@@ -46,8 +46,9 @@ const RECHECK: Duration = Duration::from_secs(1);
     long_about = "Reads the pane's agent record and prints the conversation its transcript holds as NDJSON chat \
                   events: about the last --limit events, then `live`, then each poll's new events as the agent \
                   writes them, each poll's ended by a `live` whose cursor is where --after resumes. \
-                  A new conversation in the pane is a `reset` and its backlog; the record clearing ends the stream. \
-                  Ends when standard input reaches its end."
+                  A permission prompt the agent waits on (the pane's status `blocked`) is an `approval`, and an \
+                  `approval_done` once it is answered anywhere. A new conversation in the pane is a `reset` and its \
+                  backlog; the record clearing ends the stream. Ends when standard input reaches its end."
 )]
 pub struct Chat {
     #[arg(long, help = "Which pane the agent runs in: left or right. Defaults to left.")]

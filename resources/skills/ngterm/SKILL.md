@@ -773,6 +773,15 @@ open stays where it is when the lead changes. The overlay's program still runs o
 the far side needs `ngtermctl` installed by the Help action: the remote call runs it on the ssh `PATH` plus
 `~/.local/bin` and `/usr/local/bin`. A machine merely running ngterm has no CLI an ssh command can find. Every `live` command needs a running ngterm.
 
+**agent** - this build's own, with no upstream counterpart: the record behind the Android app's chat view of
+a pane running Claude Code or Codex. Nothing in it drives the app. `agent hook claude|codex EVENT` is what the
+installed agent-status hooks run, the hook's payload on stdin; it tells ngterm, in memory only, which agent the
+pane runs and where its transcript is, so never call it yourself. `agent chat [--target S] [--pane left|right]`
+prints that pane's conversation as NDJSON chat events and follows it until stdin closes; `agent commands
+[--target S] [--pane left|right]` prints the agent's slash commands and skills as one JSON array. Both fail with
+`no agent in this pane` until the hooks from this build are installed and a new agent process has started
+([details](reference.md#agent)).
+
 **clipboard** — `clipboard set [TEXT]` — copy text to the clipboard of every terminal showing the pane
 the command runs in; the text is the argument, or stdin when omitted (`git diff | ngtermctl clipboard set`).
 Text that starts with `-` (a flag, a list item, a diff line) is read as an option: pipe it on stdin, or put

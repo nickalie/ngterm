@@ -7,7 +7,7 @@
 //!   every change, as [`MobileEvent::PaneAgent`]; an origin that predates the kind never does, and the app keeps the
 //!   terminal. The frames name a pane by its identity; `ngtermctl agent` names it `left` or `right`, which the session's
 //!   layout maps (its primary pane is the left one), so the chats keep each attached session's last layout.
-//! - **The channel.** [`Chats::open`] runs `ngtermctl agent chat --target SESSION --pane SIDE` for a shown pane, and
+//! - **The channel.** `Chats::open` runs `ngtermctl agent chat --target SESSION --pane SIDE` for a shown pane, and
 //!   only for one: the app opens it while the pane shows as a chat and closes it on hide, so a session costs at most
 //!   one chat channel per shown pane besides the pane's own attach (the ssh server's `MaxSessions` counts them). Its
 //!   NDJSON lines arrive as [`MobileEvent::Chat`], a batch per read, in order. The chat keeps a cursor of the main
@@ -37,18 +37,18 @@
 //! - **The end.** The command's exit 0 (the record cleared: the agent ended), its "no agent in this pane", a failure
 //!   before the first `live` (an origin without `ngtermctl agent chat`) or too many failures in a row end the chat:
 //!   [`ChatState::Ended`], with no error, and the app shows the terminal.
-//! - **Older pages** ([`Chats::older`]): `--before` the oldest cursor, once, with its conversation; a `reset` meanwhile
+//! - **Older pages** (`Chats::older`): `--before` the oldest cursor, once, with its conversation; a `reset` meanwhile
 //!   (on the channel, or the page's own when the pane moved to another conversation) makes the page stale. Each chat
 //!   opened and each conversation it shows takes a new generation of one counter, so a page begun before a close and
 //!   answered after the pane's chat was opened again is stale too.
-//! - **The catalog** ([`Chats::commands`]): `ngtermctl agent commands` once per conversation, kept per pane until the
+//! - **The catalog** (`Chats::commands`): `ngtermctl agent commands` once per conversation, kept per pane until the
 //!   pane's announced conversation changes or its chat reads a `reset`. A failed fetch is not kept.
 //!
 //! The composer's dropdown narrows the catalog with [`filter_commands`], the native picker's ranking.
 //!
 //! **Answering the agent** happens in its pane, not over the chat channel: [`input`] sends a prompt, Stop, an
 //! approval's or a question's answer as keys into the pane's terminal ([`crate::api::Pane::send_prompt`] and the
-//! others), after taking the lead and checking the screen with the agent's matcher ([`matchers`]); the pane's attach
+//! others), after taking the lead and checking the screen with the agent's matcher (`matchers`); the pane's attach
 //! stays open behind the chat for it, at the grid the terminal view gave, so opening, reading or closing a chat never
 //! resizes or claims anything.
 

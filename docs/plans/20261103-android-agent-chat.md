@@ -915,12 +915,20 @@ with no output yet is a running call (Task 1's fixture README).
 
 ### Task 19: [Final] Update documentation
 
-- [ ] README: the Android section gains the chat view, its Settings toggle, taking the lead on action, and the origin
+- As built: README > Android gains an "Agent chat view" subsection (the view, the toggle, the bar's switch, the
+  `/` dropdown, the cards, taking the lead on action, approvals confirmed on screen with the backlog item's gap, the
+  origin's requirement), the extensions list names the `agent.*` group, and README > CI the `--must-pass agent-chat`
+  legs. `ngterm-core`'s root docs name `agent_chat` and the `agent.*` group; `ngterm-mobile`'s name `screen-read`, and
+  its `chat`, `chat::input` and `pane` docs no longer link private items, so `cargo doc -D warnings` passes on the
+  crate. `ngtermctl agent` has a long help, and `agent chat`'s names the approvals. The skill gets
+  `0018-agent-group.patch` (SKILL.md's summary and a reference.md `agent` section), checked with
+  `sync-resources.sh --check v0.40.0 v0.40.0`.
+- [x] README: the Android section gains the chat view, its Settings toggle, taking the lead on action, and the origin
       requirement (hooks reinstalled); the Windows origin stays listed as unreachable
-- [ ] the crate docs of `ngterm-mobile` (module map: `chat`) and `ngterm-core` (`agent_chat`); the `ngtermctl agent`
+- [x] the crate docs of `ngterm-mobile` (module map: `chat`) and `ngterm-core` (`agent_chat`); the `ngtermctl agent`
       help text
-- [ ] if agents should know about `ngtermctl agent`, the `ngterm` skill through a `build/patches/skill-ngterm/` patch
-- [ ] move this plan to `docs/plans/completed/`
+- [x] if agents should know about `ngtermctl agent`, the `ngterm` skill through a `build/patches/skill-ngterm/` patch
+- [x] move this plan to `docs/plans/completed/` (skipped - the harness moves the plan after all phases finish)
 
 ## Post-Completion
 

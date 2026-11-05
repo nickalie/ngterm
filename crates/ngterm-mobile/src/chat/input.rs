@@ -3,18 +3,18 @@
 //!
 //! 1. **Lead.** A pane that is not its session's leader claims the lead first (as Take control does) and waits for
 //!    the attach to report [`LeadRole::Leader`](ngterm_core::live::lead::LeadRole); a claim that reports another role,
-//!    is replaced or lost, or has no answer within [`InputTiming::lead_timeout`] sends nothing
+//!    is replaced or lost, or has no answer within `InputTiming::lead_timeout` sends nothing
 //!    ([`AgentInputOutcome::LeadRefused`]). Only the leader's input reaches the program, and its grid lays the TUI
 //!    out, so the screen read next is laid out for this pane.
-//! 2. **Settle.** No new output, no new frame and no new grid for [`InputTiming::quiet`] (the redraw after the claim's
-//!    resize has landed), or [`InputTiming::settle_max`] at most: a working agent's spinner never goes quiet.
-//! 3. **Match.** The agent's screen matcher ([`crate::chat::matchers`]) reads the program's screen itself
+//! 2. **Settle.** No new output, no new frame and no new grid for `InputTiming::quiet` (the redraw after the claim's
+//!    resize has landed), or `InputTiming::settle_max` at most: a working agent's spinner never goes quiet.
+//! 3. **Match.** The agent's screen matcher (`crate::chat::matchers`) reads the program's screen itself
 //!    ([`ngterm_term::Pane::active_screen`]: the terminal's active area with its screen generation), never what the
 //!    terminal view shows: a view scrolled back (onto an old copy of a dialog, say), a selection, a search's
 //!    highlights or anything the app draws over the view play no part. A screen the program holds (synchronized
 //!    output, until the hold's timeout ends it) or the VT's reflow after a new column or row count the program has
 //!    not redrawn for yet is not read: the action settles and looks again. The same grid again or a new cell size
-//!    alone reflows nothing, so an idle screen stays readable. The action's [`Plan`] decides from the screen read:
+//!    alone reflows nothing, so an idle screen stays readable. The action's `Plan` decides from the screen read:
 //!    the keys to send, or the outcome.
 //! 4. **Send.** The keys go into the same terminal the screen was read from, on the actor, with nothing awaited
 //!    between the read and the send: the role and the attach are checked again right before (the terminal's pending
@@ -24,7 +24,7 @@
 //!    settled and read again.
 //! 5. **Confirm.** A step that needs to see what its keys did (a paste before its Enter, each question of the picker, a
 //!    toggle, a dialog's answer) settles and matches again, until the screen shows what the keys were to do or
-//!    [`InputTiming::confirm`] has gone by since they went. Until then any other screen is pending ([`Next::Wait`]),
+//!    `InputTiming::confirm` has gone by since they went. Until then any other screen is pending (`Next::Wait`),
 //!    the screen they were sent to above all (no output since: its reply is still on the network); no key is sent
 //!    again. At the deadline the action is [`AgentInputOutcome::Unconfirmed`].
 //!
@@ -40,8 +40,8 @@
 //!   by the confirm deadline, the paste is left unsent ([`AgentInputOutcome::Unconfirmed`]).
 //! - **Stop**: Escape, while a turn is running.
 //! - **Approval**: the option whose label is the card's, by its key: Claude's digit, Codex's letter or Escape; only to
-//!   the dialog that asks about the card's call ([`Dialog::asks`](super::matchers::Dialog::asks) of what
-//!   [`shown_subjects`] says the dialog shows: the command or URL the hook reported, or a file tool's path relative to
+//!   the dialog that asks about the card's call (`Dialog::asks` of what
+//!   `shown_subjects` says the dialog shows: the command or URL the hook reported, or a file tool's path relative to
 //!   the agent's working directory, read in the rows above its options). A dialog about another call (the card's
 //!   answered elsewhere and the agent asks the next) or a card that names nothing a dialog shows (an MCP tool's) is
 //!   [`AgentInputOutcome::NotOnScreen`]: a label alone (Claude's `Yes`) would answer any dialog. The card stays up:

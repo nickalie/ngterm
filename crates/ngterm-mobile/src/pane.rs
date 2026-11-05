@@ -8,7 +8,7 @@
 //!   denied clipboard read's reply) and closes the channel once the queue has been quiet for [`WRITER_POLL`].
 //! - **Leadership.** The attach tail carries a `LeadAttachment`: the first attach and every automatic one claim
 //!   nothing (they lead only a session nobody leads), [`crate::MobileCore::take_lead`] claims, as does a chat action
-//!   on a pane that does not lead ([`crate::chat::input`], which weighs [`Panes::standing`]). The attach client's
+//!   on a pane that does not lead ([`crate::chat::input`], which weighs `Panes::standing`). The attach client's
 //!   role reports arrive as titles under `LeadNotice::PREFIX`: filtered through the pane's `LeadState` into
 //!   [`MobileEvent::PaneLead`], never shown as a title. A follower is covered; an unowned pane attaches again.
 //! - **How an attach ends** ([`PaneEnd`]): a *lost* link covers the pane, and it attaches again into a fresh terminal

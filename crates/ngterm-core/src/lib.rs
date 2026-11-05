@@ -3,8 +3,11 @@
 //! target resolution ([`resolve`]), control errors with upstream agterm's wire strings ([`ControlError`]), the
 //! sidebar's drag-and-drop index math ([`sidebar_drop`]) and its gestures ([`sidebar_actions`]), state-dir and socket
 //! path resolution ([`paths`]), the state directory's owner lock ([`state_lock`]), the environment of spawned shells
-//! ([`pane_env`]), and what the core and the frontend exchange about on-screen windows ([`windows`]). The command
-//! groups' handlers live in the private `commands` module.
+//! ([`pane_env`]), what the core and the frontend exchange about on-screen windows ([`windows`]), and the Android chat
+//! view's agent side ([`agent_chat`]: Claude Code's and Codex's transcripts as chat events, their hook payloads and
+//! slash-command catalogs, which `ngtermctl agent` serves). The command groups' handlers live in the private
+//! `commands` module, the Rust-only `agent.*` group's in `commands::agent`: the per-pane agent record the hooks fill,
+//! kept in memory only and offered to the presentation stream's opt-in `agent` kind ([`remote`]).
 //!
 //! Work that needs a live terminal, widget, daemon or process goes through the `ngterm-host` traits.
 

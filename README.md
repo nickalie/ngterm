@@ -45,7 +45,9 @@ Linux build unless it names another OS.
   answer is listed again on the reconnect schedule for up to a week, and a session gone there is named in a banner
   (`crates/ngterm-core/src/remote/relaunch.rs`).
 - Another extension beyond upstream, which has no mobile app: an Android app that views and drives another machine's
-  live sessions over ssh ([Android](#android)).
+  live sessions over ssh, with a chat view of a pane running Claude Code or Codex ([Android](#android)). The origin
+  serves the chat through the Rust-only `agent.*` commands (`ngtermctl agent`, capability `agent-chat`) and an opt-in
+  `agent` kind on the presentation stream, with no desktop UI.
 - No bundled theme of its own: upstream ships its `agterm` theme and starts a fresh install on it; this build ships
   Ghostty's theme catalog only, so a fresh install starts on Ghostty's built-in colors (the "default ghostty" row),
   and a settings file that still names `agterm` (a build from before the rename seeded it) loads on them too.
@@ -645,6 +647,39 @@ Not in v1: HTML pages and program overlays (refused, as a viewer that can't show
 symbols, a GPU renderer (the terminal is drawn on a Compose canvas), editing the layout from the phone, and Play Store
 publishing. A Windows machine can't be reached, as from Attach Remote.
 
+### Agent chat view
+
+A pane running Claude Code or Codex shows as a chat instead of its terminal (Settings ▸ Agents ▸ Agent chat view, on
+by default). The agent stays a regular TUI in its pane, which the origin and every other viewer see as before; the
+chat is a second view of it, read from the agent's transcript on the origin (`ngtermctl agent chat` on an exec
+channel, open only while the pane shows as a chat):
+
+- prompts, Markdown replies, tool calls with their output and diffs, subagents folded under their task, and older
+  messages paged in as the list scrolls up;
+- a composer: Send pastes the prompt into the pane and enters it, Stop sends Esc while a turn runs, and `/` opens a
+  dropdown of the agent's slash commands and skills (built-ins, user and project skills and commands, enabled
+  plugins'; `ngtermctl agent commands`), narrowed as you type with the desktop palettes' ranking;
+- a permission prompt, or Claude's `AskUserQuestion`, as a card pinned above the composer and answered with its
+  buttons;
+- the session bar's Show terminal / Show chat switch for the focused pane: picking the terminal holds for that pane
+  until its agent's next conversation, and the agent ending returns it to the terminal. A notification about the pane
+  opens its chat at the newest message.
+
+**Answering takes control.** A chat action (a prompt, Stop, an approval, an answer) from a device that does not lead
+the pane first takes the lead, as Take control does, waits for the agent to redraw at the phone's grid, and checks
+with the agent's screen matcher that the pane shows what the action answers; only then do the keys go. Opening or
+reading a chat claims and resizes nothing. An approval goes only to the dialog that shows the card's call: its
+command or URL, or a file tool's path relative to the agent's working directory. A card the pane can't confirm (one
+answered elsewhere, or an MCP tool's, whose dialog shows nothing the card names) sends nothing and stays up with
+Answer in terminal until the agent moves on. Two calls a dialog shows alike (the same command twice) can't be told
+apart on screen (`docs/backlog/a-phone-approval-can-answer-a-later-dialog-that-shows-the-same-call.md`).
+
+**The origin** needs this build's `ngtermctl` and its agent-status hooks reinstalled (Help ▸ Install Agent Status
+Hooks… on a desktop, `ngterm-headless --install-agent-hooks` on a server), then a new agent process: the hooks'
+`ngtermctl agent hook` call tells the origin which agent a pane runs and where its transcript is. An origin restarted
+under a running agent learns it again at the agent's next prompt. An origin without these pieces shows the terminal,
+as before, with no error. A Windows origin can't be reached at all yet, as above.
+
 ## Windows
 
 The same app, CLI and session server, built with MSVC: GPUI renders through DirectX, the HTML overlays are WebView2
@@ -826,7 +861,8 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   (clippy, tests and the bindings' regeneration check of the WPE crates on Arch's `wpewebkit`, then the app with its
   overlays, see [WPE WebKit](#wpe-webkit)), then the staged build (HTML overlays on) under the suite in the `wpe`
   job's Arch container, on its lavapipe, held by `rust-passing.txt`, once per login shell (`conformance`, a matrix:
-  bash, fish and zsh), each with `--must-pass live-any-shell`, the zsh and fish ones with `--must-pass live-sessions`
+  bash, fish and zsh), each with `--must-pass live-any-shell` and `--must-pass agent-chat`, the zsh and fish ones
+  with `--must-pass live-sessions`
   too; the bash one runs the app's process tests with the overlays on first, and a `coverage` entry runs the suite on
   an instrumented build, judged by `conformance/coverage-floor-linux.txt` only.
 - `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,
@@ -838,7 +874,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   vendored portable-pty's Windows patch tests and builds the app: `ngterm-gpui`'s clippy and tests without and with
   its HTML overlays (WebView2, which the runner image carries). Beside it, `windows`: the harness's Windows
   self-tests and the suite against the staged release build (`conformance/tools/run-windows.sh`, with `--must-pass
-  live-any-shell`: the runner's login shell is Windows PowerShell), held by `rust-passing-windows.txt`; the report
+  live-any-shell`, as the runner's login shell is Windows PowerShell, and `--must-pass agent-chat`), held by `rust-passing-windows.txt`; the report
   and the stage are kept as artifacts; and `coverage-windows`, the suite on an instrumented build, judged by
   `conformance/coverage-floor-windows.txt` only. The workflow also runs on pushes to `ci/**` branches, to check a
   macOS or Windows form without a PR.

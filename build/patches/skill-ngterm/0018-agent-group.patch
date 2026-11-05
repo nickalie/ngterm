@@ -1,0 +1,67 @@
+Document this build's `agent` group: the per-pane agent record behind the Android app's chat view, which the
+agent-status hooks fill through `ngtermctl agent hook`, and `agent chat` and `agent commands`, which the app runs on
+the origin. Applied after 0017-headless-page-companions.patch.
+
+diff --git a/SKILL.md b/SKILL.md
+index 3d9dceb1..6581c40a 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -773,6 +773,15 @@ open stays where it is when the lead changes. The overlay's program still runs o
+ the far side needs `ngtermctl` installed by the Help action: the remote call runs it on the ssh `PATH` plus
+ `~/.local/bin` and `/usr/local/bin`. A machine merely running ngterm has no CLI an ssh command can find. Every `live` command needs a running ngterm.
+ 
++**agent** - this build's own, with no upstream counterpart: the record behind the Android app's chat view of
++a pane running Claude Code or Codex. Nothing in it drives the app. `agent hook claude|codex EVENT` is what the
++installed agent-status hooks run, the hook's payload on stdin; it tells ngterm, in memory only, which agent the
++pane runs and where its transcript is, so never call it yourself. `agent chat [--target S] [--pane left|right]`
++prints that pane's conversation as NDJSON chat events and follows it until stdin closes; `agent commands
++[--target S] [--pane left|right]` prints the agent's slash commands and skills as one JSON array. Both fail with
++`no agent in this pane` until the hooks from this build are installed and a new agent process has started
++([details](reference.md#agent)).
++
+ **clipboard** — `clipboard set [TEXT]` — copy text to the clipboard of every terminal showing the pane
+ the command runs in; the text is the argument, or stdin when omitted (`git diff | ngtermctl clipboard set`).
+ Text that starts with `-` (a flag, a list item, a diff line) is read as an option: pipe it on stdin, or put
+diff --git a/reference.md b/reference.md
+index bf46ab7a..0038fac6 100644
+--- a/reference.md
++++ b/reference.md
+@@ -2042,6 +2042,38 @@ counters, comments and reordering included; a removed line drops its queue and f
+ 
+ Both are app-global and refuse a target or `--window`.
+ 
++## agent
++
++This build's own group, with no upstream counterpart: what the Android app's chat view reads about a pane
++running Claude Code or Codex. It changes nothing in the app and has no UI; the tree and the snapshot never
++show it.
++
++`ngtermctl agent hook claude|codex EVENT [--target ID] [--pane P] [--pane-id TOKEN]` — run by the installed
++agent-status hooks on `SessionStart`, `UserPromptSubmit`, `PermissionRequest` and Claude's `SessionEnd`, with
++the hook's JSON payload on stdin. It sends `agent.report`, which keeps per pane, in memory only, the agent,
++its conversation id and transcript path, and the last permission prompt (shown as an approval only while the
++session's status is `blocked`). `SessionEnd` clears the record, as does the pane's foreground going back to
++its shell. Prints nothing on success. Don't run it by hand: it is the hooks' call, and a pane gets a record
++only after the hooks are reinstalled from this build and a new agent process starts; an ngterm restarted
++under a running agent learns it at the agent's next prompt.
++
++`ngtermctl agent chat [--target ID] [--pane left|right] [--limit N] [--before CURSOR | --after CURSOR]
++[--conversation ID]` — the pane's conversation as NDJSON, one chat event per line, each with `type`, `id`
++(a later line with the same id updates the item) and `cursor`: `conversation`, `user`, `assistant`,
++`thinking`, `tool`, `question`, `approval`, `approval_done`, `notice`, `unknown`, `reset` and `live`. By
++default it prints about the last `--limit` (200) events, then `live`, then follows the transcript; a new
++conversation in the pane is a `reset` and its backlog, and the record clearing ends it with exit 0. It also
++ends when stdin reaches its end, so give it a stdin that stays open (`</dev/null` prints the backlog and
++exits). `--before CURSOR` prints one older page and exits; `--after CURSOR` resumes from that cursor's line.
++
++`ngtermctl agent commands [--target ID] [--pane left|right]` — the agent's slash commands and skills as one
++JSON array of `{name, description, kind, argument_hint}` (`kind`: `builtin`, `skill`, `command` or
++`plugin`): the built-ins, the user's and the project's skills and custom commands, and those of each enabled
++plugin, read from the agent's own config dir (the one its transcript lies in). A Codex skill is named as
++Codex mentions it, `$name`.
++
++Both read the record through `agent.get` and fail with `no agent in this pane` when it has none.
++
+ ## browser
+ 
+ `ngtermctl browser clear` - remove every cookie and all site data held by the saved store of
