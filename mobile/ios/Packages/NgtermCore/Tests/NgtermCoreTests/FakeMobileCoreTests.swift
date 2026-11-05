@@ -110,6 +110,25 @@ internal struct FakeMobileCoreTests {
         }
     }
 
+    @Test("an attach delivers what the session's stream says, and a refused one nothing")
+    internal func attachDeliversTheStream() async throws {
+        let core = FakeMobileCore()
+        try await core.connect(machine: Self.machine)
+        core.sessions["m1"] = [fakeSession(id: "s1")]
+        let layout = RemoteLayout(panes: ["P1"], primary: "P1", axis: nil, shown: true)
+        core.attachEvents["s1"] = [
+            .sessionConnection(machineId: "m1", sessionId: "s1", state: .connected),
+            .sessionLayout(machineId: "m1", sessionId: "s1", layout: layout),
+        ]
+        await #expect(throws: MobileError.NotListed(sessionId: "s1")) {
+            try await core.attachSession(machineId: "m1", sessionId: "s1")
+        }
+        #expect(!core.emitted.contains { if case .sessionLayout = $0 { true } else { false } })
+        _ = try await core.listSessions(machineId: "m1")
+        try await core.attachSession(machineId: "m1", sessionId: "s1")
+        #expect(Array(core.emitted.suffix(2)) == core.attachEvents["s1"])
+    }
+
     @Test("a machine not connected is refused")
     internal func machineNotConnectedIsRefused() async {
         let core = FakeMobileCore()

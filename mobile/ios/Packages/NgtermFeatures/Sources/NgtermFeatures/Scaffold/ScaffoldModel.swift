@@ -81,6 +81,15 @@ public final class ScaffoldModel {
         return .here
     }
 
+    /// Leaves the session this window shows (Close, Detach, End session): a compact stack goes back to the machine's
+    /// sessions.
+    public func close() {
+        session = nil
+        if compactColumn == .detail {
+            compactColumn = .content
+        }
+    }
+
     isolated deinit {
         // the scene went away: another main window may show its session now
         windows.show(nil, in: ObjectIdentifier(self))

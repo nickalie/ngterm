@@ -13,7 +13,8 @@
     /// - any other host connects at once;
     ///
     /// and, when asked, a program in `docs-site` on `build-01` asks to read the clipboard as the app starts, and one in
-    /// `notes` after it: its question shows only once the first is answered.
+    /// `notes` after it: its question shows only once the first is answered; and, when asked, a machine `split`
+    /// (`split.lan`) is saved already, with a session `work` of two panes side by side (``FakeSessionWorld``).
     internal enum FakeWorld {
         /// The host key `build-01.lan` offers (made up).
         internal static let buildHostKey = "SHA256:fAkEbU1Ld01h0sTkEyF0rUiTeStS0nLyN0tArEaLkEy00"
@@ -29,10 +30,10 @@
             isImported: false
         )
 
-        /// The app's graph over the fake core, with a key already when `withKey`, and two programs asking to read the
-        /// clipboard when `readsClipboard`.
+        /// The app's graph over the fake core, with a key already when `withKey`, two programs asking to read the
+        /// clipboard when `readsClipboard`, and `split` with its session when `hasSession`.
         @MainActor
-        internal static func graph(withKey: Bool, readsClipboard: Bool) -> AppGraph {
+        internal static func graph(withKey: Bool, readsClipboard: Bool, hasSession: Bool) -> AppGraph {
             let directory = FileManager.default.temporaryDirectory.appending(
                 path: "ngterm-fake-\(UUID().uuidString)",
                 directoryHint: .isDirectory
@@ -45,8 +46,12 @@
             if withKey {
                 try? keys.add(key)
             }
+            let machines = MachineStore(directory: directory)
+            if hasSession {
+                FakeSessionWorld.seed(machines, core: core, keyId: key.id)
+            }
             let graph = AppGraph(
-                machines: MachineStore(directory: directory),
+                machines: machines,
                 settings: SettingsStore(directory: directory),
                 keys: AppKeys(store: keys, vault: MemoryPrivateKeys(), maker: CoreKeyMaker(), comment: "ngterm@fake"),
                 pins: pins,

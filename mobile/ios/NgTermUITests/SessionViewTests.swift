@@ -1,0 +1,89 @@
+import XCTest
+
+/// The session view on the fake core's `split`, whose session `work` has two panes side by side, each naming
+/// itself on its first line ("P1 ready"): a phone shows one at a time, a tablet the split.
+///
+/// Switching panes, then turning the device (the layout made anew) and back, keeps the selected pane; the session view
+/// is audited.
+internal final class SessionViewTests: XCTestCase {
+    @MainActor private static var isPad: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
+
+    // the terminal whose screen shows `text` (VoiceOver's value of it)
+    @MainActor
+    private static func screen(showing text: String, in app: XCUIApplication) -> XCUIElement {
+        app.textViews.matching(NSPredicate(format: "value CONTAINS %@", text)).firstMatch
+    }
+
+    // the app on `work`'s session view, its first pane selected
+    @MainActor
+    private func openSession() -> XCUIApplication {
+        let app = FakeApp.launch(withKey: true, arguments: ["-ngterm-fake-session"], for: self)
+        FakeApp.showMachines(in: app)
+        FakeApp.expectRow("split", reads: "Connected", in: app)
+        app.descendants(matching: .any)["machine-split"].firstMatch.tap()
+        let row = app.descendants(matching: .any)["session-work"].firstMatch
+        FakeApp.expect(row, "the session's row")
+        row.tap()
+        FakeApp.expect(app.descendants(matching: .any)["session-title"].firstMatch, "the session view")
+        FakeApp.expect(Self.screen(showing: "P1 ready", in: app), "the first pane's screen")
+        return app
+    }
+
+    @MainActor
+    private func expectSelected(_ number: Int, in app: XCUIApplication) {
+        let tab = app.buttons["pane-\(number)"]
+        FakeApp.expect(tab, "pane \(number)'s tab")
+        let selected = NSPredicate(format: "isSelected == true")
+        let waited = XCTNSPredicateExpectation(predicate: selected, object: tab)
+        XCTAssertEqual(XCTWaiter.wait(for: [waited], timeout: 10), .completed, "pane \(number) isn't selected")
+    }
+
+    @MainActor
+    internal func testSwitchingPanesAndTurningKeepTheSelectedPane() throws {
+        let app = openSession()
+        expectSelected(1, in: app)
+        try FakeApp.audit(app)
+
+        app.buttons["pane-2"].tap()
+        expectSelected(2, in: app)
+        let second = Self.screen(showing: "P2 ready", in: app)
+        FakeApp.expect(second, "the second pane's screen")
+        if Self.isPad {
+            XCTAssertTrue(Self.screen(showing: "P1 ready", in: app).exists, "the split shows both panes")
+            let sidebar = app.descendants(matching: .any)["sidebar-session-work"].firstMatch
+            XCTAssertTrue(sidebar.exists, "the machines' column lists the attached session")
+        } else {
+            XCTAssertFalse(Self.screen(showing: "P1 ready", in: app).exists, "a phone shows one pane")
+        }
+
+        // the layout made anew on its side and upright again keeps the selection
+        let turned: UIDeviceOrientation = Self.isPad ? .portrait : .landscapeLeft
+        let back: UIDeviceOrientation = Self.isPad ? .landscapeLeft : .portrait
+        XCUIDevice.shared.orientation = turned
+        expectSelected(2, in: app)
+        FakeApp.expect(second, "the second pane's screen, turned")
+        XCUIDevice.shared.orientation = back
+        expectSelected(2, in: app)
+        FakeApp.expect(second, "the second pane's screen, turned back")
+        try FakeApp.audit(app)
+    }
+
+    @MainActor
+    internal func testDetachClosesTheSessionView() {
+        let app = openSession()
+        app.buttons["session-menu"].tap()
+        let detach = app.buttons["session-detach"]
+        FakeApp.expect(detach, "Detach in the session's menu")
+        detach.tap()
+        let title = app.descendants(matching: .any)["session-title"].firstMatch
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: title)
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 10), .completed, "the session view stayed")
+        FakeApp.expect(app.descendants(matching: .any)["session-work"].firstMatch, "the session's row again")
+    }
+
+    deinit {
+        // nothing to release: XCTest owns the app it launched
+    }
+}

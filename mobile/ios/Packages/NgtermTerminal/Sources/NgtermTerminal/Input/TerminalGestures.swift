@@ -7,7 +7,9 @@ import UIKit
 /// - a double tap selects the word, a triple tap the line, with handles and the edit menu;
 /// - a finger coming down stops a fling;
 /// - a drag scrolls (the pane reports it to a program that asked for the mouse, as wheel turns) and flings on; a drag
-///   from a selection handle moves that end;
+///   from a selection handle moves that end; a sideways drag (twice as far across as down) is a swipe where the view
+///   has somewhere for it to go (``TerminalView/onSwipe``): far enough, or flung, it moves to the next pane (leftward)
+///   or the previous one;
 /// - a long press selects the word with handles, and a drag from it extends the selection, as text selection does; the
 ///   edit menu shows when the finger lifts;
 /// - a pinch changes the text size, in whole points.
@@ -21,12 +23,18 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
     private static let tapReach: CGFloat = 22
     // a single, a double (word) and a triple (line) tap, then round again
     private static let tapKinds = 3
+    // how far a swipe goes to count without a fling, and how fast a fling counts on its own, in points (a second)
+    private static let swipeDistance: CGFloat = 64
+    private static let swipeSpeed: CGFloat = 800
+    // how many times as far across as down a drag goes to be a swipe
+    private static let swipeSlant: CGFloat = 2
 
     private unowned let view: TerminalView
     private var taps = ClickCounter()
     // what a drag holds: a handle's grip while it moves an end, none while it scrolls
     private var dragGrip: SelectionGrip?
     private var dragTranslation: CGPoint = .zero
+    private var isSwiping = false
     private var pressGrip: SelectionGrip?
     private var pinchBase: CGFloat?
 
@@ -119,14 +127,22 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
                 dragGrip = .plain(fixed: handle.fixed, moving: handle.cell, offset: offset)
                 view.selection.isAdjusting = true
                 view.hideMenu()
+            } else if view.onSwipe != nil, pinchBase == nil, isSideways(translation) {
+                isSwiping = true
+                return
             }
             dragged(to: point, translation: translation)
 
         case .changed:
-            dragged(to: point, translation: translation)
+            if !isSwiping {
+                dragged(to: point, translation: translation)
+            }
 
         case .ended, .cancelled:
-            if dragGrip != nil {
+            if isSwiping {
+                isSwiping = false
+                swiped(phase, translation: translation.x, velocity: velocity.x)
+            } else if dragGrip != nil {
                 dragGrip = nil
                 view.selection.isAdjusting = false
                 if phase == .ended {
@@ -193,6 +209,20 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
             view.pointer.drag(by: translation.y - dragTranslation.y, at: point)
         }
         dragTranslation = translation
+    }
+
+    // a drag twice as far across as down
+    private func isSideways(_ translation: CGPoint) -> Bool {
+        abs(translation.x) > abs(translation.y) * Self.swipeSlant
+    }
+
+    // a swipe that ends far enough across, or flung, moves on: leftward forward
+    private func swiped(_ phase: GesturePhase, translation: CGFloat, velocity: CGFloat) {
+        let isFlung = abs(velocity) > Self.swipeSpeed
+        guard phase == .ended, pinchBase == nil, isFlung || abs(translation) > Self.swipeDistance else {
+            return
+        }
+        view.onSwipe?((isFlung ? velocity : translation) < 0)
     }
 
     // the edit menu shows over the touch selection once a frame shows it

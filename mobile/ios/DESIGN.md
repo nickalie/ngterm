@@ -349,6 +349,9 @@ iOS's own: the keyboard's accessory, on the keyboard's own ground, not a Materia
 - **The app's chords** are upstream's Mac ones, listed while ⌘ is held: ⌘+ and ⌘- step the text a point (within 8 to
   32), ⌘0 goes back to Settings' size, ⌘⌥→ and ⌘⌥← move between panes, ⌘⌥↓ and ⌘⌥↑ between sessions (offered once the
   session view gives them somewhere to go). Copy and paste are the system's ⌘C and ⌘V, in its Edit menu.
+- **VoiceOver** reads a terminal ("Terminal", a text input) line by line, as a page: each row is a line framed on its
+  row, the page down to its last row with text (`UIAccessibilityReadingContent`). The selected pane says its cursor's
+  line as it changes, at most once a second (a faster change is said once the second is up, as it stands then).
 
 ## Screens
 
@@ -435,6 +438,56 @@ session** is the toolbar's `+` while the machine is connected.
   which keeps its text. The field isn't focused on its own: a field being edited reports only its text's height to
   the accessibility audit, under 44 pt.
 - **A machine removed** while its sessions show takes the window back to the machines.
+
+### The session (`Session/`)
+
+The detail column, and an iPad's session window: the terminal is the hero, so the chrome is the navigation bar and
+nothing else, and the panes run to the screen's edges on the terminal's own ground.
+
+```
+compact: the selected pane alone                regular: the origin's split
++-----------------------------+                  +-----------+------------------------------------------------+
+| <    api              1 2 … |                  | Machines  |              api                     1 2 …     |
+|  ● working  Fix the parser  |                  | build-01 ●|        ● working  Fix the parser               |
+| [ Deploying api  step 2/3 ] |                  |   api   ● | [ Deploying api   step 2 of 3 ]               |
+| $ make test                 |                  |   docs  ◐ | $ make test          ┃ $ cargo watch            |
+| ok parser 0.42s             |                  | nas      ⊘| ok parser 0.42s      ┃                          |
++-----------------------------+                  +-----------+------------------------------------------------+
+```
+
+- **Toolbar:** the session's name over its state (the agent's status while the stream is live; "Connecting",
+  "Reconnecting" or "Can't stream" while it isn't) and its context, read as one heading. Trailing: the pane switcher and
+  More.
+- **Pane switcher** (two panes or more): the panes' numbers in the origin's order, 44 pt each; the selected one bold,
+  underlined and in the tint (weight and the line carry it, not color alone). VoiceOver reads "Pane 1 of 2" and the
+  title its program set, and which is selected.
+- **More** (`ellipsis`): Detach at once, Open in New Window (where the device has windows), and End session, which
+  confirms ("End api?", as the sessions list does).
+- **HUD:** the origin's HUD as a strip under the toolbar on the secondary ground (a spinner when the origin runs one,
+  its message and its detail), in the app's colors, not the desktop's; announced as it changes, and left out below
+  320 pt of height (a phone on its side with the keyboard up), where it would take the terminal's last rows.
+- **Compact:** the selected pane alone; a sideways swipe on it (twice as far across as down, 64 pt or flung) moves to
+  the next pane leftward and the previous rightward, sliding in from that side (a cut with Reduce Motion).
+- **Regular:** the origin's split, side by side (`vertical`) or stacked, split by a hairline; a split it hides, or one
+  pane, shows the selected pane alone. Each pane of a split has a 4 pt gutter at its leading edge, where the selected
+  one shows a 3 × 32 pt bar in the tint; its cursor draws as it is, the other's as a hollow block. A tap or a click on
+  a pane selects it. Beside it, the machines' column lists each machine's attached sessions under it (name and
+  status; the session view says the context), the one shown marked with a checkmark in the tint (the list selects
+  nothing meanwhile: a selection it draws grey once the session has the focus would leave the machine's colored text
+  under 4.5:1).
+- **Selection and the keyboard:** one keyboard serves every pane; the selected pane is the only one anything typed
+  reaches. A tab, a swipe, ⌘⌥←/→ and a touch select a pane, and the focus follows: the pane selected next takes it,
+  with the soft keyboard if it was open. The selection is kept per session, so another size class, a turn or a trip
+  elsewhere finds the same pane.
+- **Covers** (`Cover`, over the pane, hiding it from VoiceOver): another device drives it ("Another device is driving
+  this pane", **Take control**); attaching (a spinner, "Reading this pane from build-01."); the program exited ("The
+  program exited", the exit code or signal, **Detach**: the session ended there); a pane that couldn't be shown (the
+  core's words, **Retry**). A dropped link is no veil: the last screen stays readable under a light scrim that takes
+  the touches, with a strip at the top ("Reconnecting to build-01", "The last screen stays until it is back").
+- **States:** "Opening api" (a spinner) before the layout; "build-01's ngterm can't share live sessions" with
+  **Detach**; "api is gone" ("It ended on build-01, so there is nothing left to show.", **Close**) once it ended there.
+  Detached some other way, the view closes (an iPad's session window too).
+- **Screen awake:** while a session shows and Settings' Keep screen on is set, the idle timer is off (across windows).
 
 ## App icon and launch screen
 

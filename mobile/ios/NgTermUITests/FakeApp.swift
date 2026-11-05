@@ -185,7 +185,7 @@ internal enum FakeApp {
         in app: XCUIApplication,
         isSheet: Bool
     ) -> Bool {
-        if isNavigationBarGlass(issue, in: app) {
+        if isNavigationBarGlass(issue, in: app) || isSidebarGlass(issue, in: app) {
             return true
         }
         let isBehindSheet = isSheet && issue.element == nil && issue.auditType == .elementDetection
@@ -200,6 +200,20 @@ internal enum FakeApp {
             activity.add(shot)
         }
         return false
+    }
+
+    // an iPad's contrast issue in the machines' column, the sidebar of Liquid Glass: once the session beside it has the
+    // focus, the audit measures the rows' colored text against the glass's grey (or the selection it greys), not the
+    // grouped ground the colors are made for, whose contrast ContrastTests checks
+    @MainActor
+    private static func isSidebarGlass(_ issue: XCUIAccessibilityAuditIssue, in app: XCUIApplication) -> Bool {
+        let isPadContrast = UIDevice.current.userInterfaceIdiom == .pad && issue.auditType == .contrast
+        guard isPadContrast, let element = issue.element else {
+            return false
+        }
+        let isRow = NSPredicate(format: "identifier BEGINSWITH 'machine-' OR identifier BEGINSWITH 'sidebar-session-'")
+        let rows = app.descendants(matching: .any).matching(isRow)
+        return rows.allElementsBoundByIndex.contains { row in row.frame.contains(element.frame) }
     }
 
     // an issue of the navigation bar's Liquid Glass: its buttons' size and contrast against the glass, its title

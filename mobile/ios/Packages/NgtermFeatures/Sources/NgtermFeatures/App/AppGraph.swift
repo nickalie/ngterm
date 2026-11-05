@@ -4,8 +4,8 @@ import NgtermPlatform
 import NgtermTerminal
 
 /// What the app's screens work with, made once per process: the machines, the settings, the keys, the pinned host
-/// keys, the connections over the mobile core, the attached sessions' live state, the programs' clipboard reads, and
-/// whether the device is online.
+/// keys, the connections over the mobile core, the attached sessions' live state and their shown panes, the programs'
+/// clipboard reads, and whether the device is online.
 ///
 /// The app makes it over the linked core, the Keychain and Application Support, or over the fake core and memory for
 /// its UI tests; the tests make one over fakes. ``start()`` starts what runs on its own.
@@ -24,6 +24,12 @@ public final class AppGraph {
     public let connections: Connections
     /// The attached sessions as the core tells them.
     public let live: LiveSessions
+    /// The attached sessions across machines, as the lists show them.
+    public let attachedSessions: AttachedSessions
+    /// The shown panes, and the pane each session has selected.
+    public let panes: SessionPanes
+    /// Keeps the screen awake while a session shows, when Settings asks for it.
+    public let screenAwake = ScreenAwake()
     /// The device's clipboard, which programs write and read.
     public let clipboard: any TerminalClipboard
     /// The programs' clipboard reads waiting for the user.
@@ -56,7 +62,10 @@ public final class AppGraph {
         let board = clipboard ?? SystemClipboard()
         connections = made
         self.clipboard = board
-        live = LiveSessions(connections: made, store: stores.attached, clipboard: board)
+        let streams = LiveSessions(connections: made, store: stores.attached, clipboard: board)
+        live = streams
+        attachedSessions = AttachedSessions(machines: machines, connections: made, live: streams)
+        panes = SessionPanes(connections: made, live: streams)
         clipboardReads = ClipboardReads(connections: made, trust: stores.clipboardTrust, clipboard: board)
         network = NetworkMonitor(source: pathSource ?? SystemPathSource()) {
             made.networkChanged()
