@@ -15,7 +15,7 @@ use super::viewer::{Viewer, viewer_built};
 use super::{Fixture, args, failure, wire};
 use crate::html::{HtmlHost, HtmlLoadState, HtmlNavigation, HtmlPageInfo, HtmlReloadTarget, HtmlSource};
 use crate::model::OverlayPane;
-use crate::remote::hub::SUPPORTED_KINDS;
+use crate::remote::hub::{PAGE_DETACHED_KIND, SUPPORTED_KINDS};
 use crate::remote::page_channel::{ChannelLink, Permits};
 use crate::remote::page_serve::{self, PageServeFrame};
 use crate::remote::replica_page::{HelperKey, PageHelperLauncher, PageResource};
@@ -117,6 +117,17 @@ impl Replica {
     }
 
     fn built(split: bool) -> Self {
+        Self::attached(split, None)
+    }
+
+    /// [`Replica::new`] on an origin that speaks `page.detached` when `detaching`, one that predates it otherwise.
+    fn origin(detaching: bool) -> Self {
+        Self::attached(true, Some(detaching))
+    }
+
+    /// An attached row; `detaching` makes the origin's hello answer list the page kinds, and `page.detached` with them
+    /// when true.
+    fn attached(split: bool, detaching: Option<bool>) -> Self {
         let host = Host::default();
         let launcher = Rc::new(Launcher::default());
         let (installed, helpers) = (host.clone(), Rc::clone(&launcher));
@@ -124,7 +135,16 @@ impl Replica {
             fixture.core.set_html_host(Box::new(installed));
             fixture.core.set_page_helper_launcher(helpers);
         });
-        viewer.connect(&json!({}));
+        match detaching {
+            None => viewer.connect(&json!({})),
+            Some(detaching) => {
+                let kinds: Vec<&str> = SUPPORTED_KINDS
+                    .into_iter()
+                    .filter(|kind| detaching || *kind != PAGE_DETACHED_KIND)
+                    .collect();
+                viewer.connect_listing(&kinds, &json!({}));
+            }
+        }
         Self { viewer, host, launcher }
     }
 
@@ -1528,6 +1548,188 @@ fn a_helper_that_cannot_start_closes_the_page() {
     assert!(replica.rejections().is_empty(), "the page was shown, then closed");
     assert!(!replica.session().overlay.active);
     assert_eq!(replica.closed_notices(), 1);
+}
+
+// MARK: - a close of the page and a departure (an extension beyond upstream)
+
+/// The payloads of the `page.closed` and the `page.detached` frames the origin heard after `show` put a page here and
+/// `leave` took it away, on an origin that speaks `page.detached` when `detaching`; on the link that was up then.
+fn notices(
+    detaching: bool,
+    show: impl FnOnce(&mut Replica),
+    leave: impl FnOnce(&mut Replica),
+) -> (Vec<Value>, Vec<Value>) {
+    let mut replica = Replica::origin(detaching);
+    show(&mut replica);
+    let link = replica.viewer.link();
+    leave(&mut replica);
+    replica.commit();
+    let id = replica.id();
+    assert!(
+        replica
+            .viewer
+            .fixture
+            .store()
+            .session(id)
+            .is_none_or(|session| session.html_overlays().is_empty()),
+        "the replica left its slot"
+    );
+    let heard = |kind: &str| -> Vec<Value> {
+        link.0
+            .borrow()
+            .sent
+            .iter()
+            .filter(|frame| frame["kind"] == kind)
+            .map(|frame| frame["page"].clone())
+            .collect()
+    };
+    (heard("page.closed"), heard(PAGE_DETACHED_KIND))
+}
+
+fn show_file(replica: &mut Replica) {
+    replica.request(Replica::page(Replica::file(None)));
+    assert!(replica.session().html_overlay_active());
+}
+
+fn show_forwarded(replica: &mut Replica) {
+    let index = replica.request_loopback("http://127.0.0.1:47231/");
+    replica.tunnel_line(index, "ngterm-tunnel-ready");
+    assert!(replica.session().html_overlay_active());
+}
+
+/// A close of the page itself sends `page.closed` to an origin that speaks `page.detached` too: a close here, and the
+/// origin's own close echoed back.
+#[test]
+fn a_close_of_the_page_sends_page_closed_to_any_origin() {
+    let closed = vec![json!({"page": ORIGIN})];
+    for detaching in [true, false] {
+        let here = notices(detaching, show_file, |replica| {
+            let id = replica.id();
+            replica.viewer.fixture.store_mut().unwrap().close_overlay(id);
+        });
+        assert_eq!(here, (closed.clone(), vec![]), "a close here, detaching: {detaching}");
+        let there = notices(detaching, show_file, |replica| {
+            replica.origin_frame("page.close", json!({"page": ORIGIN}));
+        });
+        assert_eq!(
+            there,
+            (closed.clone(), vec![]),
+            "the origin's close, detaching: {detaching}"
+        );
+    }
+}
+
+/// The helper's end (the page channel's, one that could not start, or a loopback page's forward) sends `page.detached`
+/// to an origin that speaks it, which parks the page while the stream lives on; an older origin gets `page.closed`.
+#[test]
+fn the_helpers_end_detaches_the_page_from_an_origin_that_speaks_it() {
+    let page = vec![json!({"page": ORIGIN})];
+    let helper_ends = |replica: &mut Replica| {
+        let key = replica.launch(0).key;
+        replica.viewer.fixture.core.page_helper_closed(key, "helper exited");
+    };
+    let refused = |replica: &mut Replica| {
+        *replica.launcher.refuse.borrow_mut() = true;
+        replica.request(Replica::page(Replica::file(None)));
+    };
+    let forward_ends = |replica: &mut Replica| replica.tunnel_closed(0, "connection lost");
+    for (detaching, expected) in [(true, (vec![], page.clone())), (false, (page.clone(), vec![]))] {
+        assert_eq!(
+            notices(detaching, show_file, helper_ends),
+            expected,
+            "helper, {detaching}"
+        );
+        assert_eq!(notices(detaching, |_| {}, refused), expected, "no helper, {detaching}");
+        assert_eq!(
+            notices(detaching, show_forwarded, forward_ends),
+            expected,
+            "forward, {detaching}"
+        );
+    }
+}
+
+/// The row leaving (a close or a soft close) and the quit send nothing to an origin that speaks `page.detached`, which
+/// parks the page when the stream ends; an older origin still hears `page.closed` when the row leaves, and nothing at
+/// the quit, which ends the stream before the pages go.
+#[test]
+fn the_row_leaving_and_the_quit_tell_an_origin_that_speaks_page_detached_nothing() {
+    let page = vec![json!({"page": ORIGIN})];
+    let row_closes = |replica: &mut Replica| {
+        let id = replica.id();
+        replica.viewer.fixture.store_mut().unwrap().close_session(id);
+    };
+    let row_soft_closes = |replica: &mut Replica| {
+        let id = replica.id();
+        assert!(replica.viewer.fixture.store_mut().unwrap().soft_close_session(id));
+    };
+    let quits = |replica: &mut Replica| {
+        replica.viewer.fixture.core.shutdown_remote_presentations();
+        // the frontend tears its windows down after the quit save
+        let id = replica.id();
+        replica.viewer.fixture.store_mut().unwrap().close_overlay(id);
+    };
+    for (detaching, expected) in [(true, (vec![], vec![])), (false, (page.clone(), vec![]))] {
+        assert_eq!(
+            notices(detaching, show_file, row_closes),
+            expected,
+            "close, {detaching}"
+        );
+        assert_eq!(
+            notices(detaching, show_file, row_soft_closes),
+            expected,
+            "soft close, {detaching}"
+        );
+        assert_eq!(
+            notices(detaching, show_file, quits),
+            (vec![], vec![]),
+            "the quit ends the stream first, {detaching}"
+        );
+    }
+}
+
+/// A loopback page whose forward is not up yet leaves as a shown page does: the row leaving refuses it only to an
+/// origin that predates `page.detached`, and its forward ending detaches it from one that speaks it.
+#[test]
+fn a_page_waiting_for_its_forward_is_let_go_as_a_shown_page_is() {
+    for detaching in [true, false] {
+        let mut replica = Replica::origin(detaching);
+        let index = replica.request_loopback("http://127.0.0.1:47231/");
+        let id = replica.id();
+        replica.viewer.fixture.store_mut().unwrap().close_session(id);
+        replica.commit();
+        assert!(replica.launch(index).helper.0.borrow().stopped);
+        let refused = usize::from(!detaching);
+        assert_eq!(replica.rejections().len(), refused, "row left, detaching: {detaching}");
+
+        let mut replica = Replica::origin(detaching);
+        let index = replica.request_loopback("http://127.0.0.1:47231/");
+        replica.tunnel_closed(index, "exit status 255");
+        assert!(replica.session().overlay.page().is_none());
+        assert_eq!(
+            replica.rejections().len(),
+            refused,
+            "forward ended, detaching: {detaching}"
+        );
+        let detached = if detaching {
+            vec![json!({"page": ORIGIN})]
+        } else {
+            vec![]
+        };
+        assert_eq!(replica.payloads(PAGE_DETACHED_KIND), detached, "detaching: {detaching}");
+    }
+}
+
+/// The stream's loss takes the replica down and sends nothing: the link is gone, and the origin parks the page (an
+/// older one ends it) as the stream ends there.
+#[test]
+fn losing_the_stream_sends_nothing_to_any_origin() {
+    for detaching in [true, false] {
+        let lost = notices(detaching, show_file, |replica| {
+            let key = replica.viewer.link().0.borrow().key.unwrap();
+            replica.viewer.fixture.core.viewer_closed(key, "exit 255");
+        });
+        assert_eq!(lost, (vec![], vec![]), "detaching: {detaching}");
+    }
 }
 
 /// A read made for a load the page left is dropped: a reload withdraws it, and the scheme request fails.

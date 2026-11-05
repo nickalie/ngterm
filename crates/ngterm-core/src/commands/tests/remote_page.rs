@@ -683,6 +683,47 @@ fn a_parked_page_records_what_it_can_and_refuses_what_needs_it_shown() {
     assert!(at("page.request") < at("page.command"));
 }
 
+/// The presenter's `page.detached` (its helper for the page ended) parks the page, telling it nothing back as it holds
+/// no replica any more; the page waits for the next presenter, and a repeated or stale report changes nothing.
+#[test]
+fn a_page_the_presenter_detached_parks_for_the_next_presenter() {
+    let mut origin = Origin::pages();
+    let page = origin.opened(FILE, |_| {});
+    let detached = json!({"kind": "page.detached", "page": {"page": page}});
+
+    assert!(origin.report(&detached) > 0, "the park is read back");
+    assert_eq!(origin.node()["remoteOverlays"][0]["parked"], true);
+    assert_eq!(origin.outcome(&page)["outcome"], "pending");
+    assert!(origin.presenter.frames("page.close").is_empty());
+    assert_eq!(origin.report(&detached), 0);
+    origin.report(&json!({"kind": "page.closed", "page": {"page": page}}));
+    assert_eq!(
+        origin.outcome(&page)["outcome"],
+        "pending",
+        "a late close of the parked page is ignored"
+    );
+
+    origin.lose_presenter();
+    origin.reattach(&SUPPORTED_KINDS);
+    let handed: Vec<Value> = origin
+        .presenter
+        .frames("page.request")
+        .into_iter()
+        .map(|frame| frame["page"]["page"].clone())
+        .collect();
+    assert_eq!(handed, [json!(page)]);
+}
+
+/// A `page.detached` naming no page handed over is ignored.
+#[test]
+fn a_detach_of_no_remote_page_is_ignored() {
+    let mut origin = Origin::pages();
+    let page = origin.opened(FILE, |_| {});
+    origin.report(&json!({"kind": "page.detached", "page": {"page": wire(Uuid::new_v4())}}));
+    assert!(origin.node()["remoteOverlays"][0].get("parked").is_none());
+    assert_eq!(origin.outcome(&page)["outcome"], "pending");
+}
+
 /// A parked page closes for good: its outcome is dismissed, no presenter is told, and no later one is handed it.
 #[test]
 fn a_parked_page_closes_for_good_telling_no_presenter() {
@@ -821,6 +862,37 @@ fn a_waiting_pane_page_keeps_its_place_under_a_later_cover() {
             .iter()
             .all(|slot| slot.get("parked").is_none())
     );
+}
+
+/// Closing a pane page that waits for its pane hands on the pages it held back at once, with no pane laid out.
+#[test]
+fn closing_a_waiting_pane_page_hands_on_what_it_held_back() {
+    let mut origin = Origin::new(true, &SUPPORTED_KINDS);
+    let left = origin.opened("https://example.com/", |a| a.pane = Some("left".to_owned()));
+    let cover = origin.opened(FILE, |a| a.size_percent = Some(60));
+    origin.lose_presenter();
+    let session = origin.session();
+    let store = origin.fixture().store_mut().unwrap();
+    store.set_split_focus(session, true);
+    store.set_split_visibility(session, false, None);
+    origin.reattach(&SUPPORTED_KINDS);
+    assert!(origin.presenter.frames("page.request").is_empty());
+
+    assert!(
+        origin
+            .overlay(SessionCmd::OverlayClose, |a| a.pane = Some("left".to_owned()))
+            .ok
+    );
+    origin.tree_changes();
+    let handed: Vec<Value> = origin
+        .presenter
+        .frames("page.request")
+        .into_iter()
+        .map(|frame| frame["page"]["page"].clone())
+        .collect();
+    assert_eq!(handed, [json!(cover)]);
+    assert_eq!(origin.outcome(&left)["outcome"], "dismissed");
+    assert!(origin.node()["remoteOverlays"][0].get("parked").is_none());
 }
 
 /// A pane page waiting for its pane holds back nothing reserved before it.

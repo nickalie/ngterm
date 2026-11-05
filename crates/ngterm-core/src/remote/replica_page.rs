@@ -10,8 +10,13 @@
 //!   page-serve TOKEN`) the frontend's [`PageHelperLauncher`] starts.
 //! - The origin's commands act on the page here (hide and show its slot only, reload, history, browser, resize), and
 //!   what the page shows goes back as `page.state` with the last command's sequence number, once per commit at most.
-//! - Every way a replica leaves its slot (the origin's close, a close here, the helper's end, the stream's loss, the
-//!   row leaving) tells the origin `page.closed` once and closes its channel.
+//! - Every way a replica leaves its slot closes its channel, and the origin hears of it once. A close of the page (here,
+//!   or the origin's own close echoed back) sends `page.closed`, which ends it there. A departure that leaves the page
+//!   open (an extension beyond upstream, where each of them sends `page.closed` too) tells an origin whose hello answer
+//!   lists [`PAGE_DETACHED_KIND`] less: the helper's end sends `page.detached`, so the origin parks the page while the
+//!   stream lives on, and the stream's loss, the row leaving and the quit send nothing, as the stream's end parks it
+//!   there. An older origin still hears `page.closed` for the helper's end and the row leaving (`page.rejected` for a
+//!   loopback page whose forward is not up yet); on the stream's loss and the quit no link is left to carry it.
 //!
 //! The viewer's hello lists the page kinds only when this build can show a page (the web views are built in and can
 //! run), where upstream's hello lists them always: an origin then keeps its own refusal instead of handing over a page
@@ -33,6 +38,7 @@ use super::frames::{
     self, Body, PageShown, PresentationPage, PresentationPageAction, PresentationPageChange, PresentationPageCommand,
     PresentationPageSource, PresentationPageState,
 };
+use super::hub::PAGE_DETACHED_KIND;
 use super::page_channel::{ChannelEvent, ChannelLink, Permits, Pull, ReplicaChannel, RequestId};
 use super::page_tunnel::{READY_LINE, TunnelPlan, forward_port};
 use crate::Core;
@@ -48,7 +54,7 @@ const NO_SESSION: &str = "no such session";
 const INVALID_PAGE: &str = "invalid page id";
 const INVALID_URL: &str = "invalid url";
 const NO_HELPER: &str = "no page helper";
-/// A loopback page whose row here left before its forward was up.
+/// A loopback page whose row here left before its forward was up, told to an origin that predates `page.detached`.
 const ROW_LEFT: &str = "the session's row on the presenting machine closed";
 /// The MIME type of an answer that named none.
 const OCTET_STREAM: &str = "application/octet-stream";
@@ -134,6 +140,16 @@ struct PendingTunnel {
     commands: Vec<PresentationPageCommand>,
 }
 
+/// Why a replica leaves its slot when the page itself is not closed: the origin keeps the page then, for this
+/// presenter or the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Departure {
+    /// Its helper (the page channel's or its forward's) ended or did not start, while the stream may live on.
+    Detached,
+    /// Its row, its stream or this app went, which the origin learns from the stream's end.
+    Gone,
+}
+
 /// A page shown here for an origin (upstream's `ReplicaPageRecord`).
 struct ReplicaRecord {
     session: Uuid,
@@ -148,6 +164,8 @@ struct ReplicaRecord {
     companion: Option<String>,
     /// The forward a loopback page loads through.
     tunnel: Option<Tunnel>,
+    /// Why the page is leaving its slot, set before it goes when that is no close of the page; the first reason holds.
+    departure: Option<Departure>,
 }
 
 /// The pages shown here for origins, by local page id, and how their helpers start.
@@ -332,6 +350,7 @@ impl Core {
                 reported: None,
                 companion,
                 tunnel: None,
+                departure: None,
             },
         );
         // the state the page starts in is what the origin assumed: only a change is reported
@@ -508,8 +527,8 @@ impl Core {
         }
     }
 
-    /// A forward's helper ended: a page waiting for it is refused, a page loading through it closes. Whether `key`
-    /// names a forward.
+    /// A forward's helper ended: a page waiting for it is let go (detached from an origin that speaks `page.detached`,
+    /// refused to an older one), a page loading through it closes. Whether `key` names a forward.
     fn tunnel_closed(&mut self, key: HelperKey, reason: &str) -> bool {
         let pages = &mut self.remote.viewer.pages;
         if pages
@@ -519,8 +538,13 @@ impl Core {
         {
             if let Some(pending) = pages.pending.remove(&key.page) {
                 pending.tunnel.stop();
-                let reason = format!("the forward to {} ended: {reason}", pending.host);
-                self.reject_page(pending.session, pending.page.page, reason);
+                if self.origin_speaks(pending.session, PAGE_DETACHED_KIND) {
+                    let change = PresentationPageChange::page(pending.page.page);
+                    self.answer_origin(pending.session, Body::PageDetached(change));
+                } else {
+                    let reason = format!("the forward to {} ended: {reason}", pending.host);
+                    self.reject_page(pending.session, pending.page.page, reason);
+                }
             }
             return true;
         }
@@ -533,6 +557,7 @@ impl Core {
             return false;
         };
         tracing::info!(%reason, "a page's forward ended; closing the page");
+        self.depart_replica(local, Departure::Detached);
         self.library_mut().close_html_overlay(local);
         true
     }
@@ -600,6 +625,7 @@ impl Core {
             }
             Err(reason) => {
                 tracing::warn!(%reason, "a page's helper did not start; closing the page");
+                self.depart_replica(local, Departure::Detached);
                 self.library_mut().close_html_overlay(local);
             }
         }
@@ -627,7 +653,7 @@ impl Core {
     }
 
     /// Takes down the page shown for `origin`, once its origin closed it (upstream's `closeReplicaPage`); the origin
-    /// still hears `page.closed`, as for every way a replica leaves.
+    /// still hears `page.closed`, its close echoed back.
     pub(crate) fn close_replica_page(&mut self, origin: &str, session: Uuid) {
         self.cancel_pending_tunnels(Some(session), Some(origin), None);
         let Some((pane, _)) = self.replica_local(origin, session) else {
@@ -641,25 +667,34 @@ impl Core {
         }
     }
 
-    /// Takes down every page `session` shows for its origin (upstream's `closeReplicaPages`): with the stream gone the
-    /// origin has ended them, and nothing could reach it from them. A session an undoable close holds included.
+    /// Takes down every page `session` shows for its origin (upstream's `closeReplicaPages`), as its stream or its row
+    /// goes: none of them is closed, so an origin that speaks `page.detached` keeps them for the next presenter, a
+    /// loopback page still waiting for its forward included (an older origin hears that one refused). A session an
+    /// undoable close holds included.
     pub(crate) fn close_replica_pages(&mut self, session: Uuid) {
-        self.cancel_pending_tunnels(Some(session), None, Some(ROW_LEFT));
+        let refusal = (!self.origin_speaks(session, PAGE_DETACHED_KIND)).then_some(ROW_LEFT);
+        self.cancel_pending_tunnels(Some(session), None, refusal);
         let Some(found) = self.library_mut().held_session_mut(session) else {
             return;
         };
         // a page companion's own page is the row: its close released it, and closing it again closes the row again
         let row = found.content() == crate::model::SessionContent::Page;
-        let pages: Vec<Option<OverlayPane>> = found
+        let pages: Vec<(Option<OverlayPane>, Uuid)> = found
             .html_overlays()
             .into_iter()
             .filter(|(pane, page)| page.replica_of.is_some() && !(row && pane.is_none()))
-            .map(|(pane, _)| pane)
+            .map(|(pane, page)| (pane, page.id))
             .collect();
         if pages.is_empty() {
             return;
         }
-        for pane in pages {
+        for (_, local) in &pages {
+            self.depart_replica(*local, Departure::Gone);
+        }
+        let Some(found) = self.library_mut().held_session_mut(session) else {
+            return;
+        };
+        for (pane, _) in pages {
             match pane {
                 Some(pane) => {
                     found.pane_overlays.slot_mut(pane).close();
@@ -791,16 +826,31 @@ impl Core {
         ))
     }
 
-    /// Page `local` left every slot (upstream's `replicaPageReleased`): its origin hears `page.closed` once and its
-    /// channel closes, failing what still waits on it. Runs from the commit's page sweep, whatever emptied the slot.
+    /// Records why replica `local` is about to leave its slot, unless a reason is recorded already.
+    fn depart_replica(&mut self, local: Uuid, departure: Departure) {
+        if let Some(record) = self.remote.viewer.pages.records.get_mut(&local) {
+            record.departure.get_or_insert(departure);
+        }
+    }
+
+    /// Page `local` left every slot (upstream's `replicaPageReleased`): its origin hears of it once and its channel
+    /// closes, failing what still waits on it. Runs from the commit's page sweep, whatever emptied the slot; a page
+    /// whose row is no longer in a window's tree (closed, or held by an undoable close) left with its row, which the
+    /// sweep sees before the row's own release ([`Core::close_replica_pages`]) runs.
     pub(crate) fn replica_page_released(&mut self, local: Uuid) {
-        let Some(record) = self.remote.viewer.pages.records.remove(&local) else {
+        let Some(mut record) = self.remote.viewer.pages.records.remove(&local) else {
             return;
         };
-        self.answer_origin(
-            record.session,
-            Body::PageClosed(PresentationPageChange::page(uuid_string(record.origin))),
-        );
+        let row_shown = self
+            .library()
+            .store_for_session(record.session)
+            .is_some_and(|store| store.session(record.session).is_some());
+        if !row_shown {
+            record.departure.get_or_insert(Departure::Gone);
+        }
+        if let Some(notice) = self.replica_release_notice(&record) {
+            self.answer_origin(record.session, notice);
+        }
         if let Some(tunnel) = &record.tunnel {
             tunnel.stop();
         }
@@ -809,6 +859,19 @@ impl Core {
             let mut settled = Settled::default();
             link.settle(events, &mut settled);
             settled.run();
+        }
+    }
+
+    /// What the origin of `record` hears as it leaves: `page.closed` for a close of the page, and for any departure
+    /// toward an origin that predates `page.detached` (or for a page companion's own page, kept as it was); otherwise
+    /// `page.detached` for the helper's end and nothing when the row, the stream or the app went.
+    fn replica_release_notice(&self, record: &ReplicaRecord) -> Option<Body> {
+        let change = PresentationPageChange::page(uuid_string(record.origin));
+        let detaching = record.companion.is_none() && self.origin_speaks(record.session, PAGE_DETACHED_KIND);
+        match record.departure {
+            Some(Departure::Detached) if detaching => Some(Body::PageDetached(change)),
+            Some(Departure::Gone) if detaching => None,
+            _ => Some(Body::PageClosed(change)),
         }
     }
 
@@ -845,10 +908,12 @@ impl Core {
         }
     }
 
-    /// Closes every replica's channel and stops its helper (the quit path); what still waits on one fails.
+    /// Closes every replica's channel and stops its helper (the quit path); what still waits on one fails. No page is
+    /// closed by it, so an origin that speaks `page.detached` keeps each for the next presenter.
     pub(crate) fn shutdown_replica_channels(&mut self) {
         self.cancel_pending_tunnels(None, None, None);
         for record in self.remote.viewer.pages.records.values_mut() {
+            record.departure.get_or_insert(Departure::Gone);
             if let Some(tunnel) = record.tunnel.take() {
                 tunnel.stop();
             }
@@ -978,11 +1043,11 @@ impl Core {
             let host = record.companion.clone()?;
             Some((record.session, record.origin, host))
         });
-        match companion {
-            Some((row, origin, host)) => self.page_companion_ended(id, row, origin, &host),
-            None => {
-                self.library_mut().close_html_overlay(id);
-            }
+        if let Some((row, origin, host)) = companion {
+            self.page_companion_ended(id, row, origin, &host);
+        } else {
+            self.depart_replica(id, Departure::Detached);
+            self.library_mut().close_html_overlay(id);
         }
     }
 }

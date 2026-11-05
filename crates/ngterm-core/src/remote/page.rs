@@ -8,9 +8,10 @@
 //! are mirrored into the read-back; hide, show, reload, history and resize are sequence-numbered `page.command`s; a
 //! close here, a rejection or close there and the session's removal end the page, keeping an answer already submitted.
 //!
-//! The presenter's loss, its page channel's helper going and an unclaimed file page's claim window passing park the
-//! page instead (an extension beyond upstream, where they end it): the slot stays reserved, the outcome pending, and
-//! the presenter, when it stays, is told to drop its replica. The next presenter granted the session that speaks pages
+//! The presenter's loss, its page channel's helper going, an unclaimed file page's claim window passing and the
+//! presenter's `page.detached` (its own helper for the page ended) park the page instead (an extension beyond upstream,
+//! where they end it, the last one being a `page.closed` there): the slot stays reserved, the outcome pending, and the
+//! presenter, when it stays and still holds a replica, is told to drop it. The next presenter granted the session that speaks pages
 //! is handed every parked page again as a fresh `page.request` ([`Core::hand_on_parked_pages`]), in the order they were
 //! opened, a pane page once its pane is laid out; the placement rule is not run again, as a parked page belongs to the
 //! session's viewer. A parked page closes here like any page, telling no presenter; its visibility and size are
@@ -498,6 +499,29 @@ impl Core {
         if parked {
             let close = Body::PageClose(PresentationPageChange::page(job));
             self.remote.hub.send_to_presenter(close, session);
+            self.shut_page_serve_channel(page);
+        }
+    }
+
+    /// The presenter of `session` let page `job` go without closing it (`page.detached`: its helper ended there): a page
+    /// it shows is parked as for a helper lost here and its channel shut, telling the presenter nothing, as it holds no
+    /// replica any more. It waits for the next presenter; a page already parked, or handed to another presenter, is
+    /// left as it is.
+    pub(super) fn detach_remote_page(&mut self, session: Uuid, job: &str) {
+        let Some(page) = self
+            .presented_session(session)
+            .and_then(|found| found.remote_overlays().slot_of_job(job))
+            .filter(|slot| self.page_shown_by_owner(session, slot))
+            .and_then(|slot| slot.page.as_ref())
+            .map(|page| page.overlay.id)
+        else {
+            return;
+        };
+        let parked = self
+            .library_mut()
+            .store_for_session_mut(session)
+            .is_some_and(|store| store.park_remote_page(session, job));
+        if parked {
             self.shut_page_serve_channel(page);
         }
     }

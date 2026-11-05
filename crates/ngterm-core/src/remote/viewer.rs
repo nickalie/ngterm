@@ -336,11 +336,11 @@ impl Core {
     }
 
     /// A row leaving (soft close, close, window removal) closes every replica overlay and page its origin handed over,
-    /// and the origin hears `overlay.closed` and `page.closed` while the stream is still up, so an undo brings none of
-    /// them back (the replica half of upstream's `releaseLeavingSession`; its replica ask is cancelled with the
-    /// session's ask).
+    /// and the origin hears `overlay.closed` while the stream is still up, so an undo brings none of them back (the
+    /// replica half of upstream's `releaseLeavingSession`; its replica ask is cancelled with the session's ask). Its
+    /// pages are no close of theirs: an origin that speaks `page.detached` hears nothing and parks them when the
+    /// stream ends, handing them to the next presenter; an older one hears `page.closed` while the stream is still up.
     fn release_leaving_row(&mut self, session: Uuid) {
-        // its pages go too, the origin told while the stream is still up
         self.close_replica_pages(session);
         self.sync_pages();
         let jobs: Vec<String> = self
@@ -498,6 +498,15 @@ impl Core {
         }
     }
 
+    /// Whether `session`'s origin listed `kind` in its last hello answer; false with no stream client.
+    pub(crate) fn origin_speaks(&self, session: Uuid, kind: &str) -> bool {
+        self.remote
+            .viewer
+            .clients
+            .get(&session)
+            .is_some_and(|client| client.origin_speaks(kind))
+    }
+
     /// Moves the stream's state; leaving `connected` orphans the replica overlays: a held surface closes now, and a
     /// running one keeps its program and closes when its ssh ends, since no later stream adopts it.
     fn set_remote_connection(&mut self, session: Uuid, connection: RemoteConnection) {
@@ -508,7 +517,8 @@ impl Core {
         if !left {
             return;
         }
-        // the origin ends a handed-over page when the stream goes, and nothing could reach it from here
+        // the origin parks a handed-over page when the stream goes (an older one ends it), and nothing could reach it
+        // from here
         self.close_replica_pages(session);
         let replicas = self.remote.viewer.replicas.get(&session).cloned().unwrap_or_default();
         for replica in replicas {

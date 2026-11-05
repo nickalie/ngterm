@@ -489,6 +489,79 @@ fn the_origin_reads_the_viewers_page_state_and_presenter_loss_parks_it() {
     assert!(roles.launcher.0.borrow()[0].queue.0.borrow().stopped);
 }
 
+/// A close of the page on the viewer ends it on the origin for good: `page.closed` still goes to an origin that speaks
+/// `page.detached`.
+#[test]
+fn a_close_on_the_viewer_ends_the_page_on_the_origin() {
+    let mut roles = Roles::new(true);
+    let page = roles.open_page().result.unwrap()["pageID"].as_str().unwrap().to_owned();
+    assert!(roles.replica().is_some());
+
+    let session = roles.viewer.session;
+    roles.viewer.fixture.store_mut().unwrap().close_overlay(session);
+    roles.viewer.fixture.core.commit();
+    roles.pump();
+
+    assert_eq!(roles.outcome(&page)["outcome"], "dismissed");
+    assert!(roles.origin_node().get("htmlOverlays").is_none());
+}
+
+/// The viewer's helper for the page ending takes the replica down there and parks the page on the origin, its channel
+/// shut, rather than ending it (an extension beyond upstream, where `page.closed` ends it).
+#[test]
+fn the_viewers_helper_ending_parks_the_page_on_the_origin() {
+    let mut roles = Roles::new(true);
+    let page = roles.open_page().result.unwrap()["pageID"].as_str().unwrap().to_owned();
+    let key = roles.launcher.0.borrow()[0].key;
+
+    roles.viewer.fixture.core.page_helper_closed(key, "helper exited");
+    roles.viewer.fixture.core.commit();
+    roles.pump();
+
+    assert!(roles.replica().is_none());
+    assert_eq!(roles.viewer.sent("page.detached").len(), 1);
+    assert!(roles.viewer.sent("page.closed").is_empty());
+    assert_eq!(roles.outcome(&page)["outcome"], "pending");
+    let read = roles.origin_node()["htmlOverlays"][0].clone();
+    assert_eq!((&read["id"], &read["parked"]), (&json!(page), &json!(true)));
+    let served = roles.launcher.0.borrow()[0]
+        .served
+        .as_ref()
+        .map(|(_, channel)| Arc::clone(channel));
+    assert!(
+        served.is_some_and(|channel| *channel.shut.lock().unwrap_or_else(PoisonError::into_inner)),
+        "the origin shut the page's channel"
+    );
+}
+
+/// The viewer's row closing tells the origin nothing about the page, which stays reserved there and parks when the
+/// stream ends, for the next presenter.
+#[test]
+fn the_viewers_row_closing_leaves_the_page_to_park_on_the_origin() {
+    let mut roles = Roles::new(true);
+    let page = roles.open_page().result.unwrap()["pageID"].as_str().unwrap().to_owned();
+    let link = roles.viewer.link();
+    let before = link.0.borrow().sent.len();
+
+    let session = roles.viewer.session;
+    roles.viewer.fixture.store_mut().unwrap().close_session(session);
+    roles.viewer.fixture.core.commit();
+    roles.pump();
+
+    let told: Vec<Value> = link.0.borrow().sent[before..].to_vec();
+    assert!(
+        told.iter()
+            .all(|frame| !frame["kind"].as_str().unwrap().starts_with("page.")),
+        "{told:?}"
+    );
+    assert_eq!(roles.outcome(&page)["outcome"], "pending");
+    let serial = roles.serial;
+    roles.origin.fixture.core.presentation_closed(serial);
+    roles.origin.fixture.core.commit();
+    assert_eq!(roles.outcome(&page)["outcome"], "pending");
+    assert_eq!(roles.origin_node()["htmlOverlays"][0]["parked"], json!(true));
+}
+
 /// Upstream's `testAnOlderPresenterKeepsTheRefusal`: a viewer that shows no pages lists no page kind, so the origin
 /// keeps its refusal rather than handing the page over.
 #[test]

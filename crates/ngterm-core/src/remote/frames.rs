@@ -972,6 +972,10 @@ pub enum Body {
     PageClose(PresentationPageChange),
     /// The presenter took the page down, so the origin ends it, keeping an answer it recorded.
     PageClosed(PresentationPageChange),
+    /// The presenter let the page go without its close (the page's helper ended there), so the origin parks it for
+    /// the next presenter ([`super::hub::PAGE_DETACHED_KIND`]). This build's addition, sent only to an origin whose
+    /// hello answer lists it; an older origin keeps getting [`Body::PageClosed`].
+    PageDetached(PresentationPageChange),
     PageCommand(PresentationPageCommand),
     PageState(PresentationPageState),
     /// A page companion the origin created under the session; the presenter attaches it under its row.
@@ -1017,6 +1021,7 @@ impl Body {
             Self::PageRejected(_) => "page.rejected",
             Self::PageClose(_) => "page.close",
             Self::PageClosed(_) => "page.closed",
+            Self::PageDetached(_) => super::hub::PAGE_DETACHED_KIND,
             Self::PageCommand(_) => "page.command",
             Self::PageState(_) => "page.state",
             Self::CompanionPage(_) => super::hub::COMPANION_PAGE_KIND,
@@ -1049,9 +1054,10 @@ impl Body {
             | Self::OverlayResize(change)
             | Self::OverlayClosed(change) => entry("overlay", serde_json::to_value(change)),
             Self::PageRequest(page) => entry("page", serde_json::to_value(page)),
-            Self::PageRejected(change) | Self::PageClose(change) | Self::PageClosed(change) => {
-                entry("page", serde_json::to_value(change))
-            }
+            Self::PageRejected(change)
+            | Self::PageClose(change)
+            | Self::PageClosed(change)
+            | Self::PageDetached(change) => entry("page", serde_json::to_value(change)),
             Self::PageCommand(command) => entry("page", serde_json::to_value(command)),
             Self::PageState(state) => entry("page", serde_json::to_value(state)),
             Self::CompanionPage(companion) => entry("companion", serde_json::to_value(companion)),
@@ -1206,6 +1212,7 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         "page.rejected" => Body::PageRejected(required(object, "page")?),
         "page.close" => Body::PageClose(required(object, "page")?),
         "page.closed" => Body::PageClosed(required(object, "page")?),
+        super::hub::PAGE_DETACHED_KIND => Body::PageDetached(required(object, "page")?),
         "page.command" => Body::PageCommand(required(object, "page")?),
         "page.state" => Body::PageState(required(object, "page")?),
         super::hub::COMPANION_PAGE_KIND => Body::CompanionPage(required(object, "companion")?),
@@ -1522,6 +1529,7 @@ mod tests {
             }),
             Body::PageClose(PresentationPageChange::page("p1")),
             Body::PageClosed(PresentationPageChange::page("p1")),
+            Body::PageDetached(PresentationPageChange::page("p1")),
             command(7, PresentationPageAction::Resize, Some(50)),
             command(8, PresentationPageAction::ReloadCurrent, None),
             Body::PageState(page_state(true)),

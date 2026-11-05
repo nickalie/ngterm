@@ -229,6 +229,7 @@ impl Core {
             Body::PageState(_) | Body::PageRejected(_) | Body::PageClosed(_) => {
                 self.receive_remote_page_frame(session, &body);
             }
+            Body::PageDetached(change) => self.detach_remote_page(session, &change.page),
             _ => {}
         }
         self.sync_modals();
@@ -238,7 +239,7 @@ impl Core {
     /// that ended records its outcome into its slot (upstream's `closeRemoteOverlay` hub half and `onFinished`). A
     /// page the model closed is taken down there too and its outcome dismissed unless it was answered, and a page
     /// visibility request the model numbered (hide or show) is sent here, and only here, while the page's slot is
-    /// still held for that presenter.
+    /// still held for that presenter. A parked page closing hands on the parked pages it held back.
     pub(crate) fn settle_remote_overlays(&mut self) {
         for change in self.library_mut().take_remote_overlay_changes() {
             match change {
@@ -249,6 +250,10 @@ impl Core {
                 }
                 RemoteOverlayChange::PageClosed { session, page, shown } => {
                     self.close_remote_page(session, page, shown);
+                    if !shown {
+                        // a parked pane page waiting for its pane may have held the pages after it back
+                        self.hand_on_parked_pages(session);
+                    }
                 }
                 RemoteOverlayChange::PageCommand { session, command } => self.deliver_page_command(session, command),
             }

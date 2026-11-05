@@ -20,7 +20,7 @@ use super::frames::{
     PresentationOverlayChange, PresentationPage, PresentationPageChange, PresentationPageCommand, PresentationRespawns,
     PresentationSound, PresentationStatus,
 };
-use super::hub::{AGENT_KIND, COMPANION_PAGE_KIND, PAGE_KINDS, SUPPORTED_KINDS};
+use super::hub::{AGENT_KIND, COMPANION_PAGE_KIND, PAGE_DETACHED_KIND, PAGE_KINDS, SUPPORTED_KINDS};
 use super::reconnect::retry_delay;
 use crate::model::RemoteConnection;
 
@@ -32,8 +32,8 @@ pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
 
 /// The kinds this viewer's hello lists: every kind the build speaks, the page kinds only when it can show a handed-over
 /// page (`pages`: the web views are built in and can run), and with them the loopback forward
-/// ([`super::page_tunnel::TUNNEL_KIND`]) and a headless origin's page companions ([`COMPANION_PAGE_KIND`]), extensions
-/// of this build. Upstream's hello lists them all; an origin a viewer
+/// ([`super::page_tunnel::TUNNEL_KIND`]), a headless origin's page companions ([`COMPANION_PAGE_KIND`]) and the page
+/// detach ([`PAGE_DETACHED_KIND`]), extensions of this build. Upstream's hello lists them all; an origin a viewer
 /// leaves them out for hands it no page and keeps its own refusal, rather than handing over a page that is refused at
 /// once.
 #[must_use]
@@ -42,7 +42,8 @@ pub fn viewer_kinds(pages: bool) -> Vec<String> {
         .iter()
         .filter(|kind| {
             pages
-                || !(PAGE_KINDS.contains(kind) || [super::page_tunnel::TUNNEL_KIND, COMPANION_PAGE_KIND].contains(kind))
+                || !(PAGE_KINDS.contains(kind)
+                    || [super::page_tunnel::TUNNEL_KIND, COMPANION_PAGE_KIND, PAGE_DETACHED_KIND].contains(kind))
         })
         .map(|kind| (*kind).to_owned())
         .collect()
@@ -134,6 +135,9 @@ pub struct PresentationClient {
     shows_pages: bool,
     /// The hello lists [`AGENT_KIND`] too, and its frames are reported.
     shows_agents: bool,
+    /// The kinds the origin's last hello answer listed, kept after its link goes so what is said about that link's
+    /// work still follows them ([`PresentationClient::origin_speaks`]).
+    origin_kinds: Vec<String>,
 }
 
 impl std::fmt::Debug for PresentationClient {
@@ -170,6 +174,7 @@ impl PresentationClient {
             mode: None,
             shows_pages: false,
             shows_agents: false,
+            origin_kinds: Vec::new(),
         }
     }
 
@@ -182,6 +187,12 @@ impl PresentationClient {
     /// opt-in kind of this build that desktop never lists, and its frames are reported as [`ClientEffect::Agent`].
     pub fn set_shows_agents(&mut self, shows_agents: bool) {
         self.shows_agents = shows_agents;
+    }
+
+    /// Whether the origin's last hello answer listed `kind`: both sides speak it. False before any answer.
+    #[must_use]
+    pub fn origin_speaks(&self, kind: &str) -> bool {
+        self.origin_kinds.iter().any(|listed| listed == kind)
     }
 
     /// The kinds the next hello lists.
@@ -336,8 +347,13 @@ impl PresentationClient {
             Body::Notify(notify) => effects.push(ClientEffect::Notify(notify)),
             Body::Sound(sound) => effects.push(ClientEffect::Sound(sound)),
             Body::Ping => self.answer(Body::Ack),
-            // an origin that predates the role answers mirror, and nothing is asked of it
-            Body::Hello(answer) if answer.mode == PresentationMode::Presenter => self.answer(Body::PresenterAcquire),
+            Body::Hello(answer) => {
+                self.origin_kinds = answer.kinds;
+                // an origin that predates the role answers mirror, and nothing is asked of it
+                if answer.mode == PresentationMode::Presenter {
+                    self.answer(Body::PresenterAcquire);
+                }
+            }
             Body::PresenterGranted => self.report_mode(PresentationMode::Presenter, effects),
             Body::PresenterRefused => self.report_mode(PresentationMode::Mirror, effects),
             Body::AskRequest(ask) => effects.push(ClientEffect::AskRequest(ask)),
@@ -351,8 +367,7 @@ impl PresentationClient {
             Body::Respawn(respawns) => effects.push(ClientEffect::Respawns(respawns, false)),
             Body::CompanionPage(companion) => effects.push(ClientEffect::CompanionPage(companion)),
             Body::Agent(agent) if self.shows_agents => effects.push(ClientEffect::Agent(agent)),
-            Body::Hello(_)
-            | Body::Ack
+            Body::Ack
             | Body::PresenterAcquire
             | Body::AskResolve(_)
             | Body::AskRejected(_)
@@ -360,6 +375,7 @@ impl PresentationClient {
             | Body::OverlayClosed(_)
             | Body::PageRejected(_)
             | Body::PageClosed(_)
+            | Body::PageDetached(_)
             | Body::PageState(_)
             // listed only when this viewer shows agents, so never sent to another
             | Body::Agent(_)

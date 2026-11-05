@@ -131,11 +131,16 @@ pub const OVERLAY_POINTS_KIND: &str = "overlay.points";
 /// ([`super::frames::Body::CompanionPage`]). This build's addition, listed with the page kinds.
 pub const COMPANION_PAGE_KIND: &str = "companion.page";
 
+/// A presenter tells a page it let go without closing it ([`super::frames::Body::PageDetached`]): its helper ended, so
+/// the origin parks the page for the next presenter instead of ending it. This build's addition, listed with the page
+/// kinds; a presenter sends it only to an origin whose hello answer lists it, and `page.closed` otherwise.
+pub const PAGE_DETACHED_KIND: &str = "page.detached";
+
 /// The frame kinds this origin produces, in upstream's order; a hello's kinds are filtered through it. Work handed to a
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's; this build's [`OPT_IN_KINDS`] are the exception.
-pub const SUPPORTED_KINDS: [&str; 18] = [
+pub const SUPPORTED_KINDS: [&str; 19] = [
     "status",
     "hud",
     "notify",
@@ -148,6 +153,7 @@ pub const SUPPORTED_KINDS: [&str; 18] = [
     OVERLAY_POINTS_KIND,
     super::page_tunnel::TUNNEL_KIND,
     COMPANION_PAGE_KIND,
+    PAGE_DETACHED_KIND,
     PAGE_KINDS[0],
     PAGE_KINDS[1],
     PAGE_KINDS[2],
@@ -402,6 +408,7 @@ impl PresentationHub {
             | Body::OverlayClosed(_)
             | Body::PageRejected(_)
             | Body::PageClosed(_)
+            | Body::PageDetached(_)
             | Body::PageState(_))
                 if self.grant.holder(session) == Some(from) =>
             {
@@ -876,7 +883,8 @@ mod tests {
 
     #[test]
     fn the_kinds_follow_upstreams_order() {
-        // upstream's, with this build's loopback forward and companion pages before the page kinds, which close the list
+        // upstream's, with this build's loopback forward, companion pages and page detach before the page kinds, which
+        // close the list
         assert_eq!(
             SUPPORTED_KINDS,
             [
@@ -892,6 +900,7 @@ mod tests {
                 "overlay.points",
                 "page.tunnel",
                 "companion.page",
+                "page.detached",
                 "page.request",
                 "page.rejected",
                 "page.close",
@@ -1130,12 +1139,19 @@ mod tests {
         hub.receive(frame(presenter, Body::PresenterAcquire), presenter);
         assert_eq!(hub.take_events(), vec![HubEvent::PresenterGained(session)]);
         let closed = Body::PageClosed(PresentationPageChange::page("p1"));
+        // this build's detach goes the same way
+        let detached = Body::PageDetached(PresentationPageChange::page("p1"));
         hub.receive(frame(mirror, closed.clone()), mirror);
+        hub.receive(frame(mirror, detached.clone()), mirror);
         assert!(hub.take_events().is_empty());
         hub.receive(frame(presenter, closed.clone()), presenter);
+        hub.receive(frame(presenter, detached.clone()), presenter);
         assert_eq!(
             hub.take_events(),
-            vec![HubEvent::PresenterFrame(session, Box::new(closed))]
+            vec![
+                HubEvent::PresenterFrame(session, Box::new(closed)),
+                HubEvent::PresenterFrame(session, Box::new(detached))
+            ]
         );
     }
 

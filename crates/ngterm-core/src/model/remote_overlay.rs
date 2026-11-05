@@ -7,8 +7,8 @@
 //! page's outcome) is queued as a [`RemoteOverlayChange`] for the core, as the store cannot reach the presentation
 //! hub, the job table or the page outcomes.
 //!
-//! A page whose presenter, or whose channel's helper, went is parked rather than ended (an extension beyond upstream,
-//! whose presenter loss ends every page): its slot stays reserved and its outcome pending until a later presenter that
+//! A page whose presenter, or whose channel's helper here or there (`page.detached`), went is parked rather than ended
+//! (an extension beyond upstream, whose presenter loss ends every page): its slot stays reserved and its outcome pending until a later presenter that
 //! speaks pages is handed it again, or it is closed here.
 
 use std::time::Instant;

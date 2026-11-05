@@ -197,9 +197,14 @@ impl Viewer {
 
     /// The origin's hello and snapshot.
     pub(super) fn connect(&mut self, snapshot: &Value) {
+        self.connect_listing(&["status", "hud", "notify", "context", "layout"], snapshot);
+    }
+
+    /// [`Viewer::connect`], the origin's hello answer listing `kinds`.
+    pub(super) fn connect_listing(&mut self, kinds: &[&str], snapshot: &Value) {
         let key = self.link().0.borrow().key.unwrap();
         let hello = json!({"kind": "hello", "gen": 5, "rev": 0,
-            "hello": {"version": 1, "kinds": ["status", "hud", "notify", "context", "layout"], "mode": "presenter"}});
+            "hello": {"version": 1, "kinds": kinds, "mode": "presenter"}});
         self.fixture.core.viewer_line(key, &serde_json::to_vec(&hello).unwrap());
         self.frame(json!({"kind": "snapshot", "snapshot": snapshot}));
     }
