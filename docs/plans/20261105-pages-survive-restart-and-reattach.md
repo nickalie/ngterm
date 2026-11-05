@@ -150,14 +150,16 @@
   persisted" docs), wherever outcomes are registered for restored pages
 - Tests: `crates/ngterm-core/src/persist/` and `crates/ngterm-core/src/model/tests/`
 
-- [ ] `PageSnapshot` and `SessionSnapshot.pages` as Technical Details describes, written from `session_snapshot`
+- [x] `PageSnapshot` and `SessionSnapshot.pages` as Technical Details describes, written from `session_snapshot`
       for local pages (no replicas, no page companion rows)
-- [ ] `session_from_snapshot` restores them into the session-wide and pane slots with fresh ids and generations;
+- [x] `session_from_snapshot` restores them into the session-wide and pane slots with fresh ids and generations;
       drops entries whose file is gone, whose source no longer validates, or whose pane does not exist
-- [ ] restored pages registered pending for every restore path (bootstrap, closed-window reopen, Recent Closed)
-- [ ] tests: round trip per source kind and slot; lossy decode of a malformed entry; gone file dropped; replica not
+- [x] restored pages registered pending for every restore path (bootstrap, closed-window reopen, Recent Closed)
+- [x] tests: round trip per source kind and slot; lossy decode of a malformed entry; gone file dropped; replica not
       written; restored page answers `overlay result --page` pending and accepts a submit
-- [ ] clippy and tests on `ngterm-core`; must pass before Task 2
+- [x] ➕ a persisted page that opens, closes or moves asks its windows for a debounced save (overlays asked for none
+      before), so a crash neither loses an open page nor revives a closed one
+- [x] clippy and tests on `ngterm-core`; must pass before Task 2
 
 ### Task 2: The origin parks a presenter's pages and hands them to the next presenter
 

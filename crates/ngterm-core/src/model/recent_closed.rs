@@ -251,7 +251,7 @@ impl AppStore {
             },
             None => self.workspace_index_or_shell(recent.workspace_id, recent.workspace_index, &recent.workspace_name),
         };
-        let session = session_from_snapshot(&recent.snapshot, false);
+        let session = session_from_snapshot(&recent.snapshot, false, &self.home);
         let id = session.id();
         let workspace_id = self.workspaces[index].id();
         let sessions = &mut self.workspaces[index].sessions;
@@ -284,7 +284,7 @@ impl AppStore {
                 break;
             };
             let end = group_end(at, sessions);
-            sessions.insert(end, session_from_snapshot(snapshot, false));
+            sessions.insert(end, session_from_snapshot(snapshot, false, &self.home));
             self.emit_session_created(snapshot.id, workspace_id);
         }
     }
@@ -310,7 +310,7 @@ impl AppStore {
         if self.restore_or_select_existing_recent_workspace(recent, occupied_elsewhere) {
             return self.workspace_restore_outcome(recent, occupied_elsewhere);
         }
-        let mut workspace = workspace_from_snapshot(&recent.snapshot);
+        let mut workspace = workspace_from_snapshot(&recent.snapshot, &self.home);
         // a member may live on elsewhere (moved to another workspace pending its own close, or to another window):
         // its original object is alive there, so rebuild everything except it
         let taken = self.taken_session_ids(occupied_elsewhere);
@@ -387,7 +387,7 @@ impl AppStore {
             .sessions
             .iter()
             .filter(|session| !taken.contains(&session.id))
-            .map(|session| session_from_snapshot(session, false))
+            .map(|session| session_from_snapshot(session, false, &self.home))
             .collect();
         let workspace_id = self.workspaces[index].id();
         let ids: Vec<Uuid> = missing.iter().map(Session::id).collect();

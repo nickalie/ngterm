@@ -19,6 +19,7 @@ mod overlay_cover_hold;
 mod overlay_events;
 mod overlay_points;
 mod overlay_visibility;
+mod page_snapshot;
 mod panes;
 mod pending_close;
 mod recent_closed;

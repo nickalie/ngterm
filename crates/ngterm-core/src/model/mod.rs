@@ -19,6 +19,7 @@ mod outbox;
 mod overlay;
 mod overlay_points;
 mod overlay_visibility;
+mod page_snapshot;
 pub mod pane;
 mod pane_focus;
 mod pane_overlay;

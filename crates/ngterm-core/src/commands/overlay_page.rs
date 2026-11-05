@@ -3,16 +3,17 @@
 //! the core's side of the frontend's web views: what they report, the page bridge's entry, and the pages released
 //! from every slot (upstream's `HtmlOverlayReleases`).
 //!
-//! A page's outcome lives here, keyed by its id ([`HtmlPageOutcomes`]): an open registers it, a submit records the
-//! value before the close, and a page found gone from every slot of every open window (its session's undoable close
-//! included) is dismissed and handed to the frontend to release its web view, whatever path emptied the slot.
+//! A page's outcome lives here, keyed by its id ([`HtmlPageOutcomes`]): an open registers it (a page a snapshot
+//! restore brought back is registered by the next sync), a submit records the value before the close, and a page
+//! found gone from every slot of every open window (its session's undoable close included) is dismissed and handed to
+//! the frontend to release its web view, whatever path emptied the slot.
 //!
 //! A page the placement rule hands to the presenting machine (`crate::remote`'s page half) is stored, rendered and
 //! followed there: its open, submit, reload and history commands go to that machine, and its outcome is settled when
 //! it ends there or here. On that machine the page is a replica (`crate::remote::replica_page`): a socket submit is
 //! refused there, its release tells the origin, and its file is never handed to the browser or the file manager.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use ngterm_proto::{Args, ControlResult, Request};
@@ -30,6 +31,7 @@ use crate::html::{
 };
 use crate::model::{HtmlOverlayOpenFailure, HtmlPageSlot, OverlayPane, OverlayPointSize, OverlaySize, StatusPane};
 use crate::pane_env::uuid_string;
+use crate::persist::PageSnapshot;
 use crate::remote::{REMOTE_LOOPBACK, REMOTE_TOO_LARGE, RemotePageCommand, RemotePageOpen};
 
 /// A page that passed validation in a build with no web views (the `html` feature off).
@@ -54,6 +56,10 @@ pub(crate) struct PageRuntime {
     outcomes: HtmlPageOutcomes,
     /// Every page opened and not yet released.
     known: HashSet<Uuid>,
+    /// The pages a window's snapshot writes ([`HtmlOverlay::persisted`]), each by the window holding it and what the
+    /// snapshot wrote for it at the last sync, so a page that comes, goes, moves or changes asks its windows for a
+    /// save.
+    persisted: HashMap<Uuid, (Uuid, PageSnapshot)>,
     /// Pages that left every slot since the frontend last took them.
     released: Vec<Uuid>,
     host: Option<Box<dyn HtmlHost>>,
@@ -66,6 +72,7 @@ impl fmt::Debug for PageRuntime {
         f.debug_struct("PageRuntime")
             .field("outcomes", &self.outcomes)
             .field("known", &self.known)
+            .field("persisted", &self.persisted)
             .field("released", &self.released)
             .field("host", &self.host.is_some())
             .field("presenter_only", &self.presenter_only)
@@ -396,7 +403,8 @@ impl Core {
     }
 
     /// Settles the pages that left every slot: each is dismissed (a no-op for one already answered) and queued for
-    /// the frontend to release its web view. Runs at every commit and before an outcome is read.
+    /// the frontend to release its web view. Then follows the pages a snapshot writes ([`Core::sync_persisted_pages`]).
+    /// Runs at every commit and before an outcome is read.
     pub(crate) fn sync_pages(&mut self) {
         let live: HashSet<Uuid> = self.library().live_html_overlays().into_iter().collect();
         let gone: Vec<Uuid> = self.pages.known.difference(&live).copied().collect();
@@ -409,6 +417,41 @@ impl Core {
             }
             self.replica_page_released(page);
             self.end_companion_page_serving(page);
+        }
+        let persisted = self.library().live_persisted_pages();
+        self.sync_persisted_pages(persisted);
+    }
+
+    /// Follows the pages a window's snapshot writes, `pages` being each as (window, page, what the snapshot writes for
+    /// it). One in a slot that no open of this run put there is one a restore brought back (with a fresh id, so never
+    /// a page answered before): its outcome starts pending, as an open's does. A persisted page that came, went, moved
+    /// or changed what its snapshot writes (its slot, visibility, size, background or cover hold) asks the windows it
+    /// touched for a debounced save, so a crash neither loses an open page nor revives a closed one or its old state.
+    fn sync_persisted_pages(&mut self, pages: Vec<(Uuid, Uuid, PageSnapshot)>) {
+        let mut before = std::mem::take(&mut self.pages.persisted);
+        let mut dirty: HashSet<Uuid> = HashSet::new();
+        for (window, page, snapshot) in pages {
+            if self.pages.known.insert(page) {
+                self.pages.outcomes.register(page);
+            } else {
+                match before.remove(&page) {
+                    Some((previous, written)) if previous == window && written == snapshot => {}
+                    // a page that changed in its window touches that window alone, the set keeping it once
+                    Some((previous, _)) => {
+                        dirty.extend([previous, window]);
+                    }
+                    None => {
+                        dirty.insert(window);
+                    }
+                }
+            }
+            self.pages.persisted.insert(page, (window, snapshot));
+        }
+        dirty.extend(before.into_values().map(|(window, _)| window));
+        for window in dirty {
+            if let Some(store) = self.library_mut().store_mut(window) {
+                store.schedule_save();
+            }
         }
     }
 

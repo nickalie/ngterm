@@ -387,7 +387,9 @@ pub struct HtmlPageFlags {
 
 /// A page occupying an overlay slot (`session.overlay.open --html` or `--url`) in place of a program (upstream's
 /// `HtmlOverlay`). `id` travels with the value, so a pane swap or promotion moves the page and the frontend's web view
-/// follows it; every frontend report addresses the page by that id. Ephemeral: never persisted.
+/// follows it; every frontend report addresses the page by that id. A page this machine opened in a session's slot is
+/// persisted with its session ([`HtmlOverlay::persisted`], an extension beyond upstream, which keeps every overlay
+/// ephemeral): its source, flags and slot, never its id or what it loaded since.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HtmlOverlay {
     pub id: uuid::Uuid,
@@ -439,6 +441,13 @@ impl HtmlOverlay {
             reload_target: HtmlReloadTarget::Original,
             row: false,
         }
+    }
+
+    /// Whether the session's snapshot writes the page: one this machine opened in an overlay slot. A replica belongs
+    /// to the machine that opened it, and a page companion's row is never persisted.
+    #[must_use]
+    pub fn persisted(&self) -> bool {
+        self.replica_of.is_none() && !self.row && !matches!(self.source, HtmlSource::Replica { .. })
     }
 
     /// Whether ngterm themes the page: a file page, replica or Markdown document (upstream's `themed`).

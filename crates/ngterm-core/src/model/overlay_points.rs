@@ -2,7 +2,7 @@
 //! --width/--height` override the panel's `--size-percent` on the axes they give, in points of the area the program or
 //! page gets, a page's strip coming on top. [`panel_size`] is the one sizing function: the frontend lays the panel out
 //! with it and the tree's `overlayWidth`/`overlayHeight` read back through it from the session's cached detail frame,
-//! so the two cannot disagree. Ephemeral, like the slot: never persisted.
+//! so the two cannot disagree. A program's are ephemeral, never persisted; a page's persist with it (`page_snapshot`).
 
 use uuid::Uuid;
 

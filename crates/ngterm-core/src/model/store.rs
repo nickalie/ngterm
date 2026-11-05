@@ -211,6 +211,9 @@ pub struct AppStore {
     pub(crate) saved_remote_rows: Vec<crate::persist::RemoteSessionSnapshot>,
     /// Where each row attached again from a saved one was saved, by its id here. Not persisted.
     pub(crate) reattached_places: HashMap<Uuid, super::saved_remote_rows::SavedPlace>,
+    /// The user's home, which a restored file page's grant is checked against ([`crate::html::grant_error`]); set by
+    /// the library that builds the store, empty in one built on its own. Not persisted.
+    pub(crate) home: String,
 }
 
 impl AppStore {

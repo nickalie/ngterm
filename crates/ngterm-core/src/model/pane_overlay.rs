@@ -4,7 +4,9 @@
 //!
 //! An overlay follows its pane: a swap exchanges them, a promotion moves the survivor's into the left slot with its
 //! exit status, and a pane that goes takes its overlay with it. Every overlay carries a generation unique within its
-//! session, which the frontend keys its terminal by, so a moved overlay keeps its terminal. Ephemeral: never persisted.
+//! session, which the frontend keys its terminal by, so a moved overlay keeps its terminal. A program overlay is
+//! ephemeral, never persisted; a page persists with its session (`page_snapshot`, an extension beyond upstream), and
+//! a restore mints its generation afresh.
 
 use std::path::PathBuf;
 

@@ -297,6 +297,96 @@ pub struct SessionSnapshot {
     /// A parent's folded companions; written only when true, so an unfolded tree writes what a legacy snapshot held.
     #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
     pub collapsed: Option<bool>,
+    /// The pages open in the session's overlay slots (an extension beyond upstream, whose overlays are ephemeral),
+    /// session-wide first, then left and right; absent while none is. An entry that does not decode drops alone.
+    #[serde(default, deserialize_with = "lossy_entries", skip_serializing_if = "Option::is_none")]
+    pub pages: Option<Vec<PageSnapshot>>,
+}
+
+/// The overlay slot a persisted page held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PageSlotSnapshot {
+    /// The session-wide slot.
+    Session,
+    /// The primary pane's slot.
+    Left,
+    /// The split pane's slot.
+    Right,
+}
+
+/// What a persisted page shows, by its `kind`: the source it was opened with, never where the user navigated since.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum PageSourceSnapshot {
+    /// `--html`, and its `--cwd` grant when it had one.
+    File {
+        path: String,
+        #[serde(default, rename = "grantRoot", skip_serializing_if = "Option::is_none")]
+        grant_root: Option<String>,
+    },
+    /// `--url`.
+    Url { url: String },
+    /// `--image`.
+    Image { path: String },
+    /// `--markdown`.
+    Markdown { path: String },
+}
+
+/// One page open in a session's overlay slot, written so the next launch opens it again (an extension beyond
+/// upstream). A page id is never written: every restore mints a fresh one, so a reopened window or Recent Closed entry
+/// cannot meet an outcome already settled. The slot and the source are required; every other key is lossy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the five independent page flags, each its own wire boolean, the hidden bit and the cover hold"
+)]
+pub struct PageSnapshot {
+    pub slot: PageSlotSnapshot,
+    pub source: PageSourceSnapshot,
+    #[serde(default, deserialize_with = "lossy_flag", skip_serializing_if = "is_false")]
+    pub navigation: bool,
+    #[serde(default, deserialize_with = "lossy_flag", skip_serializing_if = "is_false")]
+    pub javascript: bool,
+    #[serde(default, deserialize_with = "lossy_flag", skip_serializing_if = "is_false")]
+    pub chromeless: bool,
+    #[serde(default, deserialize_with = "lossy_flag", skip_serializing_if = "is_false")]
+    pub persistent: bool,
+    #[serde(default, deserialize_with = "lossy_flag", skip_serializing_if = "is_false")]
+    pub browse: bool,
+    /// The session-wide slot's floating share; absent for a full cover and in a pane slot.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub size_percent: Option<i64>,
+    /// The session-wide slot's point width beside its share.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub width: Option<i64>,
+    /// The session-wide slot's point height beside its share.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
+    /// The page's own `#rrggbb` background.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<String>,
+    /// The page runs on while it covers nothing.
+    #[serde(default, deserialize_with = "lossy_flag", skip_serializing_if = "is_false")]
+    pub hidden: bool,
+    /// A pane page opened over the session-wide page written beside it, so it draws above that page while shown
+    /// (`PaneOverlay::holds_cover`); never set in the session-wide slot.
+    #[serde(default, deserialize_with = "lossy_flag", skip_serializing_if = "is_false")]
+    pub holds_cover: bool,
+}
+
+/// A flag decoded lossily: absent, null or of another type reads as false.
+fn lossy_flag<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(lossy::<D, bool>(deserializer)?.unwrap_or(false))
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes the field by reference"
+)]
+fn is_false(flag: &bool) -> bool {
+    !*flag
 }
 
 impl SessionSnapshot {
@@ -545,6 +635,68 @@ mod tests {
                 .get("remoteSessions")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_page_entry_that_does_not_decode_drops_alone() {
+        let good = r##"{ "slot": "session", "source": { "kind": "file", "path": "/s/p.html", "grantRoot": "/s" },
+            "javascript": true, "sizePercent": 40, "width": 300, "backgroundColor": "#102030", "hidden": true }"##;
+        let sloppy = r#"{ "slot": "left", "source": { "kind": "url", "url": "https://example.com/" },
+            "navigation": "yes", "sizePercent": "big", "height": 1e400, "backgroundColor": 7, "holdsCover": true }"#;
+        let text = with_session_key(&format!(
+            r#""pages": [ {good}, {sloppy}, {{ "source": {{ "kind": "url", "url": "https://x/" }} }},
+                {{ "slot": "top", "source": {{ "kind": "url", "url": "https://x/" }} }},
+                {{ "slot": "right", "source": {{ "kind": "pdf", "path": "/a.pdf" }} }},
+                {{ "slot": "right", "source": {{ "kind": "image" }} }}, 42 ]"#
+        ));
+        let pages = decode(&text).workspaces[0].sessions[0].pages.clone().unwrap();
+        let file = PageSnapshot {
+            slot: PageSlotSnapshot::Session,
+            source: PageSourceSnapshot::File {
+                path: "/s/p.html".to_owned(),
+                grant_root: Some("/s".to_owned()),
+            },
+            navigation: false,
+            javascript: true,
+            chromeless: false,
+            persistent: false,
+            browse: false,
+            size_percent: Some(40),
+            width: Some(300),
+            height: None,
+            background_color: Some("#102030".to_owned()),
+            hidden: true,
+            holds_cover: false,
+        };
+        let url = PageSnapshot {
+            slot: PageSlotSnapshot::Left,
+            source: PageSourceSnapshot::Url {
+                url: "https://example.com/".to_owned(),
+            },
+            javascript: false,
+            size_percent: None,
+            width: None,
+            background_color: None,
+            hidden: false,
+            holds_cover: true,
+            ..file.clone()
+        };
+        assert_eq!(pages, [file.clone(), url]);
+        for bad in [r#""pages": "none""#, r#""pages": null"#] {
+            assert_eq!(decode(&with_session_key(bad)).workspaces[0].sessions[0].pages, None);
+        }
+
+        // written: a false flag and an unset optional leave their key out
+        let written = serde_json::to_value(&file).unwrap();
+        assert_eq!(
+            written,
+            serde_json::json!({
+                "slot": "session", "source": {"kind": "file", "path": "/s/p.html", "grantRoot": "/s"},
+                "javascript": true, "sizePercent": 40, "width": 300, "backgroundColor": "#102030", "hidden": true,
+            })
+        );
+        let bare = SessionSnapshot::new(session(), "/a");
+        assert!(!serde_json::to_string(&bare).unwrap().contains("pages"));
     }
 
     #[test]

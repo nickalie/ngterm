@@ -124,11 +124,12 @@ impl WindowLibrary {
     }
 
     /// An empty store carrying the library's flagged layout, for a load to restore into: the restore's selection
-    /// repair follows the order that layout shows.
+    /// repair follows the order that layout shows, and its restored file pages are checked against the home.
     #[must_use]
     pub fn blank_store(&self) -> AppStore {
         let mut store = AppStore::new();
         store.messages = self.messages.clone();
+        store.home.clone_from(&self.home);
         store.set_flagged_layout(self.flagged_layout);
         store
     }

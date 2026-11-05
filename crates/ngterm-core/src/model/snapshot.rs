@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use super::background::PaneBackgrounds;
 use super::companions::regrouped_companions;
+use super::page_snapshot::{restore_pages, session_pages};
 use super::pane::{SplitAxis, clamp_split_ratio};
 use super::recency::{RECENCY_LIMIT, RecencyStack};
 use super::session::{Session, SessionSeed};
@@ -98,7 +99,7 @@ impl AppStore {
         {
             session.teardown_surfaces();
         }
-        self.workspaces = restored_workspaces(snapshot, launch_restore);
+        self.workspaces = restored_workspaces(snapshot, launch_restore, &self.home);
         self.restore_saved_remote_rows(snapshot.remote_sessions.as_deref());
         self.sidebar.width = clamp_sidebar_width(snapshot.sidebar_width.unwrap_or(SIDEBAR_WIDTH_DEFAULT));
         self.sidebar.visible = snapshot.sidebar_visible.unwrap_or(true);
@@ -137,7 +138,7 @@ impl AppStore {
     }
 }
 
-fn restored_workspaces(snapshot: &Snapshot, launch_restore: bool) -> Vec<Workspace> {
+fn restored_workspaces(snapshot: &Snapshot, launch_restore: bool, home: &str) -> Vec<Workspace> {
     let mut seen: HashSet<Uuid> = HashSet::new();
     let mut restored: Vec<Workspace> = Vec::new();
     for persisted in &snapshot.workspaces {
@@ -145,7 +146,7 @@ fn restored_workspaces(snapshot: &Snapshot, launch_restore: bool) -> Vec<Workspa
             .sessions
             .iter()
             .filter(|session| seen.insert(session.id))
-            .map(|session| session_from_snapshot(session, launch_restore))
+            .map(|session| session_from_snapshot(session, launch_restore, home))
             .collect();
         if let Some(existing) = restored.iter_mut().find(|workspace| workspace.id() == persisted.id) {
             existing.sessions.extend(sessions);
@@ -164,14 +165,15 @@ fn restored_workspaces(snapshot: &Snapshot, launch_restore: bool) -> Vec<Workspa
     restored
 }
 
-/// Rebuilds one workspace with nothing armed (upstream's `workspace(from:)`, an Open Recent reopen).
-pub(crate) fn workspace_from_snapshot(snapshot: &WorkspaceSnapshot) -> Workspace {
+/// Rebuilds one workspace with nothing armed (upstream's `workspace(from:)`, an Open Recent reopen); its file pages'
+/// grants are checked against `home`.
+pub(crate) fn workspace_from_snapshot(snapshot: &WorkspaceSnapshot, home: &str) -> Workspace {
     let mut workspace = Workspace::with_id(snapshot.id, snapshot.name.clone());
     workspace.sessions = regrouped_companions(
         snapshot
             .sessions
             .iter()
-            .map(|session| session_from_snapshot(session, false))
+            .map(|session| session_from_snapshot(session, false, home))
             .collect(),
     );
     workspace.is_expanded = !snapshot.collapsed.unwrap_or(false);
@@ -232,6 +234,7 @@ pub fn session_snapshot(session: &Session) -> SessionSnapshot {
         tint: session.tint,
         parent_id: session.parent_id(),
         collapsed: (!session.companion.expanded).then_some(true),
+        pages: session_pages(session),
     }
 }
 
@@ -244,9 +247,10 @@ fn copied_argv(command: Option<&String>, argv: Option<&Vec<String>>) -> Option<V
 /// Rebuilds one session, its companion link as persisted: the workspace's regrouping drops one naming no top-level
 /// session. A hidden split keeps its identity and restore state, so showing it reattaches the surviving
 /// daemon; focus is not persisted and returns to the primary pane. Missing pane identities (a legacy snapshot) are
-/// minted.
+/// minted. Its pages open again in their slots under fresh ids, the entries that no longer check out dropped (a file
+/// page's grant checked against `home`).
 #[must_use]
-pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool) -> Session {
+pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool, home: &str) -> Session {
     let has_split = snapshot.has_any_split();
     let mut session = Session::new(SessionSeed {
         id: Some(snapshot.id),
@@ -314,5 +318,6 @@ pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool) -
                 .clone_from(&session.split_restore.command);
         }
     }
+    restore_pages(&mut session, snapshot.pages.as_deref().unwrap_or_default(), home);
     session
 }

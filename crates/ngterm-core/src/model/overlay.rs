@@ -4,7 +4,8 @@
 //!
 //! The slot holds one occupant at a time. A HUD is a passive message panel the app paints itself ([`hud::painter`]),
 //! re-reading a body file the HUD commands write; a caller's program or page replaces it, and
-//! it never replaces them. Everything here is ephemeral: never persisted.
+//! it never replaces them. A HUD and a program are ephemeral, never persisted; a page this machine opened persists with
+//! its session (`page_snapshot`, an extension beyond upstream).
 
 use std::path::PathBuf;
 

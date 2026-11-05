@@ -5,20 +5,22 @@
 //! A page has no terminal: it never counts as a program (`program_active`), only as a cover (`cover_overlay_active`,
 //! and `cover_overlay_visible` while it is in sight: not hidden, and not held under a pane overlay opened over it,
 //! [`Session::session_slot_shown`]).
-//! Its outcome is the core's ([`crate::html::HtmlPageOutcomes`]): the core registers a page it opens, records a
-//! submit's answer, and settles a page that left every slot as dismissed at the next commit, leaving an answered page
-//! alone; closing a slot records nothing.
+//! Its outcome is the core's ([`crate::html::HtmlPageOutcomes`]): the core registers a page it opens or a restore
+//! brought back, records a submit's answer, and settles a page that left every slot as dismissed at the next commit,
+//! leaving an answered page alone; closing a slot records nothing.
 
 use uuid::Uuid;
 
 use super::overlay::OverlayPane;
 use super::overlay_points::{OverlayPointSize, OverlaySize};
+use super::page_snapshot::persisted_pages;
 use super::pane::StatusPane;
 use super::pane_overlay::PaneOverlay;
 use super::session::Session;
 use super::store::AppStore;
 use super::window_library::WindowLibrary;
 use crate::html::{HtmlLoadState, HtmlOverlay, HtmlPageInfo, HtmlReloadTarget};
+use crate::persist::PageSnapshot;
 
 /// Why [`AppStore::open_html_overlay`] refused (upstream's `HtmlOverlayOpenFailure`; its `presenter` case is the
 /// core's, which knows the presentation hub: `overlay_page::open` refuses before the store is asked).
@@ -146,6 +148,54 @@ impl Session {
         shown.ok_or(HtmlOverlayCommandFailure::NotHtml)
     }
 
+    /// Puts `overlay` in the slot `pane` names, which must be free: a pane slot gets a fresh generation and holds the
+    /// session-wide cover open now; the session-wide slot takes the size clamped into 1...100, its points only beside
+    /// a percent. The open's checks are the caller's.
+    pub(crate) fn install_html_overlay(
+        &mut self,
+        pane: Option<OverlayPane>,
+        overlay: HtmlOverlay,
+        size: OverlaySize,
+        background_color: Option<String>,
+    ) {
+        if let Some(pane) = pane {
+            let generation = self.pane_overlays.next_generation();
+            let holds_cover = self.cover_hold();
+            let slot = self.pane_overlays.slot_mut(pane);
+            slot.exit_code = None;
+            slot.overlay = Some(PaneOverlay {
+                command: String::new(),
+                cwd: None,
+                background_color,
+                wait: false,
+                generation,
+                code_file: None,
+                html: Some(overlay),
+                hidden: false,
+                holds_cover,
+            });
+            self.remote_overlays.clear_failure(Some(pane));
+            return;
+        }
+        let slot = &mut self.overlay;
+        slot.generation += 1;
+        slot.exit_code = None;
+        slot.code_file = None;
+        slot.command = None;
+        slot.cwd = None;
+        slot.wait = false;
+        slot.size_percent = size.percent.map(|percent| percent.clamp(1, 100));
+        slot.points = if slot.size_percent.is_some() {
+            size.points
+        } else {
+            OverlayPointSize::default()
+        };
+        slot.background_color = background_color;
+        slot.html = Some(overlay);
+        slot.active = true;
+        self.remote_overlays.clear_failure(None);
+    }
+
     /// Applies `change` to page `id` in whichever slot of this session holds it; false when none does.
     pub fn update_html_overlay(&mut self, id: Uuid, change: impl FnOnce(&mut HtmlOverlay)) -> bool {
         if let Some(page) = self.overlay.html.as_mut().filter(|page| page.id == id) {
@@ -211,48 +261,15 @@ impl AppStore {
             if !session.renders_overlay_pane(pane) {
                 return Err(HtmlOverlayOpenFailure::PaneNotVisible);
             }
-            let generation = session.pane_overlays.next_generation();
-            let holds_cover = session.cover_hold();
-            let slot = session.pane_overlays.slot_mut(pane);
-            slot.exit_code = None;
-            slot.overlay = Some(PaneOverlay {
-                command: String::new(),
-                cwd: None,
-                background_color,
-                wait: false,
-                generation,
-                code_file: None,
-                html: Some(overlay),
-                hidden: false,
-                holds_cover,
-            });
-            session.remote_overlays.clear_failure(Some(pane));
-            self.schedule_tree_changed();
-            return Ok(());
-        }
-        let slot = &mut session.overlay;
-        if slot.hud_active() {
-            slot.close();
-        }
-        if slot.active {
-            return Err(HtmlOverlayOpenFailure::AlreadyOpen);
-        }
-        slot.generation += 1;
-        slot.exit_code = None;
-        slot.code_file = None;
-        slot.command = None;
-        slot.cwd = None;
-        slot.wait = false;
-        slot.size_percent = size.percent.map(|percent| percent.clamp(1, 100));
-        slot.points = if slot.size_percent.is_some() {
-            size.points
         } else {
-            OverlayPointSize::default()
-        };
-        slot.background_color = background_color;
-        slot.html = Some(overlay);
-        slot.active = true;
-        session.remote_overlays.clear_failure(None);
+            if session.overlay.hud_active() {
+                session.overlay.close();
+            }
+            if session.overlay.active {
+                return Err(HtmlOverlayOpenFailure::AlreadyOpen);
+            }
+        }
+        session.install_html_overlay(pane, overlay, size, background_color);
         self.schedule_tree_changed();
         Ok(())
     }
@@ -319,12 +336,38 @@ impl WindowLibrary {
     /// The ids of every page an open window holds, in its sessions and in its undoable closes, whose web views go on.
     #[must_use]
     pub fn live_html_overlays(&self) -> Vec<Uuid> {
+        self.live_html_pages().into_iter().map(|(_, page)| page.id).collect()
+    }
+
+    /// [`WindowLibrary::live_html_overlays`]' pages themselves, each beside the window holding it.
+    #[must_use]
+    pub fn live_html_pages(&self) -> Vec<(Uuid, &HtmlOverlay)> {
         let mut pages = Vec::new();
         for window in self.open_ids() {
             let Some(store) = self.store(window) else { continue };
             let pending = store.pending_close_members();
             let sessions = store.sessions().chain(pending.iter().map(|member| member.session));
-            pages.extend(sessions.flat_map(|session| session.html_overlays().into_iter().map(|(_, page)| page.id)));
+            pages.extend(
+                sessions.flat_map(|session| session.html_overlays().into_iter().map(move |(_, page)| (window, page))),
+            );
+        }
+        pages
+    }
+
+    /// The pages of [`WindowLibrary::live_html_pages`] a window's snapshot writes ([`HtmlOverlay::persisted`]), each
+    /// as (window, page, what the snapshot writes for it).
+    #[must_use]
+    pub(crate) fn live_persisted_pages(&self) -> Vec<(Uuid, Uuid, PageSnapshot)> {
+        let mut pages = Vec::new();
+        for window in self.open_ids() {
+            let Some(store) = self.store(window) else { continue };
+            let pending = store.pending_close_members();
+            let sessions = store.sessions().chain(pending.iter().map(|member| member.session));
+            pages.extend(sessions.flat_map(|session| {
+                persisted_pages(session)
+                    .into_iter()
+                    .map(move |(page, snapshot)| (window, page, snapshot))
+            }));
         }
         pages
     }

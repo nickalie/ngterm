@@ -271,9 +271,10 @@ pub struct Session {
     pub scratch_surface: SurfaceSlot,
     /// The in-terminal search. Ephemeral.
     pub search: SearchState,
-    /// The session-wide overlay slot and the HUD in it. Ephemeral.
+    /// The session-wide overlay slot and the HUD in it. A HUD or program in it is ephemeral; a page persists with the
+    /// session (`page_snapshot`).
     pub overlay: OverlaySlot,
-    /// The pane-scoped overlays. Ephemeral.
+    /// The pane-scoped overlays. A program in one is ephemeral; a page persists with the session (`page_snapshot`).
     pub pane_overlays: PaneOverlays,
     /// The deck's last non-empty geometry of the session's detail area and panes, which a HUD is measured against
     /// (upstream's `hudPaneFrames`). Ephemeral.
@@ -434,7 +435,7 @@ impl Session {
     }
 
     /// Whether the session is written into the snapshot's tree: a remote one never is (the snapshot lists it apart, for
-    /// the next launch to attach again), nor a page, which lives only as long as the app showing it.
+    /// the next launch to attach again), nor a page companion's row, which lives only as long as the app showing it.
     #[must_use]
     pub fn is_persistable(&self) -> bool {
         self.remote_host.is_none() && self.content == SessionContent::Terminal
