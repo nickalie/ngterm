@@ -51,6 +51,7 @@ import com.nickalie.ngterm.android.ui.session.RailSessions
 import com.nickalie.ngterm.android.ui.session.SessionViewModel
 import com.nickalie.ngterm.android.ui.session.SessionsDestination
 import com.nickalie.ngterm.android.ui.session.SidebarSessions
+import com.nickalie.ngterm.android.ui.session.rememberAloneSessions
 import com.nickalie.ngterm.android.ui.settings.SettingsRoute
 import com.nickalie.ngterm.android.ui.terminal.ClipboardReadPrompt
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
@@ -236,6 +237,8 @@ private fun Frame(
         onSelect(SESSIONS)
     }
     val groups = sessions.state.groups
+    // the sessions showing a pane alone, kept through a trip to another destination
+    val alone = rememberAloneSessions()
     AdaptiveScaffold(
         destinations = AppDestinations,
         selected = selected,
@@ -273,6 +276,7 @@ private fun Frame(
                         actions = actions,
                         extraKeys = settings.extraKeys,
                         chats = sessions.chats,
+                        alone = alone,
                     )
                 }
 

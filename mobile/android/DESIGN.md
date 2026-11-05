@@ -529,8 +529,11 @@ compact                            medium (rail open)               expanded
   (`vertical`) or stacked (`horizontal`), halves split by a 1dp `outlineVariant` rule, since the terminal's ground is
   the chrome's. Each pane of a split keeps a 4dp gutter at its leading edge where the focused one shows the bus bar
   (32dp, from its top); a touch on a pane selects it (even one that already has the input focus), and the other's
-  cursor goes hollow. A hidden split (the origin
-  zoomed a pane) shows the focused pane alone, and the switcher still moves between the two. On a phone every layout
+  cursor goes hollow. A pane tab toggles the split on this device alone, the origin's untouched: a tab in the
+  split shows its pane alone and selected, the shown pane's own tab brings the split back, and the other tab shows
+  that pane alone instead; TalkBack names the tap ("Show this pane alone", "Show both panes"). The choice is kept per
+  session. A hidden split (the origin zoomed a pane) shows the focused pane alone, and the switcher still moves
+  between the two. On a phone every layout
   is one pane at a time. A pane alone keeps 4dp at both sides, so its text stays off the screen's edge.
 - **The HUD** (`HudBanner`): a strip under the bar while the origin shows one, `surfaceContainerHigh`, 6dp radius,
   the message in bodyMedium semibold and its detail under it, a small spinner when the origin runs one; announced

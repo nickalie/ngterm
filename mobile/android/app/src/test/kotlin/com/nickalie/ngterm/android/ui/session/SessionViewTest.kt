@@ -8,11 +8,14 @@ import android.view.inputmethod.InputConnection
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
+import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -226,11 +229,101 @@ class SessionViewTest {
 
     private fun nothingReached(pane: String) = typed(pane).isEmpty() && pressed(pane).isEmpty()
 
+    // through the root, to whatever has the focus: a slot without a terminal holds it as a bare focus target, which
+    // has no semantics node of its own
     private fun chord(arrow: Key) {
-        compose.onNode(isFocused()).performKeyInput {
+        compose.onRoot().performKeyInput {
             withKeysDown(listOf(Key.CtrlLeft, Key.ShiftLeft)) { pressKey(arrow) }
         }
         compose.waitForIdle()
+    }
+
+    private fun terminals() = compose.onAllNodesWithContentDescription("Terminal").fetchSemanticsNodes().size
+
+    private fun tabAction(tab: String) =
+        compose
+            .onNodeWithContentDescription(tab)
+            .fetchSemanticsNode()
+            .config
+            .getOrNull(SemanticsActions.OnClick)
+            ?.label
+
+    @Test
+    fun aPaneTabTogglesBetweenTheSplitAndItsPaneAlone() {
+        openSplit()
+        assertEquals(2, terminals())
+        assertEquals("Show this pane alone", tabAction("Pane 2 of 2"))
+        // a tab in the split shows its pane alone, selected
+        compose.onNodeWithContentDescription("Pane 2 of 2").performClick()
+        compose.waitForIdle()
+        assertEquals(1, terminals())
+        compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
+        assertEquals("Show both panes", tabAction("Pane 2 of 2"))
+        // the other tab shows the other pane alone instead
+        compose.onNodeWithContentDescription("Pane 1 of 2").performClick()
+        compose.waitForIdle()
+        assertEquals(1, terminals())
+        compose.onNodeWithContentDescription("Pane 1 of 2").assertIsSelected()
+        // a trip to Settings and back finds the pane still alone
+        compose.onNode(hasText("Settings") and isSelectable()).performClick()
+        compose.waitForIdle()
+        compose.onNode(hasText("Sessions") and isSelectable()).performClick()
+        compose.waitForIdle()
+        assertEquals(1, terminals())
+        compose.onNodeWithContentDescription("Pane 1 of 2").assertIsSelected()
+        // the pane's own tab brings the split back, the selection staying
+        compose.onNodeWithContentDescription("Pane 1 of 2").performClick()
+        compose.waitForIdle()
+        assertEquals(2, terminals())
+        compose.onNodeWithContentDescription("Pane 1 of 2").assertIsSelected()
+    }
+
+    // a key typed into the focused node reaches pane [id]
+    private fun keyReaches(id: String) {
+        clearInputs()
+        compose.onNode(isFocused()).performKeyInput { pressKey(Key.A) }
+        waitFor { panes.getValue(id).inputs.any { it is FakeInput.Key } }
+    }
+
+    @Test
+    @Config(qualifiers = "+qwerty")
+    fun aHardwareKeyboardKeepsTypingIntoTheSelectedPaneAsItsTabTogglesTheSplit() {
+        compose.activity.resources.configuration.hardKeyboardHidden = Configuration.HARDKEYBOARDHIDDEN_NO
+        openSplit()
+        terminal(0).performClick()
+        compose.waitForIdle()
+        keyReaches("P1")
+        // its own tab shows it alone, then brings the split back: the selection stays, and so does the typing
+        compose.onNodeWithContentDescription("Pane 1 of 2").performClick()
+        compose.waitForIdle()
+        assertEquals(1, terminals())
+        keyReaches("P1")
+        compose.onNodeWithContentDescription("Pane 1 of 2").performClick()
+        compose.waitForIdle()
+        assertEquals(2, terminals())
+        keyReaches("P1")
+        assertTrue(panes.getValue("P2").inputs.none { it is FakeInput.Key })
+    }
+
+    @Test
+    @Config(qualifiers = "+qwerty")
+    fun aPaneThatCouldntBeShownShownAloneStillTakesTheChords() {
+        compose.activity.resources.configuration.hardKeyboardHidden = Configuration.HARDKEYBOARDHIDDEN_NO
+        openSession()
+        waitFor { panes["P1"] != null }
+        test.core.failNext("showPane", MobileException.Remote("no pane P2"))
+        layout.value = NavLayout.Sidebar
+        waitFor { shows("no pane P2") }
+        terminal(0).performClick()
+        compose.waitForIdle()
+        // the failed pane's tab shows it alone: its terminal-less slot takes the focus, and the chords move on
+        compose.onNodeWithContentDescription("Pane 2 of 2").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
+        assertEquals(0, terminals())
+        chord(Key.DirectionLeft)
+        compose.onNodeWithContentDescription("Pane 1 of 2").assertIsSelected()
+        keyReaches("P1")
     }
 
     @Test
@@ -239,7 +332,10 @@ class SessionViewTest {
         terminal(1).performClick()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
-        // the tab moves the selection; the keyboard stays down
+        // the tab moves the selection (and shows its pane alone, a retap the split again); the keyboard stays down
+        compose.onNodeWithContentDescription("Pane 1 of 2").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Pane 1 of 2").assertIsSelected()
         compose.onNodeWithContentDescription("Pane 1 of 2").performClick()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Pane 1 of 2").assertIsSelected()
@@ -293,7 +389,7 @@ class SessionViewTest {
         chord(Key.DirectionRight)
         compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
         clearInputs()
-        compose.onNode(isFocused()).performKeyInput { pressKey(Key.A) }
+        compose.onRoot().performKeyInput { pressKey(Key.A) }
         connect()?.commitText("x", 1)
         compose.onNodeWithContentDescription("Escape").assertDoesNotExist()
         compose.waitForIdle()
@@ -416,23 +512,15 @@ class SessionViewTest {
         waitFor { described("Chat with The agent") }
         compose.waitForIdle()
         clearInputs()
-        keyChord(Key.DirectionRight)
+        chord(Key.DirectionRight)
         compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
-        keyChord(Key.DirectionLeft)
+        chord(Key.DirectionLeft)
         compose.onNodeWithContentDescription("Pane 1 of 2").assertIsSelected()
         // a chat types into no terminal, but its chords still move
         compose.onRoot().performKeyInput { pressKey(Key.A) }
-        keyChord(Key.DirectionRight)
+        chord(Key.DirectionRight)
         compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
         assertTrue(nothingReached("P1"))
-    }
-
-    // a chord sent to whatever has the input focus (a chat's focus has no semantics node of its own)
-    private fun keyChord(arrow: Key) {
-        compose.onRoot().performKeyInput {
-            withKeysDown(listOf(Key.CtrlLeft, Key.ShiftLeft)) { pressKey(arrow) }
-        }
-        compose.waitForIdle()
     }
 
     @Test

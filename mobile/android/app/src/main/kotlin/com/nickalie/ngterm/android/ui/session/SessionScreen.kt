@@ -59,13 +59,13 @@ import com.nickalie.ngterm.android.ui.terminal.rememberTerminalKeyboard
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
-import com.nickalie.ngterm.core.ffi.RemoteLayout
 import com.nickalie.ngterm.core.ffi.StreamState
 
 /**
  * An attached session, live: its bar (name, status, context, the pane switcher, Detach and End session), the
  * origin's HUD, its panes, and the extra keys over the soft keyboard. A phone ([compact]) shows the [focused] pane
- * alone and a swipe across it moves to the next or previous one; wider windows show the origin's split. The shown
+ * alone and a swipe across it moves to the next or previous one; wider windows show the origin's split, or the
+ * [focused] pane [alone] once a pane tab asked for it ([tabTapAlone], through [SessionViewActions.onAlone]). The shown
  * panes' states are [panes] (by pane), and why one could not be shown [failures]. One [keyboard] serves every pane
  * and the extra keys, laid out as Settings' [extraKeys] says; its chords move between the panes and the sessions.
  * [views] says how each pane running an agent shows (by pane id), and the bar switches the selected one's; a pane in
@@ -90,10 +90,12 @@ fun SessionScreen(
     extraKeys: ExtraKeysChoice = ExtraKeysChoice.Fit,
     views: Map<String, PaneView> = emptyMap(),
     chats: Map<PaneRef, ChatViewModel> = emptyMap(),
+    alone: Boolean = false,
 ) {
     val key = session.key
     val live = session.live
     val ids = live.layout?.panes.orEmpty()
+    val splittable = splittable(live.layout, compact)
     val spots = ids.map { id -> spot(key, id, panes, failures, session).inView(views[id], chats) }
     val focus by rememberUpdatedState({ id: String -> actions.onFocus(key, id) })
     val move: (Boolean) -> Unit = { forward -> ids.cyclicNeighbor(focused, forward)?.let(focus) }
@@ -101,8 +103,9 @@ fun SessionScreen(
     // the keys type into the selected pane's terminal, not into a chat
     val typed = selected?.takeIf { views[it.paneId] != PaneView.Chat }
     SessionKeyboard(keyboard, typed?.let(panes::get), move, actions)
+    val onTab = tabTap(splittable, alone, focused, { actions.onAlone(key, it) }, focus)
     val chatsOnly =
-        visiblePanes(live.layout, focused, compact).let { shown ->
+        visiblePanes(ids, focused, splittable && !alone).let { shown ->
             shown.isNotEmpty() && shown.all { views[it] == PaneView.Chat }
         }
     BoxWithConstraints(
@@ -121,7 +124,8 @@ fun SessionScreen(
                 session = session,
                 focused = focused,
                 onBack = actions.onBack,
-                onSelectPane = focus,
+                onSelectPane = onTab,
+                alone = alone.takeIf { splittable },
                 onDetach = { actions.onDetach(key) },
                 onEnd = { actions.onEnd(key) },
                 view = focused?.let(views::get),
@@ -142,7 +146,7 @@ fun SessionScreen(
                             onShowTerminal = { actions.onView(it, PaneView.Terminal) },
                         )
                     }
-                Panes(session, spots, focused, compact, paneActions, move, reserve)
+                Panes(session, spots, focused, compact, splittable && !alone, paneActions, move, reserve)
             }
             if (!chatsOnly) ExtraKeysRow(keyboard, layout = extraKeys)
         }
@@ -162,6 +166,7 @@ private fun Panes(
     spots: List<PaneSpot>,
     focused: String?,
     compact: Boolean,
+    split: Boolean,
     actions: PaneActions,
     move: (Boolean) -> Unit,
     reserve: Dp,
@@ -173,11 +178,12 @@ private fun Panes(
             val requesters = remember(ids) { ids.associateWith { FocusRequester() } }
             val selected = spots.firstOrNull { it.ref.paneId == focused }
             val ready = selected?.state != null
-            // the pane that has the input focus, which may still be one the selection has left
-            var holder by remember { mutableStateOf<String?>(null) }
-            FollowFocus(focused, ready, selected?.chatView == true, holder, requesters)
+            // the pane that has the input focus, which may still be one the selection has left; a switch between the
+            // split and a pane alone builds the panes' views anew, so none of them holds it then
+            var holder by remember(split) { mutableStateOf<String?>(null) }
+            FollowFocus(focused, ready, selected?.chatView == true, split, holder, requesters)
             // stacked halves share the extra keys' room between them
-            val stacked = !compact && spots.size == 2 && layout.shown && layout.axis == STACKED
+            val stacked = split && layout.axis == STACKED
             val slotReserve = if (stacked) reserve / 2 else reserve
             val slot: @Composable (PaneSpot, Modifier) -> Unit = { spot, slotModifier ->
                 val id = spot.ref.paneId
@@ -202,7 +208,7 @@ private fun Panes(
             if (compact) {
                 OnePane(spots, focused, slot)
             } else {
-                SplitLayout(spots, layout.axis, layout.shown, focused, pane = slot)
+                SplitLayout(spots, layout.axis, split, focused, pane = slot)
             }
         }
 
@@ -275,14 +281,16 @@ private fun SessionKeyboard(
 // the input focus follows the selected pane ([focused]) once its terminal is there ([ready]): while the soft keyboard
 // is up or a hardware keyboard is attached, the selected pane takes it, so typing goes on there; otherwise a pane the
 // selection left ([holder]) lets it go without the soft keyboard opening, so the next tap on any pane focuses it
-// afresh. While the selected pane can't take it, a hardware keyboard's focus stays where it is, typing nowhere, so its
-// chords still move away. A pane switched between its terminal and its chat ([chat]) takes it again in its new view
+// afresh. While the selected pane has no terminal, a hardware keyboard's focus goes to its slot, which takes only the
+// chords, so typing goes nowhere and the chords still move away. A pane switched between its terminal and its chat
+// ([chat]), or between the split and alone ([split]), takes it again in its new view
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FollowFocus(
     focused: String?,
     ready: Boolean,
     chat: Boolean,
+    split: Boolean,
     holder: String?,
     requesters: Map<String, FocusRequester>,
 ) {
@@ -290,7 +298,7 @@ private fun FollowFocus(
     val hardware = hardwareKeyboardAttached()
     val now by rememberUpdatedState(FocusFacts(imeUp || hardware, hardware, holder))
     val focusManager = LocalFocusManager.current
-    LaunchedEffect(focused, ready, chat) {
+    LaunchedEffect(focused, ready, chat, split) {
         if (focused == null) return@LaunchedEffect
         // the pane's view joins the composition in this frame: its requester is attached in the next
         withFrameNanos { }
@@ -298,13 +306,15 @@ private fun FollowFocus(
         val left = facts.holder != null && facts.holder != focused
         // the focus is in the pane already (a touch put it in a field there): it stays where the touch put it
         if (facts.holder == focused) return@LaunchedEffect
-        if (ready && facts.typing) {
+        // a selected pane with no terminal takes a hardware keyboard's focus too (its chords only), never the soft one
+        val takes = if (ready) facts.typing else facts.hardware
+        if (takes) {
             try {
                 requesters[focused]?.requestFocus()
             } catch (_: IllegalStateException) {
                 // its view is not placed (a cover hides it): the keyboard still targets it
             }
-        } else if (left && (ready || !facts.hardware)) {
+        } else if (left) {
             focusManager.clearFocus()
         }
     }
@@ -354,16 +364,12 @@ private fun spot(
     return PaneSpot(ref, panes[ref], session.live.panes[paneId], failures[ref])
 }
 
-// the panes on screen: both halves of a split a wider window shows, else the selected one (or the first)
+// the panes on screen: both halves of a [split], else the selected one (or the first)
 private fun visiblePanes(
-    layout: RemoteLayout?,
+    ids: List<String>,
     focused: String?,
-    compact: Boolean,
-): List<String> {
-    val ids = layout?.panes.orEmpty()
-    val split = !compact && ids.size == 2 && layout?.shown == true && layout.axis != null
-    return if (split) ids else listOfNotNull(focused?.takeIf { it in ids } ?: ids.firstOrNull())
-}
+    split: Boolean,
+): List<String> = if (split) ids else listOfNotNull(focused?.takeIf { it in ids } ?: ids.firstOrNull())
 
 // the spot as its view shows it: a chat in chat view, with the chat once it is open
 private fun PaneSpot.inView(

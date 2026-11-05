@@ -17,6 +17,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.ui.components.BusBar
@@ -25,7 +26,9 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 /**
  * A session's panes as numbered tabs in the origin's order, the one on screen or with the focus ([selected]) in copper
  * with the bus bar under it. TalkBack reads a tab as "Pane 1 of 2" and the pane's title when its program set one
- * ([titles], by pane id). With one pane there is nothing to switch, and it draws nothing.
+ * ([titles], by pane id). With one pane there is nothing to switch, and it draws nothing. Where the window can show
+ * the split ([alone] not `null`), a tab also toggles it ([tabTapAlone]), and TalkBack names what its tap does: "Show
+ * this pane alone" in the split, "Show both panes" on the pane shown alone.
  */
 @Composable
 fun PaneSwitcher(
@@ -34,6 +37,7 @@ fun PaneSwitcher(
     titles: Map<String, String?>,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
+    alone: Boolean? = null,
 ) {
     if (panes.size < 2) return
     Row(modifier = modifier.selectableGroup()) {
@@ -45,7 +49,13 @@ fun PaneSwitcher(
                 } else {
                     stringResource(R.string.session_pane, index + 1, panes.size)
                 }
-            PaneTab(index + 1, pane == selected, label, { onSelect(pane) })
+            val action =
+                when {
+                    alone == false -> stringResource(R.string.session_pane_show_alone)
+                    alone == true && pane == selected -> stringResource(R.string.session_pane_show_both)
+                    else -> null
+                }
+            PaneTab(index + 1, pane == selected, label, { onSelect(pane) }, action = action)
         }
     }
 }
@@ -57,6 +67,7 @@ private fun PaneTab(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    action: String? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     val tint by animateColorAsState(
@@ -71,7 +82,16 @@ private fun PaneTab(
                 .clip(MaterialTheme.shapes.small)
                 .selectable(selected = selected, role = Role.Tab, onClick = onClick)
                 // the tab is read by its label, not its number; the click, the role and the state stay
-                .clearAndSetSemantics { contentDescription = label },
+                .clearAndSetSemantics {
+                    contentDescription = label
+                    // TalkBack says what the tap does where it toggles the split
+                    action?.let {
+                        onClick(label = it) {
+                            onClick()
+                            true
+                        }
+                    }
+                },
         contentAlignment = Alignment.Center,
     ) {
         Text(text = number.toString(), style = MaterialTheme.typography.titleSmall, color = tint)

@@ -139,7 +139,8 @@ fun PaneSlot(
         if (spot.chatView) {
             ChatSlot(spot, focused, grid, actions, focusRequester, Modifier.fillMaxSize().underCover(cover.veils))
         } else {
-            spot.state?.let { state ->
+            val state = spot.state
+            if (state != null) {
                 TerminalView(
                     state = state,
                     modifier = Modifier.fillMaxSize().underCover(cover.veils),
@@ -149,6 +150,10 @@ fun PaneSlot(
                     readAloud = readAloud && !cover.veils,
                     onSwipe = onSwipe,
                 )
+            } else {
+                // no terminal yet (attaching, or it couldn't be shown): the slot still takes a hardware keyboard's
+                // focus, so its chords move away
+                Box(Modifier.fillMaxSize().paneKeys(actions.keyboard, focusRequester))
             }
         }
         if (cover != null) {
@@ -174,6 +179,16 @@ private fun Modifier.chatKeys(
     onPreviewKeyEvent { keyboard.move(it.nativeKeyEvent) }
         .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
         .onFocusChanged { if (it.isFocused) field.requestIfShown() }
+        .focusTarget()
+
+// a slot without a terminal takes the input focus in its place; of a hardware keyboard's keys it takes only the chords
+// that move between panes and sessions, typing nowhere
+private fun Modifier.paneKeys(
+    keyboard: TerminalKeyboard,
+    requester: FocusRequester?,
+): Modifier =
+    onPreviewKeyEvent { keyboard.move(it.nativeKeyEvent) }
+        .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
         .focusTarget()
 
 // focuses the field if it is in the composition: a chat that ended, or isn't open yet, has none, and keeps the focus

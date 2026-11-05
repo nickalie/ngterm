@@ -41,9 +41,9 @@ import com.nickalie.ngterm.core.ffi.StreamState
 /**
  * The session view's one bar, under the status bar: Back ([onBack], a phone's), the session's name over its state
  * (the agent's status while the stream is live, the stream's own state while it isn't) and its context, the pane
- * switcher ([onSelectPane]; [focused] marked), the view switch while the focused pane runs an agent ([view], how it
- * shows now; [onView] asks for the other), and More: Detach ([onDetach], at once) and End session ([onEnd], once
- * confirmed).
+ * switcher ([onSelectPane]; [focused] marked; [alone] where a tab also toggles the split, see [PaneSwitcher]), the
+ * view switch while the focused pane runs an agent ([view], how it shows now; [onView] asks for the other), and More:
+ * Detach ([onDetach], at once) and End session ([onEnd], once confirmed).
  */
 @Composable
 fun SessionBar(
@@ -56,6 +56,7 @@ fun SessionBar(
     modifier: Modifier = Modifier,
     view: PaneView? = null,
     onView: (PaneView) -> Unit = {},
+    alone: Boolean? = null,
 ) {
     val spacing = NgtermTheme.spacing
     var confirming by rememberSaveable { mutableStateOf(false) }
@@ -94,6 +95,7 @@ fun SessionBar(
             selected = focused,
             titles = live.panes.mapValues { it.value.title },
             onSelect = onSelectPane,
+            alone = alone,
         )
         view?.let { ViewSwitch(it, onView) }
         SessionMenu(session.name, onDetach = onDetach, onEnd = { confirming = true })
