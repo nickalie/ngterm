@@ -235,6 +235,31 @@ compact (iPhone, Slide Over)     regular (iPad, Stage Manager large)
   offers **Show here**, which takes it back. When the window showing it lets it go (opens another session, shows
   another machine, closes), the window that had it before takes it back, and only that one.
 
+## The terminal (`NgtermTerminal`)
+
+`TerminalView` draws a pane as Ghostty draws a frame, and as Android's terminal does (`TerminalPainter`,
+`TerminalDecorations`). It is its own surface, in its palette whatever the chrome's appearance.
+
+- **Grid:** whole cells from the top left. A cell is the face's advance wide and its ascent and descent tall, rounded up
+  to whole points; what is left at the right and the bottom shows the terminal's ground. The view gives the pane the
+  grid that fits, again as rotation, Stage Manager or the split resize it.
+- **Text:** JetBrains Mono at the terminal's text size (13 pt until Settings picks another, 8 to 32), or the system's
+  monospace. Bold and italic pick the face, faint text keeps half its alpha (Ghostty's `faint-opacity`), inverse swaps
+  the text and the ground, invisible text leaves the ground alone. The font's ligatures stay, as Ghostty keeps them. A
+  character the face lacks (CJK, emoji, symbols) comes from the system's fonts, centered in its cells or squeezed into
+  them, so nothing leaves the grid.
+- **Lines:** the five underlines (single, double, curly, dotted, dashed) in the underline color the program set, else
+  the text's; strikethrough through the middle of the lowercase; overline along the cell's top. A line is the text
+  size over 14 thick.
+- **Cursor:** block (the character under it in the cell's ground color), bar (two lines wide at the cell's left),
+  underline (two lines along its bottom) or hollow block, as the program asks; in the palette's cursor color, which
+  the pane takes with the palette, else the cell's text color. On a wide character it covers both columns. An
+  unfocused terminal shows a hollow block. It doesn't blink.
+- **Selection:** the palette's selection color behind the text, which keeps its own colors (the palettes promise their
+  text 4.5:1 on it, `ContrastTests`).
+- **Motion:** none of its own. New rows show at once (no implicit animations), and the terminal draws only while output
+  comes: its display link pauses when no frame waits.
+
 ## Screens
 
 ### First run (`Onboarding/`)
