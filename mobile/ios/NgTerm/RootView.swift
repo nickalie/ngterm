@@ -1,8 +1,11 @@
 import NgtermFeatures
 import SwiftUI
 
-/// A main window: the app's frame over its own navigation, the first run over it while the app has no key, the
-/// questions the machines' connects wait on, and the programs' clipboard reads.
+/// A main window: the app's frame over its own navigation, and the questions over it.
+///
+/// The first run shows over it while the app has no key, then the questions the machines' connects wait on, the
+/// programs' clipboard reads, and the question about notifying as the first session is attached. A notification's tap
+/// brings its machine, session and pane here.
 ///
 /// Beside a session (a regular width), the machines' column lists each machine's attached sessions too; a session
 /// opened there, or by the keyboard's moves, shows here, or brings its own window forward.
@@ -42,6 +45,12 @@ internal struct RootView: View {
         }
         .connectPrompts(machines)
         .clipboardReadPrompt(graph)
+        .notificationPermissionPrompt(graph)
+        .onChange(of: graph.openRequests.pending, initial: true) { _, target in
+            if let target {
+                go(to: target)
+            }
+        }
         .task {
             graph.start()
         }
@@ -68,6 +77,22 @@ internal struct RootView: View {
                 ? { @MainActor @Sendable in openWindow(value: session) }
                 : nil
         )
+    }
+
+    // goes where a notification's tap asked: the machine, and its session with the pane when it is still attached
+    private func go(to target: OpenTarget) {
+        graph.openRequests.consume(target)
+        scaffold.show(machine: target.machineId)
+        guard let sessionId = target.sessionId,
+            graph.connections.attached[target.machineId]?.contains(sessionId) == true
+        else {
+            return
+        }
+        let key = SessionKey(machineId: target.machineId, sessionId: sessionId)
+        if let paneId = target.paneId {
+            graph.panes.select(paneId, of: key)
+        }
+        open(key)
     }
 
     // shows the session `key` here, or brings its own window forward

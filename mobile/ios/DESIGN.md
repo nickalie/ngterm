@@ -71,6 +71,8 @@ Promises:
   and grouped backgrounds at all three levels. With **Increase Contrast** it reaches **7:1**.
 - `onTint` reaches the same on `tint`. The system's white label on the dark side's copper would not (2.6:1), so a
   prominent button is `prominentAction()`, not a bare `.borderedProminent`.
+- `onTint` reaches the same on `failed`, the fill of a prominent button that is also destructive (an ask's default
+  that can't be undone).
 - An origin's status color is the user's choice. It is lifted toward white or black until it reads on every ground at
   once (`RGB.readable(on:minimum:)`); the word goes with it anyway.
 - Text, separators and fills are the system's (`.primary`), which follow Increase Contrast themselves. Secondary
@@ -488,6 +490,55 @@ compact: the selected pane alone                regular: the origin's split
   **Detach**; "api is gone" ("It ended on build-01, so there is nothing left to show.", **Close**) once it ended there.
   Detached some other way, the view closes (an iPad's session window too).
 - **Screen awake:** while a session shows and Settings' Keep screen on is set, the idle timer is off (across windows).
+
+### Asks (`Asks/`)
+
+An attached session's origin asks the user something (a button ask, a text to type, a choice). While the session
+shows, the ask is a sheet over it; out of sight it is a notification (below).
+
+- **The sheet** is a page of the prompts' shape (`AskQuestion`): the attention diamond, the ask's title as a heading,
+  its message in `secondaryText`, its form, then its buttons in the origin's order, one per line, full width, at least
+  44 pt tall:
+  - the default is filled (`prominentAction()`), in `failed` when it is also the destructive one;
+  - the cancel button is quiet (the tint on the ground, no container);
+  - the rest are outlined: a 1 pt rounded outline in the tint, or in `failed` for a destructive one, with the label in
+    the same color. A tinted fill under a label stays under 4.5:1, so none is used.
+- **An input ask** is one field on the raised grouped surface (12 pt corners), one line or an area that grows from three
+  lines to eight, starting from the origin's text, with its hint ("Your answer" when the origin gives none). Return in a
+  line field presses the default button (or the one answering button). An edit that would add a control character the
+  field can't hold is refused whole, as desktop refuses it.
+- **A choice ask** is one grouped surface of rows, each at least 44 pt: a radio mark (`circle`,
+  `inset.filled.circle`) or a checkbox (`square`, `checkmark.square.fill`) in the tint, the label and its subtitle in
+  `secondaryText`. VoiceOver reads a row's selected state (and a checkbox as a toggle), not the mark. **The free-form
+  row** has its mark and a field in place of the label ("Something else" unless the origin names it): typing picks it
+  (a radio list hands its pick over, and gets it back when the text goes blank); its mark takes a tap only while it
+  holds text, greyed until then.
+- **Dismissing** the sheet with a swipe answers as the cancel button does (the origin gets Escape). A sheet whose ask
+  went (answered elsewhere, ended on the origin, taken back as the app suspends) goes by itself. A draft outlives its
+  sheet while the ask is open.
+
+**The question about notifying** shows once, as the first session is attached, and only while the user hasn't answered
+the system's question: the bell (`bell.badge`) in the tint, "Get told when an agent needs you" as a heading, what
+reaches the user and that a question can be answered from the notification, then when notifications come (while the
+app is open, for a short time after it, and from a refresh now and then: iOS keeps no connection up in the
+background). **Turn on notifications** (prominent) raises the system's question; **Not now** (quiet), or a swipe,
+leaves it for Settings.
+
+### Notifications
+
+Each machine's and session's notifications group in their own thread; a tap opens the session and its pane. They show
+as banners in the foreground too, except for the session on screen.
+
+| Notice | Title | Under it | Text | Actions |
+|---|---|---|---|---|
+| an agent's notice | its title (the session's name when blank) | the session | its body | |
+| waiting | "api is waiting for you" | | the context, or "On build-01" | |
+| done | "api finished" | | the context, or "On build-01" | |
+| lost for good | "Lost build-01" | | the core's reason, or the changed host key's advice | |
+| an ask | its title | "api on build-01" | its message | its buttons (at most three); an input ask's answering buttons take a reply; a choice ask, or more buttons, says "Tap to answer in ngterm." |
+
+An ask's action asks for the device to be unlocked first, and a destructive button draws as one. The kinds the user
+turned off (Settings) are not posted; an ask always is.
 
 ## App icon and launch screen
 

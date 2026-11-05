@@ -126,9 +126,15 @@
             try record("takeLead", [machineId, sessionId, paneId])
         }
 
-        /// Records the call.
+        /// Records the call, then delivers what ``answerEvents`` says the answer makes the origin tell.
         public func answerAsk(machineId: String, sessionId: String, askId: String, reply: AskReply) throws {
             try record("answerAsk", [machineId, sessionId, askId, reply])
+            let key = Self.answerKey(askId: askId, button: reply.button)
+            state.withLock { state in
+                for event in state.answerEvents[key] ?? [] {
+                    emit(event, in: &state)
+                }
+            }
         }
 
         /// Records the call.

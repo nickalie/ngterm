@@ -14,7 +14,11 @@
     ///
     /// and, when asked, a program in `docs-site` on `build-01` asks to read the clipboard as the app starts, and one in
     /// `notes` after it: its question shows only once the first is answered; and, when asked, a machine `split`
-    /// (`split.lan`) is saved already, with a session `work` of two panes side by side (``FakeSessionWorld``).
+    /// (`split.lan`) is saved already, with a session `work` of two panes side by side (``FakeSessionWorld``), whose
+    /// origin asks a question as it is attached, when asked too.
+    ///
+    /// Notifications go to memory (``FakeNotices``), and the question about notifying counts as asked unless the
+    /// launch asks for it.
     internal enum FakeWorld {
         /// The host key `build-01.lan` offers (made up).
         internal static let buildHostKey = "SHA256:fAkEbU1Ld01h0sTkEyF0rUiTeStS0nLyN0tArEaLkEy00"
@@ -30,10 +34,12 @@
             isImported: false
         )
 
-        /// The app's graph over the fake core, with a key already when `withKey`, two programs asking to read the
-        /// clipboard when `readsClipboard`, and `split` with its session when `hasSession`.
+        /// The app's graph over the fake core, as the launch arguments ask.
+        ///
+        /// The `arguments` are ``CoreChoice``'s: a key already, two programs asking to read the clipboard, `split` with
+        /// its session and its question, the question about notifying left to ask.
         @MainActor
-        internal static func graph(withKey: Bool, readsClipboard: Bool, hasSession: Bool) -> AppGraph {
+        internal static func graph(arguments: [String]) -> AppGraph {
             let directory = FileManager.default.temporaryDirectory.appending(
                 path: "ngterm-fake-\(UUID().uuidString)",
                 directoryHint: .isDirectory
@@ -43,25 +49,32 @@
             core.hostKeys = ["build-01.lan": buildHostKey, "signin.lan": signInHostKey]
             core.signIns = ["signin.lan": .tailscale]
             let keys = KeyStore(directory: directory)
-            if withKey {
+            if arguments.contains(CoreChoice.fakeKeyArgument) {
                 try? keys.add(key)
             }
             let machines = MachineStore(directory: directory)
-            if hasSession {
-                FakeSessionWorld.seed(machines, core: core, keyId: key.id)
+            if arguments.contains(CoreChoice.fakeSessionArgument) {
+                FakeSessionWorld.seed(
+                    machines,
+                    core: core,
+                    keyId: key.id,
+                    asks: arguments.contains(CoreChoice.fakeAskArgument)
+                )
+            }
+            let stores = GraphStores(directory: directory)
+            if !arguments.contains(CoreChoice.fakeNotificationQuestionArgument) {
+                try? stores.notificationPrefs.markPermissionAsked()
             }
             let graph = AppGraph(
                 machines: machines,
                 settings: SettingsStore(directory: directory),
                 keys: AppKeys(store: keys, vault: MemoryPrivateKeys(), maker: CoreKeyMaker(), comment: "ngterm@fake"),
                 pins: pins,
-                stores: (
-                    attached: AttachedStore(directory: directory),
-                    clipboardTrust: ClipboardTrustStore(directory: directory)
-                ),
-                core: core
+                stores: stores,
+                core: core,
+                notices: FakeNotices()
             )
-            if readsClipboard {
+            if arguments.contains(CoreChoice.fakeClipboardReadArgument) {
                 let pane = PaneRef(machineId: "build-01", sessionId: "docs-site", paneId: "P1")
                 core.emit(.clipboardReadRequest(pane: pane, readId: 1, clipboard: .standard, listOnly: false))
                 // another pane's first read, shown once the first is answered, so a test sees that it was

@@ -40,7 +40,7 @@
     /// - ``attachSession(machineId:sessionId:)`` and ``showPane(machineId:sessionId:paneId:size:)`` take only a session
     ///   of the machine's last listing (``MobileError/NotListed(sessionId:)`` otherwise), not of ``sessions``, as the
     ///   real core refuses a session it has not listed; an attach then delivers the session's ``attachEvents``, as its
-    ///   stream would;
+    ///   stream would, and an answer to an ask what ``answerEvents`` holds for it;
     /// - a session given ``panes`` has those panes: a show takes only one the session had at the machine's last listing
     ///   (``MobileError/Remote(reason:)`` with ``unknownPane`` otherwise), so a pane added since (a split) needs a new
     ///   listing first. A session not in ``panes`` takes any pane;
@@ -128,6 +128,13 @@
             set { state.withLock { $0.attachEvents = newValue } }
         }
 
+        /// What the origin tells once an ask is answered, by ``answerKey(askId:button:)``: the stream's word that the
+        /// answer arrived (a status, a context), as an origin acting on it would say it.
+        public var answerEvents: [String: [MobileEvent]] {
+            get { state.withLock { $0.answerEvents } }
+            set { state.withLock { $0.answerEvents = newValue } }
+        }
+
         /// What a show of a pane not shown yet hands back.
         public var paneFactory: PaneFactory {
             get { state.withLock { $0.paneFactory } }
@@ -139,6 +146,11 @@
             (events, continuation) = AsyncStream.makeStream(of: MobileEvent.self, bufferingPolicy: .unbounded)
             self.hosts = hosts
             state = Mutex(FakeCoreState { _, _, paneId, _ in FakePane(paneId: paneId) })
+        }
+
+        /// The key of ``answerEvents`` for the answer to the ask `askId` with the button `button` (`nil`: escaped).
+        public static func answerKey(askId: String, button: String?) -> String {
+            "\(askId):\(button ?? "")"
         }
 
         /// Ends the wait of the connect of `machineId` for the user to sign in: `signedIn` connects it, else it fails.
