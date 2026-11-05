@@ -385,9 +385,21 @@ fn older_pages_run_before_the_oldest_main_cursor_until_the_start() {
             5,
             &serde_json::json!({"type": "assistant", "text": "sub", "parent": "toolu_9"}),
         );
+        // nor does the origin's own `account` event move it, whatever its cursor
+        let account = line(
+            "account",
+            0,
+            &serde_json::json!({"type": "account", "email": "dev@example.com"}),
+        );
         feed(
             &chat,
-            &[conversation("c1", 100), assistant("line-100", 100, "b"), sub, live(200)],
+            &[
+                conversation("c1", 100),
+                assistant("line-100", 100, "b"),
+                sub,
+                account,
+                live(200),
+            ],
         )
         .await;
         let page = format!("{}{}", assistant("line-0", 0, "a"), assistant("line-50", 50, "a2"));
@@ -403,7 +415,7 @@ fn older_pages_run_before_the_oldest_main_cursor_until_the_start() {
             .count();
         assert_eq!(pages, 1, "at the start no page is read");
         let (events, _) = fixture.reported();
-        assert_eq!(events.len(), 4, "a page is answered, not reported");
+        assert_eq!(events.len(), 5, "a page is answered, not reported");
     });
 }
 

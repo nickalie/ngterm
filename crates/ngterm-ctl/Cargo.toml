@@ -21,6 +21,9 @@ ngterm-server.workspace = true
 base64.workspace = true
 clap.workspace = true
 serde_json.workspace = true
+# `agent chat`'s account: the Keychain item's name (a SHA-256 of Claude's config dir) and Claude's usage endpoint
+sha2.workspace = true
+ureq.workspace = true
 strum.workspace = true
 uuid.workspace = true
 

@@ -8,12 +8,14 @@
 //! - [`hook`]: an agent's hook payload, read for the origin's per-pane agent record (`agent.report`).
 //! - [`approvals`]: the permission prompts the chat interleaves with a transcript's events.
 //! - [`catalog`]: the agent's slash commands and skills, for the composer's `/` dropdown.
+//! - [`account`]: the account the agent runs under and its weekly limit, for the `account` event.
 //!
 //! A parser reads one line at a time through [`TranscriptParser`], keeping what pairs a later line with an earlier
 //! one (a tool's result with its call). The formats are undocumented and drift between agent versions, so a line a
 //! parser does not know becomes an `unknown` event rather than an error. The fixtures under
 //! `tests/fixtures/agent_chat/` record the versions read and what was found about each format.
 
+pub mod account;
 pub mod approvals;
 pub mod catalog;
 pub mod claude;
@@ -204,6 +206,7 @@ fn non_empty<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
+    mod account;
     mod approvals;
     mod catalog;
     mod claude;

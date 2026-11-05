@@ -76,7 +76,7 @@ use uuid::Uuid;
 
 pub use self::records::{
     AgentCommand, AgentCommandKind, ChatApproval, ChatBody, ChatEvent, ChatNoticeKind, ChatQuestion, ChatQuestionItem,
-    ChatQuestionOption, ChatState, ChatTool, ChatToolKind, ChatToolStatus,
+    ChatQuestionOption, ChatState, ChatTool, ChatToolKind, ChatToolStatus, ChatUsage,
 };
 use crate::api::{MobileError, MobileEvent};
 use crate::pane::{PaneRef, UNKNOWN_PANE};
@@ -482,9 +482,10 @@ impl<C: Connection> Chat<C> {
         (shown, reset)
     }
 
-    /// Moves the cursors by a main-transcript event (the module docs).
+    /// Moves the cursors by a main-transcript event (the module docs). The `account` event is the origin's own, not a
+    /// transcript line's, and moves neither.
     fn track(&mut self, event: &wire::ChatEvent) {
-        if event.parent.is_some() {
+        if event.parent.is_some() || matches!(event.body, EventBody::Account { .. }) {
             return;
         }
         let at = event.cursor;

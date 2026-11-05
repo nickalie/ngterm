@@ -376,6 +376,11 @@
   <string name="chat_ended_body">%1$s isn\'t running in this pane any more, or %2$s can\'t share its conversation. The terminal shows the pane as it is.</string>
   <string name="chat_reconnecting_title">Reconnecting to %1$s</string>
   <string name="chat_reconnecting_body">What\'s here stays; new messages follow once it\'s back.</string>
+  <string name="chat_account_limit">Weekly limit %1$d%%</string>
+  <string name="chat_account_resets">Resets %1$s</string>
+  <string name="chat_account_email_spoken">Signed in as %1$s.</string>
+  <string name="chat_account_limit_spoken">%1$d%% of the weekly limit used</string>
+  <string name="chat_account_resets_spoken">%1$s, resets %2$s.</string>
   <string name="chat_older_loading">Loading earlier messages</string>
   <string name="chat_older_start">Start of the conversation</string>
   <string name="chat_older_failed">Couldn\'t load earlier messages: %1$s</string>

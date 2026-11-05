@@ -9,6 +9,7 @@ import com.nickalie.ngterm.core.ffi.ChatEvent
 import com.nickalie.ngterm.core.ffi.ChatState
 import com.nickalie.ngterm.core.ffi.ChatToolKind
 import com.nickalie.ngterm.core.ffi.ChatToolStatus
+import com.nickalie.ngterm.core.ffi.ChatUsage
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneInputException
@@ -95,6 +96,18 @@ class ChatViewModelTest {
         emit(event("a1", reply("hello")), live)
         assertEquals(ChatPhase.Live, state().phase)
         assertEquals(listOf("u1", "a1"), rows())
+    }
+
+    @Test
+    fun theAccountIsNoRowAndOutlivesAResetUntilOneThatKnowsNothingClearsIt() {
+        val account = ChatBody.Account("dev@example.com", ChatUsage(72u, 9uL))
+        emit(event("u1", user("hi")), event("account", account), live)
+        assertEquals(listOf("u1"), rows())
+        assertEquals(account, state().account)
+        emit(event("reset", ChatBody.Reset))
+        assertEquals(account, state().account)
+        emit(event("account", ChatBody.Account(null, null)))
+        assertEquals(null, state().account)
     }
 
     @Test

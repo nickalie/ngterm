@@ -95,6 +95,15 @@ fun ChatScreen(
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 Column(Modifier.fillMaxSize()) {
+                    state.account?.takeIf { state.phase != ChatPhase.Ended }?.let { account ->
+                        AccountLine(
+                            account,
+                            Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .widthIn(max = NgtermTheme.spacing.readableWidth)
+                                .padding(horizontal = NgtermTheme.spacing.lg),
+                        )
+                    }
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         ChatContent(state, machine, name, actions)
                         if (state.phase == ChatPhase.Reconnecting) {

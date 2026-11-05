@@ -58,7 +58,7 @@ pub use api::{
 pub use chat::input::{AgentInputOutcome, QuestionAnswer};
 pub use chat::{
     AgentCommand, AgentCommandKind, ChatApproval, ChatBody, ChatEvent, ChatNoticeKind, ChatQuestion, ChatQuestionItem,
-    ChatQuestionOption, ChatState, ChatTool, ChatToolKind, ChatToolStatus, filter_commands,
+    ChatQuestionOption, ChatState, ChatTool, ChatToolKind, ChatToolStatus, ChatUsage, filter_commands,
 };
 pub use keys::{KeyError, KeyPair};
 pub use pane::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};

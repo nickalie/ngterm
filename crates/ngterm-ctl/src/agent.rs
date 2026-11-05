@@ -11,6 +11,7 @@
 //! events, read from the transcript the record names. `commands` ([`commands`]) is what it runs for the composer's `/`
 //! dropdown: the agent's slash commands and skills, once, as JSON.
 
+mod account;
 mod chat;
 mod commands;
 

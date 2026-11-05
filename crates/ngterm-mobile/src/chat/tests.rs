@@ -2,6 +2,7 @@
 //! ranking; the screen matchers on the recorded agent screens ([`matchers`]) and the actions' plans and keys
 //! ([`input`]).
 
+use ngterm_core::agent_chat::account::Usage;
 use ngterm_core::agent_chat::{self as wire, EventBody, Tool, ToolKind, ToolStatus};
 
 use super::*;
@@ -194,6 +195,28 @@ fn a_wire_event_becomes_its_record() {
                     truncated: false,
                 },
             },
+        }
+    );
+    let account = wire::ChatEvent {
+        id: "account".to_owned(),
+        cursor: 4,
+        parent: None,
+        body: EventBody::Account {
+            email: Some("dev@example.com".to_owned()),
+            weekly: Some(Usage {
+                used_percent: 72,
+                resets_at: Some(9),
+            }),
+        },
+    };
+    assert_eq!(
+        ChatEvent::from(account).body,
+        ChatBody::Account {
+            email: Some("dev@example.com".to_owned()),
+            weekly: Some(ChatUsage {
+                used_percent: 72,
+                resets_at: Some(9)
+            }),
         }
     );
     let user = wire::ChatEvent {

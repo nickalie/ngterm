@@ -29,6 +29,7 @@ import com.nickalie.ngterm.core.ffi.ChatBody
 import com.nickalie.ngterm.core.ffi.ChatTool
 import com.nickalie.ngterm.core.ffi.ChatToolKind
 import com.nickalie.ngterm.core.ffi.ChatToolStatus
+import com.nickalie.ngterm.core.ffi.ChatUsage
 import com.nickalie.ngterm.core.ffi.QuestionAnswer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -115,6 +116,18 @@ class ChatScreenTest {
             .assert(expectation(SemanticsProperties.StateDescription, "Expanded"))
             .assert(clickLabel("Hide output"))
         compose.onNodeWithText("echo", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun theAccountLineReadsAsOneSentence() {
+        state.value = state.value.copy(account = ChatBody.Account("dev@example.com", ChatUsage(97u, null)))
+        show()
+        compose
+            .onNodeWithContentDescription("Signed in as dev@example.com. 97% of the weekly limit used.")
+            .assertIsDisplayed()
+        // the email alone when the origin read no limit
+        state.value = state.value.copy(account = ChatBody.Account("dev@example.com", null))
+        compose.onNodeWithContentDescription("Signed in as dev@example.com.").assertIsDisplayed()
     }
 
     @Test

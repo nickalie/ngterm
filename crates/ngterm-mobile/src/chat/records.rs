@@ -68,10 +68,25 @@ pub enum ChatBody {
     Unknown {
         entry: String,
     },
+    /// The account the agent runs under and its weekly limit, as far as the origin reads them; a later one replaces
+    /// it, and one with neither clears it.
+    Account {
+        email: Option<String>,
+        weekly: Option<ChatUsage>,
+    },
     /// The conversation switched: drop what was shown.
     Reset,
     /// The backlog (or a reconnect's catch-up) is done and following has started.
     Live,
+}
+
+/// How much of a limit is used, and when it resets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ChatUsage {
+    /// Percent used, 0–100.
+    pub used_percent: u32,
+    /// When the window starts over, epoch seconds.
+    pub resets_at: Option<u64>,
 }
 
 /// A tool call, and once its result is written, how it went.
@@ -246,6 +261,13 @@ impl From<EventBody> for ChatBody {
                 detail,
             },
             EventBody::Unknown { entry } => Self::Unknown { entry },
+            EventBody::Account { email, weekly } => Self::Account {
+                email,
+                weekly: weekly.map(|usage| ChatUsage {
+                    used_percent: usage.used_percent,
+                    resets_at: usage.resets_at,
+                }),
+            },
             EventBody::Reset => Self::Reset,
             EventBody::Live => Self::Live,
         }

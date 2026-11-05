@@ -17,6 +17,9 @@
 //! - **The record** is read again about once a second ([`RECHECK`]): a new transcript (a `/clear`, a resume) is a
 //!   `reset` and its backlog; a cleared record (the agent ended) ends the stream with a zero exit; its live permission
 //!   prompt becomes `approval` and `approval_done` events ([`Approvals`]).
+//! - **The account** the agent is signed in with and its weekly limit are read on a thread of their own
+//!   ([`Watch`]) and sent as an `account` event when they change, with the cursor of where the stream stands, as an
+//!   approval's: an `--before` page has none.
 //! - **Stdin's end** ends the process: the phone's ssh channel went away. A thread reads it to its end, as
 //!   `stream_bridge` watches its input, and the follower's wait between polls is the wait on that thread, so the end
 //!   is seen within a poll on every OS.
@@ -34,6 +37,7 @@ use ngterm_core::agent_chat::{AgentKind, ChatEvent, EventBody, Follower, NO_AGEN
 use ngterm_core::paths::Env;
 use ngterm_proto::ControlAgent;
 
+use super::account::{Source, Watch};
 use crate::{Failure, TargetOptions, client, socket};
 
 /// How often the record is read again.
@@ -47,8 +51,10 @@ const RECHECK: Duration = Duration::from_secs(1);
                   events: about the last --limit events, then `live`, then each poll's new events as the agent \
                   writes them, each poll's ended by a `live` whose cursor is where --after resumes. \
                   A permission prompt the agent waits on (the pane's status `blocked`) is an `approval`, and an \
-                  `approval_done` once it is answered anywhere. A new conversation in the pane is a `reset` and its \
-                  backlog; the record clearing ends the stream. Ends when standard input reaches its end."
+                  `approval_done` once it is answered anywhere. The account the agent is signed in with and its \
+                  weekly limit, as far as they can be read, are an `account` event, sent again when they change. A \
+                  new conversation in the pane is a `reset` and its backlog; the record clearing ends the stream. \
+                  Ends when standard input reaches its end."
 )]
 pub struct Chat {
     #[arg(long, help = "Which pane the agent runs in: left or right. Defaults to left.")]
@@ -132,6 +138,7 @@ impl Chat {
             None => follower.backlog(limit),
         }
         .map_err(|error| read_failure(&error))?;
+        let account = source(&record).and_then(Watch::start);
         let mut stream = Stream {
             chat: self,
             socket,
@@ -139,6 +146,9 @@ impl Chat {
             follower,
             record,
             approvals: Approvals::new(),
+            account,
+            position: 0,
+            announced: false,
         };
         stream.run(first, &ended)
     }
@@ -155,6 +165,14 @@ fn follower(record: &ControlAgent) -> Result<Follower, Failure> {
         .ok_or_else(|| Failure::Local(format!("unknown agent: {}", record.agent)))?;
     check_transcript(agent, &record.transcript_path).map_err(Failure::Local)?;
     Ok(Follower::new(agent, &record.transcript_path))
+}
+
+/// What the account watcher reads for `record`: its agent and transcript.
+fn source(record: &ControlAgent) -> Option<Source> {
+    Some(Source {
+        agent: AgentKind::from_name(&record.agent)?,
+        transcript: PathBuf::from(&record.transcript_path),
+    })
 }
 
 /// The event that tells the reader to drop what it shows: another conversation follows.
@@ -213,6 +231,12 @@ struct Stream<'a> {
     follower: Follower,
     record: ControlAgent,
     approvals: Approvals,
+    /// The account watcher; `None` when its thread couldn't start.
+    account: Option<Watch>,
+    /// Where the stream stands: the newest cursor of the main transcript's events written, the `account` event's.
+    position: u64,
+    /// Whether the last `account` event said anything.
+    announced: bool,
 }
 
 impl Stream<'_> {
@@ -224,6 +248,7 @@ impl Stream<'_> {
         events.extend(self.approvals.observe(self.record.approval.as_ref()));
         let mut checked = Instant::now();
         loop {
+            self.stand(&mut events);
             if write_events(&events).is_err() {
                 return Ok(());
             }
@@ -256,6 +281,9 @@ impl Stream<'_> {
         let moved = record.agent != self.record.agent || record.transcript_path != self.record.transcript_path;
         if moved {
             self.follower = follower(&record)?;
+            if let (Some(watch), Some(source)) = (&self.account, source(&record)) {
+                watch.switch(source);
+            }
         }
         self.follower.expect(record.approval.as_ref());
         if moved {
@@ -270,6 +298,26 @@ impl Stream<'_> {
         events.extend(self.approvals.observe(record.approval.as_ref()));
         self.record = record;
         Ok(events)
+    }
+
+    /// Moves [`Stream::position`] past `events`, then adds the `account` event when the watcher read a changed one.
+    fn stand(&mut self, events: &mut Vec<ChatEvent>) {
+        for event in events.iter().filter(|event| event.parent.is_none()) {
+            if matches!(event.body, EventBody::Reset) {
+                self.position = 0;
+            } else {
+                self.position = self.position.max(event.cursor);
+            }
+        }
+        let Some(account) = self.account.as_ref().and_then(Watch::changed) else {
+            return;
+        };
+        // nothing known says nothing, unless it clears what the last event said
+        if account.is_empty() && !self.announced {
+            return;
+        }
+        self.announced = !account.is_empty();
+        events.push(account.event(self.position));
     }
 
     /// `events` with the `approval_done` each one makes right after it. The events the follower parsed and did not

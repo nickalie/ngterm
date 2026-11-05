@@ -2069,6 +2069,8 @@ default it prints about the last `--limit` (200) events, then `live`, then follo
 conversation in the pane is a `reset` and its backlog, and the record clearing ends it with exit 0. It also
 ends when stdin reaches its end, so give it a stdin that stays open (`</dev/null` prints the backlog and
 exits). `--before CURSOR` prints one older page and exits; `--after CURSOR` resumes from that cursor's line.
+While following it also sends `account`, the account the agent is signed in with and how much of its weekly
+limit is used (`email`; `weekly` with `used_percent` and `resets_at`, epoch seconds), as far as the origin reads them.
 
 `ngtermctl agent commands [--target ID] [--pane left|right]` — the agent's slash commands and skills as one
 JSON array of `{name, description, kind, argument_hint}` (`kind`: `builtin`, `skill`, `command` or

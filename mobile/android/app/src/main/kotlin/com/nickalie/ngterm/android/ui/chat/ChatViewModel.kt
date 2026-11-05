@@ -109,9 +109,10 @@ sealed interface ChatProblem {
  * ([anchor], the top row of those shown before that the page left in place), the cards pinned above the composer
  * ([approval], [question]), whether an action is on its way ([busy]), why the last one did nothing ([problem],
  * until shown), whether the agent is working on a turn ([working], its status at the origin; [running] once the
- * transcript is weighed too, which Stop needs), and
- * whether the list is to go to its newest row and follow from there ([toEnd]: a notification's tap opened the chat to
- * the card at its foot), until it has.
+ * transcript is weighed too, which Stop needs), the account the agent is signed in with and its weekly limit
+ * ([account], as far as the origin reads them; kept through a reset, as the pane's agent is), and whether the list
+ * is to go to its newest row and follow from there ([toEnd]: a notification's tap opened the chat to the card at its
+ * foot), until it has.
  */
 data class ChatUiState(
     val log: ChatLog = ChatLog(),
@@ -124,6 +125,7 @@ data class ChatUiState(
     val busy: Boolean = false,
     val problem: ChatProblem? = null,
     val working: Boolean = false,
+    val account: ChatBody.Account? = null,
     val toEnd: Boolean = false,
     // the transcript's last turn was interrupted (Stop, or a declined tool call): no hook says so, so the origin's
     // status stays working until the next turn ends
@@ -438,11 +440,15 @@ private fun Boolean.after(event: ChatEvent): Boolean {
 
 private fun ChatBody.isRow(): Boolean =
     when (this) {
-        ChatBody.Reset, ChatBody.Live, is ChatBody.Conversation, is ChatBody.Approval, is ChatBody.ApprovalDone -> false
+        ChatBody.Reset, ChatBody.Live, is ChatBody.Conversation, is ChatBody.Approval, is ChatBody.ApprovalDone,
+        is ChatBody.Account,
+        -> false
+
         else -> true
     }
 
-// an event that is no row: the conversation switched or named, the backlog read, a permission prompt up or done
+// an event that is no row: the conversation switched or named, the backlog read, a permission prompt up or done, the
+// account read (one that knows nothing clears it)
 private fun ChatUiState.meta(event: ChatEvent): ChatUiState =
     when (val body = event.body) {
         ChatBody.Reset -> {
@@ -452,6 +458,7 @@ private fun ChatUiState.meta(event: ChatEvent): ChatUiState =
                 busy = busy,
                 problem = problem,
                 working = working,
+                account = account,
                 toEnd = toEnd,
                 epoch = epoch + 1,
             )
@@ -471,6 +478,10 @@ private fun ChatUiState.meta(event: ChatEvent): ChatUiState =
 
         is ChatBody.ApprovalDone -> {
             if (approval?.id == event.id) copy(approval = null) else this
+        }
+
+        is ChatBody.Account -> {
+            copy(account = body.takeIf { it.email != null || it.weekly != null })
         }
 
         else -> {

@@ -5331,8 +5331,10 @@ dependencies = [
  "ngterm-server",
  "serde_json",
  "serde_norway",
+ "sha2 0.11.1",
  "strum 0.27.2",
  "tempfile",
+ "ureq",
  "uuid",
  "windows-sys 0.61.2",
 ]

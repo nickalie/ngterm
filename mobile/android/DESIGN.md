@@ -651,6 +651,8 @@ The plan, reviewed against the brief:
 | A spinner on every running tool | motion nobody asked for, scattered down the list | the Connecting ring and "Running"; nothing in the list moves on its own |
 | The permission prompt as a dialog over the chat | hides the conversation the question is about | a Needs-you card pinned at the chat's foot, in the ask sheet's shape and order (`ui/asks/`) |
 | A paper-plane Send beside an attach clip and an emoji face | the messenger kit's glyphs, for things the agent's prompt doesn't take | Send is the return key's arrow (`ic_send`) in a filled copper circle, as a prompt goes in with Enter in the terminal; beside it only Stop, while the agent works |
+| The account as a header card: an avatar, the email, a big percentage on a ring gauge | the dashboard's KPI tile, shouting over the conversation it sits on, for a number that changes once a turn | one quiet line over the rows: the email at the start in `onSurfaceVariant`, at the end "Weekly limit 72%" over a 56×4dp meter that stands still, when it resets under them; a hairline under the line |
+| Email, limit and reset joined in one meta string with middle dots | template chrome, and three facts read as one | two ends of the line: who is signed in, and how much room is left; the meter turns the attention copper from 80% and oxide when spent, the words with it |
 | The `/` menu as a popup with an icon per command and the matched letters in bold | a second set of glyphs for a list read by name, and a highlight that fights the terminal's face | a plate (`surfaceContainerHigh`, 12dp corners) rising from the composer over the foot of the rows; each row the command as it will go in, in the terminal's face, a line of what it does, and where it comes from as a word |
 
 ```
@@ -716,6 +718,14 @@ The plan, reviewed against the brief:
   shows its summary), an API error (the alert glyph, in oxide), a summary (the page).
 - **A new conversation** (the origin's reset): "New conversation" (labelMedium, a heading) and a rule; what came
   before is gone.
+- **The account** (`AccountLine`), over the rows in the reading width, while the origin read it (Claude Code's
+  email from its global config and its weekly limit from its usage endpoint; Codex's from its `auth.json` and its
+  rollout's rate limits): the email (bodySmall, `onSurfaceVariant`, one line) at the start; at the end "Weekly limit
+  72%" (labelMedium) beside a 56×4dp meter on an `outlineVariant` track, filled verdigris, the attention copper from
+  80% and oxide at 100% (the words take the tone from 80%), and "Resets Mon 14:00" (labelSmall) under them: the
+  weekday and the locale's short time within six days, else the date. Either end shows alone when only it was read;
+  an `outlineVariant` hairline under the line. Nothing on it moves. TalkBack reads it as one sentence: "Signed in as
+  dev@example.com. 72% of the weekly limit used, resets Mon 14:00."
 - **Earlier messages:** the list's first row asks for the page before as soon as it is on screen, however it got
   there (a jump or a finger), and a new conversation's once its first row is in: "Loading earlier messages" with a
   16dp spinner, then the page goes in above and the row that was on top stays where it was. At the start it says

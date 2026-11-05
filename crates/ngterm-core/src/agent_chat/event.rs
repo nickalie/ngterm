@@ -8,6 +8,8 @@
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
+use super::account::Usage;
+
 /// The longest transcript line the parsers read; a longer one becomes an `unknown` event of entry `oversized`.
 pub const LINE_CAP: usize = 8 * 1024 * 1024;
 
@@ -114,6 +116,15 @@ pub enum EventBody {
     /// A line the parser does not know: its raw entry type, [`MALFORMED`] or [`OVERSIZED`].
     Unknown {
         entry: String,
+    },
+    /// The account the agent runs under and its weekly limit, as far as the origin can read them (`ngtermctl agent
+    /// chat`'s own, never a transcript line's; [`super::account`]). One id, [`super::account::ACCOUNT_ID`]: a later one
+    /// replaces it. Its cursor is where the stream stands, as an approval's is.
+    Account {
+        #[serde(default)]
+        email: Option<String>,
+        #[serde(default)]
+        weekly: Option<Usage>,
     },
     /// The conversation switched: drop what was shown.
     Reset,

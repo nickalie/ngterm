@@ -133,6 +133,14 @@ def _until_live(stream):
             return events
 
 
+def _next_of(stream, kind):
+    """The next event of type `kind` a stream prints, past the others."""
+    while True:
+        event = json.loads(stream.line(timeout=STREAM_WAIT))
+        if event["type"] == kind:
+            return event
+
+
 def _end(stream):
     """Ends a stream the way the phone's channel closing does: its stdin's end. It exits by itself, with 0."""
     stream.process.stdin.close()
@@ -258,10 +266,15 @@ def test_the_chat_streams_a_codex_rollout_with_its_subagent(cli, ctl, agents):
         stream = cli.spawn("agent", "chat", "--target", sid, interactive=True)
         try:
             backlog = _until_live(stream)
+            # the weekly limit the rollout's last turn recorded, read on the side; no email, as the copied tree has
+            # no auth.json
+            account = _next_of(stream, "account")
         finally:
             _end(stream)
         kinds = {event["type"] for event in backlog}
         assert {"conversation", "user", "assistant", "tool"} <= kinds, kinds
+        assert account.get("email") is None, account
+        assert account["weekly"] == {"used_percent": 35, "resets_at": 1794324247}, account
         assert any(event.get("parent") for event in backlog), backlog
         # Codex's permission prompt, while the pane is blocked
         _hook(cli, sid, "codex", "PermissionRequest", agents.payload("codex", "25-PermissionRequest.json"))

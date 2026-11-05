@@ -672,6 +672,10 @@ every other viewer see as before; the chat is a second view of it, read from the
   plugins'; `ngtermctl agent commands`), narrowed as you type with the desktop palettes' ranking;
 - a permission prompt, or Claude's `AskUserQuestion`, as a card pinned above the composer and answered with its
   buttons;
+- the account the agent is signed in with and how much of its weekly limit is used, over the rows: Claude Code's
+  email from its global config and its limit from the usage endpoint its `/usage` asks, with its own sign-in
+  (`.credentials.json`, or the macOS Keychain); Codex's from its `auth.json` and the rate limits its rollout records.
+  What the origin can't read is left out;
 - the session bar's Show terminal / Show chat switch for the focused pane: picking the terminal holds for that pane
   until its agent's next conversation, and the agent ending returns it to the terminal. A notification about the pane
   opens its chat at the newest message.
