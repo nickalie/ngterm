@@ -7,14 +7,15 @@ import UniformTypeIdentifiers
 ///
 /// What was wrong with the last attempt shows under the field it is about, and the key (typed, or the chosen file's)
 /// stays for another try. The key and the passphrase live only in this screen's state and go when it does; a chosen
-/// file's bytes are zeroed when they are replaced or the screen goes.
+/// file's bytes are zeroed when they are replaced or the screen goes. The first run and Settings both push it, each
+/// over its own model (``ImportKeyWork``).
 internal struct ImportKeyView: View {
     // a private key file is a few kilobytes; anything far bigger is not one
     private static let maxKeyBytes = 65_536
     // the key field shows a few lines of a key: three hit targets tall
     private static let keyFieldLines = 3.0
 
-    internal let model: OnboardingModel
+    internal let work: ImportKeyWork
     @State private var keyText = ""
     @State private var passphrase = ""
     @State private var isPassphraseShown = false
@@ -60,10 +61,7 @@ internal struct ImportKeyView: View {
     }
 
     private var state: (isBusy: Bool, problem: ImportProblem?) {
-        if case .importing(let isBusy, let problem) = model.step {
-            return (isBusy, problem)
-        }
-        return (false, nil)
+        work.state()
     }
 
     private func keyGroup(problem: ImportProblem?) -> some View {
@@ -151,7 +149,7 @@ internal struct ImportKeyView: View {
         let typed = passphrase
         Task {
             var bytes = file.map { Data([UInt8]($0)) } ?? Data(text.utf8)
-            await model.importKey(privateKey: &bytes, passphrase: typed)
+            await work.importKey(&bytes, typed)
         }
     }
 
@@ -166,7 +164,7 @@ internal struct ImportKeyView: View {
             }
         }
         guard let bytes = try? Data(contentsOf: url, options: .mappedIfSafe), bytes.count <= Self.maxKeyBytes else {
-            model.unreadable()
+            work.unreadable()
             return
         }
         keyText = ""

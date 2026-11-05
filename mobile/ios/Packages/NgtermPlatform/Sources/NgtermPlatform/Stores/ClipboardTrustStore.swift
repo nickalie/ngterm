@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// The machines whose programs may read the clipboard without asking ("Always allow on build-01"), by machine id.
 ///
@@ -12,15 +13,16 @@ import Foundation
 /// whole before ``machines`` shows it.
 @preconcurrency
 @MainActor
+@Observable
 public final class ClipboardTrustStore {
     /// The store's file name.
     public static let fileName = "clipboard-trust.json"
 
     /// The trusted machines' ids, as last written.
     public private(set) var machines: Set<String>
-    private let file: JSONFile<[String]>
+    @ObservationIgnored private let file: JSONFile<[String]>
     // whether `machines` is what the file holds: false while the file is there but can't be read
-    private var loaded: Bool
+    @ObservationIgnored private var loaded: Bool
 
     /// The store kept in `directory`: the app's Application Support unless a test gives its own.
     public init(directory: URL = .applicationSupportDirectory) {

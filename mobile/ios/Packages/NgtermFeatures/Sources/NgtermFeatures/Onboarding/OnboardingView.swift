@@ -23,11 +23,26 @@ public struct OnboardingView: View {
             case .importing, .welcome:
                 WelcomeView(model: model)
                     .navigationDestination(isPresented: isImporting) {
-                        ImportKeyView(model: model)
+                        ImportKeyView(work: importWork)
                     }
             }
         }
         .ngtermTheme()
+    }
+
+    // the import over the first run's model
+    private var importWork: ImportKeyWork {
+        let onboarding = model
+        return ImportKeyWork {
+            if case .importing(let isBusy, let problem) = onboarding.step {
+                return (isBusy, problem)
+            }
+            return (false, nil)
+        } importKey: { bytes, passphrase in
+            await onboarding.importKey(privateKey: &bytes, passphrase: passphrase)
+        } unreadable: {
+            onboarding.unreadable()
+        }
     }
 
     // the import is pushed over the welcome: Back pops it

@@ -21,6 +21,7 @@ internal final class FakeKeyMaker: KeyMaker {
     private let made = Mutex(0)
     private let comments = Mutex<[String]>([])
     private let refusal = Mutex<KeyError?>(nil)
+    private let gate = Mutex<DispatchSemaphore?>(nil)
 
     /// What ``generate(comment:)`` throws instead of making a key, while set.
     internal var generateFailure: KeyError? {
@@ -36,6 +37,13 @@ internal final class FakeKeyMaker: KeyMaker {
     /// The comments it was asked to make keys with, in order.
     internal var commented: [String] {
         comments.withLock { $0 }
+    }
+
+    /// Holds every import until the semaphore it returns is signalled once per import.
+    internal func holdImports() -> DispatchSemaphore {
+        let held = DispatchSemaphore(value: 0)
+        gate.withLock { $0 = held }
+        return held
     }
 
     internal func generate(comment: String) throws -> KeyPair {
@@ -55,6 +63,8 @@ internal final class FakeKeyMaker: KeyMaker {
     }
 
     internal func importKey(privateKey: Data, passphrase: String?) throws -> KeyPair {
+        // runs off the main actor (AppKeys hands it over), so a held import blocks only its own thread
+        gate.withLock { $0 }?.wait()
         let text = String(bytes: privateKey, encoding: .utf8) ?? ""
         guard text.hasPrefix("-----BEGIN") else {
             throw KeyError.Invalid(reason: "unknown key format")

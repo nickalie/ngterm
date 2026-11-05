@@ -36,9 +36,21 @@ public final class TerminalKeyboard {
         return made
     }
 
-    /// Whether the extra keys show: not while a hardware keyboard is attached, which has every key they have.
+    /// How the extra keys lay out, as Settings sets it: the terminal with the focus shows a change at once.
+    public var layout = ExtraKeysLayout.fit {
+        didSet {
+            guard layout != oldValue else {
+                return
+            }
+            madeBar?.setNeedsLayout()
+            target?.reloadInputViews()
+        }
+    }
+
+    /// Whether the extra keys show: not while a hardware keyboard is attached, which has every key they have, nor
+    /// when Settings hides them.
     public var showsExtraKeys: Bool {
-        !hardware.isAttached
+        !hardware.isAttached && layout != .hidden
     }
 
     /// A keyboard running `shortcuts`, the extra keys standing aside while `hardware` says a keyboard is attached (the

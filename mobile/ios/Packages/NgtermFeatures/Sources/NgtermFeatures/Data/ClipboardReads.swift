@@ -20,11 +20,11 @@ public final class ClipboardReads {
     @ObservationIgnored private let trust: ClipboardTrustStore
     @ObservationIgnored private let clipboard: any TerminalClipboard
     // trusted this run: a machine whose Always the store couldn't write is trusted until the app ends
-    @ObservationIgnored private var trustedNow: Set<String> = []
+    private var trustedNow: Set<String> = []
     // revoked this run: a machine whose Ask again the store couldn't write asks until the app ends
-    @ObservationIgnored private var revokedNow: Set<String> = []
+    private var revokedNow: Set<String> = []
 
-    /// The machines whose programs read the clipboard unasked: what Settings lists.
+    /// The machines whose programs read the clipboard unasked: what Settings lists, and follows as it changes.
     public var alwaysAllowed: Set<String> {
         trust.machines.union(trustedNow).subtracting(revokedNow)
     }
