@@ -6,8 +6,8 @@ import Testing
 @testable import NgtermFeatures
 
 /// The status baseline: a turn to waiting or done notifies once, a repeat doesn't, and a snapshot's status (`changed:
-/// false`) is recorded without a notice, so a refresh that finds it again says nothing; kept across launches, and let
-/// go with its session's detach.
+/// false`) is recorded without a notice, so a refresh that finds it again says nothing; the origin's clear forgets it,
+/// a stream's doesn't; kept across launches, and let go with its session's detach.
 @MainActor
 @Suite("the status baseline")
 internal struct StatusBaselineTests {
@@ -42,7 +42,20 @@ internal struct StatusBaselineTests {
         #expect(baseline.turn(key, to: "blocked") == nil)
         #expect(baseline.turn(key, to: "completed") == .done)
         #expect(baseline.turn(key, to: nil) == nil)
+        #expect(baseline.status(of: key) == nil, "listed with none: a clear")
+        #expect(baseline.turn(key, to: "completed") == .done, "so done again is a turn")
+    }
+
+    @Test("the origin's clear forgets the last status, so the same status again is a turn")
+    internal func cleared() async throws {
+        defer { test.remove() }
+        try await attach()
+        await status("completed", changed: true)
         #expect(baseline.status(of: key) == "completed")
+        await status(nil, changed: true)
+        #expect(baseline.status(of: key) == nil)
+        #expect(StatusBaselineStore(directory: test.directory).statuses.isEmpty)
+        #expect(baseline.turn(key, to: "completed") == .done)
     }
 
     @Test("a snapshot's status is recorded with no notice, so a refresh finding it again says nothing")

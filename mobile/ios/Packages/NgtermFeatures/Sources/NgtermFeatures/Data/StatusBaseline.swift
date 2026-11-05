@@ -4,9 +4,12 @@ import NgtermPlatform
 /// background refresh to tell a turn from a repeat.
 ///
 /// The live streams' statuses are recorded as they come, a snapshot's (`changed: false`, after a reconnect) as much as
-/// a change's; a stream's clear (it went away) keeps the last one. A refresh lists each session's status and notifies
-/// only a turn to waiting (`blocked`) or done (`completed`) against this baseline, once: snapshot statuses carry
-/// `changed: false`, so the stream's own rule would notify nothing. A detached session's status is let go.
+/// a change's. The origin's clear (`changed: true` with no status: `completed` reset as the user visits the session)
+/// is recorded as none, so the next turn to the same status notifies again; a clear with `changed: false` (the stream
+/// went away, or a snapshot with no status, which can't be told apart) keeps the last one. A refresh lists each
+/// session's status and notifies only a turn to waiting (`blocked`) or done (`completed`) against this baseline, once:
+/// snapshot statuses carry `changed: false`, so the stream's own rule would notify nothing. A detached session's status
+/// is let go.
 @preconcurrency
 @MainActor
 public final class StatusBaseline {
@@ -21,8 +24,14 @@ public final class StatusBaseline {
         self.store = store
         statuses = store.statuses
         connections.listen { [weak self] event in
-            if case .sessionStatus(let machineId, let sessionId, let status, _) = event, let status {
-                self?.record(SessionKey(machineId: machineId, sessionId: sessionId), status: status.status)
+            guard case .sessionStatus(let machineId, let sessionId, let status, let changed) = event else {
+                return
+            }
+            let key = SessionKey(machineId: machineId, sessionId: sessionId)
+            if let status {
+                self?.record(key, status: status.status)
+            } else if changed {
+                self?.clear(key)
             }
         }
         connections.watchAttached { [weak self] attached in
@@ -59,12 +68,24 @@ public final class StatusBaseline {
         save()
     }
 
-    /// The kind the agent of `key` turned, now listed with `status`.
+    /// Forgets the last status of `key`: the origin cleared it, and whatever it turns to next is a turn.
+    public func clear(_ key: SessionKey) {
+        guard statuses[key.machineId]?.removeValue(forKey: key.sessionId) != nil else {
+            return
+        }
+        if statuses[key.machineId]?.isEmpty == true {
+            statuses[key.machineId] = nil
+        }
+        save()
+    }
+
+    /// The kind the agent of `key` turned, now listed with `status` (`nil`: none).
     ///
     /// Waiting or done when it is one and wasn't before, `nil` for a repeat or anything else. Records `status` either
-    /// way.
+    /// way, a listing with none as a clear.
     public func turn(_ key: SessionKey, to status: String?) -> NoticeKind? {
         guard let status else {
+            clear(key)
             return nil
         }
         let before = self.status(of: key)

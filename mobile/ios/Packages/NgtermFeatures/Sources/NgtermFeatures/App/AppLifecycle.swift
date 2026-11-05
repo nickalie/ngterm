@@ -4,7 +4,8 @@ import NgtermPlatform
 ///
 /// What the app holds is its attached sessions, and a machine waiting for the user to sign in. Letting go is the
 /// graph's ``AppGraph/suspend()`` (clipboard reads denied, asks taken back with their notifications, then the core's
-/// suspend); coming back is the core's resume, whose reconnects reattach. A refresh is asked for while sessions are
+/// suspend); coming back is the graph's ``AppGraph/resume()`` (asks open again, then the core's resume, whose
+/// reconnects reattach). A refresh is asked for while sessions are
 /// attached, and runs only while the core is suspended or not yet started: in the foreground or the grace, the streams
 /// tell the statuses themselves.
 @preconcurrency
@@ -28,7 +29,7 @@ public final class AppLifecycle {
         } suspend: {
             graph.suspend()
         } resume: {
-            connections.resume()
+            graph.resume()
         }
         connections.watchAttached { [weak self] attached in
             self?.attachedChanged(attached)

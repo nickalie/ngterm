@@ -5,7 +5,7 @@ import Testing
 @testable import NgtermFeatures
 
 /// The app's lifecycle over its graph, on a grace run out by hand: what it holds is its attached sessions and a
-/// machine's sign-in, its suspend is the graph's (asks taken back, the core suspended) and its resume the core's; a
+/// machine's sign-in, its suspend is the graph's (asks taken back, the core suspended) and so is its resume; a
 /// refresh is asked for while sessions are attached, and runs only while the core is suspended or not yet started.
 @MainActor
 @Suite("the app's lifecycle over its graph")
