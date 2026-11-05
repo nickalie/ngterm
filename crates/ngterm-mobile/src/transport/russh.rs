@@ -705,7 +705,9 @@ impl Connection for RusshConnection {
         replied(channel, &mut early, "the machine refused to run the command").await?;
         let channel = opening.0.take().ok_or(TransportError::Closed)?;
         let (core, peer) = Channel::pair();
-        let ChannelPeer { output, input, backlog } = peer;
+        let ChannelPeer {
+            output, input, backlog, ..
+        } = peer;
         let (read, write) = channel.split();
         let write = Rc::new(write);
         let (closing, closed) = oneshot::channel();

@@ -324,12 +324,64 @@ fn an_answer_echoes_the_owner_and_detaching_or_disconnecting_ends_the_stream() {
 
         actor.attach().await.unwrap();
         let mut peer = actor.stream().await;
+        assert!(matches!(received(&mut peer).await.0.as_slice(), [Body::Hello(_)]));
         actor.post(Command::Disconnect {
             machine_id: "m1".to_owned(),
         });
-        assert!(received(&mut peer).await.1, "disconnecting closes the stream");
+        assert_eq!(
+            received(&mut peer).await,
+            (Vec::new(), false),
+            "disconnecting closes the connection under the stream"
+        );
+        assert_eq!(actor.transport.closed(), ["m1"]);
         tokio::time::sleep(Duration::from_secs(60)).await;
         settle().await;
         assert!(actor.transport.take_opened().is_empty(), "and nothing reopens it");
+    });
+}
+
+#[test]
+fn an_answer_posted_just_before_a_suspend_is_written_before_the_connection_closes() {
+    local(async {
+        let actor = Actor::start();
+        actor.transport.script(&tree_tail(), listing(Some(1)));
+        actor.connect().await;
+        actor.list().await;
+        actor.attach().await.unwrap();
+        let mut peer = actor.stream().await;
+        let ask: PresentationAsk = serde_json::from_value(serde_json::json!({
+            "id": "a1", "title": "Deploy?", "buttons": [{"id": "yes", "label": "Yes"}],
+            "style": "terminal", "align": "right", "owner": 9,
+        }))
+        .unwrap();
+        deliver(&peer, vec![Body::AskRequest(ask)]).await;
+        received(&mut peer).await;
+        actor.sink.take();
+
+        actor.post(Command::AnswerAsk {
+            machine_id: "m1".to_owned(),
+            session_id: SESSION.to_owned(),
+            ask_id: "a1".to_owned(),
+            reply: AskReply {
+                button: Some("yes".to_owned()),
+                ..AskReply::default()
+            },
+        });
+        actor.post(Command::Suspend);
+
+        let (bodies, closed) = received(&mut peer).await;
+        assert_eq!(
+            bodies,
+            [Body::AskResolve(PresentationAskAnswer {
+                id: "a1".to_owned(),
+                owner: 9,
+                button: Some("yes".to_owned()),
+                text: None,
+                selected: None,
+            })],
+            "the answer reached the machine"
+        );
+        assert!(closed, "and the stream was closed after it");
+        assert_eq!(actor.transport.closed(), ["m1"], "then the connection");
     });
 }

@@ -8,6 +8,7 @@
 //! inspects what the core did through it.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ngterm_term::GridSize;
@@ -95,12 +96,21 @@ struct Link {
     machine_id: String,
     /// Set when it is closed or lost, which resolves [`Connection::lost`].
     gone: watch::Sender<bool>,
-    /// The channels opened with no script, held weakly so a peer the test drops still reads as gone.
-    channels: Vec<mpsc::WeakSender<ChannelOutput>>,
+    /// The channels opened with no script, their output held weakly so a peer the test drops still reads as gone.
+    channels: Vec<OpenChannel>,
+}
+
+/// What ending a connection ends of one of its channels.
+#[derive(Debug)]
+struct OpenChannel {
+    output: mpsc::WeakSender<ChannelOutput>,
+    /// Shared with the channel's writers: set, they queue nothing more, as on a closed ssh connection.
+    refused: Arc<AtomicBool>,
 }
 
 impl State {
-    /// Ends connection `id`, if still up: its channels end as lost for `reason`, and later execs fail.
+    /// Ends connection `id`, if still up: its channels end as lost for `reason` and take no more input, as russh's
+    /// do, and later execs fail.
     fn end_link(&mut self, id: u64, reason: &str) -> bool {
         let Some(link) = self.links.remove(&id) else {
             return false;
@@ -108,7 +118,8 @@ impl State {
         link.gone.send_replace(true);
         // A channel whose reader is a full queue behind keeps its place and misses the end: ending can't wait.
         for channel in link.channels {
-            if let Some(output) = channel.upgrade() {
+            channel.refused.store(true, Ordering::Release);
+            if let Some(output) = channel.output.upgrade() {
                 let _ = output.try_send(ChannelOutput::End(ChannelEnd::Lost(reason.to_owned())));
             }
         }
@@ -311,7 +322,10 @@ impl Connection for FakeConnection {
         let Some(script) = script else {
             let mut state = lock(&self.state);
             if let Some(link) = state.links.get_mut(&self.id) {
-                link.channels.push(peer.output.downgrade());
+                link.channels.push(OpenChannel {
+                    output: peer.output.downgrade(),
+                    refused: Arc::clone(&peer.refused),
+                });
             }
             state.opened.push_back(Opened {
                 machine_id: self.machine_id.clone(),
