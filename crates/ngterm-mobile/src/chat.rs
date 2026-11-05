@@ -55,6 +55,7 @@
 pub mod input;
 pub(crate) mod matchers;
 mod records;
+pub(crate) mod upload;
 #[cfg(test)]
 pub(crate) mod tests;
 

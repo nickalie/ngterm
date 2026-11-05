@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- a paperclip, attaching a file to the prompt: a 24dp line icon, 2dp strokes with round ends; Icon tints it -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <path
+      android:pathData="M20,11.5l-7.8,7.8a5,5 0 0 1 -7.1,-7.1l8.5,-8.5a3.3,3.3 0 0 1 4.7,4.7l-8.5,8.5a1.7,1.7 0 0 1 -2.4,-2.4l7.8,-7.8"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2" />
+</vector>

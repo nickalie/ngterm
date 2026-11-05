@@ -17,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -46,8 +47,9 @@ fun ChatPane(
     selected: Boolean = true,
 ) {
     val state by chat.state.collectAsStateWithLifecycle()
+    val resolver = LocalContext.current.contentResolver
     val actions =
-        remember(chat, onShowTerminal) {
+        remember(chat, onShowTerminal, resolver) {
             ChatActions(
                 onLoadOlder = chat::loadOlder,
                 onAnswerApproval = chat::answerApproval,
@@ -57,6 +59,12 @@ fun ChatPane(
                 onSend = chat::send,
                 onStop = chat::stop,
                 onEndShown = chat::endShown,
+                onPick = { uri ->
+                    val picked = pickedFile(resolver, uri)
+                    chat.attach(picked.name, picked.size) { readPicked(resolver, uri) }
+                },
+                onCancelUpload = chat::cancelUpload,
+                onUploadShown = chat::uploadShown,
             )
         }
     KeepDraft(chat.pane, chat.composer, state.conversation?.conversationId, chat::restoreDraft)

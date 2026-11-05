@@ -1,5 +1,6 @@
 package com.nickalie.ngterm.android.ui.chat
 
+import android.net.Uri
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
@@ -121,6 +122,10 @@ data class ChatActions(
     val onSend: () -> Unit = {},
     val onStop: () -> Unit = {},
     val onEndShown: () -> Unit = {},
+    /** A file the user picked to attach, from the system's picker. */
+    val onPick: (Uri) -> Unit = {},
+    val onCancelUpload: () -> Unit = {},
+    val onUploadShown: () -> Unit = {},
 )
 
 /** How a line that opens names its tap for TalkBack: what opening it shows, and what closing it hides. */

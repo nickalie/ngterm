@@ -16,6 +16,7 @@ import com.nickalie.ngterm.core.ffi.Pane
 import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
 import com.nickalie.ngterm.core.ffi.RemoteSession
+import com.nickalie.ngterm.core.ffi.UploadProgress
 import kotlinx.coroutines.CompletableDeferred
 
 /** One call the app made on a [FakeMobileCore]: the method's name and its arguments, in order. */
@@ -63,6 +64,8 @@ data class FakeCall(
  *   chats open; [closeChat] and hiding the pane close one. [loadOlder] answers a chat's next page of [olderPages]
  *   (empty once none is left; [MobileException.Remote] with [NOT_OPEN] for a chat not open), and [agentCommands] the
  *   pane's [catalogs] entry ([MobileException.Remote] for a pane with none, as an origin without a catalog answers).
+ *   [uploadFile] tells half the bytes sent, waits on the test's gate, then tells all and answers
+ *   `/state/uploads/1/<name>`, keeping what it took in [uploads].
  *   Chat events themselves are what a test [emit]s.
  *
  * [showPane] returns what [paneFactory] makes; the default is a `Pane(NoHandle)`, a placeholder whose methods must not
@@ -418,6 +421,25 @@ class FakeMobileCore(
         recordHeld("agentCommands", machineId, sessionId, paneId)
         sessionsOf(machineId)
         return catalogs[PaneRef(machineId, sessionId, paneId)] ?: throw MobileException.Remote("no agent in this pane")
+    }
+
+    /** What each upload's bytes were, by name, in order: what [uploadFile] took. */
+    val uploads: MutableList<Pair<String, ByteArray>> = mutableListOf()
+
+    override suspend fun uploadFile(
+        machineId: String,
+        name: String,
+        bytes: ByteArray,
+        progress: UploadProgress,
+    ): String {
+        val total = bytes.size.toULong()
+        sessionsOf(machineId)
+        // half of it has gone when a test's gate holds the call, all of it once let go
+        progress.sent(total / 2u, total)
+        recordHeld("uploadFile", machineId, name, bytes.size)
+        progress.sent(total, total)
+        synchronized(uploads) { uploads += name to bytes }
+        return "/state/uploads/1/$name"
     }
 
     override fun takeLead(

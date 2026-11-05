@@ -110,9 +110,9 @@ sealed interface ChatProblem {
  * ([approval], [question]), whether an action is on its way ([busy]), why the last one did nothing ([problem],
  * until shown), whether the agent is working on a turn ([working], its status at the origin; [running] once the
  * transcript is weighed too, which Stop needs), the account the agent is signed in with and its weekly limit
- * ([account], as far as the origin reads them; kept through a reset, as the pane's agent is), and whether the list
- * is to go to its newest row and follow from there ([toEnd]: a notification's tap opened the chat to the card at its
- * foot), until it has.
+ * ([account], as far as the origin reads them; kept through a reset, as the pane's agent is), the file the composer
+ * attaches on its way or stopped short ([upload]), and whether the list is to go to its newest row and follow from
+ * there ([toEnd]: a notification's tap opened the chat to the card at its foot), until it has.
  */
 data class ChatUiState(
     val log: ChatLog = ChatLog(),
@@ -127,6 +127,7 @@ data class ChatUiState(
     val working: Boolean = false,
     val account: ChatBody.Account? = null,
     val toEnd: Boolean = false,
+    val upload: ChatUpload? = null,
     // the transcript's last turn was interrupted (Stop, or a declined tool call): no hook says so, so the origin's
     // status stays working until the next turn ends
     internal val interrupted: Boolean = false,
@@ -148,8 +149,8 @@ data class ChatUiState(
  * A shown pane's chat, from the moment [PaneChats] opens it until it closes: the events the core streams fold into
  * [state], older pages come in on [loadOlder], and the actions ([send], [stop], [answerApproval], [answerQuestion])
  * go through the pane's handle ([handle]), each claiming the lead first as the core does. Reading never claims it.
- * The prompt being written is the [composer]'s, its `/` menu listing the agent's commands ranked by [filter]; whether
- * the agent works on a turn comes from [working].
+ * The prompt being written is the [composer]'s, its `/` menu listing the agent's commands ranked by [filter], a file
+ * it attaches going to the machine on [attach]; whether the agent works on a turn comes from [working].
  *
  * - An approval card comes up with the `approval` event and goes with its `approval_done` (or the next `approval`),
  *   or when this device answered it; a dialog the core can't confirm as the card's (another call's, or one it can't
@@ -180,6 +181,24 @@ class ChatViewModel internal constructor(
     /** The prompt being written and its `/` menu. Main thread only. */
     val composer =
         ChatComposer(scope, fetch = { core.agentCommands(pane.machineId, pane.sessionId, pane.paneId) }, filter)
+
+    private val uploads = ChatUploads(core, pane.machineId, chat, scope) { composer.insertPath(promptPath(it)) }
+
+    /**
+     * Sends the file [name] of [size] bytes (`null`: unknown) that [read] gives to the pane's machine, one at a time,
+     * and puts its stored path into the prompt ([ChatUploads]).
+     */
+    fun attach(
+        name: String,
+        size: Long?,
+        read: suspend () -> ByteArray,
+    ) = uploads.attach(name, size, read)
+
+    /** Stops the upload on its way. */
+    fun cancelUpload() = uploads.cancel()
+
+    /** The upload's failure was seen. */
+    fun uploadShown() = uploads.shown()
 
     /**
      * Opens the pane's chat at the core. While the machine's link is down it is [ChatPhase.Reconnecting] and opens
@@ -460,6 +479,7 @@ private fun ChatUiState.meta(event: ChatEvent): ChatUiState =
                 working = working,
                 account = account,
                 toEnd = toEnd,
+                upload = upload,
                 epoch = epoch + 1,
             )
         }

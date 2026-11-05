@@ -30,9 +30,11 @@ import com.nickalie.ngterm.core.ffi.PaneRef
 
 /**
  * The chat's foot, in the messenger's shape: one rounded field on the bar with its buttons inside it (Commands at its
- * start, which puts a `/` into an empty field and opens the menu; Stop at its end while the agent works on a turn,
- * [ChatUiState.running]), the prompt ([composer]'s, growing to six lines, then scrolling inside) between them,
- * and Send, a round copper button beside the field that grows in once there is something to send. While a card waits
+ * start, which puts a `/` into an empty field and opens the menu; Attach, the paperclip, and Stop at its end while the
+ * agent works on a turn, [ChatUiState.running]), the prompt ([composer]'s, growing to six lines, then scrolling
+ * inside) between them, and Send, a round copper button beside the field that grows in once there is something to
+ * send. A file attached shows over the pill on its way, with Cancel, or why it stopped ([ChatUiState.upload]); its
+ * stored path goes into the prompt once it is there. While a card waits
  * ([ChatUiState.awaitsCard]) a line over the field says to answer it first, and Send and Stop hold, as their keys would
  * land in its dialog; the field still takes a draft. While an action is on its way ([ChatUiState.busy]) the field
  * holds still and Send shows a spinner. The field takes the input focus through [focusRequester].
@@ -66,6 +68,7 @@ fun Composer(
                 verticalArrangement = Arrangement.spacedBy(spacing.xs),
             ) {
                 if (state.awaitsCard) HeldLine()
+                state.upload?.let { UploadLine(it, actions.onCancelUpload, actions.onUploadShown) }
                 Row(
                     verticalAlignment = Alignment.Bottom,
                     horizontalArrangement = Arrangement.spacedBy(spacing.xs),

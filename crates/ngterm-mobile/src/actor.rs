@@ -56,7 +56,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::{AbortHandle, LocalSet};
 
 use crate::api::PaneInputError;
-use crate::api::{EventSink, Machine, MachineState, MobileError, MobileEvent, Pane, PaneSize, PaneSlot};
+use crate::api::{
+    EventSink, Machine, MachineState, MobileError, MobileEvent, Pane, PaneSize, PaneSlot, UploadProgress,
+};
 use crate::chat::input::{Action, AgentInputOutcome, InputTiming};
 use crate::chat::{AgentCommand, ChatEvent, ChatKey, Chats};
 use crate::pane::{self, ClipboardReply, GoneCheck, Note, PaneRef, Panes, Target};
@@ -141,6 +143,14 @@ pub(crate) enum Command {
     AgentCommands {
         pane: PaneRef,
         reply: oneshot::Sender<Result<Vec<AgentCommand>, MobileError>>,
+    },
+    /// A file the chat composer attaches, sent to the machine ([`crate::chat::upload`]); the reply dropped cancels it.
+    Upload {
+        machine_id: String,
+        name: String,
+        bytes: Vec<u8>,
+        progress: Arc<dyn UploadProgress>,
+        reply: oneshot::Sender<Result<String, MobileError>>,
     },
     /// A chat action on a shown pane's agent ([`crate::chat::input`]), from the handle whose slot is `slot`.
     PaneInput {
@@ -437,10 +447,7 @@ async fn run<T: Transport>(
             Command::NetworkChanged => network_changed(&state),
             Command::Suspend => suspend(&state),
             Command::Resume => resume(&state),
-            command @ (Command::OpenChat { .. }
-            | Command::CloseChat(_)
-            | Command::LoadOlder { .. }
-            | Command::AgentCommands { .. }) => chats::command(&state, command),
+            command if chats::handles(&command) => chats::command(&state, command),
             command @ (Command::PaneInput { .. } | Command::ApprovalLabels { .. }) => inputs::command(&state, command),
             command => pane_command(&state, command),
         }

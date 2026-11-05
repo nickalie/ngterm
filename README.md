@@ -669,7 +669,10 @@ every other viewer see as before; the chat is a second view of it, read from the
   messages paged in as the list scrolls up;
 - a composer: Send pastes the prompt into the pane and enters it, Stop sends Esc while a turn runs, and `/` opens a
   dropdown of the agent's slash commands and skills (built-ins, user and project skills and commands, enabled
-  plugins'; `ngtermctl agent commands`), narrowed as you type with the desktop palettes' ranking;
+  plugins'; `ngtermctl agent commands`), narrowed as you type with the desktop palettes' ranking; the paperclip
+  attaches a photo, a video or any file (the system's pickers, no storage permission): it goes to the origin over the
+  same ssh link (`ngtermctl agent upload`, at most 32 MiB, kept a week under the state directory's `uploads/`) with
+  its progress and Cancel shown, and its stored path goes into the prompt for the agent to read;
 - a permission prompt, or Claude's `AskUserQuestion`, as a card pinned above the composer and answered with its
   buttons;
 - the account the agent is signed in with and how much of its weekly limit is used, over the rows: Claude Code's

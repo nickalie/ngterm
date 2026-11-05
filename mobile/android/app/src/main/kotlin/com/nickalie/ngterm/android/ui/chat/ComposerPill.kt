@@ -7,11 +7,9 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -51,8 +49,9 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
  * The composer's rounded field and the buttons inside it: Commands (a `/` that starts one in an empty field, or closes
- * the menu while it is open), the prompt, and Stop while the agent works on a turn ([ChatUiState.running]) and no card
- * waits. Every button in it is a 48dp target, and they stay on the prompt's last line as it grows.
+ * the menu while it is open), the prompt, Attach (the paperclip, [AttachButton]), and Stop while the agent works on a
+ * turn ([ChatUiState.running]) and no card waits. Every button in it is a 48dp target, and they stay on the prompt's
+ * last line as it grows.
  */
 @Composable
 internal fun PromptPill(
@@ -77,10 +76,9 @@ internal fun PromptPill(
                 },
             )
             PromptField(composer, state.busy, focusRequester, canSend, actions.onSend, Modifier.weight(1f))
+            AttachButton(enabled = state.upload !is ChatUpload.Sending, onPick = actions.onPick)
             if (state.running && !state.awaitsCard) {
                 StopButton(enabled = !state.busy, onClick = actions.onStop)
-            } else {
-                Spacer(Modifier.width(NgtermTheme.spacing.lg))
             }
         }
     }

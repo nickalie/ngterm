@@ -781,7 +781,9 @@ pane runs and where its transcript is, so never call it yourself. `agent chat [-
 prints that pane's conversation as NDJSON chat events and follows it until stdin closes; `agent commands
 [--target S] [--pane left|right]` prints the agent's slash commands and skills as one JSON array. Both fail with
 `no agent in this pane` until the hooks from this build are installed and a new agent process has started
-([details](reference.md#agent)).
+([details](reference.md#agent)). `agent upload --name NAME --size BYTES` stores a file the app's chat composer
+attaches (its bytes on stdin) under the state directory's `uploads/` and prints its path; the path then comes in the
+user's prompt, so read the file it names.
 
 **clipboard** — `clipboard set [TEXT]` — copy text to the clipboard of every terminal showing the pane
 the command runs in; the text is the argument, or stdin when omitted (`git diff | ngtermctl clipboard set`).

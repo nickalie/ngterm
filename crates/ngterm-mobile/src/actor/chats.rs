@@ -1,5 +1,6 @@
 //! The chat commands on the actor ([`crate::chat`]): opening a shown pane's chat on its machine's connection, closing
-//! it, and the one-shot reads (an older page, the catalog) run as local tasks on the connection as it was when posted.
+//! it, the one-shot reads (an older page, the catalog) and a composer's upload, run as local tasks on the connection
+//! as it was when posted.
 
 use std::rc::Rc;
 
@@ -7,10 +8,22 @@ use ngterm_core::remote::tree::RemoteCommandResult;
 
 use super::{Command, State, connection_of};
 use crate::api::MobileError;
-use crate::chat::{self, ChatKey, FETCH_DEADLINE, Job, LinkReport, Lookup, NOT_SHOWN, Reporter};
+use crate::chat::{self, ChatKey, FETCH_DEADLINE, Job, LinkReport, Lookup, NOT_SHOWN, Reporter, upload};
 use crate::pane::PaneRef;
 use crate::sessions;
 use crate::transport::Transport;
+
+/// Whether `command` is a chat command, for [`command`].
+pub(super) fn handles(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::OpenChat { .. }
+            | Command::CloseChat(_)
+            | Command::LoadOlder { .. }
+            | Command::AgentCommands { .. }
+            | Command::Upload { .. }
+    )
+}
 
 /// Handles a chat command.
 pub(super) fn command<T: Transport>(state: &Rc<State<T>>, command: Command) {
@@ -59,6 +72,23 @@ pub(super) fn command<T: Transport>(state: &Rc<State<T>>, command: Command) {
                 if let Ok(commands) = &answer {
                     state.chats.borrow_mut().fetched(&key, job.generation, commands);
                 }
+                let _ = reply.send(answer);
+            });
+        }
+        Command::Upload {
+            machine_id,
+            name,
+            bytes,
+            progress,
+            mut reply,
+        } => {
+            let connection = match connection_of(state, &machine_id) {
+                Ok(connection) => connection,
+                Err(error) => return drop(reply.send(Err(error))),
+            };
+            tokio::task::spawn_local(async move {
+                let told = |sent, total| progress.sent(sent, total);
+                let answer = upload::upload(&*connection, &name, &bytes, &told, reply.closed()).await;
                 let _ = reply.send(answer);
             });
         }

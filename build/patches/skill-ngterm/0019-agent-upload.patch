@@ -1,0 +1,36 @@
+Document `agent upload`: a file the Android app's chat composer attaches, stored under the state directory's
+`uploads/` with its path printed for the prompt. Applied after 0018-agent-group.patch.
+
+diff --git a/SKILL.md b/SKILL.md
+index 1c8798c8..81a819c5 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -781,7 +781,9 @@ pane runs and where its transcript is, so never call it yourself. `agent chat [-
+ prints that pane's conversation as NDJSON chat events and follows it until stdin closes; `agent commands
+ [--target S] [--pane left|right]` prints the agent's slash commands and skills as one JSON array. Both fail with
+ `no agent in this pane` until the hooks from this build are installed and a new agent process has started
+-([details](reference.md#agent)).
++([details](reference.md#agent)). `agent upload --name NAME --size BYTES` stores a file the app's chat composer
++attaches (its bytes on stdin) under the state directory's `uploads/` and prints its path; the path then comes in the
++user's prompt, so read the file it names.
+
+ **clipboard** — `clipboard set [TEXT]` — copy text to the clipboard of every terminal showing the pane
+ the command runs in; the text is the argument, or stdin when omitted (`git diff | ngtermctl clipboard set`).
+diff --git a/reference.md b/reference.md
+index 0230cafb..43afac80 100644
+--- a/reference.md
++++ b/reference.md
+@@ -2078,6 +2078,13 @@ Codex mentions it, `$name`.
+
+ Both read the record through `agent.get` and fail with `no agent in this pane` when it has none.
+
++`ngtermctl agent upload --name NAME --size BYTES` — what the Android app runs for a file its chat composer
++attaches: reads exactly `--size` bytes (at most 32 MiB) from stdin and stores them as `NAME` (its last path
++component, with what an OS can't take in a file name replaced) in a fresh directory under the state directory's
++`uploads/`, then prints the stored file's full path, which the app puts into the prompt. Input that ends early or
++runs past `--size` stores nothing; uploads older than a week are removed by the next one. It needs no record and
++no running ngterm.
++
+ ## browser
+
+ `ngtermctl browser clear` - remove every cookie and all site data held by the saved store of

@@ -160,7 +160,7 @@ above headings.
 Line icons drawn for the app in `res/drawable/ic_*.xml`: 24dp, 2dp strokes, round ends, tinted by `Icon`. Machines
 (two racked servers), Sessions (a terminal window), Settings (sliders), Menu and Menu open, Add, Retry, Alert, Offline
 (a struck signal), Close, Lock, Back (mirrored right to left), More (an item's menu), Send (the return key's arrow,
-mirrored right to left, `ic_send`), Chat (a speech bubble with two
+mirrored right to left, `ic_send`), Attach (a paperclip, `ic_attach`), Chat (a speech bubble with two
 lines, `ic_chat`) and the extra keys' arrow
 (`ic_key_arrow`, turned for each direction). The chat's lines have a glyph per tool kind (`ic_tool_*`): shell (a `>_`
 prompt), edit (a pencil), read (a page with a folded corner), search (a magnifier), web (a globe), task (a branch,
@@ -761,11 +761,13 @@ The plan, reviewed against the brief:
   terminal's face: in an empty field it puts the `/` in, takes the focus and opens the menu; with the menu open it
   closes it; with a prompt written it holds. Then the prompt (bodyLarge on 24 sp lines, "Prompt, or / for commands",
   the copper caret) that grows to six lines and then scrolls inside, so a long prompt leaves the conversation in sight;
-  the buttons stay on its last line. At its end **Stop** (the interrupt's square) while the agent's status says it
-  works on a turn and the turn wasn't interrupted (no hook tells the origin of an interrupt, so its status stays
-  working: Stop comes back once the agent works again or a prompt is typed, not for a `/command` alone). **Send** (filled copper round, 48dp, `ic_send`) sits beside the pill only while there is something
-  to send, growing in from its middle and out again (120ms, scale and fade; a cut with animations off), so an empty
-  composer is the pill alone, as a messenger's is. The field takes line breaks as the clipboard
+  the buttons stay on its last line. Near its end **Attach** (the paperclip, `ic_attach`; see Attaching a file below),
+  and at its end **Stop** (the interrupt's square) while the agent's status says it works on a turn and the turn
+  wasn't interrupted (no hook tells the origin of an interrupt, so its status stays working: Stop comes back once the
+  agent works again or a prompt is typed, not for a `/command` alone). **Send** (filled copper round, 48dp,
+  `ic_send`) sits beside the pill only while there is something to send, growing in from its middle and out again
+  (120ms, scale and fade; a cut with animations off), so an empty composer is the pill alone, as a messenger's is.
+  The field takes line breaks as the clipboard
   brings them and refuses an edit that adds any other control character. Send takes the text with its ends trimmed;
   the field lets it go once the agent has it and keeps it when nothing was sent. While an action is on its way the
   field holds still and Send turns to a 16dp spinner ("Sending"), so a second tap sends nothing. While a card waits,
@@ -785,9 +787,28 @@ The plan, reviewed against the brief:
   | | 2 commands                       | |
   | +----------------------------------+ |
   | .-------------------------------.    |
-  | ( /  /co                     [] ) (<-)|
+  | ( /  /co                   @ [] ) (<-)|
   | '-------------------------------'    |
   +--------------------------------------+
+  ```
+
+- **Attaching a file** (`AttachButton`, `UploadLine`, `ChatUploads`): the paperclip opens a small menu, **Photo or
+  video** (the system photo picker) and **File** (the documents UI, any type); neither asks for a storage permission.
+  The picked file goes to the pane's machine over its ssh link (`ngtermctl agent upload`, stored a week under the
+  origin's state directory, at most 32 MiB: a larger one is refused before a byte is read). Over the pill a line shows
+  it on its way: the paperclip at 16dp, "Uploading shot.png" (bodySmall, one line), the percentage (labelMedium,
+  `onSurfaceVariant`) and **Cancel upload** (Close, 48dp), over a determinate bar; the paperclip holds meanwhile, as
+  one file goes at a time. Done, the line goes and the stored path goes into the field at the cursor with a space on
+  each side (in double quotes when it holds a space), for the user to write around before Send; Claude Code reads an
+  image's path as the image. Stopped short, the line says why in the Error tone ("Couldn't attach shot.png: …", a
+  polite live region) with Dismiss; Cancel leaves nothing on the machine.
+
+  ```
+  |  [@] Uploading shot.png         42%  X |
+  |  =============------------------------ |
+  | .-------------------------------.      |
+  | ( /  Look at                 @  )  (<-)|
+  | '-------------------------------'      |
   ```
 
 - **The `/` menu** (`SlashCommandMenu`): a `/` at the start of the field, with no space or line break after it, opens
@@ -806,7 +827,7 @@ The plan, reviewed against the brief:
   Tab picks it; Escape closes the menu. Enter alone is a line break.
 - **TalkBack:** the chat is "Chat with Claude Code"; a prompt reads "You: …"; a line reads its kind, its title and its
   status, says Expanded or Collapsed, and names its tap (Show output, Hide steps, Show summary); the cards' titles are
-  headings; the reconnecting strip, Sending and the problems are polite live regions. Commands, Send and Stop are named for what
+  headings; the reconnecting strip, Sending and the problems are polite live regions. Commands, Attach a file, Cancel upload, Send and Stop are named for what
   they do ("Sending" while on its way); the line over the field and the menu's count are polite live regions; a menu
   row reads whole (the command, its hint, what it does, its kind), says Selected when highlighted, and names its tap
   Insert. The rows take no input focus, so a hardware keyboard stays in the field.

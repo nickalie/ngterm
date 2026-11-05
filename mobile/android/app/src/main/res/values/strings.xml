@@ -447,6 +447,15 @@
   <string name="chat_send">Send</string>
   <string name="chat_stop">Stop</string>
   <string name="chat_commands">Commands</string>
+  <string name="chat_attach">Attach a file</string>
+  <string name="chat_attach_media">Photo or video</string>
+  <string name="chat_attach_file">File</string>
+  <string name="chat_upload_sending">Uploading %1$s</string>
+  <string name="chat_upload_percent">%1$d%%</string>
+  <string name="chat_upload_cancel">Cancel upload</string>
+  <string name="chat_upload_failed">Couldn\'t attach %1$s: %2$s</string>
+  <string name="chat_upload_too_large">it\'s over the 32 MB an upload takes</string>
+  <string name="chat_upload_unreadable">the phone couldn\'t read it</string>
   <string name="chat_composer_held">Answer the card above first: a prompt now would go to its dialog.</string>
   <string name="chat_command_insert">Insert</string>
   <string name="chat_command_builtin">Built-in</string>

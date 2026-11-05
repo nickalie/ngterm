@@ -9,11 +9,13 @@
 //!
 //! `chat` ([`chat`]) is what the Android app runs on the origin under its ssh: the pane's conversation as NDJSON chat
 //! events, read from the transcript the record names. `commands` ([`commands`]) is what it runs for the composer's `/`
-//! dropdown: the agent's slash commands and skills, once, as JSON.
+//! dropdown: the agent's slash commands and skills, once, as JSON. `upload` ([`upload`]) is what it runs for a file
+//! the composer attaches: the bytes on standard input, stored for the agent, the stored path printed.
 
 mod account;
 mod chat;
 mod commands;
+mod upload;
 
 use std::io::{self, IsTerminal, Read};
 use std::path::Path;
@@ -49,8 +51,8 @@ const GET_DEADLINE: Duration = Duration::from_secs(5);
     about = "The coding agent a pane runs, for the Android chat view.",
     long_about = "The instance keeps, in memory, which agent (Claude Code or Codex) each pane runs and where its \
                   conversation's transcript is: the agent-status hooks fill it through `hook` (reinstall them to get \
-                  the call, then start a new agent process), and the Android app runs `chat` and `commands` on this \
-                  machine over ssh. An ngterm extension: upstream's protocol has no agent group.",
+                  the call, then start a new agent process), and the Android app runs `chat`, `commands` and \
+                  `upload` on this machine over ssh. An ngterm extension: upstream's protocol has no agent group.",
     subcommand_required = true,
     arg_required_else_help = true
 )]
@@ -64,6 +66,7 @@ enum AgentCommand {
     Hook(Hook),
     Chat(chat::Chat),
     Commands(commands::Commands),
+    Upload(upload::Upload),
 }
 
 impl Agent {
@@ -73,6 +76,7 @@ impl Agent {
             AgentCommand::Hook(command) => command.validate(),
             AgentCommand::Chat(command) => command.validate(),
             AgentCommand::Commands(command) => command.validate(),
+            AgentCommand::Upload(command) => command.validate(),
         }
     }
 
@@ -82,6 +86,7 @@ impl Agent {
             AgentCommand::Hook(command) => command.run(env),
             AgentCommand::Chat(command) => command.run(env),
             AgentCommand::Commands(command) => command.run(env),
+            AgentCommand::Upload(command) => command.run(env),
         }
     }
 }

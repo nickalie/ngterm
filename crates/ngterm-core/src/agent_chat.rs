@@ -9,6 +9,7 @@
 //! - [`approvals`]: the permission prompts the chat interleaves with a transcript's events.
 //! - [`catalog`]: the agent's slash commands and skills, for the composer's `/` dropdown.
 //! - [`account`]: the account the agent runs under and its weekly limit, for the `account` event.
+//! - [`upload`]: a file the composer attaches, stored on the origin for the agent to read.
 //!
 //! A parser reads one line at a time through [`TranscriptParser`], keeping what pairs a later line with an earlier
 //! one (a tool's result with its call). The formats are undocumented and drift between agent versions, so a line a
@@ -23,6 +24,7 @@ pub mod codex;
 pub mod event;
 pub mod follow;
 pub mod hook;
+pub mod upload;
 
 pub use claude::ClaudeParser;
 pub use codex::CodexParser;
@@ -214,4 +216,5 @@ mod tests {
     mod follow;
     mod hook;
     mod support;
+    mod upload;
 }

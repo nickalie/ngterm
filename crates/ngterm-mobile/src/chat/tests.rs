@@ -8,6 +8,7 @@ use ngterm_core::agent_chat::{self as wire, EventBody, Tool, ToolKind, ToolStatu
 use super::*;
 
 mod input;
+mod upload;
 pub(crate) mod matchers;
 
 fn command(name: &str, description: &str) -> AgentCommand {

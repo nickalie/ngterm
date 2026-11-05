@@ -2080,6 +2080,13 @@ Codex mentions it, `$name`.
 
 Both read the record through `agent.get` and fail with `no agent in this pane` when it has none.
 
+`ngtermctl agent upload --name NAME --size BYTES` — what the Android app runs for a file its chat composer
+attaches: reads exactly `--size` bytes (at most 32 MiB) from stdin and stores them as `NAME` (its last path
+component, with what an OS can't take in a file name replaced) in a fresh directory under the state directory's
+`uploads/`, then prints the stored file's full path, which the app puts into the prompt. Input that ends early or
+runs past `--size` stores nothing; uploads older than a week are removed by the next one. It needs no record and
+no running ngterm.
+
 ## browser
 
 `ngtermctl browser clear` - remove every cookie and all site data held by the saved store of

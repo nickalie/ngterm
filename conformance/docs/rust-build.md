@@ -254,7 +254,9 @@ agent-status hooks fill and the Android chat view reads (`ngterm-core`'s `comman
 `ngtermctl agent hook`, which the hooks run with the payload on stdin (`ngterm-ctl`'s `agent.rs`), and
 `ngtermctl agent chat`, which the phone runs on the origin to read the record's transcript as NDJSON chat events
 (`agent/chat.rs`), and `ngtermctl agent commands`, which prints the agent's slash commands and skills for the chat
-composer's `/` dropdown (`agent/commands.rs`, over `ngterm-core`'s `agent_chat::catalog`).
+composer's `/` dropdown (`agent/commands.rs`, over `ngterm-core`'s `agent_chat::catalog`), and
+`ngtermctl agent upload`, which stores a file the chat composer attaches from its stdin and prints its path
+(`agent/upload.rs`, over `ngterm-core`'s `agent_chat::upload`; no record or running instance needed).
 
 ### Presentation kinds
 

@@ -104,6 +104,21 @@ class ChatComposerTest {
     }
 
     @Test
+    fun anAttachedPathGoesInAtTheCursorWithASpaceEachSide() {
+        composer.edit(TextFieldValue("Look at and fix", TextRange(7)))
+        composer.insertPath("/up/a.png")
+        assertEquals("Look at /up/a.png and fix", composer.draft.text)
+        assertEquals(TextRange(18), composer.draft.selection)
+        // into an empty field, and over a selection
+        composer.edit(TextFieldValue(""))
+        composer.insertPath("/up/b.txt")
+        assertEquals("/up/b.txt ", composer.draft.text)
+        composer.edit(TextFieldValue("see THIS now", TextRange(4, 8)))
+        composer.insertPath("/up/c")
+        assertEquals("see /up/c now", composer.draft.text)
+    }
+
+    @Test
     fun eachKeystrokeNarrowsItThroughFilterCommands() {
         // the menu is read as each keystroke is drawn
         type("/")

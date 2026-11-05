@@ -286,6 +286,13 @@ pub trait KeyVault: Send + Sync {
     fn load(&self, key_id: String) -> Result<Vec<u8>, VaultError>;
 }
 
+/// How far an upload ([`MobileCore::upload_file`]) has got, told on the core's actor thread: hand it on and return.
+#[uniffi::export(with_foreign)]
+pub trait UploadProgress: Send + Sync {
+    /// `sent` of the file's `total` bytes have gone to the machine.
+    fn sent(&self, sent: u64, total: u64);
+}
+
 /// The app's pinned host keys (trust on first use).
 #[uniffi::export(with_foreign)]
 pub trait HostKeyStore: Send + Sync {
@@ -700,6 +707,34 @@ impl MobileCore {
             pane_id,
         };
         self.actor.post(Command::AgentCommands { pane, reply })?;
+        answer.await.unwrap_or(Err(MobileError::Stopped))
+    }
+
+    /// Sends a file the chat composer attaches to the machine, which stores it for its agents to read
+    /// (`ngtermctl agent upload`: a fresh directory under its state directory's `uploads/`, kept a week), and returns
+    /// the stored path to put into the prompt. `progress` hears how much has gone. Cancelling the call (dropping it, a
+    /// cancelled coroutine) stops the upload, and the machine keeps nothing of it.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::NotConnected`], [`MobileError::Remote`] with the machine's words when it stored nothing (the
+    /// file is over its 32 MiB cap, an origin that predates the command) or the transport's when the link failed or
+    /// stalled, [`MobileError::Cancelled`], or [`MobileError::Stopped`].
+    pub async fn upload_file(
+        &self,
+        machine_id: String,
+        name: String,
+        bytes: Vec<u8>,
+        progress: Arc<dyn UploadProgress>,
+    ) -> Result<String, MobileError> {
+        let (reply, answer) = oneshot::channel();
+        self.actor.post(Command::Upload {
+            machine_id,
+            name,
+            bytes,
+            progress,
+            reply,
+        })?;
         answer.await.unwrap_or(Err(MobileError::Stopped))
     }
 }

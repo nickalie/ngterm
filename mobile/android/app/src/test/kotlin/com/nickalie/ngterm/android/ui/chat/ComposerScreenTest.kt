@@ -101,6 +101,40 @@ class ComposerScreenTest {
     }
 
     @Test
+    fun anUploadShowsOverThePillWithCancelThenWhyItStopped() {
+        var cancelled = 0
+        var dismissed = 0
+        state.value = state.value.copy(upload = ChatUpload.Sending("shot.png", 512, 1024))
+        val actions = ChatActions(onCancelUpload = { cancelled++ }, onUploadShown = { dismissed++ })
+        compose.setContent {
+            NgtermTheme { ChatScreen(state.value, "build-01", actions, composer = ChatSamples.composer("")) }
+        }
+        compose.onNodeWithText("Uploading shot.png").assertIsDisplayed()
+        compose.onNodeWithText("50%").assertIsDisplayed()
+        // one upload at a time: the paperclip holds while it is on its way
+        compose.onNodeWithContentDescription("Attach a file").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Cancel upload").performClick()
+        assertEquals(1, cancelled)
+
+        state.value = state.value.copy(upload = ChatUpload.Failed("shot.png", UploadProblem.TooLarge))
+        compose.waitForIdle()
+        compose
+            .onNodeWithText("Couldn't attach shot.png: it's over the 32 MB an upload takes")
+            .assertIsDisplayed()
+        compose.onNodeWithContentDescription("Attach a file").assertIsEnabled()
+        compose.onNodeWithContentDescription("Dismiss").performClick()
+        assertEquals(1, dismissed)
+    }
+
+    @Test
+    fun theAttachMenuOffersThePhotoPickerAndFiles() {
+        show()
+        compose.onNodeWithContentDescription("Attach a file").assertIsEnabled().performClick()
+        compose.onNodeWithText("Photo or video").assertIsDisplayed()
+        compose.onNodeWithText("File").assertIsDisplayed()
+    }
+
+    @Test
     fun aHardwareKeyboardMovesPicksAndClosesTheMenu() {
         val composer = show()
         field().performClick()

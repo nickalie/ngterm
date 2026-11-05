@@ -53,7 +53,7 @@ pub mod transport;
 pub use api::{
     CellPoint, EventSink, HostKeyStore, KeyVault, Machine, MachineState, MobileCore, MobileError, MobileEvent, Pane,
     PaneColors, PaneInputError, PaneKey, PaneKeyAction, PaneMouse, PaneMouseAction, PaneMouseButton, PaneSendOutcome,
-    PaneSize, PaneWheel, PaneWheelOutcome, VaultError,
+    PaneSize, PaneWheel, PaneWheelOutcome, UploadProgress, VaultError,
 };
 pub use chat::input::{AgentInputOutcome, QuestionAnswer};
 pub use chat::{
