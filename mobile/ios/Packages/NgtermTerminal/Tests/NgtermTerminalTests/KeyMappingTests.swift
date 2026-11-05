@@ -145,6 +145,43 @@ internal struct KeyMappingTests {
         )
     }
 
+    @Test("Shift in a chord types the shifted character, which UIKit leaves out")
+    internal func shiftInChords() {
+        let (shift, ctrlShift) = (KeyMapping.shift, KeyMapping.control | KeyMapping.shift)
+        // UIKit's Ctrl+Shift+- is U+001F and '-', as Ctrl+- is: the US layout's '_' is Ghostty's Ctrl+_ (0x1F)
+        #expect(
+            KeyMapping.key(Self.stroke(.keyboardHyphen, [.control, .shift], "\u{1F}", "-"))
+                == Self.key("minus", "_", mods: ctrlShift, consumed: shift, unshifted: "-")
+        )
+        #expect(
+            KeyMapping.key(Self.stroke(.keyboard6, [.control, .shift], "6"))
+                == Self.key("digit_6", "^", mods: ctrlShift, consumed: shift, unshifted: "6")
+        )
+        #expect(
+            KeyMapping.key(Self.stroke(.keyboardSlash, [.control, .shift], "/"))
+                == Self.key("slash", "?", mods: ctrlShift, consumed: shift, unshifted: "/")
+        )
+        #expect(
+            KeyMapping.key(Self.stroke(.keyboard1, [.command, .shift], "1"))
+                == Self.key("digit_1", "!", mods: KeyMapping.super | shift, consumed: shift, unshifted: "1")
+        )
+        // Option+Shift+- types '—' of the layout's own: Alt and '_'
+        #expect(
+            KeyMapping.key(Self.stroke(.keyboardHyphen, [.alternate, .shift], "\u{2014}", "-"))
+                == Self.key("minus", "_", mods: KeyMapping.alt | shift, consumed: shift, unshifted: "-")
+        )
+        // characters UIKit gave with Shift are the layout's own
+        #expect(
+            KeyMapping.key(Self.stroke(.keyboard2, [.command, .shift], "\"", "2"))
+                == Self.key("digit_2", "\"", mods: KeyMapping.super | shift, consumed: shift, unshifted: "2")
+        )
+        // a key typing another than the US character at its place keeps it: German '-' at US '/'
+        #expect(
+            KeyMapping.key(Self.stroke(.keyboardSlash, [.control, .shift], "\u{1F}", "-"))
+                == Self.key("slash", "-", mods: ctrlShift, consumed: shift)
+        )
+    }
+
     @Test("special keys type no text, whatever UIKit names them")
     internal func specialKeys() {
         #expect(KeyMapping.key(Self.stroke(.keyboardReturnOrEnter, "\r")) == Self.key("enter"))

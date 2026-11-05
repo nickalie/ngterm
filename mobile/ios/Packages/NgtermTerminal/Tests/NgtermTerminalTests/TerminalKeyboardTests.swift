@@ -155,7 +155,7 @@ internal struct TerminalKeyboardTests {
         let bar = rig.view.keyboard.bar
         for key in [ExtraKey.escape, .tab, .pageDown, .pipe] {
             bar.press(key)
-            bar.release()
+            bar.release(key)
         }
         #expect(Self.presses(rig.inputs) == [Self.press("escape"), Self.press("tab"), Self.press("page_down")])
         #expect(rig.inputs.last == .typed("|"))
@@ -177,7 +177,7 @@ internal struct TerminalKeyboardTests {
         bar.press(.alt)
         #expect(keyboard.alt == .locked)
         bar.press(.upArrow)
-        bar.release()
+        bar.release(.upArrow)
         bar.press(.slash)
         #expect(
             Self.presses(rig.inputs(after: before)) == [
@@ -195,7 +195,7 @@ internal struct TerminalKeyboardTests {
         let bar = rig.view.keyboard.bar
         bar.press(.leftArrow)
         try await Task.sleep(for: .milliseconds(700))
-        bar.release()
+        bar.release(.leftArrow)
         let lefts = Self.presses(rig.inputs).filter { $0.key == "arrow_left" }.count
         #expect(lefts >= 3, "one press, then a repeat every 50 ms after 400 ms: \(lefts)")
         let before = rig.inputs.count
@@ -203,8 +203,44 @@ internal struct TerminalKeyboardTests {
         #expect(rig.inputs.count == before, "it stops when let go")
         bar.press(.escape)
         try await Task.sleep(for: .milliseconds(600))
-        bar.release()
+        bar.release(.escape)
         #expect(Self.presses(rig.inputs(after: before)) == [Self.press("escape")])
+    }
+
+    @Test("a bar UIKit keeps after its keyboard is gone does nothing")
+    internal func barOutlivesKeyboard() {
+        var keyboard: TerminalKeyboard? = TerminalKeyboard(hardware: HardwareKeyboard(fixed: false))
+        let bar = keyboard?.bar
+        weak let gone = keyboard
+        keyboard = nil
+        #expect(gone == nil, "the keyboard went")
+        bar?.press(.leftArrow)
+        bar?.release(.leftArrow)
+        bar?.refresh()
+        bar?.layoutIfNeeded()
+        #expect(bar?.rows == ExtraKey.twoRows)
+    }
+
+    @Test("a key let go stops its own repeat, not that of a key held with it")
+    internal func repeatsOfOthers() async throws {
+        let rig = Self.rig()
+        let bar = rig.view.keyboard.bar
+        let lefts = { Self.presses(rig.inputs).filter { $0.key == "arrow_left" }.count }
+        let rights = { Self.presses(rig.inputs).filter { $0.key == "arrow_right" }.count }
+        bar.press(.leftArrow)
+        bar.press(.slash)
+        bar.release(.slash)
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(lefts() >= 2, "a tap of / beside it left the arrow repeating: \(lefts())")
+        // a second arrow takes the repeat over, and letting go of the first leaves it
+        bar.press(.rightArrow)
+        bar.release(.leftArrow)
+        try await Task.sleep(for: .milliseconds(600))
+        bar.release(.rightArrow)
+        let held = lefts()
+        #expect(rights() >= 2, "the right arrow repeats on: \(rights())")
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(lefts() == held, "the left arrow stopped as the right one took over")
     }
 
     @Test("a key from elsewhere commits the composition first")
@@ -232,7 +268,7 @@ internal struct TerminalKeyboardTests {
         #expect(rig.inputs == [.typed("ls")], "the composition went out plain")
         #expect(keyboard.control == .once)
         keyboard.bar.press(.leftArrow)
-        keyboard.bar.release()
+        keyboard.bar.release(.leftArrow)
         #expect(Self.presses(rig.inputs) == [Self.press("arrow_left", KeyMapping.control)])
         #expect(keyboard.control == .off)
 

@@ -133,14 +133,41 @@ public enum KeyMapping {
     }
 
     // what the key types with Shift but not Ctrl, Option or Command: UIKit's characters when none of those is held,
-    // else the characters ignoring the modifiers, a letter made a capital under Shift where UIKit left it small
+    // else the characters ignoring the modifiers, with Shift put back on them when it is held
     private static func typed(_ stroke: KeyStroke) -> String {
         let held = stroke.modifiers
         guard held.contains(.control) || held.contains(.alternate) || held.contains(.command) else {
             return stroke.characters
         }
         let plain = stroke.charactersIgnoringModifiers
-        return held.contains(.shift) ? plain.uppercased() : plain
+        return held.contains(.shift) ? shifted(stroke, plain: plain) : plain
+    }
+
+    // what Shift makes of `plain`, the key's unmodified characters, in a chord: UIKit leaves Shift out of both its
+    // texts under Ctrl or Command (Ctrl+Shift+- types U+001F, as Ctrl+- does) and has no layout to ask, so it is
+    //   - UIKit's characters, when they kept Shift and nothing else (no Option, no control character);
+    //   - a letter's capital;
+    //   - else the US layout's shifted character, when the key types the US one unshifted at its US place (`_` for
+    //     Ctrl+Shift+-, so the C0 byte 0x1F), wrong for a layout with another under Shift there (UK Shift+2 `"`);
+    //   - else `plain` as it is
+    private static func shifted(_ stroke: KeyStroke, plain: String) -> String {
+        let characters = printable(stroke.characters)
+        if !stroke.modifiers.contains(.alternate), !characters.isEmpty, characters != plain {
+            return characters
+        }
+        guard plain.count == 1, let character = plain.first else {
+            return plain
+        }
+        if character.isLetter {
+            let capital = plain.uppercased()
+            return capital.count == 1 ? capital : plain
+        }
+        let position = usKeys[character]
+        let atUSPlace = position?.unshifted == character && position?.name == physicalKey(stroke.code)
+        guard atUSPlace, let shifted = usShift[character] else {
+            return plain
+        }
+        return String(shifted)
     }
 
     // the character Option types of the layout's own: printable ASCII, other than the key's own character, with

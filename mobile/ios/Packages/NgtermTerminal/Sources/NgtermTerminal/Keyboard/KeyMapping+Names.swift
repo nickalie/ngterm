@@ -66,20 +66,27 @@ extension KeyMapping {
             keys[letter] = key
             keys[Character(letter.uppercased())] = key
         }
-        let unshifted = Array("0123456789`-=[]\\;',./ ")
-        let shifted = Array(")!@#$%^&*(~_+{}|:\"<>? ")
         let digits = "0123456789".map { "digit_\($0)" }
         let others = [
             "backquote", "minus", "equal", "bracket_left", "bracket_right", "backslash", "semicolon", "quote",
             "comma", "period", "slash", "space",
         ]
         for (index, name) in (digits + others).enumerated() {
-            let key = (name: name, unshifted: unshifted[index])
-            keys[unshifted[index]] = key
-            keys[shifted[index]] = key
+            let key = (name: name, unshifted: usUnshifted[index])
+            keys[usUnshifted[index]] = key
+            keys[usShifted[index]] = key
         }
         return keys
     }()
+
+    /// What Shift makes of each character a US key types unshifted, other than a letter.
+    internal static let usShift: [Character: Character] = Dictionary(
+        uniqueKeysWithValues: zip(usUnshifted, usShifted)
+    )
+
+    // the characters a US keyboard's keys other than the letters type unshifted, and shifted, in the same order
+    private static let usUnshifted = Array("0123456789`-=[]\\;',./ ")
+    private static let usShifted = Array(")!@#$%^&*(~_+{}|:\"<>? ")
 
     private static let functionKeys = 24
 

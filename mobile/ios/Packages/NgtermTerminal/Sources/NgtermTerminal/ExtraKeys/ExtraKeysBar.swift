@@ -26,9 +26,12 @@ public final class ExtraKeysBar: UIInputView, UIInputViewAudioFeedback {
     // a key's two sides
     private static let sides: CGFloat = 2
 
-    private unowned let keyboard: TerminalKeyboard
+    // the keyboard owns the bar, but UIKit may keep it a moment longer, while it goes off screen
+    private weak var keyboard: TerminalKeyboard?
     private let content = UIView()
     private let repeats = KeyRepeat()
+    // the key held whose repeat runs
+    private var repeatingKey: ExtraKey?
     private var buttons: [ExtraKey: ExtraKeyButton] = [:]
     private var height: NSLayoutConstraint?
 
@@ -68,7 +71,7 @@ public final class ExtraKeysBar: UIInputView, UIInputViewAudioFeedback {
             button.addTarget(self, action: #selector(up), for: [.touchUpInside, .touchUpOutside, .touchCancel])
             button.activate = { [weak self] in
                 self?.press(key)
-                self?.release()
+                self?.release(key)
             }
             content.addSubview(button)
             buttons[key] = button
@@ -91,6 +94,9 @@ public final class ExtraKeysBar: UIInputView, UIInputViewAudioFeedback {
 
     /// A key goes down: it acts, with the keyboard's click and a tap, and repeats while held if it does.
     public func press(_ key: ExtraKey) {
+        guard let keyboard else {
+            return
+        }
         UIDevice.current.playInputClick()
         switch key.action {
         case .hold(let modifier):
@@ -101,8 +107,9 @@ public final class ExtraKeysBar: UIInputView, UIInputViewAudioFeedback {
             keyboard.press(name)
             tap()
             if repeating {
+                repeatingKey = key
                 repeats.start { [weak self] in
-                    self?.keyboard.press(name)
+                    self?.keyboard?.press(name)
                 }
             }
 
@@ -122,13 +129,19 @@ public final class ExtraKeysBar: UIInputView, UIInputViewAudioFeedback {
         }
     }
 
-    /// The key held goes up: its repeat stops.
-    public func release() {
-        repeats.stop()
+    /// `key` goes up: its repeat stops, if it is the key repeating; a key pressed since repeats on.
+    public func release(_ key: ExtraKey) {
+        if repeatingKey == key {
+            repeats.stop()
+            repeatingKey = nil
+        }
     }
 
     /// Shows each key as things stand: the sticky modifiers, and whether the soft keyboard is open.
     public func refresh() {
+        guard let keyboard else {
+            return
+        }
         let open = keyboard.target?.softKeyboardWanted ?? false
         let fonts = legendFonts()
         for (key, button) in buttons {
@@ -199,8 +212,8 @@ public final class ExtraKeysBar: UIInputView, UIInputViewAudioFeedback {
     }
 
     @objc
-    private func up(_: ExtraKeyButton) {
-        release()
+    private func up(_ button: ExtraKeyButton) {
+        release(button.key)
     }
 
     deinit {

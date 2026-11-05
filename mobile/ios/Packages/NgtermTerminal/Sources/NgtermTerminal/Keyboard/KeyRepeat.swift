@@ -4,22 +4,17 @@ import Foundation
 /// extra keys: after 400 ms, every 50 ms).
 @preconcurrency
 @MainActor
-public final class KeyRepeat {
+internal final class KeyRepeat {
     /// How long a key is held before it repeats.
-    public static let delay: TimeInterval = 0.4
+    internal static let delay: TimeInterval = 0.4
     /// How often it repeats then.
-    public static let interval: TimeInterval = 0.05
+    internal static let interval: TimeInterval = 0.05
 
     private var timer: Timer?
     private var action: (@MainActor () -> Void)?
 
-    /// Whether a key is held and repeating, or about to.
-    public var isRunning: Bool {
-        action != nil
-    }
-
     /// A repeat with no key held.
-    public init() {
+    internal init() {
         // a key starts it
     }
 
@@ -27,21 +22,21 @@ public final class KeyRepeat {
     ///
     /// A key held before is let go.
     @preconcurrency
-    public func start(_ action: @escaping @MainActor () -> Void) {
+    internal func start(_ action: @escaping @MainActor () -> Void) {
         stop()
         self.action = action
         schedule(after: Self.delay)
     }
 
     /// The key was let go.
-    public func stop() {
+    internal func stop() {
         timer?.invalidate()
         timer = nil
         action = nil
     }
 
-    /// One repeat, as the timer runs it: the action, and the next one an ``interval`` later.
-    public func fire() {
+    // one repeat, as the timer runs it: the action, and the next one an interval later
+    private func fire() {
         guard let action else {
             return
         }
