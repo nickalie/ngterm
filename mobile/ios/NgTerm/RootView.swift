@@ -1,7 +1,7 @@
 import NgtermFeatures
 import SwiftUI
 
-/// A main window: the app's frame over its own navigation, and the questions over it.
+/// A main window: the app's frame over its own navigation, and the questions over it, in Settings' appearance.
 ///
 /// The first run shows over it while the app has no key, then the questions the machines' connects wait on, the
 /// programs' clipboard reads, and the question about notifying as the first session is attached. A notification's tap
@@ -39,7 +39,7 @@ internal struct RootView: View {
             SessionScreen(graph: graph, session: session.key, actions: actions(for: session))
                 .id(session)
         } settings: {
-            SettingsPlaceholder(coreVersion: coreVersion)
+            SettingsView(graph: graph, coreVersion: coreVersion)
         } onboarding: {
             OnboardingView(model: onboarding) {
                 scaffold.isOnboardingPresented = false
@@ -48,6 +48,7 @@ internal struct RootView: View {
         .connectPrompts(machines)
         .clipboardReadPrompt(graph)
         .notificationPermissionPrompt(graph)
+        .appAppearance(graph)
         .onChange(of: graph.openRequests.pending, initial: true) { _, target in
             if let target {
                 go(to: target)

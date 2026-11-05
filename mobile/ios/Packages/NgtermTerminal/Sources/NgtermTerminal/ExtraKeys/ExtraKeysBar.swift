@@ -5,11 +5,12 @@ import UIKit
 ///
 /// Esc, Tab, a sticky Ctrl and Alt, `/`, `|` and `~`, Home and End, Page Up and Down, the arrows, and the soft
 /// keyboard's own key, going to the ``TerminalKeyboard``'s target. Two lines of eight on a phone held upright, one
-/// line of sixteen once the width gives each key 44 points. A key acts as it goes down, with the keyboard's click and a
-/// light tap; the arrows and the page keys repeat while held. Ctrl and Alt hold for the next key (outlined in the
-/// tint), lock on a second tap (filled), and let go on a third, with a selection tick. The keyboard's key closes the
-/// soft keyboard and opens it again, the focus and the bar staying. It isn't shown while a hardware keyboard is
-/// attached.
+/// line of sixteen once the width gives each key 44 points, or two lines at every width when Settings asks for them
+/// (``TerminalKeyboard/layout``). A key acts as it goes down, with the keyboard's click and a light tap; the arrows and
+/// the page keys repeat while held. Ctrl and Alt hold for the next key (outlined in the tint), lock on a second tap
+/// (filled), and let go on a third, with a selection tick. The keyboard's key closes the soft keyboard and opens it
+/// again, the focus and the bar staying. It isn't shown while a hardware keyboard is attached, nor when Settings hides
+/// it.
 @preconcurrency
 @MainActor
 public final class ExtraKeysBar: UIInputView, UIInputViewAudioFeedback {
@@ -87,9 +88,13 @@ public final class ExtraKeysBar: UIInputView, UIInputViewAudioFeedback {
         nil
     }
 
-    /// The lines of keys for `width` points: one line once every key gets ``keyHeight``, else two.
-    public static func rows(forWidth width: CGFloat) -> [[ExtraKey]] {
-        width >= keyHeight * CGFloat(ExtraKey.oneRow.count) ? [ExtraKey.oneRow] : ExtraKey.twoRows
+    /// The lines of keys for `width` points in `layout`: two lines when it asks for them, else one line once every key
+    /// gets ``keyHeight``, and two until then.
+    public static func rows(forWidth width: CGFloat, layout: ExtraKeysLayout = .fit) -> [[ExtraKey]] {
+        if layout == .twoLines {
+            return ExtraKey.twoRows
+        }
+        return width >= keyHeight * CGFloat(ExtraKey.oneRow.count) ? [ExtraKey.oneRow] : ExtraKey.twoRows
     }
 
     /// A key goes down: it acts, with the keyboard's click and a tap, and repeats while held if it does.
@@ -150,10 +155,11 @@ public final class ExtraKeysBar: UIInputView, UIInputViewAudioFeedback {
         }
     }
 
-    /// Lays the keys out in their lines, each its whole cell with no gaps, taking one line once the width allows.
+    /// Lays the keys out in their lines, each its whole cell with no gaps, taking one line once the width allows
+    /// unless the keyboard's layout keeps two.
     override public func layoutSubviews() {
         super.layoutSubviews()
-        let fitting = Self.rows(forWidth: content.bounds.width)
+        let fitting = Self.rows(forWidth: content.bounds.width, layout: keyboard?.layout ?? .fit)
         if fitting != rows {
             rows = fitting
             height?.constant = Self.keyHeight * CGFloat(rows.count)

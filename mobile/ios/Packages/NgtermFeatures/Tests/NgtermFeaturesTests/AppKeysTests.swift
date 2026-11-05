@@ -2,6 +2,7 @@ import Foundation
 import NgtermCore
 import NgtermFeatures
 import NgtermPlatform
+import SwiftUI
 import Testing
 
 /// The app's keys: made, imported with a passphrase and rotated, their public halves kept in the store and their
@@ -101,7 +102,7 @@ internal struct AppKeysTests {
     internal func appendCommand() {
         let quoted = "echo 'ssh-ed25519 AAAA me@it'\\''s' >> ~/.ssh/authorized_keys"
         #expect(
-            PublicKeyView.appendCommand(for: "ssh-ed25519 AAAA me@it's")
+            PublicKeyView<EmptyView>.appendCommand(for: "ssh-ed25519 AAAA me@it's")
                 == "mkdir -p ~/.ssh && chmod 700 ~/.ssh && \(quoted)"
         )
     }

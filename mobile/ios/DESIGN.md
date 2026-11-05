@@ -317,7 +317,8 @@ iOS's own: the keyboard's accessory, on the keyboard's own ground, not a Materia
   finishes it there.
 - **The extra keys** (`ExtraKeysBar`, the terminal's `inputAccessoryView` on the keyboard's own ground) sit over the
   soft keyboard, and at the screen's foot while the terminal has the focus with the keyboard closed (the arrows and Esc
-  work a pager or a menu without it). They stand aside while a hardware keyboard is attached (`GCKeyboard`).
+  work a pager or a menu without it). They stand aside while a hardware keyboard is attached (`GCKeyboard`), and when
+  Settings hides them; Settings may also keep two lines at every width.
 
   ```
   phone, upright: two lines of eight
@@ -523,6 +524,42 @@ reaches the user and that a question can be answered from the notification, then
 app is open, for a short time after it, and from a refresh now and then: iOS keeps no connection up in the
 background). **Turn on notifications** (prominent) raises the system's question; **Not now** (quiet), or a swipe,
 leaves it for Settings.
+
+### Settings (`Settings/`)
+
+A sheet from the machines' toolbar (the gear), a `NavigationStack` over a `Form`, **Done** in the toolbar. The set is
+Android's, without its wallpaper colors. Every section's header and note are the app's `FormHint`s; a choice is one of
+the section's rows, its title over what it means in `secondaryText`, the chosen one checked in the tint (the system's
+inline `Picker`); a switch is the system's `Toggle`, tinted copper.
+
+- **Terminal:** a live sample of a shell (a prompt, a listing, `git status` with a line selected, the cursor) in the
+  chosen font, size and palette, on the palette's ground with 12 pt corners; it keeps the terminal's own size in
+  points, not Dynamic Type, and VoiceOver reads it as an image ("A sample of the terminal in Copper at 13 points").
+  Then **Text size**, a slider of whole points from 8 to 32 with its value in mono beside its name, each step written
+  as it is made (the sample follows); and **Keep the screen on** ("While an attached session is open").
+- **Font:** JetBrains Mono, or the system monospace (SF Mono).
+- **Colors:** Match the theme (Copper when dark, Drafting when light), Copper, Drafting, Ghostty, each with a swatch:
+  the palette's ground with its eight normal ANSI colors (88 × 20 pt, decorative).
+- **Appearance:** System, Light or Dark. It is the window's own style (`overrideUserInterfaceStyle`, `appAppearance`),
+  so everything in a window follows, sheets and the theme's terminal palette included, every window alike.
+- **Extra keys:** Fit to the width, Always two lines, or Hidden (the soft keyboard alone, which on an iPhone has no
+  key that closes it; the note says so). A session's bar follows a change at once.
+- **Notifications:** one switch per kind (Waiting for you, Finished, Agent notifications, Lost machines), each with
+  what it tells; the note says questions from agents always notify. While the app may not notify, an attention banner
+  heads the section: **Turn on** raises the system's question when it hasn't been answered, **Open Settings** opens the
+  system's settings for the app once the user said no. The permission is read again as the app comes back.
+- **Clipboard:** each machine trusted to read it unasked, its name over its mono address, with **Ask again** (read as
+  "Ask again before nas reads the clipboard"); with none, that every machine asks.
+- **Keys:** each key ("Created on this device" or "Imported", a heading) with its mono fingerprint, "Used by build-01
+  and nas" or "No machine uses it", and **Show public key** and **Copy public key** (side by side, or stacked when they
+  don't fit). Then **Rotate key** (a spinner and "Making a key" while it runs; why it failed, under it) and **Import a
+  key** (the first run's import screen, pushed), with what rotating means. Neither confirms: nothing is lost.
+- **A key just made or brought** opens its public half (the first run's screen, pushed) with, under it, "Then switch
+  your machines", what to do first, and **Use for every machine** (prominent); once every machine uses it, "Every
+  machine signs in with this key." The machines connected keep their connections and sign in with it next time.
+- **About:** "ngterm for iOS" and the core's version in mono.
+- **States:** the stores are read at launch, so there is no loading state; a change a store couldn't write is a failed
+  banner at the sheet's foot, dismissible, the setting left as it was.
 
 ### Notifications
 

@@ -68,6 +68,29 @@ internal struct ExtraKeysBarTests {
         #expect(ExtraKey.twoRows.allSatisfy { $0.count == 8 })
     }
 
+    @Test("Settings' layouts: two lines at every width, or no bar, with the focus staying")
+    internal func layouts() {
+        #expect(ExtraKeysBar.rows(forWidth: Self.wide, layout: .twoLines) == ExtraKey.twoRows)
+        #expect(ExtraKeysBar.rows(forWidth: Self.wide, layout: .fit) == [ExtraKey.oneRow])
+        let rig = TerminalRig(clipboard: nil)
+        let keyboard = rig.view.keyboard
+        keyboard.target = rig.view
+        #expect(keyboard.showsExtraKeys)
+        #expect(rig.view.inputAccessoryView === keyboard.bar)
+        let bar = keyboard.bar
+        bar.frame = CGRect(x: 0, y: 0, width: Self.wide, height: ExtraKeysBar.keyHeight * 2)
+        bar.layoutIfNeeded()
+        #expect(bar.rows == [ExtraKey.oneRow])
+        keyboard.layout = .twoLines
+        bar.layoutIfNeeded()
+        #expect(bar.rows == ExtraKey.twoRows)
+        keyboard.layout = .hidden
+        #expect(!keyboard.showsExtraKeys)
+        #expect(rig.view.inputAccessoryView == nil)
+        keyboard.layout = .fit
+        #expect(rig.view.inputAccessoryView === keyboard.bar)
+    }
+
     @Test("two lines on a phone, light")
     internal func phoneLight() {
         snapshot(Self.bar(width: Self.phone, style: .light), named: "phone-light")

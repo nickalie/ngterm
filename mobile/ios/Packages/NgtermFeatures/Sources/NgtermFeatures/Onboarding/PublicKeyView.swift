@@ -5,10 +5,12 @@ import SwiftUI
 /// A key's public half and how to put it on a machine: the three steps, the `authorized_keys` line with Copy and
 /// Share, its fingerprint, and the one command that appends it.
 ///
-/// The first run ends here with Done (`onDone`); from the machine form it is a pushed screen, with no Done.
-public struct PublicKeyView: View {
+/// The first run ends here with Done (`onDone`); from the machine form it is a pushed screen, with no Done, and from
+/// Settings one with what to do next under it (its `footer`).
+public struct PublicKeyView<Footer: View>: View {
     private let key: AppKey
     private let onDone: (@MainActor () -> Void)?
+    private let footer: Footer
 
     /// The body of the view.
     public var body: some View {
@@ -36,6 +38,7 @@ public struct PublicKeyView: View {
                 ValuePlate(String(localized: "Or run this on the machine"), value: command) {
                     CopyButton(command)
                 }
+                footer
                 if let onDone {
                     Button {
                         onDone()
@@ -54,6 +57,7 @@ public struct PublicKeyView: View {
             .frame(maxWidth: .infinity)
         }
         .background(Color(uiColor: .systemGroupedBackground))
+        .accessibilityIdentifier("public-key-page")
         .navigationTitle(onDone == nil ? String(localized: "Public key") : "")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -84,11 +88,11 @@ public struct PublicKeyView: View {
         }
     }
 
-    /// The public half of `key`, with `onDone` ending the first run (none when the screen is pushed).
-    @preconcurrency
-    public init(key: AppKey, onDone: (@MainActor () -> Void)? = nil) {
+    /// The public half of `key`, pushed, with `footer` under it.
+    public init(key: AppKey, @ViewBuilder footer: () -> Footer) {
         self.key = key
-        self.onDone = onDone
+        onDone = nil
+        self.footer = footer()
     }
 
     /// The shell command that adds `line` to the signing-in user's `authorized_keys`, making `~/.ssh` as sshd wants
@@ -96,5 +100,15 @@ public struct PublicKeyView: View {
     public static func appendCommand(for line: String) -> String {
         let quoted = line.replacing("'", with: "'\\''")
         return "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '\(quoted)' >> ~/.ssh/authorized_keys"
+    }
+}
+
+extension PublicKeyView where Footer == EmptyView {
+    /// The public half of `key`, with `onDone` ending the first run (none when the screen is pushed).
+    @preconcurrency
+    public init(key: AppKey, onDone: (@MainActor () -> Void)? = nil) {
+        self.key = key
+        self.onDone = onDone
+        footer = EmptyView()
     }
 }

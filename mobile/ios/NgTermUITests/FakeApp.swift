@@ -157,11 +157,28 @@ internal enum FakeApp {
     /// Audits a sheet as ``audit(_:)`` does, setting aside too the text the audit sees behind it with no element.
     ///
     /// On an iPad a sheet floats over the dimmed app, which VoiceOver rightly doesn't reach while the sheet is up; the
-    /// audit, finding text on screen it can't reach, reports it with no element.
+    /// audit, finding text on screen it can't reach, reports it with no element, and so does everything else it finds
+    /// of that text (its contrast against the dimming, its lines cut by the sheet).
     @MainActor
     internal static func auditSheet(_ app: XCUIApplication) throws {
         try app.performAccessibilityAudit { issue in
             isSetAside(issue, in: app, isSheet: true)
+        }
+    }
+
+    /// Audits a sheet whose page is the scroll view `page`, as ``auditSheet(_:)`` does, setting aside too the contrast
+    /// of text the page cuts at its edge.
+    ///
+    /// On an iPad a sheet's page runs on past the sheet's foot, and the audit measures the text cut there against what
+    /// lies past the edge (the dimmed app), not the page's ground.
+    @MainActor
+    internal static func auditSheet(_ app: XCUIApplication, page: XCUIElement) throws {
+        let shown = page.frame
+        try app.performAccessibilityAudit { issue in
+            if issue.auditType == .contrast, let element = issue.element, !shown.contains(element.frame) {
+                return true
+            }
+            return isSetAside(issue, in: app, isSheet: true)
         }
     }
 
@@ -188,7 +205,9 @@ internal enum FakeApp {
         if isNavigationBarGlass(issue, in: app) || isSidebarGlass(issue, in: app) {
             return true
         }
-        let isBehindSheet = isSheet && issue.element == nil && issue.auditType == .elementDetection
+        // what lies behind a sheet has no element the audit can name: text it can't reach, and the dimmed app's text
+        // it measures against the dimming or finds cut by the sheet; everything in the sheet has its element
+        let isBehindSheet = isSheet && issue.element == nil
         if isBehindSheet, UIDevice.current.userInterfaceIdiom == .pad {
             return true
         }
