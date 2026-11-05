@@ -22,7 +22,9 @@ pub mod russh;
 mod tests;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(any(test, feature = "fakes"))]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ngterm_term::GridSize;
 use tokio::sync::mpsc;
@@ -137,6 +139,7 @@ impl Channel {
         let (output_tx, output_rx) = mpsc::channel(CHANNEL_DEPTH);
         let (input_tx, input_rx) = mpsc::unbounded_channel();
         let backlog = Backlog::default();
+        #[cfg(any(test, feature = "fakes"))]
         let refused = Arc::new(AtomicBool::new(false));
         let channel = Channel {
             reader: ChannelReader {
@@ -146,6 +149,7 @@ impl Channel {
             writer: ChannelWriter {
                 input: input_tx,
                 backlog: backlog.clone(),
+                #[cfg(any(test, feature = "fakes"))]
                 refused: Arc::clone(&refused),
             },
         };
@@ -155,6 +159,7 @@ impl Channel {
                 output: output_tx,
                 input: input_rx,
                 backlog,
+                #[cfg(any(test, feature = "fakes"))]
                 refused,
             },
         )
@@ -232,7 +237,8 @@ impl Backlog {
 pub struct ChannelWriter {
     input: mpsc::UnboundedSender<ChannelInput>,
     backlog: Backlog,
-    /// Set once the transport takes no more input (its connection is gone).
+    /// Set once the fake transport takes no more input (its connection is gone), as russh's drops it.
+    #[cfg(any(test, feature = "fakes"))]
     refused: Arc<AtomicBool>,
 }
 
@@ -240,6 +246,7 @@ impl ChannelWriter {
     /// Queues `input` for the transport; false once the channel is gone.
     #[must_use]
     pub fn send(&self, input: ChannelInput) -> bool {
+        #[cfg(any(test, feature = "fakes"))]
         if self.refused.load(Ordering::Acquire) {
             return false;
         }
@@ -293,8 +300,9 @@ pub struct ChannelPeer {
     input: mpsc::UnboundedReceiver<ChannelInput>,
     /// What the writers queued and the transport has not sent: the input this peer hands out counts as sent.
     backlog: Backlog,
-    /// Shared with the writers: set by a transport whose connection is gone, they queue nothing more and report the
-    /// channel gone, while what they queued before still reads.
+    /// Shared with the writers: set by the fake transport once its connection is gone, they queue nothing more and
+    /// report the channel gone, while what they queued before still reads (russh's own copy stops taking input then).
+    #[cfg(any(test, feature = "fakes"))]
     refused: Arc<AtomicBool>,
 }
 
