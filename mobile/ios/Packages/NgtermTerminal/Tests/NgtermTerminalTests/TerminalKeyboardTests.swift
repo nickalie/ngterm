@@ -189,6 +189,21 @@ internal struct TerminalKeyboardTests {
         #expect(keyboard.alt == .off)
     }
 
+    @Test("hiding the extra keys lets go of a locked Ctrl and Alt, whose keys go with them")
+    internal func hidingLetsGo() {
+        let rig = Self.rig()
+        let keyboard = rig.view.keyboard
+        keyboard.bar.press(.control)
+        keyboard.bar.press(.control)
+        keyboard.bar.press(.alt)
+        #expect(keyboard.control == .locked && keyboard.alt == .once)
+        keyboard.layout = .hidden
+        #expect(keyboard.control == .off && keyboard.alt == .off)
+        let before = rig.inputs.count
+        rig.view.insertText("c")
+        #expect(rig.inputs(after: before) == [.typed("c")], "typed as it is, not as Ctrl-C")
+    }
+
     @Test("a held arrow repeats, and Esc doesn't")
     internal func repeats() async throws {
         let rig = Self.rig()

@@ -559,7 +559,8 @@ inline `Picker`); a switch is the system's `Toggle`, tinted copper.
   machine signs in with this key." The machines connected keep their connections and sign in with it next time.
 - **About:** "ngterm for iOS" and the core's version in mono.
 - **States:** the stores are read at launch, so there is no loading state; a change a store couldn't write is a failed
-  banner at the sheet's foot, dismissible, the setting left as it was.
+  banner at the sheet's foot, dismissible, the setting left as it was. The one exception is a clipboard **Ask again**:
+  it still takes effect until the app closes, and the banner says so.
 
 ### Notifications
 

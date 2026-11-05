@@ -7,7 +7,8 @@ import Observation
 /// switches, the machines trusted with the clipboard, and the keys.
 ///
 /// The stores are read at launch, so there is nothing to load: what they hold shows as it changes. A change a store
-/// can't write leaves it as it was and says why in ``failure``. A key made (``rotate()``) or brought
+/// can't write leaves it as it was and says why in ``failure``, but for a clipboard Ask again
+/// (``revokeClipboard(_:)``), which still takes effect until the app closes. A key made (``rotate()``) or brought
 /// (``importKey(privateKey:passphrase:)``) lands in ``newKey``, for its public half to be shown; ``useEverywhere(_:)``
 /// then points every machine at it.
 @preconcurrency
