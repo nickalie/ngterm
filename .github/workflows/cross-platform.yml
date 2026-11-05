@@ -30,15 +30,16 @@
 #
 # A change of Markdown alone runs nothing: docs, plans, backlog and READMEs are neither built nor tested. The Markdown
 # that is (the bundled skill under resources/, vendored trees, the patch notes under build/) is put back after the
-# exclusion; the two lists are the same.
+# exclusion; the two lists are the same. Nor does a change of the iOS app's sources alone (mobile/ios/): nothing here
+# builds or reads them (ios.yml does); its core, crates/ngterm-mobile, lies outside it and stays in PACKAGES' checks.
 name: cross-platform
 
 on:
   pull_request:
-    paths: ["**", "!**/*.md", "resources/**", "vendor/**", "build/**"]
+    paths: ["**", "!**/*.md", "!mobile/ios/**", "resources/**", "vendor/**", "build/**"]
   push:
     branches: [main, "ci/**"]
-    paths: ["**", "!**/*.md", "resources/**", "vendor/**", "build/**"]
+    paths: ["**", "!**/*.md", "!mobile/ios/**", "resources/**", "vendor/**", "build/**"]
 
 permissions:
   contents: read
