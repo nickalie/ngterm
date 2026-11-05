@@ -101,6 +101,11 @@
 
         /// Row `index` with `runs`, left to right; `wrapped` when its text continues on the next row.
         public func row(_ index: Int, _ runs: FakeRun..., wrapped: Bool = false) -> Self {
+            row(index, runs, wrapped: wrapped)
+        }
+
+        /// Row `index` with the runs `runs`, left to right; `wrapped` when its text continues on the next row.
+        public func row(_ index: Int, _ runs: [FakeRun], wrapped: Bool = false) -> Self {
             var writer = self
             writer.records[index] = (wrapped, runs)
             return writer

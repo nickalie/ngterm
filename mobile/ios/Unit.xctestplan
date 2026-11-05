@@ -48,6 +48,13 @@
     },
     {
       "target" : {
+        "containerPath" : "container:Packages\/NgtermTerminal",
+        "identifier" : "NgtermTerminalTests",
+        "name" : "NgtermTerminalTests"
+      }
+    },
+    {
+      "target" : {
         "containerPath" : "container:Packages\/NgtermFeatures",
         "identifier" : "NgtermFeaturesTests",
         "name" : "NgtermFeaturesTests"
