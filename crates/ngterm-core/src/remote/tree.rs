@@ -194,15 +194,31 @@ impl RemoteCommandRunner for ProcessRemoteRunner {
         };
         let Some(status) = status else {
             end_child(&mut child);
-            // the output stays empty on a miss: the caller prefers a remote error parsed from stdout, and a partial one
-            // must not replace this diagnostic
-            return RemoteCommandResult::failed(NO_ANSWER_IN_TIME);
+            // stdout stays empty on a miss: the caller prefers a remote error parsed from stdout, and a partial one
+            // must not replace this diagnostic. What ssh last said is kept, since a stall is often ssh waiting on
+            // something it printed, such as Tailscale SSH's re-authentication link.
+            return RemoteCommandResult::failed(no_answer_in_time(&mut stderr));
         };
         RemoteCommandResult {
             status: status.code().unwrap_or(-1),
             stdout: read_capture(&mut stdout),
             stderr: read_capture(&mut stderr),
         }
+    }
+}
+
+/// [`NO_ANSWER_IN_TIME`], followed by the last usable line of what the command wrote to `stderr`, if it wrote one. Only
+/// the capture's tail is read, so a chatty wrapper cannot make the read large.
+fn no_answer_in_time(stderr: &mut std::fs::File) -> String {
+    let tail_limit = u64::try_from(crate::keymap::failure::TAIL_LIMIT).unwrap_or(u64::MAX);
+    let mut tail = Vec::new();
+    let start = stderr.seek(SeekFrom::End(0)).unwrap_or(0).saturating_sub(tail_limit);
+    if stderr.seek(SeekFrom::Start(start)).is_ok() {
+        let _ = stderr.take(tail_limit).read_to_end(&mut tail);
+    }
+    match crate::keymap::failure::detail(&tail) {
+        Some(said) => format!("{NO_ANSWER_IN_TIME} ({said})"),
+        None => NO_ANSWER_IN_TIME.to_owned(),
     }
 }
 
@@ -1002,6 +1018,15 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
         let slow = runner.run(&argv("sleep 5"), Duration::from_millis(100));
         assert_eq!(slow, RemoteCommandResult::failed("the remote did not answer in time"));
+        // a stall keeps what ssh last said, cleaned, as Tailscale SSH's re-authentication link is
+        let said = r"printf '# Tailscale SSH requires an additional check.\n\033[1m# To authenticate, visit: https://login.example/a/1\033[0m\n\n' >&2";
+        let waiting = runner.run(&argv(&format!("{said}; sleep 5")), Duration::from_millis(300));
+        assert_eq!(
+            waiting,
+            RemoteCommandResult::failed(
+                "the remote did not answer in time (# To authenticate, visit: https://login.example/a/1)"
+            )
+        );
         let missing = runner.run(&["/nonexistent/ssh".to_owned()], Duration::from_secs(5));
         assert_eq!(missing.status, 127, "env reports a missing program");
         assert_eq!(runner.run(&[], Duration::from_secs(1)).stderr, "no command to run");
