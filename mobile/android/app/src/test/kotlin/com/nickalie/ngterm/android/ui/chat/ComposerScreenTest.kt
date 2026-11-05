@@ -116,6 +116,13 @@ class ComposerScreenTest {
         compose.onNodeWithContentDescription("Cancel upload").performClick()
         assertEquals(1, cancelled)
 
+        // every byte gone: the machine stores it now, and Cancel is no longer offered
+        state.value = state.value.copy(upload = ChatUpload.Sending("shot.png", 1024, 1024, saving = true))
+        compose.waitForIdle()
+        compose.onNodeWithText("Saving shot.png").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Cancel upload").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Attach a file").assertIsNotEnabled()
+
         state.value = state.value.copy(upload = ChatUpload.Failed("shot.png", UploadProblem.TooLarge))
         compose.waitForIdle()
         compose

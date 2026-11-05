@@ -1,4 +1,4 @@
-//! A file the chat composer attaches, sent to the origin: `ngtermctl agent upload --name NAME --size BYTES` on an
+//! A file the chat composer attaches, sent to the origin: `ngtermctl agent upload --name=NAME --size BYTES` on an
 //! exec channel of the machine's connection, the file's bytes on its standard input, the stored path its answer
 //! ([`ngterm_core::agent_chat::upload`] stores it). No sftp: the exec channel every other chat command uses carries it.
 //!
@@ -6,8 +6,11 @@
 //!   holds the sender rather than a queue of the whole file; the progress told is what the transport has sent.
 //! - **The end:** after the last byte, the input's end; the origin stores the file and prints its path, or says why
 //!   not (its words, as the error).
-//! - **Stopping:** cancelling (the app's call dropped) closes the channel, so the origin reads its input short and
-//!   stores nothing. A link that moves nothing for [`STALL`] fails the upload the same way.
+//! - **Stopping:** cancelling (the app's call dropped) closes the channel, dropping what is still queued, so while
+//!   bytes are still to go the origin reads its input short and stores nothing. Once the progress has told every byte
+//!   sent, the origin gets the whole file and then its input's end (the end queued after it, or the close itself) and
+//!   stores it whatever follows: a cancel then is too late (the upload stays until the week's prune), which is why the
+//!   app stops offering Cancel there. A link that moves nothing for [`STALL`] fails the upload as a cancel does.
 
 use std::future::Future;
 use std::time::Duration;
@@ -34,10 +37,16 @@ pub(crate) const STALL: Duration = Duration::from_secs(30);
 /// The error of an upload whose link moved nothing for [`STALL`].
 pub(crate) const STALLED: &str = "the upload stalled: the machine took nothing for 30 seconds";
 
-/// The upload's remote command.
+/// The upload's remote command. The name goes as `--name=NAME`, one word, so a name that starts with `-` stays a value.
 #[must_use]
 pub(crate) fn upload_tail(name: &str, size: usize) -> String {
-    let words = ["agent", "upload", "--name", name, "--size", &size.to_string()].map(str::to_owned);
+    let words = [
+        "agent".to_owned(),
+        "upload".to_owned(),
+        format!("--name={name}"),
+        "--size".to_owned(),
+        size.to_string(),
+    ];
     remote_cli_chain(&format!("{REMOTE_CLI} {}", shell_quoted_line(&words)))
 }
 

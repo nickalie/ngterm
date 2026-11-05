@@ -395,7 +395,7 @@ pub const RUST_ONLY_COMMANDS: &[&str] = &["agent.report", "agent.get"];
 
 /// `ngtermctl` subcommand paths (`"live tree"`, as the catalog's `cli` keys them) beyond upstream's `agtermctl`: the
 /// CLI side of [`RUST_ONLY_COMMANDS`], held to the catalog the same way.
-pub const RUST_ONLY_CLI: &[&str] = &["agent hook", "agent chat", "agent commands"];
+pub const RUST_ONLY_CLI: &[&str] = &["agent hook", "agent chat", "agent commands", "agent upload"];
 
 /// A unit command matches only its bare group name, never a dotted name under it.
 fn unit(name: &str, group: Group, command: Command) -> Option<Command> {

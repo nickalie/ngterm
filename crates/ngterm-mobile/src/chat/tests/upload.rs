@@ -61,7 +61,17 @@ fn the_command_quotes_the_name_for_the_remote_shell() {
     // each word single-quoted for the inner shell, the whole line again for `sh -c`: the name's own quote survives
     assert_eq!(
         upload_tail("it's a file.png", 42),
-        r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && ngtermctl '\''agent'\'' '\''upload'\'' '\''--name'\'' '\''it'\''\'\'''\''s a file.png'\'' '\''--size'\'' '\''42'\'''"#
+        r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && ngtermctl '\''agent'\'' '\''upload'\'' '\''--name=it'\''\'\'''\''s a file.png'\'' '\''--size'\'' '\''42'\'''"#
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_name_that_starts_with_a_dash_stays_the_names_value() {
+    // `--name -notes.txt` is an unknown option to the far parser; `--name=-notes.txt` is the name
+    assert_eq!(
+        super::far_words(&upload_tail("-notes.txt", 7)),
+        "[agent][upload][--name=-notes.txt][--size][7]"
     );
 }
 
@@ -81,7 +91,13 @@ async fn the_bytes_go_whole_then_the_end_and_the_printed_path_is_the_answer() {
                 let (got, ended) = take_all(&mut opened).await;
                 assert!(ended);
                 opened.peer.data(b"/state/uploads/1/shot.png\n".to_vec()).await;
-                opened.peer.end(ChannelEnd::Exit { code: Some(0), signal: None }).await;
+                opened
+                    .peer
+                    .end(ChannelEnd::Exit {
+                        code: Some(0),
+                        signal: None,
+                    })
+                    .await;
                 got
             };
             let (answer, got) = tokio::join!(sending, origin);
@@ -93,7 +109,10 @@ async fn the_bytes_go_whole_then_the_end_and_the_printed_path_is_the_answer() {
     let told = told.into_inner();
     let total = file.len() as u64;
     assert_eq!(told.last(), Some(&(total, total)));
-    assert!(told.windows(2).all(|pair| pair[0].0 < pair[1].0), "progress only grows: {told:?}");
+    assert!(
+        told.windows(2).all(|pair| pair[0].0 < pair[1].0),
+        "progress only grows: {told:?}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -129,8 +148,17 @@ async fn the_origins_words_are_the_error_when_it_stores_nothing() {
             let origin = async {
                 let mut opened = opened(&transport).await;
                 let _ = take_all(&mut opened).await;
-                opened.peer.stderr(b"Error: the upload stopped after 1 of 3 bytes\n".to_vec()).await;
-                opened.peer.end(ChannelEnd::Exit { code: Some(1), signal: None }).await;
+                opened
+                    .peer
+                    .stderr(b"Error: the upload stopped after 1 of 3 bytes\n".to_vec())
+                    .await;
+                opened
+                    .peer
+                    .end(ChannelEnd::Exit {
+                        code: Some(1),
+                        signal: None,
+                    })
+                    .await;
             };
             tokio::join!(sending, origin).0
         })
@@ -164,6 +192,46 @@ async fn cancelling_closes_the_channel_so_the_origin_keeps_nothing() {
         })
         .await;
     assert_eq!(answer, Err(MobileError::Cancelled));
+}
+
+/// The point the app stops offering Cancel: progress tells every byte sent only once the input's end is queued
+/// behind them, so the origin has the whole file and its end, and a cancel then can't take it back.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn a_cancel_once_every_byte_has_gone_is_too_late_to_take_the_file_back() {
+    let (transport, connection) = connected().await;
+    let (cancel, cancelled) = tokio::sync::oneshot::channel::<()>();
+    let cancel = RefCell::new(Some(cancel));
+    let file = vec![3_u8; CHUNK + 5];
+    let total = file.len() as u64;
+    let progress = |sent, all| {
+        if sent == all
+            && let Some(cancel) = cancel.borrow_mut().take()
+        {
+            let _ = cancel.send(());
+        }
+    };
+    let local = tokio::task::LocalSet::new();
+    let (answer, (got, ended, _open)) = local
+        .run_until(async {
+            let sending = upload(&connection, "a.bin", &file, &progress, async {
+                let _ = cancelled.await;
+            });
+            let origin = async {
+                let mut opened = opened(&transport).await;
+                let (got, ended) = take_all(&mut opened).await;
+                // the origin is still storing it: its channel stays open until the cancel
+                (got, ended, opened)
+            };
+            tokio::join!(sending, origin)
+        })
+        .await;
+    assert_eq!(answer, Err(MobileError::Cancelled));
+    assert!(cancel.borrow().is_none(), "the progress told all {total} bytes sent");
+    assert_eq!(
+        (got.len() as u64, ended),
+        (total, true),
+        "the origin read the whole file and its end"
+    );
 }
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]

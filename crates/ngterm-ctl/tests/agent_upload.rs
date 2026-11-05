@@ -31,7 +31,11 @@ fn the_bytes_land_under_the_state_dirs_uploads_and_the_path_is_printed() -> Test
     let output = upload(root.path(), "../screen shot.png", bytes.len(), &bytes)?;
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let path = PathBuf::from(String::from_utf8(output.stdout)?.trim_end());
-    assert!(path.starts_with(root.path().join("state").join("uploads")), "{}", path.display());
+    assert!(
+        path.starts_with(root.path().join("state").join("uploads")),
+        "{}",
+        path.display()
+    );
     assert_eq!(path.file_name().and_then(|name| name.to_str()), Some("screen shot.png"));
     assert_eq!(fs::read(&path)?, bytes);
     Ok(())
@@ -54,6 +58,11 @@ fn a_size_over_the_cap_is_a_usage_error() -> TestResult {
     let root = tempfile::tempdir()?;
     let output = upload(root.path(), "big.bin", 64 * 1024 * 1024, b"")?;
     // a usage error, upstream's exit 64, before a byte is read
-    assert_eq!(output.status.code(), Some(64), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(())
 }

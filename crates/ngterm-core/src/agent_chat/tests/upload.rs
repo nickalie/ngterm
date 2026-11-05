@@ -59,7 +59,10 @@ fn input_short_of_or_past_the_announced_size_leaves_nothing() {
     let state = tempfile::tempdir().unwrap();
     let dir = uploads_dir(state.path());
     let short = store(&dir, "a.txt", 10, &mut Cursor::new(b"abc"), now());
-    assert!(matches!(short, Err(UploadError::Short { got: 3, size: 10 })), "{short:?}");
+    assert!(
+        matches!(short, Err(UploadError::Short { got: 3, size: 10 })),
+        "{short:?}"
+    );
     let long = store(&dir, "a.txt", 2, &mut Cursor::new(b"abc"), now());
     assert!(matches!(long, Err(UploadError::Long { size: 2 })), "{long:?}");
     assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
@@ -74,7 +77,13 @@ fn a_file_over_the_cap_is_refused_before_a_byte_is_read() {
         }
     }
     let state = tempfile::tempdir().unwrap();
-    let refused = store(&uploads_dir(state.path()), "big.bin", UPLOAD_CAP + 1, &mut Untouched, now());
+    let refused = store(
+        &uploads_dir(state.path()),
+        "big.bin",
+        UPLOAD_CAP + 1,
+        &mut Untouched,
+        now(),
+    );
     assert!(matches!(refused, Err(UploadError::TooLarge { .. })), "{refused:?}");
 }
 
@@ -93,4 +102,24 @@ fn pruning_removes_only_the_uploads_older_than_a_week() {
     File::create(&stray).unwrap();
     prune(&dir, modified + KEEP_FOR * 4);
     assert!(stray.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_upload_is_its_owners_alone_and_a_wider_uploads_directory_is_narrowed() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mode = |path: &std::path::Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    let state = tempfile::tempdir().unwrap();
+    let dir = uploads_dir(state.path());
+    let path = store(&dir, "private.txt", 2, &mut Cursor::new(b"hi"), now()).unwrap();
+    assert_eq!(
+        (mode(&dir), mode(path.parent().unwrap()), mode(&path)),
+        (0o700, 0o700, 0o600)
+    );
+
+    // an uploads directory an older build left open to others is closed by the next upload
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+    store(&dir, "again.txt", 1, &mut Cursor::new(b"a"), now()).unwrap();
+    assert_eq!(mode(&dir), 0o700);
 }

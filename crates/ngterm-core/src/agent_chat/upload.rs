@@ -11,8 +11,11 @@
 //! - **The size** is announced first and capped at [`UPLOAD_CAP`]; input that ends short of it (the phone cancelled,
 //!   or its link went) or runs past it leaves nothing behind.
 //! - **Keeping:** each upload first removes the uploads older than [`KEEP_FOR`] ([`prune`]).
+//! - **Who reads it:** the user alone. On Unix the uploads directory and each upload's directory are `0700` and the
+//!   file `0600`, whatever the umask, and an uploads directory found wider is narrowed; on Windows they keep the ACL
+//!   they inherit from the user's profile, where the state directory lives.
 
-use std::fs::{self, File};
+use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -78,7 +81,10 @@ pub fn safe_name(name: &str) -> String {
         return FALLBACK_NAME.to_owned();
     }
     let stem = trimmed.split('.').next().unwrap_or_default();
-    let named = if DEVICE_NAMES.iter().any(|device| device.eq_ignore_ascii_case(stem.trim())) {
+    let named = if DEVICE_NAMES
+        .iter()
+        .any(|device| device.eq_ignore_ascii_case(stem.trim()))
+    {
         format!("_{trimmed}")
     } else {
         trimmed.to_owned()
@@ -107,11 +113,17 @@ fn capped(name: &str) -> String {
 ///
 /// [`UploadError::TooLarge`] before reading anything, [`UploadError::Short`] or [`UploadError::Long`] when the input
 /// does not hold exactly `size` bytes, [`UploadError::Io`] when the directory or the file can't be written.
-pub fn store(dir: &Path, name: &str, size: u64, input: &mut impl Read, now: SystemTime) -> Result<PathBuf, UploadError> {
+pub fn store(
+    dir: &Path,
+    name: &str,
+    size: u64,
+    input: &mut impl Read,
+    now: SystemTime,
+) -> Result<PathBuf, UploadError> {
     if size > UPLOAD_CAP {
         return Err(UploadError::TooLarge { size, cap: UPLOAD_CAP });
     }
-    fs::create_dir_all(dir)?;
+    private_root(dir)?;
     let folder = fresh_folder(dir, now)?;
     let path = folder.join(safe_name(name));
     let written = write_exactly(&path, size, input);
@@ -120,6 +132,36 @@ pub fn store(dir: &Path, name: &str, size: u64, input: &mut impl Read, now: Syst
         return Err(error);
     }
     Ok(path)
+}
+
+/// Makes `dir` (and its missing parents) and leaves it its owner's alone on Unix: made `0700`, or narrowed to that
+/// when it was there wider.
+fn private_root(dir: &Path) -> io::Result<()> {
+    if let Some(parent) = dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if let Err(error) = private_dir(dir)
+        && error.kind() != ErrorKind::AlreadyExists
+    {
+        return Err(error);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = fs::metadata(dir)?.permissions().mode();
+        if mode & 0o077 != 0 {
+            fs::set_permissions(dir, fs::Permissions::from_mode(mode & 0o700))?;
+        }
+    }
+    Ok(())
+}
+
+/// Makes the directory `path`, its owner's alone on Unix (`0700`).
+fn private_dir(path: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(path)
 }
 
 /// A new directory under `dir`, named by `now` in milliseconds, with a count after it when that name is taken.
@@ -132,7 +174,7 @@ fn fresh_folder(dir: &Path, now: SystemTime) -> io::Result<PathBuf> {
             format!("{millis}-{attempt}")
         };
         let folder = dir.join(name);
-        match fs::create_dir(&folder) {
+        match private_dir(&folder) {
             Ok(()) => return Ok(folder),
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),
@@ -141,9 +183,13 @@ fn fresh_folder(dir: &Path, now: SystemTime) -> io::Result<PathBuf> {
     unreachable!("an unbounded count always finds a free name")
 }
 
-/// Copies exactly `size` bytes of `input` into a new file at `path`.
+/// Copies exactly `size` bytes of `input` into a new file at `path`, its owner's alone on Unix (`0600`).
 fn write_exactly(path: &Path, size: u64, input: &mut impl Read) -> Result<(), UploadError> {
-    let mut file = File::create_new(path)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path)?;
     let got = io::copy(&mut input.take(size), &mut file)?;
     if got < size {
         return Err(UploadError::Short { got, size });

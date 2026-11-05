@@ -64,8 +64,9 @@ data class FakeCall(
  *   chats open; [closeChat] and hiding the pane close one. [loadOlder] answers a chat's next page of [olderPages]
  *   (empty once none is left; [MobileException.Remote] with [NOT_OPEN] for a chat not open), and [agentCommands] the
  *   pane's [catalogs] entry ([MobileException.Remote] for a pane with none, as an origin without a catalog answers).
- *   [uploadFile] tells half the bytes sent, waits on the test's gate, then tells all and answers
- *   `/state/uploads/1/<name>`, keeping what it took in [uploads].
+ *   [uploadFile] tells half the bytes sent, waits on the test's gate, then tells all, waits on the `uploadFile.saving`
+ *   gate when a test set one (the machine storing what it got), and answers `/state/uploads/1/<name>`, keeping what it
+ *   took in [uploads].
  *   Chat events themselves are what a test [emit]s.
  *
  * [showPane] returns what [paneFactory] makes; the default is a `Pane(NoHandle)`, a placeholder whose methods must not
@@ -438,6 +439,7 @@ class FakeMobileCore(
         progress.sent(total / 2u, total)
         recordHeld("uploadFile", machineId, name, bytes.size)
         progress.sent(total, total)
+        holds.remove("uploadFile.saving")?.await()
         synchronized(uploads) { uploads += name to bytes }
         return "/state/uploads/1/$name"
     }

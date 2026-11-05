@@ -21,7 +21,10 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import java.io.IOException
 
-/** A file the composer attaches: on its way with its progress, its path into the prompt, cancelled, or refused. */
+/**
+ * A file the composer attaches: on its way with its progress, its path into the prompt, cancelled (not once the machine
+ * has it all), or refused.
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
 class ChatUploadTest {
@@ -98,6 +101,22 @@ class ChatUploadTest {
                 .isEmpty(),
         )
         assertEquals("", chat.composer.draft.text)
+    }
+
+    @Test
+    fun onceEveryByteHasGoneTheUploadIsSavingAndCancelHoldsOff() {
+        chat.composer.edit(TextFieldValue("See", TextRange(3)))
+        val saving = CompletableDeferred<Unit>()
+        bed.test.core.holds["uploadFile.saving"] = saving
+        chat.attach("notes.txt", 4) { byteArrayOf(1, 2, 3, 4) }
+        eventually { (upload() as? ChatUpload.Sending)?.saving == true }
+        assertEquals(ChatUpload.Sending("notes.txt", 4, 4, saving = true), upload())
+        // the machine has the whole file: a cancel couldn't take it back, so the upload runs to its path
+        chat.cancelUpload()
+        assertEquals(ChatUpload.Sending("notes.txt", 4, 4, saving = true), upload())
+        saving.complete(Unit)
+        eventually { upload() == null }
+        assertEquals("See /state/uploads/1/notes.txt ", chat.composer.draft.text)
     }
 
     @Test

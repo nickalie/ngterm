@@ -180,7 +180,8 @@ CAPABILITIES: Mapping[str, str] = {
     "password-database login shell is one of them and ngterm-session is staged",
     "agent-chat": "Rust-only: the agent record behind the Android chat view: `ngtermctl agent hook` keeps a pane's "
     "Claude Code or Codex conversation from its hook payload, `agent.get` reads it back, `ngtermctl agent chat` "
-    "streams its transcript as chat events and `ngtermctl agent commands` lists the agent's slash commands",
+    "streams its transcript as chat events, `ngtermctl agent commands` lists the agent's slash commands and "
+    "`ngtermctl agent upload` stores a file the chat attaches",
     "pages-survive": "Rust-only: an HTML page lives until it is closed: a page handed to the viewer presenting a "
     "session is parked, its slot reserved and its outcome pending, when that presenter or its page helper goes, and "
     "handed again to the next presenter that speaks pages",

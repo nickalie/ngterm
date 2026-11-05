@@ -20,7 +20,11 @@ use crate::{Failure, client};
                   --size stores nothing. Uploads older than a week are removed first. At most 32 MiB."
 )]
 pub struct Upload {
-    #[arg(long, help = "The file's name, as the user picked it.")]
+    #[arg(
+        long,
+        allow_hyphen_values = true,
+        help = "The file's name, as the user picked it; one that starts with `-` is still the name."
+    )]
     name: String,
 
     #[arg(long, value_name = "BYTES", help = "How many bytes standard input holds.")]
@@ -45,5 +49,35 @@ impl Upload {
         writeln!(stdout, "{}", path.display())
             .and_then(|()| stdout.flush())
             .map_err(|error| Failure::Local(format!("could not write the path: {}", client::os_message(&error))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser as _;
+
+    use super::*;
+    use crate::agent::{Agent, AgentCommand};
+    use crate::{Command as Cli, Ngtermctl};
+
+    fn upload(argv: &[&str]) -> Result<Upload, clap::Error> {
+        let argv = ["ngtermctl", "agent", "upload"].iter().chain(argv).copied();
+        match Ngtermctl::try_parse_from(argv)?.command {
+            Cli::Agent(Agent {
+                command: AgentCommand::Upload(upload),
+            }) => Ok(upload),
+            _ => panic!("not agent upload"),
+        }
+    }
+
+    #[test]
+    fn a_name_that_starts_with_a_dash_is_the_name() {
+        for argv in [
+            &["--name", "-notes.txt", "--size", "3"][..],
+            &["--name=-notes.txt", "--size", "3"],
+        ] {
+            let parsed = upload(argv).unwrap();
+            assert_eq!((parsed.name.as_str(), parsed.size), ("-notes.txt", 3), "{argv:?}");
+        }
     }
 }

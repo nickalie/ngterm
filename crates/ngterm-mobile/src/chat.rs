@@ -7,7 +7,7 @@
 //!   every change, as [`MobileEvent::PaneAgent`]; an origin that predates the kind never does, and the app keeps the
 //!   terminal. The frames name a pane by its identity; `ngtermctl agent` names it `left` or `right`, which the session's
 //!   layout maps (its primary pane is the left one), so the chats keep each attached session's last layout.
-//! - **The channel.** `Chats::open` runs `ngtermctl agent chat --target SESSION --pane SIDE` for a shown pane, and
+//! - **The channel.** `Chats::open` runs `ngtermctl agent chat --target=SESSION --pane SIDE` for a shown pane, and
 //!   only for one: the app opens it while the pane shows as a chat and closes it on hide, so a session costs at most
 //!   one chat channel per shown pane besides the pane's own attach (the ssh server's `MaxSessions` counts them). Its
 //!   NDJSON lines arrive as [`MobileEvent::Chat`], a batch per read, in order. The chat keeps a cursor of the main
@@ -55,9 +55,9 @@
 pub mod input;
 pub(crate) mod matchers;
 mod records;
-pub(crate) mod upload;
 #[cfg(test)]
 pub(crate) mod tests;
+pub(crate) mod upload;
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -126,11 +126,16 @@ impl Side {
     }
 }
 
-/// The words `ngtermctl agent SUBCOMMAND` takes for `side`'s pane of `session_id`.
-fn agent_words<'a>(subcommand: &'a str, session_id: &'a str, side: Side) -> Vec<String> {
-    ["agent", subcommand, "--target", session_id, "--pane", side.name()]
-        .map(str::to_owned)
-        .to_vec()
+/// The words `ngtermctl agent SUBCOMMAND` takes for `side`'s pane of `session_id`. A value the origin or an agent made
+/// goes as `--option=VALUE`, one word, so one that starts with `-` stays a value.
+fn agent_words(subcommand: &str, session_id: &str, side: Side) -> Vec<String> {
+    vec![
+        "agent".to_owned(),
+        subcommand.to_owned(),
+        format!("--target={session_id}"),
+        "--pane".to_owned(),
+        side.name().to_owned(),
+    ]
 }
 
 /// A cursor in the main transcript of the conversation it was read in.
@@ -150,8 +155,7 @@ pub(crate) fn chat_tail(session_id: &str, side: Side, after: Option<Cursor<'_>>)
         words.extend([
             "--after".to_owned(),
             after.at.to_string(),
-            "--conversation".to_owned(),
-            after.conversation.to_owned(),
+            format!("--conversation={}", after.conversation),
         ]);
     }
     remote_cli_chain(&format!("exec {REMOTE_CLI} {}", shell_quoted_line(&words)))
@@ -165,8 +169,7 @@ pub(crate) fn page_tail(session_id: &str, side: Side, before: Cursor<'_>, limit:
     words.extend([
         "--before".to_owned(),
         before.at.to_string(),
-        "--conversation".to_owned(),
-        before.conversation.to_owned(),
+        format!("--conversation={}", before.conversation),
         "--limit".to_owned(),
         limit.to_string(),
     ]);

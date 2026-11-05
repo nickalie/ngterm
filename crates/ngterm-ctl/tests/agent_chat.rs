@@ -174,13 +174,34 @@ impl Chat {
         })
     }
 
-    /// The next event.
+    /// The next event of the transcript or the record: the account watcher's, which comes when its thread has read
+    /// (a reconnect's even when it knows nothing), is skipped ([`Chat::account`] waits for it).
     fn next(&self) -> TestResult<Value> {
-        let line = self
-            .lines
-            .recv_timeout(WAIT)
-            .map_err(|error| format!("no event: {error}"))?;
-        Ok(serde_json::from_str(&line)?)
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(WAIT)
+                .map_err(|error| format!("no event: {error}"))?;
+            let event: Value = serde_json::from_str(&line)?;
+            if event["type"] != "account" {
+                return Ok(event);
+            }
+        }
+    }
+
+    /// The first `account` event within `wait`, skipping the rest.
+    fn account(&self, wait: Duration) -> TestResult<Option<Value>> {
+        let until = Instant::now() + wait;
+        while let Some(left) = until.checked_duration_since(Instant::now()) {
+            let Ok(line) = self.lines.recv_timeout(left) else {
+                break;
+            };
+            let event: Value = serde_json::from_str(&line)?;
+            if event["type"] == "account" {
+                return Ok(Some(event));
+            }
+        }
+        Ok(None)
     }
 
     /// The events up to the first of type `kind`, which is the last.
@@ -213,9 +234,18 @@ impl Chat {
         Ok((events, end))
     }
 
-    /// Whether no line comes for `quiet`.
+    /// Whether no line but the account watcher's comes for `quiet`.
     fn silent_for(&self, quiet: Duration) -> bool {
-        self.lines.recv_timeout(quiet).is_err()
+        let until = Instant::now() + quiet;
+        while let Some(left) = until.checked_duration_since(Instant::now()) {
+            let Ok(line) = self.lines.recv_timeout(left) else {
+                return true;
+            };
+            if serde_json::from_str::<Value>(&line).map_or(true, |event| event["type"] != "account") {
+                return false;
+            }
+        }
+        true
     }
 
     fn close_stdin(&mut self) {
@@ -385,6 +415,30 @@ fn after_resends_the_cursors_line_and_follows() -> TestResult {
     append(&path, slice(&bytes, NEXT_CALL, u64::MAX)?)?;
     let rest = lines_in(&golden, NEXT_CALL, u64::MAX);
     assert_eq!(chat.followed(rest.len())?.0, rest);
+    Ok(())
+}
+
+/// The account the watcher reads where nothing is known (no config or credentials in the temp tree): a fresh stream
+/// says nothing of it, while a reconnect sends it even empty, so a caller still showing the account an earlier
+/// stream sent (signed out meanwhile) clears it.
+#[test]
+fn a_reconnect_sends_the_first_account_even_when_nothing_is_known() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    let path = write_transcript(dir.path(), SHORT, &transcript(SHORT)?)?;
+    let _server = Scripted::serve(&socket, Some(record(&path, SHORT, None)?))?;
+    let fresh = Chat::spawn(dir.path(), &socket, &["--target", "S"])?;
+    fresh.until("live")?;
+    assert_eq!(fresh.account(Duration::from_millis(1500))?, None);
+
+    let reconnect = Chat::spawn(
+        dir.path(),
+        &socket,
+        &["--target", "S", "--after", "0", "--conversation", SHORT],
+    )?;
+    let account = reconnect.account(WAIT)?.ok_or("no account event")?;
+    assert_eq!(account["id"], json!("account"));
+    assert!(account["email"].is_null() && account["weekly"].is_null(), "{account}");
     Ok(())
 }
 

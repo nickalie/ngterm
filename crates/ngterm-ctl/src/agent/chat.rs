@@ -19,7 +19,9 @@
 //!   prompt becomes `approval` and `approval_done` events ([`Approvals`]).
 //! - **The account** the agent is signed in with and its weekly limit are read on a thread of their own
 //!   ([`Watch`]) and sent as an `account` event when they change, with the cursor of where the stream stands, as an
-//!   approval's: an `--before` page has none.
+//!   approval's: an `--before` page has none. A fresh stream says nothing while nothing is known; a reconnect
+//!   (`--after`) sends its first reading even then, as the caller may still show the account an earlier stream sent
+//!   (signed out meanwhile, it is cleared).
 //! - **Stdin's end** ends the process: the phone's ssh channel went away. A thread reads it to its end, as
 //!   `stream_bridge` watches its input, and the follower's wait between polls is the wait on that thread, so the end
 //!   is seen within a poll on every OS.
@@ -148,7 +150,8 @@ impl Chat {
             approvals: Approvals::new(),
             account,
             position: 0,
-            announced: false,
+            // a reconnecting caller may hold an account from the stream before: its first reading is sent, even empty
+            announced: self.after.is_some(),
         };
         stream.run(first, &ended)
     }
@@ -235,7 +238,8 @@ struct Stream<'a> {
     account: Option<Watch>,
     /// Where the stream stands: the newest cursor of the main transcript's events written, the `account` event's.
     position: u64,
-    /// Whether the last `account` event said anything.
+    /// Whether the last `account` event said anything; before the first, whether the caller may hold one (a
+    /// reconnect).
     announced: bool,
 }
 
@@ -393,6 +397,14 @@ mod tests {
             Some(""),
             "an empty id is one that never matches"
         );
+        // the phone's form: each value one word with its option, so one that starts with `-` stays a value
+        let parsed = chat(&["--target=-s", "--after", "7", "--conversation=-c"]).unwrap();
+        assert_eq!(
+            (parsed.target.target.as_str(), parsed.conversation.as_deref()),
+            ("-s", Some("-c"))
+        );
+        let parsed = chat(&["--after", "7", "--conversation="]).unwrap();
+        assert_eq!(parsed.conversation.as_deref(), Some(""));
         assert_eq!(
             chat(&["--conversation", "c1"]).unwrap().validate(),
             Err("--conversation needs --after or --before".to_owned())

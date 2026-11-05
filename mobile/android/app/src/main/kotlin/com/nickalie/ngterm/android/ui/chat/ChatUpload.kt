@@ -24,11 +24,15 @@ sealed interface ChatUpload {
     /** The file's name, as the user picked it. */
     val name: String
 
-    /** [sent] of [total] bytes have gone. */
+    /**
+     * [sent] of [total] bytes have gone; [saving] once the core has told every one gone: the machine has the whole
+     * file then and stores it, and a cancel could no longer take it back, so none is offered.
+     */
     data class Sending(
         override val name: String,
         val sent: Long,
         val total: Long,
+        val saving: Boolean = false,
     ) : ChatUpload
 
     /** Why the file didn't reach the machine, until the user dismisses it. */
@@ -55,7 +59,9 @@ sealed interface UploadProblem {
 /**
  * A pane's chat's uploads, one at a time, into [chat]'s [ChatUiState.upload]: the file's bytes read off the main
  * thread, sent to [machineId] through [core], and the stored path handed to [onStored] (the composer puts it into the
- * prompt). Its work runs in [scope]; [cancel] stops the one on its way, and the machine keeps nothing of it.
+ * prompt). Its work runs in [scope]; [cancel] stops the one on its way while bytes of it are still to go, and the
+ * machine keeps nothing of it. Once every byte has gone ([ChatUpload.Sending.saving]) the machine stores the file
+ * whatever the phone does, so [cancel] holds off and the upload runs to its path.
  */
 internal class ChatUploads(
     private val core: MobileCoreInterface,
@@ -78,8 +84,9 @@ internal class ChatUploads(
         job = scope.launch { send(name, read) }
     }
 
-    /** Stops the upload on its way, if any. */
+    /** Stops the upload on its way, if any, unless it is [saving][ChatUpload.Sending.saving]: too late then. */
     fun cancel() {
+        if ((chat.value.upload as? ChatUpload.Sending)?.saving == true) return
         job?.cancel()
         job = null
         chat.update { if (it.upload is ChatUpload.Sending) it.copy(upload = null) else it }
@@ -159,7 +166,11 @@ internal class ChatUploads(
             total: ULong,
         ) = chat.update {
             val now = it.upload as? ChatUpload.Sending
-            if (now?.name == name) it.copy(upload = now.copy(sent = sent.toLong(), total = total.toLong())) else it
+            if (now?.name == name) {
+                it.copy(upload = now.copy(sent = sent.toLong(), total = total.toLong(), saving = sent >= total))
+            } else {
+                it
+            }
         }
     }
 }

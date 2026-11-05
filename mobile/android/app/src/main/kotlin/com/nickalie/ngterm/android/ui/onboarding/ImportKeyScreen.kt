@@ -28,12 +28,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.readAtMost
 import com.nickalie.ngterm.android.ui.components.ScreenExit
 import com.nickalie.ngterm.android.ui.components.ScreenFrame
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
-import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.io.InputStream
 
 // a private key file is a few kilobytes; anything far bigger is not one
 private const val MAX_KEY_BYTES = 64 * 1024
@@ -230,15 +229,3 @@ private fun ImportProblem.words(): String =
         ImportProblem.Empty -> stringResource(R.string.import_empty)
         ImportProblem.Unreadable -> stringResource(R.string.import_unreadable)
     }
-
-// up to [limit] bytes of the stream (InputStream.readNBytes is API 33)
-private fun InputStream.readAtMost(limit: Int): ByteArray {
-    val out = ByteArrayOutputStream()
-    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-    while (out.size() < limit) {
-        val read = read(buffer, 0, minOf(buffer.size, limit - out.size()))
-        if (read < 0) break
-        out.write(buffer, 0, read)
-    }
-    return out.toByteArray()
-}

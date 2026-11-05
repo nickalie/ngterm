@@ -713,7 +713,9 @@ impl MobileCore {
     /// Sends a file the chat composer attaches to the machine, which stores it for its agents to read
     /// (`ngtermctl agent upload`: a fresh directory under its state directory's `uploads/`, kept a week), and returns
     /// the stored path to put into the prompt. `progress` hears how much has gone. Cancelling the call (dropping it, a
-    /// cancelled coroutine) stops the upload, and the machine keeps nothing of it.
+    /// cancelled coroutine) while bytes are still to go stops the upload, and the machine keeps nothing of it; once
+    /// `progress` has heard every byte sent the machine has the whole file and stores it, so a cancel then is too late
+    /// (the stored copy goes with the week's prune) and the app no longer offers one.
     ///
     /// # Errors
     ///

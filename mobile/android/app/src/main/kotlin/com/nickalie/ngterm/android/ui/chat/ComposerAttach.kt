@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.DropdownMenu
@@ -36,8 +37,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.readAtMost
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
-import java.io.ByteArrayOutputStream
 import java.io.IOException
 
 /**
@@ -85,8 +86,9 @@ internal fun AttachButton(
 }
 
 /**
- * The attached file over the pill: on its way, its name, how much has gone and Cancel, over a thin bar; stopped
- * short, why (in the Error tone, announced politely) and Dismiss.
+ * The attached file over the pill: on its way, its name, how much has gone and Cancel, over a thin bar; every byte
+ * gone, "Saving" its name over the full bar, with no Cancel (the machine has it); stopped short, why (in the Error
+ * tone, announced politely) and Dismiss.
  */
 @Composable
 internal fun UploadLine(
@@ -110,7 +112,12 @@ internal fun UploadLine(
             }
         }
         if (upload is ChatUpload.Sending) {
-            val share = if (upload.total > 0) upload.sent.toFloat() / upload.total else 0f
+            val share =
+                when {
+                    upload.saving -> 1f
+                    upload.total > 0 -> upload.sent.toFloat() / upload.total
+                    else -> 0f
+                }
             LinearProgressIndicator(progress = { share }, modifier = Modifier.fillMaxWidth())
         }
     }
@@ -123,26 +130,33 @@ private fun Sending(
     modifier: Modifier = Modifier,
 ) {
     val percent = if (upload.total > 0) (upload.sent * PERCENT / upload.total).toInt() else 0
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+    val words = if (upload.saving) R.string.chat_upload_saving else R.string.chat_upload_sending
+    // the line keeps Cancel's height once Cancel goes, so nothing under it moves
+    Row(modifier.heightIn(min = LINE_HEIGHT), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            stringResource(R.string.chat_upload_sending, upload.name),
+            stringResource(words, upload.name),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        Text(
-            stringResource(R.string.chat_upload_percent, percent),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        LineButton(stringResource(R.string.chat_upload_cancel), onCancel)
+        if (!upload.saving) {
+            Text(
+                stringResource(R.string.chat_upload_percent, percent),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            LineButton(stringResource(R.string.chat_upload_cancel), onCancel)
+        }
     }
 }
 
 // a share as a percentage
 private const val PERCENT = 100
+
+// the line's height: its 48dp button's
+private val LINE_HEIGHT = 48.dp
 
 @Composable
 private fun Failed(
@@ -207,20 +221,8 @@ fun readPicked(
     uri: Uri,
 ): ByteArray {
     val input = resolver.openInputStream(uri) ?: throw IOException("no stream for $uri")
-    return input.use { stream ->
-        val out = ByteArrayOutputStream()
-        val buffer = ByteArray(READ_CHUNK)
-        while (out.size() <= UPLOAD_CAP) {
-            val read = stream.read(buffer)
-            if (read < 0) break
-            out.write(buffer, 0, read)
-        }
-        out.toByteArray()
-    }
+    return input.use { it.readAtMost((UPLOAD_CAP + 1).toInt()) }
 }
-
-// how much of a picked file one read takes
-private const val READ_CHUNK = 64 * 1024
 
 // a 48dp Close at the line's end, named for what it does
 @Composable

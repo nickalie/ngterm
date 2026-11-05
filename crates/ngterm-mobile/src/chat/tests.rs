@@ -8,8 +8,8 @@ use ngterm_core::agent_chat::{self as wire, EventBody, Tool, ToolKind, ToolStatu
 use super::*;
 
 mod input;
-mod upload;
 pub(crate) mod matchers;
+mod upload;
 
 fn command(name: &str, description: &str) -> AgentCommand {
     AgentCommand {
@@ -55,7 +55,7 @@ fn far_words(tail: &str) -> String {
 #[test]
 fn the_remote_lines_run_the_far_ngtermctl_agent_for_the_session_and_side() {
     let session = "00000000-0000-0000-0000-0000000000A1";
-    let target = format!("[agent][chat][--target][{session}]");
+    let target = format!("[agent][chat][--target={session}]");
     assert_eq!(
         far_words(&chat_tail(session, Side::Left, None)),
         format!("{target}[--pane][left]")
@@ -63,24 +63,29 @@ fn the_remote_lines_run_the_far_ngtermctl_agent_for_the_session_and_side() {
     let cursor = |at, conversation| Cursor { at, conversation };
     assert_eq!(
         far_words(&chat_tail(session, Side::Right, Some(cursor(42, "c'1")))),
-        format!("{target}[--pane][right][--after][42][--conversation][c'1]")
+        format!("{target}[--pane][right][--after][42][--conversation=c'1]")
     );
     assert_eq!(
         far_words(&chat_tail(session, Side::Left, Some(cursor(42, "")))),
-        format!("{target}[--pane][left][--after][42][--conversation][]"),
+        format!("{target}[--pane][left][--after][42][--conversation=]"),
         "no conversation known is an empty id, which matches none"
     );
     assert_eq!(
         far_words(&page_tail(session, Side::Left, cursor(120, "c1"), OLDER_PAGE)),
-        format!("{target}[--pane][left][--before][120][--conversation][c1][--limit][100]")
+        format!("{target}[--pane][left][--before][120][--conversation=c1][--limit][100]")
     );
     assert_eq!(
         far_words(&commands_tail(session, Side::Right)),
-        format!("[agent][commands][--target][{session}][--pane][right]")
+        format!("[agent][commands][--target={session}][--pane][right]")
     );
     assert!(
         chat_tail(session, Side::Left, None).contains("exec "),
         "the stream's shell does not linger"
+    );
+    // a value that starts with `-` stays one word with its option, so the far parser can't take it for an option
+    assert_eq!(
+        far_words(&page_tail("-s", Side::Left, cursor(1, "-c"), OLDER_PAGE)),
+        "[agent][chat][--target=-s][--pane][left][--before][1][--conversation=-c][--limit][100]"
     );
 }
 
