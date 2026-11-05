@@ -653,6 +653,8 @@ The plan, reviewed against the brief:
 | A paper-plane Send beside an attach clip and an emoji face | the messenger kit's glyphs, for things the agent's prompt doesn't take | the messenger's layout, which the user asked for, with the app's own glyphs: one pill holding Commands (a `/`) and Stop, Send beside it once there is text; Send is the return key's arrow (`ic_send`) in a filled copper circle, as a prompt goes in with Enter in the terminal; no emoji face |
 | The account as a header card: an avatar, the email, a big percentage on a ring gauge | the dashboard's KPI tile, shouting over the conversation it sits on, for a number that changes once a turn | one quiet line over the rows: the email at the start in `onSurfaceVariant`, at the end "Weekly limit 72%" over a 56×4dp meter that stands still, when it resets under them; a hairline under the line |
 | Email, limit and reset joined in one meta string with middle dots | template chrome, and three facts read as one | two ends of the line: who is signed in, and how much room is left; the meter turns the attention copper from 80% and oxide when spent, the words with it |
+| A "Claude is typing" bubble with three bouncing dots at the end of the list | the messenger kit, and motion that loops while nobody asked for it | the activity strip pinned at the chat's foot, standing still: the Running ring and what the agent is doing |
+| A count badge ("3") on Stop for what runs in the background | a number alone says neither what runs nor that the reply above isn't the end | words: "Still running in the background" over "2 subagents, 1 command"; a tap lists each as its tool line |
 | The `/` menu as a popup with an icon per command and the matched letters in bold | a second set of glyphs for a list read by name, and a highlight that fights the terminal's face | a plate (`surfaceContainerHigh`, 12dp corners) rising from the composer over the foot of the rows; each row the command as it will go in, in the terminal's face, a line of what it does, and where it comes from as a word |
 
 ```
@@ -691,6 +693,9 @@ The plan, reviewed against the brief:
   opens at the newest row and follows new ones while it is at the end; a finger on it lets it be at once (a row that
   comes mid-fling doesn't pull it back), and a scroll that stops at the end follows again. Which rows are open
   survives scrolling and rotation.
+- **Selecting text:** every row's text can be selected and copied: a long press selects the word under it, with the
+  system's handles and its menu (Copy, Select all); Select all takes that row alone (a prompt, a reply, a tool's title
+  and its open output or diff, a notice), never the whole chat. A tap still opens and closes a line.
 - **Prompts** (`PromptBubble`): at the end of the line on `surfaceContainerHigh`, 12dp corners, bodyLarge, no wider
   than 480dp, with "With 2 images" under them when they carried any. TalkBack reads "You: …", then the images.
 - **Replies** (`ReplyText`, mikepenz multiplatform-markdown-renderer): full width on the ground, paragraphs and lists
@@ -745,6 +750,14 @@ The plan, reviewed against the brief:
     its description), and the "Type an answer" row (its marker, then the field; typing picks it, and in a radio list
     takes the pick over). **Send answers** (filled) once every question has an answer.
   - While an answer is on its way the buttons hold still and "Sending" with a 16dp spinner shows under them.
+- **The activity strip** (`ActivityStrip`), pinned at the chat's foot over the problem banner and the composer, in the
+  reading width (`surfaceContainerHigh`, 6dp corners): so a finished reply isn't read as the work being done. It shows
+  the Connecting ring (still, as on a Running line) and "Claude Code is working" while the agent's status says it works
+  on a turn, else "Still running in the background" while calls of the conversation have no result yet (a subagent or a
+  command the turn left going, until its notification or a stop); under it how many ("2 subagents, 1 command", a
+  subagent's own steps counted as its task). With anything running it is a 48dp toggle (Show what's running) that
+  lists each as its tool line: the kind's glyph and the title in the terminal's face. Nothing to say shows nothing, and
+  a card waiting on the user takes the foot alone.
 - **Problems:** what the last action couldn't do, as a `Banner` over the card: in the Attention tone when the user can
   act on it (the pane doesn't show the prompt any more, a dialog is open, the keys went but the screen didn't confirm
   them), in the Error tone when it only reports (another device kept control, the program isn't reading, the pane is
@@ -798,10 +811,12 @@ The plan, reviewed against the brief:
   origin's state directory, at most 32 MiB: a larger one is refused before a byte is read). Over the pill a line shows
   it on its way: the paperclip at 16dp, "Uploading shot.png" (bodySmall, one line), the percentage (labelMedium,
   `onSurfaceVariant`) and **Cancel upload** (Close, 48dp), over a determinate bar; the paperclip holds meanwhile, as
-  one file goes at a time. Done, the line goes and the stored path goes into the field at the cursor with a space on
+  one file goes at a time. Once every byte has gone the line says "Saving shot.png" over the full bar, with no
+  percentage and no Cancel (the line keeps its 48dp): the machine has the whole file then and stores it whatever the
+  phone does, so Cancel would promise what it can't keep. Done, the line goes and the stored path goes into the field at the cursor with a space on
   each side (in double quotes when it holds a space), for the user to write around before Send; Claude Code reads an
   image's path as the image. Stopped short, the line says why in the Error tone ("Couldn't attach shot.png: …", a
-  polite live region) with Dismiss; Cancel leaves nothing on the machine.
+  polite live region) with Dismiss; Cancel, offered only while bytes are still to go, leaves nothing on the machine.
 
   ```
   |  [@] Uploading shot.png         42%  X |

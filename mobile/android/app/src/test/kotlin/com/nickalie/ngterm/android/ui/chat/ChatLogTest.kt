@@ -46,6 +46,26 @@ class ChatLogTest {
     private val task = tool("Agent", "Find the bug", kind = ChatToolKind.TASK)
 
     @Test
+    fun runningListsTheConversationsCallsWithNoResultYetNotASubagentsSteps() {
+        val log =
+            ChatLog().append(
+                listOf(
+                    event("t1", tool("Bash", "npm test", ChatToolStatus.OK)),
+                    event("task", task),
+                    event("s1", tool("Bash", "cargo test"), parent = "task"),
+                    event("t2", tool("Bash", "npm run build")),
+                ),
+            )
+        assertEquals(listOf("Find the bug", "npm run build"), log.running.map { it.title })
+        // a background task's notification finishes it
+        val done =
+            log.append(
+                listOf(event("task", tool("Agent", "Find the bug", ChatToolStatus.OK, ChatToolKind.TASK))),
+            )
+        assertEquals(listOf("npm run build"), done.running.map { it.title })
+    }
+
+    @Test
     fun liveEventsUpdateTheirRowsNewestLast() {
         val log =
             ChatLog()

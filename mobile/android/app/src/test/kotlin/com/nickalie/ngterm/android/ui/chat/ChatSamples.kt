@@ -46,6 +46,13 @@ object ChatSamples {
         output: String? = null,
     ): ChatBody = ChatBody.Tool(ChatTool(name, kind, title, status, output, null, false))
 
+    /** A call with no result yet. */
+    fun running(
+        name: String,
+        kind: ChatToolKind,
+        title: String,
+    ) = ChatTool(name, kind, title, ChatToolStatus.RUNNING, null, null, false)
+
     val prompt =
         event(
             "u1",

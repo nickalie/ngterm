@@ -131,6 +131,36 @@ class ChatScreenTest {
     }
 
     @Test
+    fun theFootSaysWhatStillRunsAfterTheTurnAndATapListsIt() {
+        val agent = event("task", tool("Agent", "Review the parser", kind = ChatToolKind.TASK))
+        val build = event("t9", tool("Bash", "npm run build"))
+        state.value = ChatSamples.state(listOf(ChatSamples.prompt, ChatSamples.opening, agent, build))
+        show()
+        val strip = hasText("Still running in the background")
+        compose
+            .onNode(strip)
+            .assert(hasText("1 subagent, 1 command"))
+            .assert(expectation(SemanticsProperties.StateDescription, "Collapsed"))
+            .assert(clickLabel("Show what's running"))
+            .performClick()
+        compose.onNode(strip).assert(clickLabel("Hide what's running"))
+        assertEquals(2, compose.onAllNodesWithText("npm run build").fetchSemanticsNodes().size)
+        // while the agent works on a turn, it says so, and a card waiting on the user takes the foot alone
+        state.value = state.value.copy(working = true)
+        compose.onNodeWithText("Claude Code is working").assertIsDisplayed()
+        state.value = state.value.copy(approval = ChatSamples.approval)
+        compose.onNodeWithText("Claude Code is working").assertDoesNotExist()
+    }
+
+    @Test
+    fun aFinishedTurnWithNothingRunningLeavesTheFootEmpty() {
+        state.value = ChatSamples.state(listOf(ChatSamples.prompt, ChatSamples.opening, ChatSamples.grep))
+        show()
+        compose.onNodeWithText("Still running", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("is working", substring = true).assertDoesNotExist()
+    }
+
+    @Test
     fun anApprovalCardIsAHeadingWithTheDialogsOptions() {
         state.value = state.value.copy(approval = ChatSamples.approval)
         show()

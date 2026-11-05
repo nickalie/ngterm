@@ -3,6 +3,7 @@ package com.nickalie.ngterm.android.ui.chat
 import com.nickalie.ngterm.core.ffi.ChatBody
 import com.nickalie.ngterm.core.ffi.ChatEvent
 import com.nickalie.ngterm.core.ffi.ChatQuestion
+import com.nickalie.ngterm.core.ffi.ChatTool
 import com.nickalie.ngterm.core.ffi.ChatToolStatus
 
 /**
@@ -98,6 +99,15 @@ class ChatLog private constructor(
                     ?.takeIf { it.question.status == ChatToolStatus.RUNNING && id !in dismissed }
                     ?.let { OpenQuestion(id, it.question) }
             }
+
+    /**
+     * The conversation's own tool calls with no result yet, oldest first: a command or a subagent still on its way,
+     * including one the agent left running in the background when its turn ended. A subagent's own steps count as
+     * its task's, so only rows on the conversation's level are here.
+     */
+    val running: List<ChatTool> by lazy {
+        order.mapNotNull { id -> (bodies[id] as? ChatBody.Tool)?.tool?.takeIf { it.status == ChatToolStatus.RUNNING } }
+    }
 
     /** The log with [events] (newest last) taken in after what it shows. */
     fun append(events: List<ChatEvent>): ChatLog {

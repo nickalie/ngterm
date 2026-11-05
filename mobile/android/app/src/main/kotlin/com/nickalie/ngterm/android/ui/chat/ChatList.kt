@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,8 +41,9 @@ internal const val OLDER_KEY = "older"
  * the page before ([ChatActions.onLoadOlder]) as soon as it shows, then each row. The list opens at the newest row and
  * follows new ones while it is at the end, and goes back there to follow again when asked ([ChatUiState.toEnd]: a
  * notification's tap); a page that goes in above keeps the row that was on top in place
- * ([ChatUiState.anchor]). Which rows are open (a tool's output, a subagent's steps) survives scrolling and rotation,
- * within their conversation ([OpenRows]).
+ * ([ChatUiState.anchor]). A long press selects a row's text to copy (a prompt, a reply, a tool's title, output or
+ * diff). Which rows are open (a tool's output, a subagent's steps) survives scrolling and rotation, within their
+ * conversation ([OpenRows]).
  */
 @Composable
 fun ChatList(
@@ -74,12 +76,15 @@ fun ChatList(
             )
         }
         items(items, key = { it.key }, contentType = { it.contentType }) { item ->
-            ChatRow(
-                item = item,
-                expanded = expanded,
-                onToggle = toggle,
-                modifier = Modifier.widthIn(max = readable).fillMaxWidth().padding(vertical = item.gap),
-            )
+            // a long press selects the row's text, Copy in the system's toolbar; Select all takes this row alone
+            SelectionContainer {
+                ChatRow(
+                    item = item,
+                    expanded = expanded,
+                    onToggle = toggle,
+                    modifier = Modifier.widthIn(max = readable).fillMaxWidth().padding(vertical = item.gap),
+                )
+            }
         }
     }
 }

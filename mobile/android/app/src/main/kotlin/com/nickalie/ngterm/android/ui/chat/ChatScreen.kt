@@ -74,7 +74,8 @@ fun ChatPane(
 /**
  * A pane's chat ([state]), read from [machine]: its rows ([ChatList]), or what stands in for them (the backlog on its
  * way, nothing said yet, the chat ended), a strip over the rows while its link is back on its way, pinned at its foot
- * the last action's problem and the card the agent waits on (an approval before a question), and under them the
+ * what the agent still has running ([ActivityStrip], unless a card waits), the last action's problem and the card the
+ * agent waits on (an approval before a question), and under them the
  * [composer] (none: the chat only reads), whose `/` menu opens over the foot of the rows and cards. The prompt field
  * takes the input focus through [focusRequester]; Back closes the menu only in the [selected] pane. TalkBack names it
  * "Chat with" the agent.
@@ -202,7 +203,8 @@ private fun Centered(
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { content() }
 }
 
-// what waits at the chat's foot: the last action's problem, then the card (no taller than [cardHeight])
+// what waits at the chat's foot: what still runs (while no card waits), the last action's problem, then the card
+// (no taller than [cardHeight])
 @Composable
 private fun Pinned(
     state: ChatUiState,
@@ -216,6 +218,14 @@ private fun Pinned(
             modifier = Modifier.widthIn(max = NgtermTheme.spacing.readableWidth).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(NgtermTheme.spacing.sm),
         ) {
+            if (!state.awaitsCard) {
+                ActivityStrip(
+                    working = state.working,
+                    running = state.log.running,
+                    agent = stringResource(agentName(agent)),
+                    modifier = Modifier.padding(horizontal = NgtermTheme.spacing.sm).fillMaxWidth(),
+                )
+            }
             state.problem?.let { problem ->
                 ProblemBanner(problem, actions, Modifier.padding(NgtermTheme.spacing.sm))
             }

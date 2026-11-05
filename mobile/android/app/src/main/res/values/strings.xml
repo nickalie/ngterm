@@ -416,6 +416,22 @@
     <item quantity="other">%1$d steps</item>
   </plurals>
   <string name="chat_subagent_earlier">A subagent\'s earlier task</string>
+  <string name="chat_activity_working">%1$s is working</string>
+  <string name="chat_activity_background">Still running in the background</string>
+  <plurals name="chat_activity_subagents">
+    <item quantity="one">%1$d subagent</item>
+    <item quantity="other">%1$d subagents</item>
+  </plurals>
+  <plurals name="chat_activity_commands">
+    <item quantity="one">%1$d command</item>
+    <item quantity="other">%1$d commands</item>
+  </plurals>
+  <plurals name="chat_activity_tools">
+    <item quantity="one">%1$d tool</item>
+    <item quantity="other">%1$d tools</item>
+  </plurals>
+  <string name="chat_activity_show">Show what\'s running</string>
+  <string name="chat_activity_hide">Hide what\'s running</string>
   <string name="chat_truncated">Cut short here: the terminal has the rest.</string>
   <plurals name="chat_diff_more">
     <item quantity="one">%1$d more line, not shown</item>
@@ -451,6 +467,7 @@
   <string name="chat_attach_media">Photo or video</string>
   <string name="chat_attach_file">File</string>
   <string name="chat_upload_sending">Uploading %1$s</string>
+  <string name="chat_upload_saving">Saving %1$s</string>
   <string name="chat_upload_percent">%1$d%%</string>
   <string name="chat_upload_cancel">Cancel upload</string>
   <string name="chat_upload_failed">Couldn\'t attach %1$s: %2$s</string>

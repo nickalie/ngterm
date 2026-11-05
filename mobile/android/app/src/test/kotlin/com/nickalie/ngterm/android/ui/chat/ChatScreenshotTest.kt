@@ -12,6 +12,7 @@ import com.nickalie.ngterm.android.ui.Window
 import com.nickalie.ngterm.android.ui.WindowRule
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.ffi.ChatBody
+import com.nickalie.ngterm.core.ffi.ChatToolKind
 import com.nickalie.ngterm.core.ffi.ChatUsage
 import org.junit.Rule
 import org.junit.Test
@@ -23,8 +24,9 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * The chat (src/test/screenshots/chat) on a phone (light, dark, font scale 2.0), an unfolded foldable and a landscape
  * tablet (light and dark): a long conversation, an open approval, a multi-select question, an expanded diff, the
- * empty and error states, the account and its weekly limit over the rows, and the composer's `/` menu open on every
- * command, narrowed (the agent working, so Stop shows), and matching nothing.
+ * empty and error states, the account and its weekly limit over the rows, the activity strip open on a subagent and
+ * a command left running, and the composer's `/` menu open on every command, narrowed (the agent working, so Stop
+ * shows), and matching nothing.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -100,6 +102,26 @@ class ChatScreenshotTest(
                 account = ChatBody.Account("nick@example.com", ChatUsage(84u, null)),
             ),
         )
+
+    @Test
+    fun stillRunning() =
+        capture(
+            "running",
+            ChatSamples.state(
+                listOf(
+                    ChatSamples.prompt,
+                    ChatSamples.opening,
+                    event("task", ChatBody.Tool(ChatSamples.running("Agent", ChatToolKind.TASK, "Review the parser"))),
+                    event(
+                        "t9",
+                        ChatBody.Tool(ChatSamples.running("Bash", ChatToolKind.SHELL, "cargo test -p ngterm-core")),
+                    ),
+                    event("a9", reply("Both are running in the background; I'll report when they finish.")),
+                ),
+            ),
+        ) {
+            compose.onNode(hasText("Still running in the background")).performClick()
+        }
 
     @Test
     fun openMenu() = capture("menu", ChatSamples.state(ChatSamples.long), ChatSamples.composer("/"))
