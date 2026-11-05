@@ -194,6 +194,33 @@ impl Origin {
     pub(super) fn tree_changes(&mut self) -> usize {
         self.live.fixture.core.commit().tree_changed.len()
     }
+
+    /// The presenter's stream goes; the `tree.changed` the commit after it fires.
+    pub(super) fn lose_presenter(&mut self) -> usize {
+        let serial = self.serial;
+        self.live.fixture.core.presentation_closed(serial);
+        self.tree_changes()
+    }
+
+    /// A new presenter whose hello lists `kinds` attaches and is granted the session, replacing the old one here; the
+    /// `tree.changed` the commit after it fires.
+    pub(super) fn reattach(&mut self, kinds: &[&str]) -> usize {
+        let session = self.session();
+        let (serial, presenter) = subscribe_listing(&mut self.live.fixture.core, session, "presenter", kinds);
+        let acquire = frame(&presenter, &json!({"kind": "presenter.acquire"}));
+        self.live.fixture.core.presentation_line(serial, &acquire);
+        let changes = self.tree_changes();
+        let kinds = presenter.kinds();
+        let granted = kinds.iter().position(|kind| kind == "presenter.granted");
+        let handed = kinds.iter().position(|kind| kind.starts_with("page."));
+        assert!(
+            granted.is_some() && handed.is_none_or(|handed| Some(handed) > granted),
+            "the grant goes first: {kinds:?}"
+        );
+        self.serial = serial;
+        self.presenter = presenter;
+        changes
+    }
 }
 
 // MARK: - the placement rule
@@ -543,39 +570,288 @@ fn a_rejection_ends_the_page_dismissed() {
     assert!(origin.node().get("remoteOverlays").is_none());
 }
 
-#[test]
-fn losing_the_presenter_ends_the_page_and_keeps_an_accepted_answer() {
+// MARK: - parked pages (an extension beyond upstream, where the presenter's loss ends every page)
+
+/// A split origin whose presenter showed a file page session-wide (60%, a background) and a URL page on the right, and
+/// answered a third on the left before it went: the origin, the two parked pages' ids and the file page's first request.
+fn parked_origin() -> (Origin, String, String, Value) {
     let mut origin = Origin::new(true, &SUPPORTED_KINDS);
-    let pending = origin.opened(FILE, |_| {});
+    let shown = origin.opened(FILE, |a| {
+        a.size_percent = Some(60);
+        a.color = Some("#102030".to_owned());
+    });
+    let first = origin.presenter.last("page.request").unwrap()["page"].clone();
+    let pane = origin.opened("https://example.com/", |a| a.pane = Some("right".to_owned()));
     let answered = origin.opened(FILE, |a| a.pane = Some("left".to_owned()));
     let submitted = origin.overlay(SessionCmd::OverlaySubmit, |a| {
         a.value = Some("kept".to_owned());
         a.pane = Some("left".to_owned());
     });
     assert!(submitted.ok);
-    // the presenter goes before it closed the answered page
-    let serial = origin.serial;
-    origin.live.fixture.core.presentation_closed(serial);
-    origin.live.fixture.core.commit();
-    assert!(origin.slot_jobs().is_empty());
-    assert_eq!(origin.outcome(&pending)["outcome"], "dismissed");
+    origin.tree_changes();
+    assert!(origin.lose_presenter() > 0, "the park is read back");
     assert_eq!(origin.outcome(&answered)["value"], "kept");
+    (origin, shown, pane, first)
 }
 
-/// Upstream's `aPageThePresenterLossEndedLeavesNoOverlay`.
+/// The presenter's loss parks its pages: the slot and the pending outcome stay and the read-back marks them, while an
+/// answer already given is kept.
 #[test]
-fn a_page_the_presenter_loss_ended_leaves_no_overlay() {
-    let mut origin = Origin::pages();
-    origin.opened(FILE, |_| {});
-    let serial = origin.serial;
-    origin.live.fixture.core.presentation_closed(serial);
-    origin.live.fixture.core.commit();
+fn losing_the_presenter_parks_its_pages() {
+    let (mut origin, shown, pane, _) = parked_origin();
+    assert_eq!(origin.slot_jobs(), [shown.clone(), pane.clone()]);
+    assert_eq!(origin.outcome(&shown)["outcome"], "pending");
+    let node = origin.node();
     assert_eq!(
-        origin.overlay(SessionCmd::OverlayNavigate, |a| a.to = Some("back".to_owned())),
-        failure("no overlay")
+        node["remoteOverlays"],
+        json!([{"sizePercent": 60, "pageID": shown, "parked": true},
+            {"pane": "right", "pageID": pane, "parked": true}])
     );
-    assert_eq!(origin.overlay(SessionCmd::OverlayReload, |_| {}), failure("no overlay"));
+    assert_eq!(node["htmlOverlays"][0]["parked"], true);
+    assert_eq!(node["htmlOverlays"][0]["remote"], true);
+}
+
+/// The next presenter that speaks pages gets each parked page again as a fresh request: a new claim token, no raise,
+/// the slot and the size it had; then its reports and commands reach the page as before.
+#[test]
+fn the_next_presenter_is_handed_each_parked_page_again() {
+    let (mut origin, shown, pane, first) = parked_origin();
+    assert!(origin.reattach(&SUPPORTED_KINDS) > 0, "the hand-on is read back");
+    let requests: Vec<Value> = origin
+        .presenter
+        .frames("page.request")
+        .into_iter()
+        .map(|frame| frame["page"].clone())
+        .collect();
+    assert_eq!(requests.len(), 2);
+    let again = &requests[0];
+    assert_eq!(again["page"], json!(shown));
+    assert_ne!(again["token"], first["token"], "a fresh claim token");
+    assert_eq!(again["follow"], false, "a hand-on never raises the session");
+    let kept = ["source", "identity", "javascript", "sizePercent", "backgroundColor"];
+    assert_eq!(kept.map(|key| &again[key]), kept.map(|key| &first[key]));
+    let right = origin
+        .live
+        .fixture
+        .store()
+        .session(origin.session())
+        .unwrap()
+        .split_pane_identity
+        .map(wire);
+    assert_eq!(
+        (&requests[1]["page"], &requests[1]["pane"]),
+        (&json!(pane), &json!(right)),
+        "the right pane's slot"
+    );
+    assert!(origin.commands().is_empty(), "a shown page is handed on shown");
+    let node = origin.node();
+    assert!(node["remoteOverlays"][0].get("parked").is_none());
+    assert!(node["htmlOverlays"][0].get("parked").is_none());
+    assert_eq!(node["htmlOverlays"][0]["state"], "loading", "it loads anew there");
+    origin.state(&shown, false, 0, Some("Again"));
+    assert_eq!(origin.node()["htmlOverlays"][0]["title"], "Again");
+    assert!(origin.overlay(SessionCmd::OverlayReload, |_| {}).ok);
+    assert_eq!(origin.actions(), ["reloadOriginal"]);
+}
+
+/// What needs a parked page shown is refused; its visibility and size are recorded and delivered with the hand-on, the
+/// hide right after the request.
+#[test]
+fn a_parked_page_records_what_it_can_and_refuses_what_needs_it_shown() {
+    let mut origin = Origin::pages();
+    let page = origin.opened(FILE, |a| a.size_percent = Some(60));
+    origin.lose_presenter();
+    let back = origin.overlay(SessionCmd::OverlayNavigate, |a| a.to = Some("back".to_owned()));
+    assert_eq!(back, failure(VIEWER_GONE));
+    assert_eq!(origin.overlay(SessionCmd::OverlayReload, |_| {}), failure(VIEWER_GONE));
     assert_eq!(origin.node()["overlay"], false);
+    assert_eq!(origin.visibility(SessionCmd::OverlayHide), "hidden");
+    assert_eq!(origin.node()["htmlOverlays"][0]["hidden"], true);
+    assert!(
+        origin
+            .overlay(SessionCmd::OverlayResize, |a| a.size_percent = Some(40))
+            .ok
+    );
+    assert_eq!(origin.node()["remoteOverlays"][0]["sizePercent"], 40);
+
+    origin.reattach(&SUPPORTED_KINDS);
+    let request = origin.presenter.last("page.request").unwrap()["page"].clone();
+    assert_eq!((&request["page"], &request["sizePercent"]), (&json!(page), &json!(40)));
+    assert_eq!(origin.commands(), [json!({"page": page, "seq": 1, "action": "hide"})]);
+    let kinds = origin.presenter.kinds();
+    let at = |kind: &str| kinds.iter().position(|seen| seen == kind).unwrap();
+    assert!(at("page.request") < at("page.command"));
+}
+
+/// A parked page closes for good: its outcome is dismissed, no presenter is told, and no later one is handed it.
+#[test]
+fn a_parked_page_closes_for_good_telling_no_presenter() {
+    let mut origin = Origin::pages();
+    let page = origin.opened(FILE, |_| {});
+    origin.lose_presenter();
+    origin.reattach(&SUPPORTED_KINDS);
+    origin.lose_presenter();
+    assert!(origin.overlay(SessionCmd::OverlayClose, |_| {}).ok);
+    origin.tree_changes();
+    assert!(origin.slot_jobs().is_empty());
+    assert_eq!(origin.outcome(&page)["outcome"], "dismissed");
+    assert!(origin.presenter.frames("page.close").is_empty());
+    origin.reattach(&SUPPORTED_KINDS);
+    assert!(
+        origin.presenter.frames("page.request").is_empty(),
+        "a closed page is never handed on"
+    );
+}
+
+/// A presenter that does not speak pages leaves them parked, and so does one that cannot reach a loopback URL; the
+/// next one that can is handed them.
+#[test]
+fn only_a_presenter_able_to_show_a_parked_page_is_handed_it() {
+    let mut origin = Origin::new(true, &SUPPORTED_KINDS);
+    let file = origin.opened(FILE, |_| {});
+    let loopback = origin.opened("http://127.0.0.1:8080/", |a| a.pane = Some("left".to_owned()));
+    origin.lose_presenter();
+    origin.reattach(&OLDER_KINDS);
+    assert!(origin.presenter.frames("page.request").is_empty());
+    assert_eq!(origin.node()["remoteOverlays"][0]["parked"], true);
+    origin.lose_presenter();
+    let no_tunnel: Vec<&str> = SUPPORTED_KINDS
+        .iter()
+        .copied()
+        .filter(|kind| *kind != crate::remote::page_tunnel::TUNNEL_KIND)
+        .collect();
+    origin.reattach(&no_tunnel);
+    let handed: Vec<Value> = origin
+        .presenter
+        .frames("page.request")
+        .into_iter()
+        .map(|frame| frame["page"]["page"].clone())
+        .collect();
+    assert_eq!(handed, [json!(file)]);
+    assert_eq!(
+        origin.node()["remoteOverlays"][1]["parked"],
+        true,
+        "the loopback page waits"
+    );
+    origin.lose_presenter();
+    origin.reattach(&SUPPORTED_KINDS);
+    assert_eq!(origin.presenter.frames("page.request").len(), 2);
+    assert_eq!(origin.outcome(&loopback)["outcome"], "pending");
+}
+
+/// A parked pane page whose pane the origin does not lay out (a hidden split showing the other pane) stays parked when
+/// the next presenter is granted, as that presenter would refuse it and so end it; it is handed on once the split is
+/// shown again.
+#[test]
+fn a_parked_page_waits_for_its_pane_to_be_laid_out() {
+    let mut origin = Origin::new(true, &SUPPORTED_KINDS);
+    let page = origin.opened("https://example.com/", |a| a.pane = Some("left".to_owned()));
+    origin.lose_presenter();
+    let session = origin.session();
+    let store = origin.fixture().store_mut().unwrap();
+    store.set_split_focus(session, true);
+    store.set_split_visibility(session, false, None);
+    assert!(!store.session(session).unwrap().renders_overlay_pane(OverlayPane::Left));
+
+    origin.reattach(&SUPPORTED_KINDS);
+    assert!(
+        origin.presenter.frames("page.request").is_empty(),
+        "no pane to show it in"
+    );
+    assert_eq!(origin.node()["remoteOverlays"][0]["parked"], true);
+    assert_eq!(origin.outcome(&page)["outcome"], "pending");
+
+    origin
+        .fixture()
+        .store_mut()
+        .unwrap()
+        .set_split_visibility(session, true, None);
+    origin.tree_changes();
+    let handed: Vec<Value> = origin
+        .presenter
+        .frames("page.request")
+        .into_iter()
+        .map(|frame| frame["page"]["page"].clone())
+        .collect();
+    assert_eq!(handed, [json!(page)], "handed on once the pane is laid out");
+    let kinds = origin.presenter.kinds();
+    let at = |kind: &str| kinds.iter().rposition(|seen| seen == kind).unwrap();
+    assert!(at("layout") < at("page.request"), "the layout goes first: {kinds:?}");
+    assert!(origin.node()["remoteOverlays"][0].get("parked").is_none());
+}
+
+/// A pane page waiting for its pane holds back the session-wide page reserved after it, and what came after that, so
+/// they reach the presenter in the order they were opened: the viewer stacks a pane page over the session-wide page
+/// it finds open, and the older pane page must stay under the newer cover there as it does here.
+#[test]
+fn a_waiting_pane_page_keeps_its_place_under_a_later_cover() {
+    let mut origin = Origin::new(true, &SUPPORTED_KINDS);
+    let left = origin.opened("https://example.com/", |a| a.pane = Some("left".to_owned()));
+    let cover = origin.opened(FILE, |a| a.size_percent = Some(60));
+    let right = origin.opened("https://example.org/", |a| a.pane = Some("right".to_owned()));
+    origin.lose_presenter();
+    let session = origin.session();
+    let store = origin.fixture().store_mut().unwrap();
+    store.set_split_focus(session, true);
+    store.set_split_visibility(session, false, None);
+
+    origin.reattach(&SUPPORTED_KINDS);
+    assert!(
+        origin.presenter.frames("page.request").is_empty(),
+        "the cover and the page above it wait with the left page"
+    );
+
+    origin
+        .fixture()
+        .store_mut()
+        .unwrap()
+        .set_split_visibility(session, true, None);
+    origin.tree_changes();
+    let handed: Vec<Value> = origin
+        .presenter
+        .frames("page.request")
+        .into_iter()
+        .map(|frame| frame["page"]["page"].clone())
+        .collect();
+    assert_eq!(handed, [json!(left), json!(cover), json!(right)], "the opening order");
+    assert!(
+        origin.node()["remoteOverlays"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|slot| slot.get("parked").is_none())
+    );
+}
+
+/// A pane page waiting for its pane holds back nothing reserved before it.
+#[test]
+fn a_waiting_pane_page_holds_back_no_earlier_cover() {
+    let mut origin = Origin::new(true, &SUPPORTED_KINDS);
+    let cover = origin.opened(FILE, |a| a.size_percent = Some(60));
+    let left = origin.opened("https://example.com/", |a| a.pane = Some("left".to_owned()));
+    origin.lose_presenter();
+    let session = origin.session();
+    let store = origin.fixture().store_mut().unwrap();
+    store.set_split_focus(session, true);
+    store.set_split_visibility(session, false, None);
+
+    origin.reattach(&SUPPORTED_KINDS);
+    let handed = |origin: &Origin| -> Vec<Value> {
+        origin
+            .presenter
+            .frames("page.request")
+            .into_iter()
+            .map(|frame| frame["page"]["page"].clone())
+            .collect()
+    };
+    assert_eq!(handed(&origin), [json!(cover)]);
+    origin
+        .fixture()
+        .store_mut()
+        .unwrap()
+        .set_split_visibility(session, true, None);
+    origin.tree_changes();
+    assert_eq!(handed(&origin), [json!(cover), json!(left)]);
 }
 
 #[test]
@@ -876,12 +1152,14 @@ fn a_local_page_omits_the_remote_fields_and_a_replica_reports_its_origin_path() 
         pane: None,
         size_percent: Some(60),
         page_id: None,
+        parked: None,
     };
     assert_eq!(serde_json::to_value(&program).unwrap(), json!({"sizePercent": 60}));
     let page = ngterm_proto::tree::ControlRemoteOverlayNode {
         pane: Some("left".to_owned()),
         size_percent: None,
         page_id: Some("p1".to_owned()),
+        parked: None,
     };
     let encoded = serde_json::to_value(&page).unwrap();
     assert_eq!(encoded, json!({"pane": "left", "pageID": "p1"}));

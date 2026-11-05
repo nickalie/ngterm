@@ -5,7 +5,8 @@
 //! that multiplex the page's resource transfers and its bridge calls by request id. A resource is read here off the
 //! main loop, from the page's own file or from inside its grant, in chunks of at most [`MAX_CHUNK_BYTES`]; a bridge
 //! request runs here against the page's place at that moment, as a local page's request would. The helper's
-//! connection closing, or sending what a helper never sends, ends the page and keeps the presenter.
+//! connection closing parks the page for the next presenter (an extension beyond upstream, which ends it), and sending
+//! what a helper never sends ends the page; either way the presenter stays.
 //!
 //! The frontend owns the connection: it hands the core each adopted one as a [`PageChannel`], calls
 //! [`PageServeStream::take`] with every line on the connection's own thread (a cancel applies at once and a request
@@ -841,7 +842,8 @@ impl Core {
     }
 
     /// A channel's connection closed (upstream's `PageServeStream.closed`): a page whose end was not already under way
-    /// ends, as nobody is left to load it. A claim whose reply never reached the helper closes this way too. A page
+    /// is parked and its presenter told to drop it, as nobody is left to load it there (upstream ends it); the next
+    /// presenter is handed it again. A claim whose reply never reached the helper closes this way too. A page
     /// companion's attachment closing ends nothing but itself.
     pub fn page_serve_closed(&mut self, stream: &Arc<PageServeStream>) {
         if let Some(serving) = &stream.companion {
@@ -863,7 +865,7 @@ impl Core {
         if stream.ending.load(Ordering::SeqCst) {
             return;
         }
-        self.end_remote_page_anywhere(stream.page);
+        self.park_remote_page_anywhere(stream.page);
     }
 
     /// A page handed to the presenter ended: its channel, if one was adopted, is shut once, and a claim not adopted yet

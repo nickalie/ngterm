@@ -237,7 +237,8 @@ jobs:
   #   again with the HTML overlays on.
   # - zsh and fish: upstream wraps a pane in zmx only for one of these login shells, so the build claims
   #   `live-sessions` too and the live tests run: `--must-pass live-sessions` (every test upstream holds to Live
-  #   sessions) and `--must-pass live-any-shell`.
+  #   sessions) and `--must-pass live-any-shell`, and `--must-pass pages-survive` (the Rust-only parking of a page whose
+  #   presenter went, whose tests need Live sessions).
   # - bash, zsh and fish: `--must-pass agent-chat` too (the Rust-only agent record and `ngtermctl agent` behind the
   #   Android chat view).
 # - coverage: the zsh entry again on an instrumented build (run-linux.sh --coverage: cargo-llvm-cov and the toolchain's
@@ -258,10 +259,12 @@ jobs:
             must-pass: --must-pass live-any-shell --must-pass agent-chat
           - shell: zsh
             out: rust-linux-zsh
-            must-pass: --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat
+            must-pass: >-
+              --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
           - shell: fish
             out: rust-linux-fish
-            must-pass: --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat
+            must-pass: >-
+              --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
           - shell: zsh
             out: rust-linux-coverage
             coverage: true

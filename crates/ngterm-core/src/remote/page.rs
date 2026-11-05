@@ -6,8 +6,15 @@
 //! the slot is reserved here (a [`RemotePage`] in its [`RemoteOverlaySlot`]), the page's outcome is registered pending
 //! and a `page.request` carries a single-use claim token. Nothing renders here. The presenter's `page.state` reports
 //! are mirrored into the read-back; hide, show, reload, history and resize are sequence-numbered `page.command`s; a
-//! close here, a rejection or close there, the presenter's loss and the session's removal end the page, keeping an
-//! answer already submitted.
+//! close here, a rejection or close there and the session's removal end the page, keeping an answer already submitted.
+//!
+//! The presenter's loss, its page channel's helper going and an unclaimed file page's claim window passing park the
+//! page instead (an extension beyond upstream, where they end it): the slot stays reserved, the outcome pending, and
+//! the presenter, when it stays, is told to drop its replica. The next presenter granted the session that speaks pages
+//! is handed every parked page again as a fresh `page.request` ([`Core::hand_on_parked_pages`]), in the order they were
+//! opened, a pane page once its pane is laid out; the placement rule is not run again, as a parked page belongs to the
+//! session's viewer. A parked page closes here like any page, telling no presenter; its visibility and size are
+//! recorded for the hand-on, and what needs a page shown is refused.
 
 use std::time::{Duration, Instant};
 
@@ -21,7 +28,7 @@ use super::hub::PAGE_KINDS;
 use crate::Core;
 use crate::commands::overlay_page::PageOpening;
 use crate::html::{self, HtmlNavigation, HtmlOverlay, HtmlSource, errors};
-use crate::model::{OverlayPane, OverlayPointSize, OverlaySize, RemoteOverlaySlot, RemotePage, Session};
+use crate::model::{HandedOn, OverlayPane, OverlayPointSize, OverlaySize, RemoteOverlaySlot, RemotePage, Session};
 use crate::pane_env::uuid_string;
 
 /// How long a handed-over file page waits for its channel to be claimed (upstream's `pageClaimWindow`).
@@ -68,7 +75,7 @@ pub(crate) enum RemotePageCommand {
 }
 
 /// A page's full source on the wire; a replica, itself shown for another machine, is never handed on.
-pub(super) fn presentation_source(source: &HtmlSource) -> Option<PresentationPageSource> {
+pub(crate) fn presentation_source(source: &HtmlSource) -> Option<PresentationPageSource> {
     match source {
         HtmlSource::File { path, grant_root } => Some(PresentationPageSource::File {
             path: path.clone(),
@@ -184,12 +191,7 @@ pub(crate) fn open_remote_page(
         ..size
     };
     let request = Body::PageRequest(page_request(overlay, opening, source, identity, token.clone(), sent));
-    let probe = PresentationFrame {
-        generation: i64::MAX,
-        rev: i64::MAX,
-        body: request.clone(),
-    };
-    if frames::encode(&probe).is_err() {
+    if !fits_one_frame(&request) {
         return RemotePageOpen::TooLarge;
     }
     let hud = found.overlay.hud_active();
@@ -200,7 +202,8 @@ pub(crate) fn open_remote_page(
     if slot.is_none() && hud {
         store.close_hud(session);
     }
-    let reserved = RemotePage::new(overlay.clone(), token, Instant::now() + PAGE_CLAIM_WINDOW);
+    let mut reserved = RemotePage::new(overlay.clone(), token, Instant::now() + PAGE_CLAIM_WINDOW);
+    reserved.background_color.clone_from(&opening.background_color);
     store.reserve_remote_overlay(
         session,
         RemoteOverlaySlot {
@@ -214,15 +217,20 @@ pub(crate) fn open_remote_page(
             page: Some(reserved),
         },
     );
-    core.register_page_outcome(overlay.id);
+    core.register_viewer_page_outcome(overlay.id);
     core.remote.hub.send_to_presenter(request, session);
-    if matches!(overlay.source, HtmlSource::File { .. }) {
-        core.remote
-            .page_serve
-            .expiries
-            .push(PAGE_CLAIM_WINDOW + CLAIM_EXPIRY_SLACK);
-    }
+    core.arm_page_claim_expiry(&overlay.source);
     RemotePageOpen::Opened
+}
+
+/// Whether `body` encodes into one presentation frame, at the largest generation and revision it could carry.
+fn fits_one_frame(body: &Body) -> bool {
+    let probe = PresentationFrame {
+        generation: i64::MAX,
+        rev: i64::MAX,
+        body: body.clone(),
+    };
+    frames::encode(&probe).is_ok()
 }
 
 /// Whether `source` is a URL on this machine's loopback that `session`'s presenter cannot reach: the address it would
@@ -268,8 +276,16 @@ impl Core {
             .as_ref()
     }
 
+    /// Whether `slot` holds a page shown on the stream it was handed to: not parked, and that stream still presents.
+    fn page_shown_by_owner(&self, session: Uuid, slot: &RemoteOverlaySlot) -> bool {
+        slot.page.as_ref().is_some_and(|page| !page.parked)
+            && self.remote.hub.has_presenter(session)
+            && self.remote.hub.presenter_generation(session) == slot.owner
+    }
+
     /// Asks the presenter to act on the page in `pane`'s slot (upstream's `sendRemotePageCommand`); false when no remote
-    /// page sits there or the stream it was handed to is gone. A hide or show is recorded as the pending visibility.
+    /// page sits there, it is parked, or the stream it was handed to is gone. A hide or show is recorded as the pending
+    /// visibility.
     pub(crate) fn send_remote_page_command(
         &mut self,
         session: Uuid,
@@ -281,7 +297,7 @@ impl Core {
         let owned = self
             .presented_session(session)
             .and_then(|found| found.remote_overlays().slot(pane))
-            .is_some_and(|slot| slot.page.is_some() && self.remote.hub.presenter_generation(session) == slot.owner);
+            .is_some_and(|slot| self.page_shown_by_owner(session, slot));
         if !owned {
             return false;
         }
@@ -358,8 +374,22 @@ impl Core {
     }
 
     /// Applies what the presenter of `session` reported about one of its pages (upstream's `receiveRemotePageFrame`):
-    /// a state is mirrored, a rejection or close ends the page.
+    /// a state is mirrored, a rejection or close ends the page. A parked page takes none of them: the presenter
+    /// answering the `page.close` that parked it only confirms it dropped its replica.
     pub(super) fn receive_remote_page_frame(&mut self, session: Uuid, body: &Body) {
+        let page = match body {
+            Body::PageState(state) => &state.page,
+            Body::PageRejected(change) | Body::PageClosed(change) => &change.page,
+            _ => return,
+        };
+        let parked = self
+            .presented_session(session)
+            .and_then(|found| found.remote_overlays().slot_of_job(page))
+            .and_then(|slot| slot.page.as_ref())
+            .is_some_and(|page| page.parked);
+        if parked {
+            return;
+        }
         let Some(store) = self.library_mut().store_for_session_mut(session) else {
             return;
         };
@@ -383,10 +413,13 @@ impl Core {
         }
     }
 
-    /// A page closed here: the presenter takes it down, and it ends (upstream's `closeRemoteOverlay` page arm).
-    pub(super) fn close_remote_page(&mut self, session: Uuid, page: Uuid) {
-        let close = Body::PageClose(PresentationPageChange::page(uuid_string(page)));
-        self.remote.hub.send_to_presenter(close, session);
+    /// A page closed here: the presenter takes it down when it was `shown` there, and it ends (upstream's
+    /// `closeRemoteOverlay` page arm).
+    pub(super) fn close_remote_page(&mut self, session: Uuid, page: Uuid, shown: bool) {
+        if shown {
+            let close = Body::PageClose(PresentationPageChange::page(uuid_string(page)));
+            self.remote.hub.send_to_presenter(close, session);
+        }
         self.remote_page_ended(page);
     }
 
@@ -395,20 +428,20 @@ impl Core {
         let owned = self
             .presented_session(session)
             .and_then(|found| found.remote_overlays().slot_of_job(&command.page))
-            .is_some_and(|slot| slot.page.is_some() && self.remote.hub.presenter_generation(session) == slot.owner);
+            .is_some_and(|slot| self.page_shown_by_owner(session, slot));
         if owned {
             self.remote.hub.send_to_presenter(Body::PageCommand(command), session);
         }
     }
 
-    /// A page handed to the presenting machine ended, by close, rejection, presenter loss or session removal: its
+    /// A page handed to the presenting machine ended, by close, rejection or session removal: its
     /// outcome is dismissed unless it was answered (upstream's `endRemotePage` and `RemotePageEnds`).
     pub(super) fn remote_page_ended(&mut self, page: Uuid) {
         self.dismiss_page_outcome(page);
         self.shut_page_serve_channel(page);
     }
 
-    /// Where page `page` is reserved now, `None` once it ended or its presenter changed (upstream's
+    /// Where page `page` is reserved now, `None` once it ended, parked or its presenter changed (upstream's
     /// `remotePagePlace`): a swap moves the slot, and a new presenter generation means the page belongs to a stream
     /// that is gone.
     pub(crate) fn remote_page_place(&self, page: Uuid) -> Option<RemotePagePlace> {
@@ -417,11 +450,7 @@ impl Core {
         library.open_ids().into_iter().find_map(|window| {
             library.store(window)?.sessions().find_map(|session| {
                 let slot = session.remote_overlays().slot_of_job(&job)?;
-                let hub = &self.remote.hub;
-                let held = slot.page.is_some()
-                    && hub.has_presenter(session.id())
-                    && hub.presenter_generation(session.id()) == slot.owner;
-                held.then_some(RemotePagePlace {
+                self.page_shown_by_owner(session.id(), slot).then_some(RemotePagePlace {
                     window,
                     session: session.id(),
                     pane: slot.pane,
@@ -449,12 +478,155 @@ impl Core {
         }
     }
 
+    /// Parks page `page` wherever its reservation sits, its channel's helper gone or its claim expired, and tells the
+    /// presenter showing it to drop its replica; a page already parked is left as it is.
+    pub(super) fn park_remote_page_anywhere(&mut self, page: Uuid) {
+        let job = uuid_string(page);
+        let Some(session) = self.library().open_ids().into_iter().find_map(|window| {
+            self.library()
+                .store(window)?
+                .sessions()
+                .find(|session| session.remote_overlays().slot_of_job(&job).is_some())
+                .map(Session::id)
+        }) else {
+            return;
+        };
+        let parked = self
+            .library_mut()
+            .store_for_session_mut(session)
+            .is_some_and(|store| store.park_remote_page(session, &job));
+        if parked {
+            let close = Body::PageClose(PresentationPageChange::page(job));
+            self.remote.hub.send_to_presenter(close, session);
+            self.shut_page_serve_channel(page);
+        }
+    }
+
+    /// Arms the claim expiry of a page handed over with `source`: a file page's channel has to be claimed in time, a URL
+    /// page loads with none.
+    fn arm_page_claim_expiry(&mut self, source: &HtmlSource) {
+        if matches!(source, HtmlSource::File { .. }) {
+            self.remote
+                .page_serve
+                .expiries
+                .push(PAGE_CLAIM_WINDOW + CLAIM_EXPIRY_SLACK);
+        }
+    }
+
+    /// The presenter of `session` was just granted, or a pane of the session came into view: when the presenter speaks
+    /// pages, every page parked in the session and not handed to it yet is handed to it (an extension beyond upstream),
+    /// each as a fresh `page.request` under a new claim token and the new generation, never raising the session
+    /// (`follow` off), at the size the slot keeps, then a hide when it was hidden. A page parked while this presenter
+    /// held the session (its helper gone or its claim expired) waits for the next one. A loopback URL page waits for a
+    /// presenter that forwards this machine's loopback, a pane page for its pane to be laid out (a presenter refuses a
+    /// page for a pane it cannot show, which would end it), and one whose request no longer fits a frame stays parked.
+    ///
+    /// Pages go in the order they were reserved, as the viewer stacks a pane page over the session-wide page open when
+    /// it arrives and `page.request` carries no stacking of its own. So while a pane page waits for its pane, the
+    /// session-wide page reserved after it waits too, and so does every page reserved after that one; they follow it
+    /// once the pane is laid out.
+    pub(crate) fn hand_on_parked_pages(&mut self, session: Uuid) {
+        if !PAGE_KINDS
+            .iter()
+            .all(|kind| self.remote.hub.presenter_supports(kind, session))
+        {
+            return;
+        }
+        let generation = self.remote.hub.presenter_generation(session);
+        let parked: Vec<(RemoteOverlaySlot, bool)> = self
+            .presented_session(session)
+            .map(|found| {
+                found
+                    .remote_overlays()
+                    .slots()
+                    .iter()
+                    .filter(|slot| slot.owner != generation && slot.page.as_ref().is_some_and(|page| page.parked))
+                    .map(|slot| {
+                        let unlaid = slot.pane.is_some_and(|pane| !found.renders_overlay_pane(pane));
+                        (slot.clone(), unlaid)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut pane_waits = false;
+        for (slot, unlaid) in &parked {
+            if *unlaid {
+                pane_waits = true;
+                continue;
+            }
+            if pane_waits && slot.pane.is_none() {
+                // the session-wide page and every page after it keep their place above the waiting pane page
+                return;
+            }
+            self.hand_on_parked_page(session, slot);
+        }
+    }
+
+    fn hand_on_parked_page(&mut self, session: Uuid, slot: &RemoteOverlaySlot) {
+        let Some(page) = &slot.page else {
+            return;
+        };
+        let overlay = &page.overlay;
+        let Some(source) = presentation_source(&overlay.source) else {
+            return;
+        };
+        let Some(identity) = self
+            .presented_session(session)
+            .and_then(|found| slot_identity(found, slot.pane).ok())
+        else {
+            return;
+        };
+        if unreachable_loopback(self, session, &overlay.source) {
+            return;
+        }
+        let opening = PageOpening {
+            source: overlay.source.clone(),
+            flags: overlay.flags,
+            pane: slot.pane,
+            size_percent: slot.size_percent,
+            points: slot.points,
+            background_color: page.background_color.clone(),
+            follow: false,
+        };
+        let size = page_size(&opening);
+        let sent = OverlaySize {
+            points: self.presentable_points(session, size.points),
+            ..size
+        };
+        let token = uuid_string(Uuid::new_v4());
+        let request = Body::PageRequest(page_request(overlay, &opening, source, identity, token.clone(), sent));
+        if !fits_one_frame(&request) {
+            return;
+        }
+        let owner = self.remote.hub.presenter_generation(session);
+        let deadline = Instant::now() + PAGE_CLAIM_WINDOW;
+        let Some(handed) = self
+            .library_mut()
+            .store_for_session_mut(session)
+            .and_then(|store| store.hand_on_remote_page(session, &slot.job, owner, token, deadline))
+        else {
+            return;
+        };
+        self.remote.hub.send_to_presenter(request, session);
+        if let HandedOn::Hidden(seq) = handed {
+            let command = PresentationPageCommand {
+                width: None,
+                height: None,
+                page: slot.job.clone(),
+                seq,
+                action: PresentationPageAction::Hide,
+                size_percent: None,
+            };
+            self.remote.hub.send_to_presenter(Body::PageCommand(command), session);
+        }
+        self.arm_page_claim_expiry(&overlay.source);
+    }
+
     /// Admits the page channel `token` names (upstream's `claimRemotePage`): unclaimed, inside its deadline at `now`,
-    /// and still held for the presenter it was handed to. A token claims once. The page's id and the source its
+    /// and still shown by the presenter it was handed to. A token claims once. The page's id and the source its
     /// channel serves.
     pub(crate) fn claim_remote_page(&mut self, token: &str, now: Instant) -> Option<(Uuid, HtmlSource)> {
         let library = self.library();
-        let hub = &self.remote.hub;
         let found = library.open_ids().into_iter().find_map(|window| {
             library.store(window)?.sessions().find_map(|session| {
                 let id = session.id();
@@ -464,10 +636,7 @@ impl Core {
                     .iter()
                     .find(|slot| slot.page.as_ref().is_some_and(|page| page.token == token))?;
                 let page = slot.page.as_ref()?;
-                let admissible = !page.claimed
-                    && now <= page.claim_deadline
-                    && hub.has_presenter(id)
-                    && hub.presenter_generation(id) == slot.owner;
+                let admissible = !page.claimed && now <= page.claim_deadline && self.page_shown_by_owner(id, slot);
                 admissible.then(|| {
                     (
                         window,
@@ -484,32 +653,30 @@ impl Core {
         Some((page, source))
     }
 
-    /// Ends every file page whose channel was not claimed by `now` (upstream's `expireRemotePageClaims`); a URL page
-    /// loads on the presenter with no channel and never expires.
+    /// Parks every file page shown on a presenter whose channel was not claimed by `now` (upstream's
+    /// `expireRemotePageClaims`, which ends it); a URL page loads on the presenter with no channel and never expires.
     pub(crate) fn expire_remote_page_claims_at(&mut self, now: Instant) {
         let library = self.library();
-        let expired: Vec<(Uuid, Uuid, Option<OverlayPane>)> = library
+        let expired: Vec<Uuid> = library
             .open_ids()
             .into_iter()
-            .filter_map(|window| library.store(window).map(|store| (window, store)))
-            .flat_map(|(window, store)| {
+            .filter_map(|window| library.store(window))
+            .flat_map(|store| {
                 store.sessions().flat_map(move |session| {
                     session.remote_overlays().slots().iter().filter_map(move |slot| {
                         let page = slot.page.as_ref()?;
                         let unclaimed = !page.claimed
+                            && !page.parked
                             && now > page.claim_deadline
                             && matches!(page.overlay.source, HtmlSource::File { .. });
-                        unclaimed.then_some((window, session.id(), slot.pane))
+                        unclaimed.then_some(page.overlay.id)
                     })
                 })
             })
             .collect();
-        for (window, session, pane) in expired {
-            if let Some(store) = self.library_mut().store_mut(window) {
-                store.close_remote_overlay(session, pane);
-            }
+        for page in expired {
+            self.park_remote_page_anywhere(page);
         }
-        self.settle_remote_overlays();
     }
 
     /// Runs the claim expiry, at a deadline the frontend armed from [`Core::take_page_claim_expiries`].

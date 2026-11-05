@@ -58,6 +58,9 @@ impl SubscriberId {
 pub enum HubEvent {
     /// The session's presenter went away; the role is released.
     PresenterLost(Uuid),
+    /// A viewer was just granted the session's presenter role, after its answer went out (this build's addition: the
+    /// owner hands it the pages parked since the last presenter).
+    PresenterGained(Uuid),
     /// What the session's current presenter sent about work it was handed. Frames of these kinds from any other
     /// viewer are dropped before they get here.
     PresenterFrame(Uuid, Box<Body>),
@@ -381,13 +384,17 @@ impl PresentationHub {
                 self.send(Body::Ack, from);
             }
             Body::PresenterAcquire => {
+                let fresh = self.grant.holder(session).is_none();
                 let granted = self.grant.acquire(session, from);
                 let answer = if granted {
                     Body::PresenterGranted
                 } else {
                     Body::PresenterRefused
                 };
-                self.send(answer, from);
+                // the answer can drop a stalled viewer, which releases the role it was just given
+                if self.send(answer, from) && granted && fresh {
+                    self.events.push(HubEvent::PresenterGained(session));
+                }
             }
             body @ (Body::AskResolve(_)
             | Body::AskRejected(_)
@@ -1014,6 +1021,11 @@ mod tests {
         assert_eq!(bodies(&second_seen).last(), Some(&Body::PresenterRefused));
         assert!(hub.has_presenter(session));
         assert_eq!(hub.presenter_generation(session), 1);
+        assert_eq!(
+            hub.take_events(),
+            vec![HubEvent::PresenterGained(session)],
+            "only the new holder is announced"
+        );
         hub.publish(&Body::Status(None), session);
         assert_eq!(bodies(&second_seen).last(), Some(&Body::Status(None)), "still mirrors");
         // a repeated acquire never preempts the holder, and the holder's own repeat is granted again
@@ -1022,6 +1034,28 @@ mod tests {
         assert_eq!(bodies(&second_seen).last(), Some(&Body::PresenterRefused));
         assert_eq!(bodies(&first_seen).last(), Some(&Body::PresenterGranted));
         assert_eq!(hub.presenter_generation(session), 1);
+        assert!(hub.take_events().is_empty(), "a repeat grants nothing new");
+        // the role freed, the next acquire is a new holder again
+        hub.unsubscribe(first);
+        hub.receive(frame(second, Body::PresenterAcquire), second);
+        assert_eq!(
+            hub.take_events(),
+            vec![HubEvent::PresenterLost(session), HubEvent::PresenterGained(session)]
+        );
+        assert_eq!(hub.presenter_generation(session), 3);
+    }
+
+    /// A grant whose answer stalls the viewer drops it at once: the role is lost, never announced as gained.
+    #[test]
+    fn a_grant_the_viewer_cannot_take_is_not_announced() {
+        let (mut hub, _) = hub();
+        let session = Uuid::new_v4();
+        let (id, seen) = subscribe(&mut hub, session, PresentationMode::Presenter);
+        let sent = seen.borrow().frames.len();
+        seen.borrow_mut().capacity = Some(sent);
+        hub.receive(frame(id, Body::PresenterAcquire), id);
+        assert_eq!(hub.take_events(), vec![HubEvent::PresenterLost(session)]);
+        assert!(!hub.has_presenter(session));
     }
 
     #[test]
@@ -1031,6 +1065,7 @@ mod tests {
             let session = Uuid::new_v4();
             let (id, _) = subscribe(&mut hub, session, PresentationMode::Presenter);
             hub.receive(frame(id, Body::PresenterAcquire), id);
+            assert_eq!(hub.take_events(), vec![HubEvent::PresenterGained(session)]);
             if stale {
                 advance(&clock, 31);
                 hub.heartbeat();
@@ -1075,7 +1110,10 @@ mod tests {
         hub.receive(frame(presenter, rejected.clone()), presenter);
         assert_eq!(
             hub.take_events(),
-            vec![HubEvent::PresenterFrame(session, Box::new(rejected))]
+            vec![
+                HubEvent::PresenterGained(session),
+                HubEvent::PresenterFrame(session, Box::new(rejected))
+            ]
         );
         assert!(!hub.send_to_presenter(Body::Ping, Uuid::new_v4()));
     }
@@ -1090,6 +1128,7 @@ mod tests {
         let (presenter, _) = subscribe(&mut hub, session, PresentationMode::Presenter);
         let (mirror, _) = subscribe(&mut hub, session, PresentationMode::Mirror);
         hub.receive(frame(presenter, Body::PresenterAcquire), presenter);
+        assert_eq!(hub.take_events(), vec![HubEvent::PresenterGained(session)]);
         let closed = Body::PageClosed(PresentationPageChange::page("p1"));
         hub.receive(frame(mirror, closed.clone()), mirror);
         assert!(hub.take_events().is_empty());

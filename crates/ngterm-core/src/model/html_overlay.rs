@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use super::overlay::OverlayPane;
 use super::overlay_points::{OverlayPointSize, OverlaySize};
-use super::page_snapshot::persisted_pages;
+use super::page_snapshot::{park_local_pages, persisted_pages};
 use super::pane::StatusPane;
 use super::pane_overlay::PaneOverlay;
 use super::session::Session;
@@ -370,6 +370,30 @@ impl WindowLibrary {
             }));
         }
         pages
+    }
+
+    /// Parks every page a presenter can show that sits in an open window's own slots ([`park_local_pages`]): a
+    /// presenter-only origin's sweep over what a restore opened, closing what no presenter can show. A window that
+    /// parked or closed one asks for a save, so its file writes the page as the viewer's or no more. The pages parked.
+    pub(crate) fn park_local_pages(&mut self) -> Vec<Uuid> {
+        let mut parked = Vec::new();
+        for window in self.open_ids() {
+            let Some(store) = self.store_mut(window) else { continue };
+            let sessions: Vec<Uuid> = store.sessions().map(Session::id).collect();
+            let mut changed = false;
+            for id in sessions {
+                if let Some(session) = store.session_mut(id) {
+                    let swept = park_local_pages(session);
+                    changed |= swept.dropped || !swept.parked.is_empty();
+                    parked.extend(swept.parked);
+                }
+            }
+            if changed {
+                store.schedule_tree_changed();
+                store.schedule_save();
+            }
+        }
+        parked
     }
 
     /// Applies `change` to page `id` wherever its slot now is, a session an undoable close holds included (upstream's

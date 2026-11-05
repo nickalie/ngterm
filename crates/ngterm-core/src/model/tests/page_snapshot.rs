@@ -3,13 +3,14 @@
 //! gone, their source fails its checks or their slot cannot take them.
 
 use std::path::Path;
+use std::time::Instant;
 
 use url::Url;
 use uuid::Uuid;
 
 use super::support::add;
 use crate::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
-use crate::model::{AppStore, OverlayPane, OverlayPointSize, OverlaySize, Session};
+use crate::model::{AppStore, OverlayPane, OverlayPointSize, OverlaySize, RemoteOverlaySlot, RemotePage, Session};
 use crate::persist::{PageSlotSnapshot, PageSnapshot, PageSourceSnapshot, SessionSnapshot, Snapshot};
 
 /// A folder holding a page, an image and a Markdown document.
@@ -332,6 +333,7 @@ fn entry(slot: PageSlotSnapshot, source: PageSourceSnapshot) -> PageSnapshot {
         background_color: None,
         hidden: false,
         holds_cover: false,
+        viewer: false,
     }
 }
 
@@ -478,4 +480,296 @@ fn a_hidden_split_keeps_its_page() {
     let pages = restored.html_overlays();
     assert_eq!(pages.len(), 1);
     assert_eq!((pages[0].0, &pages[0].1.source), (Some(OverlayPane::Right), &source));
+}
+
+/// Reserves `pane`'s slot of `session` for `handed`, as a hand-over to the session's presenter does.
+fn hand_over(store: &mut AppStore, session: Uuid, pane: Option<OverlayPane>, handed: RemotePage, size: OverlaySize) {
+    let slot = RemoteOverlaySlot {
+        job: crate::pane_env::uuid_string(handed.overlay.id),
+        pane,
+        owner: 1,
+        size_percent: size.percent,
+        points: size.points,
+        wait: false,
+        ended: false,
+        page: Some(handed),
+    };
+    assert!(store.reserve_remote_overlay(session, slot));
+}
+
+/// A store whose split session's viewer holds a file page shown in the session-wide slot (60% and 300 points, a
+/// background, JavaScript on) and a hidden URL page parked in the right slot, beside a local URL page on the left:
+/// the store, the two viewer pages' ids, and the file and URL sources.
+fn viewer_pages(files: &Files) -> (AppStore, [Uuid; 2], HtmlSource, HtmlSource) {
+    let (mut store, session) = store_with_split();
+    let file = HtmlSource::File {
+        path: files.path("page.html"),
+        grant_root: Some(files.root()),
+    };
+    let flags = HtmlPageFlags {
+        javascript: true,
+        ..HtmlPageFlags::default()
+    };
+    let mut wide = RemotePage::new(page(file.clone(), flags), "t".to_owned(), Instant::now());
+    wide.background_color = Some("#102030".to_owned());
+    let size = OverlaySize {
+        percent: Some(60),
+        points: OverlayPointSize {
+            width: Some(300),
+            height: None,
+        },
+    };
+    let wide_id = wide.overlay.id;
+    hand_over(&mut store, session, None, wide, size);
+    let url = HtmlSource::Url(Url::parse("https://example.com/").unwrap());
+    let mut parked = RemotePage::new(
+        page(url.clone(), HtmlPageFlags::default()),
+        "u".to_owned(),
+        Instant::now(),
+    );
+    parked.hidden = true;
+    parked.parked = true;
+    let ids = [wide_id, parked.overlay.id];
+    hand_over(
+        &mut store,
+        session,
+        Some(OverlayPane::Right),
+        parked,
+        OverlaySize::default(),
+    );
+    open_in(
+        &mut store,
+        session,
+        OverlayPane::Left,
+        page(url.clone(), HtmlPageFlags::default()),
+    );
+    (store, ids, file, url)
+}
+
+/// A page the session's viewer holds, shown on a presenter or parked, is written marked `viewer` beside the local
+/// ones, with the size its slot keeps, its background and the visibility it was last asked for.
+#[test]
+fn a_viewer_page_is_written_marked() {
+    let files = Files::new();
+    let (store, _, _, _) = viewer_pages(&files);
+    let written = store.snapshot().workspaces[0].sessions[0].pages.clone().unwrap();
+    let marks: Vec<_> = written
+        .iter()
+        .map(|entry| (entry.slot, entry.viewer, entry.hidden))
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            (PageSlotSnapshot::Left, false, false),
+            (PageSlotSnapshot::Session, true, false),
+            (PageSlotSnapshot::Right, true, true),
+        ]
+    );
+    let entry = &written[1];
+    assert_eq!(
+        (
+            entry.size_percent,
+            entry.width,
+            entry.background_color.as_deref(),
+            entry.javascript
+        ),
+        (Some(60), Some(300), Some("#102030"), true)
+    );
+}
+
+/// A viewer entry is restored parked in its slot under a fresh id, never opened here, with its size, background and
+/// visibility.
+#[test]
+fn a_viewer_page_is_restored_parked() {
+    let files = Files::new();
+    let (store, ids, file, url) = viewer_pages(&files);
+    let back = round_trip(&store);
+    let restored = only_session(&back);
+    assert_eq!(
+        shown(restored),
+        [(Some(OverlayPane::Left), url.clone(), HtmlPageFlags::default())],
+        "only the local page opens here"
+    );
+    assert!(!restored.overlay.active, "a parked page covers nothing");
+    let overlays = restored.remote_overlays();
+    assert_eq!(overlays.slots().len(), 2);
+    for slot in overlays.slots() {
+        let parked = slot.page.as_ref().unwrap();
+        assert!(parked.parked && !ids.contains(&parked.overlay.id), "{slot:?}");
+        assert_eq!(slot.job, crate::pane_env::uuid_string(parked.overlay.id));
+    }
+    let wide = overlays.slot(None).unwrap();
+    let wide_page = wide.page.as_ref().unwrap();
+    assert_eq!(
+        (
+            wide.size_percent,
+            wide.points.width,
+            wide_page.background_color.as_deref()
+        ),
+        (Some(60), Some(300), Some("#102030"))
+    );
+    assert_eq!(wide_page.overlay.source, file);
+    assert!(wide_page.overlay.flags.javascript);
+    let right = overlays.slot(Some(OverlayPane::Right)).unwrap().page.as_ref().unwrap();
+    assert!(right.hidden && right.effective_hidden());
+    assert_eq!(right.overlay.source, url);
+}
+
+/// A viewer entry checks out as a local one does, and drops when its slot is taken here or its split is gone.
+#[test]
+fn a_viewer_entry_needs_a_free_slot() {
+    let url = |text: &str| PageSourceSnapshot::Url { url: text.to_owned() };
+    let viewer = |slot, source| PageSnapshot {
+        viewer: true,
+        ..entry(slot, source)
+    };
+    let parked_slots = |snapshot: &SessionSnapshot| {
+        let session = crate::model::snapshot::session_from_snapshot(snapshot, false, "/home/u");
+        let panes: Vec<Option<OverlayPane>> = session.remote_overlays().slots().iter().map(|slot| slot.pane).collect();
+        (panes, session.html_overlays().len())
+    };
+    let no_split = persisted(
+        vec![viewer(PageSlotSnapshot::Right, url("https://example.com/"))],
+        false,
+    );
+    assert_eq!(parked_slots(&no_split), (vec![], 0));
+    let bad = persisted(vec![viewer(PageSlotSnapshot::Session, url("example.com"))], false);
+    assert_eq!(parked_slots(&bad), (vec![], 0));
+    let taken = persisted(
+        vec![
+            entry(PageSlotSnapshot::Session, url("https://example.com/here")),
+            viewer(PageSlotSnapshot::Session, url("https://example.com/there")),
+            viewer(PageSlotSnapshot::Left, url("https://example.com/left")),
+            entry(PageSlotSnapshot::Left, url("https://example.com/also-left")),
+        ],
+        false,
+    );
+    assert_eq!(parked_slots(&taken), (vec![Some(OverlayPane::Left)], 1));
+}
+
+/// A presenter-only origin parks the pages a restore opened in its own slots, with their size, background and
+/// visibility; a page no presenter can show is closed, as nothing there would ever show it.
+#[test]
+fn local_pages_park_for_a_presenter_only_origin() {
+    let files = Files::new();
+    let (mut store, session) = store_with_split();
+    let file = HtmlSource::File {
+        path: files.path("page.html"),
+        grant_root: None,
+    };
+    let size = OverlaySize {
+        percent: Some(40),
+        points: OverlayPointSize::default(),
+    };
+    let wide = open(
+        &mut store,
+        session,
+        None,
+        page(file.clone(), HtmlPageFlags::default()),
+        size,
+    );
+    store.session_mut(session).unwrap().overlay.hidden = true;
+    let image = HtmlSource::Image {
+        path: files.path("picture.png"),
+    };
+    open_in(
+        &mut store,
+        session,
+        OverlayPane::Left,
+        page(image, HtmlPageFlags::default()),
+    );
+
+    let found = store.session_mut(session).unwrap();
+    let swept = crate::model::page_snapshot::park_local_pages(found);
+    assert_eq!((swept.parked, swept.dropped), (vec![wide], true));
+    let again = crate::model::page_snapshot::park_local_pages(found);
+    assert!(again.parked.is_empty() && !again.dropped, "once");
+    let found = store.session(session).unwrap();
+    assert!(!found.overlay.active);
+    assert!(shown(found).is_empty(), "the image page is closed");
+    assert!(!found.local_overlay_holds(Some(OverlayPane::Left)), "its slot is free");
+    let slot = found.remote_overlays().slot(None).unwrap();
+    let parked = slot.page.as_ref().unwrap();
+    assert_eq!((parked.overlay.id, &parked.overlay.source), (wide, &file));
+    assert!(parked.parked && parked.hidden);
+    assert_eq!(
+        (slot.size_percent, parked.background_color.as_deref()),
+        (Some(40), Some("#102030"))
+    );
+}
+
+/// A presenter-only origin parks its pages in the order they were drawn, so the next presenter, handed them in that
+/// order, stacks them the same way: a pane page the session-wide page was opened over before it, a pane page opened
+/// over the session-wide page after it.
+#[test]
+fn local_pages_park_in_drawing_order() {
+    let files = Files::new();
+    let (mut store, session) = store_with_split();
+    let file = HtmlSource::File {
+        path: files.path("page.html"),
+        grant_root: Some(files.root()),
+    };
+    let url = |path: &str| HtmlSource::Url(Url::parse(&format!("https://example.com/{path}")).unwrap());
+    let under = open_in(
+        &mut store,
+        session,
+        OverlayPane::Left,
+        page(url("under"), HtmlPageFlags::default()),
+    );
+    let wide = open(
+        &mut store,
+        session,
+        None,
+        page(file, HtmlPageFlags::default()),
+        OverlaySize::default(),
+    );
+    let over = open_in(
+        &mut store,
+        session,
+        OverlayPane::Right,
+        page(url("over"), HtmlPageFlags::default()),
+    );
+    let found = store.session_mut(session).unwrap();
+    assert_eq!(
+        crate::model::page_snapshot::park_local_pages(found).parked,
+        [under, wide, over]
+    );
+    let order: Vec<Option<OverlayPane>> = found.remote_overlays().slots().iter().map(|slot| slot.pane).collect();
+    assert_eq!(order, [Some(OverlayPane::Left), None, Some(OverlayPane::Right)]);
+}
+
+/// Viewer pages are written and restored in the order their slots were reserved, not slot by slot: a pane page handed
+/// over before the session-wide page stays under it once the next presenter is handed both again.
+#[test]
+fn viewer_pages_keep_their_opening_order_across_a_restart() {
+    let (mut store, session) = store_with_split();
+    let handed = |path: &str| {
+        let url = HtmlSource::Url(Url::parse(&format!("https://example.com/{path}")).unwrap());
+        RemotePage::new(page(url, HtmlPageFlags::default()), "t".to_owned(), Instant::now())
+    };
+    hand_over(
+        &mut store,
+        session,
+        Some(OverlayPane::Left),
+        handed("first"),
+        OverlaySize::default(),
+    );
+    hand_over(&mut store, session, None, handed("second"), OverlaySize::default());
+    let written: Vec<PageSlotSnapshot> = store.snapshot().workspaces[0].sessions[0]
+        .pages
+        .clone()
+        .unwrap()
+        .iter()
+        .map(|entry| entry.slot)
+        .collect();
+    assert_eq!(written, [PageSlotSnapshot::Left, PageSlotSnapshot::Session]);
+
+    let back = round_trip(&store);
+    let order: Vec<Option<OverlayPane>> = only_session(&back)
+        .remote_overlays()
+        .slots()
+        .iter()
+        .map(|slot| slot.pane)
+        .collect();
+    assert_eq!(order, [Some(OverlayPane::Left), None]);
 }

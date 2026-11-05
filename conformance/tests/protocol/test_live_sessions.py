@@ -39,6 +39,9 @@ LIVE_IN_ANY_SHELL = pytest.mark.requires(
     any=True,
     reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell",
 )
+# The Rust-only extension that keeps a page handed to a presenter past that presenter's loss (rust-build.md >
+# Rust-only extensions): the reference ends it, as upstream does.
+PAGES_SURVIVE = pytest.mark.requires("pages-survive", reason="upstream ends a page with its presenter")
 ATTRIBUTIONS = ("supervisor", "app", "orphaned", "unknown")
 PRESENTATION_VERSION = 1
 # The line a `--wait` pane holds on once its command ended (Ghostty's `wait-after-command`).
@@ -1094,14 +1097,90 @@ def test_page_serve_serves_a_page_a_presenter_shows(live, tmp_path):
 
 @LIVE
 @pytest.mark.covers("session.overlay.page.serve", streams=("session.overlay.page.serve",))
-def test_losing_the_page_helper_ends_only_the_page(live, tmp_path):
+def test_losing_the_page_helper_takes_only_the_page_off_its_presenter(live, adapter, tmp_path):
     with _page_presenter(live) as (sid, presenter, _):
         page_id, _, _, helper = _claimed_page(live, sid, presenter, tmp_path)
         helper.close()
         assert wait_frame(presenter.read, "page.close", presenter.send)["page"] == {"page": page_id}
-        live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
+        if adapter.has("pages-survive"):
+            # the page waits, parked, for the next presenter, and still closes for good here
+            parked = [{"pageID": page_id, "parked": True}]
+            live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == parked)
+            assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "pending"}
+            assert_ok(live.request("session.overlay.close", sid))
+        else:
+            # upstream ends it
+            live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
         assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "dismissed"}
         _presenters(live, sid, {"mirrors": 0, "presenter": True})
+
+
+def _granted(live, sid, kinds=PAGE_PRESENTER_KINDS):
+    """Another presenter of `sid` whose hello lists `kinds`, granted the role: `(stream, its generation)`."""
+    presenter, gen = _subscribed(live, sid, "presenter", kinds)
+    presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
+    wait_frame(presenter.read, "presenter.granted", presenter.send)
+    return presenter, gen
+
+
+def _parked(live, sid, entry):
+    def parked(tree):
+        assert find_session(tree, sid).get("remoteOverlays") == [entry]
+        return True
+
+    parked.__qualname__ = f"remoteOverlays of {sid} reading {entry}"
+    live.wait_tree(parked)
+
+
+@LIVE
+@PAGES_SURVIVE
+@pytest.mark.covers(
+    "session.overlay.open",
+    "session.overlay.close",
+    "session.overlay.result",
+    "field:tree.session.remoteOverlays",
+    "field:tree.session.htmlOverlays",
+)
+def test_a_page_whose_presenter_goes_waits_parked_for_the_next_one(live, tmp_path):
+    page = _page_file(tmp_path)
+    with _page_presenter(live) as (sid, presenter, _):
+        page_id, first = _handed_over(live, sid, presenter, html=str(page), cwd=str(page.parent), sizePercent=70)
+        presenter.close()
+        _parked(live, sid, {"sizePercent": 70, "pageID": page_id, "parked": True})
+        assert_subset(find_session(live.tree(), sid)["htmlOverlays"][0], {"id": page_id, "remote": True, "parked": True})
+        assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "pending"}
+        # the next presenter is handed the same page again, under a fresh claim and without raising the session
+        later, _ = _granted(live, sid)
+        with later:
+            again = wait_frame(later.read, "page.request", later.send)["page"]
+            assert_subset(again, {"page": page_id, "source": first["source"], "sizePercent": 70, "follow": False})
+            assert again["token"] != first["token"]
+            _parked(live, sid, {"sizePercent": 70, "pageID": page_id})
+            assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "pending"}
+            assert_ok(live.request("session.overlay.close", sid))
+            assert wait_frame(later.read, "page.close", later.send)["page"] == {"page": page_id}
+        assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "dismissed"}
+
+
+@LIVE
+@PAGES_SURVIVE
+@pytest.mark.covers("session.overlay.open", "session.overlay.close", "session.overlay.result")
+def test_a_page_closed_while_parked_is_not_handed_on(live, tmp_path):
+    page = _page_file(tmp_path)
+    with _page_presenter(live) as (sid, presenter, _):
+        closed, _ = _handed_over(live, sid, presenter, html=str(page))
+        presenter.close()
+        _parked(live, sid, {"pageID": closed, "parked": True})
+        assert assert_ok(live.request("session.overlay.close", sid))["id"] == sid
+        live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
+        assert _outcome(live, closed) == {"pageID": closed, "outcome": "dismissed"}
+        later, _ = _granted(live, sid)
+        with later:
+            # the first page the next presenter is handed is one opened now, never the closed one
+            opened, _ = _handed_over(live, sid, later, url="https://example.com/a")
+            assert opened != closed
+            assert_ok(live.request("session.overlay.close", sid))
+            assert wait_frame(later.read, "page.close", later.send)["page"] == {"page": opened}
 
 
 

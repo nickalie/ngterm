@@ -171,17 +171,20 @@
 - Tests: `crates/ngterm-core/src/commands/tests/remote_page.rs`, `model/tests/overlay_events.rs`, hub tests;
   `conformance/tests/protocol/test_live_sessions.py`
 
-- [ ] `HubEvent::PresenterGained` on a new grant, dispatched in `remote/mod.rs`
-- [ ] presenter loss, helper loss and claim expiry park pages; a stale `page.closed`/`page.rejected` for a parked
+- [x] `HubEvent::PresenterGained` on a new grant, dispatched in `remote/mod.rs`
+- [x] presenter loss, helper loss and claim expiry park pages; a stale `page.closed`/`page.rejected` for a parked
       page is ignored
-- [ ] re-hand of parked pages to a page-speaking presenter, hidden state replayed
-- [ ] commands on a parked page; `parked` read-back; `tree.changed` on park and re-hand
-- [ ] parked pages persist (`viewer: true`) and restore as parked; a presenter-only origin restores local pages as
+- [x] re-hand of parked pages to a page-speaking presenter, hidden state replayed
+- [x] commands on a parked page; `parked` read-back; `tree.changed` on park and re-hand
+- [x] parked pages persist (`viewer: true`) and restore as parked; a presenter-only origin restores local pages as
       parked
-- [ ] tests on the fakes for each item above; protocol conformance: disconnect and reattach re-sends the page, a
+- [x] tests on the fakes for each item above; protocol conformance: disconnect and reattach re-sends the page, a
       closed page is not re-sent; check `rust-passing.txt` ids that asserted the old ending and update them with
       the reason
-- [ ] clippy and tests on `ngterm-core` and `ngterm-headless`, the live-sessions protocol file; must pass before
+- [x] ➕ a Rust-only capability `pages-survive` (base.py, rust-build.md, `ngterm-gpui`'s `CAPABILITIES`, the zsh and
+      fish legs' `--must-pass`), so the new conformance tests skip on the reference and the helper-loss test branches
+      on it instead of failing upstream's reference
+- [x] clippy and tests on `ngterm-core` and `ngterm-headless`, the live-sessions protocol file; must pass before
       Task 3
 
 ### Task 3: The viewer sends `page.closed` only for a close of the page

@@ -6,6 +6,10 @@
 //! or the page ends. What a change needs beyond the model (telling the presenter, cancelling the job, settling the
 //! page's outcome) is queued as a [`RemoteOverlayChange`] for the core, as the store cannot reach the presentation
 //! hub, the job table or the page outcomes.
+//!
+//! A page whose presenter, or whose channel's helper, went is parked rather than ended (an extension beyond upstream,
+//! whose presenter loss ends every page): its slot stays reserved and its outcome pending until a later presenter that
+//! speaks pages is handed it again, or it is closed here.
 
 use std::time::Instant;
 
@@ -52,8 +56,13 @@ pub struct RemotePage {
     /// Until when a file page's channel may be claimed.
     pub claim_deadline: Instant,
     pub claimed: bool,
-    /// The visibility the presenter last reported.
+    /// The visibility the presenter last reported; while parked, the one it is handed on with.
     pub hidden: bool,
+    /// The page's own `#rrggbb` background, sent again when it is handed to a later presenter.
+    pub background_color: Option<String>,
+    /// No presenter shows the page: it waits, its slot reserved and its outcome pending, for the next presenter that
+    /// speaks pages.
+    pub parked: bool,
     requested: Option<VisibilityRequest>,
     last_seq: i64,
 }
@@ -67,9 +76,31 @@ impl RemotePage {
             claim_deadline,
             claimed: false,
             hidden: false,
+            background_color: None,
+            parked: false,
             requested: None,
             last_seq: 0,
         }
+    }
+
+    /// Parks the page: a visibility asked for and not yet echoed is the one it is handed on with.
+    pub(crate) fn park(&mut self) {
+        self.hidden = self.effective_hidden();
+        self.requested = None;
+        self.parked = true;
+    }
+
+    /// Hands the parked page on under a fresh claim `token`, its load state starting over as a new page's does; the
+    /// number of the hide to replay when it was hidden.
+    pub(crate) fn hand_on(&mut self, token: String, claim_deadline: Instant) -> Option<i64> {
+        self.parked = false;
+        self.token = token;
+        self.claim_deadline = claim_deadline;
+        self.claimed = false;
+        self.overlay.load_state = crate::html::HtmlLoadState::Loading;
+        self.overlay.load_error = None;
+        self.overlay.current = None;
+        self.hidden.then(|| self.request(true))
     }
 
     /// What a toggle and a visibility reply go by (upstream's `effectiveHidden`): an unacknowledged request, else the
@@ -157,6 +188,18 @@ impl RemoteOverlays {
             .map(change)
     }
 
+    /// Parks every page a presenter shows; the pages parked now.
+    fn park_pages(&mut self) -> Vec<Uuid> {
+        self.slots
+            .iter_mut()
+            .filter_map(|slot| slot.page.as_mut().filter(|page| !page.parked))
+            .map(|page| {
+                page.park();
+                page.overlay.id
+            })
+            .collect()
+    }
+
     #[must_use]
     pub fn failure(&self, pane: Option<OverlayPane>) -> Option<&str> {
         self.failures[failure_index(pane)].as_deref()
@@ -238,13 +281,23 @@ impl RemoteOverlays {
 pub enum RemoteOverlayChange {
     /// A program overlay closed: the presenter takes its surface down and the job is cancelled.
     Closed { session: Uuid, job: String },
-    /// A page closed here: the presenter takes it down, and its outcome is dismissed unless it was answered.
-    PageClosed { session: Uuid, page: Uuid },
+    /// A page closed here: the presenter takes it down when it was `shown` there (a parked page is shown nowhere), and
+    /// its outcome is dismissed unless it was answered.
+    PageClosed { session: Uuid, page: Uuid, shown: bool },
     /// A page's visibility was asked for (upstream's `sendRemotePageCommand` from `setOverlaysHidden`).
     PageCommand {
         session: Uuid,
         command: PresentationPageCommand,
     },
+}
+
+/// What follows a parked page's fresh request to the presenter it is handed on to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HandedOn {
+    /// It shows as a new page does.
+    Shown,
+    /// It was hidden: the hide numbered `seq` goes right after the request.
+    Hidden(i64),
 }
 
 /// How a remote job ended, as the slot's result records it.
@@ -321,10 +374,11 @@ impl AppStore {
             return false;
         };
         let job = slot.job.clone();
-        if slot.page.is_some() {
+        if let Some(page) = &slot.page {
+            let shown = !page.parked;
             if let Some(page) = self.end_remote_page(session, &job) {
                 self.remote_overlay_changes
-                    .push(RemoteOverlayChange::PageClosed { session, page });
+                    .push(RemoteOverlayChange::PageClosed { session, page, shown });
             }
             return true;
         }
@@ -398,6 +452,40 @@ impl AppStore {
         self.tracking_remote_slots(session, |overlays| overlays.surface_gone(job));
     }
 
+    /// Asks for `hidden` on the page in `pane`'s slot (upstream's `setOverlaysHidden` page arm): a page a presenter
+    /// shows gets a numbered command when its pending or reported visibility differs, a parked one records it.
+    pub(super) fn request_remote_page_hidden(&mut self, session: Uuid, pane: Option<OverlayPane>, hidden: bool) {
+        use crate::remote::frames::{PresentationPageAction, PresentationPageCommand};
+        if self.set_parked_page_hidden(session, pane, hidden) {
+            return;
+        }
+        let differs = self
+            .session(session)
+            .and_then(|found| found.remote_overlays.slot(pane))
+            .and_then(|slot| slot.page.as_ref())
+            .is_some_and(|page| page.effective_hidden() != hidden);
+        if !differs {
+            return;
+        }
+        let action = if hidden {
+            PresentationPageAction::Hide
+        } else {
+            PresentationPageAction::Show
+        };
+        if let Some((page, seq)) = self.number_remote_page_command(session, pane, action) {
+            let command = PresentationPageCommand {
+                width: None,
+                height: None,
+                page,
+                seq,
+                action,
+                size_percent: None,
+            };
+            self.remote_overlay_changes
+                .push(RemoteOverlayChange::PageCommand { session, command });
+        }
+    }
+
     /// Records the size asked of a session-wide remote overlay.
     pub fn resize_remote_overlay(
         &mut self,
@@ -411,26 +499,94 @@ impl AppStore {
         }
     }
 
-    /// The viewer presenting `session` is gone, and every overlay it held goes with it: each program slot's surface
-    /// counts as gone, and each page ends. The program jobs, whose unclaimed ones the caller cancels, and the ended
-    /// pages, whose outcomes the caller settles, are returned.
+    /// The viewer presenting `session` is gone: each program slot's surface counts as gone, and each page it showed is
+    /// parked for the next presenter. The program jobs, whose unclaimed ones the caller cancels, and the pages parked
+    /// now, whose channels the caller shuts, are returned.
     pub fn remote_overlay_presenter_lost(&mut self, session: Uuid) -> (Vec<String>, Vec<Uuid>) {
-        self.tracking_remote_slots(session, |overlays| {
-            let pages: Vec<(String, Uuid)> = overlays
-                .slots()
-                .iter()
-                .filter_map(|slot| slot.page.as_ref().map(|page| (slot.job.clone(), page.overlay.id)))
-                .collect();
-            for (job, _) in &pages {
-                overlays.remove(job);
-            }
-            let jobs: Vec<String> = overlays.slots().iter().map(|slot| slot.job.clone()).collect();
-            for job in &jobs {
-                overlays.surface_gone(job);
-            }
-            (jobs, pages.into_iter().map(|(_, page)| page).collect())
-        })
-        .unwrap_or_default()
+        let Some(found) = self.session_mut(session) else {
+            return (Vec::new(), Vec::new());
+        };
+        let pages = found.remote_overlays.park_pages();
+        if !pages.is_empty() {
+            self.schedule_tree_changed();
+        }
+        let jobs = self
+            .tracking_remote_slots(session, |overlays| {
+                let jobs: Vec<String> = overlays
+                    .slots()
+                    .iter()
+                    .filter(|slot| slot.page.is_none())
+                    .map(|slot| slot.job.clone())
+                    .collect();
+                for job in &jobs {
+                    overlays.surface_gone(job);
+                }
+                jobs
+            })
+            .unwrap_or_default();
+        (jobs, pages)
+    }
+
+    /// Parks the page held under `job`, its channel's helper gone or its claim expired while its presenter stays;
+    /// whether a page shown there was parked now.
+    pub(crate) fn park_remote_page(&mut self, session: Uuid, job: &str) -> bool {
+        let parked = self
+            .session_mut(session)
+            .and_then(|found| {
+                found.remote_overlays.update_page(job, |page| {
+                    let shown = !page.parked;
+                    page.park();
+                    shown
+                })
+            })
+            .unwrap_or(false);
+        if parked {
+            self.schedule_tree_changed();
+        }
+        parked
+    }
+
+    /// Hands the parked page under `job` to presenter generation `owner` under a fresh claim `token`; `None` when no
+    /// parked page is held there, else what follows its request.
+    pub(crate) fn hand_on_remote_page(
+        &mut self,
+        session: Uuid,
+        job: &str,
+        owner: i64,
+        token: String,
+        claim_deadline: Instant,
+    ) -> Option<HandedOn> {
+        let found = self.session_mut(session)?;
+        let slot = found
+            .remote_overlays
+            .slots
+            .iter_mut()
+            .find(|slot| slot.job == job && slot.page.as_ref().is_some_and(|page| page.parked))?;
+        slot.owner = owner;
+        let handed = match slot.page.as_mut()?.hand_on(token, claim_deadline) {
+            Some(seq) => HandedOn::Hidden(seq),
+            None => HandedOn::Shown,
+        };
+        self.schedule_tree_changed();
+        Some(handed)
+    }
+
+    /// Records `hidden` on the parked page in `pane`'s slot, delivered when it is handed on; whether one is parked
+    /// there.
+    fn set_parked_page_hidden(&mut self, session: Uuid, pane: Option<OverlayPane>, hidden: bool) -> bool {
+        let Some(parked) = self
+            .session_mut(session)
+            .and_then(|found| found.remote_overlays.slots.iter_mut().find(|slot| slot.pane == pane))
+            .and_then(|slot| slot.page.as_mut())
+            .filter(|page| page.parked)
+        else {
+            return false;
+        };
+        if parked.hidden != hidden {
+            parked.hidden = hidden;
+            self.schedule_tree_changed();
+        }
+        true
     }
 
     /// The presenter refused to show `job`: no surface was ever shown, so a `--wait` slot has nothing to hold it.

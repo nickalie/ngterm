@@ -351,6 +351,62 @@ fn closing_rejecting_or_losing_a_remote_overlay_invalidates_the_tree() {
     );
 }
 
+/// Parking a presenter's page and handing it on each change the read-back (`parked`), once; a page already parked is
+/// not parked again, and only a parked page is handed on.
+#[test]
+fn parking_and_handing_on_a_remote_page_invalidate_the_tree() {
+    let (mut store, id) = launched();
+    let overlay = HtmlOverlay::new(
+        HtmlSource::File {
+            path: "/tmp/a.html".to_owned(),
+            grant_root: None,
+        },
+        HtmlPageFlags::default(),
+    );
+    let page = crate::model::RemotePage::new(overlay, "t".to_owned(), std::time::Instant::now());
+    let job = crate::pane_env::uuid_string(page.overlay.id);
+    let reserved = RemoteOverlaySlot {
+        job: job.clone(),
+        page: Some(page),
+        ..slot("p", None, false)
+    };
+    assert!(store.reserve_remote_overlay(id, reserved));
+    let parked = |store: &AppStore| {
+        store.session(id).unwrap().remote_overlays().slots()[0]
+            .page
+            .as_ref()
+            .unwrap()
+            .parked
+    };
+    let mut lost = (Vec::new(), Vec::new());
+    assert_eq!(
+        tree_changes(&mut store, |s| lost = s.remote_overlay_presenter_lost(id)),
+        1
+    );
+    assert_eq!(lost.0, Vec::<String>::new(), "no program job");
+    assert_eq!(lost.1.len(), 1);
+    assert!(parked(&store));
+    assert_eq!(tree_changes(&mut store, |s| assert!(!s.park_remote_page(id, &job))), 0);
+    let now = std::time::Instant::now();
+    assert_eq!(
+        tree_changes(&mut store, |s| {
+            assert_eq!(
+                s.hand_on_remote_page(id, &job, 7, "u".to_owned(), now),
+                Some(crate::model::HandedOn::Shown)
+            );
+        }),
+        1
+    );
+    assert!(!parked(&store));
+    assert_eq!(store.session(id).unwrap().remote_overlays().slots()[0].owner, 7);
+    assert_eq!(
+        store.hand_on_remote_page(id, &job, 8, "v".to_owned(), now),
+        None,
+        "not parked"
+    );
+    assert_eq!(tree_changes(&mut store, |s| assert!(s.park_remote_page(id, &job))), 1);
+}
+
 #[test]
 fn promoting_the_split_invalidates_the_tree_for_a_reservation_that_changes_pane() {
     let (mut store, id) = launched();

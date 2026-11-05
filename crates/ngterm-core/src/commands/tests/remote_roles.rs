@@ -441,9 +441,10 @@ fn a_file_page_handed_to_the_viewer_loads_and_submits_through_its_channel() {
     assert!(roles.origin_node().get("htmlOverlays").is_none());
 }
 
-/// Upstream's `testTheOriginReadsTheViewersPageStateAndPresenterLossDismissesIt`.
+/// Upstream's `testTheOriginReadsTheViewersPageStateAndPresenterLossDismissesIt`, but for the loss: the origin parks
+/// the page for the next presenter (an extension beyond upstream) while the viewer still tears its replica down.
 #[test]
-fn the_origin_reads_the_viewers_page_state_and_presenter_loss_dismisses_it() {
+fn the_origin_reads_the_viewers_page_state_and_presenter_loss_parks_it() {
     let mut roles = Roles::new(true);
     let opened = roles.open_page();
     let page = opened.result.unwrap()["pageID"].as_str().unwrap().to_owned();
@@ -472,7 +473,7 @@ fn the_origin_reads_the_viewers_page_state_and_presenter_loss_dismisses_it() {
     assert_eq!(read["page"], json!(index));
     assert_eq!(roles.outcome(&page)["outcome"], "pending");
 
-    // the presenter goes: the origin dismisses the page, the viewer tears down the replica and its helper
+    // the presenter goes: the origin parks the page, the viewer tears down the replica and its helper
     let serial = roles.serial;
     roles.origin.fixture.core.presentation_closed(serial);
     roles.origin.fixture.core.commit();
@@ -481,8 +482,9 @@ fn the_origin_reads_the_viewers_page_state_and_presenter_loss_dismisses_it() {
     roles.viewer.fixture.core.commit();
     roles.pump();
 
-    assert_eq!(roles.outcome(&page)["outcome"], "dismissed");
-    assert!(roles.origin_node().get("htmlOverlays").is_none());
+    assert_eq!(roles.outcome(&page)["outcome"], "pending");
+    let read = roles.origin_node()["htmlOverlays"][0].clone();
+    assert_eq!((&read["id"], &read["parked"]), (&json!(page), &json!(true)));
     assert!(roles.replica().is_none());
     assert!(roles.launcher.0.borrow()[0].queue.0.borrow().stopped);
 }

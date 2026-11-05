@@ -862,7 +862,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   overlays, see [WPE WebKit](#wpe-webkit)), then the staged build (HTML overlays on) under the suite in the `wpe`
   job's Arch container, on its lavapipe, held by `rust-passing.txt`, once per login shell (`conformance`, a matrix:
   bash, fish and zsh), each with `--must-pass live-any-shell` and `--must-pass agent-chat`, the zsh and fish ones
-  with `--must-pass live-sessions`
+  with `--must-pass live-sessions` and `--must-pass pages-survive`
   too; the bash one runs the app's process tests with the overlays on first, and a `coverage` entry runs the suite on
   an instrumented build, judged by `conformance/coverage-floor-linux.txt` only.
 - `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,

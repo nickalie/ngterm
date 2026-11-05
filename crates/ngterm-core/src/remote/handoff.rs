@@ -170,9 +170,9 @@ impl Core {
             .is_some_and(|pane| session.renders_overlay_pane(pane))
     }
 
-    /// The viewer presenting `session` is gone: its ask comes back, and every overlay it held goes with it; a job
-    /// still unclaimed is cancelled and can no longer launch, and a page ends, keeping an answer it was given
-    /// (upstream's `onPresenterLost`).
+    /// The viewer presenting `session` is gone: its ask comes back, and every program overlay it held goes with it, a
+    /// job still unclaimed cancelled so it can no longer launch (upstream's `onPresenterLost`). A page it showed is
+    /// parked for the next presenter instead of ended (an extension beyond upstream): only its channel goes.
     pub(crate) fn presenter_lost(&mut self, session: Uuid) {
         self.take_back_remote_ask(session);
         let (jobs, pages) = self
@@ -181,7 +181,7 @@ impl Core {
             .map(|store| store.remote_overlay_presenter_lost(session))
             .unwrap_or_default();
         for page in pages {
-            self.remote_page_ended(page);
+            self.shut_page_serve_channel(page);
         }
         for job in jobs {
             let unclaimed = self
@@ -247,7 +247,9 @@ impl Core {
                     self.remote.hub.send_to_presenter(body, session);
                     self.cancel_overlay_job(&job);
                 }
-                RemoteOverlayChange::PageClosed { session, page } => self.close_remote_page(session, page),
+                RemoteOverlayChange::PageClosed { session, page, shown } => {
+                    self.close_remote_page(session, page, shown);
+                }
                 RemoteOverlayChange::PageCommand { session, command } => self.deliver_page_command(session, command),
             }
         }
@@ -266,7 +268,8 @@ impl Core {
     }
 
     /// Resolves a session-wide remote resize against its stored axes, then sends the whole result
-    /// (upstream's `resizeRemoteOverlay`). A stale presenter is refused before any state changes.
+    /// (upstream's `resizeRemoteOverlay`). A stale presenter is refused before any state changes; a parked page only
+    /// records the size it is handed on with.
     pub(crate) fn resize_remote_overlay(
         &mut self,
         session: Uuid,
@@ -278,8 +281,9 @@ impl Core {
             .store_for_session(session)
             .and_then(|store| store.session(session))
             .and_then(|found| found.remote_overlays().slot(None).cloned())?;
+        let parked = slot.page.as_ref().is_some_and(|page| page.parked);
         let hub = &self.remote.hub;
-        if !hub.has_presenter(session) || hub.presenter_generation(session) != slot.owner {
+        if !parked && (!hub.has_presenter(session) || hub.presenter_generation(session) != slot.owner) {
             return Some(RemoteOverlayResize::ViewerGone);
         }
         let (size, merged) = if let Some(percent) = size_percent {
@@ -294,6 +298,9 @@ impl Core {
         };
         if let Some(store) = self.library_mut().store_for_session_mut(session) {
             store.resize_remote_overlay(session, &slot.job, size, merged);
+        }
+        if parked {
+            return Some(RemoteOverlayResize::Sent);
         }
         let sent = self.presentable_points(session, merged);
         let delivered = if slot.page.is_some() {

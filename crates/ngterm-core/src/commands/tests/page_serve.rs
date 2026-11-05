@@ -320,9 +320,10 @@ fn a_token_claims_once_within_its_deadline() {
     assert_eq!(served.claim(&token), failure("page not claimable"));
 }
 
-/// Upstream's `aLateClaimIsRefusedAndExpiryEndsOnlyAnUnclaimedFilePage`.
+/// Upstream's `aLateClaimIsRefusedAndExpiryEndsOnlyAnUnclaimedFilePage`, but the expiry parks the page for the next
+/// presenter (an extension beyond upstream): the presenter drops it, the slot and the pending outcome stay.
 #[test]
-fn a_late_claim_is_refused_and_expiry_ends_only_an_unclaimed_file_page() {
+fn a_late_claim_is_refused_and_expiry_parks_only_an_unclaimed_file_page() {
     let mut origin = Origin::new(true, &crate::remote::hub::SUPPORTED_KINDS);
     let file = origin.opened("/tmp/docs/index.html", |_| {});
     let token = origin.presenter.last("page.request").unwrap()["page"]["token"]
@@ -339,9 +340,28 @@ fn a_late_claim_is_refused_and_expiry_ends_only_an_unclaimed_file_page() {
     let late = Instant::now() + PAGE_CLAIM_WINDOW + Duration::from_secs(1);
     assert_eq!(core.claim_remote_page(&token, late), None);
     core.expire_remote_page_claims_at(late);
+    assert!(!core.commit().tree_changed.is_empty(), "the park is read back");
+    assert_eq!(origin.slot_jobs(), [file.clone(), web]);
+    assert_eq!(origin.outcome(&file)["outcome"], "pending");
+    let closes: Vec<_> = origin
+        .presenter
+        .frames("page.close")
+        .into_iter()
+        .map(|frame| frame["page"].clone())
+        .collect();
+    assert_eq!(closes, [json!({"page": file})]);
+    let node = origin.node();
+    assert_eq!(node["remoteOverlays"][0]["parked"], true);
+    assert!(
+        node["remoteOverlays"][1].get("parked").is_none(),
+        "the URL page stays shown"
+    );
+    // the presenter answering the close changes nothing, and a second expiry finds nothing to park
+    origin.report(&json!({"kind": "page.closed", "page": {"page": file}}));
+    let core = &mut origin.fixture().core;
+    core.expire_remote_page_claims_at(late + Duration::from_secs(60));
     core.commit();
-    assert_eq!(origin.slot_jobs(), [web]);
-    assert_eq!(origin.outcome(&file)["outcome"], "dismissed");
+    assert_eq!(origin.outcome(&file)["outcome"], "pending");
     assert_eq!(origin.presenter.frames("page.close").len(), 1);
 }
 
@@ -692,23 +712,41 @@ fn a_malformed_or_origin_only_frame_ends_the_page_and_keeps_the_presenter() {
 }
 
 /// Upstream's `testLosingTheHelperEndsOnlyThePage` and `testAClaimWhoseReplyFailsEndsThePage` (an abandoned connection
-/// reports its close the same way).
+/// reports its close the same way), but the page is parked rather than ended (an extension beyond upstream): the
+/// presenter is told to drop it and stays, the slot and the pending outcome stay, and the page's own close still ends
+/// it, telling nobody.
 #[test]
-fn losing_the_helper_ends_only_the_page() {
+fn losing_the_helper_parks_only_the_page() {
     let mut served = Served::new();
     let page = served.open_file(true);
     let channel = served.channel(&page);
     served.close(&channel);
-    assert!(served.origin.slot_jobs().is_empty());
+    assert_eq!(served.origin.slot_jobs(), std::slice::from_ref(&page));
     assert_eq!(served.page_closes().len(), 1);
-    assert_eq!(served.origin.outcome(&page)["outcome"], "dismissed");
+    assert_eq!(served.origin.outcome(&page)["outcome"], "pending");
     assert!(served.presenter_kept());
     assert!(!served.origin.fixture().core.page_serve_adopted(page_id(&page)));
+    assert_eq!(served.origin.node()["htmlOverlays"][0]["parked"], true);
+    // the presenter's answer to the close is stale: the page stays parked
+    served
+        .origin
+        .report(&json!({"kind": "page.closed", "page": {"page": page}}));
+    assert_eq!(served.origin.outcome(&page)["outcome"], "pending");
+    assert!(served.origin.overlay(SessionCmd::OverlayClose, |_| {}).ok);
+    served.origin.fixture().core.commit();
+    assert!(served.origin.slot_jobs().is_empty());
+    assert_eq!(served.origin.outcome(&page)["outcome"], "dismissed");
+    assert_eq!(
+        served.page_closes().len(),
+        1,
+        "a parked page's close tells no presenter"
+    );
 }
 
-/// Upstream's `testLosingThePresenterEndsThePageAndClosesItsChannel`.
+/// Upstream's `testLosingThePresenterEndsThePageAndClosesItsChannel`, but the page is parked for the next presenter
+/// (an extension beyond upstream): only its channel goes.
 #[test]
-fn losing_the_presenter_ends_the_page_and_closes_its_channel() {
+fn losing_the_presenter_parks_the_page_and_closes_its_channel() {
     let mut served = Served::new();
     let page = served.open_file(true);
     let channel = served.channel(&page);
@@ -716,11 +754,16 @@ fn losing_the_presenter_ends_the_page_and_closes_its_channel() {
     let core = &mut served.origin.fixture().core;
     core.presentation_closed(serial);
     core.commit();
-    assert!(served.origin.slot_jobs().is_empty());
-    assert_eq!(served.origin.outcome(&page)["outcome"], "dismissed");
+    assert_eq!(served.origin.slot_jobs(), std::slice::from_ref(&page));
+    assert_eq!(served.origin.outcome(&page)["outcome"], "pending");
     assert!(channel.fake.closed());
     served.close(&channel);
-    assert!(served.origin.slot_jobs().is_empty());
+    assert_eq!(
+        served.origin.slot_jobs(),
+        std::slice::from_ref(&page),
+        "its channel's close parks nothing again"
+    );
+    assert!(!served.origin.fixture().core.page_serve_adopted(page_id(&page)));
 }
 
 #[test]

@@ -181,6 +181,9 @@ CAPABILITIES: Mapping[str, str] = {
     "agent-chat": "Rust-only: the agent record behind the Android chat view: `ngtermctl agent hook` keeps a pane's "
     "Claude Code or Codex conversation from its hook payload, `agent.get` reads it back, `ngtermctl agent chat` "
     "streams its transcript as chat events and `ngtermctl agent commands` lists the agent's slash commands",
+    "pages-survive": "Rust-only: an HTML page lives until it is closed: a page handed to the viewer presenting a "
+    "session is parked, its slot reserved and its outcome pending, when that presenter or its page helper goes, and "
+    "handed again to the next presenter that speaks pages",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
     "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",

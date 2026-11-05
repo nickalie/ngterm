@@ -454,6 +454,10 @@ pub struct ControlHtmlOverlayNode {
     /// `true` for a page shown here for the machine that opened it; absent otherwise.
     #[serde(default)]
     pub replica: Option<bool>,
+    /// `true` for a `remote` page no presenter shows now, kept for the next one (this build's addition); absent
+    /// otherwise.
+    #[serde(default)]
+    pub parked: Option<bool>,
 }
 
 /// An overlay slot of an origin session held by the viewer presenting it.
@@ -468,6 +472,10 @@ pub struct ControlRemoteOverlayNode {
     /// The page the slot holds, the id `htmlOverlays` reports; absent for a program overlay.
     #[serde(default, rename = "pageID")]
     pub page_id: Option<String>,
+    /// `true` while the slot's page is parked: no presenter shows it, the next one is handed it (this build's
+    /// addition); absent otherwise.
+    #[serde(default)]
+    pub parked: Option<bool>,
 }
 
 /// A viewer's presentation stream.

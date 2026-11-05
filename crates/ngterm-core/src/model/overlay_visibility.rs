@@ -20,7 +20,7 @@
 use uuid::Uuid;
 
 use super::overlay::OverlayPane;
-use super::remote_overlay::{RemoteOverlayChange, RemoteOverlaySlot};
+use super::remote_overlay::RemoteOverlaySlot;
 use super::session::Session;
 use super::store::AppStore;
 use super::window_library::WindowLibrary;
@@ -304,35 +304,11 @@ impl AppStore {
         Ok(())
     }
 
-    /// Asks the presenter for `hidden` on each page in `panes`' slots whose pending or reported visibility differs.
+    /// Asks for `hidden` on each page in `panes`' slots: the presenter showing it when its pending or reported
+    /// visibility differs, the page itself when it is parked.
     fn request_remote_page_visibility(&mut self, id: Uuid, panes: &[Option<OverlayPane>], hidden: bool) {
-        use crate::remote::frames::{PresentationPageAction, PresentationPageCommand};
-        let action = if hidden {
-            PresentationPageAction::Hide
-        } else {
-            PresentationPageAction::Show
-        };
         for pane in panes {
-            let differs = self
-                .session(id)
-                .and_then(|found| found.remote_overlays.slot(*pane))
-                .and_then(|slot| slot.page.as_ref())
-                .is_some_and(|page| page.effective_hidden() != hidden);
-            if !differs {
-                continue;
-            }
-            if let Some((page, seq)) = self.number_remote_page_command(id, *pane, action) {
-                let command = PresentationPageCommand {
-                    width: None,
-                    height: None,
-                    page,
-                    seq,
-                    action,
-                    size_percent: None,
-                };
-                self.remote_overlay_changes
-                    .push(RemoteOverlayChange::PageCommand { session: id, command });
-            }
+            self.request_remote_page_hidden(id, *pane, hidden);
         }
     }
 

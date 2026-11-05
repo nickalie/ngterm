@@ -196,3 +196,74 @@ fn a_page_that_hides_or_resizes_asks_its_window_for_a_save() {
     assert_eq!(written_page(state.path(), window).size_percent, Some(70));
     assert_eq!(land_debounced_saves(&mut core), 0, "nothing changed since");
 }
+
+/// A launch over the state in `dir` as a presenter-only origin (headless): no web views; its first open window and
+/// that window's first session.
+fn launch_presenter_only(dir: &Path) -> (Core, Uuid, Uuid) {
+    let mut persistence = LibraryPersistence::new(dir);
+    let library = persistence.bootstrap("/home/u");
+    let mut core = Core::new(
+        CoreConfig {
+            app: AppIdentity::from_recorded("0.1.0", None),
+            capabilities: Vec::new(),
+        },
+        CoreState {
+            library,
+            settings: AppSettings::default(),
+            persistence: Some(persistence),
+        },
+    );
+    core.set_page_presenter_only();
+    let _ = core.commit();
+    let window = core.library().open_ids()[0];
+    let session = core.library().store(window).expect("the window is open").workspaces()[0].sessions[0].id();
+    (core, window, session)
+}
+
+/// A presenter-only origin, which renders no page, parks what a restore opened in its own slots: the page waits for a
+/// presenter under a fresh id, pending, written as the viewer's, and comes back parked from that entry too, on any
+/// origin. Closing it ends it and writes it no more.
+#[test]
+fn a_presenter_only_origin_restores_a_page_parked_for_its_viewer() {
+    let state = short_tempdir();
+    let site = tempfile::tempdir().expect("a temp dir");
+    let file = site.path().join("page.html");
+    std::fs::write(&file, "<p>hi</p>").expect("the page");
+    let (mut core, _, session) = launch(state.path());
+    let before = open_file_page(&mut core, session, &file);
+    assert!(core.save_all());
+    drop(core);
+
+    let (mut core, window, _) = launch_presenter_only(state.path());
+    let pages = html_overlays(&mut core, session);
+    assert_eq!(pages.as_array().map(Vec::len), Some(1), "{pages}");
+    assert_eq!((&pages[0]["remote"], &pages[0]["parked"]), (&json!(true), &json!(true)));
+    let parked = Uuid::parse_str(pages[0]["id"].as_str().expect("an id")).expect("an id");
+    assert_ne!(parked, before);
+    assert_eq!(
+        outcome(&mut core, parked).result,
+        Some(json!({"pageOutcome": {"pageID": wire(parked), "outcome": "pending"}}))
+    );
+    assert!(core.save_all());
+    let written = written_page(state.path(), window);
+    assert!(written.viewer && written.size_percent == Some(40), "{written:?}");
+    drop(core);
+
+    // the viewer's entry parks again, on an origin with web views too
+    let (mut core, window, _) = launch(state.path());
+    let pages = html_overlays(&mut core, session);
+    assert_eq!((&pages[0]["remote"], &pages[0]["parked"]), (&json!(true), &json!(true)));
+    let again = Uuid::parse_str(pages[0]["id"].as_str().expect("an id")).expect("an id");
+    assert_ne!(again, parked);
+    let pending = outcome(&mut core, again).result.expect("a result");
+    assert_eq!(pending["pageOutcome"]["outcome"], "pending");
+    let _ = land_debounced_saves(&mut core);
+    assert!(overlay(&mut core, SessionCmd::OverlayClose, session, |_| {}).ok);
+    assert!(
+        land_debounced_saves(&mut core) > 0,
+        "a parked page's close asks for a save"
+    );
+    assert_eq!(written_pages(state.path(), window), 0);
+    let closed = outcome(&mut core, again).result.expect("a result");
+    assert_eq!(closed["pageOutcome"]["outcome"], "dismissed");
+}

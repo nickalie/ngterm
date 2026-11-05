@@ -78,6 +78,7 @@ use self::hub::{CloseReason, HubEvent, PresentationHub, PresentationSink, Subscr
 pub use self::page::PAGE_CLAIM_WINDOW;
 pub(crate) use self::page::{
     REMOTE_LOOPBACK, REMOTE_TOO_LARGE, RemotePageCommand, RemotePageOpen, VIEWER_GONE, open_remote_page,
+    presentation_source,
 };
 use self::tree::{ProcessRemoteRunner, RemoteCommandResult, RemoteCommandRunner, RemoteWindowProjection};
 pub(crate) use self::viewer::row_changes;
@@ -86,7 +87,7 @@ use crate::commands::Outcome;
 pub use crate::commands::overlay::LineChannel;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
-use crate::model::{AgentStatus, Session, StatusPane};
+use crate::model::{AgentStatus, OverlayPane, Session, StatusPane};
 use crate::pane_env::uuid_string;
 use crate::resolve::{Resolver, trimmed};
 
@@ -149,6 +150,9 @@ struct Published {
     name: Option<String>,
     /// Each pane's agent frame, as the viewers listing the agent kind last got it.
     agents: agents::AgentFrames,
+    /// Whether the left and the right pane were laid out at the last publication: a pane coming into view hands on
+    /// the parked pages waiting for it.
+    rendered_panes: [bool; 2],
 }
 
 /// A session's HUD as published to viewers (upstream's `hudPublishGeneration`, `hudExpiresAt` and `onHudWithdrawn`).
@@ -360,6 +364,11 @@ fn presentation_layout(session: &Session) -> Option<PresentationLayout> {
     })
 }
 
+/// Whether `session` lays out its left and its right pane.
+fn rendered_panes(session: &Session) -> [bool; 2] {
+    [OverlayPane::Left, OverlayPane::Right].map(|pane| session.renders_overlay_pane(pane))
+}
+
 impl PresentationRuntime {
     /// The published HUD as it travels, its remaining lifetime sampled at `now` (upstream's `presentationHud`).
     fn hud(&self, session: &Session, now: Instant) -> Option<PresentationHud> {
@@ -501,11 +510,11 @@ impl Core {
             channel.shutdown();
             return;
         };
-        if self.presented_session(session).is_none() {
+        let Some(rendered_panes) = self.presented_session(session).map(rendered_panes) else {
             tracing::info!("closing a presentation stream whose session is gone");
             channel.shutdown();
             return;
-        }
+        };
         let snapshot = self.presentation_snapshot(session);
         self.remote.published.entry(session).or_insert_with(|| Published {
             status: snapshot.status.clone(),
@@ -513,6 +522,7 @@ impl Core {
             info: snapshot.info.clone(),
             name: snapshot.name.clone(),
             agents: agents::AgentFrames::new(),
+            rendered_panes,
         });
         let agents = self.attach_agents(session, &hello.kinds);
         let sink = Box::new(ChannelSink(Rc::clone(&channel)));
@@ -601,7 +611,8 @@ impl Core {
         }
     }
 
-    /// Acts on what the hub queued: a presenter lost takes its work back, a presenter's frame is applied.
+    /// Acts on what the hub queued: a presenter lost takes its work back, a presenter granted is handed the session's
+    /// parked pages, a presenter's frame is applied.
     fn run_hub_events(&mut self) {
         loop {
             let events = self.remote.hub.take_events();
@@ -611,6 +622,7 @@ impl Core {
             for event in events {
                 match event {
                     HubEvent::PresenterLost(session) => self.presenter_lost(session),
+                    HubEvent::PresenterGained(session) => self.hand_on_parked_pages(session),
                     HubEvent::PresenterFrame(session, body) => self.receive_presenter_frame(session, *body),
                 }
             }
@@ -727,11 +739,17 @@ impl Core {
             presentation_name(found),
             presentation_layout(found),
         );
+        let rendered_panes = rendered_panes(found);
         let published = self.remote.published.entry(session).or_default();
         let status_changed = published.status != status;
         let context_changed = published.context != context;
         let info_changed = published.info != info;
         let name_changed = published.name.as_ref() != Some(&name);
+        let pane_shown = rendered_panes
+            .iter()
+            .zip(published.rendered_panes)
+            .any(|(now, before)| *now && !before);
+        published.rendered_panes = rendered_panes;
         published.status.clone_from(&status);
         published.context.clone_from(&context);
         published.info.clone_from(&info);
@@ -750,6 +768,10 @@ impl Core {
         }
         if let Some(layout) = layout {
             self.remote.hub.publish_layout(layout, session);
+        }
+        // after the layout, so the presenter lays the pane out before its page arrives
+        if pane_shown {
+            self.hand_on_parked_pages(session);
         }
     }
 }

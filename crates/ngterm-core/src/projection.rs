@@ -208,14 +208,15 @@ fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
                 pane: slot.pane.map(|pane| pane.wire_name().to_owned()),
                 size_percent: slot.size_percent,
                 page_id: slot.page.as_ref().map(|page| uuid_string(page.overlay.id)),
+                parked: slot.page.as_ref().is_some_and(|page| page.parked).then_some(true),
             })
             .collect()
     });
 }
 
 /// The pages in `session`'s slots, session-wide first (upstream's `htmlOverlayNodes`): a local page as its web view last
-/// reported it, a page shown on the presenting machine as that machine last reported it, marked `remote`; `None` when
-/// no slot holds one.
+/// reported it, a page shown on the presenting machine as that machine last reported it, marked `remote` (and `parked`
+/// while no presenter shows it); `None` when no slot holds one.
 fn html_overlay_nodes(session: &Session) -> Option<Vec<ControlHtmlOverlayNode>> {
     let local = session.html_overlays();
     let nodes: Vec<ControlHtmlOverlayNode> = [None, Some(OverlayPane::Left), Some(OverlayPane::Right)]
@@ -231,6 +232,7 @@ fn html_overlay_nodes(session: &Session) -> Option<Vec<ControlHtmlOverlayNode>> 
             let mut node = html_overlay_node(name, &remote.overlay);
             node.hidden = remote.hidden.then_some(true);
             node.remote = Some(true);
+            node.parked = remote.parked.then_some(true);
             Some(node)
         })
         .collect();
@@ -272,6 +274,7 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
         hidden: None,
         remote: None,
         replica: page.replica_of.map(|_| true),
+        parked: None,
     }
 }
 

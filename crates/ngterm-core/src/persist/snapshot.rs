@@ -340,7 +340,8 @@ pub enum PageSourceSnapshot {
 #[serde(rename_all = "camelCase")]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "the five independent page flags, each its own wire boolean, the hidden bit and the cover hold"
+    reason = "the five independent page flags, each its own wire boolean, the hidden bit, the cover hold and the viewer \
+              mark"
 )]
 pub struct PageSnapshot {
     pub slot: PageSlotSnapshot,
@@ -374,6 +375,10 @@ pub struct PageSnapshot {
     /// (`PaneOverlay::holds_cover`); never set in the session-wide slot.
     #[serde(default, deserialize_with = "lossy_flag", skip_serializing_if = "is_false")]
     pub holds_cover: bool,
+    /// The page belongs to the session's viewer: a presenter showed it or it was parked waiting for one, and a restore
+    /// parks it again for the next presenter rather than opening it here.
+    #[serde(default, deserialize_with = "lossy_flag", skip_serializing_if = "is_false")]
+    pub viewer: bool,
 }
 
 /// A flag decoded lossily: absent, null or of another type reads as false.
@@ -642,7 +647,8 @@ mod tests {
         let good = r##"{ "slot": "session", "source": { "kind": "file", "path": "/s/p.html", "grantRoot": "/s" },
             "javascript": true, "sizePercent": 40, "width": 300, "backgroundColor": "#102030", "hidden": true }"##;
         let sloppy = r#"{ "slot": "left", "source": { "kind": "url", "url": "https://example.com/" },
-            "navigation": "yes", "sizePercent": "big", "height": 1e400, "backgroundColor": 7, "holdsCover": true }"#;
+            "navigation": "yes", "sizePercent": "big", "height": 1e400, "backgroundColor": 7, "holdsCover": true,
+            "viewer": true }"#;
         let text = with_session_key(&format!(
             r#""pages": [ {good}, {sloppy}, {{ "source": {{ "kind": "url", "url": "https://x/" }} }},
                 {{ "slot": "top", "source": {{ "kind": "url", "url": "https://x/" }} }},
@@ -667,6 +673,7 @@ mod tests {
             background_color: Some("#102030".to_owned()),
             hidden: true,
             holds_cover: false,
+            viewer: false,
         };
         let url = PageSnapshot {
             slot: PageSlotSnapshot::Left,
@@ -679,6 +686,7 @@ mod tests {
             background_color: None,
             hidden: false,
             holds_cover: true,
+            viewer: true,
             ..file.clone()
         };
         assert_eq!(pages, [file.clone(), url]);

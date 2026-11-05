@@ -115,6 +115,7 @@ share is asserted directly, with no capability.
 | `live-sessions` | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's per-session daemons; the Rust build's one session server per instance, ngterm-session) |
 | `live-any-shell` |  | Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and ngterm-session is staged |
 | `agent-chat` |  | Rust-only: the agent record behind the Android chat view: `ngtermctl agent hook` keeps a pane's Claude Code or Codex conversation from its hook payload, `agent.get` reads it back, `ngtermctl agent chat` streams its transcript as chat events and `ngtermctl agent commands` lists the agent's slash commands |
+| `pages-survive` |  | Rust-only: an HTML page lives until it is closed: a page handed to the viewer presenting a session is parked, its slot reserved and its outcome pending, when that presenter or its page helper goes, and handed again to the next presenter that speaks pages |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
@@ -144,7 +145,9 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `live-any-shell`: by host, live sessions for bash and PowerShell login shells too, a Rust-only extension
   (below): claimed together with `live-sessions` for a zsh or fish login shell, alone for the others;
 - `agent-chat`: on every OS, the `agent.*` group and `ngtermctl agent` behind the Android chat view, a Rust-only
-  extension (below).
+  extension (below);
+- `pages-survive`: on every OS, a page handed to a presenter parked on its presenter's loss and handed to the next, a
+  Rust-only extension (below).
 
 It does not claim:
 
@@ -189,7 +192,7 @@ ghostty config sets `copy-on-select = false`.
 A Rust-only extension is a capability the reference does not claim, so its tests (`requires` on it) skip as
 `unsupported` on the reference and the reference discipline holds them to nothing there: the Rust CI validates them
 instead, with `--must-pass` on the capability in every job whose host can claim it.
-Today there are two. `live-any-shell`: a Live pane runs the password database's login shell in its live session, zsh
+Today there are three. `live-any-shell`: a Live pane runs the password database's login shell in its live session, zsh
 and fish as upstream, bash and PowerShell as well, each started with its shell integration the way libghostty starts a
 shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in POSIX mode for bash, `XDG_DATA_DIRS` for fish, the integration's
 root merged in front of the pane's own value as upstream; ngterm's own script for PowerShell, which Ghostty does not
@@ -217,6 +220,16 @@ agent chat` (its backlog, following, an older page, a resume, a cursor of anothe
 pane is back at its shell) and list a config tree's skills, commands and plugins with `ngtermctl agent commands`.
 The build claims it on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and every conformance job that judges
 the ratchet runs with `--must-pass agent-chat`: the three Linux legs and Windows' `windows` job.
+
+`pages-survive`: a page lives until it is closed. Upstream's origin ends a page handed to the viewer presenting the
+session when that presenter goes ("losing the presenter ends its overlays for good"), when its page helper's channel
+closes and when an unclaimed file page's claim window passes; the build parks it instead, its slot reserved and its
+outcome pending (`parked: true` in `htmlOverlays` and `remoteOverlays`), tells a presenter that stays to drop it, and
+hands it again, as a fresh `page.request` under a new claim token, to the next presenter granted the session that
+lists the page kinds. Its tests are in `tests/protocol/test_live_sessions.py` (`PAGES_SURVIVE`): a presenter that
+goes and the next one that attaches, and a page closed meanwhile that is not handed on; the upstream test of a helper
+that goes branches on the claim. They need Live sessions too, so the zsh and fish legs run with
+`--must-pass pages-survive`. The build claims it on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`).
 
 ### Commands
 

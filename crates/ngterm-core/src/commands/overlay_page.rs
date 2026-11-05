@@ -56,6 +56,9 @@ pub(crate) struct PageRuntime {
     outcomes: HtmlPageOutcomes,
     /// Every page opened and not yet released.
     known: HashSet<Uuid>,
+    /// The pages handed to the session's viewer (shown on a presenter or parked) whose outcome is registered: no web
+    /// view of this machine's holds one, so they are never released, only forgotten once they leave their slot.
+    viewer: HashSet<Uuid>,
     /// The pages a window's snapshot writes ([`HtmlOverlay::persisted`]), each by the window holding it and what the
     /// snapshot wrote for it at the last sync, so a page that comes, goes, moves or changes asks its windows for a
     /// save.
@@ -72,6 +75,7 @@ impl fmt::Debug for PageRuntime {
         f.debug_struct("PageRuntime")
             .field("outcomes", &self.outcomes)
             .field("known", &self.known)
+            .field("viewer", &self.viewer)
             .field("persisted", &self.persisted)
             .field("released", &self.released)
             .field("host", &self.host.is_some())
@@ -404,8 +408,14 @@ impl Core {
 
     /// Settles the pages that left every slot: each is dismissed (a no-op for one already answered) and queued for
     /// the frontend to release its web view. Then follows the pages a snapshot writes ([`Core::sync_persisted_pages`]).
-    /// Runs at every commit and before an outcome is read.
+    /// Runs at every commit and before an outcome is read. A presenter-only origin first parks what a restore opened
+    /// in its own slots, as it renders no page itself.
     pub(crate) fn sync_pages(&mut self) {
+        if self.pages.presenter_only {
+            for page in self.library_mut().park_local_pages() {
+                self.pages.known.remove(&page);
+            }
+        }
         let live: HashSet<Uuid> = self.library().live_html_overlays().into_iter().collect();
         let gone: Vec<Uuid> = self.pages.known.difference(&live).copied().collect();
         for page in gone {
@@ -424,14 +434,20 @@ impl Core {
 
     /// Follows the pages a window's snapshot writes, `pages` being each as (window, page, what the snapshot writes for
     /// it). One in a slot that no open of this run put there is one a restore brought back (with a fresh id, so never
-    /// a page answered before): its outcome starts pending, as an open's does. A persisted page that came, went, moved
-    /// or changed what its snapshot writes (its slot, visibility, size, background or cover hold) asks the windows it
-    /// touched for a debounced save, so a crash neither loses an open page nor revives a closed one or its old state.
+    /// a page answered before): its outcome starts pending, as an open's does; a page the session's viewer holds is
+    /// followed apart from the local ones, as no web view here holds it. A persisted page that came, went, moved or
+    /// changed what its snapshot writes (its slot, visibility, size, background, cover hold or parking) asks the windows
+    /// it touched for a debounced save, so a crash neither loses an open page nor revives a closed one or its old state.
     fn sync_persisted_pages(&mut self, pages: Vec<(Uuid, Uuid, PageSnapshot)>) {
         let mut before = std::mem::take(&mut self.pages.persisted);
         let mut dirty: HashSet<Uuid> = HashSet::new();
         for (window, page, snapshot) in pages {
-            if self.pages.known.insert(page) {
+            let restored = if snapshot.viewer {
+                self.pages.viewer.insert(page)
+            } else {
+                self.pages.known.insert(page)
+            };
+            if restored {
                 self.pages.outcomes.register(page);
             } else {
                 match before.remove(&page) {
@@ -447,6 +463,8 @@ impl Core {
             }
             self.pages.persisted.insert(page, (window, snapshot));
         }
+        let persisted = &self.pages.persisted;
+        self.pages.viewer.retain(|page| persisted.contains_key(page));
         dirty.extend(before.into_values().map(|(window, _)| window));
         for window in dirty {
             if let Some(store) = self.library_mut().store_mut(window) {
@@ -464,6 +482,13 @@ impl Core {
     /// Starts tracking a page handed to the presenting machine as pending; no web view of this machine's holds it.
     pub(crate) fn register_page_outcome(&mut self, page: Uuid) {
         self.pages.outcomes.register(page);
+    }
+
+    /// [`Core::register_page_outcome`] for a page held in a session's slot for its viewer, which its snapshot writes:
+    /// the page sync then knows it was opened in this run, not restored.
+    pub(crate) fn register_viewer_page_outcome(&mut self, page: Uuid) {
+        self.pages.viewer.insert(page);
+        self.register_page_outcome(page);
     }
 
     /// Whether page `page` is still open and unanswered.
