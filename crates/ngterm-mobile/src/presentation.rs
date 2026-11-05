@@ -21,8 +21,10 @@
 //!   - when the stream leaves `connected`, what it showed goes with it: context, status and HUD clear, and the asks
 //!     still open are dismissed (the origin takes them back), as desktop's row does.
 //!
-//! A lost connection keeps the streams (`Presentations::machine_down`); a suspended core stops them without a word
-//! (`Presentations::suspend_machine`); the machine back, each client starts again if stopped and retries at once.
+//! A lost connection keeps the streams (`Presentations::machine_down`); a suspending core stops them without a word,
+//! first letting their links write what they still hold, an answer just sent among it (`Presentations::stop_machine`,
+//! then `Presentations::suspend_machine` once the connection is closed); the machine back, each client starts again
+//! if stopped and retries at once.
 //!
 //! The origin's respawn counts are handed on to the session's panes (`Presentations::take_respawns`, then
 //! [`crate::pane`]), and its warnings name nothing the app shows: the stream's own state carries the reason it failed.
@@ -49,6 +51,7 @@ use ngterm_core::remote::ssh::present_tail;
 use ngterm_core::remote::tree::INVALID_REMOTE_SESSION;
 use ngterm_core::remote::{LinkKey, PresentationLink, PresentationTransport};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 pub use self::records::{
@@ -85,6 +88,8 @@ pub(crate) struct ChannelLinks<C> {
     /// `None` while the machine's connection is down.
     connection: RefCell<Option<Rc<C>>>,
     report: Reporter,
+    /// The launches' tasks that may still be running, so a suspend can wait for them to write what they hold.
+    tasks: RefCell<Vec<JoinHandle<()>>>,
 }
 
 impl<C> ChannelLinks<C> {
@@ -93,12 +98,18 @@ impl<C> ChannelLinks<C> {
         Self {
             connection: RefCell::new(Some(connection)),
             report,
+            tasks: RefCell::new(Vec::new()),
         }
     }
 
     /// The machine's connection from now on: `None` while it is down.
     fn set_connection(&self, connection: Option<Rc<C>>) {
         *self.connection.borrow_mut() = connection;
+    }
+
+    /// The launches' tasks not yet finished, handed over to be waited on.
+    fn take_tasks(&self) -> Vec<JoinHandle<()>> {
+        std::mem::take(&mut *self.tasks.borrow_mut())
     }
 }
 
@@ -113,7 +124,10 @@ impl<C: Connection> PresentationTransport for ChannelLinks<C> {
         };
         // The argv is the remote command alone: the connection is the ssh part.
         let command = argv.last().cloned().unwrap_or_default();
-        tokio::task::spawn_local(run_link(connection, command, key, queue, report));
+        let task = tokio::task::spawn_local(run_link(connection, command, key, queue, report));
+        let mut tasks = self.tasks.borrow_mut();
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(task);
         Box::new(ChannelLink { input })
     }
 }
@@ -347,6 +361,19 @@ impl<C: Connection> Presentations<C> {
         for attached in self.of_machine(machine_id) {
             attached.links.set_connection(None);
         }
+    }
+
+    /// Stops the streams of `machine_id`, whose connection the core is about to close to suspend, reporting nothing,
+    /// and hands over their links' tasks: each writes the lines it still holds (an answer just sent), closes its
+    /// channel and ends, so the core waits for them before it closes the connection. They start again once the
+    /// machine is back ([`Presentations::machine_up`]).
+    pub(crate) fn stop_machine(&mut self, machine_id: &str) -> Vec<JoinHandle<()>> {
+        let mut tasks = Vec::new();
+        for attached in self.of_machine(machine_id) {
+            attached.client.stop();
+            tasks.extend(attached.links.take_tasks());
+        }
+        tasks
     }
 
     /// Stops the streams of `machine_id`, whose connection the core closed to suspend, reporting nothing: they start

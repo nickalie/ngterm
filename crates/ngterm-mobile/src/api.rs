@@ -469,7 +469,8 @@ impl MobileCore {
 
     /// The app has nothing to keep connected (in the background with no attached session to watch): every machine's
     /// connection closes and every connect in flight is cancelled ([`MobileError::Cancelled`]), with no state
-    /// reported, and the attached sessions' streams stop quietly. [`MobileCore::resume`] brings them back.
+    /// reported, and the attached sessions' streams stop quietly. An answer posted before ([`MobileCore::answer_ask`])
+    /// is written to its origin before the connection closes. [`MobileCore::resume`] brings them back.
     ///
     /// # Errors
     ///

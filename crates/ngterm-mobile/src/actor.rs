@@ -20,7 +20,8 @@
 //! attempt that waits first ([`crate::reconnect`]) until it is back or refused for good
 //! ([`crate::transport::TransportError::Refused`]), and the machine's sessions stay attached across it. Closing a
 //! machine's connection (a disconnect, a connect of the machine as edited) ends its sessions' streams and its retries;
-//! suspending closes every connection but keeps the streams to start again on resume.
+//! suspending lets the streams' links write what they hold, then closes every connection but keeps the streams to start
+//! again on resume.
 
 #[cfg(test)]
 mod pane_tests;
@@ -356,7 +357,7 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
                     .answer_ask(&machine_id, &session_id, &ask_id, reply);
             }
             Command::NetworkChanged => network_changed(&state),
-            Command::Suspend => suspend(&state),
+            Command::Suspend => suspend(&state).await,
             Command::Resume => resume(&state),
             command => pane_command(&state, command),
         }
@@ -603,7 +604,19 @@ fn network_changed<T: Transport>(state: &Rc<State<T>>) {
 
 /// The app went to the background with nothing to keep: every connection closes and every connect in flight is
 /// cancelled, with no state reported, and each machine is set aside for [`resume`] with its streams stopped.
-fn suspend<T: Transport>(state: &State<T>) {
+///
+/// The connected machines' streams stop first, and the loop waits for their links to write what they hold: an answer
+/// posted just before (`answer_ask` is fire-and-forget) reaches the origin before the connection closes under it.
+async fn suspend<T: Transport>(state: &State<T>) {
+    let mut connected: Vec<String> = state.connections.borrow().keys().cloned().collect();
+    connected.sort();
+    for machine_id in connected {
+        let tasks = state.presentations.borrow_mut().stop_machine(&machine_id);
+        for task in tasks {
+            // A link that panicked has nothing left to write.
+            let _ = task.await;
+        }
+    }
     let connections = std::mem::take(&mut *state.connections.borrow_mut());
     let attempts = std::mem::take(&mut *state.attempts.borrow_mut());
     let mut set_aside = Vec::new();
