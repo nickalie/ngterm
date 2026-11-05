@@ -141,6 +141,22 @@ internal struct HardwareKeysTests {
         #expect(pressed == [KeyMapping.named("arrow_up", mods: KeyMapping.super | KeyMapping.alt)])
     }
 
+    @Test("a terminal the selection has left sends the program nothing, and its chords still move on")
+    internal func selectionLeft() {
+        let rig = TerminalRig(clipboard: nil)
+        let view = rig.view
+        let moves = Locked<[String]>([])
+        view.keyboard.shortcuts = TerminalShortcuts { moves.value.append("next pane") }
+        view.drawsFocused = false
+        let ctrlC = Self.stroke(.keyboardC, .control, "\u{3}", "c")
+        #expect(Self.strike(ctrlC, on: view) == (true, false), "the chord is taken, and goes nowhere")
+        #expect(Self.strike(Self.stroke(.keyboardA, [], "a"), on: view) == (false, false))
+        #expect(Self.strike(Self.stroke(.keyboardLeftShift, .shift, ""), on: view) == (false, false))
+        _ = Self.strike(Self.stroke(.keyboardRightArrow, [.command, .alternate], "UIKeyInputRightArrow"), on: view)
+        #expect(moves.value == ["next pane"])
+        #expect(rig.inputs.isEmpty)
+    }
+
     @Test("it lists the chords it has actions for while ⌘ is held")
     internal func keyCommands() {
         let view = TerminalRig(clipboard: nil).view

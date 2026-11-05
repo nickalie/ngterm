@@ -22,6 +22,8 @@ internal struct SessionLiveView: View {
     internal let actions: SessionActions
     @State private var isConfirmingEnd = false
     @State private var isForward = true
+    // the layout the panes show in: it follows `isCompact` a moment later, once the keyboard's focus is handed over
+    @State private var shownCompact: Bool
 
     internal var body: some View {
         GeometryReader { geometry in
@@ -34,7 +36,7 @@ internal struct SessionLiveView: View {
                 SessionPanesView(
                     session: session,
                     focused: focused,
-                    isCompact: isCompact,
+                    isCompact: shownCompact,
                     actions: slotActions,
                     isForward: isForward
                 )
@@ -55,11 +57,7 @@ internal struct SessionLiveView: View {
             message: String(
                 localized: "It stops on \(session.machine), with everything running in it. This can't be undone."
             ),
-            action: RowAction(String(localized: "End session")) {
-                Task {
-                    await model.end()
-                }
-            }
+            action: RowAction(String(localized: "End session"), perform: end)
         )
         .onAppear {
             model.keyboard.shortcuts = TerminalShortcuts(
@@ -68,6 +66,16 @@ internal struct SessionLiveView: View {
                 nextSession: { moveSession(forward: true) },
                 previousSession: { moveSession(forward: false) }
             )
+        }
+        .onDisappear {
+            // the moves hold this view, and through it the model that holds the keyboard
+            model.keyboard.shortcuts = TerminalShortcuts()
+        }
+        .onChange(of: isCompact) { _, compact in
+            // the other layout builds the selected pane's terminal anew: the old one, still the keyboard's, hands its
+            // focus (and the soft keyboard) over to it before it goes
+            model.keyboard.handOver()
+            shownCompact = compact
         }
     }
 
@@ -118,6 +126,25 @@ internal struct SessionLiveView: View {
         )
     }
 
+    /// The live `session` of `model`, its pane `focused` selected, in a compact width's layout when `isCompact`, its
+    /// terminals in `look`, asking its window for `actions`.
+    internal init(
+        model: SessionModel,
+        session: AttachedSession,
+        focused: String?,
+        isCompact: Bool,
+        look: TerminalLook,
+        actions: SessionActions
+    ) {
+        self.model = model
+        self.session = session
+        self.focused = focused
+        self.isCompact = isCompact
+        self.look = look
+        self.actions = actions
+        _shownCompact = State(initialValue: isCompact)
+    }
+
     // selects `paneId`, the keyboard's focus following; a compact width slides it in from the side it lies on
     private func select(_ paneId: String) {
         let panes = session.live.layout?.panes ?? []
@@ -134,6 +161,16 @@ internal struct SessionLiveView: View {
         }
         select(next)
         isForward = forward
+    }
+
+    // ends the session, and closes the view once it ended: the listing may have dropped it first, leaving the view on
+    // the session gone rather than let go (a close the view asked for already changes nothing)
+    private func end() {
+        Task {
+            if await model.end() {
+                actions.close()
+            }
+        }
     }
 
     private func moveSession(forward: Bool) {

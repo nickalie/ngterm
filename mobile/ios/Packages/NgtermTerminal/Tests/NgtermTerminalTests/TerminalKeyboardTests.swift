@@ -297,4 +297,26 @@ internal struct TerminalKeyboardTests {
         #expect(first.inputs == [.typed("vi")], "nothing reached the first after it let go")
         #expect(second.inputs == [.typed("x")])
     }
+
+    @Test("a terminal the selection leaves finishes its composition there, then types nothing while it keeps the focus")
+    internal func selectionLeft() {
+        let rig = Self.rig()
+        let view = rig.view
+        let keyboard = view.keyboard
+        view.setMarkedText("vi", selectedRange: NSRange(location: 2, length: 0))
+        view.drawsFocused = false
+        #expect(rig.inputs == [.typed("vi")])
+        #expect(keyboard.target === view, "it keeps the focus until the next pane takes it")
+        keyboard.toggle(.control)
+        keyboard.type("x")
+        keyboard.press("escape")
+        view.insertText("y\n")
+        view.deleteBackward()
+        #expect(rig.inputs == [.typed("vi")], "nothing reached it after the selection left")
+        #expect(keyboard.control == .once, "the sticky Ctrl waits for a key that goes somewhere")
+
+        view.drawsFocused = true
+        keyboard.type("c")
+        #expect(Self.presses(rig.inputs) == [KeyMapping.forText("c", mods: KeyMapping.control)])
+    }
 }

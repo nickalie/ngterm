@@ -11,7 +11,7 @@ internal final class SessionsTests: XCTestCase {
         // a host the fake world connects at once, with no sessions
         try FakeApp.addMachine(host: "box.lan", user: "nick", in: app, audit: false)
         FakeApp.expectRow("box.lan", reads: "Connected", in: app)
-        app.descendants(matching: .any)["machine-box.lan"].firstMatch.tap()
+        app.descendants(matching: .any)["machine-row-box.lan"].firstMatch.tap()
 
         let empty = FakeApp.element(containing: "No sessions on box.lan", in: app)
         FakeApp.expect(empty, "empty state")

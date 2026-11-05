@@ -1,7 +1,8 @@
 /// The keyboard's side of the terminals on screen (mobile/android's `TerminalKeyboard`).
 ///
 /// What the soft keyboard types, the extra keys and a hardware keyboard's keys go to the ``target`` and nowhere else,
-/// with the extra keys' sticky Ctrl and Alt held for the next key. One keyboard serves every terminal on screen, so
+/// and only while it is drawn focused (the selected pane), with the extra keys' sticky Ctrl and Alt held for the next
+/// key. One keyboard serves every terminal on screen, so
 /// the sticky modifiers stay as the focus moves. The target is the terminal that is the first responder. A key from
 /// elsewhere than the soft keyboard (an extra key, a sticky tap) commits the composition waiting in the target first,
 /// so the program gets the text before the key, in the order it was typed.
@@ -93,7 +94,12 @@ public final class TerminalKeyboard {
 
     /// Text for `view`: line breaks go as Enter, the rest as typed text; with a sticky modifier held, the first
     /// character goes as the key that types it, with the modifier.
+    ///
+    /// A view not drawn focused takes nothing.
     public func type(_ text: String, to view: TerminalView) {
+        guard view.drawsFocused else {
+            return
+        }
         var rest = Substring(text)
         if control != .off || alt != .off, let first = rest.first, first != "\n" {
             view.pressKey(KeyMapping.forText(String(first), mods: takeSticky()))
@@ -109,8 +115,12 @@ public final class TerminalKeyboard {
         }
     }
 
-    /// Presses and lets go of the key Ghostty names `name` on `view`, with the sticky modifiers.
+    /// Presses and lets go of the key Ghostty names `name` on `view`, with the sticky modifiers; a view not drawn
+    /// focused takes nothing.
     public func press(_ name: String, to view: TerminalView) {
+        guard view.drawsFocused else {
+            return
+        }
         view.pressKey(KeyMapping.named(name, mods: takeSticky()))
     }
 
@@ -129,8 +139,9 @@ public final class TerminalKeyboard {
         return bits
     }
 
-    /// The session view moves the selection to another terminal: when a terminal has the focus now, the one drawn
-    /// focused next in a window takes it, with the soft keyboard if this one had it open (Android's `FollowFocus`).
+    /// The session view moves the selection to another terminal, or builds the selected one anew (the other size
+    /// class's layout): when a terminal has the focus now, the one drawn focused next in a window takes it, with the
+    /// soft keyboard if this one had it open (Android's `FollowFocus`).
     public func handOver() {
         handingOver = target.map { $0.softKeyboardWanted ? .withKeyboard : .focus }
     }
