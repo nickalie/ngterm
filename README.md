@@ -48,6 +48,17 @@ Linux build unless it names another OS.
   live sessions over ssh, with a chat view of a pane running Claude Code or Codex ([Android](#android)). The origin
   serves the chat through the Rust-only `agent.*` commands (`ngtermctl agent`, capability `agent-chat`) and an opt-in
   `agent` kind on the presentation stream, with no desktop UI.
+- Another extension beyond upstream, where every overlay is ephemeral: an HTML page overlay (`--html`, `--url`,
+  `--image`, `--markdown`, session-wide or `--pane`, and link-click pages) lives until it is closed. A restart of the
+  app or the headless server brings back each page in the slot it held
+  (`crates/ngterm-core/src/model/page_snapshot.rs`).
+  On a session another machine presents, losing that viewer (a detach, a lost link, its row closing, a restart of
+  either side) parks the page on the origin, read back as `parked: true`, and the next viewer that attaches is handed
+  it again (`crates/ngterm-core/src/remote/page.rs`); a viewer tells the page's close (`page.closed`) from its own
+  helper's end (`page.detached`, this build's presentation kind, sent only to an origin that lists it). Closing the
+  page (its X, ⌘W/Ctrl+W, `session overlay close`, `window.close()`, a submit, the session's close) ends it for good.
+  Page companions are still not kept; a page already open on a desktop origin before a viewer attached stays there;
+  a page comes back from its original source, without its in-page state. Rust-only capability `pages-survive`.
 - No bundled theme of its own: upstream ships its `agterm` theme and starts a fresh install on it; this build ships
   Ghostty's theme catalog only, so a fresh install starts on Ghostty's built-in colors (the "default ghostty" row),
   and a settings file that still names `agterm` (a build from before the rename seeded it) loads on them too.

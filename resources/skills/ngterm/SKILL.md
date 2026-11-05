@@ -278,7 +278,8 @@ session; after a relaunch the row comes back under a new id once that machine an
 `unsupported`, or `failed` with `error` - not the ssh connection's - plus `mode`, `presenter` while its stream holds that role, else `mirror`),
 `presenters` (origin session: `mirrors`, the streams mirroring it without presenting, and `presenter: true`
 when one presents it) and `remoteOverlays` (origin session: overlay slots a presenting Mac holds, a page's
-`pageID` included; HTML pages follow the same placement, see reference.md Remote sessions),
+`pageID` included, `parked: true` for a page waiting for the next presenter; HTML pages follow the same placement,
+see reference.md Remote sessions),
 `hasSplit` (whether a second pane exists at all, shown or hidden; omitted when there is none — read this
 rather than `split`, which is false for a split hidden with ⌘D even though its pane is still alive),
 `splitAxis` (`vertical` for left/right or `horizontal` for top/bottom; omitted without a split),
@@ -895,6 +896,9 @@ ngtermctl session overlay reload --target "$NGTERM_SESSION_ID"   # after rewriti
   light theme (see below). A palette the user asks for wins.
 - Leave the page up for the user, who dismisses it with ⌘W or its close button. Call
   `session overlay close` only when the page is no longer wanted, never right after it loads.
+- A page lives until it is closed: an ngterm restart brings it back in its slot (reloaded from its source, under a
+  new `id`), and on a session another Mac presents, losing that viewer parks it (`parked: true` in `htmlOverlays`)
+  until the next one attaches and shows it again. `session overlay close` ends a parked page too.
 - A successful open means the page was accepted. `tree --json --window "$NGTERM_WINDOW_ID"` reports it
   under `htmlOverlays`; without `--window`, `tree` covers the frontmost window only. Each page has
   `state` `loading`, `loaded` or `failed`; `loaded` does not prove every CDN asset arrived. A failed

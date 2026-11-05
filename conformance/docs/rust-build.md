@@ -226,7 +226,10 @@ session when that presenter goes ("losing the presenter ends its overlays for go
 closes and when an unclaimed file page's claim window passes; the build parks it instead, its slot reserved and its
 outcome pending (`parked: true` in `htmlOverlays` and `remoteOverlays`), tells a presenter that stays to drop it, and
 hands it again, as a fresh `page.request` under a new claim token, to the next presenter granted the session that
-lists the page kinds. Its tests are in `tests/protocol/test_live_sessions.py` (`PAGES_SURVIVE`): a presenter that
+lists the page kinds. A presenter whose own helper for the page ends sends `page.detached`, a presentation kind of
+this build listed in its hello and echoed by the origin, which parks the page the same way; toward an origin that
+does not echo it the presenter keeps sending `page.closed`, and it sends `page.closed` for a close of the page alone,
+nothing when its row, its stream or the app goes. Its tests are in `tests/protocol/test_live_sessions.py` (`PAGES_SURVIVE`): a presenter that
 goes and the next one that attaches, and a page closed meanwhile that is not handed on; the upstream test of a helper
 that goes branches on the claim. They need Live sessions too, so the zsh and fish legs run with
 `--must-pass pages-survive`. The build claims it on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`).

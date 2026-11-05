@@ -6,7 +6,9 @@
 //! live session, the presentation (status, layout, HUD, notifications) streamed over `ngtermctl live present`, and
 //! asks, program overlays and pages shown on the viewer.
 //! Pages always use the presenter, including a new split whose terminal still leads on this headless origin, and a page
-//! companion is created without web views and handed to the machine presenting its parent.
+//! companion is created without web views and handed to the machine presenting its parent. A page waits, parked, while
+//! no viewer presents its session and goes to the next one that attaches, and the pages open here persist like the
+//! app's, so a restart of this server keeps them too (an extension beyond upstream, whose pages end with their viewer).
 //!
 //! - Live sessions always: every launch runs in restore mode `live` whatever the settings hold, which keep the user's
 //!   own mode for an app on the same state dir ([`Core::force_restore_mode`]), and refuses to start when the live

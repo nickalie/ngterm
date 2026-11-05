@@ -194,30 +194,31 @@
 - Modify: `crates/ngterm-gpui` only if its quit or row-close path sends `page.closed` around the core
 - Tests: the replica page tests in `ngterm-core`
 
-- [ ] `Body::PageDetached` (`page.detached`) in frames, `SUPPORTED_KINDS`, the hub's presenter-frame forwarding,
+- [x] `Body::PageDetached` (`page.detached`) in frames, `SUPPORTED_KINDS`, the hub's presenter-frame forwarding,
       and the origin's handling (park, as for helper loss)
-- [ ] the replica record knows why it left; `replica_page_released` sends `page.closed`, `page.detached` or nothing
+- [x] the replica record knows why it left; `replica_page_released` sends `page.closed`, `page.detached` or nothing
       as Technical Details says, gated on the origin's hello answer
-- [ ] the quit path and the row's soft close send nothing to a `page.detached` origin
-- [ ] tests: each departure reason toward a new and an old origin; a viewer close ends the page on the origin end
+- [x] the quit path and the row's soft close send nothing to a `page.detached` origin
+- [x] tests: each departure reason toward a new and an old origin; a viewer close ends the page on the origin end
       to end through the fakes
-- [ ] clippy and tests on `ngterm-core` (and `ngterm-gpui` if touched); must pass before Task 4
+- [x] clippy and tests on `ngterm-core` (and `ngterm-gpui` if touched); must pass before Task 4
 
 ### Task 4: Verify acceptance criteria
 
-- [ ] every Overview item holds: restart restores pages (local and parked); detach/reattach, link loss, row close
+- [x] every Overview item holds: restart restores pages (local and parked); detach/reattach, link loss, row close
       and either side's restart bring a page back; every close path ends it for good
-- [ ] older peers: an old viewer (no `page.detached`) still ends pages by `page.closed`; an old origin keeps getting
+- [x] older peers: an old viewer (no `page.detached`) still ends pages by `page.closed`; an old origin keeps getting
       `page.closed`
-- [ ] clippy and tests on the touched crates; the live-sessions protocol file
+- [x] clippy and tests on the touched crates; the live-sessions protocol file left to CI (the user ruled
+      conformance is CI's job)
 
 ### Task 5: [Final] Documentation
 
-- [ ] README: an "Another extension beyond upstream" entry (pages survive a restart and a reattach, close ends
+- [x] README: an "Another extension beyond upstream" entry (pages survive a restart and a reattach, close ends
       them, what stays out of scope)
-- [ ] the `ngterm` skill (`resources/skills/ngterm/`): pages persist until closed; `parked` read-back
-- [ ] crate and module docs that said pages are ephemeral or end with their presenter
-- [ ] move this plan to `docs/plans/completed/`
+- [x] the `ngterm` skill (`resources/skills/ngterm/`): pages persist until closed; `parked` read-back
+- [x] crate and module docs that said pages are ephemeral or end with their presenter
+- [x] move this plan to `docs/plans/completed/` (moved by the harness)
 
 ## Post-Completion
 
