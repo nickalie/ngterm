@@ -14,11 +14,13 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
     private let textSize: CGFloat
     private let faces: TerminalFaces?
     private let focused: Bool
+    private var keyboard: TerminalKeyboard?
 
     /// The terminal of `pane`, told of new frames through `feed`.
     ///
     /// It draws in `palette` at `textSize` points in `faces` (the bundled JetBrains Mono by default; `nil` is the
-    /// system's monospace), its cursor as it is when `focused`.
+    /// system's monospace), its cursor as it is when `focused`. It takes its keys through a keyboard of its own unless
+    /// given one (``keyboard(_:)``).
     public init(
         pane: any PaneClient,
         feed: TerminalFeed,
@@ -35,9 +37,16 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
         self.focused = focused
     }
 
+    /// The same terminal, taking its keys through `keyboard`, which the terminals on screen share.
+    public func keyboard(_ keyboard: TerminalKeyboard) -> Self {
+        var copy = self
+        copy.keyboard = keyboard
+        return copy
+    }
+
     /// The terminal view, joined to the feed.
     public func makeUIView(context _: Context) -> TerminalView {
-        let view = TerminalView(pane: pane, palette: palette, textSize: textSize, faces: faces)
+        let view = TerminalView(pane: pane, palette: palette, textSize: textSize, faces: faces, keyboard: keyboard)
         view.drawsFocused = focused
         feed.view = view
         return view
@@ -54,6 +63,7 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
         if context.coordinator.textSize != textSize {
             context.coordinator.textSize = textSize
             view.textSize = textSize
+            view.defaultTextSize = textSize
         }
         view.faces = faces
         view.drawsFocused = focused

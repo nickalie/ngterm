@@ -298,6 +298,58 @@ recognizers; what is new to iOS is the system's: the edit menu, the text beam, t
 - **A program writing the clipboard** (OSC 52) puts its text on the system's; a write to the selection or primary
   clipboard, which iOS doesn't have, is dropped.
 
+### The keyboard
+
+`Keyboard/`, `TextInput/`, `ExtraKeys/`. Typing is the terminal's other half, and on a phone the soft keyboard is in
+charge of the screen. The behavior is Android's (`KeyMapping`, `TerminalKeyboard`, `ExtraKeysRow`); the extra keys are
+iOS's own: the keyboard's accessory, on the keyboard's own ground, not a Material row.
+
+- **Focus and the soft keyboard are apart.** A tap gives the terminal the focus and opens the soft keyboard; a pointer's
+  click, a long press and the edit menu take the focus without it. The terminal asks for plain text: no autocorrect,
+  spell check, smart quotes, dashes or spaces, automatic capitals, inline predictions or Writing Tools (it types
+  commands and passwords). What the keyboard commits goes to the program at once, Return as Enter, delete with
+  nothing composed as the program's backspace.
+- **A composition** (a CJK input method's, a hardware dead key's, dictation's) waits at the cursor in the terminal's
+  face on its ground, underlined 2 pt in the cursor's color, moved left as far as it needs to fit, and goes when it
+  commits. A key from elsewhere (an extra key, a sticky tap) sends it first, and the terminal letting the keyboard go
+  finishes it there.
+- **The extra keys** (`ExtraKeysBar`, the terminal's `inputAccessoryView` on the keyboard's own ground) sit over the
+  soft keyboard, and at the screen's foot while the terminal has the focus with the keyboard closed (the arrows and Esc
+  work a pager or a menu without it). They stand aside while a hardware keyboard is attached (`GCKeyboard`).
+
+  ```
+  phone, upright: two lines of eight
+  +-----+------+-----+-----+------+-----+-----+------+
+  | Esc |  /   |  |  |  ~  | Home |  ↑  | End | PgUp |
+  | Tab | Ctrl | Alt |  ⌨  |  ←   |  ↓  |  →  | PgDn |
+  +-----+------+-----+-----+------+-----+-----+------+
+
+  sideways or wider (44 pt a key or more): one line of sixteen
+  | Esc | Tab | Ctrl | Alt | / | | | ~ | Home | End | PgUp | PgDn | ← | ↑ | ↓ | → | ⌨ |
+  ```
+
+  - Ctrl and Alt by Tab under the thumb, the arrows an inverted T with Home and End over Left and Right, the page keys
+    at the end. A key is its whole cell (no gaps), 44 pt tall. Android's `-` gives its place to the keyboard's key
+    (`⌨`): an iPhone's keyboard has no key of its own that closes it. The key closes the soft keyboard and opens it
+    again (`keyboard.chevron.compact.down`, then `keyboard`), the focus and the extra keys staying.
+  - **Legends:** nothing is drawn around a key at rest. Words in SF Pro semibold at the subheadline size, all at one
+    size, the widest's fitted to its key; `/`, `|` and `~` in JetBrains Mono at 18 pt (scaling to 26), the character as
+    it will land; the arrows and the keyboard in SF Symbols. The label color on the keyboard's ground; the system's
+    fill under a pressed key.
+  - **A key acts as it goes down**, with the keyboard's click (as the user set it) and a light tap; the arrows and the
+    page keys repeat while held (after 400 ms, every 50 ms), Esc, Tab and the symbols don't.
+  - **Sticky Ctrl and Alt:** a tap holds the modifier for the next key, a second locks it, a third lets it go, each with
+    a selection tick. Shape carries the state, never color alone: an outline 1.5 pt in the tint holds for the next key,
+    a tint fill (`onTint` legend) locks. VoiceOver reads "Off", "On for the next key" or "Locked on"; each key is a
+    keyboard key with its name ("Escape", "Vertical bar", "Hide keyboard").
+- **A hardware keyboard:** what types plainly goes through the system's text input, so dead keys and input methods
+  work as in any text field; special keys and chords go to the program as keys (Ctrl, Command as Super, the arrows,
+  Esc, the function keys), repeating while held. Option types the layout's own ASCII character (`@`, `|`, `~` on
+  European layouts) and is Alt otherwise, as Ghostty's `macos-option-as-alt` is on a US layout.
+- **The app's chords** are upstream's Mac ones, listed while ⌘ is held: ⌘+ and ⌘- step the text a point (within 8 to
+  32), ⌘0 goes back to Settings' size, ⌘⌥→ and ⌘⌥← move between panes, ⌘⌥↓ and ⌘⌥↑ between sessions (offered once the
+  session view gives them somewhere to go). Copy and paste are the system's ⌘C and ⌘V, in its Edit menu.
+
 ## Screens
 
 ### First run (`Onboarding/`)

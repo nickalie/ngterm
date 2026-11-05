@@ -18,6 +18,9 @@ internal struct CoreChoice {
     internal static let fakeKeyArgument = "-ngterm-fake-key"
     /// With the fake core, the launch argument that has two programs ask to read the clipboard at once.
     internal static let fakeClipboardReadArgument = "-ngterm-fake-clipboard-read"
+    /// With the fake core, the launch argument that shows a terminal on a fake pane alone (``TerminalBench``), for the
+    /// keyboard's UI tests.
+    internal static let fakeTerminalArgument = "-ngterm-fake-terminal"
 
     // the public key's comment, which shows in a machine's authorized_keys: whose key it is ("ngterm@iPhone")
     @MainActor private static var keyComment: String {

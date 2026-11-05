@@ -2,7 +2,8 @@ import UIKit
 
 /// A finger's gestures on a ``TerminalView``, as mobile/android's `terminalGestures` has them.
 ///
-/// - a tap gives the terminal the focus, and under mouse tracking clicks there; a tap lets a touch selection go;
+/// - a tap gives the terminal the focus and opens the soft keyboard, and under mouse tracking clicks there; a tap lets
+///   a touch selection go;
 /// - a double tap selects the word, a triple tap the line, with handles and the edit menu;
 /// - a finger coming down stops a fling;
 /// - a drag scrolls (the pane reports it to a program that asked for the mouse, as wheel turns) and flings on; a drag
@@ -49,7 +50,7 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
         if pointer.tracking {
             pointer.mouse(.press, button: .left, mods: 0, at: point)
             pointer.mouse(.release, button: .left, mods: 0, at: point)
-            view.focus()
+            view.focus(showingKeyboard: true)
             return
         }
         switch (count - 1) % Self.tapKinds {
@@ -57,7 +58,7 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
             if selection.isTouchSelection {
                 selection.clear()
             } else {
-                view.focus()
+                view.focus(showingKeyboard: true)
             }
 
         case 1:
