@@ -1,5 +1,6 @@
 #if DEBUG
     import Foundation
+    import NgtermCore
     import NgtermCoreFakes
     import NgtermFeatures
     import NgtermPlatform
@@ -9,7 +10,9 @@
     ///
     /// - `build-01.lan` offers ``buildHostKey``, which the first connect asks to trust;
     /// - `signin.lan` offers ``signInHostKey`` and asks to sign in as Tailscale SSH does;
-    /// - any other host connects at once.
+    /// - any other host connects at once;
+    ///
+    /// and, when asked, a program in `docs-site` on `build-01` asks to read the clipboard as the app starts.
     internal enum FakeWorld {
         /// The host key `build-01.lan` offers (made up).
         internal static let buildHostKey = "SHA256:fAkEbU1Ld01h0sTkEyF0rUiTeStS0nLyN0tArEaLkEy00"
@@ -25,9 +28,10 @@
             isImported: false
         )
 
-        /// The app's graph over the fake core, with a key already when `withKey`.
+        /// The app's graph over the fake core, with a key already when `withKey`, and a program asking to read the
+        /// clipboard when `readsClipboard`.
         @MainActor
-        internal static func graph(withKey: Bool) -> AppGraph {
+        internal static func graph(withKey: Bool, readsClipboard: Bool) -> AppGraph {
             let directory = FileManager.default.temporaryDirectory.appending(
                 path: "ngterm-fake-\(UUID().uuidString)",
                 directoryHint: .isDirectory
@@ -40,14 +44,22 @@
             if withKey {
                 try? keys.add(key)
             }
-            return AppGraph(
+            let graph = AppGraph(
                 machines: MachineStore(directory: directory),
                 settings: SettingsStore(directory: directory),
                 keys: AppKeys(store: keys, vault: MemoryPrivateKeys(), maker: CoreKeyMaker(), comment: "ngterm@fake"),
                 pins: pins,
-                attached: AttachedStore(directory: directory),
+                stores: (
+                    attached: AttachedStore(directory: directory),
+                    clipboardTrust: ClipboardTrustStore(directory: directory)
+                ),
                 core: core
             )
+            if readsClipboard {
+                let pane = PaneRef(machineId: "build-01", sessionId: "docs-site", paneId: "P1")
+                core.emit(.clipboardReadRequest(pane: pane, readId: 1, clipboard: .standard, listOnly: false))
+            }
+            return graph
         }
     }
 #endif

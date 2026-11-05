@@ -158,6 +158,18 @@ internal struct LiveSessionsTests {
         #expect(frames.seen == ["dirty", "attached"])
     }
 
+    @Test("a program's write to the standard clipboard goes to the device's, and one to another clipboard is dropped")
+    internal func clipboardWrite() async {
+        defer { test.remove() }
+        await emit(
+            .clipboardWrite(pane: pane, clipboard: .standard, text: "copied"),
+            .clipboardWrite(pane: pane, clipboard: .selection, text: "selected"),
+            .clipboardWrite(pane: pane, clipboard: .primary, text: "primary"),
+            .clipboardWrite(pane: pane, clipboard: .standard, text: nil)
+        )
+        #expect(test.clipboard.writes == ["copied", nil])
+    }
+
     @Test("a detached session's state goes")
     internal func detached() async throws {
         defer { test.remove() }

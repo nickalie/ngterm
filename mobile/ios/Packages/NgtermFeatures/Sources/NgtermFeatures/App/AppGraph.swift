@@ -1,9 +1,11 @@
 import Foundation
 import NgtermCore
 import NgtermPlatform
+import NgtermTerminal
 
 /// What the app's screens work with, made once per process: the machines, the settings, the keys, the pinned host
-/// keys, the connections over the mobile core, the attached sessions' live state, and whether the device is online.
+/// keys, the connections over the mobile core, the attached sessions' live state, the programs' clipboard reads, and
+/// whether the device is online.
 ///
 /// The app makes it over the linked core, the Keychain and Application Support, or over the fake core and memory for
 /// its UI tests; the tests make one over fakes. ``start()`` starts what runs on its own.
@@ -22,21 +24,28 @@ public final class AppGraph {
     public let connections: Connections
     /// The attached sessions as the core tells them.
     public let live: LiveSessions
+    /// The device's clipboard, which programs write and read.
+    public let clipboard: any TerminalClipboard
+    /// The programs' clipboard reads waiting for the user.
+    public let clipboardReads: ClipboardReads
     /// Whether the device is online; it nudges the core when a network comes up.
     public let network: NetworkMonitor
     private var isStarted = false
 
-    /// The graph over its parts: `core` connects, `attached` keeps the attached set, and `pathSource` (the system's
-    /// unless a test gives its own) tells the network; a reconnect counts down by `clock`.
+    /// The graph over its parts: `core` connects, `attached` keeps the attached set, `clipboardTrust` the machines
+    /// trusted with the clipboard, and `pathSource` (the system's unless a test gives its own) tells the network; a
+    /// reconnect counts down by `clock`, and programs write and read `clipboard` (the system's unless a test gives its
+    /// own).
     @preconcurrency
     public init(
         machines: MachineStore,
         settings: SettingsStore,
         keys: AppKeys,
         pins: any HostKeyPins,
-        attached: AttachedStore,
+        stores: (attached: AttachedStore, clipboardTrust: ClipboardTrustStore),
         core: any MobileCoreClient,
         pathSource: (any PathSource)? = nil,
+        clipboard: (any TerminalClipboard)? = nil,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.machines = machines
@@ -44,8 +53,11 @@ public final class AppGraph {
         self.keys = keys
         self.pins = pins
         let made = Connections(core: core, clock: clock)
+        let board = clipboard ?? SystemClipboard()
         connections = made
-        live = LiveSessions(connections: made, store: attached)
+        self.clipboard = board
+        live = LiveSessions(connections: made, store: stores.attached, clipboard: board)
+        clipboardReads = ClipboardReads(connections: made, trust: stores.clipboardTrust, clipboard: board)
         network = NetworkMonitor(source: pathSource ?? SystemPathSource()) {
             made.networkChanged()
         }
@@ -62,6 +74,13 @@ public final class AppGraph {
         for machine in machines.machines {
             connections.connect(machine.core)
         }
+    }
+
+    /// The app has nothing to keep connected: every clipboard read still waiting is denied, then the core closes every
+    /// connection quietly until ``Connections/resume()``.
+    public func suspend() {
+        clipboardReads.denyAll()
+        connections.suspend()
     }
 
     deinit {

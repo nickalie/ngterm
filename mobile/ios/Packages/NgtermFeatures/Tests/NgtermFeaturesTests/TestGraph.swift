@@ -6,7 +6,8 @@ import NgtermPlatform
 
 /// The app's graph over fakes, as mobile/android's `TestGraph`: the core a ``FakeMobileCore`` pinning in memory, the
 /// stores real ones in a directory of the test's own, the keys made by a ``FakeKeyMaker`` and kept in memory, the
-/// network a ``TestPathSource`` and the clock a ``TestClock``. ``remove()`` deletes the directory.
+/// network a ``TestPathSource``, the clock a ``TestClock`` and the clipboard a ``MemoryClipboard``. ``remove()``
+/// deletes the directory.
 @MainActor
 internal final class TestGraph {
     internal let directory: URL
@@ -15,6 +16,7 @@ internal final class TestGraph {
     internal let maker = FakeKeyMaker()
     internal let path = TestPathSource()
     internal let clock = TestClock()
+    internal let clipboard = MemoryClipboard(nil)
     internal let core: FakeMobileCore
     internal let graph: AppGraph
 
@@ -30,9 +32,13 @@ internal final class TestGraph {
             settings: SettingsStore(directory: directory),
             keys: AppKeys(store: KeyStore(directory: directory), vault: vault, maker: maker, comment: "ngterm@test"),
             pins: pins,
-            attached: AttachedStore(directory: directory),
+            stores: (
+                attached: AttachedStore(directory: directory),
+                clipboardTrust: ClipboardTrustStore(directory: directory)
+            ),
             core: core,
             pathSource: path,
+            clipboard: clipboard,
             clock: clock.read
         )
     }
