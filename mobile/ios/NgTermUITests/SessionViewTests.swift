@@ -22,7 +22,7 @@ internal final class SessionViewTests: XCTestCase {
         let app = FakeApp.launch(withKey: true, arguments: ["-ngterm-fake-session"], for: self)
         FakeApp.showMachines(in: app)
         FakeApp.expectRow("split", reads: "Connected", in: app)
-        app.descendants(matching: .any)["machine-split"].firstMatch.tap()
+        app.descendants(matching: .any)["machine-row-split"].firstMatch.tap()
         let row = app.descendants(matching: .any)["session-work"].firstMatch
         FakeApp.expect(row, "the session's row")
         row.tap()
@@ -81,6 +81,28 @@ internal final class SessionViewTests: XCTestCase {
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: title)
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 10), .completed, "the session view stayed")
         FakeApp.expect(app.descendants(matching: .any)["session-work"].firstMatch, "the session's row again")
+    }
+
+    // the fake core lists the session's machine without it before End answers: the view closes all the same, rather
+    // than staying on the session gone
+    @MainActor
+    internal func testEndClosesTheSessionView() throws {
+        let app = openSession()
+        app.buttons["session-menu"].tap()
+        let end = app.buttons["session-end"]
+        FakeApp.expect(end, "End session in the session's menu")
+        end.tap()
+        FakeApp.expect(FakeApp.element(containing: "End work?", in: app), "End session confirmation")
+        let confirm = app.buttons.matching(identifier: "End session").allElementsBoundByIndex.first(where: \.isHittable)
+        try XCTUnwrap(confirm, "no End session in the confirmation").tap()
+        let absent = NSPredicate(format: "exists == false")
+        let title = app.descendants(matching: .any)["session-title"].firstMatch
+        let live = XCTNSPredicateExpectation(predicate: absent, object: title)
+        XCTAssertEqual(XCTWaiter.wait(for: [live], timeout: 10), .completed, "the session view stayed")
+        FakeApp.expect(FakeApp.element(containing: "No sessions on split", in: app), "the machine's empty list")
+        let goneShown = FakeApp.element(containing: "work is gone", in: app)
+        let gone = XCTNSPredicateExpectation(predicate: absent, object: goneShown)
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 10), .completed, "the view stayed on the session gone")
     }
 
     deinit {

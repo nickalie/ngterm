@@ -101,13 +101,15 @@ public final class TerminalView: UIView {
     /// Whether the terminal has the focus: an unfocused one shows its cursor as a hollow block.
     ///
     /// The session view draws its selected pane focused: one that becomes so in a window takes the keyboard's focus
-    /// when the last selected one handed it over (``TerminalKeyboard/handOver()``).
+    /// when the last selected one handed it over (``TerminalKeyboard/handOver()``). One the selection leaves finishes
+    /// its composition there and types nowhere after, though it keeps the first responder until the next pane takes
+    /// it, its chords still moving on: the next may have no terminal yet, or none it could show.
     public var drawsFocused = true {
+        willSet {
+            focusWillMove(drawingFocused: newValue)
+        }
         didSet {
-            if drawsFocused != oldValue, let cursor = screen.header?.cursor {
-                redraw(rows: [cursor.row])
-            }
-            takeHandover()
+            focusMoved(drawnFocused: oldValue)
         }
     }
 

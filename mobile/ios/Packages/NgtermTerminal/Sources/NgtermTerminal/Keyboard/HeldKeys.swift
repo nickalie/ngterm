@@ -43,15 +43,24 @@ internal final class HeldKeys {
 
     /// Lets every key go (the terminal lost the keyboard): the program's keys, to be released.
     internal func letGoAll() -> [PaneKey] {
+        let keys = letGoProgramKeys()
+        held = [:]
+        return keys
+    }
+
+    /// Lets the program's keys go, the repeat stopping (the terminal types nowhere now): those keys, to be released.
+    ///
+    /// A held chord stays the app's until it is let go.
+    internal func letGoProgramKeys() -> [PaneKey] {
         repeats.stop()
         repeating = nil
-        let keys = held.values.compactMap { what -> PaneKey? in
+        var keys: [PaneKey] = []
+        for (code, what) in held {
             if case .program(let key, _) = what {
-                return key
+                keys.append(key)
+                held.removeValue(forKey: code)
             }
-            return nil
         }
-        held = [:]
         return keys
     }
 

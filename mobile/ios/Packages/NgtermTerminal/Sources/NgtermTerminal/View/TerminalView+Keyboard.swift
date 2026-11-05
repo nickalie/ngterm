@@ -20,6 +20,27 @@ extension TerminalView {
         return became
     }
 
+    /// ``drawsFocused`` is about to become `next`: a terminal the selection leaves finishes its composition while it
+    /// still types, and lets the program's held keys go, their repeat stopping; a chord held (the one that moved the
+    /// selection) stays the app's.
+    internal func focusWillMove(drawingFocused next: Bool) {
+        if drawsFocused, !next {
+            commitComposition()
+            for key in heldKeys.letGoProgramKeys() {
+                send(key: KeyMapping.key(key, as: .release))
+            }
+        }
+    }
+
+    /// ``drawsFocused`` changed from `before`: the cursor is drawn anew, and a terminal drawn focused takes the focus
+    /// handed over.
+    internal func focusMoved(drawnFocused before: Bool) {
+        if drawsFocused != before, let cursor = screen.header?.cursor {
+            redraw(rows: [cursor.row])
+        }
+        takeHandover()
+    }
+
     /// The terminal drawn focused (the selected pane) in a window takes the focus the last selected one handed over,
     /// opening the soft keyboard if that one had it open.
     internal func takeHandover() {
@@ -56,7 +77,7 @@ extension TerminalView {
     /// An app chord runs (where no key command ran it already); while an input method composes, every key is its own;
     /// a special key or a chord goes to the program with the sticky modifiers, repeating while held; a modifier key
     /// goes to the program and the system both; what types plainly is the text system's, which types it through
-    /// ``insertText(_:)``.
+    /// ``insertText(_:)``. A terminal not drawn focused (one the selection has left) runs the chords alone.
     public func keyDown(_ stroke: KeyStroke) -> Bool {
         if let shortcut = TerminalShortcut.matching(stroke), run(shortcut) {
             heldKeys.hold(stroke.code, as: .chord)
@@ -65,7 +86,12 @@ extension TerminalView {
         guard !textInput.isComposing else {
             return false
         }
-        switch KeyMapping.route(stroke) {
+        let route = KeyMapping.route(stroke)
+        guard drawsFocused else {
+            // the program's keys go nowhere, and what the text system types goes nowhere through insertText
+            return route == .key
+        }
+        switch route {
         case .text, .system:
             return false
 

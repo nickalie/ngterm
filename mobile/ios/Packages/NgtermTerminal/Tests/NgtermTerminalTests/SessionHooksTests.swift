@@ -1,6 +1,7 @@
 import Foundation
 import NgtermTerminal
 import Testing
+import UIKit
 
 /// What the session view takes from a terminal: a sideways swipe to the next or previous pane, a touch selecting the
 /// pane, and its lines for VoiceOver (mobile/android's `TerminalGesturesTest` swipe cases and spoken text).
@@ -81,5 +82,17 @@ internal struct SessionHooksTests {
         #expect(view.accessibilityFrame(forLineNumber: 3).height == view.font.cellHeight)
         #expect(view.accessibilityLineNumber(for: rig.point(3, 1)) == 1)
         #expect(view.accessibilityLineNumber(for: CGPoint(x: -5, y: -5)) == NSNotFound)
+    }
+
+    @Test("VoiceOver's point for a line is in the view's own space, wherever the view sits in its window")
+    internal func lineUnderPointOffOrigin() {
+        let rig = TerminalRig(clipboard: nil)
+        let view = rig.view
+        let ground = UIView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        view.frame.origin = CGPoint(x: 300, y: 200)
+        ground.addSubview(view)
+        #expect(view.accessibilityLineNumber(for: rig.point(3, 0)) == 0)
+        #expect(view.accessibilityLineNumber(for: rig.point(3, 3)) == 3)
+        #expect(view.accessibilityLineNumber(for: CGPoint(x: 5, y: view.bounds.maxY + 1)) == NSNotFound)
     }
 }

@@ -39,7 +39,7 @@ internal struct MachineEntry: View {
                 SessionsSummary(sessions: item.sessions)
             }
         }
-        .accessibilityIdentifier("machine-\(item.machine.title)")
+        .accessibilityIdentifier("machine-row-\(item.machine.title)")
     }
 
     private func rowAction(_ action: LinkLook.Action) -> RowAction {

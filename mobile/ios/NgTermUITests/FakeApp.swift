@@ -137,7 +137,7 @@ internal enum FakeApp {
     @MainActor
     internal static func expectRow(_ title: String, reads badge: String, in app: XCUIApplication) {
         let reading = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "machine-\(title)", badge))
+            .matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "machine-row-\(title)", badge))
             .firstMatch
         expect(reading, "\(title) reading \(badge)")
     }
@@ -204,14 +204,20 @@ internal enum FakeApp {
 
     // an iPad's contrast issue in the machines' column, the sidebar of Liquid Glass: once the session beside it has the
     // focus, the audit measures the rows' colored text against the glass's grey (or the selection it greys), not the
-    // grouped ground the colors are made for, whose contrast ContrastTests checks
+    // grouped ground the colors are made for, whose contrast ContrastTests checks. Only the rows, and only beside a
+    // session: the machine form and the machines' list on their own are audited in full
     @MainActor
     private static func isSidebarGlass(_ issue: XCUIAccessibilityAuditIssue, in app: XCUIApplication) -> Bool {
         let isPadContrast = UIDevice.current.userInterfaceIdiom == .pad && issue.auditType == .contrast
         guard isPadContrast, let element = issue.element else {
             return false
         }
-        let isRow = NSPredicate(format: "identifier BEGINSWITH 'machine-' OR identifier BEGINSWITH 'sidebar-session-'")
+        guard app.descendants(matching: .any)["session-title"].firstMatch.exists else {
+            return false
+        }
+        let isRow = NSPredicate(
+            format: "identifier BEGINSWITH 'machine-row-' OR identifier BEGINSWITH 'sidebar-session-'"
+        )
         let rows = app.descendants(matching: .any).matching(isRow)
         return rows.allElementsBoundByIndex.contains { row in row.frame.contains(element.frame) }
     }

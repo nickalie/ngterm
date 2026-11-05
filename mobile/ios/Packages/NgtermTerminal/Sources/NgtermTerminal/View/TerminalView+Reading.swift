@@ -3,13 +3,12 @@ import UIKit
 // VoiceOver reads the terminal line by line, as it reads a book's page: each row of the screen is a line, framed on
 // its row, and the page is the screen's text down to its last row with text.
 extension TerminalView: UIAccessibilityReadingContent {
-    /// The row under `point` (in screen coordinates), or `NSNotFound` off the screen's rows.
+    /// The row under `point` (in the view's own coordinates, as UIKit gives it), or `NSNotFound` off the screen's rows.
     public func accessibilityLineNumber(for point: CGPoint) -> Int {
-        let local = convert(point, from: nil)
-        guard bounds.contains(local), font.cellHeight > 0 else {
+        guard bounds.contains(point), font.cellHeight > 0 else {
             return NSNotFound
         }
-        let row = Int(local.y / font.cellHeight)
+        let row = Int(point.y / font.cellHeight)
         return row < screen.rowCount ? row : NSNotFound
     }
 
