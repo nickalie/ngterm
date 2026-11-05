@@ -59,6 +59,10 @@ class PaneChats(
     // the panes whose terminal was picked, with the conversation it holds for (`null`: the one still to be named)
     private val holds = MutableStateFlow<Map<PaneRef, Hold>>(emptyMap())
     private val chatViewState = MutableStateFlow(ChatViews())
+
+    // the sessions' choices the store could not keep (`null`: one set back to the default), over what it reads until
+    // the process ends or a later write of the same session lands
+    private val unsaved = MutableStateFlow<Map<SessionKey, Boolean?>>(emptyMap())
     private val viewState = MutableStateFlow<Map<PaneRef, PaneView>>(emptyMap())
     private val chatState = MutableStateFlow<Map<PaneRef, ChatViewModel>>(emptyMap())
     private val sessions = live.sessions
@@ -78,9 +82,11 @@ class PaneChats(
     init {
         connections.listen(::onEvent)
         scope.launch {
-            sessionViews.views
-                .catch { /* each source stands in for itself (SessionChatViews): nothing reaches here */ }
-                .collect { chatViewState.value = it }
+            combine(
+                sessionViews.views.catch { /* each source stands in for itself (SessionChatViews): none comes */ },
+                unsaved,
+                ::withUnsaved,
+            ).collect { chatViewState.value = it }
         }
         scope.launch { sessions.collect(::keepHolds) }
         scope.launch {
@@ -119,8 +125,10 @@ class PaneChats(
         scope.launch {
             try {
                 sessionViews.set(key, on, default)
+                unsaved.update { it - key }
             } catch (_: IOException) {
-                // the store can't be written: the choice holds until the app's process ends
+                // the store can't be written: the choice holds over what it reads until the app's process ends
+                unsaved.update { it + (key to on.takeIf { on != default }) }
             }
         }
     }
@@ -264,3 +272,14 @@ private fun views(
                 pane to if (held) PaneView.Terminal else PaneView.Chat
             }
         }.toMap()
+
+// [views] with the choices the store could not keep laid over its own: `null` drops one
+private fun withUnsaved(
+    views: ChatViews,
+    unsaved: Map<SessionKey, Boolean?>,
+): ChatViews {
+    if (unsaved.isEmpty()) return views
+    val sessions = views.sessions.toMutableMap()
+    for ((key, on) in unsaved) if (on == null) sessions.remove(key) else sessions[key] = on
+    return views.copy(sessions = sessions)
+}

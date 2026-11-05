@@ -177,6 +177,39 @@ class ChatModeTest {
     }
 
     @Test
+    fun aChoiceTheStoreCannotKeepHoldsThroughSettingsChanges() {
+        bed.attach("p1")
+        val model = model()
+        bed.show("p1")
+        bed.agent("p1")
+        eventually { bed.view("p1") == PaneView.Chat }
+        // the store can't be written: the choice shows at once and is kept in memory
+        val views = bed.test.sessionViewsDir
+        views.setWritable(false)
+        try {
+            model.setChatView(bed.key, false)
+            eventually { bed.view("p1") == null }
+            // the write failed by now; Settings' default moving re-reads the store, and the choice still holds
+            Thread.sleep(300)
+            setChatView(false)
+            setChatView(true)
+            eventually { bed.test.chats.chatViews.value.default }
+            assertNull(bed.view("p1"))
+            assertTrue(
+                runBlocking {
+                    bed.test.sessionViews.sessions
+                        .first()
+                }.isEmpty(),
+            )
+        } finally {
+            views.setWritable(true)
+        }
+        // once the store takes writes again, setting it back lands there and follows the default
+        model.setChatView(bed.key, true)
+        eventually { bed.view("p1") == PaneView.Chat }
+    }
+
+    @Test
     fun pickingTheTerminalHoldsUntilThePanesNextConversation() {
         bed.attach("p1")
         val model = model()

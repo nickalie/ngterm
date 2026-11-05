@@ -144,7 +144,10 @@ class TestGraph(
 
     // the panes' frames are read on the main thread, where the UI tests' clock drives them
     val settings = SettingsStore(testStore(dir, "settings"))
-    val sessionViews = SessionChatViews(testStore(dir, "session_chat_views"), settings.settings)
+
+    /** The sessions' own chat views, in a directory of their own ([sessionViewsDir]) a test can make unwritable. */
+    val sessionViewsDir = File(dir, "session_chat_views").apply { mkdirs() }
+    val sessionViews = SessionChatViews(testStore(sessionViewsDir, "session_chat_views"), settings.settings)
     val panes = SessionPanes(scope, connections, live, EmptyCoroutineContext, settings.settings)
 
     /** The queries the chats' `/` menus ranked the catalog for, oldest first. */

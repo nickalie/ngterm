@@ -747,7 +747,9 @@ The plan, reviewed against the brief:
 - **The composer** (`Composer`), under the cards on the bar's tone (`surfaceContainer`), in the reading width: an
   outlined field (12dp corners, bodyLarge, "Prompt, or / for commands") that grows to six lines and then scrolls inside,
   so a long prompt leaves the conversation in sight; Stop (the interrupt's square, outlined round) while the agent's
-  status says it works on a turn; Send (filled copper round, `ic_send`). The field takes line breaks as the clipboard
+  status says it works on a turn and the turn wasn't interrupted (no hook tells the origin of an interrupt, so its
+  status stays working: Stop comes back once the agent works again or a prompt is typed, not for a `/command` alone);
+  Send (filled copper round, `ic_send`). The field takes line breaks as the clipboard
   brings them and refuses an edit that adds any other control character. Send takes the text with its ends trimmed;
   the field lets it go once the agent has it and keeps it when nothing was sent. While an action is on its way the
   field holds still and Send turns to a 16dp spinner ("Sending"), so a second tap sends nothing. While a card waits,
