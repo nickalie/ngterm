@@ -16,8 +16,10 @@
 //!   `KillShell` or `KillBash`) usually writes no notification, so a successful stop's result finishes the stopped
 //!   task's tool, if still running, as an error with the stop's message; the result names the task in
 //!   `toolUseResult.task_id` (or `shell_id`, `bash_id`), else the stop call's input does.
-//! - `system` lines: `compact_boundary` is a compaction notice, `api_error` an API error notice; the others are
-//!   bookkeeping, as are the line types in [`IGNORED`].
+//! - `system` lines: `compact_boundary` is a compaction notice, `api_error` an API error notice; a `local_command`
+//!   line holding a `<command-name>` shows as its `/command`, as the `user` one does (Claude Code 2.1.318 writes a
+//!   command that runs without a turn, `/context` say, only as `local_command` lines: the command, then its output,
+//!   which makes no event); the others are bookkeeping, as are the line types in [`IGNORED`].
 //!
 //! A subagent writes its own file, `<session-id>/subagents/agent-<id>.jsonl`, whose `.meta.json` names the parent's
 //! `Agent` tool use ([`subagent_parent`]); [`ClaudeParser::subagent`] reads it with every event under that tool.
@@ -55,7 +57,7 @@ pub const IGNORED: &[&str] = &[
 ];
 
 /// `system` subtypes the chat has no use for.
-const IGNORED_SYSTEM: &[&str] = &["stop_hook_summary", "turn_duration", "local_command", "informational"];
+const IGNORED_SYSTEM: &[&str] = &["stop_hook_summary", "turn_duration", "informational"];
 
 /// The id of the one `conversation` item a stream has.
 const CONVERSATION_ID: &str = "conversation";
@@ -144,6 +146,7 @@ impl ClaudeParser {
         match str_at(entry, "/type").unwrap_or_default() {
             "user" => self.user(entry, out),
             "assistant" => self.assistant(entry, out),
+            "system" if str_at(entry, "/subtype") == Some("local_command") => self.local_command(entry, out),
             "system" => system(entry, out),
             "summary" => out.push(
                 out.line_id(),
@@ -240,6 +243,16 @@ impl ClaudeParser {
         if !texts.is_empty() || images > 0 {
             self.prompt(&texts.join("\n"), images, id, out);
         }
+    }
+
+    /// A `system` `local_command` line: its `<command-name>` shows as the command (the duplicate check included); its
+    /// output, or anything else it holds, makes no event.
+    fn local_command(&mut self, entry: &Value, out: &mut Out) {
+        let Some(text) = str_at(entry, "/content").filter(|text| command_line(text.trim()).is_some()) else {
+            return;
+        };
+        let id = str_at(entry, "/uuid").map_or_else(|| out.line_id(), str::to_owned);
+        self.prompt(text, 0, id, out);
     }
 
     /// The prompt a `user` line's text makes, if it is one: Claude's own markup makes a notice, a task's result or

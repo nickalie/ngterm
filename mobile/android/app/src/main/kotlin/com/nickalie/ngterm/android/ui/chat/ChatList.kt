@@ -104,9 +104,10 @@ private fun AskOlder(
     }
 }
 
-// while the list is at its end (where it opens), a new or changed last row keeps it there; a finger on the list lets
-// it be at once (a new row mid-fling doesn't pull it back), and where a scroll stops says whether it follows again.
-// Asked to ([toEnd]), it goes to its end and follows again, wherever it was, and says so ([onReachEnd])
+// while the list is at its end (where it opens), a new or changed last row, or a new height (the keyboard), keeps it
+// there; a finger on the list lets it be at once (a new row mid-fling doesn't pull it back), and where a scroll stops
+// says whether it follows again. Asked to ([toEnd]), it goes to its end and follows again, wherever it was, and says so
+// ([onReachEnd])
 @Composable
 private fun FollowEnd(
     listState: LazyListState,
@@ -134,6 +135,12 @@ private fun FollowEnd(
             .drop(1)
             .filter { !it }
             .collect { following = !listState.canScrollForward }
+    }
+    LaunchedEffect(listState) {
+        // the list grew shorter (the keyboard came up) or taller: one that follows stays at its end
+        snapshotFlow { listState.layoutInfo.viewportSize.height }
+            .drop(1)
+            .collect { if (following) listState.scrollToItem(rows.size, END_OFFSET) }
     }
     val last = items.lastOrNull()
     LaunchedEffect(last) {

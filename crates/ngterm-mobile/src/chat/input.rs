@@ -566,11 +566,11 @@ fn shows(picker: &Picker, item: &ChatQuestionItem, asking: Asking, other: Option
 }
 
 /// Whether the free-text row (squeezed) shows its placeholder and nothing typed: `Type something.`, and in a
-/// multi-select question the `Submit` drawn under it.
+/// multi-select question the button drawn under it (`Submit` on the last question, `Next` on one before it).
 fn untouched(row: &str) -> bool {
     row.strip_prefix(TYPING).is_some_and(|rest| {
         let rest = rest.strip_prefix('.').unwrap_or(rest);
-        rest.is_empty() || rest == "Submit"
+        rest.is_empty() || rest == "Submit" || rest == "Next"
     })
 }
 

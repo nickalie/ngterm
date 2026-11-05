@@ -551,6 +551,22 @@ fn typed_text_may_follow_the_placeholder_or_take_its_place_and_a_draft_there_get
 }
 
 #[test]
+fn a_multi_select_question_before_the_last_one_shows_next_under_its_free_text_row() {
+    // Claude Code draws `Submit` under the free-text row of the last question's boxes and `Next` under one with
+    // another question after it (seen on 2.1.318): both rows are the untouched placeholder
+    let multi = screen("claude-160x48", Agent::Claude, "question_multi");
+    let Screen::Question(mut picker) = multi.clone() else {
+        panic!("not the picker")
+    };
+    picker.options.last_mut().expect("its free-text row").text = "Type something Next".to_owned();
+    let before_last = Screen::Question(picker);
+    let mut plan = Plan::new(Action::Question(vec![languages()], vec![answer(&["Spanish"], None)]));
+    assert_eq!(step(&mut plan, &before_last), send(Key::Digit(1), true));
+    let spanish = varied(&before_last, None, &[true, false, false], None);
+    assert_eq!(step(&mut plan, &spanish), send(Key::Tab, true));
+}
+
+#[test]
 fn free_text_in_a_multi_select_question_goes_through_its_row_then_tab() {
     let multi = screen("claude-160x48", Agent::Claude, "question_multi");
     let review = screen("claude-160x48", Agent::Claude, "question_submit");

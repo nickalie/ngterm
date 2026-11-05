@@ -6,7 +6,9 @@ import com.nickalie.ngterm.core.ffi.AgentInputOutcome
 import com.nickalie.ngterm.core.ffi.ChatApproval
 import com.nickalie.ngterm.core.ffi.ChatBody
 import com.nickalie.ngterm.core.ffi.ChatEvent
+import com.nickalie.ngterm.core.ffi.ChatNoticeKind
 import com.nickalie.ngterm.core.ffi.ChatState
+import com.nickalie.ngterm.core.ffi.ChatToolStatus
 import com.nickalie.ngterm.core.ffi.MobileCoreInterface
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneInputException
@@ -106,7 +108,8 @@ sealed interface ChatProblem {
  * named, whether older pages remain ([older]), the row the list keeps in place after a page went in above it
  * ([anchor], the top row of those shown before that the page left in place), the cards pinned above the composer
  * ([approval], [question]), whether an action is on its way ([busy]), why the last one did nothing ([problem],
- * until shown), whether the agent is working on a turn ([working], its status at the origin), which Stop needs, and
+ * until shown), whether the agent is working on a turn ([working], its status at the origin; [running] once the
+ * transcript is weighed too, which Stop needs), and
  * whether the list is to go to its newest row and follow from there ([toEnd]: a notification's tap opened the chat to
  * the card at its foot), until it has.
  */
@@ -122,12 +125,18 @@ data class ChatUiState(
     val problem: ChatProblem? = null,
     val working: Boolean = false,
     val toEnd: Boolean = false,
+    // the transcript's last turn was interrupted (Stop, or a declined tool call): no hook says so, so the origin's
+    // status stays working until the next turn ends
+    internal val interrupted: Boolean = false,
     // the questions whose picker was found answered or gone: their card stays down until the event says so
     internal val dismissed: Set<String> = emptySet(),
     // bumped by each reset, so a page asked for before it is dropped
     internal val epoch: Int = 0,
 ) {
     val items: List<ChatItem> get() = log.items
+
+    /** Whether a turn runs that Stop can end: the origin says the agent works, and the turn was not interrupted. */
+    val running: Boolean get() = working && !interrupted
 
     /** Whether a card waits on an answer, so a prompt or Stop would land in its dialog: the composer holds them. */
     val awaitsCard: Boolean get() = approval != null || question != null
@@ -270,9 +279,13 @@ class ChatViewModel internal constructor(
         act(null, onSent = { composer.sent(text) }) { it.sendPrompt(text) }
     }
 
-    /** Stop: interrupts the agent's turn (Escape), not while a card waits, as Escape would answer its dialog. */
+    /**
+     * Stop: interrupts the agent's turn (Escape), not while a card waits, as Escape would answer its dialog, nor once
+     * the turn was interrupted.
+     */
     fun stop() {
-        if (!chat.value.awaitsCard) act(null) { it.interrupt() }
+        // a turn already interrupted has nothing to stop: Esc would land in the idle prompt
+        if (!chat.value.awaitsCard && !chat.value.interrupted) act(null) { it.interrupt() }
     }
 
     /**
@@ -396,6 +409,7 @@ private fun ChatUiState.taking(events: List<ChatEvent>): ChatUiState {
     for (event in events) {
         if (event.body.isRow()) {
             rows += event
+            state = state.copy(interrupted = state.interrupted.after(event))
             continue
         }
         if (rows.isNotEmpty()) state = state.withLog(state.log.append(rows))
@@ -403,6 +417,23 @@ private fun ChatUiState.taking(events: List<ChatEvent>): ChatUiState {
         state = state.meta(event)
     }
     return if (rows.isEmpty()) state else state.withLog(state.log.append(rows))
+}
+
+// whether the main conversation's last turn stays interrupted after a row: an interrupt notice ends it; the agent at
+// work again (a reply, thinking, a tool call or a question asked: a turn of its own, one a background task's end
+// started included) or a prompt typed lifts it, though not a `/command` alone, which may run no turn, nor a call or a
+// question ending (Codex ends the interrupted turn's calls after its notice). A subagent's rows (with a parent,
+// replayed after the main ones) say nothing of the main turn.
+private fun Boolean.after(event: ChatEvent): Boolean {
+    if (event.parent != null) return this
+    return when (val body = event.body) {
+        is ChatBody.Notice -> body.kind == ChatNoticeKind.INTERRUPT || this
+        is ChatBody.User -> body.text.trimStart().startsWith("/") && this
+        is ChatBody.Tool -> body.tool.status != ChatToolStatus.RUNNING && this
+        is ChatBody.Question -> body.question.status != ChatToolStatus.RUNNING && this
+        is ChatBody.Assistant, is ChatBody.Thinking -> false
+        else -> this
+    }
 }
 
 private fun ChatBody.isRow(): Boolean =

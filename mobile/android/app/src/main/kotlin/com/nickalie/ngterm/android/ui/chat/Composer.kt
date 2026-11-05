@@ -49,7 +49,7 @@ import com.nickalie.ngterm.core.ffi.PaneRef
 
 /**
  * The chat's foot: the prompt field ([composer]'s, growing to [MAX_LINES] lines, then scrolling inside), Stop while
- * the agent works on a turn ([ChatUiState.working]), and Send. While a card waits ([ChatUiState.awaitsCard]) a line
+ * the agent works on a turn ([ChatUiState.running]), and Send. While a card waits ([ChatUiState.awaitsCard]) a line
  * over the field says to answer it first, and Send and Stop hold, as their keys would land in its dialog; the field
  * still takes a draft. While an action is on its way ([ChatUiState.busy]) the field holds still and Send shows a
  * spinner. The field takes the input focus through [focusRequester].
@@ -100,7 +100,7 @@ fun Composer(
                         shape = MaterialTheme.shapes.medium,
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     )
-                    if (state.working && !state.awaitsCard) {
+                    if (state.running && !state.awaitsCard) {
                         StopButton(enabled = !state.busy, onClick = actions.onStop)
                     }
                     SendButton(enabled = canSend, sending = state.busy && !state.awaitsCard, onClick = actions.onSend)

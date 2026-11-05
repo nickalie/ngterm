@@ -396,6 +396,28 @@ fn a_command_repeats_only_the_prompt_just_before() {
 }
 
 #[test]
+fn a_local_command_written_as_system_lines_shows_as_its_command() {
+    // Claude Code 2.1.318 writes `/context` only as `system` `local_command` lines: the command, then its output
+    let local = |uuid: &str, content: &str| {
+        serde_json::json!({"type": "system", "subtype": "local_command", "uuid": uuid, "content": content}).to_string()
+    };
+    let named = "<command-name>/context</command-name>\n            <command-message>context</command-message>\n            \
+                 <command-args></command-args>";
+    let events = parse_owned(&[
+        local("c", named),
+        local("o", "<local-command-stdout>Context Usage</local-command-stdout>"),
+        local("x", "something else"),
+        user_line("p", "/cost"),
+        local("d", "<command-name>/cost</command-name>"),
+    ]);
+    assert_eq!(
+        user_texts(&events),
+        ["/context", "/cost"],
+        "the command once, its output and other text nothing, a repeat of the prompt before it nothing"
+    );
+}
+
+#[test]
 fn a_prompt_quoting_command_markup_stays_a_prompt() {
     let quoted = "Explain why <command-name>/compact</command-name> appears here";
     let message_first = "<command-message>compact</command-message>\n<command-name>/compact</command-name>";

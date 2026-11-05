@@ -350,6 +350,66 @@ pub(crate) fn into_prompt(term: &Term, agent: Agent, style: &str, text: &str) ->
 }
 
 #[test]
+fn a_slash_commands_popup_two_rows_an_entry_on_a_phone_is_still_under_the_prompt() {
+    use std::fmt::Write as _;
+    // Claude Code 2.1.318 at 52 columns: the pasted `/context` over seven commands, each wrapped onto two rows
+    let rule = "─".repeat(52);
+    let popup: String = [
+        ("/context", "Visualize current context"),
+        ("/doctor", "Health-check your setup"),
+        ("/autocompact", "Set how full the context"),
+        ("/subtask", "Send a subagent off with"),
+        ("/clear", "Start a new session with"),
+        ("/compact", "Free up context by"),
+        ("/skill-doctor", "Show which loaded skills"),
+    ]
+    .iter()
+    .fold(String::new(), |mut rows, (name, about)| {
+        let _ = write!(rows, "    {name:<20}{about}\r\n{:24}and what comes after…\r\n", "");
+        rows
+    });
+    let screen = format!("\x1b[2J\x1b[H● Done.\r\n\r\n{rule}\r\n❯ /context\r\n{rule}\r\n{popup}");
+    let term = Term::new(52, 40);
+    term.feed(screen.as_bytes());
+    assert_eq!(
+        Agent::Claude.read(&term.frame()),
+        Screen::Prompt {
+            working: false,
+            composer: "/context".to_owned()
+        }
+    );
+}
+
+#[test]
+fn a_box_left_over_other_output_or_too_far_up_is_no_prompt() {
+    use std::fmt::Write as _;
+    let rule = "─".repeat(52);
+    let boxed = format!("\x1b[2J\x1b[H● Done.\r\n{rule}\r\n❯ \r\n{rule}\r\n");
+    let read = |under: &str| {
+        let term = Term::new(52, 40);
+        term.feed(format!("{boxed}{under}").as_bytes());
+        Agent::Claude.read(&term.frame())
+    };
+    let idle = Screen::Prompt {
+        working: false,
+        composer: String::new(),
+    };
+    assert_eq!(read("  ⏵⏵ auto mode on (shift+tab to cycle)\r\n"), idle, "its footer");
+    // Claude exited and the shell went on under the box it left
+    assert_eq!(
+        read("nick@box ~/project\r\n$ ls\r\nREADME.md\r\n$ \r\n"),
+        Screen::Unknown,
+        "a shell's rows"
+    );
+    // indented, but more rows than a footer and a popup take
+    let tall = (0..30).fold(String::new(), |mut rows, at| {
+        let _ = write!(rows, "    row {at}\r\n");
+        rows
+    });
+    assert_eq!(read(&tall), Screen::Unknown, "too far up");
+}
+
+#[test]
 fn a_draft_in_the_prompt_is_read_and_a_faint_hint_is_not() {
     for (agent, name) in AGENTS {
         for (capture_name, capture) in captures(name) {

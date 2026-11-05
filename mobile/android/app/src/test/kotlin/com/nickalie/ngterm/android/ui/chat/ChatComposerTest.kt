@@ -9,6 +9,8 @@ import com.nickalie.ngterm.core.ffi.AgentCommand
 import com.nickalie.ngterm.core.ffi.AgentCommandKind
 import com.nickalie.ngterm.core.ffi.AgentInputOutcome
 import com.nickalie.ngterm.core.ffi.ChatBody
+import com.nickalie.ngterm.core.ffi.ChatNoticeKind
+import com.nickalie.ngterm.core.ffi.ChatToolStatus
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.RemoteStatus
 import kotlinx.coroutines.CompletableDeferred
@@ -305,6 +307,68 @@ class ChatComposerTest {
         assertTrue(chat.state.value.working)
         status("blocked", "p1")
         eventually { !chat.state.value.working }
+    }
+
+    @Test
+    fun anInterruptedTurnEndsForStopThoughTheStatusStillSaysWorking() {
+        bed.test.core.emit(
+            MobileEvent.SessionStatus("m1", "s1", RemoteStatus("active", false, null, null, "p1", null), true),
+        )
+        bed.emit("p1", event("u1", user("Write a long story")))
+        eventually { chat.state.value.running }
+        // Stop (or a declined tool call) interrupts the turn: no hook tells the origin, whose status stays active
+        bed.emit("p1", event("n1", ChatBody.Notice(ChatNoticeKind.INTERRUPT, "Request interrupted by user", null)))
+        assertTrue(chat.state.value.working)
+        assertFalse(chat.state.value.running)
+        chat.stop()
+        assertTrue("no Stop for a turn already interrupted", pane.actions.isEmpty())
+        // a `/command` alone may run no turn; a subagent's rows say nothing of the main turn
+        bed.emit("p1", event("c1", user("/context")))
+        bed.emit("p1", event("s1", user("Count the lines"), parent = "task"))
+        bed.emit("p1", event("s2", ChatBody.Assistant("12 lines"), parent = "task"))
+        // Codex ends the interrupted turn's calls after its notice: a call ending is no new work
+        bed.emit("p1", event("x1", tool("exec_command", "sleep 30", ChatToolStatus.ERROR)))
+        bed.emit("p1", event("q1", question(ChatToolStatus.ERROR)))
+        assertFalse(chat.state.value.running)
+        // the agent at work again (a turn a background task's end started, with no prompt) lifts it
+        bed.emit("p1", event("a1", ChatBody.Assistant("The build finished.")))
+        assertTrue(chat.state.value.running)
+        // as does a call it starts
+        bed.emit("p1", event("n3", ChatBody.Notice(ChatNoticeKind.INTERRUPT, "Turn interrupted by user", null)))
+        bed.emit("p1", event("x2", tool("exec_command", "make test")))
+        assertTrue(chat.state.value.running)
+        // and so does the next prompt typed, before the agent says anything
+        bed.emit("p1", event("n2", ChatBody.Notice(ChatNoticeKind.INTERRUPT, "Request interrupted by user", null)))
+        assertFalse(chat.state.value.running)
+        bed.emit("p1", event("u2", user("Shorter, please")))
+        assertTrue(chat.state.value.running)
+    }
+
+    @Test
+    fun aReplayedBacklogWeighsOnlyTheMainTurn() {
+        bed.test.core.emit(
+            MobileEvent.SessionStatus("m1", "s1", RemoteStatus("active", false, null, null, "p1", null), true),
+        )
+        // one batch, as a backlog comes: the main turn runs, a subagent's old interrupt replayed after it
+        bed.emit(
+            "p1",
+            event("u1", user("Run the tests")),
+            event("t1", ChatBody.Assistant("Running them now.")),
+            event(
+                "s1",
+                ChatBody.Notice(ChatNoticeKind.INTERRUPT, "Request interrupted by user", null),
+                parent = "task",
+            ),
+        )
+        eventually { chat.state.value.working }
+        assertTrue(chat.state.value.running)
+        // the main turn interrupted, a subagent's opening prompt replayed after it
+        bed.emit(
+            "p1",
+            event("n1", ChatBody.Notice(ChatNoticeKind.INTERRUPT, "Request interrupted by user", null)),
+            event("s2", user("Look around"), parent = "task"),
+        )
+        assertFalse(chat.state.value.running)
     }
 
     @Test

@@ -256,8 +256,13 @@ const DIALOG_MARKS: [&str; 6] = [
     "Ready to submit your answers?",
 ];
 
-/// The most rows under a prompt: its footer, or a popup the TUI shows there (a slash command's list).
+/// The most rows under Codex's composer: its footer, or a popup it shows there.
 const FOOTER_ROWS: usize = 12;
+
+/// The most rows under Claude's prompt box: its footer, or a popup it shows there (a slash command's list, whose
+/// entries take two rows each on a phone's narrow grid: Claude Code 2.1.318 lists seven, fourteen rows at 52 columns).
+/// Each of them is indented ([`Rows::indented`]): what a shell prints under a box Claude left on screen is not.
+const CLAUDE_FOOTER_ROWS: usize = 24;
 
 /// The rows above a prompt searched for a turn's spinner.
 const NEAR: usize = 6;
@@ -303,6 +308,14 @@ impl Rows {
             text: line.trim().to_owned(),
             full: line.trim_end().chars().count() + 1 >= self.cols,
         }
+    }
+
+    /// Whether every row in `range` is blank or indented: the rows Claude draws under its prompt box (its footer, a
+    /// popup's entries and their wrapped descriptions) all are.
+    fn indented(&self, range: Range<usize>) -> bool {
+        range
+            .into_iter()
+            .all(|index| self.blank(index) || self.get(index).starts_with("  "))
     }
 
     fn blank(&self, index: usize) -> bool {
@@ -586,7 +599,7 @@ fn claude_review(rows: &Rows) -> Option<bool> {
 fn claude_prompt(rows: &Rows) -> Option<(bool, String)> {
     let last = rows.last()?;
     let lower = (0..=last).rev().find(|index| rows.rule(*index))?;
-    if last - lower > FOOTER_ROWS {
+    if last - lower > CLAUDE_FOOTER_ROWS || !rows.indented(lower + 1..last + 1) {
         return None;
     }
     let upper = (0..lower).rev().find(|index| rows.rule(*index))?;
