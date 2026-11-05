@@ -1,3 +1,4 @@
+import Foundation
 import NgtermCore
 import NgtermCoreFakes
 import NgtermPlatform
@@ -81,6 +82,25 @@ internal struct ClipboardReadsTests {
         #expect(reads.alwaysAllowed.isEmpty)
         await request(5)
         #expect(reads.pending.count == 2)
+    }
+
+    @Test("an Ask again the store can't write still asks until the app ends")
+    internal func revokeUnwritable() async throws {
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: test.directory.path)
+            test.remove()
+        }
+        await request(1)
+        reads.allowAlways(reads.pending[0])
+        #expect(ClipboardTrustStore(directory: test.directory).machines == ["m1"])
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: test.directory.path)
+        #expect(throws: StoreError.self) {
+            try reads.revoke("m1")
+        }
+        #expect(reads.alwaysAllowed.isEmpty)
+        await request(2)
+        #expect(reads.pending == [ClipboardRead(pane: pane, readId: 2, listOnly: false)])
+        #expect(answers() == [answer(1, .allow(text: nil))])
     }
 
     @Test("a read the core dismisses leaves unanswered: the core denied it")

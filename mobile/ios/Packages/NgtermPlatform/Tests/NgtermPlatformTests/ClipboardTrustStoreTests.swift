@@ -42,6 +42,30 @@ internal struct ClipboardTrustStoreTests {
         #expect(try directory.names() == [ClipboardTrustStore.fileName + ".bad"])
     }
 
+    @Test("a file that can't be read trusts none, and no change writes over the machines it holds")
+    internal func unreadableFile() throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        try ClipboardTrustStore(directory: directory.url).allow("m1")
+        let file = directory.file(ClipboardTrustStore.fileName)
+        let before = try Data(contentsOf: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        let store = ClipboardTrustStore(directory: directory.url)
+        #expect(store.machines.isEmpty)
+        #expect(throws: StoreError.self) {
+            try store.allow("m2")
+        }
+        #expect(throws: StoreError.self) {
+            try store.revoke("m1")
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        #expect(try Data(contentsOf: file) == before)
+        // readable again, the next change starts from what the file holds
+        try store.allow("m2")
+        #expect(store.machines == ["m1", "m2"])
+        #expect(ClipboardTrustStore(directory: directory.url).machines == ["m1", "m2"])
+    }
+
     @Test("a change the store can't write throws and trusts as before")
     internal func unwritable() throws {
         let directory = try TemporaryDirectory()

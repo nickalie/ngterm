@@ -292,8 +292,9 @@ public final class TerminalView: UIView {
         let spots = selection.isTouchSelection ? HandleSpots(screen.selection, font: font, size: bounds.size) : nil
         handles.show(spots, color: palette.cursor.uiColor.cgColor)
         guard let spots else {
+            // the touch selection went: its menu goes with it, a secondary click's stays
             if !selection.isTouchSelection {
-                hideMenu()
+                editMenu.hideOverSelection()
             }
             return
         }

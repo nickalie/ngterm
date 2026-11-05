@@ -88,6 +88,11 @@ internal struct TerminalPointerGesturesTests {
         rig.view.pointerGestures.press(.began, at: rig.point(4, 2), buttons: .secondary, mods: [], time: 1)
         #expect(rig.view.isMenuShown)
         #expect(rig.inputs.isEmpty)
+        // the program's next frames leave it open
+        rig.view.drawFrame()
+        rig.view.setNeedsLayout()
+        rig.view.layoutIfNeeded()
+        #expect(rig.view.isMenuShown)
     }
 
     @Test("the wheel and a two-finger scroll turn the pane's wheel by whole rows and columns, with the modifiers")

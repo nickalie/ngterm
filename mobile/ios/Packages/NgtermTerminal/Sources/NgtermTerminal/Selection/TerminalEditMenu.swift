@@ -42,6 +42,14 @@ internal final class TerminalEditMenu: NSObject, @preconcurrency UIEditMenuInter
         isShown = false
     }
 
+    /// Takes the menu down when it shows over a touch selection's rows: the one at a secondary click's point stays
+    /// until the user picks an item or taps elsewhere.
+    internal func hideOverSelection() {
+        if !target.isNull {
+            hide()
+        }
+    }
+
     // MARK: - UIEditMenuInteractionDelegate
 
     /// The menu's items: the standard edit actions the view can perform now.

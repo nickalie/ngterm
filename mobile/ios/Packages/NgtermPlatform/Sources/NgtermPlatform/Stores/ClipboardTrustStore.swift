@@ -5,9 +5,11 @@ import Foundation
 /// They are kept as one JSON file in Application Support (`clipboard-trust.json`; mobile/android's `ClipboardTrust`).
 /// Settings lists and revokes them.
 ///
-/// It reads the file as ``AttachedStore`` reads its own: one that no longer decodes reads as none and is kept as
-/// `clipboard-trust.json.bad`, and one that can't be read (before the first unlock) reads as none, so every read asks
-/// (the safe side). A change is written whole before ``machines`` shows it.
+/// It reads the file as ``MachineStore`` reads its own: one that no longer decodes reads as none and is kept as
+/// `clipboard-trust.json.bad`. One that can't be read (before the device's first unlock), or a corrupt one whose copy
+/// can't be written, reads as none too, so every read asks (the safe side), but is left alone: the next change reads it
+/// again, and fails rather than write over the machines it holds while it still can't be read. A change is written
+/// whole before ``machines`` shows it.
 @preconcurrency
 @MainActor
 public final class ClipboardTrustStore {
@@ -17,28 +19,47 @@ public final class ClipboardTrustStore {
     /// The trusted machines' ids, as last written.
     public private(set) var machines: Set<String>
     private let file: JSONFile<[String]>
+    // whether `machines` is what the file holds: false while the file is there but can't be read
+    private var loaded: Bool
 
     /// The store kept in `directory`: the app's Application Support unless a test gives its own.
     public init(directory: URL = .applicationSupportDirectory) {
         file = JSONFile(directory: directory, name: Self.fileName)
-        machines = Set((try? file.read()) ?? [])
+        do {
+            machines = Set(try file.read() ?? [])
+            loaded = true
+        } catch {
+            machines = []
+            loaded = false
+        }
     }
 
     /// Lets the programs on `machineId` read the clipboard without asking.
     ///
-    /// - Throws: ``StoreError/unwritable(reason:)`` when it can't; the machines stay as they were.
+    /// - Throws: ``StoreError/unwritable(reason:)`` when it can't write the change, or
+    ///   ``StoreError/unreadable(reason:)`` when the file is there but still can't be read; the machines stay as they
+    ///   were.
     public func allow(_ machineId: String) throws(StoreError) {
-        try save(machines.union([machineId]))
+        try change { $0.insert(machineId) }
     }
 
     /// Asks again before the programs on `machineId` read the clipboard.
     ///
-    /// - Throws: ``StoreError/unwritable(reason:)`` when it can't; the machines stay as they were.
+    /// - Throws: ``StoreError/unwritable(reason:)`` when it can't write the change, or
+    ///   ``StoreError/unreadable(reason:)`` when the file is there but still can't be read; the machines stay as they
+    ///   were.
     public func revoke(_ machineId: String) throws(StoreError) {
-        try save(machines.subtracting([machineId]))
+        try change { $0.remove(machineId) }
     }
 
-    private func save(_ next: Set<String>) throws(StoreError) {
+    // applies `edit` to the machines and writes the result, then shows it; a file that couldn't be read is read first
+    private func change(_ edit: (inout Set<String>) -> Void) throws(StoreError) {
+        if !loaded {
+            machines = Set(try file.read() ?? [])
+            loaded = true
+        }
+        var next = machines
+        edit(&next)
         try file.write(next.sorted())
         machines = next
     }

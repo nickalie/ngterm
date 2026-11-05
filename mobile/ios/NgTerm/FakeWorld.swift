@@ -12,7 +12,8 @@
     /// - `signin.lan` offers ``signInHostKey`` and asks to sign in as Tailscale SSH does;
     /// - any other host connects at once;
     ///
-    /// and, when asked, a program in `docs-site` on `build-01` asks to read the clipboard as the app starts.
+    /// and, when asked, a program in `docs-site` on `build-01` asks to read the clipboard as the app starts, and one in
+    /// `notes` after it: its question shows only once the first is answered.
     internal enum FakeWorld {
         /// The host key `build-01.lan` offers (made up).
         internal static let buildHostKey = "SHA256:fAkEbU1Ld01h0sTkEyF0rUiTeStS0nLyN0tArEaLkEy00"
@@ -28,7 +29,7 @@
             isImported: false
         )
 
-        /// The app's graph over the fake core, with a key already when `withKey`, and a program asking to read the
+        /// The app's graph over the fake core, with a key already when `withKey`, and two programs asking to read the
         /// clipboard when `readsClipboard`.
         @MainActor
         internal static func graph(withKey: Bool, readsClipboard: Bool) -> AppGraph {
@@ -58,6 +59,9 @@
             if readsClipboard {
                 let pane = PaneRef(machineId: "build-01", sessionId: "docs-site", paneId: "P1")
                 core.emit(.clipboardReadRequest(pane: pane, readId: 1, clipboard: .standard, listOnly: false))
+                // another pane's first read, shown once the first is answered, so a test sees that it was
+                let next = PaneRef(machineId: "build-01", sessionId: "notes", paneId: "P2")
+                core.emit(.clipboardReadRequest(pane: next, readId: 1, clipboard: .standard, listOnly: false))
             }
             return graph
         }

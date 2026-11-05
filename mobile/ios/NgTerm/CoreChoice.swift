@@ -16,7 +16,7 @@ internal struct CoreChoice {
     internal static let fakeArgument = "-ngterm-fake-core"
     /// With the fake core, the launch argument that gives the app a key, so the first run is over.
     internal static let fakeKeyArgument = "-ngterm-fake-key"
-    /// With the fake core, the launch argument that has a program ask to read the clipboard at once.
+    /// With the fake core, the launch argument that has two programs ask to read the clipboard at once.
     internal static let fakeClipboardReadArgument = "-ngterm-fake-clipboard-read"
 
     // the public key's comment, which shows in a machine's authorized_keys: whose key it is ("ngterm@iPhone")

@@ -2,6 +2,8 @@ import XCTest
 
 /// A program's clipboard read in the app on the fake core (mobile/android's `ClipboardReadPromptTest`): the sheet asks
 /// over whatever shows, passes the accessibility audit, and goes once answered, or swiped away (which denies).
+///
+/// A second read waits behind the first, so its question showing proves the first was answered.
 internal final class ClipboardReadTests: XCTestCase {
     @MainActor
     private func launch() -> XCUIApplication {
@@ -18,6 +20,7 @@ internal final class ClipboardReadTests: XCTestCase {
         try FakeApp.auditSheet(app)
         app.buttons["clipboard-deny"].tap()
         XCTAssertTrue(app.staticTexts["Let docs-site read your clipboard?"].waitForNonExistence(timeout: 10))
+        FakeApp.expect(app.staticTexts["Let notes read your clipboard?"], "the next read's question")
     }
 
     @MainActor
@@ -29,8 +32,9 @@ internal final class ClipboardReadTests: XCTestCase {
         heading.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.05, thenDragTo: foot, withVelocity: .fast, thenHoldForDuration: 0)
         XCTAssertTrue(app.staticTexts["Let docs-site read your clipboard?"].waitForNonExistence(timeout: 10))
-        // the read was answered: the question doesn't come back
-        XCTAssertFalse(app.staticTexts["Let docs-site read your clipboard?"].waitForExistence(timeout: 2))
+        // the read was answered: the next one's question shows, and the first's doesn't come back
+        FakeApp.expect(app.staticTexts["Let notes read your clipboard?"], "the next read's question")
+        XCTAssertFalse(app.staticTexts["Let docs-site read your clipboard?"].exists)
     }
 
     deinit {

@@ -47,6 +47,12 @@ internal struct TerminalGesturesTests {
         #expect(!rig.view.pointer.isFlinging)
         gestures.pan(.cancelled, at: point, translation: .zero, velocity: CGPoint(x: 0, y: 2_000))
         #expect(!rig.view.pointer.isFlinging)
+        // a finger coming down stops it too, before it is a tap, a drag or a long press
+        gestures.pan(.began, at: point, translation: .zero, velocity: .zero)
+        gestures.pan(.ended, at: point, translation: .zero, velocity: CGPoint(x: 0, y: 2_000))
+        #expect(rig.view.pointer.isFlinging)
+        gestures.touchDown()
+        #expect(!rig.view.pointer.isFlinging)
         // a slow let-go doesn't fling either
         gestures.pan(.began, at: point, translation: .zero, velocity: .zero)
         gestures.pan(.ended, at: point, translation: .zero, velocity: CGPoint(x: 0, y: 20))
