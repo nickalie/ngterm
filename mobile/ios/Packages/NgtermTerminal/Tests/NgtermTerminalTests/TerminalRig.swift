@@ -32,8 +32,14 @@ internal final class TerminalRig {
         pane.inputs
     }
 
-    /// A rig whose clipboard holds `clipboard`, 390 × 200 points at a display scale of 2, with its first frame read.
-    internal init(clipboard held: String?) {
+    /// A rig as ``init(clipboard:keyboard:)`` makes, with a keyboard of its own and no hardware keyboard.
+    internal convenience init(clipboard held: String?) {
+        self.init(clipboard: held, keyboard: TerminalKeyboard(hardware: HardwareKeyboard(fixed: false)))
+    }
+
+    /// A rig whose clipboard holds `clipboard`, 390 × 200 points at a display scale of 2, with its first frame read,
+    /// its keys coming through `keyboard`.
+    internal init(clipboard held: String?, keyboard: TerminalKeyboard) {
         let shown = Locked<[SelectedSpan]>([])
         spans = shown
         pane = FakePane { since in
@@ -47,7 +53,13 @@ internal final class TerminalRig {
             return writer.bytes()
         }
         clipboard = MemoryClipboard(held)
-        view = TerminalView(pane: pane, palette: .copper, textSize: Self.textSize, clipboard: clipboard)
+        view = TerminalView(
+            pane: pane,
+            palette: .copper,
+            textSize: Self.textSize,
+            clipboard: clipboard,
+            keyboard: keyboard
+        )
         view.traitOverrides.displayScale = Self.scale
         view.updateTraitsIfNeeded()
         view.frame = CGRect(x: 0, y: 0, width: Self.width, height: Self.height)

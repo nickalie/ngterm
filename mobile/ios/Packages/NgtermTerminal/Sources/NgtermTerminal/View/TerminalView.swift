@@ -20,7 +20,14 @@ import UIKit
 /// ``pointer`` and ``selection``; a touch selection shows its handles and the edit menu (Copy, Paste, Select All),
 /// whose standard edit actions it answers as the first responder, as it answers ⌘C, ⌘V and ⌘A. A paste the pane
 /// refuses as unsafe waits for the user's yes (``PasteConfirmation``).
+///
+/// As the first responder it takes the keyboard (``keyboard``): it is the soft keyboard's text input, its composition
+/// drawn at the cursor (``TerminalTextInput``), a hardware keyboard's keys and chords come to it, and the extra keys
+/// sit over the keyboard. Being the first responder and showing the soft keyboard are apart: a tap opens the keyboard,
+/// where a click, a long press or the edit menu only take the focus (``focus(showingKeyboard:)``).
 public final class TerminalView: UIView {
+    // how far up the composition sits: over the rows (0), under the handles (1)
+    private static let compositionDepth: CGFloat = 0.5
     // the edit menu's items: the standard edit actions, with their titles
     internal static let editActions: [(Selector, String)] = [
         (#selector(copy(_:)), String(localized: "Copy")),
@@ -32,6 +39,27 @@ public final class TerminalView: UIView {
     public let pane: any PaneClient
     /// The clipboard its copies go to and its pastes come from.
     public let clipboard: any TerminalClipboard
+    /// The keyboard it takes while it is the first responder, which every terminal on screen shares.
+    public let keyboard: TerminalKeyboard
+
+    /// No automatic capitals: a terminal types commands and passwords.
+    @objc public var autocapitalizationType = UITextAutocapitalizationType.none
+    /// No autocorrection.
+    @objc public var autocorrectionType = UITextAutocorrectionType.no
+    /// No spell check.
+    @objc public var spellCheckingType = UITextSpellCheckingType.no
+    /// No smart quotes.
+    @objc public var smartQuotesType = UITextSmartQuotesType.no
+    /// No smart dashes.
+    @objc public var smartDashesType = UITextSmartDashesType.no
+    /// No smart spaces around what is inserted or deleted.
+    @objc public var smartInsertDeleteType = UITextSmartInsertDeleteType.no
+    /// No inline predictions.
+    @objc public var inlinePredictionType = UITextInlinePredictionType.no
+    /// No math completion.
+    @objc public var mathExpressionCompletionType = UITextMathExpressionCompletionType.no
+    /// No Writing Tools: what is typed goes to the program at once.
+    @objc public var writingToolsBehavior = UIWritingToolsBehavior.none
 
     /// The colors the terminal starts from, and the selection's.
     public var palette: TerminalPalette {
@@ -42,8 +70,15 @@ public final class TerminalView: UIView {
             sendColors()
             redrawAll()
             refreshHandles()
+            placeComposition()
         }
     }
+
+    /// The text size Settings gives, which ⌘0 goes back to.
+    public var defaultTextSize: CGFloat
+    /// Whether a tap asked for the soft keyboard: while it is the first responder, the keyboard shows; a click, a long
+    /// press or the edit menu take the focus without it.
+    public internal(set) var softKeyboardWanted = false
 
     /// The text size, in points.
     public var textSize: CGFloat {
@@ -107,20 +142,48 @@ public final class TerminalView: UIView {
         editMenu.isShown
     }
 
-    /// It takes the focus, and the edit menu's actions with it.
+    /// It takes the focus, and the edit menu's actions and the keyboard with it.
     override public var canBecomeFirstResponder: Bool {
         true
     }
 
+    /// The soft keyboard while a tap asked for it; else a stand-in with no keys, so the terminal keeps the focus (and a
+    /// hardware keyboard's keys) with the extra keys at the screen's foot.
+    override public var inputView: UIView? {
+        softKeyboardWanted ? nil : noKeyboard
+    }
+
+    /// The extra keys, over the soft keyboard, unless a hardware keyboard is attached.
+    override public var inputAccessoryView: UIView? {
+        keyboard.showsExtraKeys ? keyboard.bar : nil
+    }
+
+    // swiftlint:disable discouraged_optional_collection - UIResponder declares it optional
+    /// The app's chords, listed while ⌘ is held (``shortcutCommands``).
+    override public var keyCommands: [UIKeyCommand]? {
+        shortcutCommands
+    }
+    // swiftlint:enable discouraged_optional_collection
+
+    /// The composition, and where it draws.
+    internal let textInput = TerminalTextInput()
+    /// The hardware keys taken as the program's while they are held, and the repeat of the one held last.
+    internal let heldKeys = HeldKeys()
+    /// The soft keyboard's stand-in while it isn't wanted: no keys, so the extra keys sit at the foot of the screen.
+    internal let noKeyboard = UIView(frame: .zero)
+
     private var glyphs: GlyphCache
     private var painter: TerminalPainter
-    private var rowLayers: [TerminalRowLayer] = []
+    /// The rows' layers, one per row of the screen.
+    internal var rowLayers: [TerminalRowLayer] = []
     private var link: CADisplayLink?
     private var restart = true
-    private let handles = SelectionHandles()
-    private lazy var editMenu = TerminalEditMenu(view: self)
+    /// A touch selection's handles.
+    internal let handles = SelectionHandles()
+    /// The edit menu.
+    internal lazy var editMenu = TerminalEditMenu(view: self)
 
-    private var scale: CGFloat {
+    internal var scale: CGFloat {
         max(traitCollection.displayScale, 1)
     }
 
@@ -130,18 +193,22 @@ public final class TerminalView: UIView {
 
     /// A terminal showing `pane` in `palette`, at `textSize` points in `faces` (the bundled JetBrains Mono by default).
     ///
-    /// Copies and pastes go through `clipboard`, the system's by default.
+    /// Copies and pastes go through `clipboard`, the system's by default, and keys come through `keyboard`, its own by
+    /// default.
     public init(
         pane: any PaneClient,
         palette: TerminalPalette,
         textSize: CGFloat,
         faces: TerminalFaces? = Fonts.terminalFaces,
-        clipboard: (any TerminalClipboard)? = nil
+        clipboard: (any TerminalClipboard)? = nil,
+        keyboard: TerminalKeyboard? = nil
     ) {
         self.pane = pane
         self.clipboard = clipboard ?? SystemClipboard()
+        self.keyboard = keyboard ?? TerminalKeyboard()
         self.palette = palette
         self.textSize = textSize
+        defaultTextSize = textSize
         self.faces = faces
         let made = TerminalFont(size: textSize, faces: faces)
         font = made
@@ -154,6 +221,10 @@ public final class TerminalView: UIView {
         registerForTraitChanges([UITraitDisplayScale.self]) { (view: Self, _: UITraitCollection) in
             view.setNeedsLayout()
         }
+        // the composition over the rows, under the selection's handles, in depth and in order (a render of the layer
+        // keeps the order and leaves the depth out); the rows go in under both
+        textInput.layer.zPosition = Self.compositionDepth
+        layer.addSublayer(textInput.layer)
         handles.zPosition = 1
         layer.addSublayer(handles)
         _ = (gestures, pointerGestures, editMenu)
@@ -198,6 +269,7 @@ public final class TerminalView: UIView {
         backgroundColor = UIColor(cgColor: .argb(update.header.defaultBackground))
         selection.shown(screen.selection)
         refreshHandles()
+        placeComposition()
         // the terminal was busy and this is the frame it made last: ask again on the next tick
         framePending = update.header.stale
         link?.isPaused = !framePending
@@ -209,6 +281,7 @@ public final class TerminalView: UIView {
         for row in rowLayers {
             row.displayIfNeeded()
         }
+        textInput.layer.displayIfNeeded()
     }
 
     /// Lays the rows out over the bounds and gives the pane the grid that fits them.
@@ -217,6 +290,7 @@ public final class TerminalView: UIView {
         layoutRows()
         handles.frame = bounds
         refreshHandles()
+        placeComposition()
         let fits = font.grid(fitting: bounds.size, scale: scale)
         guard let fits, fits != grid else {
             return
@@ -242,9 +316,51 @@ public final class TerminalView: UIView {
         link = made
     }
 
-    /// Takes the focus (the first responder), as a tap or a click on the terminal does.
-    public func focus() {
+    /// Takes the focus (the first responder), as a tap or a click on the terminal does, opening the soft keyboard when
+    /// `showingKeyboard` (a tap); without it, a keyboard showing stays and none opens.
+    public func focus(showingKeyboard: Bool = false) {
+        if showingKeyboard, !softKeyboardWanted {
+            softKeyboardWanted = true
+            if isFirstResponder {
+                reloadInputViews()
+            }
+        }
         _ = becomeFirstResponder()
+    }
+
+    /// Takes the keyboard: every key goes here now.
+    override public func becomeFirstResponder() -> Bool {
+        tookKeyboard(super.becomeFirstResponder())
+    }
+
+    /// Lets the keyboard go: the composition is finished here first (``letKeyboardGo(_:)``).
+    override public func resignFirstResponder() -> Bool {
+        commitComposition()
+        return letKeyboardGo(super.resignFirstResponder())
+    }
+
+    /// A hardware keyboard's keys: what the program takes goes to it (``keyDown(_:)``), the rest to the text system.
+    override public func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let rest = untaken(presses, by: keyDown)
+        if !rest.isEmpty {
+            super.pressesBegan(rest, with: event)
+        }
+    }
+
+    /// Keys let go: those the program took are released to it (``keyUp(_:)``), the rest go to the text system.
+    override public func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let rest = untaken(presses, by: keyUp)
+        if !rest.isEmpty {
+            super.pressesEnded(rest, with: event)
+        }
+    }
+
+    /// Keys the system took back: as if let go.
+    override public func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let rest = untaken(presses, by: keyUp)
+        if !rest.isEmpty {
+            super.pressesCancelled(rest, with: event)
+        }
     }
 
     /// Whether the edit action `action` can run now: Copy with a selection, Paste with text on the clipboard, Select
@@ -287,67 +403,9 @@ public final class TerminalView: UIView {
         painter.draw(row: index, of: screen, width: bounds.width, look: look, in: context)
     }
 
-    /// Shows a touch selection's handles where the screen has it, and the edit menu over it once it is wanted.
-    internal func refreshHandles() {
-        let spots = selection.isTouchSelection ? HandleSpots(screen.selection, font: font, size: bounds.size) : nil
-        handles.show(spots, color: palette.cursor.uiColor.cgColor)
-        guard let spots else {
-            // the touch selection went: its menu goes with it, a secondary click's stays
-            if !selection.isTouchSelection {
-                editMenu.hideOverSelection()
-            }
-            return
-        }
-        if selection.wantsMenu, !selection.isAdjusting {
-            selection.wantsMenu = false
-            editMenu.show(over: spots.rows)
-        }
-    }
-
-    /// Shows the edit menu at `point` (a secondary click).
-    internal func showMenu(at point: CGPoint) {
-        editMenu.show(at: point)
-    }
-
-    /// Takes the edit menu down.
-    internal func hideMenu() {
-        editMenu.hide()
-    }
-
     @objc
     private func step(_: CADisplayLink) {
         drawFrame()
-    }
-
-    // a layer per row of the screen, each a cell high across the bounds, at the screen's scale
-    private func layoutRows() {
-        while rowLayers.count < screen.rowCount {
-            let row = TerminalRowLayer()
-            row.index = rowLayers.count
-            row.view = self
-            layer.addSublayer(row)
-            rowLayers.append(row)
-        }
-        while rowLayers.count > screen.rowCount {
-            rowLayers.removeLast().removeFromSuperlayer()
-        }
-        for row in rowLayers {
-            if row.contentsScale != scale {
-                row.contentsScale = scale
-                row.setNeedsDisplay()
-            }
-            row.frame = CGRect(x: 0, y: font.top(row.index), width: bounds.width, height: font.cellHeight)
-        }
-    }
-
-    private func redraw(rows: some Sequence<Int>) {
-        for index in rows where rowLayers.indices.contains(index) {
-            rowLayers[index].setNeedsDisplay()
-        }
-    }
-
-    private func redrawAll() {
-        redraw(rows: rowLayers.indices)
     }
 
     private func remakeFont() {
@@ -356,25 +414,7 @@ public final class TerminalView: UIView {
         painter = TerminalPainter(font: font, glyphs: glyphs)
         setNeedsLayout()
         redrawAll()
-    }
-
-    // asks before pasting `text`, which could run a command, in an alert over whatever the window shows
-    private func confirmPaste(_ text: String) {
-        let alert = PasteConfirmation.alert(for: text) { [weak self] in
-            self?.selection.confirmPaste()
-        } onCancel: { [weak self] in
-            self?.selection.cancelPaste()
-        }
-        var presenter = window?.rootViewController
-        while let shown = presenter?.presentedViewController {
-            presenter = shown
-        }
-        presenter?.present(alert, animated: true)
-    }
-
-    private func sendColors() {
-        // a pane with no terminal gives its next one the colors anyway
-        try? pane.setColors(colors: palette.paneColors)
+        placeComposition()
     }
 
     deinit {

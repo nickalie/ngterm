@@ -273,7 +273,15 @@ action_lint() {
   mkdir -p "$BUILD_DIR"
   touch "${compiled[@]}"
   if project_xcodebuild build-for-testing "${SIMULATOR_BUILD[@]}" >"$log" 2>&1; then
-    (cd "$IOS_DIR" && swiftlint analyze --strict --quiet --compiler-log-path "$log") || failed+=("SwiftLint analyzer")
+    # the analyzer type-checks every file of the log in SourceKit, in its own process and on several threads at once,
+    # and loading the macro plugins (Swift Testing's) into that process crashed it most runs on Xcode 27.2 ("unowned
+    # reference ... already destroyed" expanding one @Suite while another expands): it reads a copy of the log that
+    # runs them in the toolchain's plugin server instead (-external-plugin-path), as a build may
+    local server analyzed="$BUILD_DIR/lint-analyze-plugins.log"
+    server="$(xcrun --find swift-plugin-server)"
+    sed -E "s# -plugin-path ([^ ]+)# -external-plugin-path \\1\\#$server#g" "$log" >"$analyzed"
+    (cd "$IOS_DIR" && swiftlint analyze --strict --quiet --compiler-log-path "$analyzed") ||
+      failed+=("SwiftLint analyzer")
   else
     grep -E ': (error|warning): ' "$log" | sort -u >&2 || tail -n 40 "$log" >&2
     echo "lint: the build failed (log: $log)" >&2
