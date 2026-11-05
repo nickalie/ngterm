@@ -260,6 +260,44 @@ compact (iPhone, Slide Over)     regular (iPad, Stage Manager large)
 - **Motion:** none of its own. New rows show at once (no implicit animations), and the terminal draws only while output
   comes: its display link pauses when no frame waits.
 
+### Touch, pointer and the clipboard
+
+`Input/`, `Selection/`, `Prompts/`. The gestures are Android's (`TerminalGestures`, `TerminalMouse`), in UIKit's
+recognizers; what is new to iOS is the system's: the edit menu, the text beam, the paste rule.
+
+- **A finger:** a drag scrolls the screen with the finger, in whole rows, and flings on as a list does (a program that
+  asked for the mouse gets wheel turns); a tap gives the terminal the focus, or lets a touch selection go, and clicks
+  where it landed while a program tracks the mouse; a double tap selects the word, a triple tap the line; a long press
+  selects the word with a selection tick (haptic) and a drag from it extends the selection as text selection does; a
+  pinch changes the text size in whole points within Settings' 8 to 32, for this view only (Settings keeps its own).
+- **Selection handles** (`SelectionHandles`), iOS's own shape: a stem two points wide on the selection's edge, a row
+  tall, and a round knob 10 pt across, the start's above its stem and the end's below (on the other side where the view
+  has no room), in the palette's cursor color, the terminal's accent on its own ground. A finger within 22 pt of a knob
+  or a stem takes it (a 44 pt target); a long press there doesn't start a new word.
+- **The edit menu** (`UIEditMenuInteraction`): Copy (with a selection), Paste (with text on the clipboard) and Select
+  All, the system's menu with the system's words, over a touch selection once the finger lifts (under it when there is
+  no room above), and at the pointer for a secondary click. It keeps out of the way while a finger moves the selection.
+  Its items are the standard edit actions, so the menu's Paste and ⌘V are the user's own paste, which iOS doesn't
+  question; Copy lets the selection go.
+- **A pointer (iPad):** a text beam a row tall over the terminal, the system's pointer while a program takes the mouse;
+  under mouse tracking (shift held overrides it) the buttons, their drags and the motion go to the program; otherwise a
+  click lets the selection go, a drag selects, a double click the word, a triple click the line; the wheel and a
+  trackpad's two-finger scroll scroll it; a trackpad pinch zooms as a finger's does.
+- **Paste confirmation:** a paste the pane refuses as able to run a command (a line break or a control character) asks
+  first, in the system's alert: "Paste text that can run a command?", what it can do, and the text's first six lines
+  as they are (cut at 60 characters, control characters as their symbols, ␛ for escape). **Cancel** is the safe
+  answer and what dismissing does; **Paste** repeats the menu's word.
+- **A program reading the clipboard** asks in a sheet over whatever shows (`ClipboardReadQuestion`), a page of the
+  connect prompts' shape: the attention diamond, "Let docs-site read your clipboard?" as a heading, what the program
+  would see (the text, or only what kinds of content the clipboard holds) and from which session on which machine, then
+  **Allow** (prominent), and **Always allow on build-01** and **Deny**, quieter (the tint on the ground). Swiping it
+  away denies. Every read gets an answer: a read whose session is detached, whose pane's program ends, whose machine
+  drops, or that is waiting when the app suspends is denied. A machine allowed always is answered unasked until
+  Settings asks again. Handing over the text may still bring up iOS's own question about pasting from another app,
+  which the app can't skip outside the user's own paste.
+- **A program writing the clipboard** (OSC 52) puts its text on the system's; a write to the selection or primary
+  clipboard, which iOS doesn't have, is dropped.
+
 ## Screens
 
 ### First run (`Onboarding/`)

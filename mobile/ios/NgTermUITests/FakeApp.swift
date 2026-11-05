@@ -17,6 +17,12 @@ internal enum FakeApp {
     /// upright, its last rows off the screen.
     @MainActor
     internal static func launch(withKey: Bool, for test: XCTestCase) -> XCUIApplication {
+        launch(withKey: withKey, arguments: [], for: test)
+    }
+
+    /// Launches the app as ``launch(withKey:for:)`` does, with the launch arguments `arguments` besides.
+    @MainActor
+    internal static func launch(withKey: Bool, arguments: [String], for test: XCTestCase) -> XCUIApplication {
         let isPad = UIDevice.current.userInterfaceIdiom == .pad
         if isPad {
             XCUIDevice.shared.orientation = .landscapeLeft
@@ -25,7 +31,7 @@ internal enum FakeApp {
             }
         }
         let app = XCUIApplication()
-        app.launchArguments = ["-ngterm-fake-core"] + (withKey ? ["-ngterm-fake-key"] : [])
+        app.launchArguments = ["-ngterm-fake-core"] + (withKey ? ["-ngterm-fake-key"] : []) + arguments
         app.launch()
         if isPad {
             expectLandscape(app)

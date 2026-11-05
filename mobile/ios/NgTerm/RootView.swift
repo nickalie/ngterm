@@ -2,8 +2,8 @@ import NgtermDesign
 import NgtermFeatures
 import SwiftUI
 
-/// A main window: the app's frame over its own navigation, the first run over it while the app has no key, and the
-/// questions the machines' connects wait on.
+/// A main window: the app's frame over its own navigation, the first run over it while the app has no key, the
+/// questions the machines' connects wait on, and the programs' clipboard reads.
 ///
 /// The session column holds a placeholder until the session view lands.
 internal struct RootView: View {
@@ -31,6 +31,7 @@ internal struct RootView: View {
             }
         }
         .connectPrompts(machines)
+        .clipboardReadPrompt(graph)
         .task {
             graph.start()
         }

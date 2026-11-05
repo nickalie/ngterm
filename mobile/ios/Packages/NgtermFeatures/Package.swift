@@ -37,6 +37,7 @@ let package = Package(
                 .product(name: "NgtermCoreFakes", package: "NgtermCore"),
                 .product(name: "NgtermDesign", package: "NgtermDesign"),
                 .product(name: "NgtermPlatform", package: "NgtermPlatform"),
+                .product(name: "NgtermTerminal", package: "NgtermTerminal"),
                 .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
             ],
             exclude: ["__Snapshots__"],

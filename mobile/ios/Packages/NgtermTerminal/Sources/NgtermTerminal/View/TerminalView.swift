@@ -15,9 +15,23 @@ import UIKit
 /// It fills its bounds with whole cells from the top left and gives the pane the grid that fits (``grid``), again as
 /// its size changes (rotation, Stage Manager, the split), and the colors of ``palette``. With ``drawsFocused`` the
 /// cursor takes its shape; an unfocused terminal shows a hollow block.
+///
+/// A finger's gestures (``gestures``) and a pointer's (``pointerGestures``) scroll, click, select and zoom it through
+/// ``pointer`` and ``selection``; a touch selection shows its handles and the edit menu (Copy, Paste, Select All),
+/// whose standard edit actions it answers as the first responder, as it answers ⌘C, ⌘V and ⌘A. A paste the pane
+/// refuses as unsafe waits for the user's yes (``PasteConfirmation``).
 public final class TerminalView: UIView {
+    // the edit menu's items: the standard edit actions, with their titles
+    internal static let editActions: [(Selector, String)] = [
+        (#selector(copy(_:)), String(localized: "Copy")),
+        (#selector(paste(_:)), String(localized: "Paste")),
+        (#selector(selectAll(_:)), String(localized: "Select All")),
+    ]
+
     /// The pane it shows: a new pane needs a new view.
     public let pane: any PaneClient
+    /// The clipboard its copies go to and its pastes come from.
+    public let clipboard: any TerminalClipboard
 
     /// The colors the terminal starts from, and the selection's.
     public var palette: TerminalPalette {
@@ -27,6 +41,7 @@ public final class TerminalView: UIView {
             }
             sendColors()
             redrawAll()
+            refreshHandles()
         }
     }
 
@@ -66,9 +81,35 @@ public final class TerminalView: UIView {
     /// The font it draws in.
     public private(set) var font: TerminalFont
 
+    /// The pointer's side of the pane: cells, clicks, the wheel, flings and the text size.
+    public private(set) lazy var pointer = TerminalPointer(view: self)
+    /// The selection's side of the pane: the touch selection, copy and paste.
+    public private(set) lazy var selection = TerminalSelection(pane: pane, clipboard: clipboard) { [weak self] in
+        self?.dirty()
+    }
+    /// A finger's gestures.
+    public private(set) lazy var gestures = TerminalGestures(view: self)
+    /// A mouse's and a trackpad's.
+    public private(set) lazy var pointerGestures = TerminalPointerGestures(view: self)
+
     /// Whether the display link runs: while the view is in a window and a frame waits.
     public var readsFrames: Bool {
         link.map { !$0.isPaused } ?? false
+    }
+
+    /// Where a touch selection's handles stand; `nil` while none shows.
+    public var handleSpots: HandleSpots? {
+        handles.spots
+    }
+
+    /// Whether the edit menu shows.
+    public var isMenuShown: Bool {
+        editMenu.isShown
+    }
+
+    /// It takes the focus, and the edit menu's actions with it.
+    override public var canBecomeFirstResponder: Bool {
+        true
     }
 
     private var glyphs: GlyphCache
@@ -76,6 +117,8 @@ public final class TerminalView: UIView {
     private var rowLayers: [TerminalRowLayer] = []
     private var link: CADisplayLink?
     private var restart = true
+    private let handles = SelectionHandles()
+    private lazy var editMenu = TerminalEditMenu(view: self)
 
     private var scale: CGFloat {
         max(traitCollection.displayScale, 1)
@@ -86,13 +129,17 @@ public final class TerminalView: UIView {
     }
 
     /// A terminal showing `pane` in `palette`, at `textSize` points in `faces` (the bundled JetBrains Mono by default).
+    ///
+    /// Copies and pastes go through `clipboard`, the system's by default.
     public init(
         pane: any PaneClient,
         palette: TerminalPalette,
         textSize: CGFloat,
-        faces: TerminalFaces? = Fonts.terminalFaces
+        faces: TerminalFaces? = Fonts.terminalFaces,
+        clipboard: (any TerminalClipboard)? = nil
     ) {
         self.pane = pane
+        self.clipboard = clipboard ?? SystemClipboard()
         self.palette = palette
         self.textSize = textSize
         self.faces = faces
@@ -107,6 +154,9 @@ public final class TerminalView: UIView {
         registerForTraitChanges([UITraitDisplayScale.self]) { (view: Self, _: UITraitCollection) in
             view.setNeedsLayout()
         }
+        handles.zPosition = 1
+        layer.addSublayer(handles)
+        _ = (gestures, pointerGestures, editMenu)
         sendColors()
     }
 
@@ -146,6 +196,8 @@ public final class TerminalView: UIView {
         layoutRows()
         redraw(rows: changed)
         backgroundColor = UIColor(cgColor: .argb(update.header.defaultBackground))
+        selection.shown(screen.selection)
+        refreshHandles()
         // the terminal was busy and this is the frame it made last: ask again on the next tick
         framePending = update.header.stale
         link?.isPaused = !framePending
@@ -163,6 +215,8 @@ public final class TerminalView: UIView {
     override public func layoutSubviews() {
         super.layoutSubviews()
         layoutRows()
+        handles.frame = bounds
+        refreshHandles()
         let fits = font.grid(fitting: bounds.size, scale: scale)
         guard let fits, fits != grid else {
             return
@@ -178,6 +232,8 @@ public final class TerminalView: UIView {
         link?.invalidate()
         link = nil
         guard window != nil else {
+            pointer.stopFling()
+            hideMenu()
             return
         }
         let made = CADisplayLink(target: self, selector: #selector(step))
@@ -186,9 +242,75 @@ public final class TerminalView: UIView {
         link = made
     }
 
+    /// Takes the focus (the first responder), as a tap or a click on the terminal does.
+    public func focus() {
+        _ = becomeFirstResponder()
+    }
+
+    /// Whether the edit action `action` can run now: Copy with a selection, Paste with text on the clipboard, Select
+    /// All always.
+    override public func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        switch action {
+        case #selector(copy(_:)):
+            selection.hasSelection
+
+        case #selector(paste(_:)):
+            clipboard.hasText
+
+        case #selector(selectAll(_:)):
+            true
+
+        default:
+            super.canPerformAction(action, withSender: sender)
+        }
+    }
+
+    /// Copy: the selection's text goes on the clipboard, and the selection goes.
+    override public func copy(_: Any?) {
+        selection.copy()
+    }
+
+    /// Paste: the clipboard's text goes to the program, once the user says yes when it could run a command.
+    override public func paste(_: Any?) {
+        if selection.pasteClipboard(), let text = selection.unsafePaste {
+            confirmPaste(text)
+        }
+    }
+
+    /// Select All: everything on screen and in the scrollback.
+    override public func selectAll(_: Any?) {
+        selection.selectAll()
+    }
+
     /// Draws row `index` into `context` (its row layer's), as the screen has it now.
     internal func drawRow(_ index: Int, in context: CGContext) {
         painter.draw(row: index, of: screen, width: bounds.width, look: look, in: context)
+    }
+
+    /// Shows a touch selection's handles where the screen has it, and the edit menu over it once it is wanted.
+    internal func refreshHandles() {
+        let spots = selection.isTouchSelection ? HandleSpots(screen.selection, font: font, size: bounds.size) : nil
+        handles.show(spots, color: palette.cursor.uiColor.cgColor)
+        guard let spots else {
+            if !selection.isTouchSelection {
+                hideMenu()
+            }
+            return
+        }
+        if selection.wantsMenu, !selection.isAdjusting {
+            selection.wantsMenu = false
+            editMenu.show(over: spots.rows)
+        }
+    }
+
+    /// Shows the edit menu at `point` (a secondary click).
+    internal func showMenu(at point: CGPoint) {
+        editMenu.show(at: point)
+    }
+
+    /// Takes the edit menu down.
+    internal func hideMenu() {
+        editMenu.hide()
     }
 
     @objc
@@ -233,6 +355,20 @@ public final class TerminalView: UIView {
         painter = TerminalPainter(font: font, glyphs: glyphs)
         setNeedsLayout()
         redrawAll()
+    }
+
+    // asks before pasting `text`, which could run a command, in an alert over whatever the window shows
+    private func confirmPaste(_ text: String) {
+        let alert = PasteConfirmation.alert(for: text) { [weak self] in
+            self?.selection.confirmPaste()
+        } onCancel: { [weak self] in
+            self?.selection.cancelPaste()
+        }
+        var presenter = window?.rootViewController
+        while let shown = presenter?.presentedViewController {
+            presenter = shown
+        }
+        presenter?.present(alert, animated: true)
     }
 
     private func sendColors() {

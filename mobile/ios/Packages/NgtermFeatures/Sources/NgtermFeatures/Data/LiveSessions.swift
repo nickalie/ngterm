@@ -1,11 +1,14 @@
 import NgtermCore
 import NgtermPlatform
+import NgtermTerminal
 import Observation
 
 /// What the core tells the app about the attached sessions and their shown panes (mobile/android's `LiveSessions`).
 ///
 /// It keeps, per session in ``sessions``, the stream's state, status, context, layout and HUD, and each pane's role,
-/// cover, end and title. A shown pane's frames go to the ``PaneFrames`` ``route(_:to:)``d to it. A detached session's
+/// cover, end and title. A shown pane's frames go to the ``PaneFrames`` ``route(_:to:)``d to it, and a program's write
+/// to the standard clipboard goes to the device's (iOS has no selection or primary clipboard, so a write to either is
+/// dropped). A detached session's
 /// state is let go, and the attached set is written to the ``AttachedStore`` on every change, for a background refresh
 /// that starts with nothing attached. A stream that fails before the session was ever shown has the machine listed
 /// again, so a session ended elsewhere since its listing leaves.
@@ -17,15 +20,18 @@ public final class LiveSessions {
     public private(set) var sessions: [SessionKey: LiveSession] = [:]
     @ObservationIgnored private let connections: Connections
     @ObservationIgnored private let store: AttachedStore
+    @ObservationIgnored private let clipboard: any TerminalClipboard
     @ObservationIgnored private var frames: [PaneRef: any PaneFrames] = [:]
     // the attached set as last seen: only what was in it and no longer is goes (an event may land before its attach is
     // recorded)
     @ObservationIgnored private var attached: Set<SessionKey> = []
 
-    /// The live sessions over `connections`, whose events they take from now on, writing the attached set to `store`.
-    public init(connections: Connections, store: AttachedStore) {
+    /// The live sessions over `connections`, whose events they take from now on, writing the attached set to `store`
+    /// and the programs' clipboard writes to `clipboard`.
+    public init(connections: Connections, store: AttachedStore, clipboard: any TerminalClipboard) {
         self.connections = connections
         self.store = store
+        self.clipboard = clipboard
         connections.listen { [weak self] event in
             self?.receive(event)
         }
@@ -102,6 +108,9 @@ public final class LiveSessions {
                 live.end = end
                 live.isCovered = false
             }
+
+        case .clipboardWrite(_, .standard, let text):
+            clipboard.write(text)
 
         default:
             break

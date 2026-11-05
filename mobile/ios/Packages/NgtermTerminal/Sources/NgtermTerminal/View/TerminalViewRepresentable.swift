@@ -43,10 +43,18 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
         return view
     }
 
-    /// Takes the palette, the font and the focus as they are now.
-    public func updateUIView(_ view: TerminalView, context _: Context) {
+    /// The text size it last gave the view: a pinch changes the view's own until a new one is given.
+    public func makeCoordinator() -> TextSizeGiven {
+        TextSizeGiven(textSize)
+    }
+
+    /// Takes the palette, the font and the focus as they are now, and the text size when it is a new one.
+    public func updateUIView(_ view: TerminalView, context: Context) {
         view.palette = palette
-        view.textSize = textSize
+        if context.coordinator.textSize != textSize {
+            context.coordinator.textSize = textSize
+            view.textSize = textSize
+        }
         view.faces = faces
         view.drawsFocused = focused
         feed.view = view

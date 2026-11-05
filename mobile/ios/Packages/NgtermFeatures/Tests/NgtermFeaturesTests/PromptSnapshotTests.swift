@@ -1,10 +1,12 @@
 import NgtermCoreFakes
 import NgtermPlatform
+import NgtermTerminal
 import Testing
 
 @testable import NgtermFeatures
 
-/// Goldens of the questions a first connect asks: a host key to trust, a sign-in, and a changed host key's stop.
+/// Goldens of the questions a first connect asks (a host key to trust, a sign-in, and a changed host key's stop), and
+/// of a program's clipboard read.
 @MainActor
 @Suite("connect prompt snapshots")
 internal struct PromptSnapshotTests {
@@ -32,6 +34,32 @@ internal struct PromptSnapshotTests {
             onCancel: ScreenSnapshot.ignore
         )
         ScreenSnapshot.check(sheet, named: "sign-in", variant: variant)
+    }
+
+    @Test("a program asks to read the clipboard", arguments: ScreenVariant.allCases)
+    internal func clipboardRead(variant: ScreenVariant) {
+        let question = ClipboardReadQuestion(
+            listOnly: false,
+            machine: "build-01",
+            session: "docs-site",
+            onAllow: ScreenSnapshot.ignore,
+            onAlways: ScreenSnapshot.ignore,
+            onDeny: ScreenSnapshot.ignore
+        )
+        ScreenSnapshot.check(question, named: "clipboard-read", variant: variant)
+    }
+
+    @Test("a program asks only what kinds the clipboard holds")
+    internal func clipboardList() {
+        let question = ClipboardReadQuestion(
+            listOnly: true,
+            machine: "build-01",
+            session: "docs-site",
+            onAllow: ScreenSnapshot.ignore,
+            onAlways: ScreenSnapshot.ignore,
+            onDeny: ScreenSnapshot.ignore
+        )
+        ScreenSnapshot.check(question, named: "clipboard-list", variant: .light)
     }
 
     @Test("a changed host key stops the connection", arguments: ScreenVariant.allCases)

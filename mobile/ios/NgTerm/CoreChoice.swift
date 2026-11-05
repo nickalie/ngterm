@@ -16,6 +16,8 @@ internal struct CoreChoice {
     internal static let fakeArgument = "-ngterm-fake-core"
     /// With the fake core, the launch argument that gives the app a key, so the first run is over.
     internal static let fakeKeyArgument = "-ngterm-fake-key"
+    /// With the fake core, the launch argument that has a program ask to read the clipboard at once.
+    internal static let fakeClipboardReadArgument = "-ngterm-fake-clipboard-read"
 
     // the public key's comment, which shows in a machine's authorized_keys: whose key it is ("ngterm@iPhone")
     @MainActor private static var keyComment: String {
@@ -33,7 +35,10 @@ internal struct CoreChoice {
         #if DEBUG
             if arguments.contains(Self.fakeArgument) {
                 version = FakeCoreInfo.version
-                graph = FakeWorld.graph(withKey: arguments.contains(Self.fakeKeyArgument))
+                graph = FakeWorld.graph(
+                    withKey: arguments.contains(Self.fakeKeyArgument),
+                    readsClipboard: arguments.contains(Self.fakeClipboardReadArgument)
+                )
                 return
             }
         #endif
@@ -56,7 +61,7 @@ internal struct CoreChoice {
             settings: SettingsStore(),
             keys: AppKeys(store: KeyStore(), vault: KeychainKeyVault(), maker: CoreKeyMaker(), comment: keyComment),
             pins: pins,
-            attached: AttachedStore(),
+            stores: (attached: AttachedStore(), clipboardTrust: ClipboardTrustStore()),
             core: core
         )
     }
