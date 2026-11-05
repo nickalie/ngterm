@@ -58,12 +58,17 @@
             }
         }
 
-        /// Attaches a session of the machine's last listing.
+        /// Attaches a session of the machine's last listing, then delivers what its stream says (``attachEvents``).
         nonisolated(nonsending) public func attachSession(machineId: String, sessionId: String) async throws {
             try await abandoningOnCancel { [self] in
                 let call = recordHeld("attachSession", [machineId, sessionId])
                 try await call.pass()
-                _ = try state.withLock { state throws(MobileError) in try state.listed(machineId, sessionId) }
+                try state.withLock { state throws(MobileError) in
+                    _ = try state.listed(machineId, sessionId)
+                    for event in state.attachEvents[sessionId] ?? [] {
+                        emit(event, in: &state)
+                    }
+                }
             }
         }
 

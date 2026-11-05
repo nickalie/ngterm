@@ -21,6 +21,9 @@ internal struct CoreChoice {
     /// With the fake core, the launch argument that shows a terminal on a fake pane alone (``TerminalBench``), for the
     /// keyboard's UI tests.
     internal static let fakeTerminalArgument = "-ngterm-fake-terminal"
+    /// With the fake core, the launch argument that saves a machine with a session of two panes
+    /// (``FakeSessionWorld``).
+    internal static let fakeSessionArgument = "-ngterm-fake-session"
 
     // the public key's comment, which shows in a machine's authorized_keys: whose key it is ("ngterm@iPhone")
     @MainActor private static var keyComment: String {
@@ -40,7 +43,8 @@ internal struct CoreChoice {
                 version = FakeCoreInfo.version
                 graph = FakeWorld.graph(
                     withKey: arguments.contains(Self.fakeKeyArgument),
-                    readsClipboard: arguments.contains(Self.fakeClipboardReadArgument)
+                    readsClipboard: arguments.contains(Self.fakeClipboardReadArgument),
+                    hasSession: arguments.contains(Self.fakeSessionArgument)
                 )
                 return
             }

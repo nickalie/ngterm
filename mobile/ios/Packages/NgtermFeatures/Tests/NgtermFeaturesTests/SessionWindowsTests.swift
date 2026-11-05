@@ -196,6 +196,35 @@ internal struct SessionWindowsTests {
         #expect(model.compactColumn == .content)
     }
 
+    @Test("opening a session a second window shows already focuses that window and opens no other")
+    internal func secondWindowFocusesTheFirst() {
+        let windows = SessionWindows()
+        let model = ScaffoldModel(windows: windows)
+        _ = model.open(docs)
+        // Open in New Window: its own window comes, and this one steps aside
+        windows.opened(docs)
+        #expect(model.shownSessionPlacement == .ownWindow)
+        // opening it again, from the sidebar, a move or the list: the window it has comes forward (SwiftUI keeps one
+        // window per value), and none other opens
+        #expect(model.open(docs) == .ownWindow)
+        #expect(windows.open == [docs])
+        #expect(SessionWindowID(docs.key) == docs, "the value the window group is asked for is the session's own")
+    }
+
+    @Test("closing the session shown here leaves it, and a compact stack goes back to the machine's sessions")
+    internal func closing() {
+        let windows = SessionWindows()
+        let model = ScaffoldModel(windows: windows)
+        let other = ScaffoldModel(windows: windows)
+        _ = other.open(docs)
+        _ = model.open(docs)
+        #expect(other.shownSessionPlacement == .otherWindow)
+        model.close()
+        #expect(model.session == nil)
+        #expect(model.compactColumn == .content)
+        #expect(other.shownSessionPlacement == .here, "the window that had it before takes it back")
+    }
+
     @Test("the onboarding covers the first run only")
     internal func onboardingHook() {
         #expect(ScaffoldModel(windows: SessionWindows(), needsOnboarding: true).isOnboardingPresented)

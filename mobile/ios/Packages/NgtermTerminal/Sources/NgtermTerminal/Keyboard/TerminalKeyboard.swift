@@ -11,6 +11,8 @@ public final class TerminalKeyboard {
     private static let enter = "enter"
 
     private var madeBar: ExtraKeysBar?
+    // the focus the terminal that had it left when the selection moved on: the terminal selected next takes it
+    private var handingOver: Handover?
 
     /// The moves' actions, which the session view sets.
     public var shortcuts: TerminalShortcuts
@@ -125,6 +127,18 @@ public final class TerminalKeyboard {
             }
         }
         return bits
+    }
+
+    /// The session view moves the selection to another terminal: when a terminal has the focus now, the one drawn
+    /// focused next in a window takes it, with the soft keyboard if this one had it open (Android's `FollowFocus`).
+    public func handOver() {
+        handingOver = target.map { $0.softKeyboardWanted ? .withKeyboard : .focus }
+    }
+
+    /// What ``handOver()`` left for the terminal selected next, taken once.
+    internal func takeHandover() -> Handover? {
+        defer { handingOver = nil }
+        return handingOver
     }
 
     /// Shows the extra keys as things stand now: the sticky modifiers, and whether the soft keyboard is open.

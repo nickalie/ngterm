@@ -39,7 +39,8 @@
     ///   kept;
     /// - ``attachSession(machineId:sessionId:)`` and ``showPane(machineId:sessionId:paneId:size:)`` take only a session
     ///   of the machine's last listing (``MobileError/NotListed(sessionId:)`` otherwise), not of ``sessions``, as the
-    ///   real core refuses a session it has not listed;
+    ///   real core refuses a session it has not listed; an attach then delivers the session's ``attachEvents``, as its
+    ///   stream would;
     /// - a session given ``panes`` has those panes: a show takes only one the session had at the machine's last listing
     ///   (``MobileError/Remote(reason:)`` with ``unknownPane`` otherwise), so a pane added since (a split) needs a new
     ///   listing first. A session not in ``panes`` takes any pane;
@@ -118,6 +119,13 @@
         /// The panes shown and not hidden since.
         public var shownPanes: Set<PaneRef> {
             state.withLock { Set($0.shown.keys) }
+        }
+
+        /// What each session's stream says as an attach of it lands, by session id: its state, layout, status and its
+        /// panes' leads, as the real core's presentation stream would.
+        public var attachEvents: [String: [MobileEvent]] {
+            get { state.withLock { $0.attachEvents } }
+            set { state.withLock { $0.attachEvents = newValue } }
         }
 
         /// What a show of a pane not shown yet hands back.

@@ -99,13 +99,24 @@ public final class TerminalView: UIView {
     }
 
     /// Whether the terminal has the focus: an unfocused one shows its cursor as a hollow block.
+    ///
+    /// The session view draws its selected pane focused: one that becomes so in a window takes the keyboard's focus
+    /// when the last selected one handed it over (``TerminalKeyboard/handOver()``).
     public var drawsFocused = true {
         didSet {
             if drawsFocused != oldValue, let cursor = screen.header?.cursor {
                 redraw(rows: [cursor.row])
             }
+            takeHandover()
         }
     }
+
+    /// What a touch or a click on it, or its taking the focus, does: the session view selects its pane.
+    public var onSelect: (@MainActor () -> Void)?
+    /// Where a finger's sideways swipe goes (`true` forward: a swipe to the left); with none, a drag only scrolls.
+    public var onSwipe: (@MainActor (Bool) -> Void)?
+    /// Whether VoiceOver hears its cursor's line as it changes (the selected pane's), at most once a second.
+    public var readsAloud = false
 
     /// The grid it last gave the pane; `nil` until it has a size that holds a cell.
     public private(set) var grid: PaneSize?
@@ -165,8 +176,20 @@ public final class TerminalView: UIView {
     }
     // swiftlint:enable discouraged_optional_collection
 
+    /// What VoiceOver reads of it: its screen's text, line by line (``accessibilityPageContent()``).
+    override public var accessibilityValue: String? {
+        get {
+            accessibilityPageContent()
+        }
+        set {
+            super.accessibilityValue = newValue
+        }
+    }
+
     /// The composition, and where it draws.
     internal let textInput = TerminalTextInput()
+    /// What says the cursor's line to VoiceOver.
+    internal lazy var announcer = CursorAnnouncer()
     /// The hardware keys taken as the program's while they are held, and the repeat of the one held last.
     internal let heldKeys = HeldKeys()
     /// The soft keyboard's stand-in while it isn't wanted: no keys, so the extra keys sit at the foot of the screen.
@@ -217,6 +240,9 @@ public final class TerminalView: UIView {
         super.init(frame: .zero)
         isOpaque = true
         clipsToBounds = true
+        // a text input VoiceOver reads line by line (UIAccessibilityReadingContent, View/TerminalView+Reading)
+        isAccessibilityElement = true
+        accessibilityLabel = String(localized: "Terminal")
         backgroundColor = palette.background.uiColor
         registerForTraitChanges([UITraitDisplayScale.self]) { (view: Self, _: UITraitCollection) in
             view.setNeedsLayout()
@@ -270,6 +296,9 @@ public final class TerminalView: UIView {
         selection.shown(screen.selection)
         refreshHandles()
         placeComposition()
+        if readsAloud {
+            announcer.cursorLine(screen.text(update.header.cursor.row))
+        }
         // the terminal was busy and this is the frame it made last: ask again on the next tick
         framePending = update.header.stale
         link?.isPaused = !framePending
@@ -314,6 +343,13 @@ public final class TerminalView: UIView {
         made.isPaused = !framePending
         made.add(to: .main, forMode: .common)
         link = made
+        takeHandover()
+    }
+
+    /// A touch or a click on it selects it (``onSelect``), whatever it goes on to do.
+    override public func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        onSelect?()
+        super.touchesBegan(touches, with: event)
     }
 
     /// Takes the focus (the first responder), as a tap or a click on the terminal does, opening the soft keyboard when

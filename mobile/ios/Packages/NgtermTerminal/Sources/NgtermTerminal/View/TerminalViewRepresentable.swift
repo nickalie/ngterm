@@ -15,6 +15,9 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
     private let faces: TerminalFaces?
     private let focused: Bool
     private var keyboard: TerminalKeyboard?
+    private var select: (@MainActor () -> Void)?
+    private var swipe: (@MainActor (Bool) -> Void)?
+    private var readsAloud = false
 
     /// The terminal of `pane`, told of new frames through `feed`.
     ///
@@ -44,11 +47,35 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
         return copy
     }
 
+    /// The same terminal, running `action` as a touch or a click lands on it, or it takes the focus
+    /// (``TerminalView/onSelect``).
+    @preconcurrency
+    public func onSelect(_ action: @escaping @MainActor () -> Void) -> Self {
+        var copy = self
+        copy.select = action
+        return copy
+    }
+
+    /// The same terminal, a finger's sideways swipe going to `action` (``TerminalView/onSwipe``); with none, a drag
+    /// only scrolls.
+    @preconcurrency
+    public func onSwipe(_ action: (@MainActor (Bool) -> Void)?) -> Self {
+        var copy = self
+        copy.swipe = action
+        return copy
+    }
+
+    /// The same terminal, saying its cursor's line to VoiceOver as it changes when `reads` (the selected pane).
+    public func readsAloud(_ reads: Bool) -> Self {
+        var copy = self
+        copy.readsAloud = reads
+        return copy
+    }
+
     /// The terminal view, joined to the feed.
     public func makeUIView(context _: Context) -> TerminalView {
         let view = TerminalView(pane: pane, palette: palette, textSize: textSize, faces: faces, keyboard: keyboard)
-        view.drawsFocused = focused
-        feed.view = view
+        take(into: view)
         return view
     }
 
@@ -66,6 +93,14 @@ public struct TerminalViewRepresentable: UIViewRepresentable {
             view.defaultTextSize = textSize
         }
         view.faces = faces
+        take(into: view)
+    }
+
+    // what changes with every update: the hooks, then the focus, which may take the focus handed over
+    private func take(into view: TerminalView) {
+        view.onSelect = select
+        view.onSwipe = swipe
+        view.readsAloud = readsAloud
         view.drawsFocused = focused
         feed.view = view
     }

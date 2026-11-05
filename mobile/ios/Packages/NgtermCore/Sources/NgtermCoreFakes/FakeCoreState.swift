@@ -41,6 +41,8 @@
         // each machine's sessions' panes at its last listing, by machine id then session id
         internal var listedPanes: [String: [String: Set<String>]] = [:]
         internal var shown: [PaneRef: any PaneClient] = [:]
+        // what each session's stream says as it is attached, by session id
+        internal var attachEvents: [String: [MobileEvent]] = [:]
         internal var paneFactory: FakeMobileCore.PaneFactory
 
         /// Records an async call, taking its queued failure and its gate for ``FakeHeldCall/pass()``.

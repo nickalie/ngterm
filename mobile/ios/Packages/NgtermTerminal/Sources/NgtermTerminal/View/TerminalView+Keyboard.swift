@@ -15,8 +15,18 @@ extension TerminalView {
         if became {
             keyboard.target = self
             keyboard.refreshBar()
+            onSelect?()
         }
         return became
+    }
+
+    /// The terminal drawn focused (the selected pane) in a window takes the focus the last selected one handed over,
+    /// opening the soft keyboard if that one had it open.
+    internal func takeHandover() {
+        guard drawsFocused, window != nil, let handover = keyboard.takeHandover() else {
+            return
+        }
+        focus(showingKeyboard: handover == .withKeyboard)
     }
 
     /// The terminal let the first responder go (`resigned`), or isn't it: the keys held are let go, the keys go

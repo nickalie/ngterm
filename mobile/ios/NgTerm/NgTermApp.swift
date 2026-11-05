@@ -27,7 +27,7 @@ internal struct NgTermApp: App {
         // one window per session: SwiftUI keeps a window per value, and opening a session that has one focuses it
         WindowGroup(for: SessionWindowID.self) { session in
             if let id = session.wrappedValue {
-                SessionWindow(session: id, windows: windows)
+                SessionWindow(graph: core.graph, session: id, windows: windows)
             }
         }
     }
