@@ -7,6 +7,14 @@
 		<key>UIColorName</key>
 		<string>LaunchBackground</string>
 	</dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.nickalie.ngterm.ios.refresh</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

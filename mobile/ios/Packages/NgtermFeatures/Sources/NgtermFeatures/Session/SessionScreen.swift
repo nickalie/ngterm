@@ -7,8 +7,8 @@ import SwiftUI
 ///
 /// A compact width shows one pane at a time, a regular width the origin's split. Once the session is let go some other
 /// way (Detach, End session, a disconnect), the view asks its window to close it. While it shows, the screen stays
-/// awake when Settings asks for it. Its caller gives it the session's identity (`.id`), so another session gets a view
-/// of its own.
+/// awake when Settings asks for it, and the session's open asks show in a sheet over it (``AskPrompt``). Its caller
+/// gives it the session's identity (`.id`), so another session gets a view of its own.
 public struct SessionScreen: View {
     @Environment(\.colorScheme)
     private var colorScheme
@@ -16,6 +16,7 @@ public struct SessionScreen: View {
     private var sizeClass
 
     private let graph: AppGraph
+    private let key: SessionKey
     private let actions: SessionActions
     @State private var model: SessionModel
     @State private var holder = UUID()
@@ -32,6 +33,7 @@ public struct SessionScreen: View {
             .onChange(of: graph.settings.settings.keepScreenOn) { _, keepsOn in
                 graph.screenAwake.hold(holder, wanted: keepsOn)
             }
+            .askPrompt(graph, session: key)
     }
 
     @ViewBuilder private var content: some View {
@@ -66,6 +68,7 @@ public struct SessionScreen: View {
     /// its own by default).
     public init(graph: AppGraph, session: SessionKey, actions: SessionActions, keyboard: TerminalKeyboard? = nil) {
         self.graph = graph
+        key = session
         self.actions = actions
         _model = State(initialValue: SessionModel(graph: graph, key: session, keyboard: keyboard))
     }

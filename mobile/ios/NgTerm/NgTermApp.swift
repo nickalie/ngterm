@@ -9,8 +9,12 @@ internal struct NgTermApp: App {
         private let arguments = ProcessInfo.processInfo.arguments
     #endif
 
-    private let core = CoreChoice(arguments: ProcessInfo.processInfo.arguments)
+    @UIApplicationDelegateAdaptor private var delegate: AppDelegate
     @State private var windows = SessionWindows()
+
+    private var core: CoreChoice {
+        delegate.core
+    }
 
     internal var body: some Scene {
         WindowGroup {

@@ -24,6 +24,10 @@ internal struct CoreChoice {
     /// With the fake core, the launch argument that saves a machine with a session of two panes
     /// (``FakeSessionWorld``).
     internal static let fakeSessionArgument = "-ngterm-fake-session"
+    /// With the fake session, the launch argument that has its origin ask a question as it is attached.
+    internal static let fakeAskArgument = "-ngterm-fake-ask"
+    /// With the fake core, the launch argument that leaves the question about notifying to be asked.
+    internal static let fakeNotificationQuestionArgument = "-ngterm-fake-notification-question"
 
     // the public key's comment, which shows in a machine's authorized_keys: whose key it is ("ngterm@iPhone")
     @MainActor private static var keyComment: String {
@@ -41,11 +45,7 @@ internal struct CoreChoice {
         #if DEBUG
             if arguments.contains(Self.fakeArgument) {
                 version = FakeCoreInfo.version
-                graph = FakeWorld.graph(
-                    withKey: arguments.contains(Self.fakeKeyArgument),
-                    readsClipboard: arguments.contains(Self.fakeClipboardReadArgument),
-                    hasSession: arguments.contains(Self.fakeSessionArgument)
-                )
+                graph = FakeWorld.graph(arguments: arguments)
                 return
             }
         #endif
@@ -68,8 +68,11 @@ internal struct CoreChoice {
             settings: SettingsStore(),
             keys: AppKeys(store: KeyStore(), vault: KeychainKeyVault(), maker: CoreKeyMaker(), comment: keyComment),
             pins: pins,
-            stores: (attached: AttachedStore(), clipboardTrust: ClipboardTrustStore()),
+            stores: GraphStores(),
             core: core
-        )
+        ) {
+            // a refresh's own core: the app's keeps what it holds, or what a suspend set aside
+            try LiveMobileCore(vault: KeychainKeyVault(), hosts: pins)
+        }
     }
 }

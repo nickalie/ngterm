@@ -6,8 +6,9 @@ import NgtermPlatform
 
 /// The app's graph over fakes, as mobile/android's `TestGraph`: the core a ``FakeMobileCore`` pinning in memory, the
 /// stores real ones in a directory of the test's own, the keys made by a ``FakeKeyMaker`` and kept in memory, the
-/// network a ``TestPathSource``, the clock a ``TestClock`` and the clipboard a ``MemoryClipboard``. ``remove()``
-/// deletes the directory.
+/// network a ``TestPathSource``, the clock a ``TestClock``, the clipboard a ``MemoryClipboard``, the notifications a
+/// ``RecordingNotices``, and the background refresh's core another ``FakeMobileCore`` (``refreshCore``), which keeps
+/// the sessions of ``core``. ``remove()`` deletes the directory.
 @MainActor
 internal final class TestGraph {
     internal let directory: URL
@@ -17,7 +18,9 @@ internal final class TestGraph {
     internal let path = TestPathSource()
     internal let clock = TestClock()
     internal let clipboard = MemoryClipboard(nil)
+    internal let notices = RecordingNotices()
     internal let core: FakeMobileCore
+    internal let refreshCore: FakeMobileCore
     internal let graph: AppGraph
 
     internal var connections: Connections {
@@ -27,18 +30,24 @@ internal final class TestGraph {
     internal init() {
         directory = FileManager.default.temporaryDirectory.appending(path: "NgtermFeaturesTests-\(UUID().uuidString)")
         core = FakeMobileCore(hosts: pins)
+        let refreshing = FakeMobileCore(hosts: pins)
+        refreshCore = refreshing
+        let main = core
         graph = AppGraph(
             machines: MachineStore(directory: directory),
             settings: SettingsStore(directory: directory),
             keys: AppKeys(store: KeyStore(directory: directory), vault: vault, maker: maker, comment: "ngterm@test"),
             pins: pins,
-            stores: (
-                attached: AttachedStore(directory: directory),
-                clipboardTrust: ClipboardTrustStore(directory: directory)
-            ),
+            stores: GraphStores(directory: directory),
             core: core,
+            notices: notices,
             pathSource: path,
             clipboard: clipboard,
+            refreshCore: {
+                // the machines have the same sessions, whichever core asks
+                refreshing.sessions = main.sessions
+                return refreshing
+            },
             clock: clock.read
         )
     }

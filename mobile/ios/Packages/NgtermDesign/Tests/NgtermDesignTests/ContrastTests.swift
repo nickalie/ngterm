@@ -65,6 +65,16 @@ internal struct ContrastTests {
         )
     }
 
+    @Test("a destructive prominent button's label reads on failed", arguments: Appearance.allCases)
+    internal func onTintReadsOnFailed(appearance: Appearance) {
+        expectContrast(
+            "\(appearance) onTint on failed",
+            Palette.onTint.resolved(in: appearance),
+            Palette.failed.resolved(in: appearance),
+            minimum: appearance.textContrast
+        )
+    }
+
     @Test("every terminal palette's text reads and its cursor shows", arguments: TerminalPalette.builtIn)
     internal func terminalPalettesRead(palette: TerminalPalette) {
         expectContrast("\(palette.id) text", palette.foreground, palette.background, minimum: Contrast.text)

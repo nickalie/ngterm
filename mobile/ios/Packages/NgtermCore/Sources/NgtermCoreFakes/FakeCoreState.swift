@@ -43,6 +43,8 @@
         internal var shown: [PaneRef: any PaneClient] = [:]
         // what each session's stream says as it is attached, by session id
         internal var attachEvents: [String: [MobileEvent]] = [:]
+        // what the origin tells once an ask is answered, by FakeMobileCore.answerKey
+        internal var answerEvents: [String: [MobileEvent]] = [:]
         internal var paneFactory: FakeMobileCore.PaneFactory
 
         /// Records an async call, taking its queued failure and its gate for ``FakeHeldCall/pass()``.
