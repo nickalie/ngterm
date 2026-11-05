@@ -3,7 +3,9 @@ package com.nickalie.ngterm.android.ui.sessions
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nickalie.ngterm.android.AppGraph
+import com.nickalie.ngterm.android.data.ChatViews
 import com.nickalie.ngterm.android.data.Link
+import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.data.StoredMachine
 import com.nickalie.ngterm.android.data.reason
 import com.nickalie.ngterm.core.ffi.MobileException
@@ -34,6 +36,8 @@ data class MachineSessions(
     val refreshing: Boolean = false,
     // the sessions whose End is under way
     val ending: Set<String> = emptySet(),
+    // whether each session's panes running an agent show as a chat
+    val chatViews: ChatViews = ChatViews(),
 )
 
 /** What a machine's sessions screen shows. */
@@ -61,6 +65,7 @@ data class NewSessionState(
  * attaching and detaching. [opened] lists the machine afresh. [notice] carries what a list can't show (an End or an
  * attach that failed) for a snackbar.
  */
+@Suppress("TooManyFunctions") // a function per thing the screen does
 class SessionsViewModel(
     private val graph: AppGraph,
     private val machineId: String,
@@ -78,13 +83,20 @@ class SessionsViewModel(
         graph.machines.machines.map { list -> list.firstOrNull { it.id == machineId } }
 
     private val live =
-        combine(connections.links, connections.trees, connections.treeFailures, connections.attached) {
-            links,
-            trees,
-            failures,
-            attached,
-            ->
-            Live(links[machineId] ?: Link.Offline, trees[machineId], failures[machineId], attached[machineId].orEmpty())
+        combine(
+            connections.links,
+            connections.trees,
+            connections.treeFailures,
+            connections.attached,
+            graph.chats.chatViews,
+        ) { links, trees, failures, attached, chatViews ->
+            Live(
+                links[machineId] ?: Link.Offline,
+                trees[machineId],
+                failures[machineId],
+                attached[machineId].orEmpty(),
+                chatViews,
+            )
         }
 
     private data class Live(
@@ -92,6 +104,7 @@ class SessionsViewModel(
         val sessions: List<RemoteSession>?,
         val failure: String?,
         val attached: Set<String>,
+        val chatViews: ChatViews,
     )
 
     /** The screen's state. */
@@ -110,6 +123,7 @@ class SessionsViewModel(
                         offline = !online,
                         refreshing = refreshing,
                         ending = ending,
+                        chatViews = live.chatViews,
                     ),
                 )
             }
@@ -220,6 +234,12 @@ class SessionsViewModel(
 
     /** Detaches the session [sessionId]; it goes on running there. */
     fun detach(sessionId: String) = connections.detach(machineId, sessionId)
+
+    /** Shows [sessionId]'s panes running an agent as a chat ([on]) or as their terminal: the session's own choice. */
+    fun setChatView(
+        sessionId: String,
+        on: Boolean,
+    ) = graph.chats.setChatView(SessionKey(machineId, sessionId), on)
 
     /** The [notice] has been shown. */
     fun noticeShown() {

@@ -27,11 +27,12 @@ import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.ui.components.AgentStatusBadge
 import com.nickalie.ngterm.android.ui.components.SessionRow
+import com.nickalie.ngterm.android.ui.session.ChatViewItem
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
  * One session's row: its name, its context (or its working directory) or the parent it is a companion of, its agent's
- * status, and a menu with Attach or Detach and End session ([onAskEnd]: the screen confirms it).
+ * status, and a menu with Attach or Detach, Chat view and End session ([onAskEnd]: the screen confirms it).
  * Tapping it attaches it (the session view opens from there once it lands). While its End is under way it says so
  * instead of its status.
  */
@@ -58,6 +59,8 @@ internal fun SessionEntry(
                 ending = line.ending,
                 onAttach = { actions.onOpen(session.id) },
                 onDetach = { actions.onDetach(session.id) },
+                chatView = line.chatView,
+                onChatView = { on -> actions.onChatView(session.id, on) },
                 onEnd = onAskEnd,
             )
         },
@@ -97,6 +100,8 @@ private fun SessionMenu(
     ending: Boolean,
     onAttach: () -> Unit,
     onDetach: () -> Unit,
+    chatView: Boolean,
+    onChatView: (Boolean) -> Unit,
     onEnd: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -123,6 +128,10 @@ private fun SessionMenu(
                     if (attached) onDetach() else onAttach()
                 },
             )
+            ChatViewItem(chatView) { on ->
+                open = false
+                onChatView(on)
+            }
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.machine_sessions_end), color = MaterialTheme.colorScheme.error) },
                 enabled = !ending,

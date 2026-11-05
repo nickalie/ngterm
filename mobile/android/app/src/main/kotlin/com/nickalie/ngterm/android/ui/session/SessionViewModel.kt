@@ -3,6 +3,7 @@ package com.nickalie.ngterm.android.ui.session
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nickalie.ngterm.android.AppGraph
+import com.nickalie.ngterm.android.data.ChatViews
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.LiveSession
 import com.nickalie.ngterm.android.data.SessionKey
@@ -33,7 +34,8 @@ data class AgentStatus(
 
 /**
  * An attached session as the app shows it: its [machine]'s name, its [name], [context] and agent [status] (the stream's
- * when it has them, the machine's last listing's otherwise), its machine's [link], and its stream's [live] state.
+ * when it has them, the machine's last listing's otherwise), its machine's [link], its stream's [live] state, and
+ * whether its panes running an agent show as a chat ([chatView]: its own choice, else Settings').
  */
 data class AttachedSession(
     val key: SessionKey,
@@ -43,6 +45,7 @@ data class AttachedSession(
     val status: AgentStatus?,
     val link: Link,
     val live: LiveSession,
+    val chatView: Boolean = ChatViews().default,
 )
 
 /** A machine's attached sessions, in its listing's order. */
@@ -121,9 +124,9 @@ class SessionViewModel(
             graph.panes.live.sessions,
             openKey,
             focus,
-            graph.chats.views,
-        ) { listed, live, open, focus, views ->
-            val groups = groups(listed, live, seen)
+            combine(graph.chats.views, graph.chats.chatViews, ::Pair),
+        ) { listed, live, open, focus, (views, chatViews) ->
+            val groups = groups(listed, live, chatViews, seen)
             AttachedUiState(groups, open?.let { open(it, listed, groups, focus, views) })
         }.catch { emit(AttachedUiState()) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, AttachedUiState())
@@ -212,6 +215,12 @@ class SessionViewModel(
         view: PaneView,
     ) = graph.chats.pick(pane, view)
 
+    /** Shows [key]'s panes running an agent as a chat ([on]) or as their terminal: the session's own choice. */
+    fun setChatView(
+        key: SessionKey,
+        on: Boolean,
+    ) = graph.chats.setChatView(key, on)
+
     /** Brings [pane]'s chat, if it shows one, to its newest row and the card it waits on (a notification's tap). */
     fun reveal(pane: PaneRef) = graph.chats.reveal(pane)
 
@@ -255,6 +264,7 @@ private data class Listed(
 private fun groups(
     listed: Listed,
     live: Map<SessionKey, LiveSession>,
+    chatViews: ChatViews,
     seen: MutableMap<SessionKey, AttachedSession>,
 ): List<AttachedGroup> =
     listed.machines.mapNotNull { machine ->
@@ -262,7 +272,11 @@ private fun groups(
         if (ids.isEmpty()) return@mapNotNull null
         val tree = listed.trees[machine.id].orEmpty()
         val order = tree.map { it.id }.filter { it in ids } + ids.filter { id -> tree.none { it.id == id } }
-        val sessions = order.map { id -> attached(SessionKey(machine.id, id), machine, listed, live, seen) }
+        val sessions =
+            order.map { id ->
+                val key = SessionKey(machine.id, id)
+                attached(key, machine, listed, live, seen).copy(chatView = chatViews.on(key))
+            }
         AttachedGroup(machine.id, machine.title, sessions)
     }
 

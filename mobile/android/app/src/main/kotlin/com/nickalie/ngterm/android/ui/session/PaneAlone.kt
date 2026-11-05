@@ -1,5 +1,6 @@
 package com.nickalie.ngterm.android.ui.session
 
+import com.nickalie.ngterm.android.ui.chat.PaneView
 import com.nickalie.ngterm.core.ffi.RemoteLayout
 
 // whether the window can show the origin's split: a wider window, two panes, the origin showing them both
@@ -41,3 +42,9 @@ internal fun tabTap(
         if (next != alone) onAlone(next)
         focus(tapped)
     }
+
+/** Whether every pane on screen ([shown]) shows its chat, by [views]; none on screen is no. */
+internal fun chatsOnly(
+    shown: List<String>,
+    views: Map<String, PaneView>,
+): Boolean = shown.isNotEmpty() && shown.all { views[it] == PaneView.Chat }

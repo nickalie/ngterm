@@ -1,9 +1,10 @@
 package com.nickalie.ngterm.android.ui.chat
 
-import com.nickalie.ngterm.android.data.AppSettings
+import com.nickalie.ngterm.android.data.ChatViews
 import com.nickalie.ngterm.android.data.Connections
 import com.nickalie.ngterm.android.data.LiveSession
 import com.nickalie.ngterm.android.data.LiveSessions
+import com.nickalie.ngterm.android.data.SessionChatViews
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.data.session
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
@@ -26,20 +27,23 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import java.io.IOException
 
 /** How a pane running an agent shows: its chat, or its terminal. */
 enum class PaneView { Terminal, Chat }
 
 /**
  * Which panes show as a chat, and their chats. A pane whose origin announces an agent (`LiveSession.agents`) shows as
- * a chat while Settings' Agent chat view is on, unless its terminal was picked: by hand ([pick]), or because its chat
- * ended or the origin couldn't open it (a link that is down only defers the open until it is back). A terminal so
- * picked holds until the pane's next conversation (or the agent leaves); picking the chat again lifts it. With the
- * setting off every pane shows its terminal.
+ * a chat while its session's chat view is on ([chatViews]: Settings' Agent chat view, unless the session's More menu
+ * set its own through [setChatView], kept in [sessionViews]), unless its terminal was picked: by hand ([pick]), or
+ * because its chat ended or the origin couldn't open it (a link that is down only defers the open until it is back).
+ * A terminal so picked holds until the pane's next conversation (or the agent leaves); picking the chat again lifts
+ * it. With its session's chat view off every pane shows its terminal.
  *
- * [views] has every pane with an agent while the setting is on. A pane in chat view that is shown ([shown]) has its
- * chat open in [chats], one [ChatViewModel] each, so the core's chat channels stay as few as the panes on screen; a
- * pane leaving chat view (or the screen) closes its chat, and the pane's own attach stays open behind it all along.
+ * [views] has every pane with an agent whose session's chat view is on. A pane in chat view that is shown ([shown])
+ * has its chat open in [chats], one [ChatViewModel] each, so the core's chat channels stay as few as the panes on
+ * screen; a pane leaving chat view (or the screen) closes its chat, and the pane's own attach stays open behind it all
+ * along.
  * Events arrive on the core's thread; the flows take them from any. Used on the main thread. A chat's `/` menu ranks
  * the agent's commands with [filter] (the core's `filter_commands`; the app's tests, which run without the native
  * library, give their own).
@@ -49,12 +53,12 @@ class PaneChats(
     private val connections: Connections,
     live: LiveSessions,
     private val shown: StateFlow<Map<PaneRef, TerminalState>>,
-    settings: Flow<AppSettings>,
+    private val sessionViews: SessionChatViews,
     private val filter: (String, List<AgentCommand>) -> List<AgentCommand> = ::filterCommands,
 ) {
     // the panes whose terminal was picked, with the conversation it holds for (`null`: the one still to be named)
     private val holds = MutableStateFlow<Map<PaneRef, Hold>>(emptyMap())
-    private val on = MutableStateFlow(AppSettings().agentChat)
+    private val chatViewState = MutableStateFlow(ChatViews())
     private val viewState = MutableStateFlow<Map<PaneRef, PaneView>>(emptyMap())
     private val chatState = MutableStateFlow<Map<PaneRef, ChatViewModel>>(emptyMap())
     private val sessions = live.sessions
@@ -65,21 +69,22 @@ class PaneChats(
     /** How each pane with an agent shows, by pane; a pane not here shows its terminal, with no switch. */
     val views: StateFlow<Map<PaneRef, PaneView>> = viewState.asStateFlow()
 
+    /** Whether each session's panes running an agent show as a chat: the default, and the sessions' own choices. */
+    val chatViews: StateFlow<ChatViews> = chatViewState.asStateFlow()
+
     /** The open chats, by pane. */
     val chats: StateFlow<Map<PaneRef, ChatViewModel>> = chatState.asStateFlow()
 
     init {
         connections.listen(::onEvent)
         scope.launch {
-            settings
-                .map { it.agentChat }
-                .distinctUntilChanged()
-                .catch { /* unreadable settings: the default stays */ }
-                .collect { on.value = it }
+            sessionViews.views
+                .catch { /* each source stands in for itself (SessionChatViews): nothing reaches here */ }
+                .collect { chatViewState.value = it }
         }
         scope.launch { sessions.collect(::keepHolds) }
         scope.launch {
-            combine(sessions, holds, on, ::views).collect { viewState.value = it }
+            combine(sessions, holds, chatViewState, ::views).collect { viewState.value = it }
         }
         scope.launch {
             combine(viewState, shown) { views, shown -> views to shown.keys }
@@ -95,6 +100,28 @@ class PaneChats(
         when (view) {
             PaneView.Terminal -> hold(pane)
             PaneView.Chat -> holds.update { it - pane }
+        }
+    }
+
+    /**
+     * Shows [key]'s panes running an agent as a chat ([on]) or as their terminal, whatever Settings' default; a choice
+     * equal to the default follows it from then on.
+     */
+    fun setChatView(
+        key: SessionKey,
+        on: Boolean,
+    ) {
+        val default = chatViewState.value.default
+        // at once, so the views follow the tap rather than the store's write
+        chatViewState.update { views ->
+            views.copy(sessions = if (on == default) views.sessions - key else views.sessions + (key to on))
+        }
+        scope.launch {
+            try {
+                sessionViews.set(key, on, default)
+            } catch (_: IOException) {
+                // the store can't be written: the choice holds until the app's process ends
+            }
         }
     }
 
@@ -221,14 +248,14 @@ private data class Hold(
     val conversation: String?,
 )
 
-// every pane with an agent, in its view, while the setting is on
+// every pane with an agent, in its view, while its session's chat view is on
 private fun views(
     sessions: Map<SessionKey, LiveSession>,
     holds: Map<PaneRef, Hold>,
-    on: Boolean,
-): Map<PaneRef, PaneView> {
-    if (!on) return emptyMap()
-    return sessions
+    chatViews: ChatViews,
+): Map<PaneRef, PaneView> =
+    sessions
+        .filterKeys(chatViews::on)
         .flatMap { (key, session) ->
             session.agents.map { (paneId, agent) ->
                 val pane = PaneRef(key.machineId, key.sessionId, paneId)
@@ -237,4 +264,3 @@ private fun views(
                 pane to if (held) PaneView.Terminal else PaneView.Chat
             }
         }.toMap()
-}

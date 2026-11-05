@@ -9,7 +9,7 @@ import com.nickalie.ngterm.core.ffi.PaneSize
  * What the Sessions destination does, over its [SessionViewModel]: open and close a session's view, give a pane the
  * focus, show a pane (and try one again), Take control, Detach, End session, go to the Machines destination
  * ([onOpenMachines]), say the snackbar was shown ([onNoticeShown]), and show a pane as its chat or its terminal
- * ([onView]).
+ * ([onView]), and set a session's own chat view ([onChatView]).
  */
 data class AttachedActions(
     val onOpen: (SessionKey) -> Unit,
@@ -23,6 +23,7 @@ data class AttachedActions(
     val onOpenMachines: () -> Unit,
     val onNoticeShown: () -> Unit,
     val onView: (PaneRef, PaneView) -> Unit = { _, _ -> },
+    val onChatView: (SessionKey, Boolean) -> Unit = { _, _ -> },
 ) {
     companion object {
         /** The actions of [viewModel], with [onOpenMachines] going to Machines. */
@@ -41,6 +42,7 @@ data class AttachedActions(
             onOpenMachines = onOpenMachines,
             onNoticeShown = viewModel::noticeShown,
             onView = viewModel::pickView,
+            onChatView = viewModel::setChatView,
         )
     }
 }

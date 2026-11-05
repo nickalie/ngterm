@@ -178,7 +178,7 @@ white on nothing, as Android masks it. The status glyphs are 16dp filled or stro
 | `BusBar` | the copper bar marking where you are |
 | `StatusGlyph`, `StatusBadge`, `AgentStatusBadge` | a status's glyph; glyph and word for an app tone; for an origin's status |
 | `MachineCard` | a machine: name, mono address, connection badge, and a summary slot for its sessions' status |
-| `SessionRow` | a session: name, context or companion line, status slot, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, End session) |
+| `SessionRow` | a session: name, context or companion line, status slot, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, Chat view, End session) |
 | `SectionHeader` | a group's heading with an optional count and one text action |
 | `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it; at most one quieter text-button action under it, for a retry after the fix the main one points to |
 | `Banner` | a strip about the whole screen while it stays usable, with an optional action and dismiss; announced politely |
@@ -315,8 +315,8 @@ machine is the subject: the list is quiet rows on the ground, not cards, since a
   rather than losing its end), and New session at the end while connected.
 - **List:** 640dp at most, centered. "Attached" (what this app has attached) first, then "On build-01" (the rest);
   each heading with its count, a group with nothing in it left out. A row is a `SessionRow`: the name, the context (or
-  the working directory when it has none), the agent's status badge, and a More menu with Attach or Detach and End
-  session (in the error color). Companions sit indented under their parent with "Companion of …" as their line.
+  the working directory when it has none), the agent's status badge, and a More menu with Attach or Detach, Chat view
+  and End session (in the error color). Companions sit indented under their parent with "Companion of …" as their line.
   Tapping a row attaches it (the session view opens from there). A row being ended says "Ending" with a small
   spinner in place of its status. Pull to refresh lists again; on a machine not connected it connects.
 - **New session:** a dialog over the list: one optional Name field ("Optional: build-01 names it when blank"),
@@ -503,7 +503,7 @@ compact                            medium (rail open)               expanded
 ```
 
 - **Where it lives:** under Sessions. With nothing open, Sessions lists what is attached, grouped by machine (a
-  `SectionHeader` per machine, a `SessionRow` per session with its status and a menu: Detach, End session), or the
+  `SectionHeader` per machine, a `SessionRow` per session with its status and a menu: Detach, Chat view, End session), or the
   empty state pointing to Machines. Tapping a session opens its view. On a phone the view is a screen of its own over
   the list (Back returns to it) and the bottom bar steps aside, so the terminal has the whole height; from the medium
   width up it is the content beside the rail or the sidebar, which list the attached sessions (below).
@@ -517,13 +517,13 @@ compact                            medium (rail open)               expanded
   between the panes too: a mostly sideways drag of 64dp or more, or a fast sideways fling, goes to the next or
   previous pane; other drags scroll the terminal.
 - **The view switch** (`SessionBar`, `ui/chat/PaneChats.kt`): while the focused pane runs Claude Code or Codex (its
-  origin announces the agent) and Settings' Agent chat view is on, the pane shows as a chat and the bar has one more
+  origin announces the agent) and its session's chat view is on (Chat view, below), the pane shows as a chat and the bar has one more
   48dp icon button, between the pane switcher and More. It names what a tap does: "Show terminal" with the Sessions
   glyph over a chat, "Show chat" with `ic_chat` over the terminal; TalkBack reads those words. Picking the terminal
   holds for that pane until its agent starts its next conversation (or another agent starts there); picking the chat
   lifts it. When the agent ends, or its chat ends or can't open (an origin without the chat view), the pane shows its
   terminal and the switch offers the chat back while the agent is still announced. A pane without an agent, or every
-  pane with the setting off, has no switch. Switching never resizes the pane or moves its lead: the terminal stays
+  pane of a session with its chat view off, has no switch. Switching never resizes the pane or moves its lead: the terminal stays
   attached at its grid behind the chat, and only a chat action takes control. The chat itself is The chat, below.
 - **The split** (`SplitLayout`, medium and expanded): the origin's layout as it is, two panes side by side
   (`vertical`) or stacked (`horizontal`), halves split by a 1dp `outlineVariant` rule, since the terminal's ground is
@@ -558,8 +558,13 @@ compact                            medium (rail open)               expanded
   ngterm can't stream ("build-01's ngterm can't share live sessions", update it there, **Detach**); and gone ("docs-site
   is gone", "It ended on build-01, so there is nothing left to show.", **Close**), which also covers a session that
   left the machine's list while it was open.
-- **More:** Detach (at once: it goes on running there, and the view closes) and End session (in the error color,
-  confirmed as on a machine's list).
+- **More:** Detach (at once: it goes on running there, and the view closes), Chat view and End session (in the error
+  color, confirmed as on a machine's list).
+- **Chat view** (`ChatViewItem`, in every session's More menu: the bar's, the attached list's, a machine's list): the
+  session's own Agent chat view, a menu item with a checkbox at its end, checked while the session's panes running an
+  agent show as a chat; TalkBack reads it as a checkbox. It starts at Settings' Agent chat view, and a tap sets the
+  other for that session alone, kept on this device (`SessionChatViews`, the newest 256 sessions); one set back to
+  Settings' value follows Settings again. The menu closes on the tap.
 - **The keyboard:** one `TerminalKeyboard` for the view, shared by every pane and the extra-keys row, so a held Ctrl
   stays as the selection moves; the row sits under the panes over the soft keyboard, and steps aside while every pane
   on screen shows its chat (The chat, below). Ctrl+Shift+Left and Right go to
@@ -875,8 +880,8 @@ The plan, reviewed against the brief:
 - **Extra keys:** Fit to the width (as Keyboard above), Always two lines, or Hidden (only the soft keyboard; a
   hardware keyboard hides the row whatever is picked).
 - **Agents:** Agent chat view, a switch, on by default: a pane running Claude Code or Codex shows as a chat, with the
-  terminal one tap away in the session's bar (The view switch, above). Off, every pane shows its terminal and the bar
-  has no switch.
+  terminal one tap away in the session's bar (The view switch, above). Off, a session's panes show their terminal and
+  its bar has no switch. It is the default: a session's More menu sets its own either way (Chat view, above).
 - **Notifications:** a switch per kind (Waiting for you, Finished, Agent notifications, Lost machines), and the line
   that questions always notify. While the system lets the app post none (the permission refused, Not now, or turned
   off), a `Banner` with the attention diamond says so, and Turn on opens the system's notification settings for the

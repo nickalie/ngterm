@@ -67,6 +67,7 @@ fun SessionsRoute(
                 onOpen = { id -> viewModel.attach(id) { openSession(SessionKey(machineId, id)) } },
                 onDetach = viewModel::detach,
                 onEnd = viewModel::end,
+                onChatView = viewModel::setChatView,
             )
         }
     val snackbar = remember { SnackbarHostState() }

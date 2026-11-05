@@ -1,6 +1,8 @@
 package com.nickalie.ngterm.android.ui.sessions
 
+import com.nickalie.ngterm.android.data.ChatViews
 import com.nickalie.ngterm.android.data.Link
+import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.core.ffi.RemoteSession
 
 /** Where the far side's setup is explained: the README's section on running ngterm on a server. */
@@ -18,12 +20,16 @@ fun isMissingCli(reason: String): Boolean {
     return REMOTE_CLI in text && ("not found" in text || "no such file" in text)
 }
 
-/** A session as the list shows it: the session, its parent's name when it is a companion, and what is under way. */
+/**
+ * A session as the list shows it: the session, its parent's name when it is a companion, what is under way, and
+ * whether its panes running an agent show as a chat ([chatView]: its own choice, else Settings').
+ */
 data class SessionLine(
     val session: RemoteSession,
     val companionOf: String?,
     val attached: Boolean,
     val ending: Boolean,
+    val chatView: Boolean = ChatViews().default,
 )
 
 /** What the body of a machine's sessions screen is, by its link and its listing. */
@@ -115,6 +121,7 @@ private fun MachineSessions.lines(listed: List<RemoteSession>): SessionsBody.Ses
             companionOf = session.parent?.let { names[it] ?: it },
             attached = session.id in attached,
             ending = session.id in ending,
+            chatView = chatViews.on(SessionKey(machine.id, session.id)),
         )
     }
     val families = families(listed).map { family -> family.map(line) }
@@ -151,4 +158,5 @@ data class SessionActions(
     val onOpen: (String) -> Unit,
     val onDetach: (String) -> Unit,
     val onEnd: (String) -> Unit,
+    val onChatView: (String, Boolean) -> Unit = { _, _ -> },
 )

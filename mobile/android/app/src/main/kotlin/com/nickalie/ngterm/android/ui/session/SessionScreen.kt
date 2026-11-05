@@ -104,10 +104,7 @@ fun SessionScreen(
     val typed = selected?.takeIf { views[it.paneId] != PaneView.Chat }
     SessionKeyboard(keyboard, typed?.let(panes::get), move, actions)
     val onTab = tabTap(splittable, alone, focused, { actions.onAlone(key, it) }, focus)
-    val chatsOnly =
-        visiblePanes(ids, focused, splittable && !alone).let { shown ->
-            shown.isNotEmpty() && shown.all { views[it] == PaneView.Chat }
-        }
+    val chatsOnly = chatsOnly(visiblePanes(ids, focused, splittable && !alone), views)
     BoxWithConstraints(
         modifier
             .fillMaxSize()
@@ -130,6 +127,7 @@ fun SessionScreen(
                 onEnd = { actions.onEnd(key) },
                 view = focused?.let(views::get),
                 onView = { view -> selected?.let { actions.onView(it, view) } },
+                onChatView = { on -> actions.onChatView(key, on) },
             )
             live.hud?.takeIf { roomy }?.let { HudBanner(it, Modifier.padding(NgtermTheme.spacing.sm)) }
             Box(Modifier.weight(1f).fillMaxWidth()) {

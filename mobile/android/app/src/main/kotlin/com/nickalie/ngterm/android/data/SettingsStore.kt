@@ -42,7 +42,10 @@ data class AppSettings(
     val extraKeys: ExtraKeysChoice = ExtraKeysChoice.Fit,
     /** Keeps the screen on while an attached session is open. */
     val keepScreenOn: Boolean = false,
-    /** Shows a pane running Claude Code or Codex as a chat (`ui/chat/`), with the terminal one switch away. */
+    /**
+     * Shows a pane running Claude Code or Codex as a chat (`ui/chat/`), with the terminal one switch away: the default,
+     * which a session's More menu overrides for that session ([SessionChatViews]).
+     */
     val agentChat: Boolean = true,
 )
 

@@ -14,6 +14,7 @@ import com.nickalie.ngterm.android.data.LiveSessions
 import com.nickalie.ngterm.android.data.MachineStore
 import com.nickalie.ngterm.android.data.NotificationPrefs
 import com.nickalie.ngterm.android.data.OpenRequests
+import com.nickalie.ngterm.android.data.SessionChatViews
 import com.nickalie.ngterm.android.data.SettingsStore
 import com.nickalie.ngterm.android.data.StoredMachine
 import com.nickalie.ngterm.android.platform.KeyWrapper
@@ -143,12 +144,13 @@ class TestGraph(
 
     // the panes' frames are read on the main thread, where the UI tests' clock drives them
     val settings = SettingsStore(testStore(dir, "settings"))
+    val sessionViews = SessionChatViews(testStore(dir, "session_chat_views"), settings.settings)
     val panes = SessionPanes(scope, connections, live, EmptyCoroutineContext, settings.settings)
 
     /** The queries the chats' `/` menus ranked the catalog for, oldest first. */
     val filtered: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
     val chats =
-        PaneChats(scope, connections, live, panes.shown, settings.settings) { query, items ->
+        PaneChats(scope, connections, live, panes.shown, sessionViews) { query, items ->
             filtered += query
             rankCommands(query, items)
         }

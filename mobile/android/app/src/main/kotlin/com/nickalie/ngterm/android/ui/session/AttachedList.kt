@@ -47,8 +47,8 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
  * The attached sessions as the Sessions destination lists them when none is open: a heading per machine, then a row
- * per session with its status and a menu (Detach, End session: [onEnd] confirms first). Tapping a row opens it
- * ([onOpen]). [contentPadding] keeps the list clear of the bars.
+ * per session with its status and a menu (Detach, Chat view through [onChatView], End session: [onEnd] confirms
+ * first). Tapping a row opens it ([onOpen]). [contentPadding] keeps the list clear of the bars.
  */
 @Composable
 fun AttachedList(
@@ -57,6 +57,7 @@ fun AttachedList(
     onDetach: (SessionKey) -> Unit,
     onEnd: (SessionKey) -> Unit,
     modifier: Modifier = Modifier,
+    onChatView: (SessionKey, Boolean) -> Unit = { _, _ -> },
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     LazyColumn(
@@ -72,7 +73,15 @@ fun AttachedList(
                     name = session.name,
                     onClick = { onOpen(session.key) },
                     context = session.context,
-                    menu = { SessionMenu(session.name, { onDetach(session.key) }, { onEnd(session.key) }) },
+                    menu = {
+                        SessionMenu(
+                            name = session.name,
+                            chatView = session.chatView,
+                            onDetach = { onDetach(session.key) },
+                            onChatView = { onChatView(session.key, it) },
+                            onEnd = { onEnd(session.key) },
+                        )
+                    },
                 ) { Status(session) }
             }
         }

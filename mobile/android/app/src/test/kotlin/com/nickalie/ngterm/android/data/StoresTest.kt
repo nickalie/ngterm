@@ -12,7 +12,9 @@ import com.nickalie.ngterm.android.platform.PinnedHostKeys
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.android.testStore
 import com.nickalie.ngterm.core.ffi.VaultException
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -25,6 +27,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.IOException
 
 /** The app's stores over real DataStores (org.json comes from Robolectric's Android). */
 @RunWith(AndroidJUnit4::class)
@@ -79,6 +82,67 @@ class StoresTest {
             assertEquals(ExtraKeysChoice.Hidden, again.extraKeys)
             assertTrue(again.keepScreenOn)
             assertFalse(again.agentChat)
+        }
+
+    @Test
+    fun aSessionKeepsItsChatViewOnlyWhileItDiffersFromTheDefault() =
+        runBlocking {
+            val store = SessionChatViews(testStore(dir.root, "session_chat_views"), flowOf(AppSettings()))
+            val a = SessionKey("m1", "s1")
+            val b = SessionKey("m1", "s2")
+            assertEquals(emptyMap<SessionKey, Boolean>(), store.sessions.first())
+
+            store.set(a, on = false, default = true)
+            store.set(b, on = true, default = false)
+            assertEquals(mapOf(a to false, b to true), store.sessions.first())
+            assertEquals(false, ChatViews(default = true, sessions = store.sessions.first()).on(a))
+            assertEquals(true, ChatViews(default = true, sessions = store.sessions.first()).on(SessionKey("m2", "s1")))
+
+            // set back to the default: dropped
+            store.set(a, on = true, default = true)
+            assertEquals(mapOf(b to true), store.sessions.first())
+        }
+
+    @Test
+    fun sessionChatViewsKeepOnlyTheNewest() =
+        runBlocking {
+            val store = SessionChatViews(testStore(dir.root, "session_chat_views"), flowOf(AppSettings()))
+            val keys = List(SessionChatViews.MAX_SESSIONS + 2) { SessionKey("m1", "s$it") }
+            keys.forEach { store.set(it, on = false, default = true) }
+            // the oldest kept, set again, moves to the newest end: the next new session drops the one after it
+            store.set(keys[2], on = false, default = true)
+            store.set(SessionKey("m1", "new"), on = false, default = true)
+            val kept = store.sessions.first().keys
+            assertEquals(SessionChatViews.MAX_SESSIONS, kept.size)
+            assertTrue(keys[2] in kept)
+            assertTrue(keys[0] !in kept && keys[1] !in kept && keys[3] !in kept)
+            assertTrue(keys.last() in kept && keys[4] in kept)
+        }
+
+    @Test
+    fun unreadableSessionChatViewsReadAsNone() =
+        runBlocking {
+            val prefs = testStore(dir.root, "session_chat_views")
+            prefs.edit { it[stringPreferencesKey("session_chat_views")] = "not json" }
+            assertEquals(
+                emptyMap<SessionKey, Boolean>(),
+                SessionChatViews(prefs, flowOf(AppSettings())).sessions.first(),
+            )
+        }
+
+    @Test
+    fun anUnreadableSessionChatViewsStoreLeavesTheSettingInCharge() =
+        runBlocking<Unit> {
+            File(dir.root, "broken.preferences_pb").writeBytes(byteArrayOf(0x7f, 0x01, 0x02, 0x03))
+            val settings = MutableStateFlow(AppSettings(agentChat = false))
+            val store = SessionChatViews(testStore(dir.root, "broken"), settings)
+            assertEquals(ChatViews(default = false), store.views.first())
+            // the setting still moves the default; a write to the store says it failed
+            settings.value = AppSettings(agentChat = true)
+            assertEquals(ChatViews(default = true), store.views.first { it.default })
+            assertThrows(IOException::class.java) {
+                runBlocking { store.set(SessionKey("m1", "s1"), on = false, default = true) }
+            }
         }
 
     @Test

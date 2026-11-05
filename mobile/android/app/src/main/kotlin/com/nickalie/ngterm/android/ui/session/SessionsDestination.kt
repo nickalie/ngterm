@@ -128,6 +128,7 @@ private fun LiveSession(
                 onNextSession = { sessions.cyclicNeighbor(key, forward = true)?.let(actions.onOpen) },
                 onPreviousSession = { sessions.cyclicNeighbor(key, forward = false)?.let(actions.onOpen) },
                 onView = actions.onView,
+                onChatView = actions.onChatView,
                 onAlone = { session, on ->
                     alone.remove(session.saved)
                     if (on) alone.add(session.saved)
@@ -186,6 +187,7 @@ private fun Attached(
             groups = state.groups,
             onOpen = actions.onOpen,
             onDetach = actions.onDetach,
+            onChatView = actions.onChatView,
             onEnd = { key -> sessions.firstOrNull { it.key == key }?.let(onAskEnd) },
             contentPadding =
                 PaddingValues(

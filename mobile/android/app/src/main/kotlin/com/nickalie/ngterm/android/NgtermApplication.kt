@@ -16,6 +16,7 @@ import com.nickalie.ngterm.android.data.MachineStore
 import com.nickalie.ngterm.android.data.NativeKeyMaker
 import com.nickalie.ngterm.android.data.NotificationPrefs
 import com.nickalie.ngterm.android.data.OpenRequests
+import com.nickalie.ngterm.android.data.SessionChatViews
 import com.nickalie.ngterm.android.data.SettingsStore
 import com.nickalie.ngterm.android.platform.AndroidClipboard
 import com.nickalie.ngterm.android.platform.AndroidKeystoreWrapper
@@ -66,6 +67,8 @@ class NgtermApplication :
         val settings = SettingsStore(PreferenceDataStoreFactory.create { file("settings") })
         val machines = MachineStore(PreferenceDataStoreFactory.create { file("machines") })
         val asks = Asks(scope, connections)
+        val chatViews =
+            SessionChatViews(PreferenceDataStoreFactory.create { file("session_chat_views") }, settings.settings)
         val panes = SessionPanes(scope, connections, live, settings = settings.settings)
         val prefs = NotificationPrefs(PreferenceDataStoreFactory.create { file("notifications") })
         Alerts(scope, connections, asks, machines.machines, prefs.enabled, Notifications(this))
@@ -97,7 +100,7 @@ class NgtermApplication :
                     clipboard = clipboard,
                 ),
             panes = panes,
-            chats = PaneChats(scope, connections, live, panes.shown, settings.settings),
+            chats = PaneChats(scope, connections, live, panes.shown, chatViews),
             asks = asks,
             notificationPrefs = prefs,
             settings = settings,

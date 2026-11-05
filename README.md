@@ -650,9 +650,9 @@ publishing. A Windows machine can't be reached, as from Attach Remote.
 ### Agent chat view
 
 A pane running Claude Code or Codex shows as a chat instead of its terminal (Settings ▸ Agents ▸ Agent chat view, on
-by default). The agent stays a regular TUI in its pane, which the origin and every other viewer see as before; the
-chat is a second view of it, read from the agent's transcript on the origin (`ngtermctl agent chat` on an exec
-channel, open only while the pane shows as a chat):
+by default; a session's More ▸ Chat view sets its own). The agent stays a regular TUI in its pane, which the origin and
+every other viewer see as before; the chat is a second view of it, read from the agent's transcript on the origin
+(`ngtermctl agent chat` on an exec channel, open only while the pane shows as a chat):
 
 - prompts, Markdown replies, tool calls with their output and diffs, subagents folded under their task, and older
   messages paged in as the list scrolls up;

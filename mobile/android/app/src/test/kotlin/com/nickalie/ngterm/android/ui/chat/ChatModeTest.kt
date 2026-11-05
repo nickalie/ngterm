@@ -15,6 +15,7 @@ import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.RemoteLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -119,6 +120,60 @@ class ChatModeTest {
         setChatView(false)
         eventually { bed.view("p1") == null && openChats().isEmpty() }
         assertEquals(closed + 1, closes("p1"))
+    }
+
+    @Test
+    fun aSessionsOwnChatViewOverridesTheSettingUntilSetBackToIt() {
+        bed.attach("p1")
+        val model = model()
+        bed.show("p1")
+        bed.agent("p1")
+        eventually { bed.view("p1") == PaneView.Chat && openChats() == setOf(bed.ref("p1")) }
+        assertEquals(
+            true,
+            model.state.value.sessions
+                .single()
+                .chatView,
+        )
+
+        // the session's menu turns it off: its panes show their terminal, the setting still on
+        model.setChatView(bed.key, false)
+        eventually { bed.view("p1") == null && openChats().isEmpty() }
+        assertEquals(
+            false,
+            model.state.value.sessions
+                .single()
+                .chatView,
+        )
+
+        // the setting off and back on leaves the session's own choice alone
+        setChatView(false)
+        setChatView(true)
+        eventually { bed.test.chats.chatViews.value.default }
+        assertNull(bed.view("p1"))
+
+        // on again equals the default: the choice is dropped, and the session follows the setting from then on
+        model.setChatView(bed.key, true)
+        eventually { bed.view("p1") == PaneView.Chat }
+        eventually {
+            runBlocking {
+                bed.test.sessionViews.sessions
+                    .first()
+            }.isEmpty()
+        }
+        setChatView(false)
+        eventually { bed.view("p1") == null }
+
+        // with the setting off, a session's menu turns the chat on for it alone
+        model.setChatView(bed.key, true)
+        eventually { bed.view("p1") == PaneView.Chat && openChats() == setOf(bed.ref("p1")) }
+        // the views follow the tap at once; the store's write lands after
+        eventually {
+            runBlocking {
+                bed.test.sessionViews.sessions
+                    .first()
+            } == mapOf(bed.key to true)
+        }
     }
 
     @Test
