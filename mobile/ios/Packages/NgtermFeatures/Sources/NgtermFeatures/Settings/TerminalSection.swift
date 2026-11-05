@@ -11,10 +11,11 @@ internal struct TerminalSection: View {
 
     internal var body: some View {
         let settings = model.settings
+        let isDark = colorScheme == .dark
         Section {
             TerminalPreview(
-                palette: TerminalLook(settings, isDark: colorScheme == .dark).palette,
-                paletteName: SettingsChoices.name(of: settings.palette),
+                palette: TerminalLook(settings, isDark: isDark).palette,
+                paletteName: SettingsChoices.name(of: settings.palette, isDark: isDark),
                 font: settings.font,
                 textSize: settings.textSize
             )

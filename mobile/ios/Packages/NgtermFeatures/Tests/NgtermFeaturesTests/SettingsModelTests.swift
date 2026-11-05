@@ -131,4 +131,12 @@ internal struct SettingsModelTests {
         #expect(some.usedBy == ["build-01"])
         #expect(!some.isEveryMachine)
     }
+
+    @Test("the preview names the palette it draws: the theme's is Copper when dark, Drafting when light")
+    internal func paletteNames() {
+        #expect(SettingsChoices.name(of: .theme, isDark: true) == "Copper")
+        #expect(SettingsChoices.name(of: .theme, isDark: false) == "Drafting")
+        #expect(SettingsChoices.name(of: .ghostty, isDark: true) == "Ghostty")
+        #expect(SettingsChoices.name(of: .drafting, isDark: true) == "Drafting")
+    }
 }

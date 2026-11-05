@@ -83,8 +83,10 @@ internal enum SettingsChoices {
         ),
     ]
 
-    /// The name of `choice`, as the preview says it.
-    internal static func name(of choice: PaletteChoice) -> String {
-        palettes.first { $0.value == choice }?.title ?? ""
+    /// The name of the palette `choice` draws in the dark appearance when `isDark`, the light one otherwise, as the
+    /// preview says it: the theme's is the palette it matches (Copper when dark, Drafting when light).
+    internal static func name(of choice: PaletteChoice, isDark: Bool) -> String {
+        let drawn: PaletteChoice = choice == .theme ? (isDark ? .copper : .drafting) : choice
+        return palettes.first { $0.value == drawn }?.title ?? ""
     }
 }

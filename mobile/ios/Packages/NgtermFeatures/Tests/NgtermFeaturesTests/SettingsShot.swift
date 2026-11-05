@@ -18,7 +18,7 @@ internal struct SettingsShot: Sendable, CustomTestStringConvertible {
     private static let compactWidth: CGFloat = 402
     private static let regularWidth: CGFloat = 580
     private static let height: CGFloat = 3_400
-    private static let accessibilityHeight: CGFloat = 1_800
+    private static let accessibilityHeight: CGFloat = 7_600
 
     internal let isRegular: Bool
     internal let isDark: Bool

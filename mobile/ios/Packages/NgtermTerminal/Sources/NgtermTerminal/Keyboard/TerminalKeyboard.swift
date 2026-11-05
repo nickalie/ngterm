@@ -37,10 +37,16 @@ public final class TerminalKeyboard {
     }
 
     /// How the extra keys lay out, as Settings sets it: the terminal with the focus shows a change at once.
+    ///
+    /// Hiding them lets go of the sticky Ctrl and Alt, whose keys go with them.
     public var layout = ExtraKeysLayout.fit {
         didSet {
             guard layout != oldValue else {
                 return
+            }
+            if layout == .hidden {
+                set(.control, .off)
+                set(.alt, .off)
             }
             madeBar?.setNeedsLayout()
             target?.reloadInputViews()
