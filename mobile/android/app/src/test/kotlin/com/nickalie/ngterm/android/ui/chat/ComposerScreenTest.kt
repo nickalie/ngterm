@@ -85,6 +85,22 @@ class ComposerScreenTest {
     }
 
     @Test
+    fun theCommandsButtonInTheFieldStartsACommandAndClosesTheMenuAgain() {
+        val composer = show()
+        compose.onNodeWithContentDescription("Commands").assertIsEnabled().performClick()
+        assertEquals("/", composer.draft.text)
+        field().assertIsFocused()
+        compose.onNodeWithText("8 commands").assertIsDisplayed()
+        // open, it closes the menu and leaves the `/` for the user to go on or delete
+        compose.onNodeWithContentDescription("Commands").performClick()
+        compose.onNodeWithText("8 commands").assertDoesNotExist()
+        assertEquals("/", composer.draft.text)
+        // with a prompt in the field it has nowhere to put a command
+        field().performTextReplacement("Fix the guide")
+        compose.onNodeWithContentDescription("Commands").assertIsNotEnabled()
+    }
+
+    @Test
     fun aHardwareKeyboardMovesPicksAndClosesTheMenu() {
         val composer = show()
         field().performClick()
@@ -122,7 +138,8 @@ class ComposerScreenTest {
     @Test
     fun sendAndStopSayWhatHoldsThem() {
         show(ChatSamples.composer(""))
-        compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
+        // nothing to send: Send stays out of the way until there is
+        compose.onNodeWithContentDescription("Send").assertDoesNotExist()
         compose.onNodeWithContentDescription("Stop").assertDoesNotExist()
         field().performTextInput("Fix the guide")
         compose.onNodeWithContentDescription("Send").assertIsEnabled().performClick()

@@ -446,6 +446,7 @@
   <string name="chat_prompt_hint">Prompt, or / for commands</string>
   <string name="chat_send">Send</string>
   <string name="chat_stop">Stop</string>
+  <string name="chat_commands">Commands</string>
   <string name="chat_composer_held">Answer the card above first: a prompt now would go to its dialog.</string>
   <string name="chat_command_insert">Insert</string>
   <string name="chat_command_builtin">Built-in</string>

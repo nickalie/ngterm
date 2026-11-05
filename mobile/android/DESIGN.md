@@ -650,7 +650,7 @@ The plan, reviewed against the brief:
 | Code in a syntax-highlighting theme | a second palette fighting the app's, and color carrying meaning | the terminal's face in one color on a `surfaceContainerLow` plate; a diff is the only colored text: verdigris added, oxide removed, each line keeping its `+` or `-` |
 | A spinner on every running tool | motion nobody asked for, scattered down the list | the Connecting ring and "Running"; nothing in the list moves on its own |
 | The permission prompt as a dialog over the chat | hides the conversation the question is about | a Needs-you card pinned at the chat's foot, in the ask sheet's shape and order (`ui/asks/`) |
-| A paper-plane Send beside an attach clip and an emoji face | the messenger kit's glyphs, for things the agent's prompt doesn't take | Send is the return key's arrow (`ic_send`) in a filled copper circle, as a prompt goes in with Enter in the terminal; beside it only Stop, while the agent works |
+| A paper-plane Send beside an attach clip and an emoji face | the messenger kit's glyphs, for things the agent's prompt doesn't take | the messenger's layout, which the user asked for, with the app's own glyphs: one pill holding Commands (a `/`) and Stop, Send beside it once there is text; Send is the return key's arrow (`ic_send`) in a filled copper circle, as a prompt goes in with Enter in the terminal; no emoji face |
 | The account as a header card: an avatar, the email, a big percentage on a ring gauge | the dashboard's KPI tile, shouting over the conversation it sits on, for a number that changes once a turn | one quiet line over the rows: the email at the start in `onSurfaceVariant`, at the end "Weekly limit 72%" over a 56×4dp meter that stands still, when it resets under them; a hairline under the line |
 | Email, limit and reset joined in one meta string with middle dots | template chrome, and three facts read as one | two ends of the line: who is signed in, and how much room is left; the meter turns the attention copper from 80% and oxide when spent, the words with it |
 | The `/` menu as a popup with an icon per command and the matched letters in bold | a second set of glyphs for a list read by name, and a highlight that fights the terminal's face | a plate (`surfaceContainerHigh`, 12dp corners) rising from the composer over the foot of the rows; each row the command as it will go in, in the terminal's face, a line of what it does, and where it comes from as a word |
@@ -754,12 +754,18 @@ The plan, reviewed against the brief:
   the top of the rows (`surfaceContainerHigh`, 6dp corners, a 16dp spinner, "Reconnecting to build-01", "What's here
   stays; new messages follow once it's back."), the rows readable under it; the chat ended (the agent left, or the
   origin can't share its conversation): "This chat ended" and Show terminal, which the pane then does by itself.
-- **The composer** (`Composer`), under the cards on the bar's tone (`surfaceContainer`), in the reading width: an
-  outlined field (12dp corners, bodyLarge, "Prompt, or / for commands") that grows to six lines and then scrolls inside,
-  so a long prompt leaves the conversation in sight; Stop (the interrupt's square, outlined round) while the agent's
-  status says it works on a turn and the turn wasn't interrupted (no hook tells the origin of an interrupt, so its
-  status stays working: Stop comes back once the agent works again or a prompt is typed, not for a `/command` alone);
-  Send (filled copper round, `ic_send`). The field takes line breaks as the clipboard
+- **The composer** (`Composer`), under the cards on the bar's tone (`surfaceContainer`), in the reading width, in a
+  messenger's shape (the user asked for the composer of a chat app, overriding the first pass's "no messenger kit" for
+  this one part): one pill (`surfaceContainerHigh`, no outline, 24dp corners, so a one-line field is fully round, 48dp
+  tall) with its buttons inside it, each a 48dp target in `onSurfaceVariant`. At its start **Commands**, a `/` in the
+  terminal's face: in an empty field it puts the `/` in, takes the focus and opens the menu; with the menu open it
+  closes it; with a prompt written it holds. Then the prompt (bodyLarge on 24 sp lines, "Prompt, or / for commands",
+  the copper caret) that grows to six lines and then scrolls inside, so a long prompt leaves the conversation in sight;
+  the buttons stay on its last line. At its end **Stop** (the interrupt's square) while the agent's status says it
+  works on a turn and the turn wasn't interrupted (no hook tells the origin of an interrupt, so its status stays
+  working: Stop comes back once the agent works again or a prompt is typed, not for a `/command` alone). **Send** (filled copper round, 48dp, `ic_send`) sits beside the pill only while there is something
+  to send, growing in from its middle and out again (120ms, scale and fade; a cut with animations off), so an empty
+  composer is the pill alone, as a messenger's is. The field takes line breaks as the clipboard
   brings them and refuses an edit that adds any other control character. Send takes the text with its ends trimmed;
   the field lets it go once the agent has it and keeps it when nothing was sent. While an action is on its way the
   field holds still and Send turns to a 16dp spinner ("Sending"), so a second tap sends nothing. While a card waits,
@@ -778,9 +784,9 @@ The plan, reviewed against the brief:
   | | Show how the context window i... | |
   | | 2 commands                       | |
   | +----------------------------------+ |
-  | +---------------------------+ [] (<-)|
-  | | /co                       |        |
-  | +---------------------------+        |
+  | .-------------------------------.    |
+  | ( /  /co                     [] ) (<-)|
+  | '-------------------------------'    |
   +--------------------------------------+
   ```
 
@@ -800,7 +806,7 @@ The plan, reviewed against the brief:
   Tab picks it; Escape closes the menu. Enter alone is a line break.
 - **TalkBack:** the chat is "Chat with Claude Code"; a prompt reads "You: …"; a line reads its kind, its title and its
   status, says Expanded or Collapsed, and names its tap (Show output, Hide steps, Show summary); the cards' titles are
-  headings; the reconnecting strip, Sending and the problems are polite live regions. Send and Stop are named for what
+  headings; the reconnecting strip, Sending and the problems are polite live regions. Commands, Send and Stop are named for what
   they do ("Sending" while on its way); the line over the field and the menu's count are polite live regions; a menu
   row reads whole (the command, its hint, what it does, its kind), says Selected when highlighted, and names its tap
   Insert. The rows take no input focus, so a hardware keyboard stays in the field.
