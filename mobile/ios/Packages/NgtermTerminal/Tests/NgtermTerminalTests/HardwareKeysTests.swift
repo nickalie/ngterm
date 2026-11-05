@@ -157,6 +157,24 @@ internal struct HardwareKeysTests {
         #expect(rig.inputs.isEmpty)
     }
 
+    @Test("a key held as the selection leaves is let go, its repeat stopping; the chord that moved stays the app's")
+    internal func selectionLeftHeld() async throws {
+        let rig = TerminalRig(clipboard: nil)
+        let view = rig.view
+        view.keyboard.shortcuts = TerminalShortcuts { view.drawsFocused = false }
+        let down = Self.stroke(.keyboardDownArrow, [], "UIKeyInputDownArrow")
+        #expect(view.keyDown(down))
+        let move = Self.stroke(.keyboardRightArrow, [.command, .alternate], "UIKeyInputRightArrow")
+        #expect(view.keyDown(move))
+        let arrow = KeyMapping.named("arrow_down", mods: 0)
+        #expect(Self.keys(rig.inputs) == [arrow, KeyMapping.key(arrow, as: .release)])
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(rig.inputs.count == 2, "no repeat after the selection left")
+        #expect(view.keyUp(move), "the chord's release is still the app's")
+        #expect(!view.keyUp(down), "let go already")
+        #expect(rig.inputs.count == 2)
+    }
+
     @Test("it lists the chords it has actions for while ⌘ is held")
     internal func keyCommands() {
         let view = TerminalRig(clipboard: nil).view
