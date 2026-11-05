@@ -261,6 +261,7 @@ impl From<&ControlAgentApproval> for Approval {
             title: live.title.clone(),
             detail: live.detail.clone(),
             tool_use_id: live.tool_use_id.clone(),
+            cwd: live.cwd.clone(),
         }
     }
 }

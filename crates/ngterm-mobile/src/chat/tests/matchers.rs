@@ -842,6 +842,79 @@ pub(crate) fn approval_of(command: &str) -> ChatApproval {
         title: command.to_owned(),
         detail: Some(command.to_owned()),
         tool_use_id: None,
+        cwd: None,
+    }
+}
+
+/// The working directory the synthesized file dialogs' agent runs in.
+pub(crate) const PROJECT_DIR: &str = "/home/user/project";
+
+/// An approval card for Claude's `tool` writing the file at `path` (absolute, as the hook reports it), asked from
+/// `cwd`.
+pub(crate) fn file_approval(tool: &str, path: &str, cwd: Option<&str>) -> ChatApproval {
+    ChatApproval {
+        tool: tool.to_owned(),
+        title: path.to_owned(),
+        detail: Some(path.to_owned()),
+        tool_use_id: None,
+        cwd: cwd.map(str::to_owned),
+    }
+}
+
+/// Claude's file-edit permission dialog naming the file `shown` (as the dialog words it: relative to the working
+/// directory), drawn at 100x40. **Synthesized**, not recorded: Task 1's sessions recorded no Edit or Write dialog. It
+/// follows the recorded Bash dialog's frame (a full-width rule over the title, the call between dashed rules, the
+/// question, the numbered options, `Esc to cancel · Tab to amend`) with what Claude Code shows for a file tool: the
+/// title, the path relative to its working directory over the diff, and a question naming only the file's name.
+pub(crate) fn claude_file_dialog(title: &str, shown: &str) -> Screen {
+    let (cols, rows) = (100, 40);
+    let name = shown.rsplit('/').next().unwrap_or(shown);
+    let rule = "─".repeat(usize::from(cols));
+    let dashed = "╌".repeat(usize::from(cols));
+    let lines = [
+        "● Update(hello.py)".to_owned(),
+        rule,
+        format!(" {title}"),
+        format!(" {shown}"),
+        dashed.clone(),
+        "  1  def greet(name):".to_owned(),
+        "  2 -    return \"Hello, \" + name + \"!\"".to_owned(),
+        "  2 +    return \"Hi, \" + name + \"!\"".to_owned(),
+        dashed,
+        format!(" Do you want to make this edit to {name}?"),
+        " ❯ 1. Yes".to_owned(),
+        "   2. Yes, allow all edits during this session (shift+tab)".to_owned(),
+        "   3. No".to_owned(),
+        " Esc to cancel · Tab to amend".to_owned(),
+    ];
+    let term = Term::new(cols, rows);
+    term.feed(format!("\x1b[2J\x1b[H{}", lines.join("\r\n")).as_bytes());
+    Agent::Claude.read(&term.frame())
+}
+
+#[test]
+fn a_file_dialog_reads_as_a_dialog_whose_subject_names_the_path() {
+    let screen = claude_file_dialog("Edit file", "src/hello.py");
+    let dialog = dialog(&screen);
+    let labels: Vec<&str> = dialog.options.iter().map(|option| option.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        ["Yes", "Yes, allow all edits during this session (shift+tab)", "No"]
+    );
+    assert!(
+        dialog.subject.iter().any(|row| row == "src/hello.py"),
+        "{:?}",
+        dialog.subject
+    );
+    assert!(dialog.asks("src/hello.py"));
+    // a path the dialog does not name whole: its file name alone, a part of it, the absolute path
+    for other in [
+        "hello.py",
+        "src",
+        "/home/user/project/src/hello.py",
+        "other/src/hello.py",
+    ] {
+        assert!(!dialog.asks(other), "{other}");
     }
 }
 

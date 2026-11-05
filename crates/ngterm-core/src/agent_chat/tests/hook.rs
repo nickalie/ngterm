@@ -92,6 +92,7 @@ fn claude_permission_requests_carry_the_tool_its_description_and_its_command() {
                 title: "Create empty file allowed.txt".to_owned(),
                 detail: Some("touch allowed.txt".to_owned()),
                 tool_use_id: None,
+                cwd: Some("/home/user/project".to_owned()),
             }),
             ..conversation(claude, HookEvent::PermissionRequest, CLAUDE_TRANSCRIPT, CLAUDE_MAIN)
         })
@@ -128,6 +129,7 @@ fn an_edit_permission_names_the_file() {
             title: "/home/user/project/notes.txt".to_owned(),
             detail: Some("/home/user/project/notes.txt".to_owned()),
             tool_use_id: Some("toolu_1".to_owned()),
+            cwd: Some("/home/user/project".to_owned()),
         })
     );
 }
@@ -153,6 +155,7 @@ fn codex_events_carry_the_thread_and_its_rollout() {
                 title: "Do you want to allow this network request to example.com?".to_owned(),
                 detail: Some("curl -sI https://example.com".to_owned()),
                 tool_use_id: None,
+                cwd: Some("/home/user/project".to_owned()),
             }),
             ..conversation(codex, PermissionRequest, CODEX_TRANSCRIPT, CODEX_MAIN)
         })

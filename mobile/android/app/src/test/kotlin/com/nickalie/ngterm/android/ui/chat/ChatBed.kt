@@ -111,7 +111,7 @@ val live = event("live", ChatBody.Live)
 
 val reset = event("reset", ChatBody.Reset)
 
-val approval = ChatApproval("Bash", "rm -rf build", "Remove the build directory", "toolu_1")
+val approval = ChatApproval("Bash", "rm -rf build", "Remove the build directory", "toolu_1", null)
 
 /** A one-question `AskUserQuestion` in [status]. */
 fun question(status: ChatToolStatus = ChatToolStatus.RUNNING): ChatBody =

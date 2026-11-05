@@ -649,8 +649,9 @@ impl Pane {
 
     /// Answers the permission dialog on screen with its option labelled `label` (one of [`Pane::approval_labels`]):
     /// that option's key, then a look that the dialog went. Only a dialog that asks about `approval`'s call (the
-    /// card's: its command, path or URL shows in the dialog) is answered; a dialog about another call, or an
-    /// `approval` that names none, is [`AgentInputOutcome::NotOnScreen`].
+    /// card's: its command or URL, or a file tool's path relative to the agent's working directory, shows in the
+    /// dialog) is answered; a dialog about another call, or an `approval` that names none, is
+    /// [`AgentInputOutcome::NotOnScreen`]: answer it in the terminal, the card is still waiting.
     ///
     /// # Errors
     ///

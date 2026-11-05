@@ -374,6 +374,7 @@ fn get(core: &mut Core, request: &Request) -> Outcome {
         title: candidate.approval.title.clone(),
         detail: candidate.approval.detail.clone(),
         tool_use_id: candidate.approval.tool_use_id.clone(),
+        cwd: candidate.approval.cwd.clone(),
         since: epoch_seconds(candidate.since),
     });
     Ok(ControlResult {

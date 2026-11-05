@@ -869,6 +869,7 @@ fn denied_prompt() -> ngterm_proto::ControlAgentApproval {
         title: "Create empty file denied.txt".to_owned(),
         detail: Some("touch denied.txt".to_owned()),
         tool_use_id: None,
+        cwd: None,
         since: 1.0,
     }
 }

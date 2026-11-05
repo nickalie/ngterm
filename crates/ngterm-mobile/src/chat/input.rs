@@ -40,10 +40,13 @@
 //!   by the confirm deadline, the paste is left unsent ([`AgentInputOutcome::Unconfirmed`]).
 //! - **Stop**: Escape, while a turn is running.
 //! - **Approval**: the option whose label is the card's, by its key: Claude's digit, Codex's letter or Escape; only to
-//!   the dialog that asks about the card's call ([`Dialog::asks`](super::matchers::Dialog::asks): the command, path or
-//!   URL the hook reported, read in the rows above its options). A dialog about another call (the card's answered
-//!   elsewhere and the agent asks the next) or a card that names no command, path or URL is
-//!   [`AgentInputOutcome::NotOnScreen`]: a label alone (Claude's `Yes`) would answer any dialog.
+//!   the dialog that asks about the card's call ([`Dialog::asks`](super::matchers::Dialog::asks) of what
+//!   [`shown_subjects`] says the dialog shows: the command or URL the hook reported, or a file tool's path relative to
+//!   the agent's working directory, read in the rows above its options). A dialog about another call (the card's
+//!   answered elsewhere and the agent asks the next) or a card that names nothing a dialog shows (an MCP tool's) is
+//!   [`AgentInputOutcome::NotOnScreen`]: a label alone (Claude's `Yes`) would answer any dialog. The card stays up:
+//!   the origin's `approval_done`, or its next prompt, ends it. Two calls a dialog shows alike (the same command, two
+//!   edits of one file) can't be told apart on screen.
 //! - **Question**: per question, its tab confirmed by its text and options; a digit picks a single-select option (the
 //!   picker moves on), digits toggle a multi-select question's boxes to the answer and Tab moves on; free text goes
 //!   through `Type something.` (its digit, then a paste, then Enter or Tab: the row must hold the text, after the
@@ -381,7 +384,7 @@ impl Plan {
         match (&self.step, screen) {
             (Step::Start, Screen::Permission(dialog)) => match dialog.option(label) {
                 // the dialog asks about the card's call, not the next one the agent asked after it
-                Some(option) if card.detail.as_deref().is_some_and(|detail| dialog.asks(detail)) => {
+                Some(option) if shown_subjects(card).iter().any(|subject| dialog.asks(subject)) => {
                     let key = option.key.into();
                     self.step = Step::Answered(dialog.clone());
                     Next::Send {
@@ -587,6 +590,53 @@ fn holds_paste(composer: &str, text: &str) -> bool {
         return false;
     }
     shown == squeeze(text) || (stand_in(&shown) == Some(0) && shown.ends_with(']') && shown.matches('[').count() == 1)
+}
+
+/// Claude's tools whose dialog names the file they write, by its path relative to the agent's working directory.
+const FILE_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
+
+/// What a dialog that asks about `card`'s call shows of it, any one of which confirms the dialog: the command or URL
+/// as the hook reported it; for a file tool, its path as Claude's dialog names it (relative to the working directory
+/// the agent asked from, `../` included, as Node's `path.relative` makes it) or whole (Claude's verbose mode). Empty
+/// for a card that names nothing (an MCP tool's): no dialog can be confirmed as its own.
+pub(crate) fn shown_subjects(card: &ChatApproval) -> Vec<String> {
+    let Some(detail) = card.detail.as_deref().filter(|detail| !detail.trim().is_empty()) else {
+        return Vec::new();
+    };
+    let relative = FILE_TOOLS
+        .contains(&card.tool.as_str())
+        .then(|| card.cwd.as_deref().and_then(|cwd| relative_path(cwd, detail)))
+        .flatten();
+    relative.into_iter().chain([detail.to_owned()]).collect()
+}
+
+/// `path` relative to the directory `from`, both absolute POSIX paths, as Node's `path.relative` gives it: the
+/// components past their common start, after a `..` for each of `from`'s left. `None` for a path that is not absolute
+/// (a Windows one: only the whole path is matched) or that is `from` itself.
+fn relative_path(from: &str, path: &str) -> Option<String> {
+    let (from, path) = (components(from)?, components(path)?);
+    let common = from.iter().zip(&path).take_while(|(a, b)| a == b).count();
+    let parts: Vec<&str> = std::iter::repeat_n("..", from.len() - common)
+        .chain(path[common..].iter().copied())
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// An absolute POSIX path's components, `.` and `..` resolved as Node's `path.resolve` does; `None` when it is not
+/// absolute.
+fn components(path: &str) -> Option<Vec<&str>> {
+    let rest = path.strip_prefix('/')?;
+    let mut parts = Vec::new();
+    for part in rest.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(parts)
 }
 
 /// The labels the card offers for `agent`'s approval: the dialog's on `screen`, or the agent's usual ones.

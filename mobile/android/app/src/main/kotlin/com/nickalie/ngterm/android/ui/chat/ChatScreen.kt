@@ -29,6 +29,7 @@ import com.nickalie.ngterm.android.ui.components.PanelAction
 import com.nickalie.ngterm.android.ui.components.SectionAction
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.StatusTone
+import com.nickalie.ngterm.core.ffi.QuestionAnswer
 
 /**
  * A pane's open [chat], live, read from [machine]; [onShowTerminal] shows the pane's terminal instead. Its prompt field
@@ -205,12 +206,17 @@ private fun Pinned(
             val approval = state.approval
             val question = state.question
             when {
+                // a tap answers the card it was drawn on, whatever replaced it before the tap landed
                 approval != null -> {
-                    ApprovalCardView(approval, agent, state.busy, actions.onAnswerApproval, card)
+                    val onAnswer: (String) -> Unit = { label -> actions.onAnswerApproval(approval.id, label) }
+                    ApprovalCardView(approval, agent, state.busy, onAnswer, card)
                 }
 
                 question != null -> {
-                    QuestionCardView(question, agent, state.busy, actions.onAnswerQuestion, card)
+                    val onAnswer: (List<QuestionAnswer>) -> Unit = { answers ->
+                        actions.onAnswerQuestion(question.id, answers)
+                    }
+                    QuestionCardView(question, agent, state.busy, onAnswer, card)
                 }
             }
         }

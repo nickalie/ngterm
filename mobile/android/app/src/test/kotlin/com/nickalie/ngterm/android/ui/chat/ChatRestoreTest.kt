@@ -47,8 +47,8 @@ class ChatRestoreTest {
         val actions =
             ChatActions(
                 onLoadOlder = {},
-                onAnswerApproval = {},
-                onAnswerQuestion = { answers += it },
+                onAnswerApproval = { _, _ -> },
+                onAnswerQuestion = { _, answer -> answers += answer },
                 onProblemShown = {},
                 onShowTerminal = {},
             )

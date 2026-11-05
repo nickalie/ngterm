@@ -291,7 +291,7 @@ class ChatViewModelTest {
 
         // answered here
         emit(event("approval-2", ChatBody.Approval(approval)))
-        chat.answerApproval("Yes")
+        chat.answerApproval("approval-2", "Yes")
         // with the card's prompt: the core answers only the dialog that asks about it
         assertEquals(FakeAction.Approval(approval, "Yes"), pane.actions.last())
         assertNull(state().approval)
@@ -299,19 +299,46 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun aCardWhosePromptIsNoLongerOnScreenGoesAndOffersTheTerminal() {
-        emit(event("approval-1", ChatBody.Approval(approval)), event("q1", question()))
-        assertEquals("q1", state().question?.id)
+    fun anApprovalTheCoreCantConfirmOnScreenStaysUpAndOffersTheTerminal() {
+        emit(event("approval-1", ChatBody.Approval(approval)))
         pane.outcome = AgentInputOutcome.NOT_ON_SCREEN
 
-        chat.answerApproval("Yes")
-        assertNull(state().approval)
+        // another call's dialog, or one the core can't tell apart: nothing went, and the card still waits
+        chat.answerApproval("approval-1", "Yes")
+        assertEquals("approval-1", state().approval?.id)
         assertEquals(ChatProblem.NotOnScreen, state().problem)
         assertTrue(state().problem!!.offersTerminal)
         chat.problemShown()
-        assertNull(state().problem)
+        // the origin's word ends it: answered in the terminal, or anywhere else
+        emit(event("approval-1", ChatBody.ApprovalDone(approval)))
+        assertNull(state().approval)
+    }
 
-        chat.answerQuestion(listOf(QuestionAnswer(listOf("Postgres"), null)))
+    @Test
+    fun aTapAnswersOnlyTheCardItWasDrawnOn() {
+        emit(event("approval-1", ChatBody.Approval(approval)))
+        // the next prompt replaced the card before the tap on the first one's buttons landed
+        emit(event("approval-1", ChatBody.ApprovalDone(approval)), event("approval-2", ChatBody.Approval(approval)))
+        val before = pane.actions.size
+        chat.answerApproval("approval-1", "Yes")
+        assertEquals(before, pane.actions.size)
+        assertEquals("approval-2", state().approval?.id)
+        assertEquals(ChatProblem.NotOnScreen, state().problem)
+        chat.problemShown()
+
+        emit(event("approval-2", ChatBody.ApprovalDone(approval)), event("q1", question()))
+        chat.answerQuestion("q0", listOf(QuestionAnswer(listOf("Postgres"), null)))
+        assertEquals(before, pane.actions.size)
+        assertEquals("q1", state().question?.id)
+    }
+
+    @Test
+    fun aQuestionWhosePickerIsNoLongerOnScreenGoesAndOffersTheTerminal() {
+        emit(event("q1", question()))
+        assertEquals("q1", state().question?.id)
+        pane.outcome = AgentInputOutcome.NOT_ON_SCREEN
+
+        chat.answerQuestion("q1", listOf(QuestionAnswer(listOf("Postgres"), null)))
         assertNull(state().question)
         assertEquals(ChatProblem.NotOnScreen, state().problem)
         // the answer the transcript then records leaves it down
@@ -329,7 +356,7 @@ class ChatViewModelTest {
                 .single()
                 .question,
         )
-        chat.answerQuestion(listOf(QuestionAnswer(listOf("Postgres"), null)))
+        chat.answerQuestion("q1", listOf(QuestionAnswer(listOf("Postgres"), null)))
         assertEquals(
             FakeAction.Question(card.question, listOf(QuestionAnswer(listOf("Postgres"), null))),
             pane.actions.last(),

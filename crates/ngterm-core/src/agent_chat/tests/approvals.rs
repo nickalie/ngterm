@@ -11,6 +11,7 @@ fn denied_txt(since: f64) -> ControlAgentApproval {
         title: "Create empty file denied.txt".to_owned(),
         detail: Some("touch denied.txt".to_owned()),
         tool_use_id: None,
+        cwd: None,
         since,
     }
 }
@@ -21,6 +22,7 @@ fn shown(approval: &ControlAgentApproval) -> Approval {
         title: approval.title.clone(),
         detail: approval.detail.clone(),
         tool_use_id: approval.tool_use_id.clone(),
+        cwd: approval.cwd.clone(),
     }
 }
 
@@ -186,6 +188,7 @@ fn a_codex_call_matches_by_its_kind_and_command_whatever_the_tool_is_named() {
         title: "Check the network".to_owned(),
         detail: Some("curl -sI https://example.com\n".to_owned()),
         tool_use_id: None,
+        cwd: None,
         since: 1.0,
     }));
     let mut exec = bash("exec-1", 300, "curl -sI https://example.com", ToolStatus::Ok);

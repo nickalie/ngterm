@@ -107,14 +107,15 @@ fun genericApprovalLabels(agent: String?): List<String> =
 
 /**
  * What a chat does: [onLoadOlder] asks for the page before what it shows, [onAnswerApproval] and [onAnswerQuestion]
- * answer its cards, [onProblemShown] dismisses the last action's problem, [onShowTerminal] shows the pane's terminal
- * in its place (the bar's Show terminal, and Answer in terminal), [onSend] sends the composer's prompt, [onStop]
- * interrupts the agent's turn, and [onEndShown] says the list went to its newest row ([ChatUiState.toEnd]).
+ * answer its cards (the id of the card drawn, then its answer), [onProblemShown] dismisses the last action's problem,
+ * [onShowTerminal] shows the pane's terminal in its place (the bar's Show terminal, and Answer in terminal), [onSend]
+ * sends the composer's prompt, [onStop] interrupts the agent's turn, and [onEndShown] says the list went to its newest
+ * row ([ChatUiState.toEnd]).
  */
 data class ChatActions(
     val onLoadOlder: () -> Unit = {},
-    val onAnswerApproval: (String) -> Unit = {},
-    val onAnswerQuestion: (List<QuestionAnswer>) -> Unit = {},
+    val onAnswerApproval: (String, String) -> Unit = { _, _ -> },
+    val onAnswerQuestion: (String, List<QuestionAnswer>) -> Unit = { _, _ -> },
     val onProblemShown: () -> Unit = {},
     val onShowTerminal: () -> Unit = {},
     val onSend: () -> Unit = {},

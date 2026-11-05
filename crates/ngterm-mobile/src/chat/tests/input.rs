@@ -2,9 +2,12 @@
 //! bracketed paste and Enter (a slash command the same way), Stop's Escape, each dialog's option keys and the picker's
 //! digits, Tab and Enter.
 
-use super::matchers::{Capture, Term, approval_of, asked, marked_drafts, tricky_drafts, with_draft};
+use super::matchers::{
+    Capture, PROJECT_DIR, Term, approval_of, asked, claude_file_dialog, file_approval, marked_drafts, tricky_drafts,
+    with_draft,
+};
 use crate::api::PaneInputError;
-use crate::chat::input::{Action, AgentInputOutcome, Key, Next, Plan, QuestionAnswer, UNSAFE_PASTE};
+use crate::chat::input::{Action, AgentInputOutcome, Key, Next, Plan, QuestionAnswer, UNSAFE_PASTE, shown_subjects};
 use crate::chat::matchers::{Agent, Picker, Screen};
 use crate::chat::{ChatApproval, ChatQuestionItem, ChatQuestionOption};
 
@@ -251,6 +254,104 @@ fn an_approval_goes_only_to_the_dialog_that_asks_about_the_cards_call() {
         let mut plan = Plan::new(Action::Approval(own, labels[0].clone()));
         assert!(matches!(step(&mut plan, &dialog), Next::Send { .. }), "{name}");
     }
+}
+
+#[test]
+fn a_file_tools_approval_goes_to_the_dialog_naming_its_path_relative_to_the_working_directory() {
+    let file = format!("{PROJECT_DIR}/src/hello.py");
+    // the dialog names `src/hello.py`, as Claude does from the project; or the whole path (its verbose mode)
+    for (shown, card) in [
+        ("src/hello.py", file_approval("Edit", &file, Some(PROJECT_DIR))),
+        (
+            "src/hello.py",
+            file_approval("Write", &file, Some(&format!("{PROJECT_DIR}/"))),
+        ),
+        ("src/hello.py", file_approval("MultiEdit", &file, Some(PROJECT_DIR))),
+        ("src/hello.py", file_approval("NotebookEdit", &file, Some(PROJECT_DIR))),
+        (
+            "../src/hello.py",
+            file_approval("Edit", &file, Some(&format!("{PROJECT_DIR}/app"))),
+        ),
+        (file.as_str(), file_approval("Edit", &file, Some(PROJECT_DIR))),
+        (file.as_str(), file_approval("Edit", &file, None)),
+    ] {
+        let dialog = claude_file_dialog("Edit file", shown);
+        let mut plan = Plan::new(Action::Approval(card.clone(), "Yes".to_owned()));
+        assert_eq!(step(&mut plan, &dialog), send(Key::Digit(1), true), "{shown}: {card:?}");
+    }
+    // a dialog about another file, or one the card can't be told from: nothing goes, and the card is not answered
+    let dialog = claude_file_dialog("Edit file", "src/hello.py");
+    for card in [
+        // the file of the same name a directory up, which a suffix of the path would take for this one
+        file_approval("Edit", &format!("{PROJECT_DIR}/hello.py"), Some(PROJECT_DIR)),
+        file_approval("Edit", &format!("{PROJECT_DIR}/lib/src/hello.py"), Some(PROJECT_DIR)),
+        // the same file asked from another directory: the dialog would name it otherwise
+        file_approval("Edit", &file, Some(&format!("{PROJECT_DIR}/src"))),
+        file_approval("Edit", &file, Some("/home/user/other")),
+        // no working directory: only the whole path confirms it
+        file_approval("Edit", &file, None),
+        // not a file tool: its detail is matched as it is
+        ChatApproval {
+            tool: "Read".to_owned(),
+            ..file_approval("Edit", &file, Some(PROJECT_DIR))
+        },
+        // an MCP tool's card names nothing a dialog shows
+        ChatApproval {
+            tool: "mcp__github__create_issue".to_owned(),
+            title: "mcp__github__create_issue".to_owned(),
+            detail: None,
+            tool_use_id: None,
+            cwd: Some(PROJECT_DIR.to_owned()),
+        },
+    ] {
+        let mut plan = Plan::new(Action::Approval(card.clone(), "Yes".to_owned()));
+        assert_eq!(
+            step(&mut plan, &dialog),
+            Next::Done(AgentInputOutcome::NotOnScreen),
+            "{card:?}"
+        );
+        assert!(!plan.sent());
+    }
+}
+
+#[test]
+fn a_file_tools_path_is_shown_relative_as_node_makes_it() {
+    let subjects = |tool: &str, path: &str, cwd: Option<&str>| shown_subjects(&file_approval(tool, path, cwd));
+    let pairs = [
+        ("/a/b", "/a/b/c.rs", "c.rs"),
+        ("/a/b/", "/a/b/./x/../c.rs", "c.rs"),
+        ("/a/b", "/a/c/d.rs", "../c/d.rs"),
+        ("/a/b/c", "/x.rs", "../../../x.rs"),
+        ("/", "/x/y.rs", "x/y.rs"),
+    ];
+    for (cwd, path, relative) in pairs {
+        assert_eq!(
+            subjects("Edit", path, Some(cwd)),
+            [relative.to_owned(), path.to_owned()],
+            "{cwd} {path}"
+        );
+    }
+    // the directory itself, a path that is not absolute (Windows), no working directory: only the whole path
+    for (cwd, path) in [
+        (Some("/a/b"), "/a/b"),
+        (Some("C:\\work"), "C:\\work\\x.rs"),
+        (Some("/a/b"), "C:\\work\\x.rs"),
+        (None, "/a/b/c.rs"),
+    ] {
+        assert_eq!(subjects("Write", path, cwd), [path.to_owned()], "{cwd:?} {path}");
+    }
+    // a shell call's command is matched as it is, wherever it ran; a card with nothing to match, nothing
+    assert_eq!(
+        subjects("Bash", "/a/b/run.sh", Some("/a/b")),
+        ["/a/b/run.sh".to_owned()]
+    );
+    assert!(
+        shown_subjects(&ChatApproval {
+            detail: Some("  ".to_owned()),
+            ..approval_of("x")
+        })
+        .is_empty()
+    );
 }
 
 fn item(question: &str, multi: bool, options: &[(&str, &str)]) -> ChatQuestionItem {

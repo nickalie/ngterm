@@ -428,7 +428,7 @@
   <string name="chat_send_answers">Send answers</string>
   <string name="chat_sending">Sending</string>
   <string name="chat_answer_in_terminal">Answer in terminal</string>
-  <string name="chat_problem_not_on_screen">The pane doesn\'t show this any more, so nothing was sent. It may have been answered on another device.</string>
+  <string name="chat_problem_not_on_screen">Couldn\'t confirm the pane shows this, so nothing was sent. Use the terminal, or wait if it was answered elsewhere.</string>
   <string name="chat_problem_dialog_open">A dialog is open in the pane. Answer it first: nothing was sent.</string>
   <string name="chat_problem_lead_refused">Another device kept control of this pane, so nothing was sent.</string>
   <string name="chat_problem_unconfirmed">The keys went, but the pane didn\'t show what they should have done. Check the terminal.</string>

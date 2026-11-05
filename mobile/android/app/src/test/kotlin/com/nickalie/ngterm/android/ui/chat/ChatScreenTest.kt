@@ -51,6 +51,9 @@ class ChatScreenTest {
     private val approvals = mutableListOf<String>()
     private val answers = mutableListOf<List<QuestionAnswer>>()
 
+    // the cards the taps answered, by id
+    private val answered = mutableListOf<String>()
+
     // the asks for an earlier page the view model acts on: with rows shown (an empty log has nothing before it)
     private var olderAsked = 0
     private var terminalShown = 0
@@ -61,8 +64,14 @@ class ChatScreenTest {
         val actions =
             ChatActions(
                 onLoadOlder = { if (!state.value.log.isEmpty) olderAsked++ },
-                onAnswerApproval = { approvals += it },
-                onAnswerQuestion = { answers += it },
+                onAnswerApproval = { id, label ->
+                    answered += id
+                    approvals += label
+                },
+                onAnswerQuestion = { id, answer ->
+                    answered += id
+                    answers += answer
+                },
                 onProblemShown = { problemsShown++ },
                 onShowTerminal = { terminalShown++ },
                 onEndShown = {
@@ -115,6 +124,8 @@ class ChatScreenTest {
         compose.onNode(hasText("Allow Bash?") and isHeading()).assertIsDisplayed()
         compose.onNodeWithText("Yes, and don't ask again", substring = true).performClick()
         assertEquals(listOf("Yes, and don't ask again for rm commands in this project"), approvals)
+        // the tap names the card it was drawn on
+        assertEquals(listOf(ChatSamples.approval.id), answered)
     }
 
     @Test

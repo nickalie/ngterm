@@ -209,6 +209,9 @@ pub struct Approval {
     pub detail: Option<String>,
     #[serde(default)]
     pub tool_use_id: Option<String>,
+    /// The agent's working directory when it asked: what its dialog shows a path relative to.
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 /// What a notice reports.

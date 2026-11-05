@@ -70,7 +70,10 @@ data class ApprovalCard(
 sealed interface ChatProblem {
     val offersTerminal: Boolean get() = false
 
-    /** The screen doesn't show what the action answers (answered elsewhere, or unreadable): nothing was sent. */
+    /**
+     * The screen doesn't show what the action answers, or not as the one it answers (answered elsewhere, another call's
+     * dialog, unreadable): nothing was sent.
+     */
     data object NotOnScreen : ChatProblem {
         override val offersTerminal: Boolean get() = true
     }
@@ -137,9 +140,11 @@ data class ChatUiState(
  * The prompt being written is the [composer]'s, its `/` menu listing the agent's commands ranked by [filter]; whether
  * the agent works on a turn comes from [working].
  *
- * - An approval card comes up with the `approval` event and goes with its `approval_done`; a question card comes up
- *   with a question still running and goes once it is answered. Either goes too when this device answered it, or
- *   when the core finds its prompt no longer on screen (answered on another device): the card's next check misses.
+ * - An approval card comes up with the `approval` event and goes with its `approval_done` (or the next `approval`),
+ *   or when this device answered it; a dialog the core can't confirm as the card's (another call's, or one it can't
+ *   tell apart) leaves it up, its banner offering the terminal. A question card comes up with a question still
+ *   running and goes once it is answered, here, or when the core finds its picker no longer on screen (answered on
+ *   another device). A tap answers the card it was drawn on: one another card replaced meanwhile sends nothing.
  * - A `reset` drops what was shown and starts the new conversation under a divider.
  *
  * Events arrive on the core's thread; [state] takes them from any. Its work runs in [scope], which [close] ends.
@@ -285,18 +290,38 @@ class ChatViewModel internal constructor(
     }
 
     /**
-     * Answers the approval card with its button [label]: only the dialog that asks about the card's call, so a card
-     * answered elsewhere never answers the agent's next prompt.
+     * Answers the approval card [id] (the one its buttons were drawn for) with its button [label]: only while it is
+     * still the card up, and only the dialog that asks about its call, so a card answered elsewhere never answers the
+     * agent's next prompt. The card stays up when the core can't confirm the dialog is its own.
      */
-    fun answerApproval(label: String) {
-        val card = chat.value.approval ?: return
-        act(card.id) { it.answerApproval(card.approval, label) }
+    fun answerApproval(
+        id: String,
+        label: String,
+    ) {
+        val card = chat.value.approval
+        if (card?.id != id) {
+            replaced()
+            return
+        }
+        act(card.id, goneIfNotOnScreen = false) { it.answerApproval(card.approval, label) }
     }
 
-    /** Answers the question card with [answers], one per question. */
-    fun answerQuestion(answers: List<QuestionAnswer>) {
-        val card = chat.value.question ?: return
-        act(card.id) { it.answerQuestion(card.question, answers) }
+    /** Answers the question card [id] (the one its answers were picked on) with [answers], one per question. */
+    fun answerQuestion(
+        id: String,
+        answers: List<QuestionAnswer>,
+    ) {
+        val card = chat.value.question
+        if (card?.id != id) {
+            replaced()
+            return
+        }
+        act(card.id, goneIfNotOnScreen = true) { it.answerQuestion(card.question, answers) }
+    }
+
+    // a tap on a card another one replaced before it landed: nothing is sent
+    private fun replaced() {
+        chat.update { if (it.busy) it else it.copy(problem = ChatProblem.NotOnScreen) }
     }
 
     /** Brings the list to its newest row, the card at its foot under it, the next time it is on screen. */
@@ -314,9 +339,11 @@ class ChatViewModel internal constructor(
         chat.update { it.copy(problem = null) }
     }
 
-    // one action at a time; [card] is the card it answers, which goes once answered or found gone
+    // one action at a time; [card] is the card it answers, which goes once answered, or, [goneIfNotOnScreen], once
+    // the core finds its prompt gone
     private fun act(
         card: String?,
+        goneIfNotOnScreen: Boolean = false,
         onSent: () -> Unit = {},
         call: suspend (PaneInterface) -> AgentInputOutcome,
     ) {
@@ -336,7 +363,8 @@ class ChatViewModel internal constructor(
                 }
             if (problem == null) onSent()
             chat.update { now ->
-                val answered = card != null && (problem == null || problem == ChatProblem.NotOnScreen)
+                val gone = problem == null || (goneIfNotOnScreen && problem == ChatProblem.NotOnScreen)
+                val answered = card != null && gone
                 val after = if (answered) now.without(card) else now
                 after.copy(busy = false, problem = problem)
             }

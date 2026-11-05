@@ -108,7 +108,8 @@ pub fn report(agent: AgentKind, event: HookEvent, payload: &[u8]) -> Result<Opti
 }
 
 /// A `PermissionRequest` payload's prompt: the tool, a title (the agent's own description of the call when it gave
-/// one, else the command, path or URL), and that command, path or URL cut to [`OUTPUT_CAP`] bytes as the detail.
+/// one, else the command, path or URL), that command, path or URL cut to [`OUTPUT_CAP`] bytes as the detail, and the
+/// agent's working directory (Claude's dialog shows a file's path relative to it).
 fn approval(payload: &Value) -> Result<AgentApproval, String> {
     let tool = non_empty(payload, "/tool_name").ok_or_else(|| "hook payload has no tool_name".to_owned())?;
     let input = payload.get("tool_input").unwrap_or(&Value::Null);
@@ -119,6 +120,7 @@ fn approval(payload: &Value) -> Result<AgentApproval, String> {
         title,
         detail: tool_subject(kind, input).map(|subject| cap(subject, OUTPUT_CAP).0),
         tool_use_id: non_empty(payload, "/tool_use_id").map(str::to_owned),
+        cwd: non_empty(payload, "/cwd").map(str::to_owned),
     })
 }
 

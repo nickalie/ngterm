@@ -178,6 +178,9 @@ pub struct ControlAgentApproval {
     pub detail: Option<String>,
     #[serde(default)]
     pub tool_use_id: Option<String>,
+    /// The agent's working directory when it asked.
+    #[serde(default)]
+    pub cwd: Option<String>,
     /// When the hook reported it, epoch seconds.
     pub since: f64,
 }

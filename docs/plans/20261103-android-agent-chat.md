@@ -584,9 +584,13 @@ with no output yet is a running call (Task 1's fixture README).
   - `Pane::approval_labels()` gives the card its buttons: the dialog's labels read from the screen now (no claim), or
     the agent's own set (Claude `Yes`/`No`; Codex `Yes, proceed`/`No, and tell Codex what to do differently`).
     `answer_approval` matches a label whitespace aside, so a label read at another width still finds its option, and
-    sends only to the dialog that asks about the card's `approval`: its `detail` (the command, path or URL) must read
-    as a run of the dialog's rows above its options (Claude's under its top rule, Codex's from `Would you like to`);
-    another call's dialog, or a card with no detail, is `NotOnScreen`.
+    sends only to the dialog that asks about the card's `approval`: what the dialog shows of the call must read as a
+    run of whole rows above its options (Claude's under its top rule, Codex's from `Would you like to`), no `…` cut
+    accepted: the command or URL as the hook reported it, or, for Claude's Edit/MultiEdit/Write/NotebookEdit, the path
+    relative to the `cwd` the `PermissionRequest` payload names (carried on the approval from the hook through the
+    record and the event; Node's `path.relative`, `../` included) or the whole path. Another call's dialog, or a card
+    with nothing a dialog shows (an MCP tool's), is `NotOnScreen`. Two calls a dialog shows alike (one command twice,
+    two edits of one file) stay indistinguishable on screen (`docs/backlog/`).
   - The agent comes from the presentation stream's announcement; a pane with none the core knows is refused.
   - Keys: Claude's options by digit; Codex's by the key its option names (`y`, `p`, Escape for `(esc)`); a multi-select
     question's boxes are toggled to the answer, each at most once, then Tab; "Type something." is its digit, a paste,
@@ -651,9 +655,11 @@ with no output yet is a running call (Task 1's fixture README).
     androidx `ViewModel`: its life is the chat channel's, not a screen's. `ChatLog` (`ChatItems.kt`) folds events
     into rows; a `reset` drops the rows and puts a divider on top. `ChatUiState.anchor` is the key of the row that was
     on top before an older page went in above it. Cards drop on `approval_done` / an answered question, on `Sent`,
-    and on `NotOnScreen` (the prompt went elsewhere); every non-`Sent` outcome, `Unconfirmed` included, and the
-    `Pane` errors (`Closed`, `Backpressure`, `Refused`) become a `ChatProblem`, with `offersTerminal` for
-    `NotOnScreen` and `Unconfirmed`.
+    and a question card on `NotOnScreen` (its picker went elsewhere); an approval card stays up on `NotOnScreen`
+    (the core could not confirm the dialog is its own) until the origin's `approval_done` or next `approval`. A tap
+    names the card it was drawn on, and a card replaced meanwhile sends nothing. Every non-`Sent` outcome,
+    `Unconfirmed` included, and the `Pane` errors (`Closed`, `Backpressure`, `Refused`) become a `ChatProblem`, with
+    `offersTerminal` for `NotOnScreen` and `Unconfirmed`.
   - The bar's switch is one icon button for the focused pane, named for what a tap does ("Show terminal" /
     "Show chat"). Until Task 14 a pane in chat view still draws its terminal under the switch.
 

@@ -150,7 +150,7 @@ fn hook_sends_the_payloads_report_addressed_as_the_status_hooks_address_theirs()
     assert_eq!(sent["target"], "active");
     assert_eq!(
         sent["args"]["report"]["approval"],
-        json!({"tool": "Bash", "title": "Create empty file allowed.txt", "detail": "touch allowed.txt"})
+        json!({"tool": "Bash", "title": "Create empty file allowed.txt", "detail": "touch allowed.txt", "cwd": "/home/user/project"})
     );
     Ok(())
 }

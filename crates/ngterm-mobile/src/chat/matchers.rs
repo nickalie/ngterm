@@ -107,10 +107,11 @@ pub(crate) struct Dialog {
 }
 
 impl Dialog {
-    /// Whether the dialog asks about the call `detail` names (its command, path or URL, as the agent's hook reported
-    /// it): some run of the subject's rows reads as `detail`, whitespace aside (the screen wraps it where it likes; a
-    /// command's leading `$ ` not counted), or as its start cut short with `…`. A run is whole rows, so a row that
-    /// says more than `detail` (another command that starts the same, a sentence that quotes it) is not a match.
+    /// Whether the dialog asks about the call `detail` names (its command, path or URL, as the dialog shows it): some
+    /// run of the subject's rows reads as `detail`, whitespace aside (the screen wraps it where it likes; a command's
+    /// leading `$ ` not counted). A run is whole rows, so a row that says more than `detail` (another command that
+    /// starts the same, a sentence that quotes it) is not a match, and a row cut short with `…` is not either: another
+    /// call may start the same.
     pub(crate) fn asks(&self, detail: &str) -> bool {
         let wanted = squeeze(detail);
         if wanted.is_empty() {
@@ -125,10 +126,10 @@ impl Dialog {
                     row
                 };
                 run.push_str(&squeeze(row));
-                if !run.is_empty() && fits(&run, &wanted) {
+                if !run.is_empty() && run == wanted {
                     return true;
                 }
-                if run.len() > wanted.len() + '…'.len_utf8() {
+                if run.len() > wanted.len() {
                     return false;
                 }
             }

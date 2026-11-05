@@ -289,6 +289,8 @@ pub struct AgentApproval {
     pub detail: Option<String>,
     /// The tool use the prompt is for, when the payload names it.
     pub tool_use_id: Option<String>,
+    /// The agent's working directory when it asked (the payload's `cwd`): what a dialog shows a path relative to.
+    pub cwd: Option<String>,
 }
 
 #[cfg(test)]

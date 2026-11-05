@@ -146,6 +146,8 @@ pub struct ChatApproval {
     pub title: String,
     pub detail: Option<String>,
     pub tool_use_id: Option<String>,
+    /// The agent's working directory when it asked: what its dialog shows a file's path relative to.
+    pub cwd: Option<String>,
 }
 
 /// What a notice reports.
@@ -325,6 +327,7 @@ impl From<Approval> for ChatApproval {
             title: approval.title,
             detail: approval.detail,
             tool_use_id: approval.tool_use_id,
+            cwd: approval.cwd,
         }
     }
 }

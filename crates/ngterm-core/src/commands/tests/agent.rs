@@ -36,6 +36,7 @@ fn permission(tool: &str, command: &str) -> AgentReport {
             title: format!("Run {command}"),
             detail: Some(command.to_owned()),
             tool_use_id: None,
+            cwd: None,
         }),
         ..conversation("claude", "PermissionRequest", CLAUDE_A, "aaaa")
     }
