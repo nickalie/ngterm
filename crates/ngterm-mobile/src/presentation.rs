@@ -25,7 +25,8 @@
 //!     still open are dismissed (the origin takes them back), as desktop's row does.
 //!
 //! A lost connection keeps the streams (`Presentations::machine_down`); a suspending core stops them without a word,
-//! first letting their links write what they still hold, an answer just sent among it (`Presentations::stop_machine`,
+//! first letting their links write what they still hold and the transport send it, an answer just sent among it
+//! (bounded by [`FLUSH_LIMIT`]; `Presentations::stop_machine`,
 //! then `Presentations::suspend_machine` once the connection is closed); the machine back, each client starts again
 //! if stopped and retries at once.
 //!
@@ -73,6 +74,10 @@ pub const CONNECTION_DOWN: &str = "the connection to the machine is down";
 
 /// Why a stream ended that sent a line over [`MAX_FRAME_BYTES`].
 pub const OVERSIZE_LINE: &str = "the presentation stream sent an oversize line";
+
+/// How long a stopped link waits for the transport to send the lines it queued before it closes the channel: a close
+/// cancels a write still waiting for ssh's window, and a machine that takes nothing must not hold the close for ever.
+pub const FLUSH_LIMIT: Duration = Duration::from_millis(500);
 
 /// What a link reports to its client's owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,6 +206,8 @@ async fn run_link<C: Connection>(
                     let _ = channel.writer.write(&line);
                 }
                 Some(LinkInput::Stop) | None => {
+                    // What was written (an answer just sent) goes out first: the close would cancel it.
+                    let _ = tokio::time::timeout(FLUSH_LIMIT, channel.writer.flushed()).await;
                     let _ = channel.writer.close();
                     return;
                 }
@@ -369,8 +376,9 @@ impl<C: Connection> Presentations<C> {
     }
 
     /// Stops the streams of `machine_id`, whose connection the core is about to close to suspend, reporting nothing,
-    /// and hands over their links' tasks: each writes the lines it still holds (an answer just sent), closes its
-    /// channel and ends, so the core waits for them before it closes the connection. They start again once the
+    /// and hands over their links' tasks: each writes the lines it still holds (an answer just sent), waits up to
+    /// [`FLUSH_LIMIT`] for the transport to send them, closes its channel and ends, so the core waits for them before
+    /// it closes the connection. They start again once the
     /// machine is back ([`Presentations::machine_up`]).
     pub(crate) fn stop_machine(&mut self, machine_id: &str) -> Vec<JoinHandle<()>> {
         let mut tasks = Vec::new();

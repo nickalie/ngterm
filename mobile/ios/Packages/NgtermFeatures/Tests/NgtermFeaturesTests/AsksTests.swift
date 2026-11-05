@@ -85,6 +85,20 @@ internal struct AsksTests {
         #expect(test.core.calls.last?.method == "suspend")
     }
 
+    @Test("an ask the core tells after the suspend took them back opens nothing until the app resumes")
+    internal func lateAskAfterSuspend() async throws {
+        defer { test.remove() }
+        try await attach()
+        test.graph.suspend()
+        await emit(.ask(machineId: "m1", sessionId: "s1", ask: TestAsks.plain()))
+        #expect(asks.open.isEmpty)
+        #expect(test.notices.posted.isEmpty, "and no notification goes up for it")
+        test.graph.resume()
+        #expect(test.core.calls.last?.method == "resume")
+        await emit(.ask(machineId: "m1", sessionId: "s1", ask: TestAsks.plain()))
+        #expect(asks.open.map(\.key) == [key], "handed over again after the reconnect, it opens")
+    }
+
     @Test("a session shows while a view says so")
     internal func onScreen() {
         defer { test.remove() }

@@ -51,6 +51,7 @@ internal struct StatusRefreshTests {
         #expect(test.notices.upIds == [waiting, done])
         #expect(test.notices.posted[waiting]?.title == "s1-name is waiting for you")
         #expect(test.notices.posted[done]?.title == "s2-name finished")
+        #expect(test.notices.log.last == "=", "the run ends once its notices have reached the system")
 
         test.notices.withdraw(test.notices.upIds)
         await test.graph.refresh.run()

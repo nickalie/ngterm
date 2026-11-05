@@ -27,7 +27,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ngterm_term::GridSize;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 use crate::api::Machine;
 
@@ -209,26 +209,54 @@ impl ChannelReader {
 
 /// The bytes of standard input a channel's writers queued that its transport has not sent yet, shared by both ends:
 /// a writer that may out-produce the machine waits on it ([`ChannelWriter::backlog`]) rather than queue without bound
-/// while ssh's window is shut.
+/// while ssh's window is shut, and one about to close the channel waits for it to drain
+/// ([`ChannelWriter::flushed`]).
 #[derive(Debug, Clone, Default)]
-pub struct Backlog(Arc<AtomicUsize>);
+pub struct Backlog(Arc<Queued>);
+
+#[derive(Debug, Default)]
+struct Queued {
+    bytes: AtomicUsize,
+    /// Woken each time the bytes drop to none.
+    drained: Notify,
+}
 
 impl Backlog {
     fn add(&self, bytes: usize) {
-        self.0.fetch_add(bytes, Ordering::AcqRel);
+        self.0.bytes.fetch_add(bytes, Ordering::AcqRel);
     }
 
     /// `bytes` queued earlier have been sent (or will never be).
     pub fn sent(&self, bytes: usize) {
-        let _ = self.0.fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
-            Some(queued.saturating_sub(bytes))
-        });
+        let before = self
+            .0
+            .bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+                Some(queued.saturating_sub(bytes))
+            });
+        if before.unwrap_or_default() <= bytes {
+            self.0.drained.notify_waiters();
+        }
     }
 
     /// The bytes queued and not yet sent.
     #[must_use]
     pub fn get(&self) -> usize {
-        self.0.load(Ordering::Acquire)
+        self.0.bytes.load(Ordering::Acquire)
+    }
+
+    /// Resolves once nothing queued is left unsent.
+    async fn drained(&self) {
+        loop {
+            let notified = self.0.drained.notified();
+            tokio::pin!(notified);
+            // Registered before the check, so a drain between the two still wakes it.
+            notified.as_mut().enable();
+            if self.get() == 0 {
+                return;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -284,6 +312,13 @@ impl ChannelWriter {
     #[must_use]
     pub fn eof(&self) -> bool {
         self.send(ChannelInput::Eof)
+    }
+
+    /// Resolves once the transport has sent every byte of standard input queued so far (russh: handed them to the
+    /// connection, ahead of anything sent on it later). A machine that takes no input, or a channel gone with input
+    /// unsent, may keep it waiting for ever: the caller bounds the wait.
+    pub async fn flushed(&self) {
+        self.backlog.drained().await;
     }
 
     /// Asks the transport to close the channel.

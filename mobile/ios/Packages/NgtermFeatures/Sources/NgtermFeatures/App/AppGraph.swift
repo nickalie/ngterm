@@ -135,6 +135,13 @@ public final class AppGraph {
         connections.suspend()
     }
 
+    /// The app is back: asks open again, and the core connects again what ``suspend()`` closed (its reconnects
+    /// reattach, and the origins hand over the asks still waiting).
+    public func resume() {
+        asks.resume()
+        connections.resume()
+    }
+
     deinit {
         // nothing to release: the process ends with it
     }

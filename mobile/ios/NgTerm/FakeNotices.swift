@@ -24,6 +24,10 @@
             }
         }
 
+        internal func delivered() {
+            // kept in memory: there is nothing to wait for
+        }
+
         internal func permission() -> NoticePermission {
             answer
         }

@@ -5,6 +5,9 @@ import Observation
 /// answered here or the core takes them down (answered elsewhere, ended on the origin, the stream gone), their session
 /// is detached, or the core is about to suspend (``takeBack()``: the origin takes them back).
 ///
+/// From the suspend until ``resume()`` no ask opens: one the core told before it stopped its streams has been taken
+/// back with the rest.
+///
 /// Where one shows is the ask rule's: a sheet while its session is on screen (``onScreen``: its view shown in a window
 /// in the foreground), otherwise a notification (``Alerts``).
 @preconcurrency
@@ -30,6 +33,8 @@ public final class Asks {
     }
 
     @ObservationIgnored private let connections: Connections
+    // between takeBack() and resume(): the origins have taken their asks back
+    @ObservationIgnored private var isTakenBack = false
     @ObservationIgnored private var watchers: [@MainActor () -> Void] = []
 
     /// The asks over `connections`, whose events they take from now on.
@@ -78,14 +83,24 @@ public final class Asks {
     }
 
     /// The core is about to suspend, and the origins take their asks back (as upstream does when a presenter goes):
-    /// every ask leaves ``open``, unanswered.
+    /// every ask leaves ``open``, unanswered, and none opens until ``resume()``: an ask the core told before its
+    /// suspend stopped the streams has no stream left to answer through, and nothing would take it down.
     public func takeBack() {
+        isTakenBack = true
         open = []
+    }
+
+    /// The core is back: its streams hand the asks still waiting over again as they reconnect.
+    public func resume() {
+        isTakenBack = false
     }
 
     private func receive(_ event: MobileEvent) {
         switch event {
         case .ask(let machineId, let sessionId, let ask):
+            guard !isTakenBack else {
+                return
+            }
             let key = SessionKey(machineId: machineId, sessionId: sessionId)
             // one with the same id again is the same ask, restated
             var next = open

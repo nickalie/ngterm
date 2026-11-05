@@ -700,17 +700,21 @@ fn network_changed<T: Transport>(state: &Rc<State<T>>) {
 /// The app went to the background with nothing to keep: every connection closes and every connect in flight is
 /// cancelled, with no state reported, and each machine is set aside for [`resume`] with its streams stopped.
 ///
-/// The connected machines' streams stop first, and the loop waits for their links to write what they hold: an answer
-/// posted just before (`answer_ask` is fire-and-forget) reaches the origin before the connection closes under it.
+/// The connected machines' streams stop first, and the loop waits for their links to write what they hold and the
+/// transport to send it (each for [`FLUSH_LIMIT`] at most, all at once): an answer posted just before (`answer_ask` is
+/// fire-and-forget) reaches the origin before the connection closes under it.
+///
+/// [`FLUSH_LIMIT`]: crate::presentation::FLUSH_LIMIT
 async fn suspend<T: Transport>(state: &State<T>) {
     let mut connected: Vec<String> = state.connections.borrow().keys().cloned().collect();
     connected.sort();
+    let mut tasks = Vec::new();
     for machine_id in connected {
-        let tasks = state.presentations.borrow_mut().stop_machine(&machine_id);
-        for task in tasks {
-            // A link that panicked has nothing left to write.
-            let _ = task.await;
-        }
+        tasks.extend(state.presentations.borrow_mut().stop_machine(&machine_id));
+    }
+    for task in tasks {
+        // A link that panicked has nothing left to write.
+        let _ = task.await;
     }
     let connections = std::mem::take(&mut *state.connections.borrow_mut());
     let attempts = std::mem::take(&mut *state.attempts.borrow_mut());

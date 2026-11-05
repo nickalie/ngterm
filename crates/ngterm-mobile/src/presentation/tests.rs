@@ -135,20 +135,27 @@ impl Harness {
 
     /// What the core sent down the stream since the last call.
     async fn received(&mut self) -> Received {
-        settle().await;
-        let peer = self.peer.as_mut().expect("a stream");
         let mut received = Received::default();
-        while let Some(input) = peer.try_input() {
-            match input {
-                ChannelInput::Data(line) => {
-                    let line = line.strip_suffix(b"\n").expect("a whole line");
-                    received.bodies.push(frames::decode(line).unwrap().body);
+        // A stopped link closes once what it wrote was taken: taking some lets more come.
+        loop {
+            settle().await;
+            let peer = self.peer.as_mut().expect("a stream");
+            let mut took = false;
+            while let Some(input) = peer.try_input() {
+                took = true;
+                match input {
+                    ChannelInput::Data(line) => {
+                        let line = line.strip_suffix(b"\n").expect("a whole line");
+                        received.bodies.push(frames::decode(line).unwrap().body);
+                    }
+                    ChannelInput::Close => received.closed = true,
+                    other => panic!("unexpected input {other:?}"),
                 }
-                ChannelInput::Close => received.closed = true,
-                other => panic!("unexpected input {other:?}"),
+            }
+            if !took {
+                return received;
             }
         }
-        received
     }
 
     /// The origin sends `bytes`; a stream the core has closed reads none of them.

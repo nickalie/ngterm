@@ -66,7 +66,8 @@ public final class StatusRefresh {
         }
     }
 
-    /// Runs the refresh once: each machine at the same time, then every one disconnected.
+    /// Runs the refresh once: each machine at the same time, then every one disconnected; it ends once its notices
+    /// have reached the system.
     public func run() async {
         let entries = wanted
         guard !entries.isEmpty, let core = try? makeCore() else {
@@ -96,6 +97,8 @@ public final class StatusRefresh {
         for entry in entries {
             try? core.disconnect(machineId: entry.machine.id)
         }
+        // the turns are in the baseline already, so a notice still on its way would never be posted again
+        await alerts.delivered()
     }
 
     private func refresh(_ machine: StoredMachine, sessions: Set<String>, on core: any MobileCoreClient) async {

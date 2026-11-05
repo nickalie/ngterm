@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::{Command, run};
 use crate::api::{EventSink, Machine, MobileError, MobileEvent};
-use crate::presentation::{AskReply, StreamState};
+use crate::presentation::{AskReply, FLUSH_LIMIT, StreamState};
 use crate::transport::fake::{FakeTransport, Script};
 use crate::transport::{ChannelInput, ChannelPeer};
 
@@ -152,16 +152,25 @@ pub(super) async fn settle() {
 
 /// What the core sent down `peer`: its frames' bodies, and whether it closed the channel.
 pub(super) async fn received(peer: &mut ChannelPeer) -> (Vec<Body>, bool) {
-    settle().await;
     let (mut bodies, mut closed) = (Vec::new(), false);
-    while let Some(input) = peer.try_input() {
-        match input {
-            ChannelInput::Data(line) => bodies.push(frames::decode(line.strip_suffix(b"\n").unwrap()).unwrap().body),
-            ChannelInput::Close => closed = true,
-            other => panic!("unexpected input {other:?}"),
+    // A stopped link closes once what it wrote was taken: taking some lets more come.
+    loop {
+        settle().await;
+        let mut took = false;
+        while let Some(input) = peer.try_input() {
+            took = true;
+            match input {
+                ChannelInput::Data(line) => {
+                    bodies.push(frames::decode(line.strip_suffix(b"\n").unwrap()).unwrap().body);
+                }
+                ChannelInput::Close => closed = true,
+                other => panic!("unexpected input {other:?}"),
+            }
+        }
+        if !took {
+            return (bodies, closed);
         }
     }
-    (bodies, closed)
 }
 
 /// The origin's hello and snapshot, then `bodies`, in order.
@@ -368,20 +377,57 @@ fn an_answer_posted_just_before_a_suspend_is_written_before_the_connection_close
             },
         });
         actor.post(Command::Suspend);
+        settle().await;
+        assert!(
+            actor.transport.closed().is_empty(),
+            "the connection stays while the answer waits to be sent"
+        );
 
-        let (bodies, closed) = received(&mut peer).await;
+        let Some(ChannelInput::Data(line)) = peer.try_input() else {
+            panic!("the answer was queued first");
+        };
         assert_eq!(
-            bodies,
-            [Body::AskResolve(PresentationAskAnswer {
+            frames::decode(line.strip_suffix(b"\n").unwrap()).unwrap().body,
+            Body::AskResolve(PresentationAskAnswer {
                 id: "a1".to_owned(),
                 owner: 9,
                 button: Some("yes".to_owned()),
                 text: None,
                 selected: None,
-            })],
+            }),
             "the answer reached the machine"
         );
-        assert!(closed, "and the stream was closed after it");
+        assert_eq!(
+            received(&mut peer).await,
+            (Vec::new(), true),
+            "and the stream was closed once it was sent"
+        );
+        settle().await;
         assert_eq!(actor.transport.closed(), ["m1"], "then the connection");
+    });
+}
+
+#[test]
+fn a_suspend_waits_for_a_machine_that_takes_no_input_only_so_long() {
+    local(async {
+        let actor = Actor::start();
+        actor.transport.script(&tree_tail(), listing(Some(1)));
+        actor.connect().await;
+        actor.list().await;
+        actor.attach().await.unwrap();
+        let peer = actor.stream().await;
+        deliver(&peer, Vec::new()).await;
+        actor.sink.take();
+
+        // the hello the client sent back is never taken
+        actor.post(Command::Suspend);
+        settle().await;
+        assert!(
+            actor.transport.closed().is_empty(),
+            "the connection waits for the hello"
+        );
+        tokio::time::sleep(FLUSH_LIMIT).await;
+        settle().await;
+        assert_eq!(actor.transport.closed(), ["m1"], "until the flush limit");
     });
 }

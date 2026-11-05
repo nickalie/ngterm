@@ -22,6 +22,8 @@ internal struct RootView: View {
     @State private var scaffold: ScaffoldModel
     @State private var machines: MachinesModel
     @State private var onboarding: OnboardingModel
+    // a notification tap's session, attached once its machine connects and lists it
+    @State private var tapAttach: Task<Void, Never>?
 
     internal var body: some View {
         AppScaffold(model: scaffold) {
@@ -79,17 +81,43 @@ internal struct RootView: View {
         )
     }
 
-    // goes where a notification's tap asked: the machine, and its session with the pane when it is still attached
+    // goes where a notification's tap asked: the machine, then its session with the pane. A session not attached (the
+    // app started afresh for the tap, as after a background refresh's notice) is attached once the machine connects
+    // and lists it, while the window still shows the machine; a connect that needs the user, or a session gone, leaves
+    // the machine showing
     private func go(to target: OpenTarget) {
         graph.openRequests.consume(target)
+        tapAttach?.cancel()
+        tapAttach = nil
         scaffold.show(machine: target.machineId)
-        guard let sessionId = target.sessionId,
-            graph.connections.attached[target.machineId]?.contains(sessionId) == true
-        else {
+        guard let sessionId = target.sessionId else {
             return
         }
         let key = SessionKey(machineId: target.machineId, sessionId: sessionId)
-        if let paneId = target.paneId {
+        if graph.connections.attached[target.machineId]?.contains(sessionId) == true {
+            open(key, pane: target.paneId)
+            return
+        }
+        // the connects start with the graph, which may not have started yet
+        graph.start()
+        tapAttach = Task {
+            let isAttached = await graph.connections.attachWhenListed(machineId: key.machineId, sessionId: sessionId) {
+                showsOnly(machine: key.machineId)
+            }
+            if isAttached, !Task.isCancelled, showsOnly(machine: key.machineId) {
+                open(key, pane: target.paneId)
+            }
+        }
+    }
+
+    // whether this window shows the sessions of `machine` and no session, as a tap leaves it
+    private func showsOnly(machine: String) -> Bool {
+        scaffold.machine == machine && scaffold.session == nil && scaffold.compactColumn == .content
+    }
+
+    // shows the session `key` with its pane `paneId` selected, when given
+    private func open(_ key: SessionKey, pane paneId: String?) {
+        if let paneId {
             graph.panes.select(paneId, of: key)
         }
         open(key)

@@ -114,6 +114,11 @@ public final class SystemNotices: NoticeCenter {
         }
     }
 
+    /// Waits until every post and withdrawal made so far has been handed to the system.
+    public func delivered() async {
+        await last?.value
+    }
+
     /// Whether the user has answered the question about notifying.
     public func permission() async -> NoticePermission {
         switch await center.notificationSettings().authorizationStatus {
