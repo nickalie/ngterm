@@ -158,9 +158,14 @@ fn private_root(dir: &Path) -> io::Result<()> {
 
 /// Makes the directory `path`, its owner's alone on Unix (`0700`).
 fn private_dir(path: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
+    let builder = fs::DirBuilder::new();
+    // the mode is Unix's alone: elsewhere the builder is never changed, so it is not `mut` there
     #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    let builder = {
+        let mut builder = builder;
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+    };
     builder.create(path)
 }
 
