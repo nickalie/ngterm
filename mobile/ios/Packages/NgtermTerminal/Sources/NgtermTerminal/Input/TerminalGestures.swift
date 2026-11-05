@@ -4,6 +4,7 @@ import UIKit
 ///
 /// - a tap gives the terminal the focus, and under mouse tracking clicks there; a tap lets a touch selection go;
 /// - a double tap selects the word, a triple tap the line, with handles and the edit menu;
+/// - a finger coming down stops a fling;
 /// - a drag scrolls (the pane reports it to a program that asked for the mouse, as wheel turns) and flings on; a drag
 ///   from a selection handle moves that end;
 /// - a long press selects the word with handles, and a drag from it extends the selection, as text selection does; the
@@ -32,6 +33,12 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
         self.view = view
         super.init()
         install()
+    }
+
+    /// A finger comes down on the terminal: it stops a fling where it is, before it is told apart as a tap, a drag or a
+    /// long press.
+    public func touchDown() {
+        view.pointer.stopFling()
     }
 
     /// A tap at `point` at `time` (seconds of the system's uptime).
@@ -148,6 +155,14 @@ public final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
     }
 
     // MARK: - UIGestureRecognizerDelegate
+
+    /// Every recognizer takes every touch; a finger's first one stops a fling (``touchDown()``).
+    public func gestureRecognizer(_: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if touch.type == .direct {
+            touchDown()
+        }
+        return true
+    }
 
     /// A long press doesn't start on a selection handle: a finger held there takes the handle, not a new word.
     public func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {

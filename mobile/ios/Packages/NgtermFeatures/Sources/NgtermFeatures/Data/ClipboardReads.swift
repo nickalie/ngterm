@@ -21,10 +21,12 @@ public final class ClipboardReads {
     @ObservationIgnored private let clipboard: any TerminalClipboard
     // trusted this run: a machine whose Always the store couldn't write is trusted until the app ends
     @ObservationIgnored private var trustedNow: Set<String> = []
+    // revoked this run: a machine whose Ask again the store couldn't write asks until the app ends
+    @ObservationIgnored private var revokedNow: Set<String> = []
 
     /// The machines whose programs read the clipboard unasked: what Settings lists.
     public var alwaysAllowed: Set<String> {
-        trust.machines.union(trustedNow)
+        trust.machines.union(trustedNow).subtracting(revokedNow)
     }
 
     /// The reads over `connections`, whose events they take from now on, trusting the machines in `trust` and handing
@@ -52,6 +54,7 @@ public final class ClipboardReads {
     public func allowAlways(_ read: ClipboardRead) {
         let machine = read.pane.machineId
         trustedNow.insert(machine)
+        revokedNow.remove(machine)
         // a machine the store can't keep is trusted until the app ends, and asks again after
         try? trust.allow(machine)
         let same = pending.filter { $0.pane.machineId == machine }
@@ -74,10 +77,11 @@ public final class ClipboardReads {
 
     /// Asks again before `machineId`'s programs read the clipboard (Settings' Ask again).
     ///
-    /// - Throws: ``StoreError/unwritable(reason:)`` when the store can't forget it; it still asks again until the app
-    ///   ends.
+    /// - Throws: ``StoreError`` when the store can't forget it (its file can't be written, or still can't be read); it
+    ///   still asks again until the app ends.
     public func revoke(_ machineId: String) throws(StoreError) {
         trustedNow.remove(machineId)
+        revokedNow.insert(machineId)
         try trust.revoke(machineId)
     }
 
