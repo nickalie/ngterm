@@ -102,39 +102,72 @@ pub(crate) struct Dialog {
     /// The rows that say what the dialog asks about, each trimmed: Claude's from under its top rule to its question
     /// (the tool, the call's description, its command), Codex's from its `Would you like to …` to its options (the
     /// reason, the command as `$ …`). Empty when the dialog shows no such rows.
-    pub(crate) subject: Vec<String>,
+    pub(crate) subject: Vec<SubjectRow>,
     pub(crate) options: Vec<DialogOption>,
+}
+
+/// One row of what a dialog asks about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SubjectRow {
+    /// The row's text, trimmed.
+    pub(crate) text: String,
+    /// The row reaches the screen's edge: the screen may have cut a word there.
+    pub(crate) full: bool,
+}
+
+impl SubjectRow {
+    /// Whether the text that goes on in the next row may go on with no whitespace between: the row was cut at the
+    /// screen's edge (Claude wraps a word too long for a row there), or it ends where a line may break inside a word
+    /// (Codex breaks `https://` | `example.net`). After a letter or a digit short of the edge, the screen broke at
+    /// whitespace.
+    fn breaks_inside_a_word(&self) -> bool {
+        self.full || self.text.chars().last().is_some_and(|c| !c.is_alphanumeric())
+    }
 }
 
 impl Dialog {
     /// Whether the dialog asks about the call `detail` names (its command, path or URL, as the dialog shows it): some
-    /// run of the subject's rows reads as `detail`, whitespace aside (the screen wraps it where it likes; a command's
-    /// leading `$ ` not counted). A run is whole rows, so a row that says more than `detail` (another command that
-    /// starts the same, a sentence that quotes it) is not a match, and a row cut short with `…` is not either: another
-    /// call may start the same.
+    /// run of the subject's rows reads as `detail` (its ends trimmed; a command's leading `$ ` not counted). Within a
+    /// row whitespace counts as it is, so `touch 'a b'` is not `touch 'ab'`; between two rows `detail` holds the
+    /// whitespace the screen's wrap took (a space, a line break, the next line's indent), or none where the row may
+    /// break inside a word ([`SubjectRow::breaks_inside_a_word`]). A run is whole rows, so a row that says more than
+    /// `detail` (another command that starts the same, a sentence that quotes it) is not a match, and a row cut short
+    /// with `…` is not either: another call may start the same.
     pub(crate) fn asks(&self, detail: &str) -> bool {
-        let wanted = squeeze(detail);
-        if wanted.is_empty() {
-            return false;
-        }
-        (0..self.subject.len()).any(|from| {
-            let mut run = String::new();
-            for (at, row) in self.subject.iter().enumerate().skip(from) {
-                let row = if at == from {
-                    row.strip_prefix("$ ").unwrap_or(row)
-                } else {
-                    row
-                };
-                run.push_str(&squeeze(row));
-                if !run.is_empty() && run == wanted {
-                    return true;
-                }
-                if run.len() > wanted.len() {
+        let wanted = detail.trim();
+        !wanted.is_empty() && (0..self.subject.len()).any(|from| self.reads_from(from, wanted))
+    }
+
+    /// Whether the subject's rows from `from` on read as `wanted`.
+    fn reads_from(&self, from: usize, wanted: &str) -> bool {
+        let mut rest = wanted;
+        let mut previous: Option<&SubjectRow> = None;
+        for (at, row) in self.subject.iter().enumerate().skip(from) {
+            let text = if at == from {
+                row.text.strip_prefix("$ ").unwrap_or(&row.text)
+            } else {
+                &row.text
+            };
+            if text.is_empty() {
+                return false;
+            }
+            if let Some(previous) = previous {
+                let after = rest.trim_start();
+                if after.len() == rest.len() && !previous.breaks_inside_a_word() {
                     return false;
                 }
+                rest = after;
             }
-            false
-        })
+            let Some(after) = rest.strip_prefix(text) else {
+                return false;
+            };
+            if after.is_empty() {
+                return true;
+            }
+            rest = after;
+            previous = Some(row);
+        }
+        false
     }
 
     /// The option whose label is `label`, whitespace aside (a label read at another width wraps elsewhere).
@@ -260,6 +293,16 @@ impl Rows {
 
     fn get(&self, index: usize) -> &str {
         self.lines.get(index).map_or("", String::as_str)
+    }
+
+    /// Row `index` as a dialog's subject row: trimmed, and whether it reaches the screen's edge (as [`options`] tells
+    /// a cut row).
+    fn subject_row(&self, index: usize) -> SubjectRow {
+        let line = self.get(index);
+        SubjectRow {
+            text: line.trim().to_owned(),
+            full: line.trim_end().chars().count() + 1 >= self.cols,
+        }
     }
 
     fn blank(&self, index: usize) -> bool {
@@ -439,9 +482,7 @@ fn claude_permission(rows: &Rows) -> Option<Dialog> {
             })
         })
         .collect::<Option<Vec<_>>>()?;
-    let subject = (top + 1..question)
-        .map(|index| rows.get(index).trim().to_owned())
-        .collect();
+    let subject = (top + 1..question).map(|index| rows.subject_row(index)).collect();
     (options.len() >= 2).then_some(Dialog { subject, options })
 }
 
@@ -614,7 +655,7 @@ fn codex_approval(rows: &Rows) -> Option<Dialog> {
         .rev()
         .find(|index| rows.get(*index).trim_start().starts_with("Would you like to"))
         .map_or_else(Vec::new, |from| {
-            (from..start).map(|index| rows.get(index).trim().to_owned()).collect()
+            (from..start).map(|index| rows.subject_row(index)).collect()
         });
     (options.len() >= 2).then_some(Dialog { subject, options })
 }

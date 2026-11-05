@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use ngterm_term::{Frame, GridSize, Outgoing, StreamFeed, StreamOut};
 
 use crate::chat::ChatApproval;
-use crate::chat::matchers::{Agent, Dialog, DialogOption, OptionKey, Picker, Screen, squeeze};
+use crate::chat::matchers::{Agent, Dialog, DialogOption, OptionKey, Picker, Screen, SubjectRow, squeeze};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -902,7 +902,7 @@ fn a_file_dialog_reads_as_a_dialog_whose_subject_names_the_path() {
         ["Yes", "Yes, allow all edits during this session (shift+tab)", "No"]
     );
     assert!(
-        dialog.subject.iter().any(|row| row == "src/hello.py"),
+        dialog.subject.iter().any(|row| row.text == "src/hello.py"),
         "{:?}",
         dialog.subject
     );
@@ -926,8 +926,15 @@ fn a_dialog_asks_about_its_own_call_and_no_other() {
             let dialog = dialog(&screen);
             let command = command_of(&name);
             assert!(dialog.asks(command), "{name}: {:?}", dialog.subject);
-            // wrapped or spaced otherwise, it is the same call
-            assert!(dialog.asks(&command.replace(' ', "\n  ")), "{name}");
+            // its ends aside, whitespace counts: spaced otherwise, it is another call
+            assert!(dialog.asks(&format!("  {command}\n")), "{name}");
+            for spaced in [
+                command.replacen(' ', "  ", 1),
+                command.replacen(' ', "\n  ", 1),
+                command.replacen(' ', "", 1),
+            ] {
+                assert!(!dialog.asks(&spaced), "{name}: {spaced:?}");
+            }
             // another command, one that starts the same or says more, or a part of the command's row
             let others = [
                 "touch picked.txt",
@@ -956,8 +963,52 @@ fn a_dialog_asks_about_its_own_call_and_no_other() {
     // quote any command) are not what it asks about
     let screen = Capture::load("claude-44x36").read(Agent::Claude, "permission");
     assert!(!dialog(&screen).asks("touch picked.txt First call"));
-    assert!(dialog(&screen).subject.iter().all(|row| !row.starts_with('●')));
+    assert!(dialog(&screen).subject.iter().all(|row| !row.text.starts_with('●')));
     let screen = Capture::load("codex-44x36").read(Agent::Codex, "permission");
-    assert!(dialog(&screen).subject[0].starts_with("Would you like to run"));
+    assert!(dialog(&screen).subject[0].text.starts_with("Would you like to run"));
     assert!(!dialog(&screen).asks("Running curl -sI https://example.net"));
+}
+
+/// A dialog whose subject is `rows`, each `(text, full)`.
+fn subject_of(rows: &[(&str, bool)]) -> Dialog {
+    Dialog {
+        subject: rows
+            .iter()
+            .map(|(text, full)| SubjectRow {
+                text: (*text).to_owned(),
+                full: *full,
+            })
+            .collect(),
+        options: Vec::new(),
+    }
+}
+
+#[test]
+fn a_subject_keeps_its_whitespace_and_allows_only_the_wraps_a_screen_makes() {
+    // within a row whitespace counts as it is
+    let one = subject_of(&[("Bash command", false), ("touch 'a b'", false)]);
+    assert!(one.asks("touch 'a b'"));
+    for other in ["touch 'ab'", "touch  'a b'", "touch 'a  b'", "touch\t'a b'"] {
+        assert!(!one.asks(other), "{other:?}");
+    }
+    // wrapped at a space (Claude) or a line of the command: the text holds whitespace there, any of it
+    let soft = subject_of(&[("touch 'a", false), ("b'", false)]);
+    assert!(soft.asks("touch 'a b'"));
+    assert!(soft.asks("touch 'a\n  b'"));
+    assert!(
+        !soft.asks("touch 'ab'"),
+        "a letter short of the edge broke at whitespace"
+    );
+    let lines = subject_of(&[("cat <<EOF", false), ("x", false), ("EOF", false)]);
+    assert!(lines.asks("cat <<EOF\n  x\nEOF"));
+    assert!(!lines.asks("cat <<EOFxEOF"));
+    // cut at the screen's edge (Claude's long word), or after a mark a line may break at (Codex's `https://`)
+    let hard = subject_of(&[("curl https://exa", true), ("mple.net", false)]);
+    assert!(hard.asks("curl https://example.net"));
+    let mark = subject_of(&[("$ curl -sI https://", false), ("example.net", false)]);
+    assert!(mark.asks("curl -sI https://example.net"));
+    assert!(mark.asks("curl -sI https:// example.net"));
+    // a blank row ends the run: a command is not read across it
+    let gap = subject_of(&[("touch", false), ("", false), ("x", false)]);
+    assert!(!gap.asks("touch x"));
 }
