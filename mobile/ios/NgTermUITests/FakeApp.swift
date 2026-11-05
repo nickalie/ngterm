@@ -7,6 +7,14 @@ internal enum FakeApp {
     // how long a list is watched for, at most, before an audit: this many reads, this far apart
     private static let settleReads = 20
     private static let settleBeat: TimeInterval = 0.25
+    // how many reads running a list has to keep still for, its text inside its rows
+    private static let settleQuietReads = 3
+    // how often a list whose text lies outside its rows is nudged, and how far
+    private static let settleNudges = 3
+    private static let nudgeDistance: CGFloat = 12
+    private static let nudgePress: TimeInterval = 0.05
+    // where in a list a nudge starts: its middle
+    private static let middle: CGFloat = 0.5
 
     /// Launches the app on the fake core for `test`: on the first run, or past it with a key when `withKey`.
     ///
@@ -113,6 +121,10 @@ internal enum FakeApp {
     ///
     /// An iPad's keyboard covers the form's last rows while it goes, and a list bounces back after a swipe: the audit
     /// would measure the rows' text against the keyboard, or while it moves, and find it under 4.5:1 now and then.
+    ///
+    /// On an iPad's form sheet, once the keyboard has gone, the rows' accessibility frames can stay where the keyboard
+    /// left them while their text has moved on (seen 20-36 pt apart, for good): the audit then fails text it measures
+    /// in a row it isn't in. A list whose text lies outside its rows is nudged, which lays the rows out anew.
     @MainActor
     internal static func settle(_ list: XCUIElement, in app: XCUIApplication) {
         let keyboardGone = XCTNSPredicateExpectation(
@@ -120,16 +132,44 @@ internal enum FakeApp {
             object: app.keyboards
         )
         XCTAssertEqual(XCTWaiter.wait(for: [keyboardGone], timeout: wait), .completed, "the keyboard stayed")
-        // the last row's frame, read until two reads a beat apart agree
-        let last = list.cells.allElementsBoundByIndex.last
-        var before = last?.frame
-        for _ in 0..<settleReads {
-            _ = XCTWaiter.wait(for: [XCTestExpectation(description: "a beat")], timeout: settleBeat)
-            let now = last?.frame
-            if now == before {
+        // past the last nudge the audit has its say
+        for nudges in 0...settleNudges {
+            if nudges > 0 {
+                nudge(list)
+            }
+            if settleRows(list) {
                 return
             }
+        }
+    }
+
+    // reads the rows' frames and the text's a beat apart until they agree for `settleQuietReads` reads running with
+    // every text inside a row; false when they don't come to that
+    @MainActor
+    private static func settleRows(_ list: XCUIElement) -> Bool {
+        var before: [CGRect] = []
+        var quiet = 0
+        for _ in 0..<settleReads {
+            _ = XCTWaiter.wait(for: [XCTestExpectation(description: "a beat")], timeout: settleBeat)
+            let rows = list.cells.allElementsBoundByIndex.map(\.frame)
+            let texts = list.staticTexts.allElementsBoundByIndex.map(\.frame)
+            let now = rows + texts
+            let isInRows = texts.allSatisfy { text in rows.contains { row in row.contains(text) } }
+            quiet = now == before && isInRows ? quiet + 1 : 0
+            if quiet >= settleQuietReads {
+                return true
+            }
             before = now
+        }
+        return false
+    }
+
+    // drags `list` a few points down and lets go: it bounces back (or scrolls by as much), laying its rows out anew
+    @MainActor
+    private static func nudge(_ list: XCUIElement) {
+        XCTContext.runActivity(named: "nudge the list: its text lies outside its rows") { _ in
+            let start = list.coordinate(withNormalizedOffset: CGVector(dx: middle, dy: middle))
+            start.press(forDuration: nudgePress, thenDragTo: start.withOffset(CGVector(dx: .zero, dy: nudgeDistance)))
         }
     }
 
@@ -194,6 +234,19 @@ internal enum FakeApp {
         }
     }
 
+    /// Audits the form `page` as ``auditForm(_:)`` does, setting aside too the contrast of text the page cuts at its
+    /// edge, as ``auditSheet(_:page:)`` does: on an iPad's sheet a form's row can run past the sheet's foot.
+    @MainActor
+    internal static func auditForm(_ app: XCUIApplication, page: XCUIElement) throws {
+        let shown = page.frame
+        try app.performAccessibilityAudit(for: XCUIAccessibilityAuditType.all.subtracting(.dynamicType)) { issue in
+            if issue.auditType == .contrast, let element = issue.element, !shown.contains(element.frame) {
+                return true
+            }
+            return isSetAside(issue, in: app, isSheet: true)
+        }
+    }
+
     // whether the audit sets `issue` aside (the navigation bar's glass, and over a sheet on an iPad the app behind it);
     // one it keeps is named in the report, so a failure says which element it is
     @MainActor
@@ -221,17 +274,23 @@ internal enum FakeApp {
         return false
     }
 
-    // an iPad's contrast issue in the machines' column, the sidebar of Liquid Glass: once the session beside it has the
-    // focus, the audit measures the rows' colored text against the glass's grey (or the selection it greys), not the
-    // grouped ground the colors are made for, whose contrast ContrastTests checks. Only the rows, and only beside a
-    // session: the machine form and the machines' list on their own are audited in full
+    // an iPad's contrast issue in the machines' column, the sidebar of Liquid Glass: once the column beside it (a
+    // machine's sessions, or a session) has the focus, the audit measures the rows' colored text against the glass's
+    // grey (or the selection it greys), not the grouped ground the colors are made for, whose contrast ContrastTests
+    // checks. Whether the focus has moved yet when the audit looks varies from run to run, so it is set aside whenever
+    // such a column shows. Only the rows, and only beside a machine's sessions or a session: the machine form and the
+    // machines' list on their own are audited in full
     @MainActor
     private static func isSidebarGlass(_ issue: XCUIAccessibilityAuditIssue, in app: XCUIApplication) -> Bool {
         let isPadContrast = UIDevice.current.userInterfaceIdiom == .pad && issue.auditType == .contrast
         guard isPadContrast, let element = issue.element else {
             return false
         }
-        guard app.descendants(matching: .any)["session-title"].firstMatch.exists else {
+        // a session's title, or a machine's sessions: their list, or the New session button of a connected machine
+        let besideColumn = ["session-title", "sessions", "new-session"].contains { identifier in
+            app.descendants(matching: .any)[identifier].firstMatch.exists
+        }
+        guard besideColumn else {
             return false
         }
         let isRow = NSPredicate(

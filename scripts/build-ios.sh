@@ -28,7 +28,8 @@
 #      none of them. Each runs even when an earlier one failed, and the action fails when any did;
 #    - build: the app, its tests and its packages for the simulator (Debug);
 #    - test: the Unit and then the UI test plan on the pinned phone and tablet simulators (IOS_SIM_PHONE_NAME and
-#      IOS_SIM_TABLET_NAME, made by setup-ios.sh), one at a time; result bundles in mobile/ios/build/;
+#      IOS_SIM_TABLET_NAME, made by setup-ios.sh), one at a time; result bundles in mobile/ios/build/, and a failed
+#      snapshot's image in mobile/ios/build/snapshot-failures/ (its diff is in the result bundle);
 #    - archive: a Release archive for devices, mobile/ios/build/NgTerm.xcarchive, unsigned unless the release
 #      environment is set (APP_STORE_CONNECT_KEY_PATH, APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_ISSUER_ID and
 #      IOS_DEVELOPMENT_TEAM: automatic signing through that App Store Connect API key), then checked to hold no
@@ -306,6 +307,10 @@ action_test() {
   [[ -n "$phone" && -n "$tablet" ]] ||
     die "no $IOS_SIM_PHONE_NAME or $IOS_SIM_TABLET_NAME simulator on iOS $IOS_SIMULATOR_RUNTIME: run scripts/setup-ios.sh"
   mkdir -p "$BUILD_DIR"
+  # a failed snapshot's image goes to snapshot-failures/<test file>/ (xcodebuild hands TEST_RUNNER_* to the test
+  # processes without the prefix; the simulator's processes write the Mac's paths), its diffs into the result bundle
+  rm -rf "$BUILD_DIR/snapshot-failures"
+  export TEST_RUNNER_SNAPSHOT_ARTIFACTS="$BUILD_DIR/snapshot-failures"
   for plan in Unit UI; do
     rm -rf "$BUILD_DIR/$plan.xcresult"
     project_xcodebuild test -scheme NgTerm -configuration Debug -testPlan "$plan" \

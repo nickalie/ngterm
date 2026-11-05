@@ -30,10 +30,7 @@ public struct PublicKeyView<Footer: View>: View {
                             .frame(minHeight: Spacing.hitTarget)
                     }
                 }
-                Text("Fingerprint \(Text(verbatim: key.fingerprint).font(Typography.address))")
-                    .font(.footnote)
-                    .foregroundStyle(Palette.secondaryText.color)
-                    .textSelection(.enabled)
+                fingerprint
                 let command = Self.appendCommand(for: key.authorizedKey)
                 ValuePlate(String(localized: "Or run this on the machine"), value: command) {
                     CopyButton(command)
@@ -60,6 +57,16 @@ public struct PublicKeyView<Footer: View>: View {
         .accessibilityIdentifier("public-key-page")
         .navigationTitle(onDone == nil ? String(localized: "Public key") : "")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    // the key's fingerprint, at its full height: footnote text with a mono run was sized a line short for some
+    // fingerprints, whose last line the audit then found clipped
+    private var fingerprint: some View {
+        Text("Fingerprint \(Text(verbatim: key.fingerprint).font(Typography.address))")
+            .font(.footnote)
+            .foregroundStyle(Palette.secondaryText.color)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // a real sequence, so numbered: what to do, in order

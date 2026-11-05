@@ -6,15 +6,16 @@
 # registry keys. The MSI is kept as an artifact.
 #
 # Pushes to a `ci/**` branch run it too, as cross-platform.yml, and a change of Markdown alone runs nothing, with the
-# same exceptions (the bundled skill the MSI installs, vendored trees, the patch notes under build/).
+# same exceptions (the bundled skill the MSI installs, vendored trees, the patch notes under build/); nor does a change
+# of the iOS app's sources alone (mobile/ios/), which the MSI neither builds nor holds.
 name: windows-installer
 
 on:
   pull_request:
-    paths: ["**", "!**/*.md", "resources/**", "vendor/**", "build/**"]
+    paths: ["**", "!**/*.md", "!mobile/ios/**", "resources/**", "vendor/**", "build/**"]
   push:
     branches: [main, "ci/**"]
-    paths: ["**", "!**/*.md", "resources/**", "vendor/**", "build/**"]
+    paths: ["**", "!**/*.md", "!mobile/ios/**", "resources/**", "vendor/**", "build/**"]
   workflow_dispatch:
 
 permissions:
