@@ -8,6 +8,10 @@ public protocol NoticeCenter: AnyObject {
     /// Takes down the notices `ids` that are up.
     func withdraw(_ ids: [String])
 
+    /// Waits until every post and withdrawal made so far has reached the system: a background run awaits it before it
+    /// ends, as the system may suspend the process once it has.
+    func delivered() async
+
     /// Whether the user has answered the question about notifying: ``NoticePermission/undecided`` until then.
     func permission() async -> NoticePermission
 

@@ -3,7 +3,7 @@ import NgtermPlatform
 /// A ``NoticeCenter`` that keeps what is up in memory, and every post and withdrawal in order, for the tests.
 @MainActor
 internal final class RecordingNotices: NoticeCenter {
-    /// What was done, in order: a post as `+id`, a withdrawal as `-id`.
+    /// What was done, in order: a post as `+id`, a withdrawal as `-id`, a wait for them to reach the system as `=`.
     internal private(set) var log: [String] = []
     /// The notices up, by id.
     internal private(set) var posted: [String: Notice] = [:]
@@ -27,6 +27,10 @@ internal final class RecordingNotices: NoticeCenter {
             log.append("-" + id)
             posted[id] = nil
         }
+    }
+
+    internal func delivered() {
+        log.append("=")
     }
 
     internal func permission() -> NoticePermission {

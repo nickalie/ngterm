@@ -73,6 +73,12 @@ public final class Alerts {
         center.post(Alert.status(about: subject, kind: kind, context: session.context, pane: nil).notice)
     }
 
+    /// Waits until every notice posted or taken down so far has reached the system (a background refresh's last step:
+    /// the system may suspend the process once its task ends).
+    public func delivered() async {
+        await center.delivered()
+    }
+
     /// What the user did with a notice: a tap opens its target; an ask's action answers the ask through the core, and
     /// an ask no longer open (answered or taken back meanwhile) has its notice taken down, which nothing else would.
     public func respond(to response: NoticeResponse) {
