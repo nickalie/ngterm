@@ -11,10 +11,12 @@
 //!   `❯`, a long label wrapped onto indented rows) and, as the screen's last line, `Esc to cancel · Tab to amend`. A
 //!   digit picks an option.
 //! - **Claude's `AskUserQuestion` picker**: a full-width rule over the tab row (`☐ Color`, or `←  ☐ Style  ☐ Languages
-//!   ✔ Submit  →`), the question, its numbered options (each with its description on the rows under it; a
-//!   multi-select one boxed `[ ]` or `[✔]`), `Type something.`, a rule, `Chat about this` and the footer
-//!   `Enter to select · …`. Its review tab asks `Ready to submit your answers?` over `1. Submit answers` and
-//!   `2. Cancel`.
+//!   ✔ Submit  →`), the question (one that wraps drawn as a quote by 2.1.318, each row opening with `│`), its
+//!   numbered options (each with its description on the rows under it; a multi-select one boxed `[ ]` or `[✔]`),
+//!   `Type something.`, a rule, `Chat about this` and the footer `Enter to select · …`. A picker taller than the
+//!   screen (long descriptions on a phone's grid) shows its bottom only: its frame, tab row and some or all of the
+//!   question scrolled off the top, which leaves no rule over its options ([`Picker::cut`]). Its review tab asks
+//!   `Ready to submit your answers?` over `1. Submit answers` and `2. Cancel`.
 //! - **Codex's composer**: a row opening with `›` under a blank row, the rows its text wraps onto (indented, or blank
 //!   for an empty line of a pasted text), then a blank row over the footer; read from the footer up, so a blank line
 //!   or a `1. …` line in the text is still the composer's. Working while a line above it says `esc to interrupt`
@@ -194,10 +196,12 @@ pub(crate) struct PickerOption {
 /// Claude's `AskUserQuestion` picker on screen, at one question's tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Picker {
-    /// The question's rows joined.
+    /// The question's rows joined, a quote's bars left out.
     pub(crate) question: String,
     /// Its options as numbered, `Type something.` included, `Chat about this` not.
     pub(crate) options: Vec<PickerOption>,
+    /// The picker is taller than the screen: its top scrolled off, and `question` is what is left of it.
+    pub(crate) cut: bool,
 }
 
 impl Picker {
@@ -505,11 +509,44 @@ fn tab_row(line: &str) -> bool {
     ["←", "☐", "☒", "✔"].iter().any(|start| trimmed.starts_with(start))
 }
 
-/// The row of the picker's frame under `row`: the full-width rule right above its tab row.
+/// The tab row of the picker's frame over `row`: under the full-width rule, or at the screen's top (a picker a row
+/// taller than the screen left its rule above it).
 fn picker_top(rows: &Rows, row: usize) -> Option<usize> {
     let tabs = (0..row).rev().find(|index| tab_row(rows.get(*index)))?;
-    rows.rule(tabs.checked_sub(1)?).then_some(tabs)
+    (tabs == 0 || rows.rule(tabs - 1)).then_some(tabs)
 }
+
+/// The question over the picker's options (which start at row `start`), its rows joined, and whether the picker's top
+/// scrolled off the screen. Under the tab row the question is whole. A picker taller than the screen leaves no tab row
+/// and no rule over its options: the rows over them are what is left of the question (none, maybe). A question that
+/// wraps is drawn as a quote (Claude Code 2.1.318), each of its rows opening with `│`: the bars are left out.
+fn picker_question(rows: &Rows, start: usize) -> Option<(String, bool)> {
+    let (from, cut) = match picker_top(rows, start) {
+        Some(tabs) => (tabs + 1, false),
+        None if !(0..start).any(|index| rows.rule(index) || tab_row(rows.get(index))) => (0, true),
+        None => return None,
+    };
+    let lines: Vec<&str> = (from..start)
+        .map(|index| rows.get(index).trim())
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() && !cut {
+        return None;
+    }
+    let quoted = !lines.is_empty() && lines.iter().all(|line| line.starts_with(QUOTE_BAR));
+    let lines: Vec<&str> = if quoted {
+        lines
+            .iter()
+            .map(|line| line[QUOTE_BAR.len_utf8()..].trim_start())
+            .collect()
+    } else {
+        lines
+    };
+    Some((lines.join(" "), cut))
+}
+
+/// The bar each row of a quoted question opens with.
+const QUOTE_BAR: char = '│';
 
 /// Whether only blank rows, or at most `wrapped` rows of a footer wrapped onto them, follow `row`.
 fn ends_after(rows: &Rows, row: usize, wrapped: usize) -> bool {
@@ -532,14 +569,7 @@ fn claude_picker(rows: &Rows) -> Option<Picker> {
     let end = rule.checked_sub(1)?;
     let start = options_start(rows, end, CLAUDE_CURSOR)?;
     let blocks = options(rows, start, end + 1, CLAUDE_CURSOR)?;
-    let tabs = picker_top(rows, start)?;
-    let question: Vec<&str> = (tabs + 1..start)
-        .map(|index| rows.get(index).trim())
-        .filter(|line| !line.is_empty())
-        .collect();
-    if question.is_empty() {
-        return None;
-    }
+    let (question, cut) = picker_question(rows, start)?;
     let options = blocks
         .into_iter()
         .map(|block| {
@@ -555,10 +585,7 @@ fn claude_picker(rows: &Rows) -> Option<Picker> {
             }
         })
         .collect();
-    Some(Picker {
-        question: question.join(" "),
-        options,
-    })
+    Some(Picker { question, options, cut })
 }
 
 /// A multi-select option's box and the text after it: `[ ] Spanish` is unticked.

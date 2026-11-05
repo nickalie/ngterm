@@ -47,8 +47,9 @@
 //!   [`AgentInputOutcome::NotOnScreen`]: a label alone (Claude's `Yes`) would answer any dialog. The card stays up:
 //!   the origin's `approval_done`, or its next prompt, ends it. Two calls a dialog shows alike (the same command, two
 //!   edits of one file) can't be told apart on screen.
-//! - **Question**: per question, its tab confirmed by its text and options; a digit picks a single-select option (the
-//!   picker moves on), digits toggle a multi-select question's boxes to the answer and Tab moves on; free text goes
+//! - **Question**: per question, its tab confirmed by its text and options (a picker taller than the screen by what
+//!   is left of its text, and only while no other question of the call lists the same options); a digit picks a
+//!   single-select option (the picker moves on), digits toggle a multi-select question's boxes to the answer and Tab moves on; free text goes
 //!   through `Type something.` (its digit, then a paste, then Enter or Tab: the row must hold the text, after the
 //!   placeholder or in its place, or a paste's stand-in); the review tab's `1. Submit answers` takes Enter. A
 //!   `Type something.` row that holds text before the answer starts is someone's draft: nothing is sent.
@@ -59,7 +60,7 @@ use ngterm_core::ghostty_config::binds::{Mods, PhysicalKey};
 use ngterm_term::{ClipboardLocation, KeyInput, Paste, PasteSource};
 
 use super::matchers::{Agent, OptionKey, Picker, Screen, fits, squeeze};
-use super::{ChatApproval, ChatQuestionItem};
+use super::{ChatApproval, ChatQuestionItem, ChatQuestionOption};
 use crate::api::PaneInputError;
 
 /// Why an action was refused: the text is empty.
@@ -412,7 +413,9 @@ impl Plan {
                     return self.unmet();
                 };
                 let other = answers[asked.index].other.as_deref().map(str::trim);
-                if !shows(picker, &items[asked.index], asked.asking, other) {
+                if !shows(picker, &items[asked.index], asked.asking, other)
+                    || (picker.cut && !told_apart(items, asked.index))
+                {
                     return self.unmet();
                 }
                 self.ask(items, answers, picker, asked)
@@ -546,13 +549,19 @@ const TYPING: &str = "Typesomething";
 /// alone while the answer is picked (any more is a draft typed at the terminal) and once focused, and the text
 /// `other` once typed: after the placeholder or in its place, or as a paste's stand-in.
 fn shows(picker: &Picker, item: &ChatQuestionItem, asking: Asking, other: Option<&str>) -> bool {
-    if !fits(&picker.question, &item.question) || picker.multi() != item.multi_select {
+    let asked = if picker.cut {
+        squeeze(&item.question).ends_with(&squeeze(&picker.question))
+    } else {
+        fits(&picker.question, &item.question)
+    };
+    if !asked || picker.multi() != item.multi_select {
         return false;
     }
-    let listed = item.options.iter().zip(&picker.options).all(|(option, shown)| {
-        let expected = format!("{} {}", option.label, option.description.as_deref().unwrap_or_default());
-        fits(&shown.text, &expected)
-    });
+    let listed = item
+        .options
+        .iter()
+        .zip(&picker.options)
+        .all(|(option, shown)| fits(&shown.text, &listing(option)));
     let typing = picker.options.get(item.options.len()).is_some_and(|shown| {
         let row = squeeze(&shown.text);
         match (asking, other) {
@@ -563,6 +572,27 @@ fn shows(picker: &Picker, item: &ChatQuestionItem, asking: Asking, other: Option
         }
     });
     listed && picker.options.len() > item.options.len() && typing
+}
+
+/// An option as the picker lists it: its label, then its description.
+fn listing(option: &ChatQuestionOption) -> String {
+    format!("{} {}", option.label, option.description.as_deref().unwrap_or_default())
+}
+
+/// Whether question `index`'s options, as the picker lists them, are no other question's of the call: with the tab
+/// row and the question's start scrolled off ([`Picker::cut`]), only they tell which question the picker is at.
+fn told_apart(items: &[ChatQuestionItem], index: usize) -> bool {
+    let listed = |item: &ChatQuestionItem| {
+        item.options
+            .iter()
+            .map(|option| squeeze(&listing(option)))
+            .collect::<Vec<_>>()
+    };
+    let own = listed(&items[index]);
+    items
+        .iter()
+        .enumerate()
+        .all(|(at, item)| at == index || listed(item) != own)
 }
 
 /// Whether the free-text row (squeezed) shows its placeholder and nothing typed: `Type something.`, and in a

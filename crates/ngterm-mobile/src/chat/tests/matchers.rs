@@ -309,6 +309,123 @@ fn a_multi_select_question_shows_its_boxes_and_the_review_its_submit() {
     );
 }
 
+/// The question of [`LIMIT_PICKER`].
+pub(crate) const LIMIT_QUESTION: &str = "Claude Code's weekly limit isn't stored on disk on the machine the agent runs \
+                                          on (Codex's is, in its rollout). Where should the chat get Claude's weekly \
+                                          limit?";
+
+/// The options of [`LIMIT_PICKER`]: label and description.
+pub(crate) const LIMIT_OPTIONS: [(&str, &str); 3] = [
+    (
+        "Usage API (Recommended)",
+        "The origin calls the same usage endpoint Claude Code's /usage uses (api.anthropic.com/api/oauth/usage), \
+         with Claude Code's own sign-in token read from its credentials (file on Linux/Windows, Keychain on macOS). \
+         Read-only, cached a minute or so; on an expired token or any failure the limit just isn't shown. \
+         Undocumented endpoint: it can change.",
+    ),
+    (
+        "Statusline bridge",
+        "ngterm installs a Claude Code statusLine command that records the rate_limits Claude Code passes it, \
+         chaining to the user's own statusline if one is set. No token use, but it touches the agent's config, and \
+         the limits only update while Claude Code is drawing its status line.",
+    ),
+    (
+        "Email only for Claude",
+        "Claude Code shows the account email and no limit; Codex shows email and weekly limit. Nothing beyond what's \
+         on disk.",
+    ),
+];
+
+/// A real `AskUserQuestion` picker as Claude Code 2.1.318 drew it at 52 columns: a question that wraps is a quote,
+/// each of its rows opening with `│`, and three options whose descriptions take four to nine rows each. 35 rows tall,
+/// so a shorter screen holds only its bottom: the rest scrolled off the top, as it did on a 28-row grid.
+pub(crate) const LIMIT_PICKER: [&str; 35] = [
+    "────────────────────────────────────────────────────",
+    " ☐ Claude limit",
+    "",
+    "│ Claude Code's weekly limit isn't stored on disk on",
+    "│ the machine the agent runs on (Codex's is, in its",
+    "│ rollout). Where should the chat get Claude's",
+    "│ weekly limit?",
+    "",
+    "❯ 1. Usage API (Recommended)",
+    "     The origin calls the same usage endpoint Claude",
+    "     Code's /usage uses",
+    "     (api.anthropic.com/api/oauth/usage), with",
+    "     Claude Code's own sign-in token read from its",
+    "     credentials (file on Linux/Windows, Keychain on",
+    "     macOS). Read-only, cached a minute or so; on",
+    "     an expired token or any failure the limit just",
+    "     isn't shown. Undocumented endpoint: it can",
+    "     change.",
+    "  2. Statusline bridge",
+    "     ngterm installs a Claude Code statusLine",
+    "     command that records the rate_limits Claude",
+    "     Code passes it, chaining to the user's own",
+    "     statusline if one is set. No token use, but it",
+    "     touches the agent's config, and the limits only",
+    "     update while Claude Code is drawing its status",
+    "     line.",
+    "  3. Email only for Claude",
+    "     Claude Code shows the account email and no",
+    "     limit; Codex shows email and weekly limit.",
+    "     Nothing beyond what's on disk.",
+    "  4. Type something.",
+    "────────────────────────────────────────────────────",
+    "  5. Chat about this",
+    "",
+    "Enter to select · ↑/↓ to navigate · Esc to cancel",
+];
+
+/// [`LIMIT_PICKER`] under a few rows of the conversation, on a 52-column screen `rows` tall: the rows past its top
+/// scroll away.
+pub(crate) fn limit_picker(rows: u16) -> Term {
+    let term = Term::new(52, rows);
+    let screen = format!(
+        "\x1b[2J\x1b[H● I'll ask which source to use.\r\n\r\n{}",
+        LIMIT_PICKER.join("\r\n")
+    );
+    term.feed(screen.as_bytes());
+    term
+}
+
+#[test]
+fn a_wrapped_question_drawn_as_a_quote_is_read_without_its_bars() {
+    let screen = Agent::Claude.read(&limit_picker(40).frame());
+    let picker = picker(&screen);
+    assert_eq!(picker.question, LIMIT_QUESTION);
+    assert!(!picker.cut);
+    let options: Vec<String> = picker.options.iter().map(|option| squeeze(&option.text)).collect();
+    let expected: Vec<String> = LIMIT_OPTIONS
+        .iter()
+        .map(|(label, description)| squeeze(&format!("{label} {description}")))
+        .chain(["Typesomething.".to_owned()])
+        .collect();
+    assert_eq!(options, expected);
+}
+
+#[test]
+fn a_picker_taller_than_the_screen_is_read_from_what_is_left_of_its_question() {
+    // 27 and 28 rows: its frame, tabs and question scrolled off, its options whole; then each height up to the one
+    // that shows it all, through the question's rows, its tab row with no rule above it, and the rule
+    for rows in 27..=36 {
+        let screen = Agent::Claude.read(&limit_picker(rows).frame());
+        let picker = picker(&screen);
+        let options: Vec<u8> = picker.options.iter().map(|option| option.number).collect();
+        assert_eq!(options, [1, 2, 3, 4], "{rows} rows");
+        let whole = rows >= 34;
+        assert_eq!(picker.cut, !whole, "{rows} rows");
+        assert!(
+            squeeze(LIMIT_QUESTION).ends_with(&squeeze(&picker.question)),
+            "{rows} rows: {}",
+            picker.question
+        );
+        assert_eq!(picker.question == LIMIT_QUESTION, rows >= 32, "{rows} rows");
+    }
+    // the first option's own row scrolled off too: no picker
+    assert_eq!(Agent::Claude.read(&limit_picker(26).frame()), Screen::Unknown);
+}
+
 fn picker_checked(screen: &Screen) -> Vec<Option<bool>> {
     picker(screen).options[..3]
         .iter()

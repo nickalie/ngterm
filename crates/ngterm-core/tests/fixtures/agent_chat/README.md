@@ -147,7 +147,9 @@ Where these differ from the plan, the plan was updated.
 - `AskUserQuestion` picker: digits pick an option of a single-select question (which moves to the next question,
   or submits when it is the only one); in a multi-select question digits toggle `[ ]`/`[✔]`; Tab or → moves to the
   next tab; the last tab, "Submit", reviews the answers with `1. Submit answers` (Enter). The option after the
-  listed ones is "Type something." (free text), then "Chat about this". Esc cancels.
+  listed ones is "Type something." (free text), then "Chat about this". Esc cancels. Claude Code 2.1.318 draws a
+  question that wraps as a quote, each of its rows opening with `│`; a picker taller than the screen (long
+  descriptions at 52x28) leaves its frame, tab row and question above the screen's top.
 - Claude's permission dialog: `1. Yes`, `2. Yes, and always allow access to <dir> from this project` (or `Yes, and
   don't ask again for: <prefix> *`), `3. Yes, and switch to auto mode`, `4. No`; digits pick, footer
   `Esc to cancel · Tab to amend`. Codex's: `1. Yes, proceed (y)`, `2. Yes, and don't ask again for commands that

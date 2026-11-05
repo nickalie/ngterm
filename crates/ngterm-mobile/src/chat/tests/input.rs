@@ -3,8 +3,8 @@
 //! digits, Tab and Enter.
 
 use super::matchers::{
-    Capture, PROJECT_DIR, Term, approval_of, asked, claude_file_dialog, file_approval, marked_drafts, tricky_drafts,
-    with_draft,
+    Capture, LIMIT_OPTIONS, LIMIT_QUESTION, PROJECT_DIR, Term, approval_of, asked, claude_file_dialog, file_approval,
+    limit_picker, marked_drafts, tricky_drafts, with_draft,
 };
 use crate::api::PaneInputError;
 use crate::chat::input::{Action, AgentInputOutcome, Key, Next, Plan, QuestionAnswer, UNSAFE_PASTE, shown_subjects};
@@ -548,6 +548,49 @@ fn typed_text_may_follow_the_placeholder_or_take_its_place_and_a_draft_there_get
             );
         }
     }
+}
+
+fn limit() -> ChatQuestionItem {
+    item(LIMIT_QUESTION, false, &LIMIT_OPTIONS)
+}
+
+#[test]
+fn a_wrapped_question_with_long_options_is_answered_at_any_height_that_shows_its_options() {
+    // the question Claude Code 2.1.318 asked, its rows quoted with `│`; on a short screen its top scrolled off
+    for rows in [40, 34, 30, 28] {
+        let screen = Agent::Claude.read(&limit_picker(rows).frame());
+        let mut plan = Plan::new(Action::Question(
+            vec![limit()],
+            vec![answer(&["Statusline bridge"], None)],
+        ));
+        assert_eq!(step(&mut plan, &screen), send(Key::Digit(2), true), "{rows} rows");
+        assert_eq!(
+            step(&mut plan, &IDLE),
+            Next::Done(AgentInputOutcome::Sent),
+            "{rows} rows"
+        );
+    }
+}
+
+#[test]
+fn a_picker_whose_question_scrolled_off_is_answered_only_when_its_options_tell_it_apart() {
+    let short = Agent::Claude.read(&limit_picker(28).frame());
+    let usage = || answer(&["Usage API (Recommended)"], None);
+    // another question of the call offers the same options: which one is on screen can't be told
+    let twin = item("Where should Codex's limit come from?", false, &LIMIT_OPTIONS);
+    let mut plan = Plan::new(Action::Question(vec![limit(), twin], vec![usage(), usage()]));
+    assert_eq!(step(&mut plan, &short), Next::Done(AgentInputOutcome::NotOnScreen));
+    // what is left of the question on screen must be its end
+    let Screen::Question(mut picker) = Agent::Claude.read(&limit_picker(30).frame()) else {
+        panic!("not the picker")
+    };
+    assert!(picker.cut);
+    picker.question = "Where should the chat get Codex's weekly limit?".to_owned();
+    let mut plan = Plan::new(Action::Question(vec![limit()], vec![usage()]));
+    assert_eq!(
+        step(&mut plan, &Screen::Question(picker)),
+        Next::Done(AgentInputOutcome::NotOnScreen)
+    );
 }
 
 #[test]
