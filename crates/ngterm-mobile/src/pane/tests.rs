@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use ngterm_core::remote::ssh::SESSION_GONE;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ngterm_term::{GridSize, Outgoing};
 
@@ -112,7 +112,19 @@ fn the_views_theme_reaches_the_terminal_in_place_and_every_later_one() {
     pane.set_colors(colors.clone()).unwrap();
     let (first, _feed, _out) = ngterm_term::Pane::stream(&config(grid, Arc::new(|| {}))).unwrap();
     slot.install(Arc::new(first), grid);
-    let theme = |slot: &PaneSlot| slot.terminal().unwrap().frame().frame.colors.clone();
+    // a frame taken while the terminal's IO thread holds its lock is the previous one, marked stale: wait for a
+    // fresh one
+    let theme = |slot: &PaneSlot| {
+        let terminal = slot.terminal().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = terminal.frame();
+            if !snapshot.stale || Instant::now() > deadline {
+                return snapshot.frame.colors.clone();
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
     let drawn = theme(&slot);
     assert_eq!(drawn.foreground, ngterm_term::Rgb::new(0xe3, 0xe8, 0xea));
     assert_eq!(drawn.background, ngterm_term::Rgb::new(0x1b, 0x22, 0x26));
