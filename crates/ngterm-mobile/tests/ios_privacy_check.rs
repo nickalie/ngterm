@@ -196,6 +196,23 @@ fn a_reason_of_another_category_fails() {
 }
 
 #[test]
+fn a_reason_holding_several_codes_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = Manifest {
+        tracking: false,
+        types: &[("FileTimestamp", &["C617.1 3B52.1"]), ("SystemBootTime", &["35F9.1"])],
+    };
+    let output = check(dir.path(), &APP_USES, Some(&manifest));
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output)
+            .contains("NSPrivacyAccessedAPICategoryFileTimestamp: 'C617.1 3B52.1' is not a reason an app may"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn tracking_fails() {
     let dir = tempfile::tempdir().unwrap();
     let manifest = Manifest {
