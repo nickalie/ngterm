@@ -141,7 +141,10 @@ data class ChatUiState(
     /** Whether a turn runs that Stop can end: the origin says the agent works, and the turn was not interrupted. */
     val running: Boolean get() = working && !interrupted
 
-    /** Whether a card waits on an answer, so a prompt or Stop would land in its dialog: the composer holds them. */
+    /**
+     * Whether a card waits on an answer, so a prompt or Stop would land in its dialog: the composer holds Send, and the
+     * foot leaves out the activity line with its Stop.
+     */
     val awaitsCard: Boolean get() = approval != null || question != null
 }
 

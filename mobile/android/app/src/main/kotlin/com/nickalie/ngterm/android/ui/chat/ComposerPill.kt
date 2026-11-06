@@ -1,12 +1,11 @@
 package com.nickalie.ngterm.android.ui.chat
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
@@ -50,11 +49,12 @@ import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
- * The composer's rounded field and the buttons inside it, as a messenger's input bar holds its own: Commands (a `/`
- * that starts one in an empty field, or closes the menu while it is open), the prompt, Attach (the paperclip,
- * [AttachButton]), Stop while the agent works on a turn ([ChatUiState.running]) and no card waits, and Send at its end
- * once there is something to send ([sendShown]). Every button in it is a 48dp target, and they stay on the prompt's
- * last line as it grows.
+ * The composer's rounded field and the buttons inside it, as a messenger's input bar holds its own: Attach (the
+ * paperclip, [AttachButton]) at its start, the prompt, and one slot at its end that Commands and Send share, as
+ * Telegram's bot chats share theirs (Stop is the activity strip's, [ActivityStrip]): Commands
+ * (a `/` that starts one) while there is nothing to send, Send once there is ([sendShown]), the one turning into the
+ * other in place, so the prompt keeps its width as it is typed. Every button in it is a 48dp target, and they stay on
+ * the prompt's last line as it grows.
  */
 @Composable
 internal fun PromptPill(
@@ -73,45 +73,48 @@ internal fun PromptPill(
         shape = RoundedCornerShape(PillHeight / 2),
     ) {
         Row(verticalAlignment = Alignment.Bottom) {
-            CommandsButton(
-                enabled = !state.busy && (composer.menu != null || composer.draft.text.isEmpty()),
-                onClick = {
-                    if (!composer.dismissMenu()) composer.edit(TextFieldValue("/", TextRange(1)))
-                    focusRequester.requestFocus()
-                },
-            )
-            PromptField(composer, state.busy, focusRequester, canSend, actions.onSend, Modifier.weight(1f))
             AttachButton(enabled = state.upload !is ChatUpload.Sending, onPick = actions.onPick)
-            if (state.running && !state.awaitsCard) {
-                StopButton(enabled = !state.busy, onClick = actions.onStop)
-            }
-            SendSlot(visible = sendShown) {
-                SendButton(enabled = canSend, sending = sending, onClick = actions.onSend)
+            PromptField(composer, state.busy, focusRequester, canSend, actions.onSend, Modifier.weight(1f))
+            EndSlot(send = sendShown) { send ->
+                if (send) {
+                    SendButton(enabled = canSend, sending = sending, onClick = actions.onSend)
+                } else {
+                    CommandsButton(
+                        enabled = !state.busy,
+                        onClick = {
+                            composer.edit(TextFieldValue("/", TextRange(1)))
+                            focusRequester.requestFocus()
+                        },
+                    )
+                }
             }
         }
     }
 }
 
-// Send's place at the pill's end: it opens and grows in from its middle once there is something to send, and out when
-// sent, the prompt giving it the room
+// the pill's last place, Commands' or Send's: the one leaving shrinks and fades as the other grows in from its middle,
+// both 48dp, so nothing beside it moves
 @Composable
-private fun SendSlot(
-    visible: Boolean,
-    content: @Composable () -> Unit,
+private fun EndSlot(
+    send: Boolean,
+    content: @Composable (send: Boolean) -> Unit,
 ) {
     val motion = NgtermTheme.motion
-    AnimatedVisibility(
-        visible = visible,
-        enter =
-            expandHorizontally(motion.quick(), expandFrom = Alignment.Start) + scaleIn(motion.quick()) +
-                fadeIn(motion.quick()),
-        exit =
-            shrinkHorizontally(motion.quick(), shrinkTowards = Alignment.Start) + scaleOut(motion.quick()) +
-                fadeOut(motion.quick()),
-    ) { content() }
+    AnimatedContent(
+        targetState = send,
+        transitionSpec = {
+            (scaleIn(motion.quick(), initialScale = SWAP_SCALE) + fadeIn(motion.quick()))
+                .togetherWith(scaleOut(motion.quick(), targetScale = SWAP_SCALE) + fadeOut(motion.quick()))
+        },
+        contentAlignment = Alignment.Center,
+        label = "send or commands",
+    ) { content(it) }
 }
 
-// Send, inside the pill at its end: the return key's arrow in copper, no plate of its own (the pill is its ground);
+// how small the leaving button shrinks to, and the arriving one starts from
+private const val SWAP_SCALE = 0.6f
+
+// Send, in the pill's last place: the return key's arrow in copper, no plate of its own (the pill is its ground);
 // a spinner ("Sending") on its way
 @Composable
 private fun SendButton(
@@ -183,7 +186,8 @@ private val FieldLineSp = 24.sp
 // the most lines the field grows to before it scrolls inside: a long prompt leaves the conversation in sight
 private const val MAX_LINES = 6
 
-// the `/` the agent's commands start with, in the terminal's face, as the button that starts one
+// the `/` the agent's commands start with, in the terminal's face, as the button that puts one into the empty field,
+// takes the focus and so opens the menu
 @Composable
 private fun CommandsButton(
     enabled: Boolean,
@@ -193,19 +197,6 @@ private fun CommandsButton(
     val label = stringResource(R.string.chat_commands)
     IconButton(onClick = onClick, enabled = enabled, modifier = modifier.semantics { contentDescription = label }) {
         Text("/", style = ChatType.code.copy(fontSize = 18.sp), color = LocalContentColor.current)
-    }
-}
-
-// inside the pill after Attach, while the agent works: the interrupt's square
-@Composable
-private fun StopButton(
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val label = stringResource(R.string.chat_stop)
-    IconButton(onClick = onClick, enabled = enabled, modifier = modifier.semantics { contentDescription = label }) {
-        Icon(painterResource(R.drawable.ic_tool_stop), contentDescription = null)
     }
 }
 

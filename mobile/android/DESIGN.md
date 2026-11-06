@@ -650,12 +650,12 @@ The plan, reviewed against the brief:
 | Code in a syntax-highlighting theme | a second palette fighting the app's, and color carrying meaning | the terminal's face in one color on a `surfaceContainerLow` plate; a diff is the only colored text: verdigris added, oxide removed, each line keeping its `+` or `-` |
 | A spinner on every running tool | motion nobody asked for, scattered down the list | the Connecting ring and "Running"; nothing in the list moves on its own |
 | The permission prompt as a dialog over the chat | hides the conversation the question is about | a Needs-you card pinned at the chat's foot, in the ask sheet's shape and order (`ui/asks/`) |
-| A paper-plane Send beside an attach clip and an emoji face | the messenger kit's glyphs, for things the agent's prompt doesn't take | the messenger's layout, which the user asked for, with the app's own glyphs: one pill holding Commands (a `/`), Attach, Stop and, once there is text, Send at its very end, as Telegram's input bar holds its send; Send is the return key's arrow (`ic_send`) in copper on the pill, as a prompt goes in with Enter in the terminal; no emoji face |
-| The account as a header card: an avatar, the email, a big percentage on a ring gauge | the dashboard's KPI tile, shouting over the conversation it sits on, for a number that changes once a turn | one quiet line over the rows: the email at the start in `onSurfaceVariant`, at the end "Weekly limit 72%" over a 56×4dp meter that stands still, when it resets under them; a hairline under the line |
-| Email, limit and reset joined in one meta string with middle dots | template chrome, and three facts read as one | two ends of the line: who is signed in, and how much room is left; the meter turns the attention copper from 80% and oxide when spent, the words with it |
-| A "Claude is typing" bubble with three bouncing dots at the end of the list | the messenger kit, and motion that loops while nobody asked for it | the activity strip pinned at the chat's foot, standing still: the Running ring and what the agent is doing |
-| A count badge ("3") on Stop for what runs in the background | a number alone says neither what runs nor that the reply above isn't the end | words: "Still running in the background" over "2 subagents, 1 command"; a tap lists each as its tool line |
-| The `/` menu as a popup with an icon per command and the matched letters in bold | a second set of glyphs for a list read by name, and a highlight that fights the terminal's face | a plate (`surfaceContainerHigh`, 12dp corners) rising from the composer over the foot of the rows; each row the command as it will go in, in the terminal's face, a line of what it does, and where it comes from as a word |
+| A paper-plane Send beside an attach clip and an emoji face | the messenger kit's glyphs, for things the agent's prompt doesn't take | the messenger's layout, which the user asked for, with the app's own glyphs: one pill holding Attach at its start and at its end one place that Commands (a `/`) gives up to Send once there is text, as Telegram's bot chats share theirs, so the prompt keeps the width; Send is the return key's arrow (`ic_send`) in copper on the pill, as a prompt goes in with Enter in the terminal; no emoji face |
+| The account as a header card: an avatar, the email, a big percentage on a ring gauge | the dashboard's KPI tile, shouting over the conversation it sits on, for a number that changes once a turn | one quiet line over the rows: the email at the start in `onSurfaceVariant`, at the end "Weekly limit 72%, resets Mon 14:00"; no meter and no hairline |
+| Email, limit and reset joined in one meta string with middle dots | template chrome, and three facts read as one | two ends of the line: who is signed in, and how much room is left; the words turn the attention copper from 80% and oxide when spent |
+| A "Claude is typing" bubble with three bouncing dots at the end of the list | the messenger kit, and motion that loops while nobody asked for it | the activity line pinned at the chat's foot, standing still and with no plate: the Running ring and what the agent is doing, Stop at its end |
+| A count badge ("3") on Stop for what runs in the background | a number alone says neither what runs nor that the reply above isn't the end | words: "Still running in the background" and "2 subagents, 1 command" on one line; a tap lists each as its tool line |
+| The `/` menu as a popup with an icon per command and the matched letters in bold | a second set of glyphs for a list read by name, and a highlight that fights the terminal's face | a plate (`surfaceContainerHigh`, 12dp corners) rising from the composer over the foot of the rows, the activity line's Stop left in reach; each row the command as it will go in, in the terminal's face, a line of what it does, and where it comes from as a word |
 
 ```
 +--------------------------------------+
@@ -725,12 +725,14 @@ The plan, reviewed against the brief:
   before is gone.
 - **The account** (`AccountLine`), over the rows in the reading width, while the origin read it (Claude Code's
   email from its global config and its weekly limit from its usage endpoint; Codex's from its `auth.json` and its
-  rollout's rate limits): the email (bodySmall, `onSurfaceVariant`, one line) at the start; at the end "Weekly limit
-  72%" (labelMedium) beside a 56×4dp meter on an `outlineVariant` track, filled verdigris, the attention copper from
-  80% and oxide at 100% (the words take the tone from 80%), and "Resets Mon 14:00" (labelSmall) under them: the
-  weekday and the locale's short time within six days, else the date. Either end shows alone when only it was read;
-  an `outlineVariant` hairline under the line. Nothing on it moves. TalkBack reads it as one sentence: "Signed in as
-  dev@example.com. 72% of the weekly limit used, resets Mon 14:00."
+  rollout's rate limits), as one quiet line with no rule and no meter (the user asked for it as minimal as the
+  activity line): the email (bodySmall, `onSurfaceVariant`, one line, cut with an ellipsis) at the start; at the end
+  "Weekly limit 72%" (bodySmall, `onSurfaceVariant`), with ", resets Mon 14:00" after it when the origin read when (the
+  weekday and the locale's short time within six days, else the date); the words take the attention copper from 80%
+  and oxide at 100%, the only color on the line. When the two ends don't fit on one line (a long email, a large font)
+  the limit goes under the email, so neither cuts the other short. Either end shows alone when only it was read.
+  Nothing on it moves.
+  TalkBack reads it as one sentence: "Signed in as dev@example.com. 72% of the weekly limit used, resets Mon 14:00."
 - **Earlier messages:** the list's first row asks for the page before as soon as it is on screen, however it got
   there (a jump or a finger), and a new conversation's once its first row is in: "Loading earlier messages" with a
   16dp spinner, then the page goes in above and the row that was on top stays where it was. At the start it says
@@ -750,14 +752,28 @@ The plan, reviewed against the brief:
     its description), and the "Type an answer" row (its marker, then the field; typing picks it, and in a radio list
     takes the pick over). **Send answers** (filled) once every question has an answer.
   - While an answer is on its way the buttons hold still and "Sending" with a 16dp spinner shows under them.
-- **The activity strip** (`ActivityStrip`), pinned at the chat's foot over the problem banner and the composer, in the
-  reading width (`surfaceContainerHigh`, 6dp corners): so a finished reply isn't read as the work being done. It shows
-  the Connecting ring (still, as on a Running line) and "Claude Code is working" while the agent's status says it works
-  on a turn, else "Still running in the background" while calls of the conversation have no result yet (a subagent or a
-  command the turn left going, until its notification or a stop); under it how many ("2 subagents, 1 command", a
-  subagent's own steps counted as its task). With anything running it is a 48dp toggle (Show what's running) that
-  lists each as its tool line: the kind's glyph and the title in the terminal's face. Nothing to say shows nothing, and
-  a card waiting on the user takes the foot alone.
+- **The activity line** (`ActivityStrip`), pinned at the chat's foot just over the problem banner and the composer,
+  in the reading width, on the ground with no plate and on one line (the user found the plated, two-line strip too
+  big: the composer is what the foot is for): so a finished reply isn't read as the work being done. The Connecting
+  ring at 12dp (still, as on a Running line), its middle over the composer's paperclip, then "Claude Code is working"
+  (labelLarge, `onSurfaceVariant`) while the agent's status says it works on a turn, else "Still running in the
+  background" while calls of the conversation have no result yet (a subagent or a command the turn left going, until
+  its notification or a stop), then how many (bodySmall, "2 subagents, 1 command", a subagent's own steps counted as
+  its task), each cut with an ellipsis rather than wrapped, the counts first: the title is what tells the two states
+  apart. With anything running the line is a 48dp toggle (Show
+  what's running) that lists each under it as its tool line: the kind's glyph and the title in the terminal's face.
+  **Stop**, the word in copper (a text button, labelLarge), ends the line while the agent works on a turn and the turn
+  wasn't interrupted (no hook tells the origin of an interrupt, so its status stays working: Stop comes back once the
+  agent works again or a prompt is typed, not for a `/command` alone); it holds while an action is on its way. Nothing
+  to say shows nothing, and a card waiting on the user takes the foot alone.
+
+  ```
+  |   o Claude Code is working  1 subagent    Stop |
+  | .--------------------------------------------. |
+  | ( @  Prompt, or / for commands             / ) |
+  | '--------------------------------------------' |
+  ```
+
 - **Problems:** what the last action couldn't do, as a `Banner` over the card: in the Attention tone when the user can
   act on it (the pane doesn't show the prompt any more, a dialog is open, the keys went but the screen didn't confirm
   them), in the Error tone when it only reports (another device kept control, the program isn't reading, the pane is
@@ -770,22 +786,21 @@ The plan, reviewed against the brief:
 - **The composer** (`Composer`), under the cards on the bar's tone (`surfaceContainer`), in the reading width, in a
   messenger's shape (the user asked for the composer of a chat app, overriding the first pass's "no messenger kit" for
   this one part): one pill (`surfaceContainerHigh`, no outline, 24dp corners, so a one-line field is fully round, 48dp
-  tall) with its buttons inside it, each a 48dp target in `onSurfaceVariant`. At its start **Commands**, a `/` in the
-  terminal's face: in an empty field it puts the `/` in, takes the focus and opens the menu; with the menu open it
-  closes it; with a prompt written it holds. Then the prompt (bodyLarge on 24 sp lines, "Prompt, or / for commands",
-  the copper caret) that grows to six lines and then scrolls inside, so a long prompt leaves the conversation in sight;
-  the buttons stay on its last line. Near its end **Attach** (the paperclip, `ic_attach`; see Attaching a file below),
-  and after it **Stop** (the interrupt's square) while the agent's status says it works on a turn and the turn
-  wasn't interrupted (no hook tells the origin of an interrupt, so its status stays working: Stop comes back once the
-  agent works again or a prompt is typed, not for a `/command` alone). **Send** (`ic_send` in copper, `primary`, with
-  no plate of its own: the pill is its ground) takes the pill's very end only while there is something to send, as
-  Telegram's input bar has it: the prompt gives it its 48dp and it grows in from its middle, and out again (120ms,
-  width, scale and fade; a cut with animations off), so an empty composer is the pill alone.
+  tall) with its buttons inside it, each a 48dp target in `onSurfaceVariant`, and never more than two beside the prompt
+  while it is typed, so on a phone the prompt keeps most of the width. At its start **Attach** (the paperclip,
+  `ic_attach`; see Attaching a file below), there whatever the field holds, as a path goes in around the text. Then the
+  prompt (bodyLarge on 24 sp lines, "Prompt, or / for commands", the copper caret) that grows to six lines and then
+  scrolls inside, so a long prompt leaves the conversation in sight; the buttons stay on its last line. (Stop is the
+  activity line's, over the pill.) At its very end one place that two buttons share, as Telegram's bot
+  chats share theirs: **Commands**, a `/` in the terminal's face, while there is nothing to send (it puts the `/` in,
+  takes the focus and opens the menu), and **Send** (`ic_send` in copper, `primary`, with no plate of its own: the pill
+  is its ground) once there is, the `/` included. The one leaving shrinks and fades as the other grows in from its
+  middle (120ms; a cut with animations off), both 48dp, so the prompt never changes width as it is typed.
   The field takes line breaks as the clipboard
   brings them and refuses an edit that adds any other control character. Send takes the text with its ends trimmed;
   the field lets it go once the agent has it and keeps it when nothing was sent. While an action is on its way the
   field holds still and Send turns to a 16dp spinner ("Sending"), so a second tap sends nothing. While a card waits,
-  "Answer the card above first: a prompt now would go to its dialog." stands over the field, and Send and Stop hold;
+  "Answer the card above first: a prompt now would go to its dialog." stands over the field, and Send holds;
   the field still takes a draft. A draft survives the app being put away, and comes back only to its pane and
   conversation. The chat's input focus is the field's: the session view moving the focus to a chat pane while typing
   lands in it, and a touch in a field of the chat keeps the focus where it put it.
@@ -801,7 +816,7 @@ The plan, reviewed against the brief:
   | | 2 commands                       | |
   | +----------------------------------+ |
   | .----------------------------------. |
-  | ( /  /co                    @ [] <-) |
+  | ( @  /co                         <-) |
   | '----------------------------------' |
   +--------------------------------------+
   ```
@@ -823,12 +838,13 @@ The plan, reviewed against the brief:
   |  [@] Uploading shot.png         42%  X |
   |  =============------------------------ |
   | .------------------------------------. |
-  | ( /  Look at                     @ <-) |
+  | ( @  Look at                       <-) |
   | '------------------------------------' |
   ```
 
 - **The `/` menu** (`SlashCommandMenu`): a `/` at the start of the field, with no space or line break after it, opens
-  it over the foot of the rows and cards; what follows the `/` narrows it as it is typed (the IME's unfinished word
+  it over the foot of the rows, leaving the activity line and its Stop in reach under it (over the card while one
+  waits, as that leaves the line out); what follows the `/` narrows it as it is typed (the IME's unfinished word
   included), ranked by the core's `filter_commands`, the palettes' ranking. A space, a line break or deleting the `/`
   closes it, and so do Escape and Back until the text changes (Back only the selected pane's: a split's other pane
   keeps its menu open). Rows (56dp): the command as it goes in (`/compact`, a

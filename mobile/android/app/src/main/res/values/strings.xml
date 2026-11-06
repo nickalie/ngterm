@@ -377,7 +377,7 @@
   <string name="chat_reconnecting_title">Reconnecting to %1$s</string>
   <string name="chat_reconnecting_body">What\'s here stays; new messages follow once it\'s back.</string>
   <string name="chat_account_limit">Weekly limit %1$d%%</string>
-  <string name="chat_account_resets">Resets %1$s</string>
+  <string name="chat_account_limit_resets">Weekly limit %1$d%%, resets %2$s</string>
   <string name="chat_account_email_spoken">Signed in as %1$s.</string>
   <string name="chat_account_limit_spoken">%1$d%% of the weekly limit used</string>
   <string name="chat_account_resets_spoken">%1$s, resets %2$s.</string>

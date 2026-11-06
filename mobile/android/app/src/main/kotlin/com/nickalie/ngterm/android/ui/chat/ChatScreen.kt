@@ -76,7 +76,8 @@ fun ChatPane(
  * way, nothing said yet, the chat ended), a strip over the rows while its link is back on its way, pinned at its foot
  * what the agent still has running ([ActivityStrip], unless a card waits), the last action's problem and the card the
  * agent waits on (an approval before a question), and under them the
- * [composer] (none: the chat only reads), whose `/` menu opens over the foot of the rows and cards. The prompt field
+ * [composer] (none: the chat only reads), whose `/` menu opens over the foot of the rows, under them the activity line
+ * and its Stop, or over the card while one waits. The prompt field
  * takes the input focus through [focusRequester]; Back closes the menu only in the [selected] pane. TalkBack names it
  * "Chat with" the agent.
  */
@@ -115,6 +116,17 @@ fun ChatScreen(
                     }
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         ChatContent(state, machine, name, actions)
+                        // over the rows alone while no card waits, so the activity line's Stop stays in reach
+                        if (!state.awaitsCard) {
+                            writing?.let {
+                                CommandMenu(
+                                    it,
+                                    agent,
+                                    focusRequester,
+                                    Modifier.align(Alignment.BottomCenter),
+                                )
+                            }
+                        }
                         if (state.phase == ChatPhase.Reconnecting) {
                             ReconnectingStrip(
                                 machine,
@@ -127,26 +139,38 @@ fun ChatScreen(
                     }
                     if (state.phase != ChatPhase.Ended) Pinned(state, actions, cardHeight)
                 }
-                writing?.menu?.let { menu ->
-                    SlashCommandMenu(
-                        menu = menu,
-                        agent = agent,
-                        onPick = { command ->
-                            writing.pick(command)
-                            // the field keeps the input focus, and the keyboard with it
-                            focusRequester.requestFocus()
-                        },
-                        modifier =
-                            Modifier
-                                .align(Alignment.BottomCenter)
-                                .widthIn(max = NgtermTheme.spacing.readableWidth)
-                                .padding(horizontal = NgtermTheme.spacing.sm, vertical = NgtermTheme.spacing.xs),
-                    )
+                // over the card too while one waits: it has no Stop, and the menu rises from the composer
+                if (state.awaitsCard) {
+                    writing?.let { CommandMenu(it, agent, focusRequester, Modifier.align(Alignment.BottomCenter)) }
                 }
             }
             writing?.let { Composer(it, state, actions, focusRequester, selected = selected) }
         }
     }
+}
+
+// the `/` menu of [writing] while it is open, over what is above the composer
+@Composable
+private fun CommandMenu(
+    writing: ChatComposer,
+    agent: String?,
+    focusRequester: FocusRequester,
+    modifier: Modifier = Modifier,
+) {
+    val menu = writing.menu ?: return
+    SlashCommandMenu(
+        menu = menu,
+        agent = agent,
+        onPick = { command ->
+            writing.pick(command)
+            // the field keeps the input focus, and the keyboard with it
+            focusRequester.requestFocus()
+        },
+        modifier =
+            modifier
+                .widthIn(max = NgtermTheme.spacing.readableWidth)
+                .padding(horizontal = NgtermTheme.spacing.sm, vertical = NgtermTheme.spacing.xs),
+    )
 }
 
 // the most of the chat's height a card takes before it scrolls inside: the rows above it stay in sight
@@ -224,6 +248,8 @@ private fun Pinned(
                     running = state.log.running,
                     agent = stringResource(agentName(agent)),
                     modifier = Modifier.padding(horizontal = NgtermTheme.spacing.sm).fillMaxWidth(),
+                    onStop = actions.onStop.takeIf { state.running },
+                    stopEnabled = !state.busy,
                 )
             }
             state.problem?.let { problem ->

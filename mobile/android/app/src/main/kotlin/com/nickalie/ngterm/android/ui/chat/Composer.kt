@@ -28,14 +28,14 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.ffi.PaneRef
 
 /**
- * The chat's foot, in the messenger's shape: one rounded field on the bar with its buttons inside it (Commands at its
- * start, which puts a `/` into an empty field and opens the menu; Attach, the paperclip, and Stop by its end while the
- * agent works on a turn, [ChatUiState.running]), the prompt ([composer]'s, growing to six lines, then scrolling
- * inside) between them, and Send, a copper arrow at the field's very end that grows in once there is something to
- * send, as a messenger's input bar has it. A file attached shows over the pill on its way, with Cancel, or why it
+ * The chat's foot, in the messenger's shape: one rounded field on the bar with its buttons inside it (Attach, the
+ * paperclip, at its start, and at its end one place that Commands, a `/` that puts one into the empty field and opens
+ * the menu, gives up to Send, a copper arrow, once there is something to send, as Telegram's bot chats have it), the
+ * prompt ([composer]'s, growing to six lines, then scrolling inside) between them; Stop is the activity line's, over
+ * it ([ActivityStrip]). A file attached shows over the pill on its way, with Cancel, or why it
  * stopped ([ChatUiState.upload]); its stored path goes into the prompt once it is there. While a card waits
- * ([ChatUiState.awaitsCard]) a line over the field says to answer it first, and Send and Stop hold, as their keys would
- * land in its dialog; the field still takes a draft. While an action is on its way ([ChatUiState.busy]) the field
+ * ([ChatUiState.awaitsCard]) a line over the field says to answer it first, and Send holds, as its key would land in
+ * its dialog; the field still takes a draft. While an action is on its way ([ChatUiState.busy]) the field
  * holds still and Send shows a spinner. The field takes the input focus through [focusRequester].
  *
  * A hardware keyboard: Ctrl+Enter sends; while the `/` menu lists commands, Up and Down move its highlight and Enter
@@ -83,7 +83,7 @@ fun Composer(
     }
 }
 
-// why Send and Stop hold: a card waits, and their keys would land in its dialog
+// why Send holds: a card waits, and its key would land in its dialog
 @Composable
 private fun HeldLine(modifier: Modifier = Modifier) {
     Text(

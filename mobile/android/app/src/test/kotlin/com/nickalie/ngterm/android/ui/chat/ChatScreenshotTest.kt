@@ -24,9 +24,9 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * The chat (src/test/screenshots/chat) on a phone (light, dark, font scale 2.0), an unfolded foldable and a landscape
  * tablet (light and dark): a long conversation, an open approval, a multi-select question, an expanded diff, the
- * empty and error states, the account and its weekly limit over the rows, the activity strip open on a subagent and
- * a command left running, and the composer's `/` menu open on every command, narrowed (the agent working, so Stop
- * shows), and matching nothing.
+ * empty and error states, the account and its weekly limit over the rows, the activity line open on a subagent and
+ * a command left running, the agent working over an empty composer (the line's Stop, the field's Commands), and the
+ * composer's `/` menu open on every command, narrowed (the agent working), and matching nothing.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -99,7 +99,8 @@ class ChatScreenshotTest(
         capture(
             "account",
             ChatSamples.state(listOf(ChatSamples.prompt, ChatSamples.opening, ChatSamples.grep)).copy(
-                account = ChatBody.Account("nick@example.com", ChatUsage(84u, null)),
+                // a reset more than a week out reads as a date, the same whenever the test runs
+                account = ChatBody.Account("nick@example.com", ChatUsage(84u, RESETS_AT)),
             ),
         )
 
@@ -124,6 +125,10 @@ class ChatScreenshotTest(
         }
 
     @Test
+    fun working() =
+        capture("working", ChatSamples.state(ChatSamples.long).copy(working = true), ChatSamples.composer(""))
+
+    @Test
     fun openMenu() = capture("menu", ChatSamples.state(ChatSamples.long), ChatSamples.composer("/"))
 
     @Test
@@ -139,6 +144,9 @@ class ChatScreenshotTest(
         capture("menu_no_match", ChatSamples.state(ChatSamples.long), ChatSamples.composer("/deploy"))
 
     companion object {
+        // noon UTC on 10 January 2036: the same date in every zone, and always more than a week out
+        private const val RESETS_AT = 2_083_579_200uL
+
         @JvmStatic
         @ParameterizedRobolectricTestRunner.Parameters(name = "{0}")
         fun windows() =
