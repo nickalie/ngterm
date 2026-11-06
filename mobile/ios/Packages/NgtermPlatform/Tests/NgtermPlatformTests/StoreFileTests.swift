@@ -114,6 +114,25 @@ internal struct StoreFileTests {
         #expect(store.machines.map(\.id) == ["m1", "m2"])
     }
 
+    @Test("a file that couldn't be read is read again on asking once it can be, and only then")
+    internal func readAgain() throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        try MachineStore(directory: directory.url).save(Self.box)
+        let file = directory.file(MachineStore.fileName)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        let store = MachineStore(directory: directory.url)
+        store.readIfUnread()
+        #expect(store.machines.isEmpty, "still unreadable")
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        store.readIfUnread()
+        #expect(store.machines.map(\.id) == ["m1"])
+        // read, the store keeps what it has: a file changed behind it isn't read again
+        try MachineStore(directory: directory.url).delete(id: "m1")
+        store.readIfUnread()
+        #expect(store.machines.map(\.id) == ["m1"])
+    }
+
     @Test("the stores create their directory, and write under completeUntilFirstUserAuthentication")
     internal func fileProtection() throws {
         let directory = try TemporaryDirectory()

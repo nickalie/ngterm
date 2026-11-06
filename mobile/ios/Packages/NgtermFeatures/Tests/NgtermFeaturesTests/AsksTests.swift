@@ -5,7 +5,8 @@ import Testing
 @testable import NgtermFeatures
 
 /// The open asks over the fake core (mobile/android's `AsksTest`): opened and restated by the core, dismissed by it,
-/// answered once through it, let go with their session's detach, and taken back as the core suspends.
+/// answered once through it, let go with their session's detach, and taken back as the core suspends; their drafts kept
+/// with them.
 @MainActor
 @Suite("the open asks")
 internal struct AsksTests {
@@ -97,6 +98,31 @@ internal struct AsksTests {
         #expect(test.core.calls.last?.method == "resume")
         await emit(.ask(machineId: "m1", sessionId: "s1", ask: TestAsks.plain()))
         #expect(asks.open.map(\.key) == [key], "handed over again after the reconnect, it opens")
+    }
+
+    @Test("an open ask's draft outlives its sheet, goes with the ask, and none is kept for an ask no longer open")
+    internal func drafts() async throws {
+        defer { test.remove() }
+        try await attach()
+        await emit(
+            .ask(machineId: "m1", sessionId: "s1", ask: TestAsks.plain()),
+            .ask(machineId: "m1", sessionId: "s2", ask: TestAsks.plain())
+        )
+        let first = try #require(asks.open.first { $0.key == key })
+        let other = try #require(asks.open.first { $0.key != key })
+        #expect(asks.draft(of: first) == AskDraft(first.ask), "a new draft until the user writes one")
+        let typed = AskDraft(first.ask).withText("half an answer")
+        asks.keep(typed, of: first)
+        // the session's view goes (another session opened in its place) and a new one asks again
+        asks.showing(key, isShown: true)
+        asks.showing(key, isShown: false)
+        #expect(asks.draft(of: first) == typed, "kept as the user left it")
+        #expect(asks.draft(of: other) == AskDraft(other.ask), "each ask has its own")
+        await emit(.askDismiss(machineId: "m1", sessionId: "s1", askId: "A1"))
+        #expect(asks.draft(of: first) == AskDraft(first.ask), "it went with its ask")
+        asks.keep(typed, of: first)
+        await emit(.ask(machineId: "m1", sessionId: "s1", ask: TestAsks.plain()))
+        #expect(asks.draft(of: first) == AskDraft(first.ask), "an ask no longer open keeps none, and opens anew")
     }
 
     @Test("a session shows while a view says so")

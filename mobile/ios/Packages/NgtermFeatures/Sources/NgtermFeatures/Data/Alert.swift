@@ -48,6 +48,18 @@ public enum Alert: Hashable, Sendable {
         }
     }
 
+    /// Whether the posted alert `id`, about the session `key` (none for a machine's), shows while the app is in the
+    /// foreground with the sessions `onScreen` on screen.
+    ///
+    /// Every one does but a status or an ask of a session on screen, which came just before it was: its view says it
+    /// now. An agent's own notice shows beside its session too, as mobile/android's does.
+    public static func showsInForeground(id: String, key: SessionKey?, onScreen: Set<SessionKey>) -> Bool {
+        guard let key, onScreen.contains(key) else {
+            return true
+        }
+        return id != statusId(key) && !id.hasPrefix(askId(key, askId: ""))
+    }
+
     /// The id of the agent status alert of `key`: one per session, the latest replacing the one before.
     public static func statusId(_ key: SessionKey) -> String {
         "status:\(key.machineId):\(key.sessionId)"

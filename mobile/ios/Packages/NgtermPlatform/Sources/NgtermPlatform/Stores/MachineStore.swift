@@ -7,7 +7,8 @@ import Observation
 /// It reads the file once, as it starts. A file that no longer decodes reads as no machines and is kept as
 /// `machines.json.bad`. A file that can't be read (before the device's first unlock), or a corrupt one whose copy
 /// can't be written, reads as no machines too, but is left alone: the next change reads it again, and fails rather
-/// than write over it while it still can't be read or kept.
+/// than write over it while it still can't be read or kept, and ``readIfUnread()`` tries again (a process the system
+/// started for a background refresh before the first unlock, whose window opens later).
 /// A change is written whole and atomically before ``machines`` shows it.
 @preconcurrency
 @MainActor
@@ -31,6 +32,20 @@ public final class MachineStore {
         } catch {
             machines = []
             loaded = false
+        }
+    }
+
+    /// Reads the file again if it couldn't be read before, so its machines show once it can be; a store that has read
+    /// it keeps what it has.
+    public func readIfUnread() {
+        guard !loaded else {
+            return
+        }
+        do {
+            machines = try file.read() ?? []
+            loaded = true
+        } catch {
+            // still unreadable: no machines, as before
         }
     }
 

@@ -70,6 +70,28 @@ internal final class SessionViewTests: XCTestCase {
         try FakeApp.audit(app)
     }
 
+    // a phone's machines list is its view of every attached session (Android's Sessions destination), a tablet's
+    // sidebar beside the session
+    @MainActor
+    internal func testTheMachinesListTheAttachedSessionAndOpenIt() throws {
+        let app = openSession()
+        let add = app.buttons["add-machine"]
+        // a phone goes back from the session and the machine's sessions to the machines
+        for _ in 0..<2 where !add.exists {
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+        }
+        FakeApp.expect(add, "the machines")
+        let row = app.descendants(matching: .any)["sidebar-session-work"].firstMatch
+        FakeApp.expect(row, "the attached session under its machine")
+        if !Self.isPad {
+            XCTAssertFalse(app.descendants(matching: .any)["session-title"].firstMatch.exists, "the session left")
+            try FakeApp.audit(app)
+        }
+        row.tap()
+        FakeApp.expect(app.descendants(matching: .any)["session-title"].firstMatch, "the session view again")
+        FakeApp.expect(Self.screen(showing: "P1 ready", in: app), "the first pane's screen")
+    }
+
     @MainActor
     internal func testDetachClosesTheSessionView() {
         let app = openSession()

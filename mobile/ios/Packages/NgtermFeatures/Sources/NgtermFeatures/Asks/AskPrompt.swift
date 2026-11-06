@@ -7,8 +7,8 @@ import SwiftUI
 /// The view tells ``Asks`` whether its session is on screen: shown, and its window not in the background. The answer,
 /// or a swipe that dismisses the sheet (which the origin gets as Escape), goes to the core once; a sheet whose ask
 /// went (answered elsewhere, dismissed, taken back) goes by itself, and so does one whose view goes (another session
-/// opened in its place, its window closed), leaving its ask open. An ask's draft outlives its sheet while the ask is
-/// open, so one that left the screen comes back as the user left it.
+/// opened in its place, its window closed), leaving its ask open. An ask's draft is ``Asks``', kept with the open ask
+/// rather than with this view, so one that left the screen comes back as the user left it.
 internal struct AskPrompt: ViewModifier {
     @Environment(\.scenePhase)
     private var phase
@@ -16,7 +16,6 @@ internal struct AskPrompt: ViewModifier {
     internal let graph: AppGraph
     internal let key: SessionKey
     @State private var shown: OpenAsk?
-    @State private var drafts: [String: AskDraft] = [:]
     @State private var isVisible = false
     @State private var presence = AskPresence()
 
@@ -51,8 +50,6 @@ internal struct AskPrompt: ViewModifier {
             }
             .onChange(of: first, initial: true) { _, open in
                 shown = open
-                let ids = Set(graph.asks.open.map(\.id))
-                drafts = drafts.filter { ids.contains($0.key) }
             }
             .sheet(item: presented) { open in
                 AskQuestion(ask: open.ask, draft: draft(of: open)) { reply in
@@ -82,10 +79,11 @@ internal struct AskPrompt: ViewModifier {
     }
 
     private func draft(of open: OpenAsk) -> Binding<AskDraft> {
-        Binding {
-            drafts[open.id] ?? AskDraft(open.ask)
+        let asks = graph.asks
+        return Binding {
+            asks.draft(of: open)
         } set: { draft in
-            drafts[open.id] = draft
+            asks.keep(draft, of: open)
         }
     }
 }
