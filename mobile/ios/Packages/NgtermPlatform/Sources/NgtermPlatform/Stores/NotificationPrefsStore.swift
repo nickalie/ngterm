@@ -6,7 +6,7 @@ import Observation
 ///
 /// It reads the file as ``SettingsStore`` reads its own: a file that no longer decodes reads as the defaults (every
 /// kind on, the permission not asked) and is kept as `notifications.json.bad`, and one that can't be read is left alone
-/// until a change can read it. A change is written whole before ``prefs`` shows it.
+/// until a change or ``readIfUnread()`` can read it. A change is written whole before ``prefs`` shows it.
 @preconcurrency
 @MainActor
 @Observable
@@ -29,6 +29,20 @@ public final class NotificationPrefsStore {
         } catch {
             prefs = NotificationPrefs()
             loaded = false
+        }
+    }
+
+    /// Reads the file again if it couldn't be read before, so its choices show once it can be; a store that has read it
+    /// keeps what it has.
+    public func readIfUnread() {
+        guard !loaded else {
+            return
+        }
+        do {
+            prefs = try file.read() ?? NotificationPrefs()
+            loaded = true
+        } catch {
+            // still unreadable: the defaults, as before
         }
     }
 

@@ -5,8 +5,8 @@ import Observation
 /// private halves are the Keychain's (``KeychainKeyVault``).
 ///
 /// It reads the file as ``MachineStore`` reads its own: a file that no longer decodes reads as no keys and is kept as
-/// `keys.json.bad`, and one that can't be read (or kept) is left alone until a change can read it (or keep it). A
-/// change is written whole and atomically before ``keys`` shows it.
+/// `keys.json.bad`, and one that can't be read (or kept) is left alone until a change can read it (or keep it), or
+/// ``readIfUnread()`` can. A change is written whole and atomically before ``keys`` shows it.
 @preconcurrency
 @MainActor
 @Observable
@@ -29,6 +29,20 @@ public final class KeyStore {
         } catch {
             keys = []
             loaded = false
+        }
+    }
+
+    /// Reads the file again if it couldn't be read before, so its keys show once it can be; a store that has read it
+    /// keeps what it has.
+    public func readIfUnread() {
+        guard !loaded else {
+            return
+        }
+        do {
+            keys = try file.read() ?? []
+            loaded = true
+        } catch {
+            // still unreadable: no keys, as before
         }
     }
 

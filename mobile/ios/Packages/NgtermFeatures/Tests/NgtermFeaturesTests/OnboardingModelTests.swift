@@ -1,5 +1,6 @@
 import Foundation
 import NgtermFeatures
+import NgtermPlatform
 import Testing
 
 /// The first run, as mobile/android's `OnboardingViewModelTest` has it.
@@ -13,6 +14,32 @@ internal struct OnboardingModelTests {
         defer { test.remove() }
         _ = try await test.seedKey()
         #expect(OnboardingModel(keys: test.graph.keys).step == .done)
+    }
+
+    @Test("a process that couldn't read its files as it started reads them again before the first run is decided")
+    internal func readAgain() async throws {
+        defer { test.remove() }
+        let key = try await test.seedKey()
+        try test.seed(TestGraph.machine(keyId: key.id))
+        try test.graph.settings.update { $0.theme = .dark }
+        try test.graph.notificationPrefs.set(.done, isOn: false)
+        let names = [KeyStore.fileName, MachineStore.fileName, SettingsStore.fileName, NotificationPrefsStore.fileName]
+        let files = names.map { test.directory.appending(path: $0).path }
+        // before the device's first unlock: the files are there but can't be read
+        for file in files {
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file)
+        }
+        let early = TestGraph(directory: test.directory)
+        #expect(early.graph.keys.keys.isEmpty)
+        for file in files {
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file)
+        }
+        early.graph.readUnreadStores()
+        #expect(early.graph.keys.keys == [key])
+        #expect(early.graph.machines.machines.map(\.id) == ["m1"])
+        #expect(early.graph.settings.settings.theme == .dark)
+        #expect(early.graph.notificationPrefs.prefs.off == [.done])
+        #expect(OnboardingModel(keys: early.graph.keys).step == .done)
     }
 
     @Test("creating a key shows its public half, then finishes")

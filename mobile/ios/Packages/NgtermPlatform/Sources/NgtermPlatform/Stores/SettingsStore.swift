@@ -5,7 +5,7 @@ import Observation
 ///
 /// It reads the file as ``MachineStore`` reads its own: a file that no longer decodes reads as the defaults and is
 /// kept as `settings.json.bad`, and one that can't be read (or kept) is left alone until a change can read it (or keep
-/// it). A change is written whole and atomically before ``settings`` shows it.
+/// it), or ``readIfUnread()`` can. A change is written whole and atomically before ``settings`` shows it.
 @preconcurrency
 @MainActor
 @Observable
@@ -28,6 +28,20 @@ public final class SettingsStore {
         } catch {
             settings = AppSettings()
             loaded = false
+        }
+    }
+
+    /// Reads the file again if it couldn't be read before, so its settings show once it can be; a store that has read
+    /// it keeps what it has.
+    public func readIfUnread() {
+        guard !loaded else {
+            return
+        }
+        do {
+            settings = try file.read() ?? AppSettings()
+            loaded = true
+        } catch {
+            // still unreadable: the defaults, as before
         }
     }
 

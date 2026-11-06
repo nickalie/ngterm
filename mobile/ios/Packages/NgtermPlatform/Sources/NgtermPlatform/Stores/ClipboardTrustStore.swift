@@ -9,8 +9,8 @@ import Observation
 /// It reads the file as ``MachineStore`` reads its own: one that no longer decodes reads as none and is kept as
 /// `clipboard-trust.json.bad`. One that can't be read (before the device's first unlock), or a corrupt one whose copy
 /// can't be written, reads as none too, so every read asks (the safe side), but is left alone: the next change reads it
-/// again, and fails rather than write over the machines it holds while it still can't be read. A change is written
-/// whole before ``machines`` shows it.
+/// again, and fails rather than write over the machines it holds while it still can't be read, and ``readIfUnread()``
+/// tries again. A change is written whole before ``machines`` shows it.
 @preconcurrency
 @MainActor
 @Observable
@@ -33,6 +33,20 @@ public final class ClipboardTrustStore {
         } catch {
             machines = []
             loaded = false
+        }
+    }
+
+    /// Reads the file again if it couldn't be read before, so its machines are trusted once it can be; a store that has
+    /// read it keeps what it has.
+    public func readIfUnread() {
+        guard !loaded else {
+            return
+        }
+        do {
+            machines = Set(try file.read() ?? [])
+            loaded = true
+        } catch {
+            // still unreadable: none trusted, as before
         }
     }
 

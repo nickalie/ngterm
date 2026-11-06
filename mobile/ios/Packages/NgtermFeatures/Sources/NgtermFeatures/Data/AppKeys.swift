@@ -45,6 +45,11 @@ public final class AppKeys {
         try maker.importKey(privateKey: privateKey, passphrase: passphrase)
     }
 
+    /// Reads the keys' file again if the store couldn't read it before (``KeyStore/readIfUnread()``).
+    public func readIfUnread() {
+        store.readIfUnread()
+    }
+
     /// The key `id`, if the app has it.
     public func key(id: String) -> AppKey? {
         store.key(id: id)

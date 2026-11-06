@@ -9,6 +9,8 @@ import NgtermPlatform
 /// network a ``TestPathSource``, the clock a ``TestClock``, the clipboard a ``MemoryClipboard``, the notifications a
 /// ``RecordingNotices``, and the background refresh's core another ``FakeMobileCore`` (``refreshCore``), which keeps
 /// the sessions of ``core``. ``remove()`` deletes the directory.
+///
+/// A graph made over another's `directory` reads the files that one wrote, as a process started afresh does.
 @MainActor
 internal final class TestGraph {
     internal let directory: URL
@@ -27,8 +29,15 @@ internal final class TestGraph {
         graph.connections
     }
 
-    internal init() {
-        directory = FileManager.default.temporaryDirectory.appending(path: "NgtermFeaturesTests-\(UUID().uuidString)")
+    /// The graph over a new directory of the test's own.
+    internal convenience init() {
+        let name = "NgtermFeaturesTests-\(UUID().uuidString)"
+        self.init(directory: FileManager.default.temporaryDirectory.appending(path: name))
+    }
+
+    /// The graph over the stores in `directory`.
+    internal init(directory: URL) {
+        self.directory = directory
         core = FakeMobileCore(hosts: pins)
         let refreshing = FakeMobileCore(hosts: pins)
         refreshCore = refreshing

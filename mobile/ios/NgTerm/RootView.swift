@@ -61,6 +61,8 @@ internal struct RootView: View {
     internal init(graph: AppGraph, coreVersion: String, windows: SessionWindows) {
         self.graph = graph
         self.coreVersion = coreVersion
+        // a process started before the first unlock read no keys: read them now, or the first run would show over them
+        graph.readUnreadStores()
         _scaffold = State(initialValue: ScaffoldModel(windows: windows, needsOnboarding: graph.keys.keys.isEmpty))
         _machines = State(initialValue: MachinesModel(graph: graph))
         _onboarding = State(initialValue: OnboardingModel(keys: graph.keys))

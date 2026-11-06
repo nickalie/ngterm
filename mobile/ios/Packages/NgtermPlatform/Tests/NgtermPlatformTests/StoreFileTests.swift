@@ -133,6 +133,46 @@ internal struct StoreFileTests {
         #expect(store.machines.map(\.id) == ["m1"])
     }
 
+    @Test("the keys, settings, notification choices and trusted machines are read again on asking once they can be")
+    internal func readAgainEvery() throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        let key = AppKey(id: "k1", authorizedKey: "ssh-ed25519 AAAA", fingerprint: "SHA256:k1", isImported: false)
+        try KeyStore(directory: directory.url).add(key)
+        try SettingsStore(directory: directory.url).update { $0.theme = .dark }
+        try NotificationPrefsStore(directory: directory.url).set(.done, isOn: false)
+        try ClipboardTrustStore(directory: directory.url).allow("m1")
+        let names = [
+            KeyStore.fileName, SettingsStore.fileName, NotificationPrefsStore.fileName, ClipboardTrustStore.fileName,
+        ]
+        for name in names {
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: directory.file(name).path)
+        }
+        let keys = KeyStore(directory: directory.url)
+        let settings = SettingsStore(directory: directory.url)
+        let prefs = NotificationPrefsStore(directory: directory.url)
+        let trust = ClipboardTrustStore(directory: directory.url)
+        keys.readIfUnread()
+        settings.readIfUnread()
+        prefs.readIfUnread()
+        trust.readIfUnread()
+        #expect(keys.keys.isEmpty, "still unreadable")
+        #expect(settings.settings == AppSettings())
+        #expect(prefs.prefs == NotificationPrefs())
+        #expect(trust.machines.isEmpty)
+        for name in names {
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: directory.file(name).path)
+        }
+        keys.readIfUnread()
+        settings.readIfUnread()
+        prefs.readIfUnread()
+        trust.readIfUnread()
+        #expect(keys.keys == [key])
+        #expect(settings.settings.theme == .dark)
+        #expect(prefs.prefs.off == [.done])
+        #expect(trust.machines == ["m1"])
+    }
+
     @Test("the stores create their directory, and write under completeUntilFirstUserAuthentication")
     internal func fileProtection() throws {
         let directory = try TemporaryDirectory()

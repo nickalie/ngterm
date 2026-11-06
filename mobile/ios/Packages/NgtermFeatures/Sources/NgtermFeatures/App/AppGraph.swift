@@ -53,6 +53,8 @@ public final class AppGraph {
     public let network: NetworkMonitor
     /// Whether ``start()`` has run: before it the core has connected nothing.
     public private(set) var isStarted = false
+    // the trusted machines, read again with the other stores
+    private let clipboardTrust: ClipboardTrustStore
 
     /// The graph over its parts: `core` connects, `stores` keep the small state, and `notices` (the system's unless a
     /// test gives its own) takes the notifications; `pathSource` (the system's unless a test gives its own) tells the
@@ -84,6 +86,7 @@ public final class AppGraph {
         live = streams
         attachedSessions = AttachedSessions(machines: machines, connections: made, live: streams)
         panes = SessionPanes(connections: made, live: streams)
+        clipboardTrust = stores.clipboardTrust
         clipboardReads = ClipboardReads(connections: made, trust: stores.clipboardTrust, clipboard: board)
         let open = Asks(connections: made)
         asks = open
@@ -113,17 +116,32 @@ public final class AppGraph {
         }
     }
 
+    /// Reads again every file of the user's that the process couldn't read as it started.
+    ///
+    /// The system starts the process for a background refresh before the device's first unlock, and its window may
+    /// open later. The machines, the keys, the settings, the notification choices and the trusted machines show what
+    /// their files hold once they can be read; a store that has read its file keeps what it has.
+    ///
+    /// A window calls it before it decides on the first run (which shows while there is no key), and ``start()`` before
+    /// it connects.
+    public func readUnreadStores() {
+        machines.readIfUnread()
+        keys.readIfUnread()
+        settings.readIfUnread()
+        notificationPrefs.readIfUnread()
+        clipboardTrust.readIfUnread()
+    }
+
     /// Starts following the network and connects every machine the user added, once per process; later calls do
     /// nothing.
     ///
-    /// A machines file the process couldn't read as it started (before the device's first unlock) is read again
-    /// first.
+    /// The files the process couldn't read as it started are read again first (``readUnreadStores()``).
     public func start() {
         guard !isStarted else {
             return
         }
         isStarted = true
-        machines.readIfUnread()
+        readUnreadStores()
         network.start()
         for machine in machines.machines {
             connections.connect(machine.core)
