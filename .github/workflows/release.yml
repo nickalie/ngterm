@@ -452,7 +452,7 @@ jobs:
           artifact-ids: ${{ steps.ids.outputs.ids }}
           path: ${{ runner.temp }}/in
           merge-multiple: true
-      - name: Digests, signatures and build identity
+      - name: Digests, signatures, layout and build identity
         env:
           VERSION: ${{ needs.version.outputs.version }}
           BUILD_COMMIT: ${{ needs.version.outputs.build_commit }}
@@ -467,8 +467,10 @@ jobs:
             got="$("$1" --build-identity)"
             [[ "$got" == "$expected" ]] || { echo "::error::$1 is $got, expected $expected"; exit 1; }
           }
+          # the hardened runtime on every Mach-O, entitlements on ngterm alone and exactly the shipping set
           bundle() {
             codesign --verify --deep --strict "$1"
+            scripts/sign-macos.sh check "$1"
             [[ "$(plutil -extract CFBundleShortVersionString raw "$1/Contents/Info.plist")" == "$VERSION" ]]
             [[ "$(plutil -extract GitCommit raw "$1/Contents/Info.plist")" == "$BUILD_COMMIT" ]]
             identity "$1/Contents/MacOS/ngterm"
@@ -477,6 +479,7 @@ jobs:
           ditto -x -k "$name.app.zip" "$work/zip"
           bundle "$work/zip/ngterm.app"
           tar -xzf "$name.tar.gz" -C "$work/archive"
+          scripts/sign-macos.sh check "$work/archive/bin"
           identity "$work/archive/bin/ngterm"
           hdiutil attach -nobrowse -readonly -mountpoint "$work/dmg" "$name.dmg"
           trap 'hdiutil detach "$work/dmg" || true' EXIT

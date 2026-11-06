@@ -15,9 +15,16 @@ open target/ngterm.app
 
 For release builds, add `--release` to Cargo and use `--profile release` when bundling. The bundle includes the CLI,
 session server, fonts embedded in the executable, themes, terminfo, shell integration, agent integrations, icon,
-and build identity. It is ad-hoc signed for local use; public distribution still needs Developer ID signing and
-notarization. Install by copying the bundle to Applications. The CLI is `ngterm.app/Contents/MacOS/ngtermctl`.
+and build identity. Install by copying the bundle to Applications. The CLI is `ngterm.app/Contents/MacOS/ngtermctl`.
 Resource files live in `Contents/share`, beside `Contents/MacOS`, preserving the staged layout's relative lookup.
+
+The bundle is ad-hoc signed under the hardened runtime by `scripts/sign-macos.sh`: every helper executable first, with
+no entitlements, then the app with `packaging/macos/ngterm.entitlements`. ngterm is the responsible process for what
+its panes run, so it carries upstream's TCC entitlements and `Info.plist` its usage strings; without them macOS would
+not even prompt when a tool in a pane asks for the microphone, camera, contacts and the like. A `--profile debug`
+bundle uses `ngterm-debug.entitlements`, the same set plus `get-task-allow`, so a debugger can attach.
+`scripts/sign-macos.sh check ngterm.app` checks that layout without running anything; the release workflow runs it on
+every published bundle and archive.
 
 A second launch forwards activation over an owner-only Unix socket, protected by a file lock that also serializes
 recovery after a crash. Application ids and state directories isolate dev instances. The state and configuration

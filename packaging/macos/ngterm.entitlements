@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The shipping set, upstream's (agterm.entitlements). Every key is a TCC resource-access entitlement: ngterm is the
+     responsible process for the programs its panes run, so under the hardened runtime a missing one means macOS never
+     even prompts and records nothing (upstream issue #396). Info.plist (scripts/bundle-macos.sh) carries the matching
+     NS*UsageDescription strings. scripts/sign-macos.sh signs bin/ngterm (the app's and the archive's) with this file and
+     every other Mach-O with no entitlements; ngterm-debug.entitlements is this set plus get-task-allow. -->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
+	<true/>
+	<key>com.apple.security.personal-information.addressbook</key>
+	<true/>
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+	<key>com.apple.security.personal-information.location</key>
+	<true/>
+	<key>com.apple.security.personal-information.photos-library</key>
+	<true/>
+</dict>
+</plist>

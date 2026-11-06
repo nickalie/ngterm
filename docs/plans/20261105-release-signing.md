@@ -427,15 +427,24 @@
 **Files:**
 - Create: `packaging/macos/ngterm.entitlements`, `packaging/macos/ngterm-debug.entitlements`, `scripts/sign-macos.sh`
 - Modify: `scripts/bundle-macos.sh`, `.github/workflows/release.yml`, `docs/macos.md`
+- ➕ Modify: `scripts/package-release.sh` (signs the app and the archive's loose binaries through `sign-macos.sh`)
 
-- [ ] port upstream's shipping entitlements and `NS*UsageDescription` strings, reworded for ngterm; the debug file is
+- [x] port upstream's shipping entitlements and `NS*UsageDescription` strings, reworded for ngterm; the debug file is
       the shipping set plus `get-task-allow`
-- [ ] `scripts/sign-macos.sh` step 2 (helpers, then app, hardened runtime, no `--deep` on the app); `bundle-macos.sh`
+- [x] `scripts/sign-macos.sh` step 2 (helpers, then app, hardened runtime, no `--deep` on the app); `bundle-macos.sh`
       uses it ad-hoc in place of today's `--deep` sign, with the debug entitlements for `--profile debug`
-- [ ] `macos-verify` layout checks: hardened runtime on every Mach-O; no entitlements on helpers; the app's
+- [x] ➕ helpers are every Mach-O in the bundle but `ngterm`, not only `Contents/MacOS`'s, so the check's "every
+      Mach-O" and the signing cover the same files; `bundle` refuses a non-Mach-O in `Contents/MacOS`, which
+      `--verify --deep --strict` rejects unsigned (a script's signature would live in xattrs the archives drop)
+- [x] ➕ step 6's loose-binary signing (helpers, then `bin/ngterm` with the entitlements) lands here, ad-hoc, since
+      the archive layout check needs it; `sign-macos.sh check` holds the layout checks
+- [x] `macos-verify` layout checks: hardened runtime on every Mach-O; no entitlements on helpers; the app's
       `ngterm` and the archive's `bin/ngterm` carry exactly the shipping entitlements
-- [ ] tests: `scripts/lint.sh`
-- [ ] run checks; must pass before Task 5
+- [x] tests: `scripts/lint.sh`; ➕ on the real Mac (macOS 27.2) with stand-in binaries: `bundle-macos.sh --staged`,
+      `sign-macos.sh loose` and `check` pass, the signed binary runs, the layout survives the build tarball and
+      `.app.zip` round trips, and `check` refuses a helper without the runtime, a helper with entitlements and the
+      debug set on a release
+- [x] run checks; must pass before Task 5
 
 ### Task 5: macOS Developer ID signing, notarization and stapling
 

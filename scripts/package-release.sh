@@ -4,8 +4,8 @@
 #   scripts/package-release.sh STAGED VERSION OUTPUT_DIR
 #     every package of this host from a complete scripts/stage.sh tree;
 #   scripts/package-release.sh --macos-bundle STAGED VERSION COMMIT TREE
-#     macOS, the build step: TREE/ngterm.app (ad-hoc signed, recording VERSION and COMMIT) and TREE/archive (the loose
-#     bin and share of the .tar.gz), from a staged tree;
+#     macOS, the build step: TREE/ngterm.app (recording VERSION and COMMIT) and TREE/archive (the loose bin and share
+#     of the .tar.gz), from a staged tree, both ad-hoc signed under the hardened runtime (scripts/sign-macos.sh);
 #   scripts/package-release.sh --macos-package TREE VERSION ARCH OUTPUT_DIR
 #     macOS, the packaging step: the .tar.gz, .app.zip, DMG and PKG from a --macos-bundle TREE. It executes nothing
 #     from TREE, so it can run where signing keys are.
@@ -47,10 +47,10 @@ macos_bundle() {
   app="$tree/ngterm.app"
   "$NATIVE_ROOT/scripts/bundle-macos.sh" "$app" --staged "$stage" --version "$version" --commit "$commit"
   echo macos-bundle > "$app/Contents/Resources/update-format"
-  codesign --force --deep --sign - "$app"
-  codesign --verify --deep --strict "$app"
+  "$NATIVE_ROOT/scripts/sign-macos.sh" bundle "$app"
   echo macos-archive > "$stage/share/ngterm/update-format"
   cp -R "$stage/bin" "$stage/share" "$tree/archive/"
+  "$NATIVE_ROOT/scripts/sign-macos.sh" loose "$tree/archive/bin"
 }
 
 # macos_package TREE ARCH: every macOS package from a macos_bundle tree, executing nothing from it
