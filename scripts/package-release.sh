@@ -35,7 +35,7 @@ if [[ "$(host_os)" != windows ]]; then
   fonts="$(fonts_prefix)"
   fonts_prefix_is_complete "$fonts" || die "run scripts/fetch-fonts.sh first"
   mkdir -p "$stage/share/doc/ngterm" "$stage/share/doc/fonts"
-  cp "$NATIVE_ROOT/NOTICE" "$NATIVE_ROOT/resources/LICENSE.upstream" "$stage/share/doc/ngterm/"
+  cp "$NATIVE_ROOT/LICENSE" "$NATIVE_ROOT/NOTICE" "$NATIVE_ROOT/resources/LICENSE.upstream" "$stage/share/doc/ngterm/"
   cp "$fonts/share/doc/fonts/"* "$stage/share/doc/fonts/"
 fi
 arch="$(uname -m)"

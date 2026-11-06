@@ -93,12 +93,17 @@ jobs:
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
       - name: format
-        run: cargo fmt $PACKAGES --check
+        run: |
+          # shellcheck disable=SC2086 # PACKAGES is a list of cargo arguments, split on purpose
+          cargo fmt $PACKAGES --check
       - name: clippy
-        run: cargo clippy --locked $PACKAGES --all-targets --all-features -- -D warnings
+        run: |
+          # shellcheck disable=SC2086 # PACKAGES is a list of cargo arguments, split on purpose
+          cargo clippy --locked $PACKAGES --all-targets --all-features -- -D warnings
       - name: test
         run: |
           if [[ "$(uname -s)" == Darwin ]]; then ulimit -n 8192; fi
+          # shellcheck disable=SC2086 # PACKAGES is a list of cargo arguments, split on purpose
           cargo test --locked $PACKAGES --all-features
       # ngterm-term without `local` (stream panes only, a remote-only frontend's): its own invocation, as
       # --all-features turns the feature back on

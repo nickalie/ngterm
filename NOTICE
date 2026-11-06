@@ -1,7 +1,7 @@
 ngterm — third-party notices
 ===============================
 
-ngterm is licensed under the MIT License (each crate's `license` in Cargo.toml). Parts of it are derived from
+ngterm is licensed under the MIT License (LICENSE; each crate's `license` in Cargo.toml). Parts of it are derived from
 the projects below, under their licenses, whose notices must accompany the code. Each derived module names its
 source in its module docs.
 

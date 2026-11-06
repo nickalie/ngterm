@@ -99,7 +99,8 @@ function Test-Installed([string] $msi, [bool] $versioned) {
     foreach ($file in 'bin\ngterm.exe', 'bin\ngtermctl.exe', 'bin\ngterm-session.exe', 'bin\vcruntime140.dll',
         'share\ghostty\shell-integration\bash\ghostty.bash', 'share\ngterm\shell-integration\pwsh\ngterm.ps1',
         'share\ngterm\agent-status\ngterm-agent-status.ps1', 'share\ngterm\skills\ngterm\SKILL.md',
-        'share\ngterm\app-BUILD', 'share\doc\ngterm\NOTICE.txt', 'share\doc\fonts\JetBrainsMono-OFL.txt') {
+        'share\ngterm\app-BUILD', 'share\doc\ngterm\LICENSE.txt', 'share\doc\ngterm\NOTICE.txt',
+        'share\doc\fonts\JetBrainsMono-OFL.txt') {
         Check "$file is installed" (Test-Path -PathType Leaf (Join-Path $root $file))
     }
     $terminfo = @('x', '78') | Where-Object { Test-Path -PathType Leaf (Join-Path $root "share\terminfo\$_\xterm-ghostty") }

@@ -335,20 +335,26 @@
 - Create: `.github/workflows/lint.yml`
 - Modify: `scripts/package-release.sh`, `scripts/build-msi.sh`, `scripts/check-msi.ps1` (ship `LICENSE`)
 - Modify: the tool pins file for `actionlint` and `shellcheck`
+- ➕ Create: `scripts/lint.sh` (what `lint.yml` runs, and runs the same locally), `.shellcheckrc`,
+  `.github/actionlint.yaml`
+- ➕ Modify: the scripts and workflow that failed the new lint (`scripts/lib/native.sh`, `scripts/lib/dev-instance.sh`,
+  `scripts/fetch-wpe.sh`, the four `scripts/vendor-*.sh`, `cross-platform.yml`), `NOTICE`, README > CI
 
-- [ ] `LICENSE` with the MIT text (copyright Nick Gluschenko); ship it beside `NOTICE` in `share/doc/ngterm` and in
-      the MSI
-- [ ] `scripts/setup-release-protection.sh` as Technical Details describes
-- [ ] `.github/dependabot.yml` for `github-actions` (weekly)
-- [ ] `.github/workflows/lint.yml` (none exists today):
-      - `actionlint` and `shellcheck`, pinned and checksum-verified;
-      - path filters `.github/workflows/**`, `scripts/*.sh`, `scripts/*.py`;
+- [x] `LICENSE` with the MIT text (copyright Nick Gluschenko); ship it beside `NOTICE` in `share/doc/ngterm` and in
+      the MSI (as `LICENSE.txt` there, like `NOTICE.txt`)
+- [x] `scripts/setup-release-protection.sh` as Technical Details describes; it reads the state back after applying
+- [x] `.github/dependabot.yml` for `github-actions` (weekly)
+- [x] `.github/workflows/lint.yml` (none exists today):
+      - `actionlint` and `shellcheck`, pinned in `packaging/release/pins.env` and checksum-verified, through
+        `scripts/lint.sh`;
+      - path filters `.github/workflows/**`, `scripts/*.sh`, `scripts/*.py` (plus `scripts/lib/*.sh`, the linters'
+        settings and the pins file);
       - later tasks add each `--self-test` here
-- [ ] `check-msi.ps1` lists `share\doc\ngterm\LICENSE` among the installed files (the MSI harvests `share\**`)
-- [ ] tests: `shellcheck` on the touched scripts; the `--dry-run` output parses as JSON; `actionlint` passes on all
+- [x] `check-msi.ps1` lists `share\doc\ngterm\LICENSE.txt` among the installed files (the MSI harvests `share\**`)
+- [x] tests: `shellcheck` on the touched scripts; the `--dry-run` output parses as JSON; `actionlint` passes on all
       current workflows. `LICENSE` in the packaged output is confirmed by Task 2's and Task 3's dry runs, not by a local
       Linux package build (that needs the portable WPE build)
-- [ ] run checks; must pass before Task 2
+- [x] run checks; must pass before Task 2
 
 ### Task 2: The version job, modes, dry-run semantics and the gate
 

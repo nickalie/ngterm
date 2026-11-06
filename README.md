@@ -977,6 +977,10 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 - `windows-installer.yml` (the same triggers, and by hand): the release build staged, the MSI built from it with the
   pinned WiX and one of the next patch version, then `scripts/check-msi.ps1` installs, checks, upgrades and
   uninstalls it on the runner; the MSI is kept as the `ngterm-msi` artifact.
+- `lint.yml` (path-filtered to the workflows, the scripts, their linters' settings and `packaging/release/pins.env`;
+  also on `ci/**` pushes): `scripts/lint.sh`, which runs actionlint over the workflows and shellcheck over
+  `scripts/*.sh`, `scripts/lib/*.sh` and every `run:` block, both pinned and checksum-verified. Run it locally the
+  same way.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
 - `reference-macos.yml`: the suite against upstream's macOS release.
 

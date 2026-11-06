@@ -1,0 +1,4 @@
+# shellcheck's settings for every script in the repository, read by scripts/lint.sh and by editors: follow `source`,
+# resolving a `# shellcheck source=` path against the sourcing script's directory.
+external-sources=true
+source-path=SCRIPTDIR

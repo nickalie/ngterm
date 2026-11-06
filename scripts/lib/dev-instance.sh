@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # The isolated dev instance of scripts/run-gpui-dev.sh: build, stage and launch this checkout's ngterm beside any
 # installed ngterm (the entry script's header describes the instance), under Linux's bash and Git Bash on Windows.
 # Sourced, not run.

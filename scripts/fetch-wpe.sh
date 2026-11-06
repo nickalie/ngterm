@@ -70,6 +70,7 @@ for dir in lib include share; do
 done
 # Relocate the pkg-config files from /usr to the final prefix (the stage is renamed into it below).
 for pc in "$STAGE"/lib/pkgconfig/*.pc; do
+  # shellcheck disable=SC2016 # ${prefix} is pkg-config's variable, written literally
   sed -i -e "s|^prefix=/usr\$|prefix=$PREFIX|" -e 's|^libdir=/usr/lib|libdir=${prefix}/lib|' \
     -e 's|^moduledir=/usr/lib|moduledir=${prefix}/lib|' "$pc"
   if grep -E '^[a-z_]+=/usr' "$pc" >&2; then

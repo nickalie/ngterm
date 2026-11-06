@@ -6,8 +6,8 @@
 # The package is made of a staged tree (scripts/stage.sh's layout, which the installed folder keeps): with --staged
 # that tree, else this script builds the release binaries (ngterm with its HTML overlays, ngtermctl, ngterm-session)
 # and stages them first, which needs the libghostty-vt prefix (scripts/build-ghostty-vt.sh) and the terminal fonts
-# (scripts/fetch-fonts.sh). The licenses and notices go under share\doc beside the staged files: ngterm's NOTICE,
-# upstream's license of the agent-status package and skill, the terminal fonts' licenses.
+# (scripts/fetch-fonts.sh). The licenses and notices go under share\doc beside the staged files: ngterm's LICENSE and
+# NOTICE, upstream's license of the agent-status package and skill, the terminal fonts' licenses.
 #
 # The version is the staged ngterm's own (the first line of share/ngterm/app-BUILD, its Cargo version), or --version;
 # Windows Installer compares the first three fields, which a major upgrade needs to rise. The toasts' app id the
@@ -145,6 +145,7 @@ cp -R "$STAGED" "$ROOT"
 FONTS="$(fonts_prefix)"
 fonts_prefix_is_complete "$FONTS" || die "no complete terminal fonts prefix at $FONTS: run scripts/fetch-fonts.sh"
 mkdir -p "$ROOT/share/doc/ngterm" "$ROOT/share/doc/fonts"
+cp "$NATIVE_ROOT/LICENSE" "$ROOT/share/doc/ngterm/LICENSE.txt"
 cp "$NATIVE_ROOT/NOTICE" "$ROOT/share/doc/ngterm/NOTICE.txt"
 cp "$NATIVE_ROOT/resources/LICENSE.upstream" "$ROOT/share/doc/ngterm/LICENSE.upstream.txt"
 cp "$FONTS/share/doc/fonts/"* "$ROOT/share/doc/fonts/"

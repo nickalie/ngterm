@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared helpers of the native build scripts (build-ghostty-vt.sh, build-weston.sh, fetch-wpe.sh, fetch-lavapipe.sh,
 # fetch-fonts.sh, gen-wpe-bindings.sh, gen-ghostty-config-keys.sh, pkg-config.sh, stage.sh, lib/dev-instance.sh).
 # Sourced, not run.
@@ -56,8 +57,10 @@ source "$PINS"
 # WebKit (Ubuntu packages none) still builds and tests the rest; GPUI_WITHOUT_HTML adds the GPUI frontend back without
 # the feature (the core then refuses every page). The app with its pages, and its conformance, need a WPE WebKit
 # (README > WPE WebKit): run-linux.sh and run-gpui-dev.sh build it so, and CI runs them in its Arch jobs.
+# shellcheck disable=SC2034 # for the sourcing scripts
 WORKSPACE_WITHOUT_WPE=(--workspace --exclude ngterm-wpe --exclude ngterm-wpe-sys --exclude ngterm-wpe-platform-sys
   --exclude ngterm-wpe-javascriptcore-sys --exclude ngterm-gpui)
+# shellcheck disable=SC2034 # for the sourcing scripts
 GPUI_WITHOUT_HTML=(-p ngterm-gpui --no-default-features)
 
 # The sha256 of stdin: coreutils' sha256sum (Linux, Git Bash), else shasum (stock macOS).
@@ -316,12 +319,16 @@ find_zig() {
       || { rm -f "$archive"; die "cannot create $dir.unpacked"; }
     if [[ "$format" == zip ]]; then
       # the zip's one top directory, $name/, becomes the partial tree (unzip strips no components)
-      unzip -q "$archive" -d "$dir.unpacked" && mv "$dir.unpacked/$name" "$dir.partial" \
-        || { rm -rf "$dir.unpacked" "$dir.partial" "$archive"; die "cannot unpack zig $version"; }
+      if ! { unzip -q "$archive" -d "$dir.unpacked" && mv "$dir.unpacked/$name" "$dir.partial"; }; then
+        rm -rf "$dir.unpacked" "$dir.partial" "$archive"
+        die "cannot unpack zig $version"
+      fi
       rm -rf "$dir.unpacked"
     else
-      tar -xJf "$archive" -C "$dir.unpacked" --strip-components=1 && mv "$dir.unpacked" "$dir.partial" \
-        || { rm -rf "$dir.unpacked" "$dir.partial" "$archive"; die "cannot unpack zig $version"; }
+      if ! { tar -xJf "$archive" -C "$dir.unpacked" --strip-components=1 && mv "$dir.unpacked" "$dir.partial"; }; then
+        rm -rf "$dir.unpacked" "$dir.partial" "$archive"
+        die "cannot unpack zig $version"
+      fi
     fi
     rm -f "$archive"
     { rm -rf "$dir" && mv "$dir.partial" "$dir"; } || { rm -rf "$dir.partial"; die "cannot move zig into $dir"; }

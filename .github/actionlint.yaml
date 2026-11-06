@@ -1,0 +1,6 @@
+# actionlint's settings (scripts/lint.sh). GitHub-hosted runner labels newer than the pinned actionlint's list, which
+# would otherwise be reported as unknown self-hosted labels.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - xcode-27

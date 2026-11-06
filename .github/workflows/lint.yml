@@ -1,0 +1,40 @@
+# The workflows and the scripts, linted by scripts/lint.sh: actionlint over .github/workflows/ (each `run:` block
+# through shellcheck), shellcheck over scripts/*.sh and scripts/lib/*.sh, both at the versions
+# packaging/release/pins.env pins and checksum-verified. Python scripts' self-tests join this job as they come.
+#
+# Path-filtered to what it reads: the workflows and actionlint's settings, the scripts, shellcheck's settings and the
+# pins. Pushes to a `ci/**` branch run it too, and it can be run by hand.
+name: lint
+
+on:
+  pull_request:
+    paths: &paths
+      - .github/workflows/**
+      - .github/actionlint.yaml
+      - scripts/*.sh
+      - scripts/lib/*.sh
+      - scripts/*.py
+      - .shellcheckrc
+      - packaging/release/pins.env
+  push:
+    branches: [main, "ci/**"]
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: actionlint and shellcheck
+        run: scripts/lint.sh

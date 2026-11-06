@@ -1,0 +1,8 @@
+# Dependabot keeps the workflows' actions current, whether a workflow pins one by tag or by commit SHA (with the tag in
+# a comment).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
