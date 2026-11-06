@@ -19,7 +19,9 @@
 #   (mobile/ios/build/snapshot-failures/) with the failed tests' attachments exported from the result bundles (each
 #   snapshot's reference, failure and difference images, the UI audits' screenshots) as `ios-failure-diffs`;
 # - `archive`: scripts/build-ios.sh archive, an unsigned Release archive for devices, checked to hold no
-#   NgtermCoreFakes symbol (the fake core is for Debug builds only).
+#   NgtermCoreFakes symbol (the fake core is for Debug builds only), to answer the export compliance question, and to
+#   carry a privacy manifest that covers the required-reason APIs its binary uses (scripts/ios-privacy-check.sh). The
+#   signed archive, its export and its upload are ios-release.yml's.
 #
 # The vendor root (the pinned Zig, its global cache, the libghostty-vt prefixes and the vendored SwiftLint) and cargo's
 # registry and target directory are cached as cross-platform.yml's macOS leg caches them, under keys of this image;
@@ -53,6 +55,7 @@ on:
       - scripts/build-ios.sh
       - scripts/setup-ios.sh
       - scripts/ios-sim-runner.sh
+      - scripts/ios-privacy-check.sh
       - scripts/build-ghostty-vt.sh
       - scripts/lib/native.sh
       - build/pins.env

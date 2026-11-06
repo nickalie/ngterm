@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	The app's privacy manifest: no tracking, no data collected (the app talks only to the user's own ssh servers and
+	sends nothing anywhere else), and the required-reason APIs its executable uses, as scripts/ios-privacy-check.sh
+	finds them in the Release archive (scripts/build-ios.sh archive runs it; docs/ios-release.md > Privacy manifest):
+	- FileTimestamp, C617.1: fstat and fstatat, from the core's libraries (Rust's std reading the app's own executable
+	  for a panic's backtrace; libghostty-vt's file helpers), on files inside the app's container only;
+	- SystemBootTime, 35F9.1: ProcessInfo.systemUptime, timing the terminal's taps (a double tap) and spacing its
+	  VoiceOver announcements, all within the app.
+-->
 <plist version="1.0">
 <dict>
 	<key>NSPrivacyTracking</key>
@@ -9,6 +18,23 @@
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array/>
 	<key>NSPrivacyAccessedAPITypes</key>
-	<array/>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
