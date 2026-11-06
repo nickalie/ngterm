@@ -24,8 +24,9 @@
 //! inherits the pane's `NGTERM_*`) or a Codex other than its TUI. A Codex run is told apart by the `source` its
 //! rollout's first line (`session_meta`) records: `cli` for the TUI, `exec` for `codex exec`, `vscode` for an
 //! app-server client, an object for a subagent; a payload without a readable rollout takes nothing, so its mail waits
-//! for the next event. The read+ack is at most once, as `msg read --ack` is: a message an agent then drops (its hook
-//! timed out, it quit) is gone.
+//! for the next event. A session keeps the `source` it was created with, so a `codex exec resume` of a TUI session is
+//! also refused by the argv of the Codex process above the hook ([`codex_process`]: Linux and macOS). The read+ack is
+//! at most once, as `msg read --ack` is: a message an agent then drops (its hook timed out, it quit) is gone.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -140,12 +141,19 @@ fn takes_mail(agent: AgentKind, payload: &Value, env: &dyn Env) -> bool {
     }
     match agent {
         AgentKind::Claude => env.var("CLAUDE_CODE_ENTRYPOINT").is_some_and(|entry| entry == "cli"),
-        AgentKind::Codex => payload
-            .get("transcript_path")
-            .and_then(Value::as_str)
-            .and_then(|path| session_meta_line(Path::new(path)))
-            .is_some_and(|line| codex_tui_session(&line)),
+        AgentKind::Codex => {
+            created_by_codexs_tui(payload) && !parent_pid().is_some_and(codex_process::headless_codex_above)
+        }
     }
+}
+
+/// Whether the rollout a Codex payload names was created by Codex's TUI.
+fn created_by_codexs_tui(payload: &Value) -> bool {
+    payload
+        .get("transcript_path")
+        .and_then(Value::as_str)
+        .and_then(|path| session_meta_line(Path::new(path)))
+        .is_some_and(|line| codex_tui_session(&line))
 }
 
 /// The first line of a Codex rollout, its `session_meta` record; `None` when the file cannot be read or that line is
@@ -406,6 +414,8 @@ fn parent_pid() -> Option<u32> {
 fn parent_pid() -> Option<u32> {
     None
 }
+
+mod codex_process;
 
 #[cfg(test)]
 mod tests;

@@ -16,9 +16,10 @@
 # into its composer. `ngtermctl agent mail codex` reads the payload, takes the messages in one read+ack and prints the
 # hook's answer, which this prints for Codex: added context on the first two, and on Stop a block whose reason is the
 # mail, so the turn goes on (the row stays active then). Only an interactive Codex takes mail, as its rollout's
-# session_meta records it (`source` `cli`): a `codex exec` or app-server run (a worker another agent started in this
-# pane inherits its NGTERM_*) takes none, nor does a subagent's event or the memory-consolidation thread. An idle Codex
-# has no hook to wake it, so mail sent then waits for its next prompt.
+# session_meta records it (`source` `cli`) and, on Linux and macOS, the argv of the Codex above the hook confirms (a
+# `codex exec resume` keeps the TUI session's record): a `codex exec` or app-server run (a worker another agent started
+# in this pane inherits its NGTERM_*) takes none, nor does a subagent's event or the memory-consolidation thread. An
+# idle Codex has no hook to wake it, so mail sent then waits for its next prompt.
 set -u
 
 [ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
@@ -123,8 +124,8 @@ if not (isinstance(payload, dict) and "transcript_path" in payload and payload["
 
 # Takes the pane's mail for this event into $mail_output, the hook answer `ngtermctl agent mail codex` prints; fails
 # when there is none or this Codex takes no mail (`agent mail` hands it only to the TUI, as the session_meta of the
-# payload's rollout records it: not to a `codex exec`, app-server or subagent run, nor to the memory-consolidation
-# thread, which has no rollout).
+# payload's rollout and the Codex process above it say: not to a `codex exec`, app-server or subagent run, nor to the
+# memory-consolidation thread, which has no rollout).
 mail_output=
 take_mail() {
   [ -n "${NGTERM_PANE_ID:-}" ] && [ -n "$payload" ] || return 1

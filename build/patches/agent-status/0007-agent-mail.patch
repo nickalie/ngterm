@@ -6,7 +6,8 @@ wakes an idle agent, turning the pane's status back to active when it does; the 
 parent is the agent. The Codex adapter runs `ngtermctl agent mail codex` on UserPromptSubmit, PostToolUse and Stop and
 prints its hook answer for Codex (a Stop that hands mail over keeps the row active and the watcher running), reading a
 PostToolUse or Stop payload only when the pane has an id; which Codex run takes mail (its TUI, not a `codex exec`
-worker, a subagent or the memory-consolidation thread) is the CLI's to decide from the payload. Applied after
+worker, a subagent or the memory-consolidation thread) is the CLI's to decide from the payload and the Codex process
+above the hook. Applied after
 0006-agent-transcript.patch.
 
 diff --git a/ngterm-agent-mail.ps1 b/ngterm-agent-mail.ps1
@@ -99,10 +100,10 @@ index 00000000..24ef4ac5
 +
 +exec "${NGTERMCTL:-ngtermctl}" "${args[@]}"
 diff --git a/ngterm-codex-status.sh b/ngterm-codex-status.sh
-index aa63d170..ba7b3d84 100755
+index aa63d170..3f400dc2 100755
 --- a/ngterm-codex-status.sh
 +++ b/ngterm-codex-status.sh
-@@ -10,6 +10,15 @@
+@@ -10,6 +10,16 @@
  # pane's agent record, piping the payload to `ngtermctl agent hook codex <event>`, so those three read the payload up
  # front and hand it on to the readers below. A subagent's events fire here with its `agent_id` and its own transcript:
  # only its permission prompt is reported, and `agent hook` keeps only the prompt of it.
@@ -112,13 +113,14 @@ index aa63d170..ba7b3d84 100755
 +# into its composer. `ngtermctl agent mail codex` reads the payload, takes the messages in one read+ack and prints the
 +# hook's answer, which this prints for Codex: added context on the first two, and on Stop a block whose reason is the
 +# mail, so the turn goes on (the row stays active then). Only an interactive Codex takes mail, as its rollout's
-+# session_meta records it (`source` `cli`): a `codex exec` or app-server run (a worker another agent started in this
-+# pane inherits its NGTERM_*) takes none, nor does a subagent's event or the memory-consolidation thread. An idle Codex
-+# has no hook to wake it, so mail sent then waits for its next prompt.
++# session_meta records it (`source` `cli`) and, on Linux and macOS, the argv of the Codex above the hook confirms (a
++# `codex exec resume` keeps the TUI session's record): a `codex exec` or app-server run (a worker another agent started
++# in this pane inherits its NGTERM_*) takes none, nor does a subagent's event or the memory-consolidation thread. An
++# idle Codex has no hook to wake it, so mail sent then waits for its next prompt.
  set -u
  
  [ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
-@@ -37,6 +46,13 @@ case "$action" in
+@@ -37,6 +47,13 @@ case "$action" in
      payload=$(cat)
      exec <<<"$payload"
      ;;
@@ -132,14 +134,14 @@ index aa63d170..ba7b3d84 100755
  esac
  
  # Pipes the payload to `ngtermctl agent hook codex <event>`; a subagent's event other than a permission prompt is left
-@@ -105,6 +121,18 @@ if not (isinstance(payload, dict) and "transcript_path" in payload and payload["
+@@ -105,6 +122,18 @@ if not (isinstance(payload, dict) and "transcript_path" in payload and payload["
    fi
  }
  
 +# Takes the pane's mail for this event into $mail_output, the hook answer `ngtermctl agent mail codex` prints; fails
 +# when there is none or this Codex takes no mail (`agent mail` hands it only to the TUI, as the session_meta of the
-+# payload's rollout records it: not to a `codex exec`, app-server or subagent run, nor to the memory-consolidation
-+# thread, which has no rollout).
++# payload's rollout and the Codex process above it say: not to a `codex exec`, app-server or subagent run, nor to the
++# memory-consolidation thread, which has no rollout).
 +mail_output=
 +take_mail() {
 +  [ -n "${NGTERM_PANE_ID:-}" ] && [ -n "$payload" ] || return 1
@@ -151,7 +153,7 @@ index aa63d170..ba7b3d84 100755
  read_visible_screen() {
    "${NGTERMCTL:-ngtermctl}" session text \
      --target "$NGTERM_SESSION_ID" \
-@@ -202,9 +230,14 @@ case "$action" in
+@@ -202,9 +231,14 @@ case "$action" in
      report_agent UserPromptSubmit
      report_status active --blink
      start_watcher
@@ -167,7 +169,7 @@ index aa63d170..ba7b3d84 100755
      ;;
    permission-request)
      # Candidate only: keep watching while Auto Review decides. The watcher reports blocked only if
-@@ -213,6 +246,11 @@ case "$action" in
+@@ -213,6 +247,11 @@ case "$action" in
      start_watcher
      ;;
    stop)

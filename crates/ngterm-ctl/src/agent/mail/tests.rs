@@ -100,19 +100,13 @@ fn session_meta(source: &Value) -> String {
     json!({"type": "session_meta", "payload": {"originator": "codex-tui", "source": source}}).to_string()
 }
 
+/// The rollout half of Codex's check; the process half is `codex_process`'s, and `takes_mail` refuses a subagent's
+/// event before either (a test run under a `codex exec` would otherwise find that run above it).
 #[test]
-fn only_codexs_tui_takes_mail_as_its_rollout_records_it() {
+fn only_a_rollout_codexs_tui_created_takes_mail() {
     let directory = tempfile::tempdir().unwrap();
-    let env = MapEnv::default();
     let tui = codex_payload(directory.path(), "tui.jsonl", &session_meta(&json!("cli")), json!({}));
-    assert!(takes_mail(AgentKind::Codex, &tui, &env));
-    let tui_with_empty_agent = codex_payload(
-        directory.path(),
-        "tui2.jsonl",
-        &session_meta(&json!("cli")),
-        json!({"agent_id": ""}),
-    );
-    assert!(takes_mail(AgentKind::Codex, &tui_with_empty_agent, &env));
+    assert!(created_by_codexs_tui(&tui));
     for (name, source) in [
         ("exec", json!("exec")),
         ("app-server", json!("vscode")),
@@ -120,7 +114,8 @@ fn only_codexs_tui_takes_mail_as_its_rollout_records_it() {
         ("subagent", json!({"subagent": {"thread_spawn": {"depth": 1}}})),
     ] {
         let payload = codex_payload(directory.path(), name, &session_meta(&source), json!({}));
-        assert!(!takes_mail(AgentKind::Codex, &payload, &env), "{name}");
+        assert!(!created_by_codexs_tui(&payload), "{name}");
+        assert!(!takes_mail(AgentKind::Codex, &payload, &MapEnv::default()), "{name}");
     }
     let subagent = codex_payload(
         directory.path(),
@@ -128,16 +123,16 @@ fn only_codexs_tui_takes_mail_as_its_rollout_records_it() {
         &session_meta(&json!("cli")),
         json!({"agent_id": "a1"}),
     );
-    assert!(!takes_mail(AgentKind::Codex, &subagent, &env));
+    assert!(!takes_mail(AgentKind::Codex, &subagent, &MapEnv::default()));
     let not_meta = codex_payload(
         directory.path(),
         "turn.jsonl",
         r#"{"type":"turn_context","payload":{"source":"cli"}}"#,
         json!({}),
     );
-    assert!(!takes_mail(AgentKind::Codex, &not_meta, &env));
+    assert!(!created_by_codexs_tui(&not_meta));
     let garbled = codex_payload(directory.path(), "garbled.jsonl", "{not json", json!({}));
-    assert!(!takes_mail(AgentKind::Codex, &garbled, &env));
+    assert!(!created_by_codexs_tui(&garbled));
     let unfinished = directory.path().join("unfinished.jsonl");
     fs::write(&unfinished, session_meta(&json!("cli"))).unwrap();
     for payload in [
@@ -146,7 +141,7 @@ fn only_codexs_tui_takes_mail_as_its_rollout_records_it() {
         json!({"hook_event_name": "Stop", "transcript_path": null}),
         json!({"hook_event_name": "Stop"}),
     ] {
-        assert!(!takes_mail(AgentKind::Codex, &payload, &env), "{payload}");
+        assert!(!created_by_codexs_tui(&payload), "{payload}");
     }
 }
 
