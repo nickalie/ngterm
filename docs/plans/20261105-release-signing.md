@@ -75,10 +75,12 @@
 - **CRITICAL: all tests must pass before starting next task.**
 - **CRITICAL: update this plan file when scope changes during implementation.**
 - Checks are sized to the change (AGENTS.md > Choosing checks):
-  - a workflow task proves itself with a dry run on its `ci/release-signing-<task>` branch, using the `platforms`
-    input to build only the platforms it touched;
-  - one full dry run is kept for Task 10;
-  - macOS and Windows behavior is gated on CI runners, never by `--target *-windows-*` cargo on the Linux host.
+  - no CI dry runs (user's call, 2026-11-06): no `ci/release-signing-<task>` branches, no release workflow runs as a
+    check. A workflow task proves itself locally (`scripts/lint.sh`, each script's `--self-test`, `shellcheck`);
+    the workflow's first run is a real release;
+  - the workflow keeps its dry-run mode (a `publish: false` dispatch) for whoever wants one;
+  - macOS and Windows behavior is never checked by `--target *-windows-*` cargo on the Linux host; the existing CI
+    workflows still run on the pushed changes.
 
 ## Testing Strategy
 
@@ -352,8 +354,9 @@
       - later tasks add each `--self-test` here
 - [x] `check-msi.ps1` lists `share\doc\ngterm\LICENSE.txt` among the installed files (the MSI harvests `share\**`)
 - [x] tests: `shellcheck` on the touched scripts; the `--dry-run` output parses as JSON; `actionlint` passes on all
-      current workflows. `LICENSE` in the packaged output is confirmed by Task 2's and Task 3's dry runs, not by a local
-      Linux package build (that needs the portable WPE build)
+      current workflows. `LICENSE` in the packaged MSI is confirmed by `windows-installer.yml` on main; in the other
+      packages by the first release (no CI dry runs), not by a local Linux package build (that needs the portable WPE
+      build)
 - [x] run checks; must pass before Task 2
 
 ### Task 2: The version job, modes, dry-run semantics and the gate
@@ -375,7 +378,7 @@
 - [ ] `approve` job on `release-gate`, only when publishing
 - [ ] pin every action in `release.yml` by SHA; add `persist-credentials: false`; set per-job permissions, listing
       `contents: read` beside any widened scope
-- [ ] tests: `--self-test`; `actionlint`; a Linux-only dry run on `ci/release-signing-2` keeps today's Linux assets
+- [ ] tests: `--self-test`; `scripts/lint.sh`
 - [ ] run checks; must pass before Task 3
 
 ### Task 3: Build/sign/verify split with tarball hand-off and digests
@@ -403,9 +406,8 @@
 - [ ] fonts: the build jobs copy the font licences into the tree, so the signing jobs need no font prefix
 - [ ] `macos-verify` and `windows-verify` run the smoke checks moved out of packaging (`--build-identity`,
       `check-msi.ps1` with the upgrade test)
-- [ ] tests: `actionlint`; `shellcheck`; macOS and Windows dry runs on `ci/release-signing-3` produce the same release
-      assets as before (names, plus `LICENSE` inside), with digests checked, and leave the upgrade MSI out of
-      `SHA256SUMS`
+- [ ] tests: `scripts/lint.sh`; the release asset names stay as before, and the upgrade MSI stays out of
+      `SHA256SUMS`, checked by reading the job graph
 - [ ] run checks; must pass before Task 4
 
 ### Task 4: macOS hardened runtime, entitlements and layout checks (ad-hoc)
@@ -420,7 +422,7 @@
       uses it ad-hoc in place of today's `--deep` sign, with the debug entitlements for `--profile debug`
 - [ ] `macos-verify` layout checks: hardened runtime on every Mach-O; no entitlements on helpers; the app's
       `ngterm` and the archive's `bin/ngterm` carry exactly the shipping entitlements
-- [ ] tests: `shellcheck`; a macOS dry run passes the layout checks on both arches and `--build-identity`
+- [ ] tests: `scripts/lint.sh`
 - [ ] run checks; must pass before Task 5
 
 ### Task 5: macOS Developer ID signing, notarization and stapling
@@ -437,8 +439,7 @@
       if not, the test matches its output
 - [ ] mode handling: secrets → Developer ID; `optional` without secrets → notice, the ad-hoc output ships;
       `required` or `require_developer_id` without secrets → fail, naming the secrets
-- [ ] tests: `shellcheck`; a macOS dry run signs with the throwaway identity and passes `codesign --verify` and the
-      PKG signature check
+- [ ] tests: `scripts/lint.sh`
 - [ ] run checks; must pass before Task 6
 
 ### Task 6: Windows: version resources and SignPath signing
@@ -461,8 +462,8 @@
 - [ ] `windows-verify`: `Get-AuthenticodeSignature` is `Valid` on the four exes in the portable zip, on the installed
       exes, and on the MSI when signed; `NotSigned` is accepted only in `optional` mode; then `check-msi.ps1` with
       the upgrade test
-- [ ] tests: the version resource is present (`(Get-Item ...).VersionInfo` in `windows-verify`); `actionlint`; a
-      Windows dry run passes unsigned
+- [ ] tests: the version resource is present (`(Get-Item ...).VersionInfo` in `windows-verify`, and in
+      `windows-installer.yml`'s run on main); `scripts/lint.sh`
 - [ ] run checks; must pass before Task 7
 
 ### Task 7: Updater: minisign over SHA256SUMS and the macOS team requirement
@@ -499,7 +500,7 @@
 - [ ] mode handling: `require_minisign` (a non-empty `minisign.pub`) or `required` mode with no key → fail; otherwise
       no key → notice and no `.minisig`
 - [ ] dry runs: `checksums` signs with a throwaway `minisign -G -W` key and verifies it
-- [ ] tests: `actionlint`; a Linux-only dry run produces `SHA256SUMS` and a throwaway signature that verifies
+- [ ] tests: `scripts/lint.sh`
 - [ ] run checks; must pass before Task 9
 
 ### Task 9: Android release builds, signing and Play upload
@@ -526,13 +527,13 @@
       - `llvm-readelf -lW` LOAD alignment of at least `0x4000` on every `lib/*/*.so`, including JNA's
         `libjnidispatch.so`;
       - `aapt2 dump badging`: version name and code equal the `version` job's outputs
-- [ ] tests: `shellcheck`; an Android dry run signs with throwaway keys and passes `android-verify`
+- [ ] tests: `scripts/lint.sh`; `scripts/sign-android.sh` signs and verifies with throwaway `keytool` keys
+      locally
 - [ ] run checks; must pass before Task 10
 
 ### Task 10: Verify acceptance criteria
 
 - [ ] every Overview item has its job or step; every secret and variable is read somewhere and documented
-- [ ] a full dry run on `ci/release-signing-10` (all platforms) is green, with throwaway signatures where they apply
 - [ ] `release-version.py --self-test` covers `required` from the variable, and each trust anchor forcing only its own
       component
 - [ ] grep checks:
