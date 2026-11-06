@@ -29,8 +29,11 @@
   - Homebrew: a cask in the user's tap `nickalie/homebrew-apps` (Task 13);
   - winget (Task 14), the AUR (Task 15) and Flathub (Task 16).
 - Credentials are requested as their task lands, never batched at the end (user, 2026-11-06): each task ends with a
-  **Credentials** list of what the user creates and enters. Secrets go straight into a GitHub environment from the
-  user's shell (`gh secret set NAME --env release`), never through the chat; non-secret ids the user may just tell.
+  **Credentials** list of what the user creates and enters. Secrets are kept in the private repository
+  `nickalie/ngterm-release-keys` (age-encrypted, mirrored to Bitwarden) and reach GitHub from there: the user runs
+  `./add.sh NAME [FILE]`, `./bitwarden.sh push` and `./sync.sh`, never through the chat. Non-secret ids go in its
+  `vars.tsv` (the user may just tell them). A `gh secret set ... --env release` in a Credentials list below means
+  `./add.sh` for that name, then `./sync.sh`.
   Long-lead applications (SignPath Foundation, the Play Console, App Store Connect) are started at the first task
   that can name them.
 - Nothing has been released yet (no tags, no GitHub releases), so there are no installed versions to stay compatible
