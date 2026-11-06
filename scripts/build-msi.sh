@@ -16,13 +16,20 @@
 # The `wix` tool is installed once into the vendor root (dotnet tool install, which needs a .NET SDK); NGTERM_WIX names
 # a `wix` of the pinned version to use instead (not WIX, which WiX 3 sets to its own folder).
 #
-# Usage: scripts/build-msi.sh OUTPUT.msi [--staged DIR] [--version X.Y.Z] [--archive OUTPUT.zip]
+# --arch (x64 or arm64) names the package's architecture instead of the host rustc's, so a job without Rust can build
+# it. --notices takes a staged tree whose share/doc/fonts holds the fonts' licenses already (a tree a previous run of
+# this script packaged), so no fonts prefix is needed.
+#
+# Usage: scripts/build-msi.sh OUTPUT.msi [--staged DIR [--notices]] [--version X.Y.Z] [--archive OUTPUT.zip]
+#        [--arch x64|arm64]
 set -euo pipefail
 
 # shellcheck source=lib/native.sh
 source "$(dirname "$0")/lib/native.sh"
 
-usage() { die "usage: scripts/build-msi.sh OUTPUT.msi [--staged DIR] [--version X.Y.Z] [--archive OUTPUT.zip]"; }
+usage() {
+  die "usage: scripts/build-msi.sh OUTPUT.msi [--staged DIR [--notices]] [--version X.Y.Z] [--archive OUTPUT.zip] [--arch x64|arm64]"
+}
 
 [[ "$(host_os)" == windows ]] || die "scripts/build-msi.sh runs on Windows (Git Bash): WiX writes MSIs through Windows Installer"
 (($# >= 1)) || usage
@@ -31,16 +38,26 @@ shift
 STAGED=""
 VERSION=""
 ARCHIVE=""
+ARCH=""
+NOTICES=false
 while (($#)); do
+  if [[ "$1" == --notices ]]; then
+    NOTICES=true
+    shift
+    continue
+  fi
   (($# >= 2)) || usage
   case "$1" in
     --staged) STAGED="$2" ;;
     --version) VERSION="$2" ;;
     --archive) ARCHIVE="$2" ;;
+    --arch) ARCH="$2" ;;
     *) usage ;;
   esac
   shift 2
 done
+[[ -z "$ARCH" || "$ARCH" == x64 || "$ARCH" == arm64 ]] || die "--arch is x64 or arm64, not $ARCH"
+[[ "$NOTICES" == false || -n "$STAGED" ]] || die "--notices takes a --staged tree"
 [[ "$OUTPUT" == *.msi ]] || die "the output is a .msi: $OUTPUT"
 
 # The pinned `wix`: NGTERM_WIX when given (checked against the pin), else the vendor root's, installed on first use.
@@ -62,9 +79,13 @@ wix_tool() {
   echo "$tool"
 }
 
-# WiX's -arch for the binaries cargo builds on this host.
+# WiX's -arch: --arch, else that of the binaries cargo builds on this host.
 wix_arch() {
   local host
+  if [[ -n "$ARCH" ]]; then
+    echo "$ARCH"
+    return
+  fi
   host="$(rustc -vV | sed -n 's/^host: //p')"
   case "$host" in
     x86_64-pc-windows-*) echo x64 ;;
@@ -142,13 +163,17 @@ fi
 # executables
 ROOT="$WORK/root"
 cp -R "$STAGED" "$ROOT"
-FONTS="$(fonts_prefix)"
-fonts_prefix_is_complete "$FONTS" || die "no complete terminal fonts prefix at $FONTS: run scripts/fetch-fonts.sh"
 mkdir -p "$ROOT/share/doc/ngterm" "$ROOT/share/doc/fonts"
 cp "$NATIVE_ROOT/LICENSE" "$ROOT/share/doc/ngterm/LICENSE.txt"
 cp "$NATIVE_ROOT/NOTICE" "$ROOT/share/doc/ngterm/NOTICE.txt"
 cp "$NATIVE_ROOT/resources/LICENSE.upstream" "$ROOT/share/doc/ngterm/LICENSE.upstream.txt"
-cp "$FONTS/share/doc/fonts/"* "$ROOT/share/doc/fonts/"
+if [[ "$NOTICES" == true ]]; then
+  compgen -G "$ROOT/share/doc/fonts/*" >/dev/null || die "--notices, but $STAGED has no share/doc/fonts licenses"
+else
+  FONTS="$(fonts_prefix)"
+  fonts_prefix_is_complete "$FONTS" || die "no complete terminal fonts prefix at $FONTS: run scripts/fetch-fonts.sh"
+  cp "$FONTS/share/doc/fonts/"* "$ROOT/share/doc/fonts/"
+fi
 bundle_vc_runtime "$ROOT/bin"
 rm -f "$ROOT/share/ngterm/session-BUILD"
 

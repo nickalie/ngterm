@@ -8,6 +8,13 @@
 # - a dry run: a dispatch with `publish: false` on any ref. It builds the platforms its `platforms` input names, at
 #   that ref's Cargo.toml version, keeps the packages as workflow artifacts and publishes nothing.
 #
+# The jobs, in order: build (no secrets, caches allowed), sign (no cache, and it executes nothing a build produced),
+# verify (runs the signed output), `checksums`, then `publish`. Files pass between them as artifacts, checked by
+# digest at every step (scripts/release-artifacts.py): each job that uploads reports the artifact's id, its files'
+# SHA-256 and which of them are release assets in a job output (matrix legs under per-arch names, as legs writing one
+# name overwrite each other), and each job that downloads checks what it got against those before using it. A tree a
+# later job unpacks travels as a tarball, so modes and symlinks survive; finished packages travel as plain files.
+#
 # Every action is pinned by commit SHA (its tag in a comment, which Dependabot keeps current), and no checkout keeps
 # its credentials.
 name: release
@@ -47,6 +54,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       commit: ${{ steps.version.outputs.commit }}
+      build_commit: ${{ steps.version.outputs.build_commit }}
       android_version_code: ${{ steps.version.outputs.android_version_code }}
       publishing: ${{ steps.version.outputs.publishing }}
       signing_mode: ${{ steps.version.outputs.signing_mode }}
@@ -95,10 +103,14 @@ jobs:
           - os: ubuntu-24.04-arm
             arch: aarch64
     runs-on: ${{ matrix.os }}
+    outputs:
+      manifest_x86_64: ${{ steps.manifest.outputs.manifest_x86_64 }}
+      manifest_aarch64: ${{ steps.manifest.outputs.manifest_aarch64 }}
     # A cold WPE source build dominates this job. Its installed prefix is cached.
     timeout-minutes: 350
     env:
       NGTERM_RELEASE_WPE: /home/runner/.cache/ngterm/release-wpe
+      NGTERM_BUILD_COMMIT: ${{ needs.version.outputs.build_commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -171,16 +183,29 @@ jobs:
       - name: Linux archive, native packages and AppImage
         run: scripts/package-release.sh "$RUNNER_TEMP/stage" "${{ needs.version.outputs.version }}" dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
         with:
           name: release-linux-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
+      - name: Manifest
+        id: manifest
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          manifest="$(python3 scripts/release-artifacts.py manifest dist "$ARTIFACT_ID")"
+          echo "manifest_$ARCH=$manifest" >> "$GITHUB_OUTPUT"
 
   windows-build:
     needs: version
     if: contains(fromJSON(needs.version.outputs.platforms), 'windows')
     runs-on: windows-2025
     timeout-minutes: 90
+    outputs:
+      manifest: ${{ steps.manifest.outputs.manifest }}
+    env:
+      NGTERM_BUILD_COMMIT: ${{ needs.version.outputs.build_commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -203,24 +228,70 @@ jobs:
         run: |
           cargo test --locked -p ngterm-update
           cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless
-      - name: Stage and package
+      # Unsigned, as plain files: SignPath opens this artifact itself, and reads no tarball.
+      - name: MSI, portable zip and the upgrade-test MSI
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           scripts/stage.sh "$RUNNER_TEMP/stage" --profile release
-          scripts/package-release.sh "$RUNNER_TEMP/stage" "${{ needs.version.outputs.version }}" dist
-      - name: Validate Windows install, upgrade and uninstall
-        run: |
-          IFS=. read -r major minor patch <<<"${{ needs.version.outputs.version }}"
-          scripts/build-msi.sh "$RUNNER_TEMP/upgrade.msi" --staged "$RUNNER_TEMP/stage" --version "$major.$minor.$((patch + 1))"
-      - name: Windows installer smoke test
-        shell: pwsh
-        run: |
-          $msi = (Get-ChildItem dist\*.msi).FullName
-          scripts\check-msi.ps1 -Msi $msi -UpgradeMsi "$env:RUNNER_TEMP\upgrade.msi" -Log "$env:RUNNER_TEMP\msi"
+          scripts/package-release.sh "$RUNNER_TEMP/stage" "$VERSION" dist
+          IFS=. read -r major minor patch <<<"$VERSION"
+          scripts/build-msi.sh dist/ngterm-upgrade-test.msi --staged "$RUNNER_TEMP/stage" \
+            --version "$major.$minor.$((patch + 1))"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
         with:
           name: release-windows-x86_64
           path: dist/*
           if-no-files-found: error
+      - name: Manifest
+        id: manifest
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          manifest="$(python scripts/release-artifacts.py manifest dist "$ARTIFACT_ID" --not-asset ngterm-upgrade-test.msi)"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+
+  windows-verify:
+    needs: [version, windows-build]
+    if: ${{ !cancelled() && needs.windows-build.result == 'success' }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
+      - name: Artifact ids
+        id: ids
+        env:
+          WINDOWS: ${{ needs.windows-build.outputs.manifest }}
+        run: |
+          ids="$(python scripts/release-artifacts.py ids "$WINDOWS")"
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.ids.outputs.ids }}
+          path: ${{ runner.temp }}/in
+          merge-multiple: true
+      - name: Digests and build identity
+        env:
+          WINDOWS: ${{ needs.windows-build.outputs.manifest }}
+          VERSION: ${{ needs.version.outputs.version }}
+          BUILD_COMMIT: ${{ needs.version.outputs.build_commit }}
+        run: |
+          python scripts/release-artifacts.py check "$RUNNER_TEMP/in" "$WINDOWS"
+          python -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+            "$RUNNER_TEMP/in/ngterm-$VERSION-windows-x86_64.zip" "$RUNNER_TEMP/zip"
+          identity="$("$RUNNER_TEMP/zip/ngterm/bin/ngterm.exe" --build-identity | tr -d '\r')"
+          [[ "$identity" == "$VERSION"$'\n'"$BUILD_COMMIT" ]] || { echo "::error::the zip's ngterm is $identity"; exit 1; }
+      - name: Install, upgrade and uninstall
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          scripts\check-msi.ps1 -Msi "$env:RUNNER_TEMP\in\ngterm-$env:VERSION-windows-x86_64.msi" `
+            -UpgradeMsi "$env:RUNNER_TEMP\in\ngterm-upgrade-test.msi" -Log "$env:RUNNER_TEMP\msi"
 
   macos-build:
     needs: version
@@ -230,13 +301,17 @@ jobs:
       matrix:
         include:
           - os: macos-15-intel
-            platform: macos-x86_64
+            arch: x86_64
           - os: macos-15
-            platform: macos-arm64
+            arch: arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    outputs:
+      manifest_x86_64: ${{ steps.manifest.outputs.manifest_x86_64 }}
+      manifest_arm64: ${{ steps.manifest.outputs.manifest_arm64 }}
     env:
       MACOSX_DEPLOYMENT_TARGET: "14.0"
+      NGTERM_BUILD_COMMIT: ${{ needs.version.outputs.build_commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -259,39 +334,257 @@ jobs:
         run: |
           cargo test --locked -p ngterm-update
           cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless
-      - name: Stage and package
+      # The ad-hoc signed .app and the archive's loose tree, as one tarball: macos-sign packages them
+      - name: Bundle
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
         run: |
           scripts/stage.sh "$RUNNER_TEMP/stage" --profile release
-          scripts/package-release.sh "$RUNNER_TEMP/stage" "${{ needs.version.outputs.version }}" dist
+          scripts/package-release.sh --macos-bundle "$RUNNER_TEMP/stage" "$VERSION" "$NGTERM_BUILD_COMMIT" "$RUNNER_TEMP/tree"
+          mkdir dist
+          COPYFILE_DISABLE=1 tar --no-xattrs -C "$RUNNER_TEMP/tree" -czf "dist/ngterm-macos-$ARCH-build.tar.gz" ngterm.app archive
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
         with:
-          name: release-${{ matrix.platform }}
+          name: build-macos-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
+      - name: Manifest
+        id: manifest
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          manifest="$(python3 scripts/release-artifacts.py manifest dist "$ARTIFACT_ID" --not-asset "ngterm-macos-$ARCH-build.tar.gz")"
+          echo "manifest_$ARCH=$manifest" >> "$GITHUB_OUTPUT"
 
-  publish:
-    needs: [version, approve, linux, windows-build, macos-build]
-    if: needs.version.outputs.publishing == 'true'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
+  # Packages both arches. It runs nothing the builds produced: they reach it as data only (unpacked with no link out of
+  # the tree), so a build can't aim it at anything this job holds.
+  macos-sign:
+    needs: [version, approve, macos-build]
+    # A skipped `approve` passes on a dry run only
+    if: >-
+      ${{ !cancelled() && needs.macos-build.result == 'success'
+      && (needs.approve.result == 'success'
+      || (needs.version.outputs.publishing != 'true' && needs.approve.result == 'skipped')) }}
+    runs-on: macos-15
+    environment: ${{ needs.version.outputs.publishing == 'true' && 'release' || '' }}
+    timeout-minutes: 60
+    outputs:
+      manifest: ${{ steps.manifest.outputs.manifest }}
+    env:
+      X86_64: ${{ needs.macos-build.outputs.manifest_x86_64 }}
+      ARM64: ${{ needs.macos-build.outputs.manifest_arm64 }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
+      # tarfile's extraction filters
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Artifact ids
+        id: ids
+        run: |
+          ids="$(python3 scripts/release-artifacts.py ids "$X86_64" "$ARM64")"
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: release-*
-          path: dist
+          artifact-ids: ${{ steps.ids.outputs.ids }}
+          path: ${{ runner.temp }}/in
           merge-multiple: true
-      - name: Checksums and GitHub Release
+      - name: Digests and unpacking
+        run: |
+          python3 scripts/release-artifacts.py check "$RUNNER_TEMP/in" "$X86_64" "$ARM64"
+          for arch in x86_64 arm64; do
+            python3 scripts/release-artifacts.py extract "$RUNNER_TEMP/in/ngterm-macos-$arch-build.tar.gz" "$RUNNER_TEMP/tree-$arch"
+          done
+      - name: Packages
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          for arch in x86_64 arm64; do
+            scripts/package-release.sh --macos-package "$RUNNER_TEMP/tree-$arch" "$VERSION" "$arch" dist
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
+        with:
+          name: release-macos
+          path: dist/*
+          if-no-files-found: error
+      - name: Manifest
+        id: manifest
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          manifest="$(python3 scripts/release-artifacts.py manifest dist "$ARTIFACT_ID")"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+
+  macos-verify:
+    needs: [version, macos-sign]
+    if: ${{ !cancelled() && needs.macos-sign.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            arch: x86_64
+          - os: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      MACOS: ${{ needs.macos-sign.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
+      - name: Artifact ids
+        id: ids
+        run: |
+          ids="$(python3 scripts/release-artifacts.py ids "$MACOS")"
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.ids.outputs.ids }}
+          path: ${{ runner.temp }}/in
+          merge-multiple: true
+      - name: Digests, signatures and build identity
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          BUILD_COMMIT: ${{ needs.version.outputs.build_commit }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python3 scripts/release-artifacts.py check "$RUNNER_TEMP/in" "$MACOS"
+          name="$RUNNER_TEMP/in/ngterm-$VERSION-macos-$ARCH"
+          work="$RUNNER_TEMP/verify"
+          expected="$VERSION"$'\n'"$BUILD_COMMIT"
+          identity() {
+            local got
+            got="$("$1" --build-identity)"
+            [[ "$got" == "$expected" ]] || { echo "::error::$1 is $got, expected $expected"; exit 1; }
+          }
+          bundle() {
+            codesign --verify --deep --strict "$1"
+            [[ "$(plutil -extract CFBundleShortVersionString raw "$1/Contents/Info.plist")" == "$VERSION" ]]
+            [[ "$(plutil -extract GitCommit raw "$1/Contents/Info.plist")" == "$BUILD_COMMIT" ]]
+            identity "$1/Contents/MacOS/ngterm"
+          }
+          mkdir -p "$work/zip" "$work/archive" "$work/dmg"
+          ditto -x -k "$name.app.zip" "$work/zip"
+          bundle "$work/zip/ngterm.app"
+          tar -xzf "$name.tar.gz" -C "$work/archive"
+          identity "$work/archive/bin/ngterm"
+          hdiutil attach -nobrowse -readonly -mountpoint "$work/dmg" "$name.dmg"
+          trap 'hdiutil detach "$work/dmg" || true' EXIT
+          bundle "$work/dmg/ngterm.app"
+          # through a file: under pipefail, grep -q quitting early could fail pkgutil with SIGPIPE
+          pkgutil --payload-files "$name.pkg" > "$work/pkg-files"
+          grep -q 'Contents/MacOS/ngterm' "$work/pkg-files"
+
+  checksums:
+    needs: [version, linux, windows-build, macos-sign]
+    # Over what this run built: a dry run's left-out platforms are skipped, and any failure stops it
+    if: >-
+      ${{ !cancelled() && needs.version.result == 'success' && !contains(needs.*.result, 'failure')
+      && (needs.linux.result == 'success' || needs.windows-build.result == 'success'
+      || needs.macos-sign.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      manifest: ${{ steps.manifest.outputs.manifest }}
+    env:
+      LINUX_X86_64: ${{ needs.linux.outputs.manifest_x86_64 }}
+      LINUX_AARCH64: ${{ needs.linux.outputs.manifest_aarch64 }}
+      WINDOWS: ${{ needs.windows-build.outputs.manifest }}
+      MACOS: ${{ needs.macos-sign.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
+      - name: Artifact ids
+        id: ids
+        run: |
+          ids="$(python3 scripts/release-artifacts.py ids "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS")"
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.ids.outputs.ids }}
+          path: ${{ runner.temp }}/in
+          merge-multiple: true
+      - name: SHA256SUMS over the release assets
+        run: |
+          mkdir sums
+          python3 scripts/release-artifacts.py sums "$RUNNER_TEMP/in" "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" \
+            > sums/SHA256SUMS
+          cat sums/SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
+        with:
+          name: release-sha256sums
+          path: sums/SHA256SUMS
+          if-no-files-found: error
+      - name: Manifest
+        id: manifest
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          manifest="$(python3 scripts/release-artifacts.py manifest sums "$ARTIFACT_ID")"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: [version, approve, linux, windows-build, windows-verify, macos-sign, macos-verify, checksums]
+    if: needs.version.outputs.publishing == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      LINUX_X86_64: ${{ needs.linux.outputs.manifest_x86_64 }}
+      LINUX_AARCH64: ${{ needs.linux.outputs.manifest_aarch64 }}
+      WINDOWS: ${{ needs.windows-build.outputs.manifest }}
+      MACOS: ${{ needs.macos-sign.outputs.manifest }}
+      SUMS: ${{ needs.checksums.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
+      # A publishing run builds every platform: an empty manifest is a job that failed to report, never one left out
+      - name: Artifact ids
+        id: ids
+        run: |
+          for manifest in LINUX_X86_64 LINUX_AARCH64 WINDOWS MACOS SUMS; do
+            [[ -n "${!manifest}" ]] || { echo "::error::no $manifest manifest"; exit 1; }
+          done
+          ids="$(python3 scripts/release-artifacts.py ids "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$SUMS")"
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.ids.outputs.ids }}
+          path: ${{ runner.temp }}/dist
+          merge-multiple: true
+      - name: Digests
+        run: |
+          python3 scripts/release-artifacts.py check "$RUNNER_TEMP/dist" \
+            "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$SUMS"
+          (cd "$RUNNER_TEMP/dist" && sha256sum --check --strict SHA256SUMS)
+      - name: GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
-          cd dist
-          sha256sum -- * > SHA256SUMS
+          mapfile -t assets < <(python3 scripts/release-artifacts.py assets "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS")
+          cd "$RUNNER_TEMP/dist"
           # Upload into a draft first: failed uploads never expose a partial new release.
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --verify-tag --draft --title "ngterm $RELEASE_TAG" --generate-notes
           fi
-          gh release upload "$RELEASE_TAG" --clobber -- *
+          gh release upload "$RELEASE_TAG" --clobber -- "${assets[@]}" SHA256SUMS
           gh release edit "$RELEASE_TAG" --draft=false

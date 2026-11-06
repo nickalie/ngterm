@@ -389,29 +389,38 @@
 **Files:**
 - Modify: `.github/workflows/release.yml`
 - Modify: `scripts/package-release.sh`, `scripts/bundle-macos.sh`, `scripts/build-msi.sh`
+- ➕ Create: `scripts/release-artifacts.py` (manifests, digest checks, `SHA256SUMS`, safe extraction; `--self-test`)
+- ➕ Modify: `scripts/release-version.py` (a `build_commit` output), README > Downloads and releases
 
-- [ ] `bundle-macos.sh` takes the version and commit as arguments (from `version`) instead of running
+- [x] `bundle-macos.sh` takes the version and commit as arguments (from `version`) instead of running
       `--build-identity`; local use keeps reading them from the staged `app-BUILD`
-- [ ] `package-release.sh`: split macOS into a bundle step (build job) and a package step (signing job) that executes
+- [x] `package-release.sh`: split macOS into a bundle step (build job) and a package step (signing job) that executes
       no build output; move `--build-identity` checks into the verify jobs
-- [ ] `build-msi.sh`: an `--arch` option so it needs no `rustc`, and an option to accept a tree whose font notices
+- [x] `build-msi.sh`: an `--arch` option so it needs no `rustc`, and an option to accept a tree whose font notices
       are already in place, skipping the font prefix check. `windows-build` builds the unsigned MSI, zip and upgrade
       MSI and uploads them as plain files, because SignPath reads that artifact
-- [ ] the other build jobs upload tarballs. Every build job outputs artifact ids, per-file digests and its release
+- [x] the other build jobs upload tarballs. Every build job outputs artifact ids, per-file digests and its release
       asset list, with per-arch output names in matrix jobs
-- [ ] signing, verify and `checksums` jobs download by id and check digests first; signing jobs reject absolute and
+- [x] ➕ `linux` uploads its packages as plain files, like `windows-build`: they are finished packages that no later
+      job unpacks, so a tarball would only add a step. The hand-off is one manifest per artifact (id, file digests,
+      release assets) rather than separate id/digest outputs
+- [x] ➕ the build jobs set `NGTERM_BUILD_COMMIT` to the `version` job's `build_commit`: release binaries recorded
+      no commit until now, and the bundle's `GitCommit` and the verify jobs' `--build-identity` check need it
+- [x] signing, verify and `checksums` jobs download by id and check digests first; signing jobs reject absolute and
       escaping symlinks in extracted trees. `checksums` writes `SHA256SUMS` over the reported release assets only.
       `publish` (publishing only) checks the `SHA256SUMS` digest and runs `sha256sum -c` before uploading
-- [ ] job conditions as in Solution Overview: signing jobs accept a skipped `approve` only on dry runs; `checksums`
+- [x] job conditions as in Solution Overview: signing jobs accept a skipped `approve` only on dry runs; `checksums`
       skips after any failure; `publish` and `play-upload` need every verify job
-- [ ] macOS packaging runs in one `macos-sign` job for both arches from this task on, so Task 5 only adds the
+      (➕ `windows-sign` arrives with Task 6 and `play-upload` with the Android tasks; until then `windows-verify` and
+      `checksums` take `windows-build`'s files)
+- [x] macOS packaging runs in one `macos-sign` job for both arches from this task on, so Task 5 only adds the
       Developer ID steps to it
-- [ ] fonts: the build jobs copy the font licences into the tree, so the signing jobs need no font prefix
-- [ ] `macos-verify` and `windows-verify` run the smoke checks moved out of packaging (`--build-identity`,
+- [x] fonts: the build jobs copy the font licences into the tree, so the signing jobs need no font prefix
+- [x] `macos-verify` and `windows-verify` run the smoke checks moved out of packaging (`--build-identity`,
       `check-msi.ps1` with the upgrade test)
-- [ ] tests: `scripts/lint.sh`; the release asset names stay as before, and the upgrade MSI stays out of
+- [x] tests: `scripts/lint.sh`; the release asset names stay as before, and the upgrade MSI stays out of
       `SHA256SUMS`, checked by reading the job graph
-- [ ] run checks; must pass before Task 4
+- [x] run checks; must pass before Task 4
 
 ### Task 4: macOS hardened runtime, entitlements and layout checks (ad-hoc)
 

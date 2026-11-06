@@ -4,6 +4,8 @@
 The `version` job runs it and writes these outputs to $GITHUB_OUTPUT:
 
 - version, commit: the workspace version (Cargo.toml) and the checked-out commit;
+- build_commit: that commit's short form, which the build jobs record (NGTERM_BUILD_COMMIT) and the verify jobs
+  expect `ngterm --build-identity` to print;
 - tag: the release tag when publishing, else empty;
 - android_version_code: major * 1_000_000 + minor * 1_000 + patch (minor and patch below 1000);
 - publishing: "true" for a tag push, or a dispatch with `publish: true` on a tag ref; a dispatch with
@@ -136,6 +138,7 @@ def main():
         anchors=anchors,
     )
     outputs["commit"] = git("rev-parse", "HEAD")
+    outputs["build_commit"] = git("rev-parse", "--short", "HEAD")
     if outputs["publishing"] == "true":
         tagged = git("rev-parse", f"refs/tags/{outputs['tag']}^{{commit}}")
         if tagged != outputs["commit"]:

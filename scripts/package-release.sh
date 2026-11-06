@@ -1,21 +1,94 @@
 #!/usr/bin/env bash
-# Package a complete scripts/stage.sh tree on its native runner.
-# Usage: scripts/package-release.sh STAGED VERSION OUTPUT_DIR
+# Package a release on its native runner.
+#
+#   scripts/package-release.sh STAGED VERSION OUTPUT_DIR
+#     every package of this host from a complete scripts/stage.sh tree;
+#   scripts/package-release.sh --macos-bundle STAGED VERSION COMMIT TREE
+#     macOS, the build step: TREE/ngterm.app (ad-hoc signed, recording VERSION and COMMIT) and TREE/archive (the loose
+#     bin and share of the .tar.gz), from a staged tree;
+#   scripts/package-release.sh --macos-package TREE VERSION ARCH OUTPUT_DIR
+#     macOS, the packaging step: the .tar.gz, .app.zip, DMG and PKG from a --macos-bundle TREE. It executes nothing
+#     from TREE, so it can run where signing keys are.
+#
+# The licenses and notices go into share/doc beside the staged files (on Windows, scripts/build-msi.sh does that).
 set -euo pipefail
 # shellcheck source=lib/native.sh
 source "$(dirname "$0")/lib/native.sh"
 # shellcheck source=../packaging/release/pins.env
 source "$NATIVE_ROOT/packaging/release/pins.env"
-(($# == 3)) || die "usage: scripts/package-release.sh STAGED VERSION OUTPUT_DIR"
+usage() {
+  die "usage: scripts/package-release.sh STAGED VERSION OUTPUT_DIR
+  | --macos-bundle STAGED VERSION COMMIT TREE | --macos-package TREE VERSION ARCH OUTPUT_DIR"
+}
+mode=all
+case "${1:-}" in
+  --macos-bundle | --macos-package)
+    mode="${1#--}"
+    shift
+    (($# == 4)) || usage
+    [[ "$(host_os)" == macos ]] || die "--$mode runs on macOS"
+    ;;
+  *) (($# == 3)) || usage ;;
+esac
 if [[ -n "${NGTERM_WPE_SMOKE_BINARY:-}" && "${RUNNER_ENVIRONMENT:-}" != github-hosted ]]; then
   die "NGTERM_WPE_SMOKE_BINARY is reserved for disposable GitHub-hosted release jobs"
 fi
-stage="$1"
 version="$2"
-dist="$3"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "expected MAJOR.MINOR.PATCH"
-mkdir -p "$dist"
-dist="$(cd "$dist" && pwd)"
+work="$(mktemp -d)"
+hidden_wpe=""
+trap 'if [[ -n "$hidden_wpe" && -d "$hidden_wpe" ]]; then mv "$hidden_wpe" "$wpe"; fi; rm -rf "$work"' EXIT
+
+# macos_bundle TREE COMMIT: the .app and the archive's loose tree from $stage
+macos_bundle() {
+  local tree="$1" commit="$2" app
+  [[ ! -e "$tree" ]] || die "the bundle tree exists: $tree"
+  mkdir -p "$tree/archive"
+  app="$tree/ngterm.app"
+  "$NATIVE_ROOT/scripts/bundle-macos.sh" "$app" --staged "$stage" --version "$version" --commit "$commit"
+  echo macos-bundle > "$app/Contents/Resources/update-format"
+  codesign --force --deep --sign - "$app"
+  codesign --verify --deep --strict "$app"
+  echo macos-archive > "$stage/share/ngterm/update-format"
+  cp -R "$stage/bin" "$stage/share" "$tree/archive/"
+}
+
+# macos_package TREE ARCH: every macOS package from a macos_bundle tree, executing nothing from it
+macos_package() {
+  local tree="$1" arch="$2" app="$1/ngterm.app" name
+  [[ -d "$app/Contents/MacOS" && -d "$tree/archive/bin" && -d "$tree/archive/share" ]] \
+    || die "not a --macos-bundle tree: $tree"
+  name="ngterm-$version-macos-$arch"
+  codesign --verify --deep --strict "$app"
+  tar -C "$tree/archive" -czf "$dist/$name.tar.gz" bin share
+  ditto -c -k --sequesterRsrc --keepParent "$app" "$dist/$name.app.zip"
+  mkdir -p "$work/dmg-$arch"
+  cp -R "$app" "$work/dmg-$arch/"
+  ln -s /Applications "$work/dmg-$arch/Applications"
+  hdiutil create -volname ngterm -srcfolder "$work/dmg-$arch" -ov -format UDZO "$dist/$name.dmg"
+  pkgbuild --component "$app" --install-location /Applications --identifier com.nickalie.ngterm \
+    --version "$version" "$dist/$name.pkg"
+  pkgutil --payload-files "$dist/$name.pkg" > "$work/pkg-files-$arch"
+  grep -q 'Contents/MacOS/ngterm' "$work/pkg-files-$arch"
+}
+
+if [[ "$mode" == macos-package ]]; then
+  [[ "$3" == x86_64 || "$3" == arm64 ]] || die "the macOS arch is x86_64 or arm64, not $3"
+  mkdir -p "$4"
+  dist="$(cd "$4" && pwd)"
+  macos_package "$(cd "$1" && pwd)" "$3"
+  exit 0
+fi
+
+stage="$1"
+if [[ "$mode" == macos-bundle ]]; then
+  commit="$3"
+  tree="$4"
+  [[ "$tree" == /* ]] || tree="$PWD/$tree"
+else
+  mkdir -p "$3"
+  dist="$(cd "$3" && pwd)"
+fi
 if [[ "$(host_os)" == windows ]]; then stage="$(cygpath -u "$stage")"; fi
 stage="$(cd "$stage" && pwd)"
 exe=""
@@ -25,9 +98,6 @@ for binary in ngterm ngtermctl ngterm-session ngterm-headless; do
 done
 [[ "$(head -n1 "$stage/share/ngterm/app-BUILD" | tr -d '\r')" == "$version" ]] \
   || die "staged version does not match $version"
-work="$(mktemp -d)"
-hidden_wpe=""
-trap 'if [[ -n "$hidden_wpe" && -d "$hidden_wpe" ]]; then mv "$hidden_wpe" "$wpe"; fi; rm -rf "$work"' EXIT
 cp -R "$stage" "$work/stage"
 stage="$work/stage"
 rm -f "$stage/share/ngterm/session-BUILD"
@@ -37,6 +107,10 @@ if [[ "$(host_os)" != windows ]]; then
   mkdir -p "$stage/share/doc/ngterm" "$stage/share/doc/fonts"
   cp "$NATIVE_ROOT/LICENSE" "$NATIVE_ROOT/NOTICE" "$NATIVE_ROOT/resources/LICENSE.upstream" "$stage/share/doc/ngterm/"
   cp "$fonts/share/doc/fonts/"* "$stage/share/doc/fonts/"
+fi
+if [[ "$mode" == macos-bundle ]]; then
+  macos_bundle "$tree" "$commit"
+  exit 0
 fi
 arch="$(uname -m)"
 [[ "$arch" != arm64 ]] || arch=aarch64
@@ -203,23 +277,8 @@ PY
     ;;
   macos)
     [[ "$arch" != aarch64 ]] || arch=arm64
-    app="$work/ngterm.app"
-    "$NATIVE_ROOT/scripts/bundle-macos.sh" "$app" --staged "$stage"
-    echo macos-bundle > "$app/Contents/Resources/update-format"
-    codesign --force --deep --sign - "$app"
-    codesign --verify --deep --strict "$app"
-    "$app/Contents/MacOS/ngterm" --build-identity
-    echo macos-archive > "$stage/share/ngterm/update-format"
-    tar -C "$stage" -czf "$dist/ngterm-$version-macos-$arch.tar.gz" bin share
-    ditto -c -k --sequesterRsrc --keepParent "$app" "$dist/ngterm-$version-macos-$arch.app.zip"
-    mkdir -p "$work/dmg"
-    cp -R "$app" "$work/dmg/"
-    ln -s /Applications "$work/dmg/Applications"
-    hdiutil create -volname ngterm -srcfolder "$work/dmg" -ov -format UDZO "$dist/ngterm-$version-macos-$arch.dmg"
-    pkgbuild --component "$app" --install-location /Applications --identifier com.nickalie.ngterm \
-      --version "$version" "$dist/ngterm-$version-macos-$arch.pkg"
-    pkgutil --payload-files "$dist/ngterm-$version-macos-$arch.pkg" > "$work/pkg-files"
-    grep -q 'Contents/MacOS/ngterm' "$work/pkg-files"
+    macos_bundle "$work/tree" "$(sed -n 2p "$stage/share/ngterm/app-BUILD" | tr -d '\r')"
+    macos_package "$work/tree" "$arch"
     ;;
   windows)
     "$NATIVE_ROOT/scripts/build-msi.sh" "$dist/ngterm-$version-windows-x86_64.msi" \
