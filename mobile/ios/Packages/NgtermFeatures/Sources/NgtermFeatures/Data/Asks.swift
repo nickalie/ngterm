@@ -9,7 +9,9 @@ import Observation
 /// back with the rest.
 ///
 /// Where one shows is the ask rule's: a sheet while its session is on screen (``onScreen``: its view shown in a window
-/// in the foreground), otherwise a notification (``Alerts``).
+/// in the foreground), otherwise a notification (``Alerts``). An open ask's draft is kept here, with the ask, not with
+/// its sheet: a sheet that left the screen (another session opened in its place, its window closed, the app in the
+/// background) comes back as the user left it, as mobile/android's `AskPrompt` keeps it.
 @preconcurrency
 @MainActor
 @Observable
@@ -18,6 +20,7 @@ public final class Asks {
     public private(set) var open: [OpenAsk] = [] {
         didSet {
             if open != oldValue {
+                dropGoneDrafts()
                 changed()
             }
         }
@@ -32,6 +35,8 @@ public final class Asks {
         }
     }
 
+    // the drafts of the open asks, by their ids (``OpenAsk/id``): one goes with its ask
+    private var drafts: [String: AskDraft] = [:]
     @ObservationIgnored private let connections: Connections
     // between takeBack() and resume(): the origins have taken their asks back
     @ObservationIgnored private var isTakenBack = false
@@ -60,6 +65,18 @@ public final class Asks {
             onScreen.insert(key)
         } else {
             onScreen.remove(key)
+        }
+    }
+
+    /// The draft of the open ask `open`: as the user left it, or a new one.
+    public func draft(of open: OpenAsk) -> AskDraft {
+        drafts[open.id] ?? AskDraft(open.ask)
+    }
+
+    /// Keeps `draft` as the draft of `open` while it stays open; one no longer open is left be.
+    public func keep(_ draft: AskDraft, of open: OpenAsk) {
+        if self.open.contains(where: { $0.id == open.id }) {
+            drafts[open.id] = draft
         }
     }
 
@@ -121,6 +138,13 @@ public final class Asks {
         let before = open.count
         open.removeAll { $0.key == key && $0.ask.id == askId }
         return open.count != before
+    }
+
+    private func dropGoneDrafts() {
+        let ids = Set(open.map(\.id))
+        if drafts.keys.contains(where: { !ids.contains($0) }) {
+            drafts = drafts.filter { ids.contains($0.key) }
+        }
     }
 
     private func changed() {

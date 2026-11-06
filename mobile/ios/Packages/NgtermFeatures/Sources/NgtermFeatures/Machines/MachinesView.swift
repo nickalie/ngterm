@@ -5,9 +5,9 @@ import SwiftUI
 /// The Machines list: a row per machine with its link and its sessions' statuses, Add machine in the toolbar, the
 /// form as a sheet, swipe to remove (with Undo), and each row's menu (Connect or Disconnect, Edit, Remove).
 ///
-/// With no machines it invites the first; a banner says when the device is offline, and when a change failed. Beside
-/// a session (a regular width) each machine's attached sessions sit under it with their statuses, the one shown
-/// marked, when the caller asks for them (``attachedSessions(shown:onOpen:)``).
+/// With no machines it invites the first; a banner says when the device is offline, and when a change failed. Each
+/// machine's attached sessions sit under it with their statuses, the one shown marked, when the caller asks for them
+/// (``attachedSessions(shown:onOpen:)``).
 public struct MachinesView: View {
     // how long Undo stays on offer after a removal
     private static let undoSeconds = 10.0
@@ -156,8 +156,7 @@ public struct MachinesView: View {
 
     /// The same list with each machine's attached sessions under it, `shown` (the session this window shows) marked.
     ///
-    /// Opening one calls `onOpen`. With no `onOpen` (a compact width, where the list isn't beside the session) the list
-    /// is as it was.
+    /// Opening one calls `onOpen`. With no `onOpen` the list is as it was.
     @preconcurrency
     public func attachedSessions(shown: SessionKey?, onOpen: (@MainActor (SessionKey) -> Void)?) -> Self {
         var copy = self

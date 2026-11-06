@@ -477,7 +477,8 @@ compact: the selected pane alone                regular: the origin's split
   a pane selects it. Beside it, the machines' column lists each machine's attached sessions under it (name and
   status; the session view says the context), the one shown marked with a checkmark in the tint (the list selects
   nothing meanwhile: a selection it draws grey once the session has the focus would leave the machine's colored text
-  under 4.5:1).
+  under 4.5:1). A compact width's machines list shows the same rows under each machine, so a phone sees every
+  attached session in one place, as Android's Sessions destination shows them.
 - **Selection and the keyboard:** one keyboard serves every pane; the selected pane is the only one anything typed
   reaches. A tab, a swipe, ⌘⌥←/→ and a touch select a pane, and the focus follows: the pane selected next takes it,
   with the soft keyboard if it was open. The selection is kept per session, so another size class, a turn or a trip

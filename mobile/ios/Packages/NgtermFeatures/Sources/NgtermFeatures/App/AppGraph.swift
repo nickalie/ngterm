@@ -115,11 +115,15 @@ public final class AppGraph {
 
     /// Starts following the network and connects every machine the user added, once per process; later calls do
     /// nothing.
+    ///
+    /// A machines file the process couldn't read as it started (before the device's first unlock) is read again
+    /// first.
     public func start() {
         guard !isStarted else {
             return
         }
         isStarted = true
+        machines.readIfUnread()
         network.start()
         for machine in machines.machines {
             connections.connect(machine.core)

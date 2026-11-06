@@ -56,6 +56,28 @@ internal struct AlertsTests {
         #expect(notices.posted.isEmpty, "a detached session's notices go")
     }
 
+    @Test("in the foreground an agent's notice shows beside its session, a status or an ask of a session on screen not")
+    internal func foreground() async throws {
+        defer { test.remove() }
+        try await attach()
+        let sent = RemoteNotice(title: "Build done", body: "All green", pane: "P2", source: "agent")
+        await emit(.notify(machineId: "m1", sessionId: "s1", notice: sent), status("blocked", changed: true))
+        let notice = try #require(notices.posted.values.first { $0.id.hasPrefix("notice:") })
+        let status = try #require(notices.posted[Alert.statusId(key)])
+        // as the app's delegate reads a notice it is about to show: its id, and its session from its info
+        let shows = { (notice: Notice, onScreen: Set<SessionKey>) -> Bool in
+            let about = notice.info["machine"].flatMap { machineId in
+                notice.info["session"].map { SessionKey(machineId: machineId, sessionId: $0) }
+            }
+            return Alert.showsInForeground(id: notice.id, key: about, onScreen: onScreen)
+        }
+        #expect(shows(notice, [key]), "an agent's notice, as mobile/android's, beside its session too")
+        #expect(!shows(status, [key]), "the session's view says its status")
+        #expect(shows(status, [SessionKey(machineId: "m1", sessionId: "s2")]), "another session's view doesn't")
+        #expect(!Alert.showsInForeground(id: Alert.askId(key, askId: "A1"), key: key, onScreen: [key]))
+        #expect(Alert.showsInForeground(id: Alert.lostId("m1"), key: nil, onScreen: [key]))
+    }
+
     @Test("a change to waiting or done posts once per session, a snapshot's status doesn't, anything else withdraws")
     internal func statuses() async throws {
         defer { test.remove() }

@@ -7,15 +7,15 @@ import SwiftUI
 /// programs' clipboard reads, and the question about notifying as the first session is attached. A notification's tap
 /// brings its machine, session and pane here.
 ///
-/// Beside a session (a regular width), the machines' column lists each machine's attached sessions too; a session
-/// opened there, or by the keyboard's moves, shows here, or brings its own window forward.
+/// The machines' list shows each machine's attached sessions under it: beside a session in a regular width, and as a
+/// page of its own in a compact one, where it is the phone's view of every attached session (mobile/android's
+/// Sessions destination). A session opened there, or by the keyboard's moves, shows here, or brings its own window
+/// forward.
 internal struct RootView: View {
     @Environment(\.openWindow)
     private var openWindow
     @Environment(\.supportsMultipleWindows)
     private var supportsMultipleWindows
-    @Environment(\.horizontalSizeClass)
-    private var sizeClass
 
     private let graph: AppGraph
     private let coreVersion: String
@@ -30,8 +30,7 @@ internal struct RootView: View {
             MachinesView(model: machines, selection: scaffold.machine) { machineId in
                 scaffold.show(machine: machineId)
             }
-            // beside a session only: a compact width's machines are a page of their own
-            .attachedSessions(shown: scaffold.session?.key, onOpen: sizeClass == .regular ? open : nil)
+            .attachedSessions(shown: scaffold.session?.key, onOpen: open)
         } sessions: { machineId in
             SessionsColumn(graph: graph, machineId: machineId, scaffold: scaffold, machines: machines)
                 .id(machineId)
