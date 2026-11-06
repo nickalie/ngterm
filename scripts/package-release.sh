@@ -6,9 +6,8 @@
 #   scripts/package-release.sh --macos-bundle STAGED VERSION COMMIT TREE
 #     macOS, the build step: TREE/ngterm.app (recording VERSION and COMMIT) and TREE/archive (the loose bin and share
 #     of the .tar.gz), from a staged tree, both ad-hoc signed under the hardened runtime (scripts/sign-macos.sh);
-#   scripts/package-release.sh --macos-package TREE VERSION ARCH OUTPUT_DIR
-#     macOS, the packaging step: the .tar.gz, .app.zip, DMG and PKG from a --macos-bundle TREE. It executes nothing
-#     from TREE, so it can run where signing keys are.
+#   then `scripts/sign-macos.sh package` makes the .tar.gz, .app.zip, DMG and PKG from that TREE, where the signing
+#     keys are (the release workflow's macos-sign job).
 #
 # The licenses and notices go into share/doc beside the staged files (on Windows, scripts/build-msi.sh does that).
 set -euo pipefail
@@ -17,12 +16,11 @@ source "$(dirname "$0")/lib/native.sh"
 # shellcheck source=../packaging/release/pins.env
 source "$NATIVE_ROOT/packaging/release/pins.env"
 usage() {
-  die "usage: scripts/package-release.sh STAGED VERSION OUTPUT_DIR
-  | --macos-bundle STAGED VERSION COMMIT TREE | --macos-package TREE VERSION ARCH OUTPUT_DIR"
+  die "usage: scripts/package-release.sh STAGED VERSION OUTPUT_DIR | --macos-bundle STAGED VERSION COMMIT TREE"
 }
 mode=all
 case "${1:-}" in
-  --macos-bundle | --macos-package)
+  --macos-bundle)
     mode="${1#--}"
     shift
     (($# == 4)) || usage
@@ -52,33 +50,6 @@ macos_bundle() {
   cp -R "$stage/bin" "$stage/share" "$tree/archive/"
   "$NATIVE_ROOT/scripts/sign-macos.sh" loose "$tree/archive/bin"
 }
-
-# macos_package TREE ARCH: every macOS package from a macos_bundle tree, executing nothing from it
-macos_package() {
-  local tree="$1" arch="$2" app="$1/ngterm.app" name
-  [[ -d "$app/Contents/MacOS" && -d "$tree/archive/bin" && -d "$tree/archive/share" ]] \
-    || die "not a --macos-bundle tree: $tree"
-  name="ngterm-$version-macos-$arch"
-  codesign --verify --deep --strict "$app"
-  tar -C "$tree/archive" -czf "$dist/$name.tar.gz" bin share
-  ditto -c -k --sequesterRsrc --keepParent "$app" "$dist/$name.app.zip"
-  mkdir -p "$work/dmg-$arch"
-  cp -R "$app" "$work/dmg-$arch/"
-  ln -s /Applications "$work/dmg-$arch/Applications"
-  hdiutil create -volname ngterm -srcfolder "$work/dmg-$arch" -ov -format UDZO "$dist/$name.dmg"
-  pkgbuild --component "$app" --install-location /Applications --identifier com.nickalie.ngterm \
-    --version "$version" "$dist/$name.pkg"
-  pkgutil --payload-files "$dist/$name.pkg" > "$work/pkg-files-$arch"
-  grep -q 'Contents/MacOS/ngterm' "$work/pkg-files-$arch"
-}
-
-if [[ "$mode" == macos-package ]]; then
-  [[ "$3" == x86_64 || "$3" == arm64 ]] || die "the macOS arch is x86_64 or arm64, not $3"
-  mkdir -p "$4"
-  dist="$(cd "$4" && pwd)"
-  macos_package "$(cd "$1" && pwd)" "$3"
-  exit 0
-fi
 
 stage="$1"
 if [[ "$mode" == macos-bundle ]]; then
@@ -278,7 +249,7 @@ PY
   macos)
     [[ "$arch" != aarch64 ]] || arch=arm64
     macos_bundle "$work/tree" "$(sed -n 2p "$stage/share/ngterm/app-BUILD" | tr -d '\r')"
-    macos_package "$work/tree" "$arch"
+    "$NATIVE_ROOT/scripts/sign-macos.sh" package "$version" "$dist" --identity ad-hoc "$work/tree" "$arch"
     ;;
   windows)
     "$NATIVE_ROOT/scripts/build-msi.sh" "$dist/ngterm-$version-windows-x86_64.msi" \

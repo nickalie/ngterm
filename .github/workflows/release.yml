@@ -370,9 +370,11 @@ jobs:
       || (needs.version.outputs.publishing != 'true' && needs.approve.result == 'skipped')) }}
     runs-on: macos-15
     environment: ${{ needs.version.outputs.publishing == 'true' && 'release' || '' }}
-    timeout-minutes: 60
+    # notarization: two rounds of submissions, each waited for up to 90 minutes
+    timeout-minutes: 240
     outputs:
       manifest: ${{ steps.manifest.outputs.manifest }}
+      identity: ${{ steps.identity.outputs.identity }}
     env:
       X86_64: ${{ needs.macos-build.outputs.manifest_x86_64 }}
       ARM64: ${{ needs.macos-build.outputs.manifest_arm64 }}
@@ -401,13 +403,63 @@ jobs:
           for arch in x86_64 arm64; do
             python3 scripts/release-artifacts.py extract "$RUNNER_TEMP/in/ngterm-macos-$arch-build.tar.gz" "$RUNNER_TEMP/tree-$arch"
           done
-      - name: Packages
+      # A dry run signs with a throwaway identity; publishing with Developer ID when the secrets are there, else (in
+      # `optional` mode, with no committed team id) it ships the builds' ad-hoc signatures
+      - name: Signing identity
+        id: identity
+        env:
+          PUBLISHING: ${{ needs.version.outputs.publishing }}
+          SIGNING_MODE: ${{ needs.version.outputs.signing_mode }}
+          REQUIRE_DEVELOPER_ID: ${{ needs.version.outputs.require_developer_id }}
+          HAS_APPLE_DEVELOPER_ID_APP_P12: ${{ secrets.APPLE_DEVELOPER_ID_APP_P12 != '' }}
+          HAS_APPLE_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_P12 != '' }}
+          HAS_APPLE_P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD != '' }}
+          HAS_APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 != '' }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          if [[ "$PUBLISHING" != true ]]; then
+            identity=throwaway
+          else
+            missing=()
+            for secret in APPLE_DEVELOPER_ID_APP_P12 APPLE_DEVELOPER_ID_INSTALLER_P12 APPLE_P12_PASSWORD APPLE_NOTARY_KEY_P8; do
+              has="HAS_$secret"
+              [[ "${!has}" == true ]] || missing+=("secret $secret")
+            done
+            for variable in APPLE_TEAM_ID APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID; do
+              [[ -n "${!variable}" ]] || missing+=("variable $variable")
+            done
+            if ((${#missing[@]} == 0)); then
+              identity=developer-id
+              committed="$(tr -d '[:space:]' < crates/ngterm-update/trust/apple-team-id)"
+              if [[ -n "$committed" && "$committed" != "$APPLE_TEAM_ID" ]]; then
+                echo "::error::APPLE_TEAM_ID is $APPLE_TEAM_ID, but the updater trusts team $committed (trust/apple-team-id)"
+                exit 1
+              fi
+            elif [[ "$SIGNING_MODE" == required || "$REQUIRE_DEVELOPER_ID" == true ]]; then
+              echo "::error::Developer ID signing is required; the release environment lacks: ${missing[*]}"
+              exit 1
+            else
+              echo "::notice::macOS ships ad-hoc signed: the release environment lacks ${missing[*]}"
+              identity=ad-hoc
+            fi
+          fi
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+      - name: Sign, notarize and package
         env:
           VERSION: ${{ needs.version.outputs.version }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+          APPLE_DEVELOPER_ID_APP_P12: ${{ secrets.APPLE_DEVELOPER_ID_APP_P12 }}
+          APPLE_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_P12 }}
+          APPLE_P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
+          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
         run: |
-          for arch in x86_64 arm64; do
-            scripts/package-release.sh --macos-package "$RUNNER_TEMP/tree-$arch" "$VERSION" "$arch" dist
-          done
+          scripts/sign-macos.sh package "$VERSION" dist --identity "$IDENTITY" \
+            "$RUNNER_TEMP/tree-x86_64" x86_64 "$RUNNER_TEMP/tree-arm64" arm64
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: upload
         with:
@@ -487,6 +539,50 @@ jobs:
           # through a file: under pipefail, grep -q quitting early could fail pkgutil with SIGPIPE
           pkgutil --payload-files "$name.pkg" > "$work/pkg-files"
           grep -q 'Contents/MacOS/ngterm' "$work/pkg-files"
+      # What signed them: Developer ID passes Gatekeeper and carries stapled tickets; a throwaway identity, untrusted
+      # here, is matched by name; ad-hoc leaves the DMG and PKG unsigned
+      - name: Signatures of the ${{ needs.macos-sign.outputs.identity }} identity
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          IDENTITY: ${{ needs.macos-sign.outputs.identity }}
+        run: |
+          name="$RUNNER_TEMP/in/ngterm-$VERSION-macos-$ARCH"
+          app="$RUNNER_TEMP/verify/zip/ngterm.app"
+          pkgutil --check-signature "$name.pkg" > "$RUNNER_TEMP/pkg-signature" && pkg_status=0 || pkg_status=$?
+          cat "$RUNNER_TEMP/pkg-signature"
+          case "$IDENTITY" in
+            developer-id) signer="Developer ID Application: " ;;
+            throwaway) signer="ngterm throwaway Developer ID Application" ;;
+            ad-hoc) signer=adhoc ;;
+            *)
+              echo "::error::unknown identity '$IDENTITY'"
+              exit 1
+              ;;
+          esac
+          # every Mach-O of the app and of the archive, by that signer
+          mkdir "$RUNNER_TEMP/signer-archive"
+          tar -xzf "$name.tar.gz" -C "$RUNNER_TEMP/signer-archive"
+          scripts/sign-macos.sh check "$app" --signer "$signer"
+          scripts/sign-macos.sh check "$RUNNER_TEMP/signer-archive/bin" --signer "$signer"
+          if [[ "$IDENTITY" != ad-hoc ]]; then
+            dmg="$(codesign -dvv "$name.dmg" 2>&1)"
+            [[ $'\n'"$dmg" == *$'\nAuthority='"$signer"* ]] || { echo "::error::the DMG's signer: $dmg"; exit 1; }
+          fi
+          case "$IDENTITY" in
+            developer-id)
+              spctl --assess --type execute -vv "$app"
+              spctl --assess --type open --context context:primary-signature -vv "$name.dmg"
+              spctl --assess --type install -vv "$name.pkg"
+              ((pkg_status == 0)) || { echo "::error::pkgutil --check-signature failed ($pkg_status)"; exit 1; }
+              grep -q 'Developer ID Installer: ' "$RUNNER_TEMP/pkg-signature"
+              for file in "$app" "$name.dmg" "$name.pkg"; do xcrun stapler validate "$file"; done
+              ;;
+            throwaway)
+              # untrusted on this runner, so pkgutil's verdict is not the check: its signer is
+              grep -q 'ngterm throwaway Developer ID Installer' "$RUNNER_TEMP/pkg-signature"
+              ;;
+          esac
 
   checksums:
     needs: [version, linux, windows-build, macos-sign]

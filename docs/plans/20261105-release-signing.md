@@ -450,18 +450,32 @@
 
 **Files:**
 - Modify: `scripts/sign-macos.sh`, `scripts/package-release.sh`, `.github/workflows/release.yml`
+- ➕ Modify: `docs/macos.md`
 
-- [ ] keychain steps 1 with the EXIT trap (keychain, search list, `.p8`)
-- [ ] the order of steps 2-7: notarize and staple the app before the zip, DMG and PKG are made; parallel submissions
+- [x] keychain steps 1 with the EXIT trap (keychain, search list, `.p8`)
+- [x] the order of steps 2-7: notarize and staple the app before the zip, DMG and PKG are made; parallel submissions
       for the DMG, PKG and loose binaries; print the notary log on rejection; `spctl` in `macos-verify` when Developer
       ID signed
-- [ ] dry runs: the throwaway identity from Technical Details (LibreSSL `.p12`, codeSigning EKU, signing by SHA-1
+- [x] dry runs: the throwaway identity from Technical Details (LibreSSL `.p12`, codeSigning EKU, signing by SHA-1
       hash) runs steps 1, 2, 4 and 5. Check early whether `pkgutil --check-signature` exits 0 for an untrusted signer;
       if not, the test matches its output
-- [ ] mode handling: secrets → Developer ID; `optional` without secrets → notice, the ad-hoc output ships;
+- [x] ➕ found on the real Mac (macOS 27.2): `productsign` takes no untrusted installer identity ("An installer
+      signing identity ... is required"), whatever its EKU or Apple's installer extension. So the throwaway Installer
+      certificate is trusted in the runner's admin domain with `sudo` (GitHub-hosted runners only) until the EXIT
+      trap withdraws it. That trust step and `productsign` itself are unverified until the first dry run; `codesign`
+      by hash, the keychain, the DMG signature and the trap's restore were run on the Mac. `pkgutil
+      --check-signature` on an untrusted signer couldn't be produced there, so `macos-verify` matches the signer's name
+- [x] ➕ the macOS packaging moved from `package-release.sh --macos-package` into `sign-macos.sh package`, which runs
+      steps 1-7 in one process (both arches, so the notary submissions overlap); local macOS packaging calls it with
+      the ad-hoc identity. `macos-sign`'s timeout is 240 minutes for two rounds of 90-minute notary waits
+- [x] ➕ a Developer ID run fails when the signed app's team isn't `APPLE_TEAM_ID`, or when a non-empty
+      `trust/apple-team-id` names another team
+- [x] mode handling: secrets → Developer ID; `optional` without secrets → notice, the ad-hoc output ships;
       `required` or `require_developer_id` without secrets → fail, naming the secrets
-- [ ] tests: `scripts/lint.sh`
-- [ ] run checks; must pass before Task 6
+- [x] tests: `scripts/lint.sh`; ➕ on the real Mac with stand-in binaries: `package --identity ad-hoc` for both arches
+      (the unpacked zip and archive pass `check` and run), `throwaway` up to `productsign` with `sudo` stubbed (the
+      search list restored after), `developer-id` without secrets naming them, `throwaway` refused off GitHub runners
+- [x] run checks; must pass before Task 6
 
 ### Task 6: Windows: version resources and SignPath signing
 
