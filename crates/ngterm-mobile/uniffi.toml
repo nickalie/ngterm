@@ -1,5 +1,5 @@
 # UniFFI's bindings of the mobile apps' core, generated in library mode by the crate's own `uniffi-bindgen`: Kotlin for
-# the Android app (scripts/build-android.sh), Swift for the iOS app.
+# the Android app (scripts/build-android.sh), Swift for the iOS app (scripts/build-ios.sh).
 [bindings.kotlin]
 # the Android app's core module (mobile/android/core) holds them under its own namespace
 package_name = "com.nickalie.ngterm.core.ffi"

@@ -44,10 +44,10 @@ Linux build unless it names another OS.
   next launch lists each machine once and attaches every row it still offers where it stood; a machine that does not
   answer is listed again on the reconnect schedule for up to a week, and a session gone there is named in a banner
   (`crates/ngterm-core/src/remote/relaunch.rs`).
-- Another extension beyond upstream, which has no mobile app: an Android app that views and drives another machine's
-  live sessions over ssh, with a chat view of a pane running Claude Code or Codex ([Android](#android)). The origin
-  serves the chat through the Rust-only `agent.*` commands (`ngtermctl agent`, capability `agent-chat`) and an opt-in
-  `agent` kind on the presentation stream, with no desktop UI.
+- Another extension beyond upstream, which has no mobile app: Android and iOS apps that view and drive another
+  machine's live sessions over ssh ([Android](#android), [iOS](#ios)); the Android app also has a chat view of a pane
+  running Claude Code or Codex. The origin serves the chat through the Rust-only `agent.*` commands (`ngtermctl
+  agent`, capability `agent-chat`) and an opt-in `agent` kind on the presentation stream, with no desktop UI.
 - Another extension beyond upstream, where every overlay is ephemeral: an HTML page overlay (`--html`, `--url`,
   `--image`, `--markdown`, session-wide or `--pane`, and link-click pages) lives until it is closed. A restart of the
   app or the headless server brings back each page in the slot it held
@@ -500,6 +500,18 @@ doesn't install JDK 21 or `sshd` (the mobile e2e test), which are system package
 command that installs it, and the script exits 1. It is idempotent, reports what it did
 and could not do, and prints the `JAVA_HOME`, `ANDROID_HOME` and `ANDROID_NDK_HOME` lines to export.
 
+### iOS toolchain
+
+The iOS app needs a Mac with the `IOS_*` and `SWIFTLINT_*` pins of `build/pins.env`: Xcode, the iOS simulator runtime
+(Apple Silicon only, no x86_64 slice), the Rust iOS targets and SwiftLint. `scripts/setup-ios.sh` (macOS only) finds
+the pinned Xcode and exports it as `DEVELOPER_DIR` (the selected one stays as it was), adds `aarch64-apple-ios` and
+`aarch64-apple-ios-sim`, downloads the runtime when it is missing (about 8 GB), creates the `ngterm-phone` and
+`ngterm-tablet` simulators on it, installs SwiftLint into the vendor root and checks for the libghostty-vt build's
+pinned Zig. It doesn't install Xcode, which needs an Apple ID. It is idempotent, reports what it did and could not do
+(exit 1), and prints the `DEVELOPER_DIR` and `PATH` lines to export; `--check` changes nothing and fails when a
+piece is missing. Its header has the notes for a Mac reached over ssh (rustup's `PATH`, a host that can't reach
+`ziglang.org`).
+
 ## Build and run
 
 ```sh
@@ -697,6 +709,49 @@ Hooks… on a desktop, `ngterm-headless --install-agent-hooks` on a server), the
 `ngtermctl agent hook` call tells the origin which agent a pane runs and where its transcript is. An origin restarted
 under a running agent learns it again at the agent's next prompt. An origin without these pieces shows the terminal,
 as before, with no error. A Windows origin can't be reached at all yet, as above.
+
+## iOS
+
+`mobile/ios` is a native iOS app (SwiftUI over local Swift packages, with a UIKit terminal view; iPhone and iPad, iOS
+26 and later) over the same Rust core, which Swift reaches through UniFFI. It does what the Android app does (see
+[Android](#android) for the machines, the key and what isn't in v1), with these differences:
+
+- It has no [agent chat view](#agent-chat-view) yet: a pane running Claude Code or Codex shows its terminal.
+- It is connected only while it is in the foreground: iOS can't keep the ssh links up, so there is no counterpart of
+  Android's foreground service. Leaving the foreground, it disconnects after a short grace, and its open asks go back
+  to the machine; coming back, it reconnects. Asks show as sheets, or as notifications with answer actions until the
+  grace ends.
+- Background App Refresh lists each machine's sessions and notifies the agents that turned waiting or done, without
+  attaching.
+- On an iPad each session opens in a window of its own.
+- Its key is kept in the Keychain; its design system is `mobile/ios/DESIGN.md`; it ships through TestFlight to the
+  App Store ([docs/ios-release.md](docs/ios-release.md)).
+
+```sh
+scripts/setup-ios.sh [--check]    # the pinned toolchain (iOS toolchain); build-ios.sh takes its exports itself
+scripts/build-ios.sh [--profile release|debug] [--no-xcode] [lint|build|test|archive...]   # default: build
+scripts/build-ios.sh lint test    # the lint gate, then the Unit and UI test plans on both simulators, as CI runs them
+scripts/build-ios.sh archive      # a Release archive for devices (unsigned without the release secrets), checked
+eval "$(scripts/setup-ios.sh --check)"   # then the core's tests in the phone simulator, as CI's lint job runs them:
+CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER="$PWD/scripts/ios-sim-runner.sh" \
+  cargo test -p ngterm-mobile --lib --target aarch64-apple-ios-sim
+```
+
+- `build-ios.sh` builds `libngterm_mobile.a` for the device and the simulator, generates the Swift bindings, wraps
+  them in `NgtermCoreFFI.xcframework` and runs its actions. Everything it generates stays under the packages'
+  gitignored `Generated/` and `mobile/ios/build/` (derived data, the `.xcresult` bundles, the archive). It holds a
+  per-user lock, so one `xcodebuild` runs at a time on a Mac, and strips `NGTERM_*` from everything Xcode starts.
+- `lint` is SwiftLint (`--strict`, with its analyzer rules), `swift format lint --strict` and a check that every
+  `swiftlint:disable:next` gives its reason; the compiler adds Swift 6 with complete concurrency checking and
+  warnings as errors. A finding is fixed in the code: there are no baselines.
+- `test` runs on the pinned `ngterm-phone` and `ngterm-tablet` simulators, one after the other. The UI tests drive
+  the app on a fake core (Debug builds only; `archive` checks the Release build doesn't hold it).
+- Snapshot goldens live in each package's `Tests/*/__Snapshots__/`, one per simulator (`-on-phone`, `-on-tablet`),
+  recorded on the pinned runtime, which CI verifies them on. A missing golden is recorded by the run that first
+  meets it, which fails; the next run checks it. To re-record the ones that fail, run
+  `TEST_RUNNER_SNAPSHOT_TESTING_RECORD=failed scripts/build-ios.sh test` (that run fails too), check the new images
+  and run `test` again. A failed snapshot's image is in `mobile/ios/build/snapshot-failures/`, its diff in the
+  result bundle.
 
 ## Windows
 
@@ -896,11 +951,17 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   and the stage are kept as artifacts; and `coverage-windows`, the suite on an instrumented build, judged by
   `conformance/coverage-floor-windows.txt` only. The workflow also runs on pushes to `ci/**` branches, to check a
   macOS or Windows form without a PR.
-- `android.yml` (path-filtered to the mobile core, the crates under it, `mobile/` and the Android scripts and pins;
-  also on `ci/**` pushes): `app` sets up the pinned toolchain (`scripts/setup-android.sh`), runs
+- `android.yml` (path-filtered to the mobile core, the crates under it, `mobile/android/` and the Android scripts and
+  pins; also on `ci/**` pushes): `app` sets up the pinned toolchain (`scripts/setup-android.sh`), runs
   `scripts/build-android.sh check assembleDebug` (Spotless, detekt, Android Lint, the JVM unit and Roborazzi screenshot
   tests) and keeps the debug APK as the `ngterm-android-debug` artifact, then runs `scripts/test-mobile-e2e.sh` behind
   the runner's `sshd`; `emulator` runs the instrumented tests on the phone and tablet AVDs (KVM).
+- `ios.yml` (path-filtered to the mobile core, the crates under it, `mobile/ios/`, the shared fonts and the iOS
+  scripts and pins; also on `ci/**` pushes), on the `xcode-27` image, three jobs side by side: `lint` (the core's Rust
+  tests in the phone simulator, then `scripts/build-ios.sh lint`), `test` (`build-ios.sh test`, keeping the result
+  bundles and the failed snapshots' images when it fails) and `archive` (`build-ios.sh archive`, unsigned).
+- `ios-release.yml`: a release tag's signed iOS build, uploaded to TestFlight, and dry runs by hand or from `ci/**`
+  pushes ([docs/ios-release.md](docs/ios-release.md)).
 - `windows-installer.yml` (the same triggers, and by hand): the release build staged, the MSI built from it with the
   pinned WiX and one of the next patch version, then `scripts/check-msi.ps1` installs, checks, upgrades and
   uninstalls it on the runner; the MSI is kept as the `ngterm-msi` artifact.
@@ -918,6 +979,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   patch).
 - `scripts/`: native builds, staging, `run-gpui-dev.sh`, the lint report, the AppArmor profile installer, the Windows
   installer's build and check, the Windows smoke checks.
+- `mobile/android`, `mobile/ios`: the mobile apps over `crates/ngterm-mobile`, each with its `DESIGN.md`.
 - `packaging/linux/apparmor/`: ngterm's AppArmor profile (WebKit's sandbox on Ubuntu).
 - `packaging/windows/`: the Windows installer's WiX source.
 - `resources/`: the agent-status hooks and agent skill the app installs (the skill at `resources/skills/ngterm`,

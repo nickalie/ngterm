@@ -15,7 +15,7 @@ crate-type = ["lib", "cdylib"]
 
 [[bin]]
 # UniFFI's bindgen in library mode over a build of the library, which writes the apps' bindings: Kotlin over the
-# Android `.so` (scripts/build-android.sh), Swift over the host build for iOS.
+# Android `.so` (scripts/build-android.sh), Swift over the host build for iOS (scripts/build-ios.sh).
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
 required-features = ["bindgen"]

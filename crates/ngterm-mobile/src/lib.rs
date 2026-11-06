@@ -11,9 +11,9 @@
 //! `uniffi-bindgen` binary (feature `bindgen`) generates in library mode (`uniffi.toml` configures both):
 //! - Kotlin for Android: `scripts/build-android.sh` builds the `cdylib` the app loads and generates the bindings over
 //!   it.
-//! - Swift for iOS: the iOS build builds a `staticlib` per iOS target (`aarch64-apple-ios`, `aarch64-apple-ios-sim`),
-//!   giving the crate type on the command line, and generates the bindings over the host build of the library. The
-//!   crate holds no iOS-specific code.
+//! - Swift for iOS: `scripts/build-ios.sh` builds a `staticlib` per iOS target (`aarch64-apple-ios`,
+//!   `aarch64-apple-ios-sim`), giving the crate type on the command line, and generates the bindings over the host
+//!   build of the library. The crate holds no iOS-specific code.
 //!
 //! Module map: [`api`] (the facade, its records, events and callback interfaces), [`actor`] (the thread, its runtime
 //! and commands), [`transport`] (the ssh seam, its channels, the russh transport and the scripted fake behind the

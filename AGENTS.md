@@ -24,7 +24,7 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
 | `ngterm-app` | frontend-neutral app services | any |
 | `ngterm-update` | verified release downloads, staging and installation | any |
 | `ngterm-headless` | the core, control socket and live sessions with no window (an Attach Remote origin) | any |
-| `ngterm-mobile` | the Android app's Rust core: a remote-only viewer over ssh, exposed to Kotlin through UniFFI | any |
+| `ngterm-mobile` | the mobile apps' Rust core: a remote-only viewer over ssh, exposed to Kotlin and Swift through UniFFI | any |
 | `ngterm-wpe-sys` and kin, `ngterm-wpe` | WPE WebKit bindings and the HTML overlays' host | Linux |
 | `ngterm-gpui` → `ngterm` | the GPUI frontend | Linux, macOS, Windows |
 
@@ -33,9 +33,9 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
 - GPUI owns the main thread and the state; other threads hop onto it through `MainLoop`.
 - Put work that needs no terminal or widget in `ngterm-core` (tested on the `ngterm-host` fakes), and terminal work
   that needs no window in `ngterm-term` (tested on real PTYs). Keep both toolkit-neutral.
-- The Android app (`mobile/android`, Kotlin + Compose) is a frontend over `ngterm-mobile`. UI work there goes through
-  the `frontend-design` skill and stays inside `mobile/android/DESIGN.md`, extending it in the same change when a
-  screen needs something new.
+- The Android app (`mobile/android`, Kotlin + Compose) and the iOS app (`mobile/ios`, SwiftUI) are frontends over
+  `ngterm-mobile`, which keeps no platform-specific code. UI work there goes through the `frontend-design` skill and
+  stays inside that app's `DESIGN.md`, extending it in the same change when a screen needs something new.
 
 ## Platforms
 
