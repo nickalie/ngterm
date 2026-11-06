@@ -128,6 +128,16 @@ impl Environment {
         })
     }
 
+    /// Whether this process runs from a staged layout, the bundle under `<bin>/../share/ngterm` (a package, an archive,
+    /// `scripts/stage.sh`), not from cargo's target directory, whose installers fall back to this checkout's resources.
+    #[must_use]
+    pub fn process_is_staged() -> bool {
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf));
+        staged_resource_dir(exe_dir.as_deref(), "agent-status").is_some()
+    }
+
     /// The home as text, for the paths the transforms build.
     #[must_use]
     pub fn home_str(&self) -> String {
@@ -137,13 +147,22 @@ impl Environment {
 
 /// A bundled resource: `<bin>/../share/ngterm/<relative>` in a staged build, else this checkout's `resources/`.
 fn resource_dir(exe_dir: Option<&Path>, relative: &str) -> Option<PathBuf> {
-    let staged = exe_dir
+    staged_resource_dir(exe_dir, relative).or_else(|| {
+        Some(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../resources")
+                .join(relative),
+        )
+        .filter(|dir| dir.is_dir())
+    })
+}
+
+/// A staged build's bundled resource, `<bin>/../share/ngterm/<relative>`, when it is there.
+fn staged_resource_dir(exe_dir: Option<&Path>, relative: &str) -> Option<PathBuf> {
+    exe_dir
         .and_then(Path::parent)
-        .map(|root| paths::join_relative(root, "share/ngterm").join(relative));
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../resources")
-        .join(relative);
-    staged.into_iter().chain([checkout]).find(|dir| dir.is_dir())
+        .map(|root| paths::join_relative(root, "share/ngterm").join(relative))
+        .filter(|dir| dir.is_dir())
 }
 
 // the adapters run for real: the POSIX scripts on Unix, their PowerShell forms on Windows

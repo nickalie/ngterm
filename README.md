@@ -610,8 +610,8 @@ rejects the host), each in a terminal nobody draws, so every session is attachab
 
 ```sh
 # on the server: the staged layout (scripts/stage.sh), ngtermctl on PATH (~/.local/bin or /usr/local/bin)
-ngterm-headless --install-agent-hooks  # install status hooks on the server, as Help does on the desktop
-nohup ngterm-headless [--grid 120x40] </dev/null >/dev/null 2>&1 &   # one per state dir, as the app
+nohup ngterm-headless [--grid 120x40] </dev/null >/dev/null 2>&1 &   # one per state dir, as the app; installs or
+# updates the agent skill and status hooks first (--skip-agent-setup leaves them alone)
 # SIGTERM, SIGINT or SIGHUP saves and ends it (on Windows the console's Ctrl+C, Ctrl+Break or close); SIGINT or SIGHUP
 # ignored at its start stays ignored, so under nohup it outlives the ssh session that started it
 ngtermctl session new --name build      # sessions to attach; they outlive ngterm-headless, the next start re-attaches
@@ -621,11 +621,18 @@ ngtermctl live tree SERVER && ngtermctl live attach SERVER SESSION-ID
 ```
 
 Agent status indicators need the hooks installed on the machine running the agents; installing them on the viewer
-alone does not install them on the server. `--install-agent-hooks` runs the desktop's installer and exits without
-starting or contacting an instance, so it also works while the service is running. It preserves user settings and
-reports any config it could not safely merge. If OpenCode's version cannot be detected, its hooks are skipped;
-re-run with `--install-agent-hooks --opencode-version v1` or `v2` to choose it explicitly. After installation, start a
-new agent process; existing shells need to source `~/.config/ngterm/agent-status/shell/integration.sh` (fish:
+alone does not install them on the server. So each start of a staged `ngterm-headless` (a package, a release archive,
+`scripts/stage.sh`) runs the desktop's Help installers before any pane's shell starts: the agent skill into each coding
+agent's skills directory and the agent-status hooks with every agent's and shell's wiring, installing them the first
+time and bringing them up to this build's bundle after an upgrade. Both preserve user settings and leave a
+same-named skill or plugin the user wrote alone; the results, and any config they could not safely merge, go to the
+log (`ngterm.log` in the state dir). `--skip-agent-setup` starts without touching the configs (a relaunch for a Live
+sessions reset keeps it and `--opencode-version`), and a build run straight from cargo's target directory never runs
+them, so a dev run leaves the real home's hooks on the installed `ngtermctl`. `--install-agent-hooks` runs the same two installers
+and exits without starting or contacting an instance, printing their results, so it also works while the service is
+running. If OpenCode's version cannot be detected, its hooks are skipped; pass `--opencode-version v1` or `v2` (to a
+start or to `--install-agent-hooks`) to choose it explicitly. After installation, start a new agent process; shells
+that were already running need to source `~/.config/ngterm/agent-status/shell/integration.sh` (fish:
 `source ~/.config/ngterm/agent-status/shell/integration.fish`) or start a new shell to load the shell integration.
 
 The attached row is as one from a desktop instance: each pane an ssh into its live session (the viewer claims the pty
@@ -705,7 +712,7 @@ Answer in terminal until the agent moves on. Two calls a dialog shows alike (the
 apart on screen (`docs/backlog/a-phone-approval-can-answer-a-later-dialog-that-shows-the-same-call.md`).
 
 **The origin** needs this build's `ngtermctl` and its agent-status hooks reinstalled (Help ▸ Install Agent Status
-Hooks… on a desktop, `ngterm-headless --install-agent-hooks` on a server), then a new agent process: the hooks'
+Hooks… on a desktop; on a server, a start of this build's `ngterm-headless` updates them), then a new agent process: the hooks'
 `ngtermctl agent hook` call tells the origin which agent a pane runs and where its transcript is. An origin restarted
 under a running agent learns it again at the agent's next prompt. An origin without these pieces shows the terminal,
 as before, with no error. A Windows origin can't be reached at all yet, as above.

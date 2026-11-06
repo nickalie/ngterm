@@ -20,15 +20,18 @@ pub const RELAUNCHED_FLAG: &str = "--relaunched";
 pub const LOCK_WAIT: Duration = Duration::from_secs(10);
 pub const LOCK_POLL: Duration = Duration::from_millis(200);
 
-/// The arguments the next instance runs with: this one's grid, and [`RELAUNCHED_FLAG`].
+/// The arguments the next instance runs with: this one's grid and agent setup, and [`RELAUNCHED_FLAG`].
 #[must_use]
 pub fn arguments(options: &Options) -> Vec<OsString> {
     let (columns, rows) = options.grid;
-    vec![
-        "--grid".into(),
-        format!("{columns}x{rows}").into(),
-        RELAUNCHED_FLAG.into(),
-    ]
+    let mut arguments: Vec<OsString> = vec!["--grid".into(), format!("{columns}x{rows}").into()];
+    if options.skip_agent_setup {
+        arguments.push("--skip-agent-setup".into());
+    } else if let Some(version) = options.opencode_version {
+        arguments.extend(["--opencode-version".into(), version.raw().into()]);
+    }
+    arguments.push(RELAUNCHED_FLAG.into());
+    arguments
 }
 
 /// The binary to start again, as `current_exe` names it: itself while it exists, else, for a file Linux reports
@@ -95,9 +98,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_next_instance_keeps_the_grid_and_waits_for_the_lock() {
-        let arguments = arguments(&Options { grid: (120, 40) });
-        assert_eq!(arguments, ["--grid", "120x40", RELAUNCHED_FLAG].map(OsString::from));
+    fn the_next_instance_keeps_the_grid_and_agent_setup_and_waits_for_the_lock() {
+        let grid = Options {
+            grid: (120, 40),
+            ..Options::default()
+        };
+        assert_eq!(
+            arguments(&grid),
+            ["--grid", "120x40", RELAUNCHED_FLAG].map(OsString::from)
+        );
+        let skipped = Options {
+            skip_agent_setup: true,
+            ..grid.clone()
+        };
+        assert_eq!(
+            arguments(&skipped),
+            ["--grid", "120x40", "--skip-agent-setup", RELAUNCHED_FLAG].map(OsString::from)
+        );
+        let pinned = Options {
+            opencode_version: Some(ngterm_app::integrations::opencode::Version::V2),
+            ..grid
+        };
+        assert_eq!(
+            arguments(&pinned),
+            ["--grid", "120x40", "--opencode-version", "v2", RELAUNCHED_FLAG].map(OsString::from)
+        );
     }
 
     #[test]

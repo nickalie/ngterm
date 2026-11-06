@@ -16,6 +16,9 @@
 //!   daemons there is nothing to attach.
 //! - Every session's panes run, not only a shown one's (there is none): a session is attachable once every pane of it
 //!   has a running daemon.
+//! - The agent skill and status hooks are installed, or updated to this build's bundle, at each start of a staged build
+//!   (a relaunch included, which may be an upgraded binary) before this library runs (the binary's `set_up_agents`),
+//!   since a server has no Help menu to run them from.
 //! - One instance per state directory, as the app: the state lock refuses a second one, and an app instance on the
 //!   same state directory too.
 //! - It can view as well: `ngtermctl live attach` on it attaches another machine's session as a row of its own, its
@@ -62,12 +65,18 @@ use crate::state::{HeadlessState, Poster, post};
 pub struct Options {
     /// The grid the terminals start at, columns and rows.
     pub grid: (u16, u16),
+    /// `--skip-agent-setup`: the start leaves the agent skill and hooks as they are.
+    pub skip_agent_setup: bool,
+    /// `--opencode-version`: the `OpenCode` version the agent setup installs for when detection fails.
+    pub opencode_version: Option<ngterm_app::integrations::opencode::Version>,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
             grid: panes::DEFAULT_GRID,
+            skip_agent_setup: false,
+            opencode_version: None,
         }
     }
 }

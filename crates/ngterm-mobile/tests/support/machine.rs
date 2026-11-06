@@ -126,6 +126,8 @@ impl Headless {
         let log = fs::File::create(work.join("headless.log")).expect("create the headless log");
         let child = private
             .command(&stage.join("bin/ngterm-headless"))
+            // the private home's shells stay as the test sets them up: no skill, no hooks, no rc line
+            .arg("--skip-agent-setup")
             .stdin(Stdio::null())
             .stdout(log.try_clone().expect("the log"))
             .stderr(log)
