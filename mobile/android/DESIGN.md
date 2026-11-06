@@ -650,7 +650,7 @@ The plan, reviewed against the brief:
 | Code in a syntax-highlighting theme | a second palette fighting the app's, and color carrying meaning | the terminal's face in one color on a `surfaceContainerLow` plate; a diff is the only colored text: verdigris added, oxide removed, each line keeping its `+` or `-` |
 | A spinner on every running tool | motion nobody asked for, scattered down the list | the Connecting ring and "Running"; nothing in the list moves on its own |
 | The permission prompt as a dialog over the chat | hides the conversation the question is about | a Needs-you card pinned at the chat's foot, in the ask sheet's shape and order (`ui/asks/`) |
-| A paper-plane Send beside an attach clip and an emoji face | the messenger kit's glyphs, for things the agent's prompt doesn't take | the messenger's layout, which the user asked for, with the app's own glyphs: one pill holding Commands (a `/`) and Stop, Send beside it once there is text; Send is the return key's arrow (`ic_send`) in a filled copper circle, as a prompt goes in with Enter in the terminal; no emoji face |
+| A paper-plane Send beside an attach clip and an emoji face | the messenger kit's glyphs, for things the agent's prompt doesn't take | the messenger's layout, which the user asked for, with the app's own glyphs: one pill holding Commands (a `/`), Attach, Stop and, once there is text, Send at its very end, as Telegram's input bar holds its send; Send is the return key's arrow (`ic_send`) in copper on the pill, as a prompt goes in with Enter in the terminal; no emoji face |
 | The account as a header card: an avatar, the email, a big percentage on a ring gauge | the dashboard's KPI tile, shouting over the conversation it sits on, for a number that changes once a turn | one quiet line over the rows: the email at the start in `onSurfaceVariant`, at the end "Weekly limit 72%" over a 56×4dp meter that stands still, when it resets under them; a hairline under the line |
 | Email, limit and reset joined in one meta string with middle dots | template chrome, and three facts read as one | two ends of the line: who is signed in, and how much room is left; the meter turns the attention copper from 80% and oxide when spent, the words with it |
 | A "Claude is typing" bubble with three bouncing dots at the end of the list | the messenger kit, and motion that loops while nobody asked for it | the activity strip pinned at the chat's foot, standing still: the Running ring and what the agent is doing |
@@ -775,11 +775,12 @@ The plan, reviewed against the brief:
   closes it; with a prompt written it holds. Then the prompt (bodyLarge on 24 sp lines, "Prompt, or / for commands",
   the copper caret) that grows to six lines and then scrolls inside, so a long prompt leaves the conversation in sight;
   the buttons stay on its last line. Near its end **Attach** (the paperclip, `ic_attach`; see Attaching a file below),
-  and at its end **Stop** (the interrupt's square) while the agent's status says it works on a turn and the turn
+  and after it **Stop** (the interrupt's square) while the agent's status says it works on a turn and the turn
   wasn't interrupted (no hook tells the origin of an interrupt, so its status stays working: Stop comes back once the
-  agent works again or a prompt is typed, not for a `/command` alone). **Send** (filled copper round, 48dp,
-  `ic_send`) sits beside the pill only while there is something to send, growing in from its middle and out again
-  (120ms, scale and fade; a cut with animations off), so an empty composer is the pill alone, as a messenger's is.
+  agent works again or a prompt is typed, not for a `/command` alone). **Send** (`ic_send` in copper, `primary`, with
+  no plate of its own: the pill is its ground) takes the pill's very end only while there is something to send, as
+  Telegram's input bar has it: the prompt gives it its 48dp and it grows in from its middle, and out again (120ms,
+  width, scale and fade; a cut with animations off), so an empty composer is the pill alone.
   The field takes line breaks as the clipboard
   brings them and refuses an edit that adds any other control character. Send takes the text with its ends trimmed;
   the field lets it go once the agent has it and keeps it when nothing was sent. While an action is on its way the
@@ -799,9 +800,9 @@ The plan, reviewed against the brief:
   | | Show how the context window i... | |
   | | 2 commands                       | |
   | +----------------------------------+ |
-  | .-------------------------------.    |
-  | ( /  /co                   @ [] ) (<-)|
-  | '-------------------------------'    |
+  | .----------------------------------. |
+  | ( /  /co                    @ [] <-) |
+  | '----------------------------------' |
   +--------------------------------------+
   ```
 
@@ -821,9 +822,9 @@ The plan, reviewed against the brief:
   ```
   |  [@] Uploading shot.png         42%  X |
   |  =============------------------------ |
-  | .-------------------------------.      |
-  | ( /  Look at                 @  )  (<-)|
-  | '-------------------------------'      |
+  | .------------------------------------. |
+  | ( /  Look at                     @ <-) |
+  | '------------------------------------' |
   ```
 
 - **The `/` menu** (`SlashCommandMenu`): a `/` at the start of the field, with no space or line break after it, opens

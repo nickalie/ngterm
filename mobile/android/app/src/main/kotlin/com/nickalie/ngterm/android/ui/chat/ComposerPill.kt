@@ -1,10 +1,12 @@
 package com.nickalie.ngterm.android.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
@@ -14,9 +16,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -48,9 +50,10 @@ import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
- * The composer's rounded field and the buttons inside it: Commands (a `/` that starts one in an empty field, or closes
- * the menu while it is open), the prompt, Attach (the paperclip, [AttachButton]), and Stop while the agent works on a
- * turn ([ChatUiState.running]) and no card waits. Every button in it is a 48dp target, and they stay on the prompt's
+ * The composer's rounded field and the buttons inside it, as a messenger's input bar holds its own: Commands (a `/`
+ * that starts one in an empty field, or closes the menu while it is open), the prompt, Attach (the paperclip,
+ * [AttachButton]), Stop while the agent works on a turn ([ChatUiState.running]) and no card waits, and Send at its end
+ * once there is something to send ([sendShown]). Every button in it is a 48dp target, and they stay on the prompt's
  * last line as it grows.
  */
 @Composable
@@ -60,6 +63,8 @@ internal fun PromptPill(
     actions: ChatActions,
     focusRequester: FocusRequester,
     canSend: Boolean,
+    sendShown: Boolean,
+    sending: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -80,37 +85,47 @@ internal fun PromptPill(
             if (state.running && !state.awaitsCard) {
                 StopButton(enabled = !state.busy, onClick = actions.onStop)
             }
+            SendSlot(visible = sendShown) {
+                SendButton(enabled = canSend, sending = sending, onClick = actions.onSend)
+            }
         }
     }
 }
 
-/** Send's place beside the pill: it grows in from its middle once there is something to send, and out when sent. */
+// Send's place at the pill's end: it opens and grows in from its middle once there is something to send, and out when
+// sent, the prompt giving it the room
 @Composable
-internal fun SendSlot(
+private fun SendSlot(
     visible: Boolean,
     content: @Composable () -> Unit,
 ) {
     val motion = NgtermTheme.motion
     AnimatedVisibility(
         visible = visible,
-        enter = scaleIn(motion.quick()) + fadeIn(motion.quick()),
-        exit = scaleOut(motion.quick()) + fadeOut(motion.quick()),
+        enter =
+            expandHorizontally(motion.quick(), expandFrom = Alignment.Start) + scaleIn(motion.quick()) +
+                fadeIn(motion.quick()),
+        exit =
+            shrinkHorizontally(motion.quick(), shrinkTowards = Alignment.Start) + scaleOut(motion.quick()) +
+                fadeOut(motion.quick()),
     ) { content() }
 }
 
-/** Send: the return key's arrow in a filled copper circle as tall as the pill; a spinner ("Sending") on its way. */
+// Send, inside the pill at its end: the return key's arrow in copper, no plate of its own (the pill is its ground);
+// a spinner ("Sending") on its way
 @Composable
-internal fun SendButton(
+private fun SendButton(
     enabled: Boolean,
     sending: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val label = stringResource(if (sending) R.string.chat_sending else R.string.chat_send)
-    FilledIconButton(
+    IconButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.size(PillHeight).semantics { contentDescription = label },
+        colors = IconButtonDefaults.iconButtonColors(contentColor = MaterialTheme.colorScheme.primary),
+        modifier = modifier.semantics { contentDescription = label },
     ) {
         if (sending) {
             CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -181,7 +196,7 @@ private fun CommandsButton(
     }
 }
 
-// inside the pill at its end, while the agent works: the interrupt's square
+// inside the pill after Attach, while the agent works: the interrupt's square
 @Composable
 private fun StopButton(
     enabled: Boolean,
