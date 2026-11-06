@@ -11,7 +11,7 @@
 const ANCESTORS: usize = 6;
 
 /// The Codex options that take a value as the next word, so the subcommand is not found in it.
-const VALUED_OPTIONS: [&str; 18] = [
+const VALUED_OPTIONS: [&str; 16] = [
     "-c",
     "--config",
     "-m",
@@ -24,13 +24,14 @@ const VALUED_OPTIONS: [&str; 18] = [
     "--sandbox",
     "-a",
     "--ask-for-approval",
-    "-i",
-    "--image",
     "--add-dir",
     "--enable",
     "--disable",
     "--local-provider",
 ];
+
+/// The Codex options that take one or more values, the words up to the next option (`--image a.png b.png`).
+const MULTI_VALUED_OPTIONS: [&str; 2] = ["-i", "--image"];
 
 /// The subcommands that run Codex without its TUI: `exec` (`e`) and its `resume`, `review`, and the servers.
 const HEADLESS: [&str; 5] = ["exec", "e", "review", "app-server", "mcp-server"];
@@ -63,15 +64,25 @@ fn is_codex(argv: &[String]) -> bool {
     name == "codex" || name == "codex.exe" || name.starts_with("codex-")
 }
 
-/// Whether a Codex `argv` names a headless subcommand: its first word that is not an option or an option's value.
+/// Whether a Codex `argv` names a headless subcommand: its first word that is not an option or an option's value. An
+/// image option's values run up to the next option, and a headless subcommand's name among them counts as that
+/// subcommand, so where the two cannot be told apart the run takes no mail (it stays in the mailbox).
 pub(super) fn runs_headless(argv: &[String]) -> bool {
-    let mut words = argv.iter().skip(1);
+    let mut words = argv.iter().skip(1).peekable();
     while let Some(word) = words.next() {
         if word == "--" {
             return false; // the prompt follows
         }
         if VALUED_OPTIONS.contains(&word.as_str()) {
             words.next();
+            continue;
+        }
+        if MULTI_VALUED_OPTIONS.contains(&word.as_str()) {
+            while let Some(value) = words.next_if(|value| !value.starts_with('-')) {
+                if HEADLESS.contains(&value.as_str()) {
+                    return true;
+                }
+            }
             continue;
         }
         if word.starts_with('-') {
@@ -210,6 +221,19 @@ mod tests {
             &["codex", "--full-auto", "--model", "o9", "review"],
             &["codex-x86_64-unknown-linux-musl", "app-server"],
             &["codex.exe", "mcp-server"],
+            &[
+                "codex",
+                "--image",
+                "before.png",
+                "after.png",
+                "-C",
+                ".",
+                "exec",
+                "resume",
+                "id",
+            ],
+            &["codex", "-i", "a.png", "exec", "task"],
+            &["codex", "-i", "a.png", "b.png", "review"],
         ] {
             assert!(runs_headless(&argv(headless)), "{headless:?}");
         }
@@ -221,6 +245,8 @@ mod tests {
             &["codex", "resume", "--last"],
             &["codex", "fork"],
             &["codex", "--no-daemon", "fix the build"],
+            &["codex", "--image", "a.png", "b.png", "--", "exec"],
+            &["codex", "--image=a.png", "fix it"],
         ] {
             assert!(!runs_headless(&argv(interactive)), "{interactive:?}");
         }
