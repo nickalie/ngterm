@@ -144,7 +144,7 @@ impl Hook {
     fn run(&self, env: &dyn Env) -> Result<(), Failure> {
         let agent = parse_agent(&self.agent).map_err(Failure::Usage)?;
         let event = HookEvent::parse(&self.event).map_err(Failure::Usage)?;
-        let payload = read_payload()?;
+        let payload = read_payload("agent hook")?;
         let Some(report) = report(agent, event, &payload).map_err(Failure::Local)? else {
             return Ok(());
         };
@@ -215,14 +215,14 @@ fn parse_agent(name: &str) -> Result<AgentKind, String> {
     AgentKind::from_name(name).ok_or_else(|| format!("unknown agent: {name} (claude|codex)"))
 }
 
-/// The hook payload on standard input, read to its end. A terminal is refused, since nothing would end the read; so is
-/// an empty payload, which no agent writes.
-fn read_payload() -> Result<Vec<u8>, Failure> {
+/// The hook payload on standard input, read to its end for `command` (`agent hook`, `agent mail`). A terminal is
+/// refused, since nothing would end the read; so is an empty payload, which no agent writes.
+fn read_payload(command: &str) -> Result<Vec<u8>, Failure> {
     let stdin = io::stdin();
     if stdin.is_terminal() {
-        return Err(Failure::Usage(
-            "agent hook reads the hook payload on standard input".to_owned(),
-        ));
+        return Err(Failure::Usage(format!(
+            "{command} reads the hook payload on standard input"
+        )));
     }
     let mut payload = Vec::new();
     stdin

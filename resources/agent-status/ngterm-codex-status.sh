@@ -15,10 +15,10 @@
 # Codex, so a message another program left with `ngtermctl msg send --to SESSION:PANE` reaches it without anyone typing
 # into its composer. `ngtermctl agent mail codex` reads the payload, takes the messages in one read+ack and prints the
 # hook's answer, which this prints for Codex: added context on the first two, and on Stop a block whose reason is the
-# mail, so the turn goes on (the row stays active then). Only an interactive Codex takes mail: the adapter's parent is
-# the Codex that fired it, and a `codex exec`, `review`, `app-server` or `mcp-server` run (a worker another agent
-# started in this pane inherits its NGTERM_*) takes none, nor does a subagent's event or the memory-consolidation
-# thread. An idle Codex has no hook to wake it, so mail sent then waits for its next prompt.
+# mail, so the turn goes on (the row stays active then). Only an interactive Codex takes mail, as its rollout's
+# session_meta records it (`source` `cli`): a `codex exec` or app-server run (a worker another agent started in this
+# pane inherits its NGTERM_*) takes none, nor does a subagent's event or the memory-consolidation thread. An idle Codex
+# has no hook to wake it, so mail sent then waits for its next prompt.
 set -u
 
 [ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
@@ -102,47 +102,6 @@ sys.stdout.write(value)
 
 # whether the payload's transcript_path is there and null. plutil types a null as "(any)"; with no plutil, python3 or
 # jq reads it, and with none of the three nothing counts as null, so the event is reported (fail open)
-# Whether the Codex that fired this hook, the adapter's parent, is the interactive TUI: its first argument that is not
-# an option (or an option's value) is no subcommand, or `resume` or `fork`. Linux reads its exact argv; elsewhere `ps`
-# joins the words, which a prompt cannot make look like a subcommand at that position. An argv that is unreadable or not
-# Codex's counts as interactive, so mail still flows where the parent cannot be seen (Git Bash on Windows).
-codex_runs_interactively() {
-  local words=() word i=1
-  if [ -r "/proc/$PPID/cmdline" ]; then
-    while IFS= read -r -d '' word; do words+=("$word"); done <"/proc/$PPID/cmdline"
-  else
-    read -r -a words <<<"$(ps -o args= -p "$PPID" 2>/dev/null)" || true
-  fi
-  [ "${#words[@]}" -gt 0 ] || return 0
-  case "${words[0]##*/}" in codex | codex.exe | codex-*) ;; *) return 0 ;; esac
-  while [ "$i" -lt "${#words[@]}" ]; do
-    case "${words[$i]}" in
-      -c | --config | -m | --model | -p | --profile | -C | --cd | -s | --sandbox | -a | --ask-for-approval | -i | --image | \
-        --add-dir | --enable | --disable | --local-provider)
-        i=$((i + 2))
-        ;;
-      --) return 0 ;;
-      -*) i=$((i + 1)) ;;
-      *) break ;;
-    esac
-  done
-  [ "$i" -lt "${#words[@]}" ] || return 0
-  case "${words[$i]}" in exec | e | review | app-server | mcp-server) return 1 ;; esac
-  return 0
-}
-
-# Takes the pane's mail for this event into $mail_output, the hook answer `ngtermctl agent mail codex` prints; fails
-# when there is none or this Codex takes no mail.
-mail_output=
-take_mail() {
-  [ -n "${NGTERM_PANE_ID:-}" ] && [ -n "$payload" ] || return 1
-  printf '%s' "$payload" | transcript_path_is_null && return 1
-  codex_runs_interactively || return 1
-  mail_output=$(printf '%s' "$payload" | "${NGTERMCTL:-ngtermctl}" agent mail codex \
-    "${socket_args[@]+"${socket_args[@]}"}" 2>/dev/null) || true
-  [ -n "$mail_output" ]
-}
-
 transcript_path_is_null() {
   if [ -x /usr/bin/plutil ]; then
     [ "$(/usr/bin/plutil -type transcript_path - 2>/dev/null)" = "(any)" ]
@@ -160,6 +119,18 @@ if not (isinstance(payload, dict) and "transcript_path" in payload and payload["
   else
     return 1
   fi
+}
+
+# Takes the pane's mail for this event into $mail_output, the hook answer `ngtermctl agent mail codex` prints; fails
+# when there is none or this Codex takes no mail (`agent mail` hands it only to the TUI, as the session_meta of the
+# payload's rollout records it: not to a `codex exec`, app-server or subagent run, nor to the memory-consolidation
+# thread, which has no rollout).
+mail_output=
+take_mail() {
+  [ -n "${NGTERM_PANE_ID:-}" ] && [ -n "$payload" ] || return 1
+  mail_output=$(printf '%s' "$payload" | "${NGTERMCTL:-ngtermctl}" agent mail codex \
+    "${socket_args[@]+"${socket_args[@]}"}" 2>/dev/null) || true
+  [ -n "$mail_output" ]
 }
 
 read_visible_screen() {

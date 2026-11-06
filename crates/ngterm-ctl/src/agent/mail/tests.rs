@@ -81,10 +81,93 @@ fn only_the_panes_interactive_agent_takes_mail() {
     assert!(!takes_mail(AgentKind::Claude, &main, &headless));
     assert!(!takes_mail(AgentKind::Claude, &main, &MapEnv::default()));
     assert!(!takes_mail(AgentKind::Claude, &subagent, &cli));
-    assert!(takes_mail(AgentKind::Codex, &main, &MapEnv::default()));
-    assert!(!takes_mail(AgentKind::Codex, &subagent, &MapEnv::default()));
     let empty_agent = json!({"hook_event_name": "Stop", "agent_id": ""});
-    assert!(takes_mail(AgentKind::Codex, &empty_agent, &MapEnv::default()));
+    assert!(takes_mail(AgentKind::Claude, &empty_agent, &cli));
+}
+
+/// A Codex rollout in `directory` whose first line is `first`, and a payload naming it.
+fn codex_payload(directory: &Path, name: &str, first: &str, extra: Value) -> Value {
+    let path = directory.join(name);
+    fs::write(&path, format!("{first}\n{{\"type\":\"turn_context\"}}\n")).unwrap();
+    let mut payload = json!({"hook_event_name": "Stop", "transcript_path": path.to_string_lossy()});
+    if let (Value::Object(payload), Value::Object(extra)) = (&mut payload, extra) {
+        payload.extend(extra);
+    }
+    payload
+}
+
+fn session_meta(source: &Value) -> String {
+    json!({"type": "session_meta", "payload": {"originator": "codex-tui", "source": source}}).to_string()
+}
+
+#[test]
+fn only_codexs_tui_takes_mail_as_its_rollout_records_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let env = MapEnv::default();
+    let tui = codex_payload(directory.path(), "tui.jsonl", &session_meta(&json!("cli")), json!({}));
+    assert!(takes_mail(AgentKind::Codex, &tui, &env));
+    let tui_with_empty_agent = codex_payload(
+        directory.path(),
+        "tui2.jsonl",
+        &session_meta(&json!("cli")),
+        json!({"agent_id": ""}),
+    );
+    assert!(takes_mail(AgentKind::Codex, &tui_with_empty_agent, &env));
+    for (name, source) in [
+        ("exec", json!("exec")),
+        ("app-server", json!("vscode")),
+        ("mcp", json!("mcp")),
+        ("subagent", json!({"subagent": {"thread_spawn": {"depth": 1}}})),
+    ] {
+        let payload = codex_payload(directory.path(), name, &session_meta(&source), json!({}));
+        assert!(!takes_mail(AgentKind::Codex, &payload, &env), "{name}");
+    }
+    let subagent = codex_payload(
+        directory.path(),
+        "sub.jsonl",
+        &session_meta(&json!("cli")),
+        json!({"agent_id": "a1"}),
+    );
+    assert!(!takes_mail(AgentKind::Codex, &subagent, &env));
+    let not_meta = codex_payload(
+        directory.path(),
+        "turn.jsonl",
+        r#"{"type":"turn_context","payload":{"source":"cli"}}"#,
+        json!({}),
+    );
+    assert!(!takes_mail(AgentKind::Codex, &not_meta, &env));
+    let garbled = codex_payload(directory.path(), "garbled.jsonl", "{not json", json!({}));
+    assert!(!takes_mail(AgentKind::Codex, &garbled, &env));
+    let unfinished = directory.path().join("unfinished.jsonl");
+    fs::write(&unfinished, session_meta(&json!("cli"))).unwrap();
+    for payload in [
+        json!({"hook_event_name": "Stop", "transcript_path": unfinished.to_string_lossy()}),
+        json!({"hook_event_name": "Stop", "transcript_path": directory.path().join("missing.jsonl").to_string_lossy()}),
+        json!({"hook_event_name": "Stop", "transcript_path": null}),
+        json!({"hook_event_name": "Stop"}),
+    ] {
+        assert!(!takes_mail(AgentKind::Codex, &payload, &env), "{payload}");
+    }
+}
+
+#[test]
+fn a_wake_turns_the_panes_status_back_to_active() {
+    let env = MapEnv::default()
+        .with("NGTERM_SESSION_ID", "S")
+        .with("NGTERM_PANE", "right")
+        .with("NGTERM_PANE_ID", "p7");
+    assert_eq!(
+        serde_json::to_value(wake_status(&env).unwrap()).unwrap(),
+        json!({"cmd": "session.status", "target": "S",
+               "args": {"pane": "right", "paneID": "p7", "status": "active", "blink": true}})
+    );
+    let bare = MapEnv::default().with("NGTERM_SESSION_ID", "S");
+    assert_eq!(
+        serde_json::to_value(wake_status(&bare).unwrap()).unwrap(),
+        json!({"cmd": "session.status", "target": "S", "args": {"status": "active", "blink": true}})
+    );
+    assert!(wake_status(&MapEnv::default()).is_none());
+    assert!(wake_status(&MapEnv::default().with("NGTERM_SESSION_ID", "")).is_none());
 }
 
 #[test]

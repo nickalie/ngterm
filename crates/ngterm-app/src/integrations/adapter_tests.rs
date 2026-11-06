@@ -480,8 +480,6 @@ struct CodexSetup {
     mail_output: Option<&'static str>,
     /// Run without `NGTERM_PANE_ID`, as an app from before stable pane ids starts a pane.
     no_pane_id: bool,
-    /// Run under a parent whose argv is `codex -c … exec`, as a `codex exec` worker fires its hooks (Linux only).
-    exec_parent: bool,
 }
 
 /// The Codex adapter run for `action` with `payload` on stdin, in a pane's environment from scratch, its watcher
@@ -507,18 +505,9 @@ fn codex_with(action: &str, payload: &str, setup: &CodexSetup) -> Option<CodexRu
     let adapter = bash_path(&resources().join("ngterm-codex-status.sh"));
     let mut command = Command::new(bash);
     scrub(&mut command);
-    if setup.exec_parent {
-        // a bash named `codex` whose next word after its `-c` script is `exec`; the trailing `:` keeps it from
-        // exec-ing the adapter, so the adapter's parent is that bash
-        command
-            .arg("-c")
-            .arg(r#"exec -a codex bash -c "$0 $1; :" exec"#)
-            .arg(&adapter)
-            .arg(action);
-    } else {
-        command.arg(&adapter).arg(action);
-    }
     command
+        .arg(&adapter)
+        .arg(action)
         .env("STATUSES", bash_path(&statuses))
         .env("NGTERMCTL", bash_path(&stub.path("ngtermctl")))
         .env("NGTERM_STATUS_WRAPPER", bash_path(&wrapper))
@@ -672,43 +661,74 @@ fn codex_without_mail_prints_nothing_and_ends_its_turn_as_before() {
     }
 }
 
+/// Which Codex run takes mail (its TUI, not a `codex exec` worker, a subagent or the memory-consolidation thread) is
+/// `agent mail codex`'s to decide from the payload, so the adapter hands every payload over when the pane has an id.
 #[test]
-fn codex_takes_no_mail_without_a_pane_id_or_in_the_memory_thread() {
+fn codex_takes_no_mail_without_a_pane_id() {
     let setup = CodexSetup {
         mail_output: Some(BLOCK),
         no_pane_id: true,
-        ..CodexSetup::default()
     };
     let Some(run) = codex_with("stop", &fixture("codex/hooks/main/03-Stop.json"), &setup) else {
         return;
     };
     assert_eq!((run.mail, run.stdout.as_str()), (None, ""));
     assert_eq!(run.statuses, ["completed --auto-reset"]);
-
-    let consolidation = r#"{"hook_event_name":"Stop","transcript_path":null,"last_assistant_message":"done"}"#;
-    let setup = CodexSetup {
-        mail_output: Some(BLOCK),
-        ..CodexSetup::default()
-    };
-    let Some(run) = codex_with("stop", consolidation, &setup) else {
-        return;
-    };
-    assert_eq!((run.mail, run.stdout.as_str()), (None, ""));
 }
 
-/// A `codex exec` started inside an agent's pane inherits its NGTERM_* and fires the same hooks: it must not take the
-/// pane's mail. Its argv is read from /proc, so the check is exact on Linux alone.
-#[cfg(target_os = "linux")]
+/// The Claude mail adapter hands its process over to `ngtermctl agent mail` (so a waiter's parent is the agent that
+/// started the hook, and a waiter notices that agent's exit), with the pane's socket, the payload and the exit status
+/// passing through untouched.
+#[cfg(unix)]
 #[test]
-fn a_codex_exec_run_takes_no_mail() {
-    let setup = CodexSetup {
-        mail_output: Some(BLOCK),
-        exec_parent: true,
-        ..CodexSetup::default()
-    };
-    let run = codex_with("stop", &fixture("codex/hooks/main/03-Stop.json"), &setup).unwrap();
-    assert_eq!((run.mail, run.stdout.as_str()), (None, ""));
-    assert_eq!(run.statuses, ["completed --auto-reset"]);
+fn the_claude_mail_adapter_hands_its_process_to_ngtermctl() {
+    let stub = Stub::new();
+    let ctl = stub.path("mail-ctl");
+    ngterm_host::fakes::write_executable(
+        &ctl,
+        "#!/bin/sh
+printf '%s' \"$PPID\" > \"$OUT/ppid\"\n(IFS='\t'; printf '%s' \"$*\") > \"$OUT/argv\"\n\
+         cat > \"$OUT/stdin\"\necho mail >&2\nexit 2\n",
+    )
+    .unwrap();
+    let mut command = Command::new("bash");
+    scrub(&mut command);
+    let output = command
+        .arg(resources().join("ngterm-agent-mail.sh"))
+        .args(["claude", "--wait"])
+        .env("OUT", stub.dir.path())
+        .env("NGTERMCTL", &ctl)
+        .env("NGTERM_SESSION_ID", "S")
+        .envs(pane_vars(&[]))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write as _;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"{\"hook_event_name\":\"Stop\"}")?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "mail\n");
+    assert_eq!(
+        fs::read_to_string(stub.path("ppid")).unwrap(),
+        std::process::id().to_string(),
+        "ngtermctl's parent is the adapter's"
+    );
+    assert_eq!(
+        fs::read_to_string(stub.path("argv")).unwrap(),
+        format!("agent\tmail\tclaude\t--wait\t--socket\t{SOCKET}")
+    );
+    assert_eq!(
+        fs::read_to_string(stub.path("stdin")).unwrap(),
+        r#"{"hook_event_name":"Stop"}"#
+    );
 }
 
 /// Codex fires a subagent's events in the parent with its `agent_id` and the subagent's transcript: its prompt never

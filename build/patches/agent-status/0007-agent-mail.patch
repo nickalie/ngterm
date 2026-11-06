@@ -2,18 +2,19 @@ Agent mail, an ngterm extension: hand the pane's `msg` mailbox to the coding age
 program leaves with `ngtermctl msg send` reaches the agent without anyone typing into its composer. A new adapter,
 `ngterm-agent-mail.sh` (and its PowerShell form `ngterm-agent-mail.ps1`), runs `ngtermctl agent mail claude` for Claude
 Code's PostToolUse (the mail as added context) and, with --wait, as the asyncRewake waiter on SessionStart and Stop that
-wakes an idle agent, turning the pane's status back to active when it does. The Codex adapter runs
-`ngtermctl agent mail codex` on UserPromptSubmit, PostToolUse and Stop and prints its hook answer for Codex (a Stop
-that hands mail over keeps the row active and the watcher running), reading a PostToolUse or Stop payload only when the
-pane has an id; it skips the memory-consolidation thread and a `codex exec`, `review`, `app-server` or `mcp-server`
-parent. Applied after 0006-agent-transcript.patch.
+wakes an idle agent, turning the pane's status back to active when it does; the POSIX form execs it, so a waiter's
+parent is the agent. The Codex adapter runs `ngtermctl agent mail codex` on UserPromptSubmit, PostToolUse and Stop and
+prints its hook answer for Codex (a Stop that hands mail over keeps the row active and the watcher running), reading a
+PostToolUse or Stop payload only when the pane has an id; which Codex run takes mail (its TUI, not a `codex exec`
+worker, a subagent or the memory-consolidation thread) is the CLI's to decide from the payload. Applied after
+0006-agent-transcript.patch.
 
 diff --git a/ngterm-agent-mail.ps1 b/ngterm-agent-mail.ps1
 new file mode 100644
-index 00000000..342ed48a
+index 00000000..e2a09620
 --- /dev/null
 +++ b/ngterm-agent-mail.ps1
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,45 @@
 +# ngterm-agent-mail — hand the pane's mail to the Claude Code that runs in it (Windows).
 +#
 +#   powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ngterm-agent-mail.ps1 claude          # PostToolUse
@@ -22,15 +23,15 @@ index 00000000..342ed48a
 +# The Windows form of ngterm-agent-mail.sh, for Windows PowerShell 5.1 and PowerShell 7; its header holds what the
 +# hooks do. The payload is read and handed on as UTF-8 whatever the console's code page, `ngtermctl agent mail` writes
 +# the hook's answer straight to the streams Claude Code reads, and the exit status is the CLI's: 2 when --wait took
-+# mail, which also turns the pane's status back to active. Outside ngterm it does nothing and exits 0.
++# mail (the CLI has turned the pane's status back to active by then). Unlike the POSIX form it cannot hand its process
++# over to ngtermctl, and Windows does not re-parent, so a waiter here does not notice its agent exiting: it ends with
++# its claim (the next agent's waiter), its pane, its app or the hook's timeout. Outside ngterm it does nothing and
++# exits 0.
 +#
 +# ngtermctl resolution: $env:NGTERMCTL, else the path the installer bakes in ($NgtermctlBaked), else `ngtermctl` on
 +# PATH.
 +
 +if (-not $env:NGTERM_SESSION_ID -or -not $env:NGTERM_PANE_ID) { exit 0 }
-+
-+$statusWrapper = $env:NGTERM_STATUS_WRAPPER
-+if (-not $statusWrapper) { $statusWrapper = Join-Path $PSScriptRoot 'ngterm-agent-status.ps1' }
 +
 +$ngtermctl = 'ngtermctl'
 +if ($env:NGTERMCTL) {
@@ -58,16 +59,13 @@ index 00000000..342ed48a
 +  $payload | & $ngtermctl @cli
 +  $status = $LASTEXITCODE
 +} catch { }
-+if ($status -eq 2) {
-+  try { & $statusWrapper active --blink *> $null } catch { }
-+}
 +exit $status
 diff --git a/ngterm-agent-mail.sh b/ngterm-agent-mail.sh
 new file mode 100755
-index 00000000..c39baea7
+index 00000000..24ef4ac5
 --- /dev/null
 +++ b/ngterm-agent-mail.sh
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,32 @@
 +#!/usr/bin/env bash
 +# ngterm-agent-mail — hand the pane's mail to the Claude Code that runs in it.
 +#
@@ -85,29 +83,23 @@ index 00000000..c39baea7
 +# interactive agent takes mail: a subagent's hook and a `claude -p` worker (which inherits the pane's NGTERM_*) take
 +# none. A wake also turns the pane's status back to active, since a woken turn fires no UserPromptSubmit.
 +#
-+# Its stdout and stderr are the hook's answer, so it adds nothing of its own; outside ngterm (NGTERM_SESSION_ID or
-+# NGTERM_PANE_ID unset) it does nothing and exits 0. Codex's mail goes through its lifecycle adapter instead, whose
-+# hook lines Codex has already trusted.
++# It execs ngtermctl, so a waiter's parent is the Claude Code that started it: an agent that exits or dies without
++# ending its hooks leaves the waiter re-parented, and it stops before taking mail nobody would read. Its stdout and
++# stderr are the hook's answer, so it adds nothing of its own; outside ngterm (NGTERM_SESSION_ID or NGTERM_PANE_ID
++# unset) it does nothing and exits 0. Codex's mail goes through its lifecycle adapter instead, whose hook lines Codex
++# has already trusted.
 +#
 +# ngtermctl resolution: $NGTERMCTL, else the path the installer bakes in, else `ngtermctl` on PATH.
 +set -u
 +
 +[ -n "${NGTERM_SESSION_ID:-}" ] && [ -n "${NGTERM_PANE_ID:-}" ] || exit 0
 +
-+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
-+status_wrapper=${NGTERM_STATUS_WRAPPER:-"$script_dir/ngterm-agent-status.sh"}
-+
 +args=(agent mail "$@")
 +[ -n "${NGTERM_SOCKET:-}" ] && args+=(--socket "$NGTERM_SOCKET")
 +
-+"${NGTERMCTL:-ngtermctl}" "${args[@]}"
-+status=$?
-+if [ "$status" -eq 2 ]; then
-+  "$status_wrapper" active --blink >/dev/null 2>&1 </dev/null || true
-+fi
-+exit "$status"
++exec "${NGTERMCTL:-ngtermctl}" "${args[@]}"
 diff --git a/ngterm-codex-status.sh b/ngterm-codex-status.sh
-index aa63d170..377c2857 100755
+index aa63d170..ba7b3d84 100755
 --- a/ngterm-codex-status.sh
 +++ b/ngterm-codex-status.sh
 @@ -10,6 +10,15 @@
@@ -119,10 +111,10 @@ index aa63d170..377c2857 100755
 +# Codex, so a message another program left with `ngtermctl msg send --to SESSION:PANE` reaches it without anyone typing
 +# into its composer. `ngtermctl agent mail codex` reads the payload, takes the messages in one read+ack and prints the
 +# hook's answer, which this prints for Codex: added context on the first two, and on Stop a block whose reason is the
-+# mail, so the turn goes on (the row stays active then). Only an interactive Codex takes mail: the adapter's parent is
-+# the Codex that fired it, and a `codex exec`, `review`, `app-server` or `mcp-server` run (a worker another agent
-+# started in this pane inherits its NGTERM_*) takes none, nor does a subagent's event or the memory-consolidation
-+# thread. An idle Codex has no hook to wake it, so mail sent then waits for its next prompt.
++# mail, so the turn goes on (the row stays active then). Only an interactive Codex takes mail, as its rollout's
++# session_meta records it (`source` `cli`): a `codex exec` or app-server run (a worker another agent started in this
++# pane inherits its NGTERM_*) takes none, nor does a subagent's event or the memory-consolidation thread. An idle Codex
++# has no hook to wake it, so mail sent then waits for its next prompt.
  set -u
  
  [ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
@@ -140,72 +132,42 @@ index aa63d170..377c2857 100755
  esac
  
  # Pipes the payload to `ngtermctl agent hook codex <event>`; a subagent's event other than a permission prompt is left
-@@ -86,6 +102,47 @@ sys.stdout.write(value)
+@@ -105,6 +121,18 @@ if not (isinstance(payload, dict) and "transcript_path" in payload and payload["
+   fi
+ }
  
- # whether the payload's transcript_path is there and null. plutil types a null as "(any)"; with no plutil, python3 or
- # jq reads it, and with none of the three nothing counts as null, so the event is reported (fail open)
-+# Whether the Codex that fired this hook, the adapter's parent, is the interactive TUI: its first argument that is not
-+# an option (or an option's value) is no subcommand, or `resume` or `fork`. Linux reads its exact argv; elsewhere `ps`
-+# joins the words, which a prompt cannot make look like a subcommand at that position. An argv that is unreadable or not
-+# Codex's counts as interactive, so mail still flows where the parent cannot be seen (Git Bash on Windows).
-+codex_runs_interactively() {
-+  local words=() word i=1
-+  if [ -r "/proc/$PPID/cmdline" ]; then
-+    while IFS= read -r -d '' word; do words+=("$word"); done <"/proc/$PPID/cmdline"
-+  else
-+    read -r -a words <<<"$(ps -o args= -p "$PPID" 2>/dev/null)" || true
-+  fi
-+  [ "${#words[@]}" -gt 0 ] || return 0
-+  case "${words[0]##*/}" in codex | codex.exe | codex-*) ;; *) return 0 ;; esac
-+  while [ "$i" -lt "${#words[@]}" ]; do
-+    case "${words[$i]}" in
-+      -c | --config | -m | --model | -p | --profile | -C | --cd | -s | --sandbox | -a | --ask-for-approval | -i | --image | \
-+        --add-dir | --enable | --disable | --local-provider)
-+        i=$((i + 2))
-+        ;;
-+      --) return 0 ;;
-+      -*) i=$((i + 1)) ;;
-+      *) break ;;
-+    esac
-+  done
-+  [ "$i" -lt "${#words[@]}" ] || return 0
-+  case "${words[$i]}" in exec | e | review | app-server | mcp-server) return 1 ;; esac
-+  return 0
-+}
-+
 +# Takes the pane's mail for this event into $mail_output, the hook answer `ngtermctl agent mail codex` prints; fails
-+# when there is none or this Codex takes no mail.
++# when there is none or this Codex takes no mail (`agent mail` hands it only to the TUI, as the session_meta of the
++# payload's rollout records it: not to a `codex exec`, app-server or subagent run, nor to the memory-consolidation
++# thread, which has no rollout).
 +mail_output=
 +take_mail() {
 +  [ -n "${NGTERM_PANE_ID:-}" ] && [ -n "$payload" ] || return 1
-+  printf '%s' "$payload" | transcript_path_is_null && return 1
-+  codex_runs_interactively || return 1
 +  mail_output=$(printf '%s' "$payload" | "${NGTERMCTL:-ngtermctl}" agent mail codex \
 +    "${socket_args[@]+"${socket_args[@]}"}" 2>/dev/null) || true
 +  [ -n "$mail_output" ]
 +}
 +
- transcript_path_is_null() {
-   if [ -x /usr/bin/plutil ]; then
-     [ "$(/usr/bin/plutil -type transcript_path - 2>/dev/null)" = "(any)" ]
-@@ -202,10 +259,15 @@ case "$action" in
+ read_visible_screen() {
+   "${NGTERMCTL:-ngtermctl}" session text \
+     --target "$NGTERM_SESSION_ID" \
+@@ -202,9 +230,14 @@ case "$action" in
      report_agent UserPromptSubmit
      report_status active --blink
      start_watcher
 +    take_mail && printf '%s\n' "$mail_output"
++    ;;
++  pre-tool-use)
++    report_status active --blink
      ;;
 -  pre-tool-use|post-tool-use)
-+  pre-tool-use)
-     report_status active --blink
-     ;;
 +  post-tool-use)
-+    report_status active --blink
+     report_status active --blink
 +    take_mail && printf '%s\n' "$mail_output"
-+    ;;
+     ;;
    permission-request)
      # Candidate only: keep watching while Auto Review decides. The watcher reports blocked only if
-     # Codex subsequently leaves a real approval prompt visible for the user.
-@@ -213,6 +275,11 @@ case "$action" in
+@@ -213,6 +246,11 @@ case "$action" in
      start_watcher
      ;;
    stop)

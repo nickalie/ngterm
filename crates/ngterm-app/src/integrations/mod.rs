@@ -61,8 +61,10 @@
 //!   choose to): `ngterm-agent-mail.sh` and its PowerShell form run `ngtermctl agent mail claude`, wired to Claude
 //!   Code's `SessionStart` and `Stop` as an `asyncRewake` waiter and to its `PostToolUse` ([`hooks_config`]), and the
 //!   Codex adapter runs `ngtermctl agent mail codex` on `UserPromptSubmit`, `PostToolUse` and `Stop`, printing the hook
-//!   answer for Codex, unless its parent is a `codex exec` run (`build/patches/agent-status/0007-agent-mail.patch`); the
-//!   skill documents it (`build/patches/skill-ngterm/0020-agent-mail.patch`);
+//!   answer for Codex, which takes mail only for the TUI its rollout names (not a `codex exec` run)
+//!   (`build/patches/agent-status/0007-agent-mail.patch`); on Windows a Claude Code waiter does not notice its agent's
+//!   exit and ends with the next agent's waiter, its pane, its app or the hook's timeout; the skill documents it
+//!   (`build/patches/skill-ngterm/0020-agent-mail.patch`);
 //! - the skill speaks of the `live` group and the attach contract's `NGTERM_LIVE_*` variables where upstream's names
 //!   `zmx`, and it is named `ngterm` (frontmatter `name`, a description that also triggers on ngterm and `ngtermctl`),
 //!   its text, examples and `show-image.sh` running `ngtermctl` wherever upstream runs `agtermctl`, the far side of a

@@ -9,26 +9,34 @@
 //! (`decision: block`). With no mail, or for any other event, it prints nothing and reads nothing.
 //!
 //! With `--wait` it is Claude Code's `asyncRewake` hook, started on `SessionStart` and `Stop`: it waits in the
-//! background until mail arrives, prints it on standard error and exits 2, which wakes an idle Claude Code with the
-//! mail as a system reminder (a busy one gets it when its turn ends). Claude Code starts one per `Stop` without ending
-//! the last, so each waiter claims the pane in a token file under the control socket's directory and an older one
-//! that finds its claim gone exits 0 without reading. A waiter also exits 0 when its agent is gone (its parent changed:
-//! Unix only), and when the pane or the app is (the read keeps failing).
+//! background until mail arrives, turns the pane's status back to active (a woken turn fires no `UserPromptSubmit`),
+//! prints the mail on standard error and exits 2, which wakes an idle Claude Code with it as a system reminder (a busy
+//! one gets it when its turn ends). Claude Code starts one per `Stop` without ending the last, so each waiter claims
+//! the pane in a token file under the control socket's directory and an older one that finds its claim gone exits 0
+//! without reading. A waiter also exits 0 when its agent is gone, and when the pane or the app is (the read keeps
+//! failing). The agent is its parent: the POSIX adapter `exec`s this command, so an agent that exits or dies without
+//! ending its hooks leaves the waiter re-parented, which it notices before its next read (Unix only: on Windows the
+//! PowerShell adapter stays between the two and no re-parenting happens, so a waiter there outlives its agent until
+//! its claim, its pane, its app or the hook's timeout ends it).
 //!
-//! Mail reaches only the pane's own interactive agent: a subagent's event (a payload with an `agent_id`) and a Claude
-//! Code other than the interactive CLI (`CLAUDE_CODE_ENTRYPOINT` not `cli`: a `claude -p` worker inherits the pane's
-//! `NGTERM_*`) take nothing, and the Codex adapter leaves a `codex exec` run out. The read+ack is at most once, as
-//! `msg read --ack` is: a message an agent then drops (its hook timed out, it quit) is gone.
+//! Mail reaches only the pane's own interactive agent: a subagent's event (a payload with an `agent_id`) takes nothing,
+//! nor does a Claude Code other than the interactive CLI (`CLAUDE_CODE_ENTRYPOINT` not `cli`: a `claude -p` worker
+//! inherits the pane's `NGTERM_*`) or a Codex other than its TUI. A Codex run is told apart by the `source` its
+//! rollout's first line (`session_meta`) records: `cli` for the TUI, `exec` for `codex exec`, `vscode` for an
+//! app-server client, an object for a subagent; a payload without a readable rollout takes nothing, so its mail waits
+//! for the next event. The read+ack is at most once, as `msg read --ack` is: a message an agent then drops (its hook
+//! timed out, it quit) is gone.
 
 use std::fmt::Write as _;
 use std::fs;
+use std::io::{BufRead as _, BufReader, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ngterm_core::agent_chat::AgentKind;
 use ngterm_core::paths::Env;
-use ngterm_proto::command::MsgCmd;
+use ngterm_proto::command::{MsgCmd, SessionCmd};
 use ngterm_proto::{Args, BusMessage, Command, ControlResult, Request};
 use serde_json::{Value, json};
 
@@ -40,7 +48,8 @@ use crate::{BasicOptions, Failure};
 /// The most one read+ack waits, its reply included: the agent waits on a synchronous hook.
 const READ_DEADLINE: Duration = Duration::from_secs(5);
 
-/// How often a waiter reads the mailbox, as `msg read --wait` does at a quarter of it.
+/// How often a waiter reads the mailbox: twice as long as `msg read --wait` sleeps between its reads, since a waiter
+/// runs for as long as its agent sits idle.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// How long a waiter holds its first read: the `Stop` that starts it also posts `completed` through the status
@@ -50,6 +59,9 @@ const FIRST_READ_DELAY: Duration = Duration::from_secs(1);
 /// Failed reads in a row after which a waiter takes the pane or the app for gone.
 const FAILED_READS: u32 = 3;
 
+/// The most of a Codex rollout read for its first line, the `session_meta` record (its base instructions included).
+const SESSION_META_CAP: u64 = 4 * 1024 * 1024;
+
 /// `ngtermctl agent mail <agent>`: the pane's mail into the agent's conversation, as a hook.
 #[derive(Debug, clap::Args)]
 #[command(
@@ -58,8 +70,8 @@ const FAILED_READS: u32 = 3;
                   waiting in this pane's mailbox (msg send) and hands them to the agent: as added context on \
                   PostToolUse and UserPromptSubmit, as the reason to keep going on Stop. With --wait (Claude Code's \
                   asyncRewake hook) it waits until mail arrives, prints it on standard error and exits 2, which \
-                  wakes an idle Claude Code. Only the pane's interactive agent takes mail: a subagent's event or a \
-                  `claude -p` worker takes nothing. Prints nothing when there is no mail."
+                  wakes an idle Claude Code. Only the pane's interactive agent takes mail: a subagent's event, a \
+                  `claude -p` worker or a `codex exec` run takes nothing. Prints nothing when there is no mail."
 )]
 pub struct Mail {
     #[arg(help = "The agent: claude or codex.")]
@@ -89,7 +101,7 @@ impl Mail {
 
     pub(super) fn run(&self, env: &dyn Env) -> Result<(), Failure> {
         let agent = parse_agent(&self.agent).map_err(Failure::Usage)?;
-        let payload: Value = serde_json::from_slice(&read_payload()?)
+        let payload: Value = serde_json::from_slice(&read_payload("agent mail")?)
             .map_err(|error| Failure::Local(format!("the hook payload is not JSON: {error}")))?;
         if !takes_mail(agent, &payload, env) {
             return Ok(());
@@ -100,7 +112,7 @@ impl Mail {
         let socket = self.options.socket_path(env);
         let request = read_request(identity.clone());
         if self.wait {
-            return wait_live(&socket, request, &identity);
+            return wait_live(&socket, request, &identity, env);
         }
         let Some(event) = payload.get("hook_event_name").and_then(Value::as_str) else {
             return Ok(());
@@ -117,17 +129,44 @@ impl Mail {
 }
 
 /// Whether the agent that fired this hook takes the pane's mail: the interactive agent itself, not a subagent of it
-/// nor a headless Claude Code started inside the pane.
+/// nor a headless Claude Code or Codex run started inside the pane.
 fn takes_mail(agent: AgentKind, payload: &Value, env: &dyn Env) -> bool {
     let subagent = payload
         .get("agent_id")
         .and_then(Value::as_str)
         .is_some_and(|id| !id.is_empty());
-    let interactive = match agent {
+    if subagent {
+        return false;
+    }
+    match agent {
         AgentKind::Claude => env.var("CLAUDE_CODE_ENTRYPOINT").is_some_and(|entry| entry == "cli"),
-        AgentKind::Codex => true, // the adapter leaves out `codex exec`, which only its process tells apart
+        AgentKind::Codex => payload
+            .get("transcript_path")
+            .and_then(Value::as_str)
+            .and_then(|path| session_meta_line(Path::new(path)))
+            .is_some_and(|line| codex_tui_session(&line)),
+    }
+}
+
+/// The first line of a Codex rollout, its `session_meta` record; `None` when the file cannot be read or that line is
+/// over [`SESSION_META_CAP`].
+fn session_meta_line(path: &Path) -> Option<Vec<u8>> {
+    let file = fs::File::open(path).ok()?;
+    let mut line = Vec::new();
+    BufReader::new(file.take(SESSION_META_CAP))
+        .read_until(b'\n', &mut line)
+        .ok()?;
+    (line.last() == Some(&b'\n')).then_some(line)
+}
+
+/// Whether a rollout's first line is the `session_meta` of an interactive Codex (`source` `cli`), not of a `codex
+/// exec` run (`exec`), an app-server client (`vscode`, `mcp`) or a subagent (an object).
+fn codex_tui_session(line: &[u8]) -> bool {
+    let Ok(record) = serde_json::from_slice::<Value>(line) else {
+        return false;
     };
-    interactive && !subagent
+    record.get("type").and_then(Value::as_str) == Some("session_meta")
+        && record.pointer("/payload/source").and_then(Value::as_str) == Some("cli")
 }
 
 /// How a synchronous hook hands mail over.
@@ -248,7 +287,7 @@ fn wait_for_mail(waiting: &mut dyn Waiting) -> Option<Vec<BusMessage>> {
 }
 
 /// The live waiter: reads over the control socket, holding the pane's claim while its agent runs.
-fn wait_live(socket: &Path, request: Request, identity: &str) -> Result<(), Failure> {
+fn wait_live(socket: &Path, request: Request, identity: &str, env: &dyn Env) -> Result<(), Failure> {
     let claim = Claim::take(socket, identity);
     let mut waiting = LiveWaiting {
         socket: socket.to_owned(),
@@ -263,8 +302,34 @@ fn wait_live(socket: &Path, request: Request, identity: &str) -> Result<(), Fail
     let Some(messages) = mail else {
         return Ok(());
     };
+    if let Some(status) = wake_status(env) {
+        // best effort, as the status adapters' own reports are: the mail goes to the agent either way
+        let _ = client::send_within(socket, &status, READ_DEADLINE);
+    }
     eprintln!("{}", render(&messages));
     Err(Failure::Exit(ExitCode::from(2)))
+}
+
+/// The `session status active --blink` a wake posts for the pane, as the agent-status wrapper would from the same
+/// variables; `None` outside a session.
+fn wake_status(env: &dyn Env) -> Option<Request> {
+    let text = |key: &str| {
+        env.var(key)
+            .map(|value| value.to_string_lossy().into_owned())
+            .filter(|value| !value.is_empty())
+    };
+    let session = text("NGTERM_SESSION_ID")?;
+    Some(Request {
+        cmd: Command::Session(SessionCmd::Status),
+        target: Some(session),
+        args: Some(Args {
+            pane: text("NGTERM_PANE"),
+            pane_id: text("NGTERM_PANE_ID"),
+            status: Some("active".to_owned()),
+            blink: Some(true),
+            ..Args::default()
+        }),
+    })
 }
 
 struct LiveWaiting<'a> {
@@ -328,14 +393,15 @@ fn file_stem(identity: &str) -> String {
         .collect()
 }
 
-/// This process's parent, which changes when the agent that started the hook exits (the hook is re-parented).
+/// This process's parent, the agent that started the hook (the adapter `exec`s this command), which changes when that
+/// agent exits or dies and the waiter is re-parented.
 #[cfg(unix)]
 fn parent_pid() -> Option<u32> {
     // SAFETY: getppid has no preconditions and cannot fail.
     u32::try_from(unsafe { libc::getppid() }).ok()
 }
 
-/// Windows has no re-parenting to watch: a waiter there ends with its claim, its pane or its app.
+/// Windows has no re-parenting to watch: a waiter there ends with its claim, its pane, its app or the hook's timeout.
 #[cfg(not(unix))]
 fn parent_pid() -> Option<u32> {
     None

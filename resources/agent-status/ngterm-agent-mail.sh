@@ -15,24 +15,18 @@
 # interactive agent takes mail: a subagent's hook and a `claude -p` worker (which inherits the pane's NGTERM_*) take
 # none. A wake also turns the pane's status back to active, since a woken turn fires no UserPromptSubmit.
 #
-# Its stdout and stderr are the hook's answer, so it adds nothing of its own; outside ngterm (NGTERM_SESSION_ID or
-# NGTERM_PANE_ID unset) it does nothing and exits 0. Codex's mail goes through its lifecycle adapter instead, whose
-# hook lines Codex has already trusted.
+# It execs ngtermctl, so a waiter's parent is the Claude Code that started it: an agent that exits or dies without
+# ending its hooks leaves the waiter re-parented, and it stops before taking mail nobody would read. Its stdout and
+# stderr are the hook's answer, so it adds nothing of its own; outside ngterm (NGTERM_SESSION_ID or NGTERM_PANE_ID
+# unset) it does nothing and exits 0. Codex's mail goes through its lifecycle adapter instead, whose hook lines Codex
+# has already trusted.
 #
 # ngtermctl resolution: $NGTERMCTL, else the path the installer bakes in, else `ngtermctl` on PATH.
 set -u
 
 [ -n "${NGTERM_SESSION_ID:-}" ] && [ -n "${NGTERM_PANE_ID:-}" ] || exit 0
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
-status_wrapper=${NGTERM_STATUS_WRAPPER:-"$script_dir/ngterm-agent-status.sh"}
-
 args=(agent mail "$@")
 [ -n "${NGTERM_SOCKET:-}" ] && args+=(--socket "$NGTERM_SOCKET")
 
-"${NGTERMCTL:-ngtermctl}" "${args[@]}"
-status=$?
-if [ "$status" -eq 2 ]; then
-  "$status_wrapper" active --blink >/dev/null 2>&1 </dev/null || true
-fi
-exit "$status"
+exec "${NGTERMCTL:-ngtermctl}" "${args[@]}"
