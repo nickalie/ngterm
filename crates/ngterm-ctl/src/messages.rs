@@ -32,7 +32,7 @@ enum MsgCommand {
 }
 
 #[derive(Debug, clap::Args)]
-struct Identity {
+pub(crate) struct Identity {
     #[arg(
         long = "as",
         help = "Act as this pane, SESSION:PANE-ID (defaults to NGTERM_SESSION_ID:NGTERM_PANE_ID)."
@@ -41,7 +41,7 @@ struct Identity {
 }
 
 impl Identity {
-    fn resolve(&self, env: &dyn Env) -> Result<Option<String>, Failure> {
+    pub(crate) fn resolve(&self, env: &dyn Env) -> Result<Option<String>, Failure> {
         if let Some(identity) = &self.identity {
             return Ok(Some(identity.clone()));
         }
@@ -301,7 +301,7 @@ impl MessageOutput {
     }
 }
 
-fn ack_confirmed(result: &ControlResult) -> bool {
+pub(crate) fn ack_confirmed(result: &ControlResult) -> bool {
     let ids: Vec<&str> = result
         .messages
         .as_deref()

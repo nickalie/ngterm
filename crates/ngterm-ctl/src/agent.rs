@@ -11,10 +11,14 @@
 //! events, read from the transcript the record names. `commands` ([`commands`]) is what it runs for the composer's `/`
 //! dropdown: the agent's slash commands and skills, once, as JSON. `upload` ([`upload`]) is what it runs for a file
 //! the composer attaches: the bytes on standard input, stored for the agent, the stored path printed.
+//!
+//! `mail` ([`mail`]) is another hook's call, not the chat view's: it hands the pane's `msg` mailbox to the agent running
+//! in it.
 
 mod account;
 mod chat;
 mod commands;
+mod mail;
 mod upload;
 
 use std::io::{self, IsTerminal, Read};
@@ -66,6 +70,7 @@ enum AgentCommand {
     Hook(Hook),
     Chat(chat::Chat),
     Commands(commands::Commands),
+    Mail(mail::Mail),
     Upload(upload::Upload),
 }
 
@@ -76,6 +81,7 @@ impl Agent {
             AgentCommand::Hook(command) => command.validate(),
             AgentCommand::Chat(command) => command.validate(),
             AgentCommand::Commands(command) => command.validate(),
+            AgentCommand::Mail(command) => command.validate(),
             AgentCommand::Upload(command) => command.validate(),
         }
     }
@@ -86,6 +92,7 @@ impl Agent {
             AgentCommand::Hook(command) => command.run(env),
             AgentCommand::Chat(command) => command.run(env),
             AgentCommand::Commands(command) => command.run(env),
+            AgentCommand::Mail(command) => command.run(env),
             AgentCommand::Upload(command) => command.run(env),
         }
     }

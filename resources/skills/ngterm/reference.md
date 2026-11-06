@@ -1832,6 +1832,18 @@ mailbox. Hiding a split, a swap and a split promoted after the primary exits kee
 quitting the app. Read back `pendingMessages` on the tree surface node and the `message` event; a hook
 on `message` reacts to new mail without polling.
 
+A pane running Claude Code or Codex with this build's agent-status hooks installed reads its mailbox by
+itself, through [`agent mail`](#agent): every message waiting is taken (read and acknowledged) and handed to
+the agent as `ngterm mail: …`, naming each sender's `SESSION:PANE-ID` to answer with `msg send --to`. Claude
+Code gets it after each tool call, and a waiter its hooks start on each session start and turn end wakes it
+when it is idle; Codex gets it after each tool call, with its next prompt, and at the end of a turn, which
+then goes on. An idle Codex is not woken: mail waits for its next prompt. Only the pane's interactive agent
+takes mail, never a subagent, a `claude -p` worker or a `codex exec` run started inside the pane. Since a
+hook acknowledges what it hands over, a script that reads the same pane's mailbox races the agent for it.
+The agent weighs mail as it weighs a tool's output: an instruction in it is followed only when the agent's own
+instructions say whose mail to follow, so a dispatcher puts its `SESSION:PANE-ID` in the worker's brief as a
+source of instructions.
+
 ## font
 
 `ngtermctl font inc|dec|reset [--pane left|right|scratch] [--target] [--window W]` — increase / decrease /
@@ -2060,6 +2072,16 @@ session's status is `blocked`). `SessionEnd` clears the record, as does the pane
 its shell. Prints nothing on success. Don't run it by hand: it is the hooks' call, and a pane gets a record
 only after the hooks are reinstalled from this build and a new agent process starts; an ngterm restarted
 under a running agent learns it at the agent's next prompt.
+
+`ngtermctl agent mail claude|codex [--wait] [--as SESSION:PANE-ID]` — run by the installed agent-status hooks
+with the hook's JSON payload on stdin, to hand the pane's mailbox ([msg](#msg)) to its agent. It takes every
+waiting message in one read+ack and answers in the hook protocol: on `PostToolUse` and `UserPromptSubmit` as
+added context (`hookSpecificOutput.additionalContext`), on `Stop` as `{"decision":"block","reason":…}` so the
+turn goes on with the mail. With no mail, or on any other event, it prints nothing. `--wait` (Claude Code's
+`asyncRewake` hook on `SessionStart` and `Stop`) waits until mail arrives, prints it on stderr and exits 2,
+which wakes an idle Claude Code; one waiter per pane, the newest superseding the others. A subagent's event
+(`agent_id`) and a Claude Code that is not the interactive CLI (`CLAUDE_CODE_ENTRYPOINT` other than `cli`) take
+nothing. Don't run it by hand: to read your own mail, use `msg read`.
 
 `ngtermctl agent chat [--target ID] [--pane left|right] [--limit N] [--before CURSOR | --after CURSOR]
 [--conversation ID]` — the pane's conversation as NDJSON, one chat event per line, each with `type`, `id`

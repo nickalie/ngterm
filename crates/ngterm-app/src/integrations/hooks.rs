@@ -3,7 +3,8 @@
 //! in `~/.zshrc`, `~/.bashrc` and (when fish is set up) `config.fish`, the Claude Code hooks merged into
 //! `~/.claude/settings.json`, the Codex hooks into `~/.codex/config.toml`, and, where each agent is set up, Pi's
 //! extension and `OpenCode`'s plugin. The Claude Code hooks include the restore adapter's (an ngterm extension:
-//! [`config::RESTORE_WRAPPER_NAME`]); Codex gets none. Claude and Codex configs get a `.bak` first; every rewrite keeps
+//! [`config::RESTORE_WRAPPER_NAME`]) and the mail adapter's ([`config::MAIL_WRAPPER_NAME`]); Codex gets neither (its
+//! mail goes through its lifecycle adapter). Claude and Codex configs get a `.bak` first; every rewrite keeps
 //! a symlinked file's link and its target's mode. Idempotent: a second run refreshes the baked path and changes
 //! nothing else. An install over one in [`legacy_script_dir`] (this build's before it had its own) moves every
 //! reference onto the new directory instead of adding a second set.
@@ -756,8 +757,8 @@ pub fn apply(plan: &HooksPlan) -> Result<HooksOutcome, InstallError> {
 }
 
 /// Copies the package over the script directory and bakes `ngtermctl` into every script that runs it: the generic and
-/// Codex wrappers, the restore adapter and the Claude status adapter (its `ngtermctl agent hook` call), in both their
-/// forms.
+/// Codex wrappers, the restore adapter, the Claude status adapter (its `ngtermctl agent hook` call) and the mail
+/// adapter, in both their forms.
 fn install_package(plan: &HooksPlan) -> Result<(), InstallError> {
     files::copy_tree(&plan.package, &plan.script_dir).map_err(failed("install the scripts into", &plan.script_dir))?;
     let Some(tool) = &plan.bake else {
@@ -770,9 +771,11 @@ fn install_package(plan: &HooksPlan) -> Result<(), InstallError> {
         (config::CODEX_WRAPPER_NAME, posix),
         (config::RESTORE_WRAPPER_NAME, posix),
         (config::CLAUDE_WRAPPER_NAME, posix),
+        (config::MAIL_WRAPPER_NAME, posix),
         (config::WINDOWS_WRAPPER_NAME, powershell),
         (config::WINDOWS_RESTORE_WRAPPER_NAME, powershell),
         (config::WINDOWS_CLAUDE_WRAPPER_NAME, powershell),
+        (config::WINDOWS_MAIL_WRAPPER_NAME, powershell),
     ] {
         let wrapper = plan.script_dir.join(name);
         let original = fs::read_to_string(&wrapper).map_err(failed("read", &wrapper))?;

@@ -209,6 +209,11 @@ and how this build does it where the OS matters:
   `NGTERM_SESSION_ID`/`NGTERM_PANE_ID` pair. Mail stays with its pane through swaps, is not saved, and is discarded
   when that pane closes or restarts. Reads repeat until acknowledged; `read --ack` consumes one bounded batch,
   `read --wait --timeout SEC` exits 124 on timeout. The tree reports nonzero `pendingMessages`; `message` events omit bodies.
+- Agent mail (this build's own): with the agent-status hooks installed, mail sent to a pane running Claude Code or
+  Codex reaches the agent by itself (`ngtermctl agent mail`, run by the hooks): after each tool call, at the end of a
+  turn (which then goes on), with Codex's next prompt, and an idle Claude Code is woken by an `asyncRewake` waiter.
+  Only the pane's interactive agent takes it, never a subagent, a `claude -p` worker or a `codex exec` run inside the
+  pane. An agent weighs mail like any text it did not get from the user, so tell it whose mail to follow.
 - Session info (v0.40): `ngtermctl session info TEXT [--markdown] [--hide-after SEC]` draws an activity line below
   the sidebar row; `--clear` removes it. Inline bold, italic, code, `^[text](color: "green")` and
   `^[text](dim: true)` are supported. A positive expiry restarts on every successful set, even with identical text;

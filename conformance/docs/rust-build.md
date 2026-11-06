@@ -256,7 +256,9 @@ agent-status hooks fill and the Android chat view reads (`ngterm-core`'s `comman
 (`agent/chat.rs`), and `ngtermctl agent commands`, which prints the agent's slash commands and skills for the chat
 composer's `/` dropdown (`agent/commands.rs`, over `ngterm-core`'s `agent_chat::catalog`), and
 `ngtermctl agent upload`, which stores a file the chat composer attaches from its stdin and prints its path
-(`agent/upload.rs`, over `ngterm-core`'s `agent_chat::upload`; no record or running instance needed).
+(`agent/upload.rs`, over `ngterm-core`'s `agent_chat::upload`; no record or running instance needed), and
+`ngtermctl agent mail`, which the hooks run to hand the pane's `msg` mailbox to its agent over upstream's `msg.read`
+(`agent/mail.rs`; it adds no control command).
 
 ### Presentation kinds
 

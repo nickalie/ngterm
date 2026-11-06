@@ -22,12 +22,19 @@ pub const CLAUDE_WRAPPER_NAME: &str = "ngterm-claude-status.sh";
 /// and on a deliberate exit it clears the pin, so a rerun launch brings every pane back to its latest conversation.
 pub const RESTORE_WRAPPER_NAME: &str = "ngterm-agent-restore.sh";
 
+/// The mail adapter (an ngterm extension beyond upstream, whose agents read their mailbox only when they choose to),
+/// wired to Claude Code alone: it runs `ngtermctl agent mail claude`, which hands the pane's `msg` mailbox to the agent,
+/// as added context after each tool and, from an `asyncRewake` waiter started on each session start and turn end, by
+/// waking an idle agent. Codex's mail goes through its lifecycle adapter, whose hook lines Codex has already trusted.
+pub const MAIL_WRAPPER_NAME: &str = "ngterm-agent-mail.sh";
+
 /// The Windows forms of the generic wrapper, the Claude adapter and the restore adapter: PowerShell scripts beside the
 /// POSIX ones, for Windows PowerShell 5.1 (inbox on every Windows) and PowerShell 7. A stock Windows has no POSIX
 /// shell, and Claude Code runs a hook's command in Git Bash there, or in PowerShell without it ([`HookForm`]).
 pub const WINDOWS_WRAPPER_NAME: &str = "ngterm-agent-status.ps1";
 pub const WINDOWS_CLAUDE_WRAPPER_NAME: &str = "ngterm-claude-status.ps1";
 pub const WINDOWS_RESTORE_WRAPPER_NAME: &str = "ngterm-agent-restore.ps1";
+pub const WINDOWS_MAIL_WRAPPER_NAME: &str = "ngterm-agent-mail.ps1";
 
 /// How a Windows hook command starts a PowerShell script: Windows PowerShell by name, which Git Bash, PowerShell and
 /// `cmd.exe` all find on the system `PATH`, without the user's profile, never prompting, past the execution policy
@@ -71,6 +78,15 @@ impl HookForm {
         match self {
             Self::Posix => restore_wrapper_path(script_dir),
             Self::Windows => format!("{script_dir}/{WINDOWS_RESTORE_WRAPPER_NAME}"),
+        }
+    }
+
+    /// The mail adapter in `script_dir`.
+    #[must_use]
+    pub fn mail_adapter(self, script_dir: &str) -> String {
+        match self {
+            Self::Posix => format!("{script_dir}/{MAIL_WRAPPER_NAME}"),
+            Self::Windows => format!("{script_dir}/{WINDOWS_MAIL_WRAPPER_NAME}"),
         }
     }
 
@@ -146,6 +162,19 @@ const CLAUDE_HOOKS: [(&str, Option<&str>, &str); 6] = [
 /// clear and compact, so the pin follows every conversation switch; `SessionEnd` clears it only on a deliberate exit
 /// (the adapter reads the payload's `reason`).
 const CLAUDE_RESTORE_HOOKS: [(&str, &str); 2] = [("SessionStart", "claude start"), ("SessionEnd", "claude end")];
+
+/// The Claude Code events the mail adapter handles, with its arguments and whether the entry is an `asyncRewake`
+/// waiter. `SessionStart` and `Stop` start a waiter, so mail wakes a fresh or an idle agent; `PostToolUse` hands mail
+/// over mid-turn, where a waiter's wake would otherwise wait for the turn to end.
+const CLAUDE_MAIL_HOOKS: [(&str, &str, bool); 3] = [
+    ("SessionStart", "claude --wait", true),
+    ("Stop", "claude --wait", true),
+    ("PostToolUse", "claude", false),
+];
+
+/// How long Claude Code lets a mail waiter wait, in seconds: a day. One that runs out is restarted by the next turn's
+/// `Stop`; until then mail waits for the agent's next tool or turn end.
+const MAIL_WAIT_TIMEOUT_SECONDS: u64 = 86_400;
 
 /// Whether an earlier installer (this build's before `SessionEnd`, upstream's) wrote `event`: only those
 /// entries are its own to migrate, so a `SessionEnd` entry naming a wrapper is always the user's.
@@ -240,6 +269,7 @@ pub fn merge_claude_settings_in(
         changed = true;
     }
     changed |= merge_claude_restore_hooks(&mut hooks, form, script_dir);
+    changed |= merge_claude_mail_hooks(&mut hooks, form, script_dir);
     if !changed {
         return Ok((existing.unwrap_or_default().to_owned(), false));
     }
@@ -271,6 +301,41 @@ fn merge_claude_restore_hooks(hooks: &mut Map<String, Value>, form: HookForm, sc
             continue;
         }
         entries.push(hook_entry(&command, arguments, None));
+        changed = true;
+    }
+    changed
+}
+
+/// Adds the mail adapter's entry to each of its events that has none calling it, returning whether any was added. The
+/// adapter is probed on its own, as the restore adapter is, and the Windows form moves a POSIX form's stock entry onto
+/// the PowerShell script, keeping its `asyncRewake` and `timeout`.
+fn merge_claude_mail_hooks(hooks: &mut Map<String, Value>, form: HookForm, script_dir: &str) -> bool {
+    let adapter = form.mail_adapter(script_dir);
+    let command = form.command(&adapter);
+    let posix = HookForm::Posix.command(&HookForm::Posix.mail_adapter(script_dir));
+    let mut changed = false;
+    for (event, arguments, waiter) in CLAUDE_MAIL_HOOKS {
+        let entries = hooks.entry(event).or_insert_with(|| Value::Array(Vec::new()));
+        let Value::Array(entries) = entries else {
+            continue; // the shape was checked when the hooks were read
+        };
+        if form == HookForm::Windows {
+            for entry in entries.iter_mut() {
+                changed |= migrate_entry(entry, &posix, &[arguments], &format!("{command}{arguments}"));
+            }
+        }
+        if entries
+            .iter()
+            .any(|entry| entry_calls(entry, std::slice::from_ref(&adapter)))
+        {
+            continue;
+        }
+        let mut entry = hook_entry(&command, arguments, None);
+        if waiter && let Some(hook) = entry.pointer_mut("/hooks/0").and_then(Value::as_object_mut) {
+            hook.insert("asyncRewake".to_owned(), Value::Bool(true));
+            hook.insert("timeout".to_owned(), Value::from(MAIL_WAIT_TIMEOUT_SECONDS));
+        }
+        entries.push(entry);
         changed = true;
     }
     changed

@@ -89,12 +89,16 @@ impl Stub {
         Self { dir }
     }
 
-    /// The POSIX stub, `ngtermctl` in `dir`, which the Codex adapter runs under bash on every OS.
+    /// The POSIX stub, `ngtermctl` in `dir`, which the Codex adapter runs under bash on every OS. An `agent mail` call
+    /// is kept apart from the `agent hook` one (`mail-argv`, `mail-stdin`) and answers with `mail-output` when there is
+    /// one, as the CLI prints a hook answer when the mailbox held mail.
     fn write_posix(dir: &Path) {
         ngterm_host::fakes::write_executable(
             &dir.join("ngtermctl"),
-            "#!/bin/sh\n[ \"$1\" = agent ] || exit 0\ndir=$(dirname \"$0\")\ncat > \"$dir/agent-stdin\"\n\
-             (IFS='\t'; printf '%s' \"$*\") > \"$dir/agent-argv\"\n",
+            "#!/bin/sh\n[ \"$1\" = agent ] || exit 0\ndir=$(dirname \"$0\")\nname=agent\n\
+             [ \"$2\" = mail ] && name=mail\ncat > \"$dir/$name-stdin\"\n\
+             (IFS='\t'; printf '%s' \"$*\") > \"$dir/$name-argv\"\n\
+             if [ \"$name\" = mail ] && [ -f \"$dir/mail-output\" ]; then cat \"$dir/mail-output\"; fi\n",
         )
         .unwrap();
     }
@@ -105,10 +109,19 @@ impl Stub {
 
     /// The `agent` call made since the last [`Self::reset`], if any.
     fn agent_call(&self) -> Option<AgentCall> {
-        let argv = fs::read_to_string(self.path("agent-argv")).ok()?;
+        self.call("agent")
+    }
+
+    /// The POSIX stub's `agent mail` call.
+    fn mail_call(&self) -> Option<AgentCall> {
+        self.call("mail")
+    }
+
+    fn call(&self, name: &str) -> Option<AgentCall> {
+        let argv = fs::read_to_string(self.path(&format!("{name}-argv"))).ok()?;
         Some(AgentCall {
             argv: argv.split('\t').map(str::to_owned).collect(),
-            stdin: fs::read_to_string(self.path("agent-stdin")).unwrap_or_default(),
+            stdin: fs::read_to_string(self.path(&format!("{name}-stdin"))).unwrap_or_default(),
         })
     }
 
@@ -455,11 +468,29 @@ fn codex_bash() -> Option<PathBuf> {
 struct CodexRun {
     statuses: Vec<String>,
     agent: Option<AgentCall>,
+    /// Its `agent mail` call, and what it printed for Codex.
+    mail: Option<AgentCall>,
+    stdout: String,
+}
+
+/// How a Codex adapter run differs from a pane's stock one.
+#[derive(Default)]
+struct CodexSetup {
+    /// What the stub's `agent mail` prints: the hook answer for mail the mailbox held.
+    mail_output: Option<&'static str>,
+    /// Run without `NGTERM_PANE_ID`, as an app from before stable pane ids starts a pane.
+    no_pane_id: bool,
+    /// Run under a parent whose argv is `codex -c … exec`, as a `codex exec` worker fires its hooks (Linux only).
+    exec_parent: bool,
 }
 
 /// The Codex adapter run for `action` with `payload` on stdin, in a pane's environment from scratch, its watcher
 /// making no check; `None` after printing why on Windows without Git for Windows' bash.
 fn codex(action: &str, payload: &str) -> Option<CodexRun> {
+    codex_with(action, payload, &CodexSetup::default())
+}
+
+fn codex_with(action: &str, payload: &str, setup: &CodexSetup) -> Option<CodexRun> {
     use std::io::Write as _;
     use std::process::Stdio;
 
@@ -470,11 +501,24 @@ fn codex(action: &str, payload: &str) -> Option<CodexRun> {
     let stub = Stub::new();
     let (statuses, wrapper) = (stub.path("statuses"), stub.path("status-wrapper"));
     ngterm_host::fakes::write_executable(&wrapper, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$STATUSES\"\n").unwrap();
+    if let Some(output) = setup.mail_output {
+        fs::write(stub.path("mail-output"), output).unwrap();
+    }
+    let adapter = bash_path(&resources().join("ngterm-codex-status.sh"));
     let mut command = Command::new(bash);
     scrub(&mut command);
-    let mut child = command
-        .arg(bash_path(&resources().join("ngterm-codex-status.sh")))
-        .arg(action)
+    if setup.exec_parent {
+        // a bash named `codex` whose next word after its `-c` script is `exec`; the trailing `:` keeps it from
+        // exec-ing the adapter, so the adapter's parent is that bash
+        command
+            .arg("-c")
+            .arg(r#"exec -a codex bash -c "$0 $1; :" exec"#)
+            .arg(&adapter)
+            .arg(action);
+    } else {
+        command.arg(&adapter).arg(action);
+    }
+    command
         .env("STATUSES", bash_path(&statuses))
         .env("NGTERMCTL", bash_path(&stub.path("ngtermctl")))
         .env("NGTERM_STATUS_WRAPPER", bash_path(&wrapper))
@@ -482,16 +526,20 @@ fn codex(action: &str, payload: &str) -> Option<CodexRun> {
         .envs(pane_vars(&[]))
         .env("NGTERM_CODEX_WATCH_FILE", bash_path(&stub.path("watch")))
         .env("NGTERM_CODEX_WATCH_MAX_CHECKS", "0")
-        .env("TMPDIR", bash_path(stub.dir.path()))
+        .env("TMPDIR", bash_path(stub.dir.path()));
+    if setup.no_pane_id {
+        command.env_remove("NGTERM_PANE_ID");
+    }
+    let mut child = command
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
     // the adapter may exit without reading it all
     let _ = child.stdin.take().unwrap().write_all(payload.as_bytes());
-    let status = child.wait().unwrap();
-    assert!(status.success(), "{action}: {status}");
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{action}: {}", output.status);
     Some(CodexRun {
         statuses: fs::read_to_string(&statuses)
             .unwrap_or_default()
@@ -499,6 +547,8 @@ fn codex(action: &str, payload: &str) -> Option<CodexRun> {
             .map(str::to_owned)
             .collect(),
         agent: stub.agent_call(),
+        mail: stub.mail_call(),
+        stdout: String::from_utf8(output.stdout).unwrap(),
     })
 }
 
@@ -560,6 +610,105 @@ fn codex_tool_and_stop_events_make_no_agent_call() {
         };
         assert_eq!((run.statuses, run.agent), (vec![status.to_owned()], None), "{action}");
     }
+}
+
+/// The mail tail: `ngtermctl agent mail codex` with the adapter's `--socket`.
+const CODEX_MAIL: [&str; 5] = ["agent", "mail", "codex", "--socket", SOCKET];
+
+const BLOCK: &str = r#"{"decision":"block","reason":"ngterm mail: rebase first"}"#;
+
+#[test]
+fn codex_hands_the_panes_mail_over_on_prompt_tool_and_stop() {
+    let context = r#"{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"ngterm mail: hi"}}"#;
+    for (action, path, output, statuses) in [
+        (
+            "user-prompt-submit",
+            "codex/hooks/main/02-UserPromptSubmit.json",
+            context,
+            &["active --blink"][..],
+        ),
+        (
+            "post-tool-use",
+            "codex/hooks/main/06-PostToolUse.json",
+            context,
+            &["active --blink"],
+        ),
+        // the turn goes on with the mail, so the row stays active instead of completing
+        ("stop", "codex/hooks/main/03-Stop.json", BLOCK, &["active --blink"]),
+    ] {
+        let payload = fixture(path);
+        let setup = CodexSetup {
+            mail_output: Some(output),
+            ..CodexSetup::default()
+        };
+        let Some(run) = codex_with(action, &payload, &setup) else {
+            return;
+        };
+        let call = run.mail.unwrap_or_else(|| panic!("{action}: no agent mail call"));
+        assert_eq!(call.argv, CODEX_MAIL, "{action}");
+        assert_eq!(
+            call.stdin.trim_end(),
+            payload.trim_end(),
+            "{action}: the payload, whole"
+        );
+        assert_eq!(run.stdout.trim_end(), output, "{action}: the answer, for Codex");
+        assert_eq!(run.statuses, statuses, "{action}");
+    }
+}
+
+#[test]
+fn codex_without_mail_prints_nothing_and_ends_its_turn_as_before() {
+    for action in ["post-tool-use", "stop"] {
+        let path = if action == "stop" {
+            "codex/hooks/main/03-Stop.json"
+        } else {
+            "codex/hooks/main/06-PostToolUse.json"
+        };
+        let Some(run) = codex(action, &fixture(path)) else {
+            return;
+        };
+        assert!(run.mail.is_some(), "{action}: the mailbox is read");
+        assert_eq!(run.stdout, "", "{action}");
+    }
+}
+
+#[test]
+fn codex_takes_no_mail_without_a_pane_id_or_in_the_memory_thread() {
+    let setup = CodexSetup {
+        mail_output: Some(BLOCK),
+        no_pane_id: true,
+        ..CodexSetup::default()
+    };
+    let Some(run) = codex_with("stop", &fixture("codex/hooks/main/03-Stop.json"), &setup) else {
+        return;
+    };
+    assert_eq!((run.mail, run.stdout.as_str()), (None, ""));
+    assert_eq!(run.statuses, ["completed --auto-reset"]);
+
+    let consolidation = r#"{"hook_event_name":"Stop","transcript_path":null,"last_assistant_message":"done"}"#;
+    let setup = CodexSetup {
+        mail_output: Some(BLOCK),
+        ..CodexSetup::default()
+    };
+    let Some(run) = codex_with("stop", consolidation, &setup) else {
+        return;
+    };
+    assert_eq!((run.mail, run.stdout.as_str()), (None, ""));
+}
+
+/// A `codex exec` started inside an agent's pane inherits its NGTERM_* and fires the same hooks: it must not take the
+/// pane's mail. Its argv is read from /proc, so the check is exact on Linux alone.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_codex_exec_run_takes_no_mail() {
+    let setup = CodexSetup {
+        mail_output: Some(BLOCK),
+        exec_parent: true,
+        ..CodexSetup::default()
+    };
+    let run = codex_with("stop", &fixture("codex/hooks/main/03-Stop.json"), &setup).unwrap();
+    assert_eq!((run.mail, run.stdout.as_str()), (None, ""));
+    assert_eq!(run.statuses, ["completed --auto-reset"]);
 }
 
 /// Codex fires a subagent's events in the parent with its `agent_id` and the subagent's transcript: its prompt never

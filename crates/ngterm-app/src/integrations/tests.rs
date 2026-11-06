@@ -187,6 +187,49 @@ fn assert_restore_adapter_installed(home: &Home) {
     );
 }
 
+/// The mail adapter is installed beside the others, executable and with `ngtermctl` baked into both its forms, and Claude
+/// Code's settings call it: a waiter on `SessionStart` and `Stop`, the mid-turn delivery on `PostToolUse`. Codex's
+/// config does not name it: its mail goes through the Codex adapter.
+fn assert_mail_adapter_installed(home: &Home) {
+    let dir_path = home.path(".config/ngterm/agent-status");
+    let mail = dir_path.join(config::MAIL_WRAPPER_NAME);
+    #[cfg(unix)]
+    assert_eq!(
+        files::posix_mode(&mail).unwrap() & 0o111,
+        0o111,
+        "the mail adapter is executable"
+    );
+    let tool = hooks::shell_path(&home.env.bundled_cli.clone().unwrap());
+    assert!(
+        fs::read_to_string(&mail)
+            .unwrap()
+            .contains(&format!("  NGTERMCTL='{tool}'"))
+    );
+    assert!(
+        fs::read_to_string(dir_path.join(config::WINDOWS_MAIL_WRAPPER_NAME))
+            .unwrap()
+            .contains(&format!("  $NgtermctlBaked = '{tool}'"))
+    );
+    let settings: serde_json::Value = serde_json::from_str(&home.read(".claude/settings.json")).unwrap();
+    let form = config::HookForm::HOST;
+    let command = form.command(&form.mail_adapter(&hooks::shell_path(&dir_path)));
+    for (event, arguments, waiter) in [
+        ("SessionStart", "claude --wait", true),
+        ("Stop", "claude --wait", true),
+        ("PostToolUse", "claude", false),
+    ] {
+        let hook = settings["hooks"][event]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| &entry["hooks"][0])
+            .find(|hook| hook["command"] == format!("{command}{arguments}"))
+            .unwrap_or_else(|| panic!("{event}: no mail entry"));
+        assert_eq!(hook.get("asyncRewake").is_some(), waiter, "{event}");
+    }
+    assert!(!home.read(".codex/config.toml").contains(config::MAIL_WRAPPER_NAME));
+}
+
 /// The Claude status adapters run `ngtermctl agent hook` themselves, so both forms have `tool` baked in.
 fn assert_claude_adapters_baked(home: &Home, tool: &Path) {
     let script_dir = home.path(".config/ngterm/agent-status");
@@ -232,6 +275,7 @@ fn assert_fresh_install_files(home: &Home) {
     .unwrap();
     assert!(home.read(".claude/settings.json").contains(&command), "{command}");
     assert_restore_adapter_installed(home);
+    assert_mail_adapter_installed(home);
     assert_eq!(home.read(".claude/settings.json.bak"), "{\"model\": \"opus\"}\n");
     #[cfg(unix)]
     assert_eq!(files::posix_mode(&home.path(".claude/settings.json")), Some(0o600));
@@ -289,15 +333,15 @@ fn before_the_rename(text: &str) -> String {
         .replace("// ngterm-", "// agterm-")
 }
 
-/// Claude settings `json` without the restore adapter's entries, which no install from before the rename wrote.
+/// Claude settings `json` without the restore and mail adapters' entries, which no install from before the rename wrote.
 fn without_restore_hooks(json: &str) -> String {
     let mut root: serde_json::Value = serde_json::from_str(json).unwrap();
     let hooks = root["hooks"].as_object_mut().unwrap();
     for entries in hooks.values_mut() {
-        entries
-            .as_array_mut()
-            .unwrap()
-            .retain(|entry| !entry.to_string().contains(config::RESTORE_WRAPPER_NAME));
+        entries.as_array_mut().unwrap().retain(|entry| {
+            let entry = entry.to_string();
+            !entry.contains(config::RESTORE_WRAPPER_NAME) && !entry.contains(config::MAIL_WRAPPER_NAME)
+        });
     }
     hooks.retain(|_, entries| entries.as_array().is_some_and(|entries| !entries.is_empty()));
     serde_json::to_string_pretty(&root).unwrap()

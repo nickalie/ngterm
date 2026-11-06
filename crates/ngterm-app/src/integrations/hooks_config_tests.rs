@@ -14,7 +14,15 @@ fn events(json: &str) -> Map<String, Value> {
     root["hooks"].as_object().cloned().unwrap_or_default()
 }
 
+/// The commands of `event` but the mail adapter's, which the mail tests below hold: the status and restore hooks and
+/// the user's own.
 fn commands(json: &str, event: &str) -> Vec<String> {
+    let mut found = all_commands(json, event);
+    found.retain(|command| !command.contains(MAIL_WRAPPER_NAME) && !command.contains(WINDOWS_MAIL_WRAPPER_NAME));
+    found
+}
+
+fn all_commands(json: &str, event: &str) -> Vec<String> {
     events(json)[event]
         .as_array()
         .unwrap()
@@ -192,7 +200,11 @@ fn a_four_event_adapter_install_gains_permission_request() {
         "SessionEnd",
         "SessionStart",
     ] {
-        let expected = if event == "SessionEnd" { 2 } else { 1 };
+        // SessionEnd adds the restore adapter, SessionStart, PostToolUse and Stop the mail adapter
+        let expected = match event {
+            "SessionEnd" | "PostToolUse" | "Stop" | "SessionStart" => 2,
+            _ => 1,
+        };
         assert_eq!(hooks[event].as_array().map(Vec::len), Some(expected), "{event}");
     }
     assert_eq!(commands(&first, "PermissionRequest"), [format!("'{a}' blocked")]);
@@ -969,4 +981,81 @@ fn baking_a_powershell_script_sets_the_baked_path_once() {
     let moved = bake_ngtermctl_path_powershell(&baked, "D:/ngterm/ngtermctl.exe");
     assert_eq!(moved.matches(NGTERMCTL_MARKER).count(), 1);
     assert_eq!(moved, bake_ngtermctl_path_powershell(script, "D:/ngterm/ngtermctl.exe"));
+}
+
+/// The mail adapter's command for `arguments` (`claude`, `claude --wait`).
+fn mail(arguments: &str) -> String {
+    format!("'{SCRIPT_DIR}/{MAIL_WRAPPER_NAME}' {arguments}")
+}
+
+/// The mail adapter's entry in `event`.
+fn mail_entry(json: &str, event: &str) -> Value {
+    events(json)[event]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry.to_string().contains(MAIL_WRAPPER_NAME))
+        .cloned()
+        .unwrap_or_else(|| panic!("no mail entry in {event}"))
+}
+
+#[test]
+fn a_fresh_merge_adds_the_mail_waiters_and_the_mid_turn_delivery_last() {
+    let (json, _) = merge(None);
+    for event in ["SessionStart", "Stop"] {
+        assert_eq!(
+            all_commands(&json, event).last(),
+            Some(&mail("claude --wait")),
+            "{event}"
+        );
+        let hook = &mail_entry(&json, event)["hooks"][0];
+        assert_eq!(hook["asyncRewake"], true, "{event}");
+        assert_eq!(hook["timeout"], MAIL_WAIT_TIMEOUT_SECONDS, "{event}");
+    }
+    assert_eq!(all_commands(&json, "PostToolUse").last(), Some(&mail("claude")));
+    let hook = &mail_entry(&json, "PostToolUse")["hooks"][0];
+    assert!(hook.get("asyncRewake").is_none() && hook.get("timeout").is_none());
+    for event in ["UserPromptSubmit", "PermissionRequest", "Notification", "SessionEnd"] {
+        assert!(!json_event_mentions(&json, event, MAIL_WRAPPER_NAME), "{event}");
+    }
+}
+
+fn json_event_mentions(json: &str, event: &str, needle: &str) -> bool {
+    events(json)[event].to_string().contains(needle)
+}
+
+#[test]
+fn the_mail_hooks_are_added_once_and_a_users_own_mail_entry_stands_in() {
+    let (json, _) = merge(None);
+    assert_eq!(merge(Some(&json)), (json.clone(), false));
+    let customized = format!("{} --verbose", mail("claude --wait"));
+    let existing = format!(
+        r#"{{"hooks":{{"Stop":[{{"hooks":[{{"type":"command","command":{}}}]}}]}}}}"#,
+        serde_json::to_string(&customized).unwrap()
+    );
+    let (json, changed) = merge(Some(&existing));
+    assert!(changed);
+    let stop = all_commands(&json, "Stop");
+    assert_eq!(
+        stop.iter()
+            .filter(|command| command.contains(MAIL_WRAPPER_NAME))
+            .count(),
+        1
+    );
+    assert!(stop.contains(&customized));
+    assert_eq!(all_commands(&json, "SessionStart").last(), Some(&mail("claude --wait")));
+}
+
+#[test]
+fn the_windows_form_calls_the_powershell_mail_adapter() {
+    let (json, _) = merge_claude_settings_in(HookForm::Windows, None, SCRIPT_DIR, &[]).unwrap();
+    let script = format!("{SCRIPT_DIR}/{WINDOWS_MAIL_WRAPPER_NAME}");
+    assert_eq!(
+        all_commands(&json, "Stop").last(),
+        Some(&format!("{WINDOWS_POWERSHELL_FILE} \"{script}\" claude --wait"))
+    );
+    assert_eq!(
+        all_commands(&json, "PostToolUse").last(),
+        Some(&format!("{WINDOWS_POWERSHELL_FILE} \"{script}\" claude"))
+    );
 }
