@@ -20,7 +20,19 @@
   - building (cargo, Gradle, every `build.rs`) runs in jobs with no secrets;
   - signing jobs run no cargo or Gradle, restore no cache, and **never execute anything the build produced**;
   - smoke tests of the signed output run in secret-free verify jobs afterwards.
-- iOS is out of scope: `docs/plans/20261103-ios-app.md` and the iOS branch are left untouched.
+- By the end, every channel is ready to submit or publish (user, 2026-11-06):
+  - the GitHub release (signed, with `SHA256SUMS`, its minisign signature and attestations);
+  - Google Play: the AAB on the internal track and the store listing complete (Task 11);
+  - the iOS App Store: the existing `ios-release.yml` uploads to TestFlight; this plan adds the App Store listing and
+    review readiness (Task 12). The iOS app's code stays as `docs/plans/20261103-ios-app.md` left it. The desktop app
+    stays out of the Mac App Store, whose sandbox doesn't fit a terminal;
+  - Homebrew: a cask in the user's tap `nickalie/homebrew-apps` (Task 13);
+  - winget (Task 14), the AUR (Task 15) and Flathub (Task 16).
+- Credentials are requested as their task lands, never batched at the end (user, 2026-11-06): each task ends with a
+  **Credentials** list of what the user creates and enters. Secrets go straight into a GitHub environment from the
+  user's shell (`gh secret set NAME --env release`), never through the chat; non-secret ids the user may just tell.
+  Long-lead applications (SignPath Foundation, the Play Console, App Store Connect) are started at the first task
+  that can name them.
 - Nothing has been released yet (no tags, no GitHub releases), so there are no installed versions to stay compatible
   with.
 
@@ -147,7 +159,7 @@
        - notarizes and staples the app, then makes the `.app.zip`, `.tar.gz`, DMG and PKG;
        - signs, notarizes and staples the DMG and PKG;
      - `windows-sign`: one SignPath request signs the PE files inside the MSI and zip, and the MSI itself. Two
-       requests are the fallback (Task 6);
+       requests are the fallback (Task 7);
      - `android-sign`: signs the APK (`zipalign -P 16 -f 4`, then `apksigner`, with the APK key) and the AAB
        (`jarsigner`, with the upload key);
      - every signing job checks its inputs against the build job's digests before using them. It rejects symlinks
@@ -411,7 +423,7 @@
       `publish` (publishing only) checks the `SHA256SUMS` digest and runs `sha256sum -c` before uploading
 - [x] job conditions as in Solution Overview: signing jobs accept a skipped `approve` only on dry runs; `checksums`
       skips after any failure; `publish` and `play-upload` need every verify job
-      (➕ `windows-sign` arrives with Task 6 and `play-upload` with the Android tasks; until then `windows-verify` and
+      (➕ `windows-sign` arrives with Task 7 and `play-upload` with the Android tasks; until then `windows-verify` and
       `checksums` take `windows-build`'s files)
 - [x] macOS packaging runs in one `macos-sign` job for both arches from this task on, so Task 5 only adds the
       Developer ID steps to it
@@ -477,7 +489,44 @@
       search list restored after), `developer-id` without secrets naming them, `throwaway` refused off GitHub runners
 - [x] run checks; must pass before Task 6
 
-### Task 6: Windows: version resources and SignPath signing
+**Credentials** (asked when Task 5 landed; the rehearsal of Task 6 checks them):
+- run `scripts/setup-release-protection.sh` (creates `release-gate` and `release`; needed before any signed run);
+- Apple Developer Program membership (Developer ID needs the paid program);
+- Developer ID Application and Developer ID Installer certificates (Certificates, Identifiers & Profiles), exported
+  from Keychain Access together with their keys as two `.p12` files sharing one password:
+  `gh secret set APPLE_DEVELOPER_ID_APP_P12 --env release < <(base64 -i app.p12)`, the same for
+  `APPLE_DEVELOPER_ID_INSTALLER_P12`, and `gh secret set APPLE_P12_PASSWORD --env release`;
+- an App Store Connect team API key (Users and Access > Integrations, the Developer role is enough for notarytool):
+  `gh secret set APPLE_NOTARY_KEY_P8 --env release < <(base64 -i AuthKey_XXXX.p8)`;
+- not secret (tell me, or `gh variable set NAME --env release`): `APPLE_TEAM_ID`, `APPLE_NOTARY_KEY_ID`,
+  `APPLE_NOTARY_ISSUER_ID`;
+- `trust/apple-team-id` is committed only after the rehearsal passes with Developer ID.
+- Start now, long lead: apply to SignPath Foundation (Task 7).
+
+### Task 6: Signed rehearsal runs
+
+A dry run never reaches the `release` environment, so credentials could otherwise be checked only by a real release.
+A rehearsal signs exactly as a release does and publishes nothing.
+
+**Files:**
+- Modify: `scripts/release-version.py`, `.github/workflows/release.yml`, README > Downloads and releases
+
+- [ ] a `rehearse` dispatch input (boolean): on a `vX.Y.Z` tag ref with `publish: false` it makes a rehearsal;
+      `rehearse` on any other ref, or with `publish: true`, fails in the `version` job
+- [ ] `version` outputs `signed_run` (publishing or rehearsal) besides `publishing`. `approve`, the signing jobs'
+      `environment: release` and their identity choice follow `signed_run`; `publish`, `play-upload` and every
+      channel job (Tasks 13-16) follow `publishing` only. The signing mode of a rehearsal is that of a release
+- [ ] signing jobs accept a skipped `approve` only when `signed_run` is false
+- [ ] `--self-test` covers the rehearsal outputs and its refusals
+- [ ] tests: `scripts/lint.sh`
+- [ ] run checks; must pass before Task 7
+
+**Credentials:** none new. After this task the user pushes the first release's tag (say `v0.1.0`; the `release`
+environment admits only `v*` tags) and rejects (or cancels) that run's `approve`, so nothing is signed or published;
+then `gh workflow run release --ref v0.1.0 -f rehearse=true`, and approves that one. With the Apple secrets of Task 5, `macos-verify` must pass with `developer-id`; then `trust/apple-team-id` is
+committed. The same tag is published later with `-f publish=true`.
+
+### Task 7: Windows: version resources and SignPath signing
 
 **Files:**
 - Create: `packaging/windows/signpath/` (artifact configurations and a README of the SignPath settings)
@@ -499,9 +548,17 @@
       the upgrade test
 - [ ] tests: the version resource is present (`(Get-Item ...).VersionInfo` in `windows-verify`, and in
       `windows-installer.yml`'s run on main); `scripts/lint.sh`
-- [ ] run checks; must pass before Task 7
+- [ ] run checks; must pass before Task 8
 
-### Task 7: Updater: minisign over SHA256SUMS and the macOS team requirement
+**Credentials** (ask as this task starts; SignPath Foundation was applied for at Task 5):
+- the SignPath Foundation project approved; in SignPath: the project, the signing policy and the artifact
+  configuration(s) from `packaging/windows/signpath/`; an API token for a CI user:
+  `gh secret set SIGNPATH_API_TOKEN --env release`;
+- not secret: `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`,
+  `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` (and the second slug if the fallback is used);
+- a rehearsal with Windows signed, `windows-verify` showing `Valid`.
+
+### Task 8: Updater: minisign over SHA256SUMS and the macOS team requirement
 
 **Files:**
 - Modify: `crates/ngterm-update/src/{download.rs,install.rs,lib.rs,tests.rs}`, `crates/ngterm-update/Cargo.toml`,
@@ -518,9 +575,14 @@
 - [ ] tests: the cases in Testing Strategy. Fixtures come from the minisign CLI and a test-only key, with the commands
       in a comment. The requirement is checked as an argument string, plus one real `codesign` run on macOS CI against
       an ad-hoc binary: no team id → passes; a team id → rejected
-- [ ] run `cargo test -p ngterm-update` and clippy on the crate; must pass before Task 8
+- [ ] run `cargo test -p ngterm-update` and clippy on the crate; must pass before Task 9
 
-### Task 8: Publish: SHA256SUMS signature and attestations
+**Credentials:** a minisign key pair, made by the user: `minisign -G -W -p minisign.pub -s minisign.key`;
+`gh secret set MINISIGN_SECRET_KEY --env release < minisign.key`; the public key is committed to
+`trust/minisign.pub` in this task (from then on `publish` requires the signature). Keep an offline backup of the secret
+key: an installed build trusts only this key.
+
+### Task 9: Publish: SHA256SUMS signature and attestations
 
 **Files:**
 - Modify: `.github/workflows/release.yml`
@@ -536,9 +598,9 @@
       no key → notice and no `.minisig`
 - [ ] dry runs: `checksums` signs with a throwaway `minisign -G -W` key and verifies it
 - [ ] tests: `scripts/lint.sh`
-- [ ] run checks; must pass before Task 9
+- [ ] run checks; must pass before Task 10
 
-### Task 9: Android release builds, signing and Play upload
+### Task 10: Android release builds, signing and Play upload
 
 **Files:**
 - Modify: `mobile/android/app/build.gradle.kts`, `scripts/build-android.sh`, `.cargo/config.toml` or the cargo-ndk
@@ -564,9 +626,146 @@
       - `aapt2 dump badging`: version name and code equal the `version` job's outputs
 - [ ] tests: `scripts/lint.sh`; `scripts/sign-android.sh` signs and verifies with throwaway `keytool` keys
       locally
-- [ ] run checks; must pass before Task 10
+- [ ] run checks; must pass before Task 11
 
-### Task 10: Verify acceptance criteria
+**Credentials** (ask as this task starts; start the Play Console account at Task 5 if it doesn't exist):
+- the APK signing key (permanent; it can't be reset, keep an offline backup):
+  `keytool -genkeypair -v -keystore apk.jks -alias ngterm -keyalg RSA -keysize 4096 -validity 36500`, then
+  `ANDROID_APK_KEYSTORE` (base64), `ANDROID_APK_KEYSTORE_PASSWORD`, `ANDROID_APK_KEY_ALIAS`, `ANDROID_APK_KEY_PASSWORD`;
+- the Play upload key, the same way with the `ANDROID_UPLOAD_` names;
+- the Play Console: the developer account, the app `com.nickalie.ngterm` created, Play App Signing enrolled;
+- GCP: a project, a Workload Identity Federation pool and provider for GitHub with the attribute condition of
+  `docs/release-signing.md`, a service account with release access in the Play Console; not secret:
+  `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_PLAY_SERVICE_ACCOUNT`, `PLAY_RELEASE_STATUS`;
+- the first AAB uploaded by hand, as Post-Completion describes.
+
+### Task 11: Google Play store listing
+
+**Files:**
+- Create: `mobile/android/play/` (listing text per locale, screenshots, feature graphic, the 512px icon, release
+  notes), `scripts/play-listing.sh`
+- Modify: `scripts/play-upload.sh`, `.github/workflows/release.yml`, `mobile/android/DESIGN.md` if a screenshot needs
+  a demo state
+
+- [ ] listing text: title, short and full description (en-US first), from the README and DESIGN.md, within Play's
+      limits (30/80/4000 characters)
+- [ ] graphics: phone and 7"/10" tablet screenshots made from the emulator by a scripted demo session (no real host
+      data), the 1024x500 feature graphic and the 512px icon from the app's icon source; sizes checked by the script
+- [ ] `play-listing.sh` uploads text and images through the Play Developer API (`edits.listings`, `edits.images`) in
+      the same edit as the AAB; `play-upload` runs it; release notes from the tag's notes
+- [ ] the forms the API can't fill are written out for the user in `docs/release-signing.md` with the answers: Data
+      safety (what the app collects and sends: nothing to us; ssh to the user's own hosts), content rating
+      questionnaire, target audience, app access (no login), ads (none)
+- [ ] a privacy policy page (the site's or the repo's) linked from the listing
+- [ ] tests: `scripts/lint.sh`; the listing files pass the script's limits locally
+- [ ] run checks; must pass before Task 12
+
+**Credentials:** none new (the service account of Task 10). The user fills the Data safety, content rating and target
+audience forms in the Play Console with the written answers, and promotes the internal release to production when
+ready.
+
+### Task 12: iOS App Store readiness
+
+**Files:**
+- Create: `mobile/ios/appstore/` (metadata per locale, screenshots, review notes), `scripts/appstore-listing.sh`
+- Modify: `.github/workflows/ios-release.yml`, `docs/ios-release.md`
+
+- [ ] metadata: name, subtitle, description, keywords, support and marketing URLs, the privacy policy URL, the
+      copyright line, review notes (how to reach a test host: the demo mode or a reviewer-reachable sshd)
+- [ ] screenshots for the required display sizes (6.9" iPhone, 13" iPad) from the simulator with a scripted demo
+      session, on the real Mac's Xcode
+- [ ] `appstore-listing.sh` uploads metadata and screenshots through the App Store Connect API to the version being
+      prepared; `ios-release.yml` runs it after the TestFlight upload on a release tag
+- [ ] the App Privacy answers and the age rating written out for the user in `docs/ios-release.md`
+- [ ] tests: `scripts/lint.sh`; the metadata against App Store limits locally
+- [ ] run checks; must pass before Task 13
+
+**Credentials** (ask as this task starts): the `ios-release` environment's secrets of `docs/ios-release.md` (the App
+Store Connect API key with the Admin role, `IOS_DEVELOPMENT_TEAM`), the app record `com.nickalie.ngterm` created in
+App Store Connect, and the bundle id registered. The user fills App Privacy and the age rating with the written
+answers and presses Submit for Review.
+
+### Task 13: Homebrew cask in nickalie/homebrew-apps
+
+**Files:**
+- Create: `packaging/homebrew/ngterm.rb.in`, `scripts/homebrew-cask.py` (with `--self-test`)
+- Modify: `.github/workflows/release.yml`, README > Downloads and releases
+
+- [ ] the cask: `app "ngterm.app"` from each arch's notarized `.app.zip` (`on_arm`/`on_intel`), `binary` for
+      `ngtermctl` inside the app, `depends_on macos: ">= :sonoma"`, `livecheck` on GitHub releases, a `zap` of the
+      state and config dirs; Linux: decide with Homebrew's Linux cask support at the time, else macOS only
+- [ ] `homebrew-cask.py` renders it from the version and the digests in `SHA256SUMS`; its self-test pins the output
+- [ ] job `homebrew` (publishing only, `environment: release`, after `publish`): renders the cask, checks it with
+      `brew audit --cask --strict` and `brew style` on a macOS runner, and pushes `Casks/ngterm.rb` to the tap's
+      `main`. It runs only when macOS shipped Developer ID signed (a notice otherwise), so the cask never installs an
+      app Gatekeeper blocks
+- [ ] tests: `scripts/lint.sh`; `brew install --cask` from a local tap of the rendered cask on the real Mac with a
+      rehearsal's packages
+- [ ] run checks; must pass before Task 14
+
+**Credentials:** a fine-grained token with Contents read/write on `nickalie/homebrew-apps` only:
+`gh secret set HOMEBREW_TAP_TOKEN --env release`.
+
+### Task 14: winget
+
+**Files:**
+- Create: `packaging/windows/winget/` (manifest templates: version, installer, defaultLocale), `scripts/winget.py`
+  (with `--self-test`)
+- Modify: `.github/workflows/release.yml`
+
+- [ ] manifests for `Nickalie.ngterm`: the per-user MSI (`Scope: user`, its ProductCode and UpgradeCode from
+      `ngterm.wxs`), the portable zip as a second installer if winget's rules allow both, license, tags, release notes
+      URL
+- [ ] job `winget` (publishing only, after `publish`): renders the manifests from the release, validates them with
+      `winget validate` on a Windows runner, and opens the pull request to `microsoft/winget-pkgs` from the user's fork
+      with the pinned `wingetcreate submit`. Runs only when the MSI is Authenticode signed (a notice otherwise)
+- [ ] the first submission (a new package) is made the same way; later ones update it
+- [ ] tests: `scripts/lint.sh`; `winget validate` and a local `winget install --manifest` in the Win11 VM
+- [ ] run checks; must pass before Task 15
+
+**Credentials:** a fork of `microsoft/winget-pkgs` in the user's account and a classic token with `public_repo` for
+it: `gh secret set WINGET_TOKEN --env release`.
+
+### Task 15: AUR
+
+**Files:**
+- Create: `packaging/linux/aur/PKGBUILD.in`, `scripts/aur.py` (with `--self-test`)
+- Modify: `.github/workflows/release.yml`
+
+- [ ] `ngterm-bin`: x86_64 and aarch64 sources from the release's Linux tarballs, the digests from `SHA256SUMS`,
+      `provides`/`conflicts` `ngterm`, depends matching `packaging/linux/runtime-libraries.txt`, the desktop file and
+      icon, the license
+- [ ] job `aur` (publishing only, after `publish`): renders `PKGBUILD` and `.SRCINFO` (`makepkg --printsrcinfo` in an
+      `archlinux` container), checks with `namcap`, builds it once with `makepkg`, and pushes to
+      `ssh://aur@aur.archlinux.org/ngterm-bin.git` with the deploy key
+- [ ] tests: `scripts/lint.sh`; `makepkg -si` of the rendered package locally (CachyOS) with a rehearsal's tarball
+- [ ] run checks; must pass before Task 16
+
+**Credentials:** an AUR account, an SSH key pair registered in it (`ssh-keygen -t ed25519 -f aur`):
+`gh secret set AUR_SSH_PRIVATE_KEY --env release < aur`. The first push creates the package.
+
+### Task 16: Flathub
+
+**Files:**
+- Create: `packaging/linux/flatpak/` (the manifest, MetaInfo, the desktop file and icons), `scripts/flatpak.sh`
+- Modify: the PTY spawn path in `ngterm-pty`/`ngterm-session` for the Flatpak sandbox, `.github/workflows/release.yml`
+
+- [ ] the app id: `com.nickalie.ngterm` needs the domain verified on Flathub; otherwise `io.github.nickalie.ngterm`
+      (asked with the credentials below)
+- [ ] a terminal must run the user's host shell: inside Flatpak, panes spawn through `flatpak-spawn --host` with the
+      PTY passed in (as GNOME's Ptyxis does), with `--talk-name=org.freedesktop.Flatpak`; the session server and
+      `ngtermctl` socket paths under the sandbox's runtime dir; tested in a Flatpak build locally
+- [ ] the manifest builds from source on the Flathub runtime (GNOME platform), WPE WebKit and libghostty-vt as modules
+      with pinned sources; MetaInfo with screenshots, OARS rating, releases; `flatpak-builder-lint` clean
+- [ ] the Flathub submission pull request (`flathub/flathub`, new-pr branch) prepared for the user; later releases
+      update the app repository through `flatpak-external-data-checker` or a `flatpak` job
+- [ ] tests: `scripts/lint.sh`; `flatpak-builder --user --install` locally and a pane running the host shell
+- [ ] run checks; must pass before Task 17
+
+**Credentials:** a Flathub account (GitHub login) to open the submission; for `com.nickalie.ngterm`, the domain
+verification token placed on nickalie.com.
+
+### Task 17: Verify acceptance criteria
 
 - [ ] every Overview item has its job or step; every secret and variable is read somewhere and documented
 - [ ] `release-version.py --self-test` covers `required` from the variable, and each trust anchor forcing only its own
@@ -576,10 +775,11 @@
       - no signing job executes a staged or packaged binary;
       - every job using `release` needs `approve`, and none accepts a skipped `approve` while publishing;
       - no job references a secret at job level;
-      - only `publish`, `play-upload` and `windows-sign` widen the workflow's read-only permissions
+      - only `publish`, `play-upload` and `windows-sign` widen the workflow's read-only permissions;
+      - `homebrew`, `winget`, `aur` and every store upload run only when `publishing`, never on a rehearsal
 - [ ] `actionlint`, `shellcheck`; `cargo test -p ngterm-update` and clippy on the crate
 
-### Task 11: [Final] Documentation
+### Task 18: [Final] Documentation
 
 - [ ] `docs/release-signing.md`:
       - every secret and variable, with its source and the job that reads it;
@@ -602,6 +802,7 @@
 - [ ] README: replace the "ad-hoc signed / unsigned" paragraph and the release steps with a summary and a link to the
       page; add the SignPath code signing policy section
 - [ ] `docs/macos.md`: the signing notes
+- [ ] README: installing through Homebrew, winget, the AUR and Flathub, and the store links
 - [ ] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
