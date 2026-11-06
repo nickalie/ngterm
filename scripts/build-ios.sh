@@ -32,8 +32,11 @@
 #      snapshot's image in mobile/ios/build/snapshot-failures/ (its diff is in the result bundle);
 #    - archive: a Release archive for devices, mobile/ios/build/NgTerm.xcarchive, unsigned unless the release
 #      environment is set (APP_STORE_CONNECT_KEY_PATH, APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_ISSUER_ID and
-#      IOS_DEVELOPMENT_TEAM: automatic signing through that App Store Connect API key), then checked to hold no
-#      NgtermCoreFakes symbol: the fake core is compiled into Debug builds only.
+#      IOS_DEVELOPMENT_TEAM: automatic signing through that App Store Connect API key). Its marketing version is the
+#      workspace version (Cargo.toml's [workspace.package]) and its build number the commit count of HEAD (a release
+#      checks out its tag with the full history). It's then checked to hold no NgtermCoreFakes symbol (the fake core
+#      is compiled into Debug builds only), to answer the export compliance question (ITSAppUsesNonExemptEncryption),
+#      and to carry a privacy manifest that covers the required-reason APIs it uses (scripts/ios-privacy-check.sh).
 #
 # Everything xcodebuild runs (the compilers, the simulators, the tests and the app under test) gets an environment
 # without NGTERM_* (nor SIMCTL_CHILD_NGTERM_* or TEST_RUNNER_NGTERM_*, which reach a simulator's processes), so no test
@@ -334,8 +337,16 @@ check_no_fakes() {
   ((!found))
 }
 
+# The workspace version, Cargo.toml's [workspace.package] version.
+workspace_version() {
+  sed -n '/^\[workspace\.package\]$/,/^\[/s/^version = "\(.*\)"$/\1/p' "$NATIVE_ROOT/Cargo.toml"
+}
+
 action_archive() {
-  local archive="$BUILD_DIR/NgTerm.xcarchive" signing=()
+  local archive="$BUILD_DIR/NgTerm.xcarchive" signing=() version build app
+  version="$(workspace_version)"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "build-ios.sh: no MAJOR.MINOR.PATCH workspace version in Cargo.toml"
+  build="$(git -C "$NATIVE_ROOT" rev-list --count HEAD)"
   if [[ -n "${APP_STORE_CONNECT_KEY_PATH:-}" && -n "${APP_STORE_CONNECT_KEY_ID:-}" &&
     -n "${APP_STORE_CONNECT_ISSUER_ID:-}" && -n "${IOS_DEVELOPMENT_TEAM:-}" ]]; then
     signing=(-allowProvisioningUpdates -authenticationKeyPath "$APP_STORE_CONNECT_KEY_PATH"
@@ -347,10 +358,13 @@ action_archive() {
   fi
   rm -rf "$archive"
   project_xcodebuild archive -scheme NgTerm -configuration Release -destination "generic/platform=iOS" \
-    -archivePath "$archive" -quiet "${signing[@]}"
-  check_no_fakes "$archive/Products/Applications/NgTerm.app/NgTerm" \
-    "$archive/dSYMs/NgTerm.app.dSYM/Contents/Resources/DWARF/NgTerm"
-  echo "archive: $archive (no fake core)" >&2
+    -archivePath "$archive" -quiet MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build" "${signing[@]}"
+  app="$archive/Products/Applications/NgTerm.app"
+  check_no_fakes "$app/NgTerm" "$archive/dSYMs/NgTerm.app.dSYM/Contents/Resources/DWARF/NgTerm"
+  plutil -extract ITSAppUsesNonExemptEncryption raw -o - "$app/Info.plist" >/dev/null ||
+    die "build-ios.sh: $app answers no export compliance question (ITSAppUsesNonExemptEncryption)"
+  scripts/ios-privacy-check.sh "$app"
+  echo "archive: $archive ($version, build $build; no fake core)" >&2
 }
 
 for action in "${ACTIONS[@]}"; do

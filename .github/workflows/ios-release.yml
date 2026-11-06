@@ -1,0 +1,185 @@
+# The iOS app's release: a signed Release archive of mobile/ios, exported for App Store Connect and uploaded to
+# TestFlight. Submitting a TestFlight build to the App Store stays a manual step in App Store Connect. The secrets it
+# needs, the export compliance answer and the privacy manifest are in docs/ios-release.md.
+#
+# - A release tag (`v*`, the tags release.yml builds the desktop release from) uploads that tag's build.
+# - A run by hand (workflow_dispatch) is a dry run unless `dry_run` is turned off: it archives and exports the build
+#   without uploading it. With `tag` empty it builds the ref it was run on, which only a dry run may do.
+# - A push to a `ci/**` branch that changes this workflow or mobile/ios/ExportOptions.plist is a dry run too, since a
+#   workflow can only be run by hand once it is on the default branch.
+#
+# The build: the marketing version is the workspace version (Cargo.toml), which a tag has to match, and the build
+# number is the commit count of the tag (or of the ref a dry run builds); scripts/build-ios.sh archive sets both, then
+# checks the archive (no fake core, the export compliance key, the privacy manifest against the binary). The archive is
+# signed automatically through an App Store Connect API key with the Admin role (cloud-managed distribution signing),
+# and `xcodebuild -exportArchive` exports it with mobile/ios/ExportOptions.plist, whose destination a release turns to
+# `upload`. If cloud signing is refused, a distribution certificate in the optional certificate secrets is imported
+# into a temporary keychain first, and automatic signing uses it.
+#
+# A dry run without the signing secrets (a branch push, a fork, before the App Store Connect setup) can't export, since
+# an export signs: it builds the unsigned archive, checks it and ExportOptions.plist, and says that it skipped the
+# export. A release without them fails at once.
+name: ios-release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+    # path filters apply to the branch pushes only, never to tags
+    branches: ["ci/**"]
+    paths:
+      - .github/workflows/ios-release.yml
+      - mobile/ios/ExportOptions.plist
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (vMAJOR.MINOR.PATCH, matching Cargo.toml); empty: the ref this runs on (dry run only)"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Archive and export without uploading to TestFlight"
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    runs-on: xcode-27
+    # the core for both iOS targets, the bindings and a Release build of the app, with nothing cached
+    timeout-minutes: 120
+    env:
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
+      IOS_DEVELOPMENT_TEAM: ${{ secrets.IOS_DEVELOPMENT_TEAM }}
+      IOS_DISTRIBUTION_CERTIFICATE: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE }}
+      IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+      # a tag push uploads; a run by hand uploads only with dry_run off; a branch push never does
+      UPLOAD: ${{ (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
+      RELEASE_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # the build number is the commit count
+          fetch-depth: 0
+      - name: what this run builds
+        run: |
+          version="$(sed -n '/^\[workspace\.package\]$/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::no MAJOR.MINOR.PATCH workspace version"; exit 1; }
+          if [[ -n "$RELEASE_TAG" ]]; then
+            [[ "$RELEASE_TAG" == "v$version" ]] ||
+              { echo "::error::tag $RELEASE_TAG must match Cargo.toml: v$version (MAJOR.MINOR.PATCH)"; exit 1; }
+            [[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" ]] ||
+              { echo "::error::the checkout does not match the release tag"; exit 1; }
+          elif [[ "$UPLOAD" == true ]]; then
+            echo "::error::an upload needs a release tag: set tag, or leave dry_run on"
+            exit 1
+          fi
+          signing=false
+          if [[ -n "$APP_STORE_CONNECT_KEY_ID" && -n "$APP_STORE_CONNECT_ISSUER_ID" && -n "$APP_STORE_CONNECT_KEY" &&
+            -n "$IOS_DEVELOPMENT_TEAM" ]]; then
+            signing=true
+          elif [[ "$UPLOAD" == true ]]; then
+            echo "::error::an upload needs the App Store Connect secrets (docs/ios-release.md > Secrets)"
+            exit 1
+          fi
+          build="$(git rev-list --count HEAD)"
+          echo "SIGNING=$signing" >>"$GITHUB_ENV"
+          echo "NAME=ngterm-ios-$version-$build" >>"$GITHUB_ENV"
+          echo "ngterm $version, build $build, upload: $UPLOAD, signed: $signing" >>"$GITHUB_STEP_SUMMARY"
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ios
+          # a release reads ios.yml's cache and leaves it as it is
+          save-if: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: vendor-ngterm-xcode-27-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh', 'scripts/setup-ios.sh') }}
+      - name: Zig and the libghostty-vt prefix (build/pins.env)
+        run: scripts/build-ghostty-vt.sh
+      - name: iOS toolchain (build/pins.env)
+        run: scripts/setup-ios.sh
+      - name: the App Store Connect API key
+        if: env.SIGNING == 'true'
+        run: |
+          key="$RUNNER_TEMP/AuthKey_$APP_STORE_CONNECT_KEY_ID.p8"
+          (umask 077 && printf '%s\n' "$APP_STORE_CONNECT_KEY" >"$key")
+          echo "APP_STORE_CONNECT_KEY_PATH=$key" >>"$GITHUB_ENV"
+      # the fallback when cloud-managed signing is refused: a distribution certificate (.p12, base64) in a keychain of
+      # this run's own, which automatic signing then finds
+      - name: the distribution certificate (optional)
+        if: env.SIGNING == 'true' && env.IOS_DISTRIBUTION_CERTIFICATE != ''
+        run: |
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          password="$(openssl rand -hex 24)"
+          (umask 077 && base64 --decode >"$RUNNER_TEMP/distribution.p12" <<<"$IOS_DISTRIBUTION_CERTIFICATE")
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 7200 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/distribution.p12" -k "$keychain" -P "$IOS_DISTRIBUTION_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+          existing="$(security list-keychains -d user | tr -d '"')"
+          # shellcheck disable=SC2086 # one keychain path per word
+          security list-keychains -d user -s "$keychain" $existing
+          rm -f "$RUNNER_TEMP/distribution.p12"
+      - name: Release archive (signed with the secrets), checked
+        run: scripts/build-ios.sh archive
+      - name: export for App Store Connect
+        run: |
+          options=mobile/ios/ExportOptions.plist
+          plutil -lint "$options"
+          [[ "$(plutil -extract method raw -o - "$options")" == app-store-connect &&
+            "$(plutil -extract destination raw -o - "$options")" == export &&
+            "$(plutil -extract manageAppVersionAndBuildNumber raw -o - "$options")" == false ]] ||
+            { echo "::error::$options must export (not upload) for app-store-connect with the archive's build number"; exit 1; }
+          if [[ "$SIGNING" != true ]]; then
+            echo "::notice::the export was skipped: it signs, and the App Store Connect secrets are not set (docs/ios-release.md)"
+            exit 0
+          fi
+          eval "$(scripts/setup-ios.sh --check)"
+          cp "$options" "$RUNNER_TEMP/ExportOptions.plist"
+          options="$RUNNER_TEMP/ExportOptions.plist"
+          /usr/libexec/PlistBuddy -c "Add :teamID string $IOS_DEVELOPMENT_TEAM" "$options"
+          if [[ "$UPLOAD" == true ]]; then
+            /usr/libexec/PlistBuddy -c "Set :destination upload" "$options"
+          fi
+          xcodebuild -exportArchive -archivePath mobile/ios/build/NgTerm.xcarchive -exportOptionsPlist "$options" \
+            -exportPath mobile/ios/build/export -allowProvisioningUpdates \
+            -authenticationKeyPath "$APP_STORE_CONNECT_KEY_PATH" -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
+          if [[ "$UPLOAD" == true ]]; then
+            echo "uploaded to App Store Connect: submit it from TestFlight when it has been processed" >>"$GITHUB_STEP_SUMMARY"
+          fi
+      - name: keep the export and the symbols
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.NAME }}
+          path: |
+            mobile/ios/build/export/
+            mobile/ios/build/NgTerm.xcarchive/dSYMs/
+          if-no-files-found: ignore
+      - name: remove the key and the keychain
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP"/AuthKey_*.p8 "$RUNNER_TEMP/distribution.p12"
+          if [[ -f "$RUNNER_TEMP/release.keychain-db" ]]; then
+            security delete-keychain "$RUNNER_TEMP/release.keychain-db"
+          fi
