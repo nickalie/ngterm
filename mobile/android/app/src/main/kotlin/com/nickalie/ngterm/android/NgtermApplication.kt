@@ -71,7 +71,7 @@ class NgtermApplication :
             SessionChatViews(PreferenceDataStoreFactory.create { file("session_chat_views") }, settings.settings)
         val panes = SessionPanes(scope, connections, live, settings = settings.settings)
         val prefs = NotificationPrefs(PreferenceDataStoreFactory.create { file("notifications") })
-        Alerts(scope, connections, asks, machines.machines, prefs.enabled, Notifications(this))
+        Alerts(scope, connections, asks, machines.machines, prefs.enabled, Notifications(this), live.sessions)
         LinkKeeper(scope, connections.attached) { LinkService.start(this) }
         IdleKeeper(
             scope,

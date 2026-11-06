@@ -58,7 +58,8 @@ class AlertsTest {
     private suspend fun TestScope.attached() {
         connections = Connections(this, { 0L }) { s -> FakeMobileCore(s).also { core = it } }
         asks = Asks(backgroundScope, connections)
-        Alerts(backgroundScope, connections, asks, flowOf(listOf(testMachine())), enabled, sink)
+        val live = LiveSessions(backgroundScope, connections) {}
+        Alerts(backgroundScope, connections, asks, flowOf(listOf(testMachine())), enabled, sink, live.sessions)
         core.sessions["m1"] =
             mutableListOf(fakeSession("s1", name = "docs-site").copy(context = "Rewrite the install guide"))
         connections.connect(testMachine().toCore())
@@ -107,6 +108,36 @@ class AlertsTest {
             assertEquals(OpenTarget("m1", "s1", "P1"), statuses[0].target)
             assertEquals(statusTag(key), statuses[0].tag)
             assertTrue(statusTag(key) in sink.cancelled)
+        }
+
+    @Test
+    fun aSessionRenamedOrGivenANewContextOnItsStreamIsPostedSo() =
+        runTest {
+            attached()
+            core.emit(MobileEvent.SessionName("m1", "s1", "Fix Linux"))
+            core.emit(MobileEvent.SessionContext("m1", "s1", "Sidebar rename drops the suffix"))
+            core.emit(status("blocked"))
+            core.emit(MobileEvent.Notify("m1", "s1", RemoteNotice("", "No title", null, "notify")))
+            val status = sink.posted.filterIsInstance<Alert.Status>().single()
+            assertEquals("Fix Linux", status.session)
+            assertEquals("Sidebar rename drops the suffix", status.context)
+            assertEquals(
+                "Fix Linux",
+                sink.posted
+                    .filterIsInstance<Alert.Notice>()
+                    .single()
+                    .title,
+            )
+            // a cleared context is a clear, not a gap the listing fills
+            core.emit(MobileEvent.SessionContext("m1", "s1", null))
+            core.emit(status("completed"))
+            assertEquals(
+                null,
+                sink.posted
+                    .filterIsInstance<Alert.Status>()
+                    .last()
+                    .context,
+            )
         }
 
     @Test

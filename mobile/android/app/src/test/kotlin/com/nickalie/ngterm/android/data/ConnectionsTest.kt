@@ -41,6 +41,8 @@ class ConnectionsTest {
     private lateinit var core: FakeMobileCore
     private var now = 5_000L
 
+    private fun Connections.names() = trees.value["m1"]?.map { it.name }
+
     private fun TestScope.connections() =
         Connections(this, { now }) { sink -> FakeMobileCore(sink, pins).also { core = it } }
 
@@ -303,6 +305,36 @@ class ConnectionsTest {
             connections.attach("m1", "s3")
             connections.disconnect("m1")
             assertEquals(null, connections.attached.value["m1"])
+        }
+
+    @Test
+    fun anAttachedSessionIsListedUnderTheNameItsStreamLastSaid() =
+        runTest {
+            val connections = connections()
+            core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "ngterm"), fakeSession("s2", name = "docs"))
+            connections.connect(machine)
+            advanceUntilIdle()
+            connections.attach("m1", "s1")
+            // renamed on its machine: the stream says so before any listing does
+            core.emit(MobileEvent.SessionName("m1", "s1", "Session Labels"))
+            assertEquals(listOf("Session Labels", "docs"), connections.names())
+            // a blank name says nothing, and a session not attached here keeps its listing's
+            core.emit(MobileEvent.SessionName("m1", "s1", " "))
+            core.emit(MobileEvent.SessionName("m1", "s2", "Docs Site"))
+            assertEquals(listOf("Session Labels", "docs"), connections.names())
+            // a listing read before the rename doesn't bring the old name back
+            connections.listSessions("m1")
+            assertEquals(listOf("Session Labels", "docs"), connections.names())
+            // nor does one after the attached session is opened (attached) again, which keeps its stream
+            connections.attach("m1", "s1")
+            connections.listSessions("m1")
+            assertEquals(listOf("Session Labels", "docs"), connections.names())
+            // once detached, the listing's name stands again, with no listing read since
+            connections.detach("m1", "s1")
+            assertEquals(listOf("ngterm", "docs"), connections.names())
+            // an attach again starts from the listing's name, until its own stream says one
+            connections.attach("m1", "s1")
+            assertEquals(listOf("ngterm", "docs"), connections.names())
         }
 
     @Test

@@ -68,7 +68,8 @@ sealed interface Link {
  * The app's side of the mobile core: it makes the core with itself as the [EventSink] ([coreFactory]), turns the
  * core's events and its connect answers into each machine's [Link] in [links], keeps each machine's last listing in
  * [trees] (and why the last one failed in [treeFailures]; a connect and a reconnect each list anew), and the sessions
- * this app has attached in [attached].
+ * this app has attached in [attached]. An attached session's listing carries the name its stream last said, so a
+ * rename on its machine shows everywhere at once, though the machine is listed only now and then.
  * Events arrive on the core's thread; the state flows take them from any thread. Calls are made from the main thread
  * and the suspending ones run in [scope] or the caller's, except [detach], which a listing event also makes on the
  * core's thread (it only posts to the core, so it must never block on it).
@@ -92,6 +93,13 @@ class Connections(
     // bump and the failure's check-and-set from interleaving across the core's thread and the callers'.
     private val listingLock = Any()
     private val generations = mutableMapOf<String, Long>()
+
+    // the name each attached session's stream last said, by session: it outranks its listing's while it stays attached
+    private val streamNames = ConcurrentHashMap<SessionKey, String>()
+
+    // each machine's last listing as the core gave it (under listingLock): [trees] is it with the stream names over it,
+    // so a session that stops being attached shows its listing's name again
+    private val listings = mutableMapOf<String, List<RemoteSession>>()
 
     // the machines whose unknown host key the user declined: the failure their connect reports is no failure to them
     private val declined = MutableStateFlow<Set<String>>(emptySet())
@@ -133,6 +141,7 @@ class Connections(
             is MobileEvent.HostKeyChanged -> set(event.machineId, Link.HostKeyChanged(event.pinned, event.offered))
             is MobileEvent.SignInRequested -> signInRequested(event.machineId, event.message, event.url)
             is MobileEvent.Tree -> listed(event.machineId, event.sessions)
+            is MobileEvent.SessionName -> named(event.machineId, event.sessionId, event.name)
             else -> Unit
         }
         listeners.forEach { it(event) }
@@ -154,12 +163,43 @@ class Connections(
     ) {
         synchronized(listingLock) {
             bump(machineId)
-            treeState.update { it + (machineId to sessions) }
+            listings[machineId] = sessions
+            treeState.update { it + (machineId to withStreamNames(machineId, sessions)) }
             treeFailureState.update { it - machineId }
         }
         val ids = sessions.mapTo(mutableSetOf()) { it.id }
         val gone = attachedState.value[machineId].orEmpty() - ids
         gone.forEach { detach(machineId, it) }
+    }
+
+    // a stream's word on its session's name (a blank one says nothing); it reaches the listing once the session is
+    // attached, as one may land before its attach is recorded
+    private fun named(
+        machineId: String,
+        sessionId: String,
+        name: String,
+    ) {
+        if (name.isBlank()) return
+        streamNames[SessionKey(machineId, sessionId)] = name
+        if (sessionId in attachedState.value[machineId].orEmpty()) renamed(machineId)
+    }
+
+    // the machine's last listing, its attached sessions under the names their streams said
+    private fun renamed(machineId: String) =
+        synchronized(listingLock) {
+            val listing = listings[machineId] ?: return@synchronized
+            treeState.update { it + (machineId to withStreamNames(machineId, listing)) }
+        }
+
+    private fun withStreamNames(
+        machineId: String,
+        sessions: List<RemoteSession>,
+    ): List<RemoteSession> {
+        val attached = attachedState.value[machineId].orEmpty()
+        return sessions.map { session ->
+            val said = streamNames[SessionKey(machineId, session.id)]
+            if (said != null && session.id in attached && said != session.name) session.copy(name = said) else session
+        }
     }
 
     // callers hold listingLock
@@ -322,8 +362,11 @@ class Connections(
         machineId: String,
         sessionId: String,
     ) {
+        // a name an earlier stream of the session said is not this one's; attaching an attached one keeps its stream
+        if (sessionId !in attachedState.value[machineId].orEmpty()) streamNames.remove(SessionKey(machineId, sessionId))
         core.attachSession(machineId, sessionId)
         attachedState.update { it + (machineId to (it[machineId].orEmpty() + sessionId)) }
+        renamed(machineId)
     }
 
     /** Detaches [sessionId] of [machineId]: it goes on running there. */
@@ -335,6 +378,8 @@ class Connections(
             val left = attached[machineId].orEmpty() - sessionId
             if (left.isEmpty()) attached - machineId else attached + (machineId to left)
         }
+        streamNames.remove(SessionKey(machineId, sessionId))
+        renamed(machineId)
         guarded { core.detachSession(machineId, sessionId) }
     }
 
@@ -363,10 +408,12 @@ class Connections(
         linkState.update { it - machineId }
         synchronized(listingLock) {
             bump(machineId)
+            listings -= machineId
             treeState.update { it - machineId }
             treeFailureState.update { it - machineId }
         }
         attachedState.update { it - machineId }
+        streamNames.keys.removeIf { it.machineId == machineId }
     }
 
     /**

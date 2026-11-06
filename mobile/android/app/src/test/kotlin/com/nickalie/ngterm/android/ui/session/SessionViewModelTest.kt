@@ -163,6 +163,33 @@ class SessionViewModelTest {
     }
 
     @Test
+    fun theStreamsNameOutranksTheListings() {
+        val stored = testMachine(keyId = test.seedKey().id)
+        test.seedMachine(stored)
+        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "ngterm"))
+        test.connections.connect(stored.toCore())
+        eventually { test.connections.trees.value["m1"] != null }
+        runBlocking { test.connections.attach("m1", "s1") }
+        val model = model()
+        model.open(SessionKey("m1", "s1"))
+        eventually { model.state.value.sessions.size == 1 }
+        assertEquals(
+            "ngterm",
+            model.state.value.sessions
+                .single()
+                .name,
+        )
+        // renamed on its machine: the stream says so, the listing has not been read again
+        test.core.emit(MobileEvent.SessionName("m1", "s1", "Session Labels"))
+        eventually {
+            model.state.value.sessions
+                .single()
+                .name == "Session Labels"
+        }
+        assertEquals("Session Labels", (model.state.value.open as? OpenSession.Live)?.session?.name)
+    }
+
+    @Test
     fun anOpenSessionFocusesItsPrimaryPaneUntilAnotherIsFocused() {
         attached("s1")
         val model = model()

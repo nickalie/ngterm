@@ -127,6 +127,13 @@ pub enum MobileEvent {
         session_id: String,
         context: Option<String>,
     },
+    /// An attached session's name as its origin shows it: with every snapshot (from an origin that sends one) and on
+    /// each rename. It outlasts the stream's connection, as a session keeps its name while its link is down.
+    SessionName {
+        machine_id: String,
+        session_id: String,
+        name: String,
+    },
     /// An attached session's panes and their arrangement.
     SessionLayout {
         machine_id: String,

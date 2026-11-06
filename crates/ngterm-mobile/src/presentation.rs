@@ -49,8 +49,8 @@ use ngterm_core::model::RemoteConnection;
 use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::client::{ClientEffect, PAGES_UNSUPPORTED, PresentationClient};
 use ngterm_core::remote::frames::{
-    Body, MAX_FRAME_BYTES, PresentationAskAnswer, PresentationOverlayChange, PresentationPageChange, PresentationPane,
-    PresentationRespawns,
+    Body, MAX_FRAME_BYTES, PresentationAgent, PresentationAskAnswer, PresentationOverlayChange, PresentationPageChange,
+    PresentationPane, PresentationRespawns,
 };
 use ngterm_core::remote::ssh::present_tail;
 use ngterm_core::remote::tree::INVALID_REMOTE_SESSION;
@@ -516,6 +516,11 @@ impl<C> Attached<C> {
                 session_id,
                 context,
             },
+            ClientEffect::Name(name) => MobileEvent::SessionName {
+                machine_id,
+                session_id,
+                name,
+            },
             ClientEffect::Layout(layout) => MobileEvent::SessionLayout {
                 machine_id,
                 session_id,
@@ -561,21 +566,28 @@ impl<C> Attached<C> {
             }
             ClientEffect::Respawns(respawns, seed) => return self.respawns.push((respawns, seed)),
             ClientEffect::Agent(agent) => {
-                // the scratch pane keeps no agent record
-                let PresentationPane::Identity(pane) = agent.pane else {
+                let Some(event) = self.agent(agent) else {
                     return;
                 };
-                MobileEvent::PaneAgent {
-                    machine_id,
-                    session_id,
-                    pane_id: uuid_string(pane),
-                    agent: agent.agent,
-                    conversation_id: agent.conversation_id,
-                }
+                event
             }
             other => return self.refuse(other),
         };
         events.push(event);
+    }
+
+    /// What a pane runs, as its event; the scratch pane keeps no agent record.
+    fn agent(&self, agent: PresentationAgent) -> Option<MobileEvent> {
+        let PresentationPane::Identity(pane) = agent.pane else {
+            return None;
+        };
+        Some(MobileEvent::PaneAgent {
+            machine_id: self.machine_id.clone(),
+            session_id: self.session_id.clone(),
+            pane_id: uuid_string(pane),
+            agent: agent.agent,
+            conversation_id: agent.conversation_id,
+        })
     }
 
     /// What the app never shows: an overlay or a page is refused, so the origin takes it back at once; their closes

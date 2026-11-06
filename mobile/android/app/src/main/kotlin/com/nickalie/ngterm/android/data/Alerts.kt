@@ -5,6 +5,7 @@ import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.RemoteAsk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -159,9 +160,11 @@ fun askTag(
  * - every open ask out of sight (the ask rule: a dialog while its session is on screen, a notification otherwise),
  *   taken down when it is answered, dismissed, or comes on screen.
  *
- * The kinds the user turned off ([enabled]) are not posted. Names come from [machines] and the machines' listings.
+ * The kinds the user turned off ([enabled]) are not posted. Names come from [machines] and the machines' listings, and
+ * a session's context from its stream ([live]) once it has said one, its listing's until then.
  * Events arrive on the core's thread; [sink] is called from it and from [scope].
  */
+@Suppress("LongParameterList") // a parameter per source the alerts read, and the sink they post to
 class Alerts(
     scope: CoroutineScope,
     private val connections: Connections,
@@ -169,6 +172,7 @@ class Alerts(
     machines: Flow<List<StoredMachine>>,
     enabled: Flow<Set<AlertKind>>,
     private val sink: AlertSink,
+    private val live: StateFlow<Map<SessionKey, LiveSession>>,
 ) {
     @Volatile private var names: Map<String, String> = emptyMap()
 
@@ -282,7 +286,9 @@ class Alerts(
             sink.cancel(statusTag(key))
             return
         }
-        val context = listing(key)?.context?.takeIf { it.isNotBlank() }
+        val stream = live.value[key]
+        val context =
+            if (stream?.contextSaid == true) stream.context else listing(key)?.context?.takeIf { it.isNotBlank() }
         sink.post(Alert.Status(key, machineName(key.machineId), sessionName(key), kind, context, pane))
     }
 

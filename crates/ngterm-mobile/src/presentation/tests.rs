@@ -383,7 +383,7 @@ fn the_snapshot_connects_and_its_status_is_no_change() {
             context: Some("fixing the build".to_owned()),
             info: None,
             layout: Some(layout()),
-            name: None,
+            name: Some("Fix Linux".to_owned()),
             respawns: Some(PresentationRespawns {
                 epoch: "e1".to_owned(),
                 generations: std::collections::BTreeMap::new(),
@@ -413,9 +413,14 @@ fn the_snapshot_connects_and_its_status_is_no_change() {
                     hud: Some(RemoteHud::from(hud())),
                 },
                 MobileEvent::SessionContext {
+                    machine_id: machine_id.clone(),
+                    session_id: session_id.clone(),
+                    context: Some("fixing the build".to_owned()),
+                },
+                MobileEvent::SessionName {
                     machine_id,
                     session_id,
-                    context: Some("fixing the build".to_owned()),
+                    name: "Fix Linux".to_owned(),
                 },
             ]
         );
@@ -444,6 +449,7 @@ fn deltas_reach_the_app_as_their_events() {
         };
         harness.deliver(Body::Notify(notify)).await;
         harness.deliver(Body::Sound(PresentationSound { name: None })).await;
+        harness.deliver(Body::Name("Auto Update".to_owned())).await;
 
         let events = harness.take_events();
         assert_eq!(events[0], status_event(Some(remote_blocked()), true));
@@ -480,12 +486,20 @@ fn deltas_reach_the_app_as_their_events() {
         assert_eq!(
             events[5],
             MobileEvent::Sound {
-                machine_id,
-                session_id,
+                machine_id: machine_id.clone(),
+                session_id: session_id.clone(),
                 name: None,
             }
         );
-        assert_eq!(events.len(), 6);
+        assert_eq!(
+            events[6],
+            MobileEvent::SessionName {
+                machine_id,
+                session_id,
+                name: "Auto Update".to_owned(),
+            }
+        );
+        assert_eq!(events.len(), 7);
         // nothing went back but the hello
         assert_eq!(harness.received().await.bodies.len(), 1);
     });

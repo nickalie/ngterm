@@ -95,6 +95,7 @@ class AskFlowTest {
             test.graph.machines.machines,
             test.notificationPrefs.enabled,
             Notifications(app),
+            test.live.sessions,
         )
     }
 
