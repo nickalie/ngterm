@@ -153,7 +153,12 @@ for ((i = 0; i < count; i++)); do
   fi
   for ((r = 0; r < reasons; r++)); do
     reason="$(value "NSPrivacyAccessedAPITypes.$i.NSPrivacyAccessedAPITypeReasons.$r")" || reason=""
-    [[ " $approved " == *" $reason "* ]] || fail "$type: '$reason' is not a reason an app may declare ($approved)"
+    # each entry is one approved code, compared whole: "C617.1 3B52.1" is no reason
+    known=0
+    for code in $approved; do
+      [[ "$reason" != "$code" ]] || known=1
+    done
+    ((known)) || fail "$type: '$reason' is not a reason an app may declare ($approved)"
   done
   [[ "$used_any" == *" $category "* ]] ||
     fail "$type is declared, but $(basename "$EXECUTABLE") uses none of its APIs: remove it"

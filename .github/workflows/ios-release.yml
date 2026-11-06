@@ -16,6 +16,12 @@
 # `upload`. If cloud signing is refused, a distribution certificate in the optional certificate secrets is imported
 # into a temporary keychain first, and automatic signing uses it.
 #
+# The signing secrets live in the `ios-release` environment, whose deployment rules admit only `v*` tags and the
+# default branch (docs/ios-release.md > Secrets). The job asks for it only on such a ref, so a `ci/**` push or a run by
+# hand from another branch gets no secrets and never signs, and a release tag must also point at a commit on the
+# default branch. Each secret reaches only the step that needs it, never a build step's environment: the core is built
+# before the API key's file is written, and the archive and export steps get the key's path and ids, not its text.
+#
 # A dry run without the signing secrets (a branch push, a fork, before the App Store Connect setup) can't export, since
 # an export signs: it builds the unsigned archive, checks it and ExportOptions.plist, and says that it skipped the
 # export. A release without them fails at once.
@@ -45,7 +51,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ios-release-${{ inputs.tag || github.ref }}
+  group: ios-release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -60,13 +66,14 @@ jobs:
     runs-on: xcode-27
     # the core for both iOS targets, the bindings and a Release build of the app, with nothing cached
     timeout-minutes: 120
+    # the signing secrets' environment, only on a ref its deployment rules admit (a `v*` tag, the default branch); an
+    # empty name runs the job with no environment, and so with no signing secrets
+    environment: ${{ (github.ref_type == 'tag' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) && 'ios-release' || '' }}
     env:
-      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-      APP_STORE_CONNECT_KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
-      IOS_DEVELOPMENT_TEAM: ${{ secrets.IOS_DEVELOPMENT_TEAM }}
-      IOS_DISTRIBUTION_CERTIFICATE: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE }}
-      IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+      # whether the secrets are there, never their values: each secret is passed to the one step that uses it
+      SIGNING_SECRETS: ${{ secrets.APP_STORE_CONNECT_KEY_ID != '' && secrets.APP_STORE_CONNECT_ISSUER_ID != '' && secrets.APP_STORE_CONNECT_KEY != '' && secrets.IOS_DEVELOPMENT_TEAM != '' }}
+      CERTIFICATE_SECRET: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE != '' }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       # a tag push uploads; a run by hand uploads only with dry_run off; a branch push never does
       UPLOAD: ${{ (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
       RELEASE_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
@@ -85,13 +92,14 @@ jobs:
               { echo "::error::tag $RELEASE_TAG must match Cargo.toml: v$version (MAJOR.MINOR.PATCH)"; exit 1; }
             [[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" ]] ||
               { echo "::error::the checkout does not match the release tag"; exit 1; }
+            git merge-base --is-ancestor HEAD "refs/remotes/origin/$DEFAULT_BRANCH" ||
+              { echo "::error::release tag $RELEASE_TAG is not on $DEFAULT_BRANCH"; exit 1; }
           elif [[ "$UPLOAD" == true ]]; then
             echo "::error::an upload needs a release tag: set tag, or leave dry_run on"
             exit 1
           fi
           signing=false
-          if [[ -n "$APP_STORE_CONNECT_KEY_ID" && -n "$APP_STORE_CONNECT_ISSUER_ID" && -n "$APP_STORE_CONNECT_KEY" &&
-            -n "$IOS_DEVELOPMENT_TEAM" ]]; then
+          if [[ "$SIGNING_SECRETS" == true ]]; then
             signing=true
           elif [[ "$UPLOAD" == true ]]; then
             echo "::error::an upload needs the App Store Connect secrets (docs/ios-release.md > Secrets)"
@@ -116,8 +124,15 @@ jobs:
         run: scripts/build-ghostty-vt.sh
       - name: iOS toolchain (build/pins.env)
         run: scripts/setup-ios.sh
+      # the core, its bindings and the generated sources, with no key on disk yet: the archive step's cargo then has
+      # nothing left to build
+      - name: the core for iOS
+        run: scripts/build-ios.sh --no-xcode
       - name: the App Store Connect API key
         if: env.SIGNING == 'true'
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
         run: |
           key="$RUNNER_TEMP/AuthKey_$APP_STORE_CONNECT_KEY_ID.p8"
           (umask 077 && printf '%s\n' "$APP_STORE_CONNECT_KEY" >"$key")
@@ -125,7 +140,10 @@ jobs:
       # the fallback when cloud-managed signing is refused: a distribution certificate (.p12, base64) in a keychain of
       # this run's own, which automatic signing then finds
       - name: the distribution certificate (optional)
-        if: env.SIGNING == 'true' && env.IOS_DISTRIBUTION_CERTIFICATE != ''
+        if: env.SIGNING == 'true' && env.CERTIFICATE_SECRET == 'true'
+        env:
+          IOS_DISTRIBUTION_CERTIFICATE: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
         run: |
           keychain="$RUNNER_TEMP/release.keychain-db"
           password="$(openssl rand -hex 24)"
@@ -141,8 +159,17 @@ jobs:
           security list-keychains -d user -s "$keychain" $existing
           rm -f "$RUNNER_TEMP/distribution.p12"
       - name: Release archive (signed with the secrets), checked
+        env:
+          # with APP_STORE_CONNECT_KEY_PATH, which only a signing run sets
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          IOS_DEVELOPMENT_TEAM: ${{ secrets.IOS_DEVELOPMENT_TEAM }}
         run: scripts/build-ios.sh archive
       - name: export for App Store Connect
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          IOS_DEVELOPMENT_TEAM: ${{ secrets.IOS_DEVELOPMENT_TEAM }}
         run: |
           options=mobile/ios/ExportOptions.plist
           plutil -lint "$options"

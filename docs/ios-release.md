@@ -9,9 +9,10 @@ manual click in App Store Connect.
 | run | what it does |
 |---|---|
 | a release tag `vMAJOR.MINOR.PATCH` (the tag `release.yml` builds the desktop release from) | archives, exports and uploads the tag's build |
-| Actions > ios-release > Run workflow, `dry_run` on (the default) | archives and exports without uploading; with `tag` empty, the ref it runs on |
-| Run workflow with `tag` set and `dry_run` off | uploads that tag's build, for example after a failed upload |
-| a push to a `ci/**` branch that changes `ios-release.yml` or `mobile/ios/ExportOptions.plist` | a dry run, since a workflow can only be run by hand once it is on the default branch |
+| Actions > ios-release > Run workflow on the default branch, `dry_run` on (the default) | archives and exports without uploading; with `tag` empty, the default branch's head |
+| Run workflow on the default branch with `tag` set and `dry_run` off | uploads that tag's build, for example after a failed upload |
+| Run workflow on another branch | an unsigned dry run of that branch (or of `tag`): it gets no signing secrets |
+| a push to a `ci/**` branch that changes `ios-release.yml` or `mobile/ios/ExportOptions.plist` | an unsigned dry run, since a workflow can only be run by hand once it is on the default branch |
 
 - **Versions.** The marketing version (`CFBundleShortVersionString`) is the workspace version in `Cargo.toml`, which
   a tag has to match. The build number (`CFBundleVersion`) is the tag's commit count, so it grows with every release
@@ -21,6 +22,8 @@ manual click in App Store Connect.
   automatic signing and `destination = export`. An upload sets `destination = upload` in its own copy, with the team
   id. Exporting always signs, so a dry run without the secrets below archives unsigned, checks the archive and the
   export options, and skips the export with a notice. A tag or an upload run without them fails at once.
+- **The tag.** A release tag has to point at a commit on the default branch. A run of a tag stops before building
+  anything otherwise.
 - **The checks.** `scripts/build-ios.sh archive` checks every archive, in `ios.yml` and here:
   - the fake core isn't in it;
   - the app answers the export compliance question;
@@ -30,7 +33,7 @@ manual click in App Store Connect.
 
 ## Secrets
 
-Repository secrets (Settings > Secrets and variables > Actions):
+Secrets of the `ios-release` environment (Settings > Environments > New environment), never repository secrets:
 
 | secret | what it holds |
 |---|---|
@@ -41,6 +44,17 @@ Repository secrets (Settings > Secrets and variables > Actions):
 | `IOS_DISTRIBUTION_CERTIFICATE` | optional: an Apple Distribution certificate with its private key, a `.p12`, base64 |
 | `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD` | optional: that `.p12`'s password |
 
+- **The environment's rules.** Under Deployment branches and tags, choose "Selected branches and tags" and add the
+  default branch (`main`) and the tag pattern `v*`. The job asks for the environment only on such a ref, and GitHub
+  refuses it to any other ref, so a `ci/**` push, a run by hand from another branch, or a branch that edits the
+  workflow to ask for it gets no secrets. Optionally, add required reviewers, so that every signing run waits for an
+  approval.
+- **The tags.** A `v*` tag's run uses the workflow and the scripts of the commit it points at, so whoever can push a
+  `v*` tag can sign. Restrict who may create `v*` tags with a tag ruleset (Settings > Rules > Rulesets). The workflow
+  also refuses a tag whose commit isn't on the default branch.
+- **Each secret reaches one step.** The job's environment holds only whether the secrets are set. The key's text goes
+  only to the step that writes its file, after the core is built. The certificate goes only to the step that imports
+  it. The archive and export steps get the key's path and ids. No other step, build script or action sees them.
 - **The API key needs the Admin role.** Automatic signing on a runner (`-allowProvisioningUpdates` with the key) uses
   cloud-managed distribution certificates and creates the provisioning profiles, and that needs Admin.
 - **The certificate is the fallback.** Use it only if cloud-managed signing is refused. The workflow imports it into
