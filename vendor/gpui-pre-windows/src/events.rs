@@ -1322,7 +1322,8 @@ impl WindowsWindowInner {
             let maximized = IsZoomed(handle).as_bool();
             let enable = |command: u32, enabled: bool| {
                 let state = if enabled { MF_ENABLED } else { MF_GRAYED | MF_DISABLED };
-                EnableMenuItem(menu, command, MF_BYCOMMAND | state);
+                // the item's previous state, or -1 where the menu has no such item: nothing to act on either way
+                let _ = EnableMenuItem(menu, command, MF_BYCOMMAND | state);
             };
             enable(SC_RESTORE, maximized);
             enable(SC_MOVE, !maximized);
