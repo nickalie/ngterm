@@ -7,7 +7,9 @@ internal enum FakeApp {
     // how long a list is watched for, at most, before an audit: this many reads, this far apart
     private static let settleReads = 20
     private static let settleBeat: TimeInterval = 0.25
-    // how often a list whose text's frames lie outside its rows' is nudged, and how far
+    // how many reads running a list has to keep still for, its text inside its rows
+    private static let settleQuietReads = 3
+    // how often a list whose text lies outside its rows is nudged, and how far
     private static let settleNudges = 3
     private static let nudgeDistance: CGFloat = 12
     private static let nudgePress: TimeInterval = 0.05
@@ -120,10 +122,9 @@ internal enum FakeApp {
     /// An iPad's keyboard covers the form's last rows while it goes, and a list bounces back after a swipe: the audit
     /// would measure the rows' text against the keyboard, or while it moves, and find it under 4.5:1 now and then.
     ///
-    /// An iPad's form sheet moves back down as the keyboard goes, and now and then the accessibility frames stay where
-    /// a step of that move left them, the rows' and their text's apart (the last row's text 30 pt low, the row 10 pt):
-    /// the audit then measures each text where it isn't, across the row's edge, and finds it failing. So the last
-    /// row's text has to lie inside the row too, and a list whose frames stay apart is nudged, which lays it out anew.
+    /// On an iPad's form sheet, once the keyboard has gone, the rows' accessibility frames can stay where the keyboard
+    /// left them while their text has moved on (seen 20-36 pt apart, for good): the audit then fails text it measures
+    /// in a row it isn't in. A list whose text lies outside its rows is nudged, which lays the rows out anew.
     @MainActor
     internal static func settle(_ list: XCUIElement, in app: XCUIApplication) {
         let keyboardGone = XCTNSPredicateExpectation(
@@ -142,19 +143,20 @@ internal enum FakeApp {
         }
     }
 
-    // reads the last row's frame until two reads a beat apart agree and its text lies inside it; false when its text
-    // stays outside it
+    // reads the rows' frames and the text's a beat apart until they agree for `settleQuietReads` reads running with
+    // every text inside a row; false when they don't come to that
     @MainActor
     private static func settleRows(_ list: XCUIElement) -> Bool {
-        guard let last = list.cells.allElementsBoundByIndex.last else {
-            return true
-        }
-        var before = last.frame
+        var before: [CGRect] = []
+        var quiet = 0
         for _ in 0..<settleReads {
             _ = XCTWaiter.wait(for: [XCTestExpectation(description: "a beat")], timeout: settleBeat)
-            let now = last.frame
-            let isStill = now == before
-            if isStill, last.staticTexts.allElementsBoundByIndex.allSatisfy({ text in now.contains(text.frame) }) {
+            let rows = list.cells.allElementsBoundByIndex.map(\.frame)
+            let texts = list.staticTexts.allElementsBoundByIndex.map(\.frame)
+            let now = rows + texts
+            let isInRows = texts.allSatisfy { text in rows.contains { row in row.contains(text) } }
+            quiet = now == before && isInRows ? quiet + 1 : 0
+            if quiet >= settleQuietReads {
                 return true
             }
             before = now
@@ -165,7 +167,7 @@ internal enum FakeApp {
     // drags `list` a few points down and lets go: it bounces back (or scrolls by as much), laying its rows out anew
     @MainActor
     private static func nudge(_ list: XCUIElement) {
-        XCTContext.runActivity(named: "nudge the list: its text's frames lie outside its rows'") { _ in
+        XCTContext.runActivity(named: "nudge the list: its text lies outside its rows") { _ in
             let start = list.coordinate(withNormalizedOffset: CGVector(dx: middle, dy: middle))
             start.press(forDuration: nudgePress, thenDragTo: start.withOffset(CGVector(dx: .zero, dy: nudgeDistance)))
         }
@@ -229,6 +231,19 @@ internal enum FakeApp {
     internal static func auditForm(_ app: XCUIApplication) throws {
         try app.performAccessibilityAudit(for: XCUIAccessibilityAuditType.all.subtracting(.dynamicType)) { issue in
             isSetAside(issue, in: app, isSheet: true)
+        }
+    }
+
+    /// Audits the form `page` as ``auditForm(_:)`` does, setting aside too the contrast of text the page cuts at its
+    /// edge, as ``auditSheet(_:page:)`` does: on an iPad's sheet a form's row can run past the sheet's foot.
+    @MainActor
+    internal static func auditForm(_ app: XCUIApplication, page: XCUIElement) throws {
+        let shown = page.frame
+        try app.performAccessibilityAudit(for: XCUIAccessibilityAuditType.all.subtracting(.dynamicType)) { issue in
+            if issue.auditType == .contrast, let element = issue.element, !shown.contains(element.frame) {
+                return true
+            }
+            return isSetAside(issue, in: app, isSheet: true)
         }
     }
 

@@ -767,6 +767,12 @@ fn sign_in_requested() -> MobileEvent {
 
 /// How long a machine holding authentication holds it when that has to outlast [`signing_in`]'s connect deadline.
 const HOLD_PAST_CONNECT: Duration = Duration::from_secs(3);
+/// A sign-in grace that something done well inside it (a connect dropped at 200 ms, a machine answering at 100 ms)
+/// stays inside on a slow host: a debug build on the CI's iOS simulator has stalled past half a second there, which
+/// let a 400 ms grace run out first.
+const SLOW_GRACE: Duration = Duration::from_secs(3);
+/// Long enough past [`SLOW_GRACE`] for an ask it would raise to have come.
+const PAST_SLOW_GRACE: Duration = Duration::from_millis(3200);
 
 /// [`quick`] with a connect deadline a sign-in outlasts: short enough to see run out, long enough for a debug build's
 /// handshake on a busy simulator (CI overran 300 ms); a machine that holds authentication past it holds it for
@@ -824,7 +830,7 @@ fn a_sign_in_not_completed_in_time_fails_the_connect() {
 fn a_dropped_connect_stops_waiting_for_the_sign_in_and_raises_nothing_after() {
     run(async {
         let mut fixture = fixture(Timing {
-            sign_in_grace: Duration::from_millis(400),
+            sign_in_grace: SLOW_GRACE,
             ..signing_in()
         });
         let server = TestServer::start_holding_auth(&fixture.public, SIGN_IN_BANNER, Duration::from_secs(60)).await;
@@ -839,7 +845,7 @@ fn a_dropped_connect_stops_waiting_for_the_sign_in_and_raises_nothing_after() {
         })
         .await;
         assert!(dropped.is_none(), "the connect was still waiting: {dropped:?}");
-        tokio::time::sleep(Duration::from_millis(600)).await;
+        tokio::time::sleep(PAST_SLOW_GRACE).await;
         assert!(
             fixture.events.try_recv().is_err(),
             "a connect that is over asks nothing"
@@ -887,7 +893,7 @@ fn a_banner_without_a_link_changes_nothing() {
 fn a_link_the_machine_does_not_wait_on_asks_nothing() {
     run(async {
         let mut fixture = fixture(Timing {
-            sign_in_grace: Duration::from_millis(500),
+            sign_in_grace: SLOW_GRACE,
             ..signing_in()
         });
         let banner = "Authorized use only: see https://example.com/policy.\n";
@@ -896,7 +902,7 @@ fn a_link_the_machine_does_not_wait_on_asks_nothing() {
 
         let connected = fixture.transport.connect(&machine(server.port)).await;
         assert!(connected.is_ok(), "{:?}", connected.err());
-        tokio::time::sleep(Duration::from_millis(600)).await;
+        tokio::time::sleep(PAST_SLOW_GRACE).await;
         assert!(
             fixture.events.try_recv().is_err(),
             "a link answered within the grace asks nothing"

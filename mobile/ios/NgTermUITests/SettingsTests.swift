@@ -52,7 +52,7 @@ internal final class SettingsTests: XCTestCase {
         // the switch itself, at the row's trailing end
         keepOn.switches.firstMatch.tap()
         XCTAssertEqual(keepOn.value as? String, "1")
-        try FakeApp.auditForm(app)
+        try FakeApp.auditForm(app, page: app.collectionViews["settings-form"])
 
         app.buttons["settings-done"].tap()
         app.buttons["settings"].tap()
@@ -84,7 +84,9 @@ internal final class SettingsTests: XCTestCase {
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let unused = FakeApp.element(containing: "No machine uses it", in: app)
         scroll(to: unused, in: app)
-        XCTAssertTrue(FakeApp.element(containing: "Used by split", in: app).exists)
+        // and the new key, the row after it, is split's: on an iPad's sheet that row can still be below the foot, where
+        // the list hasn't made it yet
+        scroll(to: FakeApp.element(containing: "Used by split", in: app), in: app)
     }
 
     deinit {
