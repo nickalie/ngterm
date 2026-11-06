@@ -1,6 +1,6 @@
 # The workflows and the scripts, linted by scripts/lint.sh: actionlint over .github/workflows/ (each `run:` block
 # through shellcheck), shellcheck over scripts/*.sh and scripts/lib/*.sh, both at the versions
-# packaging/release/pins.env pins and checksum-verified. Python scripts' self-tests join this job as they come.
+# packaging/release/pins.env pins and checksum-verified, then each scripts/*.py `--self-test`.
 #
 # Path-filtered to what it reads: the workflows and actionlint's settings, the scripts, shellcheck's settings and the
 # pins. Pushes to a `ci/**` branch run it too, and it can be run by hand.

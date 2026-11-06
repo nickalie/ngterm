@@ -1,3 +1,15 @@
+# The desktop release: build, package and publish ngterm for Linux (x86_64, aarch64), Windows (x86_64) and macOS
+# (Intel, Apple Silicon). scripts/release-version.py, in the `version` job, decides what a run does:
+#
+# - publishing: a `v*` tag push, or a dispatch with `publish: true` on a tag ref
+#   (`gh workflow run release --ref vX.Y.Z -f publish=true`). It builds every platform, waits for the `approve` job,
+#   whose `release-gate` environment needs the release reviewer (scripts/setup-release-protection.sh), then publishes
+#   the GitHub release;
+# - a dry run: a dispatch with `publish: false` on any ref. It builds the platforms its `platforms` input names, at
+#   that ref's Cargo.toml version, keeps the packages as workflow artifacts and publishes nothing.
+#
+# Every action is pinned by commit SHA (its tag in a comment, which Dependabot keeps current), and no checkout keeps
+# its credentials.
 name: release
 
 on:
@@ -5,20 +17,20 @@ on:
     tags: ["v[0-9]*"]
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Existing release tag (vMAJOR.MINOR.PATCH, matching Cargo.toml)"
-        required: true
-        type: string
       publish:
-        description: "Publish to GitHub Releases (otherwise keep workflow artifacts only)"
+        description: "Publish to GitHub Releases (only on a vMAJOR.MINOR.PATCH tag ref; otherwise a dry run)"
         default: false
         type: boolean
+      platforms:
+        description: "A dry run's platforms: all, or some of linux, macos, windows, android (publishing builds all)"
+        default: all
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 defaults:
@@ -35,37 +47,45 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       commit: ${{ steps.version.outputs.commit }}
+      android_version_code: ${{ steps.version.outputs.android_version_code }}
+      publishing: ${{ steps.version.outputs.publishing }}
+      signing_mode: ${{ steps.version.outputs.signing_mode }}
+      require_minisign: ${{ steps.version.outputs.require_minisign }}
+      require_developer_id: ${{ steps.version.outputs.require_developer_id }}
+      platforms: ${{ steps.version.outputs.platforms }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ github.ref }}
           fetch-depth: 0
-      - name: Validate tag and workspace version
+          persist-credentials: false
+      - name: Self-test
+        run: python3 scripts/release-version.py --self-test
+      - name: Version, publishing, signing mode and platforms
         id: version
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-        run: |
-          python3 - <<'PY'
-          import os
-          import re
-          import subprocess
-          import tomllib
+          RELEASE_PUBLISH: ${{ inputs.publish }}
+          RELEASE_PLATFORMS: ${{ inputs.platforms }}
+          NGTERM_RELEASE_SIGNING: ${{ vars.NGTERM_RELEASE_SIGNING }}
+        run: python3 scripts/release-version.py
 
-          tag = os.environ["RELEASE_TAG"]
-          with open("Cargo.toml", "rb") as source:
-              version = tomllib.load(source)["workspace"]["package"]["version"]
-          if not re.fullmatch(r"\d+\.\d+\.\d+", version) or tag != f"v{version}":
-              raise SystemExit(f"tag {tag!r} must match Cargo.toml: v{version} (MAJOR.MINOR.PATCH)")
-          commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          tagged = subprocess.check_output(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"], text=True).strip()
-          if tagged != commit:
-              raise SystemExit("checkout does not match the release tag")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"version={version}\ntag={tag}\ncommit={commit}\n")
-          PY
+  # The one approval of a release, at its start: every job that signs or publishes needs it. Its environment holds no
+  # secrets.
+  approve:
+    needs: version
+    if: needs.version.outputs.publishing == 'true'
+    runs-on: ubuntu-24.04
+    environment: release-gate
+    steps:
+      - name: Approved
+        env:
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.version.outputs.commit }}
+        run: echo "release $RELEASE_TAG at $RELEASE_COMMIT approved"
 
   linux:
     needs: version
+    if: contains(fromJSON(needs.version.outputs.platforms), 'linux')
     strategy:
       fail-fast: false
       matrix:
@@ -80,9 +100,10 @@ jobs:
     env:
       NGTERM_RELEASE_WPE: /home/runner/.cache/ngterm/release-wpe
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
       - name: Build and packaging dependencies
         run: |
           # WPE and the Rust release build both need disk space on hosted runners.
@@ -104,10 +125,10 @@ jobs:
             gstreamer1.0-libav glib-networking libvulkan1 mesa-vulkan-drivers
       - name: Rust toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: release-${{ matrix.os }}
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ngterm/vendor
           key: release-vendor-${{ matrix.os }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
@@ -116,7 +137,7 @@ jobs:
         run: |
           key="$(scripts/build-release-wpe.sh --print-key)"
           echo "key=$key" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ngterm/release-wpe
           key: release-wpe-${{ matrix.os }}-${{ steps.wpe-cache.outputs.key }}
@@ -149,20 +170,65 @@ jobs:
           PY
       - name: Linux archive, native packages and AppImage
         run: scripts/package-release.sh "$RUNNER_TEMP/stage" "${{ needs.version.outputs.version }}" dist
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
 
-  desktop:
+  windows-build:
     needs: version
+    if: contains(fromJSON(needs.version.outputs.platforms), 'windows')
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release-windows-2025
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: release-vendor-windows-2025-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - name: libghostty-vt and embedded fonts
+        run: |
+          scripts/build-ghostty-vt.sh
+          scripts/fetch-fonts.sh
+      - name: Release binaries with HTML overlays
+        run: |
+          cargo test --locked -p ngterm-update
+          cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless
+      - name: Stage and package
+        run: |
+          scripts/stage.sh "$RUNNER_TEMP/stage" --profile release
+          scripts/package-release.sh "$RUNNER_TEMP/stage" "${{ needs.version.outputs.version }}" dist
+      - name: Validate Windows install, upgrade and uninstall
+        run: |
+          IFS=. read -r major minor patch <<<"${{ needs.version.outputs.version }}"
+          scripts/build-msi.sh "$RUNNER_TEMP/upgrade.msi" --staged "$RUNNER_TEMP/stage" --version "$major.$minor.$((patch + 1))"
+      - name: Windows installer smoke test
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dist\*.msi).FullName
+          scripts\check-msi.ps1 -Msi $msi -UpgradeMsi "$env:RUNNER_TEMP\upgrade.msi" -Log "$env:RUNNER_TEMP\msi"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows-x86_64
+          path: dist/*
+          if-no-files-found: error
+
+  macos-build:
+    needs: version
+    if: contains(fromJSON(needs.version.outputs.platforms), 'macos')
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-2025
-            platform: windows-x86_64
           - os: macos-15-intel
             platform: macos-x86_64
           - os: macos-15
@@ -172,15 +238,16 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: "14.0"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
       - name: Rust toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: release-${{ matrix.os }}
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ngterm/vendor
           key: release-vendor-${{ matrix.os }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
@@ -196,31 +263,20 @@ jobs:
         run: |
           scripts/stage.sh "$RUNNER_TEMP/stage" --profile release
           scripts/package-release.sh "$RUNNER_TEMP/stage" "${{ needs.version.outputs.version }}" dist
-      - name: Validate Windows install, upgrade and uninstall
-        if: runner.os == 'Windows'
-        run: |
-          IFS=. read -r major minor patch <<<"${{ needs.version.outputs.version }}"
-          scripts/build-msi.sh "$RUNNER_TEMP/upgrade.msi" --staged "$RUNNER_TEMP/stage" --version "$major.$minor.$((patch + 1))"
-      - name: Windows installer smoke test
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $msi = (Get-ChildItem dist\*.msi).FullName
-          scripts\check-msi.ps1 -Msi $msi -UpgradeMsi "$env:RUNNER_TEMP\upgrade.msi" -Log "$env:RUNNER_TEMP\msi"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ matrix.platform }}
           path: dist/*
           if-no-files-found: error
 
   publish:
-    needs: [version, linux, desktop]
-    if: github.event_name == 'push' || inputs.publish
+    needs: [version, approve, linux, windows-build, macos-build]
+    if: needs.version.outputs.publishing == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: release-*
           path: dist

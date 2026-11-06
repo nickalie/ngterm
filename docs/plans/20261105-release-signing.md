@@ -365,8 +365,9 @@
 - Create: `scripts/release-version.py`
 - Create: `crates/ngterm-update/trust/minisign.pub`, `crates/ngterm-update/trust/apple-team-id` (both empty)
 - Modify: `.github/workflows/release.yml`, `.github/workflows/lint.yml`
+- ➕ Modify: `scripts/lint.sh` (runs every `scripts/*.py --self-test`), README > Downloads and releases
 
-- [ ] `scripts/release-version.py`:
+- [x] `scripts/release-version.py`:
       - resolves `version`, `commit`, `android_version_code`, `publishing`, `signing_mode`, `require_minisign`,
         `require_developer_id` and `platforms` from the event, the ref, `Cargo.toml`, `NGTERM_RELEASE_SIGNING` and
         the trust files (a missing file counts as empty);
@@ -374,12 +375,14 @@
         publishing;
       - `--self-test`, run in `lint.yml` and in the `version` job, covers every combination: the version code's bounds
         (minor and patch < 1000); dry runs always `optional`; each trust anchor forcing only its own component
-- [ ] drop the `tag` input; `concurrency.group` and checkouts use `github.ref_name`/`github.ref`; add `platforms`
-- [ ] `approve` job on `release-gate`, only when publishing
-- [ ] pin every action in `release.yml` by SHA; add `persist-credentials: false`; set per-job permissions, listing
+- [x] drop the `tag` input; `concurrency.group` and checkouts use `github.ref_name`/`github.ref`; add `platforms`
+- [x] `approve` job on `release-gate`, only when publishing; `publish` needs it
+- [x] pin every action in `release.yml` by SHA; add `persist-credentials: false`; set per-job permissions, listing
       `contents: read` beside any widened scope
-- [ ] tests: `--self-test`; `scripts/lint.sh`
-- [ ] run checks; must pass before Task 3
+- [x] ➕ the platform gate needs a job per platform, so `desktop` is split now into `windows-build` and `macos-build`
+      (same steps; Task 3 reshapes them)
+- [x] tests: `--self-test`; `scripts/lint.sh`
+- [x] run checks; must pass before Task 3
 
 ### Task 3: Build/sign/verify split with tarball hand-off and digests
 
@@ -593,7 +596,8 @@
 - minisign key pair: the secret key to `release`, the public key committed to `trust/minisign.pub`.
 
 **Repository settings (user, or with the user's go-ahead):**
-- Run `scripts/setup-release-protection.sh`.
+- Run `scripts/setup-release-protection.sh` before the first `v*` tag: a job naming an environment that doesn't exist
+  creates it unprotected, so `approve` would pass with no reviewer.
 - Enter the secrets and variables from `docs/release-signing.md`.
 - Set `NGTERM_RELEASE_SIGNING=required` once every platform signs.
 

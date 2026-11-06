@@ -135,9 +135,11 @@ currently unsigned as well.
 
 To release, update the workspace version and lockfile, commit, then push the matching tag (for example `v0.1.0`).
 The `release` workflow builds all five platform/architecture combinations before uploading assets and `SHA256SUMS`
-to a GitHub Release. New releases stay drafts until uploads finish. It can also be run manually against an existing
-tag: leave **publish** disabled to inspect workflow artifacts, or enable it to publish/re-upload that tag's assets.
-Tag/version mismatches fail before any builds. Packaging tool versions, checksums, and the WPE source checksum live
+to a GitHub Release, once the release reviewer approves its `approve` job. New releases stay drafts until uploads
+finish. Run by hand (`gh workflow run release --ref <ref>`), it is a dry run on any ref: it builds the platforms its
+**platforms** input names and keeps them as workflow artifacts. With **publish** enabled on a tag ref
+(`--ref vX.Y.Z -f publish=true`) it publishes, or re-uploads, that tag's assets. Tag/version mismatches fail before
+any builds. Packaging tool versions, checksums, and the WPE source checksum live
 in `packaging/release/pins.env`; update the WPE source checksum and relocation patch when changing `WPE_VERSION`.
 
 ## Parity
