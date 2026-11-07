@@ -53,6 +53,7 @@
   <string name="welcome_create">Create a key</string>
   <string name="welcome_creating">Creating a key</string>
   <string name="welcome_import">Import a key</string>
+  <string name="welcome_importing">Importing a key</string>
   <string name="onboarding_read_failed_title">Your keys couldn\'t be read</string>
   <string name="onboarding_read_failed_body">The app\'s storage answered: %1$s. Try again; if it keeps failing, restart the app.</string>
   <string name="welcome_create_failed">The key couldn\'t be created: %1$s</string>

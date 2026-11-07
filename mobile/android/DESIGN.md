@@ -244,7 +244,9 @@ reading, not a poster), the mark on top of the welcome.
 
 - **Welcome:** "Set up a key", what the key is for, and a line with the lock glyph in verdigris that the private key
   is sealed by the device's keystore. Create a key is the filled button, Import a key the outlined one under it; while
-  the key is made the button shows a spinner and its words say so.
+  the key is made the button shows a spinner and its words say so. An import continues through Back: the welcome
+  shows a spinner with "Importing a key", Create a key is disabled, and Import a key reopens the busy import screen.
+  Success shows the public key even from the welcome; a failure leaves the welcome ready for another try.
 - **Import:** the private key pasted into a mono field or read from a chosen file, and the passphrase (hidden, with a
   Show toggle). What went wrong shows under the field it is about: no passphrase or the wrong one under the
   passphrase, anything else under the key, and the text stays for another try. The key's text lives in memory only,
@@ -252,6 +254,8 @@ reading, not a poster), the mark on top of the welcome.
 - **Public key:** the three steps, numbered because they are a sequence; the `authorized_keys` line on a `KeyPlate`
   with Copy and Share; its fingerprint; the one command that appends it, with Copy; Done. The machine form opens the
   same screen with Back.
+- **States:** nothing while the keys are read; "Your keys couldn't be read", the store's reason and Retry when they
+  can't be. No key is made or imported until a retry reads the store successfully.
 
 ### Machines (`ui/machines/`)
 

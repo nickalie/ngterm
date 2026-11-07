@@ -13,6 +13,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -41,6 +42,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.IOException
 import java.io.InputStream
+import java.util.concurrent.CountDownLatch
 
 /** First-run navigation uses the real model and the core's key boundary. */
 @RunWith(RobolectricTestRunner::class)
@@ -124,6 +126,30 @@ class OnboardingFlowTest {
         compose.onNodeWithText("Done").performScrollTo().performClick()
         compose.waitForIdle()
         assertEquals(OnboardingStep.Done, model.step.value)
+    }
+
+    @Test
+    fun backDuringAnImportShowsProgressAndDisablesCreatingAnotherKey() {
+        val gate = CountDownLatch(1)
+        graph.maker.importGate = gate
+        try {
+            show()
+            compose.onNodeWithText("Import a key").performClick()
+            compose.onNodeWithText("Private key").performTextReplacement(PLAIN_FAKE_KEY)
+            compose.onNodeWithText("Import key").performScrollTo().performClick()
+            compose.onNodeWithContentDescription("Back").performClick()
+            compose.onNodeWithText("Set up a key").assertIsDisplayed()
+            compose.onNodeWithText("Create a key").assertIsNotEnabled().performClick()
+            compose.onNodeWithText("Importing a key").assertIsDisplayed()
+            assertEquals(0, graph.maker.generated)
+            // Reopening still shows the same import, with no second submission.
+            compose.onNodeWithText("Import a key").performClick()
+            compose.runOnIdle { assertEquals(OnboardingStep.Import(busy = true), model.step.value) }
+            gate.countDown()
+            compose.awaitText(FAKE_FINGERPRINT, substring = true)
+        } finally {
+            gate.countDown()
+        }
     }
 
     @Test

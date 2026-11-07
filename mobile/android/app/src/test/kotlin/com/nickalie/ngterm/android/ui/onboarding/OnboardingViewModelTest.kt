@@ -1,5 +1,7 @@
 package com.nickalie.ngterm.android.ui.onboarding
 
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.viewModelScope
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.ENCRYPTED_FAKE_KEY
@@ -152,6 +154,44 @@ class OnboardingViewModelTest {
         }
 
     @Test
+    fun malformedStoredKeysShowAReadFailureAndRetryCanRecover() = assertUndecodableKeysFail("not json")
+
+    @Test
+    fun storedKeysMissingARequiredFieldShowAReadFailureAndRetryCanRecover() = assertUndecodableKeysFail("[{}]")
+
+    private fun assertUndecodableKeysFail(json: String) =
+        runBlocking {
+            val store = testStore(dir.root, "undecodable")
+            val field = stringPreferencesKey("keys")
+            store.edit { it[field] = json }
+            val keys =
+                AppKeys(
+                    store,
+                    KeystoreKeyVault(File(dir.root, "vault"), SoftwareWrapper()),
+                    test.maker,
+                    "test",
+                )
+            val model = OnboardingViewModel(keys)
+            try {
+                val settled = withTimeout(10_000) { model.step.first { it != OnboardingStep.Loading } }
+                assertTrue(settled is OnboardingStep.ReadFailed)
+                assertTrue((settled as OnboardingStep.ReadFailed).reason.isNotBlank())
+                model.create()
+                model.startImport()
+                assertEquals(settled, model.step.value)
+                assertEquals(0, test.maker.generated)
+                store.edit { it.remove(field) }
+                model.retry()
+                assertEquals(
+                    OnboardingStep.Welcome(),
+                    withTimeout(10_000) { model.step.first { it != OnboardingStep.Loading } },
+                )
+            } finally {
+                model.viewModelScope.cancel()
+            }
+        }
+
+    @Test
     fun backAndReopenDuringImportMustNotAllowTwoKeysToBeStored() =
         runBlocking {
             val model = OnboardingViewModel(test.graph.keys)
@@ -166,7 +206,7 @@ class OnboardingViewModelTest {
                 model.back()
                 // the import goes on: no key is made beside it, and the import screen shows it still busy
                 model.create()
-                assertEquals(OnboardingStep.Welcome(), model.step.value)
+                assertEquals(OnboardingStep.Welcome(importing = true), model.step.value)
                 model.startImport()
                 assertEquals(OnboardingStep.Import(busy = true), model.step.value)
                 val second = PLAIN_FAKE_KEY.toByteArray()
@@ -185,6 +225,40 @@ class OnboardingViewModelTest {
                 )
                 assertEquals(0, test.maker.generated)
                 assertTrue(model.step.value is OnboardingStep.KeyReady)
+            } finally {
+                gate.countDown()
+                model.viewModelScope.cancel()
+            }
+        }
+
+    @Test
+    fun aSuccessfulImportFinishingAfterBackStillShowsItsPublicKey() =
+        runBlocking {
+            val model = OnboardingViewModel(test.graph.keys)
+            val gate = CountDownLatch(1)
+            try {
+                withTimeout(10_000) { model.step.first { it is OnboardingStep.Welcome } }
+                test.maker.importGate = gate
+                model.startImport()
+                model.import(PLAIN_FAKE_KEY.toByteArray(), null)
+                model.back()
+                assertEquals(OnboardingStep.Welcome(importing = true), model.step.value)
+                val work =
+                    model.viewModelScope.coroutineContext.job.children
+                        .toList()
+                gate.countDown()
+                withTimeout(10_000) { work.joinAll() }
+                val ready = model.step.value as OnboardingStep.KeyReady
+                assertTrue(ready.key.imported)
+                assertEquals(FAKE_FINGERPRINT, ready.key.fingerprint)
+                assertEquals(
+                    listOf(ready.key),
+                    test.graph.keys.keys
+                        .first(),
+                )
+                model.create()
+                assertEquals(ready, model.step.value)
+                assertEquals(0, test.maker.generated)
             } finally {
                 gate.countDown()
                 model.viewModelScope.cancel()
