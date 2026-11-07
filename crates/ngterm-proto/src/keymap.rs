@@ -55,7 +55,9 @@ fn default_error_position() -> String {
 
 /// Reads an explicit `null` as the type's default, as an omitted field reads (upstream's
 /// `decodeIfPresent(...) ?? default`).
-fn null_as_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(deserializer: D) -> Result<T, D::Error> {
+pub(crate) fn null_as_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
+    deserializer: D,
+) -> Result<T, D::Error> {
     Ok(Option::deserialize(deserializer)?.unwrap_or_default())
 }
 
