@@ -71,7 +71,9 @@ impl<S: PageHelperOwner> PageHelperLauncher for PageHelperProcess<S> {
             spawn("ngterm.page-helper-write", move || write_lines(stdin, &queued));
         }
         if let Some(stderr) = stderr {
-            spawn("ngterm.page-helper-stderr", move || log_lines(stderr));
+            spawn("ngterm.page-helper-stderr", move || {
+                crate::remote::log_lines(stderr, "page helper");
+            });
         }
         let (poster, waited) = (self.poster.clone(), Arc::clone(&child));
         spawn("ngterm.page-helper-read", move || {
@@ -191,15 +193,6 @@ fn wait(child: &Mutex<Child>) -> String {
             }
             Ok(None) => std::thread::sleep(EXIT_POLL),
             Err(error) => return format!("helper wait failed: {error}"),
-        }
-    }
-}
-
-fn log_lines(stderr: impl Read) {
-    for line in BufReader::new(stderr).lines() {
-        match line {
-            Ok(line) => tracing::info!(line = %line, "page helper"),
-            Err(_) => return,
         }
     }
 }
@@ -340,6 +333,22 @@ mod tests {
             [
                 Report::Line("got {\"id\":1}".to_owned()),
                 Report::Closed("helper exit 0".to_owned()),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_stderr_line_does_not_stop_the_stderr_drain() {
+        let running = launch(
+            "printf '\\377\\n' >&2; trap '' PIPE; i=0; while [ $i -lt 100000 ]; do echo x >&2 || { echo broken; exit 1; }; i=$((i+1)); done; echo done",
+            "",
+        );
+        assert_eq!(
+            running.until_closed(),
+            [
+                Report::Line("done".to_owned()),
+                Report::Closed("helper exit 0".to_owned())
             ]
         );
     }

@@ -120,7 +120,7 @@ impl ProcessLink {
         if let Some(stderr) = child.stderr.take() {
             let spawned = std::thread::Builder::new()
                 .name("ngterm.presentation-stderr".to_owned())
-                .spawn(move || log_lines(stderr));
+                .spawn(move || log_lines(stderr, "presentation bridge"));
             if spawned.is_err() {
                 tracing::warn!("presentation bridge stderr is not read");
             }
@@ -390,12 +390,23 @@ fn read_lines<S: PresentationViewer>(stdout: impl Read, key: LinkKey, poster: &P
     }
 }
 
-fn log_lines(stderr: impl Read) {
-    for line in BufReader::new(stderr).lines() {
-        match line {
-            Ok(line) => tracing::info!(line = %line, "presentation bridge"),
-            Err(_) => return,
+/// Drains a child's stderr even when it contains non-UTF-8 bytes, logging each line lossily as upstream does.
+pub(crate) fn log_lines(stderr: impl Read, source: &str) {
+    let mut reader = BufReader::new(stderr);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
         }
+        if line.last() == Some(&b'\n') {
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+        }
+        tracing::info!(line = %String::from_utf8_lossy(&line), "{source}");
     }
 }
 
@@ -480,6 +491,36 @@ mod tests {
                 Report::Closed("exit 0".to_owned()),
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_stderr_line_does_not_stop_the_stderr_drain() {
+        assert_eq!(
+            reports_of(
+                "printf '\\377\\n' >&2; trap '' PIPE; i=0; while [ $i -lt 100000 ]; do echo x >&2 || { echo broken; exit 1; }; i=$((i+1)); done; echo done",
+                "",
+            ),
+            [Report::Line("done".to_owned()), Report::Closed("exit 0".to_owned())]
+        );
+    }
+
+    #[test]
+    fn stderr_is_logged_lossily_through_its_unterminated_last_line() {
+        let log = tempfile::NamedTempFile::new().unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_target(false)
+            .with_writer(Mutex::new(log.reopen().unwrap()))
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            log_lines(&b"plain\nbad \xff\r\nlast"[..], "test child");
+        });
+        let text = std::fs::read_to_string(log.path()).unwrap();
+        assert!(text.contains("test child line=plain\n"), "{text:?}");
+        assert!(text.contains("test child line=bad \u{fffd}\n"), "{text:?}");
+        assert!(text.contains("test child line=last\n"), "{text:?}");
     }
 
     #[test]
