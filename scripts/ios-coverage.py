@@ -32,6 +32,8 @@ Usage: scripts/ios-coverage.py summarize|check
        scripts/ios-coverage.py --self-test
 """
 
+import contextlib
+import io
 import json
 import math
 import re
@@ -39,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 IOS = ROOT / "mobile" / "ios"
@@ -271,6 +274,8 @@ def uncovered(sources):
             raise CoverageError(f"{source} is in none of the measured targets ({', '.join(sorted(targets))})")
         objects = target_objects(name, targets[name], DERIVED_DATA)
         shown = llvm_cov("show", "-instr-profile", str(PROFDATA), *object_args(objects), "-sources", str(path))
+        if not shown.strip():
+            raise CoverageError(f"{source} was not measured: run scripts/build-ios.sh coverage to rebuild its mapping")
         ranges = unexecuted_ranges(shown)
         print(f"{source}: " + (", ".join(ranges) if ranges else "every executable line ran"))
 
@@ -376,6 +381,27 @@ def self_test():
         floors_path.write_text("NgTerm 50\nNgtermCore 31\n")
         expect_error(lambda: check(summary_path, floors_path), "NgtermCore covers 30.00%")
         expect_error(lambda: check(Path(tmp, "missing.json"), floors_path), "missing.json")
+    # llvm-cov silently omits an existing source added after the last coverage build.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        source = root / "mobile/ios/Packages/NgtermCore/Sources/NgtermCore/New.swift"
+        source.parent.mkdir(parents=True)
+        source.write_text("func newCode() {}\n")
+        profile = root / "Unit.profdata"
+        profile.touch()
+        with mock.patch.multiple(__name__, ROOT=root, PROFDATA=profile), \
+                mock.patch(f"{__name__}.target_objects", return_value=[root / "NgtermCore.o"]), \
+                mock.patch(f"{__name__}.llvm_cov") as cov, contextlib.redirect_stdout(io.StringIO()) as output:
+            cov.return_value = ""
+            expect_error(lambda: uncovered([str(source)]), "was not measured")
+            assert "every executable line ran" not in output.getvalue()
+            cov.return_value = "    1|      1|func newCode() {}\n"
+            uncovered([str(source)])
+            assert output.getvalue().endswith(f"{source}: every executable line ran\n")
+            cov.return_value = "    1|      0|func newCode() {}\n"
+            uncovered([str(source)])
+            assert output.getvalue().endswith(f"{source}: 1\n")
+
     print("ios-coverage self-test: ok")
 
 

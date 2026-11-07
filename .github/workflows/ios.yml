@@ -142,7 +142,7 @@ jobs:
       - name: test (the Unit and UI test plans on the phone and tablet, the Unit plan's coverage floors)
         run: scripts/build-ios.sh test
       - name: upload the coverage summary
-        if: success() || failure()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ios-coverage
