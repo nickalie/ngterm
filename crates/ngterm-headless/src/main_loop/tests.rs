@@ -88,3 +88,48 @@ fn a_closed_loop_refuses_work_and_drops_what_waited() {
         Err(MainLoopClosed)
     );
 }
+
+#[test]
+fn a_task_can_post_work_while_its_closed_queue_is_being_dropped() {
+    struct OnDrop(Arc<ThreadMainLoop<Log>>, std::sync::mpsc::Sender<bool>);
+    impl Drop for OnDrop {
+        fn drop(&mut self) {
+            self.1.send(self.0.post(push("too late")).is_err()).unwrap();
+        }
+    }
+    let main_loop = Arc::new(ThreadMainLoop::<Log>::default());
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let captured = OnDrop(main_loop.clone(), sender);
+    main_loop.post(Box::new(move |_| drop(captured))).unwrap();
+    main_loop.close();
+    assert!(receiver.recv_timeout(Duration::from_secs(2)).unwrap());
+}
+
+#[test]
+fn identical_deadlines_order_by_serial_and_compare_consistently() {
+    let due = Instant::now();
+    let first = Delayed {
+        due,
+        serial: 1,
+        task: push("first"),
+    };
+    let same = Delayed {
+        due,
+        serial: 1,
+        task: push("same position"),
+    };
+    let second = Delayed {
+        due,
+        serial: 2,
+        task: push("second"),
+    };
+    assert!(first == same);
+    assert!(first != second);
+    assert_eq!(first.partial_cmp(&second), Some(Ordering::Greater));
+    let mut queue = BinaryHeap::from([second, first]);
+    let mut log = Vec::new();
+    while let Some(delayed) = queue.pop() {
+        (delayed.task)(&mut log);
+    }
+    assert_eq!(log, ["first", "second"]);
+}

@@ -94,53 +94,5 @@ pub fn relaunch(options: &Options) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_next_instance_keeps_the_grid_and_agent_setup_and_waits_for_the_lock() {
-        let grid = Options {
-            grid: (120, 40),
-            ..Options::default()
-        };
-        assert_eq!(
-            arguments(&grid),
-            ["--grid", "120x40", RELAUNCHED_FLAG].map(OsString::from)
-        );
-        let skipped = Options {
-            skip_agent_setup: true,
-            ..grid.clone()
-        };
-        assert_eq!(
-            arguments(&skipped),
-            ["--grid", "120x40", "--skip-agent-setup", RELAUNCHED_FLAG].map(OsString::from)
-        );
-        let pinned = Options {
-            opencode_version: Some(ngterm_app::integrations::opencode::Version::V2),
-            ..grid
-        };
-        assert_eq!(
-            arguments(&pinned),
-            ["--grid", "120x40", "--opencode-version", "v2", RELAUNCHED_FLAG].map(OsString::from)
-        );
-    }
-
-    #[test]
-    fn an_existing_binary_is_its_own_target() {
-        let dir = tempfile::tempdir().unwrap();
-        let binary = dir.path().join("ngterm-headless");
-        std::fs::write(&binary, b"").unwrap();
-        assert_eq!(target(&binary), Some(binary.clone()));
-        assert_eq!(target(&dir.path().join("gone")), None);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_replaced_binary_is_restarted_from_its_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let binary = dir.path().join("ngterm-headless");
-        std::fs::write(&binary, b"").unwrap();
-        let reported = dir.path().join("ngterm-headless (deleted)");
-        assert_eq!(target(&reported), Some(binary));
-    }
-}
+#[path = "relaunch_tests.rs"]
+mod tests;

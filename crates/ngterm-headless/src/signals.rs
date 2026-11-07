@@ -130,20 +130,5 @@ pub fn quit_on_termination(poster: Poster) -> io::Result<()> {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
-    use super::ignored_at_start;
-
-    #[test]
-    fn a_signal_ignored_before_the_handlers_is_read_back() {
-        // SIGUSR2: nothing in the tests sends it, so its action is this test's to set and put back
-        let signal = libc::SIGUSR2;
-        // SAFETY: `SIG_IGN` installs no handler code.
-        let previous = unsafe { libc::signal(signal, libc::SIG_IGN) };
-        assert!(ignored_at_start(signal));
-        // SAFETY: `SIG_DFL` installs no handler code.
-        unsafe { libc::signal(signal, libc::SIG_DFL) };
-        assert!(!ignored_at_start(signal));
-        // SAFETY: the action read back above, put back as it was.
-        unsafe { libc::signal(signal, previous) };
-    }
-}
+#[path = "signals_tests.rs"]
+mod tests;

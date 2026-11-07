@@ -187,3 +187,264 @@ fn a_respawned_primary_keeps_its_token_but_needs_a_fresh_terminal() {
     assert!(!carries(&core, &spec), "the respawn tore its terminal down");
     assert_eq!(role(&core, session, &split), None);
 }
+
+#[test]
+fn an_unstarted_surface_refuses_io_and_reports_no_terminal_geometry() {
+    let panes = Panes::new(environment(), Arc::new(|_, _| {}));
+    let cell = panes.cell("waiting");
+    let mut surface = HeadlessSurface(cell);
+    assert_eq!(surface.pane_token(), "waiting");
+    assert!(!surface.is_realized());
+    assert!(!surface.is_live_session());
+    assert!(!surface.type_text("hello\n"));
+    assert!(!surface.binding_action("text:hello"));
+    assert_eq!(surface.read_text(TextScope::Screen), None);
+    assert_eq!(surface.read_text(TextScope::All), None);
+    assert_eq!(surface.read_selection(), None);
+    assert_eq!(surface.cursor_column(), None);
+    assert_eq!(surface.foreground_pid(), None);
+    assert_eq!(surface.font_size(), None);
+    assert_eq!(surface.cell_size(), None);
+    surface.promote_to_primary();
+    Box::new(surface).teardown();
+}
+
+#[cfg(unix)]
+fn shell_environment() -> PaneEnvironment {
+    let mut env = environment();
+    env.host = Host::new(&env.config, Some("/bin/sh".into()), None, None);
+    env
+}
+
+#[cfg(unix)]
+fn wait_surface(surface: &HeadlessSurface, contains: &str, wake: &std::sync::mpsc::Receiver<()>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !surface.read_text(TextScope::All).unwrap_or_default().contains(contains) {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "no {contains:?}: {:?}",
+            surface.read_text(TextScope::All)
+        );
+        match wake.recv_timeout(remaining.min(std::time::Duration::from_millis(20))) {
+            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => panic!("terminal wake channel closed: {error}"),
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_real_terminal_accepts_keys_bindings_and_reads_the_programs_output() {
+    let (sender, wake) = std::sync::mpsc::channel();
+    let panes = Panes::new(
+        shell_environment(),
+        Arc::new(move |_, _| {
+            let _ = sender.send(());
+        }),
+    );
+    let cell = panes.cell("input");
+    let config = panes.pane_config(Uuid::new_v4(), &cell);
+    // Each wake must be available to the waiter; drain normally clears the coalescing flag.
+    let queued = Arc::clone(&cell.drain_queued);
+    let wake_sender = config.wake.clone().unwrap();
+    let mut config = config;
+    config.wake = Some(Arc::new(move || {
+        queued.store(false, Ordering::Release);
+        wake_sender();
+    }));
+    let launch = Launch {
+        command: Some(
+            "stty -echo; printf 'READY\\n'; while IFS= read -r line; do printf 'GOT:%s\\n' \"$line\"; done".into(),
+        ),
+        ..Launch::default()
+    };
+    *cell.pane.borrow_mut() = Some(Rc::new(
+        Pane::launch(&launch, &panes.environment.host, &config).unwrap(),
+    ));
+    let mut surface = HeadlessSurface(Rc::clone(&cell));
+    wait_surface(&surface, "READY", &wake);
+    assert!(surface.is_realized());
+    assert!(!surface.is_live_session());
+    cell.live.set(true);
+    assert!(surface.is_live_session());
+    assert_eq!(surface.font_size(), Some(f64::from(panes.environment.config.font.size)));
+    assert_eq!(surface.cell_size(), Some((8.0, 16.0)));
+    assert!(surface.cursor_column().is_some());
+    assert!(surface.foreground_pid().is_some());
+    assert_eq!(surface.read_selection(), None);
+    assert!(surface.type_text("alpha\nbeta\n"));
+    wait_surface(&surface, "GOT:alpha", &wake);
+    wait_surface(&surface, "GOT:beta", &wake);
+    assert!(surface.binding_action(r"text:gamma\r"));
+    wait_surface(&surface, "GOT:gamma", &wake);
+    assert!(surface.binding_action("copy_to_clipboard"));
+    assert!(surface.binding_action("invalid-coverage-action"));
+    assert!(surface.read_text(TextScope::Screen).unwrap().contains("GOT:gamma"));
+    Box::new(surface).teardown();
+    assert!(cell.pane.borrow().is_none());
+}
+
+#[test]
+fn retaining_a_pending_close_keeps_its_surface_until_the_close_is_final() {
+    let (mut core, session, primary, _) = split_core();
+    let mut panes = Panes::new(environment(), Arc::new(|_, _| {}));
+    let spec = PaneSpec::of_token(&core, session, &primary).unwrap();
+    panes.mount(&mut core, &spec);
+    assert_eq!(panes.len(), 1);
+    assert!(panes.drain(session, &primary).is_empty());
+    assert!(panes.drain(session, "missing").is_empty());
+    panes.retain(&[], &std::collections::HashSet::from([session]));
+    assert_eq!(panes.len(), 1);
+    panes.retain(&[], &std::collections::HashSet::new());
+    assert!(panes.is_empty());
+    panes.launch_seeded(&session, &primary, &LaunchSeed::default());
+    panes.teardown_all();
+    assert!(panes.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_replacement_uses_the_current_role_cwd_and_environment_and_reports_exit() {
+    let (mut core, session, primary, _) = split_core();
+    let (sender, wake) = std::sync::mpsc::channel();
+    let mut panes = Panes::new(
+        shell_environment(),
+        Arc::new(move |_, _| {
+            let _ = sender.send(());
+        }),
+    );
+    let spec = PaneSpec::of_token(&core, session, &primary).unwrap();
+    panes.mount(&mut core, &spec);
+    let dir = tempfile::tempdir().unwrap();
+    let replacement = PaneReplacement {
+        session,
+        token: primary.clone(),
+        command: "printf '\\033]2;replaced\\007'; printf '%s:%s\\n' \"$NGTERM_PANE\" \"$EXTRA\"; pwd".into(),
+        attach: None,
+        env: vec![
+            ("NGTERM_PANE".into(), "overridden".into()),
+            ("EXTRA".into(), "kept".into()),
+        ],
+        cwd: Some(dir.path().to_string_lossy().into_owned()),
+        remote: true,
+    };
+    assert!(panes.replace_one(&mut core, &replacement));
+    let cell = panes.cells.values().next().unwrap().clone();
+    let surface = HeadlessSurface(cell);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut reports = Vec::new();
+    loop {
+        reports.extend(panes.drain(session, &primary));
+        if reports.contains(&Report::Held) {
+            break;
+        }
+        wake.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap();
+    }
+    assert!(reports.contains(&Report::Pane(PaneReport::Title("replaced".into()))));
+    let output = surface.read_text(TextScope::All).unwrap();
+    assert!(output.contains("overridden:kept"), "{output}");
+    assert!(output.contains(dir.path().to_str().unwrap()), "{output}");
+    assert!(!panes.replace_one(
+        &mut core,
+        &PaneReplacement {
+            token: "missing".into(),
+            ..replacement
+        }
+    ));
+    panes.teardown_all();
+    assert!(!surface.is_realized());
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_mounts_all_split_panes_once_and_follows_the_models_roles_and_closes() {
+    let (mut core, session, primary, split) = split_core();
+    let window = core.library().active_window_id().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let found = core
+            .library_mut()
+            .store_mut(window)
+            .unwrap()
+            .session_mut(session)
+            .unwrap();
+        found.current_cwd = Some(dir.path().to_string_lossy().into_owned());
+        found.split_cwd = found.current_cwd.clone();
+        found.launch.command = Some("printf 'PRIMARY\\n'".into());
+        found.launch.wait = true;
+        found.split_launch.command = Some("printf 'SPLIT\\n'".into());
+        found.split_launch.wait = true;
+    }
+    let (sender, wake) = std::sync::mpsc::channel();
+    let mut panes = Panes::new(
+        shell_environment(),
+        Arc::new(move |_, _| {
+            let _ = sender.send(());
+        }),
+    );
+    assert!(!panes.sync(&mut core));
+    assert_eq!(panes.len(), 2);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut reports = Vec::new();
+    loop {
+        reports.extend(panes.drain(session, &primary));
+        reports.extend(panes.drain(session, &split));
+        if reports.iter().filter(|report| **report == Report::Held).count() == 2 {
+            break;
+        }
+        wake.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap();
+    }
+    assert!(!panes.sync(&mut core));
+    core.library_mut()
+        .store_mut(window)
+        .unwrap()
+        .swap_panes(session)
+        .unwrap();
+    assert!(!panes.sync(&mut core));
+    let spec = panes.specs.values().find(|spec| spec.token == primary).unwrap();
+    assert_eq!(spec.pane, StatusPane::Right);
+    let surfaces: Vec<_> = panes.cells.values().map(|cell| HeadlessSurface(cell.clone())).collect();
+    core.library_mut().store_mut(window).unwrap().close_session(session);
+    assert!(!panes.sync(&mut core));
+    assert!(panes.is_empty());
+    assert!(surfaces.iter().all(|surface| !surface.is_realized()));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_programs_clipboard_read_is_denied_so_its_output_keeps_flowing() {
+    let (mut core, session, primary, _) = split_core();
+    let (sender, wake) = std::sync::mpsc::channel();
+    let mut panes = Panes::new(
+        shell_environment(),
+        Arc::new(move |_, _| {
+            let _ = sender.send(());
+        }),
+    );
+    let mut spec = PaneSpec::of_token(&core, session, &primary).unwrap();
+    spec.cwd = "/".into();
+    panes.mount(&mut core, &spec);
+    panes.launch_seeded(
+        &session,
+        &primary,
+        &LaunchSeed {
+            command: Some("printf '\\033]52;c;?\\007after-clipboard\\n'".into()),
+            wait_after_command: true,
+            ..LaunchSeed::default()
+        },
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if panes.drain(session, &primary).contains(&Report::Held) {
+            break;
+        }
+        wake.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap();
+    }
+    let surface = HeadlessSurface(panes.cells.values().next().unwrap().clone());
+    assert!(surface.read_text(TextScope::All).unwrap().contains("after-clipboard"));
+    panes.teardown_all();
+}

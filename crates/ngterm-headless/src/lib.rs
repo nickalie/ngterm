@@ -343,3 +343,7 @@ fn restart_for_reset(state: &HeadlessState, options: &Options) {
         state.core.disarm_live_reset();
     }
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;

@@ -668,3 +668,7 @@ fn finalize_pending_close(state: &mut HeadlessState, timer: PendingCloseTimer) {
     state.core.finalize_pending_close(timer);
     state.settle();
 }
+
+#[cfg(test)]
+#[path = "state_tests.rs"]
+mod tests;
