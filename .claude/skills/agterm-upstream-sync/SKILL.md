@@ -123,7 +123,8 @@ subagent's `absent` or `already-ported` claim goes into the plan, confirm it wit
 2. **Upstream's pins**: `bash $SKILL_DIR/scripts/pins-delta.sh CURRENT TARGET`. None of upstream's pins is a pin
    here, so this only reports. A moved `ZMX_REV` or a changed zmx patch becomes a plan task that ports the behavior into
    `ngterm-session`. A moved `GHOSTTY_REV` becomes a task to review the Ghostty-level changes against this repo's own
-   `LIBGHOSTTY_VT_REV`. Bumps of herdr or of this repo's Ghostty pin are separate changes, not part of the sync.
+   `LIBGHOSTTY_VT_REV`. Bumps of herdr or of this repo's Ghostty pin are separate changes, not part of the sync (the
+   Ghostty pin's is the `libghostty-sync` skill).
 3. **Vendored copies**: `bash $SKILL_DIR/scripts/sync-resources.sh --patches WORK/patches CURRENT TARGET`.
    A `conflict` or `unmapped` line becomes a plan task. If nothing conflicted, bump the release named in the header of
    `crates/ngterm-app/src/integrations/mod.rs`.
