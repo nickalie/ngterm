@@ -434,13 +434,13 @@ impl Page {
         }
     }
 
-    /// Wears a changed theme: a log page rebuilds from what it shows (its follower's snapshot and paused offset,
+    /// Wears a changed theme: a text page rebuilds from what it shows (its text, a log's snapshot and paused offset,
     /// upstream's `loadDocument(fresh: false)`), any other page reloads.
     fn rebuild_shown(&self) {
-        match self.text_bridge.as_ref().filter(|page| page.is_log()) {
-            Some(log) => {
+        match &self.text_bridge {
+            Some(text) => {
                 self.state.borrow_mut().load.begin();
-                log.load_document(false);
+                text.load_document(false);
             }
             None => self.reload_shown(),
         }
@@ -705,8 +705,9 @@ impl Page {
             state.load.begin();
             state.overlay.source.clone()
         };
-        if let Some(log) = self.text_bridge.as_ref().filter(|page| page.is_log()) {
-            log.load_document(true);
+        // a text page's documents are its bridge's, read off the main thread with the model's search
+        if let Some(text) = &self.text_bridge {
+            text.load_document(true);
             return;
         }
         let load = match source {
@@ -1057,6 +1058,12 @@ impl PageChannel for Page {
         }
     }
 
+    fn fail(&self, message: String) {
+        if self.active() {
+            Page::fail(self, message);
+        }
+    }
+
     fn call(&self, expression: String) -> Option<async_channel::Receiver<text_page::Answer>> {
         let (web, view) = (self.web()?, self.view.get()?);
         Some(web.evaluate(view, expression, Some(super::documents::WORLD.to_owned())))
@@ -1302,7 +1309,7 @@ mod document_tests {
     }
 
     /// A log page's document is its follower's (no gutter, its state in place of a line); the renderer's ready report
-    /// hands it the latest text in its world, and a scroll that pauses it goes to the follower before the model. The
+    /// hands it the latest text and the model's search in its world, and a scroll that pauses it goes to the follower before the model. The
     /// model's pause reaches the renderer's bar.
     #[gpui_kit::test]
     fn a_log_page_builds_from_its_follower_and_hears_its_renderer(cx: &mut gpui_kit::TestAppContext) {
@@ -1325,12 +1332,17 @@ mod document_tests {
             );
             page.event(&renderer_message(&page, &ready(&built)), cx);
             let calls = evaluated(recorder.take());
-            assert_eq!(calls.len(), 2, "{calls:?}");
+            assert_eq!(calls.len(), 3, "{calls:?}");
             assert!(
                 calls[0].0.starts_with("ngtermTextUpdate(\"first\\nsecond\\n\""),
                 "{calls:?}"
             );
             assert_eq!(calls[1], ("ngtermTextSetFollowing(true)".to_owned(), world.clone()));
+            // the model's search goes with them, none here
+            assert_eq!(
+                calls[2],
+                (r#"ngtermTextSearchSet("",0,false)"#.to_owned(), world.clone())
+            );
             page.event(&renderer_message(&page, r#"{"following":false,"top":12}"#), cx);
             assert!(evaluated(recorder.take()).is_empty(), "the page made the change");
             // an apply ahead of the posted pause carries the model's older value, which keeps the pause

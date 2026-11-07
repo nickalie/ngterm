@@ -517,13 +517,13 @@ impl Page {
         }
     }
 
-    /// Wears a changed theme: a log page rebuilds from what it shows (its follower's snapshot and paused offset,
+    /// Wears a changed theme: a text page rebuilds from what it shows (its text, a log's snapshot and paused offset,
     /// upstream's `loadDocument(fresh: false)`), any other page reloads.
     fn rebuild_shown(&self) {
-        match self.text_bridge.as_ref().filter(|page| page.is_log()) {
-            Some(log) if self.native().is_some() => {
+        match &self.text_bridge {
+            Some(text) if self.native().is_some() => {
                 self.state.borrow_mut().load.begin();
-                log.load_document(false);
+                text.load_document(false);
             }
             _ => self.reload_shown(),
         }
@@ -1030,8 +1030,9 @@ impl Page {
             state.overlay.source.clone()
         };
         let Some(native) = self.native() else { return };
-        if let Some(log) = self.text_bridge.as_ref().filter(|page| page.is_log()) {
-            log.load_document(true);
+        // a text page's documents are its bridge's, read off the main thread with the model's search
+        if let Some(text) = &self.text_bridge {
+            text.load_document(true);
             return;
         }
         let address = match source {
@@ -1282,6 +1283,12 @@ impl PageChannel for Page {
     fn show_document(&self, html: String) {
         if self.active() {
             self.show(html);
+        }
+    }
+
+    fn fail(&self, message: String) {
+        if self.active() {
+            Page::fail(self, message);
         }
     }
 

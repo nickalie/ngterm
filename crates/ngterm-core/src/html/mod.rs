@@ -429,6 +429,11 @@ pub struct HtmlOverlay {
     pub text_log: Option<text_page::TextLog>,
     /// A log page's live state (upstream's `logState`), set exactly when `text_log` is; a snapshot never writes it.
     pub log_state: Option<text_page::TextLogState>,
+    /// A text page's search, `None` with none (upstream's `textSearch`); a snapshot never writes it.
+    pub text_search: Option<text_page::TextSearch>,
+    /// Moves with every query set or closed (upstream's `searchRevision`): a page report naming another revision is
+    /// dropped.
+    pub search_revision: u64,
 }
 
 impl HtmlOverlay {
@@ -464,6 +469,8 @@ impl HtmlOverlay {
             clicked: false,
             text_log: None,
             log_state: None,
+            text_search: None,
+            search_revision: 0,
         }
     }
 
@@ -677,7 +684,32 @@ pub trait HtmlHost {
     fn saved_store_clear(&self) -> ClearProgress {
         ClearProgress::Done
     }
+
+    /// Steps text page `page`'s search once (upstream's `TextPageBridge.step`): its renderer applies `step`'s query
+    /// first when it holds an older revision, moves to the next or previous match and answers the count, once, on the
+    /// channel handed back. `None`, as a channel that closes unanswered, when the page's renderer is not up to take it.
+    fn step_text_search(&self, _page: uuid::Uuid, _step: SearchStep) -> Option<SearchAnswer> {
+        None
+    }
 }
+
+/// One step of a text page's search: the direction, and the model's query and its revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchStep {
+    pub forward: bool,
+    pub query: String,
+    pub revision: u64,
+}
+
+/// What a text page's renderer counted: its matches and the one it reached, from 1 and 0 for none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchCount {
+    pub matches: usize,
+    pub current: usize,
+}
+
+/// The renderer's answer to a [`SearchStep`], once; a channel that closes unanswered means the page could not take it.
+pub type SearchAnswer = std::sync::mpsc::Receiver<SearchCount>;
 
 /// How a clear of the saved browser store is going.
 #[derive(Debug, Clone, PartialEq, Eq)]

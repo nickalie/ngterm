@@ -302,6 +302,25 @@ def test_overlay_search_refusals(ctl):
         ctl.request("session.close", sid)
 
 
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.overlay.search", "session.overlay.follow", "field:tree.session.htmlOverlays")
+def test_a_search_step_pauses_a_following_log_page(ctl):
+    path = _file(ctl, "searched.log", SEARCHED)
+    sid = _new(ctl)
+    try:
+        _open_text(ctl, sid, path, tail=50, followFile=True)
+        _lines(ctl, sid, 5, following=True)
+        assert_ok(ctl.request("session.overlay.search", sid, text="alpha"))
+        # a following page starts its search at the last match
+        _text(ctl, sid, lambda text: text.get("search") == {"query": "alpha", "matches": 3, "current": 3})
+        # a step moves off the end the page follows, so it pauses first
+        assert assert_ok(_once_loaded(ctl, "session.overlay.search", sid, to="next")) == {"id": sid, "text": "1 of 3"}
+        _text(ctl, sid, lambda text: text["following"] is False and text["search"]["current"] == 1)
+        assert assert_ok(ctl.request("session.overlay.follow", sid)) == {"id": sid, "text": "following"}
+    finally:
+        ctl.request("session.close", sid)
+
+
 # -- session.overlay.changes
 
 # two changes, one per hunk, short enough to fit on screen

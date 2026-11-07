@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ngterm_core::html::log_tail::Snapshot;
-use ngterm_core::html::text_page::{self, PageState, TextLog, TextLogReport, TextLogState};
+use ngterm_core::html::text_page::{self, PageState, SearchState, TextLog, TextLogReport, TextLogState};
 
 use crate::documents::{self, FileStamp};
 
@@ -136,6 +136,8 @@ pub struct LogFollower {
     /// nothing is pushed, since the old document or a renderer not yet running would drop it, and the ready report
     /// delivers the latest state instead.
     document_pending: bool,
+    /// The search a built document starts with (upstream's `loadDocument(search:)`).
+    search: SearchState,
 }
 
 impl LogFollower {
@@ -161,6 +163,7 @@ impl LogFollower {
             pause_epoch: 0,
             document_load: 0,
             document_pending: false,
+            search: SearchState::default(),
         }
     }
 
@@ -201,6 +204,17 @@ impl LogFollower {
     #[must_use]
     pub fn interval(&self) -> Duration {
         self.interval
+    }
+
+    /// Whether a document build waits for its renderer's ready report.
+    #[must_use]
+    pub fn document_pending(&self) -> bool {
+        self.document_pending
+    }
+
+    /// The search the next built document starts with, so a rebuild keeps the query and the current match.
+    pub fn set_search(&mut self, search: SearchState) {
+        self.search = search;
     }
 
     /// Whether the frontend should tick the follower now: it follows and is on screen. When this turns true the first
@@ -417,6 +431,7 @@ impl LogFollower {
             log: Some(&log),
             anchor: if self.following { None } else { self.anchor },
             load: Some(self.document_load),
+            search: Some(&self.search),
         };
         let html = text_page::html(&shown.text, text_page::language(&self.path), None, &self.style, &state);
         self.page_snapshot.clone_from(&self.snapshot);

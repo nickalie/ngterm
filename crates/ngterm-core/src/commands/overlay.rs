@@ -269,7 +269,7 @@ fn document_flags(args: &Args) -> bool {
 
 /// The `session.overlay.*` pane selector (upstream's `parseOverlayPane`): absent keeps the session-wide slot, the
 /// pane aliases scope to one pane, anything else (the scratch included) is refused.
-fn parse_overlay_pane(raw: Option<&str>) -> Result<Option<OverlayPane>, ControlError> {
+pub(super) fn parse_overlay_pane(raw: Option<&str>) -> Result<Option<OverlayPane>, ControlError> {
     raw.map(|raw| OverlayPane::from_control_name(raw).ok_or_else(|| ControlError::rejected(INVALID_PANE)))
         .transpose()
 }

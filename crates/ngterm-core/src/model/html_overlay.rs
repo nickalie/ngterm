@@ -19,8 +19,8 @@ use super::pane_overlay::PaneOverlay;
 use super::session::Session;
 use super::store::AppStore;
 use super::window_library::WindowLibrary;
-use crate::html::text_page::TextLogReport;
-use crate::html::{HtmlLoadState, HtmlOverlay, HtmlPageInfo, HtmlReloadTarget, errors};
+use crate::html::text_page::{TextLogReport, TextSearch};
+use crate::html::{HtmlLoadState, HtmlOverlay, HtmlPageInfo, HtmlReloadTarget, HtmlSource, SearchCount, errors};
 use crate::persist::PageSnapshot;
 
 /// Why [`AppStore::open_html_overlay`] refused (upstream's `HtmlOverlayOpenFailure`; its `presenter` case is the
@@ -70,6 +70,34 @@ impl TextLogFollowFailure {
             Self::Page(failure) => failure.message(),
             Self::Replica => errors::REPLICA_SUBMIT,
             Self::NotLog => "no log page",
+        }
+    }
+}
+
+/// Why a `session.overlay.search` request was refused (upstream's `TextSearchFailure`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextSearchFailure {
+    Page(HtmlOverlayCommandFailure),
+    /// The slot holds a page that is not a local text page, a replica included.
+    NotText,
+    /// The slot is the presenting machine's, which alone shows the page.
+    Remote,
+    /// The page's renderer is not up to take a step.
+    NotLoaded,
+    /// A step with no query set.
+    NoQuery,
+}
+
+impl TextSearchFailure {
+    /// The control error for this refusal (upstream's `message`).
+    #[must_use]
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Page(failure) => failure.message(),
+            Self::NotText => "no text page",
+            Self::Remote => "remote page: search it on the Mac that shows it",
+            Self::NotLoaded => "page not loaded",
+            Self::NoQuery => "no search query: set one first",
         }
     }
 }
@@ -501,6 +529,43 @@ impl WindowLibrary {
         self.update_html_overlay(id, |page| {
             if let Some(state) = page.log_state.as_mut() {
                 state.report = report;
+            }
+        });
+    }
+
+    /// Sets text page `id`'s query wherever its slot now is, an empty one closing the search, from control or the page's
+    /// own field (upstream's `setTextSearch`). A change moves the search revision, clears the report and emits
+    /// `tree.changed`; the new revision, `None` for no change or a page that is not a text page.
+    pub fn set_text_search(&mut self, id: Uuid, query: &str) -> Option<u64> {
+        let mut revision = None;
+        self.update_html_overlay(id, |page| {
+            let current = page.text_search.as_ref().map_or("", |search| search.query.as_str());
+            if !matches!(page.source, HtmlSource::Text { .. }) || current == query {
+                return;
+            }
+            page.search_revision += 1;
+            page.text_search = (!query.is_empty()).then(|| TextSearch::new(query));
+            revision = Some(page.search_revision);
+        });
+        if revision.is_some()
+            && let Some(session) = self.session_holding_page(id)
+        {
+            self.schedule_tree_changed_for(session);
+        }
+        revision
+    }
+
+    /// Records text page `id`'s matches and current match for `query` at `revision` (upstream's
+    /// `setTextSearchReport`), dropped when either is not the model's, so counts never land under another query. Never
+    /// emitted, like [`WindowLibrary::set_text_log_report`].
+    pub fn set_text_search_report(&mut self, id: Uuid, revision: u64, query: &str, count: SearchCount) {
+        self.update_html_overlay(id, |page| {
+            if page.search_revision != revision {
+                return;
+            }
+            if let Some(search) = page.text_search.as_mut().filter(|search| search.query == query) {
+                search.matches = count.matches;
+                search.current = count.current;
             }
         });
     }

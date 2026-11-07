@@ -59,8 +59,38 @@ impl TextLogState {
     }
 }
 
+/// A text page's search (upstream's `TextSearch`): the query and the page's last report on it, `current` counted from 1
+/// and 0 with no match.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TextSearch {
+    pub query: String,
+    pub matches: usize,
+    pub current: usize,
+}
+
+impl TextSearch {
+    /// A query the page has not counted yet.
+    #[must_use]
+    pub fn new(query: impl Into<String>) -> Self {
+        Self {
+            query: query.into(),
+            ..Self::default()
+        }
+    }
+}
+
+/// The search a built page starts with (upstream's `TextPage.SearchState`): the model's query (empty with none) and its
+/// revision, and the match the page showed last, from 1 and 0 for none.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchState {
+    pub query: String,
+    pub revision: u64,
+    pub current: usize,
+}
+
 /// What a built page starts from beyond its file: a log page's state, which replaces the line, and `anchor`, the scroll
-/// offset a rebuilt page reopens at (a paused log page's or a plain page's; upstream's `html` `log` and `anchor`).
+/// offset a rebuilt page reopens at (a paused log page's or a plain page's; upstream's `html` `log` and `anchor`), and
+/// the page's search, which a rebuild keeps (upstream's `search`).
 /// `load` is the document's build generation, which the renderer echoes in its ready report, so a ready report from an
 /// older document cannot release a newer one's build (a fix over upstream, whose ready report names no document).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -68,6 +98,7 @@ pub struct PageState<'a> {
     pub log: Option<&'a TextLogState>,
     pub anchor: Option<f64>,
     pub load: Option<u64>,
+    pub search: Option<&'a SearchState>,
 }
 
 /// Lowercased extensions and the bundled highlight.js language each maps to.
@@ -204,10 +235,21 @@ pub fn validate(data: Vec<u8>) -> Option<String> {
 /// `div`: the parser drops a newline right after `<pre>`, which would shift every line number. A log page (`state.log`
 /// set) carries its follow state and report flags instead of a line, and the renderer draws no gutter; a finite
 /// `state.anchor` is the scroll offset the rebuilt page reopens at, and `state.load` the build generation the renderer's
-/// ready report echoes.
+/// ready report echoes. A search carries its revision, and with a query the escaped query and the match shown.
 #[must_use]
 pub fn html(text: &str, language: Option<&str>, line: Option<i64>, style: &str, state: &PageState) -> String {
     let mut attributes = String::new();
+    if let Some(search) = state.search {
+        let _ = write!(attributes, " data-revision=\"{}\"", search.revision);
+        if !search.query.is_empty() {
+            let _ = write!(
+                attributes,
+                " data-query=\"{}\" data-current=\"{}\"",
+                escaped(&search.query),
+                search.current
+            );
+        }
+    }
     if let Some(language) = language.filter(|_| text.len() <= MAX_HIGHLIGHT_BYTES) {
         let _ = write!(attributes, " data-language=\"{}\"", escaped(language));
     }

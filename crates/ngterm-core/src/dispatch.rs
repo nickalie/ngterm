@@ -935,7 +935,7 @@ mod tests {
     /// v0.41's commands are registered ahead of their handlers and refused by name until those land.
     #[test]
     fn registered_v041_commands_refuse_until_their_feature_handlers_land() {
-        for name in ["session.overlay.search", "session.overlay.changes", "sidebar.density"] {
+        for name in ["session.overlay.changes", "sidebar.density"] {
             let response = core().dispatch(&Request::new(name.parse().unwrap()));
             assert!(!response.ok, "{name}");
             assert_eq!(

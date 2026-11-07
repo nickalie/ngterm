@@ -818,6 +818,18 @@ impl Core {
         self.library_mut().set_text_log_following(id, following)
     }
 
+    /// A query typed into text page `id`'s own field, an empty one closing the search (upstream's `setTextSearch` from
+    /// `TextPageBridge.typed`): the revision it made, `None` for no change. Settle afterwards.
+    pub fn set_text_search_from_page(&mut self, id: Uuid, query: &str) -> Option<u64> {
+        self.library_mut().set_text_search(id, query)
+    }
+
+    /// Text page `id`'s count for `query` at `revision` (upstream's `setTextSearchReport`): recorded only while both are
+    /// the model's, emitting nothing.
+    pub fn set_text_search_report(&mut self, id: Uuid, revision: u64, query: &str, count: crate::html::SearchCount) {
+        self.library_mut().set_text_search_report(id, revision, query, count);
+    }
+
     /// Opens a clicked web link as a browsing overlay without selecting its session; false uses the browser. The page
     /// is marked clicked, and replaces a hidden page an earlier click opened once the saved store is known usable.
     pub fn open_link_overlay(&mut self, url: Url, session: Uuid, size_percent: Option<i64>) -> bool {

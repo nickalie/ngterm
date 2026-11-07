@@ -14,6 +14,7 @@ use ngterm_proto::{
 use uuid::Uuid;
 
 use crate::Core;
+use crate::html::HtmlSource;
 use crate::keymap::BuiltinAction;
 use crate::model::{AgentIndicator, AppStore, Session, SessionNavigation, SidebarMode};
 use crate::palette::PaletteMode;
@@ -60,6 +61,8 @@ pub enum FrontendAction {
     /// Ring the alert bell over the window: an Edit item was refused because a hidden overlay holds the session slot,
     /// the one refusal with nothing on screen to explain it (upstream's `beepIfHiddenOverlayRefused`).
     AlertBell(Uuid),
+    /// Find over a text page on top: the keyboard goes into that page's own search field (upstream's `focusSearch`).
+    FocusPageSearch { window: Uuid, page: Uuid },
 }
 
 /// A config file the menu's Edit items open in an editor overlay.
@@ -136,6 +139,9 @@ impl Core {
         }
         if action == BuiltinAction::CloseSession {
             return self.close_active_session_or_window(origin);
+        }
+        if action == BuiltinAction::ToggleSearch {
+            return self.toggle_search(origin);
         }
         self.perform_enabled(window, action)
     }
@@ -542,7 +548,6 @@ impl Core {
             BuiltinAction::ToggleOverlay => {
                 self.run_request(Command::Session(SessionCmd::OverlayToggle), target, on(Args::default()));
             }
-            BuiltinAction::ToggleSearch => self.toggle_search(window, session),
             BuiltinAction::FocusLeftPane | BuiltinAction::FocusRightPane => {
                 let pane = if action == BuiltinAction::FocusLeftPane {
                     "left"
@@ -591,14 +596,23 @@ impl Core {
         self.request_pane_focus(session);
     }
 
-    /// Find…: libghostty's search opens on the pane on screen, or the open one ends (the find bar's own toggle).
-    fn toggle_search(&mut self, window: Uuid, session: Uuid) {
+    /// Find… (upstream's `toggleSearch`): what is on top owns it first ([`Core::cover_takes_search`]), so the terminal
+    /// behind never opens or closes its bar; else libghostty's search opens on the pane on screen, the scratch first,
+    /// or the open one ends (the find bar's own toggle).
+    fn toggle_search(&mut self, origin: ActionOrigin) -> ActionEffect {
+        let window = origin.window;
+        let Some(session) = self.active_session_of(window) else {
+            return ActionEffect::Done;
+        };
+        if let Some(effect) = self.cover_takes_search(origin, session) {
+            return effect;
+        }
         let Some(state) = self
             .library_mut()
             .store_mut(window)
             .and_then(|store| store.session_mut(session))
         else {
-            return;
+            return ActionEffect::Done;
         };
         let (pane, action) = match state.search.owner.filter(|_| state.search.active) {
             Some(owner) => (owner, "end_search"),
@@ -607,6 +621,31 @@ impl Core {
         if let Some(surface) = state.pane_slot_mut(pane).get_mut() {
             surface.binding_action(action);
         }
+        ActionEffect::Done
+    }
+
+    /// What Find does when a cover on top owns it (upstream's `coverTakesSearch`), `None` when the terminal keeps it:
+    /// the quick terminal holding the keys, or a shown page or program overlay over the focused pane, full or floating,
+    /// takes it. A text page's own field gets the keyboard; every other cover does nothing with it. A HUD is passive and
+    /// a pane overlay on the other pane of a split covers nothing the user types into, so neither takes it.
+    fn cover_takes_search(&mut self, origin: ActionOrigin, session: Uuid) -> Option<ActionEffect> {
+        if origin.quick {
+            return Some(ActionEffect::Done);
+        }
+        let state = self.library().store(origin.window)?.session(session)?;
+        state.visible_cover()?;
+        let page = state
+            .topmost_html_overlay()
+            .filter(|page| matches!(page.source, HtmlSource::Text { .. }))
+            .map(|page| page.id);
+        let Some(page) = page else {
+            return Some(ActionEffect::Done);
+        };
+        self.request_pane_focus(session);
+        Some(frontend(FrontendAction::FocusPageSearch {
+            window: origin.window,
+            page,
+        }))
     }
 
     fn toggle_workspace_collapse(&mut self, window: Uuid, workspace: Uuid) {

@@ -1026,6 +1026,7 @@ def test_open_refusals(ctl, args, error):
     "session.overlay.show",
     "session.overlay.toggle",
     "session.overlay.follow",
+    "session.overlay.search",
 )
 @pytest.mark.parametrize(
     ("cmd", "args"),
@@ -1039,6 +1040,7 @@ def test_open_refusals(ctl, args, error):
         ("session.overlay.show", {"pane": "scratch"}),
         ("session.overlay.toggle", {"pane": "scratch"}),
         pytest.param("session.overlay.follow", {"pane": "scratch"}, marks=pytest.mark.since("0.41.0")),
+        pytest.param("session.overlay.search", {"pane": "scratch", "text": "a"}, marks=pytest.mark.since("0.41.0")),
     ],
 )
 def test_overlay_pane_selector_refusals(ctl, cmd, args):
@@ -1057,6 +1059,7 @@ def test_overlay_pane_selector_refusals(ctl, cmd, args):
     "session.overlay.show",
     "session.overlay.toggle",
     "session.overlay.follow",
+    "session.overlay.search",
 )
 @pytest.mark.parametrize(
     ("cmd", "args"),
@@ -1073,6 +1076,7 @@ def test_overlay_pane_selector_refusals(ctl, cmd, args):
         ("session.overlay.show", {}),
         ("session.overlay.toggle", {}),
         pytest.param("session.overlay.follow", {"mode": "on"}, marks=pytest.mark.since("0.41.0")),
+        pytest.param("session.overlay.search", {"text": "a"}, marks=pytest.mark.since("0.41.0")),
     ],
 )
 def test_unknown_session_target(ctl, cmd, args):

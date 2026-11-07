@@ -589,3 +589,24 @@ fn a_shift_calls_another_file_or_a_shrunk_one_a_replacement() {
         replaced
     );
 }
+
+/// Upstream's `loadDocument(search:)`: a built log document starts with the search it was given, so a rebuild keeps the
+/// query and the current match; the build waits for its renderer until that one reports ready.
+#[test]
+fn a_built_document_carries_its_search() {
+    let (log, sink) = (Log::new(), Sink::default());
+    let mut follower = log.follower(false);
+    follower.set_search(SearchState {
+        query: "a<".to_owned(),
+        revision: 3,
+        current: 1,
+    });
+    let read = follower.load_document(true, &sink).unwrap();
+    let result = read.run();
+    follower.finish(&read, result, &sink);
+    assert!(follower.document_pending());
+    assert!(sink.loads.borrow()[0].contains(" data-revision=\"3\" data-query=\"a&lt;\" data-current=\"1\""));
+    let load = load_of(&sink.loads.borrow()[0]);
+    follower.renderer_ready(load, &sink);
+    assert!(!follower.document_pending());
+}

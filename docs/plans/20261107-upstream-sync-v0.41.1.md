@@ -453,29 +453,33 @@ rows; `test_cli_only.py::test_overlay_search_validation`; `tests/ui/test_html_ov
 `tests/ui/test_titlebar.py::test_find_bar_counts_the_matches`, `tests/protocol/test_session_text.py::test_search_counts_the_matches`
 stay green.
 
-- [ ] Model: `text_search {query, matches, current}` and `search_revision`; a set or close bumps the revision,
+- [x] Model: `text_search {query, matches, current}` and `search_revision`; a set or close bumps the revision,
   clears the report and emits only on a change; an empty query closes; text sources only; a report lands only for
   the current revision and query and is never emitted.
-- [ ] Dispatch: exactly one of text/to: "session.overlay.search needs text, --next, --prev or --close",
+- [x] Dispatch: exactly one of text/to: "session.overlay.search needs text, --next, --prev or --close",
   "session.overlay.search: text cannot be combined with --next, --prev or --close", "session.overlay.search: text
   must not be empty", "invalid overlay search direction: X"; then pane, session. A presenter's slot -> "remote page:
   search it on the Mac that shows it"; a non-text page -> "no text page"; a step without a query -> "no search
   query: set one first"; before load -> "page not loaded"; a step answers `{id, text: "N of M"}` and pauses a
   following log page. The step is a one-shot request to the frontend with a reply (a `Dispatched::Pending` like
-  `browser.clear`, `commands/browser.rs:64`).
-- [ ] The page's own field writes the same model; typed revisions never get overwritten by their own pushes; a later
+  `browser.clear`, `commands/browser.rs:64`). (`commands/overlay_text.rs`; the frontend answers through
+  `HtmlHost::step_text_search`, a renderer that never answers counts as `page not loaded` after 5 s.)
+- [x] The page's own field writes the same model; typed revisions never get overwritten by their own pushes; a later
   control query replaces coalesced typing. Page html carries `data-revision` (+ escaped `data-query`/`data-current`).
-  Tree `text.search {query, matches, current}`, omitted with no query. Bridge own-overlay += search.
-- [ ] Find routing: the quick terminal holding the keys, or a shown page/program overlay over the focused pane (full
+  Tree `text.search {query, matches, current}`, omitted with no query. Bridge own-overlay += search. (The bridge now
+  builds every local text page's documents, static ones included, and a rebuilt static page reopens where it was.)
+- [x] Find routing: the quick terminal holding the keys, or a shown page/program overlay over the focused pane (full
   or floating), takes Find first; a text page focuses its field, any other cover swallows it; with no cover the
   scratch, then the focused surface. A HUD or a page over the other pane does not count. The Find chord (Cmd+F on
   macOS, Ctrl+Shift+F on Linux and Windows) reaches the app action while a web view holds focus on each backend.
-- [ ] ngtermctl `session overlay search` with "text cannot be combined with --next, --prev or --close", "text must
-  not be empty" and upstream's other parse strings.
-- [ ] text.js/css: the find box (placeholder "Find", "Previous match"/"Next match", counter "N of M"/"no matches"),
-  `/`, n/N, Return/Shift-Return, Esc; matches across highlight spans; a hostile query stays text.
-- [ ] write tests: model and dispatcher rows; projection; page attrs; CLI parse; `app_actions` cover routing over the
-  fakes; the conformance tests above.
+- [x] ngtermctl `session overlay search` with "text cannot be combined with --next, --prev or --close", "text must
+  not be empty" and upstream's other parse strings. (Task 1 landed it with its tests; nothing to change.)
+- [x] text.js/css: the find box (placeholder "Find", "Previous match"/"Next match", counter "N of M"/"no matches"),
+  `/`, n/N, Return/Shift-Return, Esc; matches across highlight spans; a hostile query stays text. (Already in the
+  resources Task 2 synced; nothing to change.)
+- [x] write tests: model and dispatcher rows; projection; page attrs; CLI parse; `app_actions` cover routing over the
+  fakes; the conformance tests above. (Plus the bridge over a fake channel, the Find chord's routing, and a WPE
+  harness case: the renderer counts the document's query and steps it.)
 
 ### Task 10: Diff pages step between changes and color by file language (#916, #921)
 

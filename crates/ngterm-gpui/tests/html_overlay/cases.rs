@@ -15,7 +15,8 @@ use gpui_kit::{
     AppContext as _, Context, Entity, HeadlessAppContext, InputEvent as _, IntoElement, NoopTextSystem,
     ParentElement as _, Render, Styled as _, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
 };
-use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
+use ngterm_core::html::text_page::TextSearch;
+use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource, SearchCount, SearchStep};
 use ngterm_core::remote::replica_page::PageResource;
 use ngterm_gpui::external_texture::{FrameSource, negotiate};
 use ngterm_gpui::html_overlay::{self, FrameStats, PageView, ReplicaLink};
@@ -28,7 +29,7 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 27] = [
+pub const CASES: [(&str, Case); 28] = [
     (
         "an_image_document_renders_and_current_reload_rereads_the_source",
         image_document,
@@ -36,6 +37,10 @@ pub const CASES: [(&str, Case); 27] = [
     (
         "a_markdown_document_renders_inert_markup_and_embedded_pictures",
         markdown_document,
+    ),
+    (
+        "a_text_page_starts_with_the_models_search_and_steps_through_its_renderer",
+        text_search,
     ),
     ("the_engine_renders_on_the_renderers_gpu_in_its_mode", mode),
     ("a_page_loads_and_its_frames_reach_the_screen", loads),
@@ -1567,4 +1572,52 @@ fn markdown_document(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
         &element,
         |_, width, pixels| close(pixel(pixels, width, 160, 130), RED),
     )
+}
+
+/// A text page's renderer (`text.js` in its world) starts with the model's query from its document and counts it; a
+/// step goes to it once it reported ready and answers the match it reached, applying a newer revision's query first.
+fn text_search(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let path = fixture.scratch.path().join("notes.txt");
+    std::fs::write(&path, "alpha one\nbeta\nalpha two\n").map_err(|error| error.to_string())?;
+    let mut overlay = HtmlOverlay::new(
+        HtmlSource::Text {
+            path: path.to_string_lossy().into_owned(),
+            line: None,
+        },
+        HtmlPageFlags::default(),
+    );
+    overlay.search_revision = 1;
+    overlay.text_search = Some(TextSearch::new("alpha"));
+    fixture.mount(&overlay, 320.0, 240.0)?;
+    let step = |fixture: &mut Fixture, forward: bool, query: &str, revision: u64| {
+        let step = SearchStep {
+            forward,
+            query: query.to_owned(),
+            revision,
+        };
+        let mut answer = None;
+        fixture.wait("the renderer to take a step", || {
+            answer = html_overlay::step_text_search(overlay.id, &step);
+            answer.is_some()
+        })?;
+        let answer = answer.ok_or("no answer")?;
+        let mut count = None;
+        fixture.wait("the step's count", || {
+            count = answer.try_recv().ok();
+            count.is_some()
+        })?;
+        count.ok_or_else(|| "no count".to_owned())
+    };
+    let first = step(fixture, true, "alpha", 1)?;
+    check(first == SearchCount { matches: 2, current: 2 }, || {
+        format!("the document's query, counted and stepped: {first:?}")
+    })?;
+    let wrapped = step(fixture, true, "alpha", 1)?;
+    check(wrapped == SearchCount { matches: 2, current: 1 }, || {
+        format!("a step past the last match wraps: {wrapped:?}")
+    })?;
+    let newer = step(fixture, false, "beta", 2)?;
+    check(newer == SearchCount { matches: 1, current: 1 }, || {
+        format!("a newer revision's query applies before the step: {newer:?}")
+    })
 }

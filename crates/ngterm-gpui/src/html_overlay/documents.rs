@@ -3,7 +3,7 @@
 //! world on `WebView2`), with the page's own JavaScript off, and the stylesheets they wear. A clicked HTML file runs no
 //! renderer: its own markup is the page, behind its policy (`document_page`).
 
-use ngterm_core::html::{HtmlSource, document_page, errors, image_page, markdown_page, text_page};
+use ngterm_core::html::{HtmlSource, document_page, errors, image_page, markdown_page};
 
 pub(super) const WORLD: &str = "ngterm-markdown";
 pub(super) const STYLE: &str = include_str!("../../../../resources/markdown/page.css");
@@ -106,7 +106,8 @@ pub(super) fn document_start_script(source: &HtmlSource) -> Option<String> {
     })
 }
 
-/// Reads document data on a worker, never through the web engine's file or network permissions.
+/// Reads an image, Markdown or clicked HTML page's document on a worker, never through the web engine's file or network
+/// permissions.
 pub(super) fn read(source: &HtmlSource) -> Result<String, String> {
     match source {
         HtmlSource::Image { path } => {
@@ -117,21 +118,11 @@ pub(super) fn read(source: &HtmlSource) -> Result<String, String> {
             let document = ngterm_app::documents::probe_markdown(std::path::Path::new(path))?;
             Ok(markdown_page::html(&document.markdown, &document.images, STYLE))
         }
-        HtmlSource::Text { path, line } => {
-            let text = ngterm_app::documents::load_text(std::path::Path::new(path))?;
-            let state = text_page::PageState::default();
-            Ok(text_page::html(
-                &text,
-                text_page::language(path),
-                *line,
-                &text_style(),
-                &state,
-            ))
-        }
         HtmlSource::Document { path } => {
             ngterm_app::documents::load_document(std::path::Path::new(path), document_page_builder())
         }
-        _ => unreachable!("only document sources are read through bounded probes"),
+        // a text page's documents are its bridge's (`text_page`), which carry the model's search
+        _ => unreachable!("only image, markdown and document sources are read through bounded probes"),
     }
 }
 
@@ -155,34 +146,16 @@ impl Generation {
 mod tests {
     use super::*;
 
-    /// A text page reads its file on the worker and builds the inert document with its mapped language and line,
-    /// wearing the Markdown stylesheet with `text.css` over it; a binary file fails with upstream's probe message.
+    /// A text page runs the text renderer and refuses the browser hand-off; its documents are its bridge's.
     #[test]
-    fn a_text_source_reads_into_its_inert_document() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("main.go");
-        std::fs::write(&path, "\npackage <main>\n").unwrap();
+    fn a_text_source_runs_the_text_renderer() {
         let source = HtmlSource::Text {
-            path: path.to_string_lossy().into_owned(),
+            path: "/tmp/main.go".to_owned(),
             line: Some(2),
         };
-        let html = read(&source).unwrap();
-        assert!(html.contains(
-            "<div id=\"ngterm-text\" hidden data-language=\"go\" data-line=\"2\">\npackage &lt;main&gt;\n</div>"
-        ));
-        assert!(html.contains(TEXT_STYLE) && html.contains(STYLE));
-        let binary = dir.path().join("blob.log");
-        std::fs::write(&binary, b"a\0b").unwrap();
-        let source = HtmlSource::Text {
-            path: binary.to_string_lossy().into_owned(),
-            line: None,
-        };
-        assert_eq!(
-            read(&source).unwrap_err(),
-            format!("not a UTF-8 text file: {}", binary.display())
-        );
         assert_eq!(browser_refusal(&source), Some(errors::TEXT_IN_OVERLAY));
         assert_eq!(renderer(&source), Some(text_script()));
+        assert!(text_style().contains(TEXT_STYLE) && text_style().contains(STYLE));
     }
 
     /// A clicked HTML file reads on the worker into its own markup behind the policy, with no renderer; an unreadable

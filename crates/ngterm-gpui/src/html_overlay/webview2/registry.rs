@@ -23,7 +23,9 @@ use gpui_kit::{AnyWindowHandle, App, AppContext as _, AsyncApp, ClipboardItem, E
 use ngterm_core::Core;
 use ngterm_core::html::bridge;
 use ngterm_core::html::profile::{self, BrowserProfile};
-use ngterm_core::html::{ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, StoreClear, errors};
+use ngterm_core::html::{
+    ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, SearchAnswer, SearchStep, StoreClear, errors,
+};
 use ngterm_core::remote::replica_page::PageResource;
 use ngterm_proto::Response;
 use raw_window_handle::RawWindowHandle;
@@ -166,6 +168,10 @@ impl HtmlHost for PageHost {
 
     fn navigate(&self, id: Uuid, navigation: HtmlNavigation) -> Result<(), String> {
         navigate(id, navigation)
+    }
+
+    fn step_text_search(&self, page: Uuid, step: SearchStep) -> Option<SearchAnswer> {
+        crate::html_overlay::step_text_search(page, &step)
     }
 
     fn clear_saved_store(&self) -> Result<StoreClear, String> {

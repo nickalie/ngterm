@@ -212,7 +212,7 @@ fn a_log_page_carries_its_state_instead_of_a_line() {
     let state = PageState {
         log: Some(&log),
         anchor: None,
-        load: None,
+        ..PageState::default()
     };
     let html = html("a\nb\n", None, Some(7), "", &state);
     assert!(html.contains(
@@ -231,7 +231,7 @@ fn a_paused_log_page_omits_the_unset_flags() {
     let state = PageState {
         log: Some(&log),
         anchor: None,
-        load: None,
+        ..PageState::default()
     };
     assert!(
         html("a", None, None, "", &state)
@@ -252,7 +252,7 @@ fn a_rebuilt_page_carries_only_a_finite_anchor() {
             &PageState {
                 log,
                 anchor,
-                load: None,
+                ..PageState::default()
             },
         )
     };
@@ -280,7 +280,41 @@ fn a_built_log_page_carries_its_load() {
         log: Some(&log),
         anchor: Some(4.0),
         load: Some(7),
+        ..PageState::default()
     };
     assert!(html("a", None, None, "", &state).contains(" data-anchor=\"4.0\" data-load=\"7\">a</div>"));
     assert!(!html("a", None, None, "", &PageState::default()).contains("data-load"));
+}
+
+/// Upstream's `aPageCarriesItsSearchWithTheQueryEscaped`.
+#[test]
+fn a_page_carries_its_search_with_the_query_escaped() {
+    let search = SearchState {
+        query: "\"><x>".to_owned(),
+        revision: 4,
+        current: 2,
+    };
+    let state = PageState {
+        search: Some(&search),
+        ..PageState::default()
+    };
+    assert!(html("a", None, None, "", &state).contains(
+        "<div id=\"ngterm-text\" hidden data-revision=\"4\" data-query=\"&quot;&gt;&lt;x&gt;\" data-current=\"2\">"
+    ));
+}
+
+/// Upstream's `aClosedSearchCarriesOnlyItsRevision`.
+#[test]
+fn a_closed_search_carries_only_its_revision() {
+    let closed = SearchState {
+        query: String::new(),
+        revision: 5,
+        current: 0,
+    };
+    let state = PageState {
+        search: Some(&closed),
+        ..PageState::default()
+    };
+    assert!(html("a", None, None, "", &state).contains("<div id=\"ngterm-text\" hidden data-revision=\"5\">"));
+    assert!(!html("a", None, None, "", &PageState::default()).contains("data-revision"));
 }

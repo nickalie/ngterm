@@ -115,6 +115,26 @@ pub fn hide(element: &gpui_kit::Entity<PageView>, cx: &mut gpui_kit::App) {
     page.apply(&overlay, false, cx);
 }
 
+/// Steps text page `page`'s search once through its renderer (the core's `HtmlHost::step_text_search`, which each
+/// backend's page host answers with this); `None` while the renderer is not up to take it.
+#[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
+#[must_use]
+pub fn step_text_search(
+    page: uuid::Uuid,
+    step: &ngterm_core::html::SearchStep,
+) -> Option<ngterm_core::html::SearchAnswer> {
+    text_page::step(page, step)
+}
+
+/// Find over a text page on top: the keyboard goes into that page's own search field (upstream's `focusSearch`); the
+/// deck gives the page's element the keyboard.
+pub fn focus_page_search(page: uuid::Uuid) {
+    #[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
+    text_page::focus_search(page);
+    #[cfg(not(all(feature = "html", any(target_os = "linux", target_os = "macos", windows))))]
+    let _ = page;
+}
+
 /// Whether a layer the app draws over `window`'s content (a dialog, the palette, a popover, an alert) is up: native
 /// pages are hidden under it on macOS and Windows, where they sit above everything the window draws. Nothing to do where the
 /// app draws the pages itself.
