@@ -1369,6 +1369,39 @@ fn a_binary_text_file_is_revealed_instead_of_opened() {
     assert_eq!(text_page(&state, session), None);
 }
 
+/// The log request of the page open over `session`.
+fn text_log(state: &AppState, session: Uuid) -> Option<ngterm_core::html::text_page::TextLog> {
+    let found = state.core.library().store_for_session(session)?.session(session)?;
+    found.overlay.page()?.text_log
+}
+
+/// Upstream's `testAClickedLog*`: a plain click on a log opens a log page following its file at the default tail, read
+/// only for its tail (a log over the whole-file cap opens); a `path:line` click opens the static page at its line.
+#[test]
+fn a_clicked_log_follows_its_file_and_a_located_one_opens_at_its_line() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let log = directory.path().join("App.LOG");
+    let line = "x".repeat(1023);
+    std::fs::write(&log, format!("{line}\n").repeat(5 << 10)).unwrap();
+    click(&mut state, &main_loop, "./App.LOG", session, "T");
+    let file = log.to_string_lossy().into_owned();
+    assert_eq!(text_page(&state, session), Some((file.clone(), None)));
+    assert_eq!(
+        text_log(&state, session),
+        Some(ngterm_core::html::text_page::TextLog {
+            tail: ngterm_core::html::text_page::DEFAULT_TAIL,
+            follow: true
+        })
+    );
+    assert!(state.frontend.reveals.is_empty());
+    let store = state.core.library_mut().store_for_session_mut(session).unwrap();
+    assert!(store.close_overlay(session));
+    std::fs::write(&log, "one\ntwo\n").unwrap();
+    click(&mut state, &main_loop, "./App.LOG:2", session, "T");
+    assert_eq!(text_page(&state, session), Some((file, Some(2))));
+    assert_eq!(text_log(&state, session), None);
+}
+
 #[test]
 fn shell_metacharacters_in_the_directory_stay_data() {
     if cfg!(windows) {

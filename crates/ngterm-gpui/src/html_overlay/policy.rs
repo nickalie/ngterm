@@ -38,7 +38,10 @@ pub enum DecisionTarget {
 #[cfg(target_os = "linux")]
 /// The shared policy's view of a `WebKitGTK` decision: a clicked link is judged as the main frame's, where a hand-off
 /// belongs; any other navigation as a subframe's, which admits what an iframe may load, the main frame being pinned
-/// when its response arrives. Only a navigation or a new window counts as clicked.
+/// when its response arrives. `about:blank` is the exception: the documents the app builds load there, with no
+/// response to pin them on, and the policy admits it in any frame but a text page's subframes, which a text page cannot
+/// have (its text is inert data), so it is judged as the main frame's. Only a navigation or a new window counts as
+/// clicked.
 #[must_use]
 pub fn navigation_action(url: Url, target: DecisionTarget, link_clicked: bool) -> HtmlNavigationAction {
     let frame = match target {
@@ -46,7 +49,7 @@ pub fn navigation_action(url: Url, target: DecisionTarget, link_clicked: bool) -
         DecisionTarget::MainResponse => HtmlNavigationTarget::MainFrame,
         DecisionTarget::SubframeResponse => HtmlNavigationTarget::Subframe,
         DecisionTarget::Frame => {
-            if link_clicked {
+            if link_clicked || url.as_str() == "about:blank" {
                 HtmlNavigationTarget::MainFrame
             } else {
                 HtmlNavigationTarget::Subframe
@@ -692,6 +695,32 @@ mod tests {
         );
         let sub = navigation_action(url("https://a.test/"), DecisionTarget::SubframeResponse, false);
         assert_eq!(sub.target, HtmlNavigationTarget::Subframe);
+    }
+
+    /// The document the app builds for a text page loads at `about:blank`, which `WebKitGTK` asks about as a frame
+    /// navigation with no response after it: the text page's policy, which admits only the main frame's
+    /// `about:blank`, lets it load; another `about:` address stays refused.
+    #[test]
+    fn a_text_pages_own_document_loads_at_about_blank() {
+        let text = HtmlOverlay::new(
+            HtmlSource::Text {
+                path: "/x/app.log".to_owned(),
+                line: None,
+            },
+            ngterm_core::html::HtmlPageFlags::default(),
+        );
+        let decided =
+            |uri: &str| ngterm_core::html::decide(&navigation_action(url(uri), DecisionTarget::Frame, false), &text);
+        assert_eq!(decided("about:blank"), ngterm_core::html::HtmlNavigationDecision::Allow);
+        assert_eq!(
+            decided("about:srcdoc"),
+            ngterm_core::html::HtmlNavigationDecision::Cancel
+        );
+        let blank = navigation_action(url("about:blank"), DecisionTarget::Frame, false);
+        assert_eq!(
+            (blank.target, blank.user_activated),
+            (HtmlNavigationTarget::MainFrame, false)
+        );
     }
 
     #[test]

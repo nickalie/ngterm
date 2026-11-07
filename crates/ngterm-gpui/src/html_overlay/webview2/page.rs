@@ -30,6 +30,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_WEB_ERROR_STATUS
 
 use super::super::panel::{PanelColors, TerminalColors};
 use super::super::policy::{self, LoadEvent, LoadOutcome, LoadTracker, ThemeChange};
+use super::super::text_page::{self, PageChannel, TextPage};
 use super::native::{Bounds, Grant, Native, Navigation, Report, Text};
 use super::view::PageView;
 use super::{bridge, registry, scheme};
@@ -185,6 +186,8 @@ pub struct Page {
     /// A file page reloads once its replaced theme script is in place.
     reload_after_theme: Cell<bool>,
     document_generation: super::super::documents::Generation,
+    /// A text page's bridge: the renderer's reports and a log page's follower.
+    text_bridge: Option<Rc<TextPage>>,
     me: Weak<Page>,
 }
 
@@ -237,6 +240,7 @@ impl Page {
             native_focused: Cell::new(false),
             reload_after_theme: Cell::new(false),
             document_generation: super::super::documents::Generation::default(),
+            text_bridge: TextPage::new(overlay, me.clone() as Weak<dyn PageChannel>, poster),
             me: me.clone(),
         })
     }
@@ -509,7 +513,19 @@ impl Page {
                 native.set_background(canvas);
             }
         } else if reload {
-            self.reload_shown();
+            self.rebuild_shown();
+        }
+    }
+
+    /// Wears a changed theme: a log page rebuilds from what it shows (its follower's snapshot and paused offset,
+    /// upstream's `loadDocument(fresh: false)`), any other page reloads.
+    fn rebuild_shown(&self) {
+        match self.text_bridge.as_ref().filter(|page| page.is_log()) {
+            Some(log) if self.native().is_some() => {
+                self.state.borrow_mut().load.begin();
+                log.load_document(false);
+            }
+            _ => self.reload_shown(),
         }
     }
 
@@ -612,7 +628,12 @@ impl Page {
             Report::Key(keystroke) => self.app_key(&keystroke, cx),
             Report::ThemeInstalled => {
                 if self.reload_after_theme.take() {
-                    self.reload_shown();
+                    self.rebuild_shown();
+                }
+            }
+            Report::TextPage(body) => {
+                if let (Some(page), true) = (&self.text_bridge, self.active()) {
+                    page.message(&body);
                 }
             }
             Report::NetworkFilterInstalled => self.network_filter_installed(),
@@ -962,6 +983,9 @@ impl Page {
             moved.then_some(overlay.reload_target)
         };
         self.placement_changed();
+        if let Some(page) = &self.text_bridge {
+            page.apply(overlay, on_screen);
+        }
         self.refresh(cx);
         if !on_screen {
             self.end_prompt(cx);
@@ -1006,6 +1030,10 @@ impl Page {
             state.overlay.source.clone()
         };
         let Some(native) = self.native() else { return };
+        if let Some(log) = self.text_bridge.as_ref().filter(|page| page.is_log()) {
+            log.load_document(true);
+            return;
+        }
         let address = match source {
             source @ (HtmlSource::Image { .. }
             | HtmlSource::Markdown { .. }
@@ -1052,21 +1080,24 @@ impl Page {
             return;
         }
         match result {
-            Ok(html) => {
-                let Some(native) = self.native() else { return };
-                self.text.lock().unwrap_or_else(PoisonError::into_inner).replace(html);
-                let gate = {
-                    let mut state = self.state.borrow_mut();
-                    state.text_pending = true;
-                    state.network.document_read()
-                };
-                match gate {
-                    NetworkGate::Open => native.load_url(&scheme::text_address(self.id)),
-                    NetworkGate::Waiting { .. } => {}
-                    NetworkGate::Failed => self.fail(errors::NETWORK_FILTER_UNAVAILABLE.to_owned()),
-                }
-            }
+            Ok(html) => self.show(html),
             Err(failure) => self.fail(failure),
+        }
+    }
+
+    /// Loads a built document through the text protocol, once the network filter it waits for is in place.
+    fn show(&self, html: String) {
+        let Some(native) = self.native() else { return };
+        self.text.lock().unwrap_or_else(PoisonError::into_inner).replace(html);
+        let gate = {
+            let mut state = self.state.borrow_mut();
+            state.text_pending = true;
+            state.network.document_read()
+        };
+        match gate {
+            NetworkGate::Open => native.load_url(&scheme::text_address(self.id)),
+            NetworkGate::Waiting { .. } => {}
+            NetworkGate::Failed => self.fail(errors::NETWORK_FILTER_UNAVAILABLE.to_owned()),
         }
     }
 
@@ -1230,12 +1261,32 @@ impl Page {
         self.end_prompt(cx);
         self.state.borrow_mut().life = Life::Released;
         self.document_generation.next();
+        if let Some(page) = &self.text_bridge {
+            page.stop();
+        }
         if let Some(native) = self.native.take() {
             registry::bury(native, self.private_folder());
         }
         if let Some(element) = self.element() {
             element.update(cx, PageView::release);
         }
+    }
+}
+
+/// A text page's way to its web view: documents load as the source's do, and calls run in the renderer's world.
+impl PageChannel for Page {
+    fn holds_slot(&self) -> bool {
+        self.active()
+    }
+
+    fn show_document(&self, html: String) {
+        if self.active() {
+            self.show(html);
+        }
+    }
+
+    fn call(&self, expression: String) -> Option<async_channel::Receiver<text_page::Answer>> {
+        Some(self.native()?.call_renderer(&expression))
     }
 }
 

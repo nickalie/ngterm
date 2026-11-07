@@ -408,6 +408,54 @@ fn a_presented_session_refuses_a_log_page_after_its_probe() {
     );
 }
 
+/// Upstream's `openTextLink` for a log (`ControlServerLinkOverlayTests.testAClickedLog*`): the click's off-main read
+/// stands, so the core reads nothing again; the page follows its file at the default tail, marked clicked, without
+/// selecting its session. The page's reports land through the core.
+#[test]
+fn a_clicked_log_opens_a_following_log_page() {
+    let (mut f, log) = fixture();
+    let id = f.sessions[0];
+    let selected = f.store().selected_session_id();
+    assert!(f.core.click_opens_log_here(id));
+    assert!(f.core.open_log_link(path("app.log"), id, Some(95)));
+    assert!(log.borrow().checked.is_empty());
+    assert_eq!(f.store().selected_session_id(), selected);
+    let page = f.store().session(id).unwrap().overlay.page().unwrap().clone();
+    assert!(page.clicked);
+    assert_eq!(
+        page.text_log,
+        Some(TextLog {
+            tail: 5_000,
+            follow: true
+        })
+    );
+    assert_eq!(text(&mut f, id)["following"], true);
+    f.core.commit();
+    f.core.set_text_log_report(
+        page.id,
+        TextLogReport {
+            lines: 2,
+            ..TextLogReport::default()
+        },
+    );
+    assert!(f.core.set_text_log_following_from_page(page.id, false));
+    assert!(!f.core.set_text_log_following_from_page(page.id, false));
+    assert_eq!(f.core.commit().tree_changed.len(), 1);
+    assert_eq!(
+        (text(&mut f, id)["lines"].clone(), text(&mut f, id)["following"].clone()),
+        (json!(2), json!(false))
+    );
+    assert!(!f.core.open_log_link(path("app.log"), id, Some(95)), "a busy slot");
+}
+
+/// A presented session's click opens no log page here (upstream's `pageBelongsRemote` check in `openTextLink`).
+#[test]
+fn a_presented_session_click_opens_no_log_page_here() {
+    let mut origin = Origin::build(false, &SUPPORTED_KINDS, false);
+    let session = origin.session();
+    assert!(!origin.fixture().core.click_opens_log_here(session));
+}
+
 /// Upstream's `logPageArgumentsRoundTripAndAreOmittedWhenUnset`.
 #[test]
 fn log_page_arguments_round_trip_and_are_omitted_when_unset() {

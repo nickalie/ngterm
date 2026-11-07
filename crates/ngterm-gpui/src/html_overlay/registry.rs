@@ -242,6 +242,7 @@ pub fn install(core: &mut Core, state_dir: PathBuf, poster: Poster) {
 /// Spawns the pump: it takes the engine's start from the start thread ([`engine`]), then dispatches the engine's events
 /// on the main thread, and fails every page when the engine ends while the app runs.
 pub fn init(cx: &mut App) {
+    super::text_page::init(cx);
     let (documents, queue) = async_channel::unbounded::<DocumentLoad>();
     with(|registry| registry.documents = Some(documents));
     cx.spawn(async move |cx| {

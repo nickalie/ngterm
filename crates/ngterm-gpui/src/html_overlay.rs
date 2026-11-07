@@ -57,6 +57,8 @@ mod registry;
 mod sandbox;
 #[cfg(all(test, feature = "html", target_os = "linux"))]
 pub(crate) mod testing;
+#[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
+mod text_page;
 #[cfg(all(feature = "html", target_os = "linux"))]
 mod view;
 #[cfg(all(feature = "html", windows))]

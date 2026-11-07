@@ -210,6 +210,7 @@ pub fn install(core: &mut Core, state_dir: PathBuf, poster: Poster) {
 
 /// Spawns the pump (module docs).
 pub fn init(cx: &mut App) {
+    super::super::text_page::init(cx);
     let (jobs, queue) = async_channel::unbounded::<Job>();
     with(|registry| registry.jobs = Some(jobs));
     cx.spawn(async move |cx| {

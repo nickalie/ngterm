@@ -25,7 +25,7 @@ use crate::Core;
 use crate::app_actions::{ActionEffect, FrontendAction};
 use crate::error::ControlError;
 use crate::html::bridge::{self, HtmlBridgePage};
-use crate::html::text_page::TextLog;
+use crate::html::text_page::{self, TextLog};
 use crate::html::{
     HtmlHost, HtmlLoadState, HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlPageInfo, HtmlPageOutcomes,
     HtmlReloadTarget, HtmlSource, errors, zoom,
@@ -757,7 +757,29 @@ impl Core {
         source: HtmlSource,
         session: Uuid,
         size_percent: Option<i64>,
+        image: Option<crate::html::image_page::ImageData>,
+    ) -> bool {
+        self.open_clicked_document(source, session, size_percent, image, None)
+    }
+
+    /// Opens a clicked log as a log page following its file's end (upstream's `openTextLink` with `opensAsLog`), after
+    /// the off-main read of its last [`text_page::DEFAULT_TAIL`] lines; as [`Self::open_document_link`] otherwise.
+    pub fn open_log_link(&mut self, path: String, session: Uuid, size_percent: Option<i64>) -> bool {
+        let log = text_page::TextLog {
+            tail: text_page::DEFAULT_TAIL,
+            follow: true,
+        };
+        let source = HtmlSource::Text { path, line: None };
+        self.open_clicked_document(source, session, size_percent, None, Some(log))
+    }
+
+    fn open_clicked_document(
+        &mut self,
+        source: HtmlSource,
+        session: Uuid,
+        size_percent: Option<i64>,
         mut image: Option<crate::html::image_page::ImageData>,
+        text_log: Option<text_page::TextLog>,
     ) -> bool {
         if !self.can_show_link_overlay(session) {
             return false;
@@ -772,9 +794,28 @@ impl Core {
             background_color: None,
             follow: false,
             clicked: true,
-            text_log: None,
+            text_log,
         };
         open_checked(self, Some(&uuid_string(session)), None, opening, image, true).is_ok()
+    }
+
+    /// Whether a click in `session` opens its log page here: the placement rule hands no session-wide page to a
+    /// presenting machine, which gets the static text page instead (upstream's `pageBelongsRemote` check in
+    /// `openTextLink`).
+    #[must_use]
+    pub fn click_opens_log_here(&self, session: Uuid) -> bool {
+        !self.page_belongs_remote(session, None)
+    }
+
+    /// The app's last read of log page `id` (upstream's `setTextLogReport`): recorded only, emitting nothing.
+    pub fn set_text_log_report(&mut self, id: Uuid, report: text_page::TextLogReport) {
+        self.library_mut().set_text_log_report(id, report);
+    }
+
+    /// Log page `id` paused or resumed by the user's scroll (upstream's `setTextLogFollowing(_:following:)`); whether
+    /// it changed, which emits `tree.changed`. Settle afterwards.
+    pub fn set_text_log_following_from_page(&mut self, id: Uuid, following: bool) -> bool {
+        self.library_mut().set_text_log_following(id, following)
     }
 
     /// Opens a clicked web link as a browsing overlay without selecting its session; false uses the browser. The page

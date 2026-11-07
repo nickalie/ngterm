@@ -6,8 +6,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ngterm_wpe::{
-    BufferId, EditingCommand, Geometry, Input, Load, MenuToken, PolicyToken, ReplyToken, SchemeResponse, SchemeToken,
-    SessionId, SessionSpec, UserScript, ViewId, ViewSpec,
+    BufferId, EditingCommand, Evaluation, Geometry, Input, Load, MenuToken, PolicyToken, ReplyToken, SchemeResponse,
+    SchemeToken, SessionId, SessionSpec, UserScript, ViewId, ViewSpec,
 };
 
 use super::engine::{Presenter, Web};
@@ -16,7 +16,10 @@ use super::engine::{Presenter, Web};
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Call {
     CreateSession(SessionSpec),
-    CreateView { handlers: usize, transparent: bool },
+    CreateView {
+        handlers: usize,
+        transparent: bool,
+    },
     CloseView(ViewId),
     Load(Load),
     Reload,
@@ -32,6 +35,11 @@ pub(crate) enum Call {
     Editing(EditingCommand),
     Preedit(String),
     Commit(String),
+    /// A script evaluated in a world.
+    Evaluate {
+        script: String,
+        world: Option<String>,
+    },
     Other,
 }
 
@@ -105,6 +113,10 @@ impl Web for Recorder {
     }
     fn set_zoom(&self, _: ViewId, _: f64) {
         self.record(Call::Other);
+    }
+    fn evaluate(&self, _: ViewId, script: String, world: Option<String>) -> async_channel::Receiver<Evaluation> {
+        self.record(Call::Evaluate { script, world });
+        async_channel::bounded(1).1
     }
     fn set_scripts(&self, _: ViewId, _: Vec<UserScript>) {
         self.record(Call::Other);

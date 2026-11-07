@@ -100,6 +100,8 @@ pub enum Report {
     NetworkFilterInstalled,
     /// That filter could not be installed: the page loads nothing.
     NetworkFilterFailed(String),
+    /// A text page's renderer reported (its JSON object), through its handler in the renderer's world.
+    TextPage(String),
 }
 
 /// Decides a navigation at once.
@@ -191,6 +193,14 @@ unsafe extern "C" {
     fn ngterm_web_reply(view: *mut c_void, json: *const c_char);
     fn ngterm_web_theme(view: *mut c_void, script: *const c_char);
     fn ngterm_web_document_script(view: *mut c_void, script: *const c_char, world: *const c_char);
+    fn ngterm_web_text_channel(delegate: *mut c_void, name: *const c_char, world: *const c_char);
+    fn ngterm_web_world_call(
+        view: *mut c_void,
+        script: *const c_char,
+        world: *const c_char,
+        context: *mut c_void,
+        done: extern "C" fn(*mut c_void, *const c_char, *const c_char),
+    );
     fn ngterm_web_block_network(
         view: *mut c_void,
         context: *mut c_void,
@@ -258,6 +268,7 @@ extern "C" fn report(context: *mut c_void, json: *const c_char) {
             reason: text("reason"),
         },
         "message" => Report::Message(text("body")),
+        "text" => Report::TextPage(text("body")),
         "download" => Report::DownloadRefused(text("url")),
         "focus" => Report::Focus(value["focused"].as_bool().unwrap_or(false)),
         "commit" => Report::Committed,
@@ -298,6 +309,19 @@ extern "C" fn take_key(context: *mut c_void, code: u32) -> bool {
     } else {
         false
     }
+}
+/// A renderer call's answer: the sender leaked for it, given back once with the value's JSON or the error.
+extern "C" fn called(context: *mut c_void, json: *const c_char, error: *const c_char) {
+    // SAFETY: the Box leaked for this call, which the adapter answers exactly once on the main thread.
+    let sender = unsafe { Box::from_raw(context.cast::<async_channel::Sender<super::super::text_page::Answer>>()) };
+    let answer = if error.is_null() {
+        // SAFETY: the adapter passes null or a live NUL-terminated JSON string for this call.
+        Ok((!json.is_null()).then(|| unsafe { CStr::from_ptr(json) }.to_string_lossy().into_owned()))
+    } else {
+        // SAFETY: the adapter passes a live NUL-terminated message for this call.
+        Err(unsafe { CStr::from_ptr(error) }.to_string_lossy().into_owned())
+    };
+    let _ = sender.try_send(answer);
 }
 pub struct Native {
     view: WebView,
@@ -352,6 +376,12 @@ impl Native {
                 take_key,
             )
         };
+        if spec.trusted_document_script.is_some() {
+            let name = CString::new(super::super::text_page::HANDLER).map_err(|error| error.to_string())?;
+            let world = CString::new(super::super::documents::WORLD).map_err(|error| error.to_string())?;
+            // SAFETY: the live delegate registers itself as the handler in that world, removed again at its detach.
+            unsafe { ngterm_web_text_channel(delegate, name.as_ptr(), world.as_ptr()) };
+        }
         Ok(Self {
             view,
             delegate,
@@ -421,6 +451,29 @@ impl Native {
                 parent as *mut c_void,
             );
         };
+    }
+    /// Evaluates `expression` in the renderer's world (`callAsyncJavaScript`, so a promise is awaited); its answer
+    /// arrives on the returned channel.
+    pub fn call_renderer(&self, expression: &str) -> async_channel::Receiver<super::super::text_page::Answer> {
+        let (sender, answer) = async_channel::bounded(1);
+        let (Ok(script), Ok(world)) = (
+            CString::new(format!("return ({expression});")),
+            CString::new(super::super::documents::WORLD),
+        ) else {
+            return answer;
+        };
+        let context = Box::into_raw(Box::new(sender)).cast();
+        // SAFETY: a main-thread web view; the adapter copies both strings and answers the context once.
+        unsafe {
+            ngterm_web_world_call(
+                objc2::rc::Retained::as_ptr(&self.view.webview()).cast_mut().cast(),
+                script.as_ptr(),
+                world.as_ptr(),
+                context,
+                called,
+            );
+        };
+        answer
     }
     pub fn post_json(&self, json: &str) {
         if let Ok(json) = CString::new(json) {

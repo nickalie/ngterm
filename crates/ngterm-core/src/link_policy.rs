@@ -148,6 +148,13 @@ impl Route {
             Self::Browser(_) | Self::Overlay { .. } | Self::Ignore => None,
         }
     }
+
+    /// Whether the click opens a log page following the file (upstream's `TextLink.opensAsLog`): a plain click on a
+    /// `.log` or `.out` text page; a `path:line` click opens the static page at its line.
+    #[must_use]
+    pub fn opens_as_log(&self) -> bool {
+        matches!(self, Self::Text { path, line: None, .. } if crate::html::text_page::is_log(&path.to_string_lossy()))
+    }
 }
 
 /// The lowercased host names counting as this machine for a `file://` link: `localhost` and the kernel's host name
@@ -576,6 +583,28 @@ mod tests {
 
     fn reveal(path: &str) -> LinkDisposition {
         LinkDisposition::Reveal(PathBuf::from(path))
+    }
+
+    /// Upstream's `onlyAPlainClickOnALogOpensAsALogPage`: a `.log` or `.out` file in any case, with no line.
+    #[test]
+    fn only_a_plain_click_on_a_log_opens_as_a_log_page() {
+        let session = uuid::Uuid::nil();
+        for (path, line, expected) in [
+            ("/x/app.log", None, true),
+            ("/x/run.OUT", None, true),
+            ("/x/app.log", Some(42), false),
+            ("/x/notes.txt", None, false),
+            ("/x/a.go", None, false),
+        ] {
+            let route = Route::Text {
+                path: PathBuf::from(path),
+                line,
+                session,
+                size_percent: None,
+            };
+            assert_eq!(route.opens_as_log(), expected, "{path} {line:?}");
+        }
+        assert!(!Route::Reveal(PathBuf::from("/x/app.log")).opens_as_log());
     }
 
     // disposition (open / reveal / ignore)

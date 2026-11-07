@@ -404,24 +404,27 @@ the page->host handler registration (`wkwebview/native.rs`, `webview2/bridge.rs`
 **Conformance:** new in `test_text_pages.py`: `test_log_page_follows_appends_rotation_and_truncation`,
 `test_a_paused_log_page_reads_nothing_until_resumed`, `test_a_log_reads_only_its_tail`.
 
-- [ ] `LogFollower` (frontend-neutral, injected reader and interval): while following and on screen, one stamp check
+- [x] `LogFollower` (frontend-neutral, injected reader and interval): while following and on screen, one stamp check
   per second (polling, as upstream: it works on network filesystems and through rotation and copytruncate on all
   three OSes); skip while the page left its slot or a document build is pending; only the newest read lands, never
   across a pause epoch; `shift(old, new)` treats a changed id, a shrunk size or a start offset that moved back as
   replaced, and counts CRLF and lone CR once each.
-- [ ] Results: a binary end keeps its stamp and sets `unreadable`; a read failure clears the stamp and sets
+- [x] Results: a binary end keeps its stamp and sets `unreadable`; a read failure clears the stamp and sets
   `waiting`; a good read sets `{lines, clipped}` and pushes; every report goes to the model without an event; a
   theme rebuild reuses the cached snapshot and paused anchor; an explicit reload reads fresh; highlighting drops
   past the highlight cap.
-- [ ] The page channel: text.js posts `{ready}` (releases held pushes, resends following) and `{following, top}`
+- [x] The page channel: text.js posts `{ready}` (releases held pushes, resends following) and `{following, top}`
   (a user scroll); a model follow change calls `set_following` (a pause drops the anchor and reads in flight, a
   resume ticks at once). Define "on screen" in GPUI terms and stop the timer when the page closes or leaves the
   screen. Tasks 9 and 10 reuse this channel and its host->page calls with replies.
-- [ ] Links: a plain click on a `.log`/`.out` opens a following log page (tail 5000) after an off-thread check; a
+- [x] Links: a plain click on a `.log`/`.out` opens a following log page (tail 5000) after an off-thread check; a
   `path:line` click opens the static page; a presented session gets the static page (after Task 11).
-- [ ] text.js/css (ngterm names): the log bar ("Follow: on" / "Follow: paused - Resume", title "Follow or pause (F)",
+  (Also fixed: on WPE a text page's own `about:blank` load was judged a subframe's and refused, so no text page
+  finished loading on Linux; `policy::navigation_action` judges it the main frame's.)
+- [x] text.js/css (ngterm names): the log bar ("Follow: on" / "Follow: paused - Resume", title "Follow or pause (F)",
   info "first line clipped · waiting for file · unreadable data"), no gutter; keys F, G/End, g/Home (none with
   Ctrl/Meta/Alt or in the find field); user-scroll intent within 600 ms or a held pointer; bottom within 4 px.
+  (Already in the resources Task 2 synced; nothing to change.)
 - [ ] write tests: follower tests over a fake reader and a temp dir porting `LogFollowerTests`; `opens_as_log`; the
   conformance tests above; Windows share mode and file id on a CI runner or the VM.
 

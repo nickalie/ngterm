@@ -3,7 +3,8 @@
 //! system can resolve (a `path:line` location, a relative path) is looked up off the main thread, the first existing
 //! candidate winning, and one with no candidate on disk keeps the route it has as typed. A reveal chord selects the
 //! file a local route names in the file manager after that guarded routing, and leaves a web link to its web route.
-//! A local document or text page is read off the main thread before it takes its slot; a refused open reveals it.
+//! A local document or text page is read off the main thread before it takes its slot, a clicked log only for the
+//! lines its page shows; a refused open reveals it.
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,8 @@ enum Document {
     Html,
     /// A text page marked at its line.
     Text(Option<i64>),
+    /// A clicked log, shown as a log page following its file's end (upstream's `opensAsLog`).
+    Log,
 }
 
 impl Document {
@@ -33,6 +36,7 @@ impl Document {
             Self::Markdown => HtmlSource::Markdown { path },
             Self::Html => HtmlSource::Document { path },
             Self::Text(line) => HtmlSource::Text { path, line },
+            Self::Log => HtmlSource::Text { path, line: None },
         }
     }
 }
@@ -118,6 +122,7 @@ impl AppState {
             self.frontend.reveals.push(file.to_path_buf());
             return;
         }
+        let log = route.opens_as_log();
         match route {
             Route::Overlay {
                 url,
@@ -148,7 +153,15 @@ impl AppState {
                 line,
                 session,
                 size_percent,
-            } => self.open_document_link(path, session, size_percent, Document::Text(line)),
+            } => {
+                // a page the presenting machine is handed stays the static text page it already shows there
+                let document = if log && self.core.click_opens_log_here(session) {
+                    Document::Log
+                } else {
+                    Document::Text(line)
+                };
+                self.open_document_link(path, session, size_percent, document);
+            }
             Route::Browser(url) => self.frontend.open_urls.push(url),
             Route::Reveal(path) => self.frontend.reveals.push(path),
             Route::Ignore => tracing::debug!(raw, "link click ignored by the link policy"),
@@ -169,14 +182,21 @@ impl AppState {
                 Document::Markdown => ngterm_app::documents::check_markdown(&path).map(|()| None),
                 Document::Html => ngterm_app::documents::check_document(&path).map(|()| None),
                 Document::Text(_) => ngterm_app::documents::check_text(&path).map(|()| None),
+                Document::Log => {
+                    ngterm_app::documents::check_log(&path, ngterm_core::html::text_page::DEFAULT_TAIL).map(|()| None)
+                }
             };
             post(&poster, move |state: &mut AppState| {
                 if state.quitting {
                     return;
                 }
                 let source = document.source(&path);
-                let shown =
-                    checked.is_ok_and(|probe| state.core.open_document_link(source, session, size_percent, probe));
+                let shown = checked.is_ok_and(|probe| match (document, source) {
+                    (Document::Log, HtmlSource::Text { path, .. }) => {
+                        state.core.open_log_link(path, session, size_percent)
+                    }
+                    (_, source) => state.core.open_document_link(source, session, size_percent, probe),
+                });
                 if shown {
                     state.settle();
                 } else {

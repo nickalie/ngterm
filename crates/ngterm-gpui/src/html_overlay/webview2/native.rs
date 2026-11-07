@@ -12,7 +12,7 @@
 //! a web view pumps the window's messages until `WebView2` answers, so it never runs inside one of GPUI's callbacks
 //! or tasks (`registry`'s pump hands it to the main loop, `outside`).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::num::NonZeroIsize;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -33,11 +33,11 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 use webview2_com::{
     AcceleratorKeyPressedEventHandler, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
     CallDevToolsProtocolMethodCompletedHandler, ClearBrowsingDataCompletedHandler, ContentLoadingEventHandler,
-    ContextMenuRequestedEventHandler, DocumentTitleChangedEventHandler, FocusChangedEventHandler,
-    HistoryChangedEventHandler, NavigationCompletedEventHandler, NavigationStartingEventHandler,
-    NewWindowRequestedEventHandler, ProcessFailedEventHandler, ScriptDialogOpeningEventHandler,
-    SourceChangedEventHandler, WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
-    WindowCloseRequestedEventHandler, take_pwstr,
+    ContextMenuRequestedEventHandler, DevToolsProtocolEventReceivedEventHandler, DocumentTitleChangedEventHandler,
+    FocusChangedEventHandler, HistoryChangedEventHandler, NavigationCompletedEventHandler,
+    NavigationStartingEventHandler, NewWindowRequestedEventHandler, ProcessFailedEventHandler,
+    ScriptDialogOpeningEventHandler, SourceChangedEventHandler, WebMessageReceivedEventHandler,
+    WebResourceRequestedEventHandler, WindowCloseRequestedEventHandler, take_pwstr,
 };
 use windows::core::{BOOL, HSTRING, Interface as _, PWSTR, Result as ComResult};
 use wry::dpi::{LogicalPosition, LogicalSize};
@@ -130,6 +130,8 @@ pub enum Report {
     NetworkFilterInstalled,
     /// That filter could not be installed: the page loads nothing.
     NetworkFilterFailed(String),
+    /// A text page's renderer reported (its JSON object), through its binding in the renderer's world.
+    TextPage(String),
 }
 
 /// Decides a navigation at once.
@@ -207,6 +209,8 @@ pub struct Native {
     view: WebView,
     /// The theme script's id once `WebView2` added it.
     theme: Rc<RefCell<Option<String>>>,
+    /// The renderer's execution context, from its binding's last report: where a call into its world runs.
+    renderer: Rc<Cell<Option<i64>>>,
     post: Post,
 }
 
@@ -218,6 +222,7 @@ impl Native {
         let native = Self {
             view,
             theme: Rc::default(),
+            renderer: Rc::default(),
             post: Rc::clone(&spec.post),
         };
         let webview = native.webview();
@@ -244,6 +249,7 @@ impl Native {
             native.add_script_now(script)?;
         }
         if let Some(script) = &spec.trusted_document_script {
+            native.wire_renderer_channel(&spec.post)?;
             native.add_isolated_document_script(script)?;
         }
         hold_profile(&spec.store, &native);
@@ -276,6 +282,89 @@ impl Native {
             Box::new(|result, _| result),
         )
         .map_err(|error| format!("the isolated document renderer was not added: {error}"))
+    }
+
+    /// Runs CDP's `method` with `parameters` and waits until `WebView2` did (pumping the window's messages).
+    fn devtools_now(&self, method: &str, parameters: &serde_json::Value) -> Result<(), String> {
+        let webview = self.webview();
+        let (method, parameters) = (HSTRING::from(method), HSTRING::from(parameters.to_string()));
+        CallDevToolsProtocolMethodCompletedHandler::wait_for_async_operation(
+            Box::new(move |handler| {
+                // SAFETY: the web view's COM object is called on its owning thread.
+                unsafe { webview.CallDevToolsProtocolMethod(&method, &parameters, &handler) }.map_err(Into::into)
+            }),
+            Box::new(|result, _| result),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    /// The renderer's reports and the app's calls into its world (`text_page`): `WebView2` has no message handler in a
+    /// named world, so CDP's binding stands in, added to the renderer's world alone (`window.webkit.messageHandlers`
+    /// there is `documents::RENDERER_CHANNEL`'s shim over it); each report names the context it came from, which the
+    /// calls run in.
+    fn wire_renderer_channel(&self, post: &Post) -> Result<(), String> {
+        let failed = |error: String| format!("the renderer's channel was not added: {error}");
+        self.devtools_now("Runtime.enable", &serde_json::json!({}))
+            .map_err(failed)?;
+        let binding = serde_json::json!({
+            "name": super::super::documents::RENDERER_BINDING,
+            "executionContextName": super::super::documents::WORLD,
+        });
+        self.devtools_now("Runtime.addBinding", &binding).map_err(failed)?;
+        let webview = self.webview();
+        // SAFETY: a COM call on the web view's own thread.
+        let receiver = unsafe { webview.GetDevToolsProtocolEventReceiver(&HSTRING::from("Runtime.bindingCalled")) }
+            .map_err(|error| failed(error.to_string()))?;
+        let (sent, renderer) = (Rc::clone(post), Rc::clone(&self.renderer));
+        let handler = DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let event = string(|out| {
+                // SAFETY: the event's own arguments, read on its thread.
+                unsafe { args.ParameterObjectAsJson(out) }
+            })?;
+            if let Some((context, body)) = binding_called(&event) {
+                renderer.set(Some(context));
+                sent(Report::TextPage(body));
+            }
+            Ok(())
+        }));
+        let mut token = 0i64;
+        // SAFETY: a COM registration on the web view's own thread; the handler lives as long as the web view.
+        unsafe { receiver.add_DevToolsProtocolEventReceived(&handler, &raw mut token) }
+            .map_err(|error| failed(error.to_string()))
+    }
+
+    /// Evaluates `expression` in the renderer's world (CDP's `Runtime.evaluate` in its context, a promise awaited);
+    /// its answer arrives on the returned channel. Before the renderer's first report there is no context to run in.
+    pub fn call_renderer(&self, expression: &str) -> async_channel::Receiver<super::super::text_page::Answer> {
+        let (sender, answer) = async_channel::bounded(1);
+        let Some(context) = self.renderer.get() else {
+            let _ = sender.try_send(Err("the renderer has not reported".to_owned()));
+            return answer;
+        };
+        let parameters = serde_json::json!({
+            "expression": expression,
+            "contextId": context,
+            "returnByValue": true,
+            "awaitPromise": true,
+        });
+        let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
+            let _ = sender.try_send(evaluation(result.map(|()| json).map_err(|error| error.to_string())));
+            Ok(())
+        }));
+        let webview = self.webview();
+        // SAFETY: a COM call on the web view's own thread; the handler answers once.
+        let called = unsafe {
+            webview.CallDevToolsProtocolMethod(
+                &HSTRING::from("Runtime.evaluate"),
+                &HSTRING::from(parameters.to_string()),
+                &handler,
+            )
+        };
+        if let Err(err) = called {
+            tracing::debug!(%err, "a call into the renderer did not start");
+        }
+        answer
     }
 
     /// Adds `script` for later documents and waits until `WebView2` did (pumping the window's messages); its id.
@@ -468,6 +557,36 @@ fn string(read: impl FnOnce(*mut PWSTR) -> ComResult<()>) -> ComResult<String> {
     let mut value = PWSTR::null();
     read(&raw mut value)?;
     Ok(take_pwstr(value))
+}
+
+/// A `Runtime.bindingCalled` event of the renderer's binding: its context and its payload.
+fn binding_called(event: &str) -> Option<(i64, String)> {
+    let event: serde_json::Value = serde_json::from_str(event).ok()?;
+    if event["name"] != super::super::documents::RENDERER_BINDING {
+        return None;
+    }
+    Some((
+        event["executionContextId"].as_i64()?,
+        event["payload"].as_str()?.to_owned(),
+    ))
+}
+
+/// What a `Runtime.evaluate` answered (`answer`, its JSON): the value as JSON (`None` for `undefined`), or the exception's
+/// text.
+fn evaluation(answer: Result<String, String>) -> super::super::text_page::Answer {
+    let answer: serde_json::Value = serde_json::from_str(&answer?).map_err(|error| error.to_string())?;
+    if let Some(exception) = answer.get("exceptionDetails") {
+        let text = exception["exception"]["description"]
+            .as_str()
+            .or_else(|| exception["text"].as_str())
+            .unwrap_or("the script failed");
+        return Err(text.to_owned());
+    }
+    let result = &answer["result"];
+    if result["type"] == "undefined" {
+        return Ok(None);
+    }
+    Ok(result.get("value").map(serde_json::Value::to_string))
 }
 
 /// The flag a COM getter writes.
@@ -1208,6 +1327,35 @@ mod tests {
         ] {
             assert!(!keeps_menu_item(refused), "{refused}");
         }
+    }
+
+    #[test]
+    fn the_renderer_channel_reads_its_reports_and_answers() {
+        let event = serde_json::json!({
+            "name": super::super::super::documents::RENDERER_BINDING,
+            "payload": "{\"ready\":true}",
+            "executionContextId": 7,
+        });
+        assert_eq!(
+            binding_called(&event.to_string()),
+            Some((7, r#"{"ready":true}"#.to_owned()))
+        );
+        assert_eq!(
+            binding_called(r#"{"name":"other","payload":"{}","executionContextId":7}"#),
+            None
+        );
+        let value = r#"{"result":{"type":"object","value":{"matches":3,"current":1}}}"#;
+        assert_eq!(
+            evaluation(Ok(value.to_owned())),
+            Ok(Some(r#"{"matches":3,"current":1}"#.to_owned()))
+        );
+        assert_eq!(
+            evaluation(Ok(r#"{"result":{"type":"undefined"}}"#.to_owned())),
+            Ok(None)
+        );
+        let thrown = r#"{"result":{"type":"object"},"exceptionDetails":{"text":"Uncaught","exception":{"description":"ReferenceError: x"}}}"#;
+        assert_eq!(evaluation(Ok(thrown.to_owned())), Err("ReferenceError: x".to_owned()));
+        assert_eq!(evaluation(Err("gone".to_owned())), Err("gone".to_owned()));
     }
 
     #[test]

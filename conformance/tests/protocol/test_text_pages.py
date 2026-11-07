@@ -2,6 +2,8 @@
 pauses (`session.overlay.follow`), a text page searches (`session.overlay.search`), and a diff page steps between its
 changes (`session.overlay.changes`). Each reads back under the page's `htmlOverlays[].text` node."""
 
+import time
+
 import pytest
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, find_session
 
@@ -91,7 +93,7 @@ def test_log_open_refusals(ctl):
 @pytest.mark.since("0.41.0")
 @pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")
 def test_log_page_reads_back_its_tail_and_follow_state(ctl):
-    path = _file(ctl, "app.log", "first log line\nsecond log line\n")
+    path = _file(ctl, "follow.log", "first log line\nsecond log line\n")
     sid = _new(ctl)
     try:
         # a tail alone shows the log once, paused
@@ -115,13 +117,106 @@ def test_log_page_reads_back_its_tail_and_follow_state(ctl):
         ctl.request("session.close", sid)
 
 
+def _lines(ctl, sid, lines, **expected):
+    """The log page's node once it shows `lines` lines and holds `expected`'s fields."""
+    return _text(ctl, sid, lambda text: text["lines"] == lines and all(text[k] == v for k, v in expected.items()))
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")
+def test_log_page_follows_appends_rotation_and_truncation(ctl):
+    path = _file(ctl, "follow.log", "first log line\nsecond log line\n")
+    sid = _new(ctl)
+    try:
+        _open_text(ctl, sid, path, tail=50, followFile=True)
+        _lines(ctl, sid, 2, following=True, waiting=False)
+        # an append is read at the next check
+        with path.open("a", encoding="utf-8") as log:
+            log.write("third log line\n")
+        _lines(ctl, sid, 3)
+        # a rotation: the path names a new file, which the page follows from its start
+        path.rename(path.with_name("follow.log.1"))
+        _lines(ctl, sid, 3, waiting=True)
+        path.write_text("fresh\n", encoding="utf-8")
+        _lines(ctl, sid, 1, waiting=False)
+        # copytruncate: the file shrinks in place and the page shows what follows the truncation
+        with path.open("a", encoding="utf-8") as log:
+            log.write("a\nb\nc\n")
+        _lines(ctl, sid, 4)
+        with path.open("r+", encoding="utf-8") as log:
+            log.truncate(0)
+            log.write("after truncation\n")
+        _lines(ctl, sid, 1, clipped=False, unreadable=False)
+        # an end that turns binary keeps the text shown and marks it unreadable
+        with path.open("ab") as log:
+            log.write(b"\x00\xff\n")
+        _lines(ctl, sid, 1, unreadable=True)
+    finally:
+        ctl.request("session.close", sid)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.overlay.follow", "field:tree.session.htmlOverlays")
+def test_a_paused_log_page_reads_nothing_until_resumed(ctl):
+    path = _file(ctl, "follow.log", "first log line\nsecond log line\n")
+    sid = _new(ctl)
+    try:
+        _open_text(ctl, sid, path, tail=50, followFile=True)
+        _lines(ctl, sid, 2, following=True)
+        assert assert_ok(ctl.request("session.overlay.follow", sid, mode="off")) == {"id": sid, "text": "paused"}
+        _lines(ctl, sid, 2, following=False)
+        with path.open("a", encoding="utf-8") as log:
+            log.write("third log line\n")
+        # a paused page checks nothing: well past two checks, it still shows what it had
+        time.sleep(2.5)
+        assert _text(ctl, sid)["lines"] == 2
+        # a resume reads at once
+        assert assert_ok(ctl.request("session.overlay.follow", sid, mode="on")) == {"id": sid, "text": "following"}
+        _lines(ctl, sid, 3, following=True)
+        # a page opened paused (a tail alone) shows the log once and reads it again only when followed
+        assert_ok(ctl.request("session.overlay.close", sid))
+        _open_text(ctl, sid, path, tail=50)
+        _lines(ctl, sid, 3, following=False)
+        with path.open("a", encoding="utf-8") as log:
+            log.write("fourth log line\n")
+        time.sleep(2.5)
+        assert _text(ctl, sid)["lines"] == 3
+        assert_ok(ctl.request("session.overlay.follow", sid))
+        _lines(ctl, sid, 4, following=True)
+    finally:
+        ctl.request("session.close", sid)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")
+def test_a_log_reads_only_its_tail(ctl):
+    # over the whole-file cap a text page is refused, while a log page reads only its last lines
+    path = ctl.instance.root / "big.log"
+    line = "x" * 1023 + "\n"
+    path.write_text(line * (5 << 10), encoding="utf-8")
+    sid = _new(ctl)
+    try:
+        assert_error(ctl.request("session.overlay.open", sid, textFile=str(path)),
+                     f"session.overlay.open: text file too large (over 4 MB): {path}")
+        _open_text(ctl, sid, path, tail=10)
+        _lines(ctl, sid, 10, tail=10, clipped=False)
+        assert_ok(ctl.request("session.overlay.close", sid))
+        # one line longer than the read window shows clipped, from its first whole character
+        long_line = ctl.instance.root / "long.log"
+        long_line.write_text("y" * (3 << 20) + "\n", encoding="utf-8")
+        _open_text(ctl, sid, long_line, tail=5)
+        _lines(ctl, sid, 1, clipped=True)
+    finally:
+        ctl.request("session.close", sid)
+
+
 # -- session.overlay.follow
 
 
 @pytest.mark.since("0.41.0")
 @pytest.mark.covers("session.overlay.follow", "session.overlay.open", "field:tree.session.htmlOverlays")
 def test_follow_answers_the_state_it_left(ctl):
-    path = _file(ctl, "app.log", "first log line\nsecond log line\n")
+    path = _file(ctl, "follow.log", "first log line\nsecond log line\n")
     sid = _new(ctl)
     try:
         _open_text(ctl, sid, path, tail=50, followFile=True)
