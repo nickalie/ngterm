@@ -123,3 +123,7 @@ fn process_alive(pid: u32) -> bool {
     unsafe { CloseHandle(process) };
     running
 }
+
+#[cfg(test)]
+#[path = "staging_tests.rs"]
+mod tests;

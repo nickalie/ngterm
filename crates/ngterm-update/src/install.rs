@@ -347,3 +347,7 @@ if ($Reopen -eq 'reopen') {
   Start-Process -FilePath $Executable -WorkingDirectory $OriginalDirectory
 }
 "#;
+
+#[cfg(test)]
+#[path = "install_tests.rs"]
+mod tests;

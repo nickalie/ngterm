@@ -215,7 +215,7 @@ fn windows_helper_replaces_or_rolls_back_a_tree_and_respects_quit() {
     }
 }
 
-fn installation(root: &Path) -> Installation {
+pub(super) fn installation(root: &Path) -> Installation {
     Installation {
         root: root.to_owned(),
         executable: root.join("usr/bin/ngterm"),
@@ -223,7 +223,7 @@ fn installation(root: &Path) -> Installation {
         image_identity: None,
     }
 }
-fn metadata(version: &str) -> Metadata {
+pub(super) fn metadata(version: &str) -> Metadata {
     let tag = format!("v{version}");
     let name = format!("ngterm-{version}-linux-{}.tar.gz", std::env::consts::ARCH);
     Metadata {
@@ -296,12 +296,12 @@ fn selection_rejects_external_assets_and_duplicate_manifests() {
 //   minisign -S -s test.key -m SHA256SUMS -x SHA256SUMS.minisig -t "ngterm v0.2.0 SHA256SUMS"
 //   minisign -S -s test.key -m SHA256SUMS -x other-release.minisig -t "ngterm v0.3.0 SHA256SUMS"
 //   minisign -S -s other.key -m SHA256SUMS -x wrong-key.minisig -t "ngterm v0.2.0 SHA256SUMS"
-const TEST_KEY: &str = include_str!("tests/minisign/test.pub");
+pub(super) const TEST_KEY: &str = include_str!("tests/minisign/test.pub");
 const OTHER_KEY: &str = include_str!("tests/minisign/other.pub");
 const SUMS: &[u8] = include_bytes!("tests/minisign/SHA256SUMS");
 const SIGNATURE: &[u8] = include_bytes!("tests/minisign/SHA256SUMS.minisig");
 
-fn keyed(key: &str) -> Trust {
+pub(super) fn keyed(key: &str) -> Trust {
     Trust::from_files(key).unwrap()
 }
 
@@ -435,7 +435,7 @@ fn checksum_requires_one_exact_filename_and_a_valid_hash() {
 }
 
 #[cfg(target_os = "linux")]
-fn tree(root: &Path, version: &str) {
+pub(super) fn tree(root: &Path, version: &str) {
     fs::create_dir_all(root.join("usr/bin")).unwrap();
     fs::create_dir_all(root.join("usr/share/ngterm")).unwrap();
     fs::write(root.join("usr/share/ngterm/app-BUILD"), format!("{version}\ncommit\n")).unwrap();
@@ -640,5 +640,236 @@ fn transport_rejects_wrong_hash_and_truncated_downloads_before_extracting() {
             success
         );
         thread.join().unwrap();
+    }
+}
+
+#[test]
+fn remaining_asset_names_and_unsupported_architectures_are_exact() {
+    let version = Version::parse("1.2.3").unwrap();
+    for (format, arch, suffix) in [
+        (Format::LinuxArchive, "x86_64", "linux-x86_64.tar.gz"),
+        (Format::AppImage, "aarch64", "linux-aarch64.AppImage"),
+        (Format::MacArchive, "aarch64", "macos-arm64.tar.gz"),
+        (Format::MacBundle, "x86_64", "macos-x86_64.app.zip"),
+    ] {
+        assert_eq!(format.asset(&version, arch).unwrap(), format!("ngterm-1.2.3-{suffix}"));
+    }
+    for format in [
+        Format::LinuxArchive,
+        Format::AppImage,
+        Format::MacArchive,
+        Format::MacBundle,
+        Format::WindowsArchive,
+        Format::WindowsMsi,
+    ] {
+        assert_eq!(
+            format.asset(&version, "unsupported").unwrap_err().to_string(),
+            "No release binary is available for this architecture."
+        );
+    }
+}
+
+#[test]
+fn markers_only_enable_the_current_platform_and_trim_whitespace() {
+    for (marker, format, supported) in [
+        ("linux-archive", Format::LinuxArchive, cfg!(target_os = "linux")),
+        ("macos-archive", Format::MacArchive, cfg!(target_os = "macos")),
+        ("macos-bundle", Format::MacBundle, cfg!(target_os = "macos")),
+        ("windows-archive", Format::WindowsArchive, cfg!(windows)),
+        ("windows-msi", Format::WindowsMsi, cfg!(windows)),
+    ] {
+        assert_eq!(
+            Format::from_marker(&format!(" \n{marker}\n")),
+            supported.then_some(format)
+        );
+    }
+    assert_eq!(Format::from_marker("unknown"), None);
+}
+
+#[test]
+fn installation_access_checks_the_expected_kind_and_missing_root() {
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().join("installation");
+    let mut install = installation(&root);
+    assert!(matches!(install.validate_paths(&[]), Err(Error::Io(_))));
+    fs::write(&root, "image").unwrap();
+    assert_eq!(
+        install.validate_paths(&[]).unwrap_err().to_string(),
+        "The installation path no longer has the expected file type."
+    );
+    install.format = Format::AppImage;
+    install.validate_paths(&[]).unwrap();
+    fs::remove_file(&root).unwrap();
+    fs::create_dir(&root).unwrap();
+    assert_eq!(
+        install.validate_paths(&[]).unwrap_err().to_string(),
+        "The installation path no longer has the expected file type."
+    );
+    install.format = Format::LinuxArchive;
+    install.validate_paths(&[]).unwrap();
+    fs::write(root.join("file"), "not a directory").unwrap();
+    assert!(install.contains_path(&root.join("file/config")));
+    assert_eq!(
+        install
+            .validate_paths(&[root.join("file/config")])
+            .unwrap_err()
+            .to_string(),
+        "Automatic updates would replace your state or configuration directory, or its location could not be resolved safely. Move those directories outside the ngterm installation, or update manually."
+    );
+}
+
+#[test]
+fn version_identity_requires_a_semver_first_line_and_uses_the_format_prefix() {
+    let fixture = tempfile::tempdir().unwrap();
+    let mut install = installation(fixture.path());
+    assert_eq!(install.installed_version(), None);
+    for format in [Format::LinuxArchive, Format::MacBundle, Format::WindowsArchive] {
+        install.format = format;
+        fs::create_dir_all(install.identity_file().parent().unwrap()).unwrap();
+        for (identity, expected) in [
+            ("", None),
+            ("bad\n0.1.0", None),
+            ("0.1.0\ncommit", Some(Version::parse("0.1.0").unwrap())),
+        ] {
+            fs::write(install.identity_file(), identity).unwrap();
+            assert_eq!(install.installed_version(), expected);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn deleted_executable_suffix_is_removed_only_when_the_literal_path_is_missing() {
+    let fixture = tempfile::tempdir().unwrap();
+    let executable = fixture.path().join("program");
+    let deleted = fixture.path().join("program (deleted)");
+    assert_eq!(executable_on_disk(executable.clone()), executable);
+    assert_eq!(executable_on_disk(deleted.clone()), executable);
+    fs::write(&deleted, "literal filename").unwrap();
+    assert_eq!(executable_on_disk(deleted.clone()), deleted);
+}
+
+#[test]
+#[cfg(unix)]
+fn detection_reports_paths_with_no_executable_directory_or_install_root() {
+    assert_eq!(
+        Installation::at(Path::new("/")).unwrap_err().to_string(),
+        "Executable has no directory."
+    );
+    assert_eq!(
+        Installation::at(Path::new("/dev")).unwrap_err().to_string(),
+        "Executable has no install root."
+    );
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().join("loop");
+    std::os::unix::fs::symlink(&root, &root).unwrap();
+    assert!(installation(&root).contains_path(fixture.path()));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn archive_detection_refuses_a_linux_prefix_without_usr() {
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().join("ngterm");
+    fs::create_dir_all(root.join("bin")).unwrap();
+    fs::create_dir_all(root.join("share/ngterm")).unwrap();
+    fs::write(root.join(MARKER), "linux-archive").unwrap();
+    let executable = root.join("bin/ngterm");
+    fs::write(&executable, "binary").unwrap();
+    assert_eq!(
+        Installation::at(&executable).unwrap_err().to_string(),
+        "Invalid Linux archive layout."
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn bundle_access_visits_files_and_propagates_missing_paths() {
+    use std::os::unix::fs::MetadataExt as _;
+    let fixture = tempfile::tempdir().unwrap();
+    let file = fixture.path().join("binary");
+    fs::write(&file, "binary").unwrap();
+    bundle_access(fixture.path(), fs::metadata(&file).unwrap().uid()).unwrap();
+    fs::remove_file(&file).unwrap();
+    assert!(matches!(bundle_access(&file, 0), Err(Error::Io(_))));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn detect_recognizes_only_images_whose_mount_contains_this_executable() {
+    const MODE: &str = "UPDATE_DETECT_MODE";
+    if let Ok(mode) = std::env::var(MODE) {
+        detected_image_matches_environment(&mode);
+        return;
+    }
+    let fixture = tempfile::tempdir().unwrap();
+    let image = fixture.path().join("image");
+    fs::write(&image, "image bytes").unwrap();
+    for mode in [
+        "image",
+        "outside",
+        "directory",
+        "absent",
+        "missing",
+        "image-only",
+        "appdir-only",
+    ] {
+        let executable = std::env::current_exe().unwrap();
+        let mut command = std::process::Command::new(&executable);
+        command
+            .args([
+                "--exact",
+                "tests::detect_recognizes_only_images_whose_mount_contains_this_executable",
+                "--nocapture",
+            ])
+            .env(MODE, mode)
+            .env_remove("APPIMAGE")
+            .env_remove("APPDIR");
+        if mode != "absent" {
+            command
+                .env("APPIMAGE", if mode == "directory" { fixture.path() } else { &image })
+                .env(
+                    "APPDIR",
+                    if mode == "outside" {
+                        fixture.path()
+                    } else {
+                        executable.parent().unwrap()
+                    },
+                );
+        }
+        match mode {
+            "missing" => {
+                command.env("APPIMAGE", fixture.path().join("missing"));
+            }
+            "image-only" => {
+                command.env_remove("APPDIR");
+            }
+            "appdir-only" => {
+                command.env_remove("APPIMAGE");
+            }
+            _ => {}
+        }
+        let result = command.output().unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stdout));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn detected_image_matches_environment(mode: &str) {
+    let result = Installation::detect();
+    if mode == "image" {
+        let install = result.unwrap();
+        let image = fs::canonicalize(std::env::var_os("APPIMAGE").unwrap()).unwrap();
+        assert_eq!(install.root, image);
+        assert_eq!(install.executable, image);
+        assert_eq!(install.format, Format::AppImage);
+        assert_eq!(install.image_identity.unwrap(), install::image_stamp(&image).unwrap());
+    } else if mode == "missing" {
+        assert!(matches!(result, Err(Error::Io(_))));
+    } else {
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Automatic updates are available for official release archives, AppImages, macOS app bundles and Windows installers. Update package-manager installations with your package manager; rebuild development installations from source."
+        );
     }
 }
