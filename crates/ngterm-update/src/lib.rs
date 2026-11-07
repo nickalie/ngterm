@@ -13,6 +13,37 @@ use semver::Version;
 pub use download::{Release, check, prepare};
 pub use install::Prepared;
 
+/// The release signing keys this build trusts. A build trusts exactly what its source commit's `trust/` directory
+/// says, so no release can talk an installed build out of checking.
+#[derive(Debug, Clone, Default)]
+pub struct Trust {
+    /// The key `SHA256SUMS.minisig` must verify against; none (an empty `trust/minisign.pub`) skips the signature.
+    minisign: Option<minisign_verify::PublicKey>,
+}
+
+impl Trust {
+    /// What release builds trust: the committed `trust/minisign.pub`.
+    ///
+    /// # Errors
+    /// Returns an error when the committed key doesn't parse, which a test rules out for every commit.
+    pub fn release() -> Result<Self, Error> {
+        Self::from_files(include_str!("../trust/minisign.pub"))
+    }
+
+    /// Trust from a `minisign.pub` file's contents; empty or whitespace means no key.
+    pub(crate) fn from_files(minisign: &str) -> Result<Self, Error> {
+        let minisign = if minisign.trim().is_empty() {
+            None
+        } else {
+            Some(
+                minisign_verify::PublicKey::decode(minisign.trim_start())
+                    .map_err(|e| error(format!("The release signing key is invalid: {e}")))?,
+            )
+        };
+        Ok(Self { minisign })
+    }
+}
+
 /// The release archive/MSI marker, relative to the prefix above `bin` (`usr/` for Linux archives).
 /// macOS app bundles instead carry `Contents/Resources/update-format`.
 pub const MARKER: &str = "share/ngterm/update-format";

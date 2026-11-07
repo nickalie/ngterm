@@ -7,12 +7,14 @@ use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 
-use crate::{Error, Installation, Prepared, error};
+use crate::{Error, Installation, Prepared, Trust, error};
 
 const API: &str = "https://api.github.com/repos/nickalie/ngterm/releases/latest";
 const DOWNLOADS: &str = "https://github.com/nickalie/ngterm/releases/download/";
 const METADATA_LIMIT: u64 = 2 * 1024 * 1024;
 const ASSET_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
+// a minisign signature is four short lines
+const SIGNATURE_LIMIT: u64 = 4 * 1024;
 
 #[derive(Deserialize)]
 pub(crate) struct Metadata {
@@ -29,13 +31,15 @@ pub(crate) struct Asset {
     pub size: u64,
 }
 
-/// A stable release with exactly the asset required by the running installation and its checksum manifest.
+/// A stable release with exactly the asset required by the running installation, its checksum manifest and, when
+/// the build trusts a signing key, the manifest's signature.
 #[derive(Debug, Clone)]
 pub struct Release {
     pub version: Version,
     pub(crate) asset: String,
     pub(crate) url: String,
     pub(crate) checksum_url: String,
+    pub(crate) signature_url: Option<String>,
     pub(crate) size: u64,
 }
 
@@ -49,11 +53,12 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-/// Queries GitHub's latest stable release. Never installs prereleases, downgrades or the running version.
+/// Queries GitHub's latest stable release. Never installs prereleases, downgrades or the running version. With a
+/// trusted signing key, a release without `SHA256SUMS.minisig` is refused.
 ///
 /// # Errors
 /// Returns network, metadata or incompatible release errors.
-pub fn check(installation: &Installation, current: &str) -> Result<Option<Release>, Error> {
+pub fn check(installation: &Installation, current: &str, trust: &Trust) -> Result<Option<Release>, Error> {
     let mut response = agent()
         .get(API)
         .header("User-Agent", concat!("ngterm/", env!("CARGO_PKG_VERSION")))
@@ -61,13 +66,14 @@ pub fn check(installation: &Installation, current: &str) -> Result<Option<Releas
         .header("X-GitHub-Api-Version", "2022-11-28")
         .call()?;
     let bytes = bounded_read(response.body_mut().as_reader(), METADATA_LIMIT)?;
-    select(&serde_json::from_slice(&bytes)?, installation, current)
+    select(&serde_json::from_slice(&bytes)?, installation, current, trust)
 }
 
 pub(crate) fn select(
     metadata: &Metadata,
     installation: &Installation,
     current: &str,
+    trust: &Trust,
 ) -> Result<Option<Release>, Error> {
     let current = Version::parse(current).map_err(|e| error(e.to_string()))?;
     let version = metadata
@@ -98,7 +104,12 @@ pub(crate) fn select(
     };
     let asset = find(&name)?;
     let checksums = find("SHA256SUMS")?;
-    if asset.size == 0 || asset.size > ASSET_LIMIT || checksums.size > METADATA_LIMIT {
+    let signature = trust.minisign.is_some().then(|| find(SIGNATURE)).transpose()?;
+    if asset.size == 0
+        || asset.size > ASSET_LIMIT
+        || checksums.size > METADATA_LIMIT
+        || signature.is_some_and(|signature| signature.size > SIGNATURE_LIMIT)
+    {
         return Err(error("Release asset size is outside the supported range."));
     }
     Ok(Some(Release {
@@ -106,8 +117,33 @@ pub(crate) fn select(
         asset: name,
         url: asset.browser_download_url.clone(),
         checksum_url: checksums.browser_download_url.clone(),
+        signature_url: signature.map(|signature| signature.browser_download_url.clone()),
         size: asset.size,
     }))
+}
+
+const SIGNATURE: &str = "SHA256SUMS.minisig";
+
+/// The checksum manifest, once its signature checks out: with a trusted key, `signature` must verify the exact
+/// manifest bytes, and its trusted comment must name this release (`ngterm v<version> SHA256SUMS`), so a signature
+/// can't be replayed onto another release's manifest. With no key the manifest is taken as it is.
+pub(crate) fn verified_manifest(
+    trust: &Trust,
+    version: &Version,
+    manifest: Vec<u8>,
+    signature: Option<&[u8]>,
+) -> Result<String, Error> {
+    if let Some(key) = &trust.minisign {
+        let refused = || error("Release signature verification failed. The installation was not changed.");
+        let signature = signature.ok_or_else(refused)?;
+        let signature = std::str::from_utf8(signature).map_err(|_| refused())?;
+        let signature = minisign_verify::Signature::decode(signature).map_err(|_| refused())?;
+        key.verify(&manifest, &signature, false).map_err(|_| refused())?;
+        if signature.trusted_comment() != format!("ngterm v{version} SHA256SUMS") {
+            return Err(refused());
+        }
+    }
+    String::from_utf8(manifest).map_err(|e| error(e.to_string()))
 }
 
 fn bounded_read(mut reader: impl std::io::Read, limit: u64) -> Result<Vec<u8>, Error> {
@@ -137,14 +173,16 @@ pub(crate) fn checksum(manifest: &str, name: &str) -> Result<String, Error> {
 }
 
 /// Streams and hashes a download, then prepares the complete replacement beside the current installation so the
-/// eventual rename stays on one filesystem. Returning false from `progress` cancels the download and removes its
-/// stage; dropping a prepared update also removes the staged data.
+/// eventual rename stays on one filesystem. With a trusted signing key, the checksum manifest is verified against
+/// `SHA256SUMS.minisig` before any checksum is read. Returning false from `progress` cancels the download and removes
+/// its stage; dropping a prepared update also removes the staged data.
 ///
 /// # Errors
-/// Returns download, checksum, extraction or filesystem errors; the installation is left untouched.
+/// Returns download, signature, checksum, extraction or filesystem errors; the installation is left untouched.
 pub fn prepare(
     installation: &Installation,
     release: &Release,
+    trust: &Trust,
     mut progress: impl FnMut(u64, u64) -> bool,
 ) -> Result<Prepared, Error> {
     if !progress(0, release.size) {
@@ -173,7 +211,19 @@ pub fn prepare(
     let agent = agent();
     let mut manifest = agent.get(&release.checksum_url).call()?;
     let bytes = bounded_read(manifest.body_mut().as_reader(), METADATA_LIMIT)?;
-    let manifest = String::from_utf8(bytes).map_err(|e| error(e.to_string()))?;
+    let signature = match (&trust.minisign, &release.signature_url) {
+        (None, _) => None,
+        (Some(_), None) => {
+            return Err(error(
+                "Release signature verification failed. The installation was not changed.",
+            ));
+        }
+        (Some(_), Some(url)) => {
+            let mut response = agent.get(url).call()?;
+            Some(bounded_read(response.body_mut().as_reader(), SIGNATURE_LIMIT)?)
+        }
+    };
+    let manifest = verified_manifest(trust, &release.version, bytes, signature.as_deref())?;
     let expected = checksum(&manifest, &release.asset)?;
     let asset = work.path().join(&release.asset);
     download(&agent, release, &asset, &expected, &mut progress)?;

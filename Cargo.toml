@@ -31,6 +31,7 @@ ngterm-wpe = { path = "crates/ngterm-wpe" }
 ureq = "3.5.1"
 semver = "1"
 sha2 = "0.11"
+minisign-verify = "0.3"
 flate2 = "1"
 tar = "0.4"
 # Resolve launcher symlinks while keeping Windows paths usable by native installer tools.

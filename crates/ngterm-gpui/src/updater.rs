@@ -166,12 +166,14 @@ fn start_check(manual: Option<AnyWindowHandle>, cx: &mut App) {
                 let installation = installation.clone();
                 async move {
                     let _ = installation.cleanup_stale();
-                    ngterm_update::check(&installation, env!("CARGO_PKG_VERSION"))
+                    let trust = ngterm_update::Trust::release()?;
+                    ngterm_update::check(&installation, env!("CARGO_PKG_VERSION"), &trust)
+                        .map(|release| release.map(|release| (release, trust)))
                 }
             })
             .await;
         let result = match checked {
-            Ok(Some(release)) => {
+            Ok(Some((release, trust))) => {
                 if cancelled.load(Ordering::Acquire) {
                     return;
                 }
@@ -181,8 +183,10 @@ fn start_check(manual: Option<AnyWindowHandle>, cx: &mut App) {
                     cx.refresh_windows();
                 });
                 cx.background_spawn(async move {
-                    ngterm_update::prepare(&installation, &release, |_, _| !cancelled.load(Ordering::Acquire))
-                        .map(|prepared| (version, prepared))
+                    ngterm_update::prepare(&installation, &release, &trust, |_, _| {
+                        !cancelled.load(Ordering::Acquire)
+                    })
+                    .map(|prepared| (version, prepared))
                 })
                 .await
                 .map(Some)

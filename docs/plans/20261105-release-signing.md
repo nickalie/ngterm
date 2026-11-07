@@ -439,19 +439,28 @@ tag), rehearsed, and then published with `-f publish=true`.
 **Files:**
 - Modify: `crates/ngterm-update/src/{download.rs,lib.rs,tests.rs}`, `crates/ngterm-update/Cargo.toml`, `Cargo.toml`
 
-- [ ] add `minisign-verify` (the minisign author's verifier, used by the Tauri updater)
-- [ ] a `Trust` value passed into `select`/`prepare`, which production builds from the `trust/` files (empty or
+- [x] add `minisign-verify` (the minisign author's verifier, used by the Tauri updater)
+- [x] a `Trust` value passed into `select`/`prepare`, which production builds from the `trust/` files (empty or
       whitespace means none). It holds the key here; the Apple plan adds the team id to it
-- [ ] with a key, require `SHA256SUMS.minisig`, verify the manifest bytes, and check the trusted comment before
+- [x] with a key, require `SHA256SUMS.minisig`, verify the manifest bytes, and check the trusted comment before
       reading any checksum
-- [ ] tests: the cases in Testing Strategy. Fixtures come from the minisign CLI and a test-only key, with the commands
+- [x] ➕ `check` and `prepare` take the `Trust` (the GPUI updater builds it with `Trust::release()`); with a key,
+      `select` requires a unique `SHA256SUMS.minisig` at the release's own download URL, at most 4 KiB, and `prepare`
+      verifies the manifest before reading any checksum. A test checks the committed `trust/minisign.pub` parses
+- [x] tests: the cases in Testing Strategy. Fixtures come from the minisign CLI and a test-only key, with the commands
       in a comment
-- [ ] run `cargo test -p ngterm-update` and clippy on the crate; must pass before Task 7
+- [x] run `cargo test -p ngterm-update` and clippy on the crate; must pass before Task 7
 
 **Credentials:** a minisign key pair, made by the user: `minisign -G -W -p minisign.pub -s minisign.key`;
 `gh secret set MINISIGN_SECRET_KEY --env release < minisign.key`; the public key is committed to
 `trust/minisign.pub` in this task (from then on `publish` requires the signature). Keep an offline backup of the secret
 key: an installed build trusts only this key.
+
+➕ Done 2026-11-07: the user asked for credentials through zenity dialogs, so the key pair was generated here (no
+password, `minisign -G -W`). The secret key went straight into the keys repository (`add.sh`, then a sign-and-verify
+round trip against the committed public key), to the `release` environment (`sync.sh`) and to Bitwarden; the plain
+file was shredded. `trust/minisign.pub` is committed with this task, so `publish` must sign from Task 7 on; no
+release is cut before it.
 
 ### Task 7: Publish: SHA256SUMS signature and attestations
 
