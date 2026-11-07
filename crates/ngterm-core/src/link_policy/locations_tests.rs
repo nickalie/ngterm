@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use uuid::Uuid;
 
+#[cfg(unix)]
 use super::super::{LinkDisposition, disposition_for_hosts_and_home, route_for_hosts};
 use super::*;
 

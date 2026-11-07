@@ -677,7 +677,7 @@ mod tests {
                 "{path}"
             );
         }
-        for path in ["/Networkx/a.txt", "/System/Volumes/Data/homework/a.txt"] {
+        for path in ["/Networkx/a.bin", "/System/Volumes/Data/homework/a.bin"] {
             assert_eq!(disposition_of(&format!("file://{path}")), reveal(path), "{path}");
         }
     }
@@ -770,7 +770,11 @@ mod tests {
     fn windows_local_disk_and_verbatim_disk_paths_still_open_documents() {
         for path in [r"C:\local\a.png", r"\\?\C:\local\a.png"] {
             assert!(!network_or_device_path(path), "{path}");
-            assert_eq!(local_path(path), LinkDisposition::Image(PathBuf::from(path)), "{path}");
+            assert_eq!(
+                local_path(path, None),
+                LinkDisposition::Image(PathBuf::from(path)),
+                "{path}"
+            );
         }
     }
 
