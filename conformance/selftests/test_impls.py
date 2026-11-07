@@ -1439,7 +1439,7 @@ def test_live_sessions_run_for_an_executable_zsh_or_fish_login_shell(
 )
 def test_swift_macos_profile_follows_launch_mode(zsh_login: Path, mode: str, zmx: bool, live: bool) -> None:
     adapter = SwiftMacosAdapter(None, launch_mode=mode, enable_zmx=zmx)
-    assert adapter.parity_level == "0.40.0"
+    assert adapter.parity_level == "0.41.1"
     assert {"posix-shell", "window-geometry"} <= adapter.capabilities
     assert ("live-sessions" in adapter.capabilities) is live
 
