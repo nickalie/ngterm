@@ -482,4 +482,88 @@ mod tests {
         assert_eq!(gesture.state(&terminal).click_count, 0);
         gesture.close(&mut terminal);
     }
+
+    #[test]
+    fn dragging_past_either_edge_requests_scroll_and_a_tick_extends_the_selection() {
+        let mut terminal = Terminal::new(20, 3).unwrap();
+        terminal.vt_write(b"first\r\nsecond\r\nthird");
+        let mut gesture = SelectionGesture::new().unwrap();
+        gesture.apply(&mut terminal, &press(1, 1, 0), None).unwrap();
+        for (y, expected) in [(0.0, Autoscroll::Up), (61.0, Autoscroll::Down)] {
+            let input = GestureInput::Drag(GestureDrag {
+                at: viewport(3, 1),
+                x: 38.0,
+                y,
+                rectangle: true,
+                geometry: GEOMETRY,
+            });
+            let selection = gesture.apply(&mut terminal, &input, None).unwrap().unwrap();
+            assert!(selection.rectangle);
+            assert_eq!(gesture.state(&terminal).autoscroll, expected);
+        }
+        let tick = GestureInput::Tick(GestureTick {
+            viewport: (3, 2),
+            x: 38.0,
+            y: 61.0,
+            rectangle: true,
+            geometry: GEOMETRY,
+        });
+        let selection = gesture.apply(&mut terminal, &tick, Some(&[0])).unwrap().unwrap();
+        assert_eq!((selection.start.x, selection.start.y), (1, 1));
+        assert_eq!((selection.end.x, selection.end.y), (3, 2));
+        assert!(selection.rectangle);
+        assert_eq!(gesture.state(&terminal).autoscroll, Autoscroll::Down);
+        assert_eq!(
+            gesture.apply(&mut terminal, &GestureInput::Release(None), Some(&[0])),
+            Ok(None)
+        );
+        assert_eq!(gesture.state(&terminal).autoscroll, Autoscroll::None);
+        gesture.close(&mut terminal);
+    }
+
+    #[test]
+    fn invalid_points_are_refused_without_starting_a_gesture() {
+        let mut terminal = Terminal::new(20, 3).unwrap();
+        let mut gesture = SelectionGesture::new().unwrap();
+        assert_eq!(
+            gesture.apply(&mut terminal, &press(20, 0, 0), None),
+            Err(Error::InvalidValue)
+        );
+        assert_eq!(
+            gesture.apply(&mut terminal, &drag(0, 3), None),
+            Err(Error::InvalidValue)
+        );
+        assert_eq!(gesture.state(&terminal), GestureState::default());
+        assert_eq!(
+            gesture.apply(&mut terminal, &GestureInput::Release(Some(viewport(99, 99))), None),
+            Ok(None)
+        );
+        assert_eq!(gesture.apply(&mut terminal, &drag(1, 1), None), Ok(None));
+        gesture.close(&mut terminal);
+    }
+
+    #[test]
+    fn output_clicks_select_a_semantic_command_output() {
+        let mut terminal = Terminal::new(20, 3).unwrap();
+        terminal.vt_write(b"\x1b]133;A\x07$ cmd\x1b]133;C\x07\r\nout\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ");
+        let mut gesture = SelectionGesture::new().unwrap();
+        let GestureInput::Press(mut input) = press(1, 1, 0) else {
+            unreachable!()
+        };
+        input.behaviors[0] = GestureBehavior::Output;
+        let selection = gesture
+            .apply(&mut terminal, &GestureInput::Press(input), None)
+            .unwrap()
+            .unwrap();
+        terminal
+            .set_selection(selection.start, selection.end, selection.rectangle)
+            .unwrap();
+        assert_eq!(
+            terminal
+                .format(crate::Region::Selection, crate::FormatOptions::default())
+                .unwrap(),
+            Some(b"out".to_vec())
+        );
+        gesture.close(&mut terminal);
+    }
 }

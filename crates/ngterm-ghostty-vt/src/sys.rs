@@ -139,3 +139,7 @@ unsafe extern "C" fn log(
     let message = String::from_utf8_lossy(unsafe { raw_slice(message, message_len) });
     sink(level, &scope, &message);
 }
+
+#[cfg(test)]
+#[path = "sys_tests.rs"]
+mod tests;

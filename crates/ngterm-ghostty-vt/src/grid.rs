@@ -187,4 +187,21 @@ mod tests {
         assert!(first.wrapped && !second.wrapped);
         assert_eq!((text(&first), text(&second)), ("abcd".to_owned(), "ef".to_owned()));
     }
+
+    #[test]
+    fn long_clusters_and_wide_wrap_spacers_are_read_by_point() {
+        let cluster = format!("e{}", "\u{301}".repeat(24));
+        let mut terminal = Terminal::new(4, 3).unwrap();
+        terminal.vt_write(cluster.as_bytes());
+        terminal.vt_write("ab中".as_bytes());
+        let first = terminal.active_row(0).unwrap();
+        assert_eq!(first.cells[0].text, cluster);
+        assert_eq!(first.cells[3].width, CellWidth::SpacerHead);
+        assert!(first.wrapped);
+        let next = terminal.active_row(1).unwrap();
+        assert_eq!(next.cells[0].text, "中");
+        assert_eq!(next.cells[0].width, CellWidth::Wide);
+        assert_eq!(next.cells[1].width, CellWidth::SpacerTail);
+        assert!(next.cells[1].text.is_empty());
+    }
 }

@@ -300,4 +300,43 @@ mod tests {
             "libghostty-vt failed with unknown result -99"
         );
     }
+
+    #[test]
+    fn errors_describe_each_library_failure() {
+        for (error, message) in [
+            (Error::OutOfMemory, "libghostty-vt ran out of memory"),
+            (Error::InvalidValue, "libghostty-vt refused an invalid value"),
+            (Error::OutOfSpace, "a buffer for libghostty-vt was too small"),
+            (Error::NoValue, "libghostty-vt has no value for the request"),
+            (Error::Io, "libghostty-vt failed on external I/O"),
+            (
+                Error::LimitExceeded,
+                "input for libghostty-vt exceeded a configured limit",
+            ),
+            (
+                Error::Rejected,
+                "libghostty-vt rejected the operation on a safety check",
+            ),
+        ] {
+            assert_eq!(error.to_string(), message);
+            assert!(std::error::Error::source(&error).is_none());
+        }
+    }
+
+    #[test]
+    fn the_library_reports_a_version() {
+        let version = version();
+        assert!(!version.is_empty());
+        assert!(version.starts_with(|c: char| c.is_ascii_digit()), "{version}");
+    }
+
+    #[test]
+    fn a_null_owned_handle_is_an_allocation_failure() {
+        assert_eq!(
+            Handle::new(std::ptr::null_mut(), ffi::ghostty_terminal_free).unwrap_err(),
+            Error::OutOfMemory
+        );
+        let terminal = Terminal::new(2, 1).unwrap();
+        assert!(format!("{terminal:?}").contains("Handle("));
+    }
 }
