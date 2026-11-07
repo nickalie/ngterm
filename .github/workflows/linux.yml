@@ -2,7 +2,8 @@
 # conformance suite, once the cargo job passes. The WPE WebKit crates (the -sys crates and ngterm-wpe) and the app's
 # HTML overlays over them need a WPE WebKit Ubuntu does not package: the Ubuntu job builds the workspace without them
 # and the app without the overlays (WORKSPACE_WITHOUT_WPE and GPUI_WITHOUT_HTML in scripts/lib/native.sh), the wpe job
-# checks them on Arch, and the conformance jobs run there too.
+# checks them on Arch, and the conformance jobs run there too, as does the unit-coverage job (the whole workspace's
+# `cargo test` under cargo-llvm-cov, judged by its coverage floors).
 name: linux
 
 # A change of Markdown alone runs nothing: docs, plans, backlog and READMEs are neither built nor tested. The Markdown
@@ -224,6 +225,126 @@ jobs:
         run: |
           cargo test -p ngterm-gpui --lib
           NGTERM_REQUIRE_DISPLAY_TESTS=1 cargo test -p ngterm-gpui --test html_overlay
+
+  # What `cargo test` covers (scripts/unit-coverage.sh: the workspace's tests at their default features, under
+  # cargo-llvm-cov, test code and vendor/ out of the denominator), judged by scripts/unit-coverage-floor-linux.txt
+  # (conformance/tools/check_coverage.py: lines, functions and regions % per workspace crate). The default features
+  # need WPE WebKit, so it runs in the wpe job's Arch container (the same digest, Arch Linux Archive snapshot and
+  # pacman-archive), privileged for WebKit's bubblewrap sandbox, with the conformance jobs' packages and setup (the
+  # pinned weston where Arch's lacks --fake-seat, lavapipe), node for ngterm-app's OpenCode plugin tests and GStreamer
+  # for the html_overlay harness's audio case; the tests run as an unprivileged user (see its step) on a private Xvfb
+  # and session bus, and none may skip. A failed test fails the job after the report and the floors are judged; the report (lcov.info, summary.json, summary.md) is
+  # uploaded as rust-linux-unit-coverage. One instrumented build of the whole workspace and its tests: about an hour
+  # on a cold cache.
+  unit-coverage:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    container:
+      # archlinux:base-devel-20261011.0.609700
+      image: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
+      options: --privileged --init
+    env:
+      CARGO_TERM_COLOR: always
+      ARCH_SNAPSHOT: "2026/10/14"
+    steps:
+      - name: system packages from the Arch Linux Archive snapshot
+        run: |
+          echo "Server = https://archive.archlinux.org/repos/$ARCH_SNAPSHOT/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
+          cat > /usr/local/bin/pacman-archive <<'EOF'
+          #!/bin/bash
+          # pacman-archive PKG...: the snapshot's upgrade and PKG..., downloaded with retries, installed from the cache
+          set -u
+          for attempt in 1 2 3; do
+            if timeout --kill-after=1m 15m pacman -Syyuuw --needed --noconfirm --disable-download-timeout "$@"; then
+              exec pacman -Suu --needed --noconfirm "$@"
+            fi
+            rm -f /var/lib/pacman/db.lck
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::download from the Arch Linux Archive failed (attempt $attempt of 3), retrying in 30s"
+              sleep 30
+            fi
+          done
+          echo "::error::download from the Arch Linux Archive failed 3 times: $*"
+          exit 1
+          EOF
+          chmod +x /usr/local/bin/pacman-archive
+          pacman-archive git rustup wpewebkit bubblewrap \
+            meson ninja wayland wayland-protocols libxkbcommon libxcb \
+            curl xz patch ncurses fontconfig ttf-dejavu procps-ng \
+            weston dbus xorg-server-xvfb xorg-xauth mesa vulkan-swrast \
+            pixman libinput libevdev libdrm cairo pango libpng hwdata seatd lcms2 \
+            python zsh fish at-spi2-core gobject-introspection pkgconf gcc \
+            gst-plugins-base gst-plugins-good nodejs
+      - uses: actions/checkout@v7
+      # the runner owns the workspace, the container runs as root: without this git refuses the checkout
+      - name: git trusts the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: rust toolchain (rust-toolchain.toml) with llvm-tools
+        run: |
+          rustup toolchain install
+          rustup component add llvm-tools
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: vendor-ngterm-arch-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
+      - name: libghostty-vt prefix
+        run: scripts/build-ghostty-vt.sh
+      - name: terminal fonts
+        run: scripts/fetch-fonts.sh
+      - name: weston with --fake-seat
+        shell: bash
+        run: |
+          # the help read whole: `grep -q` leaving a pipe early would end weston with SIGPIPE under pipefail
+          if ! grep -q -- --fake-seat <<<"$(weston --help 2>/dev/null || true)"; then
+            echo "$(scripts/build-weston.sh)/bin" >> "$GITHUB_PATH"
+          fi
+      - name: lavapipe (the distribution's)
+        run: scripts/fetch-lavapipe.sh
+      # The tests run as an unprivileged user, as on a desktop and in the Ubuntu job: root writes into the read-only
+      # directories ngterm-core's persistence tests count on to refuse a write. It owns the checkout and the job's home (the
+      # toolchain, cargo's registry, the vendor prefixes), may use /dev/udmabuf (the external texture test, required
+      # like the display tests) and gets the unprivileged user namespaces WebKit's bubblewrap sandbox needs, which the
+      # runner's AppArmor restricts (README > WebKit sandbox on Ubuntu) and root alone escapes.
+      - name: an unprivileged test user
+        shell: bash
+        run: |
+          useradd --create-home --shell /bin/bash tester
+          chown -R tester: "$GITHUB_WORKSPACE" "$HOME"
+          if [[ ! -c /dev/udmabuf ]]; then
+            echo "::error::no /dev/udmabuf on kernel $(uname -r): the external texture test needs it"
+            exit 1
+          fi
+          chmod a+rw /dev/udmabuf
+          restrict=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [[ -f "$restrict" ]]; then echo 0 > "$restrict"; fi
+      # exits 1 on a failed test with the report written: the floors are still judged and the report kept below; the
+      # environment kept whole (-m), HOME included, so the toolchain and the prefixes set up above are the ones used
+      - name: unit-test coverage
+        env:
+          GDK_BACKEND: x11
+          NGTERM_REQUIRE_DISPLAY_TESTS: "1"
+          NGTERM_REQUIRE_NODE_TESTS: "1"
+        run: runuser -u tester -m -- xvfb-run -a dbus-run-session -- scripts/unit-coverage.sh unit-coverage
+      - name: unit coverage floors
+        if: ${{ !cancelled() && hashFiles('unit-coverage/summary.md') != '' }}
+        run: >-
+          python conformance/tools/check_coverage.py
+          --summary unit-coverage/summary.md
+          --floor scripts/unit-coverage-floor-linux.txt
+      - name: report into the summary
+        if: ${{ !cancelled() && hashFiles('unit-coverage/summary.md') != '' }}
+        run: cat unit-coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: upload the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-linux-unit-coverage
+          path: unit-coverage/
+          if-no-files-found: warn
 
   # The staged build under the suite (run-linux.sh: each instance on its own headless weston and session bus),
   # held by conformance/rust-passing.txt, once per login shell. Its HTML overlays run on WPE WebKit, which Ubuntu does
