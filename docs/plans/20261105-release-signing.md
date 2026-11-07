@@ -1,4 +1,4 @@
-# Release pipeline: the GitHub release, the signed APK and the Linux channels
+# Release pipeline: the GitHub release and the signed APK
 
 ## Overview
 
@@ -11,7 +11,6 @@
     because Apple Silicon refuses to run a binary with no signature at all;
   - the iOS app as an unsigned IPA;
   - `SHA256SUMS`, its minisign signature and GitHub build attestations over every asset.
-- Besides the GitHub release, it keeps the Linux channels: the AUR (Task 9) and Flathub (Task 10).
 - Moved out (user, 2026-11-07), each into a plan that builds on this one's job graph, signed rehearsals and updater
   trust:
   - **Apple** (`docs/plans/20261107-apple-signing.md`):
@@ -25,6 +24,10 @@
   - **Google Play** (`docs/plans/20261107-google-play.md`): the App Bundle signed with the upload key, the upload to
     the internal track through Workload Identity Federation, and the store listing. This plan builds and signs the
     APK it ships in the GitHub release; the Play plan adds the bundle beside it.
+  - **AUR** (`docs/plans/20261107-aur.md`): the `ngterm-bin` package from the release's Linux tarballs, and the `aur`
+    job that updates it.
+  - **Flathub** (`docs/plans/20261107-flathub.md`): the Flatpak, panes spawning the host shell from the sandbox, and
+    the submission.
 - Signing happens inside GitHub Actions, so a release takes a tag push and one approval.
 - Prepared ahead of the credentials:
   - until a secret exists, its step is skipped with a workflow notice, and the release stays green and unsigned;
@@ -176,8 +179,8 @@
      - minisign-signs `SHA256SUMS`;
      - when publishing: attests every asset, uploads to the draft release and undrafts it. A rehearsal stops after
        the signature (Task 7).
-  8. Channel jobs (publishing only, after `publish`): `aur` (Task 9); Flathub is a pull request to its own repository
-     (Task 10). The Google Play plan adds `play-upload`.
+  8. Channel jobs (publishing only, after `publish`): none in this plan. The AUR, Apple, Windows and Google Play plans
+     add `aur`, `homebrew`, `winget` and `play-upload`; Flathub updates through its own repository.
 - **Approval:** `release` has the `v*` tag deployment policy and no reviewer. A run reaching it without `approve` is
   prevented by two things:
   - the job graph: every job that uses `release` needs `approve`;
@@ -224,8 +227,7 @@
   - Android: `ANDROID_APK_KEYSTORE` (base64), `ANDROID_APK_KEYSTORE_PASSWORD`, `ANDROID_APK_KEY_ALIAS`,
     `ANDROID_APK_KEY_PASSWORD`, the GitHub APK's key;
   - updater: `MINISIGN_SECRET_KEY`, generated with `minisign -G -W` (no password: the environment already protects
-    it);
-  - channels: `AUR_SSH_PRIVATE_KEY`.
+    it).
   - Secrets are read only in the `env:` of the steps that use them, never at job level.
 - **Variables:** `NGTERM_RELEASE_SIGNING` is repository-level; every other variable lives in `release`.
   - `NGTERM_RELEASE_SIGNING` (the Apple, Windows and Google Play plans add their own).
@@ -243,7 +245,9 @@
   - `libngterm_mobile.so` is linked with `-z max-page-size=16384`. The APK is aligned with `zipalign -P 16 -f 4`.
     `android-verify` checks it with `zipalign -c -P 16 -v 4` and checks the ELF LOAD alignment of every `.so`.
   - The APK is named `ngterm-<version>-android.apk`. Its key is ngterm's own and permanent (an installed APK takes
-    updates only signed with it); Google Play signs its own copies with Play App Signing, so the two never mix.
+    updates only signed with it). It is also Google Play's app signing key (user, 2026-11-07: the Google Play plan
+    enrolls Play App Signing with it), so a Play install and the GitHub APK update each other without an
+    uninstall.
 - **Attestations:** `actions/attest-build-provenance` over every asset in `publish`. Users verify with
   `gh attestation verify <file> --repo nickalie/ngterm`.
 - **Permissions:** a job-level `permissions:` replaces the workflow default, so each widened job lists everything it
@@ -380,7 +384,7 @@ A rehearsal signs exactly as a release does and publishes nothing.
       `rehearse` on any other ref, or with `publish: true`, fails in the `version` job
 - [x] `version` outputs `signed_run` (publishing or rehearsal) besides `publishing`. `approve`, the signing jobs'
       `environment: release` and their identity choice follow `signed_run`; the release upload and every channel
-      job (the AUR and Flathub here; Homebrew, winget and `play-upload` in the Apple, Windows and Play plans) follow
+      job (`aur`, `homebrew`, `winget` and `play-upload`, from the AUR, Apple, Windows and Play plans) follow
       `publishing` only. The signing mode of a rehearsal is that of a release
 - [x] signing jobs accept a skipped `approve` only when `signed_run` is false
 - [x] `--self-test` covers the rehearsal outputs and its refusals
@@ -507,51 +511,12 @@ release is cut before it.
 - [ ] run checks; must pass before Task 9
 
 **Credentials** (one step at a time, through zenity): the APK signing key, permanent (it can't be reset; the keys
-repository and Bitwarden are its backups): `keytool -genkeypair -v -keystore apk.jks -alias ngterm -keyalg RSA -keysize
+repository and Bitwarden are its backups; Google Play will hold a copy as its app signing key): `keytool -genkeypair -v -keystore apk.jks -alias ngterm -keyalg RSA -keysize
 4096 -validity 36500`, the keystore password asked through zenity, then `ANDROID_APK_KEYSTORE` (base64),
 `ANDROID_APK_KEYSTORE_PASSWORD`, `ANDROID_APK_KEY_ALIAS`, `ANDROID_APK_KEY_PASSWORD`; then a rehearsal with
 `platforms=android`, `android-verify` passing.
 
-### Task 9: AUR
-
-**Files:**
-- Create: `packaging/linux/aur/PKGBUILD.in`, `scripts/aur.py` (with `--self-test`)
-- Modify: `.github/workflows/release.yml`
-
-- [ ] `ngterm-bin`: x86_64 and aarch64 sources from the release's Linux tarballs, the digests from `SHA256SUMS`,
-      `provides`/`conflicts` `ngterm`, depends matching `packaging/linux/runtime-libraries.txt`, the desktop file and
-      icon, the license
-- [ ] job `aur` (publishing only, after `publish`): renders `PKGBUILD` and `.SRCINFO` (`makepkg --printsrcinfo` in an
-      `archlinux` container), checks with `namcap`, builds it once with `makepkg`, and pushes to
-      `ssh://aur@aur.archlinux.org/ngterm-bin.git` with the deploy key
-- [ ] tests: `scripts/lint.sh`; `makepkg -si` of the rendered package locally (CachyOS) with a rehearsal's tarball
-- [ ] run checks; must pass before Task 10
-
-**Credentials:** an AUR account, an SSH key pair registered in it (`ssh-keygen -t ed25519 -f aur`):
-`gh secret set AUR_SSH_PRIVATE_KEY --env release < aur`. The first push creates the package.
-
-### Task 10: Flathub
-
-**Files:**
-- Create: `packaging/linux/flatpak/` (the manifest, MetaInfo, the desktop file and icons), `scripts/flatpak.sh`
-- Modify: the PTY spawn path in `ngterm-pty`/`ngterm-session` for the Flatpak sandbox, `.github/workflows/release.yml`
-
-- [ ] the app id: `com.nickalie.ngterm` needs the domain verified on Flathub; otherwise `io.github.nickalie.ngterm`
-      (asked with the credentials below)
-- [ ] a terminal must run the user's host shell: inside Flatpak, panes spawn through `flatpak-spawn --host` with the
-      PTY passed in (as GNOME's Ptyxis does), with `--talk-name=org.freedesktop.Flatpak`; the session server and
-      `ngtermctl` socket paths under the sandbox's runtime dir; tested in a Flatpak build locally
-- [ ] the manifest builds from source on the Flathub runtime (GNOME platform), WPE WebKit and libghostty-vt as modules
-      with pinned sources; MetaInfo with screenshots, OARS rating, releases; `flatpak-builder-lint` clean
-- [ ] the Flathub submission pull request (`flathub/flathub`, new-pr branch) prepared for the user; later releases
-      update the app repository through `flatpak-external-data-checker` or a `flatpak` job
-- [ ] tests: `scripts/lint.sh`; `flatpak-builder --user --install` locally and a pane running the host shell
-- [ ] run checks; must pass before Task 11
-
-**Credentials:** a Flathub account (GitHub login) to open the submission; for `com.nickalie.ngterm`, the domain
-verification token placed on nickalie.com.
-
-### Task 11: Verify acceptance criteria
+### Task 9: Verify acceptance criteria
 
 - [ ] every Overview item has its job or step; every secret and variable is read somewhere and documented
 - [ ] a release's assets: the signed APK, the Linux packages, the unsigned MSI and zip, the ad-hoc macOS packages, the
@@ -565,13 +530,13 @@ verification token placed on nickalie.com.
       - no job references a secret at job level;
       - only `publish` widens the workflow's read-only permissions, besides the jobs the other plans add if they
         have landed (`windows-sign`, `play-upload`), each with only the permissions its plan names;
-      - `aur`, the release upload, and any channel or store job another plan added (`homebrew`, `winget`,
-        `play-upload`) run only when `publishing`, never on a rehearsal
+      - the release upload, and any channel or store job another plan added (`aur`, `homebrew`, `winget`,
+        `play-upload`), run only when `publishing`, never on a rehearsal
 - [ ] `actionlint`, `shellcheck`; `cargo test -p ngterm-update` and clippy on the crate
 
-### Task 12: [Final] Documentation
+### Task 10: [Final] Documentation
 
-- [ ] `docs/release-signing.md` (the Apple, Windows and Google Play plans add their sections):
+- [ ] `docs/release-signing.md` (the Apple, Windows, Google Play and AUR plans add their sections):
       - every secret and variable, with its source and the job that reads it;
       - the APK key (`keytool`, with the warning that it can't be reset; keep an offline backup);
       - minisign (`minisign -G -W`, filling `trust/minisign.pub`);
@@ -580,7 +545,7 @@ verification token placed on nickalie.com.
       - verifying downloads (`gh attestation verify`, `minisign -Vm`)
 - [ ] README: replace the release steps with a summary and a link to the page; say which assets are signed and which
       aren't yet (macOS without Developer ID, Windows without Authenticode, the IPA unsigned)
-- [ ] README: installing the APK, and through the AUR and Flathub
+- [ ] README: installing the APK
 - [ ] move this plan to `docs/plans/completed/`
 
 ## Post-Completion

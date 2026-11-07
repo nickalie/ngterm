@@ -275,7 +275,8 @@ for Review.
 
 - [ ] the cask: `app "ngterm.app"` from each arch's notarized `.app.zip` (`on_arm`/`on_intel`), `binary` for
       `ngtermctl` inside the app, `depends_on macos: ">= :sonoma"`, `livecheck` on GitHub releases, a `zap` of the
-      state and config dirs; Linux: decide with Homebrew's Linux cask support at the time, else macOS only
+      state and config dirs, and `auto_updates true`: the `.app.zip` keeps its `macos-bundle` update marker, so the
+      app updates itself and `brew upgrade` must not fight it; Linux: decide with Homebrew's Linux cask support at the time, else macOS only
 - [ ] `homebrew-cask.py` renders it from the version and the digests in `SHA256SUMS`; its self-test pins the output
 - [ ] job `homebrew` (publishing only, `environment: release`, after `publish`): renders the cask, checks it with
       `brew audit --cask --strict` and `brew style` on a macOS runner, and pushes `Casks/ngterm.rb` to the tap's

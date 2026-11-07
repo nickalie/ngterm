@@ -5,7 +5,7 @@
 - Split from `docs/plans/20261105-release-signing.md` (user, 2026-11-07). That plan ships the Android APK, signed
   with ngterm's own APK key, in the GitHub release. This plan takes the app to Google Play:
   - the App Bundle (AAB), built beside the APK and signed with the Play upload key; Play App Signing re-signs what
-    users install;
+    users install with ngterm's own APK key, the one the GitHub APK carries;
   - a `play-upload` job that sends each release's bundle to the internal track through the Play Developer API, logged
     in with Workload Identity Federation (no long-lived Google key in GitHub);
   - the store listing: text, graphics, and the written answers for the forms the API can't fill.
@@ -17,8 +17,11 @@
 - Long lead: the Play Console developer account (identity verification). A personal account created since late 2023
   must also run a closed test with at least 12 testers for 14 days before it can apply for production access; an
   organization account (D-U-N-S number) is exempt. Start the account at Task 1.
-- The APK and the AAB never share a key: the APK key is ngterm's own and permanent, the upload key only proves an
-  upload to Play and Google can reset it.
+- One app signing key for both channels (user, 2026-11-07): Play App Signing is enrolled with ngterm's APK key
+  (the release plan's Task 8), not a key Google generates, so a Play install and the GitHub APK update each other with
+  no uninstall. Google then holds a copy of that permanent key. The choice is made once, at enrollment, before the
+  first upload, and can't be changed later; Play's key upgrade would split the channels again. The upload key stays
+  separate: it only proves an upload to Play, and Google can reset it.
 
 ## Context (from discovery)
 
@@ -117,8 +120,11 @@ passing.
 
 ### Task 3: Play Console, GCP and the first upload
 
-- [ ] the app `com.nickalie.ngterm.android` created in the Play Console; Play App Signing enrolled with the upload key's
-      certificate
+- [ ] the app `com.nickalie.ngterm.android` created in the Play Console; Play App Signing enrolled with ngterm's APK
+      key ("use a different key": the keystore exported with Google's `pepk` tool, encrypted to Google's public
+      key, the keystore passwords asked through zenity), and the upload key's certificate registered as the upload
+      key
+- [ ] the app signing certificate Play shows equals the GitHub APK's (`apksigner verify --print-certs`)
 - [ ] GCP: a project, the WIF pool and provider with the attribute condition above, a service account with release
       access to the app in the Play Console; the variables in the keys repository's `vars.tsv`, synced
 - [ ] the first AAB uploaded by hand from a publishing run (Technical Details), rolled out to internal testing
@@ -169,4 +175,5 @@ Console with the written answers, and promotes the internal release to productio
 
 - Play Console: the forms of Task 4, the closed test if the account is personal, then promoting a release to
   production.
-- From the first release on Play: the internal-track build installs from Play, and a later one updates it.
+- From the first release on Play: the internal-track build installs from Play, and a later one updates it; a phone
+  with the GitHub APK installed takes the Play update with its data intact.

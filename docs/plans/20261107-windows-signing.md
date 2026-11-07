@@ -146,9 +146,10 @@ in `vars.tsv`: `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SI
   (with `--self-test`)
 - Modify: `.github/workflows/release.yml`
 
-- [ ] manifests for `Nickalie.ngterm`: the per-user MSI (`Scope: user`, its ProductCode and UpgradeCode from
-      `ngterm.wxs`), the portable zip as a second installer if winget's rules allow both, license, tags, release notes
-      URL
+- [ ] manifests for `Nickalie.ngterm`: the per-user MSI only (`Scope: user`, its ProductCode and UpgradeCode from
+      `ngterm.wxs`), license, tags, release notes URL. Not the portable zip: it carries the `windows-archive`
+      self-update marker, so a winget "portable" install would replace itself behind winget's back. The MSI updates
+      itself through Windows Installer, which winget reads back as the installed version
 - [ ] job `winget` (publishing only, after `publish`): renders the manifests from the release, validates them with
       `winget validate` on a Windows runner, and opens the pull request to `microsoft/winget-pkgs` from the user's fork
       with the pinned `wingetcreate submit`. Runs only when the MSI is Authenticode signed (a notice otherwise)
