@@ -20,6 +20,10 @@ pub mod fakes;
 
 pub use command_line::ShellCommand;
 
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;
+
 /// A unit of work for the main thread, run with the state the main loop owns.
 pub type MainTask<S> = Box<dyn FnOnce(&mut S) + Send + 'static>;
 

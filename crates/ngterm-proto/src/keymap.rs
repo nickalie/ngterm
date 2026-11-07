@@ -125,6 +125,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_minimal_command_decodes_with_the_default_hud_settings() {
+        let command: ControlKeymapCommand = serde_json::from_str(r#"{"name":"Palette Only"}"#).unwrap();
+        assert_eq!(
+            command,
+            ControlKeymapCommand {
+                name: "Palette Only".to_owned(),
+                shortcut: None,
+                error_hud: false,
+                error_position: "center".to_owned(),
+                error_pane: None,
+                repeats: false,
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&command).unwrap(),
+            r#"{"name":"Palette Only","errorHud":false,"errorPosition":"center","repeats":false}"#
+        );
+    }
+
+    #[test]
+    fn explicit_command_settings_survive_the_wire() {
+        let wire = json!({
+            "name": "Grow", "shortcut": "ctrl+a>x", "errorHud": true,
+            "errorPosition": "bottom-right", "errorPane": "right", "repeats": true
+        });
+        let command: ControlKeymapCommand = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(command.name, "Grow");
+        assert_eq!(command.shortcut.as_deref(), Some("ctrl+a>x"));
+        assert!(command.error_hud);
+        assert_eq!(command.error_position, "bottom-right");
+        assert_eq!(command.error_pane.as_deref(), Some("right"));
+        assert!(command.repeats);
+        assert_eq!(serde_json::to_value(command).unwrap(), wire);
+    }
+
+    #[test]
     fn absent_fields_are_omitted_and_order_is_upstreams() {
         let action = ControlKeymapAction {
             action: "new_session".to_owned(),
