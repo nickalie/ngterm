@@ -545,3 +545,135 @@ fn fifo_devices_symlinks_and_canonical_escape_are_checked_without_reads() {
     );
     assert!(!linked_doc.images.references.contains_key("late.png"));
 }
+
+/// Upstream's `testATailOfASmallFileStartsAtItsFirstByte`.
+#[test]
+fn a_tail_of_a_small_file_starts_at_its_first_byte() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "small.log", b"one\ntwo\n");
+    let read = read_tail(&path, 64, None).unwrap().unwrap();
+    assert_eq!(
+        (read.data.as_slice(), read.offset, read.stamp.size),
+        (&b"one\ntwo\n"[..], 0, 8)
+    );
+}
+
+/// Upstream's `testATailOfALargeFileReadsTheWindowAndTheByteBeforeIt`.
+#[test]
+fn a_tail_of_a_large_file_reads_the_window_and_the_byte_before_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "big.log", b"0123456789abcdef");
+    let read = read_tail(&path, 4, None).unwrap().unwrap();
+    assert_eq!((read.data.as_slice(), read.offset), (&b"bcdef"[..], 11));
+}
+
+/// Upstream's `testATailIgnoresTheWholeFileCapAndMeasuresASymlinkAtItsTarget`.
+#[cfg(unix)]
+#[test]
+fn a_tail_ignores_the_whole_file_cap_and_measures_a_symlink_at_its_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let big = write(dir.path(), "huge.log", []);
+    File::options()
+        .write(true)
+        .open(&big)
+        .unwrap()
+        .set_len((text_page::MAX_BYTES * 2) as u64)
+        .unwrap();
+    let link = dir.path().join("link.log");
+    std::os::unix::fs::symlink(&big, &link).unwrap();
+    let read = read_tail(&link, 16, None).unwrap().unwrap();
+    assert_eq!(read.data.len(), 17);
+    assert_eq!(read.stamp.size, (text_page::MAX_BYTES * 2) as u64);
+}
+
+/// Upstream's `testATailOfAFifoOrADeviceIsRefused`.
+#[cfg(unix)]
+#[test]
+fn a_tail_of_a_fifo_or_a_device_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("pipe.log");
+    let raw = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: a nul-terminated path owned by this test, ordinary owner-only permissions.
+    assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+    let device = dir.path().join("zero.log");
+    std::os::unix::fs::symlink("/dev/zero", &device).unwrap();
+    for path in [
+        &fifo,
+        &device,
+        &dir.path().join("missing.log"),
+        &dir.path().to_path_buf(),
+    ] {
+        assert_eq!(
+            read_tail(path, 16, None),
+            Err(Failure::Unreadable),
+            "{}",
+            path.display()
+        );
+        assert_eq!(
+            check_log(path, 10).unwrap_err(),
+            format!("unreadable text file: {}", path.display())
+        );
+    }
+}
+
+/// Upstream's `testATailStampChangesWhenTheFileGrowsOrIsReplaced`.
+#[test]
+fn a_tail_stamp_changes_when_the_file_grows_or_is_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "app.log", b"a\n");
+    let stamp = |path: &Path| read_tail(path, 64, None).unwrap().unwrap().stamp;
+    let first = stamp(&path);
+    assert_eq!(stamp(&path), first);
+    let mut file = File::options().append(true).open(&path).unwrap();
+    std::io::Write::write_all(&mut file, b"b\n").unwrap();
+    drop(file);
+    let grown = stamp(&path);
+    // the reader holds no handle between reads, so a writer renames the file away and starts a new one
+    fs::rename(&path, dir.path().join("app.log.1")).unwrap();
+    write(dir.path(), "app.log", b"a\nb\n");
+    let replaced = stamp(&path);
+    assert_ne!(grown, first);
+    assert_ne!(replaced.identity, grown.identity);
+}
+
+/// Upstream's `testATailOfAnUnchangedFileReadsNothing`.
+#[test]
+fn a_tail_of_an_unchanged_file_reads_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "app.log", b"a\n");
+    let stamp = read_tail(&path, 64, None).unwrap().unwrap().stamp;
+    assert_eq!(read_tail(&path, 64, Some(&stamp)), Ok(None));
+    assert_eq!(load_log(&path, 10, Some(&stamp)), Ok(None));
+    let mut file = File::options().append(true).open(&path).unwrap();
+    std::io::Write::write_all(&mut file, b"b\n").unwrap();
+    drop(file);
+    let read = read_tail(&path, 64, Some(&stamp)).unwrap().unwrap();
+    assert_eq!(read.data, b"a\nb\n");
+}
+
+/// Upstream's `TextProbe.checkLog`: a log is read only for its tail, so its size is never refused, and its kept lines
+/// alone judge it binary.
+#[test]
+fn a_log_check_reads_only_its_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let big = write(dir.path(), "big.log", []);
+    let mut file = File::options().write(true).open(&big).unwrap();
+    file.set_len((text_page::MAX_BYTES * 2) as u64).unwrap();
+    std::io::Seek::seek(&mut file, std::io::SeekFrom::End(0)).unwrap();
+    std::io::Write::write_all(&mut file, b"\nlast line\n").unwrap();
+    drop(file);
+    check_log(&big, 1).unwrap();
+    let read = load_log(&big, 1, None).unwrap().unwrap();
+    let snapshot = read.snapshot.unwrap();
+    assert_eq!((snapshot.text.as_str(), snapshot.lines), ("last line\n", 1));
+    // the window opens inside the NUL run, a partial line it drops
+    check_log(&big, 3).unwrap();
+    let binary = write(dir.path(), "bin.log", b"a\0b\n\xFF\xFE\nok\n");
+    for tail in [3, 2] {
+        assert_eq!(
+            check_log(&binary, tail).unwrap_err(),
+            format!("not a UTF-8 text file: {}", binary.display())
+        );
+    }
+    check_log(&binary, 1).unwrap();
+}

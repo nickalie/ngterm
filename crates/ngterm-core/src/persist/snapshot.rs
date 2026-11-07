@@ -331,11 +331,17 @@ pub enum PageSourceSnapshot {
     Image { path: String },
     /// `--markdown`.
     Markdown { path: String },
-    /// `--text`, and the `--line` it was opened at.
+    /// `--text`, and the `--line` it was opened at, or a log page's request: its `--tail` and `--follow-file` (never
+    /// its live state, which a restore reads afresh).
     Text {
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         line: Option<i64>,
+        // plain defaults, as `line`'s: the tagged enum buffers its fields, which a raw-text lossy decode cannot read
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tail: Option<i64>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        follow: bool,
     },
     /// A clicked HTML file.
     Document { path: String },

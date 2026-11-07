@@ -43,6 +43,78 @@ def _open_text(ctl, sid, path, **args):
     assert_ok(ctl.request("session.overlay.open", sid, textFile=str(path), **args))
 
 
+# -- log pages: session.overlay.open with tail or followFile
+
+TAIL_WITHOUT_TEXT = "session.overlay.open: --tail and --follow-file require --text"
+TAIL_WITH_LINE = "session.overlay.open: --tail and --follow-file cannot be combined with --line"
+TAIL_RANGE = "session.overlay.open: --tail must be 1...100000"
+LOG_FIELDS = ("tail", "following", "lines", "clipped", "waiting", "unreadable")
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.overlay.open")
+def test_log_open_refusals(ctl):
+    root = ctl.instance.root
+    log = str(root / "app.log")
+    # a log option with no text file is refused ahead of any source's own checks, after a stray line
+    for args in [{}, {"command": "cat"}, {"image": "relative", "wait": True}, {"markdownFile": str(root / "x.md")},
+                 {"html": str(root / "x.html")}]:
+        for option in ({"tail": 10}, {"followFile": True}):
+            assert_error(ctl.request("session.overlay.open", UNKNOWN, **args, **option), TAIL_WITHOUT_TEXT)
+    assert_error(ctl.request("session.overlay.open", UNKNOWN, line=3, tail=10),
+                 "session.overlay.open: --line requires --text")
+    # beside a line, then out of range, after the text page's own options and line checks
+    for option in ({"tail": 10}, {"followFile": True}):
+        assert_error(ctl.request("session.overlay.open", UNKNOWN, textFile=log, line=3, **option), TAIL_WITH_LINE)
+    for tail in (0, -1, 100001):
+        assert_error(ctl.request("session.overlay.open", UNKNOWN, textFile=log, tail=tail), TAIL_RANGE)
+    assert_error(ctl.request("session.overlay.open", UNKNOWN, textFile=log, line=0, tail=10),
+                 "session.overlay.open: --line must be 1 or more")
+    assert_error(ctl.request("session.overlay.open", UNKNOWN, textFile=str(root / "x.md"), tail=10),
+                 "session.overlay.open: --text must be a source, config, text or log file")
+
+    # the app reads the log's last lines before it opens anything: a missing log or a binary end opens no page
+    sid = _new(ctl)
+    try:
+        missing = root / "missing.log"
+        assert_error(ctl.request("session.overlay.open", sid, textFile=str(missing), followFile=True),
+                     f"session.overlay.open: unreadable text file: {missing}")
+        binary = root / "binary.log"
+        binary.write_bytes(b"first line\n\xff\xfe\x00\n")
+        assert_error(ctl.request("session.overlay.open", sid, textFile=str(binary), tail=5),
+                     f"session.overlay.open: not a UTF-8 text file: {binary}")
+        assert_absent(find_session(ctl.tree(), sid), "htmlOverlays")
+    finally:
+        ctl.request("session.close", sid)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")
+def test_log_page_reads_back_its_tail_and_follow_state(ctl):
+    path = _file(ctl, "app.log", "first log line\nsecond log line\n")
+    sid = _new(ctl)
+    try:
+        # a tail alone shows the log once, paused
+        _open_text(ctl, sid, path, tail=20)
+        text = _text(ctl, sid)
+        assert (text["file"], text["tail"], text["following"]) == (str(path), 20, False), text
+        for field in LOG_FIELDS:
+            assert field in text, (field, text)
+        assert_absent(text, "line", "language")
+        assert_ok(ctl.request("session.overlay.close", sid))
+        # follow-file follows, with the default tail
+        _open_text(ctl, sid, path, followFile=True)
+        text = _text(ctl, sid)
+        assert (text["tail"], text["following"]) == (5000, True), text
+        assert_ok(ctl.request("session.overlay.close", sid))
+        # a plain text page has none of the log fields
+        _open_text(ctl, sid, path)
+        text = _text(ctl, sid)
+        assert_absent(text, *LOG_FIELDS)
+    finally:
+        ctl.request("session.close", sid)
+
+
 # -- session.overlay.follow
 
 

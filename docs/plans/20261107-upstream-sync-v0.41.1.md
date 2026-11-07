@@ -358,34 +358,36 @@ modify `crates/ngterm-proto/src/{command,request,tree}.rs`, `crates/ngterm-core/
 rows in `test_overlay.py::test_overlay_pane_selector_refusals` and `::test_unknown_session_target`;
 `tests/cli/test_cli_only.py::test_overlay_follow_and_tail_validation`.
 
-- [ ] `LogTail::snapshot(data, offset, max_lines)`: from offset > 0 drop the partial first line (unless nothing
+- [x] `LogTail::snapshot(data, offset, max_lines)`: from offset > 0 drop the partial first line (unless nothing
   follows it, then keep the over-long line from its first whole character, marked clipped); hold back an
   unfinished UTF-8 tail; skip a leading NUL hole (copytruncate); keep the last `max_lines`; None for NUL or invalid
   UTF-8 in the kept lines; `start_offset` as upstream.
-- [ ] Constants `DEFAULT_TAIL` 5000, `MAX_TAIL` 100000, `MAX_TAIL_BYTES` 2 MiB; `is_log` = `.log`/`.out`.
-- [ ] `HtmlOverlay.text_log {tail, follow}` and `log_state {following, report}`; a follow change emits
+- [x] Constants `DEFAULT_TAIL` 5000, `MAX_TAIL` 100000, `MAX_TAIL_BYTES` 2 MiB; `is_log` = `.log`/`.out`.
+- [x] `HtmlOverlay.text_log {tail, follow}` and `log_state {following, report}`; a follow change emits
   `tree.changed`, a report is stored only on change and never emitted.
-- [ ] Open validation: a text-only refusal first ("session.overlay.open: --line requires --text",
+- [x] Open validation: a text-only refusal first ("session.overlay.open: --line requires --text",
   "session.overlay.open: --tail and --follow-file require --text"); in the text branch "session.overlay.open: --tail
   and --follow-file cannot be combined with --line", then "session.overlay.open: --tail must be 1...100000". A log
   reads only its tail (no 4 MB refusal); a binary tail is refused as not UTF-8. A log page the placement hands to a
   presenter -> "session.overlay.open: a log page is not shown on another Mac".
-- [ ] `session.overlay.follow [mode]` (absent = toggle; "invalid overlay follow mode: X"), then pane, then session;
+- [x] `session.overlay.follow [mode]` (absent = toggle; "invalid overlay follow mode: X"), then pane, then session;
   a replica keeps upstream's replica string; a non-log text page -> "no log page"; answers
   `{id, text: "following"|"paused"}`. Bridge own-overlay commands += follow.
-- [ ] Tree text node: `file, language, line, tail, following, lines, clipped, waiting, unreadable` (the last six
+- [x] Tree text node: `file, language, line, tail, following, lines, clipped, waiting, unreadable` (the last six
   omitted on a plain page, present on a log page).
-- [ ] ngtermctl: `--tail N`, `--follow-file` (help says it is not `--follow`), the three parse-time strings;
+- [x] ngtermctl: `--tail N`, `--follow-file` (help says it is not `--follow`), the three parse-time strings;
   `session overlay follow` with "mode must be on, off or toggle".
-- [ ] Persisted pages (`model/page_snapshot.rs`, an ngterm extension): persist the request (tail, follow), not the
+- [x] Persisted pages (`model/page_snapshot.rs`, an ngterm extension): persist the request (tail, follow), not the
   live report, and recheck the range on restore. A headless origin's parked log page is refused or closed like the
   presenter case.
-- [ ] Tail reader (ngterm-app): a `FileStamp` of dev+ino+size+mtime(ns) on Unix and volume serial + file index +
+- [x] Tail reader (ngterm-app): a `FileStamp` of dev+ino+size+mtime(ns) on Unix and volume serial + file index +
   size + last-write on Windows (`GetFileInformationByHandle`); `read_at`/`seek_read`; non-regular files refused;
   default share modes so a writer's rename rotation is never blocked.
-- [ ] write tests: log_tail cases; html log attributes; model setters; dispatcher table; wire round trip;
+- [x] write tests: log_tail cases; html log attributes; model setters; dispatcher table; wire round trip;
   projection; CLI parse; tail reader (small file, large window + 1 byte, symlink measured at its target,
   FIFO/device refused, unchanged stamp reads nothing, stamp changes on grow/replace); the conformance tests above.
+  (The conformance cases carry `since("0.41.0")` and stay skipped on Rust until Task 24; the tail reader's Windows
+  branch, `GetFileInformationByHandle` and `seek_read`, is exercised by the same unit tests on the CI Windows job.)
 
 ### Task 8: Log pages follow the file in the app; `.log` clicks (#899)
 

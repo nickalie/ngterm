@@ -9,6 +9,7 @@ use url::Url;
 use uuid::Uuid;
 
 use super::support::add;
+use crate::html::text_page::{TextLog, TextLogReport, TextLogState};
 use crate::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
 use crate::model::{AppStore, OverlayPane, OverlayPointSize, OverlaySize, RemoteOverlaySlot, RemotePage, Session};
 use crate::persist::{PageSlotSnapshot, PageSnapshot, PageSourceSnapshot, SessionSnapshot, Snapshot};
@@ -845,4 +846,131 @@ fn viewer_pages_keep_their_opening_order_across_a_restart() {
         .map(|slot| slot.pane)
         .collect();
     assert_eq!(order, [Some(OverlayPane::Left), None]);
+}
+
+/// A log page is written with its request, `--tail` and `--follow-file`, never with what it last read or whether it
+/// was paused since; a restore opens it following as requested, nothing read yet.
+#[test]
+fn a_log_page_round_trips_its_request_not_its_state() {
+    let files = Files::new();
+    let (mut store, session) = store_with_split();
+    let text = HtmlSource::Text {
+        path: files.path("main.go"),
+        line: None,
+    };
+    let log = TextLog { tail: 50, follow: true };
+    let id = open(
+        &mut store,
+        session,
+        None,
+        page(text.clone(), HtmlPageFlags::default()).with_text_log(Some(log)),
+        OverlaySize::default(),
+    );
+    store.session_mut(session).unwrap().update_html_overlay(id, |page| {
+        page.log_state = Some(TextLogState {
+            following: false,
+            report: TextLogReport {
+                lines: 12,
+                clipped: true,
+                waiting: false,
+                unreadable: true,
+            },
+        });
+    });
+    let written = serde_json::to_string(&store.snapshot()).unwrap();
+    assert!(written.contains("\"tail\":50,\"follow\":true"), "{written}");
+    for key in ["following", "lines", "clipped", "unreadable"] {
+        assert!(!written.contains(key), "{key}: {written}");
+    }
+    let back = round_trip(&store);
+    let (_, restored) = only_session(&back).html_overlays()[0];
+    assert_eq!(restored.source, text);
+    assert_eq!(restored.text_log, Some(log));
+    assert_eq!(restored.log_state, Some(TextLogState::new(log)));
+
+    // a plain text page writes neither key and comes back plain
+    let (mut store, session) = store_with_split();
+    open(
+        &mut store,
+        session,
+        None,
+        page(text, HtmlPageFlags::default()),
+        OverlaySize::default(),
+    );
+    let written = serde_json::to_string(&store.snapshot()).unwrap();
+    assert!(!written.contains("tail") && !written.contains("follow"), "{written}");
+    let back = round_trip(&store);
+    assert_eq!(only_session(&back).html_overlays()[0].1.text_log, None);
+}
+
+/// A log entry is checked again as `session.overlay.open` checks it: a tail in 1...100000 and no line beside it; a
+/// follow alone takes the default tail. A viewer entry never holds a log page, so one claiming to is dropped.
+#[test]
+fn a_log_entry_rechecks_its_request_on_restore() {
+    let files = Files::new();
+    let log = |line: Option<i64>, tail: Option<i64>, follow: bool| PageSourceSnapshot::Text {
+        path: files.path("main.go"),
+        line,
+        tail,
+        follow,
+    };
+    let restored_log = |source: PageSourceSnapshot, viewer: bool| {
+        let snapshot = persisted(
+            vec![PageSnapshot {
+                viewer,
+                ..entry(PageSlotSnapshot::Session, source)
+            }],
+            false,
+        );
+        let session = crate::model::snapshot::session_from_snapshot(&snapshot, false, "/home/u");
+        let local = session.html_overlays().first().map(|(_, page)| page.text_log);
+        let parked = session.remote_overlays().slot(None).is_some();
+        (local, parked)
+    };
+    let opened = |tail, follow| (Some(Some(TextLog { tail, follow })), false);
+    assert_eq!(restored_log(log(None, Some(1), false), false), opened(1, false));
+    assert_eq!(
+        restored_log(log(None, Some(100_000), true), false),
+        opened(100_000, true)
+    );
+    assert_eq!(restored_log(log(None, None, true), false), opened(5_000, true));
+    assert_eq!(restored_log(log(Some(3), None, false), false), (Some(None), false));
+    for dropped in [
+        log(None, Some(0), false),
+        log(None, Some(100_001), true),
+        log(None, Some(-4), false),
+        log(Some(3), Some(10), false),
+        log(Some(3), None, true),
+    ] {
+        assert_eq!(restored_log(dropped.clone(), false), (None, false), "{dropped:?}");
+    }
+    assert_eq!(
+        restored_log(log(None, Some(10), true), true),
+        (None, false),
+        "no viewer log page"
+    );
+}
+
+/// A presenter-only origin closes a log page a restore opened, as nothing there shows it and a presenter would get it
+/// without its log state.
+#[test]
+fn a_presenter_only_origin_closes_a_log_page() {
+    let files = Files::new();
+    let (mut store, session) = store_with_split();
+    let text = HtmlSource::Text {
+        path: files.path("main.go"),
+        line: None,
+    };
+    let log = Some(TextLog { tail: 10, follow: true });
+    open(
+        &mut store,
+        session,
+        None,
+        page(text, HtmlPageFlags::default()).with_text_log(log),
+        OverlaySize::default(),
+    );
+    let swept = crate::model::page_snapshot::park_local_pages(store.session_mut(session).unwrap());
+    assert!(swept.parked.is_empty() && swept.dropped);
+    let found = store.session(session).unwrap();
+    assert!(!found.overlay.active && found.remote_overlays().slot(None).is_none());
 }

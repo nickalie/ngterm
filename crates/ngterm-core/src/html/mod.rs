@@ -8,6 +8,7 @@
 pub mod bridge;
 pub mod document_page;
 pub mod image_page;
+pub mod log_tail;
 pub mod markdown_page;
 pub mod navigation;
 pub mod outcomes;
@@ -424,6 +425,10 @@ pub struct HtmlOverlay {
     /// lets a later click replace while it is hidden. Local: presentation frames do not carry it, and a snapshot does
     /// not write it.
     pub clicked: bool,
+    /// Makes a text page a log page (upstream's `textLog`, `--tail` and `--follow-file`); a snapshot writes this request.
+    pub text_log: Option<text_page::TextLog>,
+    /// A log page's live state (upstream's `logState`), set exactly when `text_log` is; a snapshot never writes it.
+    pub log_state: Option<text_page::TextLogState>,
 }
 
 impl HtmlOverlay {
@@ -457,7 +462,17 @@ impl HtmlOverlay {
             reload_target: HtmlReloadTarget::Original,
             row: false,
             clicked: false,
+            text_log: None,
+            log_state: None,
         }
+    }
+
+    /// This page as a log page for `log`, following as it asks; `None` leaves a plain page.
+    #[must_use]
+    pub fn with_text_log(mut self, log: Option<text_page::TextLog>) -> Self {
+        self.text_log = log;
+        self.log_state = log.map(text_page::TextLogState::new);
+        self
     }
 
     /// Whether the session's snapshot writes the page: one this machine opened in an overlay slot. A replica belongs
@@ -599,6 +614,15 @@ pub trait HtmlHost {
     /// The upstream text probe failure (`unreadable text file: P`, `text file too large (over 4 MB): P`, `not a UTF-8
     /// text file: P`).
     fn check_text(&self, path: &str) -> Result<(), String> {
+        Err(format!("unreadable text file: {path}"))
+    }
+
+    /// Reads a log page's last `tail` lines the way its page will, before taking a slot (upstream's `textFileRefusal`
+    /// for a log): only the file's end is read, so its size is never refused, and a binary end is.
+    ///
+    /// # Errors
+    /// The upstream text probe failure (`unreadable text file: P`, `not a UTF-8 text file: P`).
+    fn check_log(&self, path: &str, _tail: usize) -> Result<(), String> {
         Err(format!("unreadable text file: {path}"))
     }
 

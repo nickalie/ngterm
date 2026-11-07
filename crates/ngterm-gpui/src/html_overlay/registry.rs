@@ -183,6 +183,10 @@ impl HtmlHost for PageHost {
         ngterm_app::documents::check_text(std::path::Path::new(path))
     }
 
+    fn check_log(&self, path: &str, tail: usize) -> Result<(), String> {
+        ngterm_app::documents::check_log(std::path::Path::new(path), tail)
+    }
+
     fn page_zoom(&self) -> f64 {
         with(|registry| registry.zoom.unwrap_or(1.0))
     }

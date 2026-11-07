@@ -58,7 +58,7 @@ pub use companions::{
 pub use duplicate::{CompanionCopy, PaneCopy};
 pub use flagged_order::FlaggedOrderPlacement;
 pub use focus::FocusMode;
-pub use html_overlay::{HtmlOverlayCommandFailure, HtmlOverlayOpenFailure, HtmlPageSlot};
+pub use html_overlay::{HtmlOverlayCommandFailure, HtmlOverlayOpenFailure, HtmlPageSlot, TextLogFollowFailure};
 pub use navigation::{NewSessionPlacement, SessionNavigation, WorkspaceNavigation, stops_attention_navigation};
 pub use outbox::{EventPayload, ModelEvent, Outbox, RecentClosedChange, SaveRequest, WatermarkRemoval};
 pub use overlay::{HudOpening, HudState, OverlayPane, OverlayProgram, OverlaySlot};

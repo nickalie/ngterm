@@ -1,7 +1,8 @@
 //! The page a text overlay shows (upstream's `TextPage.swift`): a source, config, log or other text file named by
 //! untrusted output, shown read-only. The text travels as escaped, inert data and the page loads nothing; the trusted
 //! renderer (highlight.js and `text.js`, in the backend's isolated world) builds the gutter, the highlighted code and
-//! the marked line from it.
+//! the marked line from it. A log page is a text page that shows only its file's last lines ([`TextLog`]), following
+//! the end as it grows; its live state is [`TextLogState`].
 
 use std::fmt::Write as _;
 
@@ -12,6 +13,59 @@ pub const MAX_BYTES: usize = 4 << 20;
 /// The most text the page highlights; a larger file renders plain. Highlighting measured about 0.23 s over plain at
 /// 256 KiB in `WebKit`, and 1.2 s at 1 MiB (upstream's measurement).
 pub const MAX_HIGHLIGHT_BYTES: usize = 256 << 10;
+/// How many lines a log page keeps when the request names none.
+pub const DEFAULT_TAIL: usize = 5_000;
+/// The most lines a log page may ask for.
+pub const MAX_TAIL: usize = 100_000;
+/// The most a log page reads from its file's end, so one huge line cannot pull in the file.
+pub const MAX_TAIL_BYTES: usize = 2 << 20;
+
+/// Lowercased extensions a plain click opens as a log page, following its end.
+const LOG_EXTENSIONS: &[&str] = &["log", "out"];
+
+/// A text page's request to show only a log's last `tail` lines, following its end when `follow` is set (upstream's
+/// `TextLog`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextLog {
+    pub tail: usize,
+    pub follow: bool,
+}
+
+/// What the app last read for a log page (upstream's `TextLogReport`): the lines shown, a clipped first line, a file
+/// that is missing (`waiting`) or turned binary (`unreadable`, the last good text still shown).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextLogReport {
+    pub lines: usize,
+    pub clipped: bool,
+    pub waiting: bool,
+    pub unreadable: bool,
+}
+
+/// A log page's live state (upstream's `TextLogState`): whether it follows the file, and the app's last report.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextLogState {
+    pub following: bool,
+    pub report: TextLogReport,
+}
+
+impl TextLogState {
+    /// The state a page opened with `log` starts in: following as requested, nothing read yet.
+    #[must_use]
+    pub fn new(log: TextLog) -> Self {
+        Self {
+            following: log.follow,
+            report: TextLogReport::default(),
+        }
+    }
+}
+
+/// What a built page starts from beyond its file: a log page's state, which replaces the line, and `anchor`, the scroll
+/// offset a rebuilt page reopens at (a paused log page's or a plain page's; upstream's `html` `log` and `anchor`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PageState<'a> {
+    pub log: Option<&'a TextLogState>,
+    pub anchor: Option<f64>,
+}
 
 /// Lowercased extensions and the bundled highlight.js language each maps to.
 const LANGUAGES: &[(&str, &str)] = &[
@@ -125,6 +179,13 @@ pub fn is_eligible(path: &str) -> bool {
         || PLAIN_BASENAMES.contains(&name.as_str())
 }
 
+/// Whether a plain click on `path` opens it as a log page, following its end (upstream's `isLog`): a `.log` or `.out`
+/// file, in any case.
+#[must_use]
+pub fn is_log(path: &str) -> bool {
+    LOG_EXTENSIONS.contains(&name_and_extension(path).1.as_str())
+}
+
 /// The file's text, `None` when it is not valid UTF-8 or holds a NUL, which marks a binary (upstream's `validate`).
 #[must_use]
 pub fn validate(data: Vec<u8>) -> Option<String> {
@@ -137,15 +198,31 @@ pub fn validate(data: Vec<u8>) -> Option<String> {
 /// The document the renderer fills (upstream's `TextPage.html`): the text as the content of a hidden element, the
 /// language and target line as attributes, and `style`, the app's own stylesheet. The language is dropped over
 /// [`MAX_HIGHLIGHT_BYTES`], so the renderer shows that text plain. The policy loads nothing at all. The holder is a
-/// `div`: the parser drops a newline right after `<pre>`, which would shift every line number.
+/// `div`: the parser drops a newline right after `<pre>`, which would shift every line number. A log page (`state.log`
+/// set) carries its follow state and report flags instead of a line, and the renderer draws no gutter; a finite
+/// `state.anchor` is the scroll offset the rebuilt page reopens at.
 #[must_use]
-pub fn html(text: &str, language: Option<&str>, line: Option<i64>, style: &str) -> String {
+pub fn html(text: &str, language: Option<&str>, line: Option<i64>, style: &str, state: &PageState) -> String {
     let mut attributes = String::new();
     if let Some(language) = language.filter(|_| text.len() <= MAX_HIGHLIGHT_BYTES) {
         let _ = write!(attributes, " data-language=\"{}\"", escaped(language));
     }
-    if let Some(line) = line {
+    if let Some(log) = state.log {
+        let _ = write!(attributes, " data-log data-following=\"{}\"", log.following);
+        for (set, name) in [
+            (log.report.clipped, "clipped"),
+            (log.report.waiting, "waiting"),
+            (log.report.unreadable, "unreadable"),
+        ] {
+            if set {
+                let _ = write!(attributes, " data-{name}");
+            }
+        }
+    } else if let Some(line) = line {
         let _ = write!(attributes, " data-line=\"{line}\"");
+    }
+    if let Some(anchor) = state.anchor.filter(|anchor| anchor.is_finite()) {
+        let _ = write!(attributes, " data-anchor=\"{}\"", swift_double(anchor));
     }
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
@@ -155,6 +232,16 @@ pub fn html(text: &str, language: Option<&str>, line: Option<i64>, style: &str) 
          <main id=\"ngterm-page\"></main></body></html>",
         escaped(text)
     )
+}
+
+/// `anchor` as Swift's `Double` description spells it, which the renderer parses back: a whole number keeps its `.0`.
+fn swift_double(anchor: f64) -> String {
+    let shown = anchor.to_string();
+    if shown.contains(['.', 'e', 'E']) {
+        shown
+    } else {
+        format!("{shown}.0")
+    }
 }
 
 #[cfg(test)]

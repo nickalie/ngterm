@@ -25,6 +25,7 @@ use crate::Core;
 use crate::app_actions::{ActionEffect, FrontendAction};
 use crate::error::ControlError;
 use crate::html::bridge::{self, HtmlBridgePage};
+use crate::html::text_page::TextLog;
 use crate::html::{
     HtmlHost, HtmlLoadState, HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlPageInfo, HtmlPageOutcomes,
     HtmlReloadTarget, HtmlSource, errors, zoom,
@@ -47,6 +48,8 @@ const ALREADY_OPEN: &str = "overlay already open";
 const PANE_ALREADY_OPEN: &str = "pane overlay already open";
 /// Upstream's `OverlayHtmlError.presenter`.
 const PRESENTER: &str = "a viewer presents this session: an html overlay would open where nobody sees it";
+/// Upstream's `OverlayHtmlError.logRemote`.
+const LOG_REMOTE: &str = "session.overlay.open: a log page is not shown on another Mac";
 /// The bridge's refusals of a page that left its slot (upstream's `handleBridgeRequest`).
 const PAGE_CLOSED: &str = "page closed";
 
@@ -96,6 +99,8 @@ pub(crate) struct PageOpening {
     pub follow: bool,
     /// A terminal click opens the page ([`HtmlOverlay::clicked`]); the dispatcher never sets it.
     pub clicked: bool,
+    /// Makes a text page a log page ([`HtmlOverlay::text_log`]).
+    pub text_log: Option<TextLog>,
 }
 
 impl PageOpening {
@@ -107,6 +112,12 @@ impl PageOpening {
         points: OverlayPointSize,
     ) -> Self {
         let set = |flag: Option<bool>| flag == Some(true);
+        // only a text page takes a log's options; the dispatcher refused them on any other source
+        let text_log = if matches!(source, HtmlSource::Text { .. }) {
+            super::overlay::text_log(args)
+        } else {
+            None
+        };
         Self {
             source,
             flags: HtmlPageFlags {
@@ -122,6 +133,7 @@ impl PageOpening {
             background_color: args.color.clone(),
             follow: set(args.follow),
             clicked: false,
+            text_log,
         }
     }
 }
@@ -153,7 +165,8 @@ fn open_checked(
     let page = HtmlOverlay {
         clicked: opening.clicked,
         ..HtmlOverlay::new(opening.source.clone(), opening.flags)
-    };
+    }
+    .with_text_log(opening.text_log);
     let page_id = page.id;
     let refusal = match crate::remote::open_remote_page(core, resolved.window, resolved.session, &page, &opening) {
         RemotePageOpen::Local => None,
@@ -191,6 +204,11 @@ fn open_checked(
         return Err(ControlError::rejected(format!("session.overlay.open: {failure}")));
     }
     prepare_document(core, host.as_ref(), resolved, &mut opening, image, checked)?;
+    // a presenter would get the text page without its log state, so it is refused rather than changed (upstream's
+    // `textLogRefusal`, after the probe); a presentable text page must meet this before its hand-off
+    if opening.text_log.is_some() && core.page_belongs_remote(id, opening.pane) {
+        return Err(ControlError::rejected(LOG_REMOTE));
+    }
     // the store's own guard (upstream's `openHtmlOverlay`): a page placed on the presenting machine never renders here
     if core.page_belongs_remote(id, opening.pane) {
         return Err(ControlError::rejected(PRESENTER));
@@ -250,9 +268,12 @@ fn prepare_document(
         HtmlSource::Markdown { path } if !checked => host
             .check_markdown(path)
             .map_err(|error| ControlError::rejected(format!("session.overlay.open: {error}")))?,
-        HtmlSource::Text { path, .. } if !checked => host
-            .check_text(path)
-            .map_err(|error| ControlError::rejected(format!("session.overlay.open: {error}")))?,
+        HtmlSource::Text { path, .. } if !checked => match opening.text_log {
+            // a log reads only its end, so its size is never refused
+            Some(log) => host.check_log(path, log.tail),
+            None => host.check_text(path),
+        }
+        .map_err(|error| ControlError::rejected(format!("session.overlay.open: {error}")))?,
         _ => {}
     }
     Ok(())
@@ -751,6 +772,7 @@ impl Core {
             background_color: None,
             follow: false,
             clicked: true,
+            text_log: None,
         };
         open_checked(self, Some(&uuid_string(session)), None, opening, image, true).is_ok()
     }
@@ -778,6 +800,7 @@ impl Core {
             background_color: None,
             follow: false,
             clicked: true,
+            text_log: None,
         };
         open(self, Some(&uuid_string(session)), None, opening).is_ok()
     }

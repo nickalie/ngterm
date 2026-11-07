@@ -22,9 +22,10 @@ use uuid::Uuid;
 use super::hud::PANE_NOT_VISIBLE;
 use super::overlay_page::{self, PAGE_NO_READ, PAGE_NO_RESULT, PageOpening};
 use super::surface::{buffer_extent, last_content_lines};
-use super::{Outcome, args_of, session_store, with_id};
+use super::{Outcome, ToggleMode, args_of, session_store, with_id};
 use crate::Core;
 use crate::error::{ControlError, Noun};
+use crate::html::text_page::{self, TextLog};
 use crate::html::{self, HtmlNavigation, HtmlSource};
 use crate::model::{
     OVERLAY_HIDDEN, OverlayPane, OverlayPointResizeFailure, OverlayPointSize, OverlayProgram, OverlayVisibilityMode,
@@ -83,6 +84,9 @@ const TEXT_NOT_ABSOLUTE: &str = "session.overlay.open: --text must be an absolut
 const TEXT_TYPE: &str = "session.overlay.open: --text must be a source, config, text or log file";
 const LINE_WITHOUT_TEXT: &str = "session.overlay.open: --line requires --text";
 const LINE_NOT_POSITIVE: &str = "session.overlay.open: --line must be 1 or more";
+const TAIL_WITHOUT_TEXT: &str = "session.overlay.open: --tail and --follow-file require --text";
+const TAIL_WITH_LINE: &str = "session.overlay.open: --tail and --follow-file cannot be combined with --line";
+const TAIL_RANGE: &str = "session.overlay.open: --tail must be 1...100000";
 const NAVIGATION: &str = "session.overlay.navigate requires back, forward, browser or finder";
 const SUBMIT_VALUE: &str = "session.overlay.submit requires a value";
 const INVALID_PAGE_ID: &str = "invalid page id";
@@ -146,6 +150,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::OverlayHide => visibility(core, target, args, OverlayVisibilityMode::Hide),
         SessionCmd::OverlayShow => visibility(core, target, args, OverlayVisibilityMode::Show),
         SessionCmd::OverlayToggle => visibility(core, target, args, OverlayVisibilityMode::Toggle),
+        SessionCmd::OverlayFollow => follow(core, target, args),
         SessionCmd::OverlayJobRun => claim_job(core, target),
         SessionCmd::OverlayPageServe => claim_page_serve(core, target),
         other => Err(ControlError::NotSupported(ngterm_proto::Command::Session(other))),
@@ -202,11 +207,49 @@ fn text_content(path: &str, args: &Args) -> Result<OverlayContent, ControlError>
     if args.line.is_some_and(|line| line < 1) {
         return Err(ControlError::rejected(LINE_NOT_POSITIVE));
     }
+    if wants_log(args) && args.line.is_some() {
+        return Err(ControlError::rejected(TAIL_WITH_LINE));
+    }
+    let in_range = |tail: i64| usize::try_from(tail).is_ok_and(|tail| (1..=text_page::MAX_TAIL).contains(&tail));
+    if args.tail.is_some_and(|tail| !in_range(tail)) {
+        return Err(ControlError::rejected(TAIL_RANGE));
+    }
     let path = html::normalize_path(path);
     if !html::text_page::is_eligible(&path) {
         return Err(ControlError::rejected(TEXT_TYPE));
     }
     Ok(OverlayContent::Page(HtmlSource::Text { path, line: args.line }))
+}
+
+/// Whether the request asks for a log page: `--tail` or `--follow-file`.
+fn wants_log(args: &Args) -> bool {
+    args.tail.is_some() || args.follow_file == Some(true)
+}
+
+/// A validated text request's log options (upstream's `textLog`): a tail alone shows it once, `--follow-file` follows
+/// it, with the default tail unless one is given; `None` for a plain text page.
+pub(super) fn text_log(args: &Args) -> Option<TextLog> {
+    let follow = args.follow_file == Some(true);
+    if args.tail.is_none() && !follow {
+        return None;
+    }
+    let tail = args
+        .tail
+        .and_then(|tail| usize::try_from(tail).ok())
+        .unwrap_or(text_page::DEFAULT_TAIL);
+    Some(TextLog { tail, follow })
+}
+
+/// The options only a text page takes, refused ahead of any source so a request with no text file is answered (upstream's
+/// `textOnlyRefusal`).
+fn text_only_refusal(args: &Args) -> Option<&'static str> {
+    if args.text_file.is_some() {
+        return None;
+    }
+    if args.line.is_some() {
+        return Some(LINE_WITHOUT_TEXT);
+    }
+    wants_log(args).then_some(TAIL_WITHOUT_TEXT)
 }
 
 /// Whether a document source carries a flag only a program or a file/URL page takes: `--cwd`, `--wait`,
@@ -244,8 +287,8 @@ pub(super) enum OverlayContent {
 pub(super) fn overlay_content(command: &str, args: &Args, home: Option<&str>) -> Result<OverlayContent, ControlError> {
     let reject = |message: &str| Err(ControlError::rejected(message));
     let set = |flag: Option<bool>| flag == Some(true);
-    if args.line.is_some() && args.text_file.is_none() {
-        return reject(LINE_WITHOUT_TEXT);
+    if let Some(refusal) = text_only_refusal(args) {
+        return reject(refusal);
     }
     let page_source = !command.is_empty() || args.html.is_some() || args.url.is_some();
     if let Some(path) = args.image.as_deref() {
@@ -498,6 +541,24 @@ fn visibility(core: &mut Core, target: Option<&str>, args: &Args, mode: OverlayV
     let shown = store.session(id).is_some_and(|session| session.any_overlay_shown(pane));
     Ok(ControlResult {
         text: Some((if shown { "shown" } else { "hidden" }).to_owned()),
+        ..with_id(id)
+    })
+}
+
+/// `session.overlay.follow [on|off|toggle]` (upstream's dispatcher arm, then `setSessionOverlayFollow`): the mode, then
+/// the pane, before the session resolves; an absent mode toggles. `result.text` names the state left, `following` or
+/// `paused`.
+fn follow(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
+    let raw = args.mode.as_deref();
+    let mode = ToggleMode::parse(raw)
+        .ok_or_else(|| ControlError::rejected(format!("invalid overlay follow mode: {}", raw.unwrap_or("toggle"))))?;
+    let pane = parse_overlay_pane(args.pane.as_deref())?;
+    let (store, id) = session_store(core, target, args.window.as_deref())?;
+    let following = store
+        .set_text_log_following(id, pane, |current| mode.desired_value(current))
+        .map_err(|failure| ControlError::rejected(failure.message()))?;
+    Ok(ControlResult {
+        text: Some((if following { "following" } else { "paused" }).to_owned()),
         ..with_id(id)
     })
 }

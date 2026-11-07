@@ -28,6 +28,7 @@ mod messages;
 mod metadata;
 mod moves;
 mod overlay;
+mod overlay_log;
 mod overlay_page;
 mod overlay_points;
 mod overlay_visibility;

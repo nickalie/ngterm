@@ -255,13 +255,8 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
         HtmlSource::Document { path } => Some(path.clone()),
         _ => None,
     };
-    // the language its name maps to, even past the highlight cap, and the line it was opened at, not the one in view
     let text = match &page.source {
-        HtmlSource::Text { path, line } => Some(ControlTextOverlayNode {
-            file: path.clone(),
-            language: crate::html::text_page::language(path).map(str::to_owned),
-            line: *line,
-        }),
+        HtmlSource::Text { path, line } => Some(text_node(path, *line, page)),
         _ => None,
     };
     let current = page.current.as_ref();
@@ -292,6 +287,24 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
         replica: page.replica_of.map(|_| true),
         clicked: page.clicked.then_some(true),
         parked: None,
+    }
+}
+
+/// A text page's node (upstream's `ControlTextOverlayNode`): the language its name maps to, even past the highlight
+/// cap, and the line it was opened at, not the one in view; a log page adds its line limit and its live state.
+fn text_node(path: &str, line: Option<i64>, page: &HtmlOverlay) -> ControlTextOverlayNode {
+    let wire = |count: usize| i64::try_from(count).unwrap_or(i64::MAX);
+    let log = page.log_state;
+    ControlTextOverlayNode {
+        file: path.to_owned(),
+        language: crate::html::text_page::language(path).map(str::to_owned),
+        line,
+        tail: page.text_log.map(|log| wire(log.tail)),
+        following: log.map(|log| log.following),
+        lines: log.map(|log| wire(log.report.lines)),
+        clipped: log.map(|log| log.report.clipped),
+        waiting: log.map(|log| log.report.waiting),
+        unreadable: log.map(|log| log.report.unreadable),
     }
 }
 

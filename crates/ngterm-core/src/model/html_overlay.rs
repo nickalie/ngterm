@@ -19,7 +19,8 @@ use super::pane_overlay::PaneOverlay;
 use super::session::Session;
 use super::store::AppStore;
 use super::window_library::WindowLibrary;
-use crate::html::{HtmlLoadState, HtmlOverlay, HtmlPageInfo, HtmlReloadTarget};
+use crate::html::text_page::TextLogReport;
+use crate::html::{HtmlLoadState, HtmlOverlay, HtmlPageInfo, HtmlReloadTarget, errors};
 use crate::persist::PageSnapshot;
 
 /// Why [`AppStore::open_html_overlay`] refused (upstream's `HtmlOverlayOpenFailure`; its `presenter` case is the
@@ -47,6 +48,28 @@ impl HtmlOverlayCommandFailure {
             Self::UnknownSession => "no such session",
             Self::NoOverlay => "no overlay",
             Self::NotHtml => "the overlay is not an html page",
+        }
+    }
+}
+
+/// Why [`AppStore::set_text_log_following`] refused (upstream's `TextLogFollowFailure`, with its page lookup's
+/// `replica` case beside the others).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextLogFollowFailure {
+    Page(HtmlOverlayCommandFailure),
+    /// The page is shown here for another machine, which alone follows its file.
+    Replica,
+    NotLog,
+}
+
+impl TextLogFollowFailure {
+    /// The control error for this refusal (upstream's `message`).
+    #[must_use]
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Page(failure) => failure.message(),
+            Self::Replica => errors::REPLICA_SUBMIT,
+            Self::NotLog => "no log page",
         }
     }
 }
@@ -304,6 +327,47 @@ impl AppStore {
         }
         Ok(())
     }
+
+    /// Sets whether the log page in the slot `pane` of session `id` addresses follows its file, to what `following`
+    /// makes of its current state, and answers the state left (upstream's `setTextLogFollowing(_:pane:mode:)`). A change
+    /// emits `tree.changed`.
+    ///
+    /// # Errors
+    ///
+    /// The page lookup's refusal, a replica, or a page that is not a log page; nothing changes.
+    pub fn set_text_log_following(
+        &mut self,
+        id: Uuid,
+        pane: Option<OverlayPane>,
+        following: impl FnOnce(bool) -> bool,
+    ) -> Result<bool, TextLogFollowFailure> {
+        let shown = self.html_overlay(id, pane).map_err(TextLogFollowFailure::Page)?;
+        if shown.replica_of.is_some() {
+            return Err(TextLogFollowFailure::Replica);
+        }
+        let state = shown.log_state.ok_or(TextLogFollowFailure::NotLog)?;
+        let (page_id, wanted) = (shown.id, following(state.following));
+        if wanted != state.following {
+            if let Some(session) = self.session_mut(id) {
+                session.update_html_overlay(page_id, |page| {
+                    set_following(page, wanted);
+                });
+            }
+            self.schedule_tree_changed();
+        }
+        Ok(wanted)
+    }
+}
+
+/// Records `following` on a log page; false when it is no log page or already says so.
+fn set_following(page: &mut HtmlOverlay, following: bool) -> bool {
+    match page.log_state.as_mut() {
+        Some(state) if state.following != following => {
+            state.following = following;
+            true
+        }
+        _ => false,
+    }
 }
 
 /// One reload of `page` (upstream's `reloadHtmlOverlay` change).
@@ -417,6 +481,28 @@ impl WindowLibrary {
     /// Records what the web view shows now (upstream's `setHtmlPage`).
     pub fn set_html_page(&mut self, id: Uuid, info: Option<HtmlPageInfo>) -> bool {
         self.update_html_overlay(id, |page| page.current = info)
+    }
+
+    /// Records whether log page `id` follows its file, as the page reported it after a scroll, wherever its slot now is
+    /// (upstream's `setTextLogFollowing(_:following:)`). A change emits `tree.changed`; a page that is not a log page is
+    /// left alone. Whether it changed.
+    pub fn set_text_log_following(&mut self, id: Uuid, following: bool) -> bool {
+        let mut changed = false;
+        self.update_html_overlay(id, |page| changed = set_following(page, following));
+        if changed && let Some(session) = self.session_holding_page(id) {
+            self.schedule_tree_changed_for(session);
+        }
+        changed
+    }
+
+    /// Records what the app last read for log page `id` (upstream's `setTextLogReport`): written only on a change and
+    /// never emitted, so a follower's ticks wake no hook; a page that is not a log page is left alone.
+    pub fn set_text_log_report(&mut self, id: Uuid, report: TextLogReport) {
+        self.update_html_overlay(id, |page| {
+            if let Some(state) = page.log_state.as_mut() {
+                state.report = report;
+            }
+        });
     }
 
     /// Reloads page `id` wherever it sits (the toolbar's reload; upstream's `HtmlOverlayRegistry.reload(_:target:)`).

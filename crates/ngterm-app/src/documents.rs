@@ -1,7 +1,11 @@
 //! Bounded local image/Markdown/text/HTML reads (upstream `ImageProbe.swift`, `MarkdownProbe.swift`, `TextProbe.swift`,
-//! `DocumentProbe.swift`, `BoundedFile`).
+//! `DocumentProbe.swift`, `BoundedFile`), and a log's end ([`load_log`]).
 //! Click handlers and renderers call these services on a worker thread. The control path performs its initial
 //! probe synchronously, matching upstream; even opening a regular file can wait on network storage.
+//!
+//! Every read opens its file once and judges what that descriptor names: a symlink is measured at its target, and a
+//! FIFO or device is refused before a byte is read. Files open with the platform's default sharing (on Windows
+//! read, write and delete), so a log's writer can still append to it, rename it away or replace it while a page reads.
 
 use std::collections::HashMap;
 use std::fs::{File, Metadata, OpenOptions};
@@ -12,7 +16,7 @@ use image::{ImageDecoder as _, ImageFormat, ImageReader};
 use ngterm_core::html::document_page;
 use ngterm_core::html::image_page::{self, ImageData};
 use ngterm_core::html::markdown_page::{self, Embedded, MarkdownDocument};
-use ngterm_core::html::text_page;
+use ngterm_core::html::{log_tail, text_page};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Failure {
@@ -183,6 +187,78 @@ pub fn check_text(path: &Path) -> Result<(), String> {
     load_text(path).map(|_| ())
 }
 
+/// One version of a file (upstream's `BoundedFile.FileStamp`): a change of identity means it was replaced, of size or
+/// modification time that it was written. Unix: the device and inode, the size and the modification time to the
+/// nanosecond; Windows: the volume serial number and file index, the size and the last-write time
+/// (`GetFileInformationByHandle`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileStamp {
+    /// The device or volume, then the inode or file index.
+    pub identity: (u64, u64),
+    pub size: u64,
+    /// The modification time in the platform's own units: seconds and nanoseconds on Unix, 100 ns ticks on Windows.
+    pub modified: (i64, i64),
+}
+
+/// The end of a file (upstream's `BoundedFile.TailRead`): its bytes, the file offset they start at, and its stamp.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TailRead {
+    data: Vec<u8>,
+    offset: u64,
+    stamp: FileStamp,
+}
+
+/// The last `max_bytes` of the regular file at `path` plus the byte before them, which tells
+/// [`log_tail::snapshot`] whether the window opens on a line boundary (upstream's `BoundedFile.readTail`). Any size is
+/// accepted. `None` when the file still has `unchanged_from`'s stamp: nothing is read then.
+///
+/// Fails as unreadable when the file is missing, not a regular file, unreadable, or shrank under the read.
+fn read_tail(path: &Path, max_bytes: u64, unchanged_from: Option<&FileStamp>) -> Result<Option<TailRead>, Failure> {
+    let (file, metadata) = opened_file(path)?;
+    let stamp = file_stamp(&file, &metadata).ok_or(Failure::Unreadable)?;
+    if unchanged_from == Some(&stamp) {
+        return Ok(None);
+    }
+    let offset = stamp.size.saturating_sub(max_bytes.saturating_add(1));
+    let count = usize::try_from(stamp.size - offset).map_err(|_| Failure::Unreadable)?;
+    let data = read_fully(&file, offset, count).ok_or(Failure::Unreadable)?;
+    Ok(Some(TailRead { data, offset, stamp }))
+}
+
+/// What a log page shows and the version of the file it came from (upstream's `TextProbe.LogRead`); `snapshot` is
+/// `None` when the file's end is binary, so an unchanged binary file is not read again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogRead {
+    pub snapshot: Option<log_tail::Snapshot>,
+    pub stamp: FileStamp,
+}
+
+/// The last `tail` lines of `path` within [`text_page::MAX_TAIL_BYTES`] (upstream's `TextProbe.loadLog`); `None` when
+/// the file still has `unchanged_from`'s stamp, which costs one metadata query and no read.
+///
+/// # Errors
+/// `unreadable text file: P`.
+pub fn load_log(path: &Path, tail: usize, unchanged_from: Option<&FileStamp>) -> Result<Option<LogRead>, String> {
+    let read = read_tail(path, text_page::MAX_TAIL_BYTES as u64, unchanged_from)
+        .map_err(|_| format!("unreadable text file: {}", path.display()))?;
+    Ok(read.map(|read| LogRead {
+        snapshot: log_tail::snapshot(&read.data, read.offset, tail),
+        stamp: read.stamp,
+    }))
+}
+
+/// Read the last `tail` lines of a log the way its page will (upstream's `TextProbe.checkLog`), so a binary or
+/// unreadable file is refused at any size, and only for the lines the page shows.
+///
+/// # Errors
+/// `unreadable text file: P`, `not a UTF-8 text file: P` (a NUL byte or invalid UTF-8 in the kept lines).
+pub fn check_log(path: &Path, tail: usize) -> Result<(), String> {
+    match load_log(path, tail, None)? {
+        Some(LogRead { snapshot: Some(_), .. }) => Ok(()),
+        _ => Err(format!("not a UTF-8 text file: {}", path.display())),
+    }
+}
+
 /// Read a clicked HTML file and build its page with `page` ([`document_page::page`], or [`document_page::chromium_page`]
 /// for a Chromium engine), as upstream's `DocumentProbe.load` does: the read checks the content, so a binary file fails
 /// a click and is revealed instead of opening a failed page.
@@ -293,6 +369,17 @@ fn bounded_read(path: &Path, maximum: usize) -> Result<Vec<u8>, Failure> {
 }
 
 fn checked_file(path: &Path, maximum: usize) -> Result<(File, usize), Failure> {
+    let (file, metadata) = opened_file(path)?;
+    let size = usize::try_from(metadata.len()).map_err(|_| Failure::TooLarge)?;
+    if size > maximum {
+        return Err(Failure::TooLarge);
+    }
+    Ok((file, size))
+}
+
+/// `path` opened for reading, with what its descriptor names: a regular file, never a FIFO, device or offloaded
+/// placeholder. The default sharing is kept (module docs).
+fn opened_file(path: &Path) -> Result<(File, Metadata), Failure> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -305,11 +392,68 @@ fn checked_file(path: &Path, maximum: usize) -> Result<(File, usize), Failure> {
     if !metadata.is_file() || dataless(&metadata) || !regular_handle(&file) {
         return Err(Failure::Unreadable);
     }
-    let size = usize::try_from(metadata.len()).map_err(|_| Failure::TooLarge)?;
-    if size > maximum {
-        return Err(Failure::TooLarge);
+    Ok((file, metadata))
+}
+
+/// `count` bytes of `file` from `offset`, positioned reads that leave the descriptor's own offset alone; `None` when
+/// the file ends first, as one truncated under the read does.
+fn read_fully(file: &File, offset: u64, count: usize) -> Option<Vec<u8>> {
+    let mut data = vec![0; count];
+    let mut filled = 0;
+    while filled < count {
+        match read_at(file, &mut data[filled..], offset + filled as u64) {
+            Ok(0) => return None,
+            Ok(read) => filled += read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
     }
-    Ok((file, size))
+    Some(data)
+}
+
+#[cfg(unix)]
+fn read_at(file: &File, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
+    std::os::unix::fs::FileExt::read_at(file, buffer, offset)
+}
+
+#[cfg(windows)]
+fn read_at(file: &File, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
+    std::os::windows::fs::FileExt::seek_read(file, buffer, offset)
+}
+
+#[cfg(unix)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Windows' stamp comes from a query that can fail; both platforms share the signature"
+)]
+fn file_stamp(_: &File, metadata: &Metadata) -> Option<FileStamp> {
+    use std::os::unix::fs::MetadataExt as _;
+    Some(FileStamp {
+        identity: (metadata.dev(), metadata.ino()),
+        size: metadata.len(),
+        modified: (metadata.mtime(), metadata.mtime_nsec()),
+    })
+}
+
+#[cfg(windows)]
+fn file_stamp(file: &File, _: &Metadata) -> Option<FileStamp> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: the borrowed File owns a live handle throughout this query, and `info` is a valid out pointer.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) } == 0 {
+        return None;
+    }
+    let wide = |high: u32, low: u32| (u64::from(high) << 32) | u64::from(low);
+    let written = wide(info.ftLastWriteTime.dwHighDateTime, info.ftLastWriteTime.dwLowDateTime);
+    Some(FileStamp {
+        identity: (
+            u64::from(info.dwVolumeSerialNumber),
+            wide(info.nFileIndexHigh, info.nFileIndexLow),
+        ),
+        size: wide(info.nFileSizeHigh, info.nFileSizeLow),
+        modified: (i64::try_from(written).unwrap_or(i64::MAX), 0),
+    })
 }
 
 #[cfg(target_os = "macos")]

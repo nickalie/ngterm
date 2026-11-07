@@ -407,7 +407,7 @@ pub struct ControlSessionAsk {
 
 /// A text page's source (upstream's `ControlTextOverlayNode`): the file, the highlight.js language its name maps to
 /// (omitted when unmapped, and still reported for a file too large to highlight), and the line it was opened at, not
-/// the line in view.
+/// the line in view. A log page adds its line limit (`tail`) and its live state, all omitted on a plain text page.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlTextOverlayNode {
@@ -416,6 +416,18 @@ pub struct ControlTextOverlayNode {
     pub language: Option<String>,
     #[serde(default)]
     pub line: Option<i64>,
+    #[serde(default)]
+    pub tail: Option<i64>,
+    #[serde(default)]
+    pub following: Option<bool>,
+    #[serde(default)]
+    pub lines: Option<i64>,
+    #[serde(default)]
+    pub clipped: Option<bool>,
+    #[serde(default)]
+    pub waiting: Option<bool>,
+    #[serde(default)]
+    pub unreadable: Option<bool>,
 }
 
 /// One HTML page in an overlay slot.

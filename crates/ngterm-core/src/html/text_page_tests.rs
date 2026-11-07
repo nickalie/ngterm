@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn the_text_stays_inert_and_the_policy_loads_nothing() {
     let source = "</pre><script>alert(1)</script> <img src=x onerror=y> <iframe src=a> & \"q\" 'a'";
-    let html = html(source, Some("swift"), Some(3), "p{}");
+    let html = html(source, Some("swift"), Some(3), "p{}", &PageState::default());
     assert!(!html.contains("<script>"));
     assert!(!html.contains("<img"));
     assert!(!html.contains("<iframe"));
@@ -22,19 +22,19 @@ fn the_text_stays_inert_and_the_policy_loads_nothing() {
 // regression (upstream): a quote or bracket fused with a combining mark is one Character and skipped escaping
 #[test]
 fn a_metacharacter_followed_by_a_combining_mark_is_still_escaped() {
-    let html = html("<\u{301}b> \"\u{301}", None, None, "");
+    let html = html("<\u{301}b> \"\u{301}", None, None, "", &PageState::default());
     assert!(html.contains("&lt;\u{301}b&gt; &quot;\u{301}"));
 }
 
 #[test]
 fn no_language_or_line_leaves_the_attributes_out() {
-    assert!(html("x", None, None, "").contains("<div id=\"ngterm-text\" hidden>x</div>"));
+    assert!(html("x", None, None, "", &PageState::default()).contains("<div id=\"ngterm-text\" hidden>x</div>"));
 }
 
 // regression (upstream): a newline right after <pre> is dropped by the parser and shifted every line number
 #[test]
 fn a_leading_blank_line_survives_in_the_holder() {
-    let html = html("\n\nfunc a()", None, None, "");
+    let html = html("\n\nfunc a()", None, None, "", &PageState::default());
     assert!(html.contains("<div id=\"ngterm-text\" hidden>\n\nfunc a()</div>"));
     assert!(!html.contains("<pre"));
 }
@@ -43,8 +43,8 @@ fn a_leading_blank_line_survives_in_the_holder() {
 fn text_over_the_highlight_cap_renders_plain() {
     let at_cap = "a".repeat(MAX_HIGHLIGHT_BYTES);
     let over_cap = format!("{at_cap}é");
-    assert!(html(&at_cap, Some("go"), None, "").contains("data-language=\"go\""));
-    assert!(!html(&over_cap, Some("go"), None, "").contains("data-language"));
+    assert!(html(&at_cap, Some("go"), None, "", &PageState::default()).contains("data-language=\"go\""));
+    assert!(!html(&over_cap, Some("go"), None, "", &PageState::default()).contains("data-language"));
 }
 
 #[test]
@@ -179,4 +179,83 @@ fn validate_accepts_utf8_and_refuses_binaries() {
     assert_eq!(validate(vec![0x61, 0x00, 0x62]), None);
     assert_eq!(validate(vec![0xFF, 0xFE, 0x61]), None);
     assert_eq!(validate(vec![0x61, 0xC3]), None);
+}
+
+/// Upstream's `onlyLogAndOutFilesAreLogs`.
+#[test]
+fn only_log_and_out_files_are_logs() {
+    for (path, log) in [
+        ("a.log", true),
+        ("/x/y/APP.LOG", true),
+        ("a.out", true),
+        ("a.txt", false),
+        ("a.log.gz", false),
+        ("/x/log", false),
+        ("a.swift", false),
+    ] {
+        assert_eq!(is_log(path), log, "{path}");
+    }
+}
+
+/// Upstream's `aLogPageCarriesItsStateInsteadOfALine`.
+#[test]
+fn a_log_page_carries_its_state_instead_of_a_line() {
+    let log = TextLogState {
+        following: true,
+        report: TextLogReport {
+            lines: 2,
+            clipped: true,
+            waiting: true,
+            unreadable: true,
+        },
+    };
+    let state = PageState {
+        log: Some(&log),
+        anchor: None,
+    };
+    let html = html("a\nb\n", None, Some(7), "", &state);
+    assert!(html.contains(
+        "<div id=\"ngterm-text\" hidden data-log data-following=\"true\" data-clipped data-waiting data-unreadable>"
+    ));
+    assert!(!html.contains("data-line"));
+}
+
+/// Upstream's `aPausedLogPageOmitsTheUnsetFlags`.
+#[test]
+fn a_paused_log_page_omits_the_unset_flags() {
+    let log = TextLogState::new(TextLog {
+        tail: 50,
+        follow: false,
+    });
+    let state = PageState {
+        log: Some(&log),
+        anchor: None,
+    };
+    assert!(
+        html("a", None, None, "", &state)
+            .contains("<div id=\"ngterm-text\" hidden data-log data-following=\"false\">a</div>")
+    );
+}
+
+/// Upstream's `aRebuiltPageCarriesOnlyAFiniteAnchor`, the anchor spelled as Swift's `Double` prints it.
+#[test]
+fn a_rebuilt_page_carries_only_a_finite_anchor() {
+    let paused = TextLogState::default();
+    let at = |log: Option<&TextLogState>, line: Option<i64>, anchor: Option<f64>| {
+        html("a", None, line, "", &PageState { log, anchor })
+    };
+    assert!(at(Some(&paused), None, Some(240.5)).contains("data-anchor=\"240.5\""));
+    assert!(at(None, Some(3), Some(80.0)).contains("data-line=\"3\" data-anchor=\"80.0\""));
+    assert!(!at(Some(&paused), None, Some(f64::INFINITY)).contains("data-anchor"));
+    assert!(!at(Some(&paused), None, Some(f64::NAN)).contains("data-anchor"));
+    assert!(!at(None, None, None).contains("data-anchor"));
+}
+
+/// The log constants are upstream's.
+#[test]
+fn the_log_limits_are_upstreams() {
+    assert_eq!(
+        (DEFAULT_TAIL, MAX_TAIL, MAX_TAIL_BYTES),
+        (5_000, 100_000, 2 * 1024 * 1024)
+    );
 }

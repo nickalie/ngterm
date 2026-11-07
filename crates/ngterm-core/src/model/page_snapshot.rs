@@ -23,6 +23,7 @@ use super::overlay_points::{OverlayPointSize, OverlaySize};
 use super::remote_overlay::{RemoteOverlaySlot, RemotePage};
 use super::session::Session;
 use super::status::is_valid_color_hex;
+use crate::html::text_page::TextLog;
 use crate::html::{self, HtmlOverlay, HtmlPageFlags, HtmlSource};
 use crate::link_policy::{IMAGE_EXTENSIONS, MARKDOWN_EXTENSIONS};
 use crate::pane_env::uuid_string;
@@ -51,9 +52,9 @@ pub(super) fn persisted_pages(session: &Session) -> Vec<(Uuid, PageSnapshot)> {
     local.chain(viewer).collect()
 }
 
-/// What a page's source is written as; a replica is never written.
-fn source_snapshot(source: &HtmlSource) -> Option<PageSourceSnapshot> {
-    Some(match source {
+/// What a page's source is written as, a log page's request with it; a replica is never written.
+fn source_snapshot(page: &HtmlOverlay) -> Option<PageSourceSnapshot> {
+    Some(match &page.source {
         HtmlSource::File { path, grant_root } => PageSourceSnapshot::File {
             path: path.clone(),
             grant_root: grant_root.clone(),
@@ -66,6 +67,8 @@ fn source_snapshot(source: &HtmlSource) -> Option<PageSourceSnapshot> {
         HtmlSource::Text { path, line } => PageSourceSnapshot::Text {
             path: path.clone(),
             line: *line,
+            tail: page.text_log.map(|log| i64::try_from(log.tail).unwrap_or(i64::MAX)),
+            follow: page.text_log.is_some_and(|log| log.follow),
         },
         HtmlSource::Document { path } => PageSourceSnapshot::Document { path: path.clone() },
         HtmlSource::Replica { .. } => return None,
@@ -88,7 +91,7 @@ fn viewer_page_snapshot(slot: &RemoteOverlaySlot, page: &RemotePage) -> Option<P
     let flags = page.overlay.flags;
     Some(PageSnapshot {
         slot: slot_snapshot(slot.pane),
-        source: source_snapshot(&page.overlay.source)?,
+        source: source_snapshot(&page.overlay)?,
         navigation: flags.navigation,
         javascript: flags.javascript,
         chromeless: flags.chromeless,
@@ -106,7 +109,7 @@ fn viewer_page_snapshot(slot: &RemoteOverlaySlot, page: &RemotePage) -> Option<P
 
 /// One page as persisted, with what its slot holds beside it: the size only in the session-wide slot.
 fn page_snapshot(session: &Session, pane: Option<OverlayPane>, shown: &HtmlOverlay) -> Option<PageSnapshot> {
-    let source = source_snapshot(&shown.source)?;
+    let source = source_snapshot(shown)?;
     let (slot, size_percent, points, background_color, hidden, holds_cover) = match pane {
         None => {
             let overlay = &session.overlay;
@@ -180,7 +183,7 @@ pub(super) fn restore_pages(session: &mut Session, pages: &[PageSnapshot], home:
             persistent: snapshot.persistent,
             browse: snapshot.browse,
         };
-        let Some(source) = restored_source(&snapshot.source, flags, home).filter(|_| free) else {
+        let Some(restored) = restored_page(&snapshot.source, flags, home).filter(|_| free) else {
             continue;
         };
         let size = OverlaySize {
@@ -195,16 +198,20 @@ pub(super) fn restore_pages(session: &mut Session, pages: &[PageSnapshot], home:
             .clone()
             .filter(|color| is_valid_color_hex(color));
         if snapshot.viewer {
+            // a log page is never handed to a presenter, so no viewer holds one
+            if restored.text_log.is_some() {
+                continue;
+            }
             let parked = ParkedPage {
                 pane,
                 size,
                 background_color,
                 hidden: snapshot.hidden,
             };
-            park_page(session, HtmlOverlay::new(source, flags), parked);
+            park_page(session, restored, parked);
             continue;
         }
-        session.install_html_overlay(pane, HtmlOverlay::new(source, flags), size, background_color);
+        session.install_html_overlay(pane, restored, size, background_color);
         match pane {
             None => session.overlay.hidden = snapshot.hidden,
             Some(pane) => {
@@ -261,13 +268,13 @@ fn park_page(session: &mut Session, overlay: HtmlOverlay, parked: ParkedPage) {
 pub(crate) struct LocalPagesSwept {
     /// The pages parked for the next presenter.
     pub(crate) parked: Vec<Uuid>,
-    /// Whether a page no presenter can show (an image, Markdown or text page) was closed.
+    /// Whether a page no presenter can show (an image, Markdown, text or log page) was closed.
     pub(crate) dropped: bool,
 }
 
 /// Parks every page open in `session`'s own slots that a presenter can show (a file or URL page), in the slot it held
 /// with its size, background and visibility: what a presenter-only origin, which renders no page itself, does with
-/// the pages a restore opened. They are parked in the order they were drawn, a pane page under the session-wide one
+/// the pages a restore opened (a log page is never one: a presenter would show it without its log state). They are parked in the order they were drawn, a pane page under the session-wide one
 /// before it and one holding it after, so the next presenter stacks them the same way. A page no presenter can show is
 /// closed, as nothing here would ever show it and it would hold its slot.
 pub(crate) fn park_local_pages(session: &mut Session) -> LocalPagesSwept {
@@ -278,7 +285,8 @@ pub(crate) fn park_local_pages(session: &mut Session) -> LocalPagesSwept {
         if !page.persisted() {
             continue;
         }
-        if crate::remote::presentation_source(&page.source).is_none() {
+        // a log page is never handed to a presenter, even once its text page could be
+        if crate::remote::presentation_source(&page.source).is_none() || page.text_log.is_some() {
             unpresentable.push(pane);
         } else if let Some(snapshot) = page_snapshot(session, pane, page) {
             local.push((pane, snapshot, page.clone()));
@@ -326,6 +334,29 @@ fn close_local_page(session: &mut Session, pane: Option<OverlayPane>) {
     }
 }
 
+/// The page a persisted entry opens, under a fresh id, when its source still checks out ([`restored_source`]) and, for
+/// a log page, its request does too: a tail in 1...[`MAX_TAIL`](html::text_page::MAX_TAIL) and no line beside it, as
+/// `session.overlay.open` would check them now.
+fn restored_page(source: &PageSourceSnapshot, flags: HtmlPageFlags, home: &str) -> Option<HtmlOverlay> {
+    let log = match source {
+        PageSourceSnapshot::Text { line, tail, follow, .. } if tail.is_some() || *follow => {
+            let tail = match tail {
+                None => html::text_page::DEFAULT_TAIL,
+                Some(tail) => usize::try_from(*tail)
+                    .ok()
+                    .filter(|tail| (1..=html::text_page::MAX_TAIL).contains(tail))?,
+            };
+            if line.is_some() {
+                return None;
+            }
+            Some(TextLog { tail, follow: *follow })
+        }
+        _ => None,
+    };
+    let source = restored_source(source, flags, home)?;
+    Some(HtmlOverlay::new(source, flags).with_text_log(log))
+}
+
 /// The source a persisted page shows, when it still checks out with `flags` as `session.overlay.open` would check it
 /// now, and the file it names is still there.
 fn restored_source(source: &PageSourceSnapshot, flags: HtmlPageFlags, home: &str) -> Option<HtmlSource> {
@@ -348,7 +379,7 @@ fn restored_source(source: &PageSourceSnapshot, flags: HtmlPageFlags, home: &str
         }
         PageSourceSnapshot::Markdown { path } => (document && shown_document(path, &MARKDOWN_EXTENSIONS))
             .then(|| HtmlSource::Markdown { path: path.clone() }),
-        PageSourceSnapshot::Text { path, line } => (document
+        PageSourceSnapshot::Text { path, line, .. } => (document
             && html::is_absolute(path)
             && html::text_page::is_eligible(path)
             && line.is_none_or(|line| line >= 1)

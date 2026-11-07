@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use ngterm_core::html;
+use ngterm_core::html::text_page;
 use ngterm_core::model::is_valid_color_hex;
 use ngterm_core::paths::Env;
 use ngterm_proto::command::SessionCmd;
@@ -164,6 +165,20 @@ pub struct Open {
 
     #[arg(
         long,
+        help = "With --text, show only the file's last N lines (1...100000), read from its end so a log of any size \
+                opens."
+    )]
+    tail: Option<i64>,
+
+    #[arg(
+        long,
+        help = "With --text, follow the file's end as it grows, with the last 5000 lines unless --tail says otherwise. \
+                Not --follow, which selects the session."
+    )]
+    follow_file: bool,
+
+    #[arg(
+        long,
         help = "With --html or --url, add back, forward, reload, open in browser, and Show in Finder or Copy Link \
                 buttons."
     )]
@@ -275,6 +290,7 @@ impl Open {
         if self.line.is_some_and(|line| line < 1) {
             return Err("--line must be 1 or more");
         }
+        self.validate_log()?;
         let page_options = self.companion
             || self.block
             || self.wait
@@ -312,6 +328,24 @@ impl Open {
             return self.validate_page_options();
         };
         Err(refusal)
+    }
+
+    /// A log page's options (upstream's `validateLog`): a text page with no line, and a tail in range.
+    fn validate_log(&self) -> Result<(), &'static str> {
+        if self.tail.is_none() && !self.follow_file {
+            return Ok(());
+        }
+        if self.text.is_none() {
+            return Err("--tail and --follow-file require --text");
+        }
+        if self.line.is_some() {
+            return Err("--tail and --follow-file cannot be combined with --line");
+        }
+        let in_range = |tail: i64| usize::try_from(tail).is_ok_and(|tail| (1..=text_page::MAX_TAIL).contains(&tail));
+        if self.tail.is_some_and(|tail| !in_range(tail)) {
+            return Err("--tail must be 1...100000");
+        }
+        Ok(())
     }
 
     /// The options of one kind of page only.
@@ -472,6 +506,8 @@ impl RequestCommand for Open {
             markdown_file: self.markdown.as_deref().map(absolute),
             text_file: self.text.as_deref().map(absolute),
             line: self.line,
+            tail: self.tail,
+            follow_file: flag(self.follow_file),
             navigation: flag(self.navigation),
             url: self.url.clone(),
             javascript: flag(self.javascript),
@@ -1328,6 +1364,81 @@ mod tests {
         for (argv, message) in cases {
             assert_eq!(refusal(argv), message, "{argv:?}");
         }
+    }
+
+    /// Upstream's `textOpenSendsTheTailAndFollowFile`: `--follow-file` is its own flag, never `--follow`.
+    #[test]
+    fn text_open_sends_the_tail_and_follow_file() {
+        assert_eq!(
+            args(&["open", "--text", "/tmp/app.log", "--tail", "200", "--follow-file"]),
+            json!({"textFile": native("/tmp/app.log"), "tail": 200, "followFile": true})
+        );
+        assert_eq!(
+            args(&["open", "--text", "/tmp/app.log"]),
+            json!({"textFile": native("/tmp/app.log")})
+        );
+    }
+
+    /// Upstream's `validateLog`, in its order: a text page first, then no line, then the range.
+    #[test]
+    fn log_options_are_refused_before_any_connection() {
+        let cases: [(&[&str], &str); 7] = [
+            (
+                &["open", "--markdown", "/tmp/r.md", "--tail", "10"],
+                "--tail and --follow-file require --text",
+            ),
+            (
+                &["open", "revdiff", "--follow-file"],
+                "--tail and --follow-file require --text",
+            ),
+            (
+                &["open", "--text", "/tmp/a.log", "--line", "3", "--tail", "10"],
+                "--tail and --follow-file cannot be combined with --line",
+            ),
+            (
+                &["open", "--text", "/tmp/a.log", "--line", "3", "--follow-file"],
+                "--tail and --follow-file cannot be combined with --line",
+            ),
+            (
+                &["open", "--text", "/tmp/a.log", "--tail", "0"],
+                "--tail must be 1...100000",
+            ),
+            (
+                &["open", "--text", "/tmp/a.log", "--tail", "100001"],
+                "--tail must be 1...100000",
+            ),
+            // the line's own refusals come first
+            (
+                &["open", "--markdown", "/tmp/r.md", "--line", "3", "--tail", "10"],
+                "--line requires --text",
+            ),
+        ];
+        for (argv, message) in cases {
+            assert_eq!(refusal(argv), message, "{argv:?}");
+        }
+        assert_eq!(
+            args(&["open", "--text", "/tmp/a.log", "--tail", "100000"])["tail"],
+            json!(text_page::MAX_TAIL)
+        );
+    }
+
+    /// Upstream's `openHelpTellsFollowFileFromFollow`, with the limits the help names.
+    #[test]
+    fn open_help_tells_follow_file_from_follow() {
+        let mut command = <Ngtermctl as clap::CommandFactory>::command();
+        let open = command
+            .find_subcommand_mut("session")
+            .and_then(|session| session.find_subcommand_mut("overlay"))
+            .and_then(|overlay| overlay.find_subcommand_mut("open"))
+            .unwrap();
+        let help = open.render_long_help().to_string();
+        assert!(help.contains("--follow-file"), "{help}");
+        assert!(help.contains("Not --follow, which selects the session."), "{help}");
+        assert!(help.contains(&format!("(1...{})", text_page::MAX_TAIL)), "{help}");
+        assert!(
+            help.contains(&format!("the last {} lines", text_page::DEFAULT_TAIL)),
+            "{help}"
+        );
     }
 
     #[test]

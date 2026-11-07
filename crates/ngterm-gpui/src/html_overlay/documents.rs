@@ -86,7 +86,14 @@ pub(super) fn read(source: &HtmlSource) -> Result<String, String> {
         }
         HtmlSource::Text { path, line } => {
             let text = ngterm_app::documents::load_text(std::path::Path::new(path))?;
-            Ok(text_page::html(&text, text_page::language(path), *line, &text_style()))
+            let state = text_page::PageState::default();
+            Ok(text_page::html(
+                &text,
+                text_page::language(path),
+                *line,
+                &text_style(),
+                &state,
+            ))
         }
         HtmlSource::Document { path } => {
             ngterm_app::documents::load_document(std::path::Path::new(path), document_page_builder())

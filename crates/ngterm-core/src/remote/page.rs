@@ -616,6 +616,7 @@ impl Core {
             background_color: page.background_color.clone(),
             follow: false,
             clicked: overlay.clicked,
+            text_log: overlay.text_log,
         };
         let size = page_size(&opening);
         let sent = OverlaySize {

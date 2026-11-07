@@ -200,6 +200,11 @@ pub struct Args {
     pub text_file: Option<String>,
     /// `session.overlay.open --line`: the line, from 1, a `textFile` page opens scrolled to and marks.
     pub line: Option<i64>,
+    /// `session.overlay.open --tail`: makes a `textFile` page a log page showing its last N lines.
+    pub tail: Option<i64>,
+    /// `session.overlay.open --follow-file`: makes a `textFile` page a log page following the file's end, with the
+    /// default tail when no `tail` is given.
+    pub follow_file: Option<bool>,
     pub current: Option<bool>,
     pub navigation: Option<bool>,
     pub url: Option<String>,
