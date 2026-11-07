@@ -36,15 +36,21 @@ const MULTI_VALUED_OPTIONS: [&str; 2] = ["-i", "--image"];
 /// The subcommands that run Codex without its TUI: `exec` (`e`) and its `resume`, `review`, and the servers.
 const HEADLESS: [&str; 5] = ["exec", "e", "review", "app-server", "mcp-server"];
 
-/// Whether the nearest Codex among `pid` and its ancestors runs headless; false when none is found or a process
-/// cannot be read.
+/// Whether the nearest Codex among `pid` and its ancestors runs headless; false when none is found or the chain of
+/// parents can't be followed.
 pub(super) fn headless_codex_above(pid: u32) -> bool {
+    walk(pid, argv_of, parent_of)
+}
+
+/// The walk of [`headless_codex_above`], over the given process readers. A process whose argv can't be read or is
+/// empty is not a Codex, but the walk goes on through its parent: a process in the middle of an `exec` shows an empty
+/// `/proc/<pid>/cmdline` for a moment, and a kernel thread has none.
+fn walk(pid: u32, argv_of: impl Fn(u32) -> Option<Vec<String>>, parent_of: impl Fn(u32) -> Option<u32>) -> bool {
     let mut pid = pid;
     for _ in 0..ANCESTORS {
-        let Some(argv) = argv_of(pid) else {
-            return false;
-        };
-        if is_codex(&argv) {
+        if let Some(argv) = argv_of(pid)
+            && is_codex(&argv)
+        {
             return runs_headless(&argv);
         }
         match parent_of(pid) {
@@ -201,6 +207,33 @@ mod tests {
 
     fn argv(words: &[&str]) -> Vec<String> {
         words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    // The flake CI hit (2026-11-07, `the_walk_finds_the_codex_a_hook_runs_under`): the hook's own process read while it
+    // was in the middle of an `exec`, so its argv came back empty and the walk stopped there instead of reaching the
+    // Codex above it.
+    #[test]
+    fn a_process_with_no_argv_is_walked_through_to_its_parent() {
+        let parents = |pid| match pid {
+            30 => Some(20),
+            20 => Some(10),
+            _ => None,
+        };
+        let mid_exec = |pid| match pid {
+            // 30, mid-exec, has no argv
+            20 => Some(argv(&["codex", "exec", "task"])),
+            _ => None,
+        };
+        assert!(walk(30, mid_exec, parents));
+        let tui = |pid| match pid {
+            // 30, mid-exec, has no argv
+            20 => Some(argv(&["codex", "--no-daemon"])),
+            _ => None,
+        };
+        assert!(!walk(30, tui, parents));
+        // no Codex anywhere, or a chain that can't be followed, is not headless
+        assert!(!walk(30, |_| None, parents));
+        assert!(!walk(30, mid_exec, |_| None));
     }
 
     #[test]
