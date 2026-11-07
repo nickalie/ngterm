@@ -18,7 +18,7 @@ use std::sync::LazyLock;
 use fancy_regex::Regex;
 use gpui_kit::{App, Global};
 use ngterm_core::ghostty_config::binds::Mods;
-use ngterm_core::link_policy::{self, ClickOrigin, Route};
+use ngterm_core::link_policy::{self, ClickIntent, ClickOrigin, Route};
 use ngterm_core::persist::settings::LinkOpenMode;
 use ngterm_term::{CellFlags, CellWidth, Frame, GridPoint, Pane};
 
@@ -348,15 +348,19 @@ pub fn link_open_mode(cx: &App) -> LinkOpenMode {
         .map_or(LinkOpenMode::Browser, |setting| setting.0)
 }
 
-/// Whether a click with `mods` held is the browser chord (upstream's ⌘⇧ override, [`link_policy::wants_browser`]):
-/// Ctrl+Shift or Super+Shift exactly, in an overlay mode, from a terminal with an owning session (`origin`), while
-/// the program does not capture the mouse (`captured`). The chord then makes links live as Ctrl or Super alone does,
-/// and the click opens its link in the browser.
+/// What a click with `mods` held asks for ([`link_policy::click_intent`]): the browser chord (Ctrl+Shift or Super+Shift
+/// exactly, in an overlay mode, from a terminal with an owning session, `origin`, while the program does not capture
+/// the mouse, `captured`), the reveal chord (Ctrl+Alt or Super+Alt exactly, from any terminal, with Shift under
+/// capture), or the setting's route. A chord makes links live as Ctrl or Super alone does. A terminal with no owning
+/// session (a HUD's, the quick terminal's) takes only the reveal chord.
 #[must_use]
-pub fn wants_browser(mods: Mods, origin: Option<ClickOrigin>, captured: bool, cx: &App) -> bool {
-    origin.is_some_and(|origin| {
-        link_policy::wants_browser(super::input::key_modifiers(mods), link_open_mode(cx), origin, captured)
-    })
+pub fn click_intent(mods: Mods, origin: Option<ClickOrigin>, captured: bool, cx: &App) -> ClickIntent {
+    link_policy::click_intent(
+        super::input::key_modifiers(mods),
+        link_open_mode(cx),
+        origin.unwrap_or(ClickOrigin::Hud),
+        captured,
+    )
 }
 
 /// Carries out what the link policy decides for a clicked link (the GTK build's `follow_link`): the desktop's handler
@@ -365,7 +369,9 @@ pub fn wants_browser(mods: Mods, origin: Option<ClickOrigin>, captured: bool, cx
 pub fn follow_link(raw: &str, mode: LinkOpenMode, origin: ClickOrigin, cx: &App) {
     match link_policy::route(raw, mode, origin) {
         Route::Browser(url) | Route::Overlay { url, .. } => cx.open_url(&url),
-        Route::Reveal(path) | Route::Image { path, .. } | Route::Markdown { path, .. } => cx.reveal_path(&path),
+        Route::Reveal(path) | Route::Image { path, .. } | Route::Markdown { path, .. } | Route::Text { path, .. } => {
+            cx.reveal_path(&path);
+        }
         Route::Ignore => tracing::debug!(raw, "link click ignored by the link policy"),
     }
 }

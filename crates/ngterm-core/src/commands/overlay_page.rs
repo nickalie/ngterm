@@ -244,6 +244,9 @@ fn prepare_document(
         HtmlSource::Markdown { path } if !checked => host
             .check_markdown(path)
             .map_err(|error| ControlError::rejected(format!("session.overlay.open: {error}")))?,
+        HtmlSource::Text { path, .. } if !checked => host
+            .check_text(path)
+            .map_err(|error| ControlError::rejected(format!("session.overlay.open: {error}")))?,
         _ => {}
     }
     Ok(())
@@ -346,8 +349,12 @@ pub(crate) fn navigate(
     if let Some(refusal) = crate::remote::replica_page::replica_navigation_refusal(shown, navigation) {
         return Err(ControlError::rejected(refusal));
     }
-    if matches!(shown.source, HtmlSource::Markdown { .. }) && navigation == HtmlNavigation::Browser {
-        return Err(ControlError::rejected(errors::MARKDOWN_IN_OVERLAY));
+    if navigation == HtmlNavigation::Browser {
+        match shown.source {
+            HtmlSource::Markdown { .. } => return Err(ControlError::rejected(errors::MARKDOWN_IN_OVERLAY)),
+            HtmlSource::Text { .. } => return Err(ControlError::rejected(errors::TEXT_IN_OVERLAY)),
+            _ => {}
+        }
     }
     let page_id = shown.id;
     let host = core

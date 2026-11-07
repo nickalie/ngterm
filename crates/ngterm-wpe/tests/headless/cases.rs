@@ -31,6 +31,38 @@ pub const CASES: &[(&str, Case)] = &[
         "markdown_shows_leading_frontmatter_as_a_wrapping_yaml_block",
         crate::markdown::frontmatter,
     ),
+    (
+        "text_page_keeps_hostile_text_text_whether_plain_or_highlighted",
+        crate::text::hostile,
+    ),
+    (
+        "text_page_markup_is_only_highlight_js_spans_with_no_authored_tags",
+        crate::text::spans,
+    ),
+    (
+        "text_page_renderer_runs_isolated_with_page_script_off_and_no_bridge",
+        crate::text::isolated,
+    ),
+    (
+        "text_page_highlights_mapped_source_and_leaves_plain_or_oversized_text_plain",
+        crate::text::highlighting,
+    ),
+    (
+        "text_page_marks_and_scrolls_to_the_requested_line",
+        crate::text::requested_line,
+    ),
+    (
+        "text_page_marks_nothing_for_a_line_outside_the_file",
+        crate::text::outside_line,
+    ),
+    (
+        "text_page_keeps_a_leading_blank_line_in_the_text_and_the_gutter",
+        crate::text::leading_blank_line,
+    ),
+    (
+        "text_page_bar_spans_the_visible_width_when_the_page_scrolls_sideways",
+        crate::text::bar,
+    ),
     ("frames_arrive_in_the_configured_mode_and_follow_the_geometry", frames),
     ("a_running_page_falls_back_to_shm_and_goes_on_drawing", fallback),
     ("scheme_pages_are_served_by_the_consumer", schemes),

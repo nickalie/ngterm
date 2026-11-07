@@ -338,7 +338,8 @@ fn source_url(source: &HtmlSource) -> Option<Url> {
         HtmlSource::File { path, .. }
         | HtmlSource::Replica { path }
         | HtmlSource::Image { path }
-        | HtmlSource::Markdown { path } => file_url(path),
+        | HtmlSource::Markdown { path }
+        | HtmlSource::Text { path, .. } => file_url(path),
         HtmlSource::Url(url) => Some(url.clone()),
     }
 }
@@ -355,8 +356,10 @@ pub fn page_url(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>) -
         return Some(shown.unwrap_or(source).clone());
     }
     if overlay.text_loaded()
-        && let HtmlSource::File { path, .. } | HtmlSource::Image { path } | HtmlSource::Markdown { path } =
-            &overlay.source
+        && let HtmlSource::File { path, .. }
+        | HtmlSource::Image { path }
+        | HtmlSource::Markdown { path }
+        | HtmlSource::Text { path, .. } = &overlay.source
     {
         return file_url(path);
     }
@@ -391,7 +394,7 @@ pub fn page_info(url: &Url, title: Option<&str>, can_go_back: bool, can_go_forwa
 pub fn browser_url(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>) -> Option<Url> {
     match &overlay.source {
         HtmlSource::File { path, .. } | HtmlSource::Image { path } => file_url(path),
-        HtmlSource::Replica { .. } | HtmlSource::Markdown { .. } => None,
+        HtmlSource::Replica { .. } | HtmlSource::Markdown { .. } | HtmlSource::Text { .. } => None,
         HtmlSource::Url(original) => {
             let current = if overlay.flags.browse { shown } else { web };
             Some(
@@ -461,7 +464,10 @@ pub fn strip_items(overlay: &HtmlOverlay, hide_shown: bool) -> Option<Vec<StripI
     let sharing = match overlay.source {
         HtmlSource::File { .. } => Some(StripItem::Files),
         HtmlSource::Url(_) => Some(StripItem::CopyLink),
-        HtmlSource::Replica { .. } | HtmlSource::Image { .. } | HtmlSource::Markdown { .. } => None,
+        HtmlSource::Replica { .. }
+        | HtmlSource::Image { .. }
+        | HtmlSource::Markdown { .. }
+        | HtmlSource::Text { .. } => None,
     };
     if overlay.flags.navigation
         && let Some(sharing) = sharing

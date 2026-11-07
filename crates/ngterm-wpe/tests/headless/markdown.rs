@@ -19,7 +19,7 @@ fn script() -> String {
 
 const STYLE: &str = include_str!("../../../../resources/markdown/page.css");
 
-fn escaped(text: &str) -> String {
+pub fn escaped(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

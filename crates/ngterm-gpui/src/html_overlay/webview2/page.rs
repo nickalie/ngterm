@@ -958,7 +958,7 @@ impl Page {
         };
         let Some(native) = self.native() else { return };
         let address = match source {
-            source @ (HtmlSource::Image { .. } | HtmlSource::Markdown { .. }) => {
+            source @ (HtmlSource::Image { .. } | HtmlSource::Markdown { .. } | HtmlSource::Text { .. }) => {
                 registry::read_document(self.id, generation, source);
                 return;
             }
@@ -1042,8 +1042,8 @@ impl Page {
                 native.go_forward();
             }
             HtmlNavigation::Browser => {
-                if matches!(self.overlay().source, HtmlSource::Markdown { .. }) {
-                    return Err(errors::MARKDOWN_IN_OVERLAY.to_owned());
+                if let Some(refusal) = super::super::documents::browser_refusal(&self.overlay().source) {
+                    return Err(refusal.to_owned());
                 }
                 let opened = self.browser_url().is_some_and(|url| super::browser::open(url.as_str()));
                 if !opened {

@@ -192,14 +192,14 @@ bullets).
 `[--markdown]` (listed; their one-source string changes here), `test_local_document_pages_are_not_remote_pages`
 (listed); new below.
 
-- [ ] `HtmlSource::Text { path, line }`: themed, no bridge, file grant, links or navigation; its policy arm runs ahead
+- [x] `HtmlSource::Text { path, line }`: themed, no bridge, file grant, links or navigation; its policy arm runs ahead
   of the shared exits and allows only a main-frame `about:blank`. Browser hand-off refuses "a text page opens only
   in its overlay"; Finder "show in Finder requires a file page". Local-only until Task 11.
-- [ ] `text_page`: upstream's extension map, plain extensions (txt text log out csv tsv env lock), basename languages
+- [x] `text_page`: upstream's extension map, plain extensions (txt text log out csv tsv env lock), basename languages
   and plain basenames; Markdown, HTML and SVG are not text pages. Validate refuses NUL and invalid UTF-8;
   `MAX_BYTES` 4 MiB, highlight cap 256 KiB (over it `data-language` is dropped); the text sits in a `div` holder;
   CSP `default-src 'none'; style-src 'unsafe-inline'`.
-- [ ] `session.overlay.open` `textFile`/`line`, in upstream's order: `line` without `textFile` ->
+- [x] `session.overlay.open` `textFile`/`line`, in upstream's order: `line` without `textFile` ->
   "session.overlay.open: --line requires --text" (first); the one-source refusal becomes "session.overlay.open
   takes one of a command, --html, --url, --image, --markdown or --text"; options -> "session.overlay.open: --text
   takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse"; "session.overlay.open: --text
@@ -207,40 +207,43 @@ bullets).
   source, config, text or log file"; then the probe: "session.overlay.open: unreadable text file: P", "... text file
   too large (over 4 MB): P", "... not a UTF-8 text file: P". `session.companion.page` with `textFile` -> "a page
   companion needs --html or --url".
-- [ ] Tree `htmlOverlays[].text = {file, language?, line?}` after `markdown`; `language` is the mapped one even past
+- [x] Tree `htmlOverlays[].text = {file, language?, line?}` after `markdown`; `language` is the mapped one even past
   the highlight cap; `line` is the requested line.
-- [ ] `ngtermctl session overlay open --text FILE [--line N]`: FILE resolved to an absolute path and never parsed as
+- [x] `ngtermctl session overlay open --text FILE [--line N]`: FILE resolved to an absolute path and never parsed as
   `path:line`; "provide exactly one of COMMAND, --html, --url, --image, --markdown or --text", "--line requires
   --text", "--line must be 1 or more", "--text takes no --companion, --block, --wait, --navigation, --js,
   --chromeless, --persistent, --browse or --cwd"; help from upstream.
-- [ ] Link routing: an eligible local path from a pane or the scratch -> `Route::Text` at the mode's size (95 in
+- [x] Link routing: an eligible local path from a pane or the scratch -> `Route::Text` at the mode's size (95 in
   browser mode); from a remote pane, HUD, program overlay or quick terminal, or on a refused/unreadable/binary
   open -> reveal. `link_policy::locations(raw, origin, cwd)`: the literal path, then the path without its
   `:line[:column]`; a relative link joins the pane's cwd before any scheme parse; every candidate passes the
   guarded-path checks before a stat; the frontend stats on a worker; none found keeps the typed route. This
   replaces `detected_relative_path` (`crates/ngterm-gpui/src/state.rs:42-61`). On Windows a drive colon stays.
-- [ ] Click intent: Ctrl/Super+Shift -> browser (today's rule); Ctrl/Super+Alt (+Shift under mouse capture) ->
+- [x] Click intent: Ctrl/Super+Shift -> browser (today's rule); Ctrl/Super+Alt (+Shift under mouse capture) ->
   reveal the route's local file from any origin, HUD included, while a web link keeps its web route; a dragged
   reveal reveals nothing and keeps the block selection. Name the AltGr overlap on Windows and desktop grabs of
   Super+Alt on Linux in the module docs.
-- [ ] Renderer: `text_script` = highlight + `text.js`, `text_style` = page.css + `text.css`, in the isolated world on
+- [x] Renderer: `text_script` = highlight + `text.js`, `text_style` = page.css + `text.css`, in the isolated world on
   each backend (WKContentWorld, WPE named world, the CDP isolated world on WebView2); the bar stays pinned to the
   visible width (b7884db). Until Task 8's channel, text.js page->host posts are swallowed (add the WebView2
   `window.webkit` shim if needed).
-- [ ] write tests: Rust unit tests porting the Swift cases above (language map, eligibility, validation, inert
+- [x] write tests: Rust unit tests porting the Swift cases above (language map, eligibility, validation, inert
   escaping with a combining mark, leading blank line kept; every listed LinkPolicy case and the chord table; the
   dispatcher refusal table and round trip with `"textFile":"/tmp/a:12.go","line":7`; projection; ngterm-app probes:
   missing, FIFO, directory, oversize, NUL, non-UTF-8; navigation policy; gpui state: `path:line` opens at line N, a
   literal colon-named file wins, a missing location keeps its route, reveal never opens, shell metacharacters in the
   cwd stay data; mouse: Alt stripped, a drag keeps the block).
-- [ ] write tests: conformance (`since("0.41.0")`), updating the listed string tests in this commit:
+- [x] write tests: conformance (`since("0.41.0")`), updating the listed string tests in this commit:
   `test_document_pages.py::test_document_open_refusals` gains `textFile` (type refusal for x.svg, x.md, x.html and
   "/x/a.go:12"); `::test_text_page_reads_back_its_source` (open main.go at line 3: `text == {file, language: "go",
   line: 3}`, browser/finder refusals, reload keeps the source); `::test_text_open_line_and_file_refusals`;
   `::test_local_document_pages_are_not_remote_pages` gains `("textFile", "x.go")`; `test_document_pages_cli.py`
   gains `--text` and `::test_cli_text_source_is_taken_literally`; `tests/ui/test_html_overlay.py::test_a_text_file_renders_at_its_line_and_the_tree_names_its_source`.
-- [ ] manual GUI checks: Ctrl-click `./main.go:42:7` opens at the line; Ctrl+Alt-click reveals; Ctrl+Alt-drag
-  still selects a block.
+- [x] manual GUI checks: Ctrl-click `./main.go:42:7` opens at the line; Ctrl+Alt-click reveals; Ctrl+Alt-drag
+  still selects a block. (Automated instead of a manual run: `state::tests::a_relative_location_opens_its_file_as_a_text_page_at_the_line`,
+  `the_reveal_chord_reveals_and_never_opens`, `terminal::input_tests::the_reveal_chord_lights_the_link_and_asks_for_a_reveal`,
+  `a_dragged_reveal_chord_keeps_the_block_selection_and_opens_nothing`; the renderer in real WebKit is
+  `ngterm-wpe`'s headless text cases.)
 
 ### Task 4: A clicked path that ends a sentence (#881)
 

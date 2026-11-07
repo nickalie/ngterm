@@ -54,6 +54,7 @@ mod session;
 mod session_info;
 mod sidebar;
 mod surface;
+mod text_pages;
 mod theme;
 mod tint;
 mod viewer;

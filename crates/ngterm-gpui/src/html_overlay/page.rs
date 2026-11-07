@@ -378,12 +378,8 @@ impl Page {
             InjectionTime::Start,
             Some(THEME_WORLD),
         )];
-        if matches!(overlay.source, HtmlSource::Markdown { .. }) {
-            scripts.push(script(
-                &super::documents::script(),
-                InjectionTime::End,
-                Some(super::documents::WORLD),
-            ));
+        if let Some(renderer) = super::documents::renderer(&overlay.source) {
+            scripts.push(script(&renderer, InjectionTime::End, Some(super::documents::WORLD)));
             return scripts;
         }
         if !overlay.bridged() {
@@ -673,7 +669,7 @@ impl Page {
             state.overlay.source.clone()
         };
         let load = match source {
-            source @ (HtmlSource::Image { .. } | HtmlSource::Markdown { .. }) => {
+            source @ (HtmlSource::Image { .. } | HtmlSource::Markdown { .. } | HtmlSource::Text { .. }) => {
                 registry::read_document(self.id, generation, source);
                 return;
             }
@@ -748,8 +744,8 @@ impl Page {
                 web.go_forward(view);
             }
             HtmlNavigation::Browser => {
-                if matches!(self.overlay().source, HtmlSource::Markdown { .. }) {
-                    return Err(errors::MARKDOWN_IN_OVERLAY.to_owned());
+                if let Some(refusal) = super::documents::browser_refusal(&self.overlay().source) {
+                    return Err(refusal.to_owned());
                 }
                 let opened = self
                     .browser_url()
@@ -1057,6 +1053,51 @@ mod document_tests {
             Some(crate::html_overlay::documents::WORLD)
         );
         assert_eq!(spec.scripts[1].time, ngterm_wpe::InjectionTime::End);
+    }
+
+    /// Upstream's `testTheRendererRunsIsolatedWithPageScriptOffNoBridgeAndNoBaseURL`: a text page runs highlight.js and
+    /// `text.js` in the renderer's world, with no Markdown parser, page script, bridge or file access.
+    #[test]
+    fn text_renderer_is_isolated_without_authored_scripts_bridge_or_file_access() {
+        let page = page(HtmlSource::Text {
+            path: "/not-read.go".to_owned(),
+            line: Some(3),
+        });
+        let recorder = Rc::new(Recorder::default());
+        let web: Rc<dyn Web> = recorder.clone();
+        page.realize(&web, Some(SessionId::from_raw(1)), 1.0);
+        let specs = recorder.specs.borrow();
+        let spec = &specs[0];
+        assert!(!spec.settings.intersects(
+            Settings::JAVASCRIPT_MARKUP
+                | Settings::FILE_ACCESS_FROM_FILE_URLS
+                | Settings::UNIVERSAL_ACCESS_FROM_FILE_URLS
+        ));
+        assert!(spec.message_handlers.is_empty());
+        assert_eq!(spec.scripts.len(), 2);
+        let renderer = &spec.scripts[1];
+        assert_eq!(renderer.world.as_deref(), Some(crate::html_overlay::documents::WORLD));
+        assert_eq!(renderer.time, ngterm_wpe::InjectionTime::End);
+        assert_eq!(renderer.source, crate::html_overlay::documents::text_script());
+        assert!(!renderer.source.contains("markdownit"));
+    }
+
+    /// A text page is built by the app: the browser would get the raw file, and the file manager reveals file pages
+    /// only (upstream's `testATextPageStaysInItsOverlay`).
+    #[test]
+    fn a_text_page_stays_in_its_overlay() {
+        let page = page(HtmlSource::Text {
+            path: "/not-read.go".to_owned(),
+            line: None,
+        });
+        assert_eq!(
+            page.navigate(ngterm_core::html::HtmlNavigation::Browser),
+            Err(ngterm_core::html::errors::TEXT_IN_OVERLAY.to_owned())
+        );
+        assert_eq!(
+            page.navigate(ngterm_core::html::HtmlNavigation::Finder),
+            Err(ngterm_core::html::errors::FINDER_REQUIRES_FILE.to_owned())
+        );
     }
 
     #[test]

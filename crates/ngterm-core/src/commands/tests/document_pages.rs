@@ -92,19 +92,19 @@ fn documents_reject_sources_flags_and_paths_before_resolving_a_target() {
     let cases = [
         (
             json!({"image": image, "html": path("x.html")}),
-            "session.overlay.open takes one of a command, --html, --url, --image or --markdown",
+            "session.overlay.open takes one of a command, --html, --url, --image, --markdown or --text",
         ),
         (
             json!({"image": image, "url": "https://example.com/"}),
-            "session.overlay.open takes one of a command, --html, --url, --image or --markdown",
+            "session.overlay.open takes one of a command, --html, --url, --image, --markdown or --text",
         ),
         (
             json!({"image": image, "markdownFile": markdown}),
-            "session.overlay.open takes one of a command, --html, --url, --image or --markdown",
+            "session.overlay.open takes one of a command, --html, --url, --image, --markdown or --text",
         ),
         (
             json!({"markdownFile": markdown, "command": "cat"}),
-            "session.overlay.open takes one of a command, --html, --url, --image or --markdown",
+            "session.overlay.open takes one of a command, --html, --url, --image, --markdown or --text",
         ),
         (
             json!({"image": image, "cwd": path(".")}),

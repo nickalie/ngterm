@@ -306,6 +306,46 @@ fn markdown_plain_utf8_and_checks_have_exact_failures() {
     assert_eq!(probe_markdown(&big).unwrap_err(), message);
 }
 
+/// Upstream's `TextProbeTests`: the text read back, and each refusal with its path.
+#[test]
+fn text_reads_back_and_refuses_missing_directories_oversize_and_binaries() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "main.go", b"\npackage main\n");
+    assert_eq!(load_text(&path).unwrap(), "\npackage main\n");
+    check_text(&path).unwrap();
+    let missing = dir.path().join("missing.go");
+    assert_eq!(
+        check_text(&missing).unwrap_err(),
+        format!("unreadable text file: {}", missing.display())
+    );
+    let folder = dir.path().join("sub.txt");
+    fs::create_dir(&folder).unwrap();
+    assert_eq!(
+        check_text(&folder).unwrap_err(),
+        format!("unreadable text file: {}", folder.display())
+    );
+    let big = write(dir.path(), "big.log", []);
+    File::options()
+        .write(true)
+        .open(&big)
+        .unwrap()
+        .set_len((text_page::MAX_BYTES + 1) as u64)
+        .unwrap();
+    assert_eq!(
+        check_text(&big).unwrap_err(),
+        format!("text file too large (over 4 MB): {}", big.display())
+    );
+    let at_cap = write(dir.path(), "cap.log", "a".repeat(text_page::MAX_BYTES));
+    assert_eq!(load_text(&at_cap).unwrap().len(), text_page::MAX_BYTES);
+    for (name, bytes) in [("nul.txt", &b"a\0b"[..]), ("bad.txt", &[0xFF, 0xFE, 0x61][..])] {
+        let binary = write(dir.path(), name, bytes);
+        assert_eq!(
+            check_text(&binary).unwrap_err(),
+            format!("not a UTF-8 text file: {}", binary.display())
+        );
+    }
+}
+
 #[test]
 fn canonical_aliases_embed_one_payload_and_failures_consume_probe_budget() {
     let dir = tempfile::tempdir().unwrap();
@@ -401,6 +441,11 @@ fn fifo_devices_symlinks_and_canonical_escape_are_checked_without_reads() {
             .unwrap_err()
             .starts_with("unreadable markdown file:")
     );
+    let text_fifo = dir.path().join("pipe.log");
+    let text_path = std::ffi::CString::new(text_fifo.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: a nul-terminated path owned by this test, ordinary owner-only permissions.
+    assert_eq!(unsafe { libc::mkfifo(text_path.as_ptr(), 0o600) }, 0);
+    assert!(check_text(&text_fifo).unwrap_err().starts_with("unreadable text file:"));
     let device = dir.path().join("zero.png");
     symlink("/dev/zero", &device).unwrap();
     assert!(probe_image(&device).unwrap_err().starts_with("unreadable image:"));

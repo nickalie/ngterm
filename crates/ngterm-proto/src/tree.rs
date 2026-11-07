@@ -405,6 +405,19 @@ pub struct ControlSessionAsk {
     pub replica: Option<bool>,
 }
 
+/// A text page's source (upstream's `ControlTextOverlayNode`): the file, the highlight.js language its name maps to
+/// (omitted when unmapped, and still reported for a file too large to highlight), and the line it was opened at, not
+/// the line in view.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlTextOverlayNode {
+    pub file: String,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub line: Option<i64>,
+}
+
 /// One HTML page in an overlay slot.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -426,6 +439,9 @@ pub struct ControlHtmlOverlayNode {
     pub image: Option<String>,
     #[serde(default)]
     pub markdown: Option<String>,
+    /// A text page's source (upstream's `ControlTextOverlayNode`).
+    #[serde(default)]
+    pub text: Option<ControlTextOverlayNode>,
     /// `loading`, `loaded` or `failed`.
     pub state: String,
     #[serde(default)]

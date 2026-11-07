@@ -75,6 +75,14 @@ const CHROMELESS_WITH_NAVIGATION: &str = "session.overlay.open: --chromeless can
 const CHROMELESS_WITH_BROWSE: &str = "session.overlay.open: --chromeless cannot be combined with --browse";
 const PERSISTENT_REQUIRES_URL: &str = "session.overlay.open: --persistent requires --url";
 const BROWSE_REQUIRES_URL: &str = "session.overlay.open: --browse requires --url";
+const ONE_SOURCE: &str = "session.overlay.open takes one of a command, --html, --url, --image, --markdown or --text";
+/// A text page runs no script, navigates nowhere and reads only its own file.
+const TEXT_OPTIONS: &str =
+    "session.overlay.open: --text takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse";
+const TEXT_NOT_ABSOLUTE: &str = "session.overlay.open: --text must be an absolute path";
+const TEXT_TYPE: &str = "session.overlay.open: --text must be a source, config, text or log file";
+const LINE_WITHOUT_TEXT: &str = "session.overlay.open: --line requires --text";
+const LINE_NOT_POSITIVE: &str = "session.overlay.open: --line must be 1 or more";
 const NAVIGATION: &str = "session.overlay.navigate requires back, forward, browser or finder";
 const SUBMIT_VALUE: &str = "session.overlay.submit requires a value";
 const INVALID_PAGE_ID: &str = "invalid page id";
@@ -147,17 +155,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
 /// A local document's path and flags, before resolving any target (upstream imageContent/markdownContent).
 fn document_content(path: &str, args: &Args, image: bool) -> Result<OverlayContent, ControlError> {
     let kind = if image { "image" } else { "markdown" };
-    if args.cwd.is_some()
-        || [
-            args.wait,
-            args.navigation,
-            args.javascript,
-            args.chromeless,
-            args.persistent,
-            args.browse,
-        ]
-        .contains(&Some(true))
-    {
+    if document_flags(args) {
         return Err(ControlError::rejected(format!(
             "session.overlay.open: --{kind} takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse"
         )));
@@ -192,6 +190,40 @@ fn document_content(path: &str, args: &Args, image: bool) -> Result<OverlayConte
     }))
 }
 
+/// A text page's path, line and flags, before resolving any target (upstream's `textContent`): the path is taken
+/// literally, never split at a `:line` suffix, and dot-normalized before its name is judged.
+fn text_content(path: &str, args: &Args) -> Result<OverlayContent, ControlError> {
+    if document_flags(args) {
+        return Err(ControlError::rejected(TEXT_OPTIONS));
+    }
+    if !html::is_absolute(path) {
+        return Err(ControlError::rejected(TEXT_NOT_ABSOLUTE));
+    }
+    if args.line.is_some_and(|line| line < 1) {
+        return Err(ControlError::rejected(LINE_NOT_POSITIVE));
+    }
+    let path = html::normalize_path(path);
+    if !html::text_page::is_eligible(&path) {
+        return Err(ControlError::rejected(TEXT_TYPE));
+    }
+    Ok(OverlayContent::Page(HtmlSource::Text { path, line: args.line }))
+}
+
+/// Whether a document source carries a flag only a program or a file/URL page takes: `--cwd`, `--wait`,
+/// `--navigation`, `--js`, `--chromeless`, `--persistent` or `--browse`.
+fn document_flags(args: &Args) -> bool {
+    args.cwd.is_some()
+        || [
+            args.wait,
+            args.navigation,
+            args.javascript,
+            args.chromeless,
+            args.persistent,
+            args.browse,
+        ]
+        .contains(&Some(true))
+}
+
 /// The `session.overlay.*` pane selector (upstream's `parseOverlayPane`): absent keeps the session-wide slot, the
 /// pane aliases scope to one pane, anything else (the scratch included) is refused.
 fn parse_overlay_pane(raw: Option<&str>) -> Result<Option<OverlayPane>, ControlError> {
@@ -212,17 +244,27 @@ pub(super) enum OverlayContent {
 pub(super) fn overlay_content(command: &str, args: &Args, home: Option<&str>) -> Result<OverlayContent, ControlError> {
     let reject = |message: &str| Err(ControlError::rejected(message));
     let set = |flag: Option<bool>| flag == Some(true);
+    if args.line.is_some() && args.text_file.is_none() {
+        return reject(LINE_WITHOUT_TEXT);
+    }
+    let page_source = !command.is_empty() || args.html.is_some() || args.url.is_some();
     if let Some(path) = args.image.as_deref() {
-        if !command.is_empty() || args.html.is_some() || args.url.is_some() || args.markdown_file.is_some() {
-            return reject("session.overlay.open takes one of a command, --html, --url, --image or --markdown");
+        if page_source || args.markdown_file.is_some() || args.text_file.is_some() {
+            return reject(ONE_SOURCE);
         }
         return document_content(path, args, true);
     }
     if let Some(path) = args.markdown_file.as_deref() {
-        if !command.is_empty() || args.html.is_some() || args.url.is_some() {
-            return reject("session.overlay.open takes one of a command, --html, --url, --image or --markdown");
+        if page_source || args.text_file.is_some() {
+            return reject(ONE_SOURCE);
         }
         return document_content(path, args, false);
+    }
+    if let Some(path) = args.text_file.as_deref() {
+        if page_source {
+            return reject(ONE_SOURCE);
+        }
+        return text_content(path, args);
     }
     match (args.html.as_deref(), args.url.as_deref()) {
         (None, None) => {

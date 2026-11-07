@@ -228,10 +228,10 @@ pub enum Report {
     Held,
     /// The live font size changed.
     FontSize(f64),
-    /// A clicked link; `browser`: the Ctrl/Super+Shift override ([`TerminalEvent::OpenUrl`]).
+    /// A clicked link and what its chord asked for ([`TerminalEvent::OpenUrl`]).
     OpenUrl {
         url: String,
-        browser: bool,
+        intent: ngterm_core::link_policy::ClickIntent,
         kind: LinkKind,
     },
     /// A key the user pressed in the pane: user activity, and the status glyph it clears.
@@ -255,9 +255,9 @@ pub fn report(event: &TerminalEvent, ran: Ran, hostname: &str, points: f32, cove
         ))],
         TerminalEvent::EndSearch => vec![Report::Search(SearchReport::Ended)],
         TerminalEvent::FontSize => vec![Report::FontSize(f64::from(points))],
-        TerminalEvent::OpenUrl { url, browser, kind } => vec![Report::OpenUrl {
+        TerminalEvent::OpenUrl { url, intent, kind } => vec![Report::OpenUrl {
             url: url.clone(),
-            browser: *browser,
+            intent: *intent,
             kind: *kind,
         }],
         TerminalEvent::Keystroke(_) if covered => Vec::new(),
@@ -305,7 +305,7 @@ pub fn post_report(poster: &Poster, session: Uuid, token: &str, report: Report, 
                 state.settle();
             }
         }
-        Report::OpenUrl { url, browser, kind } => state.follow_pane_link(&url, session, &token, browser, kind),
+        Report::OpenUrl { url, intent, kind } => state.follow_pane_link(&url, session, &token, intent, kind),
         Report::Keystroke(keystroke) => state.pane_keystroke(session, &token, keystroke),
         Report::Notification { title, body } => state.terminal_notification(session, &token, &title, &body, focus),
     });

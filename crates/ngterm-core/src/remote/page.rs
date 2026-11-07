@@ -85,7 +85,10 @@ pub(crate) fn presentation_source(source: &HtmlSource) -> Option<PresentationPag
         HtmlSource::Url(url) => Some(PresentationPageSource::Url {
             address: url.as_str().to_owned(),
         }),
-        HtmlSource::Replica { .. } | HtmlSource::Image { .. } | HtmlSource::Markdown { .. } => None,
+        HtmlSource::Replica { .. }
+        | HtmlSource::Image { .. }
+        | HtmlSource::Markdown { .. }
+        | HtmlSource::Text { .. } => None,
     }
 }
 

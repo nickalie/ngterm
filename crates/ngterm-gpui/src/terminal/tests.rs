@@ -1562,7 +1562,9 @@ fn take_screen_file(cx: &mut VisualTestContext) -> (String, String) {
 fn opened(events: &Events) -> Option<std::path::PathBuf> {
     events.borrow().iter().find_map(|event| match event {
         TerminalEvent::OpenUrl {
-            url, browser: false, ..
+            url,
+            intent: ngterm_core::link_policy::ClickIntent::Normal,
+            ..
         } => Some(std::path::PathBuf::from(url)),
         _ => None,
     })

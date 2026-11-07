@@ -18,7 +18,7 @@ use gpui_kit::{
 use ngterm_core::clipboard_policy::{ClipboardAccess, ClipboardDecision};
 use ngterm_core::ghostty_config::{DEFAULTS, Loader};
 use ngterm_core::keymap::{CustomCommand, linux_defaults, parse_keymap};
-use ngterm_core::link_policy::ClickOrigin;
+use ngterm_core::link_policy::{ClickIntent, ClickOrigin};
 use ngterm_core::persist::settings::LinkOpenMode;
 use ngterm_term::{GridPoint, Pane, PaneCommand, PaneConfig, SelectionText};
 
@@ -987,10 +987,18 @@ fn links_open_with_ctrl_shift_while_the_program_has_the_mouse(cx: &mut TestAppCo
 
 // the browser chord (upstream's ⌘⇧ link override, `GhosttySurfaceViewInputTests`)
 
+fn intent_of(browser: bool) -> ClickIntent {
+    if browser {
+        ClickIntent::Browser
+    } else {
+        ClickIntent::Normal
+    }
+}
+
 fn open_url(url: &str, browser: bool) -> TerminalEvent {
     TerminalEvent::OpenUrl {
         url: url.to_owned(),
-        browser,
+        intent: intent_of(browser),
         kind: LinkKind::Url,
     }
 }
@@ -998,7 +1006,7 @@ fn open_url(url: &str, browser: bool) -> TerminalEvent {
 fn open_osc8(url: &str, browser: bool) -> TerminalEvent {
     TerminalEvent::OpenUrl {
         url: url.to_owned(),
-        browser,
+        intent: intent_of(browser),
         kind: LinkKind::Osc8,
     }
 }
@@ -1178,6 +1186,67 @@ fn the_chord_in_browser_mode_or_without_a_session_is_not_a_link_click(cx: &mut T
         f.cx.run_until_parked();
         assert!(opened_links(&f).is_empty(), "{pane} {mode:?}");
     }
+}
+
+const CTRL_ALT: Modifiers = Modifiers {
+    control: true,
+    alt: true,
+    shift: false,
+    platform: false,
+    function: false,
+};
+
+/// Upstream's `testCommandOptionClickOnALinkRevealsIt`, Ctrl standing for ⌘ and Alt for ⌥: the reveal chord lights
+/// the link as Ctrl alone does (its Alt stripped) and the click asks for a reveal, in every mode and from a terminal
+/// with no owning session too.
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn the_reveal_chord_lights_the_link_and_asks_for_a_reveal(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\nsee /tmp/main.go:42 or https://example.com/p'; exec sleep 30";
+    let mut f = fixture(cx, script, config(""));
+    f.wait_painted("example.com/p");
+    for (pane, mode) in [
+        (true, LinkOpenMode::Overlay),
+        (true, LinkOpenMode::Browser),
+        (false, LinkOpenMode::Overlay),
+    ] {
+        link_owner(&mut f, pane, mode);
+        f.events.borrow_mut().clear();
+        f.cx.simulate_mouse_move(Fixture::at(8, 1), None, CTRL_ALT);
+        let hovered = f
+            .view
+            .read_with(f.cx, |view, _| view.hovered_link().map(|link| link.url.clone()));
+        assert_eq!(hovered.as_deref(), Some("/tmp/main.go:42"), "{pane} {mode:?}");
+        f.click(8, 1, CTRL_ALT);
+        f.cx.run_until_parked();
+        assert_eq!(
+            opened_links(&f),
+            [TerminalEvent::OpenUrl {
+                url: "/tmp/main.go:42".to_owned(),
+                intent: ClickIntent::Reveal,
+                kind: LinkKind::Url,
+            }],
+            "{pane} {mode:?}"
+        );
+    }
+}
+
+/// Upstream's `testCommandOptionDragKeepsTheRectangleSelection`: a dragged reveal chord reveals nothing and keeps the
+/// block selection Ctrl+Alt draws.
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn a_dragged_reveal_chord_keeps_the_block_selection_and_opens_nothing(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\n/tmp/main.go:42 abc\\r\\n/tmp/other.go:7 def'; exec sleep 30";
+    let mut f = fixture(cx, script, config(""));
+    f.wait_painted("other.go:7");
+    link_owner(&mut f, true, LinkOpenMode::Overlay);
+    f.cx.simulate_mouse_move(Fixture::at(1, 1), None, CTRL_ALT);
+    f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Left, CTRL_ALT);
+    f.cx.simulate_mouse_move(Fixture::at(4, 2), Some(MouseButton::Left), CTRL_ALT);
+    f.cx.simulate_mouse_up(Fixture::at(4, 2), MouseButton::Left, CTRL_ALT);
+    f.cx.run_until_parked();
+    assert!(opened_links(&f).is_empty());
+    assert_eq!(f.selection().as_deref(), Some("tmp\ntmp"), "a block, not a stream");
 }
 
 #[gpui_kit::test]

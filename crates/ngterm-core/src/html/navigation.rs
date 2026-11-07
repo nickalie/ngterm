@@ -89,6 +89,15 @@ pub enum HtmlNavigationDecision {
 #[must_use]
 pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavigationDecision {
     use HtmlNavigationDecision::{Allow, Cancel, OpenExternal};
+    // ahead of the shared exits: a text page shows only the document the app built, so not even a user-activated web
+    // link or another about: address leaves it
+    if matches!(overlay.source, HtmlSource::Text { .. }) {
+        return if action.target == HtmlNavigationTarget::MainFrame && action.url.as_str() == "about:blank" {
+            Allow
+        } else {
+            Cancel
+        };
+    }
     let scheme = action.url.scheme().to_ascii_lowercase();
     let web = scheme == "http" || scheme == "https";
     let offer = if action.user_activated { OpenExternal } else { Cancel };
@@ -99,7 +108,7 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
         return Allow;
     }
     match &overlay.source {
-        HtmlSource::Image { .. } => Cancel,
+        HtmlSource::Image { .. } | HtmlSource::Text { .. } => Cancel,
         HtmlSource::Markdown { .. } => {
             if web {
                 offer
@@ -305,6 +314,56 @@ mod tests {
             let decided = decide(&action(url, target, user), &url_page(false));
             assert_eq!(decided, decision, "{url} {target:?} {user}");
         }
+    }
+
+    /// Upstream's `HtmlOverlayTests.textPagePolicyAllowsOnlyItsOwnBlankDocument`: a text page leaves its own blank
+    /// document for nothing, not even a user-activated web link.
+    #[test]
+    fn a_text_page_allows_only_its_own_blank_document() {
+        let page = HtmlOverlay::new(
+            HtmlSource::Text {
+                path: "/tmp/src/main.go".to_owned(),
+                line: Some(4),
+            },
+            HtmlPageFlags::default(),
+        );
+        for (url, target, user, decision) in [
+            ("about:blank", MainFrame, false, Allow),
+            ("about:blank", MainFrame, true, Allow),
+            ("about:blank", Subframe, false, Cancel),
+            ("about:blank", NewWindow, true, Cancel),
+            ("about:srcdoc", MainFrame, false, Cancel),
+            ("about:blank#x", MainFrame, true, Cancel),
+            ("https://example.com/", MainFrame, true, Cancel),
+            ("http://example.com/a", NewWindow, true, Cancel),
+            ("file:///tmp/src/main.go", MainFrame, true, Cancel),
+            ("javascript:alert(1)", MainFrame, true, Cancel),
+            ("data:text/html,x", MainFrame, true, Cancel),
+        ] {
+            let decided = decide(&action(url, target, user), &page);
+            assert_eq!(decided, decision, "{url} {target:?} {user}");
+        }
+    }
+
+    /// Upstream's `HtmlOverlayTests.aTextPageIsNamedByItsFileNeverTheTitle`.
+    #[test]
+    fn a_text_page_is_named_by_its_file_never_the_title() {
+        let mut page = HtmlOverlay::new(
+            HtmlSource::Text {
+                path: "/tmp/src/main.go".to_owned(),
+                line: Some(4),
+            },
+            HtmlPageFlags::default(),
+        );
+        page.current = Some(crate::html::HtmlPageInfo {
+            page: "/tmp/src/main.go".to_owned(),
+            title: Some("enter your password".to_owned()),
+            can_go_back: false,
+            can_go_forward: false,
+        });
+        assert_eq!(page.identity(), "main.go");
+        assert_eq!(page.source.text(), "/tmp/src/main.go");
+        assert!(page.themed() && page.text_loaded() && page.document() && !page.bridged());
     }
 
     /// Upstream's `HtmlOverlayTests.replicaPolicyAllowsOnlyItsOwnSchemeOrigin`, on the build's `ngterm-page` scheme.

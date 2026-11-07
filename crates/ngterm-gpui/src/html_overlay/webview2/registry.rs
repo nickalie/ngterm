@@ -144,6 +144,9 @@ impl HtmlHost for PageHost {
     fn check_markdown(&self, path: &str) -> Result<(), String> {
         ngterm_app::documents::check_markdown(std::path::Path::new(path))
     }
+    fn check_text(&self, path: &str) -> Result<(), String> {
+        ngterm_app::documents::check_text(std::path::Path::new(path))
+    }
 
     fn page_zoom(&self) -> f64 {
         with(|registry| registry.zoom.unwrap_or(1.0))
@@ -427,8 +430,7 @@ fn spec(page: &Rc<Page>) -> Result<Spec, String> {
         theme: (!matches!(overlay.source, HtmlSource::Image { .. }))
             .then(|| super::bridge::theme_script(&page.theme().script(overlay.themed()))),
         scripts: page.scripts(),
-        trusted_document_script: matches!(overlay.source, HtmlSource::Markdown { .. })
-            .then(super::super::documents::document_start_script),
+        trusted_document_script: super::super::documents::document_start_script(&overlay.source),
         grant: granted.then(|| page.grant().clone()),
         replica,
         text: overlay.text_loaded().then(|| Arc::clone(page.text())),

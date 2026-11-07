@@ -172,10 +172,11 @@ pub fn config_overlay(background: Option<&str>, opacity: f64) -> String {
     text
 }
 
-/// Whether `modifiers` hold the link modifier alone: Ctrl, Ghostty's link modifier on Linux (upstream's ⌘).
+/// Whether `modifiers` make a HUD link click (upstream's `HudLinkClick`, which takes ⌘ and ⌘⌥): Ctrl alone, Ghostty's
+/// link modifier on Linux, opens the link; Ctrl+Alt, the reveal chord, reveals its file. Shift, Super and Fn refuse it.
 #[must_use]
 pub fn is_link_modifier(modifiers: &Modifiers) -> bool {
-    modifiers.control && !modifiers.shift && !modifiers.alt && !modifiers.platform && !modifiers.function
+    modifiers.control && !modifiers.shift && !modifiers.platform && !modifiers.function
 }
 
 // MARK: - the panel on its page
@@ -366,10 +367,10 @@ fn panel_event(poster: &crate::state::Poster, session: Uuid, generation: u64, ev
                 state.settle();
             }
         }),
-        TerminalEvent::OpenUrl { url, browser, .. } => {
-            let (url, browser) = (url.clone(), *browser);
+        TerminalEvent::OpenUrl { url, intent, .. } => {
+            let (url, intent) = (url.clone(), *intent);
             post(poster, move |state: &mut AppState| {
-                state.follow_link(&url, ClickOrigin::Hud, browser);
+                state.follow_link(&url, ClickOrigin::Hud, intent);
             });
         }
         _ => {}

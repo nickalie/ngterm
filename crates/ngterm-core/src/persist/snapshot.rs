@@ -331,6 +331,12 @@ pub enum PageSourceSnapshot {
     Image { path: String },
     /// `--markdown`.
     Markdown { path: String },
+    /// `--text`, and the `--line` it was opened at.
+    Text {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line: Option<i64>,
+    },
 }
 
 /// One page open in a session's overlay slot, written so the next launch opens it again (an extension beyond

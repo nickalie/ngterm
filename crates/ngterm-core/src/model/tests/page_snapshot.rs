@@ -21,7 +21,7 @@ struct Files {
 impl Files {
     fn new() -> Self {
         let dir = tempfile::tempdir().expect("a temp dir");
-        for name in ["page.html", "picture.png", "notes.md"] {
+        for name in ["page.html", "picture.png", "notes.md", "main.go"] {
             std::fs::write(dir.path().join(name), "x").expect("a file");
         }
         Self { dir }
@@ -278,6 +278,44 @@ fn a_markdown_page_and_a_chromeless_loopback_page_round_trip() {
     );
     let slot = &only_session(&back).overlay;
     assert_eq!((slot.size_percent, slot.points), (None, OverlayPointSize::default()));
+}
+
+/// A text page is written with the line it was opened at and opens again there; one whose file is gone or no longer a
+/// text page's is dropped.
+#[test]
+fn a_text_page_round_trips_with_its_line() {
+    let files = Files::new();
+    let (mut store, session) = store_with_split();
+    let text = HtmlSource::Text {
+        path: files.path("main.go"),
+        line: Some(42),
+    };
+    open(
+        &mut store,
+        session,
+        None,
+        page(text.clone(), HtmlPageFlags::default()),
+        OverlaySize::default(),
+    );
+    let written = serde_json::to_string(&store.snapshot()).unwrap();
+    assert!(written.contains("\"kind\":\"text\""), "{written}");
+    assert!(written.contains("\"line\":42"), "{written}");
+    let back = round_trip(&store);
+    assert_eq!(shown(only_session(&back)), [(None, text, HtmlPageFlags::default())]);
+
+    let (mut store, session) = store_with_split();
+    let gone = HtmlSource::Text {
+        path: files.path("gone.go"),
+        line: None,
+    };
+    open(
+        &mut store,
+        session,
+        None,
+        page(gone, HtmlPageFlags::default()),
+        OverlaySize::default(),
+    );
+    assert!(shown(only_session(&round_trip(&store))).is_empty());
 }
 
 #[test]

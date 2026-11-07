@@ -196,6 +196,10 @@ pub struct Args {
     pub html: Option<String>,
     pub image: Option<String>,
     pub markdown_file: Option<String>,
+    /// `session.overlay.open --text`: the absolute path of a file shown read-only, taken literally.
+    pub text_file: Option<String>,
+    /// `session.overlay.open --line`: the line, from 1, a `textFile` page opens scrolled to and marks.
+    pub line: Option<i64>,
     pub current: Option<bool>,
     pub navigation: Option<bool>,
     pub url: Option<String>,

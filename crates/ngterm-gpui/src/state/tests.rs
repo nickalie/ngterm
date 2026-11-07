@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use ngterm_core::PaneRole;
 use ngterm_core::events::{EventCursor, ReadOptions};
+use ngterm_core::link_policy::{ClickIntent, ClickOrigin};
 use ngterm_core::model::{NewSession, WindowLibrary};
 use ngterm_core::persist::{LibraryPersistence, SAVE_DEBOUNCE};
 use ngterm_core::{CoreConfig, CoreState};
@@ -1019,15 +1020,33 @@ fn a_notify_lands_its_banner_and_its_sound_with_the_frontend() {
     assert_eq!(state.take_frontend_work(), FrontendWork::default(), "landed once");
 }
 
+/// Runs the link lookups and document reads a click started, then the tasks they posted.
+fn finish_links(state: &mut AppState, main_loop: &RecordingLoop<AppState>) {
+    // a found location's document read posts after the lookup's task runs
+    for _ in 0..3 {
+        state.join_link_work();
+        for (_, task) in main_loop.take() {
+            task(state);
+        }
+    }
+}
+
+/// A pane click on `raw` with no chord, its lookups finished.
+fn click(state: &mut AppState, main_loop: &RecordingLoop<AppState>, raw: &str, session: Uuid, token: &str) {
+    state.follow_pane_link(raw, session, token, ClickIntent::Normal, crate::terminal::LinkKind::Url);
+    finish_links(state, main_loop);
+}
+
 #[test]
 fn pane_relative_links_use_their_own_reported_local_directory() {
     let (mut state, _, session) = state_with_terminal();
+    let (main_loop, _held) = record(&mut state);
     let directory = tempfile::tempdir().unwrap();
     // Windows does not allow `?` in a filename; its other literal path characters are still exercised.
     let name = if cfg!(windows) {
-        "name%20# with spaces.txt"
+        "name%20# with spaces.bin"
     } else {
-        "name%20?# with spaces.txt"
+        "name%20?# with spaces.bin"
     };
     let path = directory.path().join(name);
     std::fs::write(&path, "local file").unwrap();
@@ -1036,15 +1055,9 @@ fn pane_relative_links_use_their_own_reported_local_directory() {
         "T",
         &PaneReport::Pwd(directory.path().to_string_lossy().into_owned()),
     );
-    state.follow_pane_link(
-        &format!("./{name}"),
-        session,
-        "T",
-        false,
-        crate::terminal::LinkKind::Url,
-    );
+    click(&mut state, &main_loop, &format!("./{name}"), session, "T");
     assert_eq!(state.frontend.reveals, vec![path]);
-    state.follow_pane_link("./stale.txt", session, "gone", false, crate::terminal::LinkKind::Url);
+    click(&mut state, &main_loop, "./stale.bin", session, "gone");
     assert_eq!(state.frontend.reveals.len(), 1, "a replaced pane cannot route a link");
 }
 
@@ -1066,29 +1079,24 @@ fn remote_primary_paths_stay_remote_while_scratch_paths_stay_local() {
     found.surface.replace(Box::new(FakeSurface::new("R")));
     found.scratch_surface.replace(Box::new(FakeSurface::new("S")));
     let mut state = AppState::new(core(library, None));
+    let (main_loop, _held) = record(&mut state);
     let remote_path = std::env::temp_dir().join("remote-origin").join("a.png");
-    state.follow_pane_link(
-        &remote_path.to_string_lossy(),
-        session,
-        "R",
-        false,
-        crate::terminal::LinkKind::Url,
-    );
-    state.follow_pane_link("relative.txt", session, "R", false, crate::terminal::LinkKind::Url);
+    click(&mut state, &main_loop, &remote_path.to_string_lossy(), session, "R");
+    click(&mut state, &main_loop, "relative.bin", session, "R");
     assert!(state.frontend.reveals.is_empty());
     let local = std::env::temp_dir().join("remote.png");
     let file_url = url::Url::from_file_path(&local).unwrap();
-    state.follow_pane_link(file_url.as_str(), session, "R", false, crate::terminal::LinkKind::Url);
+    click(&mut state, &main_loop, file_url.as_str(), session, "R");
     assert_eq!(state.frontend.reveals, vec![local]);
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("local.txt");
+    let path = directory.path().join("local.bin");
     std::fs::write(&path, "scratch file").unwrap();
     state.report_pane(
         session,
         "S",
         &PaneReport::Pwd(directory.path().to_string_lossy().into_owned()),
     );
-    state.follow_pane_link("./local.txt", session, "S", false, crate::terminal::LinkKind::Url);
+    click(&mut state, &main_loop, "./local.bin", session, "S");
     assert_eq!(state.frontend.reveals.last(), Some(&path));
     let _ = state
         .core
@@ -1106,8 +1114,9 @@ fn remote_primary_paths_stay_remote_while_scratch_paths_stay_local() {
 #[test]
 fn only_detected_existing_relative_links_with_an_osc7_directory_resolve() {
     let (mut state, _, session) = state_with_terminal();
+    let (main_loop, _held) = record(&mut state);
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("notes.txt");
+    let path = directory.path().join("notes.bin");
     std::fs::write(&path, "notes").unwrap();
     state
         .core
@@ -1118,7 +1127,7 @@ fn only_detected_existing_relative_links_with_an_osc7_directory_resolve() {
         .unwrap()
         .set_current_cwd(&directory.path().to_string_lossy());
     // Even an existing model cwd is not an OSC 7 report and cannot authorize relative resolution.
-    state.follow_pane_link("notes.txt", session, "T", false, crate::terminal::LinkKind::Url);
+    click(&mut state, &main_loop, "notes.bin", session, "T");
     assert!(state.frontend.reveals.is_empty());
     state.report_pane(
         session,
@@ -1126,26 +1135,169 @@ fn only_detected_existing_relative_links_with_an_osc7_directory_resolve() {
         &PaneReport::Pwd(directory.path().to_string_lossy().into_owned()),
     );
     // OSC 8 links stay literal, even when their relative spelling names an existing local file.
-    state.follow_pane_link("notes.txt", session, "T", false, crate::terminal::LinkKind::Osc8);
-    state.follow_pane_link("missing.txt", session, "T", false, crate::terminal::LinkKind::Url);
+    state.follow_pane_link(
+        "notes.bin",
+        session,
+        "T",
+        ClickIntent::Normal,
+        crate::terminal::LinkKind::Osc8,
+    );
+    finish_links(&mut state, &main_loop);
+    click(&mut state, &main_loop, "missing.bin", session, "T");
     assert!(state.frontend.reveals.is_empty());
-    state.follow_pane_link("notes.txt", session, "T", false, crate::terminal::LinkKind::Url);
+    click(&mut state, &main_loop, "notes.bin", session, "T");
     assert_eq!(state.frontend.reveals, [path]);
 }
 
 #[test]
-fn detected_relative_resolution_refuses_network_and_automount_targets_before_existence_checks() {
+fn relative_lookups_refuse_network_and_automount_targets_before_existence_checks() {
+    let session = Uuid::new_v4();
     for cwd in ["/net/server", "/misc/share"] {
-        assert_eq!(detected_relative_path("notes.md", cwd), None);
+        assert!(ngterm_core::link_policy::locations("notes.md", ClickOrigin::Pane(session), Some(cwd)).is_empty());
     }
-    for raw in [
-        r"\\server\share\notes.md",
-        r"\\?\UNC\server\share\notes.md",
-        "/\\server/share/notes.md",
-    ] {
-        assert_eq!(
-            detected_relative_path(raw, &std::env::temp_dir().to_string_lossy()),
-            None
-        );
+    // a Windows share or device path is refused before the directory is joined; on Unix a backslash is a name's
+    let refused: &[&str] = if cfg!(windows) {
+        &[
+            r"\\server\share\notes.md",
+            r"\\?\UNC\server\share\notes.md",
+            "/\\server/share/notes.md",
+        ]
+    } else {
+        &["/\\server/share/notes.md", "//server/share/notes.md:3"]
+    };
+    for raw in refused {
+        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        assert!(ngterm_core::link_policy::locations(raw, ClickOrigin::Pane(session), Some(&cwd)).is_empty());
     }
+}
+
+/// A text page the tests open: `main.go` in a fresh directory the pane reports as its own.
+fn text_fixture() -> (AppState, Recorded, Uuid, tempfile::TempDir) {
+    let (mut state, _, session) = state_with_terminal();
+    let recorded = record(&mut state);
+    state.core.set_html_host(Box::new(TextHost));
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("main.go"), "package main\n\nfunc main() {}\n").unwrap();
+    state.report_pane(
+        session,
+        "T",
+        &PaneReport::Pwd(directory.path().to_string_lossy().into_owned()),
+    );
+    (state, recorded, session, directory)
+}
+
+/// A page host that takes every page.
+struct TextHost;
+
+impl ngterm_core::html::HtmlHost for TextHost {
+    fn persistent_store_failure(&self) -> Option<String> {
+        None
+    }
+    fn navigate(&self, _: Uuid, _: ngterm_core::html::HtmlNavigation) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// The text page open over `session`, as the tree reads it back.
+fn text_page(state: &AppState, session: Uuid) -> Option<(String, Option<i64>)> {
+    let found = state.core.library().store_for_session(session)?.session(session)?;
+    found
+        .html_overlays()
+        .into_iter()
+        .find_map(|(_, page)| match &page.source {
+            ngterm_core::html::HtmlSource::Text { path, line } => Some((path.clone(), *line)),
+            _ => None,
+        })
+}
+
+// regression (upstream #874): `./main.go:42:7` read as a URL scheme and was ignored
+#[test]
+fn a_relative_location_opens_its_file_as_a_text_page_at_the_line() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    click(&mut state, &main_loop, "./main.go:2:7", session, "T");
+    let file = directory.path().join("main.go").to_string_lossy().into_owned();
+    assert_eq!(text_page(&state, session), Some((file, Some(2))));
+    assert!(state.frontend.reveals.is_empty());
+}
+
+#[test]
+fn a_literal_colon_named_file_wins_over_the_line_suffix() {
+    if cfg!(windows) {
+        // Windows does not allow `:` in a file name
+        return;
+    }
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let literal = directory.path().join("main.go:2");
+    std::fs::write(&literal, "named with a colon").unwrap();
+    click(&mut state, &main_loop, "./main.go:2", session, "T");
+    // `main.go:2` is no text page's name, so the literal file is revealed rather than `main.go` opened at line 2
+    assert_eq!(state.frontend.reveals, [literal]);
+    assert_eq!(text_page(&state, session), None);
+}
+
+#[test]
+fn a_missing_location_keeps_the_route_it_had_as_typed() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let absent = directory.path().join("absent.go:3");
+    click(&mut state, &main_loop, &absent.to_string_lossy(), session, "T");
+    // as typed, `absent.go:3` is no text page: it is revealed, as before
+    assert_eq!(state.frontend.reveals, [absent]);
+    click(&mut state, &main_loop, "./gone.go:3", session, "T");
+    assert_eq!(
+        state.frontend.reveals.len(),
+        1,
+        "a relative link with nothing on disk is ignored"
+    );
+    assert_eq!(text_page(&state, session), None);
+}
+
+#[test]
+fn the_reveal_chord_reveals_and_never_opens() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    state.follow_pane_link(
+        "./main.go:2",
+        session,
+        "T",
+        ClickIntent::Reveal,
+        crate::terminal::LinkKind::Url,
+    );
+    finish_links(&mut state, &main_loop);
+    assert_eq!(state.frontend.reveals, [directory.path().join("main.go")]);
+    assert_eq!(text_page(&state, session), None);
+    // a web link keeps its web route
+    state.follow_link("https://example.com/", ClickOrigin::Hud, ClickIntent::Reveal);
+    assert_eq!(state.frontend.open_urls, ["https://example.com/"]);
+    // and a HUD's local file is revealed, as every origin's is
+    let file = directory.path().join("main.go");
+    state.follow_link(&file.to_string_lossy(), ClickOrigin::Hud, ClickIntent::Reveal);
+    finish_links(&mut state, &main_loop);
+    assert_eq!(state.frontend.reveals.last(), Some(&file));
+}
+
+#[test]
+fn a_binary_text_file_is_revealed_instead_of_opened() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let binary = directory.path().join("blob.log");
+    std::fs::write(&binary, b"a\0b").unwrap();
+    click(&mut state, &main_loop, "./blob.log", session, "T");
+    assert_eq!(state.frontend.reveals, [binary]);
+    assert_eq!(text_page(&state, session), None);
+}
+
+#[test]
+fn shell_metacharacters_in_the_directory_stay_data() {
+    if cfg!(windows) {
+        // Windows does not allow `|`, `<` or `>` in a file name
+        return;
+    }
+    let (mut state, (main_loop, _held), session, _directory) = text_fixture();
+    let directory = tempfile::tempdir().unwrap();
+    let odd = directory.path().join("$(touch pwned); `id` | <x>");
+    std::fs::create_dir(&odd).unwrap();
+    std::fs::write(odd.join("main.go"), "package main\n").unwrap();
+    state.report_pane(session, "T", &PaneReport::Pwd(odd.to_string_lossy().into_owned()));
+    click(&mut state, &main_loop, "./main.go:1", session, "T");
+    let file = odd.join("main.go").to_string_lossy().into_owned();
+    assert_eq!(text_page(&state, session), Some((file, Some(1))));
+    assert!(!directory.path().join("pwned").exists());
 }

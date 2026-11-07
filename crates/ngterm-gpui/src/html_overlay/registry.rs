@@ -179,6 +179,9 @@ impl HtmlHost for PageHost {
     fn check_markdown(&self, path: &str) -> Result<(), String> {
         ngterm_app::documents::check_markdown(std::path::Path::new(path))
     }
+    fn check_text(&self, path: &str) -> Result<(), String> {
+        ngterm_app::documents::check_text(std::path::Path::new(path))
+    }
 
     fn page_zoom(&self) -> f64 {
         with(|registry| registry.zoom.unwrap_or(1.0))

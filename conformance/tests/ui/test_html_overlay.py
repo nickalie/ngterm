@@ -199,3 +199,24 @@ def test_a_markdown_file_renders_and_the_tree_names_its_source(ctl, ui):
         _closed(ctl, sid)
     finally:
         ctl.request("session.close", sid)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("ui:htmlOverlay.page", "field:tree.session.htmlOverlays")
+def test_a_text_file_renders_at_its_line_and_the_tree_names_its_source(ctl, ui):
+    sid = _new(ctl)
+    source = ctl.instance.root / "main.go"
+    source.write_text("package main\n\n// Rendered Text Line\n", encoding="utf-8")
+    try:
+        assert_ok(ctl.request("session.overlay.open", sid, textFile=str(source), line=3))
+        _state(ctl, sid, "loaded")
+        page, = find_session(ctl.tree(), sid)["htmlOverlays"]
+        assert page["text"] == {"file": str(source), "language": "go", "line": 3}, page
+        assert "file" not in page and "markdown" not in page and page["javascript"] is False
+        ui.find("htmlOverlay.page")
+        # a text page is named by its file, never by the generated page's title
+        assert ui.text("htmlOverlay.identity") == "main.go"
+        ui.click(ui.find("htmlOverlay.close", role="button"))
+        _closed(ctl, sid)
+    finally:
+        ctl.request("session.close", sid)

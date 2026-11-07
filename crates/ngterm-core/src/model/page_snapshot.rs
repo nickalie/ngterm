@@ -4,7 +4,7 @@
 //! opens it again in that slot under a fresh id, its outcome pending (the core's page sync registers it).
 //!
 //! A restore checks every entry again, as `session.overlay.open` checked it: a file page's grant against the home, a
-//! web address, an absolute image or Markdown path of a kind it shows, and the flags the source may take. An entry
+//! web address, an absolute image, Markdown or text path of a kind it shows, and the flags the source may take. An entry
 //! whose file is gone, whose slot is taken or whose split pane no longer exists is dropped, so no page outlives what
 //! it showed.
 //!
@@ -63,6 +63,10 @@ fn source_snapshot(source: &HtmlSource) -> Option<PageSourceSnapshot> {
         },
         HtmlSource::Image { path } => PageSourceSnapshot::Image { path: path.clone() },
         HtmlSource::Markdown { path } => PageSourceSnapshot::Markdown { path: path.clone() },
+        HtmlSource::Text { path, line } => PageSourceSnapshot::Text {
+            path: path.clone(),
+            line: *line,
+        },
         HtmlSource::Replica { .. } => return None,
     })
 }
@@ -256,7 +260,7 @@ fn park_page(session: &mut Session, overlay: HtmlOverlay, parked: ParkedPage) {
 pub(crate) struct LocalPagesSwept {
     /// The pages parked for the next presenter.
     pub(crate) parked: Vec<Uuid>,
-    /// Whether a page no presenter can show (an image or Markdown page) was closed.
+    /// Whether a page no presenter can show (an image, Markdown or text page) was closed.
     pub(crate) dropped: bool,
 }
 
@@ -343,6 +347,15 @@ fn restored_source(source: &PageSourceSnapshot, flags: HtmlPageFlags, home: &str
         }
         PageSourceSnapshot::Markdown { path } => (document && shown_document(path, &MARKDOWN_EXTENSIONS))
             .then(|| HtmlSource::Markdown { path: path.clone() }),
+        PageSourceSnapshot::Text { path, line } => (document
+            && html::is_absolute(path)
+            && html::text_page::is_eligible(path)
+            && line.is_none_or(|line| line >= 1)
+            && Path::new(path).is_file())
+        .then(|| HtmlSource::Text {
+            path: path.clone(),
+            line: *line,
+        }),
     }
 }
 

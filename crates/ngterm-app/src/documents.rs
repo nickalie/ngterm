@@ -1,4 +1,5 @@
-//! Bounded local image/Markdown reads (upstream `ImageProbe.swift`, `MarkdownProbe.swift`, `BoundedFile`).
+//! Bounded local image/Markdown/text reads (upstream `ImageProbe.swift`, `MarkdownProbe.swift`, `TextProbe.swift`,
+//! `BoundedFile`).
 //! Click handlers and renderers call these services on a worker thread. The control path performs its initial
 //! probe synchronously, matching upstream; even opening a regular file can wait on network storage.
 
@@ -10,6 +11,7 @@ use std::path::{Path, PathBuf};
 use image::{ImageDecoder as _, ImageFormat, ImageReader};
 use ngterm_core::html::image_page::{self, ImageData};
 use ngterm_core::html::markdown_page::{self, Embedded, MarkdownDocument};
+use ngterm_core::html::text_page;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Failure {
@@ -151,6 +153,33 @@ pub fn probe_markdown(path: &Path) -> Result<MarkdownDocument, String> {
         .parent()
         .map_or_else(Embedded::default, |folder| embed(&markdown, folder));
     Ok(MarkdownDocument { markdown, images })
+}
+
+/// Read a text page's file and validate it (upstream's `TextProbe.load`): the read itself checks the content, so a
+/// binary file fails a click and is revealed instead of opening an empty page.
+///
+/// # Errors
+/// Upstream's text-probe refusal: `unreadable text file: P` (missing, not a regular file, unreadable), `text file too
+/// large (over 4 MB): P`, `not a UTF-8 text file: P` (invalid UTF-8 or a NUL byte).
+pub fn load_text(path: &Path) -> Result<String, String> {
+    let bytes = bounded_read(path, text_page::MAX_BYTES).map_err(|failure| match failure {
+        Failure::Unreadable => format!("unreadable text file: {}", path.display()),
+        Failure::TooLarge => format!(
+            "text file too large (over {} MB): {}",
+            text_page::MAX_BYTES >> 20,
+            path.display()
+        ),
+    })?;
+    text_page::validate(bytes).ok_or_else(|| format!("not a UTF-8 text file: {}", path.display()))
+}
+
+/// [`load_text`] with the text dropped: what `session.overlay.open --text` and a click check before a page takes its
+/// slot (upstream's `TextProbe.check`).
+///
+/// # Errors
+/// [`load_text`]'s refusals.
+pub fn check_text(path: &Path) -> Result<(), String> {
+    load_text(path).map(|_| ())
 }
 
 fn embed(markdown: &str, folder: &Path) -> Embedded {

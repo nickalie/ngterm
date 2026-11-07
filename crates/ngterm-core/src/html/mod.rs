@@ -11,6 +11,7 @@ pub mod markdown_page;
 pub mod navigation;
 pub mod outcomes;
 pub mod profile;
+pub mod text_page;
 pub mod theme;
 mod volume;
 
@@ -225,6 +226,9 @@ pub enum HtmlSource {
     Image { path: String },
     /// A bounded local Markdown document, rendered by the trusted helper without authored scripts.
     Markdown { path: String },
+    /// A source, config, text or log file shown read-only, scrolled to `line` when one is set: no file grant, bridge,
+    /// link or navigation, but themed (upstream's `.text`).
+    Text { path: String, line: Option<i64> },
     /// A file page another machine opened, shown here from `ngterm-page://<page id>/` (upstream's `.replica`): `path`
     /// is its path on that machine, whose own grant decides what else may be fetched.
     Replica { path: String },
@@ -279,9 +283,11 @@ impl HtmlSource {
     #[must_use]
     pub fn text(&self) -> String {
         match self {
-            Self::File { path, .. } | Self::Replica { path } | Self::Image { path } | Self::Markdown { path } => {
-                path.clone()
-            }
+            Self::File { path, .. }
+            | Self::Replica { path }
+            | Self::Image { path }
+            | Self::Markdown { path }
+            | Self::Text { path, .. } => path.clone(),
             Self::Url(url) => url.as_str().to_owned(),
         }
     }
@@ -450,12 +456,15 @@ impl HtmlOverlay {
         self.replica_of.is_none() && !self.row && !matches!(self.source, HtmlSource::Replica { .. })
     }
 
-    /// Whether ngterm themes the page: a file page, replica or Markdown document (upstream's `themed`).
+    /// Whether ngterm themes the page: a file page, replica, Markdown or text document (upstream's `themed`).
     #[must_use]
     pub fn themed(&self) -> bool {
         matches!(
             self.source,
-            HtmlSource::File { .. } | HtmlSource::Replica { .. } | HtmlSource::Markdown { .. }
+            HtmlSource::File { .. }
+                | HtmlSource::Replica { .. }
+                | HtmlSource::Markdown { .. }
+                | HtmlSource::Text { .. }
         )
     }
 
@@ -468,7 +477,10 @@ impl HtmlOverlay {
     /// Whether this is a local document with no browser/file access.
     #[must_use]
     pub fn document(&self) -> bool {
-        matches!(self.source, HtmlSource::Image { .. } | HtmlSource::Markdown { .. })
+        matches!(
+            self.source,
+            HtmlSource::Image { .. } | HtmlSource::Markdown { .. } | HtmlSource::Text { .. }
+        )
     }
 
     /// Whether a page is loaded from generated or file text without a file grant (upstream's `textLoaded`).
@@ -476,7 +488,10 @@ impl HtmlOverlay {
     pub fn text_loaded(&self) -> bool {
         matches!(
             self.source,
-            HtmlSource::File { grant_root: None, .. } | HtmlSource::Image { .. } | HtmlSource::Markdown { .. }
+            HtmlSource::File { grant_root: None, .. }
+                | HtmlSource::Image { .. }
+                | HtmlSource::Markdown { .. }
+                | HtmlSource::Text { .. }
         )
     }
 
@@ -486,7 +501,9 @@ impl HtmlOverlay {
     #[must_use]
     pub fn identity(&self) -> String {
         match &self.source {
-            HtmlSource::Image { path } | HtmlSource::Markdown { path } => last_path_component(path),
+            HtmlSource::Image { path } | HtmlSource::Markdown { path } | HtmlSource::Text { path, .. } => {
+                last_path_component(path)
+            }
             HtmlSource::File { path, .. } | HtmlSource::Replica { path } => {
                 let shown = self
                     .current
@@ -527,7 +544,7 @@ pub(crate) fn os_path(unix: &str) -> String {
 
 /// The last component of a path as Foundation's `lastPathComponent` gives it: trailing slashes ignored, `/` for the
 /// root.
-fn last_path_component(path: &str) -> String {
+pub(crate) fn last_path_component(path: &str) -> String {
     // Windows paths separate by either slash
     let separators: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
     let trimmed = path.trim_end_matches(separators);
@@ -546,6 +563,16 @@ pub trait HtmlHost {
     /// The upstream image probe failure when the path cannot be read safely.
     fn probe_image(&self, _path: &str) -> Result<image_page::ImageData, String> {
         Err("could not read image".to_owned())
+    }
+
+    /// Reads and validates a text page's file before taking a slot (upstream's `textFileRefusal`); rendering reads it
+    /// afresh.
+    ///
+    /// # Errors
+    /// The upstream text probe failure (`unreadable text file: P`, `text file too large (over 4 MB): P`, `not a UTF-8
+    /// text file: P`).
+    fn check_text(&self, path: &str) -> Result<(), String> {
+        Err(format!("unreadable text file: {path}"))
     }
 
     /// Checks a Markdown source descriptor before taking a slot; rendering reads it afresh.
@@ -630,6 +657,8 @@ pub mod errors {
     pub const NOT_REALIZED: &str = "html overlay not realized";
     pub const NO_BROWSER: &str = "no default web browser to open the page in";
     pub const MARKDOWN_IN_OVERLAY: &str = "a markdown page opens only in its overlay";
+    /// A text page is built by the app, so a browser would get the raw file instead (upstream's `textInOverlay`).
+    pub const TEXT_IN_OVERLAY: &str = "a text page opens only in its overlay";
     pub const FINDER_REQUIRES_FILE: &str = "show in Finder requires a file page";
     pub const PERSISTENT_UNAVAILABLE: &str = "persistent browser storage is not available";
     /// The saved store is being emptied: neither a second clear nor a persistent page may use it (upstream's
