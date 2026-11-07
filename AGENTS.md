@@ -83,6 +83,9 @@ README > Test has the commands and how to scope them.
 
 - The ratchet (`conformance/rust-passing.txt`): a listed id that goes red fails CI. Treat a flaky test as a bug in
   the build or the test, not as noise.
+- Coverage floors: no workspace crate's unit-test coverage (lines, functions, regions of `cargo test`) may drop more
+  than the tolerance below its floor. A change that lowers a crate's coverage adds the tests that keep it; floors
+  only rise, as crates earn it.
 - Strict clippy with the `clippy.toml` complexity limits. Split a function that exceeds them; an item-level
   `#[expect(..., reason = "...")]` is the escape hatch, `#[allow]` is not.
 - Generated bindings and `vendor/` are checked against their generator and vendor scripts: change them only through

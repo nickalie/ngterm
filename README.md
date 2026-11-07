@@ -947,6 +947,19 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   (`coverage/lcov.info`, `html/`, `summary.md`), which `conformance/tools/check_coverage.py` holds against
   `conformance/coverage-floor-linux.txt` (conformance/README.md > Code coverage). It is CI's job; run it locally only
   for a change to the coverage tooling.
+- `scripts/unit-coverage.sh OUT_DIR` measures what `cargo test` covers: one instrumented `cargo llvm-cov` run of the
+  workspace's tests (the -sys crates left out, default features, so WPE WebKit too), test code and `vendor/` out of
+  the denominator, into `OUT_DIR/lcov.info` and `OUT_DIR/summary.md` (lines, regions and functions % per crate). It
+  exits 1 when a test fails, with the report still written. `check_coverage.py` holds the summary against
+  `scripts/unit-coverage-floor-linux.txt` (`crate lines functions regions`, the same 0.5 pt tolerance; floors only
+  rise, toward 90 per crate). Like the suite's coverage it is CI's job (linux.yml's `unit-coverage`, about an hour);
+  locally, for a change to the tooling or to raise the floors (`--add` takes two runs of one tree):
+
+  ```sh
+  GDK_BACKEND=x11 xvfb-run -a dbus-run-session scripts/unit-coverage.sh target/unit-coverage
+  .venv/bin/python conformance/tools/check_coverage.py --summary target/unit-coverage/summary.md \
+    --floor scripts/unit-coverage-floor-linux.txt
+  ```
 - Lint rules: `[workspace.lints]` in `Cargo.toml` (clippy `all` + `pedantic`, the complexity and robustness lints
   denied) with the thresholds in `clippy.toml`; the only exception is a reasoned outer `#[expect]` on one item.
 

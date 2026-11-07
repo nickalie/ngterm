@@ -1,0 +1,23 @@
+# Unit-test coverage floors on Linux (conformance/tools/check_coverage.py): lines, functions and regions % per
+# workspace crate of `cargo test` (scripts/unit-coverage.sh: linux.yml's unit-coverage job), test code and vendor/ out
+# of the denominator. A crate more than 0.5 pt below a floor in any of the three fails the job. Raised, never lowered,
+# toward 90 per crate as crates earn it, from a batch of runs of one tree: check_coverage.py --floor THIS --add
+# --summary A/summary.md --summary B/summary.md (each floor raised to the batch's lowest; a new crate added, a gone one
+# dropped).
+# Seeded from the per-metric minimum of two local runs, rounded down.
+# crate lines functions regions, sorted by crate.
+ngterm-app 92.37 92.51 92.49
+ngterm-core 96.34 96.80 95.70
+ngterm-ctl 94.53 91.83 93.90
+ngterm-ghostty-vt 94.81 97.12 94.47
+ngterm-gpui 83.75 83.61 83.23
+ngterm-headless 22.50 21.80 20.92
+ngterm-host 95.56 92.51 95.23
+ngterm-mobile 90.15 89.34 89.98
+ngterm-proto 99.52 99.09 99.66
+ngterm-pty 87.80 87.57 89.57
+ngterm-server 87.84 89.13 87.31
+ngterm-session 94.08 95.06 93.17
+ngterm-term 88.31 90.65 87.55
+ngterm-update 61.34 65.82 55.89
+ngterm-wpe 92.21 93.12 92.36

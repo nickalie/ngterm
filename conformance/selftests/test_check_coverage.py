@@ -224,7 +224,17 @@ def test_a_missing_floor_file_exits_2(files, capsys):
             "no separator row",
         ),
         ("| crate | lines | regions | functions |", "no separator row"),
-        ("| crate | lines | regions | functions |\n|---|---:|---:|---:|\n| ngterm-core | 50.00% (1/2) |", "no total row"),
+        (
+            "| crate | lines | regions | functions |\n|---|---:|---:|---:|\n"
+            "| ngterm-core | 50.00% (1/2) | 50.00% (1/2) | 50.00% (1/2) |",
+            "no total row",
+        ),
+        (
+            "| crate | lines | regions | functions |\n|---|---:|---:|---:|\n| ngterm-core | 50.00% (1/2) |\n",
+            "not a crate row",
+        ),
+        ("| crate | lines | regions |\n|---|---:|---:|\n| total | 50.00% (1/2) | 50.00% (1/2) |\n",
+         "no functions column"),
         ("| crate | lines | regions | functions |\n|---|---:|---:|---:|\n| ngterm-core | half |\n", "not a crate row"),
     ],
 )
@@ -248,11 +258,20 @@ def test_the_verdict_goes_to_the_job_summary(files, capsys, tmp_path, monkeypatc
     assert "ngterm-core: 10.00%, floor 60.00%" in text
 
 
-@pytest.mark.parametrize("name", ["coverage-floor-linux.txt", "coverage-floor-windows.txt"])
-def test_the_checked_in_floor_files_parse(name):
-    path = REPO / "conformance" / name
+@pytest.mark.parametrize(
+    "name, metrics",
+    [
+        ("conformance/coverage-floor-linux.txt", ("lines",)),
+        ("conformance/coverage-floor-windows.txt", ("lines",)),
+        ("scripts/unit-coverage-floor-linux.txt", ("lines", "functions", "regions")),
+    ],
+)
+def test_the_checked_in_floor_files_parse(name, metrics):
+    path = REPO / name
     floors = cc.read_floors(path)
     assert floors.header, f"{path} has no header comment"
+    assert floors.floors, f"{path} has no floor"
+    assert floors.metrics == metrics
 
 
 def test_runs_as_a_script(files):
@@ -262,3 +281,103 @@ def test_runs_as_a_script(files):
                           capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
     assert "coverage floors hold" in done.stdout
+
+
+# The three-column form (scripts/unit-coverage.sh's floors): `crate lines% functions% regions%`.
+THREE = "# unit coverage floors\n# crate lines% functions% regions%\n"
+
+
+def three_summary(rows: dict[str, dict[str, tuple[int, int]] | None]) -> str:
+    """A summary.md with each metric's own (covered, count), or None for an n/a crate."""
+    from agterm_conformance import code_coverage
+
+    crates = {}
+    for name, metrics in rows.items():
+        row = code_coverage.CrateCoverage()
+        for metric, (covered, count) in (metrics or {}).items():
+            row.metrics[metric] = code_coverage.Counts(count=count, covered=covered)
+        crates[name] = row
+    return code_coverage.render(crates)
+
+
+def measured(lines: int, functions: int, regions: int) -> dict[str, tuple[int, int]]:
+    """Per-metric counts out of 10000, so each % is the number over 100."""
+    return {"lines": (lines, 10000), "functions": (functions, 10000), "regions": (regions, 10000)}
+
+
+def write_three(summary: Path, floor: Path, rows: dict[str, dict[str, tuple[int, int]] | None], floors: str) -> None:
+    summary.write_text(three_summary(rows), encoding="utf-8")
+    floor.write_text(THREE + floors, encoding="utf-8")
+
+
+def test_three_columns_hold_within_half_a_point_each(files, capsys):
+    summary, floor = files
+    write_three(summary, floor, {"ngterm-core": measured(5950, 7000, 8000)}, "ngterm-core 60.00 70.00 80.20\n")
+    code, out, _ = check(capsys, summary, floor)
+    assert code == 0
+    assert "coverage floors hold: 1 crate(s) judged (0 new, 0 gone)" in out
+
+
+def test_three_columns_break_on_any_metric_naming_it(files, capsys):
+    summary, floor = files
+    write_three(summary, floor, {"ngterm-core": measured(6000, 6949, 5000), "ngterm-term": measured(1, 1, 1)},
+                "ngterm-core 60.00 70.00 50.51\nngterm-term 0.00 0.00 0.00\n")
+    code, out, _ = check(capsys, summary, floor)
+    assert code == 1
+    assert "BROKEN ngterm-core functions: 69.49%, floor 70.00% (0.51 pt below, more than 0.5 pt)" in out
+    assert "BROKEN ngterm-core regions: 50.00%, floor 50.51% (0.51 pt below" in out
+    assert "ngterm-core lines" not in out
+    # two metrics below, one crate
+    assert "coverage floors broken: 1 crate(s) of 2 below their floor" in out
+
+
+def test_three_columns_add_raises_each_metric_on_its_own_and_keeps_the_form(files, capsys):
+    summary, floor = files
+    write_three(summary, floor, {"ngterm-core": measured(6123, 6990, 8456), "ngterm-new": measured(1, 2, 3)},
+                "ngterm-core 60.00 70.00 80.00\nngterm-old 1.00 2.00 3.00\n")
+    code, out, _ = check(capsys, summary, floor, "--add")
+    assert code == 0
+    assert "new, no floor yet: ngterm-new: lines 0.01%, functions 0.02%, regions 0.03%" in out
+    assert "gone from the run, floor dropped by --add: ngterm-old (floor lines 1.00%, functions 2.00%" in out
+    # functions 69.90 is within the tolerance of its 70.00 floor: kept, not lowered
+    assert floor.read_text(encoding="utf-8") == THREE + "ngterm-core 61.23 70.00 84.56\nngterm-new 0.01 0.02 0.03\n"
+
+
+def test_three_columns_add_raises_to_the_batch_lowest_per_metric(files, capsys, tmp_path):
+    summary, floor = files
+    write_three(summary, floor, {}, "ngterm-gpui 60.00 60.00 60.00\n")
+    batch = []
+    for number, counts in enumerate([(6438, 6100, 6250), (6380, 6200, 6240)]):
+        path = tmp_path / f"three-{number}.md"
+        path.write_text(three_summary({"ngterm-gpui": measured(*counts)}), encoding="utf-8")
+        batch.append(path)
+    assert check(capsys, summary, floor, "--add", batch=batch)[0] == 0
+    assert floor.read_text(encoding="utf-8") == THREE + "ngterm-gpui 63.80 61.00 62.40\n"
+
+
+def test_three_columns_skip_a_crate_with_no_lines(files, capsys):
+    summary, floor = files
+    write_three(summary, floor, {"ngterm-core": measured(1, 2, 3), "ngterm-proto": None},
+                "ngterm-core 0.00 0.00 0.00\n")
+    code, out, _ = check(capsys, summary, floor, "--add")
+    assert code == 0
+    assert "ngterm-proto" not in out
+
+
+@pytest.mark.parametrize(
+    "floors, message",
+    [
+        ("ngterm-core 60 70 80\nngterm-term 60\n", "1 value(s), where the file's floors have 3"),
+        ("ngterm-core 60\nngterm-term 60 70 80\n", "3 value(s), where the file's floors have 1"),
+        ("ngterm-core 60 70\n", "not `crate line%` or `crate lines% functions% regions%`"),
+        ("ngterm-core 60 70 80 90\n", "not `crate line%` or `crate lines% functions% regions%`"),
+        ("ngterm-core 60 seventy 80\n", "not a percentage"),
+        ("ngterm-core 60 70 101\n", "out of 0..100"),
+    ],
+)
+def test_a_malformed_three_column_floor_file_exits_2(files, capsys, floors, message):
+    summary, floor = files
+    write_three(summary, floor, {"ngterm-core": measured(1, 2, 3)}, floors)
+    code, _, err = check(capsys, summary, floor)
+    assert code == 2
+    assert message in err and str(floor) in err
