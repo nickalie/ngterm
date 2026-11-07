@@ -325,7 +325,8 @@ jobs:
       - name: weston with --fake-seat
         shell: bash
         run: |
-          if ! weston --help 2>/dev/null | grep -q -- --fake-seat; then
+          # the help read whole: `grep -q` leaving a pipe early would end weston with SIGPIPE under pipefail
+          if ! grep -q -- --fake-seat <<<"$(weston --help 2>/dev/null || true)"; then
             echo "$(scripts/build-weston.sh)/bin" >> "$GITHUB_PATH"
           fi
       - name: lavapipe (the distribution's)
@@ -396,7 +397,12 @@ jobs:
         run: |
           status=0
           for probe in ghostty_probe webkit_probe chrome_probe; do
-            /opt/suite/bin/python "conformance/tools/$probe.py" > "$RUNNER_TEMP/$probe.json" || status=1
+            if ! /opt/suite/bin/python "conformance/tools/$probe.py" > "$RUNNER_TEMP/$probe.json"; then
+              status=1
+              # the summary is not in the job's log: a failed probe's report goes there too
+              echo "::error::$probe failed"
+              cat "$RUNNER_TEMP/$probe.json"
+            fi
             {
               echo "### $probe"
               echo '```json'

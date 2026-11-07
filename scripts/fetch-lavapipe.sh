@@ -47,7 +47,8 @@ icd_library_exists() {
       for dir in "${dirs[@]}"; do
         [[ -n "$dir" && -f "$dir/$library" ]] && return 0
       done
-      { ldconfig -p || /sbin/ldconfig -p || /usr/sbin/ldconfig -p; } 2>/dev/null | grep -qE "^\s*$library .*=> /"
+      # read whole before the match: `grep -q` leaving the pipe early would end ldconfig with SIGPIPE under pipefail
+      grep -qE "^\s*$library .*=> /" <<<"$({ ldconfig -p || /sbin/ldconfig -p || /usr/sbin/ldconfig -p; } 2>/dev/null)"
       ;;
   esac
 }

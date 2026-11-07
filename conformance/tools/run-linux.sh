@@ -145,9 +145,10 @@ if ! lavapipe="$("$repo/scripts/fetch-lavapipe.sh")"; then
 fi
 export CONFORMANCE_LAVAPIPE_ICD="$lavapipe"
 # GPUI panics without a wl_seat, which headless weston offers only with --fake-seat (weston 15.0 and later): a system
-# weston without it gives way to the one scripts/build-weston.sh vendors.
-if [[ "$display" == headless ]] && ! env -u WAYLAND_DISPLAY -u DISPLAY weston --help 2>/dev/null \
-    | grep -q -- --fake-seat; then
+# weston without it gives way to the one scripts/build-weston.sh vendors. The help is read whole first: under pipefail,
+# `grep -q` leaving the pipe early would end weston with SIGPIPE and fail a weston that has the option.
+if [[ "$display" == headless ]] \
+    && ! grep -q -- --fake-seat <<<"$(env -u WAYLAND_DISPLAY -u DISPLAY weston --help 2>/dev/null || true)"; then
     if ! "$repo/scripts/build-weston.sh" --verify; then
         echo "$(command -v weston) has no --fake-seat, which the GPUI build needs (weston 15.0 or later):" \
             "run scripts/build-weston.sh" >&2

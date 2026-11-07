@@ -70,7 +70,9 @@ write() {
 }
 
 environment_exists() {
-  gh api "repos/$repo/environments" --paginate --jq '.environments[].name' | grep -qxF "$1"
+  local names
+  names="$(gh api "repos/$repo/environments" --paginate --jq '.environments[].name')" || return
+  grep -qxF -- "$1" <<<"$names"
 }
 
 # the environment's deployment policies, one "ID TYPE NAME" line each

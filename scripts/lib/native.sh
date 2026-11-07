@@ -201,9 +201,11 @@ weston_prefix() {
   echo "$VENDOR_ROOT/weston-$(prefix_key WESTON /nonexistent)"
 }
 
-# Whether the weston at PATH takes --fake-seat (weston 15.0 and later): the seat the GPUI build needs.
+# Whether the weston at PATH takes --fake-seat (weston 15.0 and later): the seat the GPUI build needs. The help is
+# read whole first: piped into `grep -q` under pipefail, weston dies of SIGPIPE once grep has matched and the check
+# fails for a weston that has the option.
 weston_has_fake_seat() {
-  env -u WAYLAND_DISPLAY -u DISPLAY "$1" --help 2>/dev/null | grep -q -- '--fake-seat'
+  grep -q -- '--fake-seat' <<<"$(env -u WAYLAND_DISPLAY -u DISPLAY "$1" --help 2>/dev/null || true)"
 }
 
 # A weston prefix is complete when the compositor, its headless backend, GL renderer and desktop shell (module and
