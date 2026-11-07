@@ -124,6 +124,10 @@ fn text_open_checks_the_standardized_path_and_projects_its_source() {
         ("/tmp/src/Makefile", "/tmp/src/Makefile", Some(1), Some("makefile")),
         ("/tmp/a:12.go", "/tmp/a:12.go", Some(7), Some("go")),
     ] {
+        if cfg!(windows) && raw.contains(':') {
+            // a Windows name holds no colon: `a:` reads as a drive there
+            continue;
+        }
         let (mut f, log) = fixture();
         let id = f.sessions[0];
         let (raw, standardized) = (crate::html::os_path(raw), crate::html::os_path(standardized));
