@@ -202,6 +202,120 @@ fn a_remote_pane_offers_nothing_to_stat() {
     }
 }
 
+// regression (upstream #881): a path printed at the end of a sentence kept the period and never opened
+#[cfg(unix)]
+#[test]
+fn sentence_punctuation_after_a_path_names_the_literal_then_each_shorter_spelling() {
+    let cases: [(&str, Option<&str>, &[&str]); 7] = [
+        ("/tmp/review.md.", None, &["/tmp/review.md.", "/tmp/review.md"]),
+        ("/tmp/a.md?", None, &["/tmp/a.md?", "/tmp/a.md"]),
+        ("/tmp/a.md;", None, &["/tmp/a.md;", "/tmp/a.md"]),
+        ("/tmp/a.md?!", None, &["/tmp/a.md?!", "/tmp/a.md?", "/tmp/a.md"]),
+        ("~/a.md.", None, &["/Users/me/a.md.", "/Users/me/a.md"]),
+        ("src/a.md.", Some("/w"), &["/w/src/a.md.", "/w/src/a.md"]),
+        ("file:///tmp/a.md.", None, &["/tmp/a.md.", "/tmp/a.md"]),
+    ];
+    for (raw, cwd, expected) in cases {
+        let expected: Vec<_> = expected.iter().map(|path| loc(path, None)).collect();
+        assert_eq!(locations_of(raw, cwd), expected, "{raw}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_location_ending_a_sentence_finds_the_file_at_its_line() {
+    assert_eq!(
+        locations_of("/a/b.swift:12.", None),
+        [
+            loc("/a/b.swift:12.", None),
+            loc("/a/b.swift:12", None),
+            loc("/a/b.swift", Some(12))
+        ]
+    );
+    assert_eq!(
+        locations_of("/a/b.swift.:12", None),
+        [loc("/a/b.swift.:12", None), loc("/a/b.swift.", Some(12))]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn at_most_three_trailing_punctuation_characters_are_trimmed() {
+    assert_eq!(
+        locations_of("/tmp/a.md...", None),
+        [
+            loc("/tmp/a.md...", None),
+            loc("/tmp/a.md..", None),
+            loc("/tmp/a.md.", None),
+            loc("/tmp/a.md", None)
+        ]
+    );
+    assert!(!locations_of("/tmp/a.md....", None).contains(&loc("/tmp/a.md", None)));
+    let long = format!("/tmp/a{}", "!".repeat(10_000));
+    let found = locations_of(&long, None);
+    assert_eq!(found.len(), 4);
+    assert_eq!(found.last(), Some(&loc(&format!("/tmp/a{}", "!".repeat(9_997)), None)));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_name_of_punctuation_alone_or_other_trailing_characters_offers_no_shorter_spelling() {
+    for raw in [
+        "/tmp/x/..",
+        "/tmp/x/.",
+        "/tmp/x/.!",
+        "/tmp/...",
+        "/tmp/?!",
+        "/.",
+        "/tmp/a,",
+        "/tmp/a)",
+        "/tmp/a:",
+    ] {
+        assert!(locations_of(raw, None).is_empty(), "{raw}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_trimmed_spelling_inside_a_refused_root_is_never_offered() {
+    for raw in [
+        "/net.",
+        "/net/host/a.md.",
+        "/Network.",
+        "/home/me/a.md?",
+        "//host/share/a.md.",
+        "/tmp/../net/a.md.",
+        "/misc/a.md!",
+    ] {
+        let found = locations_of(raw, None);
+        assert!(
+            !found
+                .iter()
+                .any(|location| super::super::is_automount_path(&location.path) || location.path.starts_with("//")),
+            "{raw}: {found:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_remote_pane_offers_no_shorter_spelling() {
+    let remote = ClickOrigin::RemotePane(session());
+    assert!(locations_for_hosts_and_home("/tmp/a.md.", remote, None, &hosts(), "/Users/me").is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_sentence_ending_path_with_no_spelling_on_disk_keeps_its_typed_route() {
+    let route = route_for_hosts(
+        "/tmp/gone.md.",
+        LinkOpenMode::Overlay,
+        ClickOrigin::Pane(session()),
+        &hosts(),
+    );
+    assert_eq!(route, Route::Reveal(PathBuf::from("/tmp/gone.md.")));
+}
+
 #[cfg(unix)]
 #[test]
 fn no_found_candidate_keeps_todays_route() {
@@ -312,6 +426,30 @@ fn a_windows_drive_colon_stays_part_of_the_path() {
     assert_eq!(
         relative,
         [loc("C:\\w\\src\\a.go:3", None), loc("C:\\w\\src\\a.go", Some(3))]
+    );
+}
+
+// this build's own: Windows drops a name's trailing dots on open, so a dotted spelling would be found first and revealed
+#[cfg(windows)]
+#[test]
+fn a_windows_path_ending_a_sentence_offers_no_dotted_spelling() {
+    let of =
+        |raw: &str| locations_for_hosts_and_home(raw, ClickOrigin::Pane(session()), None, &hosts(), "C:\\Users\\me");
+    assert_eq!(of("C:\\tmp\\review.md."), [loc("C:\\tmp\\review.md", None)]);
+    assert_eq!(of("C:\\tmp\\a.md..."), [loc("C:\\tmp\\a.md", None)]);
+    assert_eq!(
+        of("C:\\tmp\\a.md!"),
+        [loc("C:\\tmp\\a.md!", None), loc("C:\\tmp\\a.md", None)]
+    );
+    assert_eq!(
+        of("C:\\tmp\\a.md...."),
+        [
+            loc("C:\\tmp\\a.md....", None),
+            loc("C:\\tmp\\a.md...", None),
+            loc("C:\\tmp\\a.md..", None),
+            loc("C:\\tmp\\a.md.", None)
+        ],
+        "with no undotted spelling the list stays as it is"
     );
 }
 

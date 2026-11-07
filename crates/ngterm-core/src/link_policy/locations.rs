@@ -3,7 +3,10 @@
 //!
 //! A link ending in `:line[:column]` names the literal path first, so a file named with a colon still wins, then the
 //! path without the suffix, opened at that line. A relative link is joined to the clicking pane's directory before any
-//! scheme parse, so `./main.go:42` never reads as a URL scheme. Every candidate passed the same guards as a click
+//! scheme parse, so `./main.go:42` never reads as a URL scheme. Ghostty keeps a sentence's trailing `.`, `?`, `!` or
+//! `;` in the link too, so a path ending in one also names up to three spellings with one character removed at a time,
+//! the literal first so a name really ending in one wins; on Windows, where no name ends in a dot, a spelling that does
+//! is dropped for the shorter ones. Every candidate passed the same guards as a click
 //! ([`super::guarded_local_path`]), so a refused path is never stat'ed; a remote pane's paths name files on another
 //! machine and offer none. The frontend stats the candidates off its main thread, the first one found winning
 //! ([`route_for_location`]), and a link with none on disk keeps the route it had as typed.
@@ -42,8 +45,9 @@ pub fn locations(raw: &str, origin: ClickOrigin, cwd: Option<&str>) -> Vec<LinkL
 
 /// The candidates a click on `raw` names, in the order they are tried: for a link ending in `:line[:column]`, the
 /// literal path and then the path without the suffix at that line; for a relative link joined to `cwd`, the joined
-/// path. Empty when [`super::route`] decides the link as typed: no suffix and not relative, a remote pane, a control
-/// character, a refused path.
+/// path; for one ending in sentence punctuation, the literal path and then each shorter spelling
+/// ([`trimmed_spellings`]), each split for a suffix the same way. Empty when [`super::route`] decides the link as
+/// typed: no suffix, no trailing punctuation and not relative, a remote pane, a control character, a refused path.
 #[must_use]
 pub fn locations_for_hosts_and_home<S: BuildHasher>(
     raw: &str,
@@ -73,20 +77,60 @@ pub fn locations_for_hosts_and_home<S: BuildHasher>(
     let Some(literal) = guarded_local_path(&path) else {
         return Vec::new();
     };
-    let suffix = line_suffix(&literal);
-    let mut found = Vec::new();
-    if relative || suffix.is_some() {
-        found.push(LinkLocation::literal(literal.clone()));
+    let mut spellings: Vec<String> = std::iter::once(literal)
+        .chain(trimmed_spellings(&path).into_iter().filter_map(guarded_local_path))
+        .collect();
+    let trimmed = spellings.len() > 1;
+    if cfg!(windows) && spellings.iter().any(|spelling| !spelling.ends_with('.')) {
+        // Windows drops a name's trailing dots when it opens a path, so `review.md.` is `review.md` there: a spelling
+        // ending in one would be found first and routed by its empty extension
+        spellings.retain(|spelling| !spelling.ends_with('.'));
     }
-    if let Some((base, line)) = suffix
-        && let Some(stripped) = guarded_local_path(base)
-    {
-        found.push(LinkLocation {
-            path: stripped,
-            line: Some(line),
-        });
+    let mut found = Vec::new();
+    for spelling in &spellings {
+        let suffix = line_suffix(spelling);
+        if relative || suffix.is_some() || trimmed {
+            found.push(LinkLocation::literal(spelling.clone()));
+        }
+        if let Some((base, line)) = suffix
+            && let Some(stripped) = guarded_local_path(base)
+        {
+            found.push(LinkLocation {
+                path: stripped,
+                line: Some(line),
+            });
+        }
     }
     found
+}
+
+/// What ends a sentence after a printed path; Ghostty's path rule keeps it in the link (upstream's
+/// `trailingPunctuation`). A comma or a closing bracket already ends the link, and a detected one never ends in a
+/// colon.
+const TRAILING_PUNCTUATION: [char; 4] = ['.', '?', '!', ';'];
+
+/// The most trailing punctuation characters [`trimmed_spellings`] removes, bounding what a click on a long run builds
+/// and stats.
+const MAX_TRIMMED: usize = 3;
+
+/// `path` with up to [`MAX_TRIMMED`] trailing [`TRAILING_PUNCTUATION`] characters removed, one at a time and longest
+/// first, so a name really ending in one still wins (upstream's `trimmedSpellings`). It stops before leaving a last
+/// component of punctuation alone, so `/x/..` never becomes `/x/.`.
+fn trimmed_spellings(path: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = path;
+    while out.len() < MAX_TRIMMED {
+        let Some(shorter) = rest.strip_suffix(TRAILING_PUNCTUATION) else {
+            break;
+        };
+        rest = shorter;
+        let name = rest.rsplit(separator).next().unwrap_or(rest);
+        if name.chars().all(|ch| TRAILING_PUNCTUATION.contains(&ch)) {
+            break;
+        }
+        out.push(rest);
+    }
+    out
 }
 
 /// The path separators a relative link and a path's last component are read with: `/`, and `\` on Windows.

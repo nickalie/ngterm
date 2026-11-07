@@ -256,11 +256,11 @@ bullets).
 **Rust side:** modify `crates/ngterm-core/src/link_policy.rs`, `crates/ngterm-gpui/src/state/tests.rs`.
 **Conformance:** none (clicks are not reachable from the suite).
 
-- [ ] `locations` iterates spellings: the literal, then up to three trims of one of `. ? ! ;` from the end, each
+- [x] `locations` iterates spellings: the literal, then up to three trims of one of `. ? ! ;` from the end, each
   followed by its `:line`-less form; stop before the last component is punctuation only (`/` and `\` separators);
   a comma, closing bracket or trailing colon offers no shorter spelling; every spelling passes the guards; a remote
   pane gets none; no candidate on disk keeps the typed route.
-- [ ] write tests: the exact upstream lists ("/tmp/review.md." -> [literal, "/tmp/review.md"]; "/a/b.swift:12." ->
+- [x] write tests: the exact upstream lists ("/tmp/review.md." -> [literal, "/tmp/review.md"]; "/a/b.swift:12." ->
   ["/a/b.swift:12.", "/a/b.swift:12", ("/a/b.swift", 12)]; "/a/b.swift.:12"; "/tmp/a.md..." gives 4; "/tmp/a.md...."
   never "/tmp/a.md"; the 10,000-'!' name; no automount or `//` spelling incl. "/tmp/../net/a.md."); a gpui state
   test where the probe sees both spellings and the Markdown page opens.

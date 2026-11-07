@@ -1257,6 +1257,51 @@ fn a_missing_location_keeps_the_route_it_had_as_typed() {
     assert_eq!(text_page(&state, session), None);
 }
 
+/// The Markdown page open over `session`, by its file.
+fn markdown_page(state: &AppState, session: Uuid) -> Option<String> {
+    let found = state.core.library().store_for_session(session)?.session(session)?;
+    found
+        .html_overlays()
+        .into_iter()
+        .find_map(|(_, page)| match &page.source {
+            ngterm_core::html::HtmlSource::Markdown { path } => Some(path.clone()),
+            _ => None,
+        })
+}
+
+// regression (upstream #881): a path printed at the end of a sentence kept the period and never opened
+#[test]
+fn a_markdown_path_ending_a_sentence_opens_the_file_without_the_period() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let file = directory.path().join("review.md");
+    std::fs::write(&file, "# Review\n").unwrap();
+    let file = file.to_string_lossy().into_owned();
+    let raw = format!("{file}.");
+    // the worker stats the literal spelling, then the one without the period (on Windows, which drops a name's
+    // trailing dots on open, only the latter)
+    let spellings: Vec<String> = ngterm_core::link_policy::locations(&raw, ClickOrigin::Pane(session), None)
+        .into_iter()
+        .map(|location| location.path)
+        .collect();
+    let expected = if cfg!(windows) {
+        vec![file.clone()]
+    } else {
+        vec![raw.clone(), file.clone()]
+    };
+    assert_eq!(spellings, expected);
+    click(&mut state, &main_loop, &raw, session, "T");
+    assert_eq!(markdown_page(&state, session), Some(file));
+    assert!(state.frontend.reveals.is_empty());
+
+    let gone = directory.path().join("gone.md.");
+    click(&mut state, &main_loop, &gone.to_string_lossy(), session, "T");
+    assert_eq!(
+        state.frontend.reveals,
+        [gone],
+        "no spelling on disk keeps the typed route"
+    );
+}
+
 #[test]
 fn the_reveal_chord_reveals_and_never_opens() {
     let (mut state, (main_loop, _held), session, directory) = text_fixture();
