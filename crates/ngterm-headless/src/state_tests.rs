@@ -88,9 +88,41 @@ fn session_request(cmd: SessionCmd, session: Uuid, args: Value) -> Request {
     request(Command::Session(cmd), Some(session), args)
 }
 
+/// The tree a fresh start over `env`'s state directory would serve.
+fn saved_tree(env: &ngterm_core::paths::MapEnv) -> String {
+    let mut core = Core::new(
+        CoreConfig {
+            app: crate::identity(),
+            capabilities: Vec::new(),
+        },
+        crate::load_state(env),
+    );
+    serde_json::to_string(&core.dispatch(&Request::new(Command::Tree))).unwrap()
+}
+
 #[test]
 fn requests_change_the_model_and_quit_saves_only_once() {
-    let (mut state, main_loop, session) = fixture();
+    let (mut state, main_loop, _) = fixture();
+    let dir = tempfile::tempdir().unwrap();
+    let env = ngterm_core::paths::MapEnv::new()
+        .with("HOME", dir.path())
+        .with("NGTERM_STATE_DIR", dir.path());
+    state.core = Core::new(
+        CoreConfig {
+            app: crate::identity(),
+            capabilities: Vec::new(),
+        },
+        crate::load_state(&env),
+    );
+    let window = state.core.library().active_window_id().unwrap();
+    let session = state
+        .core
+        .library()
+        .store(window)
+        .unwrap()
+        .active_session()
+        .unwrap()
+        .id();
     let reply = state.handle_request(&session_request(SessionCmd::Rename, session, json!({"name":"worker"})));
     assert!(reply.response.ok, "{reply:?}");
     assert!(
@@ -103,14 +135,28 @@ fn requests_change_the_model_and_quit_saves_only_once() {
     state.request_quit();
     state.request_quit();
     assert!(state.quit_requested());
+    // the rename's debounced save is still queued: only the quit save can have written it
     state.save_on_quit();
     assert!(!state.quit_requested());
+    assert!(saved_tree(&env).contains("worker"));
+    let reply = state.handle_request(&session_request(
+        SessionCmd::Rename,
+        session,
+        json!({"name":"renamed-after-quit"}),
+    ));
+    assert!(reply.response.ok, "{reply:?}");
     state.request_quit();
+    assert!(!state.quit_requested(), "a quit after the quit save asks for another");
     state.save_on_quit();
     state.settle();
     state.land();
     state.drain_pane(session, "missing");
     main_loop.drain(&mut state);
+    let saved = saved_tree(&env);
+    assert!(
+        saved.contains("worker") && !saved.contains("renamed-after-quit"),
+        "{saved}"
+    );
     state.teardown();
     assert_eq!(state.terminals(), 0);
 }
@@ -211,33 +257,8 @@ fn malformed_stream_results_remain_plain_replies() {
 }
 
 #[test]
-fn presentation_callbacks_obey_shutdown_and_release_failed_posts() {
-    let (mut state, main_loop, _) = fixture();
-    let mut reader = presentation_reader(state.poster.clone(), 99);
-    reader(b"{}".to_vec());
-    presentation_closer(state.poster.clone(), 99)();
-    main_loop.drain(&mut state);
-    state.save_on_quit();
-    reader(b"{}".to_vec());
-    presentation_closer(state.poster.clone(), 99)();
-    main_loop.drain(&mut state);
-    main_loop.closed.store(true, std::sync::atomic::Ordering::Release);
-    for _ in 0..=ngterm_core::remote::INBOUND_LIMIT {
-        reader(b"{}".to_vec());
-    }
-    drop(main_loop);
-    reader(b"{}".to_vec());
-    assert!(!state.quit_requested());
-}
-
-#[test]
-fn stale_viewer_and_page_helper_reports_leave_the_tree_unchanged() {
-    let (mut state, _, session) = fixture();
-    let key = ngterm_core::remote::LinkKey {
-        session,
-        client: 99,
-        launch: 99,
-    };
+fn page_helper_reports_for_an_unknown_page_leave_the_tree_unchanged() {
+    let (mut state, _, _) = fixture();
     let helper = ngterm_core::remote::replica_page::HelperKey {
         page: Uuid::new_v4(),
         launch: 99,
@@ -247,29 +268,33 @@ fn stale_viewer_and_page_helper_reports_leave_the_tree_unchanged() {
         if quitting {
             state.save_on_quit();
         }
-        state.viewer_line(key, b"{}");
-        state.viewer_closed(key, "closed");
         state.page_helper_line(helper, b"{}");
         state.page_helper_closed(helper, "closed");
     }
     assert_eq!(state.handle_request(&Request::new(Command::Tree)).response, before);
 }
 
+/// A presentation stream's channel: the frames sent on it, and how often it was shut down.
 #[cfg(unix)]
 #[derive(Clone, Default)]
-struct Lines(std::rc::Rc<std::cell::RefCell<Vec<Value>>>);
+struct Lines {
+    sent: std::rc::Rc<std::cell::RefCell<Vec<Value>>>,
+    shutdowns: std::rc::Rc<std::cell::Cell<usize>>,
+}
 #[cfg(unix)]
 impl ngterm_core::LineChannel for Lines {
     fn send(&self, line: Vec<u8>) -> bool {
-        self.0.borrow_mut().push(serde_json::from_slice(&line).unwrap());
+        self.sent.borrow_mut().push(serde_json::from_slice(&line).unwrap());
         true
     }
-    fn shutdown(&self) {}
+    fn shutdown(&self) {
+        self.shutdowns.set(self.shutdowns.get() + 1);
+    }
 }
 #[cfg(unix)]
 impl Lines {
     fn last(&self, kind: &str) -> Value {
-        self.0
+        self.sent
             .borrow()
             .iter()
             .rev()
@@ -279,8 +304,10 @@ impl Lines {
     }
 }
 
+/// The fixture's session presented live to one viewer holding the presenter role: the state, its loop, the session,
+/// the viewer's channel and stream serial, and the directory the live install lives in.
 #[cfg(unix)]
-fn presented() -> (HeadlessState, Arc<Loop>, Uuid, Lines, tempfile::TempDir) {
+fn presented() -> (HeadlessState, Arc<Loop>, Uuid, Lines, u64, tempfile::TempDir) {
     use ngterm_host::fakes::{FakeSessionHost, FakeSurface};
     let (mut state, main_loop, session) = fixture();
     let dir = tempfile::tempdir().unwrap();
@@ -354,7 +381,7 @@ fn presented() -> (HeadlessState, Arc<Loop>, Uuid, Lines, tempfile::TempDir) {
     );
     state.settle();
     assert_eq!(lines.last("presenter.granted")["kind"], "presenter.granted");
-    (state, main_loop, session, lines, dir)
+    (state, main_loop, session, lines, serial, dir)
 }
 
 #[cfg(unix)]
@@ -371,7 +398,7 @@ fn pump(main_loop: &Loop, state: &mut HeadlessState) {
 #[test]
 fn a_job_stream_delivers_context_and_reports_the_helpers_exit() {
     use std::io::{BufRead as _, BufReader, Write as _};
-    let (mut state, main_loop, session, lines, _dir) = presented();
+    let (mut state, main_loop, session, lines, _, _dir) = presented();
     let opened = state.handle_request(&session_request(
         SessionCmd::OverlayOpen,
         session,
@@ -422,7 +449,7 @@ fn a_job_stream_delivers_context_and_reports_the_helpers_exit() {
 #[test]
 fn page_channels_answer_bridge_calls_and_park_on_disconnect() {
     use std::io::{BufRead as _, BufReader, Write as _};
-    let (mut state, main_loop, session, lines, dir) = presented();
+    let (mut state, main_loop, session, lines, _, dir) = presented();
     let file = dir.path().join("index.html");
     std::fs::write(&file, "<p>hello</p>").unwrap();
     let opened = state.handle_request(&session_request(
@@ -501,17 +528,63 @@ fn page_channels_answer_bridge_calls_and_park_on_disconnect() {
 #[cfg(unix)]
 #[test]
 fn presentation_adoption_arms_hello_deadline_and_abandon_releases_the_stream() {
-    let (mut state, main_loop, session, _, _dir) = presented();
-    let reply = state.handle_request(&request(Command::Live(LiveCmd::Present), Some(session), json!({})));
+    use std::io::{BufRead as _, BufReader};
+    let (mut state, main_loop, session, _, serial, _dir) = presented();
+    state.core.presentation_closed(serial);
+    assert!(!state.core.has_presentation_streams());
+    let present = request(Command::Live(LiveCmd::Present), Some(session), json!({}));
+    let reply = state.handle_request(&present);
     assert!(reply.response.ok, "{reply:?}");
     assert!(state.core.has_presentation_streams());
     reply.stream.unwrap().abandon();
     main_loop.drain(&mut state);
-    state.core.presentation_closed(1);
-    main_loop.drain(&mut state);
     assert!(!state.core.has_presentation_streams());
-    state.save_on_quit();
+    // a viewer that sends no hello is closed at the deadline, which this loop runs at once
+    let reply = state.handle_request(&present);
+    assert!(reply.response.ok, "{reply:?}");
     main_loop.drain(&mut state);
+    let (server, client) = ngterm_server::endpoint::pair().unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let owner = reply.stream.unwrap();
+    let worker = std::thread::spawn(move || owner.adopt(server, Vec::new()));
+    let mut line = String::new();
+    let read = BufReader::new(client).read_line(&mut line).unwrap();
+    assert_eq!(read, 0, "the stream outlived its hello deadline: {line:?}");
+    worker.join().unwrap();
+    pump(&main_loop, &mut state);
+    assert!(!state.core.has_presentation_streams());
+}
+
+#[cfg(unix)]
+#[test]
+fn presentation_callbacks_obey_shutdown_and_release_failed_posts() {
+    let (mut state, main_loop, _, lines, serial, _dir) = presented();
+    let mut reader = presentation_reader(state.poster.clone(), serial);
+    // a bad frame shuts the viewer's channel: the reader's task reaches the core
+    reader(b"not a frame".to_vec());
+    main_loop.drain(&mut state);
+    assert_eq!(lines.shutdowns.get(), 1);
+    state.save_on_quit();
+    let shutdowns = lines.shutdowns.get();
+    reader(b"not a frame".to_vec());
+    presentation_closer(state.poster.clone(), serial)();
+    main_loop.drain(&mut state);
+    assert_eq!(
+        lines.shutdowns.get(),
+        shutdowns,
+        "a line after the quit save reached the core"
+    );
+    assert!(
+        state.core.has_presentation_streams(),
+        "a close after the quit save reached the core"
+    );
+    // each failed post gives its inbound slot back, or the reader would block past the limit
+    main_loop.closed.store(true, std::sync::atomic::Ordering::Release);
+    for _ in 0..=ngterm_core::remote::INBOUND_LIMIT {
+        reader(b"{}".to_vec());
+    }
+    drop(main_loop);
+    reader(b"{}".to_vec());
 }
 
 #[test]
@@ -542,53 +615,114 @@ fn closing_a_session_arms_and_finalizes_its_pending_close() {
 }
 
 #[test]
-fn stale_auto_follow_and_pending_close_timers_are_harmless_after_quit() {
-    let (mut state, _, _) = fixture();
-    let timer = AutoFollowTimer {
-        window: Uuid::new_v4(),
-        generation: 999,
-        delay: Duration::ZERO,
-    };
-    state.fire_auto_follow(timer);
-    let close = PendingCloseTimer {
-        window: Uuid::new_v4(),
-        record: Uuid::new_v4(),
-        grace: Duration::ZERO,
-    };
-    finalize_pending_close(&mut state, close);
-    state.save_on_quit();
-    state.fire_auto_follow(timer);
-    finalize_pending_close(&mut state, close);
-    assert!(!state.quit_requested());
+fn a_pending_close_timer_does_nothing_once_quitting() {
+    let (mut state, main_loop, session) = fixture();
+    let reply = state.handle_request(&session_request(SessionCmd::Close, session, json!({"undoable":true})));
+    assert!(reply.response.ok, "{reply:?}");
+    // the quit save itself makes every pending close final, so only the phase stands in for it here
+    state.phase = Phase::Quitting;
+    main_loop.drain(&mut state);
+    let window = state.core.library().active_window_id().unwrap();
+    assert!(
+        state
+            .core
+            .library()
+            .store(window)
+            .unwrap()
+            .pending_close_summary()
+            .is_some()
+    );
+}
+
+fn active_session(state: &HeadlessState) -> Option<Uuid> {
+    let window = state.core.library().active_window_id()?;
+    state
+        .core
+        .library()
+        .store(window)?
+        .active_session()
+        .map(ngterm_core::model::Session::id)
 }
 
 #[test]
-fn remote_ticks_keep_an_attached_viewer_alive_and_quit_stops_its_transport() {
-    use ngterm_core::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
-    use ngterm_core::remote::{LinkKey, PresentationLink, PresentationTransport};
-    struct Runner(String);
-    impl RemoteCommandRunner for Runner {
-        fn run(&self, _: &[String], _: Duration) -> RemoteCommandResult {
-            RemoteCommandResult {
-                status: 0,
-                stdout: self.0.clone(),
-                stderr: String::new(),
-            }
+fn an_auto_follow_timer_selects_a_blocked_session_only_until_the_quit() {
+    use ngterm_core::model::{AgentIndicator, AgentStatus};
+    let (mut state, _, first) = fixture();
+    let created = state.handle_request(&request(
+        Command::Session(SessionCmd::New),
+        None,
+        json!({"name":"waiting"}),
+    ));
+    assert!(created.response.ok, "{created:?}");
+    let blocked: Uuid = created.response.result.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let window = state.core.library().active_window_id().unwrap();
+    let store = state.core.library_mut().store_mut(window).unwrap();
+    store.select_session(Some(first));
+    let indicator = AgentIndicator {
+        status: AgentStatus::Blocked,
+        ..AgentIndicator::default()
+    };
+    store.set_agent_indicator(indicator, blocked);
+    // the first take applies the (off) settings, so the explicit config stands from then on
+    drop(state.core.take_auto_follow_timers());
+    state.core.set_auto_follow(Some(ngterm_core::auto_follow::FollowConfig {
+        timeout: Duration::ZERO,
+        stay_on_active: false,
+    }));
+    let timers = state.core.take_auto_follow_timers();
+    assert!(!timers.is_empty());
+    state.phase = Phase::Quitting;
+    for timer in timers.iter().copied() {
+        state.fire_auto_follow(timer);
+    }
+    assert_eq!(active_session(&state), Some(first));
+    state.phase = Phase::Running;
+    for timer in timers {
+        state.fire_auto_follow(timer);
+    }
+    assert_eq!(active_session(&state), Some(blocked));
+}
+
+/// A remote runner answering every command with one output.
+struct Runner(String);
+
+impl ngterm_core::remote::tree::RemoteCommandRunner for Runner {
+    fn run(&self, _: &[String], _: Duration) -> ngterm_core::remote::tree::RemoteCommandResult {
+        ngterm_core::remote::tree::RemoteCommandResult {
+            status: 0,
+            stdout: self.0.clone(),
+            stderr: String::new(),
         }
     }
-    #[derive(Clone)]
-    struct Transport(std::rc::Rc<std::cell::Cell<bool>>);
-    impl PresentationTransport for Transport {
-        fn open(&self, _: &[String], _: LinkKey) -> Box<dyn PresentationLink> {
-            Box::new(self.clone())
-        }
+}
+
+/// A presentation transport whose links note the key the last one opened with, and whether one was stopped.
+#[derive(Clone, Default)]
+struct Transport {
+    key: std::rc::Rc<std::cell::Cell<Option<ngterm_core::remote::LinkKey>>>,
+    stopped: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl ngterm_core::remote::PresentationTransport for Transport {
+    fn open(&self, _: &[String], key: ngterm_core::remote::LinkKey) -> Box<dyn ngterm_core::remote::PresentationLink> {
+        self.key.set(Some(key));
+        Box::new(self.clone())
     }
-    impl PresentationLink for Transport {
-        fn send(&self, _: &[u8]) {}
-        fn stop(&self) {
-            self.0.set(true);
-        }
+}
+
+impl ngterm_core::remote::PresentationLink for Transport {
+    fn send(&self, _: &[u8]) {}
+    fn stop(&self) {
+        self.stopped.set(true);
     }
+}
+
+/// The fixture with another machine's session attached as a row, its presentation bridged over `transport`.
+fn attached(transport: &Transport) -> (HeadlessState, Arc<Loop>) {
     let (mut state, main_loop, _) = fixture();
     let origin = Uuid::new_v4();
     let pane = Uuid::new_v4();
@@ -597,10 +731,9 @@ fn remote_ticks_keep_an_attached_viewer_alive_and_quit_stops_its_transport() {
         "sessions":[{"id":origin,"name":"remote build","windowID":"W","windowName":"main","workspaceID":"WS","workspaceName":"dev","cwd":"/","panes":[{"pane":"left","daemon":ngterm_core::live::daemon_name(pane)}]}]
     }}});
     state.core.set_remote_runner(Arc::new(Runner(tree.to_string())));
-    let stopped = std::rc::Rc::new(std::cell::Cell::new(false));
     state
         .core
-        .set_presentation_transport(std::rc::Rc::new(Transport(stopped.clone())));
+        .set_presentation_transport(std::rc::Rc::new(transport.clone()));
     let response = state.core.dispatch(&request(
         Command::Live(LiveCmd::Attach),
         Some(origin),
@@ -609,11 +742,39 @@ fn remote_ticks_keep_an_attached_viewer_alive_and_quit_stops_its_transport() {
     assert!(response.ok, "{response:?}");
     state.settle();
     main_loop.drain(&mut state);
-    assert!(!stopped.get());
+    (state, main_loop)
+}
+
+#[test]
+fn remote_ticks_keep_an_attached_viewer_alive_and_quit_stops_its_transport() {
+    let transport = Transport::default();
+    let (mut state, main_loop) = attached(&transport);
+    assert!(!transport.stopped.get());
     assert!(state.core.remote_wake().is_some());
     state.save_on_quit();
     main_loop.drain(&mut state);
-    assert!(stopped.get());
+    assert!(transport.stopped.get());
+}
+
+#[test]
+fn a_viewers_reports_reach_the_core_only_until_the_quit() {
+    let reports: [fn(&mut HeadlessState, ngterm_core::remote::LinkKey); 2] = [
+        |state, key| state.viewer_line(key, b"not a frame"),
+        |state, key| state.viewer_closed(key, "closed"),
+    ];
+    for report in reports {
+        let transport = Transport::default();
+        let (mut state, _main_loop) = attached(&transport);
+        let key = transport.key.get().expect("the attach opened a link");
+        // the quit save stops every link itself, so only the phase stands in for it here
+        state.phase = Phase::Quitting;
+        report(&mut state, key);
+        assert!(!transport.stopped.get(), "a report after the quit reached the core");
+        // a bad frame or a close fails the link, which stops it
+        state.phase = Phase::Running;
+        report(&mut state, key);
+        assert!(transport.stopped.get());
+    }
 }
 
 #[test]

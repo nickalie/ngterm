@@ -31,6 +31,10 @@ fn headless(binary: &Path, home: &Path, state: &Path) -> Command {
     if let Some(root) = std::env::var_os("SystemRoot") {
         command.env("SystemRoot", root);
     }
+    // Child profiles belong to the same measurement as this test's profile.
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
     command
 }
 

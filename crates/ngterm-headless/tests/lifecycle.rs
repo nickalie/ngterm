@@ -61,7 +61,7 @@ impl Fixture {
             .env("XDG_CONFIG_HOME", home.join(".config"))
             .env("NGTERM_STATE_DIR", self.root.path().join("state"))
             .env("NGTERM_CONTROL_SOCKET", self.socket())
-            .env("NGTERM_SESSION_PATH", "/bin/false")
+            .env("NGTERM_SESSION_PATH", inert_program())
             .env("GHOSTTY_RESOURCES_DIR", self.root.path().join("ghostty"))
             .env("PATH", "/usr/bin:/bin")
             .env("SHELL", "/bin/sh")
@@ -77,6 +77,18 @@ impl Fixture {
     fn socket(&self) -> PathBuf {
         self.root.path().join("control.sock")
     }
+
+    fn log(&self) -> String {
+        std::fs::read_to_string(self.root.path().join("state/ngterm.log")).unwrap_or_default()
+    }
+}
+
+/// A program that exits at once, unsuccessfully: `false` is `/bin/false` on Linux, `/usr/bin/false` alone on macOS.
+fn inert_program() -> &'static str {
+    ["/bin/false", "/usr/bin/false"]
+        .into_iter()
+        .find(|program| Path::new(program).exists())
+        .unwrap_or("/usr/bin/false")
 }
 
 struct Running(Child);
@@ -134,6 +146,28 @@ fn terminate(child: &Child) -> io::Result<()> {
     }
 }
 
+/// A new session named `name` running an exited command: its id.
+fn new_session(fixture: &Fixture, name: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let created = control(
+        fixture,
+        &serde_json::json!({"cmd":"session.new", "args":{"name":name,"command":"true","wait":true}}),
+    )?;
+    assert_eq!(created["ok"], true, "{created}");
+    Ok(created["result"]["id"].as_str().ok_or("no session id")?.to_owned())
+}
+
+/// The windows the state directory holds, as saved.
+fn saved_windows(fixture: &Fixture) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+    let mut windows = Vec::new();
+    for entry in std::fs::read_dir(fixture.root.path().join("state/windows"))? {
+        let file = entry?.path();
+        if file.extension().is_some_and(|extension| extension == "json") {
+            windows.push(serde_json::from_str(&std::fs::read_to_string(file)?)?);
+        }
+    }
+    Ok(windows)
+}
+
 #[test]
 fn a_server_answers_its_private_socket_and_saves_on_termination() {
     let fixture = Fixture::new(false).unwrap();
@@ -145,30 +179,38 @@ fn a_server_answers_its_private_socket_and_saves_on_termination() {
     BufReader::new(stream).read_line(&mut line).unwrap();
     let response: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(response["ok"], true, "{response}");
-    let created = control(
-        &fixture,
-        &serde_json::json!({"cmd":"session.new", "args":{"name":"quit-save-probe","command":"true","wait":true}}),
-    )
-    .unwrap();
-    assert_eq!(created["ok"], true, "{created}");
+    let probe = new_session(&fixture, "quit-save-probe").unwrap();
     let closed = control(
         &fixture,
-        &serde_json::json!({"cmd":"session.close", "target":created["result"]["id"], "args":{"undoable":true}}),
+        &serde_json::json!({"cmd":"session.close", "target":probe, "args":{"undoable":true}}),
     )
     .unwrap();
     assert_eq!(closed["ok"], true, "{closed}");
     let second = fixture.command().arg("--skip-agent-setup").output().unwrap();
     assert!(!second.status.success());
     assert!(String::from_utf8_lossy(&second.stderr).contains("another instance is already running on"));
+    // each new session is written at once, and the last write never had `first` selected; a selection is written
+    // after a debounce, which the signal beats, so only the quit save writes it
+    let first = new_session(&fixture, "selection-probe-first").unwrap();
+    new_session(&fixture, "selection-probe-second").unwrap();
+    let selected = control(&fixture, &serde_json::json!({"cmd":"session.select", "target":first})).unwrap();
+    assert_eq!(selected["ok"], true, "{selected}");
     terminate(&child.0).unwrap();
     assert!(wait_exit(&mut child.0).unwrap().success());
+    assert!(fixture.log().contains("quit: the state is saved"));
     assert!(fixture.root.path().join("state/windows.json").is_file());
-    for entry in std::fs::read_dir(fixture.root.path().join("state/windows")).unwrap() {
-        let file = entry.unwrap().path();
-        if file.extension().is_some_and(|extension| extension == "json") {
-            assert!(!std::fs::read_to_string(file).unwrap().contains("quit-save-probe"));
-        }
-    }
+    let windows = saved_windows(&fixture).unwrap();
+    let saved = serde_json::to_string(&windows).unwrap();
+    assert!(
+        !saved.contains("quit-save-probe"),
+        "the pending close was not made final: {saved}"
+    );
+    assert!(
+        windows.iter().any(|window| window["selectedSessionID"]
+            .as_str()
+            .is_some_and(|id| id.eq_ignore_ascii_case(&first))),
+        "the last selection was not saved: {saved}"
+    );
 }
 
 fn install(fixture: &Fixture) -> io::Result<Output> {
@@ -213,6 +255,13 @@ fn a_staged_launch_installs_agents_and_keeps_serving_after_an_install_failure() 
                 .join("home/.claude/skills/ngterm/SKILL.md")
                 .is_file()
         );
+        // the agents are set up before the server starts, so the outcome is in the log by now
+        let log = fixture.log();
+        assert_eq!(
+            log.contains("the agent status hooks were not installed"),
+            blocked,
+            "{log}"
+        );
         terminate(&child.0).unwrap();
         assert!(wait_exit(&mut child.0).unwrap().success());
     }
@@ -245,9 +294,13 @@ fn a_refused_control_socket_saves_on_quit_and_exits_unsuccessfully() {
         assert!(Instant::now() < deadline, "control refusal not logged");
         std::thread::yield_now();
     }
+    // the launch wrote the index; nothing changes after it, so only the quit save writes it again
+    let index = fixture.root.path().join("state/windows.json");
+    std::fs::remove_file(&index).unwrap();
     terminate(&child.0).unwrap();
     assert!(!wait_exit(&mut child.0).unwrap().success());
-    assert!(fixture.root.path().join("state/windows.json").is_file());
+    assert!(fixture.log().contains("quit: the state is saved"));
+    assert!(index.is_file());
 }
 
 #[test]
@@ -258,8 +311,11 @@ fn unknown_opencode_reports_the_skipped_hooks_and_preserves_user_owned_skills() 
     let skill = fixture.root.path().join("home/.claude/skills/ngterm");
     std::fs::create_dir_all(&skill).unwrap();
     std::fs::write(skill.join("SKILL.md"), "user owned skill").unwrap();
+    // no login shell to probe: the host's own OpenCode and startup files stay out of it
+    let shell = fixture.root.path().join("missing-shell");
     let output = fixture
         .command()
+        .env("SHELL", &shell)
         .arg("--install-agent-hooks")
         .stdout(Stdio::piped())
         .output()
@@ -272,9 +328,9 @@ fn unknown_opencode_reports_the_skipped_hooks_and_preserves_user_owned_skills() 
         std::fs::read_to_string(skill.join("SKILL.md")).unwrap(),
         "user owned skill"
     );
-    let mut child = Running(fixture.command().spawn().unwrap());
+    let mut child = Running(fixture.command().env("SHELL", &shell).spawn().unwrap());
     drop(ready(&fixture, &mut child.0).unwrap());
-    let log = std::fs::read_to_string(fixture.root.path().join("state/ngterm.log")).unwrap();
+    let log = fixture.log();
     assert!(
         log.contains("OpenCode version could not be detected; skipping its hooks."),
         "{log}"

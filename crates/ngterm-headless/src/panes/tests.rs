@@ -216,6 +216,18 @@ fn shell_environment() -> PaneEnvironment {
     env
 }
 
+/// The inherited names a test's shell must not see: this checkout's tests may run inside a live ngterm's pane.
+#[cfg(unix)]
+fn isolation() -> Vec<String> {
+    std::env::vars_os()
+        .map(|(name, _)| name.to_string_lossy().into_owned())
+        .filter(|name| {
+            let name = name.to_ascii_uppercase();
+            name.starts_with("NGTERM_") || name.starts_with("AGTERM_")
+        })
+        .collect()
+}
+
 #[cfg(unix)]
 fn wait_surface(surface: &HeadlessSurface, contains: &str, wake: &std::sync::mpsc::Receiver<()>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -257,6 +269,7 @@ fn a_real_terminal_accepts_keys_bindings_and_reads_the_programs_output() {
         command: Some(
             "stty -echo; printf 'READY\\n'; while IFS= read -r line; do printf 'GOT:%s\\n' \"$line\"; done".into(),
         ),
+        env_remove: isolation(),
         ..Launch::default()
     };
     *cell.pane.borrow_mut() = Some(Rc::new(
@@ -427,24 +440,40 @@ fn a_programs_clipboard_read_is_denied_so_its_output_keeps_flowing() {
     let mut spec = PaneSpec::of_token(&core, session, &primary).unwrap();
     spec.cwd = "/".into();
     panes.mount(&mut core, &spec);
+    // the program stays until told to go: its exit would deny the read by itself
     panes.launch_seeded(
         &session,
         &primary,
         &LaunchSeed {
-            command: Some("printf '\\033]52;c;?\\007after-clipboard\\n'".into()),
+            command: Some("stty -echo; printf '\\033]52;c;?\\007after-clipboard\\n'; read -r _".into()),
             wait_after_command: true,
             ..LaunchSeed::default()
         },
     );
+    let mut surface = HeadlessSurface(panes.cells.values().next().unwrap().clone());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut reports = Vec::new();
+    while !surface
+        .read_text(TextScope::All)
+        .unwrap_or_default()
+        .contains("after-clipboard")
+    {
+        reports.extend(panes.drain(session, &primary));
+        wake.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .expect("the output after the clipboard read never came");
+    }
+    assert!(
+        !reports.contains(&Report::Held),
+        "the program ended before its read was answered"
+    );
+    assert!(surface.type_text("\n"));
     loop {
-        if panes.drain(session, &primary).contains(&Report::Held) {
+        reports.extend(panes.drain(session, &primary));
+        if reports.contains(&Report::Held) {
             break;
         }
         wake.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
             .unwrap();
     }
-    let surface = HeadlessSurface(panes.cells.values().next().unwrap().clone());
-    assert!(surface.read_text(TextScope::All).unwrap().contains("after-clipboard"));
     panes.teardown_all();
 }

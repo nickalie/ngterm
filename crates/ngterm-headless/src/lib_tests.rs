@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use ngterm_core::paths::MapEnv;
 
 use super::*;
@@ -18,7 +20,8 @@ fn defaults_and_identity_describe_the_serving_build() {
     assert_eq!(Options::default().opencode_version, None);
     assert_eq!(identity().version, env!("CARGO_PKG_VERSION"));
     assert!(bin_dir().unwrap().is_dir());
-    let _ = resources();
+    // a test binary has no staged layout; a system ghostty package may still provide the resources
+    assert!(resources().is_none_or(|dir| dir.join("shell-integration").is_dir()));
 }
 
 #[test]
@@ -27,12 +30,48 @@ fn load_bootstraps_and_reloads_the_library_without_forcing_saved_settings() {
     let env = env(dir.path());
     let mut state = load_state(&env);
     assert!(!state.library.open_ids().is_empty());
-    let mode = state.settings.effective_restore_mode();
+    // nothing saved: the default, not this host's live
+    assert_eq!(state.settings.effective_restore_mode(), RestoreMode::None);
     let ids = state.library.open_ids();
     assert!(state.persistence.as_mut().unwrap().save_all_checked(&state.library));
+    let settings = ngterm_core::persist::AppSettings {
+        restore_mode: Some(RestoreMode::Rerun),
+        ..Default::default()
+    };
+    SettingsStore::new(paths::state_dir(&env)).save(&settings).unwrap();
     let restored = load_state(&env);
     assert_eq!(restored.library.open_ids(), ids);
-    assert_eq!(restored.settings.effective_restore_mode(), mode);
+    assert_eq!(restored.settings.effective_restore_mode(), RestoreMode::Rerun);
+}
+
+/// A subscriber keeping each event's fields as text, for what a call logs.
+#[derive(Clone, Default)]
+struct Logged(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for Logged {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut text = String::new();
+        event.record(&mut |field: &tracing::field::Field, value: &dyn std::fmt::Debug| {
+            write!(text, "{}={value:?} ", field.name()).unwrap();
+        });
+        self.0.lock().unwrap().push(text);
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
 }
 
 #[test]
@@ -42,8 +81,16 @@ fn config_reads_a_private_file_and_reports_invalid_values_without_losing_valid_o
     let file = paths::ghostty_settings_config_path(&env);
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(&file, "font-size = 18\nunknown-coverage-setting = yes\n").unwrap();
-    let config = terminal_config(&env, None);
+    let logged = Logged::default();
+    let config = tracing::subscriber::with_default(logged.clone(), || terminal_config(&env, None));
     assert!((config.font.size - 18.0).abs() < f32::EPSILON);
+    let messages = logged.0.lock().unwrap().clone();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("unknown-coverage-setting")),
+        "{messages:?}"
+    );
     assert!((terminal_config(&env, Some(dir.path())).font.size - 18.0).abs() < f32::EPSILON);
 }
 
@@ -178,7 +225,12 @@ fn a_staged_session_build_is_installed_without_starting_an_absent_server() {
     let dir = tempfile::tempdir().unwrap();
     let binary = dir.path().join("bin/ngterm-session");
     std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
-    std::fs::copy("/bin/false", &binary).unwrap();
+    // `false` is `/bin/false` on Linux, `/usr/bin/false` alone on macOS
+    let inert = ["/bin/false", "/usr/bin/false"]
+        .into_iter()
+        .find(|tool| Path::new(tool).exists())
+        .unwrap();
+    std::fs::copy(inert, &binary).unwrap();
     ngterm_session::build_id::Staged::write_beside(&binary, "coverage-build").unwrap();
     let env = env(dir.path()).with("NGTERM_SESSION_PATH", &binary);
     let mut core = Core::new(
