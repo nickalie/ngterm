@@ -17,6 +17,17 @@ fn source_and_picture_index_are_inert_including_combining_marks() {
     assert!(document.contains("<style>p{}</style>"));
 }
 
+// regression (upstream #897): the parser drops a newline right after `<pre>`, so a rule on line two read as frontmatter
+#[test]
+fn the_holder_is_a_div_that_keeps_a_leading_blank_line() {
+    let document = html("\n---\n## Heading", &Embedded::default(), "");
+    assert!(
+        document.contains("<div id=\"ngterm-markdown\" hidden data-images=\"{&quot;references&quot;:{},&quot;uris&quot;:[]}\">\n---\n## Heading</div>"),
+        "{document}"
+    );
+    assert!(!document.contains("<pre"));
+}
+
 #[test]
 fn inline_reference_spaced_and_unicode_pictures_resolve_once_per_decoded_reference() {
     let folder = tempfile::tempdir().unwrap();

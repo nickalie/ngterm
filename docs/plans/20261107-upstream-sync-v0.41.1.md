@@ -152,11 +152,13 @@
 **Conformance:** existing `tests/ui/test_html_overlay.py::test_a_markdown_file_renders_and_the_tree_names_its_source`
 (listed); none new (the rendered DOM is not reachable from the suite).
 
-- [ ] Extend the script's agterm -> ngterm rename set to `text.js` and `text.css` (classes, ids, functions, message
+- [x] Extend the script's agterm -> ngterm rename set to `text.js` and `text.css` (classes, ids, functions, message
   handler names), then run it; `--check` passes. `text.js` and `text.css` are vendored but unused until Task 3.
-- [ ] `markdown_page::html` uses `<div id="ngterm-markdown" hidden ...>` so a leading blank line survives.
-- [ ] write tests: the holder keeps a leading "\n" and is a `div`; manual check on a `SKILL.md`: frontmatter as a
+- [x] `markdown_page::html` uses `<div id="ngterm-markdown" hidden ...>` so a leading blank line survives.
+- [x] write tests: the holder keeps a leading "\n" and is a `div`; manual check on a `SKILL.md`: frontmatter as a
   wrapping YAML block, a later `---` as one rule; a file starting "\n---\n## H" shows no frontmatter block.
+  (The manual check is automated: `ngterm-wpe`'s headless case
+  `markdown_shows_leading_frontmatter_as_a_wrapping_yaml_block` ports upstream's two rendering tests.)
 
 ### Task 3: Text pages, `path:line` links and the reveal chord (#874, b7884db)
 

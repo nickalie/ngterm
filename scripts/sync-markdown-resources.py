@@ -17,7 +17,7 @@ def main():
         if not source.is_file():
             continue
         contents = source.read_bytes()
-        if source.name in {"render.js", "page.css"}:
+        if source.name in {"render.js", "page.css", "text.js", "text.css"}:
             contents = contents.replace(b"agterm", b"ngterm")
         target = destination / source.name
         if args.check:

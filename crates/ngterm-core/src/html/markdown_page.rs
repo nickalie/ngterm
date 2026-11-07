@@ -105,14 +105,15 @@ pub fn escaped(text: &str) -> String {
     out
 }
 
-/// Authored text and the sorted picture index are data, never scripts or authored HTML.
+/// Authored text and the sorted picture index are data, never scripts or authored HTML. The holder is a `div`: the
+/// HTML parser drops a newline right after `<pre>`, which would move a `---` up to the first line (frontmatter).
 #[must_use]
 pub fn html(markdown: &str, images: &Embedded, style: &str) -> String {
     let map = serde_json::to_string(images).unwrap_or_else(|_| "{}".to_owned());
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" \
          content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'\"><style>{style}</style></head><body>\
-         <pre id=\"ngterm-markdown\" hidden data-images=\"{}\">{}</pre>\
+         <div id=\"ngterm-markdown\" hidden data-images=\"{}\">{}</div>\
          <main id=\"ngterm-page\"></main></body></html>",
         escaped(&map),
         escaped(markdown)
