@@ -48,7 +48,7 @@ fn sources(dir: &Path, found: &mut Vec<(PathBuf, String)>) {
 }
 
 #[ignore = "ci-only: settings-sidebar-density lands in Task 16"]
-    #[test]
+#[test]
 fn every_upstream_accessibility_id_is_an_element_id_of_the_gpui_build() {
     let ids = catalog();
     assert!(ids.len() > 100, "the catalog parsed: {} ids", ids.len());
