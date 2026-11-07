@@ -389,16 +389,19 @@ A rehearsal signs exactly as a release does and publishes nothing.
 **Files:**
 - Modify: `scripts/release-version.py`, `.github/workflows/release.yml`, README > Downloads and releases
 
-- [ ] a `rehearse` dispatch input (boolean): on a `vX.Y.Z` tag ref with `publish: false` it makes a rehearsal;
+- [x] a `rehearse` dispatch input (boolean): on a `vX.Y.Z` tag ref with `publish: false` it makes a rehearsal;
       `rehearse` on any other ref, or with `publish: true`, fails in the `version` job
-- [ ] `version` outputs `signed_run` (publishing or rehearsal) besides `publishing`. `approve`, the signing jobs'
+- [x] `version` outputs `signed_run` (publishing or rehearsal) besides `publishing`. `approve`, the signing jobs'
       `environment: release` and their identity choice follow `signed_run`; `play-upload`, the release upload and
       every channel job (the AUR and Flathub here; Homebrew and winget in the Apple and Windows plans) follow
       `publishing` only. The signing mode of a rehearsal is that of a release
-- [ ] signing jobs accept a skipped `approve` only when `signed_run` is false
-- [ ] `--self-test` covers the rehearsal outputs and its refusals
-- [ ] tests: `scripts/lint.sh`
-- [ ] run checks; must pass before Task 5
+- [x] signing jobs accept a skipped `approve` only when `signed_run` is false
+- [x] `--self-test` covers the rehearsal outputs and its refusals
+- [x] ➕ a rehearsal takes the `platforms` input (publishing still builds all), so one platform's credentials can be
+      rehearsed without building every platform; `version` also outputs `rehearsal`, and `tag` is set on every signed
+      run
+- [x] tests: `scripts/lint.sh`
+- [x] run checks; must pass before Task 5
 
 **Credentials:** run `scripts/setup-release-protection.sh` (creates `release-gate` and `release`; a job naming an
 environment that doesn't exist creates it unprotected, so this comes before any `v*` tag). The first rehearsal runs

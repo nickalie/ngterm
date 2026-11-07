@@ -6,23 +6,28 @@ The `version` job runs it and writes these outputs to $GITHUB_OUTPUT:
 - version, commit: the workspace version (Cargo.toml) and the checked-out commit;
 - build_commit: that commit's short form, which the build jobs record (NGTERM_BUILD_COMMIT) and the verify jobs
   expect `ngterm --build-identity` to print;
-- tag: the release tag when publishing, else empty;
+- tag: the release tag on a signed run, else empty;
 - android_version_code: major * 1_000_000 + minor * 1_000 + patch (minor and patch below 1000);
 - publishing: "true" for a tag push, or a dispatch with `publish: true` on a tag ref; a dispatch with
-  `publish: true` on any other ref is an error, not a dry run. A dispatch with `publish: false` is a dry run;
-- signing_mode: "optional" or "required". A dry run is always optional; a publishing run is required when the
-  repository variable NGTERM_RELEASE_SIGNING is "required" (empty or "optional" means optional, anything else is
-  an error);
-- require_minisign, require_developer_id: "true" when publishing and the updater's trust anchor for that component
+  `publish: true` on any other ref is an error, not a dry run;
+- rehearsal: "true" for a dispatch with `rehearse: true` (and `publish: false`) on a tag ref: it signs exactly as a
+  release does, with the `release` environment's credentials, and publishes nothing. `rehearse: true` on any other
+  ref, or with `publish: true`, is an error;
+- signed_run: publishing or a rehearsal. Anything else (a dispatch with neither) is a dry run: no environment,
+  throwaway keys only;
+- signing_mode: "optional" or "required". A dry run is always optional; a signed run is required when the repository
+  variable NGTERM_RELEASE_SIGNING is "required" (empty or "optional" means optional, anything else is an error);
+- require_minisign, require_developer_id: "true" on a signed run when the updater's trust anchor for that component
   (crates/ngterm-update/trust/minisign.pub, apple-team-id) is non-empty, ignoring whitespace; a missing file counts
   as empty. Each forces its own component only;
 - platforms: a JSON list out of linux, macos, windows, android, from the `platforms` input ("all", or a comma- or
-  space-separated subset); all of them when publishing.
+  space-separated subset); all of them when publishing. A rehearsal takes the input, so it can check one platform's
+  credentials without building the rest.
 
-When publishing, the tag must be v<version> and point at the checked-out commit.
+On a signed run, the tag must be v<version> and point at the checked-out commit.
 
-It reads GITHUB_EVENT_NAME, GITHUB_REF, GITHUB_REF_TYPE, GITHUB_REF_NAME, RELEASE_PUBLISH and RELEASE_PLATFORMS (the
-dispatch inputs) and NGTERM_RELEASE_SIGNING from the environment.
+It reads GITHUB_EVENT_NAME, GITHUB_REF, GITHUB_REF_TYPE, GITHUB_REF_NAME, RELEASE_PUBLISH, RELEASE_REHEARSE and
+RELEASE_PLATFORMS (the dispatch inputs) and NGTERM_RELEASE_SIGNING from the environment.
 
 Usage: scripts/release-version.py [--self-test]
 """
@@ -75,10 +80,24 @@ def is_publishing(event, ref_type, publish_input):
     raise ReleaseError(f"release.yml does not run on {event!r}")
 
 
-def signing_mode(publishing, variable):
+def is_rehearsal(event, ref_type, publishing, rehearse_input):
+    if event != "workflow_dispatch":
+        return False
+    if rehearse_input not in ("true", "false"):
+        raise ReleaseError(f"the rehearse input must be true or false, not {rehearse_input!r}")
+    if rehearse_input == "false":
+        return False
+    if publishing:
+        raise ReleaseError("rehearse and publish exclude each other: a rehearsal publishes nothing")
+    if ref_type != "tag":
+        raise ReleaseError("rehearse: true runs on a tag ref: gh workflow run release --ref vX.Y.Z -f rehearse=true")
+    return True
+
+
+def signing_mode(signed_run, variable):
     if variable not in ("", "optional", "required"):
         raise ReleaseError(f"NGTERM_RELEASE_SIGNING must be optional or required, not {variable!r}")
-    return "required" if publishing and variable == "required" else "optional"
+    return "required" if signed_run and variable == "required" else "optional"
 
 
 def platforms(publishing, platforms_input):
@@ -93,22 +112,28 @@ def platforms(publishing, platforms_input):
     return [name for name in PLATFORMS if name in requested]
 
 
-def resolve(*, event, ref_type, ref_name, publish_input, platforms_input, signing_variable, version, anchors):
+def resolve(
+    *, event, ref_type, ref_name, publish_input, rehearse_input, platforms_input, signing_variable, version, anchors
+):
     """Every output but the commit, from the run's context; anchors maps a trust file's name to its contents."""
     publishing = is_publishing(event, ref_type, publish_input)
+    rehearsal = is_rehearsal(event, ref_type, publishing, rehearse_input)
+    signed_run = publishing or rehearsal
     code = android_version_code(version)
-    if publishing and ref_name != f"v{version}":
+    if signed_run and ref_name != f"v{version}":
         raise ReleaseError(f"tag {ref_name!r} must match Cargo.toml: v{version}")
 
     def anchored(name):
-        return publishing and bool(anchors.get(name, "").strip())
+        return signed_run and bool(anchors.get(name, "").strip())
 
     return {
         "version": version,
-        "tag": ref_name if publishing else "",
+        "tag": ref_name if signed_run else "",
         "android_version_code": str(code),
         "publishing": str(publishing).lower(),
-        "signing_mode": signing_mode(publishing, signing_variable),
+        "rehearsal": str(rehearsal).lower(),
+        "signed_run": str(signed_run).lower(),
+        "signing_mode": signing_mode(signed_run, signing_variable),
         "require_minisign": str(anchored("minisign.pub")).lower(),
         "require_developer_id": str(anchored("apple-team-id")).lower(),
         "platforms": json.dumps(platforms(publishing, platforms_input), separators=(",", ":")),
@@ -132,6 +157,7 @@ def main():
         ref_type=env.get("GITHUB_REF_TYPE", ""),
         ref_name=env.get("GITHUB_REF_NAME", ""),
         publish_input=env.get("RELEASE_PUBLISH") or "false",
+        rehearse_input=env.get("RELEASE_REHEARSE") or "false",
         platforms_input=env.get("RELEASE_PLATFORMS", ""),
         signing_variable=env.get("NGTERM_RELEASE_SIGNING", ""),
         version=version,
@@ -139,7 +165,7 @@ def main():
     )
     outputs["commit"] = git("rev-parse", "HEAD")
     outputs["build_commit"] = git("rev-parse", "--short", "HEAD")
-    if outputs["publishing"] == "true":
+    if outputs["signed_run"] == "true":
         tagged = git("rev-parse", f"refs/tags/{outputs['tag']}^{{commit}}")
         if tagged != outputs["commit"]:
             raise ReleaseError(f"the checkout {outputs['commit']} is not the commit of {outputs['tag']} ({tagged})")
@@ -157,6 +183,7 @@ def self_test():
             "ref_type": "branch",
             "ref_name": "main",
             "publish_input": "false",
+            "rehearse_input": "false",
             "platforms_input": "all",
             "signing_variable": "",
             "version": "1.2.3",
@@ -174,7 +201,8 @@ def self_test():
             raise AssertionError(f"expected an error containing {message!r} for {overrides}")
 
     tag = {"ref_type": "tag", "ref_name": "v1.2.3"}
-    push = {"event": "push", "publish_input": "", **tag}
+    push = {"event": "push", "publish_input": "", "rehearse_input": "", **tag}
+    rehearse = {"rehearse_input": "true", **tag}
     both = {"minisign.pub": "untrusted comment: key\nRWQ...\n", "apple-team-id": "ABCDE12345\n"}
     every = '["linux","macos","windows","android"]'
 
@@ -201,7 +229,23 @@ def self_test():
     fails("does not run on", event="schedule")
     fails("true or false", publish_input="yes")
 
-    # the tag is checked only when publishing
+    # a rehearsal: rehearse: true with publish: false on a tag ref; signed like a release, published nowhere
+    assert run(**rehearse)["rehearsal"] == "true"
+    assert run(**rehearse)["publishing"] == "false"
+    assert run(**rehearse)["signed_run"] == "true"
+    assert run(**rehearse)["tag"] == "v1.2.3"
+    assert run(**push)["rehearsal"] == "false"
+    assert run(**push)["signed_run"] == "true"
+    assert run(publish_input="true", **tag)["signed_run"] == "true"
+    assert run()["signed_run"] == "false"
+    assert run()["rehearsal"] == "false"
+    assert run(**tag)["signed_run"] == "false"
+    fails("runs on a tag ref", rehearse_input="true")
+    fails("exclude each other", publish_input="true", **rehearse)
+    fails("true or false", rehearse_input="yes")
+    fails("must match Cargo.toml", **{**rehearse, "ref_name": "v1.2.4"})
+
+    # the tag is checked only on a signed run
     fails("must match Cargo.toml", **{**push, "ref_name": "v1.2.4"})
     fails("must match Cargo.toml", publish_input="true", ref_type="tag", ref_name="1.2.3")
     assert run(ref_type="tag", ref_name="v9.9.9")["publishing"] == "false"
@@ -214,10 +258,12 @@ def self_test():
     assert run(signing_variable="optional", **push)["signing_mode"] == "optional"
     assert run(signing_variable="required", **push)["signing_mode"] == "required"
     assert run(signing_variable="required", publish_input="true", **tag)["signing_mode"] == "required"
+    assert run(signing_variable="required", **rehearse)["signing_mode"] == "required"
+    assert run(signing_variable="optional", **rehearse)["signing_mode"] == "optional"
     fails("optional or required", signing_variable="Required")
     fails("optional or required", signing_variable="required ", **push)
 
-    # each trust anchor forces only its own component, only when publishing; blank or missing counts as empty
+    # each trust anchor forces only its own component, only on a signed run; blank or missing counts as empty
     def required(**overrides):
         outputs = run(**overrides)
         return outputs["require_minisign"], outputs["require_developer_id"], outputs["signing_mode"]
@@ -230,6 +276,8 @@ def self_test():
     assert required(anchors={"minisign.pub": " \n", "apple-team-id": ""}, **push) == ("false", "false", "optional")
     assert required(anchors=both) == ("false", "false", "optional")
     assert required(anchors=both, signing_variable="required") == ("false", "false", "optional")
+    assert required(anchors={"minisign.pub": both["minisign.pub"]}, **rehearse) == ("true", "false", "optional")
+    assert required(anchors=both, signing_variable="required", **rehearse) == ("true", "true", "required")
 
     # platforms: a dry run's subset, in a fixed order; publishing builds all
     assert run()["platforms"] == every
@@ -239,6 +287,8 @@ def self_test():
     assert run(platforms_input="android linux linux")["platforms"] == '["linux","android"]'
     assert run(platforms_input="linux", **push)["platforms"] == every
     assert run(platforms_input="macos", publish_input="true", **tag)["platforms"] == every
+    assert run(platforms_input="android", **rehearse)["platforms"] == '["android"]'
+    assert run(**rehearse)["platforms"] == every
     fails("unknown platforms ios", platforms_input="linux,ios")
     fails("unknown platforms all", platforms_input="all,linux")
     print("release-version self-test: ok")

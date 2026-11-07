@@ -139,8 +139,13 @@ assets and `SHA256SUMS`
 to a GitHub Release, once the release reviewer approves its `approve` job. New releases stay drafts until uploads
 finish. Run by hand (`gh workflow run release --ref <ref>`), it is a dry run on any ref: it builds the platforms its
 **platforms** input names and keeps them as workflow artifacts. With **publish** enabled on a tag ref
-(`--ref vX.Y.Z -f publish=true`) it publishes, or re-uploads, that tag's assets. Tag/version mismatches fail before
-any builds. Packaging tool versions, checksums, and the WPE source checksum live
+(`--ref vX.Y.Z -f publish=true`) it publishes, or re-uploads, that tag's assets. With **rehearse** enabled on a tag
+ref (`--ref vX.Y.Z -f rehearse=true`) it is a rehearsal: approved and signed exactly as a release, with the real
+credentials, but nothing is published; its **platforms** input can limit it to the platform whose credentials are
+being checked. Pushing the tag first starts a publishing run, and the rehearsal queues behind it: reject (or cancel)
+that run's approval, then approve the rehearsal's. A rehearsal tag stays on the commit it rehearsed, so the release
+itself is tagged from the final commit, at a patch version bumped in `Cargo.toml` past every rehearsal tag.
+Tag/version mismatches fail before any builds. Packaging tool versions, checksums, and the WPE source checksum live
 in `packaging/release/pins.env`; update the WPE source checksum and relocation patch when changing `WPE_VERSION`.
 
 ## Parity

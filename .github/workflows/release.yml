@@ -5,8 +5,14 @@
 #   (`gh workflow run release --ref vX.Y.Z -f publish=true`). It builds every platform, waits for the `approve` job,
 #   whose `release-gate` environment needs the release reviewer (scripts/setup-release-protection.sh), then publishes
 #   the GitHub release;
-# - a dry run: a dispatch with `publish: false` on any ref. It builds the platforms its `platforms` input names, at
-#   that ref's Cargo.toml version, keeps the packages as workflow artifacts and publishes nothing.
+# - a rehearsal: a dispatch with `rehearse: true` on a tag ref (`gh workflow run release --ref vX.Y.Z -f
+#   rehearse=true`). It waits for the same approval and signs exactly as a release does, with the `release`
+#   environment's credentials, but publishes nothing: the packages stay workflow artifacts. It builds the platforms its
+#   `platforms` input names, so one platform's credentials can be checked alone;
+# - a dry run: a dispatch with neither, on any ref. It builds the platforms its `platforms` input names, at that ref's
+#   Cargo.toml version, signs with throwaway keys only, keeps the packages as workflow artifacts and publishes nothing.
+#
+# A signed run is publishing or a rehearsal: only a signed run reaches the `release` environment.
 #
 # The jobs, in order: build (no secrets, caches allowed), sign (no cache, and it executes nothing a build produced),
 # verify (runs the signed output), `checksums`, then `publish`. Files pass between them as artifacts, checked by
@@ -25,11 +31,15 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Publish to GitHub Releases (only on a vMAJOR.MINOR.PATCH tag ref; otherwise a dry run)"
+        description: "Publish to GitHub Releases (only on a vMAJOR.MINOR.PATCH tag ref; otherwise a dry run or rehearsal)"
+        default: false
+        type: boolean
+      rehearse:
+        description: "Rehearse: sign as a release does, with the real credentials, and publish nothing (tag refs only)"
         default: false
         type: boolean
       platforms:
-        description: "A dry run's platforms: all, or some of linux, macos, windows, android (publishing builds all)"
+        description: "A dry run's or rehearsal's platforms: all, or some of linux, macos, windows, android (publishing builds all)"
         default: all
         type: string
 
@@ -57,6 +67,8 @@ jobs:
       build_commit: ${{ steps.version.outputs.build_commit }}
       android_version_code: ${{ steps.version.outputs.android_version_code }}
       publishing: ${{ steps.version.outputs.publishing }}
+      rehearsal: ${{ steps.version.outputs.rehearsal }}
+      signed_run: ${{ steps.version.outputs.signed_run }}
       signing_mode: ${{ steps.version.outputs.signing_mode }}
       require_minisign: ${{ steps.version.outputs.require_minisign }}
       require_developer_id: ${{ steps.version.outputs.require_developer_id }}
@@ -69,19 +81,20 @@ jobs:
           persist-credentials: false
       - name: Self-test
         run: python3 scripts/release-version.py --self-test
-      - name: Version, publishing, signing mode and platforms
+      - name: Version, publishing, rehearsal, signing mode and platforms
         id: version
         env:
           RELEASE_PUBLISH: ${{ inputs.publish }}
+          RELEASE_REHEARSE: ${{ inputs.rehearse }}
           RELEASE_PLATFORMS: ${{ inputs.platforms }}
           NGTERM_RELEASE_SIGNING: ${{ vars.NGTERM_RELEASE_SIGNING }}
         run: python3 scripts/release-version.py
 
-  # The one approval of a release, at its start: every job that signs or publishes needs it. Its environment holds no
-  # secrets.
+  # The one approval of a signed run (a release or a rehearsal), at its start: every job that signs or publishes needs
+  # it. Its environment holds no secrets.
   approve:
     needs: version
-    if: needs.version.outputs.publishing == 'true'
+    if: needs.version.outputs.signed_run == 'true'
     runs-on: ubuntu-24.04
     environment: release-gate
     steps:
@@ -89,7 +102,11 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
           RELEASE_COMMIT: ${{ needs.version.outputs.commit }}
-        run: echo "release $RELEASE_TAG at $RELEASE_COMMIT approved"
+          REHEARSAL: ${{ needs.version.outputs.rehearsal }}
+        run: |
+          kind=release
+          [[ "$REHEARSAL" != true ]] || kind="rehearsal of"
+          echo "$kind $RELEASE_TAG at $RELEASE_COMMIT approved"
 
   linux:
     needs: version
@@ -367,9 +384,9 @@ jobs:
     if: >-
       ${{ !cancelled() && needs.macos-build.result == 'success'
       && (needs.approve.result == 'success'
-      || (needs.version.outputs.publishing != 'true' && needs.approve.result == 'skipped')) }}
+      || (needs.version.outputs.signed_run != 'true' && needs.approve.result == 'skipped')) }}
     runs-on: macos-15
-    environment: ${{ needs.version.outputs.publishing == 'true' && 'release' || '' }}
+    environment: ${{ needs.version.outputs.signed_run == 'true' && 'release' || '' }}
     # notarization: two rounds of submissions, each waited for up to 90 minutes
     timeout-minutes: 240
     outputs:
@@ -403,12 +420,12 @@ jobs:
           for arch in x86_64 arm64; do
             python3 scripts/release-artifacts.py extract "$RUNNER_TEMP/in/ngterm-macos-$arch-build.tar.gz" "$RUNNER_TEMP/tree-$arch"
           done
-      # A dry run signs with a throwaway identity; publishing with Developer ID when the secrets are there, else (in
-      # `optional` mode, with no committed team id) it ships the builds' ad-hoc signatures
+      # A dry run signs with a throwaway identity; a signed run (a release or a rehearsal) with Developer ID when the
+      # secrets are there, else (in `optional` mode, with no committed team id) it ships the builds' ad-hoc signatures
       - name: Signing identity
         id: identity
         env:
-          PUBLISHING: ${{ needs.version.outputs.publishing }}
+          SIGNED_RUN: ${{ needs.version.outputs.signed_run }}
           SIGNING_MODE: ${{ needs.version.outputs.signing_mode }}
           REQUIRE_DEVELOPER_ID: ${{ needs.version.outputs.require_developer_id }}
           HAS_APPLE_DEVELOPER_ID_APP_P12: ${{ secrets.APPLE_DEVELOPER_ID_APP_P12 != '' }}
@@ -419,7 +436,7 @@ jobs:
           APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
         run: |
-          if [[ "$PUBLISHING" != true ]]; then
+          if [[ "$SIGNED_RUN" != true ]]; then
             identity=throwaway
           else
             missing=()
@@ -586,7 +603,7 @@ jobs:
 
   checksums:
     needs: [version, linux, windows-build, macos-sign]
-    # Over what this run built: a dry run's left-out platforms are skipped, and any failure stops it
+    # Over what this run built: a dry run's or rehearsal's left-out platforms are skipped, and any failure stops it
     if: >-
       ${{ !cancelled() && needs.version.result == 'success' && !contains(needs.*.result, 'failure')
       && (needs.linux.result == 'success' || needs.windows-build.result == 'success'
