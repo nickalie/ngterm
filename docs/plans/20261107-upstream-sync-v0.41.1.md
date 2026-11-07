@@ -425,8 +425,9 @@ the page->host handler registration (`wkwebview/native.rs`, `webview2/bridge.rs`
   info "first line clipped · waiting for file · unreadable data"), no gutter; keys F, G/End, g/Home (none with
   Ctrl/Meta/Alt or in the find field); user-scroll intent within 600 ms or a held pointer; bottom within 4 px.
   (Already in the resources Task 2 synced; nothing to change.)
-- [ ] write tests: follower tests over a fake reader and a temp dir porting `LogFollowerTests`; `opens_as_log`; the
-  conformance tests above; Windows share mode and file id on a CI runner or the VM.
+- [x] write tests: follower tests over a fake reader and a temp dir porting `LogFollowerTests`; `opens_as_log`; the
+  conformance tests above; Windows share mode and file id on a CI runner or the VM. (CI `ci/upstream-sync-task8`:
+  the Windows tail reader's unit tests and the macOS/Windows html builds green.)
 
 ### Task 9: Search in text pages; Find goes to the cover on top (#899)
 
