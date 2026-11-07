@@ -15,16 +15,7 @@ pub const POLICY: &str = "<meta http-equiv=\"Content-Security-Policy\" \
 /// Turns off the DNS prefetch a Chromium engine (`WebView2`) does for the page's links, which no CSP covers.
 pub const NO_DNS_PREFETCH: &str = "<meta http-equiv=\"x-dns-prefetch-control\" content=\"off\">";
 
-/// Whether a clicked local `path` opens as a document page: its extension, in any case, is one of [`EXTENSIONS`].
-#[must_use]
-pub fn is_document(path: &str) -> bool {
-    std::path::Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| EXTENSIONS.iter().any(|known| extension.eq_ignore_ascii_case(known)))
-}
-
-/// The page a file's bytes make (upstream's `DocumentPage.page`): its text with [`POLICY`] placed by [`with_policy`],
+/// The page a file's bytes make (upstream's `DocumentPage.page`): its text with [`POLICY`] placed by `with_policy`,
 /// `None` when it holds a NUL or is not UTF-8 (`text_page::validate`). A leading byte-order mark is dropped, as
 /// Foundation's UTF-8 decoding drops it, so a doctype after it still counts as leading.
 #[must_use]
@@ -33,7 +24,7 @@ pub fn page(data: Vec<u8>) -> Option<String> {
 }
 
 /// [`page`] for a Chromium engine (`WebView2`), whose link hints neither the CSP nor a request filter reaches: every
-/// `<link>` element is made inert ([`without_links`]) and [`NO_DNS_PREFETCH`] goes in beside the policy.
+/// `<link>` element is made inert (`without_links`) and [`NO_DNS_PREFETCH`] goes in beside the policy.
 #[must_use]
 pub fn chromium_page(data: Vec<u8>) -> Option<String> {
     super::text_page::validate(data).map(|html| {
@@ -51,8 +42,7 @@ fn without_bom(html: &str) -> &str {
 /// `html` with `head` right after a leading doctype, since any tag ahead of it puts the page in quirks mode, or first
 /// when there is none (upstream's `withPolicy`). Only HTML's ASCII whitespace may come before the doctype: anything
 /// else starts the body, where the parser ignores a CSP meta. A doctype with no closing `>` is none.
-#[must_use]
-pub fn with_policy(html: &str, head: &str) -> String {
+fn with_policy(html: &str, head: &str) -> String {
     let start = html
         .find(|character| !matches!(character, '\t' | '\n' | '\u{c}' | '\r' | ' '))
         .unwrap_or(html.len());
@@ -75,8 +65,7 @@ pub fn with_policy(html: &str, head: &str) -> String {
 /// or a preload is refused, an icon is never drawn), so renaming them all loses nothing. The tag name is matched in any
 /// case and must end there (whitespace, `/` or `>`); a `<link` inside text the parser keeps verbatim (a `<textarea>`,
 /// a `<title>`) is renamed too, the price of not parsing the page.
-#[must_use]
-pub fn without_links(html: &str) -> String {
+fn without_links(html: &str) -> String {
     const TAG: &[u8] = b"<link";
     let bytes = html.as_bytes();
     let mut out = String::with_capacity(html.len());

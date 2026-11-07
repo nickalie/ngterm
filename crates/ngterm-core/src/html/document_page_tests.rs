@@ -47,22 +47,6 @@ fn the_policy_loads_only_data_and_inline_styles() {
     );
 }
 
-#[test]
-fn html_and_htm_files_in_any_case_are_documents() {
-    for path in ["/tmp/agdoc/pr.html", "/tmp/INDEX.HTM", "/a/b.Html", "relative.htm"] {
-        assert!(is_document(path), "{path}");
-    }
-    for path in [
-        "/tmp/a.md",
-        "/tmp/a.svg",
-        "/tmp/a.xhtml",
-        "/tmp/html",
-        "/tmp/a.html.txt",
-    ] {
-        assert!(!is_document(path), "{path}");
-    }
-}
-
 /// A Chromium engine preconnects and prefetches DNS for link hints past the CSP and the request filter: every `<link>`
 /// start tag, in any case, goes inert, while a longer tag name or a closing tag stays.
 #[test]

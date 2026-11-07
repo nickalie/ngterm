@@ -108,6 +108,23 @@ impl NetworkGate {
             Self::Open
         }
     }
+
+    /// A document was read: the gate as it stands, a waiting one now holding the read for the filter's report.
+    fn document_read(&mut self) -> Self {
+        if let Self::Waiting { pending } = self {
+            *pending = true;
+        }
+        *self
+    }
+
+    /// The filter is in place: the gate opens, and says whether a document read meanwhile loads now.
+    fn installed(&mut self) -> bool {
+        let pending = matches!(self, Self::Waiting { pending: true });
+        if matches!(self, Self::Waiting { .. }) {
+            *self = Self::Open;
+        }
+        pending
+    }
 }
 
 impl PageState {
@@ -434,12 +451,9 @@ impl Page {
             parent,
             ..Placement::default()
         });
+        // the network gate is kept as it stands: it was set when the page was made, and the web view's filter may
+        // have reported already, while `Native::create` pumped messages (`outside`); a page makes one web view
         self.native.replace(Some(Rc::new(native)));
-        {
-            // a new web view installs its own filter
-            let mut state = self.state.borrow_mut();
-            state.network = NetworkGate::initial(&state.overlay);
-        }
         self.placement_changed();
         self.load_original();
     }
@@ -1044,10 +1058,7 @@ impl Page {
                 let gate = {
                     let mut state = self.state.borrow_mut();
                     state.text_pending = true;
-                    if let NetworkGate::Waiting { pending } = &mut state.network {
-                        *pending = true;
-                    }
-                    state.network
+                    state.network.document_read()
                 };
                 match gate {
                     NetworkGate::Open => native.load_url(&scheme::text_address(self.id)),
@@ -1061,14 +1072,7 @@ impl Page {
 
     /// The web view's network filter is in place: the document read while it was installed loads now.
     fn network_filter_installed(&self) {
-        let pending = {
-            let mut state = self.state.borrow_mut();
-            let pending = matches!(state.network, NetworkGate::Waiting { pending: true });
-            if matches!(state.network, NetworkGate::Waiting { .. }) {
-                state.network = NetworkGate::Open;
-            }
-            pending
-        };
+        let pending = self.state.borrow_mut().network.installed();
         if pending && let Some(native) = self.native() {
             native.load_url(&scheme::text_address(self.id));
         }
@@ -1285,5 +1289,31 @@ mod tests {
         assert_eq!(error_text(13), "the server's name could not be resolved");
         assert_eq!(error_text(12), "could not connect to the server");
         assert_eq!(error_text(999), "the page could not be loaded");
+    }
+
+    /// The filter can report while the web view is still being made: a document read after that loads at once.
+    #[test]
+    fn a_filter_in_place_before_the_read_lets_it_load_at_once() {
+        let mut gate = NetworkGate::Waiting { pending: false };
+        assert!(!gate.installed());
+        assert_eq!(gate, NetworkGate::Open);
+        assert_eq!(gate.document_read(), NetworkGate::Open);
+    }
+
+    #[test]
+    fn a_read_ahead_of_the_filter_loads_once_it_is_in_place() {
+        let mut gate = NetworkGate::Waiting { pending: false };
+        assert_eq!(gate.document_read(), NetworkGate::Waiting { pending: true });
+        assert!(gate.installed());
+        assert_eq!(gate, NetworkGate::Open);
+        assert!(!gate.installed());
+    }
+
+    #[test]
+    fn a_failed_filter_keeps_the_page_from_loading() {
+        let mut gate = NetworkGate::Failed;
+        assert_eq!(gate.document_read(), NetworkGate::Failed);
+        assert!(!gate.installed());
+        assert_eq!(gate, NetworkGate::Failed);
     }
 }
