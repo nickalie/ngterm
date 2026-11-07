@@ -20,7 +20,7 @@ The `version` job runs it and writes these outputs to $GITHUB_OUTPUT:
 - require_minisign, require_developer_id: "true" on a signed run when the updater's trust anchor for that component
   (crates/ngterm-update/trust/minisign.pub, apple-team-id) is non-empty, ignoring whitespace; a missing file counts
   as empty. Each forces its own component only;
-- platforms: a JSON list out of linux, macos, windows, android, from the `platforms` input ("all", or a comma- or
+- platforms: a JSON list out of linux, macos, windows, android, ios, from the `platforms` input ("all", or a comma- or
   space-separated subset); all of them when publishing. A rehearsal takes the input, so it can check one platform's
   credentials without building the rest.
 
@@ -42,7 +42,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TRUST = ROOT / "crates/ngterm-update/trust"
-PLATFORMS = ["linux", "macos", "windows", "android"]
+PLATFORMS = ["linux", "macos", "windows", "android", "ios"]
 # Google Play's largest versionCode
 MAX_VERSION_CODE = 2_100_000_000
 
@@ -204,7 +204,7 @@ def self_test():
     push = {"event": "push", "publish_input": "", "rehearse_input": "", **tag}
     rehearse = {"rehearse_input": "true", **tag}
     both = {"minisign.pub": "untrusted comment: key\nRWQ...\n", "apple-team-id": "ABCDE12345\n"}
-    every = '["linux","macos","windows","android"]'
+    every = '["linux","macos","windows","android","ios"]'
 
     # the Android version code and its bounds
     assert run()["android_version_code"] == "1002003"
@@ -285,11 +285,12 @@ def self_test():
     assert run(platforms_input="linux")["platforms"] == '["linux"]'
     assert run(platforms_input="windows, macos")["platforms"] == '["macos","windows"]'
     assert run(platforms_input="android linux linux")["platforms"] == '["linux","android"]'
+    assert run(platforms_input="ios,macos")["platforms"] == '["macos","ios"]'
     assert run(platforms_input="linux", **push)["platforms"] == every
     assert run(platforms_input="macos", publish_input="true", **tag)["platforms"] == every
     assert run(platforms_input="android", **rehearse)["platforms"] == '["android"]'
     assert run(**rehearse)["platforms"] == every
-    fails("unknown platforms ios", platforms_input="linux,ios")
+    fails("unknown platforms iphone", platforms_input="linux,iphone")
     fails("unknown platforms all", platforms_input="all,linux")
     print("release-version self-test: ok")
 

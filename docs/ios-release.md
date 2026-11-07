@@ -8,7 +8,7 @@ manual click in App Store Connect.
 
 | run | what it does |
 |---|---|
-| a release tag `vMAJOR.MINOR.PATCH` (the tag `release.yml` builds the desktop release from) | archives, exports and uploads the tag's build |
+| a release tag `vMAJOR.MINOR.PATCH` (the tag `release.yml` builds the release from) | archives, exports and uploads the tag's build; without the secrets below, archives unsigned and skips the upload with a notice |
 | Actions > ios-release > Run workflow on the default branch, `dry_run` on (the default) | archives and exports without uploading; with `tag` empty, the default branch's head |
 | Run workflow on the default branch with `tag` set and `dry_run` off | uploads that tag's build, for example after a failed upload |
 | Run workflow on another branch | an unsigned dry run of that branch (or of `tag`): it gets no signing secrets |
@@ -21,7 +21,9 @@ manual click in App Store Connect.
 - **The export.** `mobile/ios/ExportOptions.plist` exports for App Store Connect (`method = app-store-connect`), with
   automatic signing and `destination = export`. An upload sets `destination = upload` in its own copy, with the team
   id. Exporting always signs, so a dry run without the secrets below archives unsigned, checks the archive and the
-  export options, and skips the export with a notice. A tag or an upload run without them fails at once.
+  export options, and skips the export with a notice. A release tag without them does the same, noting that nothing
+  went to TestFlight (the GitHub release still carries the unsigned IPA, from `release.yml`); an upload run by hand
+  without them fails at once.
 - **The tag.** A release tag has to point at a commit on the default branch. A run of a tag stops before building
   anything otherwise.
 - **The checks.** `scripts/build-ios.sh archive` checks every archive, in `ios.yml` and here:

@@ -84,6 +84,7 @@ tag matching the workspace version in `Cargo.toml` is pushed:
 | Linux | x86_64, aarch64 | `.deb`, `.rpm`, Arch `.pkg.tar.zst`, `.AppImage`, portable `.tar.gz` |
 | Windows | x86_64 | per-user `.msi` installer, portable `.zip` |
 | macOS 14+ | Intel x86_64, Apple Silicon arm64 | `.pkg` installer, drag-to-Applications `.dmg`, `.app.zip`, binary `.tar.gz` |
+| iOS | arm64 | unsigned `.ipa` |
 
 The archives include `ngterm`, `ngtermctl`, `ngterm-session`, `ngterm-headless`, themes, terminfo, shell and agent
 integrations, and license notices. Extract the entire archive together. Linux archives start through `ngterm/AppRun`;
@@ -131,10 +132,12 @@ For a tarball, use the same commands with its extracted `ngterm` directory in pl
 
 macOS bundles are ad-hoc signed; the PKG and DMG are not Developer ID signed or notarized. Public downloads can
 require a manual Gatekeeper approval until release signing credentials are configured. Windows installers are
-currently unsigned as well.
+currently unsigned as well. The iOS `.ipa` is unsigned and installs only once re-signed (with a sideloading tool or
+your own Xcode team); the signed app comes through TestFlight and the App Store.
 
 To release, update the workspace version and lockfile, commit, then push the matching tag (for example `v0.1.0`).
-The `release` workflow builds, packages and verifies all five platform/architecture combinations before uploading
+The `release` workflow builds, packages and verifies all five desktop platform/architecture combinations and the iOS
+app before uploading
 assets and `SHA256SUMS`
 to a GitHub Release, once the release reviewer approves its `approve` job. New releases stay drafts until uploads
 finish. Run by hand (`gh workflow run release --ref <ref>`), it is a dry run on any ref: it builds the platforms its

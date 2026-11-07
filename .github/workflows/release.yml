@@ -1,5 +1,6 @@
-# The desktop release: build, package and publish ngterm for Linux (x86_64, aarch64), Windows (x86_64) and macOS
-# (Intel, Apple Silicon). scripts/release-version.py, in the `version` job, decides what a run does:
+# The release: build, package and publish ngterm for Linux (x86_64, aarch64), Windows (x86_64) and macOS (Intel, Apple
+# Silicon), and the iOS app as an unsigned IPA (TestFlight and the App Store get the signed one from ios-release.yml).
+# scripts/release-version.py, in the `version` job, decides what a run does:
 #
 # - publishing: a `v*` tag push, or a dispatch with `publish: true` on a tag ref
 #   (`gh workflow run release --ref vX.Y.Z -f publish=true`). It builds every platform, waits for the `approve` job,
@@ -39,7 +40,7 @@ on:
         default: false
         type: boolean
       platforms:
-        description: "A dry run's or rehearsal's platforms: all, or some of linux, macos, windows, android (publishing builds all)"
+        description: "A dry run's or rehearsal's platforms: all, or some of linux, macos, windows, android, ios (publishing builds all)"
         default: all
         type: string
 
@@ -601,13 +602,80 @@ jobs:
               ;;
           esac
 
+  # The iOS app as an unsigned IPA: the unsigned Release archive of scripts/build-ios.sh (the same checks as an
+  # ios-release.yml dry run), its app zipped under Payload/. It installs only once re-signed; the signed app goes
+  # through TestFlight and the App Store. No secrets: the archive is unsigned because none of the App Store Connect
+  # variables is set here.
+  ios-build:
+    needs: version
+    if: contains(fromJSON(needs.version.outputs.platforms), 'ios')
+    runs-on: xcode-27
+    # the core for both iOS targets, the bindings and a Release build of the app, as ios-release.yml allows it
+    timeout-minutes: 120
+    outputs:
+      manifest: ${{ steps.manifest.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          # the build number is the commit count
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Rust toolchain
+        run: rustup toolchain install
+      # ios.yml's caches, read only, as ios-release.yml reads them
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: ios
+          save-if: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: vendor-ngterm-xcode-27-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh', 'scripts/setup-ios.sh') }}
+      - name: libghostty-vt and the iOS toolchain
+        run: |
+          scripts/build-ghostty-vt.sh
+          scripts/setup-ios.sh
+      - name: Unsigned Release archive, checked
+        run: scripts/build-ios.sh archive
+      - name: IPA
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          app=mobile/ios/build/NgTerm.xcarchive/Products/Applications/NgTerm.app
+          marketing="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Info.plist")"
+          build="$(plutil -extract CFBundleVersion raw -o - "$app/Info.plist")"
+          [[ "$marketing" == "$VERSION" ]] || { echo "::error::the app's version is $marketing, not $VERSION"; exit 1; }
+          [[ "$build" =~ ^[0-9]+$ ]] || { echo "::error::the app's build number is '$build'"; exit 1; }
+          if codesign -dv "$app" 2>/dev/null; then
+            echo "::error::$app is signed: this job has no credentials and ships an unsigned IPA"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/ipa/Payload" dist
+          ditto "$app" "$RUNNER_TEMP/ipa/Payload/NgTerm.app"
+          (cd "$RUNNER_TEMP/ipa" && zip -qry -X "$GITHUB_WORKSPACE/dist/ngterm-$VERSION-ios-unsigned.ipa" Payload)
+          echo "ngterm $VERSION (build $build): ngterm-$VERSION-ios-unsigned.ipa" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
+        with:
+          name: release-ios
+          path: dist/*
+          if-no-files-found: error
+      - name: Manifest
+        id: manifest
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          manifest="$(python3 scripts/release-artifacts.py manifest dist "$ARTIFACT_ID")"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+
   checksums:
-    needs: [version, linux, windows-build, macos-sign]
+    needs: [version, linux, windows-build, macos-sign, ios-build]
     # Over what this run built: a dry run's or rehearsal's left-out platforms are skipped, and any failure stops it
     if: >-
       ${{ !cancelled() && needs.version.result == 'success' && !contains(needs.*.result, 'failure')
       && (needs.linux.result == 'success' || needs.windows-build.result == 'success'
-      || needs.macos-sign.result == 'success') }}
+      || needs.macos-sign.result == 'success' || needs.ios-build.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -617,6 +685,7 @@ jobs:
       LINUX_AARCH64: ${{ needs.linux.outputs.manifest_aarch64 }}
       WINDOWS: ${{ needs.windows-build.outputs.manifest }}
       MACOS: ${{ needs.macos-sign.outputs.manifest }}
+      IOS: ${{ needs.ios-build.outputs.manifest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -625,7 +694,7 @@ jobs:
       - name: Artifact ids
         id: ids
         run: |
-          ids="$(python3 scripts/release-artifacts.py ids "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS")"
+          ids="$(python3 scripts/release-artifacts.py ids "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS")"
           echo "ids=$ids" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -635,7 +704,7 @@ jobs:
       - name: SHA256SUMS over the release assets
         run: |
           mkdir sums
-          python3 scripts/release-artifacts.py sums "$RUNNER_TEMP/in" "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" \
+          python3 scripts/release-artifacts.py sums "$RUNNER_TEMP/in" "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS" \
             > sums/SHA256SUMS
           cat sums/SHA256SUMS
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -653,7 +722,7 @@ jobs:
           echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
 
   publish:
-    needs: [version, approve, linux, windows-build, windows-verify, macos-sign, macos-verify, checksums]
+    needs: [version, approve, linux, windows-build, windows-verify, macos-sign, macos-verify, ios-build, checksums]
     if: needs.version.outputs.publishing == 'true'
     runs-on: ubuntu-24.04
     environment: release
@@ -665,6 +734,7 @@ jobs:
       LINUX_AARCH64: ${{ needs.linux.outputs.manifest_aarch64 }}
       WINDOWS: ${{ needs.windows-build.outputs.manifest }}
       MACOS: ${{ needs.macos-sign.outputs.manifest }}
+      IOS: ${{ needs.ios-build.outputs.manifest }}
       SUMS: ${{ needs.checksums.outputs.manifest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -675,10 +745,10 @@ jobs:
       - name: Artifact ids
         id: ids
         run: |
-          for manifest in LINUX_X86_64 LINUX_AARCH64 WINDOWS MACOS SUMS; do
+          for manifest in LINUX_X86_64 LINUX_AARCH64 WINDOWS MACOS IOS SUMS; do
             [[ -n "${!manifest}" ]] || { echo "::error::no $manifest manifest"; exit 1; }
           done
-          ids="$(python3 scripts/release-artifacts.py ids "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$SUMS")"
+          ids="$(python3 scripts/release-artifacts.py ids "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS" "$SUMS")"
           echo "ids=$ids" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -688,7 +758,7 @@ jobs:
       - name: Digests
         run: |
           python3 scripts/release-artifacts.py check "$RUNNER_TEMP/dist" \
-            "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$SUMS"
+            "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS" "$SUMS"
           (cd "$RUNNER_TEMP/dist" && sha256sum --check --strict SHA256SUMS)
       - name: GitHub Release
         env:
@@ -696,7 +766,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
-          mapfile -t assets < <(python3 scripts/release-artifacts.py assets "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS")
+          mapfile -t assets < <(python3 scripts/release-artifacts.py assets "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS")
           cd "$RUNNER_TEMP/dist"
           # Upload into a draft first: failed uploads never expose a partial new release.
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

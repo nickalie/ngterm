@@ -418,18 +418,21 @@ tag), rehearsed, and then published with `-f publish=true`.
 - Modify: `.github/workflows/release.yml`, `scripts/release-version.py` (`ios` among the platforms),
   `.github/workflows/ios-release.yml`, README > Downloads and releases, `docs/ios-release.md`
 
-- [ ] `ios-build` (no secrets, platform `ios`) as Technical Details describes: the unsigned Release archive through
+- [x] `ios-build` (no secrets, platform `ios`) as Technical Details describes: the unsigned Release archive through
       `scripts/build-ios.sh archive`, packed as `ngterm-<version>-ios-unsigned.ipa`, uploaded as a plain file with
       its manifest; the IPA is a release asset
-- [ ] the job checks the IPA before upload: `CFBundleShortVersionString` equals the `version` job's version, the
+- [x] the job checks the IPA before upload: `CFBundleShortVersionString` equals the `version` job's version, the
       build number is set, and the app carries no code signature (`codesign -dv` reports none)
-- [ ] `checksums` and `publish` take `ios-build`'s manifest like the other build jobs'
-- [ ] `ios-release.yml`: a tag push without the App Store Connect secrets skips the TestFlight upload with a notice
+- [x] `checksums` and `publish` take `ios-build`'s manifest like the other build jobs'
+- [x] `ios-release.yml`: a tag push without the App Store Connect secrets skips the TestFlight upload with a notice
       instead of failing, so release tags stay green until the Apple plan sets them up (that plan turns the failure
       back on once they exist)
-- [ ] the README says what the IPA is: unsigned, for re-signing; the App Store and TestFlight are the signed route
-- [ ] tests: `scripts/lint.sh`; `--self-test` with `ios` among the platforms
-- [ ] run checks; must pass before Task 6
+- [x] ➕ `ios-build` reads `ios.yml`'s cargo and vendor caches without saving them, as `ios-release.yml` does; the
+      IPA's checks run in the build job itself (there is no `ios-verify`: an unsigned device build can't run on a
+      runner), and `build-ios.sh archive` already refuses the fake core
+- [x] the README says what the IPA is: unsigned, for re-signing; the App Store and TestFlight are the signed route
+- [x] tests: `scripts/lint.sh`; `--self-test` with `ios` among the platforms
+- [x] run checks; must pass before Task 6
 
 ### Task 6: Updater: minisign over SHA256SUMS
 

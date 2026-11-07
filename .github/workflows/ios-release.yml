@@ -2,7 +2,8 @@
 # TestFlight. Submitting a TestFlight build to the App Store stays a manual step in App Store Connect. The secrets it
 # needs, the export compliance answer and the privacy manifest are in docs/ios-release.md.
 #
-# - A release tag (`v*`, the tags release.yml builds the desktop release from) uploads that tag's build.
+# - A release tag (`v*`, the tags release.yml builds the release from) uploads that tag's build, once the App Store
+#   Connect secrets are set; until then it skips the upload with a notice.
 # - A run by hand (workflow_dispatch) is a dry run unless `dry_run` is turned off: it archives and exports the build
 #   without uploading it. With `tag` empty it builds the ref it was run on, which only a dry run may do.
 # - A push to a `ci/**` branch that changes this workflow or mobile/ios/ExportOptions.plist is a dry run too, since a
@@ -24,7 +25,9 @@
 #
 # A dry run without the signing secrets (a branch push, a fork, before the App Store Connect setup) can't export, since
 # an export signs: it builds the unsigned archive, checks it and ExportOptions.plist, and says that it skipped the
-# export. A release without them fails at once.
+# export. A release tag without them does the same, with a notice that nothing went to TestFlight: release.yml ships
+# the unsigned IPA, and TestFlight waits for the App Store Connect setup. An upload asked for by hand without them
+# fails at once.
 name: ios-release
 
 on:
@@ -74,7 +77,8 @@ jobs:
       SIGNING_SECRETS: ${{ secrets.APP_STORE_CONNECT_KEY_ID != '' && secrets.APP_STORE_CONNECT_ISSUER_ID != '' && secrets.APP_STORE_CONNECT_KEY != '' && secrets.IOS_DEVELOPMENT_TEAM != '' }}
       CERTIFICATE_SECRET: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE != '' }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-      # a tag push uploads; a run by hand uploads only with dry_run off; a branch push never does
+      # a tag push uploads (with the secrets; without them it skips, see below); a run by hand uploads only with dry_run
+      # off; a branch push never does
       UPLOAD: ${{ (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
       RELEASE_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
     steps:
@@ -99,8 +103,13 @@ jobs:
             exit 1
           fi
           signing=false
+          upload="$UPLOAD"
           if [[ "$SIGNING_SECRETS" == true ]]; then
             signing=true
+          elif [[ "$UPLOAD" == true && "$GITHUB_EVENT_NAME" == push ]]; then
+            # nothing is exported unsigned, so nothing is uploaded: the export step skips on SIGNING=false
+            upload="skipped (no App Store Connect secrets)"
+            echo "::notice::$RELEASE_TAG was not uploaded to TestFlight: the App Store Connect secrets are not set (docs/ios-release.md > Secrets)"
           elif [[ "$UPLOAD" == true ]]; then
             echo "::error::an upload needs the App Store Connect secrets (docs/ios-release.md > Secrets)"
             exit 1
@@ -108,7 +117,7 @@ jobs:
           build="$(git rev-list --count HEAD)"
           echo "SIGNING=$signing" >>"$GITHUB_ENV"
           echo "NAME=ngterm-ios-$version-$build" >>"$GITHUB_ENV"
-          echo "ngterm $version, build $build, upload: $UPLOAD, signed: $signing" >>"$GITHUB_STEP_SUMMARY"
+          echo "ngterm $version, build $build, upload: $upload, signed: $signing" >>"$GITHUB_STEP_SUMMARY"
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
