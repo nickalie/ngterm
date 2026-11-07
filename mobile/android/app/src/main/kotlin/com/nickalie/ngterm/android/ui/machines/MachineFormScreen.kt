@@ -15,6 +15,8 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.listSaver
@@ -59,9 +61,7 @@ fun MachineFormScreen(
     onShowKey: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var draft by rememberSaveable(stateSaver = DraftSaver) {
-        mutableStateOf(if (initial.keyId.isEmpty()) initial.copy(keyId = keys.firstOrNull()?.id.orEmpty()) else initial)
-    }
+    var draft by rememberDraft(initial, keys)
     var tried by rememberSaveable { mutableStateOf(false) }
     // the fields focused once, and those left after that: a field shows its problem from when it is left
     var visited by rememberSaveable { mutableStateOf(listOf<String>()) }
@@ -106,6 +106,24 @@ fun MachineFormScreen(
             Pinned(pinned)
         }
     }
+}
+
+// the form's fields, from [initial], signing in with the first of [keys] when it names no key; when the keys were still
+// being read as the form opened, the first to arrive is that default
+@Composable
+private fun rememberDraft(
+    initial: MachineDraft,
+    keys: List<AppKey>,
+): MutableState<MachineDraft> {
+    val firstKey = keys.firstOrNull()?.id
+    val draft =
+        rememberSaveable(stateSaver = DraftSaver) {
+            mutableStateOf(if (initial.keyId.isEmpty()) initial.copy(keyId = firstKey.orEmpty()) else initial)
+        }
+    LaunchedEffect(firstKey) {
+        if (firstKey != null && draft.value.keyId.isEmpty()) draft.value = draft.value.copy(keyId = firstKey)
+    }
+    return draft
 }
 
 // the machine's name and address: what the form's fields hold before the key

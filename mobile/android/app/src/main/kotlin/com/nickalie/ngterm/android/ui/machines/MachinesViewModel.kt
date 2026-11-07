@@ -80,11 +80,11 @@ class MachinesViewModel(
                 }.catch { emit(MachinesUiState.Failed(it.message ?: it.javaClass.simpleName)) }
             }.stateIn(viewModelScope, SharingStarted.Eagerly, MachinesUiState.Loading)
 
-    /** The app's keys, for the form's key choice. */
-    val keys: StateFlow<List<AppKey>> =
+    /** The app's keys, for the form's key choice; `null` until they have been read. */
+    val keys: StateFlow<List<AppKey>?> =
         graph.keys.keys
             .catch { emit(emptyList()) }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /** The pinned host keys by machine id, for the form. */
     val pins: StateFlow<Map<String, String>> =

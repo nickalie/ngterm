@@ -1,5 +1,6 @@
 package com.nickalie.ngterm.android.ui.machines
 
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -76,6 +77,22 @@ class MachineFormScreenTest {
         compose.onNodeWithText("Save").performClick()
         compose.onNodeWithText("Choose the key to sign in with.").performScrollTo().assertExists()
         assertNull(saved)
+    }
+
+    @Test
+    fun aKeyThatFinishesLoadingAfterTheFormOpensBecomesTheDefaultAndSaves() {
+        val keys = mutableStateOf(emptyList<AppKey>())
+        compose.setContent {
+            NgtermTheme {
+                MachineFormScreen(MachineDraft(host = "host.lan", user = "nick"), false, keys.value, null, {
+                    saved = it
+                }, {}, {})
+            }
+        }
+        compose.runOnIdle { keys.value = listOf(created) }
+        compose.onNodeWithText("Show public key").performScrollTo().assertExists()
+        compose.onNodeWithText("Save").performClick()
+        assertEquals(created.id, saved?.keyId)
     }
 
     @Test

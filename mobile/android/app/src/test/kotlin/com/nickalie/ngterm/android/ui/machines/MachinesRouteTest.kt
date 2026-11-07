@@ -14,18 +14,29 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.lifecycle.ViewModelProvider
+import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.FAKE_PUBLIC_KEY
 import com.nickalie.ngterm.android.TestGraph
 import com.nickalie.ngterm.android.awaitDescription
 import com.nickalie.ngterm.android.awaitText
+import com.nickalie.ngterm.android.data.AppKeys
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.testMachine
+import com.nickalie.ngterm.android.testStore
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -38,6 +49,20 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 private const val ROUTE_WAIT_MS = 10_000L
+
+/** [inner], whose readers wait while [open] is false: a store read slower than the others. */
+private class GatedStore(
+    private val inner: DataStore<Preferences>,
+    private val open: StateFlow<Boolean>,
+) : DataStore<Preferences> {
+    override val data: Flow<Preferences> =
+        flow {
+            open.first { it }
+            emitAll(inner.data)
+        }
+
+    override suspend fun updateData(transform: suspend (Preferences) -> Preferences) = inner.updateData(transform)
+}
 
 /** Navigation and page lifetime over real stores and view models, with the core faked at FFI. */
 @RunWith(RobolectricTestRunner::class)
@@ -102,6 +127,46 @@ class MachinesRouteTest {
         compose.onNodeWithText("unsaved").assertDoesNotExist()
         compose.onNodeWithContentDescription("Close").performClick()
         compose.awaitText("No machines yet")
+    }
+
+    @Test
+    fun aRestoredPublicKeyPageWaitsForTheKeysToLoad() {
+        val keysOpen = MutableStateFlow(true)
+        val base = test.graph
+        val keys =
+            AppKeys(GatedStore(testStore(dir.root, "gated-keys"), keysOpen), test.vault, test.maker, "ngterm@test")
+        val graph =
+            AppGraph(
+                base.machines,
+                keys,
+                base.pins,
+                base.connections,
+                base.clipboardReads,
+                base.panes,
+                base.chats,
+                base.asks,
+                base.notificationPrefs,
+                base.settings,
+                base.opens,
+                base.online,
+            )
+        runBlocking { keys.generate() }
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent { NgtermTheme { MachinesRoute(graph) } }
+        compose.awaitText("Add machine")
+        compose.onNodeWithText("Add machine").performClick()
+        compose.onNodeWithText("Show public key").performScrollTo().performClick()
+        compose.awaitText("Add this key to your machines")
+        // A process restoration makes fresh view models; here the machines are read before the keys are.
+        keysOpen.value = false
+        compose.runOnIdle { compose.activity.viewModelStore.clear() }
+        restoration.emulateSavedInstanceStateRestore()
+        val viewModel = ViewModelProvider(compose.activity)[MachinesViewModel::class.java]
+        compose.waitUntil(ROUTE_WAIT_MS) { viewModel.state.value !is MachinesUiState.Loading }
+        compose.waitForIdle()
+        keysOpen.value = true
+        compose.awaitText("Add this key to your machines")
+        compose.onNodeWithText(FAKE_PUBLIC_KEY).assertExists()
     }
 
     @Test

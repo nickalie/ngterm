@@ -221,7 +221,7 @@ private fun Page(
     page: MachinesPage?,
     state: MachinesUiState,
     actions: MachineActions,
-    keys: List<AppKey>,
+    keys: List<AppKey>?,
     pins: Map<String, String>,
     onSave: (MachineDraft, String?) -> Unit,
     onRemovePin: (String) -> Unit,
@@ -252,7 +252,7 @@ private fun Page(
             MachineFormScreen(
                 initial = MachineDraft(),
                 editing = false,
-                keys = keys,
+                keys = keys.orEmpty(),
                 pinned = null,
                 onSave = { onSave(it, null) },
                 onClose = onPop,
@@ -263,12 +263,12 @@ private fun Page(
 
         is MachinesPage.Edit -> {
             if (item == null) {
-                Gone(state, onPop)
+                Gone(state is MachinesUiState.Loading, onPop)
             } else {
                 MachineFormScreen(
                     initial = MachineDraft.of(item.machine),
                     editing = true,
-                    keys = keys,
+                    keys = keys.orEmpty(),
                     pinned = pins[item.machine.id],
                     onSave = { onSave(it, item.machine.id) },
                     onClose = onPop,
@@ -283,7 +283,7 @@ private fun Page(
         }
 
         is MachinesPage.PublicKey -> {
-            KeyPage(keys.firstOrNull { it.id == page.keyId }, state, onPop, modifier)
+            KeyPage(keys?.firstOrNull { it.id == page.keyId }, loading = keys == null, onPop, modifier)
         }
     }
 }
@@ -299,7 +299,7 @@ private fun ChangedKeyPage(
 ) {
     val changed = item?.link as? Link.HostKeyChanged
     if (item == null || changed == null) {
-        Gone(state, onPop)
+        Gone(state is MachinesUiState.Loading, onPop)
     } else {
         HostKeyChangedScreen(
             machine = item.machine.title,
@@ -312,16 +312,16 @@ private fun ChangedKeyPage(
     }
 }
 
-// a key's public half, from the form
+// a key's public half, from the form ([loading] while the keys are still being read)
 @Composable
 private fun KeyPage(
     key: AppKey?,
-    state: MachinesUiState,
+    loading: Boolean,
     onPop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (key == null) {
-        Gone(state, onPop)
+        Gone(loading, onPop)
     } else {
         PublicKeyScreen(
             key = key,
@@ -331,15 +331,15 @@ private fun KeyPage(
     }
 }
 
-// what a page is about has gone (removed, or its question answered elsewhere): back to what is under it, once the
-// list has been read (before that, the page may only not be known yet)
+// what a page is about has gone (removed, or its question answered elsewhere): back to what is under it, once what it
+// is looked up in has been read (while [loading], the page may only not be known yet)
 @Composable
 private fun Gone(
-    state: MachinesUiState,
+    loading: Boolean,
     onPop: () -> Unit,
 ) {
     val pop by rememberUpdatedState(onPop)
-    LaunchedEffect(state is MachinesUiState.Loading) {
-        if (state !is MachinesUiState.Loading) pop()
+    LaunchedEffect(loading) {
+        if (!loading) pop()
     }
 }
