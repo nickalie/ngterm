@@ -300,7 +300,7 @@ impl Native {
 
     /// The renderer's reports and the app's calls into its world (`text_page`): `WebView2` has no message handler in a
     /// named world, so CDP's binding stands in, added to the renderer's world alone (`window.webkit.messageHandlers`
-    /// there is `documents::RENDERER_CHANNEL`'s shim over it); each report names the context it came from, which the
+    /// there is `documents::renderer_channel`'s shim over it); each report names the context it came from, which the
     /// calls run in.
     fn wire_renderer_channel(&self, post: &Post) -> Result<(), String> {
         let failed = |error: String| format!("the renderer's channel was not added: {error}");
