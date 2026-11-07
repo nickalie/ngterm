@@ -59,14 +59,20 @@ public struct PublicKeyView<Footer: View>: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    // the key's fingerprint, at its full height: footnote text with a mono run was sized a line short for some
-    // fingerprints, whose last line the audit then found clipped
+    // the key's fingerprint under its label, each a text of its own: one footnote text with the fingerprint as a mono
+    // run broke the fingerprint with a hyphen for some keys and was sized a line short of that, and the audit found
+    // its last line clipped (the first run makes a new key each time, so it came and went)
     private var fingerprint: some View {
-        Text("Fingerprint \(Text(verbatim: key.fingerprint).font(Typography.address))")
-            .font(.footnote)
-            .foregroundStyle(Palette.secondaryText.color)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: .zero) {
+            Text("Fingerprint")
+                .font(.footnote)
+            Text(verbatim: key.fingerprint)
+                .font(Typography.address)
+                .textSelection(.enabled)
+        }
+        .foregroundStyle(Palette.secondaryText.color)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .combine)
     }
 
     // a real sequence, so numbered: what to do, in order
