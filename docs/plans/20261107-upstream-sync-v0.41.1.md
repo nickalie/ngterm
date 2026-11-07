@@ -125,21 +125,21 @@
 `session.overlay.changes`, `sidebar.density`, `cli:session overlay follow|search|changes`, `cli:sidebar density`,
 `field:tree.sidebarDensity`, `field:tree.snapshotUnsaved`, `ui:settings-sidebar-density`.
 
-- [ ] Register `session.overlay.follow`, `session.overlay.search`, `session.overlay.changes` and `sidebar.density`
+- [x] Register `session.overlay.follow`, `session.overlay.search`, `session.overlay.changes` and `sidebar.density`
   with their request args (`mode`, `text`, `to`) and the dispatcher's established not-implemented refusal until
   their tasks land. Add `tree.sidebarDensity` (after `sidebarFlaggedLayout`, before `flaggedOrder`) and
   `tree.snapshotUnsaved` (after `indexUnsaved`) as optional fields, omitted while unset; update the key-order tests
   (`crates/ngterm-core/src/projection.rs` ~757, `crates/ngterm-proto/src/tree.rs` ~714).
-- [ ] Add the CLI leaves `session overlay follow on|off|toggle [--pane]` (the mode is a required argument, as in
+- [x] Add the CLI leaves `session overlay follow on|off|toggle [--pane]` (the mode is a required argument, as in
   upstream's `Session+OverlayFollow.swift`; only the wire request defaults an absent mode to toggle), `session overlay search [TEXT]
   [--next|--prev|--close] [--pane]`, `session overlay changes --next|--prev [--pane]`, `sidebar density
   [default|compact|toggle]`, with upstream's help and their parse-time refusals (Tasks 7, 9, 10, 16 list the
   strings); no success stubs.
-- [ ] Write the reference conformance tests that cover these keys (Tasks 7, 9, 10, 13, 16 give the cases and ids),
+- [x] Write the reference conformance tests that cover these keys (Tasks 7, 9, 10, 13, 16 give the cases and ids),
   `since`-marked, each asserting its named behavior or field, not merely labelled as coverage. Those tasks then
   make the tests Task 1 wrote pass on Rust and add the rest of their cases. The ui id gets
   `tests/ui/test_settings.py::test_sidebar_density_picker_persists` (Task 16).
-- [ ] Both catalog cargo tests, the host-free selftests and the coverage gate pass; existing ratchet ids unchanged.
+- [x] Both catalog cargo tests, the host-free selftests and the coverage gate pass; existing ratchet ids unchanged.
 
 ### Task 2: Renderer resources and Markdown frontmatter (#897)
 

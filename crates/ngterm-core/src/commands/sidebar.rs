@@ -107,6 +107,8 @@ pub(crate) fn dispatch(
             }
             Ok(Some(ControlResult::text(want.raw())))
         }
+        // registered ahead of its handler: refused by name until it lands
+        SidebarCmd::Density => Err(ControlError::NotSupported(ngterm_proto::Command::Sidebar(cmd))),
         SidebarCmd::Expand => {
             let layout = core.settings().effective_flagged_view_layout();
             open_store(core, window)?.expand_all_workspaces(layout);

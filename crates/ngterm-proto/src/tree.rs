@@ -37,6 +37,9 @@ pub struct ControlTree {
     /// `flat`, `plain` or `tree`; app-wide.
     #[serde(default)]
     pub sidebar_flagged_layout: Option<String>,
+    /// `default` or `compact` (the read side of `sidebar.density`); app-wide.
+    #[serde(default)]
+    pub sidebar_density: Option<String>,
     /// The window's saved flagged order as session ids (the read side of `session.flag move`); absent when nothing
     /// is flagged.
     #[serde(default)]
@@ -75,6 +78,9 @@ pub struct ControlTree {
     /// True while the last `windows.json` write failed.
     #[serde(default)]
     pub index_unsaved: Option<bool>,
+    /// True while this window's last `windows/<id>.json` write failed; per window, unlike `index_unsaved`.
+    #[serde(default)]
+    pub snapshot_unsaved: Option<bool>,
 }
 
 /// A workspace and its sessions.
@@ -684,6 +690,7 @@ mod tests {
             sidebar_visible: Some(true),
             sidebar_mode: Some("tree".to_owned()),
             sidebar_flagged_layout: Some("flat".to_owned()),
+            sidebar_density: Some("compact".to_owned()),
             flagged_order: Some(vec!["S".to_owned()]),
             link_open_mode: Some("browser".to_owned()),
             sidebar_width: Some(220.0),
@@ -699,6 +706,7 @@ mod tests {
             app: Some(AppIdentity::from_recorded("1", None)),
             live_reset: Some(json!({})),
             index_unsaved: Some(true),
+            snapshot_unsaved: Some(true),
         };
         let value = serde_json::to_value(&tree).unwrap();
         assert_eq!(
@@ -712,6 +720,7 @@ mod tests {
                 "sidebarVisible",
                 "sidebarMode",
                 "sidebarFlaggedLayout",
+                "sidebarDensity",
                 "flaggedOrder",
                 "linkOpenMode",
                 "sidebarWidth",
@@ -727,6 +736,7 @@ mod tests {
                 "app",
                 "liveReset",
                 "indexUnsaved",
+                "snapshotUnsaved",
             ]
         );
         assert_eq!(

@@ -1,7 +1,8 @@
 //! `ngtermctl session overlay ...` (`agtermctlKit/SessionCommands.swift` `Session.Overlay`): the ephemeral overlay
 //! over a session or one of its split panes. This module holds the group and its program side (`open`, `close`,
 //! `resize`, `result`, `copy`, `text`); [`crate::overlay_page`] holds the HTML page side (`reload`, `submit`,
-//! `navigate`, the page `--block` and `result --page`), and [`crate::overlay_job`] the `run-job` helper.
+//! `navigate`, the page `--block` and `result --page`), [`crate::overlay_text`] the text and log page side (`follow`,
+//! `search`, `changes`), and [`crate::overlay_job`] the `run-job` helper.
 //!
 //! `open --block` on a program opens it, then polls `session.overlay.result` by the id the open returned until the
 //! program ends, and exits with its status, printing nothing of its own (the server's line under `--json`).
@@ -18,6 +19,7 @@ use ngterm_proto::{Args, Command, Request};
 use crate::client::Reply;
 use crate::modal::{LiveIo, ModalIo};
 use crate::overlay_page::{self, PageRunner, control_result};
+use crate::overlay_text;
 use crate::session::{flag, session_request, validate_size_percent};
 use crate::session_hud::validate_overlay_pane;
 use crate::{BasicOptions, ClientOptions, Failure, RequestCommand, TargetOptions, output};
@@ -61,6 +63,9 @@ impl Overlay {
             OverlayCommand::Hide(command) => command,
             OverlayCommand::Show(command) => command,
             OverlayCommand::Toggle(command) => command,
+            OverlayCommand::Follow(command) => command,
+            OverlayCommand::Search(command) => command,
+            OverlayCommand::Changes(command) => command,
             OverlayCommand::Resize(command) => command,
             OverlayCommand::Reload(command) => command,
             OverlayCommand::Navigate(command) => command,
@@ -84,6 +89,9 @@ enum OverlayCommand {
     Hide(Hide),
     Show(Show),
     Toggle(Toggle),
+    Follow(overlay_text::Follow),
+    Search(overlay_text::Search),
+    Changes(overlay_text::Changes),
     Resize(Resize),
     Reload(overlay_page::Reload),
     Navigate(overlay_page::Navigate),

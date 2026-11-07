@@ -1185,6 +1185,22 @@ def test_sidebar(cli, ctl):
         assert_ok(ctl.request("sidebar.width", sidebarWidth=top["sidebarWidth"]))
 
 
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("cli:sidebar density")
+def test_sidebar_density(cli, ctl):
+    top = ctl.tree()["tree"]
+    try:
+        assert _json(cli("sidebar", "density", "compact", "--json")) == {"text": "compact"}
+        assert ctl.tree()["tree"]["sidebarDensity"] == "compact"
+        _rendered(cli("sidebar", "density"), {"text": "default"})  # the density toggles by default
+        assert ctl.tree()["tree"]["sidebarDensity"] == "default"
+        _rendered(cli("sidebar", "density", "default"), {"text": "default"})
+        _usage(cli("sidebar", "density", "dense"), "density must be default, compact, or toggle")
+        _usage(cli("sidebar", "density", "compact", "--window", "active"))  # app-wide: no window
+    finally:
+        assert_ok(ctl.request("sidebar.density", mode=top["sidebarDensity"]))
+
+
 @pytest.mark.covers("cli:notify")
 def test_notify_raises_the_unseen_count(cli, ctl):
     sid = _new(ctl)

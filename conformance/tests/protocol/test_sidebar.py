@@ -1,5 +1,5 @@
 """Sidebar commands with their `tree` read-back: visibility (`sidebar`), view mode (`sidebar.mode`), the app-wide
-flagged layout (`sidebar.flagged-layout`), workspace expansion (`sidebar.expand`/`.collapse`) and the divider
+flagged layout (`sidebar.flagged-layout`) and density (`sidebar.density`), workspace expansion (`sidebar.expand`/`.collapse`) and the divider
 (`sidebar.width`). The module shares one instance; every test puts back the sidebar state it found."""
 
 import pytest
@@ -25,6 +25,8 @@ def sidebar_restored(ctl):
     ctl.request("sidebar", mode="show" if tree["sidebarVisible"] else "hide")
     ctl.request("sidebar.mode", mode=tree["sidebarMode"])
     ctl.request("sidebar.flagged-layout", mode=tree["sidebarFlaggedLayout"])
+    if "sidebarDensity" in tree:
+        ctl.request("sidebar.density", mode=tree["sidebarDensity"])
     ctl.request("sidebar.width", sidebarWidth=tree["sidebarWidth"])
 
 
@@ -76,13 +78,38 @@ def test_flagged_layout_is_app_wide(ctl, second):
         assert [_top(ctl, window=wid)["sidebarFlaggedLayout"] for wid in (first, second)] == [layout, layout]
 
 
-@pytest.mark.covers("sidebar", "sidebar.mode", "sidebar.flagged-layout")
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("sidebar.density", "field:tree.sidebarDensity", "field:result.text")
+def test_density_echoes_the_density_it_set(ctl):
+    # A toggle goes to `compact` from `default` and back; it needs no window of its own.
+    assert_ok(ctl.request("sidebar.density", mode="default"))
+    steps = [("compact", "compact"), ("compact", "compact"), ("toggle", "default"), (None, "compact")]
+    steps += [("default", "default"), ("default", "default")]
+    for mode, density in steps:
+        response = ctl.request("sidebar.density", **({} if mode is None else {"mode": mode}))
+        assert assert_ok(response) == {"text": density}, mode
+        assert _top(ctl)["sidebarDensity"] == density, mode
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("sidebar.density", "field:tree.sidebarDensity")
+def test_density_is_app_wide(ctl, second):
+    first = window_ids(ctl.request("window.list"))[0]
+    for density in ("compact", "default"):
+        assert_ok(ctl.request("sidebar.density", mode=density))
+        assert [_top(ctl, window=wid)["sidebarDensity"] for wid in (first, second)] == [density, density]
+
+
+@pytest.mark.covers("sidebar", "sidebar.mode", "sidebar.flagged-layout", "sidebar.density")
 @pytest.mark.parametrize(
     ("cmd", "field", "error"),
     [
         ("sidebar", "sidebarVisible", "invalid sidebar mode: sideways"),
         ("sidebar.mode", "sidebarMode", "invalid sidebar mode: sideways"),
         ("sidebar.flagged-layout", "sidebarFlaggedLayout", "invalid flagged layout: sideways"),
+        pytest.param(
+            "sidebar.density", "sidebarDensity", "invalid sidebar density: sideways", marks=pytest.mark.since("0.41.0")
+        ),
     ],
 )
 def test_unknown_mode_is_refused(ctl, cmd, field, error):

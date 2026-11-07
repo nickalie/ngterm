@@ -754,6 +754,11 @@ mod tests {
         );
         let keys: Vec<&String> = tree.as_object().unwrap().keys().collect();
         let at = |key: &str| keys.iter().position(|candidate| *candidate == key).unwrap();
-        assert_eq!(at("flaggedOrder"), at("sidebarFlaggedLayout") + 1);
+        // upstream's order: `sidebarFlaggedLayout`, `sidebarDensity` (when reported), `flaggedOrder`
+        let between: Vec<&str> = keys[at("sidebarFlaggedLayout") + 1..at("flaggedOrder")]
+            .iter()
+            .map(|key| key.as_str())
+            .collect();
+        assert!(between.is_empty() || between == ["sidebarDensity"], "{between:?}");
     }
 }

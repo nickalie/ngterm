@@ -3869,6 +3869,11 @@ SUBCOMMANDS:
   show                    Show the session's hidden overlays again.
   toggle                  Hide the session's overlays if any is shown,
                           otherwise show them all.
+  follow                  Follow a log page's end, pause it, or toggle between
+                          the two.
+  search                  Search a text or log page: set the query, step to the
+                          next or previous match, or close it.
+  changes                 Step a diff page to its next or previous change.
   resize                  Resize an open overlay: floating at a percent or in
                           points, or back to full-pane.
   reload                  Reload an HTML overlay: the file or URL it was opened
@@ -4001,6 +4006,7 @@ SUBCOMMANDS:
   visibility (default)    Sidebar visibility (show|hide|toggle).
   mode                    Sidebar view mode (tree|flagged|toggle).
   flagged-layout          Flagged view layout (flat|plain|tree|toggle).
+  density                 Sidebar density (default|compact|toggle).
   expand                  Expand every workspace in the sidebar.
   collapse                Collapse all workspaces except the active one.
   width                   Set the sidebar width in points.

@@ -176,6 +176,9 @@ group_commands!(
         OverlayHide = "session.overlay.hide",
         OverlayShow = "session.overlay.show",
         OverlayToggle = "session.overlay.toggle",
+        OverlayFollow = "session.overlay.follow",
+        OverlaySearch = "session.overlay.search",
+        OverlayChanges = "session.overlay.changes",
         OverlayJobRun = "session.overlay.job.run",
         OverlayPageServe = "session.overlay.page.serve",
         HudOpen = "session.hud.open",
@@ -190,6 +193,7 @@ group_commands!(
         Visibility = "sidebar",
         Mode = "sidebar.mode",
         FlaggedLayout = "sidebar.flagged-layout",
+        Density = "sidebar.density",
         Expand = "sidebar.expand",
         Collapse = "sidebar.collapse",
         Width = "sidebar.width",
@@ -529,7 +533,7 @@ mod tests {
     #[test]
     fn every_command_round_trips_through_its_wire_name() {
         let all = Command::all();
-        assert_eq!(all.len(), 133);
+        assert_eq!(all.len(), 137);
         for command in all {
             assert_eq!(command.wire_name().parse(), Ok(command));
             assert_eq!(

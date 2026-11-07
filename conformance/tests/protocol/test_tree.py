@@ -241,6 +241,38 @@ def test_index_unsaved_while_windows_json_cannot_be_written(app, ctl):
     wait_until(index.is_file)
 
 
+def _window_file(app, window_id):
+    """`windows/<id>.json` of `window_id` once it is on disk; the id is matched without regard to case."""
+
+    def found():
+        files = (app.state_dir / "windows").glob("*.json")
+        return next((path for path in files if path.stem.lower() == window_id.lower()), None)
+
+    return wait_until(found)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.rename", "field:tree.snapshotUnsaved")
+def test_snapshot_unsaved_while_a_windows_file_cannot_be_written(app, ctl):
+    (window,) = assert_ok(ctl.request("window.list"))["windows"]
+    (sid,) = session_ids(ctl.tree())
+    assert_ok(ctl.request("session.rename", sid, name="saved"))
+    snapshot = _window_file(app, window["id"])
+    assert_absent(ctl.tree()["tree"], "snapshotUnsaved")
+    snapshot.unlink()
+    # A directory in its place makes the window's saves fail until it is gone.
+    snapshot.mkdir()
+    (snapshot / "blocker").write_text("")
+    assert_ok(ctl.request("session.rename", sid, name="unsaved"))
+    tree = ctl.wait_tree(lambda result: result["tree"].get("snapshotUnsaved") is True)["tree"]
+    # per window, apart from the index
+    assert_absent(tree, "indexUnsaved")
+    shutil.rmtree(snapshot)
+    assert_ok(ctl.request("session.rename", sid, name="saved again"))
+    ctl.wait_tree(lambda result: "snapshotUnsaved" not in result["tree"])
+    wait_until(snapshot.is_file)
+
+
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("session.select", "field:tree.session.lastSelectedAt")
 def test_last_selected_at_stamps_the_session_entered_and_left(app, ctl):

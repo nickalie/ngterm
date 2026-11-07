@@ -334,3 +334,22 @@ def test_row_icons_hide_independently(seeded, ui_for):
         wait_until(lambda: element not in _settings(seeded).get("hiddenInterfaceElements", []))
         ui.find(icon)
         ui.find(other)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("ui:settings-sidebar-density")
+def test_sidebar_density_picker_persists(seeded, ui_for):
+    ui = ui_for(seeded)
+    _open(ui, "Appearance")
+    picker = ui.find("settings-sidebar-density", role="popup", value="Default")
+    ui.click(picker)
+    ui.click(ui.menu_item("Compact"))
+    try:
+        wait_until(lambda: _settings(seeded).get("sidebarDensity") == "compact")
+        ui.find("settings-sidebar-density", role="popup", value="Compact")
+        assert seeded.tree()["tree"]["sidebarDensity"] == "compact"
+    finally:
+        ui.click(ui.find("settings-sidebar-density", role="popup"))
+        ui.click(ui.menu_item("Default"))
+    # the default density is stored as no key at all
+    wait_until(lambda: "sidebarDensity" not in _settings(seeded))
