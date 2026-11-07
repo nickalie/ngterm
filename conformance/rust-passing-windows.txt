@@ -26,6 +26,25 @@ tests/behaviors/test_relaunch.py::test_rerun_types_the_pinned_line_into_a_window
 tests/behaviors/test_relaunch.py::test_rerun_types_the_pinned_line_into_a_windows_shell[pwsh]
 tests/behaviors/test_state_dir_lock.py::test_a_second_instance_on_an_owned_state_dir_exits_1_without_writing
 tests/behaviors/test_state_dir_lock.py::test_the_lock_is_released_at_exit
+tests/cli/test_agent_mail.py::test_a_claude_that_is_not_the_panes_agent_takes_nothing[a claude -p worker]
+tests/cli/test_agent_mail.py::test_a_claude_that_is_not_the_panes_agent_takes_nothing[a subagent's event]
+tests/cli/test_agent_mail.py::test_a_claude_that_is_not_the_panes_agent_takes_nothing[an event that hands nothing over]
+tests/cli/test_agent_mail.py::test_a_claude_that_is_not_the_panes_agent_takes_nothing[no entry point]
+tests/cli/test_agent_mail.py::test_a_claude_that_is_not_the_panes_agent_takes_nothing[no event]
+tests/cli/test_agent_mail.py::test_a_codex_run_not_created_by_its_tui_takes_nothing[a subagent]
+tests/cli/test_agent_mail.py::test_a_codex_run_not_created_by_its_tui_takes_nothing[an app-server client]
+tests/cli/test_agent_mail.py::test_a_codex_run_not_created_by_its_tui_takes_nothing[codex exec]
+tests/cli/test_agent_mail.py::test_a_codex_run_not_created_by_its_tui_takes_nothing[no readable rollout]
+tests/cli/test_agent_mail.py::test_a_hook_outside_a_pane_takes_nothing
+tests/cli/test_agent_mail.py::test_a_newer_waiter_supersedes_the_older_one
+tests/cli/test_agent_mail.py::test_a_payload_that_is_not_json_fails_the_hook
+tests/cli/test_agent_mail.py::test_a_read_the_app_refuses_fails_the_hook
+tests/cli/test_agent_mail.py::test_a_stop_keeps_the_turn_going_with_every_message_as_its_reason
+tests/cli/test_agent_mail.py::test_a_tool_call_hands_the_mail_over_as_added_context
+tests/cli/test_agent_mail.py::test_a_waiter_ends_quietly_once_its_pane_is_gone
+tests/cli/test_agent_mail.py::test_a_waiter_wakes_the_agent_with_its_mail_and_marks_it_active
+tests/cli/test_agent_mail.py::test_codex_has_no_waiter
+tests/cli/test_agent_mail.py::test_codexs_tui_takes_the_mail
 tests/cli/test_cli_only.py::test_clipboard_set_checks_the_text_before_the_pane
 tests/cli/test_cli_only.py::test_clipboard_set_refuses_outside_a_live_pane
 tests/cli/test_cli_only.py::test_duplicate_no_select_needs_companion
