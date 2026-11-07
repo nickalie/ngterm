@@ -213,11 +213,14 @@ and working directory, the foreground read, a replay) on Linux, macOS and Window
 trip through a real `pwsh` where one is installed.
 
 `agent-chat`: the origin's per-pane agent record behind the Android chat view and its commands (Commands below).
-Its tests are in `tests/cli/test_agent_chat.py`: they pipe the recorded hook payloads of `ngterm-core`'s parser
+Its tests are in `tests/cli/`. Those of `test_agent_chat.py` pipe the recorded hook payloads of `ngterm-core`'s parser
 tests (`crates/ngterm-core/tests/fixtures/agent_chat`) to `ngtermctl agent hook` for a pane running `sleep`, read
 the record with `agent.get`, stream the recorded Claude and Codex transcripts (subagents included) with `ngtermctl
 agent chat` (its backlog, following, an older page, a resume, a cursor of another conversation, the end once the
 pane is back at its shell) and list a config tree's skills, commands and plugins with `ngtermctl agent commands`.
+Those of `test_agent_mail.py` pipe hook payloads to `ngtermctl agent mail` and check what it takes from a pane's
+mailbox: the added context and the `Stop` block, what a subagent, a `claude -p` worker or a Codex run not created by
+its TUI leaves there, and the `--wait` waiter's wake, its supersession by a newer one and its end with the pane.
 The build claims it on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and every conformance job that judges
 the ratchet runs with `--must-pass agent-chat`: the three Linux legs and Windows' `windows` job.
 
