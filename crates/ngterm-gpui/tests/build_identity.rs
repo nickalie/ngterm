@@ -1,6 +1,7 @@
 //! `ngterm --build-identity`, which `scripts/stage.sh` writes the staged identity file from: the binary prints the
 //! identity it was built with, in the file's format, and ends before the app starts. It runs with an empty
-//! environment, so a binary that ignored the flag finds no display, bus or state to reach and fails instead of drawing.
+//! environment (but a coverage run's profile destination), so a binary that ignored the flag finds no display, bus or
+//! state to reach and fails instead of drawing.
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -13,6 +14,7 @@ fn build_identity_prints_the_compiled_identity_and_exits() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_ngterm"))
         .arg(ngterm_gpui::app::BUILD_IDENTITY_FLAG)
         .env_clear()
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|profile| ("LLVM_PROFILE_FILE", profile)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

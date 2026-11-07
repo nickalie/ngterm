@@ -18,6 +18,14 @@ the rest. A function every program links but only some run (a small one inlined 
 `ngterm_proto::Request::new` in `ngtermctl`) has an unused, never-counted record in the others, so whichever object
 comes first decides; `cargo llvm-cov report` takes every program of the target directory (the Android library and the
 programs the suite never starts too) in the filesystem's order, and a run's counts vanished that way.
+
+`scripts/unit-coverage.sh` makes the unit-test report the same way, from the programs its `cargo test` build built:
+
+    python -m agterm_conformance.code_coverage unit --messages FILE --profiles DIR --repo DIR --out DIR \
+        [--crate NAME]...
+
+with test code left out of every metric (rust_test_code.py) and a per-file table beside the per-crate one
+(`unit_report`).
 """
 
 from __future__ import annotations
@@ -36,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from agterm_conformance.llvm_profiles import stage_binaries
+from agterm_conformance.rust_test_code import TestCode, find_test_code
 
 # Source paths left out of the report: patched dependencies and the -sys crates (whose sources are the generated
 # bindings). Both separators: llvm-cov names Windows files with backslashes.
@@ -62,6 +71,12 @@ class Counts:
     def add(self, summary: Mapping[str, Any]) -> None:
         self.count += int(summary.get("count", 0))
         self.covered += int(summary.get("covered", 0))
+
+    @classmethod
+    def of(cls, summary: Mapping[str, Any]) -> Counts:
+        counts = cls()
+        counts.add(summary)
+        return counts
 
     @property
     def percent(self) -> float | None:
@@ -140,11 +155,16 @@ def crate_rows(export: Mapping[str, Any], repo: Path) -> dict[str, CrateCoverage
     return dict(sorted(rows.items()))
 
 
-def render(rows: Mapping[str, CrateCoverage], notes: Iterable[str] = ()) -> str:
+SUITE_INTRO = (
+    "Line, region and function coverage per workspace crate (`vendor/`, the `-sys` crates and their generated "
+    "bindings excluded)."
+)
+
+
+def render(rows: Mapping[str, CrateCoverage], notes: Iterable[str] = (), intro: str = SUITE_INTRO) -> str:
     total = CrateCoverage()
     lines = [
-        "Line, region and function coverage per workspace crate (`vendor/`, the `-sys` crates and their generated "
-        "bindings excluded).",
+        intro,
         "",
         "| crate | lines | regions | functions |",
         "|---|---:|---:|---:|",
@@ -190,6 +210,11 @@ def llvm_tool(name: str, runner: Runner = subprocess.run) -> str:
     return os.fspath(Path(done.stdout.strip()).parent / "bin" / f"{name}{suffix}")
 
 
+# llvm-cov's error for an object with no coverage map: a program with no instrumented code (a test target compiled
+# empty on this OS, `#![cfg(target_os = "macos")]`), which has nothing to join.
+NO_COVERAGE = "no coverage data found"
+
+
 def _llvm(runner: Runner, command: list[str]) -> subprocess.CompletedProcess[str]:
     """Runs one llvm tool; refuses with its exit and the tail of its error output."""
     try:
@@ -218,10 +243,18 @@ class FileJoin:
     # whether a function, by its start (line, column), ran in one of its instantiations: llvm-cov's function %
     starts: dict[tuple[int, int], bool] = field(default_factory=dict)
 
-    def summary(self) -> dict[str, dict[str, int]]:
-        def counts(values: Iterable[int]) -> dict[str, int]:
+    def drop(self, covers: Callable[[int], bool]) -> None:
+        """Leaves out the lines, and the functions and regions starting on a line, that `covers` holds."""
+        self.lines = {number: count for number, count in self.lines.items() if not covers(number)}
+        self.functions = {name: seen for name, seen in self.functions.items() if not covers(seen[0])}
+        self.regions = {span: count for span, count in self.regions.items() if not covers(span[0])}
+        self.starts = {start: ran for start, ran in self.starts.items() if not covers(start[0])}
+
+    def summary(self) -> dict[str, dict[str, Any]]:
+        def counts(values: Iterable[int]) -> dict[str, Any]:
             listed = list(values)
-            return {"count": len(listed), "covered": sum(1 for value in listed if value)}
+            covered = sum(1 for value in listed if value)
+            return {"count": len(listed), "covered": covered, "percent": 100.0 * covered / len(listed) if listed else 0}
 
         return {
             "lines": counts(self.lines.values()),
@@ -289,13 +322,17 @@ def render_lcov(files: Mapping[str, FileJoin]) -> str:
     return "".join(f"{line}\n" for line in out)
 
 
-def joined_export(
-    profiles: Sequence[Path], objects: Sequence[Path], out: Path, runner: Runner = subprocess.run
-) -> tuple[dict[str, Any], str, list[str]]:
-    """The merged profiles read against each of `objects` on its own and joined: an `llvm-cov export` shaped summary
-    (`files` with `filename` and `summary`), the joined lcov and llvm-cov's warnings."""
-    profdata = out / "merged.profdata"
-    inputs = out / "profiles.txt"
+def join_objects(
+    profiles: Sequence[Path],
+    objects: Sequence[Path],
+    work: Path,
+    runner: Runner = subprocess.run,
+    exclude: str = EXCLUDE,
+) -> tuple[dict[str, FileJoin], list[str]]:
+    """The merged profiles (merged into `work`) read against each of `objects` on its own and joined per source file,
+    the files `exclude` matches left out; with llvm-cov's warnings."""
+    profdata = work / "merged.profdata"
+    inputs = work / "profiles.txt"
     inputs.write_text("".join(f"{os.fspath(path)}\n" for path in profiles), encoding="utf-8")
     profdata_tool = llvm_tool("llvm-profdata", runner)
     _llvm(runner, [profdata_tool, "merge", "-sparse", f"--input-files={inputs}", "-o", os.fspath(profdata)])
@@ -303,8 +340,13 @@ def joined_export(
     files: dict[str, FileJoin] = {}
     warnings: list[str] = []
     for obj in objects:
-        common = [f"-instr-profile={profdata}", f"-ignore-filename-regex={EXCLUDE}", os.fspath(obj)]
-        lcov = _llvm(runner, [llvm_cov, "export", "-format=lcov", *common])
+        common = [f"-instr-profile={profdata}", f"-ignore-filename-regex={exclude}", os.fspath(obj)]
+        try:
+            lcov = _llvm(runner, [llvm_cov, "export", "-format=lcov", *common])
+        except ReportError as error:
+            if NO_COVERAGE in str(error):
+                continue
+            raise
         text = _llvm(runner, [llvm_cov, "export", "-format=text", *common])
         for done in (lcov, text):
             notes = _ANSI.sub("", done.stderr or "").splitlines()
@@ -314,8 +356,24 @@ def joined_export(
             join_regions(files, json.loads(text.stdout or "{}"))
         except json.JSONDecodeError as error:
             raise ReportError(f"unreadable llvm-cov export of {obj.name}: {error}") from None
+    # llvm-cov's -ignore-filename-regex leaves out an excluded file's lines, not the regions its functions list
+    excluded = re.compile(exclude)
+    return {name: join for name, join in files.items() if not excluded.search(name)}, warnings
+
+
+def export_of(files: Mapping[str, FileJoin]) -> dict[str, Any]:
+    """An `llvm-cov export` shaped summary of `files`: `files` with `filename` and `summary`."""
     listed = [{"filename": name, "summary": join.summary()} for name, join in sorted(files.items())]
-    return {"data": [{"files": listed}]}, render_lcov(files), warnings
+    return {"data": [{"files": listed}]}
+
+
+def joined_export(
+    profiles: Sequence[Path], objects: Sequence[Path], out: Path, runner: Runner = subprocess.run
+) -> tuple[dict[str, Any], str, list[str]]:
+    """The merged profiles read against each of `objects` on its own and joined: an `llvm-cov export` shaped summary
+    (`export_of`), the joined lcov and llvm-cov's warnings."""
+    files, warnings = join_objects(profiles, objects, out, runner)
+    return export_of(files), render_lcov(files), warnings
 
 
 def report(
@@ -336,7 +394,153 @@ def report(
     return markdown
 
 
+# The unit-test report's exclusions besides `EXCLUDE`: test files by their names (an integration test's `tests/`, a
+# `tests.rs` or `*_tests.rs` module); test code elsewhere is found by its attributes (rust_test_code.py).
+UNIT_EXCLUDE = EXCLUDE[:-1] + r"|[\\/]tests[\\/]|[\\/]tests\.rs$|_tests\.rs$)"
+UNIT_INTRO = (
+    "Line, region and function coverage of `cargo test` per workspace crate (test code, `vendor/` and the `-sys` "
+    "crates excluded)."
+)
+UNIT_FILES_INTRO = (
+    "Line, function and region coverage of `cargo test` per source file (test code, `vendor/` and the `-sys` crates "
+    "excluded), and its uncovered lines (`lcov.info` has them by number)."
+)
+
+
+def built_programs(messages: str, repo: Path) -> list[Path]:
+    """The programs of the workspace's crates a `cargo test --no-run --message-format=json` built, from its messages:
+    the test binaries and the programs they start, not build scripts or a -sys crate's."""
+    crates = repo.resolve() / "crates"
+    found: dict[str, Path] = {}
+    for line in messages.splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        executable = message.get("executable")
+        if message.get("reason") != "compiler-artifact" or not executable:
+            continue
+        if "custom-build" in (message.get("target") or {}).get("kind", []):
+            continue
+        try:
+            parts = Path(str(message.get("manifest_path", ""))).resolve().relative_to(crates).parts
+        except ValueError:
+            continue
+        if parts and not parts[0].endswith("-sys"):
+            found[executable] = Path(executable)
+    return sorted(found.values())
+
+
+def readable_profiles(profiles: Sequence[Path], runner: Runner = subprocess.run) -> tuple[list[Path], list[Path]]:
+    """`profiles` split into those llvm-profdata reads and those it cannot: a test child killed mid-run (a timeout, a
+    crash test) leaves a truncated profile that would fail the whole merge."""
+    tool = llvm_tool("llvm-profdata", runner)
+    kept: list[Path] = []
+    dropped: list[Path] = []
+    for profile in profiles:
+        try:
+            done = runner([tool, "show", os.fspath(profile)], capture_output=True, text=True, check=False)
+        except OSError as error:
+            raise ReportError(f"cannot run {Path(tool).name}: {error}") from None
+        (kept if done.returncode == 0 else dropped).append(profile)
+    return kept, dropped
+
+
+def crate_sources(files: Iterable[str], repo: Path) -> list[Path]:
+    """Every `.rs` file of the crates `files` belong to: where their test-only code is declared."""
+    directories = set()
+    for name in files:
+        parts = Path(name).relative_to(repo).parts
+        if len(parts) > 2 and parts[0] == "crates":
+            directories.add(repo / "crates" / parts[1])
+    return [path.resolve() for directory in sorted(directories) for path in sorted(directory.rglob("*.rs"))]
+
+
+def strip_test_code(files: dict[str, FileJoin], test_code: TestCode) -> None:
+    """Leaves the test-only code `test_code` names out of `files`: its files whole, its spans' lines, functions and
+    regions in the others."""
+    for name in list(files):
+        path = Path(name).resolve()
+        if test_code.whole(path):
+            del files[name]
+        elif path in test_code.spans:
+            files[name].drop(test_code.spans[path].covers)
+
+
+def render_files(files: Mapping[str, FileJoin], repo: Path) -> str:
+    lines = [
+        UNIT_FILES_INTRO,
+        "",
+        "| file | lines | functions | regions | uncovered lines |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for name, join in sorted(files.items()):
+        summary = join.summary()
+        cells = [Counts.of(summary[metric]).cell() for metric in ("lines", "functions", "regions")]
+        uncovered = summary["lines"]["count"] - summary["lines"]["covered"]
+        lines.append(f"| {Path(name).relative_to(repo).as_posix()} | " + " | ".join(cells) + f" | {uncovered} |")
+    return "\n".join(lines) + "\n"
+
+
+def unit_report(
+    messages: Path, profiles: Path, repo: Path, out: Path, crates: Sequence[str] = (), runner: Runner = subprocess.run
+) -> str:
+    """The unit-test report (`scripts/unit-coverage.sh`): this run's profiles in `profiles`, read against each program
+    its build built (`messages`, the build's JSON messages) and joined, test code left out, only the files of
+    `crates` (package names; every workspace crate when empty). Writes `out/lcov.info`, `out/summary.json`,
+    `out/summary.md` (per crate) and `out/summary-files.md` (per file); returns the summary's markdown."""
+    repo = repo.resolve()
+    objects = built_programs(messages.read_text(encoding="utf-8"), repo)
+    if not objects:
+        raise ReportError(f"no program of the workspace's crates in the build's messages {messages}")
+    kept, dropped = readable_profiles(check_profiles(profiles), runner)
+    if not kept:
+        raise ReportError(f"no readable profile in {profiles}: {len(dropped)} truncated")
+    files, warnings = join_objects(kept, objects, profiles, runner, UNIT_EXCLUDE)
+    names: dict[str, str] = {}
+    files = {
+        name: join
+        for name, join in files.items()
+        if (crate := crate_of(name, repo, names)) is not None and (not crates or crate in crates)
+    }
+    test_code = find_test_code(crate_sources(files, repo))
+    strip_test_code(files, test_code)
+    export = export_of(files)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "summary.json").write_text(json.dumps(export), encoding="utf-8")
+    (out / "lcov.info").write_text(render_lcov(files), encoding="utf-8")
+    (out / "summary-files.md").write_text(render_files(files, repo), encoding="utf-8")
+    notes = [f"{len(dropped)} truncated profile(s) of killed test processes dropped"] if dropped else []
+    notes += [
+        f"unreadable source, its test code counted: {path.relative_to(repo).as_posix()}: {reason}"
+        for path, reason in sorted(test_code.unread.items())
+    ]
+    rows = crate_rows(export, repo)
+    markdown = render(rows, [*notes, *dict.fromkeys(warnings)], intro=UNIT_INTRO)
+    (out / "summary.md").write_text(markdown, encoding="utf-8")
+    return markdown
+
+
+def unit_main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(prog="python -m agterm_conformance.code_coverage unit")
+    for option in ("--messages", "--profiles", "--repo", "--out"):
+        parser.add_argument(option, type=Path, required=True)
+    parser.add_argument("--crate", action="append", default=[], help="a package to report (repeatable; default: all)")
+    args = parser.parse_args(argv)
+    try:
+        markdown = unit_report(args.messages, args.profiles, args.repo, args.out, args.crate)
+    except (ReportError, OSError) as error:
+        print(f"code coverage: {error}", file=sys.stderr)
+        return 2
+    print(markdown, end="")
+    return 0
+
+
 def main(argv: Sequence[str]) -> int:
+    if argv[:1] == ["unit"]:
+        return unit_main(argv[1:])
     parser = argparse.ArgumentParser(prog="python -m agterm_conformance.code_coverage")
     for option in ("--profiles", "--stage-bin", "--release-dir", "--repo", "--out"):
         parser.add_argument(option, type=Path, required=True)

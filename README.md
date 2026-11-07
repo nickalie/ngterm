@@ -947,18 +947,28 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   (`coverage/lcov.info`, `html/`, `summary.md`), which `conformance/tools/check_coverage.py` holds against
   `conformance/coverage-floor-linux.txt` (conformance/README.md > Code coverage). It is CI's job; run it locally only
   for a change to the coverage tooling.
-- `scripts/unit-coverage.sh OUT_DIR` measures what `cargo test` covers: one instrumented `cargo llvm-cov` run of the
-  workspace's tests (the -sys crates left out, default features, so WPE WebKit too), test code and `vendor/` out of
-  the denominator, into `OUT_DIR/lcov.info` and `OUT_DIR/summary.md` (lines, regions and functions % per crate). It
-  exits 1 when a test fails, with the report still written. `check_coverage.py` holds the summary against
-  `scripts/unit-coverage-floor-linux.txt` (`crate lines functions regions`, the same 0.5 pt tolerance; floors only
-  rise, toward 90 per crate). Like the suite's coverage it is CI's job (linux.yml's `unit-coverage`, about an hour);
-  locally, for a change to the tooling or to raise the floors (`--add` takes two runs of one tree):
+- `scripts/unit-coverage.sh OUT_DIR [-p CRATE]...` measures what `cargo test` covers: one instrumented build and run
+  of the workspace's tests (the -sys crates left out, default features, so WPE WebKit too), or of the `-p` crates'
+  alone, with test code out of the denominator (`#[cfg(test)]` and `#[test]` items, the module files they declare and
+  test files by name, read from the sources by `conformance/agterm_conformance/rust_test_code.py`) and `vendor/` too.
+  It writes `OUT_DIR/summary.md` (lines, regions and functions % per crate), `OUT_DIR/summary-files.md` (lines,
+  functions, regions and uncovered lines per file) and `OUT_DIR/lcov.info` (the uncovered lines by number), holding
+  only the `-p` crates' files when given; it exits 1 when a test fails, with the report still written.
+  `check_coverage.py` holds the summary against `scripts/unit-coverage-floor-linux.txt` (`crate lines functions
+  regions`, the same 0.5 pt tolerance; floors only rise, toward 90 per crate). The gate is CI's job (linux.yml's
+  `unit-coverage`, about an hour); locally, run it to see what a crate's tests leave uncovered while writing them, or
+  for a change to the tooling:
 
   ```sh
-  GDK_BACKEND=x11 xvfb-run -a dbus-run-session scripts/unit-coverage.sh target/unit-coverage
-  .venv/bin/python conformance/tools/check_coverage.py --summary target/unit-coverage/summary.md \
-    --floor scripts/unit-coverage-floor-linux.txt
+  GDK_BACKEND=x11 xvfb-run -a dbus-run-session scripts/unit-coverage.sh target/unit-coverage -p ngterm-core
+  ```
+
+  Raise the floors from the job's own reports, never a local run (a desktop runs what the runner skips, such as the
+  paths that need a DRM render node): the `rust-linux-unit-coverage` artifacts of two CI runs of one commit, then
+
+  ```sh
+  .venv/bin/python conformance/tools/check_coverage.py --floor scripts/unit-coverage-floor-linux.txt --add \
+    --summary A/summary.md --summary B/summary.md
   ```
 - Lint rules: `[workspace.lints]` in `Cargo.toml` (clippy `all` + `pedantic`, the complexity and robustness lints
   denied) with the thresholds in `clippy.toml`; the only exception is a reasoned outer `#[expect]` on one item.
@@ -975,7 +985,9 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   bash, fish and zsh), each with `--must-pass live-any-shell` and `--must-pass agent-chat`, the zsh and fish ones
   with `--must-pass live-sessions` and `--must-pass pages-survive`
   too; the bash one runs the app's process tests with the overlays on first, and a `coverage` entry runs the suite on
-  an instrumented build, judged by `conformance/coverage-floor-linux.txt` only.
+  an instrumented build, judged by `conformance/coverage-floor-linux.txt` only; and `unit-coverage`, the workspace's
+  `cargo test` under cargo-llvm-cov in the `wpe` job's Arch container (`scripts/unit-coverage.sh`), judged by
+  `scripts/unit-coverage-floor-linux.txt`.
 - `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,
   `ngterm-core`, `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt`, `ngterm-pty`, `ngterm-term`, `ngterm-server`,
   `ngterm-ctl`, `ngterm-app`, `ngterm-headless`, `ngterm-mobile` and `ngterm-update` so far), on Ubuntu, macOS and Windows runners: the libghostty-vt

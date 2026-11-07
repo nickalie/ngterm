@@ -687,6 +687,8 @@ fn the_installers_read_home_and_xdg_config_home_from_the_process() {
             "--test-threads=1",
         ])
         .env_clear()
+        // a coverage run's profile destination (cargo llvm-cov), where this child's coverage goes
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|profile| ("LLVM_PROFILE_FILE", profile)))
         .env("HOME", &home)
         .env("XDG_CONFIG_HOME", &xdg)
         .env("SHELL", bin.join("login-shell"))

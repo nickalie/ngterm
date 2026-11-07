@@ -101,6 +101,10 @@ impl Sandbox {
         // plain logs to match against
         env.insert("NO_COLOR".to_owned(), "1".to_owned());
         env.insert("GIO_USE_PORTALS".to_owned(), "0".to_owned());
+        // a coverage run's profile destination (cargo llvm-cov), where the app's and its children's coverage goes
+        if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+            env.insert("LLVM_PROFILE_FILE".to_owned(), profile);
+        }
         let bus = path.join("run/bus");
         env.insert(
             "DBUS_SESSION_BUS_ADDRESS".to_owned(),

@@ -113,7 +113,16 @@ fn parent(args: &[String]) -> ExitCode {
 fn run_child(exe: &Path, gpu: &Gpu, args: &[String]) -> Result<(), String> {
     let mut command = Command::new(exe);
     command.args(args).env_clear().stdin(Stdio::null());
-    for kept in ["PATH", "HOME", "RUST_BACKTRACE", "RUST_LOG", "TMPDIR", REQUIRE_ENV] {
+    // LLVM_PROFILE_FILE: a coverage run's profile destination (cargo llvm-cov), where the child's coverage goes
+    for kept in [
+        "PATH",
+        "HOME",
+        "RUST_BACKTRACE",
+        "RUST_LOG",
+        "TMPDIR",
+        REQUIRE_ENV,
+        "LLVM_PROFILE_FILE",
+    ] {
         if let Some(value) = std::env::var_os(kept) {
             command.env(kept, value);
         }

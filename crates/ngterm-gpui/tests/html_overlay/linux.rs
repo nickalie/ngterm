@@ -82,7 +82,15 @@ fn run_child(exe: &Path, gpu: &Gpu, args: &[String]) -> Result<(), String> {
     let home = tempfile::tempdir().map_err(|err| err.to_string())?;
     let mut command = std::process::Command::new(exe);
     command.args(args).env_clear().stdin(Stdio::null());
-    for kept in ["PATH", "RUST_BACKTRACE", "RUST_LOG", "TMPDIR", REQUIRE_ENV] {
+    // LLVM_PROFILE_FILE: a coverage run's profile destination (cargo llvm-cov), where the child's coverage goes
+    for kept in [
+        "PATH",
+        "RUST_BACKTRACE",
+        "RUST_LOG",
+        "TMPDIR",
+        REQUIRE_ENV,
+        "LLVM_PROFILE_FILE",
+    ] {
         if let Some(value) = std::env::var_os(kept) {
             command.env(kept, value);
         }
