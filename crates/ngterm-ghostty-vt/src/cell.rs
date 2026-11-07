@@ -303,3 +303,106 @@ impl CellRef<'_> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{RenderState, Terminal};
+
+    #[test]
+    fn every_underline_and_color_survives_a_render_capture() {
+        let mut terminal = Terminal::new(8, 1).unwrap();
+        terminal.vt_write(b"\x1b[1;2;3;5;7;8;9;53;38;5;123;48;2;1;2;3;58;5;42m");
+        for underline in 0..=5 {
+            terminal.vt_write(format!("\x1b[4:{underline}mX").as_bytes());
+        }
+        terminal.vt_write(b"\x1b[0mZ");
+        let mut state = RenderState::new().unwrap();
+        state.update(&mut terminal).unwrap();
+        let mut rows = state.rows().unwrap();
+        let mut row = rows.next_row().unwrap();
+        let mut cells = row.cells().unwrap();
+        for underline in [
+            Underline::None,
+            Underline::Single,
+            Underline::Double,
+            Underline::Curly,
+            Underline::Dotted,
+            Underline::Dashed,
+        ] {
+            let cell = cells.next_cell().unwrap().unwrap();
+            assert!(cell.has_styling());
+            assert!(!cell.has_hyperlink());
+            assert_eq!(
+                cell.style(),
+                Style {
+                    foreground: StyleColor::Palette(123),
+                    background: StyleColor::Rgb(Rgb::new(1, 2, 3)),
+                    underline_color: StyleColor::Palette(42),
+                    flags: StyleFlags::all(),
+                    underline,
+                }
+            );
+            assert_eq!(cell.foreground(), Some(terminal.colors().palette[123]));
+            assert_eq!(cell.background(), Some(Rgb::new(1, 2, 3)));
+        }
+        let plain = cells.next_cell().unwrap().unwrap();
+        assert!(!plain.has_styling());
+        assert_eq!(plain.style(), Style::default());
+        assert_eq!((plain.foreground(), plain.background()), (None, None));
+    }
+
+    #[test]
+    fn long_clusters_append_their_entire_utf8_text() {
+        let cluster = format!("e{}", "\u{301}".repeat(24));
+        let mut terminal = Terminal::new(3, 1).unwrap();
+        terminal.vt_write(cluster.as_bytes());
+        let mut state = RenderState::new().unwrap();
+        state.update(&mut terminal).unwrap();
+        let mut rows = state.rows().unwrap();
+        let mut row = rows.next_row().unwrap();
+        let mut cells = row.cells().unwrap();
+        let cell = cells.next_cell().unwrap().unwrap();
+        let mut out = b"prefix:".to_vec();
+        cell.grapheme(&mut out).unwrap();
+        assert_eq!(out, format!("prefix:{cluster}").as_bytes());
+        assert_eq!(cell.width(), CellWidth::Narrow);
+        let blank = cells.next_cell().unwrap().unwrap();
+        blank.grapheme(&mut out).unwrap();
+        assert_eq!(out, format!("prefix:{cluster}").as_bytes());
+    }
+
+    #[test]
+    fn wide_characters_leave_spacers_and_hyperlinks_in_the_capture() {
+        let mut terminal = Terminal::new(4, 2).unwrap();
+        terminal.vt_write("abc\x1b]8;;https://example.com\x1b\\中\x1b]8;;\x1b\\".as_bytes());
+        let mut state = RenderState::new().unwrap();
+        state.update(&mut terminal).unwrap();
+        let mut rows = state.rows().unwrap();
+        for widths in [
+            [
+                CellWidth::Narrow,
+                CellWidth::Narrow,
+                CellWidth::Narrow,
+                CellWidth::SpacerHead,
+            ],
+            [
+                CellWidth::Wide,
+                CellWidth::SpacerTail,
+                CellWidth::Narrow,
+                CellWidth::Narrow,
+            ],
+        ] {
+            let mut row = rows.next_row().unwrap();
+            let mut cells = row.cells().unwrap();
+            for width in widths {
+                let cell = cells.next_cell().unwrap().unwrap();
+                assert_eq!(cell.width(), width);
+                if width == CellWidth::Wide {
+                    assert!(cell.has_hyperlink());
+                }
+            }
+            assert!(cells.next_cell().is_none());
+        }
+    }
+}

@@ -777,3 +777,7 @@ unsafe extern "C" fn reset(_terminal: ffi::GhosttyTerminal, userdata: *mut c_voi
     // SAFETY: as in `write_pty`.
     unsafe { handler(userdata) }.reset();
 }
+
+#[cfg(test)]
+#[path = "effects_tests.rs"]
+mod tests;
