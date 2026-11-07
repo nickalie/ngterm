@@ -162,6 +162,19 @@ class OnboardingFlowTest {
         compose.onNodeWithText("Done").assertDoesNotExist()
     }
 
+    @Test
+    fun aKeyStoreReadFailureSaysSoAndRetryReadsTheKeysAgain() {
+        val step = mutableStateOf<OnboardingStep>(OnboardingStep.ReadFailed("disk unavailable"))
+        var retried = 0
+        val actions = OnboardingActions.of(model).copy(onRetry = { retried++ })
+        compose.setContent { NgtermTheme { OnboardingFlow(step.value, actions) } }
+        compose.onNodeWithText("Your keys couldn't be read").assertIsDisplayed()
+        compose.onNodeWithText("disk unavailable", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Create a key").assertDoesNotExist()
+        compose.onNodeWithText("Retry").performClick()
+        compose.runOnIdle { assertEquals(1, retried) }
+    }
+
     private class KeyPickerRegistry : ActivityResultRegistry() {
         var request = 0
 

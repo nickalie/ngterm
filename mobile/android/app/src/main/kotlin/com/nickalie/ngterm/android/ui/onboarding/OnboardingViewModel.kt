@@ -43,6 +43,11 @@ sealed interface OnboardingStep {
     /** The app is finding out whether it has a key. */
     data object Loading : OnboardingStep
 
+    /** The app's keys could not be read, for [reason]: whether it has one is unknown until a retry reads them. */
+    data class ReadFailed(
+        val reason: String,
+    ) : OnboardingStep
+
     /** No key yet: make one or bring one. [failure] says why the last attempt to make one failed. */
     data class Welcome(
         val busy: Boolean = false,
@@ -72,17 +77,34 @@ class OnboardingViewModel(
 
     val step: StateFlow<OnboardingStep> = current.asStateFlow()
 
+    /** An import is under way: it goes on through Back, and no other key is made or brought until it ends. */
+    private var importing = false
+
     init {
+        read()
+    }
+
+    private fun read() {
+        current.value = OnboardingStep.Loading
         viewModelScope.launch {
-            val existing = runCatching { keys.keys.first() }.getOrDefault(emptyList())
-            current.value = if (existing.isEmpty()) OnboardingStep.Welcome() else OnboardingStep.Done
+            current.value =
+                try {
+                    if (keys.keys.first().isEmpty()) OnboardingStep.Welcome() else OnboardingStep.Done
+                } catch (error: IOException) {
+                    OnboardingStep.ReadFailed(error.describe())
+                }
         }
+    }
+
+    /** Reads the keys again after [OnboardingStep.ReadFailed]. */
+    fun retry() {
+        if (current.value is OnboardingStep.ReadFailed) read()
     }
 
     /** Makes a new key on the device. */
     fun create() {
         val now = current.value
-        if (now !is OnboardingStep.Welcome || now.busy) return
+        if (now !is OnboardingStep.Welcome || now.busy || importing) return
         current.value = OnboardingStep.Welcome(busy = true)
         viewModelScope.launch {
             current.value =
@@ -98,9 +120,11 @@ class OnboardingViewModel(
         }
     }
 
-    /** Opens the import screen. */
+    /** Opens the import screen, busy while an earlier import still runs. */
     fun startImport() {
-        current.value = OnboardingStep.Import()
+        val now = current.value
+        if (now !is OnboardingStep.Welcome || now.busy) return
+        current.value = OnboardingStep.Import(busy = importing)
     }
 
     /** Back from the import screen to the welcome. */
@@ -118,14 +142,19 @@ class OnboardingViewModel(
         privateKey: ByteArray,
         passphrase: String?,
     ) {
+        if (importing) {
+            privateKey.fill(0)
+            return
+        }
         if (privateKey.all { it.toInt().toChar().isWhitespace() }) {
             privateKey.fill(0)
             current.value = OnboardingStep.Import(problem = ImportProblem.Empty)
             return
         }
+        importing = true
         current.value = OnboardingStep.Import(busy = true)
         viewModelScope.launch {
-            current.value =
+            val done =
                 try {
                     OnboardingStep.KeyReady(keys.import(privateKey, passphrase))
                 } catch (error: KeyException) {
@@ -134,7 +163,11 @@ class OnboardingViewModel(
                     OnboardingStep.Import(problem = ImportProblem.NotStored(error.describe()))
                 } catch (error: GeneralSecurityException) {
                     OnboardingStep.Import(problem = ImportProblem.NotStored(error.describe()))
+                } finally {
+                    importing = false
                 }
+            // the key is shown wherever the user is; a problem only on the import screen it belongs to
+            if (done is OnboardingStep.KeyReady || current.value is OnboardingStep.Import) current.value = done
         }
     }
 
