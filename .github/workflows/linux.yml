@@ -325,7 +325,9 @@ jobs:
           restrict=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
           if [[ -f "$restrict" ]]; then echo 0 > "$restrict"; fi
       # exits 1 on a failed test with the report written: the floors are still judged and the report kept below; the
-      # environment kept whole (-m), HOME included, so the toolchain and the prefixes set up above are the ones used
+      # environment kept whole (-m), HOME included, so the toolchain and the prefixes set up above are the ones used.
+      # runuser's PAM session leaves the user a soft descriptor limit of 1024, too few for the tests: the script
+      # raises it within the hard limit.
       - name: unit-test coverage
         env:
           GDK_BACKEND: x11
