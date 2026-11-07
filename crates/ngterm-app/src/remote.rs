@@ -390,13 +390,16 @@ fn read_lines<S: PresentationViewer>(stdout: impl Read, key: LinkKey, poster: &P
     }
 }
 
-/// Drains a child's stderr even when it contains non-UTF-8 bytes, logging each line lossily as upstream does.
+/// Drains a child's stderr to its end, logging each line lossily as upstream does, so non-UTF-8 bytes don't stop it.
+/// A line holds at most the frame limit, as upstream's reader caps it; a longer one is logged in pieces of the read
+/// limit and the drain keeps going, so the child never blocks on or loses its stderr.
 pub(crate) fn log_lines(stderr: impl Read, source: &str) {
     let mut reader = BufReader::new(stderr);
     let mut line = Vec::new();
+    let limit = u64::try_from(MAX_FRAME_BYTES + 1).unwrap_or(u64::MAX);
     loop {
         line.clear();
-        match reader.read_until(b'\n', &mut line) {
+        match (&mut reader).take(limit).read_until(b'\n', &mut line) {
             Ok(0) | Err(_) => return,
             Ok(_) => {}
         }
@@ -505,8 +508,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn stderr_is_logged_lossily_through_its_unterminated_last_line() {
+    /// What [`log_lines`] logs for `stderr`.
+    fn stderr_log(stderr: &[u8]) -> String {
         let log = tempfile::NamedTempFile::new().unwrap();
         let subscriber = tracing_subscriber::fmt()
             .without_time()
@@ -514,13 +517,32 @@ mod tests {
             .with_target(false)
             .with_writer(Mutex::new(log.reopen().unwrap()))
             .finish();
-        tracing::subscriber::with_default(subscriber, || {
-            log_lines(&b"plain\nbad \xff\r\nlast"[..], "test child");
-        });
-        let text = std::fs::read_to_string(log.path()).unwrap();
+        tracing::subscriber::with_default(subscriber, || log_lines(stderr, "test child"));
+        std::fs::read_to_string(log.path()).unwrap()
+    }
+
+    #[test]
+    fn stderr_is_logged_lossily_through_its_unterminated_last_line() {
+        let text = stderr_log(b"plain\nbad \xff\r\nlast");
         assert!(text.contains("test child line=plain\n"), "{text:?}");
         assert!(text.contains("test child line=bad \u{fffd}\n"), "{text:?}");
         assert!(text.contains("test child line=last\n"), "{text:?}");
+    }
+
+    #[test]
+    fn a_stderr_line_over_the_frame_limit_is_logged_in_pieces_and_the_drain_goes_on() {
+        let mut stderr = vec![b'x'; MAX_FRAME_BYTES + 2];
+        stderr.extend_from_slice(b"\nnext\n");
+        let text = stderr_log(&stderr);
+        let logged: Vec<&str> = text
+            .lines()
+            .map(|line| line.split_once("test child line=").unwrap().1)
+            .collect();
+        assert_eq!(
+            logged.iter().map(|line| line.len()).collect::<Vec<_>>(),
+            [MAX_FRAME_BYTES + 1, 1, 4]
+        );
+        assert_eq!(logged[2], "next");
     }
 
     #[test]
