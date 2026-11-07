@@ -5,11 +5,11 @@
 //! The nodes decode as upstream's do, so `ngtermctl` can render a tree from a newer or older server: required fields
 //! are the ones upstream decodes without a fallback, and an absent flag upstream defaults reads as that default.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use serde_with::skip_serializing_none;
 
-use crate::version::AppIdentity;
+use crate::{keymap::null_as_default, version::AppIdentity};
 
 /// The payload of a `tree` response (`result.tree`).
 #[skip_serializing_none]
@@ -355,6 +355,11 @@ const fn yes() -> bool {
     true
 }
 
+/// [`null_as_default`] for `frame`, whose default is `true`.
+fn null_as_yes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(Option::deserialize(deserializer)?.unwrap_or_else(yes))
+}
+
 /// The HUD panel in a session's overlay slot.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -376,13 +381,13 @@ pub struct ControlHudNode {
     #[serde(default)]
     pub pane: Option<String>,
     pub hide_after: f64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub markdown: bool,
     #[serde(default)]
     pub font_size: Option<f64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub sticky: bool,
-    #[serde(default = "yes")]
+    #[serde(default = "yes", deserialize_with = "null_as_yes")]
     pub frame: bool,
 }
 
@@ -435,11 +440,11 @@ pub struct ControlHtmlOverlayNode {
     #[serde(default)]
     pub navigation: Option<bool>,
     pub javascript: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub chromeless: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub persistent: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub browse: bool,
     #[serde(default)]
     pub zoom: Option<f64>,
@@ -791,6 +796,107 @@ mod tests {
             ),
             (&None, &None, &None, &None)
         );
+    }
+
+    #[test]
+    fn a_null_hud_markdown_decodes_as_false() {
+        let hud: ControlHudNode = serde_json::from_value(json!({
+            "message": "m", "spinner": "none", "position": "center", "hideAfter": 0, "markdown": null
+        }))
+        .unwrap();
+        assert!(!hud.markdown);
+    }
+
+    #[test]
+    fn a_null_hud_sticky_decodes_as_false() {
+        let hud: ControlHudNode = serde_json::from_value(json!({
+            "message": "m", "spinner": "none", "position": "center", "hideAfter": 0, "sticky": null
+        }))
+        .unwrap();
+        assert!(!hud.sticky);
+    }
+
+    #[test]
+    fn a_null_hud_frame_decodes_as_true() {
+        let hud: ControlHudNode = serde_json::from_value(json!({
+            "message": "m", "spinner": "none", "position": "center", "hideAfter": 0, "frame": null
+        }))
+        .unwrap();
+        assert!(hud.frame);
+    }
+
+    #[test]
+    fn a_null_html_chromeless_decodes_as_false() {
+        let page: ControlHtmlOverlayNode =
+            serde_json::from_value(json!({"state": "loaded", "javascript": true, "chromeless": null})).unwrap();
+        assert!(!page.chromeless);
+    }
+
+    #[test]
+    fn a_null_html_persistent_decodes_as_false() {
+        let page: ControlHtmlOverlayNode =
+            serde_json::from_value(json!({"state": "loaded", "javascript": true, "persistent": null})).unwrap();
+        assert!(!page.persistent);
+    }
+
+    #[test]
+    fn a_null_html_browse_decodes_as_false() {
+        let page: ControlHtmlOverlayNode =
+            serde_json::from_value(json!({"state": "loaded", "javascript": true, "browse": null})).unwrap();
+        assert!(!page.browse);
+    }
+
+    #[test]
+    fn mistyped_hud_flags_fail_to_decode() {
+        for field in ["markdown", "sticky", "frame"] {
+            for wrong in [json!("true"), json!(0), json!([]), json!({})] {
+                let mut wire = json!({"message": "m", "spinner": "none", "position": "center", "hideAfter": 0});
+                wire[field] = wrong;
+                assert!(
+                    serde_json::from_value::<ControlHudNode>(wire.clone()).is_err(),
+                    "{wire}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mistyped_html_flags_fail_to_decode() {
+        for field in ["chromeless", "persistent", "browse"] {
+            for wrong in [json!("true"), json!(0), json!([]), json!({})] {
+                let mut wire = json!({"state": "loaded", "javascript": true});
+                wire[field] = wrong;
+                assert!(
+                    serde_json::from_value::<ControlHtmlOverlayNode>(wire.clone()).is_err(),
+                    "{wire}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_hud_flags_survive_the_wire() {
+        for flag in [false, true] {
+            let wire = json!({
+                "message": "m", "spinner": "none", "position": "center", "hideAfter": 0.0,
+                "markdown": flag, "sticky": flag, "frame": flag
+            });
+            let hud: ControlHudNode = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!((hud.markdown, hud.sticky, hud.frame), (flag, flag, flag));
+            assert_eq!(serde_json::to_value(hud).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn explicit_html_flags_survive_the_wire() {
+        for flag in [false, true] {
+            let wire = json!({
+                "state": "loaded", "javascript": true, "chromeless": flag, "persistent": flag, "browse": flag
+            });
+            let page: ControlHtmlOverlayNode = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!((page.chromeless, page.persistent, page.browse), (flag, flag, flag));
+            assert_eq!(serde_json::to_value(page).unwrap(), wire);
+        }
     }
 
     #[test]
