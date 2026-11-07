@@ -30,7 +30,7 @@ import org.robolectric.annotation.Config
 /** The card's real draft follows typed answers, choice changes and restored Android state. */
 @RunWith(AndroidJUnit4::class)
 @Config(qualifiers = "w411dp-h891dp-xhdpi")
-class QuestionCardCoverageTest {
+class QuestionCardTest {
     @get:Rule
     val compose = createComposeRule()
 

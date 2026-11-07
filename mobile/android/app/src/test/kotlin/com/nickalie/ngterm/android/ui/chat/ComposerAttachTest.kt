@@ -34,7 +34,7 @@ import org.junit.runner.RunWith
 
 /** System picker results and every upload outcome as the composer presents them. */
 @RunWith(AndroidJUnit4::class)
-class ComposerAttachCoverageTest {
+class ComposerAttachTest {
     @get:Rule
     val compose = createComposeRule()
 

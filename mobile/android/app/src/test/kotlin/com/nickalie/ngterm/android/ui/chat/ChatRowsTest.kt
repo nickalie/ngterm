@@ -39,7 +39,7 @@ import org.robolectric.annotation.GraphicsMode
 
 /** Empty transcript entries still read clearly; only rows with details offer to open them. */
 @RunWith(AndroidJUnit4::class)
-class ChatRowsCoverageTest {
+class ChatRowsTest {
     @get:Rule
     val compose = createComposeRule()
 
@@ -238,6 +238,7 @@ class ChatRowsCoverageTest {
         question.value =
             question.value.copy(questions = listOf(ChatQuestionItem(" ", null, false, emptyList())), output = " ")
         compose.onNodeWithText("Question").assert(clickLabel("Hide the answer"))
+        compose.onNode(hasScrollAction()).assertDoesNotExist()
         question.value =
             question.value.copy(
                 questions =
@@ -251,6 +252,7 @@ class ChatRowsCoverageTest {
         compose.onNode(hasText("First?") and hasText("Answered")).assertIsDisplayed()
         compose.onNodeWithText("Second?").assertIsDisplayed()
         compose.onNodeWithText("Use fish").assertIsDisplayed()
+        compose.onNode(hasScrollAction()).assertExists()
         compose.onNode(hasText("First?") and hasText("Answered")).performClick()
         compose.onNodeWithText("Second?").assertDoesNotExist()
         compose.onNodeWithText("First?").assert(clickLabel("Show the answer")).performClick()
