@@ -516,6 +516,26 @@ mod tests {
         main_loop.close();
     }
 
+    /// An argv the OS refuses outright starts no bridge: the close says why, and the link takes no lines.
+    #[test]
+    fn a_bridge_the_os_refuses_reports_why_and_takes_no_lines() {
+        let (sender, receiver) = mpsc::channel();
+        let main_loop = Arc::new(FakeMainLoop::spawn(Viewer(sender)).unwrap());
+        let poster: Poster<Viewer> = Arc::downgrade(&main_loop) as Poster<Viewer>;
+        let argv = ["ss\0h".to_owned()];
+        let link = ProcessTransport::new(poster).open(&argv, KEY);
+        let report = receiver.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap();
+        assert!(
+            matches!(&report, Report::Closed(reason) if reason.starts_with("could not run ss\0h: ")),
+            "{report:?}"
+        );
+        link.send(b"{}\n");
+        link.stop();
+        drop(link);
+        main_loop.close();
+        assert!(receiver.recv().is_err(), "nothing more is reported");
+    }
+
     #[test]
     fn a_bridge_that_cannot_start_reports_why() {
         let (sender, receiver) = mpsc::channel();
@@ -533,6 +553,65 @@ mod tests {
         assert!(ok, "{report:?}");
         drop(link);
         main_loop.close();
+    }
+
+    /// A bridge that stopped reading its stdin fails the next send, which ends it; a send after that is dropped.
+    #[cfg(unix)]
+    #[test]
+    fn a_bridge_that_stopped_reading_is_ended_by_the_next_send() {
+        let (sender, receiver) = mpsc::channel();
+        let main_loop = Arc::new(FakeMainLoop::spawn(Viewer(sender)).unwrap());
+        let poster: Poster<Viewer> = Arc::downgrade(&main_loop) as Poster<Viewer>;
+        let argv = crate::test_shell::script_argv("exec 0<&-; echo ready; exec sleep 30", "");
+        let link = ProcessTransport::new(poster).open(&argv, KEY);
+        let ready = receiver.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap();
+        assert_eq!(ready, Report::Line("ready".to_owned()));
+        link.send(b"{}\n");
+        let closed = receiver.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap();
+        assert_eq!(closed, Report::Closed("signal 15".to_owned()));
+        link.send(b"{}\n");
+        link.stop();
+        drop(link);
+        main_loop.close();
+        assert!(receiver.recv().is_err(), "nothing more is reported");
+    }
+
+    /// A line longer than a frame ends the read without handing any of it on, nor a line after it; the bridge sees its
+    /// stdout closed.
+    #[cfg(unix)]
+    #[test]
+    fn an_oversize_line_ends_the_read() {
+        let reports = reports_of(
+            &format!(
+                "head -c {} /dev/zero | tr '\\0' x; echo; echo later",
+                MAX_FRAME_BYTES + 2
+            ),
+            "",
+        );
+        assert!(matches!(&reports[..], [Report::Closed(_)]), "{reports:?}");
+    }
+
+    /// A bridge whose main loop is closed or gone stops reading at its first line and posts nothing; it then ends on
+    /// its broken stdout and is reaped, and a stop after that signals nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_bridge_whose_loop_is_closed_or_gone_stops_reading_and_is_reaped() {
+        let (sender, receiver) = mpsc::channel();
+        let closed_loop = Arc::new(FakeMainLoop::spawn(Viewer(sender)).unwrap());
+        closed_loop.close();
+        let closed: Poster<Viewer> = Arc::downgrade(&closed_loop) as Poster<Viewer>;
+        let gone: Poster<Viewer> = Weak::<FakeMainLoop<Viewer>>::new();
+        let argv = crate::test_shell::script_argv("while :; do echo x || exit 4; done", "");
+        for poster in [closed, gone] {
+            let link = ProcessLink::spawn(&argv, KEY, &poster);
+            let deadline = std::time::Instant::now() + crate::test_shell::CHILD_DEADLINE;
+            while !link.reaped.load(Ordering::SeqCst) {
+                assert!(std::time::Instant::now() < deadline, "the bridge was never reaped");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            link.stop();
+        }
+        drop(receiver);
     }
 
     #[test]

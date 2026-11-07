@@ -354,10 +354,11 @@ mod tests {
     /// belongs to the open file description, and a child that another test of this multi-threaded binary spawns holds
     /// a duplicate of every descriptor from its fork until its exec, so in the shared harness the lock can outlive the
     /// handles for a moment. In the copy no other test runs, so nothing forks.
-    fn in_a_fresh_process(test: &str, body: impl FnOnce()) {
+    /// Returns the copy's stdout and stderr, for a test that checks what the body logged there; `None` in the copy.
+    fn in_a_fresh_process(test: &str, body: impl FnOnce()) -> Option<String> {
         if std::env::var(FRESH_PROCESS_ENV).is_ok_and(|probed| probed == test) {
             body();
-            return;
+            return None;
         }
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([test, "--exact", "--test-threads=1", "--nocapture"])
@@ -373,6 +374,7 @@ mod tests {
         );
         // the filter matched the test: a mistyped name would pass with no test run
         assert!(stdout.contains("1 passed"), "{test} did not run:\n{stdout}");
+        Some(format!("{stdout}{}", String::from_utf8_lossy(&output.stderr)))
     }
 
     /// A second launch, forwarded to the running instance, must not rotate the log that instance is writing, even
@@ -524,6 +526,92 @@ mod tests {
         assert!(!platform::try_lock(&other), "the lock is exclusive");
         io::Write::write_all(&mut &other, b"appended beside the holder\n").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "appended beside the holder\n");
+    }
+
+    /// The installed subscriber writes to the state directory's log at the level [`LOG_ENV`] names. In a fresh
+    /// process, as the global subscriber is installed once per process.
+    #[test]
+    fn init_logs_to_the_state_dirs_file() {
+        in_a_fresh_process(
+            "logging::tests::init_logs_to_the_state_dirs_file",
+            the_installed_subscriber_writes_the_file,
+        );
+    }
+
+    fn the_installed_subscriber_writes_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("state");
+        let env = MapEnv::new()
+            .with(STATE_DIR_ENV, dir.as_os_str())
+            .with(LOG_ENV, "debug");
+        init(&env);
+        tracing::debug!("debug line through the installed subscriber");
+        tracing::trace!("trace line below the level");
+        let written = fs::read_to_string(dir.join(LOG_FILE_NAME)).unwrap();
+        assert!(
+            written.contains("debug line through the installed subscriber"),
+            "{written}"
+        );
+        assert!(!written.contains("trace line below the level"), "{written}");
+    }
+
+    /// A log file that cannot be opened leaves logging on stderr alone, which says so. In a fresh process, as
+    /// `init_logs_to_the_state_dirs_file`.
+    #[test]
+    fn init_without_a_log_file_logs_to_stderr_and_warns() {
+        let Some(output) = in_a_fresh_process(
+            "logging::tests::init_without_a_log_file_logs_to_stderr_and_warns",
+            the_installed_subscriber_falls_back_to_stderr,
+        ) else {
+            return;
+        };
+        assert!(
+            output.contains("log file unavailable; logging to stderr only"),
+            "{output}"
+        );
+        assert!(output.contains("logged to stderr alone"), "{output}");
+    }
+
+    fn the_installed_subscriber_falls_back_to_stderr() {
+        let tmp = tempfile::tempdir().unwrap();
+        let blocker = tmp.path().join("not-a-dir");
+        fs::write(&blocker, "").unwrap();
+        init(&MapEnv::new().with(STATE_DIR_ENV, blocker.join("state").as_os_str()));
+        tracing::info!("logged to stderr alone");
+    }
+
+    /// A launch whose log was removed after it opened it writes to a fresh one at the path, not to the removed file.
+    #[test]
+    fn a_launch_whose_log_was_removed_writes_to_a_fresh_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(LOG_FILE_NAME);
+        fs::write(&path, "previous run\n").unwrap();
+        let opened = open_append(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        let file = settle_log_file(tmp.path(), opened, 8).unwrap();
+        io::Write::write_all(&mut &*file, b"this run\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "this run\n");
+        assert!(!tmp.path().join(ROTATED_FILE_NAME).exists());
+    }
+
+    /// A log whose path can no longer be looked up fails the open, so logging falls back to stderr.
+    #[cfg(unix)]
+    #[test]
+    fn a_log_whose_path_cannot_be_looked_up_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("state");
+        fs::create_dir(&dir).unwrap();
+        let opened = open_append(&dir.join(LOG_FILE_NAME)).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
+        // root looks up any path: there is nothing to refuse then
+        let searchable = fs::symlink_metadata(dir.join(LOG_FILE_NAME)).is_ok();
+        let settled = settle_log_file(&dir, opened, ROTATE_BYTES);
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        if !searchable {
+            assert_eq!(settled.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        }
     }
 
     #[test]
