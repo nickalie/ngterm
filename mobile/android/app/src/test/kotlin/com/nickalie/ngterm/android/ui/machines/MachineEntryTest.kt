@@ -51,10 +51,20 @@ class MachineEntryTest {
     }
 
     @Test
-    fun menuConnectsOfflineAndDisconnectsEveryPendingOrConnectedState() {
+    fun menuConnectsEveryIdleOrFailedStateAndDisconnectsEveryPendingOrConnectedState() {
         card()
-        menu("Connect")
-        assertEquals(listOf("connect:m1"), calls)
+        val idle =
+            listOf(
+                Link.Offline,
+                Link.Unreachable("Connection refused"),
+                Link.HostKeyUnknown("SHA256:new"),
+                Link.HostKeyChanged("SHA256:old", "SHA256:new"),
+            )
+        idle.forEach { link ->
+            compose.runOnIdle { item.value = item.value.copy(link = link) }
+            menu("Connect")
+            assertEquals("connect:m1", calls.last())
+        }
         val links =
             listOf(Link.Connected, Link.Connecting, Link.Reconnecting(4000), Link.SignIn("sign in", "https://host"))
         links.forEach { link ->
@@ -62,7 +72,7 @@ class MachineEntryTest {
             menu("Disconnect")
             assertEquals("disconnect:m1", calls.last())
         }
-        assertEquals(1 + links.size, calls.size)
+        assertEquals(idle.size + links.size, calls.size)
         menu("Edit")
         menu("Remove")
         compose.onNodeWithText("build-01").performClick()

@@ -1,6 +1,9 @@
 package com.nickalie.ngterm.android.ui.machines
 
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -11,6 +14,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
+import androidx.lifecycle.ViewModelProvider
 import com.nickalie.ngterm.android.FAKE_PUBLIC_KEY
 import com.nickalie.ngterm.android.TestGraph
 import com.nickalie.ngterm.android.awaitDescription
@@ -156,6 +160,7 @@ class MachinesRouteTest {
         route()
         compose.awaitDescription("Host key changed")
         compose.onNodeWithText("Review").performClick()
+        compose.awaitText("build-01's host key changed")
         runBlocking { test.graph.machines.delete("m1") }
         compose.awaitText("No machines yet")
         compose.onNodeWithText("build-01's host key changed").assertDoesNotExist()
@@ -197,18 +202,25 @@ class MachinesRouteTest {
     }
 
     @Test
-    fun anExpiredRemovalCannotBeUndoneAndDoesNotReturnAfterNavigation() {
+    fun anExpiredRemovalCannotBeUndoneAndDoesNotReturnWhenTheDestinationComesBack() {
         seed()
-        route()
+        // a destination switch takes the route out of composition; its activity-scoped view model stays
+        var shown by mutableStateOf(true)
+        compose.setContent { NgtermTheme { if (shown) MachinesRoute(test.graph) } }
         compose.awaitDescription("Connected")
         compose.onNodeWithContentDescription("More options for build-01").performClick()
         compose.onNodeWithText("Remove").performClick()
         compose.awaitText("Removed build-01")
         compose.mainClock.advanceTimeBy(ROUTE_WAIT_MS)
         gone("Undo")
-        assertNull(runBlocking { test.graph.machines.get("m1") })
-        compose.onNodeWithText("Add machine").performClick()
-        back()
+        val viewModel = ViewModelProvider(compose.activity)[MachinesViewModel::class.java]
+        compose.waitUntil(ROUTE_WAIT_MS) { viewModel.removed.value == null }
+        compose.runOnIdle { shown = false }
+        compose.runOnIdle { shown = true }
+        compose.awaitText("No machines yet")
+        compose.onNodeWithText("Removed build-01").assertDoesNotExist()
         compose.onNodeWithText("Undo").assertDoesNotExist()
+        compose.onNodeWithText("build-01").assertDoesNotExist()
+        assertNull(runBlocking { test.graph.machines.get("m1") })
     }
 }
