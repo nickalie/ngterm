@@ -17,16 +17,15 @@ use std::path::{Path, PathBuf};
 pub struct Unreadable;
 
 /// The contents of an existing config file: `None` when absent (a fresh install), the text when readable,
-/// [`Unreadable`] when it exists but cannot be read (upstream's `readExistingConfig`). A dangling symlink is absent.
+/// [`Unreadable`] when it exists but cannot be read (upstream's `readExistingConfig`). A dangling symlink or a path
+/// whose existence cannot be checked is absent, as upstream's `fileExists` reports.
 ///
 /// # Errors
 ///
 /// [`Unreadable`] when the file exists but cannot be read or is not UTF-8.
 pub fn read_existing(path: &Path) -> Result<Option<String>, Unreadable> {
-    match fs::metadata(path) {
-        Ok(_) => {}
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(Unreadable),
+    if fs::metadata(path).is_err() {
+        return Ok(None);
     }
     let bytes = fs::read(path).map_err(|_| Unreadable)?;
     String::from_utf8(bytes).map(Some).map_err(|_| Unreadable)
@@ -211,6 +210,36 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     use super::*;
+
+    #[test]
+    fn a_path_under_a_regular_file_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        fs::write(&file, "x").unwrap();
+        let path = file.join("settings.json");
+        assert_eq!(read_existing(&path), Ok(None));
+        assert!(write_preserving_symlink("{}", &path).is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "x");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unsearchable_config_parent_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("locked");
+        fs::create_dir(&folder).unwrap();
+        let path = folder.join("settings.json");
+        fs::write(&path, "kept").unwrap();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o000)).unwrap();
+        // root looks up any path: there is nothing to refuse then
+        let searchable = fs::metadata(&path).is_ok();
+        let existing = read_existing(&path);
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
+        if !searchable {
+            assert_eq!(existing, Ok(None));
+        }
+        assert_eq!(fs::read_to_string(&path).unwrap(), "kept");
+    }
 
     #[test]
     fn absent_unreadable_and_readable_files_are_told_apart() {
