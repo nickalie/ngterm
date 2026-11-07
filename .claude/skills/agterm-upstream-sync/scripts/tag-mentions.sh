@@ -5,7 +5,8 @@
 #
 # Classes (first matching rule wins, by path):
 #   generated  catalog.yaml, ui-ids.yaml: gen_catalog.py rewrites them; never edit by hand
-#   bump       the parity *target*: README.md, AGENTS.md, conformance/README.md, .revmux/profile.md's project line
+#   bump       the parity *target*: README.md, AGENTS.md, conformance/README.md, .revmux/profile.md's project line;
+#              a line there that states the build's claim (it says "claim") is `claim` instead
 #   reference  swift_macos.py's PARITY_LEVEL, the macOS reference app's level, which is the catalog's release; its
 #              mirror is the `parity_level` assert in selftests/test_impls.py::test_swift_macos_profile_follows_launch_mode.
 #              Edit both by hand (the selftest file also holds unrelated version fixtures; the script tags only
@@ -64,21 +65,28 @@ mapfile -t hits < <(git grep -nIE "$pattern" -- . ':!docs/plans/' ':!.claude/' |
 # the enclosing `def` of a line, for the one selftest line that mirrors swift_macos.py's level
 enclosing_def() { awk -v n="$2" 'NR <= n && /^(async )?def / { name = $0 } NR == n { print name; exit }' "$1"; }
 
-declare -A seen_bump=()
+declare -A bump_lines=()
 for hit in "${hits[@]}"; do
   file="${hit%%:*}"
+  rest="${hit#*:}"; line="${rest%%:*}"; text="${rest#*:}"
   class="$(classify "$file")"
   if [[ "$file" == conformance/selftests/test_impls.py ]]; then
-    rest="${hit#*:}"; line="${rest%%:*}"
     [[ "$(enclosing_def "$file" "$line")" == *swift_macos_profile* && "$hit" == *parity_level* ]] && class=reference
   fi
+  # a parity-target file also states the claim ("The build claims upstream vX"): that line moves with the claim
+  [[ "$class" == bump && "${text,,}" == *claim* ]] && class=claim
   printf '%-9s %s\n' "$class" "$(cut -c1-200 <<<"$hit")"
-  [[ "$class" == bump ]] && seen_bump["$file"]=1
+  [[ "$class" == bump ]] && bump_lines["$file"]+="${line} "
 done
 
 if [[ "$apply" == 1 ]]; then
-  for file in "${!seen_bump[@]}"; do
-    sed -i -E "s/(v?)${old//./\\.}([^0-9]|$)/\1${new}\2/g" "$file"
+  for file in "${!bump_lines[@]}"; do
+    # only the `bump` lines: a `claim` line in the same file keeps the old release
+    script=""
+    for line in ${bump_lines[$file]}; do
+      script+="${line}s/(v?)${old//./\\.}([^0-9]|\$)/\\1${new}\\2/g;"
+    done
+    sed -i -E "$script" "$file"
     echo "bumped: $file" >&2
   done
 fi
