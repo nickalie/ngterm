@@ -39,6 +39,7 @@ kover {
 
 // Apply identical filters to module reports and the root aggregate. Only generated code is excluded;
 // screens, previews, activities, lambdas and coroutine bodies remain in the denominator.
+// Compose's ComposableSingletons classes hold handwritten lambda bodies, so they must remain included.
 allprojects {
     plugins.withId("org.jetbrains.kotlinx.kover") {
         extensions.configure<KoverProjectExtension> {
@@ -54,7 +55,6 @@ allprojects {
                             "*.BuildConfig",
                             "*.R",
                             "*.R\$*",
-                            "*.ComposableSingletons\$*",
                             "*\$\$serializer",
                         )
                     }

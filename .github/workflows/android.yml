@@ -5,9 +5,10 @@
 # `app`: the toolchain at the build/pins.env pins (scripts/setup-android.sh, whose exports go to the job's
 # environment), the mobile core for arm64-v8a and x86_64 with its Kotlin bindings and then Gradle's `check` (Spotless,
 # detekt, Android Lint, the JVM unit tests and the Roborazzi screenshot tests, which a plain test run verifies against
-# the committed goldens) and the debug APK, all through scripts/build-android.sh; the APK is kept as the
-# `ngterm-android-debug` artifact. Then the core's end-to-end test against a staged ngterm-headless behind an
-# unprivileged sshd (scripts/test-mobile-e2e.sh; with CI set, a missing sshd fails it rather than skipping).
+# the committed goldens, and Kover coverage floors) and the debug APK, all through scripts/build-android.sh; the APK
+# is kept as `ngterm-android-debug` and the coverage reports as `android-coverage`. Then the core's end-to-end test
+# against a staged ngterm-headless behind an unprivileged sshd (scripts/test-mobile-e2e.sh; with CI set, a missing
+# sshd fails it rather than skipping).
 #
 # `emulator`: the instrumented tests (connectedDebugAndroidTest) on the phone and then the tablet AVD
 # setup-android.sh creates (reactivecircus/android-emulator-runner on KVM, which reuses them: force-avd-creation off).
@@ -112,7 +113,7 @@ jobs:
       - name: build and check (Spotless, detekt, Android Lint, unit and screenshot tests, coverage, debug APK)
         run: scripts/build-android.sh check assembleDebug
       - name: upload JVM coverage (HTML and XML)
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v7
         with:
           name: android-coverage

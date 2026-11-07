@@ -686,8 +686,9 @@ bindings from it and runs Gradle; everything it generates stays under `mobile/an
 the debug JVM tests (including Robolectric screenshots), per module and aggregated at the root. Reports are under
 `mobile/android/{app,core}/build/reports/kover/` and `mobile/android/build/reports/kover/`; CI uploads both as
 `android-coverage`. Use the coverage command above for per-class and per-file results, replacing `:app:` with `:core:`
-for the bindings module. Only generated code is excluded; handwritten UI stays in the denominator. The whole-percent
-floors in `mobile/android/build.gradle.kts` only rise as tests are added, toward 90% for each metric.
+for the bindings module. Only generated code is excluded; handwritten UI, including lambda bodies in Compose's
+`ComposableSingletons` classes, stays in the denominator. The whole-percent floors in
+`mobile/android/build.gradle.kts` only rise as tests are added, toward 90% for each metric.
 
 On its first run the app creates an ed25519 key, sealed by the Android Keystore, or imports an OpenSSH or PEM key. It
 shows the key's `authorized_keys` line (Copy, Share) and the command that appends it: add that line to
