@@ -31,6 +31,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.core.app.ActivityOptionsCompat
 import androidx.test.core.app.ApplicationProvider
@@ -86,6 +87,9 @@ class ImportKeyScreenTest {
     }
 
     private fun field(label: String) = compose.onNode(hasText(label) and hasSetTextAction())
+
+    private fun passphraseText(text: String) =
+        SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(text))
 
     private fun pick(input: InputStream) {
         val uri = Uri.parse("content://keys/private-key")
@@ -226,12 +230,14 @@ class ImportKeyScreenTest {
         }
         field("Private key").performTextReplacement("secret key")
         field("Passphrase").performScrollTo().performTextReplacement("secret phrase")
+        field("Passphrase").assert(passphraseText("•".repeat("secret phrase".length)))
         compose.runOnIdle {
             assertTrue(compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
         }
         restoration.emulateSavedInstanceStateRestore()
         compose.onNodeWithText("secret key").assertDoesNotExist()
-        compose.onNodeWithText("secret phrase").assertDoesNotExist()
+        // The field is masked, so its semantic text is bullets: check the value it holds, not the secret's text.
+        field("Passphrase").assert(passphraseText(""))
         compose.runOnIdle { visible.value = false }
         compose.runOnIdle {
             assertFalse(compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
