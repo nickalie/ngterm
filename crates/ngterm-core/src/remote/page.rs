@@ -615,6 +615,7 @@ impl Core {
             points: slot.points,
             background_color: page.background_color.clone(),
             follow: false,
+            clicked: overlay.clicked,
         };
         let size = page_size(&opening);
         let sent = OverlaySize {

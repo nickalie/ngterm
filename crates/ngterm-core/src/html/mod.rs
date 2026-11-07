@@ -420,6 +420,10 @@ pub struct HtmlOverlay {
     /// The page is a page companion's row (upstream's `content == .page`): it never hides, so its strip offers no
     /// Hide, and its Close closes the row.
     pub row: bool,
+    /// A terminal click opened the page (upstream's `clicked`), which [`crate::Core::release_hidden_clicked_page`]
+    /// lets a later click replace while it is hidden. Local: presentation frames do not carry it, and a snapshot does
+    /// not write it.
+    pub clicked: bool,
 }
 
 impl HtmlOverlay {
@@ -452,6 +456,7 @@ impl HtmlOverlay {
             reload_revision: 0,
             reload_target: HtmlReloadTarget::Original,
             row: false,
+            clicked: false,
         }
     }
 

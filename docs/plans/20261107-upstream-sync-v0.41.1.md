@@ -325,14 +325,14 @@ create `crates/ngterm-core/src/commands/tests/clicked_page.rs`.
 **Conformance:** new `tests/protocol/test_overlay.py::test_a_socket_page_is_never_marked_clicked`
 (covers `field:tree.session.htmlOverlays`, `session.overlay.hide`).
 
-- [ ] `HtmlOverlay.clicked`, set only by the five click paths (web link, image, Markdown, text, document), never by
+- [x] `HtmlOverlay.clicked`, set only by the five click paths (web link, image, Markdown, text, document), never by
   the dispatcher nor carried in presentation frames; read back `clicked: true`, omitted otherwise.
-- [ ] `release_hidden_clicked_page(session)`: close the session-wide page only when the session is overlay-hidden,
+- [x] `release_hidden_clicked_page(session)`: close the session-wide page only when the session is overlay-hidden,
   its page is clicked and `page_belongs_remote` is false; the released page's outcome is dismissed. Each click path
   releases only after every check that could still refuse (probe, HUD/zoom recheck, a usable saved store for a
   persistent web page; find ngterm's equivalent of upstream's `persistentStoreFailure`) and rechecks hidden
   before opening. A shown page, a hidden program or a socket page keep today's fallback.
-- [ ] write tests: the AppStoreClickedPageTests cases incl. the presenter case on the live fakes; projection
+- [x] write tests: the AppStoreClickedPageTests cases incl. the presenter case on the live fakes; projection
   (`true` once, never `false`, old node decodes None); gpui state per file kind and the refusal cases; the
   conformance test above.
 

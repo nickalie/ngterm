@@ -1386,3 +1386,100 @@ fn shell_metacharacters_in_the_directory_stay_data() {
     assert_eq!(text_page(&state, session), Some((file, Some(1))));
     assert!(!directory.path().join("pwned").exists());
 }
+
+/// The page in `session`'s session-wide slot, with whether a click opened it and whether its slot is hidden.
+fn session_page(state: &AppState, session: Uuid) -> Option<(ngterm_core::html::HtmlSource, bool, bool)> {
+    let found = state.core.library().store_for_session(session)?.session(session)?;
+    let page = found.overlay.page()?;
+    Some((page.source.clone(), page.clicked, found.overlay_hidden(None)))
+}
+
+/// What the Hide key does to the session-wide page.
+fn hide_session_page(state: &mut AppState, session: Uuid) {
+    state
+        .core
+        .library_mut()
+        .store_for_session_mut(session)
+        .unwrap()
+        .set_overlays_hidden(session, None, true)
+        .unwrap();
+}
+
+/// Upstream's `testEachClickedFileKindReplacesAHiddenClickedPage`, the clicked HTML document beside them: each click
+/// replaces the hidden page the click before it opened and shows its own.
+#[test]
+fn each_clicked_file_kind_replaces_a_hidden_clicked_page() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let dir = directory.path();
+    std::fs::write(dir.join("doc.md"), "# Doc\n").unwrap();
+    std::fs::write(dir.join("pr.html"), "<title>pr</title>").unwrap();
+    image::RgbaImage::from_pixel(4, 2, image::Rgba([200, 40, 40, 255]))
+        .save(dir.join("shot.png"))
+        .unwrap();
+    let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    click(&mut state, &main_loop, "./doc.md", session, "T");
+    let opened = session_page(&state, session).unwrap();
+    assert_eq!((opened.1, opened.2), (true, false), "a click marks its page");
+    let kinds = [
+        (
+            "./main.go:3",
+            ngterm_core::html::HtmlSource::Text {
+                path: path("main.go"),
+                line: Some(3),
+            },
+        ),
+        (
+            "./shot.png",
+            ngterm_core::html::HtmlSource::Image { path: path("shot.png") },
+        ),
+        (
+            "./pr.html",
+            ngterm_core::html::HtmlSource::Document { path: path("pr.html") },
+        ),
+        (
+            "./doc.md",
+            ngterm_core::html::HtmlSource::Markdown { path: path("doc.md") },
+        ),
+    ];
+    for (raw, source) in kinds {
+        hide_session_page(&mut state, session);
+        click(&mut state, &main_loop, raw, session, "T");
+        assert_eq!(session_page(&state, session), Some((source, true, false)), "{raw}");
+    }
+    assert!(state.frontend.reveals.is_empty());
+}
+
+/// Upstream's `testAClickedFileThatCannotOpenLeavesTheHiddenClickedPage`: a missing or binary file is revealed, and the
+/// hidden page stays hidden in its slot.
+#[test]
+fn a_clicked_file_that_cannot_open_leaves_the_hidden_clicked_page() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    click(&mut state, &main_loop, "./main.go", session, "T");
+    let kept = state
+        .core
+        .library()
+        .store_for_session(session)
+        .unwrap()
+        .session(session)
+        .unwrap()
+        .overlay
+        .page()
+        .unwrap()
+        .id;
+    hide_session_page(&mut state, session);
+    let missing = directory.path().join("missing.md");
+    click(&mut state, &main_loop, &missing.to_string_lossy(), session, "T");
+    let binary = directory.path().join("blob.txt");
+    std::fs::write(&binary, [0x00, 0x01]).unwrap();
+    click(&mut state, &main_loop, "./blob.txt", session, "T");
+    assert_eq!(state.frontend.reveals, [missing, binary]);
+    let found = state
+        .core
+        .library()
+        .store_for_session(session)
+        .unwrap()
+        .session(session)
+        .unwrap();
+    assert_eq!(found.overlay.page().map(|page| page.id), Some(kept));
+    assert!(found.overlay_hidden(None));
+}

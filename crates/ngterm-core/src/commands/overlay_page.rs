@@ -94,6 +94,8 @@ pub(crate) struct PageOpening {
     pub points: OverlayPointSize,
     pub background_color: Option<String>,
     pub follow: bool,
+    /// A terminal click opens the page ([`HtmlOverlay::clicked`]); the dispatcher never sets it.
+    pub clicked: bool,
 }
 
 impl PageOpening {
@@ -119,6 +121,7 @@ impl PageOpening {
             points,
             background_color: args.color.clone(),
             follow: set(args.follow),
+            clicked: false,
         }
     }
 }
@@ -147,7 +150,10 @@ fn open_checked(
     } else {
         PANE_ALREADY_OPEN
     };
-    let page = HtmlOverlay::new(opening.source.clone(), opening.flags);
+    let page = HtmlOverlay {
+        clicked: opening.clicked,
+        ..HtmlOverlay::new(opening.source.clone(), opening.flags)
+    };
     let page_id = page.id;
     let refusal = match crate::remote::open_remote_page(core, resolved.window, resolved.session, &page, &opening) {
         RemotePageOpen::Local => None,
@@ -667,17 +673,75 @@ impl Core {
         true
     }
 
-    /// Opens a local document after an off-main probe; slot eligibility is checked again here.
+    /// Closes the session-wide page a terminal click opened while it is hidden by hand (upstream's
+    /// `releaseHiddenClickedPage`), so the next click page can take the slot; the page is dismissed. Any other occupant,
+    /// a shown page, one only out of sight under a newer pane overlay, and a slot the placement rule hands to the
+    /// presenting machine are left alone, and the answer is false. A click path calls it after every check that could
+    /// still refuse its own open, so a refused click never costs the old page.
+    pub fn release_hidden_clicked_page(&mut self, session: Uuid) -> bool {
+        let Some(page) = self
+            .library()
+            .store_for_session(session)
+            .and_then(|store| store.session(session))
+            .filter(|found| found.overlay_hidden(None))
+            .and_then(|found| found.overlay.page())
+            .filter(|page| page.clicked)
+            .map(|page| page.id)
+        else {
+            return false;
+        };
+        if self.page_belongs_remote(session, None) {
+            return false;
+        }
+        let closed = self
+            .library_mut()
+            .store_for_session_mut(session)
+            .is_some_and(|store| store.close_overlay(session));
+        if closed {
+            self.pages.outcomes.dismiss(page);
+        }
+        closed
+    }
+
+    /// Releases a hidden clicked page for the click page about to open in `session` (upstream's
+    /// `ControlServer.releaseHiddenClickedPage`), only once nothing this machine checks could still refuse that open:
+    /// web views that can run, for a `persistent` page a usable saved store, and for a picture a probe that read it,
+    /// which `image` then carries on to the open.
+    fn release_for_click(
+        &mut self,
+        session: Uuid,
+        persistent: bool,
+        source: &HtmlSource,
+        image: &mut Option<crate::html::image_page::ImageData>,
+    ) {
+        let Some(host) = self.pages.host.as_ref() else {
+            return;
+        };
+        if host.web_views_unavailable().is_some() || (persistent && host.persistent_store_failure().is_some()) {
+            return;
+        }
+        if let (HtmlSource::Image { path }, None) = (source, image.as_ref()) {
+            let Ok(probe) = host.probe_image(path) else {
+                return;
+            };
+            *image = Some(probe);
+        }
+        self.release_hidden_clicked_page(session);
+    }
+
+    /// Opens a local document a terminal click named after an off-main probe; slot eligibility is checked again here.
+    /// The page is marked clicked, and replaces a hidden page an earlier click opened once nothing else can refuse it.
     pub fn open_document_link(
         &mut self,
         source: HtmlSource,
         session: Uuid,
         size_percent: Option<i64>,
-        image: Option<crate::html::image_page::ImageData>,
+        mut image: Option<crate::html::image_page::ImageData>,
     ) -> bool {
         if !self.can_show_link_overlay(session) {
             return false;
         }
+        self.release_for_click(session, false, &source, &mut image);
         let opening = PageOpening {
             source,
             flags: HtmlPageFlags::default(),
@@ -686,17 +750,21 @@ impl Core {
             points: OverlayPointSize::default(),
             background_color: None,
             follow: false,
+            clicked: true,
         };
         open_checked(self, Some(&uuid_string(session)), None, opening, image, true).is_ok()
     }
 
-    /// Opens a clicked web link as a browsing overlay without selecting its session; false uses the browser.
+    /// Opens a clicked web link as a browsing overlay without selecting its session; false uses the browser. The page
+    /// is marked clicked, and replaces a hidden page an earlier click opened once the saved store is known usable.
     pub fn open_link_overlay(&mut self, url: Url, session: Uuid, size_percent: Option<i64>) -> bool {
         if !self.can_show_link_overlay(session) {
             return false;
         }
+        let source = HtmlSource::Url(url);
+        self.release_for_click(session, true, &source, &mut None);
         let opening = PageOpening {
-            source: HtmlSource::Url(url),
+            source,
             flags: HtmlPageFlags {
                 navigation: true,
                 javascript: true,
@@ -709,6 +777,7 @@ impl Core {
             points: OverlayPointSize::default(),
             background_color: None,
             follow: false,
+            clicked: true,
         };
         open(self, Some(&uuid_string(session)), None, opening).is_ok()
     }

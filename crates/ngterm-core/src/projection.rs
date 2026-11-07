@@ -290,6 +290,7 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
         hidden: None,
         remote: None,
         replica: page.replica_of.map(|_| true),
+        clicked: page.clicked.then_some(true),
         parked: None,
     }
 }

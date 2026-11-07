@@ -1187,6 +1187,26 @@ def test_a_hidden_page_reads_back_hidden(ctl):
     _closed(ctl, sid)
 
 
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.overlay.open", "session.overlay.hide", "field:tree.session.htmlOverlays")
+def test_a_socket_page_is_never_marked_clicked(ctl):
+    """Only a terminal click marks its page `clicked`; a page the socket opened never reads back the marker, hidden or
+    shown, and a hidden one keeps its slot against the next socket open."""
+    sid = _new(ctl)
+    _, title, page_id = _open_page(ctl, sid)
+    (page,) = _loaded(ctl, sid, title)["htmlOverlays"]
+    assert_absent(page, "clicked")
+    _left(ctl, "session.overlay.hide", sid, "hidden")
+    (page,) = _node(ctl, sid)["htmlOverlays"]
+    assert page["hidden"] is True and page["id"] == page_id
+    assert_absent(page, "clicked")
+    other, _ = _page(ctl)
+    assert_error(ctl.request("session.overlay.open", sid, html=str(other)), "overlay hidden")
+    (page,) = _node(ctl, sid)["htmlOverlays"]
+    assert page["id"] == page_id and page["hidden"] is True
+    _closed(ctl, sid)
+
+
 # -- a pane overlay over a session-wide one
 
 

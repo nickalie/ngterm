@@ -480,6 +480,10 @@ pub struct ControlHtmlOverlayNode {
     /// `true` for a page shown here for the machine that opened it; absent otherwise.
     #[serde(default)]
     pub replica: Option<bool>,
+    /// `true` for a page a terminal click opened; absent otherwise. It names the origin only: whether a click replaces
+    /// the page is the core's call, and `hidden` also covers states it leaves alone.
+    #[serde(default)]
+    pub clicked: Option<bool>,
     /// `true` for a `remote` page no presenter shows now, kept for the next one (this build's addition); absent
     /// otherwise.
     #[serde(default)]
@@ -833,6 +837,8 @@ mod tests {
             serde_json::from_value(json!({"state": "loaded", "javascript": true})).unwrap();
         assert!(page.javascript && !page.chromeless && !page.persistent && !page.browse);
         assert_eq!(page.hidden, None, "an older server sends no hidden flag");
+        // upstream's `aPageNodeFromAnOlderServerDecodesAsNotBrowsing`
+        assert_eq!(page.clicked, None, "an older server sends no clicked flag");
         // upstream's `aSessionNodeFromAnOlderServerDecodesWithNoHiddenOverlays`
         let session: ControlSessionNode = serde_json::from_value(json!({"id": "x", "name": "n", "cwd": "/",
             "active": true, "split": false, "overlay": true, "scratch": false, "flagged": false}))
