@@ -1,5 +1,5 @@
 use super::*;
-use crate::tests::{TEST_KEY, installation, keyed};
+use crate::tests::{HttpFixture, TEST_KEY, installation, keyed};
 #[cfg(target_os = "linux")]
 use crate::tests::{metadata, tree};
 
@@ -179,55 +179,6 @@ fn prepare_refuses_stale_or_invalid_installed_identity_and_cleans_its_stage() {
     assert_eq!(fs::read_dir(fixture.path()).unwrap().count(), 1);
 }
 
-struct HttpFixture {
-    url: String,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl HttpFixture {
-    fn new(status: &str, body: Vec<u8>, declared_length: usize) -> Self {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let url = format!("http://{}/asset", listener.local_addr().unwrap());
-        let headers = format!("HTTP/1.1 {status}\r\nContent-Length: {declared_length}\r\nConnection: close\r\n\r\n");
-        let thread = std::thread::spawn(move || {
-            use std::io::BufRead as _;
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            let mut stream = loop {
-                match listener.accept() {
-                    Ok((stream, _)) => break stream,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(std::time::Instant::now() < deadline, "no download request arrived");
-                        std::thread::yield_now();
-                    }
-                    Err(error) => panic!("accept: {error}"),
-                }
-            };
-            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            let mut reader = std::io::BufReader::new(&mut stream);
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                    break;
-                }
-            }
-            let _ = stream
-                .write_all(headers.as_bytes())
-                .and_then(|()| stream.write_all(&body));
-        });
-        Self {
-            url,
-            thread: Some(thread),
-        }
-    }
-}
-
-impl Drop for HttpFixture {
-    fn drop(&mut self) {
-        self.thread.take().unwrap().join().unwrap();
-    }
-}
-
 fn http_agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(5)))
@@ -239,7 +190,7 @@ fn http_agent() -> ureq::Agent {
 fn successful_download_writes_exact_bytes_and_reports_monotonic_progress() {
     let body: Vec<_> = (0_u8..=255).cycle().take(50_000).collect();
     let expected = "9d3550b2e0ae28ea766fd775454403cd4888c27509cb10d1be190f89b3f1decd";
-    let server = HttpFixture::new("200 OK", body.clone(), body.len());
+    let server = HttpFixture::new("200 OK", &body, body.len());
     let fixture = tempfile::tempdir().unwrap();
     let target = fixture.path().join("download");
     let mut release = local_release();
@@ -286,7 +237,7 @@ fn transport_errors_preserve_their_exact_refusal_messages() {
         ),
         (3, "00".repeat(32), true, "Update download was cancelled."),
     ] {
-        let server = HttpFixture::new("200 OK", b"abc".to_vec(), 3);
+        let server = HttpFixture::new("200 OK", b"abc", 3);
         let mut release = local_release();
         release.url.clone_from(&server.url);
         release.size = size;
@@ -311,7 +262,7 @@ fn http_status_truncation_and_destination_errors_are_propagated() {
     let target = fixture.path().join("asset");
     let mut release = local_release();
     {
-        let server = HttpFixture::new("404 Not Found", vec![], 0);
+        let server = HttpFixture::new("404 Not Found", &[], 0);
         release.url.clone_from(&server.url);
         assert!(matches!(
             download(&http_agent(), &release, &target, "", &mut |_, _| true),
@@ -320,7 +271,7 @@ fn http_status_truncation_and_destination_errors_are_propagated() {
         assert!(!target.exists());
     }
     {
-        let server = HttpFixture::new("200 OK", vec![], 3);
+        let server = HttpFixture::new("200 OK", &[], 3);
         release.url.clone_from(&server.url);
         assert!(matches!(
             download(&http_agent(), &release, &target, "", &mut |_, _| true),
@@ -328,7 +279,7 @@ fn http_status_truncation_and_destination_errors_are_propagated() {
         ));
     }
     {
-        let server = HttpFixture::new("200 OK", b"abc".to_vec(), 3);
+        let server = HttpFixture::new("200 OK", b"abc", 3);
         release.url.clone_from(&server.url);
         assert!(matches!(
             download(&http_agent(), &release, fixture.path(), "", &mut |_, _| true),

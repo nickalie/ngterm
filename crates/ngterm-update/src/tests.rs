@@ -580,15 +580,24 @@ fn failed_install_rolls_back_and_reopens_the_previous_version() {
     );
 }
 
-#[test]
-fn transport_rejects_wrong_hash_and_truncated_downloads_before_extracting() {
-    const BODY: &[u8] = b"abc";
-    // HTTP is confined to this fixture; production's agent enforces HTTPS, including redirects.
-    fn response(body: &'static [u8]) -> (String, std::thread::JoinHandle<()>) {
+/// Answers one request on a local socket with `status`, a `Content-Length` of `declared_length` and `body`. HTTP is
+/// confined to this fixture; production's agent enforces HTTPS, including redirects.
+pub(super) struct HttpFixture {
+    pub url: String,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HttpFixture {
+    pub(super) fn new(status: &str, body: &[u8], declared_length: usize) -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        // Nonblocking only so a request that never comes fails the test instead of hanging it.
+        listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}/asset", listener.local_addr().unwrap());
+        let mut response =
+            format!("HTTP/1.1 {status}\r\nContent-Length: {declared_length}\r\nConnection: close\r\n\r\n").into_bytes();
+        response.extend_from_slice(body);
         let thread = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_before_deadline(&listener);
             let mut request = std::io::BufReader::new(&mut stream);
             loop {
                 let mut line = String::new();
@@ -596,16 +605,50 @@ fn transport_rejects_wrong_hash_and_truncated_downloads_before_extracting() {
                     break;
                 }
             }
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            )
-            .unwrap();
-            stream.write_all(body).unwrap();
+            // The client may hang up first, once it refuses an oversized body.
+            let _ = stream.write_all(&response);
         });
-        (url, thread)
+        Self {
+            url,
+            thread: Some(thread),
+        }
     }
+}
+
+fn accept_before_deadline(listener: &std::net::TcpListener) -> std::net::TcpStream {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                // macOS and Windows hand the listener's nonblocking mode on to the accepted socket.
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(std::time::Instant::now() < deadline, "no download request arrived");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(error) => panic!("accept: {error}"),
+        }
+    }
+}
+
+impl Drop for HttpFixture {
+    fn drop(&mut self) {
+        if let Err(panic) = self.thread.take().unwrap().join()
+            && !std::thread::panicking()
+        {
+            std::panic::resume_unwind(panic);
+        }
+    }
+}
+
+#[test]
+fn transport_rejects_wrong_hash_and_truncated_downloads_before_extracting() {
+    const BODY: &[u8] = b"abc";
     let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     let dir = tempfile::tempdir().unwrap();
     for (hash, size, success, cancel) in [
@@ -615,11 +658,11 @@ fn transport_rejects_wrong_hash_and_truncated_downloads_before_extracting() {
         (&"00".repeat(32), 3, false, false),
         (expected, 3, false, true),
     ] {
-        let (url, thread) = response(BODY);
+        let server = HttpFixture::new("200 OK", BODY, BODY.len());
         let release = Release {
             version: Version::parse("0.2.0").unwrap(),
             asset: "asset".into(),
-            url,
+            url: server.url.clone(),
             checksum_url: String::new(),
             signature_url: None,
             size,
@@ -639,7 +682,6 @@ fn transport_rejects_wrong_hash_and_truncated_downloads_before_extracting() {
             .is_ok(),
             success
         );
-        thread.join().unwrap();
     }
 }
 
@@ -850,7 +892,10 @@ fn detect_recognizes_only_images_whose_mount_contains_this_executable() {
             _ => {}
         }
         let result = command.output().unwrap();
-        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stdout));
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        assert!(result.status.success(), "{stdout}");
+        // A filter that stops matching runs nothing and still exits successfully.
+        assert!(stdout.contains("test result: ok. 1 passed;"), "{stdout}");
     }
 }
 

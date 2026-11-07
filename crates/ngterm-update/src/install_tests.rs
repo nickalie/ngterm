@@ -124,14 +124,13 @@ fn invalid_archives_and_existing_unpack_directories_are_refused() {
     fs::write(&asset, "not gzip").unwrap();
     let install = installation(fixture.path());
     let version = Version::parse("0.2.0").unwrap();
-    assert!(matches!(
-        extract(&install, &asset, work.path(), &version),
-        Err(Error::Io(_))
-    ));
-    assert!(matches!(
-        extract(&install, &asset, work.path(), &version),
-        Err(Error::Io(_))
-    ));
+    let refusal = || match extract(&install, &asset, work.path(), &version).unwrap_err() {
+        Error::Io(error) => error.kind(),
+        other => panic!("expected an I/O error, got {other:?}"),
+    };
+    assert_ne!(refusal(), std::io::ErrorKind::AlreadyExists);
+    // The first attempt left its unpack directory behind; a stale one is never reused.
+    assert_eq!(refusal(), std::io::ErrorKind::AlreadyExists);
 }
 
 #[test]
@@ -284,9 +283,35 @@ fn failed_ownership_transfer_stops_the_helper_and_removes_its_stage() {
         prepared.launch(&fixture.path().join("error"), false, &[]),
         Err(Error::Io(_))
     ));
+    #[cfg(target_os = "linux")]
+    assert_no_detached_child();
     assert!(!stage.exists());
     assert!(root.exists());
     assert!(!fixture.path().join("error").exists());
+}
+
+/// Fails while this process has a child leading its own process group, running or not yet reaped: only `launch`
+/// detaches its children, and its other callers in this binary fail before spawning or run in a child process.
+#[cfg(target_os = "linux")]
+fn assert_no_detached_child() {
+    let this = std::process::id().to_string();
+    for entry in fs::read_dir("/proc").unwrap().flatten() {
+        // A process that exits during the scan has no stat left.
+        let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
+            continue;
+        };
+        let Some((head, rest)) = stat.rsplit_once(") ") else {
+            continue;
+        };
+        // After the command name: state, parent and process group.
+        let mut fields = rest.split(' ').skip(1);
+        let (parent_pid, group) = (fields.next(), fields.next());
+        let pid = head.split_once(" (").map(|(pid, _)| pid);
+        assert!(
+            parent_pid != Some(this.as_str()) || group != pid,
+            "the helper was left behind: {stat}"
+        );
+    }
 }
 
 #[test]
