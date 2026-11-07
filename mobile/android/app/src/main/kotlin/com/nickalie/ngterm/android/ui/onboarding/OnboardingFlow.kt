@@ -44,6 +44,7 @@ fun OnboardingFlow(
                     WelcomeScreen(
                         busy = current.busy,
                         failure = current.failure,
+                        importing = current.importing,
                         onCreate = actions.onCreate,
                         onImport = actions.onStartImport,
                     )

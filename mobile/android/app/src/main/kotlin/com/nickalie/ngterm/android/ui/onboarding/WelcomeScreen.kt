@@ -34,7 +34,7 @@ internal val OnboardingWidth = 520.dp
 
 /**
  * The first run's first screen: the app has no key yet. Create one (the main action) or import one; [busy] while a
- * key is being made, [failure] when making one failed.
+ * key is being made, [failure] when making one failed, [importing] while an import continues after Back.
  */
 @Composable
 fun WelcomeScreen(
@@ -43,6 +43,7 @@ fun WelcomeScreen(
     onCreate: () -> Unit,
     onImport: () -> Unit,
     modifier: Modifier = Modifier,
+    importing: Boolean = false,
 ) {
     val spacing = NgtermTheme.spacing
     ScreenFrame(modifier = modifier, maxWidth = OnboardingWidth) {
@@ -78,6 +79,9 @@ fun WelcomeScreen(
         if (failure != null) {
             Problem(stringResource(R.string.welcome_create_failed, failure))
         }
+        if (importing) {
+            ImportProgress()
+        }
         Column(
             modifier = Modifier.padding(top = spacing.sm),
             verticalArrangement = Arrangement.spacedBy(spacing.sm),
@@ -87,11 +91,29 @@ fun WelcomeScreen(
                 busy = busy,
                 onClick = onCreate,
                 modifier = Modifier.fillMaxWidth(),
+                enabled = !importing,
             )
             OutlinedButton(onClick = onImport, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.welcome_import))
             }
         }
+    }
+}
+
+/** A key import keeps running after Back, so Welcome explains why Create is unavailable. */
+@Composable
+private fun ImportProgress(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        horizontalArrangement = Arrangement.spacedBy(NgtermTheme.spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+        Text(
+            stringResource(R.string.welcome_importing),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -102,8 +124,9 @@ internal fun BusyButton(
     busy: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
-    Button(onClick = { if (!busy) onClick() }, modifier = modifier) {
+    Button(onClick = { if (!busy) onClick() }, modifier = modifier, enabled = enabled) {
         if (busy) {
             CircularProgressIndicator(
                 modifier = Modifier.size(18.dp),

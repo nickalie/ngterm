@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import org.json.JSONException
 import java.io.IOException
 import java.security.GeneralSecurityException
 
@@ -48,10 +49,11 @@ sealed interface OnboardingStep {
         val reason: String,
     ) : OnboardingStep
 
-    /** No key yet: make one or bring one. [failure] says why the last attempt to make one failed. */
+    /** No key yet: make one or bring one. [importing] continues through Back; [failure] is a creation failure. */
     data class Welcome(
         val busy: Boolean = false,
         val failure: String? = null,
+        val importing: Boolean = false,
     ) : OnboardingStep
 
     /** The user is importing a key. */
@@ -92,6 +94,8 @@ class OnboardingViewModel(
                     if (keys.keys.first().isEmpty()) OnboardingStep.Welcome() else OnboardingStep.Done
                 } catch (error: IOException) {
                     OnboardingStep.ReadFailed(error.describe())
+                } catch (error: JSONException) {
+                    OnboardingStep.ReadFailed(error.describe())
                 }
         }
     }
@@ -129,7 +133,7 @@ class OnboardingViewModel(
 
     /** Back from the import screen to the welcome. */
     fun back() {
-        if (current.value is OnboardingStep.Import) current.value = OnboardingStep.Welcome()
+        if (current.value is OnboardingStep.Import) current.value = OnboardingStep.Welcome(importing = importing)
     }
 
     /** The chosen file could not be read. */
@@ -167,7 +171,11 @@ class OnboardingViewModel(
                     importing = false
                 }
             // the key is shown wherever the user is; a problem only on the import screen it belongs to
-            if (done is OnboardingStep.KeyReady || current.value is OnboardingStep.Import) current.value = done
+            if (done is OnboardingStep.KeyReady || current.value is OnboardingStep.Import) {
+                current.value = done
+            } else if (current.value is OnboardingStep.Welcome) {
+                current.value = OnboardingStep.Welcome()
+            }
         }
     }
 
