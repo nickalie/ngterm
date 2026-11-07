@@ -658,4 +658,263 @@ mod tests {
         peer.write_all(b"out").unwrap();
         assert_eq!(read.recv_timeout(Duration::from_secs(5)).unwrap(), b"out");
     }
+
+    fn assert_error(err: &io::Error, kind: io::ErrorKind, message: &str) {
+        assert_eq!(err.kind(), kind);
+        assert_eq!(err.to_string(), message);
+    }
+
+    #[test]
+    fn a_handoff_drains_output_despite_read_pause_and_rolls_back_if_input_stalls() {
+        let pause = crate::ReadPause::new();
+        pause.pause();
+        let (handle, mut peer, read, exit) = actor_with(false, pause);
+        let input = vec![b'x'; 4 * 1024 * 1024];
+        handle.write_input(&input).unwrap();
+        peer.write_all(b"query").unwrap();
+        assert_error(
+            &handle.begin_handoff(Duration::from_secs(5)).unwrap_err(),
+            io::ErrorKind::TimedOut,
+            "timed out draining PTY writes for a handoff",
+        );
+        assert_eq!(read.recv_timeout(Duration::from_secs(5)).unwrap(), b"query");
+        assert_eq!(read_exactly(&mut peer, input.len()), input);
+        assert_eq!(read_exactly(&mut peer, 5), b"reply");
+        handle.write_input(b"resumed").unwrap();
+        assert_eq!(read_exactly(&mut peer, 7), b"resumed");
+        handle.shutdown();
+        assert_eq!(exit.recv_timeout(Duration::from_secs(5)).unwrap(), ExitReason::Shutdown);
+    }
+
+    #[test]
+    fn a_peer_ending_its_output_during_the_handoff_drain_reports_broken_pipe() {
+        let pause = crate::ReadPause::new();
+        pause.pause();
+        let (handle, mut peer, _read, exit) = actor_with(false, pause);
+        let input = vec![b'x'; 4 * 1024 * 1024];
+        handle.write_input(&input).unwrap();
+        // keep the peer's input open, so it can still take the writes after rollback
+        peer.shutdown(std::net::Shutdown::Write).unwrap();
+        assert_error(
+            &handle.begin_handoff(Duration::from_secs(5)).unwrap_err(),
+            io::ErrorKind::BrokenPipe,
+            "the PTY closed while its writes drained for a handoff",
+        );
+        assert_eq!(read_exactly(&mut peer, input.len()), input);
+        handle.write_input(b"after rollback").unwrap();
+        assert_eq!(read_exactly(&mut peer, 14), b"after rollback");
+        handle.shutdown();
+        assert_eq!(exit.recv_timeout(Duration::from_secs(5)).unwrap(), ExitReason::Shutdown);
+    }
+
+    #[test]
+    fn a_read_failure_reports_failed_instead_of_eof() {
+        // a write-only descriptor polls as ready, but cannot supply the actor's reads
+        let file = std::fs::OpenOptions::new().write(true).open("/dev/null").unwrap();
+        let (exits, exit) = mpsc::channel();
+        let mut config = ActorConfig::new(
+            "read-failure",
+            Master::from_fd(file.into()),
+            Box::new(|_| panic!("a failed read delivered output")),
+        );
+        config.on_exit = Some(Box::new(move |reason| {
+            let _ = exits.send(reason);
+        }));
+        let handle = Actor::spawn(config).unwrap();
+        assert_eq!(exit.recv_timeout(Duration::from_secs(5)).unwrap(), ExitReason::Failed);
+        assert_eq!(handle.write_input(b"after failure"), Err(WriteError::Closed));
+        handle.shutdown();
+    }
+
+    #[test]
+    fn a_write_failure_drops_the_queue_and_reports_failed() {
+        let file = std::fs::File::open("/dev/null").unwrap();
+        let pause = crate::ReadPause::new();
+        pause.pause();
+        let (exits, exit) = mpsc::channel();
+        let mut config = ActorConfig::new("write-failure", Master::from_fd(file.into()), Box::new(|_| Vec::new()));
+        config.read_pause = pause;
+        config.on_exit = Some(Box::new(move |reason| {
+            let _ = exits.send(reason);
+        }));
+        let handle = Actor::spawn(config).unwrap();
+        handle.write_input(b"cannot write").unwrap();
+        assert_eq!(exit.recv_timeout(Duration::from_secs(5)).unwrap(), ExitReason::Failed);
+        assert_eq!(handle.queued(), 0);
+        assert_eq!(handle.write_input(b"after failure"), Err(WriteError::Closed));
+        handle.shutdown();
+    }
+
+    #[test]
+    fn a_running_actor_refuses_release_and_keeps_serving_input() {
+        let (handle, mut peer, _read, exit) = actor(false);
+        assert_error(
+            &handle.release_after_commit().unwrap_err(),
+            io::ErrorKind::Other,
+            "the PTY actor must be quiesced before its release",
+        );
+        assert_error(
+            &handle.duplicate_for_handoff().unwrap_err(),
+            io::ErrorKind::Other,
+            "the PTY actor must be quiesced before its handoff duplicate",
+        );
+        assert_eq!(handle.foreground_process_group(), None);
+        handle.write_input(b"still running").unwrap();
+        assert_eq!(read_exactly(&mut peer, 13), b"still running");
+        handle.shutdown();
+        assert_eq!(exit.recv_timeout(Duration::from_secs(5)).unwrap(), ExitReason::Shutdown);
+    }
+
+    #[test]
+    fn a_stopped_actor_refuses_control_and_resize_requests() {
+        let (handle, _peer, _read, exit) = actor(false);
+        handle.shutdown();
+        assert_eq!(exit.recv_timeout(Duration::from_secs(5)).unwrap(), ExitReason::Shutdown);
+        assert_error(
+            &handle.begin_handoff(Duration::from_secs(1)).unwrap_err(),
+            io::ErrorKind::BrokenPipe,
+            "the PTY actor stopped",
+        );
+        assert_error(
+            &handle.try_resize(Size::cells(24, 80)).unwrap_err(),
+            io::ErrorKind::BrokenPipe,
+            "the PTY actor stopped",
+        );
+        // the thread drops its request receiver just after notifying on_exit
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !matches!(handle.rollback_handoff(), Err(err) if err.kind() == io::ErrorKind::BrokenPipe) {
+            assert!(Instant::now() < deadline, "the stopped actor still accepts requests");
+            std::thread::yield_now();
+        }
+        assert_error(
+            &handle.duplicate_for_handoff().unwrap_err(),
+            io::ErrorKind::BrokenPipe,
+            "the PTY actor stopped",
+        );
+        assert_eq!(handle.foreground_process_group(), None);
+        handle.resize(Size::cells(24, 80));
+        handle.child_exited();
+        handle.deliver_held();
+        handle.write_reply(b"discarded");
+        assert_eq!(handle.queued(), 0);
+    }
+
+    #[test]
+    fn a_blocked_callback_times_out_control_and_handoff_then_rolls_back() {
+        let (ours, mut peer) = UnixStream::pair().unwrap();
+        let (entered, entering) = mpsc::channel();
+        let (resume, resumed) = mpsc::channel();
+        let (exits, exit) = mpsc::channel();
+        let mut config = ActorConfig::new(
+            "blocked-callback",
+            Master::from_fd(OwnedFd::from(ours)),
+            Box::new(move |_| {
+                entered.send(()).unwrap();
+                resumed.recv_timeout(Duration::from_secs(10)).unwrap();
+                Vec::new()
+            }),
+        );
+        config.on_exit = Some(Box::new(move |reason| {
+            let _ = exits.send(reason);
+        }));
+        let handle = Actor::spawn(config).unwrap();
+        peer.write_all(b"block").unwrap();
+        entering.recv_timeout(Duration::from_secs(5)).unwrap();
+        let request_error = handle.duplicate_for_handoff().unwrap_err();
+        let handoff_error = handle.begin_handoff(Duration::from_millis(20)).unwrap_err();
+        resume.send(()).unwrap();
+        // this request is ordered after the rollback queued by the timed-out begin
+        handle.rollback_handoff().unwrap();
+        assert_error(
+            &request_error,
+            io::ErrorKind::TimedOut,
+            "timed out waiting for the PTY actor's handoff duplicate",
+        );
+        assert_error(
+            &handoff_error,
+            io::ErrorKind::TimedOut,
+            "timed out waiting for the PTY actor to quiesce",
+        );
+        handle.write_input(b"resumed").unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        assert_eq!(read_exactly(&mut peer, 7), b"resumed");
+        handle.shutdown();
+        assert_eq!(exit.recv_timeout(Duration::from_secs(5)).unwrap(), ExitReason::Shutdown);
+    }
+
+    #[test]
+    fn redraw_restores_the_real_ptys_size_and_foreground_group() {
+        const CHILD: &str = "NGTERM_PTY_TEST_REDRAW";
+        const NAME: &str = "unix::actor::tests::redraw_restores_the_real_ptys_size_and_foreground_group";
+        if std::env::var_os(CHILD).is_some() {
+            real_pty_redraw();
+            return;
+        }
+        // keep the existing descriptor-count test's process free of other real PTYs
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([NAME, "--exact", "--test-threads=1", "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn real_pty_redraw() {
+        let crate::Spawned { master, mut child } = crate::spawn(
+            &crate::Command::new("/bin/sh").args(["-c", "printf ready; read line; exit 7"]),
+            Size::cells(24, 80),
+        )
+        .unwrap();
+        let (output, read) = mpsc::channel();
+        let (exits, exit) = mpsc::channel();
+        let mut config = ActorConfig::new(
+            "redraw",
+            master,
+            Box::new(move |bytes| {
+                output.send(bytes.to_vec()).unwrap();
+                Vec::new()
+            }),
+        );
+        config.on_exit = Some(Box::new(move |reason| {
+            let _ = exits.send(reason);
+        }));
+        let handle = Actor::spawn(config).unwrap();
+        assert_eq!(read.recv_timeout(Duration::from_secs(5)).unwrap(), b"ready");
+        assert!(child.try_wait().unwrap().is_none());
+        assert_eq!(handle.foreground_process_group(), Some(child.pid()));
+        for (rows, cols) in [(24, 80), (2, 80), (2, 4)] {
+            let size = Size::cells(rows, cols);
+            handle.try_resize(size).unwrap();
+            handle.nudge_redraw(size);
+            handle.begin_handoff(Duration::from_secs(5)).unwrap();
+            let duplicate = handle.duplicate_for_handoff().unwrap();
+            // SAFETY: zero is a valid initial winsize; ioctl writes into this live local.
+            let mut actual: libc::winsize = unsafe { std::mem::zeroed() };
+            // SAFETY: the duplicate is open and actual has room for the requested winsize.
+            let resized = unsafe {
+                libc::ioctl(
+                    std::os::fd::AsRawFd::as_raw_fd(&duplicate),
+                    libc::TIOCGWINSZ,
+                    &raw mut actual,
+                )
+            };
+            assert_eq!(resized, 0);
+            assert_eq!((actual.ws_row, actual.ws_col), (rows, cols));
+            handle.rollback_handoff().unwrap();
+        }
+        let killer = child.killer();
+        let clone = killer.clone();
+        killer.retire();
+        clone.hang_up().unwrap();
+        child.killer().kill_tree().unwrap();
+        handle.write_input(b"done\n").unwrap();
+        assert_eq!(child.wait().unwrap().exit_code(), 7);
+        assert_eq!(exit.recv_timeout(Duration::from_secs(5)).unwrap(), ExitReason::Eof);
+        handle.shutdown();
+    }
 }

@@ -455,6 +455,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_read_pause_shares_the_consumers_flag() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let pause = ReadPause::from(Arc::clone(&flag));
+        assert!(pause.is_paused());
+        pause.resume();
+        assert!(!flag.load(Ordering::Acquire));
+        pause.clone().pause();
+        assert!(pause.is_paused());
+    }
+
+    #[test]
+    fn a_poisoned_lock_keeps_its_data_accessible() {
+        let mutex = Mutex::new(vec![1]);
+        let _ = std::panic::catch_unwind(|| {
+            let mut data = mutex.lock().unwrap();
+            data.push(2);
+            panic!("a callback failed while holding the data");
+        });
+        assert_eq!(*lock(&mutex), [1, 2]);
+    }
+
+    #[test]
     fn input_over_the_limit_is_refused_but_replies_are_not() {
         let mut outbox = Outbox::new(false);
         outbox.push_input(b"12345", 8).unwrap();

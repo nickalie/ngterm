@@ -262,4 +262,129 @@ mod tests {
         let status = unsafe { libc::fcntl(pty.as_raw_fd(), libc::F_GETFL) };
         assert_ne!(status & libc::O_NONBLOCK, 0);
     }
+
+    #[test]
+    fn a_pipe_reports_wrong_end_errors_and_drains_after_its_writer_closes() {
+        let (read, write) = wake_pipe().unwrap();
+        assert_eq!(wake(read.as_fd()).unwrap_err().raw_os_error(), Some(libc::EBADF));
+        assert_eq!(drain(write.as_fd()).unwrap_err().raw_os_error(), Some(libc::EBADF));
+        assert_eq!(
+            add_flag(read.as_fd(), -1, libc::F_SETFD, libc::FD_CLOEXEC)
+                .unwrap_err()
+                .raw_os_error(),
+            Some(libc::EINVAL)
+        );
+        wake(write.as_fd()).unwrap();
+        drop(write);
+        drain(read.as_fd()).unwrap();
+    }
+
+    #[test]
+    fn polling_a_pipe_without_readers_reports_the_pty_error() {
+        let (read, write) = wake_pipe().unwrap();
+        let (wake, _writer) = wake_pipe().unwrap();
+        drop(read);
+        let err = poll(write.as_fd(), wake.as_fd(), false, true, 0).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(err.to_string(), "poll found the PTY in error");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_path_descriptor_cannot_be_polled() {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let path = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_PATH)
+            .open("/dev/null")
+            .unwrap();
+        let (read, _write) = wake_pipe().unwrap();
+        let err = poll(path.as_fd(), read.as_fd(), true, false, 0).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(err.to_string(), "poll found an invalid PTY actor descriptor");
+    }
+
+    #[test]
+    fn a_non_terminal_has_no_foreground_group_and_cannot_be_resized() {
+        let (read, _write) = wake_pipe().unwrap();
+        assert_eq!(foreground_process_group(read.as_fd()), None);
+        assert_eq!(
+            resize(read.as_fd(), Size::cells(24, 80)).unwrap_err().raw_os_error(),
+            Some(libc::ENOTTY)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn interrupted_polls_keep_their_deadline_and_can_still_be_woken() {
+        const CHILD: &str = "NGTERM_PTY_TEST_POLL_SIGNALS";
+        const NAME: &str = "unix::fd::tests::interrupted_polls_keep_their_deadline_and_can_still_be_woken";
+        if std::env::var_os(CHILD).is_some() {
+            interrupted_poll(100);
+            interrupted_poll(-1);
+            return;
+        }
+        // signal disposition belongs to this subprocess alone
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([NAME, "--exact", "--test-threads=1", "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    fn interrupted_poll(timeout: i32) {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        static SIGNALS: AtomicUsize = AtomicUsize::new(0);
+        extern "C" fn interrupted(_: libc::c_int) {
+            SIGNALS.fetch_add(1, Ordering::Relaxed);
+        }
+        // SAFETY: zero initializes a sigaction, whose mask and handler are set before installation.
+        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+        action.sa_sigaction = interrupted as *const () as usize;
+        // SAFETY: action is a live local; no old action is requested. SA_RESTART is unset.
+        let installed = unsafe { libc::sigaction(libc::SIGUSR2, &raw const action, std::ptr::null_mut()) };
+        assert_eq!(installed, 0);
+        // SAFETY: pthread_self returns the calling test thread's id, valid until the sender joins.
+        let target = unsafe { libc::pthread_self() };
+        let (read, write) = wake_pipe().unwrap();
+        let (pty, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        SIGNALS.store(0, Ordering::Relaxed);
+        let done = AtomicBool::new(false);
+        let (ready, elapsed) = std::thread::scope(|scope| {
+            let sender = scope.spawn(|| {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !done.load(Ordering::Acquire)
+                    && Instant::now() < deadline
+                    && (timeout >= 0 || SIGNALS.load(Ordering::Relaxed) < 64)
+                {
+                    // SAFETY: target is the live parent thread and SIGUSR2 has the harmless handler above.
+                    assert_eq!(unsafe { libc::pthread_kill(target, libc::SIGUSR2) }, 0);
+                    std::thread::yield_now();
+                }
+                wake(write.as_fd()).unwrap();
+            });
+            let started = Instant::now();
+            let ready = poll(pty.as_fd(), read.as_fd(), true, false, timeout);
+            let elapsed = started.elapsed();
+            done.store(true, Ordering::Release);
+            sender.join().unwrap();
+            (ready.unwrap(), elapsed)
+        });
+        assert!(SIGNALS.load(Ordering::Relaxed) > 0);
+        if timeout < 0 {
+            assert!(ready.wake && !ready.read);
+        } else {
+            assert_eq!(ready, Ready::default());
+            assert!(elapsed >= Duration::from_millis(u64::try_from(timeout).unwrap()));
+        }
+    }
 }

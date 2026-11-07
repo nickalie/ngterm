@@ -410,6 +410,32 @@ mod tests {
 
     type Failure = Box<dyn std::error::Error + Send + Sync>;
 
+    #[test]
+    fn an_adopted_non_child_cannot_be_waited_for() {
+        let mut child = Child::adopt(std::process::id());
+        assert_eq!(child.pid(), std::process::id());
+        assert_eq!(child.wait_exit().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+        assert_eq!(child.wait().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+        assert_eq!(child.try_wait().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+    }
+
+    #[test]
+    fn the_portable_adopted_child_reports_its_pid_but_cannot_be_reaped_or_killed() {
+        use portable_pty::{Child as _, ChildKiller as _};
+
+        let mut child = Adopted {
+            pid: std::process::id(),
+        };
+        assert_eq!(child.process_id(), Some(std::process::id()));
+        assert_eq!(child.try_wait().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+        assert_eq!(child.wait().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+        assert_eq!(child.kill().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+        assert_eq!(
+            child.clone_killer().kill().unwrap_err().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
+
     /// `retry_clone_race` over failures with these errnos, then a success; the calls it made, and its result.
     fn open_failing(errnos: &[i32]) -> (usize, io::Result<()>) {
         let mut calls = 0;
@@ -500,7 +526,12 @@ mod tests {
         let Spawned { master, mut child } = spawn(builder, Size::cells(24, 80)).unwrap();
         #[cfg(target_os = "linux")]
         assert_eq!(pty_descriptors(), before + 1);
-        child.wait().unwrap();
+        child.wait_exit().unwrap();
+        assert_eq!(child.try_wait().unwrap().unwrap().exit_code(), 0);
+        assert_eq!(child.wait().unwrap().exit_code(), 0);
+        child.wait_exit().unwrap();
+        assert_eq!(child.try_wait().unwrap().unwrap().exit_code(), 0);
+        child.killer().hang_up().unwrap();
         // SAFETY: reads the descriptor flags of the master owned here.
         let flags = unsafe { libc::fcntl(master.as_fd().as_raw_fd(), libc::F_GETFD) };
         assert_ne!(flags & libc::FD_CLOEXEC, 0);
