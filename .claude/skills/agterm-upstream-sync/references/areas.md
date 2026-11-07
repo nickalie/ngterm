@@ -8,7 +8,7 @@ disagree, the code wins: check with `ls`/`grep` before naming a Rust file in the
 ## Contents
 
 - Behavior areas: protocol, dispatcher, app-control, cli, core, session-host
-- Platforms
+- Platforms and apps
 - Evidence areas: Swift tests, contract docs, upstream design notes
 - UI
 - Vendored copies and native pins
@@ -55,19 +55,41 @@ A behavior change usually spans several of these at once (a feature commit touch
 core + ui). The plan groups it by **command group or feature**, not by area: one task per group, holding every area
 that group's change touches. The per-commit block in the classify report ("Commits by area") is the seam to cut along.
 
-## Platforms
+## Platforms and apps
 
 Upstream is macOS only; ngterm targets all three OSes (AGENTS.md > Platforms). A behavior upstream builds on a macOS
 API (keyboard layouts, the Command key, pasteboard, Notification Center, dock, Finder) gets a counterpart per OS, or a
 recorded reason why an OS has none (a Homebrew cask fix, an AppKit bug workaround). Put OS-specific logic in an `any`
 crate where it can live, since CI builds only those on macOS and Windows.
 
+The Android and iOS apps are the other two targets. They are remote-only viewers (README > Android, > iOS): over ssh
+they list a machine's live sessions, make and end them, attach their panes and show what the presentation stream
+carries. `ngterm-mobile` builds on `ngterm-proto`, `ngterm-term` and parts of `ngterm-core`: the remote client
+(`remote::*`), `live`, `agent_chat`, `model`, `hud`, the key binds of `ghostty_config` and the palettes' ranking
+(`palette::search`, `fuzzy`) for the chat's slash-command dropdown. That list drifts: before calling a change
+desktop-only, `rg -n 'ngterm_core::' crates/ngterm-mobile/src` for the module it touches. An upstream change reaches
+the apps when it touches:
+
+| upstream change | in the mobile apps |
+|---|---|
+| the `zmx` group as `live`: tree fields, session create/end, presentation (status, context, name, layout, HUD, notifications, sounds, asks) | `ngterm-mobile` `sessions`/`presentation` and the `MobileEvent` the apps show; the sessions list and session screens |
+| session-host attach, leadership, startup replies | `ngterm-mobile` `pane`, through `ngterm-session attach` on the origin |
+| terminal behavior (`agterm/Ghostty/*` that lands in `ngterm-term`: keys, mouse, selection, paste, colors) | the `Pane` API and each app's terminal view |
+| agent-status hooks and agent state | session status and notifications; the Android chat view (`ngtermctl agent`, Rust-only) |
+| a desktop UI feature with a counterpart screen on the phone (session list, status, asks, notifications, settings the apps keep) | that screen in each app, through the `frontend-design` skill inside its `DESIGN.md` |
+
+Most command groups (the control socket's window, tab, pane and settings commands) and desktop-only UI (menus, the
+palettes' own windows, the settings popup, HTML overlays, which the phones refuse) don't reach them, while the core
+code they share does (a change to palette ranking reaches the chat dropdown): record that in one line rather
+than leaving the apps out silently. A wire-type change in `ngterm-proto` or `ngterm-core::remote` must keep
+`ngterm-mobile` building with its tests green.
+
 ## Evidence areas
 
 - **Swift tests** (`tests-core`, `tests-cli`, `tests-app`, `tests-ui`): the source of exact strings, edge cases,
   validation order and field order. Every plan task names the Swift test files (and the test functions the classify
   report lists) its port asserts against; the Rust unit tests assert the full upstream string on the dispatcher's
-  output. `tests-ui` adds or changes accessibility-driven checks: they map to `conformance/tests/ui` and
+  output, and the mobile apps' tests the same string where an app shows it. `tests-ui` adds or changes accessibility-driven checks: they map to `conformance/tests/ui` and
   `ui-ids.yaml`, which the Linux build cannot run (no ui driver), so they become items of the plan's UI-only task.
 - **Contract docs** (`site/commands.html`, `site/docs.html`, `.claude/rules/*.md`, `docs/troubleshooting.md`): the
   documented contract. `commands.html` feeds the catalog's `cli` section; a rules file states the subsystem's

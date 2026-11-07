@@ -1,6 +1,6 @@
 ---
 name: agterm-upstream-sync
-description: "Sync ngterm's parity target with a new umputun/agterm release: analyse upstream changes, make the mechanical bump, and write a docs/plans/ porting plan for plan-exec-revmux. Use for upstream release syncs, parity target bumps, or upstream change analysis, including 'sync with upstream'. Ports no features itself."
+description: "Sync ngterm's parity target with a new umputun/agterm release: analyse upstream changes, make the mechanical bump, and write a docs/plans/ porting plan for plan-exec that covers all five apps (desktop on macOS, Linux and Windows; Android; iOS). Use for upstream release syncs, parity target bumps, or upstream change analysis, including 'sync with upstream'. Ports no features itself."
 ---
 
 # agterm-upstream-sync
@@ -9,8 +9,36 @@ Moves ngterm from the upstream release it targets to a newer one in three parts:
 
 1. **Analysis**: what changed upstream, and how much of it the Rust build already has.
 2. **Mechanical bump** on a branch: everything that needs no porting judgment.
-3. **Plan** for the porting, executed later by the `plan-exec-revmux` skill. The skill ports no behavior itself, so every port
+3. **Plan** for the porting, executed later by the `plan-exec` skill. The skill ports no behavior itself, so every port
    goes through that run's per-task review.
+
+## Five apps
+
+Upstream is one macOS app; ngterm ships five: the desktop app on macOS, Linux and Windows (`ngterm-gpui`), and the
+Android and iOS apps (`mobile/android`, `mobile/ios`), remote-only viewers over `ngterm-mobile` that reach a machine as
+the desktop's Attach Remote does. Weigh every upstream change against all five: the analysis says which apps a
+behavior reaches, the plan gives each of them its task items, and a change that leaves an app out records why
+(`references/areas.md` > Platforms and apps).
+
+## ngterm's own features win
+
+ngterm is more than a port: it has features upstream lacks and behaviors it chose to do differently. README lists them
+(the "extension beyond upstream" and "differs from upstream by choice" bullets), and
+`conformance/docs/rust-build.md` records the Rust-only extensions and deliberate deviations; the user's standing
+overrides of upstream live there and in the project's own decisions (the Settings popup, the `live` names, ngterm's
+identity). When an upstream change overlaps one of them, **ngterm's approach wins**:
+
+- port only the part of the change that fits ngterm's design, adapted onto it, and never rework or remove an ngterm
+  feature to match upstream;
+- an upstream change that only makes sense against what ngterm replaced is not ported: it goes to the "no port
+  needed" list with the ngterm feature that supersedes it;
+- a behavior both have, where upstream's new form contradicts ngterm's, keeps ngterm's form; the plan task records the
+  contradiction, and a conformance test that asserts upstream's form is answered by recording the deviation as
+  `rust-build.md` records the others (a note in its Rust target profile, a capability where the suite must tell the
+  builds apart), not by a code change toward upstream.
+
+Weigh an upstream change as a possible improvement to ngterm's feature only where it adds something ngterm's form
+lacks, and port that part in ngterm's terms.
 
 ## Claude and Codex
 
@@ -18,9 +46,10 @@ The shared source is `.claude/skills/agterm-upstream-sync`; `.agents/skills/agte
 Codex discovery. Edit the shared source so both agents get the same workflow.
 
 - **Claude Code:** invoke `/agterm-upstream-sync [TARGET]`; later execute the plan with
-  `/plan-exec-revmux docs/plans/<file>`.
+  `/plan-exec docs/plans/<file>`.
 - **Codex:** invoke `$agterm-upstream-sync [TARGET]`; later execute the plan with
-  `$plan-exec-revmux docs/plans/<file>`.
+  `$plan-exec docs/plans/<file>`. A Codex install that still lists the skill under its old name runs it as
+  `$plan-exec-revmux`, the same skill.
 
 Read the checkout's `AGENTS.md` (the shared architecture and check guidance) and any more specific directory
 instructions before starting. Use the current agent's file, search, shell and subagent tools; Claude tool names are
@@ -71,6 +100,14 @@ For each cluster, decide per behavior:
   a behavior the suite can test. This becomes a task that ports the tests and fixes the code if they expose a bug.
 - **already-ported**: code and tests are both there. No task; record the evidence.
 
+Then decide per app (Five apps above): which of the desktop OSes, Android and iOS the behavior reaches, and for each
+of them absent, partial or already-ported in the same sense, and whether it overlaps an ngterm feature or deliberate
+deviation (ngterm's own features win above): such a cluster ports only what fits ngterm's form, or nothing, and says
+which feature decided it. A cluster is already-ported only when every app it
+reaches has it: one the desktop has and a mobile app lacks still gets that app's task. The mobile apps share
+`ngterm-core`'s remote client with Attach Remote, so a change there can reach them with no mobile code; an app screen
+that should show it still can't.
+
 Analyse small syncs yourself. For more than a few clusters, delegate read-only analysis using
 `references/prompts/area-analysis.md`: Claude's `Agent` with `subagent_type: "general-purpose"`, or Codex's available
 subagent tool (for example, `spawn_agent`). Use up to four at a time, within the environment's available slots.
@@ -115,20 +152,24 @@ Order the tasks:
 1. new wire names and CLI skeletons (when the catalog gained any);
 2. one task per command group or feature;
 3. vendored-copy conflicts and pin work;
-4. UI-only changes;
-5. "Claim TARGET parity and update the docs", always last.
+4. desktop UI-only changes;
+5. the mobile apps: one task per feature that needs mobile code, its `ngterm-mobile` change first, then the Android
+   and iOS apps in the same task;
+6. "Claim TARGET parity and update the docs", always last.
 
-Each task names its upstream files and Swift tests, its Rust files and its conformance ids, so a subagent can work
-from the plan alone. List `already-ported` clusters in Context with their evidence.
+Each task names its upstream files and Swift tests, its Rust, Kotlin and Swift files, its conformance ids and the apps
+it reaches, so a subagent can work from the plan alone. List `already-ported` clusters in Context with their evidence.
 
 ## 6. Report
 
 Reply in the user's language with:
-- the range and what changed upstream (one line per feature or fix);
+- the range and what changed upstream (one line per feature or fix), with the apps each one reaches;
 - the branch and its commits: what was bumped, and what was left out and why;
 - the baseline result and which task fixes each expected red;
 - the plan's path and its task list;
-- what is already in the Rust build, and what needs no port;
-- next steps: invoke `plan-exec-revmux` with the plan path using the current agent's syntax above (if that skill is
+- what is already in the Rust build and the mobile apps, and what needs no port;
+- each overlap with an ngterm feature or deliberate deviation: what of upstream's change was taken, what was left,
+  and the feature that decided it;
+- next steps: invoke `plan-exec` with the plan path using the current agent's syntax above (if that skill is
   unavailable, report the missing dependency); then the user pushes, runs `reference-macos.yml` on the branch,
   and opens a PR so the cross-platform jobs and the full suite run.
