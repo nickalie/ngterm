@@ -5,18 +5,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
-import androidx.activity.ComponentActivity
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
-import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.isSelectable
-import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -29,15 +25,8 @@ import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.withKeysDown
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.nickalie.ngterm.android.TestGraph
-import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.android.ui.NavLayout
-import com.nickalie.ngterm.android.ui.NgtermApp
-import com.nickalie.ngterm.android.ui.terminal.SelectingPane
-import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.fake.FakeInput
-import com.nickalie.ngterm.core.fake.FakePane
-import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.ChatBody
 import com.nickalie.ngterm.core.ffi.ChatEvent
 import com.nickalie.ngterm.core.ffi.MobileEvent
@@ -45,22 +34,13 @@ import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneClipboard
 import com.nickalie.ngterm.core.ffi.PaneEnd
 import com.nickalie.ngterm.core.ffi.PaneKeyAction
-import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneRole
 import com.nickalie.ngterm.core.ffi.RemoteLayout
-import com.nickalie.ngterm.core.ffi.StreamState
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
-import java.util.concurrent.ConcurrentHashMap
-
-private const val WAIT_MS = 10_000L
 
 /**
  * The session view on the fake core, in the app: tapping a session on a machine's list attaches it and opens its
@@ -70,59 +50,7 @@ private const val WAIT_MS = 10_000L
  */
 @RunWith(AndroidJUnit4::class)
 @Config(qualifiers = "w1000dp-h800dp-mdpi")
-class SessionViewTest {
-    @get:Rule
-    val compose = createAndroidComposeRule<ComponentActivity>()
-
-    @get:Rule
-    val dir = TemporaryFolder()
-
-    private lateinit var test: TestGraph
-    private val layout = mutableStateOf(NavLayout.Bar)
-    private val panes = ConcurrentHashMap<String, FakePane>()
-    private val p1 = PaneRef("m1", "s1", "P1")
-    private val p2 = PaneRef("m1", "s1", "P2")
-
-    @Before
-    fun setUp() {
-        test = TestGraph(dir.root)
-    }
-
-    @After
-    fun tearDown() = test.close()
-
-    private fun waitFor(check: () -> Boolean) = compose.waitUntil(WAIT_MS, check)
-
-    private fun shows(text: String) = compose.onAllNodes(hasText(text)).fetchSemanticsNodes().isNotEmpty()
-
-    private fun described(text: String) =
-        compose.onAllNodes(hasContentDescription(text)).fetchSemanticsNodes().isNotEmpty()
-
-    // the app with docs-site (s1) on build-01 opened from the machine's list, its stream live with panes P1 and P2
-    private fun openSession() {
-        val key = test.seedKey()
-        test.seedMachine(testMachine(keyId = key.id))
-        compose.setContent {
-            NgtermTheme { NgtermApp(graph = test.graph, coreVersion = "1.2.3", layout = layout.value) }
-        }
-        waitFor { test.connections.trees.value["m1"] != null }
-        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "docs-site"))
-        test.core.paneFactory =
-            { _, _, pane, _ -> SelectingPane(List(4) { "$pane line $it" }).also { panes[pane] = it } }
-        compose.onNodeWithText("build-01").performClick()
-        compose.waitUntil(WAIT_MS) { shows("docs-site") }
-        compose.onNodeWithText("docs-site").performClick()
-        waitFor {
-            "s1" in
-                test.connections.attached.value["m1"]
-                    .orEmpty()
-        }
-        test.core.emit(MobileEvent.SessionConnection("m1", "s1", StreamState.Connected))
-        test.core.emit(MobileEvent.SessionLayout("m1", "s1", RemoteLayout(listOf("P1", "P2"), "P1", "vertical", true)))
-        compose.waitForIdle()
-        waitFor { p1 in test.core.shownPanes }
-    }
-
+class SessionViewTest : SessionViewFixture() {
     @Test
     fun switchingPanesAndTheSizeClassKeepTheFocusedPaneWhereTheExtraKeysType() {
         openSession()
