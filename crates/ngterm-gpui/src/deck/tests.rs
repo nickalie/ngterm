@@ -981,6 +981,54 @@ fn a_held_exit_closes_its_pane_on_the_next_key(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_replaced_terminals_queued_exit_leaves_the_pane_to_its_successor(cx: &mut TestAppContext) {
+    // A restart ends the pane's shell and replaces its terminal; the dying terminal's exit can reach the deck while
+    // the restart's step that installs the replacement already waits on the main loop. Its report, queued behind
+    // that step, must not close the pane the new terminal now holds (upstream's `claimProcessExit` in `replacePane`).
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let session = ids[0];
+    h.until("the pane to start", |h| h.realized(session, StatusPane::Left));
+    let token = h.token(session, StatusPane::Left);
+    let old = h.shared(session, &token);
+    let status = ngterm_term::ExitStatus {
+        code: 1,
+        signal: None,
+        held: false,
+    };
+    h.deck.update_in(h.cx, |deck, window, cx| {
+        let event = TerminalEvent::Pane(ngterm_term::PaneEvent::Exited(status));
+        deck.terminal_event(session, &token, &event, window, cx);
+    });
+    let replacement = ngterm_core::PaneReplacement {
+        session,
+        token: token.clone(),
+        command: "restarted".to_owned(),
+        attach: None,
+        env: Vec::new(),
+        cwd: None,
+        remote: false,
+    };
+    let (deck, state) = (h.deck.clone(), &mut h.state);
+    let replaced = h.cx.update(|window, cx| {
+        deck.update(cx, |deck, cx| {
+            deck.replace_pane(&mut state.core, &replacement, window, cx)
+        })
+    });
+    assert!(replaced);
+    h.state.core.pane_replaced(&replacement);
+    // the old terminal's queued exit runs now
+    h.turn();
+    assert!(old.is_torn_down(), "the replaced terminal is gone");
+    assert!(
+        h.state.core.library().store(window).unwrap().session(session).is_some(),
+        "the replaced terminal's exit closed the pane its successor holds"
+    );
+    assert_eq!(h.token(session, StatusPane::Left), token);
+    assert!(!Rc::ptr_eq(&h.shared(session, &token), &old));
+}
+
+#[gpui_kit::test]
 fn a_pane_terminal_is_owned_by_its_pane_and_its_keys_clear_the_status(cx: &mut TestAppContext) {
     let (library, window, ids) = three_sessions();
     let mut h = harness(cx, core_of(library), window);

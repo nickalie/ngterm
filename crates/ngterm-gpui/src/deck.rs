@@ -61,7 +61,7 @@ use crate::ask_dialog::{self, AskDialog, AskOpening, AskOwner};
 use crate::hud::{self, HudLayer};
 use crate::mute::{self, Washes};
 use crate::overlay::{self, OverlayLayer};
-use crate::pane::{self, PaneContext, PaneSpec, Ran, RanCell};
+use crate::pane::{self, ExitClaim, PaneContext, PaneSpec, Ran, RanCell};
 use crate::pane_lead::{self, PaneCover};
 use crate::split::{self, AskScope, PageElement, PageState, PanePlan, Place, Slot};
 use crate::state::{AppState, NotifyFocus, Poster, post};
@@ -239,6 +239,8 @@ pub struct PaneTerminal {
     /// The key press that a lead cover or reconnect wait asks for, and whether a held exit closes on the next key.
     cover_holds: Rc<Cell<bool>>,
     exit_held: Rc<Cell<bool>>,
+    /// Taken when a replacement takes the pane: the exits this terminal posted are not the pane's any more.
+    exit_claim: ExitClaim,
     /// The terminal's own config overlay (its background), loaded over the app's config.
     overlay: RefCell<Option<String>>,
     /// The background a program set with OSC 11 while it shows, and the window opacity its overlay lifts the
@@ -1036,7 +1038,9 @@ impl Deck {
         };
         let fresh = mount_with(&self.env, &spec, Some((launch, !replacement.remote)), window, cx);
         let surface = fresh.terminal.read(cx).surface();
-        // the replaced terminal's events stop with its subscriptions: its exit is not the pane's any more
+        // the replaced terminal's exit is not the pane's any more: its events stop with its subscriptions, and the
+        // claim drops what it already posted (upstream's `claimProcessExit`), which names the pane by its token alone
+        page.panes[index].exit_claim.claim();
         let old = std::mem::replace(&mut page.panes[index], fresh);
         let installed = core
             .library_mut()
@@ -1098,7 +1102,7 @@ impl Deck {
         // the cover lasts until the takeover's sync, which runs after this event: the key asking for it is not reported
         let covered = pane.cover_holds.get();
         for report in pane::report(event, ran, &self.env.hostname, points, covered) {
-            pane::post_report(&self.env.poster, session, token, report, focus);
+            pane::post_report(&self.env.poster, session, token, report, focus, &pane.exit_claim);
         }
     }
 
@@ -1582,6 +1586,7 @@ fn mount_with(
         ran,
         cover_holds: Rc::new(Cell::new(false)),
         exit_held: Rc::new(Cell::new(false)),
+        exit_claim: ExitClaim::default(),
         overlay: RefCell::new(None),
         osc_background: RefCell::new(None),
         _subscriptions: vec![events, focus],
@@ -1676,11 +1681,10 @@ fn refresh_hold(pane: &PaneTerminal, poster: &Poster, session: Uuid) {
     let token = pane.token().to_owned();
     let poster = poster.clone();
     let hold: Option<KeyHold> = if pane.exit_held.get() {
-        let held = Rc::clone(&pane.exit_held);
+        let (held, claim) = (Rc::clone(&pane.exit_held), pane.exit_claim.clone());
         Some(Rc::new(move || {
             if held.replace(false) {
-                let token = token.clone();
-                post(&poster, move |state: &mut AppState| state.pane_exited(session, &token));
+                pane::post_exit(&poster, session, &token, &claim);
             }
         }))
     } else if pane.cover_holds.get() {

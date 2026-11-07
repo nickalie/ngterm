@@ -12,6 +12,8 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ngterm_core::PaneReport;
 use ngterm_core::model::{AppStore, SearchReport, Session, StatusKeystroke};
@@ -217,6 +219,35 @@ impl Ran {
 /// What the deck records about a pane's terminal beyond the entity: what it ran, shared with its event handler.
 pub type RanCell = Rc<Cell<Ran>>;
 
+/// One terminal's exit claim (upstream's `claimProcessExit`): taken when the pane's terminal is replaced, so an exit
+/// that terminal reported before, still queued on the main loop by the pane's token, which its successor carries too,
+/// does not close the pane the successor now holds.
+#[derive(Debug, Clone, Default)]
+pub struct ExitClaim(Arc<AtomicBool>);
+
+impl ExitClaim {
+    /// The terminal's exit is not its pane's any more.
+    pub fn claim(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn is_claimed(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// Posts the exit of the terminal whose claim is `claim` for the pane carrying `token` of `session`: it closes the
+/// pane unless the claim was taken by the time it runs.
+pub fn post_exit(poster: &Poster, session: Uuid, token: &str, claim: &ExitClaim) {
+    let (token, claim) = (token.to_owned(), claim.clone());
+    post(poster, move |state: &mut AppState| {
+        if !claim.is_claimed() {
+            state.pane_exited(session, &token);
+        }
+    });
+}
+
 /// What a terminal event asks of the model, for the pane carrying `token` of `session`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Report {
@@ -285,10 +316,20 @@ fn pane_report(event: &PaneEvent, ran: Ran, hostname: &str) -> Vec<Report> {
 }
 
 /// Posts `report` of the pane carrying `token` of `session` to the model (`focus`: the pane held its window's keyboard
-/// and the window was active, sampled when the event came).
-pub fn post_report(poster: &Poster, session: Uuid, token: &str, report: Report, focus: crate::state::NotifyFocus) {
+/// and the window was active, sampled when the event came). An exit whose terminal's claim (`exit`) was taken by the
+/// time it runs is dropped: the pane belongs to the terminal that replaced it.
+pub fn post_report(
+    poster: &Poster,
+    session: Uuid,
+    token: &str,
+    report: Report,
+    focus: crate::state::NotifyFocus,
+    exit: &ExitClaim,
+) {
     let token = token.to_owned();
+    let exit = exit.clone();
     post(poster, move |state: &mut AppState| match report {
+        Report::Exited | Report::Held if exit.is_claimed() => {}
         Report::Pane(report) => state.report_pane(session, &token, &report),
         Report::Search(report) => {
             state.core.report_search(session, &token, report);
