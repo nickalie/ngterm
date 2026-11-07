@@ -448,3 +448,50 @@ fn fifo_devices_symlinks_and_canonical_escape_are_checked_without_reads() {
     );
     assert!(!linked_doc.images.references.contains_key("late.png"));
 }
+
+/// A file that starts as a raster format but whose header does not decode is refused as not an image, whichever
+/// decoder reads it; a container that is not RIFF/WEBP has no RIFF end.
+#[test]
+fn a_recognised_signature_over_an_undecodable_header_is_not_an_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend([0; 32]);
+    let mut webp = b"RIFF\0\0\0\0WEBP".to_vec();
+    append_riff_chunk(&mut webp, *b"VP8 ", &[0; 10]);
+    update_riff_length(&mut webp);
+    assert_eq!(webp_riff_end(&webp), Some(webp.len()), "a well-formed container");
+    for (name, bytes) in [("broken.png", png), ("broken.webp", webp)] {
+        let path = write(dir.path(), name, bytes);
+        assert_eq!(
+            probe_image(&path).unwrap_err(),
+            format!("not a png, jpg, gif or webp image: {}", path.display())
+        );
+    }
+    let valid = webp_with_exif(1);
+    for (start, other) in [(0, b"RIFX"), (8, b"WEBX")] {
+        let mut bytes = valid.clone();
+        bytes[start..start + 4].copy_from_slice(other);
+        assert_eq!(webp_riff_end(&bytes), None, "{other:?}");
+    }
+}
+
+/// A header that decodes to no pixels at all is not an image.
+#[test]
+fn a_zero_sized_image_is_not_an_image() {
+    let dir = tempfile::tempdir().unwrap();
+    // a GIF89a logical screen of 0x0 with no colour table, then the trailer
+    let path = write(dir.path(), "empty.gif", b"GIF89a\0\0\0\0\0\0\0;");
+    assert_eq!(
+        probe_image(&path).unwrap_err(),
+        format!("not a png, jpg, gif or webp image: {}", path.display())
+    );
+}
+
+#[test]
+fn a_missing_markdown_file_is_unreadable() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.md");
+    let message = format!("unreadable markdown file: {}", missing.display());
+    assert_eq!(check_markdown(&missing).unwrap_err(), message);
+    assert_eq!(probe_markdown(&missing).unwrap_err(), message);
+}

@@ -305,6 +305,92 @@ mod tests {
         assert_eq!(write_target(&path), path, "no link to follow");
     }
 
+    /// A dangling link resolves one step, relative to its folder, so the write recreates its target and the link
+    /// survives.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_through_a_dangling_link_recreates_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("settings.json");
+        symlink("dotfiles-settings.json", &link).unwrap();
+        let target = dir.path().join("dotfiles-settings.json");
+        assert_eq!(symlink_target(&link), Some(target.clone()));
+        assert_eq!(write_target(&link), target);
+
+        write_preserving_symlink("new", &link).unwrap();
+
+        assert!(
+            fs::symlink_metadata(&link).unwrap().file_type().is_symlink(),
+            "the link survives"
+        );
+        assert_eq!(fs::read_to_string(&link).unwrap(), "new");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+    }
+
+    /// A write that cannot land fails and leaves no temp behind; a path without a file name has no temp to write.
+    #[test]
+    fn a_failed_write_leaves_no_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let occupied = dir.path().join("settings.json");
+        fs::create_dir(&occupied).unwrap();
+        fs::write(occupied.join("inside"), "kept").unwrap();
+        assert!(write_file("new", &occupied, None).is_err(), "a folder in the way");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1, "no temp file left");
+        assert_eq!(fs::read_to_string(occupied.join("inside")).unwrap(), "kept");
+
+        let error = write_file("new", &dir.path().join(".."), None).unwrap_err();
+        assert_eq!(
+            (error.kind(), error.to_string()),
+            (io::ErrorKind::InvalidInput, "no file name".to_owned())
+        );
+    }
+
+    #[test]
+    fn remove_entry_removes_files_and_folders_and_accepts_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        fs::write(&file, "x").unwrap();
+        let folder = dir.path().join("folder");
+        fs::create_dir_all(folder.join("nested")).unwrap();
+        fs::write(folder.join("nested/file"), "x").unwrap();
+        for path in [&file, &folder] {
+            remove_entry(path).unwrap();
+            assert!(!entry_exists(path), "{}", path.display());
+        }
+        remove_entry(&dir.path().join("absent")).unwrap();
+        #[cfg(unix)]
+        {
+            // the link itself goes, its target stays
+            let target = dir.path().join("target");
+            fs::write(&target, "kept").unwrap();
+            let link = dir.path().join("link");
+            symlink(&target, &link).unwrap();
+            remove_entry(&link).unwrap();
+            assert!(!entry_exists(&link));
+            assert_eq!(fs::read_to_string(&target).unwrap(), "kept");
+        }
+    }
+
+    /// An entry that cannot be inspected is not taken for absent: its removal fails.
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_that_cannot_be_inspected_is_not_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("locked");
+        fs::create_dir(&folder).unwrap();
+        let file = folder.join("file");
+        fs::write(&file, "x").unwrap();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o000)).unwrap();
+        // root looks up any path: there is nothing to refuse then
+        let searchable = fs::symlink_metadata(&file).is_ok();
+        let removed = remove_entry(&file);
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
+        if !searchable {
+            assert_eq!(removed.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+            assert!(entry_exists(&file));
+        }
+    }
+
     #[test]
     fn copy_tree_replaces_shipped_files_and_keeps_others() {
         let dir = tempfile::tempdir().unwrap();

@@ -703,4 +703,91 @@ mod tests {
         };
         assert!(SystemLauncher.launch(&spec, Box::new(|_| ())).is_err());
     }
+
+    /// Unix has no command line to append to: a raw tail is the last argument, as written.
+    #[cfg(unix)]
+    #[test]
+    fn a_raw_tail_is_the_last_argument_on_unix() {
+        let exit = run(&LaunchSpec {
+            program: "/bin/sh".into(),
+            args: vec!["-c".to_owned()],
+            raw_tail: Some("echo \"$0\" >&2; exit 5".to_owned()),
+            capture_stderr: true,
+            ..LaunchSpec::default()
+        });
+        assert_eq!(exit.status, 5);
+        assert_eq!(exit.stderr_tail, b"/bin/sh\n");
+    }
+
+    /// Foundation's `terminationStatus` for an uncaught signal: its number.
+    #[cfg(unix)]
+    #[test]
+    fn a_child_ended_by_a_signal_reports_the_signal() {
+        let exit = run(&script("kill -TERM $$", ""));
+        assert_eq!(exit.status, libc::SIGTERM);
+    }
+
+    /// A file that holds fewer bytes than its size says (a sysfs attribute) yields what it holds.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_file_shorter_than_its_size_yields_what_it_holds() {
+        let path = std::path::Path::new("/sys/devices/system/cpu/online");
+        let file = File::open(path).unwrap();
+        let held = fs::read(path).unwrap();
+        assert!(
+            (held.len() as u64) < file.metadata().unwrap().len(),
+            "a stated size past the contents"
+        );
+        assert_eq!(read_tail(&file).unwrap(), held);
+    }
+
+    /// A capture the app cannot read back yields no tail rather than failing the report.
+    #[test]
+    fn an_unreadable_capture_yields_no_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = File::create(dir.path().join("write-only")).unwrap();
+        std::io::Write::write_all(&mut file, b"tail").unwrap();
+        assert!(read_tail(&file).is_err(), "the handle cannot read");
+        #[cfg(unix)]
+        assert_eq!(StderrFile { file }.consume(), b"");
+    }
+
+    /// Set in the copy of the test binary `a_capture_that_cannot_be_made_leaves_stderr_uncaptured` runs with no
+    /// usable temp folder.
+    #[cfg(unix)]
+    const NO_TEMP_ENV: &str = "NGTERM_APP_TEST_NO_TEMP_DIR";
+
+    /// A stderr capture that cannot be created leaves stderr on the null device: the command still runs and reports
+    /// its status, with no tail. The temp folder is the process's, so the test re-runs itself alone in a copy of the
+    /// test binary whose temp folder does not exist. Unix only: Windows PowerShell, the Windows script's shell, wants
+    /// its temp folder too.
+    #[cfg(unix)]
+    #[test]
+    fn a_capture_that_cannot_be_made_leaves_stderr_uncaptured() {
+        const TEST: &str = "hook_runner::tests::a_capture_that_cannot_be_made_leaves_stderr_uncaptured";
+        if std::env::var_os(NO_TEMP_ENV).is_some() {
+            let exit = run(&LaunchSpec {
+                capture_stderr: true,
+                ..script("echo oops >&2; exit 4", "")
+            });
+            assert_eq!((exit.status, exit.stderr_tail), (4, Vec::new()));
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([TEST, "--exact", "--test-threads=1"])
+            .env(NO_TEMP_ENV, "1")
+            .envs(["TMPDIR", "TMP", "TEMP"].map(|name| (name, &missing)))
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // the filter matched the test: a mistyped name would pass with no test run
+        assert!(stdout.contains("1 passed"), "{stdout}");
+    }
 }

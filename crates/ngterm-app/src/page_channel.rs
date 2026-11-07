@@ -369,6 +369,110 @@ mod tests {
         );
     }
 
+    /// An unterminated last line is the end of stdout, not an oversize line: the helper's own exit closes the channel.
+    #[test]
+    fn an_unterminated_last_line_is_dropped_and_the_exit_closes_the_channel() {
+        let running = launch(
+            "printf 'whole\\npartial'; exit 3",
+            "[Console]::Out.Write(\"whole`npartial\"); exit 3",
+        );
+        assert_eq!(
+            running.until_closed(),
+            [
+                Report::Line("whole".to_owned()),
+                Report::Closed("helper exit 3".to_owned())
+            ]
+        );
+    }
+
+    /// Stderr is drained beside stdout: a helper writing more than a pipe holds to it still delivers its line.
+    #[test]
+    fn a_helper_writing_much_to_stderr_still_delivers_its_lines() {
+        let running = launch(
+            "i=0; while [ $i -lt 20000 ]; do echo 'a diagnostic line' >&2; i=$((i+1)); done; echo done",
+            "foreach ($i in 1..20000) { [Console]::Error.WriteLine('a diagnostic line') }; [Console]::Out.Write(\"done`n\")",
+        );
+        assert_eq!(
+            running.until_closed(),
+            [
+                Report::Line("done".to_owned()),
+                Report::Closed("helper exit 0".to_owned())
+            ]
+        );
+    }
+
+    /// A channel that closed takes no more lines: the reader stops the helper, which would otherwise live on, and
+    /// says why.
+    #[test]
+    fn a_closed_channel_stops_the_helper() {
+        let (sender, reports) = mpsc::channel();
+        let permits = Arc::new(Permits::new(1));
+        permits.close();
+        let main_loop = Arc::new(FakeMainLoop::spawn(Keeper(sender)).unwrap());
+        let poster: Poster<Keeper> = Arc::downgrade(&main_loop) as Poster<Keeper>;
+        let argv = crate::test_shell::script_argv(
+            "echo a; exec sleep 300",
+            "[Console]::Out.Write(\"a`n\"); Start-Sleep 300",
+        );
+        let link = PageHelperProcess::new(poster).launch(&argv, KEY, permits).unwrap();
+        assert_eq!(
+            reports.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap(),
+            Report::Closed("channel closed".to_owned())
+        );
+        link.stop();
+        main_loop.close();
+    }
+
+    /// A helper whose main loop is gone is stopped at its first line rather than left running, and reaped.
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_whose_loop_is_gone_is_stopped_and_reaped() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let poster: Poster<Owner> = Weak::<FakeMainLoop<Owner>>::new();
+        let argv = crate::test_shell::script_argv(
+            &format!("echo $$ > '{}'; echo a; exec sleep 300", pid_file.display()),
+            "",
+        );
+        let link = PageHelperProcess::new(poster)
+            .launch(&argv, KEY, ReplicaChannel::permits())
+            .unwrap();
+        let deadline = std::time::Instant::now() + crate::test_shell::CHILD_DEADLINE;
+        let pid = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|pid| pid.trim().parse::<i32>().ok())
+            {
+                break pid;
+            }
+            assert!(std::time::Instant::now() < deadline, "the helper never started");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // SAFETY: kill(2) with signal 0 only checks that the pid names a process.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(std::time::Instant::now() < deadline, "the helper was left running");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(link);
+    }
+
+    /// A helper that stopped reading its stdin fails the sends after the one that found it so.
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_that_stopped_reading_refuses_later_sends() {
+        let running = launch("exec 0<&-; echo ready; exec sleep 300", "");
+        assert_eq!(
+            running.reports.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap(),
+            Report::Line("ready".to_owned())
+        );
+        let deadline = std::time::Instant::now() + crate::test_shell::CHILD_DEADLINE;
+        while running.link.send(b"{}\n".to_vec()) {
+            assert!(std::time::Instant::now() < deadline, "every send was taken");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!running.link.send(b"{}\n".to_vec()), "the writer is gone for good");
+    }
+
     #[test]
     fn a_helper_that_cannot_start_is_refused() {
         let poster: Poster<Owner> = Weak::<FakeMainLoop<Owner>>::new();
