@@ -16,6 +16,7 @@ import com.nickalie.ngterm.core.ffi.Pane
 import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
 import com.nickalie.ngterm.core.ffi.RemoteSession
+import com.nickalie.ngterm.core.ffi.UploadCancel
 import com.nickalie.ngterm.core.ffi.UploadProgress
 import kotlinx.coroutines.CompletableDeferred
 
@@ -443,6 +444,18 @@ class FakeMobileCore(
         synchronized(uploads) { uploads += name to bytes }
         return "/state/uploads/1/$name"
     }
+
+    /**
+     * The iOS app's [uploadFile] with a cancel token: the Android app cancels an upload by its coroutine and never
+     * calls this, so it is [uploadFile].
+     */
+    override suspend fun uploadFileCancellable(
+        machineId: String,
+        name: String,
+        bytes: ByteArray,
+        progress: UploadProgress,
+        cancel: UploadCancel,
+    ): String = uploadFile(machineId, name, bytes, progress)
 
     override fun takeLead(
         machineId: String,
