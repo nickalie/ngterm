@@ -671,7 +671,9 @@ design system is `mobile/android/DESIGN.md`.
 ```sh
 scripts/setup-android.sh [--check]    # the pinned toolchain (Android toolchain), then export the lines it prints
 scripts/build-android.sh [--profile release|debug] [--no-gradle] [GRADLE_TASK...]   # default: assembleDebug
-scripts/build-android.sh check assembleDebug   # the lint gate and JVM tests, as CI runs it
+scripts/build-android.sh check assembleDebug   # lint, JVM/screenshot tests and coverage floors, as CI runs it
+scripts/build-android.sh :app:koverHtmlReportDebug :app:koverXmlReportDebug # one module's debug JVM coverage
+scripts/build-android.sh :koverHtmlReportDebugJvm :koverXmlReportDebugJvm   # both modules, aggregated
 scripts/build-android.sh installDebug          # onto the device or emulator adb sees
 scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-headless behind a private sshd (Linux; python3 runs its fake agent)
 ```
@@ -679,6 +681,13 @@ scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-he
 `build-android.sh` builds `libngterm_mobile.so` for arm64-v8a and x86_64 through cargo-ndk, generates the Kotlin
 bindings from it and runs Gradle; everything it generates stays under `mobile/android/core/build/`. The debug APK is
 `mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
+
+`check` verifies each module's Kover line, instruction and branch coverage floors and writes HTML/XML reports for
+the debug JVM tests (including Robolectric screenshots), per module and aggregated at the root. Reports are under
+`mobile/android/{app,core}/build/reports/kover/` and `mobile/android/build/reports/kover/`; CI uploads both as
+`android-coverage`. Use the coverage command above for per-class and per-file results, replacing `:app:` with `:core:`
+for the bindings module. Only generated code is excluded; handwritten UI stays in the denominator. The whole-percent
+floors in `mobile/android/build.gradle.kts` only rise as tests are added, toward 90% for each metric.
 
 On its first run the app creates an ed25519 key, sealed by the Android Keystore, or imports an OpenSSH or PEM key. It
 shows the key's `authorized_keys` line (Copy, Share) and the command that appends it: add that line to

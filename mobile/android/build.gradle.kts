@@ -1,5 +1,7 @@
 import com.diffplug.gradle.spotless.SpotlessExtension
 import io.gitlab.arturbosch.detekt.extensions.DetektExtension
+import kotlinx.kover.gradle.plugin.dsl.CoverageUnit
+import kotlinx.kover.gradle.plugin.dsl.KoverProjectExtension
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 import java.time.Duration
@@ -14,6 +16,85 @@ plugins {
     alias(libs.plugins.roborazzi) apply false
     alias(libs.plugins.spotless)
     alias(libs.plugins.detekt) apply false
+    alias(libs.plugins.kover)
+}
+
+dependencies {
+    kover(project(":core"))
+    kover(project(":app"))
+}
+
+// A custom variant shared by the root and modules merges only Android's debug JVM tests.
+kover {
+    currentProject {
+        createVariant("debugJvm") {}
+    }
+    reports {
+        variant("debugJvm") {
+            html { onCheck = true }
+            xml { onCheck = true }
+        }
+    }
+}
+
+// Apply identical filters to module reports and the root aggregate. Only generated code is excluded;
+// screens, previews, activities, lambdas and coroutine bodies remain in the denominator.
+allprojects {
+    plugins.withId("org.jetbrains.kotlinx.kover") {
+        extensions.configure<KoverProjectExtension> {
+            reports {
+                // Kover defaults to checking all variants. CI's reports and floors select debug explicitly below.
+                total {
+                    verify { onCheck = false }
+                }
+                filters {
+                    excludes {
+                        packages("com.nickalie.ngterm.core.ffi")
+                        classes(
+                            "*.BuildConfig",
+                            "*.R",
+                            "*.R\$*",
+                            "*.ComposableSingletons\$*",
+                            "*\$\$serializer",
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Whole-percent floors of the debug JVM baseline. Raise these toward 90; never lower an existing floor.
+// :core has only generated production bindings today, so its measured denominator is empty.
+val coverageFloors =
+    mapOf(
+        "core" to mapOf(CoverageUnit.LINE to 0, CoverageUnit.INSTRUCTION to 0, CoverageUnit.BRANCH to 0),
+        "app" to mapOf(CoverageUnit.LINE to 93, CoverageUnit.INSTRUCTION to 91, CoverageUnit.BRANCH to 70),
+    )
+
+subprojects {
+    val moduleCoverageFloors = coverageFloors.getValue(name)
+    plugins.withId("org.jetbrains.kotlinx.kover") {
+        extensions.configure<KoverProjectExtension> {
+            currentProject {
+                createVariant("debugJvm") {
+                    add("debug")
+                }
+            }
+            reports {
+                variant("debug") {
+                    html { onCheck = true }
+                    xml { onCheck = true }
+                    verify {
+                        onCheck = true
+                        rule("JVM coverage floor") {
+                            moduleCoverageFloors.forEach { (unit, floor) -> minBound(floor, unit) }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // The lint gate every module shares: ktlint through Spotless for formatting, detekt with

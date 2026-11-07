@@ -109,8 +109,17 @@ jobs:
           sudo apt-get install -y --no-install-recommends openssh-server
       - name: Android toolchain (build/pins.env)
         run: scripts/setup-android.sh | sed 's/^export //; s/"//g' >> "$GITHUB_ENV"
-      - name: build and check (Spotless, detekt, Android Lint, unit and screenshot tests, debug APK)
+      - name: build and check (Spotless, detekt, Android Lint, unit and screenshot tests, coverage, debug APK)
         run: scripts/build-android.sh check assembleDebug
+      - name: upload JVM coverage (HTML and XML)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-coverage
+          path: |
+            mobile/android/build/reports/kover/
+            mobile/android/*/build/reports/kover/
+          if-no-files-found: error
       - name: upload the debug APK
         uses: actions/upload-artifact@v7
         with:

@@ -9,6 +9,8 @@ ktlint = "1.8.0"
 detekt = "1.23.8"
 composeRules = "0.4.28"
 roborazzi = "1.77.0"
+# latest stable Kover (2026-11-07)
+kover = "0.9.11"
 # the app's floor (UniFFI's JNA and libghostty-vt's API 24 both fit); the SDK it compiles against (37: the current
 # AndroidX libraries require it; build/pins.env's ANDROID_PLATFORM_VERSION installs it), and its target SDK, whose
 # runtime behavior the app opts into and the API 36 emulator image runs
@@ -78,3 +80,4 @@ kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "ko
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
 roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
+kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }

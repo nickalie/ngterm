@@ -3,6 +3,7 @@
 // fixtures hold a fake core for the app's tests, which run without the native library.
 plugins {
     alias(libs.plugins.android.library)
+    alias(libs.plugins.kover)
 }
 
 // relative to the module, as the variant API takes them
