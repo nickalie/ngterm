@@ -142,8 +142,14 @@ class FakeTools:
     """rustc, llvm-profdata, llvm-cov export (each object's `lcov` and `text` from `exports`) and `cargo llvm-cov
     report --html`, as the real ones answer."""
 
-    def __init__(self, exports: dict[str, tuple[str, str]], stderr: str = "", failing: str = "") -> None:
-        self.exports, self.stderr, self.failing = exports, stderr, failing
+    def __init__(
+        self,
+        exports: dict[str, tuple[str, str]],
+        stderr: str = "",
+        failing: str = "",
+        truncated: frozenset[str] = frozenset(),
+    ) -> None:
+        self.exports, self.stderr, self.failing, self.truncated = exports, stderr, failing, truncated
         self.calls: list[list[str]] = []
 
     def __call__(self, command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -153,7 +159,14 @@ class FakeTools:
             return subprocess.CompletedProcess(command, 1, "", "error: no input files\n")
         if tool == "rustc":
             return subprocess.CompletedProcess(command, 0, "/toolchain/lib/rustlib/host/lib\n", "")
+        if tool == "llvm-profdata" and command[1] == "show":
+            truncated = Path(command[2]).name in self.truncated
+            return subprocess.CompletedProcess(command, 1 if truncated else 0, "", "malformed" if truncated else "")
         if tool == "llvm-cov":
+            if Path(command[-1]).name not in self.exports:
+                error = f"error: failed to load coverage: '{command[-1]}': no coverage data found\n"
+                error += "error: could not load coverage information\n"
+                return subprocess.CompletedProcess(command, 1, "", error)
             lcov, text = self.exports[Path(command[-1]).name]
             return subprocess.CompletedProcess(command, 0, lcov if "-format=lcov" in command else text, self.stderr)
         if "--html" in command:
@@ -223,8 +236,9 @@ def test_join_regions_counts_code_regions_only_and_functions_by_their_start(repo
     export["data"][0]["functions"][0]["regions"].append([2, 1, 2, 9, 0, 0, 0, 2])  # a skipped region
     code_coverage.join_regions(files, export)
     # two instantiations of one function: one function, run; one code region, run
-    assert files[source].summary() == {"lines": {"count": 0, "covered": 0}, "regions": {"count": 1, "covered": 1},
-                                       "functions": {"count": 1, "covered": 1}}
+    assert files[source].summary() == {"lines": {"count": 0, "covered": 0, "percent": 0},
+                                       "regions": {"count": 1, "covered": 1, "percent": 100.0},
+                                       "functions": {"count": 1, "covered": 1, "percent": 100.0}}
 
 def test_the_exclusions_match_vendor_and_sys_crates_on_both_separators() -> None:
     for path in ("/r/vendor/gpui/src/a.rs", r"D:\r\vendor\gpui\a.rs", "/r/crates/ngterm-wpe-sys/src/lib.rs",
@@ -264,4 +278,161 @@ def test_main_exits_2_with_the_reason(tmp_path: Path, capsys: pytest.CaptureFixt
     )
     assert status == 2
     assert capsys.readouterr().err.startswith(f"code coverage: no profiles in {tmp_path / 'profiles'}")
+    assert not (tmp_path / "out").exists()
+
+
+# The unit-test report (scripts/unit-coverage.sh).
+
+
+def artifact(manifest: Path | str, kind: str, executable: str | None) -> str:
+    return json.dumps({"reason": "compiler-artifact", "manifest_path": str(manifest), "target": {"kind": [kind]},
+                       "executable": executable})
+
+
+def build_messages(repo: Path) -> str:
+    """A `cargo test --no-run --message-format=json` of the fixture: the programs, and what is not one."""
+    crates = repo / "crates"
+    return "\n".join([
+        artifact(crates / "ngterm-core/Cargo.toml", "lib", "/t/debug/deps/ngterm_core-1a"),
+        artifact(crates / "ngterm-gpui/Cargo.toml", "bin", "/t/debug/ngterm"),
+        artifact(crates / "ngterm-core/Cargo.toml", "test", "/t/debug/deps/macos_only-5e"),  # empty here
+        artifact(crates / "ngterm-gpui/Cargo.toml", "custom-build", "/t/debug/build/ngterm-gpui-2b/build-script-build"),
+        artifact(crates / "ngterm-vt-sys/Cargo.toml", "lib", "/t/debug/deps/vt_sys-3c"),
+        artifact(repo / "vendor/gpui/Cargo.toml", "lib", "/t/debug/deps/gpui-4d"),
+        artifact(crates / "ngterm-core/Cargo.toml", "lib", None),  # the rlib
+        json.dumps({"reason": "compiler-message", "message": {"rendered": "warning"}}),
+        "{not json",
+        json.dumps({"reason": "build-finished", "success": True}),
+    ]) + "\n"
+
+
+def test_the_built_programs_are_the_workspace_crates_test_binaries_and_programs(repo: Path) -> None:
+    assert code_coverage.built_programs(build_messages(repo), repo) == [
+        Path("/t/debug/deps/macos_only-5e"), Path("/t/debug/deps/ngterm_core-1a"), Path("/t/debug/ngterm")
+    ]
+
+
+# ngterm-core's lib.rs: two production functions, an inline test module and a test-only module file
+CORE_LIB = """pub fn used() -> u8 {
+    1
+}
+pub fn unused() {}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn runs() {
+        assert_eq!(super::used(), 1);
+    }
+}
+#[cfg(test)]
+mod helpers;
+"""
+
+
+def unit_exports(repo: Path) -> dict[str, tuple[str, str]]:
+    lib, helpers = str(repo / "crates/ngterm-core/src/lib.rs"), str(repo / "crates/ngterm-core/src/helpers.rs")
+    main = str(repo / "crates/ngterm-gpui/src/main.rs")
+    core_lcov = lcov_record(
+        lib, {"used": (1, 1), "unused": (4, 0), "runs": (8, 1)}, {1: 1, 2: 1, 3: 1, 4: 0, 8: 1, 9: 1, 10: 1}
+    ) + lcov_record(helpers, {"help": (1, 1)}, {1: 1})
+    core_text = json.loads(regions_export(lib, [("used", 1, [(1, 1, 3, 2, 1)]), ("unused", 0, [(4, 1, 4, 19, 0)]),
+                                                ("runs", 1, [(8, 1, 10, 6, 1)])]))
+    helpers_text = json.loads(regions_export(helpers, [("help", 1, [(1, 1, 1, 16, 1)])]))
+    core_text["data"][0]["functions"] += helpers_text["data"][0]["functions"]
+    # an integration test's own function: llvm-cov's -ignore-filename-regex leaves its regions in the text export
+    test_file = str(repo / "crates/ngterm-core/tests/api.rs")
+    core_text["data"][0]["functions"] += json.loads(regions_export(test_file, [("api", 1, [(1, 1, 2, 2, 1)])]))[
+        "data"][0]["functions"]
+    return {
+        "ngterm_core-1a": (core_lcov, json.dumps(core_text)),
+        "ngterm": (
+            lcov_record(main, {"main": (1, 1)}, {1: 1, 2: 0}), regions_export(main, [("main", 1, [(1, 1, 2, 2, 1)])])
+        ),
+    }
+
+
+@pytest.fixture
+def unit_inputs(tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    for override in ("LLVM_COV", "LLVM_PROFDATA"):
+        monkeypatch.delenv(override, raising=False)
+    (repo / "crates/ngterm-core/src").mkdir(parents=True)
+    (repo / "crates/ngterm-core/src/lib.rs").write_text(CORE_LIB)
+    (repo / "crates/ngterm-core/src/helpers.rs").write_text("pub fn help() {}\n")
+    (repo / "crates/ngterm-gpui/src").mkdir(parents=True)
+    (repo / "crates/ngterm-gpui/src/main.rs").write_text("fn main() {\n}\n")
+    messages = tmp_path / "build.jsonl"
+    messages.write_text(build_messages(repo))
+    profiles = tmp_path / "llvm-cov-target"
+    profiles.mkdir()
+    for name in ("ws-1.profraw", "ws-2.profraw"):
+        (profiles / name).write_bytes(b"raw")
+    return messages, profiles
+
+
+def test_the_unit_report_leaves_test_code_out_of_every_metric(
+    tmp_path: Path, repo: Path, unit_inputs: tuple[Path, Path]
+) -> None:
+    messages, profiles = unit_inputs
+    tools = FakeTools(unit_exports(repo), truncated=frozenset({"ws-2.profraw"}))
+    out = tmp_path / "out"
+    markdown = code_coverage.unit_report(messages, profiles, repo, out, runner=tools)
+    # lib.rs keeps lines 1-4, `used` and `unused` and their regions; the test module and helpers.rs are gone
+    assert markdown.startswith(code_coverage.UNIT_INTRO + "\n")
+    assert "| ngterm-core | 75.00% (3/4) | 50.00% (1/2) | 50.00% (1/2) |" in markdown
+    assert "| ngterm-gpui | 50.00% (1/2) | 100.00% (1/1) | 100.00% (1/1) |" in markdown
+    assert "| total | 66.67% (4/6) | 66.67% (2/3) | 66.67% (2/3) |" in markdown
+    assert "llvm-cov: 1 truncated profile(s) of killed test processes dropped" in markdown
+    assert (out / "summary.md").read_text() == markdown
+    lcov = (out / "lcov.info").read_text()
+    assert "helpers.rs" not in lcov and "runs" not in lcov and "DA:8," not in lcov
+    assert "tests/api.rs" not in (out / "summary-files.md").read_text()
+    assert "FN:4,unused\n" in lcov and "DA:4,0\nLF:4\nLH:3\n" in lcov
+    files = (out / "summary-files.md").read_text().splitlines()
+    assert files[2:] == [
+        "| file | lines | functions | regions | uncovered lines |",
+        "|---|---:|---:|---:|---:|",
+        "| crates/ngterm-core/src/lib.rs | 75.00% (3/4) | 50.00% (1/2) | 50.00% (1/2) | 1 |",
+        "| crates/ngterm-gpui/src/main.rs | 50.00% (1/2) | 100.00% (1/1) | 100.00% (1/1) | 1 |",
+    ]
+    summary = json.loads((out / "summary.json").read_text())["data"][0]["files"]
+    assert [entry["summary"]["lines"] for entry in summary][0] == {"count": 4, "covered": 3, "percent": 75.0}
+    # the build's programs only, each exported on its own, against the readable profiles alone; one with no
+    # coverage map (a test compiled empty on this OS) has nothing to join
+    exported = [Path(command[-1]).name for command in tools.calls if Path(command[0]).stem == "llvm-cov"]
+    assert exported == ["macos_only-5e", "ngterm_core-1a", "ngterm_core-1a", "ngterm", "ngterm"]
+    assert (profiles / "profiles.txt").read_text() == f"{profiles / 'ws-1.profraw'}\n"
+    for command in tools.calls:
+        if Path(command[0]).stem == "llvm-cov":
+            assert f"-ignore-filename-regex={code_coverage.UNIT_EXCLUDE}" in command
+
+
+def test_the_unit_report_of_selected_crates_lists_their_files_alone(
+    tmp_path: Path, repo: Path, unit_inputs: tuple[Path, Path]
+) -> None:
+    out = tmp_path / "out"
+    tools = FakeTools(unit_exports(repo))
+    markdown = code_coverage.unit_report(*unit_inputs, repo, out, ["ngterm-gpui"], runner=tools)
+    assert "| ngterm-gpui |" in markdown and "ngterm-core" not in markdown
+    assert "ngterm-core" not in (out / "lcov.info").read_text()
+    assert "ngterm-core" not in (out / "summary-files.md").read_text()
+
+
+@pytest.mark.parametrize(
+    "path", ["/r/crates/a/tests/cli.rs", "/r/crates/a/src/tests.rs", "/r/crates/a/src/model_tests.rs",
+             "/r/vendor/gpui/src/a.rs", "/r/crates/ngterm-wpe-sys/src/lib.rs"]
+)
+def test_the_unit_exclusions_add_test_files_by_name(path: str) -> None:
+    assert re.search(code_coverage.UNIT_EXCLUDE, path)
+    assert not re.search(code_coverage.UNIT_EXCLUDE, "/r/crates/a/src/contests.rs")
+
+
+def test_unit_main_exits_2_when_the_build_built_no_program(
+    tmp_path: Path, repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    messages = tmp_path / "build.jsonl"
+    messages.write_text(json.dumps({"reason": "build-finished", "success": True}) + "\n")
+    status = code_coverage.main(["unit", "--messages", str(messages), "--profiles", str(tmp_path), "--repo",
+                                 str(repo), "--out", str(tmp_path / "out"), "--crate", "ngterm-core"])
+    assert status == 2
+    assert capsys.readouterr().err.startswith("code coverage: no program of the workspace's crates")
     assert not (tmp_path / "out").exists()

@@ -9,6 +9,8 @@ __pycache__/
 conformance/**/build/
 conformance/reports/
 target/
+# a test child's coverage profile, written where it runs when its LLVM_PROFILE_FILE was lost
+*.profraw
 # Xcode per-user state and build output (mobile/ios, docs/spikes probes)
 xcuserdata/
 *.xcuserstate

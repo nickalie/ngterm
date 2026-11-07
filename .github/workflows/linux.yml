@@ -228,14 +228,17 @@ jobs:
 
   # What `cargo test` covers (scripts/unit-coverage.sh: the workspace's tests at their default features, under
   # cargo-llvm-cov, test code and vendor/ out of the denominator), judged by scripts/unit-coverage-floor-linux.txt
-  # (conformance/tools/check_coverage.py: lines, functions and regions % per workspace crate). The default features
-  # need WPE WebKit, so it runs in the wpe job's Arch container (the same digest, Arch Linux Archive snapshot and
-  # pacman-archive), privileged for WebKit's bubblewrap sandbox, with the conformance jobs' packages and setup (the
-  # pinned weston where Arch's lacks --fake-seat, lavapipe), node for ngterm-app's OpenCode plugin tests and GStreamer
-  # for the html_overlay harness's audio case; the tests run as an unprivileged user (see its step) on a private Xvfb
-  # and session bus, and none may skip. A failed test fails the job after the report and the floors are judged; the report (lcov.info, summary.json, summary.md) is
-  # uploaded as rust-linux-unit-coverage. One instrumented build of the whole workspace and its tests: about an hour
-  # on a cold cache.
+  # (conformance/tools/check_coverage.py: lines, functions and regions % per workspace crate), whose floors come from
+  # this job's own reports. The default features need WPE WebKit, so it runs in the wpe job's Arch container (the same
+  # digest, Arch Linux Archive snapshot and pacman-archive), privileged for WebKit's bubblewrap sandbox, with the
+  # conformance jobs' packages and setup (the pinned weston where Arch's lacks --fake-seat, lavapipe), node for
+  # ngterm-app's OpenCode plugin tests and GStreamer for the html_overlay harness's audio case; the tests run as an
+  # unprivileged user (see its step) on a private Xvfb and session bus. The display, node and udmabuf tests are
+  # required; what needs a DRM render node, which the runner lacks (ngterm-wpe's dmabuf mode, the external texture's
+  # Mesa GPU case), reports itself skipped, as in the wpe job. A failed test fails the job after the report and the floors
+  # are judged; the report (lcov.info, summary.json, summary.md, summary-files.md) is uploaded as
+  # rust-linux-unit-coverage. One instrumented build of the whole workspace and its tests: about an hour on a cold
+  # cache.
   unit-coverage:
     runs-on: ubuntu-26.04
     timeout-minutes: 120
