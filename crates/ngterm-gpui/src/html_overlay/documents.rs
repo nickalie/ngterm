@@ -20,8 +20,18 @@ pub(super) fn script() -> String {
 
 /// The text page renderer (upstream's `textScript`): highlight.js and `text.js`, with no Markdown parser. Until the
 /// page has a host channel, `text.js`'s posts to the host fail inside its own `try`, and are dropped.
+///
+/// A log document carries its build generation (`data-load`), which `text.js` (vendored as upstream ships it) does not
+/// report: the wrapper reads it before `text.js` takes the source element away, and once `text.js` ran and posted its
+/// own `{ready}`, posts `{ready, load}`, the report a log page's follower takes, so an older document's late report
+/// cannot release a newer build (a fix over upstream).
 pub(super) fn text_script() -> String {
-    [HIGHLIGHT, TEXT].join(";\n")
+    let handler = super::text_page::HANDLER;
+    format!(
+        "{HIGHLIGHT};\n(() => {{ const load = Number(document.getElementById('ngterm-text')?.dataset.load);\n{TEXT};\n\
+         if (Number.isSafeInteger(load)) {{ try {{ window.webkit.messageHandlers.{handler}.postMessage({{ ready: true, \
+         load }}); }} catch (_) {{}} }} }})();"
+    )
 }
 
 /// The text page's stylesheet (upstream's `textStyle`): the Markdown stylesheet, for the theme colors and highlight

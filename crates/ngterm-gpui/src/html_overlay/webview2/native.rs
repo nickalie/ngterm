@@ -167,6 +167,10 @@ pub struct Store {
 }
 
 /// What a page's web view is built from.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a native page's independent settings, each read once where the page is built"
+)]
 pub struct Spec {
     pub parent: isize,
     pub store: Store,
@@ -182,6 +186,8 @@ pub struct Spec {
     pub scripts: Vec<String>,
     /// App-owned document renderer, installed in its own content world with authored scripts still disabled.
     pub trusted_document_script: Option<String>,
+    /// The renderer is a text page's, whose reports and calls go through the renderer's channel (`text_page`).
+    pub text_channel: bool,
     pub grant: Option<Grant>,
     pub replica: Option<ReplicaRead>,
     pub text: Option<Text>,
@@ -249,7 +255,9 @@ impl Native {
             native.add_script_now(script)?;
         }
         if let Some(script) = &spec.trusted_document_script {
-            native.wire_renderer_channel(&spec.post)?;
+            if spec.text_channel {
+                native.wire_renderer_channel(&spec.post)?;
+            }
             native.add_isolated_document_script(script)?;
         }
         hold_profile(&spec.store, &native);
@@ -259,29 +267,12 @@ impl Native {
     /// CDP's named world isolates the trusted Markdown renderer from the document's global objects.
     /// Registration finishes before any document load, and does not enable authored JavaScript.
     fn add_isolated_document_script(&self, script: &str) -> Result<(), String> {
-        let webview = self.webview();
-        let parameters = HSTRING::from(
-            serde_json::json!({
-                "source": script,
-                "worldName": super::super::documents::WORLD,
-            })
-            .to_string(),
-        );
-        CallDevToolsProtocolMethodCompletedHandler::wait_for_async_operation(
-            Box::new(move |handler| {
-                // SAFETY: the web view's COM object is called on its owning thread.
-                unsafe {
-                    webview.CallDevToolsProtocolMethod(
-                        &HSTRING::from("Page.addScriptToEvaluateOnNewDocument"),
-                        &parameters,
-                        &handler,
-                    )
-                }
-                .map_err(Into::into)
-            }),
-            Box::new(|result, _| result),
-        )
-        .map_err(|error| format!("the isolated document renderer was not added: {error}"))
+        let parameters = serde_json::json!({
+            "source": script,
+            "worldName": super::super::documents::WORLD,
+        });
+        self.devtools_now("Page.addScriptToEvaluateOnNewDocument", &parameters)
+            .map_err(|error| format!("the isolated document renderer was not added: {error}"))
     }
 
     /// Runs CDP's `method` with `parameters` and waits until `WebView2` did (pumping the window's messages).

@@ -97,6 +97,20 @@ fn tick(follower: &mut LogFollower, sink: &Sink) {
     }
 }
 
+/// The build generation `html`, a built document, carries for its renderer's ready report.
+fn load_of(html: &str) -> u64 {
+    let (_, rest) = html
+        .split_once(" data-load=\"")
+        .expect("a built document carries its load");
+    rest.split_once('"').unwrap().0.parse().unwrap()
+}
+
+/// The renderer of the last document `sink` loaded reports ready.
+fn ready(follower: &mut LogFollower, sink: &Sink) {
+    let load = load_of(sink.loads.borrow().last().expect("a loaded document"));
+    follower.renderer_ready(load, sink);
+}
+
 fn text(follower: &LogFollower) -> Option<&str> {
     follower.snapshot().map(|shown| shown.text.as_str())
 }
@@ -295,7 +309,37 @@ fn a_rebuild_holds_ticks_until_the_renderer_is_ready() {
     tick(&mut follower, &sink);
     assert_eq!(text(&follower), Some("a\n"));
 
-    follower.renderer_ready(&sink);
+    ready(&mut follower, &sink);
+    tick(&mut follower, &sink);
+    assert_eq!(text(&follower), Some("a\nb\n"));
+}
+
+/// A rebuild that starts while the previous document still loads waits for its own document's ready report: the older
+/// one's late report releases nothing, so no push goes into the loading document (a fix over upstream).
+#[test]
+fn only_the_newest_document_ready_releases_a_rebuild() {
+    let (log, sink) = (Log::new(), Sink::default());
+    let mut follower = log.follower(true);
+    let read = follower.load_document(true, &sink).unwrap();
+    let result = read.run();
+    follower.finish(&read, result, &sink);
+    let first = load_of(&sink.loads.borrow()[0]);
+
+    assert!(follower.load_document(false, &sink).is_none());
+    let second = load_of(&sink.loads.borrow()[1]);
+    assert_ne!(first, second);
+    log.append("b\n");
+
+    follower.renderer_ready(first, &sink);
+    assert!(
+        follower.tick(&sink).is_none(),
+        "the rebuild still waits for its renderer"
+    );
+    assert!(sink.updates.borrow().is_empty() && sink.bar.borrow().is_empty());
+
+    follower.renderer_ready(second, &sink);
+    assert_eq!(sink.updates.borrow().len(), 1);
+    assert_eq!(*sink.bar.borrow(), [true]);
     tick(&mut follower, &sink);
     assert_eq!(text(&follower), Some("a\nb\n"));
 }
@@ -328,7 +372,7 @@ fn a_rebuild_reuses_the_snapshot_and_anchor_and_a_reload_reads_afresh() {
     let read = follower.load_document(true, &sink).unwrap();
     let result = read.run();
     follower.finish(&read, result, &sink);
-    follower.renderer_ready(&sink);
+    ready(&mut follower, &sink);
     follower.scrolled(false, Some(42.0), &sink);
     log.append("b\n");
 

@@ -2,8 +2,9 @@
 //! through one page handler ([`HANDLER`], registered in the renderer's world only), the app's calls into that world
 //! ([`PageChannel::call`], which answer), and a log page's [`LogFollower`].
 //!
-//! The renderer (`text.js`) posts `{ready}` once a new document can take updates, which releases the pushes held
-//! during the build and resends the follow state, and `{following, top}` after a user scroll. The model's follow state
+//! The renderer (`text.js`) posts `{ready}` once a new document can take updates, and its wrapper
+//! (`documents::text_script`) then `{ready, load}` naming the build the document came from, which releases the pushes
+//! held during that build and resends the follow state; `text.js` posts `{following, top}` after a user scroll. The model's follow state
 //! reaches the follower on every apply ([`TextPage::apply`]), where a pause drops the reads in flight and a resume
 //! ticks at once.
 //!
@@ -45,8 +46,8 @@ pub(super) trait PageChannel {
 /// A report the renderer posted (upstream's `PageHandler`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum Message {
-    /// A new document can take updates.
-    Ready,
+    /// A new document can take updates; `load` is the build it came from, which only a log document names.
+    Ready { load: Option<u64> },
     /// The user scrolled a log page: whether it now sits at the bottom, and its offset.
     Following { following: bool, top: Option<f64> },
 }
@@ -56,7 +57,9 @@ impl Message {
     pub(super) fn parse(body: &str) -> Option<Self> {
         let body: Value = serde_json::from_str(body).ok()?;
         if body.get("ready").and_then(Value::as_bool) == Some(true) {
-            return Some(Self::Ready);
+            return Some(Self::Ready {
+                load: body.get("load").and_then(Value::as_u64),
+            });
         }
         let following = body.get("following")?.as_bool()?;
         Some(Self::Following {
@@ -178,7 +181,7 @@ impl TextPage {
     pub(super) fn message(&self, body: &str) {
         let Some(follower) = &self.follower else { return };
         match Message::parse(body) {
-            Some(Message::Ready) => follower.borrow_mut().renderer_ready(&self.sink()),
+            Some(Message::Ready { load: Some(load) }) => follower.borrow_mut().renderer_ready(load, &self.sink()),
             Some(Message::Following { following, top }) => {
                 let mut follower = follower.borrow_mut();
                 let before = follower.following();
@@ -187,7 +190,8 @@ impl TextPage {
                     self.posted_following.set(Some(follower.following()));
                 }
             }
-            None => return,
+            // `text.js`'s own ready report names no build: the wrapper's next one does
+            Some(Message::Ready { load: None }) | None => return,
         }
         self.update_ticks();
     }
@@ -198,6 +202,12 @@ impl TextPage {
             follower.borrow_mut().stop();
         }
         self.ticks.replace(None);
+    }
+
+    /// Whether the ticks run.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) fn ticking(&self) -> bool {
+        self.ticks.borrow().is_some()
     }
 
     fn sink(&self) -> Sink<'_> {
@@ -329,10 +339,15 @@ mod tests {
 
     use super::*;
 
-    /// Upstream's `PageHandler`: a ready report, a scroll report (its offset optional), nothing else.
+    /// Upstream's `PageHandler`: a ready report (the build it names optional), a scroll report (its offset optional),
+    /// nothing else.
     #[test]
     fn the_renderer_reports_parse() {
-        assert_eq!(Message::parse(r#"{"ready":true}"#), Some(Message::Ready));
+        assert_eq!(Message::parse(r#"{"ready":true}"#), Some(Message::Ready { load: None }));
+        assert_eq!(
+            Message::parse(r#"{"ready":true,"load":3}"#),
+            Some(Message::Ready { load: Some(3) })
+        );
         assert_eq!(
             Message::parse(r#"{"following":false,"top":120.5}"#),
             Some(Message::Following {

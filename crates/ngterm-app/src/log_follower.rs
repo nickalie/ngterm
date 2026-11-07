@@ -132,8 +132,9 @@ pub struct LogFollower {
     pause_epoch: u64,
     /// Bumped by every document build and by [`Self::stop`], so a slow build cannot replace a newer one.
     document_load: u64,
-    /// Set from a document build until its renderer reports ready: ticks wait and nothing is pushed, since the old
-    /// document or a renderer not yet running would drop it, and the ready report delivers the latest state instead.
+    /// Set from a document build until the renderer of that build (its `document_load`) reports ready: ticks wait and
+    /// nothing is pushed, since the old document or a renderer not yet running would drop it, and the ready report
+    /// delivers the latest state instead.
     document_pending: bool,
 }
 
@@ -263,10 +264,12 @@ impl LogFollower {
         sink.following(following);
     }
 
-    /// Takes the new document's report that it can take updates, and hands it the latest state, which a read during
-    /// the build may have changed (upstream's `rendererReady`).
-    pub fn renderer_ready(&mut self, sink: &dyn LogSink) {
-        if !self.document_pending {
+    /// Takes the report of the document built as `load` that it can take updates, and hands it the latest state, which
+    /// a read during the build may have changed (upstream's `rendererReady`). An older document's late report is
+    /// ignored, so it cannot release ticks and pushes into a newer document still loading (a fix over upstream, whose
+    /// report names no document).
+    pub fn renderer_ready(&mut self, load: u64, sink: &dyn LogSink) {
+        if !self.document_pending || load != self.document_load {
             return;
         }
         self.document_pending = false;
@@ -413,6 +416,7 @@ impl LogFollower {
         let state = PageState {
             log: Some(&log),
             anchor: if self.following { None } else { self.anchor },
+            load: Some(self.document_load),
         };
         let html = text_page::html(&shown.text, text_page::language(&self.path), None, &self.style, &state);
         self.page_snapshot.clone_from(&self.snapshot);

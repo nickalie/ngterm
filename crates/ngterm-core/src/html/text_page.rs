@@ -61,10 +61,13 @@ impl TextLogState {
 
 /// What a built page starts from beyond its file: a log page's state, which replaces the line, and `anchor`, the scroll
 /// offset a rebuilt page reopens at (a paused log page's or a plain page's; upstream's `html` `log` and `anchor`).
+/// `load` is the document's build generation, which the renderer echoes in its ready report, so a ready report from an
+/// older document cannot release a newer one's build (a fix over upstream, whose ready report names no document).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PageState<'a> {
     pub log: Option<&'a TextLogState>,
     pub anchor: Option<f64>,
+    pub load: Option<u64>,
 }
 
 /// Lowercased extensions and the bundled highlight.js language each maps to.
@@ -200,7 +203,8 @@ pub fn validate(data: Vec<u8>) -> Option<String> {
 /// [`MAX_HIGHLIGHT_BYTES`], so the renderer shows that text plain. The policy loads nothing at all. The holder is a
 /// `div`: the parser drops a newline right after `<pre>`, which would shift every line number. A log page (`state.log`
 /// set) carries its follow state and report flags instead of a line, and the renderer draws no gutter; a finite
-/// `state.anchor` is the scroll offset the rebuilt page reopens at.
+/// `state.anchor` is the scroll offset the rebuilt page reopens at, and `state.load` the build generation the renderer's
+/// ready report echoes.
 #[must_use]
 pub fn html(text: &str, language: Option<&str>, line: Option<i64>, style: &str, state: &PageState) -> String {
     let mut attributes = String::new();
@@ -223,6 +227,9 @@ pub fn html(text: &str, language: Option<&str>, line: Option<i64>, style: &str, 
     }
     if let Some(anchor) = state.anchor.filter(|anchor| anchor.is_finite()) {
         let _ = write!(attributes, " data-anchor=\"{}\"", swift_double(anchor));
+    }
+    if let Some(load) = state.load {
+        let _ = write!(attributes, " data-load=\"{load}\"");
     }
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\

@@ -140,6 +140,10 @@ pub struct Store {
 }
 
 /// What a page's web view is built from.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a native page's independent settings, each read once where the page is built"
+)]
 pub struct Spec {
     pub parent: isize,
     pub store: Store,
@@ -155,6 +159,8 @@ pub struct Spec {
     pub scripts: Vec<String>,
     /// App-owned document renderer, installed in its own content world with authored scripts still disabled.
     pub trusted_document_script: Option<String>,
+    /// The renderer is a text page's, whose reports and calls go through the renderer's channel (`text_page`).
+    pub text_channel: bool,
     pub grant: Option<Grant>,
     pub replica: Option<ReplicaRead>,
     pub text: Option<Text>,
@@ -376,7 +382,7 @@ impl Native {
                 take_key,
             )
         };
-        if spec.trusted_document_script.is_some() {
+        if spec.text_channel {
             let name = CString::new(super::super::text_page::HANDLER).map_err(|error| error.to_string())?;
             let world = CString::new(super::super::documents::WORLD).map_err(|error| error.to_string())?;
             // SAFETY: the live delegate registers itself as the handler in that world, removed again at its detach.

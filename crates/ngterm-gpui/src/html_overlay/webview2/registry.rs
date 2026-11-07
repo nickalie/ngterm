@@ -436,6 +436,7 @@ fn spec(page: &Rc<Page>) -> Result<Spec, String> {
             .then(|| super::bridge::theme_script(&page.theme().script(overlay.themed()))),
         scripts: page.scripts(),
         trusted_document_script: super::super::documents::document_start_script(&overlay.source),
+        text_channel: matches!(overlay.source, HtmlSource::Text { .. }),
         grant: granted.then(|| page.grant().clone()),
         replica,
         text: overlay.text_loaded().then(|| Arc::clone(page.text())),

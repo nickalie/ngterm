@@ -212,6 +212,7 @@ fn a_log_page_carries_its_state_instead_of_a_line() {
     let state = PageState {
         log: Some(&log),
         anchor: None,
+        load: None,
     };
     let html = html("a\nb\n", None, Some(7), "", &state);
     assert!(html.contains(
@@ -230,6 +231,7 @@ fn a_paused_log_page_omits_the_unset_flags() {
     let state = PageState {
         log: Some(&log),
         anchor: None,
+        load: None,
     };
     assert!(
         html("a", None, None, "", &state)
@@ -242,7 +244,17 @@ fn a_paused_log_page_omits_the_unset_flags() {
 fn a_rebuilt_page_carries_only_a_finite_anchor() {
     let paused = TextLogState::default();
     let at = |log: Option<&TextLogState>, line: Option<i64>, anchor: Option<f64>| {
-        html("a", None, line, "", &PageState { log, anchor })
+        html(
+            "a",
+            None,
+            line,
+            "",
+            &PageState {
+                log,
+                anchor,
+                load: None,
+            },
+        )
     };
     assert!(at(Some(&paused), None, Some(240.5)).contains("data-anchor=\"240.5\""));
     assert!(at(None, Some(3), Some(80.0)).contains("data-line=\"3\" data-anchor=\"80.0\""));
@@ -258,4 +270,17 @@ fn the_log_limits_are_upstreams() {
         (DEFAULT_TAIL, MAX_TAIL, MAX_TAIL_BYTES),
         (5_000, 100_000, 2 * 1024 * 1024)
     );
+}
+
+/// A built log document carries its build generation for the renderer's ready report to echo (a fix over upstream).
+#[test]
+fn a_built_log_page_carries_its_load() {
+    let log = TextLogState::default();
+    let state = PageState {
+        log: Some(&log),
+        anchor: Some(4.0),
+        load: Some(7),
+    };
+    assert!(html("a", None, None, "", &state).contains(" data-anchor=\"4.0\" data-load=\"7\">a</div>"));
+    assert!(!html("a", None, None, "", &PageState::default()).contains("data-load"));
 }

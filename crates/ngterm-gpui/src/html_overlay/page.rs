@@ -1264,6 +1264,22 @@ mod document_tests {
         })
     }
 
+    /// The ready report the renderer of `built`, a log page's document, posts: `text.js`'s wrapper names its build.
+    fn ready(built: &str) -> String {
+        let (_, rest) = built
+            .split_once(" data-load=\"")
+            .expect("a log document names its build");
+        format!(r#"{{"ready":true,"load":{}}}"#, rest.split_once('"').unwrap().0)
+    }
+
+    /// The document `calls` loaded last.
+    fn loaded(calls: Vec<Call>) -> Option<String> {
+        calls.into_iter().rev().find_map(|call| match call {
+            Call::Load(Load::Html { html, .. }) => Some(html),
+            _ => None,
+        })
+    }
+
     /// The scripts evaluated among `calls`, with their worlds.
     fn evaluated(calls: Vec<Call>) -> Vec<(String, Option<String>)> {
         calls
@@ -1287,18 +1303,14 @@ mod document_tests {
 
     /// A log page's document is its follower's (no gutter, its state in place of a line); the renderer's ready report
     /// hands it the latest text in its world, and a scroll that pauses it goes to the follower before the model. The
-    /// model's pause reaches the renderer's bar; the page's close stops it.
+    /// model's pause reaches the renderer's bar.
     #[gpui_kit::test]
     fn a_log_page_builds_from_its_follower_and_hears_its_renderer(cx: &mut gpui_kit::TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.log");
         std::fs::write(&path, "first\nsecond\n").unwrap();
         let (overlay, page, recorder) = log_page(&path);
-        let built = recorder.take().into_iter().find_map(|call| match call {
-            Call::Load(Load::Html { html, .. }) => Some(html),
-            _ => None,
-        });
-        let built = built.expect("the follower's document");
+        let built = loaded(recorder.take()).expect("the follower's document");
         assert!(
             built.contains("data-log data-following=\"true\"") && built.contains(">first\nsecond\n</div>"),
             "{built}"
@@ -1307,6 +1319,11 @@ mod document_tests {
         let (paused, resumed) = (following(&overlay, false), following(&overlay, true));
         cx.update(|cx| {
             page.event(&renderer_message(&page, r#"{"ready":true}"#), cx);
+            assert!(
+                evaluated(recorder.take()).is_empty(),
+                "`text.js`'s own report names no build"
+            );
+            page.event(&renderer_message(&page, &ready(&built)), cx);
             let calls = evaluated(recorder.take());
             assert_eq!(calls.len(), 2, "{calls:?}");
             assert!(
@@ -1332,6 +1349,77 @@ mod document_tests {
             assert_eq!(evaluated(recorder.take()), [pause]);
             page.close(cx);
         });
+    }
+
+    /// The updates among `calls` that carry `text`.
+    fn updates_with(calls: Vec<Call>, text: &str) -> usize {
+        let text = serde_json::json!(text).to_string();
+        evaluated(calls)
+            .iter()
+            .filter(|(script, _)| script.starts_with(&format!("ngtermTextUpdate({text},")))
+            .count()
+    }
+
+    /// Upstream's `testOffScreenStopsTheTicksAndComingBackReadsAtOnce` and `testStopEndsTheTicks`, on the app's timer:
+    /// a following page on screen reads its file every interval; off screen its ticks end and it reads nothing, and
+    /// coming back reads at once; the page's close ends them.
+    #[gpui_kit::test]
+    fn a_log_pages_ticks_run_on_screen_and_end_off_screen_and_at_close(cx: &mut gpui_kit::TestAppContext) {
+        use std::io::Write as _;
+        cx.update(|cx| super::text_page::init(cx));
+        let interval = ngterm_app::log_follower::INTERVAL;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, "first\n").unwrap();
+        let append = |text: &str| {
+            let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(text.as_bytes()).unwrap();
+        };
+        let (overlay, page, recorder) = log_page(&path);
+        cx.run_until_parked();
+        let built = loaded(recorder.take()).expect("the follower's document");
+        assert!(built.contains(">first\n</div>"), "{built}");
+        let shown = following(&overlay, true);
+        let ticking = || page.text_bridge.as_ref().unwrap().ticking();
+
+        cx.update(|cx| {
+            page.event(&renderer_message(&page, &ready(&built)), cx);
+            page.apply(&shown, true, cx);
+        });
+        assert!(ticking());
+        cx.run_until_parked();
+        recorder.take();
+        append("second\n");
+        cx.executor().advance_clock(interval);
+        cx.run_until_parked();
+        assert_eq!(
+            updates_with(recorder.take(), "first\nsecond\n"),
+            1,
+            "a tick read the append"
+        );
+
+        cx.update(|cx| page.apply(&shown, false, cx));
+        assert!(!ticking(), "off screen ends the ticks");
+        append("third\n");
+        cx.executor().advance_clock(interval * 5);
+        cx.run_until_parked();
+        assert!(evaluated(recorder.take()).is_empty(), "nothing is read off screen");
+
+        cx.update(|cx| page.apply(&shown, true, cx));
+        assert!(ticking());
+        cx.run_until_parked();
+        assert_eq!(
+            updates_with(recorder.take(), "first\nsecond\nthird\n"),
+            1,
+            "coming back reads at once"
+        );
+
+        cx.update(|cx| page.close(cx));
+        assert!(!ticking(), "the close ends the ticks");
+        append("fourth\n");
+        cx.executor().advance_clock(interval * 5);
+        cx.run_until_parked();
+        assert!(evaluated(recorder.take()).is_empty());
     }
 
     #[test]
