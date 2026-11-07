@@ -1,0 +1,214 @@
+package com.nickalie.ngterm.android.ui.machines
+
+import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextReplacement
+import com.nickalie.ngterm.android.FAKE_PUBLIC_KEY
+import com.nickalie.ngterm.android.TestGraph
+import com.nickalie.ngterm.android.awaitDescription
+import com.nickalie.ngterm.android.awaitText
+import com.nickalie.ngterm.android.data.SessionKey
+import com.nickalie.ngterm.android.testMachine
+import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import com.nickalie.ngterm.core.fake.fakeSession
+import com.nickalie.ngterm.core.ffi.MachineState
+import com.nickalie.ngterm.core.ffi.MobileEvent
+import com.nickalie.ngterm.core.ffi.MobileException
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+
+private const val ROUTE_WAIT_MS = 10_000L
+
+/** Navigation and page lifetime over real stores and view models, with the core faked at FFI. */
+@RunWith(RobolectricTestRunner::class)
+class MachinesRouteTest {
+    @get:Rule
+    val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @get:Rule
+    val dir = TemporaryFolder()
+
+    private lateinit var test: TestGraph
+
+    @Before
+    fun setUp() {
+        test = TestGraph(dir.root)
+    }
+
+    @After
+    fun tearDown() = test.close()
+
+    private fun route(onOpen: (SessionKey) -> Unit = {}) {
+        compose.setContent { NgtermTheme { MachinesRoute(test.graph, onOpenSession = onOpen) } }
+    }
+
+    private fun seed() {
+        val key = test.seedKey()
+        test.seedMachine(testMachine(keyId = key.id))
+    }
+
+    private fun edit() {
+        compose.onNodeWithContentDescription("More options for build-01").performClick()
+        compose.onNodeWithText("Edit").performClick()
+        compose.awaitText("Edit machine")
+    }
+
+    private fun back() {
+        compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+    }
+
+    private fun gone(text: String) {
+        compose.waitUntil(ROUTE_WAIT_MS) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isEmpty() }
+    }
+
+    @Test
+    fun aPublicKeyRoundTripAndRestorationKeepTheDraftAndClosingStartsTheNextAddFresh() {
+        test.seedKey()
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent { NgtermTheme { MachinesRoute(test.graph) } }
+        compose.awaitText("Add machine")
+        compose.onNodeWithText("Add machine").performClick()
+        compose.onNode(hasText("Name") and hasSetTextAction()).performTextReplacement("unsaved")
+        compose.onNodeWithText("Show public key").performScrollTo().performClick()
+        compose.awaitText("Add this key to your machines")
+        compose.onNodeWithText(FAKE_PUBLIC_KEY).assertExists()
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("Add this key to your machines").assertExists()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithText("unsaved").performScrollTo().assertExists()
+        back()
+        compose.awaitText("Add machine")
+        compose.onNodeWithText("Add machine").performClick()
+        compose.onNodeWithText("unsaved").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Close").performClick()
+        compose.awaitText("No machines yet")
+    }
+
+    @Test
+    fun removingTheMachineElsewhereClosesItsEditPage() {
+        seed()
+        route()
+        compose.awaitDescription("Connected")
+        edit()
+        runBlocking { test.graph.machines.delete("m1") }
+        compose.awaitText("No machines yet")
+        compose.onNodeWithText("Edit machine").assertDoesNotExist()
+    }
+
+    @Test
+    fun restoringAnEditWaitsForTheMachinesToLoadAndKeepsTheUnsavedDraft() {
+        seed()
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent { NgtermTheme { MachinesRoute(test.graph) } }
+        compose.awaitDescription("Connected")
+        edit()
+        compose.onNode(hasText("Name") and hasSetTextAction()).performTextReplacement("unsaved rename")
+        // A process restoration has saved fields and routes, but must make fresh view models and read the stores.
+        compose.runOnIdle { compose.activity.viewModelStore.clear() }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.awaitText("Edit machine")
+        compose.onNodeWithText("unsaved rename").assertExists()
+        compose.onNodeWithContentDescription("Close").performClick()
+        compose.awaitText("build-01")
+        compose.onNodeWithText("unsaved rename").assertDoesNotExist()
+    }
+
+    @Test
+    fun aChangedKeyAnsweredElsewhereClosesItsReviewAndReturnsToSessions() {
+        seed()
+        route()
+        compose.awaitDescription("Connected")
+        compose.onNodeWithText("build-01").performClick()
+        compose.awaitText("No sessions on build-01")
+        compose.runOnIdle { test.core.emit(MobileEvent.HostKeyChanged("m1", "SHA256:old", "SHA256:new")) }
+        compose.awaitText("Review")
+        compose.onNodeWithText("Review").performClick()
+        compose.awaitText("build-01's host key changed")
+        compose.runOnIdle { test.core.emit(MobileEvent.MachineState("m1", MachineState.Connected)) }
+        compose.awaitText("No sessions on build-01")
+        compose.onNodeWithText("build-01's host key changed").assertDoesNotExist()
+        back()
+        compose.awaitText("Add machine")
+    }
+
+    @Test
+    fun aRemovedMachineClosesItsChangedKeyPage() {
+        val key = test.seedKey()
+        runBlocking { test.pins.set("m1", "SHA256:old") }
+        test.core.hostKeys["build-01.lan"] = "SHA256:new"
+        test.seedMachine(testMachine(keyId = key.id))
+        route()
+        compose.awaitDescription("Host key changed")
+        compose.onNodeWithText("Review").performClick()
+        runBlocking { test.graph.machines.delete("m1") }
+        compose.awaitText("No machines yet")
+        compose.onNodeWithText("build-01's host key changed").assertDoesNotExist()
+    }
+
+    @Test
+    fun aKeyThatIsNoLongerAvailableReturnsToTheForm() {
+        test.seedKey()
+        test.seedMachine(testMachine(keyId = "removed-key"))
+        test.core.failNext("connect", MobileException.Unreachable("key no longer available"))
+        route()
+        compose.awaitText("key no longer available")
+        edit()
+        compose.onNodeWithText("Show public key").performScrollTo().performClick()
+        compose.awaitText("Edit machine")
+        compose.onNodeWithText("Add this key to your machines").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Close").performClick()
+        compose.awaitText("Add machine")
+    }
+
+    @Test
+    fun disconnectAndConnectReachTheCoreAndOpeningASessionForwardsItsIdentity() {
+        seed()
+        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "build"))
+        var opened: SessionKey? = null
+        route { opened = it }
+        compose.awaitDescription("Connected")
+        compose.onNodeWithContentDescription("More options for build-01").performClick()
+        compose.onNodeWithText("Disconnect").performClick()
+        compose.awaitDescription("Offline")
+        assertEquals(false, "m1" in test.core.connected)
+        compose.onNodeWithText("Connect").performClick()
+        compose.awaitDescription("Connected")
+        compose.onNodeWithText("build-01").performClick()
+        compose.awaitText("build")
+        compose.onNodeWithText("build").performClick()
+        compose.waitUntil(ROUTE_WAIT_MS) { opened != null }
+        assertEquals(SessionKey("m1", "s1"), opened)
+    }
+
+    @Test
+    fun anExpiredRemovalCannotBeUndoneAndDoesNotReturnAfterNavigation() {
+        seed()
+        route()
+        compose.awaitDescription("Connected")
+        compose.onNodeWithContentDescription("More options for build-01").performClick()
+        compose.onNodeWithText("Remove").performClick()
+        compose.awaitText("Removed build-01")
+        compose.mainClock.advanceTimeBy(ROUTE_WAIT_MS)
+        gone("Undo")
+        assertNull(runBlocking { test.graph.machines.get("m1") })
+        compose.onNodeWithText("Add machine").performClick()
+        back()
+        compose.onNodeWithText("Undo").assertDoesNotExist()
+    }
+}
