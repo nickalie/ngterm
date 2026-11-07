@@ -16,10 +16,12 @@
 //!   follows `right-click-action` (`paste`, `copy`, `copy-or-paste`, `ignore`, or `context-menu`: the word or link
 //!   under it selected and copied per `copy-on-select`, with no menu to show).
 //! - Links ([`super::links`]) are refreshed on every move and modifier change, opened on a click; while the program
-//!   has the mouse, Shift is not counted (Ghostty's `mouseModsWithCapture`). In an overlay link-open mode with no
-//!   mouse capture, Ctrl+Shift or Super+Shift exactly (upstream's ⌘⇧) on a session's terminal is the browser chord
-//!   ([`links::wants_browser`]): Shift is not counted then either, so the link lights and a click opens it in the
-//!   browser (and Shift alone still extends the selection).
+//!   has the mouse, Shift is not counted (Ghostty's `mouseModsWithCapture`). A chord ([`links::click_intent`]) lights
+//!   the link as Ctrl or Super alone does, its extra keys not counted: in an overlay link-open mode with no mouse
+//!   capture, Ctrl+Shift or Super+Shift exactly (upstream's ⌘⇧) on a session's terminal is the browser chord, whose
+//!   click opens the link in the browser (Shift alone still extends the selection); Ctrl+Alt or Super+Alt exactly
+//!   (upstream's ⌘⌥, plus Shift under capture) is the reveal chord, whose click reveals the link's file in the file
+//!   manager, while a drag with it still draws a block selection.
 //! - The wheel goes to `Pane::wheel` (alternate scroll, a report, or the viewport) in whole steps: precise deltas
 //!   accumulate per cell height, `mouse-scroll-multiplier` (default `precision:1,discrete:3`) applies.
 //! - The pointer's shape is the program's (OSC 22; the I-beam by default), a hand over a live link. Hiding it while
@@ -248,7 +250,7 @@ impl TerminalView {
         }
     }
 
-    /// The modifiers links are looked up with: the browser chord's Shift dropped ([`Self::chord_mods`]), and Shift
+    /// The modifiers links are looked up with: a chord's extra keys dropped ([`Self::chord_mods`]), and Shift
     /// dropped while the program has the mouse and may not capture Shift (Ghostty's `mouseModsWithCapture`), since
     /// Shift then only takes the mouse back.
     fn link_mods(&self, pane: &Pane, mods: Mods, cx: &App) -> Mods {

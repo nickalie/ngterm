@@ -231,13 +231,39 @@ fn the_config_pins_the_padding_and_paints_the_background() {
     );
 }
 
-/// Upstream's `HudLinkClick` test: ⌘ and the ⌘⌥ reveal chord click a link, ⌥ alone, ⌘⇧, ⌘⌥⇧ and ⌘⌃ do not.
+/// Upstream's `HudLinkClick` test: ⌘ and the ⌘⌥ reveal chord click a link, ⌥ alone, ⌘⇧, ⌘⌥⇧ and ⌘⌃ do not (Ctrl or
+/// Super standing for ⌘).
 #[test]
-fn ctrl_and_the_ctrl_alt_reveal_chord_are_the_link_modifiers() {
+fn ctrl_or_super_and_the_reveal_chord_are_the_link_modifiers() {
     assert!(is_link_modifier(&Modifiers::control()));
     assert!(is_link_modifier(&Modifiers {
         control: true,
         alt: true,
+        ..Modifiers::default()
+    }));
+    assert!(is_link_modifier(&Modifiers {
+        platform: true,
+        ..Modifiers::default()
+    }));
+    assert!(is_link_modifier(&Modifiers {
+        platform: true,
+        alt: true,
+        ..Modifiers::default()
+    }));
+    assert!(!is_link_modifier(&Modifiers {
+        platform: true,
+        shift: true,
+        ..Modifiers::default()
+    }));
+    assert!(!is_link_modifier(&Modifiers {
+        platform: true,
+        alt: true,
+        shift: true,
+        ..Modifiers::default()
+    }));
+    assert!(!is_link_modifier(&Modifiers {
+        control: true,
+        function: true,
         ..Modifiers::default()
     }));
     assert!(!is_link_modifier(&Modifiers::control_shift()));

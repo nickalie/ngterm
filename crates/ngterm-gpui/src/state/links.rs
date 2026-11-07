@@ -180,7 +180,10 @@ impl AppState {
     /// Runs `work` on a worker thread: opening a file on slow storage can block.
     #[cfg_attr(
         not(test),
-        expect(clippy::unused_self, reason = "a test build keeps the worker's handle to wait for it")
+        expect(
+            clippy::unused_self,
+            reason = "a test build keeps the worker's handle to wait for it"
+        )
     )]
     fn spawn_link_work(&mut self, work: impl FnOnce() + Send + 'static) {
         let handle = std::thread::spawn(work);

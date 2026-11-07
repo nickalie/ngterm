@@ -6,9 +6,10 @@
 //! painter (upstream's bundled `hud.sh`, ported), which re-reads the body file the core writes; no shell runs on any
 //! OS. The deck lays it out above every pane of its page ([`Place::Hud`]): each
 //! open (a new slot generation) mounts a fresh terminal and a close drops it. The panel takes no focus and no clicks,
-//! so the session underneath keeps both; a Ctrl-click (Linux's link modifier, upstream's ⌘-click) over it opens the
-//! panel's link under the pointer and goes no further, and a Ctrl-hover over a link shows the pointing hand and the
-//! link's underline. A terminal ask drawn above the panel keeps both gestures (it takes the pointer).
+//! so the session underneath keeps both; a Ctrl- or Super-click (a terminal's link modifiers, upstream's ⌘-click; with
+//! Alt, the reveal chord) over it opens the panel's link under the pointer and goes no further, and a Ctrl- or
+//! Super-hover over a link shows the pointing hand and the link's underline. A terminal ask drawn above the panel keeps
+//! both gestures (it takes the pointer).
 //!
 //! Where the panel goes is a pure function of the slot and the bounds it is laid out in ([`PanelStyle`]).
 //!
@@ -172,11 +173,12 @@ pub fn config_overlay(background: Option<&str>, opacity: f64) -> String {
     text
 }
 
-/// Whether `modifiers` make a HUD link click (upstream's `HudLinkClick`, which takes ⌘ and ⌘⌥): Ctrl alone, Ghostty's
-/// link modifier on Linux, opens the link; Ctrl+Alt, the reveal chord, reveals its file. Shift, Super and Fn refuse it.
+/// Whether `modifiers` make a HUD link click (upstream's `HudLinkClick`, which takes ⌘ and ⌘⌥): Ctrl or Super alone,
+/// as a terminal's links go live (Ghostty's `ctrlOrSuper`), opens the link; Ctrl+Alt or Super+Alt, the reveal chord,
+/// reveals its file. Shift, Fn and Ctrl with Super refuse it.
 #[must_use]
 pub fn is_link_modifier(modifiers: &Modifiers) -> bool {
-    modifiers.control && !modifiers.shift && !modifiers.platform && !modifiers.function
+    modifiers.control != modifiers.platform && !modifiers.shift && !modifiers.function
 }
 
 // MARK: - the panel on its page
@@ -189,7 +191,7 @@ pub struct HudPanel {
     shared: Rc<Shared>,
     /// The panel's own config overlay (its background and padding), loaded over the app's config.
     overlay: String,
-    /// A Ctrl-hover shows the pointing hand.
+    /// A link-modifier hover shows the pointing hand.
     hand: Rc<Cell<bool>>,
     _events: Subscription,
 }
@@ -409,9 +411,10 @@ pub fn element(layer: &HudLayer) -> Option<impl IntoElement> {
     )
 }
 
-/// The Ctrl-click and Ctrl-hover over the panel (upstream's `HudLinkClick`): a hitbox that takes no pointer from what
-/// lies under it, its pointing hand while the link modifier alone hovers a link, and a Ctrl-press over it that opens
-/// the panel's link there and stops (a terminal ask over the panel occludes the hitbox and keeps both).
+/// The link-modifier click and hover over the panel (upstream's `HudLinkClick`): a hitbox that takes no pointer from
+/// what lies under it, its pointing hand while a link modifier ([`is_link_modifier`]) hovers a link, and a press with
+/// one over it that opens the panel's link there and stops (a terminal ask over the panel occludes the hitbox and keeps
+/// both).
 fn link_input(view: Entity<TerminalView>, hand: Rc<Cell<bool>>) -> impl IntoElement {
     canvas(
         |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),

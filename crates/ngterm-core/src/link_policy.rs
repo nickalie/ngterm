@@ -26,7 +26,6 @@ use std::sync::OnceLock;
 
 use uuid::Uuid;
 
-use crate::interrupt::KeyModifiers;
 use crate::persist::settings::LinkOpenMode;
 
 mod locations;
@@ -321,13 +320,6 @@ pub fn route(raw: &str, mode: LinkOpenMode, origin: ClickOrigin) -> Route {
     route_for_hosts(raw, mode, origin, local_host_names())
 }
 
-/// Whether a Ctrl+Shift or Super+Shift link click (upstream's ⌘⇧, exactly that chord) overrides an overlay mode and
-/// sends the link to the browser ([`click_intent`] is [`ClickIntent::Browser`]).
-#[must_use]
-pub fn wants_browser(modifiers: KeyModifiers, mode: LinkOpenMode, origin: ClickOrigin, mouse_captured: bool) -> bool {
-    click_intent(modifiers, mode, origin, mouse_captured) == ClickIntent::Browser
-}
-
 /// The route of a raw link: [`disposition_for_hosts`] decides open, reveal or ignore, then a web link an overlay can
 /// show, clicked in a pane or the scratch terminal, goes to that session's overlay at the mode's size under any mode
 /// but [`LinkOpenMode::Browser`]. Whether the overlay is free right now is the caller's check.
@@ -550,6 +542,7 @@ pub(crate) fn percent_decode(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interrupt::KeyModifiers;
 
     /// A fixed set, so host matching does not depend on the machine.
     fn hosts() -> HashSet<String> {
@@ -934,7 +927,12 @@ mod tests {
         }
     }
 
-    // wants_browser (the Ctrl/Super+Shift override)
+    // the browser chord (the Ctrl/Super+Shift override)
+
+    /// Whether `click_intent` sends the click to the browser.
+    fn wants_browser(modifiers: KeyModifiers, mode: LinkOpenMode, origin: ClickOrigin, mouse_captured: bool) -> bool {
+        click_intent(modifiers, mode, origin, mouse_captured) == ClickIntent::Browser
+    }
 
     const OVERLAY_MODES: [LinkOpenMode; 4] = [
         LinkOpenMode::Overlay,

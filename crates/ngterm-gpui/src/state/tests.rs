@@ -1155,19 +1155,25 @@ fn relative_lookups_refuse_network_and_automount_targets_before_existence_checks
     for cwd in ["/net/server", "/misc/share"] {
         assert!(ngterm_core::link_policy::locations("notes.md", ClickOrigin::Pane(session), Some(cwd)).is_empty());
     }
-    // a Windows share or device path is refused before the directory is joined; on Unix a backslash is a name's
+    // a Windows share or device path is refused before the directory is joined; on Unix a backslash is a name's. Each
+    // carries a `:line`, which makes an allowed absolute path a candidate, so only the guard can empty the result.
+    let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+    let local = if cfg!(windows) { r"C:\notes.md:3" } else { "/notes.md:3" };
+    assert!(!ngterm_core::link_policy::locations(local, ClickOrigin::Pane(session), Some(&cwd)).is_empty());
     let refused: &[&str] = if cfg!(windows) {
         &[
-            r"\\server\share\notes.md",
-            r"\\?\UNC\server\share\notes.md",
-            "/\\server/share/notes.md",
+            r"\\server\share\notes.md:3",
+            r"\\?\UNC\server\share\notes.md:3",
+            "/\\server/share/notes.md:3",
         ]
     } else {
-        &["/\\server/share/notes.md", "//server/share/notes.md:3"]
+        &["/\\server/share/notes.md:3", "//server/share/notes.md:3"]
     };
     for raw in refused {
-        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
-        assert!(ngterm_core::link_policy::locations(raw, ClickOrigin::Pane(session), Some(&cwd)).is_empty());
+        assert!(
+            ngterm_core::link_policy::locations(raw, ClickOrigin::Pane(session), Some(&cwd)).is_empty(),
+            "{raw}"
+        );
     }
 }
 
