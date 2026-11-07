@@ -94,7 +94,8 @@ the app's Help menu can install the CLI. Windows ZIPs include the same app-local
 
 Official archives, AppImages, user-owned macOS app bundles (including DMG installs), and Windows MSI installs check GitHub
 for stable updates at launch and hourly. Updates download in the background and are verified against the release's
-`SHA256SUMS`. Choose **Restart to Update** in the titlebar, or **Help → Check for Updates…**, to install after the
+`SHA256SUMS`, whose minisign signature must match the key the running build was released with
+(`crates/ngterm-update/trust/minisign.pub`). Choose **Restart to Update** in the titlebar, or **Help → Check for Updates…**, to install after the
 normal quit save and reopen ngterm. Ready updates also install on an ordinary quit, without reopening the app.
 Live sessions reconnect; other shells close and follow the configured restore
 mode. A failed archive replacement restores the previous installation. Windows MSI updates use Windows Installer
@@ -138,8 +139,9 @@ your own Xcode team); the signed app comes through TestFlight and the App Store.
 To release, update the workspace version and lockfile, commit, then push the matching tag (for example `v0.1.0`).
 The `release` workflow builds, packages and verifies all five desktop platform/architecture combinations and the iOS
 app before uploading
-assets and `SHA256SUMS`
-to a GitHub Release, once the release reviewer approves its `approve` job. New releases stay drafts until uploads
+assets, `SHA256SUMS` and its minisign signature `SHA256SUMS.minisig` to a GitHub Release, with a build provenance
+attestation for each (`gh attestation verify <file> --repo nickalie/ngterm`), once the release reviewer approves its
+`approve` job. New releases stay drafts until uploads
 finish. Run by hand (`gh workflow run release --ref <ref>`), it is a dry run on any ref: it builds the platforms its
 **platforms** input names and keeps them as workflow artifacts. With **publish** enabled on a tag ref
 (`--ref vX.Y.Z -f publish=true`) it publishes, or re-uploads, that tag's assets. With **rehearse** enabled on a tag

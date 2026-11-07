@@ -466,21 +466,27 @@ release is cut before it.
 
 **Files:**
 - Modify: `.github/workflows/release.yml`
+- ➕ Create: `scripts/sign-sums.sh` (signs and verifies; `--throwaway` for dry runs); Modify: README > Downloads and
+  releases
 
-- [ ] `publish`:
+- [x] `publish`:
       - checks the `SHA256SUMS` digest from `checksums` and runs `sha256sum -c` over the downloaded assets first;
       - installs minisign from Ubuntu's archive;
       - writes the key to a `0600` temp file removed on exit;
       - signs `SHA256SUMS` with trusted comment `ngterm v<version> SHA256SUMS`;
       - verifies the signature against `trust/minisign.pub` when that is non-empty
-- [ ] `actions/attest-build-provenance` over every asset
-- [ ] ➕ `publish` runs on rehearsals too, up to the signature and its check: the minisign key is checked before a
+- [x] `actions/attest-build-provenance` over every asset
+- [x] ➕ one attestation call over a checksums file (`subject-checksums`): the lines of the checked `SHA256SUMS` plus
+      `SHA256SUMS` and `SHA256SUMS.minisig` themselves. `sign-sums.sh` verifies against the committed key, so a secret
+      that doesn't match it fails the release; checked locally with the real key (decrypted into the script's
+      environment only), a foreign key and a throwaway one
+- [x] ➕ `publish` runs on rehearsals too (its condition accepts the platforms a rehearsal skipped), up to the signature and its check: the minisign key is checked before a
       real release, and nothing is attested or uploaded
-- [ ] mode handling: `require_minisign` (a non-empty `minisign.pub`) or `required` mode with no key → fail; otherwise
+- [x] mode handling: `require_minisign` (a non-empty `minisign.pub`) or `required` mode with no key → fail; otherwise
       no key → notice and no `.minisig`
-- [ ] dry runs: `checksums` signs with a throwaway `minisign -G -W` key and verifies it
-- [ ] tests: `scripts/lint.sh`
-- [ ] run checks; must pass before Task 8
+- [x] dry runs: `checksums` signs with a throwaway `minisign -G -W` key and verifies it
+- [x] tests: `scripts/lint.sh`
+- [x] run checks; must pass before Task 8
 
 **Credentials:** none new. A rehearsal (Task 4) checks the minisign key.
 
