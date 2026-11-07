@@ -14,3 +14,12 @@
 PKG_CONFIG = { value = "scripts/pkg-config.sh", relative = true }
 MACOSX_DEPLOYMENT_TARGET = "13.0"
 IPHONEOS_DEPLOYMENT_TARGET = "26.0"
+
+# Android 15+ devices may use 16 KB memory pages, and Google Play requires native libraries whose LOAD segments are
+# aligned for them: the mobile core (libngterm_mobile.so) links with a 16 KB maximum page size on both ABIs it ships.
+# An exported RUSTFLAGS replaces these, as it replaces every target's.
+[target.aarch64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
+
+[target.x86_64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]

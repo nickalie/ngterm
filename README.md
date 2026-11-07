@@ -85,6 +85,7 @@ tag matching the workspace version in `Cargo.toml` is pushed:
 | Windows | x86_64 | per-user `.msi` installer, portable `.zip` |
 | macOS 14+ | Intel x86_64, Apple Silicon arm64 | `.pkg` installer, drag-to-Applications `.dmg`, `.app.zip`, binary `.tar.gz` |
 | iOS | arm64 | unsigned `.ipa` |
+| Android 8.0+ | arm64-v8a, x86_64 | signed `.apk` |
 
 The archives include `ngterm`, `ngtermctl`, `ngterm-session`, `ngterm-headless`, themes, terminfo, shell and agent
 integrations, and license notices. Extract the entire archive together. Linux archives start through `ngterm/AppRun`;
@@ -134,11 +135,13 @@ For a tarball, use the same commands with its extracted `ngterm` directory in pl
 macOS bundles are ad-hoc signed; the PKG and DMG are not Developer ID signed or notarized. Public downloads can
 require a manual Gatekeeper approval until release signing credentials are configured. Windows installers are
 currently unsigned as well. The iOS `.ipa` is unsigned and installs only once re-signed (with a sideloading tool or
-your own Xcode team); the signed app comes through TestFlight and the App Store.
+your own Xcode team); the signed app comes through TestFlight and the App Store. The Android `.apk` is signed with
+ngterm's own key, which the Google Play release will carry too, so either install updates the other; its certificate's
+SHA-256 is in `packaging/android/apk-certificate.sha256`.
 
 To release, update the workspace version and lockfile, commit, then push the matching tag (for example `v0.1.0`).
-The `release` workflow builds, packages and verifies all five desktop platform/architecture combinations and the iOS
-app before uploading
+The `release` workflow builds, packages and verifies all five desktop platform/architecture combinations, the iOS
+app and the Android APK before uploading
 assets, `SHA256SUMS` and its minisign signature `SHA256SUMS.minisig` to a GitHub Release, with a build provenance
 attestation for each (`gh attestation verify <file> --repo nickalie/ngterm`), once the release reviewer approves its
 `approve` job. New releases stay drafts until uploads

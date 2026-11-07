@@ -1,5 +1,6 @@
 # The release: build, package and publish ngterm for Linux (x86_64, aarch64), Windows (x86_64) and macOS (Intel, Apple
-# Silicon), and the iOS app as an unsigned IPA (TestFlight and the App Store get the signed one from ios-release.yml).
+# Silicon), the Android app as an APK signed with ngterm's APK key, and the iOS app as an unsigned IPA (TestFlight and
+# the App Store get the signed one from ios-release.yml).
 # scripts/release-version.py, in the `version` job, decides what a run does:
 #
 # - publishing: a `v*` tag push, or a dispatch with `publish: true` on a tag ref
@@ -669,15 +670,241 @@ jobs:
           manifest="$(python3 scripts/release-artifacts.py manifest dist "$ARTIFACT_ID")"
           echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
 
+  # The Android APK, unsigned: android-sign signs it. The version name and code come from the version job.
+  android-build:
+    needs: version
+    if: contains(fromJSON(needs.version.outputs.platforms), 'android')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    outputs:
+      manifest: ${{ steps.manifest.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
+      # Gradle needs JDK 21; setup-android.sh finds it through JAVA_HOME
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release-android
+      # android.yml's vendor root (the libghostty-vt prefix), read only
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: vendor-ngterm-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-provider: basic
+      # setup-android.sh counts a missing sshd (the mobile e2e test's) as not done, so it is installed here too
+      - name: Android toolchain (build/pins.env)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends openssh-server
+          scripts/setup-android.sh | sed 's/^export //; s/"//g' >> "$GITHUB_ENV"
+      - name: Release APK, unsigned
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          VERSION_CODE: ${{ needs.version.outputs.android_version_code }}
+        run: |
+          scripts/build-android.sh assembleRelease -Pngterm.versionName="$VERSION" -Pngterm.versionCode="$VERSION_CODE"
+          mkdir dist
+          cp mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk "dist/ngterm-$VERSION-android-unsigned.apk"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
+        with:
+          name: release-android-unsigned
+          path: dist/*
+          if-no-files-found: error
+      - name: Manifest
+        id: manifest
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          manifest="$(python3 scripts/release-artifacts.py manifest dist "$ARTIFACT_ID" --not-asset "ngterm-$VERSION-android-unsigned.apk")"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+
+  # Signs the APK with ngterm's APK key (scripts/sign-android.sh), which is also Google Play's app signing key. It runs
+  # nothing the build produced: the APK reaches it as data, signed by the build tools.
+  android-sign:
+    needs: [version, approve, android-build]
+    # A skipped `approve` passes on a dry run only
+    if: >-
+      ${{ !cancelled() && needs.android-build.result == 'success'
+      && (needs.approve.result == 'success'
+      || (needs.version.outputs.signed_run != 'true' && needs.approve.result == 'skipped')) }}
+    runs-on: ubuntu-24.04
+    environment: ${{ needs.version.outputs.signed_run == 'true' && 'release' || '' }}
+    timeout-minutes: 15
+    outputs:
+      manifest: ${{ steps.manifest.outputs.manifest }}
+      identity: ${{ steps.identity.outputs.identity }}
+    env:
+      UNSIGNED: ${{ needs.android-build.outputs.manifest }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
+      - name: Artifact ids
+        id: ids
+        run: |
+          ids="$(python3 scripts/release-artifacts.py ids "$UNSIGNED")"
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.ids.outputs.ids }}
+          path: ${{ runner.temp }}/in
+          merge-multiple: true
+      - name: Digests
+        run: python3 scripts/release-artifacts.py check "$RUNNER_TEMP/in" "$UNSIGNED"
+      - name: Build tools (build/pins.env)
+        run: |
+          source build/pins.env
+          [[ -x "$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS_VERSION/apksigner" ]] ||
+            (yes 2>/dev/null || true) | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+              "build-tools;$ANDROID_BUILD_TOOLS_VERSION" >/dev/null
+      # A dry run signs with a throwaway key; a signed run with the APK key when its secrets are there. Without them the
+      # APK stays a workflow artifact, unsigned and out of the release: a notice in `optional` mode, a failure in
+      # `required` mode or once packaging/android/apk-certificate.sha256 names the key
+      - name: Signing identity
+        id: identity
+        env:
+          SIGNED_RUN: ${{ needs.version.outputs.signed_run }}
+          SIGNING_MODE: ${{ needs.version.outputs.signing_mode }}
+          HAS_ANDROID_APK_KEYSTORE: ${{ secrets.ANDROID_APK_KEYSTORE != '' }}
+          HAS_ANDROID_APK_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_APK_KEYSTORE_PASSWORD != '' }}
+          HAS_ANDROID_APK_KEY_PASSWORD: ${{ secrets.ANDROID_APK_KEY_PASSWORD != '' }}
+          # a variable, not a secret: GitHub masks a secret's value in every log line and drops any job output holding
+          # it, and the alias `ngterm` is in every file name of the release
+          ANDROID_APK_KEY_ALIAS: ${{ vars.ANDROID_APK_KEY_ALIAS }}
+        run: |
+          if [[ "$SIGNED_RUN" != true ]]; then
+            identity=throwaway
+          else
+            missing=()
+            for secret in ANDROID_APK_KEYSTORE ANDROID_APK_KEYSTORE_PASSWORD ANDROID_APK_KEY_PASSWORD; do
+              has="HAS_$secret"
+              [[ "${!has}" == true ]] || missing+=("secret $secret")
+            done
+            [[ -n "$ANDROID_APK_KEY_ALIAS" ]] || missing+=("variable ANDROID_APK_KEY_ALIAS")
+            committed="$(tr -d '[:space:]' < packaging/android/apk-certificate.sha256 2>/dev/null || true)"
+            if ((${#missing[@]} == 0)); then
+              identity=apk-key
+            elif [[ "$SIGNING_MODE" == required || -n "$committed" ]]; then
+              echo "::error::the APK must be signed; the release environment lacks: ${missing[*]}"
+              exit 1
+            else
+              echo "::notice::the APK stays out of the release, unsigned: the release environment lacks ${missing[*]}"
+              identity=unsigned
+            fi
+          fi
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+      - name: Sign
+        env:
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+          SIGN_KEYSTORE: ${{ secrets.ANDROID_APK_KEYSTORE }}
+          SIGN_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_APK_KEYSTORE_PASSWORD }}
+          SIGN_KEY_ALIAS: ${{ vars.ANDROID_APK_KEY_ALIAS }}
+          SIGN_KEY_PASSWORD: ${{ secrets.ANDROID_APK_KEY_PASSWORD }}
+        run: |
+          mkdir dist
+          unsigned="$RUNNER_TEMP/in/ngterm-$VERSION-android-unsigned.apk"
+          case "$IDENTITY" in
+            apk-key) scripts/sign-android.sh apk "$unsigned" "dist/ngterm-$VERSION-android.apk" ;;
+            throwaway) scripts/sign-android.sh apk --throwaway "$unsigned" "dist/ngterm-$VERSION-android.apk" ;;
+            unsigned) cp "$unsigned" dist/ ;;
+          esac
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
+        with:
+          name: release-android
+          path: dist/*
+          if-no-files-found: error
+      # An unsigned APK can't be installed, so it is never a release asset
+      - name: Manifest
+        id: manifest
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+        run: |
+          not_assets=()
+          [[ "$IDENTITY" != unsigned ]] || not_assets=(--not-asset "ngterm-$VERSION-android-unsigned.apk")
+          manifest="$(python3 scripts/release-artifacts.py manifest dist "$ARTIFACT_ID" "${not_assets[@]}")"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+
+  # The signed (or, without the key, unsigned) APK checked with the build tools: its signature and certificate, the
+  # 16 KB alignment of the APK and of every native library, and the version name and code
+  android-verify:
+    needs: [version, android-sign]
+    if: ${{ !cancelled() && needs.android-sign.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ANDROID: ${{ needs.android-sign.outputs.manifest }}
+      IDENTITY: ${{ needs.android-sign.outputs.identity }}
+      VERSION: ${{ needs.version.outputs.version }}
+      VERSION_CODE: ${{ needs.version.outputs.android_version_code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          persist-credentials: false
+      - name: Artifact ids
+        id: ids
+        run: |
+          ids="$(python3 scripts/release-artifacts.py ids "$ANDROID")"
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.ids.outputs.ids }}
+          path: ${{ runner.temp }}/in
+          merge-multiple: true
+      - name: Digests
+        run: python3 scripts/release-artifacts.py check "$RUNNER_TEMP/in" "$ANDROID"
+      - name: Build tools (build/pins.env)
+        run: |
+          source build/pins.env
+          [[ -x "$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS_VERSION/apksigner" ]] ||
+            (yes 2>/dev/null || true) | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+              "build-tools;$ANDROID_BUILD_TOOLS_VERSION" >/dev/null
+      - name: Signature, alignment and version
+        run: |
+          case "$IDENTITY" in
+            apk-key)
+              certificate="$(tr -d '[:space:]' < packaging/android/apk-certificate.sha256)"
+              scripts/sign-android.sh check "$RUNNER_TEMP/in/ngterm-$VERSION-android.apk" "$VERSION" "$VERSION_CODE" \
+                --certificate "$certificate"
+              ;;
+            throwaway)
+              scripts/sign-android.sh check "$RUNNER_TEMP/in/ngterm-$VERSION-android.apk" "$VERSION" "$VERSION_CODE"
+              ;;
+            unsigned)
+              scripts/sign-android.sh check "$RUNNER_TEMP/in/ngterm-$VERSION-android-unsigned.apk" "$VERSION" \
+                "$VERSION_CODE" --unsigned
+              ;;
+            *)
+              echo "::error::unknown identity '$IDENTITY'"
+              exit 1
+              ;;
+          esac
+
   checksums:
-    needs: [version, linux, windows-build, macos-sign, ios-build]
+    needs: [version, linux, windows-build, macos-sign, ios-build, android-sign]
     # Over what this run built: a dry run's or rehearsal's left-out platforms are skipped, and any failure stops it, a
     # job cancelled past its timeout included
     if: >-
       ${{ !cancelled() && needs.version.result == 'success' && !contains(needs.*.result, 'failure')
       && !contains(needs.*.result, 'cancelled')
       && (needs.linux.result == 'success' || needs.windows-build.result == 'success'
-      || needs.macos-sign.result == 'success' || needs.ios-build.result == 'success') }}
+      || needs.macos-sign.result == 'success' || needs.ios-build.result == 'success'
+      || needs.android-sign.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -688,6 +915,7 @@ jobs:
       WINDOWS: ${{ needs.windows-build.outputs.manifest }}
       MACOS: ${{ needs.macos-sign.outputs.manifest }}
       IOS: ${{ needs.ios-build.outputs.manifest }}
+      ANDROID: ${{ needs.android-sign.outputs.manifest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -696,7 +924,7 @@ jobs:
       - name: Artifact ids
         id: ids
         run: |
-          ids="$(python3 scripts/release-artifacts.py ids "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS")"
+          ids="$(python3 scripts/release-artifacts.py ids "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS" "$ANDROID")"
           echo "ids=$ids" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -707,6 +935,7 @@ jobs:
         run: |
           mkdir sums
           python3 scripts/release-artifacts.py sums "$RUNNER_TEMP/in" "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS" \
+            "$ANDROID" \
             > sums/SHA256SUMS
           cat sums/SHA256SUMS
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -735,7 +964,18 @@ jobs:
   # A release: the minisign signature over SHA256SUMS, the build attestations, then the GitHub release. A rehearsal
   # stops after the signature, so the key is checked before a real release; it attests and uploads nothing.
   publish:
-    needs: [version, approve, linux, windows-build, windows-verify, macos-sign, macos-verify, ios-build, checksums]
+    needs:
+      - version
+      - approve
+      - linux
+      - windows-build
+      - windows-verify
+      - macos-sign
+      - macos-verify
+      - ios-build
+      - android-sign
+      - android-verify
+      - checksums
     # Publishing needs every job to succeed. A rehearsal may build a subset of platforms, so there a skipped job is
     # accepted; a failed or cancelled one (a job past its timeout ends cancelled, not failed) never is
     if: >-
@@ -756,6 +996,7 @@ jobs:
       WINDOWS: ${{ needs.windows-build.outputs.manifest }}
       MACOS: ${{ needs.macos-sign.outputs.manifest }}
       IOS: ${{ needs.ios-build.outputs.manifest }}
+      ANDROID: ${{ needs.android-sign.outputs.manifest }}
       SUMS: ${{ needs.checksums.outputs.manifest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -771,11 +1012,11 @@ jobs:
         run: |
           [[ -n "$SUMS" ]] || { echo "::error::no SUMS manifest"; exit 1; }
           if [[ "$PUBLISHING" == true ]]; then
-            for manifest in LINUX_X86_64 LINUX_AARCH64 WINDOWS MACOS IOS; do
+            for manifest in LINUX_X86_64 LINUX_AARCH64 WINDOWS MACOS IOS ANDROID; do
               [[ -n "${!manifest}" ]] || { echo "::error::no $manifest manifest"; exit 1; }
             done
           fi
-          ids="$(python3 scripts/release-artifacts.py ids "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS" "$SUMS")"
+          ids="$(python3 scripts/release-artifacts.py ids "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS" "$ANDROID" "$SUMS")"
           echo "ids=$ids" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -785,7 +1026,7 @@ jobs:
       - name: Digests
         run: |
           python3 scripts/release-artifacts.py check "$RUNNER_TEMP/dist" \
-            "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS" "$SUMS"
+            "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS" "$ANDROID" "$SUMS"
           (cd "$RUNNER_TEMP/dist" && sha256sum --check --strict SHA256SUMS)
       # With the key: sign, then verify against the committed trust/minisign.pub. Without it: a non-empty
       # minisign.pub (which installed builds then require) or `required` mode fails; otherwise a notice, and the
@@ -827,7 +1068,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
-          mapfile -t assets < <(python3 scripts/release-artifacts.py assets "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS")
+          mapfile -t assets < <(python3 scripts/release-artifacts.py assets "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS" "$ANDROID")
           cd "$RUNNER_TEMP/dist"
           # Upload into a draft first: failed uploads never expose a partial new release.
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

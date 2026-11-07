@@ -22,8 +22,9 @@ android {
             libs.versions.targetSdk
                 .get()
                 .toInt()
-        versionCode = 1
-        versionName = "0.1.0"
+        // a release build gets both from release.yml's version job (scripts/release-version.py); local builds keep these
+        versionCode = providers.gradleProperty("ngterm.versionCode").orNull?.toInt() ?: 1
+        versionName = providers.gradleProperty("ngterm.versionName").orNull ?: "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             // the ABIs scripts/build-android.sh builds the mobile core for; JNA's other ABIs would only crash

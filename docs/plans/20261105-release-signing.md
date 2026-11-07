@@ -224,13 +224,16 @@
 ## Technical Details
 
 - **Secrets** (environment `release`):
-  - Android: `ANDROID_APK_KEYSTORE` (base64), `ANDROID_APK_KEYSTORE_PASSWORD`, `ANDROID_APK_KEY_ALIAS`,
-    `ANDROID_APK_KEY_PASSWORD`, the GitHub APK's key;
+  - Android: `ANDROID_APK_KEYSTORE` (base64), `ANDROID_APK_KEYSTORE_PASSWORD`, `ANDROID_APK_KEY_PASSWORD`, the
+    GitHub APK's key. Its alias is the variable `ANDROID_APK_KEY_ALIAS`, not a secret: GitHub masks every secret
+    value in the logs and drops any job output containing one, and the alias `ngterm` is in every file name;
   - updater: `MINISIGN_SECRET_KEY`, generated with `minisign -G -W` (no password: the environment already protects
     it).
   - Secrets are read only in the `env:` of the steps that use them, never at job level.
 - **Variables:** `NGTERM_RELEASE_SIGNING` is repository-level; every other variable lives in `release`.
-  - `NGTERM_RELEASE_SIGNING` (the Apple, Windows and Google Play plans add their own).
+  - `NGTERM_RELEASE_SIGNING`;
+  - `ANDROID_APK_KEY_ALIAS` (`ngterm`);
+  - the Apple, Windows and Google Play plans add their own.
 - **iOS (unsigned IPA):**
   - `ios-build` runs on the Xcode runner `ios-release.yml` uses, checks out with the full history (the build number
     is the commit count), and runs `scripts/build-ios.sh archive` with none of the App Store Connect variables, so the
@@ -488,33 +491,46 @@ release is cut before it.
   invocation, `scripts/release-version.py` (if `android` isn't wired to a job yet)
 - Create: `scripts/sign-android.sh`
 - Modify: `.github/workflows/release.yml`, README > Downloads and releases
+- ➕ Create: `packaging/android/apk-certificate.sha256` (the APK key's certificate digest, a trust anchor)
 
-- [ ] Gradle reads `ngterm.versionName`/`ngterm.versionCode`, keeping its defaults
-- [ ] link `libngterm_mobile.so` with `-z max-page-size=16384`
-- [ ] `android-build` (platform `android`, no secrets): `scripts/build-android.sh assembleRelease` with the version
+- [x] Gradle reads `ngterm.versionName`/`ngterm.versionCode`, keeping its defaults
+- [x] link `libngterm_mobile.so` with `-z max-page-size=16384`
+- [x] `android-build` (platform `android`, no secrets): `scripts/build-android.sh assembleRelease` with the version
       properties; uploads the unsigned APK with its manifest
-- [ ] `scripts/sign-android.sh`: the keystore to a temp file removed on exit; `zipalign -P 16 -f 4` then
+- [x] `scripts/sign-android.sh`: the keystore to a temp file removed on exit; `zipalign -P 16 -f 4` then
       `apksigner sign`; verified. It takes the key as the Play plan's upload key will (one script, a key per use)
-- [ ] `android-sign` (`environment: release` on a signed run, needs `approve`): with the APK key,
+- [x] `android-sign` (`environment: release` on a signed run, needs `approve`): with the APK key,
       `ngterm-<version>-android.apk` joins the release assets; without it the APK stays a workflow artifact (a
       notice in `optional` mode, a failure in `required` mode). Dry runs sign with a `keytool -genkeypair` throwaway
       key
-- [ ] `android-verify`:
+- [x] `android-verify`:
       - `apksigner verify --print-certs`, and the signer's certificate digest equal to the APK key's when signed with
         it;
       - `zipalign -c -P 16 -v 4`;
       - `llvm-readelf -lW` LOAD alignment of at least `0x4000` on every `lib/*/*.so`, including JNA's
         `libjnidispatch.so`;
       - `aapt2 dump badging`: version name and code equal the `version` job's outputs
-- [ ] `checksums` and `publish` take `android-sign`'s manifest like the other platforms'
-- [ ] tests: `scripts/lint.sh`; `scripts/sign-android.sh` signs and verifies with a throwaway `keytool` key locally
-- [ ] run checks; must pass before Task 9
+- [x] `checksums` and `publish` take `android-sign`'s manifest like the other platforms'
+- [x] ➕ the key exists before the code (generated here, user 2026-11-07: a random password, no dialog), so its
+      certificate digest is committed as `packaging/android/apk-certificate.sha256`: `sign-android.sh` refuses a
+      secret that isn't that key, `android-verify` checks the certificate, and a signed run without the secrets fails
+      even in `optional` mode once the file names the key. The check half of `sign-android.sh` (`check`) is what
+      `android-verify` runs; GNU `readelf` reads the ELF headers, so the verify job needs no NDK
+- [x] ➕ without the key (`optional` mode, no committed digest) `android-sign` re-uploads the unsigned APK as a
+      non-asset, so `checksums` and `publish` see a manifest either way
+- [x] tests: `scripts/lint.sh`; ➕ on a local `assembleRelease` build (version 0.1.0, code 1000): the unsigned APK
+      checks as unsigned and aligned, all 8 native libraries (the core and JNA's) have 16 KB LOAD segments, a
+      throwaway key and the real key (decrypted into the script's environment only) sign and check, the real key's
+      certificate equals the committed digest, and a wrong certificate, version or unsigned expectation is refused
+- [x] run checks; must pass before Task 9
 
-**Credentials** (one step at a time, through zenity): the APK signing key, permanent (it can't be reset; the keys
-repository and Bitwarden are its backups; Google Play will hold a copy as its app signing key): `keytool -genkeypair -v -keystore apk.jks -alias ngterm -keyalg RSA -keysize
-4096 -validity 36500`, the keystore password asked through zenity, then `ANDROID_APK_KEYSTORE` (base64),
-`ANDROID_APK_KEYSTORE_PASSWORD`, `ANDROID_APK_KEY_ALIAS`, `ANDROID_APK_KEY_PASSWORD`; then a rehearsal with
-`platforms=android`, `android-verify` passing.
+**Credentials** (done 2026-11-07): the APK signing key, permanent (it can't be reset; Google Play will hold a copy
+as its app signing key). As the user asked, it was generated here with no dialog: `keytool -genkeypair` (PKCS12, RSA
+4096, alias `ngterm`, 100 years), with a random 40-character password for the store and key. `ANDROID_APK_KEYSTORE`,
+`ANDROID_APK_KEYSTORE_PASSWORD` and `ANDROID_APK_KEY_PASSWORD` are in the keys repository, the `release` environment
+and Bitwarden, and the alias is the variable `ANDROID_APK_KEY_ALIAS` (➕ moved out of the secrets after review: a
+secret `ngterm` would be masked in every log line and drop every job output naming a release file); a round trip opened the stored keystore with the stored password and matched
+the committed certificate. Left: a rehearsal with `platforms=android`, `android-verify` passing.
 
 ### Task 9: Verify acceptance criteria
 

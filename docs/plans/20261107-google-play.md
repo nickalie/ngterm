@@ -29,7 +29,7 @@
   adds the version properties and the APK build.
 - `scripts/build-android.sh` runs Gradle over the Rust core (`libngterm_mobile.so`); `android.yml` is CI only.
 - The keys repository already lists `ANDROID_UPLOAD_KEYSTORE`, `ANDROID_UPLOAD_KEYSTORE_PASSWORD`,
-  `ANDROID_UPLOAD_KEY_ALIAS`, `ANDROID_UPLOAD_KEY_PASSWORD` and the variables `GCP_WORKLOAD_IDENTITY_PROVIDER`,
+  `ANDROID_UPLOAD_KEY_PASSWORD` and the variables `ANDROID_UPLOAD_KEY_ALIAS`, `GCP_WORKLOAD_IDENTITY_PROVIDER`,
   `GCP_PLAY_SERVICE_ACCOUNT`, `PLAY_RELEASE_STATUS`.
 
 ## Development Approach
@@ -68,7 +68,8 @@
 ## Technical Details
 
 - **Secrets** (environment `release`): `ANDROID_UPLOAD_KEYSTORE` (base64), `ANDROID_UPLOAD_KEYSTORE_PASSWORD`,
-  `ANDROID_UPLOAD_KEY_ALIAS`, `ANDROID_UPLOAD_KEY_PASSWORD`.
+  `ANDROID_UPLOAD_KEY_PASSWORD`. The alias is the variable `ANDROID_UPLOAD_KEY_ALIAS`: a plain word as a secret would
+  be masked in every log line and drop every job output containing it.
 - **Variables** (environment `release`): `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_PLAY_SERVICE_ACCOUNT`,
   `PLAY_RELEASE_STATUS` (default `completed`; `draft` while the Play app is still a draft).
 - **The Play upload (`scripts/play-upload.sh AAB`):**
