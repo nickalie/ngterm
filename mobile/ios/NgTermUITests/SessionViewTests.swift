@@ -51,7 +51,11 @@ internal final class SessionViewTests: XCTestCase {
         let second = Self.screen(showing: "P2 ready", in: app)
         FakeApp.expect(second, "the second pane's screen")
         if Self.isPad {
-            XCTAssertTrue(Self.screen(showing: "P1 ready", in: app).exists, "the split shows both panes")
+            // a tab in the split shows its pane alone; the shown pane's tab brings the split back, still selected
+            XCTAssertFalse(Self.screen(showing: "P1 ready", in: app).exists, "a tab shows its pane alone")
+            app.buttons["pane-2"].tap()
+            expectSelected(2, in: app)
+            FakeApp.expect(Self.screen(showing: "P1 ready", in: app), "the split shows both panes again")
             let sidebar = app.descendants(matching: .any)["sidebar-session-work"].firstMatch
             XCTAssertTrue(sidebar.exists, "the machines' column lists the attached session")
         } else {

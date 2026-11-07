@@ -61,4 +61,20 @@ public protocol PaneClient: AnyObject, Sendable {
 
     /// Routes a wheel turn or scroll gesture: to the program, or scrolling the view.
     func wheel(wheel: PaneWheel) throws -> PaneWheelOutcome
+
+    /// The chat's prompt: a bracketed paste of `text`, then Enter, while the agent's prompt is on screen, the lead
+    /// taken first when the pane doesn't hold it.
+    func sendPrompt(text: String) async throws -> AgentInputOutcome
+
+    /// Stop: Escape, while the agent works on a turn.
+    func interrupt() async throws -> AgentInputOutcome
+
+    /// Answers the permission dialog about `approval`'s call with its option `label`.
+    func answerApproval(approval: ChatApproval, label: String) async throws -> AgentInputOutcome
+
+    /// Answers Claude's `AskUserQuestion` picker for `question`, one answer per question in order.
+    func answerQuestion(question: ChatQuestion, answers: [QuestionAnswer]) async throws -> AgentInputOutcome
+
+    /// The labels an approval card offers: the dialog's own options on screen, else the agent's set; reads only.
+    func approvalLabels() async throws -> [String]
 }

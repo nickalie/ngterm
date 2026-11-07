@@ -35,8 +35,14 @@ extension Connections {
     ///
     /// - Throws: ``MobileError`` with the core's words when it could not.
     public func attach(machineId: String, sessionId: String) async throws {
+        // a name an earlier stream of the session said is not this one's; attaching an attached one keeps its stream
+        let key = SessionKey(machineId: machineId, sessionId: sessionId)
+        if attached[machineId]?.contains(sessionId) != true {
+            streamNames[key] = nil
+        }
         try await core.attachSession(machineId: machineId, sessionId: sessionId)
         attached[machineId, default: []].insert(sessionId)
+        renamed(machineId)
     }
 
     /// Attaches `sessionId` of `machineId` for a notification's tap once the machine is connected and lists it.
@@ -105,6 +111,8 @@ extension Connections {
         var left = attached[machineId] ?? []
         left.remove(sessionId)
         attached[machineId] = left.isEmpty ? nil : left
+        streamNames[SessionKey(machineId: machineId, sessionId: sessionId)] = nil
+        renamed(machineId)
         guarded { try core.detachSession(machineId: machineId, sessionId: sessionId) }
     }
 }

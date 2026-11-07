@@ -3,7 +3,9 @@ import NgtermCore
 /// An attached session as its presentation stream left it (mobile/android's `LiveSession`).
 ///
 /// Whether the stream has said a status or a context yet is ``isStatusSaid`` and ``isContextSaid``: once it has, its
-/// `nil` is a clear, not a gap the machine's listing fills.
+/// `nil` is a clear, not a gap the machine's listing fills. ``agents`` are what its panes run (every pane's, shown or
+/// not, by id; an origin that predates the chat view announces none, and a stream that drops keeps them, as the origin
+/// announces them all again when it is back).
 public struct LiveSession: Hashable, Sendable {
     /// The stream's state.
     public var connection: StreamState
@@ -21,6 +23,8 @@ public struct LiveSession: Hashable, Sendable {
     public var isStatusSaid: Bool
     /// Whether the stream has said a context.
     public var isContextSaid: Bool
+    /// The agents its panes run, by pane id.
+    public var agents: [String: PaneAgent] = [:]
 
     /// A session nothing has been said of yet: its stream connecting.
     public init() {

@@ -13,6 +13,7 @@ internal struct SessionsList: View {
     internal let selection: String?
     internal let onOpen: @MainActor (String) -> Void
     internal let onDetach: @MainActor (String) -> Void
+    internal let chatView: @MainActor (String) -> ChatViewChoice
     internal let onAskEnd: @MainActor (SessionLine) -> Void
 
     internal var body: some View {
@@ -46,7 +47,7 @@ internal struct SessionsList: View {
         if !lines.isEmpty {
             Section {
                 ForEach(lines) { line in
-                    SessionEntry(line: line) {
+                    SessionEntry(line: line, chatView: chatView(line.id)) {
                         onOpen(line.id)
                     } onDetach: {
                         onDetach(line.id)

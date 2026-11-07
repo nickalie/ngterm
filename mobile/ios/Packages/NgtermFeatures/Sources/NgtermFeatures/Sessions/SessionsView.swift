@@ -208,7 +208,8 @@ public struct SessionsView: View {
                 banners: banners(state, failure: failure),
                 selection: selection,
                 onOpen: open,
-                onDetach: model.detach
+                onDetach: model.detach,
+                chatView: model.chatView(sessionId:)
             ) { line in
                 confirming = line
             }

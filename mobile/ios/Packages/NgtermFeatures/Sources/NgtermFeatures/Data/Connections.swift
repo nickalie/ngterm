@@ -5,6 +5,9 @@ import Observation
 /// The app's side of the mobile core's connections (mobile/android's `Connections`): each machine's ``Link``, its last
 /// listing and why the last one failed, and the sessions this app has attached.
 ///
+/// An attached session's listing carries the name its stream last said, so a rename on its machine shows everywhere at
+/// once, though the machine is listed only now and then.
+///
 /// It takes the core's ``MobileCoreClient/events`` on the main actor, in the order the core told them, and turns them
 /// and its connect answers into ``links``; a connect and a reconnect each list the machine anew. Calls are made on the
 /// main actor; the async ones run in tasks of their own, or the caller's.
@@ -16,7 +19,8 @@ public final class Connections {
 
     /// Each machine's link, by id; a machine missing from it is ``Link/offline``.
     public private(set) var links: [String: Link] = [:]
-    /// Each connected machine's sessions as it last listed them, by id.
+    /// Each connected machine's sessions as it last listed them, by id, its attached sessions under the names their
+    /// streams last said.
     public private(set) var trees: [String: [RemoteSession]] = [:]
     /// Why a machine's last listing failed (the core's words), by id, until a listing lands.
     public private(set) var treeFailures: [String: String] = [:]
@@ -45,6 +49,11 @@ public final class Connections {
     // the machines whose connect was cancelled before it listed them: the connection the core makes for them later (a
     // resume's) is listed when it reports Connected; whoever takes a machine out lists it, so it is listed once
     @ObservationIgnored private var unlisted: Set<String> = []
+    // the name each attached session's stream last said: it outranks its listing's while it stays attached
+    @ObservationIgnored internal var streamNames: [SessionKey: String] = [:]
+    // each machine's last listing as the core gave it: trees is it with the stream names over it, so a session that
+    // stops being attached shows its listing's name again
+    @ObservationIgnored private var listings: [String: [RemoteSession]] = [:]
     @ObservationIgnored private var consumer: Task<Void, Never>?
     // the app's other parts that take the core's events (the live sessions), and those that follow the attached set
     @ObservationIgnored private var listeners: [@MainActor (MobileEvent) -> Void] = []
@@ -189,9 +198,11 @@ public final class Connections {
         records[machineId] = nil
         links[machineId] = nil
         bump(machineId)
+        listings[machineId] = nil
         trees[machineId] = nil
         treeFailures[machineId] = nil
         attached[machineId] = nil
+        streamNames = streamNames.filter { $0.key.machineId != machineId }
     }
 
     /// `machineId` signs in with the key `keyId` from its next connection attempt, a reconnect included; its
@@ -246,6 +257,9 @@ public final class Connections {
 
         case .tree(let machineId, let sessions):
             listed(machineId, sessions)
+
+        case .sessionName(let machineId, let sessionId, let name):
+            named(machineId, sessionId, name)
 
         default:
             break
@@ -322,11 +336,50 @@ public final class Connections {
     // stream is let go
     private func listed(_ machineId: String, _ sessions: [RemoteSession]) {
         bump(machineId)
-        trees[machineId] = sessions
+        listings[machineId] = sessions
+        trees[machineId] = withStreamNames(machineId, sessions)
         treeFailures[machineId] = nil
         let gone = (attached[machineId] ?? []).subtracting(sessions.map(\.id))
         for sessionId in gone.sorted() {
             detach(machineId: machineId, sessionId: sessionId)
+        }
+    }
+
+    // a stream's word on its session's name (a blank one says nothing); it reaches the listing once the session is
+    // attached, as one may land before its attach is recorded
+    private func named(_ machineId: String, _ sessionId: String, _ name: String) {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        streamNames[SessionKey(machineId: machineId, sessionId: sessionId)] = name
+        if attached[machineId]?.contains(sessionId) == true {
+            renamed(machineId)
+        }
+    }
+
+    /// Lays the names the attached sessions' streams said over the machine's last listing again.
+    internal func renamed(_ machineId: String) {
+        guard let listing = listings[machineId] else {
+            return
+        }
+        let named = withStreamNames(machineId, listing)
+        if trees[machineId] != named {
+            trees[machineId] = named
+        }
+    }
+
+    // the machine's listing, its attached sessions under the names their streams said
+    private func withStreamNames(_ machineId: String, _ sessions: [RemoteSession]) -> [RemoteSession] {
+        let attachedHere = attached[machineId] ?? []
+        return sessions.map { session in
+            guard attachedHere.contains(session.id),
+                let said = streamNames[SessionKey(machineId: machineId, sessionId: session.id)], said != session.name
+            else {
+                return session
+            }
+            var renamed = session
+            renamed.name = said
+            return renamed
         }
     }
 

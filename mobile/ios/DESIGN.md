@@ -139,6 +139,8 @@ accessibility sizes. Sentence case everywhere; no all-caps labels.
 | `address` | Atkinson Hyperlegible Mono at footnote, scaling with it | `user@host:port` |
 | `plateLabel` | footnote, semibold | a plate's label ("Public key", "Fingerprint") |
 | `plateValue` | Atkinson Hyperlegible Mono at callout, scaling with it | a plate's value, and the form's host, port and user |
+| `chatCode` | JetBrains Mono at 13 pt, scaling as the footnote does | what the terminal holds, in a chat: a tool's line, a command, a reply's code |
+| `chatOutput` | JetBrains Mono at 12 pt, scaling as the caption does | a tool's output and a diff, in a chat |
 
 Screen titles, list headers, buttons and empty states use the system's own styles.
 
@@ -423,7 +425,8 @@ session** is the toolbar's `+` while the machine is connected.
   `FormHint` headings, not the system's grey. A row's line is the context, else the working directory; its status is
   the `AgentStatusBadge`; while its End runs it says "Ending" with a spinner. The Attached mark stays off the rows: the
   group's heading says it.
-- **Actions:** a tap attaches the session and opens it. The context menu has Attach or Detach and **End session**; the
+- **Actions:** a tap attaches the session and opens it. The context menu has Attach or Detach, Chat view (The
+  session, below) and **End session**; the
   swipe actions (VoiceOver's row actions) End session and, when attached, Detach. End session confirms
   (`confirmingDestructive`: "End api?", "It stops on build-01, with everything running in it. This can't be undone.");
   Detach doesn't. The swipe's End has no destructive role, so the row stays until the machine's listing lets it go.
@@ -459,20 +462,35 @@ compact: the selected pane alone                regular: the origin's split
 ```
 
 - **Toolbar:** the session's name over its state (the agent's status while the stream is live; "Connecting",
-  "Reconnecting" or "Can't stream" while it isn't) and its context, read as one heading. Trailing: the pane switcher and
-  More.
+  "Reconnecting" or "Can't stream" while it isn't) and its context, read as one heading. Trailing: the pane switcher,
+  the view switch while the selected pane runs an agent, and More.
 - **Pane switcher** (two panes or more): the panes' numbers in the origin's order, 44 pt each; the selected one bold,
   underlined and in the tint (weight and the line carry it, not color alone). VoiceOver reads "Pane 1 of 2" and the
   title its program set, and which is selected.
-- **More** (`ellipsis`): Detach at once, Open in New Window (where the device has windows), and End session, which
-  confirms ("End api?", as the sessions list does).
+- **The view switch** (`ViewSwitch`): while the selected pane runs Claude Code or Codex (its origin announces the
+  agent) and its session's chat view is on, the pane shows as a chat (The chat, below) and the toolbar has one more
+  button, named for what a tap does: "Show terminal" (`terminal`) over a chat, "Show chat" (`text.bubble`) over the
+  terminal. Picking the terminal holds for that pane until its agent starts its next conversation; picking the chat
+  lifts it. When the agent ends, or its chat ends or can't open (an origin without the chat view), the pane shows its
+  terminal and the switch offers the chat back while the agent is still announced. A pane without an agent, or every
+  pane of a session with its chat view off, has no switch. Switching never resizes the pane or moves its lead.
+- **More** (`ellipsis`): Detach at once, Open in New Window (where the device has windows), Chat view, and End
+  session, which confirms ("End api?", as the sessions list does).
+- **Chat view** (`ChatViewToggle`, in every session's menu: More, and a machine's list's context menu): the session's
+  own Agent chat view, a toggle the system's menu draws with a checkmark while the session's panes running an agent
+  show as a chat. It starts at Settings' Agent chat view, and a tap sets the other for that session alone, kept on
+  this device (`session-chat-views.json`, the newest 256 sessions); one set back to Settings' value follows Settings
+  again. A choice the store can't write holds until the app ends.
 - **HUD:** the origin's HUD as a strip under the toolbar on the secondary ground (a spinner when the origin runs one,
   its message and its detail), in the app's colors, not the desktop's; announced as it changes, and left out below
   320 pt of height (a phone on its side with the keyboard up), where it would take the terminal's last rows.
 - **Compact:** the selected pane alone; a sideways swipe on it (twice as far across as down, 64 pt or flung) moves to
   the next pane leftward and the previous rightward, sliding in from that side (a cut with Reduce Motion).
 - **Regular:** the origin's split, side by side (`vertical`) or stacked, split by a hairline; a split it hides, or one
-  pane, shows the selected pane alone. Each pane of a split has a 4 pt gutter at its leading edge, where the selected
+  pane, shows the selected pane alone. A pane tab toggles the split on this device alone, the origin's untouched: a tab
+  in the split shows its pane alone and selected, the shown pane's own tab brings the split back, and the other tab
+  shows that pane alone instead; VoiceOver's hint names the tap ("Shows this pane alone", "Shows both panes"). The
+  choice is kept per session while the app runs. Each pane of a split has a 4 pt gutter at its leading edge, where the selected
   one shows a 3 × 32 pt bar in the tint; its cursor draws as it is, the other's as a hollow block. A tap or a click on
   a pane selects it. Beside it, the machines' column lists each machine's attached sessions under it (name and
   status; the session view says the context), the one shown marked with a checkmark in the tint (the list selects
@@ -483,7 +501,8 @@ compact: the selected pane alone                regular: the origin's split
   reaches. A tab, a swipe, ⌘⌥←/→ and a touch select a pane, and the focus follows: the pane selected next takes it,
   with the soft keyboard if it was open. The selection is kept per session, so another size class, a turn or a trip
   elsewhere finds the same pane.
-- **Covers** (`Cover`, over the pane, hiding it from VoiceOver): another device drives it ("Another device is driving
+- **Covers** (`Cover`, over the pane, hiding it from VoiceOver; over a chat only a pane that couldn't be shown, since
+  reading never takes control): another device drives it ("Another device is driving
   this pane", **Take control**); attaching (a spinner, "Reading this pane from build-01."); the program exited ("The
   program exited", the exit code or signal, **Detach**: the session ended there); a pane that couldn't be shown (the
   core's words, **Retry**). A dropped link is no veil: the last screen stays readable under a light scrim that takes
@@ -492,6 +511,103 @@ compact: the selected pane alone                regular: the origin's split
   **Detach**; "api is gone" ("It ended on build-01, so there is nothing left to show.", **Close**) once it ended there.
   Detached some other way, the view closes (an iPad's session window too).
 - **Screen awake:** while a session shows and Settings' Keep screen on is set, the idle timer is off (across windows).
+
+### The chat (`Chat/`)
+
+A pane running Claude Code or Codex, read as a conversation (The view switch, above). Underneath it is still the
+agent's TUI in the pane, so the chat is a second reading of the terminal, not a messenger: everything the agent typed
+or ran is in the terminal's face (`chatCode`, `chatOutput`), and only what people and the agent wrote as prose is in
+SF Pro. The behavior is Android's (`ui/chat/`); the look is the system's grounds, SF Symbols and the app's tokens.
+
+| First pass | Why it was generic, or wrong for iOS | Revised to |
+|---|---|---|
+| Android's Material chat: tonal containers, a filled composer bar | a Material system on iOS | the system grounds: the chat on `systemBackground`, prompts, plates, cards and the pill one level up (`secondarySystemBackground`), the composer on the system's bar material |
+| Bubbles on both sides, avatars, a time under each | the messenger kit; a reply is a document | only the prompt is a bubble (at the end of the line); a reply is full-width text on the ground |
+| A sheet or alert for a permission prompt | hides the conversation the question is about | a Needs-you card pinned at the chat's foot, in the ask sheet's shape and order |
+| A spinner on every running tool | motion nobody asked for | the connecting ring and "Running", standing still |
+| A typing indicator at the end of the list | loops while nobody asked | the activity line over the composer, Stop at its end |
+| A rich Markdown kit as a dependency | another dependency, and its own look | Foundation's Markdown parser, drawn as the app's text (`MarkdownText`) |
+
+- **Where:** in the pane's slot, in its terminal's place. The terminal stays laid out under it, unfocused and out of
+  sight, at the grid the slot gives it, so switching never resizes the pane, and a chat action that takes control lays
+  the program out for this device. The extra keys are the terminal's keyboard accessory, so they don't come up over a
+  chat. A hardware keyboard's ⌘⌥ arrows still move between panes and sessions from the chat's field.
+- **The list** (`ChatList`): oldest at the top, one column 640 pt at most, centered, with the phone's 16 pt gutter. It
+  opens at the newest row and follows new ones while it is at the end; a finger on it lets it be at once, and a scroll
+  that stops at the end follows again. Which rows are open survives scrolling and the size class.
+- **Copying:** a prompt, a reply, an output, a diff and a question's words take the system's text selection
+  (`textSelection(.enabled)`: a long press offers Copy).
+- **Prompts** (`PromptBubble`): at the end of the line on the raised ground, 12 pt corners, the body size, no wider
+  than 480 pt, with "With 2 images" under them when they carried any. VoiceOver reads "You: …", then the images.
+- **Replies** (`MarkdownText`): full width; paragraphs and lists in the body size, headings at title 2, title 3 and
+  headline (never the large titles), links in the tint and underlined, quotes in `secondaryText` behind a 2 pt rule,
+  tables in a grid that scrolls sideways. Code blocks are `chatCode` on a plate with 6 pt corners, scrolling sideways,
+  never highlighted; inline code the terminal's face. Images aren't fetched.
+- **Tool lines** (`ToolRow`, on `ChatLine`): the kind's glyph (an SF Symbol: `apple.terminal`, `pencil`, `doc.text`,
+  `magnifyingglass`, `globe`, `arrow.triangle.branch`, `wrench.adjustable`, read as its word: Command, Edit, Read,
+  Search, Web, Subagent, Tool), the title in `chatCode` on one line, and the status at the end: Running on the
+  connecting ring, Done on the healthy circle, Failed on the failed triangle. A line that holds something is a 44 pt
+  target: a tap opens its diff, its output (`chatOutput` on a plate, scrolling sideways) and "Cut short here: the
+  terminal has the rest." when the origin cut them, indented to the title.
+- **Diffs** (`DiffView`): each file's header lines bold and quiet, hunks quiet, added lines `healthy`, removed lines
+  `failed`, kept lines the primary text, each keeping its `+` or `-`; at most 400 lines, then how many more.
+- **Thinking, subagents, questions, notices** as Android's: a quiet line ("Thinking", or Codex's summary title); a
+  task's "2 steps", its steps behind a 2 pt rule; a question with Needs you, then Answered; an interrupt, a compaction
+  (a tap shows its summary), an API error in `failed`, a summary. A new conversation is "New conversation" (a heading)
+  and a rule.
+- **The account** (`AccountLine`), over the rows: the email at the start in `secondaryText`, at the end "Weekly limit
+  72%", with ", resets Mon 14:00" when the origin read when (the weekday and time within six days, else the date), in
+  `attention` from 80% and `failed` at 100%; the limit goes under the email when they don't fit. VoiceOver reads one
+  sentence.
+- **Earlier messages:** the list's first row asks for the page before as soon as it shows ("Loading earlier messages"
+  with a small spinner); the page goes in above and the row that was on top stays where it was. At the start it says
+  "Start of the conversation" over the working directory in mono; a page that failed says why in `failed` with Retry.
+- **Needs-you cards** (`NeedsYouCard`), pinned under the list, an approval before a question: the raised ground with
+  20 pt top corners, the attention diamond over the title (a heading), at most 60% of the chat's height, scrolling
+  inside. An approval ("Allow Bash?", the call's title in `chatCode`, its detail on a plate up to 160 pt tall, then the
+  dialog's options, the first filled with `prominentAction()`, the rest outlined in the tint), with the agent's own
+  answers standing in until the pane's screen is read. A question ("Claude Code asks", each question's header, radio
+  marks or checkboxes as the asks have them, a "Type an answer" row, **Send answers** once every question has one).
+  While an answer is on its way the buttons hold and "Sending" shows under them.
+- **The activity line** (`ActivityStrip`), over the composer, on the ground and on one line: the connecting ring at 12
+  pt, standing still, "Claude Code is working" while the agent works on a turn, else "Still running in the background"
+  while calls have no result yet, with how many ("2 subagents, 1 command"); with any running it is a 44 pt toggle that
+  lists them. **Stop**, the word in the tint, ends the line while a turn the agent works on wasn't interrupted. A card
+  waiting takes the foot alone.
+- **Problems:** what the last action couldn't do, as a `Banner` over the card: `attention` when the user can act on it,
+  `failed` when it only reports; **Answer in terminal** when the terminal is the way on; dismissible.
+- **States:** the backlog on its way ("Reading the conversation from build-01"); nothing said yet (the chat glyph,
+  "Nothing said yet", **Show terminal**); reconnecting (a strip over the rows: "Reconnecting to build-01", "What's here
+  stays; new messages follow once it's back."); ended ("This chat ended", **Show terminal**, which the pane then does
+  by itself).
+- **The composer** (`ChatComposerView`), on the system's bar material: one pill (the raised ground, 22 pt corners, 44
+  pt tall) holding **Attach** (`paperclip`) at its start, the prompt ("Prompt, or / for commands", growing to six
+  lines, then scrolling inside), and at its end one place that **Commands** (a `/` in the terminal's face, which starts
+  a command and opens the menu) gives up to **Send** (`arrow.turn.down.left` in the tint) once there is text; the one
+  leaving shrinks and fades as the other grows in (120 ms; a cut with Reduce Motion). Send takes the text with its ends
+  trimmed; the field lets it go once the agent has it. While an action is on its way the field holds still and Send is
+  a spinner ("Sending"). While a card waits, "Answer the card above first: a prompt now would go to its dialog." stands
+  over the field and Send holds. A draft left in a chat that closes comes back to the pane's next chat of the same
+  conversation.
+- **Attaching a file** (`AttachButton`, `UploadLine`, `ChatUploads`): the paperclip's menu offers **Photo or video**
+  (the system's photo picker, in its compatible encoding, so a HEIC photo goes as JPEG) and **File** (the document
+  picker, any type); neither asks for a permission. The file goes to the pane's machine (`ngtermctl agent upload`, 32
+  MB at most, refused before a byte is read when larger). Over the pill: "Uploading shot.png", the percentage and
+  **Cancel upload** over a progress bar; "Saving shot.png" with no Cancel once every byte has gone; done, the stored
+  path goes in at the cursor with a space on each side (quoted when it holds a space); stopped short, "Couldn't attach
+  shot.png: …" in `failed` with Dismiss. Cancel goes through the core's cancel token (`UploadCancel`), as a Swift task's
+  cancel can't stop the core's call.
+- **The `/` menu** (`SlashCommandMenu`): a `/` at the start of the field, with no space or line break after it, opens
+  it over the foot of the rows (over the card while one waits); what follows narrows it, ranked by the core's
+  `filter_commands`. Rows (56 pt): the command as it goes in, in `chatCode`, its argument hint quiet after it, a line
+  of what it does, and its kind at the end (Built-in, Skill, Command, Plugin); about six show. Under them a quiet line
+  says how many match or that none does ("No command matches /deploy. It goes as typed."), or that the commands are on
+  their way or not listed. Escape closes it until the text changes.
+- **A hardware keyboard:** ⌘Return sends; while the menu lists commands, Up and Down move its highlight and Return or
+  Tab picks it; Escape closes the menu. Return alone is a line break.
+- **VoiceOver:** the chat is "Chat with Claude Code"; a prompt reads "You: …"; a line reads its kind, title and status,
+  says Expanded or Collapsed, and its hint names the tap; the cards' titles are headings; the reconnecting strip,
+  Sending, the menu's count and an upload's failure are announced.
 
 ### Asks (`Asks/`)
 
@@ -543,6 +659,8 @@ inline `Picker`); a switch is the system's `Toggle`, tinted copper.
   the palette's ground with its eight normal ANSI colors (88 × 20 pt, decorative).
 - **Appearance:** System, Light or Dark. It is the window's own style (`overrideUserInterfaceStyle`, `appAppearance`),
   so everything in a window follows, sheets and the theme's terminal palette included, every window alike.
+- **Agents:** Agent chat view, a switch, on by default: a pane running Claude Code or Codex shows as a chat. A
+  session's More menu sets its own either way (Chat view, above).
 - **Extra keys:** Fit to the width, Always two lines, or Hidden (the soft keyboard alone, which on an iPhone has no
   key that closes it; the note says so). A session's bar follows a change at once.
 - **Notifications:** one switch per kind (Waiting for you, Finished, Agent notifications, Lost machines), each with
@@ -565,8 +683,10 @@ inline `Picker`); a switch is the system's `Toggle`, tinted copper.
 
 ### Notifications
 
-Each machine's and session's notifications group in their own thread; a tap opens the session and its pane. They show
-as banners in the foreground too, except for the session on screen.
+Each machine's and session's notifications group in their own thread; a tap opens the session and its pane. A pane
+shown as its chat opens at its newest row, following again, with the card the agent waits on pinned at its foot; one
+showing its terminal opens as its terminal. They show as banners in the foreground too, except for the session on
+screen.
 
 | Notice | Title | Under it | Text | Actions |
 |---|---|---|---|---|

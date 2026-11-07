@@ -1,11 +1,12 @@
 import SwiftUI
 
 /// An attached session's More menu, in its toolbar (mobile/android's `SessionMenu`): Detach at once, Open in New
-/// Window where the device has windows, and End session, which the view confirms first.
+/// Window where the device has windows, Chat view, and End session, which the view confirms first.
 internal struct SessionMenu: View {
     internal let name: String
     internal let onDetach: @MainActor () -> Void
     internal let onNewWindow: (@MainActor () -> Void)?
+    internal let chatView: ChatViewChoice
     internal let onEnd: @MainActor () -> Void
 
     internal var body: some View {
@@ -20,6 +21,7 @@ internal struct SessionMenu: View {
                 )
                 .accessibilityIdentifier("session-new-window")
             }
+            ChatViewToggle(choice: chatView)
             Divider()
             Button(String(localized: "End session"), systemImage: "xmark.circle", role: .destructive, action: onEnd)
                 .accessibilityIdentifier("session-end")

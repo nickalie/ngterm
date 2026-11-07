@@ -77,6 +77,7 @@
             try record("detachSession", [machineId, sessionId])
             state.withLock { state in
                 state.shown = state.shown.filter { $0.key.machineId != machineId || $0.key.sessionId != sessionId }
+                state.chats = state.chats.filter { $0.machineId != machineId || $0.sessionId != sessionId }
             }
         }
 
@@ -116,8 +117,10 @@
         /// Hides a shown pane.
         public func hidePane(machineId: String, sessionId: String, paneId: String) throws {
             try record("hidePane", [machineId, sessionId, paneId])
-            _ = state.withLock { state in
-                state.shown.removeValue(forKey: PaneRef(machineId: machineId, sessionId: sessionId, paneId: paneId))
+            let ref = PaneRef(machineId: machineId, sessionId: sessionId, paneId: paneId)
+            state.withLock { state in
+                state.shown[ref] = nil
+                state.chats.remove(ref)
             }
         }
 

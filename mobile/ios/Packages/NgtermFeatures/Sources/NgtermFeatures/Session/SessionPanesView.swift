@@ -4,7 +4,8 @@ import SwiftUI
 /// A live session's panes, or what stands in for them before its layout arrives (mobile/android's `Panes`).
 ///
 /// A compact width shows the selected pane alone, the next one sliding in from the side it was swiped from (a cut with
-/// Reduce Motion); a regular width shows the origin's split. A machine whose ngterm can't stream says so, with
+/// Reduce Motion); a regular width shows the origin's split, or the selected pane alone once a pane tab asked for it
+/// (`isAlone`). A machine whose ngterm can't stream says so, with
 /// Detach.
 internal struct SessionPanesView: View {
     @Environment(\.accessibilityReduceMotion)
@@ -16,6 +17,8 @@ internal struct SessionPanesView: View {
     internal let actions: PaneSlot.Actions
     /// Whether the last move went forward: a compact width slides the next pane in from the trailing side.
     internal let isForward: Bool
+    /// Whether a pane tab set the split aside.
+    internal var isAlone = false
 
     internal var body: some View {
         let spots = actions.model.spots(of: session)
@@ -23,7 +26,7 @@ internal struct SessionPanesView: View {
             if isCompact {
                 onePane(spots)
             } else {
-                SplitLayout(spots: spots, layout: layout, focused: focused) { spot in
+                SplitLayout(spots: spots, layout: layout, focused: focused, isSplit: !isAlone) { spot in
                     slot(spot, swipes: false)
                 }
             }

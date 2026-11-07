@@ -16,6 +16,12 @@
     /// ``paste(text:allowUnsafe:)`` refuses text with a line break unless allowed (``PaneSendOutcome/unsafe``, as
     /// Ghostty's paste protection does) and writes nothing for empty text; ``selectionText()`` is ``selection``. Input
     /// to a pane with no ``frames`` throws ``PaneInputError/Closed``.
+    ///
+    /// The chat's actions (``sendPrompt(text:)``, ``interrupt()``, ``answerApproval(approval:label:)``,
+    /// ``answerQuestion(question:answers:)``) are kept in ``actions`` and answer ``outcome``, or throw ``actionError``
+    /// when set; the next one waits at ``gate`` once taken, while a test holds one on its way.
+    /// ``approvalLabels()`` answers ``labels``. A pane with no ``frames`` throws ``PaneInputError/Closed`` for these
+    /// too.
     public final class FakePane: PaneClient {
         /// What packs a frame: the bytes for the frame after the seq given.
         public typealias Frames = @Sendable (UInt64) -> Data
@@ -30,6 +36,11 @@
             var colors: [PaneColors] = []
             var asked: [UInt64] = []
             var inputs: [FakeInput] = []
+            var outcome = AgentInputOutcome.sent
+            var actionError: PaneInputError?
+            var labels: [String] = []
+            var gate: FakeGate<Void>?
+            var actions: [FakeAction] = []
         }
 
         private let paneId: String
@@ -83,6 +94,35 @@
         /// The input it took, in order.
         public var inputs: [FakeInput] {
             state.withLock { $0.inputs }
+        }
+
+        /// What a chat action answers.
+        public var outcome: AgentInputOutcome {
+            get { state.withLock { $0.outcome } }
+            set { state.withLock { $0.outcome = newValue } }
+        }
+
+        /// What a chat action throws instead, when set (a refusal, say).
+        public var actionError: PaneInputError? {
+            get { state.withLock { $0.actionError } }
+            set { state.withLock { $0.actionError = newValue } }
+        }
+
+        /// What ``approvalLabels()`` answers.
+        public var labels: [String] {
+            get { state.withLock { $0.labels } }
+            set { state.withLock { $0.labels = newValue } }
+        }
+
+        /// A gate the next chat action waits at once taken, until the test opens it (an action on its way).
+        public var gate: FakeGate<Void>? {
+            get { state.withLock { $0.gate } }
+            set { state.withLock { $0.gate = newValue } }
+        }
+
+        /// The chat actions taken, in order.
+        public var actions: [FakeAction] {
+            state.withLock { $0.actions }
         }
 
         /// A pane named `paneId` whose frames `frames` packs.
@@ -201,6 +241,55 @@
         /// ``selection``.
         public func selectionText() -> String? {
             selection
+        }
+
+        /// Takes the prompt: ``outcome``.
+        public func sendPrompt(text: String) async throws -> AgentInputOutcome {
+            try await act(.prompt(text))
+        }
+
+        /// Takes the Stop: ``outcome``.
+        public func interrupt() async throws -> AgentInputOutcome {
+            try await act(.interrupt)
+        }
+
+        /// Takes the approval's answer: ``outcome``.
+        public func answerApproval(approval: ChatApproval, label: String) async throws -> AgentInputOutcome {
+            try await act(.approval(approval, label: label))
+        }
+
+        /// Takes the question's answers: ``outcome``.
+        public func answerQuestion(
+            question: ChatQuestion,
+            answers: [QuestionAnswer]
+        ) async throws -> AgentInputOutcome {
+            try await act(.question(question, answers: answers))
+        }
+
+        /// ``labels``.
+        public func approvalLabels() throws -> [String] {
+            let read = state.withLock { state in state.frames == nil ? nil : state.labels }
+            guard let read else {
+                throw PaneInputError.Closed
+            }
+            return read
+        }
+
+        private func act(_ action: FakeAction) async throws -> AgentInputOutcome {
+            let taken: Result<(FakeGate<Void>?, AgentInputOutcome), PaneInputError> = state.withLock { state in
+                guard state.frames != nil else {
+                    return .failure(.Closed)
+                }
+                if let error = state.actionError {
+                    return .failure(error)
+                }
+                state.actions.append(action)
+                defer { state.gate = nil }
+                return .success((state.gate, state.outcome))
+            }
+            let (held, answer) = try taken.get()
+            await held?.wait()
+            return answer
         }
 
         private func take(_ input: FakeInput) throws(PaneInputError) {

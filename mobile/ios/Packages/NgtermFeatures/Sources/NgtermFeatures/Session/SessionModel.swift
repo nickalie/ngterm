@@ -45,6 +45,20 @@ public final class SessionModel {
         return focused
     }
 
+    /// Whether the session shows its selected pane alone where the window could show the origin's split.
+    public var isAlone: Bool {
+        graph.panes.alone.contains(key)
+    }
+
+    /// Whether the session's panes running an agent show as a chat, and the way to set it for this session alone.
+    public var chatView: ChatViewChoice {
+        let chats = graph.chats
+        let session = key
+        return ChatViewChoice(isOn: chats.isChatView(session)) { isOn in
+            chats.setChatView(session, on: isOn)
+        }
+    }
+
     /// The session `key` over `graph`, its panes typing through `keyboard` (one of its own by default).
     public init(graph: AppGraph, key: SessionKey, keyboard: TerminalKeyboard? = nil) {
         self.graph = graph
@@ -56,11 +70,14 @@ public final class SessionModel {
     public func spots(of session: AttachedSession) -> [PaneSpot] {
         (session.live.layout?.panes ?? []).map { paneId in
             let ref = PaneRef(machineId: key.machineId, sessionId: key.sessionId, paneId: paneId)
+            let isChat = graph.chats.view(of: ref) == .chat
             return PaneSpot(
                 ref: ref,
                 shown: graph.panes.shown[ref],
                 live: session.live.panes[paneId],
-                failure: graph.panes.failures[ref]
+                failure: graph.panes.failures[ref],
+                isChatView: isChat,
+                chat: isChat ? graph.chats.chats[ref] : nil
             )
         }
     }
@@ -73,6 +90,26 @@ public final class SessionModel {
         }
         graph.panes.select(paneId, of: key)
         return true
+    }
+
+    /// A tap on the `paneId` pane's tab; whether the panes' views change (the selection moved, the split came or went).
+    ///
+    /// It selects that pane, and where the window can show the origin's split (`isSplittable`) it toggles the selected
+    /// pane alone (``PaneAlone/afterTap(isSplittable:isAlone:tapped:focused:)``).
+    @discardableResult
+    public func tapTab(_ paneId: String, isSplittable: Bool) -> Bool {
+        let wasAlone = isAlone
+        let next = PaneAlone.afterTap(
+            isSplittable: isSplittable,
+            isAlone: wasAlone,
+            tapped: paneId,
+            focused: focusedPane
+        )
+        if next != wasAlone {
+            graph.panes.setAlone(next, of: key)
+        }
+        let moved = select(paneId)
+        return moved || next != wasAlone
     }
 
     /// The pane after (or before) the selected one, wrapping around; `nil` with fewer than two.
@@ -101,6 +138,16 @@ public final class SessionModel {
     /// Take control of the pane `spot`.
     public func takeLead(_ spot: PaneSpot) {
         graph.panes.takeLead(spot.ref)
+    }
+
+    /// How the pane `paneId` shows: `nil` without an agent, or with the session's chat view off (no switch then).
+    public func view(of paneId: String) -> PaneView? {
+        graph.chats.view(of: PaneRef(machineId: key.machineId, sessionId: key.sessionId, paneId: paneId))
+    }
+
+    /// Shows the pane `paneId` as `view`: its terminal held until its next conversation, or its chat again.
+    public func pick(_ paneId: String, _ view: PaneView) {
+        graph.chats.pick(PaneRef(machineId: key.machineId, sessionId: key.sessionId, paneId: paneId), view)
     }
 
     /// Detaches the session: it goes on running there, and the view closes.

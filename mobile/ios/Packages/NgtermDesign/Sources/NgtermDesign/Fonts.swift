@@ -81,6 +81,12 @@ public enum Fonts {
         return Font.custom(monoRegular, size: defaultSize(of: style), relativeTo: style)
     }
 
+    /// The terminal's face (JetBrains Mono) at `size` points, scaling with Dynamic Type as `style` does.
+    public static func terminal(size: CGFloat, relativeTo style: Font.TextStyle, bold: Bool = false) -> Font {
+        register()
+        return Font.custom(bold ? terminalFaces.bold : terminalFaces.regular, size: size, relativeTo: style)
+    }
+
     /// The size `style` has at the default Dynamic Type size (the large one), as UIKit gives it.
     public static func defaultSize(of style: Font.TextStyle) -> CGFloat {
         let large = UITraitCollection(preferredContentSizeCategory: .large)

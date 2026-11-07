@@ -166,6 +166,15 @@ public final class SessionsModel {
         }
     }
 
+    /// Whether the panes of `sessionId` running an agent show as a chat, and the way to set it for that session alone.
+    public func chatView(sessionId: String) -> ChatViewChoice {
+        let key = SessionKey(machineId: machineId, sessionId: sessionId)
+        let chats = graph.chats
+        return ChatViewChoice(isOn: chats.isChatView(key)) { isOn in
+            chats.setChatView(key, on: isOn)
+        }
+    }
+
     /// Detaches the session `sessionId`: it goes on running there.
     public func detach(sessionId: String) {
         graph.connections.detach(machineId: machineId, sessionId: sessionId)

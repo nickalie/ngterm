@@ -1,3 +1,4 @@
+import NgtermCore
 import NgtermFeatures
 import SwiftUI
 
@@ -117,10 +118,12 @@ internal struct RootView: View {
         scaffold.machine == machine && scaffold.session == nil && scaffold.compactColumn == .content
     }
 
-    // shows the session `key` with its pane `paneId` selected, when given
+    // shows the session `key` with its pane `paneId` selected, when given: a pane shown as its chat goes to its newest
+    // row, where the card the agent waits on is pinned; one in its terminal shows its terminal
     private func open(_ key: SessionKey, pane paneId: String?) {
         if let paneId {
             graph.panes.select(paneId, of: key)
+            graph.chats.reveal(PaneRef(machineId: key.machineId, sessionId: key.sessionId, paneId: paneId))
         }
         open(key)
     }

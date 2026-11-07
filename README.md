@@ -45,8 +45,8 @@ Linux build unless it names another OS.
   answer is listed again on the reconnect schedule for up to a week, and a session gone there is named in a banner
   (`crates/ngterm-core/src/remote/relaunch.rs`).
 - Another extension beyond upstream, which has no mobile app: Android and iOS apps that view and drive another
-  machine's live sessions over ssh ([Android](#android), [iOS](#ios)); the Android app also has a chat view of a pane
-  running Claude Code or Codex. The origin serves the chat through the Rust-only `agent.*` commands (`ngtermctl
+  machine's live sessions over ssh ([Android](#android), [iOS](#ios)); both also have a chat view of a pane running
+  Claude Code or Codex. The origin serves the chat through the Rust-only `agent.*` commands (`ngtermctl
   agent`, capability `agent-chat`) and an opt-in `agent` kind on the presentation stream, with no desktop UI.
 - Another extension beyond upstream, where every overlay is ephemeral: an HTML page overlay (`--html`, `--url`,
   `--image`, `--markdown`, session-wide or `--pane`, and link-click pages) lives until it is closed. A restart of the
@@ -744,7 +744,9 @@ as before, with no error. A Windows origin can't be reached at all yet, as above
 26 and later) over the same Rust core, which Swift reaches through UniFFI. It does what the Android app does (see
 [Android](#android) for the machines, the key and what isn't in v1), with these differences:
 
-- It has no [agent chat view](#agent-chat-view) yet: a pane running Claude Code or Codex shows its terminal.
+- Its [agent chat view](#agent-chat-view) is the same, in the session's toolbar (Show terminal / Show chat) and its More
+  menu (Chat view); the paperclip offers the photo picker and the document picker, and a hardware keyboard sends with
+  ⌘Return.
 - It is connected only while it is in the foreground: iOS can't keep the ssh links up, so there is no counterpart of
   Android's foreground service. Leaving the foreground, it disconnects after a short grace, and its open asks go back
   to the machine; coming back, it reconnects. Asks show as sheets, or as notifications with answer actions until the

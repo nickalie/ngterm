@@ -46,6 +46,16 @@
         // what the origin tells once an ask is answered, by FakeMobileCore.answerKey
         internal var answerEvents: [String: [MobileEvent]] = [:]
         internal var paneFactory: FakeMobileCore.PaneFactory
+        // the chats open
+        internal var chats: Set<PaneRef> = []
+        // each pane's older pages, newest first, which loadOlder hands out in turn
+        internal var olderPages: [PaneRef: [[ChatEvent]]] = [:]
+        // each pane's agent commands
+        internal var catalogs: [PaneRef: [AgentCommand]] = [:]
+        // each upload's name and size, in order
+        internal var uploads: [FakeUpload] = []
+        // each upload call's cancel token, in order
+        internal var uploadTokens: [UploadCancel] = []
 
         /// Records an async call, taking its queued failure and its gate for ``FakeHeldCall/pass()``.
         internal mutating func recordHeld(_ method: String, _ args: [any Hashable & Sendable]) -> FakeHeldCall {
@@ -85,6 +95,7 @@
         /// Forgets the connection of `machineId`, its listing and its shown panes.
         internal mutating func drop(_ machineId: String) {
             shown = shown.filter { $0.key.machineId != machineId }
+            chats = chats.filter { $0.machineId != machineId }
             connected.remove(machineId)
             records[machineId] = nil
             listings[machineId] = nil

@@ -2,7 +2,8 @@ import Foundation
 import NgtermPlatform
 
 /// The small stores the app graph's parts keep their state in, beside the machines, the settings and the keys: the
-/// attached set, the machines trusted with the clipboard, the notification choices and the status baseline.
+/// attached set, the machines trusted with the clipboard, the notification choices, the status baseline and the
+/// sessions' own chat views.
 @preconcurrency
 @MainActor
 public struct GraphStores {
@@ -14,6 +15,8 @@ public struct GraphStores {
     public let notificationPrefs: NotificationPrefsStore
     /// The last agent status seen of each attached session.
     public let statusBaseline: StatusBaselineStore
+    /// The sessions whose More menu set their own Agent chat view.
+    public let sessionChatViews: SessionChatViewsStore
 
     /// Every store kept in `directory`: the app's Application Support unless a test gives its own.
     public init(directory: URL = .applicationSupportDirectory) {
@@ -21,5 +24,6 @@ public struct GraphStores {
         clipboardTrust = ClipboardTrustStore(directory: directory)
         notificationPrefs = NotificationPrefsStore(directory: directory)
         statusBaseline = StatusBaselineStore(directory: directory)
+        sessionChatViews = SessionChatViewsStore(directory: directory)
     }
 }

@@ -46,7 +46,16 @@
     ///   listing first. A session not in ``panes`` takes any pane;
     /// - a show hands back the same handle for a pane already shown; a hide, a detach (its session's panes) and a
     ///   disconnect (its machine's) hide panes, and ``shownPanes`` lists those still shown. A new pane is
-    ///   ``paneFactory``'s, a ``FakePane`` by default.
+    ///   ``paneFactory``'s, a ``FakePane`` by default;
+    /// - ``openChat(machineId:sessionId:paneId:)`` takes only a shown pane (``MobileError/Remote(reason:)`` with
+    ///   ``notShown`` otherwise) and ``openChats`` lists the chats open; a close, and hiding the pane, close one.
+    ///   ``loadOlder(machineId:sessionId:paneId:)`` answers a chat's next page of ``olderPages`` (empty once none is
+    ///   left; ``notOpen`` for a chat not open), and ``agentCommands(machineId:sessionId:paneId:)`` the pane's
+    ///   ``catalogs`` entry (``MobileError/Remote(reason:)`` for a pane with none, as an origin without a catalog
+    ///   answers). ``uploadFile(machineId:name:bytes:progress:cancel:)`` tells half the bytes sent, waits at the
+    ///   test's gate (``MobileError/Cancelled`` once its token is cancelled there), tells all, waits at the
+    ///   `uploadFile.saving` gate when a test set one, and answers `/state/uploads/1/<name>`, keeping the upload in
+    ///   ``uploads``. Chat events themselves are what a test ``emit(_:)``s.
     public final class FakeMobileCore: MobileCoreClient {
         /// What a show of a pane not shown yet hands back: given the machine, session and pane ids and the size.
         public typealias PaneFactory = @Sendable (String, String, String, PaneSize) -> any PaneClient
@@ -59,6 +68,12 @@
         public static let hostKeyRefused = "the host key was not trusted"
         /// The core's reason for a connect whose sign-in was not completed in time (`SIGN_IN_UNFINISHED`).
         public static let signInUnfinished = "the sign-in was not completed in time"
+        /// What share of an upload a test's gate holds it at: half of it.
+        internal static let halfway: UInt64 = 2
+        /// The core's reason for a chat opened on a pane not shown (chat.rs's `NOT_SHOWN`).
+        public static let notShown = "the pane is not shown"
+        /// The core's reason for a page asked of a chat not open (chat.rs's `NOT_OPEN`).
+        public static let notOpen = "the pane's chat is not open"
 
         /// Every event handed out, those a test emitted and those the fake made, in order.
         public let events: AsyncStream<MobileEvent>
@@ -139,6 +154,33 @@
         public var paneFactory: PaneFactory {
             get { state.withLock { $0.paneFactory } }
             set { state.withLock { $0.paneFactory = newValue } }
+        }
+
+        /// The chats open and not closed since.
+        public var openChats: Set<PaneRef> {
+            state.withLock { $0.chats }
+        }
+
+        /// Each pane's older pages, newest first, which a load of older events hands out in turn.
+        public var olderPages: [PaneRef: [[ChatEvent]]] {
+            get { state.withLock { $0.olderPages } }
+            set { state.withLock { $0.olderPages = newValue } }
+        }
+
+        /// Each pane's agent commands, which ``agentCommands(machineId:sessionId:paneId:)`` answers.
+        public var catalogs: [PaneRef: [AgentCommand]] {
+            get { state.withLock { $0.catalogs } }
+            set { state.withLock { $0.catalogs = newValue } }
+        }
+
+        /// The uploads stored, in order.
+        public var uploads: [FakeUpload] {
+            state.withLock { $0.uploads }
+        }
+
+        /// The cancel token each upload call was given, in order: what the app cancels through.
+        public var uploadTokens: [UploadCancel] {
+            state.withLock { $0.uploadTokens }
         }
 
         /// A fake core pinning host keys in `hosts`; with none, it asks about no host key.

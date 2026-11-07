@@ -4,9 +4,9 @@ import NgtermPlatform
 import NgtermTerminal
 
 /// What the app's screens work with, made once per process: the machines, the settings, the keys, the pinned host
-/// keys, the connections over the mobile core, the attached sessions' live state and their shown panes, the programs'
-/// clipboard reads, the asks and the notifications, the status baseline and the background refresh, and whether the
-/// device is online.
+/// keys, the connections over the mobile core, the attached sessions' live state, their shown panes and the agents'
+/// chats, the programs' clipboard reads, the asks and the notifications, the status baseline and the background
+/// refresh, and whether the device is online.
 ///
 /// The app makes it over the linked core, the Keychain, Application Support and the system's notifications, or over
 /// the fake core and memory for its UI tests; the tests make one over fakes. ``start()`` starts what runs on its own.
@@ -29,6 +29,8 @@ public final class AppGraph {
     public let attachedSessions: AttachedSessions
     /// The shown panes, and the pane each session has selected.
     public let panes: SessionPanes
+    /// Which panes running an agent show as a chat, and their chats.
+    public let chats: PaneChats
     /// Keeps the screen awake while a session shows, when Settings asks for it.
     public let screenAwake = ScreenAwake()
     /// The device's clipboard, which programs write and read.
@@ -53,8 +55,9 @@ public final class AppGraph {
     public let network: NetworkMonitor
     /// Whether ``start()`` has run: before it the core has connected nothing.
     public private(set) var isStarted = false
-    // the trusted machines, read again with the other stores
+    // the trusted machines and the sessions' own chat views, read again with the other stores
     private let clipboardTrust: ClipboardTrustStore
+    private let sessionChatViews: SessionChatViewsStore
 
     /// The graph over its parts: `core` connects, `stores` keep the small state, and `notices` (the system's unless a
     /// test gives its own) takes the notifications; `pathSource` (the system's unless a test gives its own) tells the
@@ -85,7 +88,16 @@ public final class AppGraph {
         let streams = LiveSessions(connections: made, store: stores.attached, clipboard: board)
         live = streams
         attachedSessions = AttachedSessions(machines: machines, connections: made, live: streams)
-        panes = SessionPanes(connections: made, live: streams)
+        let shown = SessionPanes(connections: made, live: streams)
+        panes = shown
+        sessionChatViews = stores.sessionChatViews
+        chats = PaneChats(
+            connections: made,
+            live: streams,
+            panes: shown,
+            settings: settings,
+            store: stores.sessionChatViews
+        )
         clipboardTrust = stores.clipboardTrust
         clipboardReads = ClipboardReads(connections: made, trust: stores.clipboardTrust, clipboard: board)
         let open = Asks(connections: made)
@@ -96,6 +108,7 @@ public final class AppGraph {
         let posting = Alerts(
             connections: made,
             asks: open,
+            live: streams,
             machines: machines,
             prefs: stores.notificationPrefs,
             center: center,
@@ -130,6 +143,7 @@ public final class AppGraph {
         settings.readIfUnread()
         notificationPrefs.readIfUnread()
         clipboardTrust.readIfUnread()
+        sessionChatViews.readIfUnread()
     }
 
     /// Starts following the network and connects every machine the user added, once per process; later calls do

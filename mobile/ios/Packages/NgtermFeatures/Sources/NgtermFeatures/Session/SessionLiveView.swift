@@ -6,9 +6,10 @@ import SwiftUI
 /// switcher, More: Detach, Open in New Window, End session), the origin's HUD, and its panes.
 ///
 /// A compact width shows the selected pane alone and a swipe across it moves to the next or previous one; a regular
-/// width shows the origin's split. One keyboard serves every pane, and its chords move between the panes and the
-/// sessions. The selected pane is the only one anything typed reaches: a tab, a swipe, a chord and a touch on a pane
-/// select it, and the keyboard's focus follows the selection (``TerminalKeyboard/handOver()``).
+/// width shows the origin's split, or the selected pane alone once a pane tab asked for it (``PaneAlone``). One
+/// keyboard serves every pane, and its chords move between the panes and the sessions. The selected pane is the only
+/// one anything typed reaches: a tab, a swipe, a chord and a touch on a pane select it, and the keyboard's focus
+/// follows the selection (``TerminalKeyboard/handOver()``).
 internal struct SessionLiveView: View {
     // the least height the HUD shows in: below it, it would take the terminal's last rows (a phone on its side with
     // the soft keyboard up)
@@ -38,7 +39,8 @@ internal struct SessionLiveView: View {
                     focused: focused,
                     isCompact: shownCompact,
                     actions: slotActions,
-                    isForward: isForward
+                    isForward: isForward,
+                    isAlone: isSplittable && model.isAlone
                 )
             }
         }
@@ -90,15 +92,28 @@ internal struct SessionLiveView: View {
                     panes: panes,
                     selected: focused,
                     titles: session.live.panes.compactMapValues(\.title),
-                    onSelect: select
+                    onSelect: tapTab,
+                    split: isSplittable ? (model.isAlone ? .alone : .both) : .fixed
                 )
+            }
+        }
+        if let focused, let view = model.view(of: focused) {
+            ToolbarItem(placement: .topBarTrailing) {
+                ViewSwitch(view: view) { other in
+                    if other == .terminal {
+                        // the terminal built in the chat's place takes the focus, with the soft keyboard if it was up
+                        model.keyboard.handOver()
+                    }
+                    model.pick(focused, other)
+                }
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
             SessionMenu(
                 name: session.name,
                 onDetach: model.detach,
-                onNewWindow: actions.openInNewWindow
+                onNewWindow: actions.openInNewWindow,
+                chatView: model.chatView
             ) {
                 isConfirmingEnd = true
             }
@@ -126,6 +141,11 @@ internal struct SessionLiveView: View {
         )
     }
 
+    // whether the window can show the origin's split, as the panes lay out now
+    private var isSplittable: Bool {
+        PaneAlone.isSplittable(session.live.layout, isCompact: shownCompact)
+    }
+
     /// The live `session` of `model`, its pane `focused` selected, in a compact width's layout when `isCompact`, its
     /// terminals in `look`, asking its window for `actions`.
     internal init(
@@ -143,6 +163,17 @@ internal struct SessionLiveView: View {
         self.look = look
         self.actions = actions
         _shownCompact = State(initialValue: isCompact)
+    }
+
+    // a pane tab's tap: it selects the pane, and toggles the split where it can show; either way the selected pane's
+    // terminal may be built anew, so the keyboard's focus is handed over to it
+    private func tapTab(_ paneId: String) {
+        let panes = session.live.layout?.panes ?? []
+        let from = model.focusedPane.flatMap(panes.firstIndex(of:)) ?? 0
+        isForward = (panes.firstIndex(of: paneId) ?? 0) >= from
+        if model.tapTab(paneId, isSplittable: isSplittable) {
+            model.keyboard.handOver()
+        }
     }
 
     // selects `paneId`, the keyboard's focus following; a compact width slides it in from the side it lies on

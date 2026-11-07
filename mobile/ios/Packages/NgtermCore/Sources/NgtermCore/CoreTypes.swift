@@ -5,10 +5,40 @@ import NgtermCoreBindings
 // and the generated bindings stay this package's own. Their docs are the Rust ones (crates/ngterm-mobile, api.rs and
 // the modules it names), which UniFFI copies into the bindings.
 
+/// One entry of the chat composer's `/` menu: an agent's slash command or skill.
+public typealias AgentCommand = NgtermCoreBindings.AgentCommand
+/// Where a `/` menu entry comes from.
+public typealias AgentCommandKind = NgtermCoreBindings.AgentCommandKind
+/// What became of a chat action on a pane's agent.
+public typealias AgentInputOutcome = NgtermCoreBindings.AgentInputOutcome
 /// The user's answer to an ask: a button, typed text or the choices picked.
 public typealias AskReply = NgtermCoreBindings.AskReply
 /// A cell of a pane's grid: `x` its column, `y` its row in the viewport.
 public typealias CellPoint = NgtermCoreBindings.CellPoint
+/// A permission prompt a pane's agent waits on, from its hook payload.
+public typealias ChatApproval = NgtermCoreBindings.ChatApproval
+/// What a chat event says.
+public typealias ChatBody = NgtermCoreBindings.ChatBody
+/// One event of a pane's chat; a later one with the same id updates the item an earlier one made.
+public typealias ChatEvent = NgtermCoreBindings.ChatEvent
+/// What a chat notice reports.
+public typealias ChatNoticeKind = NgtermCoreBindings.ChatNoticeKind
+/// Claude's `AskUserQuestion`: its questions, and once answered, the answer the agent got.
+public typealias ChatQuestion = NgtermCoreBindings.ChatQuestion
+/// One question of an `AskUserQuestion`.
+public typealias ChatQuestionItem = NgtermCoreBindings.ChatQuestionItem
+/// One option of a question.
+public typealias ChatQuestionOption = NgtermCoreBindings.ChatQuestionOption
+/// What became of a pane's open chat, besides its events.
+public typealias ChatState = NgtermCoreBindings.ChatState
+/// A tool call of a chat, and once its result is written, how it went.
+public typealias ChatTool = NgtermCoreBindings.ChatTool
+/// What a tool does, for its glyph.
+public typealias ChatToolKind = NgtermCoreBindings.ChatToolKind
+/// Where a tool call or a question stands.
+public typealias ChatToolStatus = NgtermCoreBindings.ChatToolStatus
+/// How much of a limit is used, and when it resets.
+public typealias ChatUsage = NgtermCoreBindings.ChatUsage
 /// The app's answer to a pane's clipboard read.
 public typealias ClipboardReply = NgtermCoreBindings.ClipboardReply
 /// Why a key could not be made or imported.
@@ -55,6 +85,8 @@ public typealias PaneWheel = NgtermCoreBindings.PaneWheel
 public typealias PaneWheelOutcome = NgtermCoreBindings.PaneWheelOutcome
 /// This app's role on an attached session.
 public typealias PresentationRole = NgtermCoreBindings.PresentationRole
+/// One question's answer: the option labels picked, and the text typed into its free-form option.
+public typealias QuestionAnswer = NgtermCoreBindings.QuestionAnswer
 /// An ask from an attached session.
 public typealias RemoteAsk = NgtermCoreBindings.RemoteAsk
 /// A button of an ask.

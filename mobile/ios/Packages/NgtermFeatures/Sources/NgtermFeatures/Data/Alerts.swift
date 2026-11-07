@@ -12,7 +12,9 @@ import NgtermPlatform
 /// - every open ask out of sight (the ask rule: a sheet while its session is on screen, a notification otherwise),
 ///   taken down when it is answered, dismissed, taken back, or comes on screen.
 ///
-/// The kinds the user turned off are not posted. Each notice groups under its session's thread (a machine's own under
+/// The kinds the user turned off are not posted. Names come from the machines and their listings (an attached session's
+/// under the name its stream last said), and a session's context from its stream once it has said one, its listing's
+/// until then. Each notice groups under its session's thread (a machine's own under
 /// the machine's). A tap opens its session and pane (``OpenRequests``); an ask's action answers it through the core,
 /// in the grace too (``respond(to:)``).
 @preconcurrency
@@ -20,6 +22,7 @@ import NgtermPlatform
 public final class Alerts {
     private let connections: Connections
     private let asks: Asks
+    private let live: LiveSessions
     private let machines: MachineStore
     private let prefs: NotificationPrefsStore
     private let center: any NoticeCenter
@@ -34,12 +37,13 @@ public final class Alerts {
     // the attached set as last seen
     private var attached: Set<SessionKey> = []
 
-    /// The alerts over `connections` and `asks`, naming machines from `machines`, posting the kinds `prefs` has on to
-    /// `center`, and handing a tap's target to `requests`.
+    /// The alerts over `connections` and `asks`, taking contexts from `live`, naming machines from `machines`, posting
+    /// the kinds `prefs` has on to `center`, and handing a tap's target to `requests`.
     @preconcurrency
     public init(
         connections: Connections,
         asks: Asks,
+        live: LiveSessions,
         machines: MachineStore,
         prefs: NotificationPrefsStore,
         center: any NoticeCenter,
@@ -47,6 +51,7 @@ public final class Alerts {
     ) {
         self.connections = connections
         self.asks = asks
+        self.live = live
         self.machines = machines
         self.prefs = prefs
         self.center = center
@@ -152,7 +157,8 @@ public final class Alerts {
             takeDown([Alert.statusId(key)])
             return
         }
-        let context = listing(key)?.context
+        let stream = live.sessions[key]
+        let context = stream?.isContextSaid == true ? stream?.context : listing(key)?.context
         center.post(Alert.status(about: subject(key), kind: kind, context: context, pane: status?.pane).notice)
     }
 

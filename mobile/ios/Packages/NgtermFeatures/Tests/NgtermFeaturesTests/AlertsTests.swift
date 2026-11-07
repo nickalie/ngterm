@@ -56,6 +56,31 @@ internal struct AlertsTests {
         #expect(notices.posted.isEmpty, "a detached session's notices go")
     }
 
+    @Test("a session renamed or given a new context on its stream is posted so")
+    internal func streamSaid() async throws {
+        defer { test.remove() }
+        try await attach()
+        let sent = RemoteNotice(title: "", body: "No title", pane: nil, source: "notify")
+        await emit(
+            .sessionName(machineId: "m1", sessionId: "s1", name: "Fix Linux"),
+            .sessionContext(machineId: "m1", sessionId: "s1", context: "Sidebar rename drops the suffix"),
+            status("blocked", changed: true),
+            .notify(machineId: "m1", sessionId: "s1", notice: sent)
+        )
+        let waiting = try #require(notices.posted[Alert.statusId(key)])
+        #expect(waiting.title == "Fix Linux is waiting for you")
+        #expect(waiting.body == "Sidebar rename drops the suffix")
+        let notice = try #require(notices.posted.values.first { $0.id.hasPrefix("notice:") })
+        #expect(notice.title == "Fix Linux")
+        // a cleared context is a clear, not a gap the listing fills
+        await emit(
+            .sessionContext(machineId: "m1", sessionId: "s1", context: nil),
+            status("completed", changed: true)
+        )
+        let done = try #require(notices.posted[Alert.statusId(key)])
+        #expect(done.body == "On build-01")
+    }
+
     @Test("in the foreground an agent's notice shows beside its session, a status or an ask of a session on screen not")
     internal func foreground() async throws {
         defer { test.remove() }

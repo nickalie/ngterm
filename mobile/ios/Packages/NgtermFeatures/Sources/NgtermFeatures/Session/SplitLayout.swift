@@ -5,16 +5,17 @@ import SwiftUI
 /// A session's split as its origin lays it out (mobile/android's `SplitLayout`).
 ///
 /// Two panes side by side (`vertical`, the divider's direction) or stacked (`horizontal`), split by a hairline, each
-/// with a gutter at its leading edge where the selected one shows the focus bar. One pane, or a split the origin hides
-/// (`shown` false), shows the selected pane alone.
+/// with a gutter at its leading edge where the selected one shows the focus bar. One pane, a split the origin hides
+/// (`shown` false), or one this device's pane tabs set aside (`isSplit` false), shows the selected pane alone.
 internal struct SplitLayout<Pane: View>: View {
     internal let spots: [PaneSpot]
     internal let layout: RemoteLayout
     internal let focused: String?
+    internal var isSplit = true
     @ViewBuilder internal let pane: (PaneSpot) -> Pane
 
     internal var body: some View {
-        if spots.count == SplitMetrics.panes, layout.shown, let axis = layout.axis {
+        if isSplit, spots.count == SplitMetrics.panes, layout.shown, let axis = layout.axis {
             if axis == SplitMetrics.sideBySide {
                 HStack(spacing: 0) {
                     half(spots[0])

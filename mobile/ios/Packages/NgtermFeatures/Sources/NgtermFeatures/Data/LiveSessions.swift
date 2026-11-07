@@ -112,6 +112,11 @@ public final class LiveSessions {
         case .clipboardWrite(_, .standard, let text):
             clipboard.write(text)
 
+        case .paneAgent(let machineId, let sessionId, let paneId, let agent, let conversationId):
+            change(SessionKey(machineId: machineId, sessionId: sessionId)) { session in
+                session.agents[paneId] = agent.map { PaneAgent(agent: $0, conversation: conversationId) }
+            }
+
         default:
             break
         }

@@ -25,6 +25,9 @@ public final class TerminalKeyboard {
     public private(set) var alt = Sticky.off
     /// The terminal every key goes to: the one that became the first responder last, if it still is.
     public weak var target: TerminalView?
+    /// Which chat's prompt field has the keyboard, if one does: the session view's chats say so, as a terminal says
+    /// it is the ``target``, so a move of the selection hands the keyboard on from a chat too.
+    public var chatField: AnyHashable?
 
     /// The extra keys, over the soft keyboard.
     public var bar: ExtraKeysBar {
@@ -157,11 +160,23 @@ public final class TerminalKeyboard {
         return bits
     }
 
-    /// The session view moves the selection to another terminal, or builds the selected one anew (the other size
-    /// class's layout): when a terminal has the focus now, the one drawn focused next in a window takes it, with the
-    /// soft keyboard if this one had it open (Android's `FollowFocus`).
+    /// The session view moves the selection to another pane, or builds the selected one anew (another layout).
+    ///
+    /// When a terminal has the focus now, the one drawn focused next in a window takes it, with the soft keyboard if
+    /// this one had it open (Android's `FollowFocus`). A chat's prompt field with the keyboard (``chatField``) hands it
+    /// on the same way, with the soft keyboard.
     public func handOver() {
-        handingOver = target.map { $0.softKeyboardWanted ? .withKeyboard : .focus }
+        if let target {
+            handingOver = target.softKeyboardWanted ? .withKeyboard : .focus
+        } else {
+            handingOver = chatField == nil ? nil : .withKeyboard
+        }
+    }
+
+    /// Whether ``handOver()`` left the keyboard for the chat selected next, which takes its prompt field's focus;
+    /// taken once.
+    public func takeChatHandover() -> Bool {
+        takeHandover() != nil
     }
 
     /// What ``handOver()`` left for the terminal selected next, taken once.

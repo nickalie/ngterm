@@ -31,4 +31,19 @@ public enum Typography {
     public static var plateValue: Font {
         Fonts.mono(.callout)
     }
+    /// What the terminal holds, in a chat, in JetBrains Mono at 13 pt.
+    ///
+    /// A tool's one line (its command, path, URL or query), a command in the `/` menu, a reply's code, an approval's
+    /// command; it scales as the footnote does.
+    public static var chatCode: Font {
+        Fonts.terminal(size: chatCodeSize, relativeTo: .footnote)
+    }
+    /// A tool's output and a diff, in a chat: JetBrains Mono at 12 pt, scaling as the caption does.
+    public static var chatOutput: Font {
+        Fonts.terminal(size: chatOutputSize, relativeTo: .caption)
+    }
+    /// The size of ``chatCode`` at the default text size, in points.
+    public static let chatCodeSize: CGFloat = 13
+    /// The size of ``chatOutput`` at the default text size, in points.
+    public static let chatOutputSize: CGFloat = 12
 }

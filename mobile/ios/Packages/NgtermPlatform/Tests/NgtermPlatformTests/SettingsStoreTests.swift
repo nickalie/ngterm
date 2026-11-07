@@ -18,6 +18,7 @@ internal struct SettingsStoreTests {
         #expect(settings.theme == .system)
         #expect(settings.extraKeys == .fit)
         #expect(!settings.keepScreenOn)
+        #expect(settings.agentChat)
     }
 
     @Test("the settings round-trip through the file, each choice by its name")
@@ -30,7 +31,8 @@ internal struct SettingsStoreTests {
             palette: .ghostty,
             theme: .dark,
             extraKeys: .twoLines,
-            keepScreenOn: true
+            keepScreenOn: true,
+            agentChat: false
         )
         try SettingsStore(directory: directory.url).update { $0 = changed }
         #expect(SettingsStore(directory: directory.url).settings == changed)
@@ -41,6 +43,7 @@ internal struct SettingsStoreTests {
         #expect(fields["font"] as? String == "systemMono")
         #expect(fields["extraKeys"] as? String == "twoLines")
         #expect(fields["textSize"] as? Int == 17)
+        #expect(fields["agentChat"] as? Bool == false)
     }
 
     @Test("the text size stays within its range, whether set or stored")

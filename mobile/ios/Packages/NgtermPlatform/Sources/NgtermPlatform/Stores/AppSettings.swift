@@ -3,6 +3,7 @@
 /// The notification switches and the machines trusted with the clipboard are kept apart from these, as on Android.
 public struct AppSettings: Codable, Hashable, Sendable {
     private enum CodingKeys: CodingKey {
+        case agentChat
         case extraKeys
         case font
         case keepScreenOn
@@ -28,6 +29,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var extraKeys: ExtraKeysChoice
     /// Whether the screen stays on while an attached session is open.
     public var keepScreenOn: Bool
+    /// Whether a pane running Claude Code or Codex shows as a chat (Agent chat view); a session's More menu sets its
+    /// own.
+    public var agentChat: Bool
 
     /// The settings given, each defaulting to its default; the text size is held within ``textSizes``.
     public init(
@@ -36,7 +40,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         palette: PaletteChoice = .theme,
         theme: ThemeChoice = .system,
         extraKeys: ExtraKeysChoice = .fit,
-        keepScreenOn: Bool = false
+        keepScreenOn: Bool = false,
+        agentChat: Bool = true
     ) {
         self.textSize = Self.clamped(textSize)
         self.font = font
@@ -44,6 +49,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.theme = theme
         self.extraKeys = extraKeys
         self.keepScreenOn = keepScreenOn
+        self.agentChat = agentChat
     }
 
     /// The settings as stored: a value missing, or one this build doesn't know, reads as its default, and the text
@@ -57,6 +63,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         theme = .stored(try? values.decodeIfPresent(String.self, forKey: .theme)) ?? defaults.theme
         extraKeys = .stored(try? values.decodeIfPresent(String.self, forKey: .extraKeys)) ?? defaults.extraKeys
         keepScreenOn = (try? values.decodeIfPresent(Bool.self, forKey: .keepScreenOn)) ?? defaults.keepScreenOn
+        agentChat = (try? values.decodeIfPresent(Bool.self, forKey: .agentChat)) ?? defaults.agentChat
     }
 
     /// `size` held within ``textSizes``.
@@ -73,5 +80,6 @@ public struct AppSettings: Codable, Hashable, Sendable {
         try values.encode(theme.storedName, forKey: .theme)
         try values.encode(extraKeys.storedName, forKey: .extraKeys)
         try values.encode(keepScreenOn, forKey: .keepScreenOn)
+        try values.encode(agentChat, forKey: .agentChat)
     }
 }

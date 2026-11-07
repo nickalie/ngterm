@@ -13,7 +13,9 @@ import Observation
 /// its ``ShownPane/feed`` through the live sessions' routing.
 ///
 /// The selection (``focus``) is kept per session, so a trip elsewhere and back, a new window size or another size
-/// class finds the same pane; it goes with its session's detach.
+/// class finds the same pane; it goes with its session's detach. So is whether a session shows its selected pane
+/// alone where the window could show the origin's split (``alone``): the device's own choice, which the origin never
+/// hears of, kept while the app runs.
 @preconcurrency
 @MainActor
 @Observable
@@ -27,6 +29,8 @@ public final class SessionPanes {
     public private(set) var failures: [PaneRef: String] = [:]
     /// The pane each session has selected, by session; one with none selects its layout's primary pane.
     public private(set) var focus: [SessionKey: String] = [:]
+    /// The sessions showing their selected pane alone, where the window could show the origin's split.
+    public private(set) var alone: Set<SessionKey> = []
     @ObservationIgnored private let connections: Connections
     @ObservationIgnored private let live: LiveSessions
     @ObservationIgnored private var showing: Set<PaneRef> = []
@@ -87,6 +91,16 @@ public final class SessionPanes {
     /// Selects the pane `paneId` of `session`: the one every key goes to.
     public func select(_ paneId: String, of session: SessionKey) {
         focus[session] = paneId
+    }
+
+    /// Shows the selected pane of `session` alone (`isAlone`), or the origin's split again, where the window can show
+    /// it.
+    public func setAlone(_ isAlone: Bool, of session: SessionKey) {
+        if isAlone {
+            alone.insert(session)
+        } else {
+            alone.remove(session)
+        }
     }
 
     private func show(_ pane: PaneRef, size: PaneSize, listFirst: Bool) {

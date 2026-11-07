@@ -4,11 +4,13 @@ import SwiftUI
 /// One session's row: its name, its context (or its working directory) or the parent it is a companion of, and its
 /// agent's status; "Ending" with a spinner while its End is under way.
 ///
-/// A tap attaches it and opens it (the list's selection). Its context menu has Attach or Detach and End session; its
+/// A tap attaches it and opens it (the list's selection). Its context menu has Attach or Detach, Chat view (checked
+/// while its panes running an agent show as a chat) and End session; its
 /// swipe actions, End session and, when attached, Detach, which VoiceOver offers as the row's actions. End session
 /// only asks (`onAskEnd`): the screen confirms it.
 internal struct SessionEntry: View {
     internal let line: SessionLine
+    internal let chatView: ChatViewChoice
     internal let onOpen: @MainActor () -> Void
     internal let onDetach: @MainActor () -> Void
     internal let onAskEnd: @MainActor () -> Void
@@ -34,6 +36,7 @@ internal struct SessionEntry: View {
             } else {
                 Button(String(localized: "Attach"), systemImage: "link", action: onOpen)
             }
+            ChatViewToggle(choice: chatView)
             Button(String(localized: "End session"), systemImage: "xmark.circle", role: .destructive, action: onAskEnd)
                 .disabled(line.isEnding)
         }

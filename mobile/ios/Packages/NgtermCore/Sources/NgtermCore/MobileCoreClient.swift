@@ -1,3 +1,5 @@
+import Foundation
+
 /// The app's core, as the live one and the fake one both offer it.
 ///
 /// The live one is ``LiveMobileCore``, over crates/ngterm-mobile; the fake one is NgtermCoreFakes' `FakeMobileCore`.
@@ -77,4 +79,39 @@ public protocol MobileCoreClient: AnyObject, Sendable {
         readId: UInt64,
         reply: ClipboardReply
     ) throws
+
+    /// Opens the chat of a shown pane whose origin announced an agent: its events arrive as
+    /// ``MobileEvent/chat(pane:events:)``, what becomes of it as ``MobileEvent/chatState(pane:state:)``. Reading claims
+    /// nothing; opening an open chat changes nothing.
+    nonisolated(nonsending) func openChat(machineId: String, sessionId: String, paneId: String) async throws
+
+    /// Closes a pane's chat, reporting nothing.
+    func closeChat(machineId: String, sessionId: String, paneId: String) throws
+
+    /// The page of a pane's open chat before the oldest event it holds, oldest first: empty at the conversation's
+    /// start.
+    nonisolated(nonsending) func loadOlder(
+        machineId: String,
+        sessionId: String,
+        paneId: String
+    ) async throws -> [ChatEvent]
+
+    /// The slash commands and skills of a pane's agent, for the composer's `/` menu.
+    nonisolated(nonsending) func agentCommands(
+        machineId: String,
+        sessionId: String,
+        paneId: String
+    ) async throws -> [AgentCommand]
+
+    /// Sends a file the chat composer attaches to `machineId`, which stores it for its agents to read, and answers the
+    /// stored path. `progress` hears how much has gone (sent, total), on the core's thread. `cancel` stops it while
+    /// bytes are still to go (``MobileError/Cancelled``), and the machine keeps nothing; a cancel of the caller's task
+    /// only ends its wait.
+    nonisolated(nonsending) func uploadFile(
+        machineId: String,
+        name: String,
+        bytes: Data,
+        progress: @escaping @Sendable (UInt64, UInt64) -> Void,
+        cancel: UploadCancel
+    ) async throws -> String
 }

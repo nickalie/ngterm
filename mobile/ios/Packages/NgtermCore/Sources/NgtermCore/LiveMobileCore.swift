@@ -1,3 +1,4 @@
+import Foundation
 import NgtermCoreBindings
 
 /// The app's core over the linked Rust one (crates/ngterm-mobile).
@@ -127,6 +128,61 @@ public final class LiveMobileCore: MobileCoreClient {
             readId: readId,
             reply: reply
         )
+    }
+
+    /// Opens a shown pane's chat (api.rs's `open_chat`).
+    nonisolated(nonsending) public func openChat(machineId: String, sessionId: String, paneId: String) async throws {
+        try await abandoningOnCancel { [core] in
+            try await core.openChat(machineId: machineId, sessionId: sessionId, paneId: paneId)
+        }
+    }
+
+    /// Closes a pane's chat (api.rs's `close_chat`).
+    public func closeChat(machineId: String, sessionId: String, paneId: String) throws {
+        try core.closeChat(machineId: machineId, sessionId: sessionId, paneId: paneId)
+    }
+
+    /// The page of a chat before what it holds (api.rs's `load_older`).
+    nonisolated(nonsending) public func loadOlder(
+        machineId: String,
+        sessionId: String,
+        paneId: String
+    ) async throws -> [ChatEvent] {
+        try await abandoningOnCancel { [core] in
+            try await core.loadOlder(machineId: machineId, sessionId: sessionId, paneId: paneId)
+        }
+    }
+
+    /// A pane's agent's commands (api.rs's `agent_commands`).
+    nonisolated(nonsending) public func agentCommands(
+        machineId: String,
+        sessionId: String,
+        paneId: String
+    ) async throws -> [AgentCommand] {
+        try await abandoningOnCancel { [core] in
+            try await core.agentCommands(machineId: machineId, sessionId: sessionId, paneId: paneId)
+        }
+    }
+
+    /// Sends a file to the machine (api.rs's `upload_file_cancellable`), stopped through `cancel`.
+    @preconcurrency
+    nonisolated(nonsending) public func uploadFile(
+        machineId: String,
+        name: String,
+        bytes: Data,
+        progress: @escaping @Sendable (UInt64, UInt64) -> Void,
+        cancel: UploadCancel
+    ) async throws -> String {
+        let told = ProgressBridge(progress)
+        return try await abandoningOnCancel { [core] in
+            try await core.uploadFileCancellable(
+                machineId: machineId,
+                name: name,
+                bytes: bytes,
+                progress: told,
+                cancel: cancel.token
+            )
+        }
     }
 
     deinit {

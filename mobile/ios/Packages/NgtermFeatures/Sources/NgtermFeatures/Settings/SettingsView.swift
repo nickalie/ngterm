@@ -2,8 +2,8 @@ import NgtermDesign
 import SwiftUI
 
 /// Settings (mobile/android's `SettingsRoute`), a sheet with a `Form`: the terminal (a live sample over its text size,
-/// font and colors, and keeping the screen on), the appearance, the extra keys, the notifications, the machines
-/// trusted with the clipboard, the keys, and the loaded core's version; Done closes it.
+/// font and colors, and keeping the screen on), the appearance, the extra keys, the agents' chat view, the
+/// notifications, the machines trusted with the clipboard, the keys, and the loaded core's version; Done closes it.
 ///
 /// It pushes a key's public half (with Use for every machine under it) and the import. A key just made or brought
 /// opens its public half in place of where Settings was. Whether the app may notify is read again each time the app
@@ -25,6 +25,7 @@ public struct SettingsView: View {
             Form {
                 TerminalSection(model: model)
                 ChoiceSections(model: model)
+                AgentsSection(model: model)
                 NotificationsSection(model: model)
                 ClipboardSection(model: model)
                 KeysSection(model: model) { keyId in
