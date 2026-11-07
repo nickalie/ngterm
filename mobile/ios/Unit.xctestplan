@@ -9,6 +9,40 @@
     }
   ],
   "defaultOptions" : {
+    "codeCoverage" : {
+      "targets" : [
+        {
+          "containerPath" : "container:NgTerm.xcodeproj",
+          "identifier" : "4E0000000000000000000010",
+          "name" : "NgTerm"
+        },
+        {
+          "containerPath" : "container:Packages\/NgtermCore",
+          "identifier" : "NgtermCore",
+          "name" : "NgtermCore"
+        },
+        {
+          "containerPath" : "container:Packages\/NgtermDesign",
+          "identifier" : "NgtermDesign",
+          "name" : "NgtermDesign"
+        },
+        {
+          "containerPath" : "container:Packages\/NgtermFeatures",
+          "identifier" : "NgtermFeatures",
+          "name" : "NgtermFeatures"
+        },
+        {
+          "containerPath" : "container:Packages\/NgtermPlatform",
+          "identifier" : "NgtermPlatform",
+          "name" : "NgtermPlatform"
+        },
+        {
+          "containerPath" : "container:Packages\/NgtermTerminal",
+          "identifier" : "NgtermTerminal",
+          "name" : "NgtermTerminal"
+        }
+      ]
+    },
     "language" : "en",
     "region" : "US",
     "targetForVariableExpansion" : {

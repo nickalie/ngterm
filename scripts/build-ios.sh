@@ -29,7 +29,13 @@
 #    - build: the app, its tests and its packages for the simulator (Debug);
 #    - test: the Unit and then the UI test plan on the pinned phone and tablet simulators (IOS_SIM_PHONE_NAME and
 #      IOS_SIM_TABLET_NAME, made by setup-ios.sh), one at a time; result bundles in mobile/ios/build/, and a failed
-#      snapshot's image in mobile/ios/build/snapshot-failures/ (its diff is in the result bundle);
+#      snapshot's image in mobile/ios/build/snapshot-failures/ (its diff is in the result bundle). The Unit plan
+#      measures line coverage of the app's own code (Unit.xctestplan names the targets): scripts/ios-coverage.py
+#      writes its summary beside the result bundle (Unit.coverage.txt and Unit.coverage.json, from the run's
+#      profiles merged into Unit.profdata) and, after the UI plan, fails the action when a target is below its floor
+#      in mobile/ios/coverage-floors.txt;
+#    - coverage: the Unit plan alone on both simulators, its coverage summary and the floor check, as test measures
+#      them;
 #    - archive: a Release archive for devices, mobile/ios/build/NgTerm.xcarchive, unsigned unless the release
 #      environment is set (APP_STORE_CONNECT_KEY_PATH, APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_ISSUER_ID and
 #      IOS_DEVELOPMENT_TEAM: automatic signing through that App Store Connect API key). Its marketing version is the
@@ -44,7 +50,7 @@
 # NGTERM_GHOSTTY_VT_PREFIX). xcodebuild runs under `caffeinate -is`, so a sleeping Mac doesn't stall a test run, and
 # with its derived data in mobile/ios/build/ (gitignored).
 #
-# Usage: scripts/build-ios.sh [--profile release|debug] [--no-xcode] [lint|build|test|archive...]
+# Usage: scripts/build-ios.sh [--profile release|debug] [--no-xcode] [lint|build|test|coverage|archive...]
 #   --profile   the cargo profile of the archives (default: release)
 #   --no-xcode  stop after step 7, the outputs
 set -euo pipefail
@@ -53,7 +59,7 @@ set -euo pipefail
 source "$(dirname "$0")/lib/native.sh" # sources build/pins.env too
 
 usage() {
-  die "usage: scripts/build-ios.sh [--profile release|debug] [--no-xcode] [lint|build|test|archive...]"
+  die "usage: scripts/build-ios.sh [--profile release|debug] [--no-xcode] [lint|build|test|coverage|archive...]"
 }
 
 ARGS=("$@") # for the re-run under the build lock
@@ -71,7 +77,7 @@ while (($#)); do
       XCODE=0
       shift
       ;;
-    lint | build | test | archive)
+    lint | build | test | coverage | archive)
       ACTIONS+=("$1")
       shift
       ;;
@@ -303,8 +309,9 @@ action_build() {
   project_xcodebuild build-for-testing "${SIMULATOR_BUILD[@]}" -quiet
 }
 
-action_test() {
-  local phone tablet plan
+# Run test plan $1 on the phone and tablet simulators, one after the other, into mobile/ios/build/$1.xcresult.
+run_test_plan() {
+  local plan="$1" phone tablet
   phone="$(simulator_udid "$IOS_SIM_PHONE_NAME")"
   tablet="$(simulator_udid "$IOS_SIM_TABLET_NAME")"
   [[ -n "$phone" && -n "$tablet" ]] ||
@@ -312,14 +319,35 @@ action_test() {
   mkdir -p "$BUILD_DIR"
   # a failed snapshot's image goes to snapshot-failures/<test file>/ (xcodebuild hands TEST_RUNNER_* to the test
   # processes without the prefix; the simulator's processes write the Mac's paths), its diffs into the result bundle
-  rm -rf "$BUILD_DIR/snapshot-failures"
   export TEST_RUNNER_SNAPSHOT_ARTIFACTS="$BUILD_DIR/snapshot-failures"
-  for plan in Unit UI; do
-    rm -rf "$BUILD_DIR/$plan.xcresult"
-    project_xcodebuild test -scheme NgTerm -configuration Debug -testPlan "$plan" \
-      -destination "id=$phone" -destination "id=$tablet" -disable-concurrent-destination-testing \
-      -parallel-testing-enabled NO -resultBundlePath "$BUILD_DIR/$plan.xcresult" -quiet
-  done
+  # the profiles of this run only: each simulator's are in Build/ProfileData/<its UDID>/
+  rm -rf "$BUILD_DIR/$plan.xcresult" "$DERIVED_DATA/Build/ProfileData"
+  project_xcodebuild test -scheme NgTerm -configuration Debug -testPlan "$plan" \
+    -destination "id=$phone" -destination "id=$tablet" -disable-concurrent-destination-testing \
+    -parallel-testing-enabled NO -resultBundlePath "$BUILD_DIR/$plan.xcresult" -quiet
+}
+
+# The Unit plan's coverage (scripts/ios-coverage.py): summarize reads the profiles the run left in the derived data
+# into Unit.coverage.txt and Unit.coverage.json beside its result bundle, so it runs before the UI plan's run replaces
+# them; check fails when a target is below its floor.
+coverage_summarize() {
+  rm -f "$BUILD_DIR/Unit.coverage.txt" "$BUILD_DIR/Unit.coverage.json" "$BUILD_DIR/Unit.profdata"
+  scripts/ios-coverage.py summarize
+}
+
+action_test() {
+  rm -rf "$BUILD_DIR/snapshot-failures"
+  run_test_plan Unit
+  coverage_summarize
+  run_test_plan UI
+  scripts/ios-coverage.py check
+}
+
+action_coverage() {
+  rm -rf "$BUILD_DIR/snapshot-failures"
+  run_test_plan Unit
+  coverage_summarize
+  scripts/ios-coverage.py check
 }
 
 # Fail when a binary (an app's executable or its dSYM's DWARF) holds a symbol or string of the fake core's module.

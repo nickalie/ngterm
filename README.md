@@ -764,8 +764,11 @@ as before, with no error. A Windows origin can't be reached at all yet, as above
 
 ```sh
 scripts/setup-ios.sh [--check]    # the pinned toolchain (iOS toolchain); build-ios.sh takes its exports itself
-scripts/build-ios.sh [--profile release|debug] [--no-xcode] [lint|build|test|archive...]   # default: build
+scripts/build-ios.sh [--profile release|debug] [--no-xcode] [lint|build|test|coverage|archive...]   # default: build
 scripts/build-ios.sh lint test    # the lint gate, then the Unit and UI test plans on both simulators, as CI runs them
+scripts/build-ios.sh coverage     # the Unit plan alone, its line coverage summary and floor check, as test measures it
+eval "$(scripts/setup-ios.sh --check)"   # then, after test or coverage, a source file's lines no Unit test ran:
+scripts/ios-coverage.py uncovered mobile/ios/Packages/NgtermCore/Sources/NgtermCore/CoreInfo.swift
 scripts/build-ios.sh archive      # a Release archive for devices (unsigned without the release secrets), checked
 eval "$(scripts/setup-ios.sh --check)"   # then the core's tests in the phone simulator, as CI's lint job runs them:
 CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER="$PWD/scripts/ios-sim-runner.sh" \
@@ -781,6 +784,12 @@ CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER="$PWD/scripts/ios-sim-runner.sh" \
   warnings as errors. A finding is fixed in the code: there are no baselines.
 - `test` runs on the pinned `ngterm-phone` and `ngterm-tablet` simulators, one after the other. The UI tests drive
   the app on a fake core (Debug builds only; `archive` checks the Release build doesn't hold it).
+- The Unit plan measures line coverage of the app's own code: the app target and the packages' library targets
+  (`Unit.xctestplan`'s code coverage targets), not the tests, the fake core or the generated bindings; the UI plan
+  is not measured. `test` and `coverage` write its summary per target and per file, least covered first, beside the
+  result bundle (`mobile/ios/build/Unit.coverage.txt`, and `.json` for scripts), and fail when a target is below its
+  floor in `mobile/ios/coverage-floors.txt`. `scripts/ios-coverage.py` measures with Xcode's `llvm-cov` over both
+  simulators' profiles and each target's objects (its header says why not `xccov`). Floors only rise, toward 90%.
 - Snapshot goldens live in each package's `Tests/*/__Snapshots__/`, one per simulator (`-on-phone`, `-on-tablet`),
   recorded on the pinned runtime, which CI verifies them on. A missing golden is recorded by the run that first
   meets it, which fails; the next run checks it. To re-record the ones that fail, run

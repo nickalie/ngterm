@@ -14,10 +14,12 @@
 #   through scripts/ios-sim-runner.sh), then scripts/build-ios.sh lint: SwiftLint with its analyzer rules,
 #   swift-format, the suppression reasons, Swift 6 with warnings as errors. Its build log is kept as `ios-lint-log`
 #   when it fails;
-# - `test`: scripts/build-ios.sh test, the Unit and UI test plans on both simulators. When it fails (or runs out of
-#   time) the result bundles are kept as `ios-results`, and the failed snapshots' images
-#   (mobile/ios/build/snapshot-failures/) with the failed tests' attachments exported from the result bundles (each
-#   snapshot's reference, failure and difference images, the UI audits' screenshots) as `ios-failure-diffs`;
+# - `test`: scripts/build-ios.sh test, the Unit and UI test plans on both simulators, and the Unit plan's line coverage
+#   checked against the floors of mobile/ios/coverage-floors.txt; the coverage summary (Unit.coverage.txt and .json)
+#   is kept as `ios-coverage` on every run that wrote it. When it fails (or runs out of time) the result bundles are
+#   kept as `ios-results`, and the failed snapshots' images (mobile/ios/build/snapshot-failures/) with the failed
+#   tests' attachments exported from the result bundles (each snapshot's reference, failure and difference images,
+#   the UI audits' screenshots) as `ios-failure-diffs`;
 # - `archive`: scripts/build-ios.sh archive, an unsigned Release archive for devices, checked to hold no
 #   NgtermCoreFakes symbol (the fake core is for Debug builds only), to answer the export compliance question, and to
 #   carry a privacy manifest that covers the required-reason APIs its binary uses (scripts/ios-privacy-check.sh). The
@@ -56,6 +58,7 @@ on:
       - scripts/setup-ios.sh
       - scripts/ios-sim-runner.sh
       - scripts/ios-privacy-check.sh
+      - scripts/ios-coverage.py
       - scripts/build-ghostty-vt.sh
       - scripts/lib/native.sh
       - build/pins.env
@@ -136,8 +139,15 @@ jobs:
         run: scripts/build-ghostty-vt.sh
       - name: iOS toolchain (build/pins.env)
         run: scripts/setup-ios.sh
-      - name: test (the Unit and UI test plans on the phone and tablet)
+      - name: test (the Unit and UI test plans on the phone and tablet, the Unit plan's coverage floors)
         run: scripts/build-ios.sh test
+      - name: upload the coverage summary
+        if: success() || failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-coverage
+          path: mobile/ios/build/Unit.coverage.*
+          if-no-files-found: ignore
       - name: upload the result bundles
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7

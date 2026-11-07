@@ -1,0 +1,12 @@
+# Line coverage floors of the iOS app's Unit test plan, per target (scripts/ios-coverage.py check, which
+# scripts/build-ios.sh test and coverage run): a target below its floor fails the run, and so does a measured target
+# with no floor or a floor whose target is gone. Each floor is a whole percent, at most the target's measured line
+# percent rounded down; floors only rise, toward 90, as targets earn it.
+# Seeded from a clean build's run on the pinned Xcode and simulators (2026-11-07).
+# Sorted by target.
+NgTerm 40
+NgtermCore 66
+NgtermDesign 97
+NgtermFeatures 84
+NgtermPlatform 76
+NgtermTerminal 88
