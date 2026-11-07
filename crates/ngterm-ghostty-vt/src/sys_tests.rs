@@ -10,6 +10,14 @@ fn decoder(bytes: &[u8]) -> Option<DecodedImage> {
         b"empty" => Vec::new(),
         b"short" => vec![1, 2, 3],
         b"valid" => vec![1, 2, 3, 255],
+        // (2^31 - 2^16 + 1) * (2^31 + 2^16 + 1) * 4 = 2^64 + 4: the size overflows u64 and, wrapped, matches 4 bytes.
+        b"huge" => {
+            return Some(DecodedImage {
+                width: (1 << 31) - (1 << 16) + 1,
+                height: (1 << 31) + (1 << 16) + 1,
+                rgba: vec![1, 2, 3, 255],
+            });
+        }
         _ => return None,
     };
     Some(DecodedImage {
@@ -26,6 +34,7 @@ fn sink(level: LogLevel, scope: &str, message: &str) {
 #[test]
 fn hooks_validate_images_and_deliver_logs_in_an_isolated_process() {
     const CASE: &str = "T_GVT_SYS_HOOKS_CASE";
+    const DONE: &str = "T_GVT_SYS_HOOKS_DONE";
     if let Ok(case) = std::env::var(CASE) {
         assert!(installed().is_none());
         let hooks = if case == "empty" {
@@ -46,6 +55,8 @@ fn hooks_validate_images_and_deliver_logs_in_an_isolated_process() {
             check_images();
             check_logs();
         }
+        // The parent's proof that this half ran: an `--exact` filter matching nothing would also exit 0.
+        println!("{DONE} {case}");
         return;
     }
     for case in ["empty", "hooks"] {
@@ -60,10 +71,10 @@ fn hooks_validate_images_and_deliver_logs_in_an_isolated_process() {
             command.env_remove(key);
         }
         let output = command.output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            output.status.success(),
-            "{case}: {}{}",
-            String::from_utf8_lossy(&output.stdout),
+            output.status.success() && stdout.contains(&format!("{DONE} {case}")),
+            "{case}: {stdout}{}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -90,7 +101,7 @@ fn decode(bytes: &[u8]) -> (bool, ffi::GhosttySysImage) {
 }
 
 fn check_images() {
-    for bytes in [b"missing".as_slice(), b"empty", b"short"] {
+    for bytes in [b"missing".as_slice(), b"empty", b"short", b"huge"] {
         let (ok, image) = decode(bytes);
         assert!(!ok);
         assert!(image.data.is_null());

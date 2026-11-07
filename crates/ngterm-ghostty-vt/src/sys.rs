@@ -90,8 +90,11 @@ unsafe extern "C" fn decode_png(
     let Some(image) = decode(png) else {
         return false;
     };
-    let expected = u64::from(image.width) * u64::from(image.height) * 4;
-    if image.rgba.is_empty() || u64::try_from(image.rgba.len()).ok() != Some(expected) {
+    // Checked: a decoder's dimensions up to `u32::MAX` each overflow `u64` (a panic here would abort the process).
+    let expected = u64::from(image.width)
+        .checked_mul(u64::from(image.height))
+        .and_then(|pixels| pixels.checked_mul(4));
+    if image.rgba.is_empty() || expected.is_none() || u64::try_from(image.rgba.len()).ok() != expected {
         return false;
     }
     // SAFETY: the allocator the library passed for this image; a null result (over its limit) is a failure.
