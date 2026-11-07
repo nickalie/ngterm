@@ -48,6 +48,9 @@ plan in English and drop sections that would stay empty.
 - Each change reaches the Android and iOS renderers and key mapping where they draw or name that thing (UI work through
   the `frontend-design` skill inside each app's `DESIGN.md`), and the session server where its VT is involved.
 - Checks per task follow AGENTS.md > Choosing checks.
+- Machines (`.claude/skills/libghostty-sync/references/machines.md`): Windows work (builds, clippy, tests, debugging,
+  GUI runs) runs in the Windows VM, macOS and iOS work on the Mac over ssh, Android work on the emulator; the VM and
+  the emulator start on demand and stop when the task's work on them is done.
 
 ## Implementation Steps
 
@@ -106,5 +109,7 @@ plan in English and drop sections that would stay empty.
   shows them, or into Task 1 when an ngterm test changes.
 - A port whose Ghostty source has Zig tests asserts those cases in Rust; a renderer change with no Ghostty test asserts
   the computed values (colors, rects, layers), not GPUI's output.
-- Mobile checks follow README > Android and > iOS; the iOS build and tests need a Mac, so they run on CI.
+- Each task's checks name the machine for each platform it reaches (`references/machines.md`): the iOS build and
+  tests and the macOS renderer on the Mac, the Android renderer's instrumented tests and screen checks on the
+  emulator, Windows in the VM. Mobile checks follow README > Android and > iOS.
 - Facts come from this run's reports and greps, not from memory of earlier syncs.

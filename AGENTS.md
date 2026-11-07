@@ -98,4 +98,5 @@ Agents usually run inside a pane of the user's live ngterm. Keep every dev run o
 - Strip `NGTERM_*` from the environment of anything you launch.
 - Give every `ngtermctl` call an explicit `--socket`.
 - Use a private state dir; reap sessions through that dir's own server, never by process name.
-- Run the GUI headless only (README > Test). A macOS or Windows GUI run goes on a CI runner or a throwaway VM.
+- Run the GUI headless only (README > Test). A Windows GUI run goes on a CI runner or a throwaway VM; a macOS one on
+  a CI runner or a Mac the operator provides for it, under these same rules there.
