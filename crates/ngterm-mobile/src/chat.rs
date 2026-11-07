@@ -59,6 +59,8 @@ mod records;
 pub(crate) mod tests;
 pub(crate) mod upload;
 
+pub use self::upload::UploadCancel;
+
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;

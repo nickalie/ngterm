@@ -6,7 +6,7 @@ use std::future;
 use std::time::Duration;
 
 use crate::api::{Machine, MobileError};
-use crate::chat::upload::{CHUNK, STALL, STALLED, WINDOW, upload, upload_tail};
+use crate::chat::upload::{CHUNK, STALL, STALLED, UploadCancel, WINDOW, upload, upload_tail};
 use crate::transport::fake::{FakeConnection, FakeTransport, Opened};
 use crate::transport::{ChannelEnd, ChannelInput, Transport};
 
@@ -191,6 +191,34 @@ async fn cancelling_closes_the_channel_so_the_origin_keeps_nothing() {
             tokio::join!(sending, origin).0
         })
         .await;
+    assert_eq!(answer, Err(MobileError::Cancelled));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_cancel_token_stops_the_upload_as_a_dropped_call_does() {
+    let (transport, connection) = connected().await;
+    let token = UploadCancel::new();
+    let local = tokio::task::LocalSet::new();
+    let answer = local
+        .run_until(async {
+            let file = vec![1_u8; WINDOW * 2];
+            let sending = upload(&connection, "a.bin", &file, &|_, _| {}, token.cancelled());
+            let origin = async {
+                let mut opened = opened(&transport).await;
+                token.cancel();
+                // a second cancel changes nothing
+                token.cancel();
+                let (_, ended) = take_all(&mut opened).await;
+                assert!(!ended, "a cancelled upload sends no end of input");
+            };
+            tokio::join!(sending, origin).0
+        })
+        .await;
+    assert_eq!(answer, Err(MobileError::Cancelled));
+    // a token cancelled before the upload starts stops it before it opens anything
+    let early = UploadCancel::new();
+    early.cancel();
+    let answer = upload(&connection, "b.bin", &[1, 2, 3], &|_, _| {}, early.cancelled()).await;
     assert_eq!(answer, Err(MobileError::Cancelled));
 }
 

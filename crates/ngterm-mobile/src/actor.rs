@@ -61,7 +61,7 @@ use crate::api::{
     EventSink, Machine, MachineState, MobileError, MobileEvent, Pane, PaneSize, PaneSlot, UploadProgress,
 };
 use crate::chat::input::{Action, AgentInputOutcome, InputTiming};
-use crate::chat::{AgentCommand, ChatEvent, ChatKey, Chats};
+use crate::chat::{AgentCommand, ChatEvent, ChatKey, Chats, UploadCancel};
 use crate::pane::{self, ClipboardReply, GoneCheck, Note, PaneRef, Panes, Target};
 use crate::presentation::{self, AskReply, ChannelLinks, LinkEvent, Presentations, Reporter};
 use crate::reconnect::Retry;
@@ -145,12 +145,14 @@ pub(crate) enum Command {
         pane: PaneRef,
         reply: oneshot::Sender<Result<Vec<AgentCommand>, MobileError>>,
     },
-    /// A file the chat composer attaches, sent to the machine ([`crate::chat::upload`]); the reply dropped cancels it.
+    /// A file the chat composer attaches, sent to the machine ([`crate::chat::upload`]); the reply dropped, or the
+    /// `cancel` token cancelled, cancels it.
     Upload {
         machine_id: String,
         name: String,
         bytes: Vec<u8>,
         progress: Arc<dyn UploadProgress>,
+        cancel: Option<Arc<UploadCancel>>,
         reply: oneshot::Sender<Result<String, MobileError>>,
     },
     /// A chat action on a shown pane's agent ([`crate::chat::input`]), from the handle whose slot is `slot`.

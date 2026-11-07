@@ -80,6 +80,7 @@ pub(super) fn command<T: Transport>(state: &Rc<State<T>>, command: Command) {
             name,
             bytes,
             progress,
+            cancel,
             mut reply,
         } => {
             let connection = match connection_of(state, &machine_id) {
@@ -88,7 +89,16 @@ pub(super) fn command<T: Transport>(state: &Rc<State<T>>, command: Command) {
             };
             tokio::task::spawn_local(async move {
                 let told = |sent, total| progress.sent(sent, total);
-                let answer = upload::upload(&*connection, &name, &bytes, &told, reply.closed()).await;
+                let cancelled = async {
+                    match &cancel {
+                        Some(token) => tokio::select! {
+                            () = reply.closed() => {}
+                            () = token.cancelled() => {}
+                        },
+                        None => reply.closed().await,
+                    }
+                };
+                let answer = upload::upload(&*connection, &name, &bytes, &told, cancelled).await;
                 let _ = reply.send(answer);
             });
         }

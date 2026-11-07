@@ -13,10 +13,12 @@
 //!   app stops offering Cancel there. A link that moves nothing for [`STALL`] fails the upload as a cancel does.
 
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ngterm_core::command_restore::shell_quoted_line;
 use ngterm_core::remote::tree::{REMOTE_CLI, remote_cli_chain};
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::api::MobileError;
@@ -36,6 +38,47 @@ pub(crate) const STALL: Duration = Duration::from_secs(30);
 
 /// The error of an upload whose link moved nothing for [`STALL`].
 pub(crate) const STALLED: &str = "the upload stalled: the machine took nothing for 30 seconds";
+
+/// A way to stop an upload ([`crate::MobileCore::upload_file_cancellable`]) besides dropping its call: Swift's async
+/// calls run a Rust future to its end whatever becomes of the task that made them, so the iOS app's Cancel upload
+/// goes through this. Cancelling it is as dropping the call: the upload stops while bytes are still to go, and once
+/// every byte has gone it is too late. Cancelling twice, or after the upload ended, changes nothing.
+#[derive(Debug, uniffi::Object)]
+pub struct UploadCancel {
+    cancelled: watch::Sender<bool>,
+}
+
+impl Default for UploadCancel {
+    fn default() -> Self {
+        Self {
+            cancelled: watch::channel(false).0,
+        }
+    }
+}
+
+#[uniffi::export]
+impl UploadCancel {
+    /// A token no upload has been cancelled through yet.
+    #[uniffi::constructor]
+    #[must_use]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Stops the upload this token was given to, as dropping its call would.
+    pub fn cancel(&self) {
+        self.cancelled.send_replace(true);
+    }
+}
+
+impl UploadCancel {
+    /// Resolves once [`UploadCancel::cancel`] has been called, at once when it was before.
+    pub(crate) async fn cancelled(&self) {
+        let mut seen = self.cancelled.subscribe();
+        // the sender lives in self, so the wait ends only with a cancel
+        let _ = seen.wait_for(|cancelled| *cancelled).await;
+    }
+}
 
 /// The upload's remote command. The name goes as `--name=NAME`, one word, so a name that starts with `-` stays a value.
 #[must_use]

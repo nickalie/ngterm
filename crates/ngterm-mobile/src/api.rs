@@ -21,7 +21,7 @@ pub use self::pane::{
 
 use crate::actor::{Actor, Command};
 use crate::chat::input::InputTiming;
-use crate::chat::{AgentCommand, ChatEvent, ChatState};
+use crate::chat::{AgentCommand, ChatEvent, ChatState, UploadCancel};
 use crate::keys::{self, KeyError, KeyPair};
 use crate::pane::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};
 use crate::presentation::{
@@ -739,12 +739,46 @@ impl MobileCore {
         bytes: Vec<u8>,
         progress: Arc<dyn UploadProgress>,
     ) -> Result<String, MobileError> {
+        self.upload(machine_id, name, bytes, progress, None).await
+    }
+
+    /// [`MobileCore::upload_file`] that `cancel` stops as well as a dropped call: for the iOS app, whose async calls
+    /// can't drop the core's future, so a cancelled Swift task alone would send the whole file.
+    ///
+    /// # Errors
+    ///
+    /// As [`MobileCore::upload_file`]; [`MobileError::Cancelled`] once `cancel` was cancelled while bytes were still
+    /// to go.
+    pub async fn upload_file_cancellable(
+        &self,
+        machine_id: String,
+        name: String,
+        bytes: Vec<u8>,
+        progress: Arc<dyn UploadProgress>,
+        cancel: Arc<UploadCancel>,
+    ) -> Result<String, MobileError> {
+        self.upload(machine_id, name, bytes, progress, Some(cancel)).await
+    }
+}
+
+impl MobileCore {
+    /// Posts an upload and waits for its answer: the call [`MobileCore::upload_file`] and
+    /// [`MobileCore::upload_file_cancellable`] share.
+    async fn upload(
+        &self,
+        machine_id: String,
+        name: String,
+        bytes: Vec<u8>,
+        progress: Arc<dyn UploadProgress>,
+        cancel: Option<Arc<UploadCancel>>,
+    ) -> Result<String, MobileError> {
         let (reply, answer) = oneshot::channel();
         self.actor.post(Command::Upload {
             machine_id,
             name,
             bytes,
             progress,
+            cancel,
             reply,
         })?;
         answer.await.unwrap_or(Err(MobileError::Stopped))
