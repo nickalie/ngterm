@@ -155,6 +155,9 @@ class OnboardingFailureTest {
             model.create()
             assertEquals(OnboardingStep.Welcome(busy = true), model.step.value)
             model.create()
+            // the import stays closed while the key is made, so no second key is brought beside it
+            model.startImport()
+            assertEquals(OnboardingStep.Welcome(busy = true), model.step.value)
         } finally {
             maker.gate?.countDown()
         }
