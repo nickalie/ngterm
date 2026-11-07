@@ -279,6 +279,8 @@ mod tests {
         drain(read.as_fd()).unwrap();
     }
 
+    // Linux reports a pipe without readers as POLLERR; XNU reports it as POLLHUP (below)
+    #[cfg(target_os = "linux")]
     #[test]
     fn polling_a_pipe_without_readers_reports_the_pty_error() {
         let (read, write) = wake_pipe().unwrap();
@@ -287,6 +289,23 @@ mod tests {
         let err = poll(write.as_fd(), wake.as_fd(), false, true, 0).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
         assert_eq!(err.to_string(), "poll found the PTY in error");
+    }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn polling_a_pipe_without_readers_reports_a_hangup() {
+        let (read, write) = wake_pipe().unwrap();
+        let (wake, _writer) = wake_pipe().unwrap();
+        drop(read);
+        let ready = poll(write.as_fd(), wake.as_fd(), false, true, 0).unwrap();
+        assert_eq!(
+            ready,
+            Ready {
+                read: true,
+                write: true,
+                wake: false
+            }
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -384,7 +403,9 @@ mod tests {
             assert!(ready.wake && !ready.read);
         } else {
             assert_eq!(ready, Ready::default());
-            assert!(elapsed >= Duration::from_millis(u64::try_from(timeout).unwrap()));
+            // poll truncates what is left after an interruption to whole milliseconds
+            let floor = Duration::from_millis(u64::try_from(timeout).unwrap() - 1);
+            assert!(elapsed >= floor, "returned after {elapsed:?}");
         }
     }
 }

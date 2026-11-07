@@ -799,9 +799,16 @@ mod tests {
         assert_eq!(handle.queued(), 0);
     }
 
-    #[test]
-    fn a_blocked_callback_times_out_control_and_handoff_then_rolls_back() {
-        let (ours, mut peer) = UnixStream::pair().unwrap();
+    /// The receivers of an actor whose read callback blocks: entering signals each call, resuming lets one return.
+    struct Blocked {
+        handle: ActorHandle,
+        entering: Receiver<()>,
+        resume: Sender<()>,
+        exit: Receiver<ExitReason>,
+    }
+
+    /// An actor over `ours` whose read callback waits to be resumed, then answers `reply` (if any).
+    fn blocked_actor(ours: UnixStream, reply: &'static [u8]) -> Blocked {
         let (entered, entering) = mpsc::channel();
         let (resume, resumed) = mpsc::channel();
         let (exits, exit) = mpsc::channel();
@@ -811,20 +818,50 @@ mod tests {
             Box::new(move |_| {
                 entered.send(()).unwrap();
                 resumed.recv_timeout(Duration::from_secs(10)).unwrap();
-                Vec::new()
+                if reply.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![reply.to_vec()]
+                }
             }),
         );
         config.on_exit = Some(Box::new(move |reason| {
             let _ = exits.send(reason);
         }));
-        let handle = Actor::spawn(config).unwrap();
+        Blocked {
+            handle: Actor::spawn(config).unwrap(),
+            entering,
+            resume,
+            exit,
+        }
+    }
+
+    /// Wait until the actor served every request queued so far and is running, not quiesced: a duplicate is
+    /// refused only then.
+    fn assert_running(handle: &ActorHandle) {
+        assert_error(
+            &handle.duplicate_for_handoff().unwrap_err(),
+            io::ErrorKind::Other,
+            "the PTY actor must be quiesced before its handoff duplicate",
+        );
+    }
+
+    #[test]
+    fn a_blocked_callback_times_out_control_and_handoff_then_rolls_back() {
+        let (ours, mut peer) = UnixStream::pair().unwrap();
+        let Blocked {
+            handle,
+            entering,
+            resume,
+            exit,
+        } = blocked_actor(ours, b"");
         peer.write_all(b"block").unwrap();
         entering.recv_timeout(Duration::from_secs(5)).unwrap();
         let request_error = handle.duplicate_for_handoff().unwrap_err();
         let handoff_error = handle.begin_handoff(Duration::from_millis(20)).unwrap_err();
         resume.send(()).unwrap();
-        // this request is ordered after the rollback queued by the timed-out begin
-        handle.rollback_handoff().unwrap();
+        // the actor serves the timed-out begin late and quiesces; only the rollback that begin queued undoes it
+        assert_running(&handle);
         assert_error(
             &request_error,
             io::ErrorKind::TimedOut,
@@ -838,6 +875,29 @@ mod tests {
         handle.write_input(b"resumed").unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         assert_eq!(read_exactly(&mut peer, 7), b"resumed");
+        handle.shutdown();
+        assert_eq!(exit.recv_timeout(Duration::from_secs(5)).unwrap(), ExitReason::Shutdown);
+    }
+
+    #[test]
+    fn a_write_failure_during_the_handoff_drain_drops_the_queue_and_keeps_the_actor() {
+        let (ours, mut peer) = UnixStream::pair().unwrap();
+        // the actor's writes fail (EPIPE) while its reads still work
+        ours.shutdown(std::net::Shutdown::Write).unwrap();
+        let Blocked {
+            handle,
+            entering,
+            resume,
+            exit,
+        } = blocked_actor(ours, b"reply");
+        peer.write_all(b"block").unwrap();
+        entering.recv_timeout(Duration::from_secs(5)).unwrap();
+        // queue the begin (and its rollback) behind the blocked read, so the drain is the first write of the reply
+        handle.begin_handoff(Duration::from_millis(20)).unwrap_err();
+        resume.send(()).unwrap();
+        assert_running(&handle);
+        assert_eq!(handle.queued(), 0);
+        assert!(exit.try_recv().is_err(), "the failed drain stopped the actor");
         handle.shutdown();
         assert_eq!(exit.recv_timeout(Duration::from_secs(5)).unwrap(), ExitReason::Shutdown);
     }
@@ -864,9 +924,25 @@ mod tests {
         );
     }
 
+    /// The redraw test's child: prints `W` for each SIGWINCH it traps and `S` for each line it reads, until `done`
+    /// (a trapped signal may end a `read` early, hence the retry).
+    const REDRAW_SHELL: &str = "trap 'printf W' WINCH; printf ready; \
+        while :; do read line || continue; [ \"$line\" = done ] && exit 7; printf S; done";
+
+    /// Send the redraw test's shell a line and collect its output up to the `S` it answers with. The traps of the
+    /// signals sent before the line run before the shell gets to it, so their `W`s come first.
+    fn sync_shell(handle: &ActorHandle, read: &Receiver<Vec<u8>>) -> Vec<u8> {
+        handle.write_input(b"x\n").unwrap();
+        let mut output = Vec::new();
+        while !output.contains(&b'S') {
+            output.extend(read.recv_timeout(Duration::from_secs(5)).unwrap());
+        }
+        output
+    }
+
     fn real_pty_redraw() {
         let crate::Spawned { master, mut child } = crate::spawn(
-            &crate::Command::new("/bin/sh").args(["-c", "printf ready; read line; exit 7"]),
+            &crate::Command::new("/bin/sh").args(["-c", REDRAW_SHELL]),
             Size::cells(24, 80),
         )
         .unwrap();
@@ -887,10 +963,19 @@ mod tests {
         assert_eq!(read.recv_timeout(Duration::from_secs(5)).unwrap(), b"ready");
         assert!(child.try_wait().unwrap().is_none());
         assert_eq!(handle.foreground_process_group(), Some(child.pid()));
-        for (rows, cols) in [(24, 80), (2, 80), (2, 4)] {
+        // a nudge one row smaller, one column smaller, and none at the four-column floor
+        for (rows, cols, nudged) in [(24, 80, true), (2, 80, true), (2, 4, false)] {
             let size = Size::cells(rows, cols);
             handle.try_resize(size).unwrap();
+            sync_shell(&handle, &read);
             handle.nudge_redraw(size);
+            let output = sync_shell(&handle, &read);
+            assert_eq!(
+                output.contains(&b'W'),
+                nudged,
+                "nudging to {rows}x{cols}: {}",
+                String::from_utf8_lossy(&output)
+            );
             handle.begin_handoff(Duration::from_secs(5)).unwrap();
             let duplicate = handle.duplicate_for_handoff().unwrap();
             // SAFETY: zero is a valid initial winsize; ioctl writes into this live local.
