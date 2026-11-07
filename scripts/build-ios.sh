@@ -28,7 +28,8 @@
 #      none of them. Each runs even when an earlier one failed, and the action fails when any did;
 #    - build: the app, its tests and its packages for the simulator (Debug);
 #    - test: the Unit and then the UI test plan on the pinned phone and tablet simulators (IOS_SIM_PHONE_NAME and
-#      IOS_SIM_TABLET_NAME, made by setup-ios.sh), one at a time; result bundles in mobile/ios/build/, and a failed
+#      IOS_SIM_TABLET_NAME, made by setup-ios.sh), one at a time, each with its keyboard's slide-to-type introduction
+#      marked as shown (it would cover the keys the UI tests tap); result bundles in mobile/ios/build/, and a failed
 #      snapshot's image in mobile/ios/build/snapshot-failures/ (its diff is in the result bundle). The Unit plan
 #      measures line coverage of the app's own code (Unit.xctestplan names the targets): scripts/ios-coverage.py
 #      writes its summary beside the result bundle (Unit.coverage.txt and Unit.coverage.json, from the run's
@@ -309,6 +310,23 @@ action_build() {
   project_xcodebuild build-for-testing "${SIMULATOR_BUILD[@]}" -quiet
 }
 
+# Tells the keyboard of the simulator $1 that its slide-to-type introduction was shown. A simulator made or erased since
+# shows that introduction the first time a keyboard that can slide to type comes up, over the soft keyboard's lower
+# half and the extra keys, and it stays until its Continue is tapped: the taps the UI tests make there land on it, and
+# the keys type nothing (KeyboardTests). The system writes the same preference once it has shown the introduction. A
+# booted simulator takes it through its own preferences daemon; a shut-down one in its preferences file, so it needn't
+# boot before xcodebuild boots it.
+quiet_keyboard_introduction() {
+  local key=DidShowContinuousPathIntroduction preferences
+  # grep reads to the end (no -q), so simctl isn't cut short by SIGPIPE, which pipefail would count as a failure
+  if xcrun simctl list devices booted | grep -F "($1)" >/dev/null; then
+    xcrun simctl spawn "$1" defaults write com.apple.keyboard.preferences "$key" -bool true
+  else
+    preferences="$HOME/Library/Developer/CoreSimulator/Devices/$1/data/Library/Preferences"
+    mkdir -p "$preferences" && defaults write "$preferences/com.apple.keyboard.preferences.plist" "$key" -bool true
+  fi || die "couldn't set simulator $1's keyboard preferences"
+}
+
 # Run test plan $1 on the phone and tablet simulators, one after the other, into mobile/ios/build/$1.xcresult.
 run_test_plan() {
   local plan="$1" phone tablet
@@ -316,6 +334,8 @@ run_test_plan() {
   tablet="$(simulator_udid "$IOS_SIM_TABLET_NAME")"
   [[ -n "$phone" && -n "$tablet" ]] ||
     die "no $IOS_SIM_PHONE_NAME or $IOS_SIM_TABLET_NAME simulator on iOS $IOS_SIMULATOR_RUNTIME: run scripts/setup-ios.sh"
+  quiet_keyboard_introduction "$phone"
+  quiet_keyboard_introduction "$tablet"
   mkdir -p "$BUILD_DIR"
   # a failed snapshot's image goes to snapshot-failures/<test file>/ (xcodebuild hands TEST_RUNNER_* to the test
   # processes without the prefix; the simulator's processes write the Mac's paths), its diffs into the result bundle
