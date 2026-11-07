@@ -78,12 +78,19 @@ mod tests {
             },
             "window": "existing-window", "complete": true
         });
-        let decoded: ControlRecentOpen = serde_json::from_value(wire.clone()).unwrap();
+        let decoded: ControlRecentOpen = serde_json::from_value(wire).unwrap();
         assert_eq!(decoded.window, "existing-window");
         assert!(decoded.complete);
         assert_eq!(decoded.item.workspace_id, "workspace-id");
         assert_eq!(decoded.item.session_ids, ["S2", "S1"]);
-        assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
+        assert_eq!(
+            serde_json::to_string(&decoded).unwrap(),
+            concat!(
+                r#"{"item":{"id":"R2","kind":"workspace","title":"project","subtitle":"2 sessions","#,
+                r#""closedAt":1700000500.25,"workspaceID":"workspace-id","sessionIDs":["S2","S1"]},"#,
+                r#""window":"existing-window","complete":true}"#
+            )
+        );
     }
 
     #[test]

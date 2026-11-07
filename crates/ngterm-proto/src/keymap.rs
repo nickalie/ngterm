@@ -2,7 +2,7 @@
 //! `keymap.conf` resolved plus what the menu carries, and every `hooks.conf` hook with its live state. Fields are in
 //! upstream's declaration order and absent when unset, as its encoder leaves them.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::skip_serializing_none;
 
 /// One rebindable built-in and the chord the keymap resolves it to.
@@ -34,20 +34,34 @@ pub struct ControlKeymapCommand {
     /// The raw kitty-syntax shortcut, absent for a palette-only command.
     #[serde(default)]
     pub shortcut: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub error_hud: bool,
     /// A HUD position's canonical spelling (`center` unless the line said otherwise).
-    #[serde(default = "default_error_position")]
+    #[serde(
+        default = "default_error_position",
+        deserialize_with = "null_as_default_error_position"
+    )]
     pub error_position: String,
     /// `left` or `right`, absent unless the line named one.
     #[serde(default)]
     pub error_pane: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub repeats: bool,
 }
 
 fn default_error_position() -> String {
     "center".to_owned()
+}
+
+/// Reads an explicit `null` as the type's default, as an omitted field reads (upstream's
+/// `decodeIfPresent(...) ?? default`).
+fn null_as_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(deserializer: D) -> Result<T, D::Error> {
+    Ok(Option::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// [`null_as_default`] for `errorPosition`, whose default is `center`.
+fn null_as_default_error_position<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(Option::deserialize(deserializer)?.unwrap_or_else(default_error_position))
 }
 
 /// A `keymap.conf` or `hooks.conf` parse problem. `line` is 1-based; `0` belongs to no single line.
@@ -150,14 +164,36 @@ mod tests {
             "name": "Grow", "shortcut": "ctrl+a>x", "errorHud": true,
             "errorPosition": "bottom-right", "errorPane": "right", "repeats": true
         });
-        let command: ControlKeymapCommand = serde_json::from_value(wire.clone()).unwrap();
+        let command: ControlKeymapCommand = serde_json::from_value(wire).unwrap();
         assert_eq!(command.name, "Grow");
         assert_eq!(command.shortcut.as_deref(), Some("ctrl+a>x"));
         assert!(command.error_hud);
         assert_eq!(command.error_position, "bottom-right");
         assert_eq!(command.error_pane.as_deref(), Some("right"));
         assert!(command.repeats);
-        assert_eq!(serde_json::to_value(command).unwrap(), wire);
+        assert_eq!(
+            serde_json::to_string(&command).unwrap(),
+            r#"{"name":"Grow","shortcut":"ctrl+a>x","errorHud":true,"errorPosition":"bottom-right","errorPane":"right","repeats":true}"#
+        );
+    }
+
+    /// Upstream's `init(from:)` reads each HUD setting with `decodeIfPresent(...) ?? default`, so an explicit `null`
+    /// decodes as the default, as an omitted field does.
+    #[test]
+    fn a_null_hud_setting_decodes_as_its_default() {
+        let command: ControlKeymapCommand = serde_json::from_str(
+            r#"{"name":"plain","shortcut":null,"errorHud":null,"errorPosition":null,"errorPane":null,"repeats":null}"#,
+        )
+        .unwrap();
+        assert_eq!(command, serde_json::from_str(r#"{"name":"plain"}"#).unwrap());
+        assert_eq!(command.error_position, "center");
+        // Only null is lenient: a mistyped setting still fails, as upstream's typed decode does.
+        for wrong in [
+            r#"{"name":"plain","errorHud":"yes"}"#,
+            r#"{"name":"plain","errorPosition":1}"#,
+        ] {
+            assert!(serde_json::from_str::<ControlKeymapCommand>(wrong).is_err(), "{wrong}");
+        }
     }
 
     #[test]
