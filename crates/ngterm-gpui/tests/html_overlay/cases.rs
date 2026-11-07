@@ -882,23 +882,27 @@ fn granted_play(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
 /// A replica page's audio, whose rescue's read through the channel is still on its way, is replaced by the page: the
 /// second file's failure is rescued too (not dropped behind the first read), and the first read's late failure is not
 /// reported on the element that moved on. `WebKit` reads a file of no declared type once itself (to sniff it) before
-/// it fails as unsupported, so the origin answers that read and holds the next, the rescue's. Red once the second
-/// file loaded, yellow on an error the element saw.
+/// it fails as unsupported, so the origin answers that read and holds the next, the rescue's. The page replaces the
+/// file on a click, given once the origin holds that read: a page acting on the element's `error` attribute instead
+/// may see it set before the `error` event that starts the rescue runs, and its new address cancels that event, so no
+/// rescue would be under way. Red once the second file loaded, yellow on an error the element saw.
 fn replica_audio_replaced(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     const YELLOW: [u8; 4] = [0xc0, 0xc0, 0x30, 0xff];
+    const BLUE: [u8; 4] = [0x30, 0x30, 0xc0, 0xff];
     let mut origin = FakeOrigin::new(&[(
         "/docs/index.html",
         "text/html",
-        "<body style='margin:0;background:#3030c0'><script>
+        "<body style='margin:0;background:#3030c0'>\
+         <div id=go style='position:fixed;left:0;top:0;width:100%;height:100%'></div>\
+         <script>
            const a = new Audio('slow.wav');
            a.preload = 'auto';
            a.addEventListener('loadedmetadata', () => {
              if (a.duration > 0.9) document.body.style.background = '#c03030';
            });
            a.addEventListener('error', () => { document.body.style.background = '#c0c030'; });
-           // the first file failed as unsupported (the rescue's read is under way, held by the origin): replace it
-           const replace = () => (a.error && a.error.code === 4 ? (a.src = 'tone.wav') : setTimeout(replace, 10));
-           replace();
+           // the first file failed as unsupported and its rescue's read is held by the origin: replace it
+           document.getElementById('go').addEventListener('click', () => { a.src = 'tone.wav'; });
          </script></body>"
             .to_owned(),
     )]);
@@ -909,7 +913,17 @@ fn replica_audio_replaced(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> 
     fake.files.insert("/docs/tone.wav", ("audio/wav", wav_second()));
     let overlay = Fixture::replica(&origin, true);
     let element = fixture.mount(&overlay, 320., 240.)?;
+    let held = Rc::clone(&origin);
+    fixture.wait("the first file's rescue read", || !held.parked.borrow().is_empty())?;
     let mut seen = [0; 4];
+    fixture.until("the page on screen", &element, |_, width, pixels| {
+        seen = pixel(pixels, width, width / 2, 200);
+        close(seen, BLUE) || close(seen, YELLOW)
+    })?;
+    check(close(seen, BLUE), || {
+        "the element saw the first file's failure while its rescue's read was under way".to_owned()
+    })?;
+    fixture.click(point(px(160.), px(120.)))?;
     fixture.until(
         "the replacement's metadata or an error",
         &element,

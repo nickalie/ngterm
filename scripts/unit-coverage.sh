@@ -51,6 +51,20 @@ while (($#)); do
   shift 2
 done
 cd "$NATIVE_ROOT"
+
+# The tests hold more descriptors at once than a soft limit of 1024 allows (ngterm-gpui's lib tests keep about 1,200
+# open by their end, at any thread count), the limit systemd sessions start with and runuser's PAM session sets for
+# the CI job's test user, whatever root's was: raised here to 65536, or to the hard limit when that is lower.
+hard="$(ulimit -Hn)"
+want=65536
+if [[ "$hard" != unlimited ]] && ((hard < want)); then
+  want="$hard"
+fi
+soft="$(ulimit -Sn)"
+if [[ "$soft" != unlimited ]] && ((soft < want)); then
+  ulimit -Sn "$want"
+fi
+
 if ((${#select[@]} == 0)); then
   select=(--workspace)
   for crate in crates/*-sys; do
