@@ -48,6 +48,8 @@ Keep scratch output (reports, analyses, logs) in a `WORK` dir in the session scr
 - Commits stay local: the user pushes and opens the PR, whose CI builds libghostty-vt on every OS, Android and iOS.
 - The branch builds and keeps the ratchet green, or its plan's Task 1 is what makes it so (step 3).
 - Never start a dev instance outside AGENTS.md > Never touch the user's running ngterm.
+- Windows work runs in the Windows VM, macOS and iOS work on the Mac over ssh, Android work on the emulator; the VM
+  and the emulator start on demand and stop when that work is done (`references/machines.md`).
 
 ## 1. Revisions and clone
 
@@ -118,7 +120,8 @@ plan's Task 1, listing what broke. The branch then holds only the plan.
 After a mechanical bump, check it as AGENTS.md > Choosing checks says, scoped to what a VT change can reach:
 the bindings `--check`; each carried patch's verification block in its README; `cargo test` and clippy for the
 crates step 3.4 built (`ngterm-core` included); and `conformance/tools/run-linux.sh -- -k <expr>` on the ids that
-cover behaviors the `inherited` clusters change. A Zig version move is checked on Windows and macOS by the PR's CI, not locally.
+cover behaviors the `inherited` clusters change. A Zig version move or a build change also builds libghostty-vt and
+the crates that link it in the Windows VM and on the Mac, the iOS library on the Mac too (`references/machines.md`).
 
 A red test or ratchet id is the plan's Task 1 ("Settle the bump's fallout"): the fix follows Ghostty's new behavior
 unless a recorded deviation says otherwise. `plan-exec` runs on this branch, so it is not merged before Task 1 is done.

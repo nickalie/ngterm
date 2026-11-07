@@ -69,6 +69,8 @@ Use the same absolute `WORK` path across tool calls and pass it to subagents tha
 - Commits stay local: the user pushes, opens the PR and runs the macOS reference workflow.
 - The branch keeps building and keeps the ratchet green. Anything that would break either becomes a plan task
   instead of part of the bump.
+- Windows work runs in the Windows VM, macOS and iOS work on the Mac over ssh, Android work on the emulator; the VM
+  and the emulator start on demand and stop when that work is done (`references/machines.md`).
 
 ## 1. Tags and upstream clone
 
@@ -136,7 +138,8 @@ subagent's `absent` or `already-ported` claim goes into the plan, confirm it wit
 
 ## 4. Baseline
 
-Check the bump as AGENTS.md > Choosing checks says, scoped to what it touched.
+Check the bump as AGENTS.md > Choosing checks says, scoped to what it touched, each platform it reaches on that
+platform's machine (`references/machines.md`).
 
 The usual expected reds are:
 - `ngterm-proto/tests/catalog.rs` and ngterm-ctl's `the_command_tree_is_the_catalogs_cli`, while the catalog lists

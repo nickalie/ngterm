@@ -40,6 +40,9 @@ and sources. Write the plan in English and drop sections that would stay empty.
   (below), or the feature's task records why an app has no counterpart.
 - Checks per task follow AGENTS.md > Choosing checks. A new conformance test must also pass on the macOS reference
   (`reference-macos.yml`), which the user runs.
+- Machines (`.claude/skills/agterm-upstream-sync/references/machines.md`): Windows work (builds, clippy, tests,
+  debugging, GUI runs) runs in the Windows VM, macOS and iOS work on the Mac over ssh, Android work on the emulator;
+  the VM and the emulator start on demand and stop when the task's work on them is done.
 
 ## Implementation Steps
 
@@ -85,5 +88,7 @@ section, `.claude/rules/*.md`>
 - A behavior the mobile apps get with no mobile code (it arrives through `ngterm-core`'s remote client) gets no mobile
   task, but its feature task carries an item for a `ngterm-mobile` test that shows it arrives, so the apps' parity is
   checked, not assumed.
-- Mobile checks follow README > Android and > iOS; the iOS build and tests need a Mac, so they run on CI.
+- Each task's checks name the machine for each platform it reaches (`references/machines.md`): the iOS build and
+  tests on the Mac, the Android app's instrumented tests and screen checks on the emulator, Windows in the VM.
+  Mobile checks follow README > Android and > iOS.
 - Facts come from this run's reports and greps, not from memory of earlier syncs.
