@@ -510,6 +510,9 @@ fn an_abandoned_line_stream_owner_reports_its_close() -> TestResult {
 fn a_second_run_drops_its_connection_and_calls_nothing() -> TestResult {
     let stream = LineStream::new(LIMITS);
     let (mut peer, opened, runner) = run_on_pair(&stream)?;
+    // adoption is reported before run attaches; an echo proves the first run is serving
+    peer.say("attached")?;
+    assert_eq!(peer.line()?, "echo:attached\n");
     let (mut second_peer, second) = pair()?;
     let calls = Cell::new(0);
     stream.run(
@@ -570,9 +573,9 @@ fn a_peer_hanging_up_mid_line_closes_the_stream() -> TestResult {
     Ok(())
 }
 
-/// A line that shuts the stream down is the last one delivered, even with more already received behind it.
+/// After a pending line shuts the stream down, input from the next socket read is not delivered.
 #[test]
-fn nothing_is_delivered_after_a_line_shuts_the_stream() -> TestResult {
+fn socket_input_is_not_delivered_after_a_pending_line_shuts_the_stream() -> TestResult {
     let stream = LineStream::new(LIMITS);
     let (mut peer, ours) = pair()?;
     peer.write_all(b"after\n")?;
