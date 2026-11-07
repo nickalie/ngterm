@@ -700,6 +700,7 @@ mod tests {
     /// The document the app builds for a text page loads at `about:blank`, which `WebKitGTK` asks about as a frame
     /// navigation with no response after it: the text page's policy, which admits only the main frame's
     /// `about:blank`, lets it load; another `about:` address stays refused.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_text_pages_own_document_loads_at_about_blank() {
         let text = HtmlOverlay::new(

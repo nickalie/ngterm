@@ -68,19 +68,24 @@ pub(super) const RENDERER_BINDING: &str = "ngtermTextPageBinding";
 /// The renderer's `window.webkit.messageHandlers.ngtermTextPage` on `WebView2`: a shim in its world over
 /// [`RENDERER_BINDING`], which carries the report as JSON.
 #[cfg(windows)]
-const RENDERER_CHANNEL: &str = "window.webkit = { messageHandlers: { ngtermTextPage: { postMessage: (body) => \
-     ngtermTextPageBinding(JSON.stringify(body)) } } };";
+fn renderer_channel() -> String {
+    let handler = super::text_page::HANDLER;
+    format!(
+        "window.webkit = {{ messageHandlers: {{ {handler}: {{ postMessage: (body) => \
+         {RENDERER_BINDING}(JSON.stringify(body)) }} }} }};"
+    )
+}
 
 /// `WebView2` installs at document creation and `WKWebView` at document end; the isolated script renders when the DOM
 /// is ready, waiting for `DOMContentLoaded` when needed so the inert data elements exist. On `WebView2` a text page's
-/// renderer reports through [`RENDERER_CHANNEL`]. `None` for a page with no renderer.
+/// renderer reports through `renderer_channel`'s shim. `None` for a page with no renderer.
 #[cfg(any(target_os = "macos", windows))]
 pub(super) fn document_start_script(source: &HtmlSource) -> Option<String> {
     #[cfg(windows)]
     let channel = if matches!(source, HtmlSource::Text { .. }) {
-        RENDERER_CHANNEL
+        renderer_channel()
     } else {
-        ""
+        String::new()
     };
     #[cfg(not(windows))]
     let channel = "";
