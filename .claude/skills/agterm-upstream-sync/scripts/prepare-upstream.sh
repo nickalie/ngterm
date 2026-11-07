@@ -35,11 +35,19 @@ retry() {
   return 1
 }
 
-if [[ ! -d "$upstream/.git" ]]; then
+if [[ ! -e "$upstream" ]]; then
   mkdir -p "$(dirname "$upstream")"
+  # a failed attempt leaves a partial clone this script made itself: only that is ever removed
   clone() { rm -rf "$upstream"; git clone -q --filter=blob:none --no-checkout "$URL" "$upstream"; }
   retry clone
 else
+  # an existing DIR is used only when it is the top of a git repository (a clone, worktree or submodule); anything
+  # else is refused, never removed or cloned over
+  top="$(git -C "$upstream" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -z "$top" || "$(cd "$upstream" && pwd -P)" != "$(cd "$top" && pwd -P)" ]]; then
+    echo "prepare-upstream: $upstream exists and is not the top of a git repository; move it or pass another --upstream" >&2
+    exit 1
+  fi
   if [[ -n "$(git -C "$upstream" status --porcelain --untracked-files=no)" ]]; then
     echo "prepare-upstream: $upstream has local changes; it is read-only, restore it first" >&2
     exit 1

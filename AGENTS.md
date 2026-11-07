@@ -68,7 +68,8 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
 5. Claim a capability (rust-build.md > Rust target profile) once its commands implement it.
 6. Check it as [Choosing checks](#choosing-checks) says; add newly green conformance ids to the ratchet.
 
-Upstream syncs and pin bumps: use the `agterm-upstream-sync` skill.
+Upstream syncs and pin bumps: use the `agterm-upstream-sync` skill; a Ghostty pin bump (`LIBGHOSTTY_VT_*`), with the
+ports that keep the terminal's behavior and rendering Ghostty's: the `libghostty-sync` skill.
 
 ## Choosing checks
 
