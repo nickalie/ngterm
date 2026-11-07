@@ -1,4 +1,4 @@
-# Release pipeline: the GitHub release, Android signing, Google Play and the Linux channels
+# Release pipeline: the GitHub release, the signed APK and the Linux channels
 
 ## Overview
 
@@ -11,9 +11,7 @@
     because Apple Silicon refuses to run a binary with no signature at all;
   - the iOS app as an unsigned IPA;
   - `SHA256SUMS`, its minisign signature and GitHub build attestations over every asset.
-- Besides the GitHub release, it keeps the channels that need neither Apple nor Windows signing:
-  - Google Play: the AAB on the internal track and the store listing complete (Task 9);
-  - the AUR (Task 10) and Flathub (Task 11).
+- Besides the GitHub release, it keeps the Linux channels: the AUR (Task 9) and Flathub (Task 10).
 - Moved out (user, 2026-11-07), each into a plan that builds on this one's job graph, signed rehearsals and updater
   trust:
   - **Apple** (`docs/plans/20261107-apple-signing.md`):
@@ -24,6 +22,9 @@
     - the Homebrew cask, which needs a notarized app.
   - **Windows** (`docs/plans/20261107-windows-signing.md`): Authenticode through SignPath Foundation, the exes'
     version resources, and winget, which needs a signed MSI.
+  - **Google Play** (`docs/plans/20261107-google-play.md`): the App Bundle signed with the upload key, the upload to
+    the internal track through Workload Identity Federation, and the store listing. This plan builds and signs the
+    APK it ships in the GitHub release; the Play plan adds the bundle beside it.
 - Signing happens inside GitHub Actions, so a release takes a tag push and one approval.
 - Prepared ahead of the credentials:
   - until a secret exists, its step is skipped with a workflow notice, and the release stays green and unsigned;
@@ -43,8 +44,8 @@
   repository `nickalie/ngterm-release-keys` (age-encrypted, mirrored to Bitwarden) and reach GitHub from there: the
   user runs `./add.sh NAME [FILE]`, `./bitwarden.sh push` and `./sync.sh`, never through the chat. Non-secret ids go
   in its `vars.tsv` (the user may just tell them). A `gh secret set ... --env release` in a Credentials list below
-  means `./add.sh` for that name, then `./sync.sh`. The Play Console account is the long-lead item; it is started at
-  the first task that can name it.
+  means `./add.sh` for that name, then `./sync.sh`. Since 2026-11-07 the user is asked for passwords and keys through
+  zenity dialogs piped straight into those scripts, which this session then runs.
 - Nothing has been released yet (no tags, no GitHub releases), so there are no installed versions to stay compatible
   with.
 
@@ -111,7 +112,7 @@
   - macOS and Windows keep the smoke checks of Tasks 3-4 (the layout checks, `--build-identity`, `check-msi.ps1` with
     the upgrade test);
   - Android:
-    - `apksigner verify --print-certs`, `jarsigner -verify`, `zipalign -c -P 16 -v 4`;
+    - `apksigner verify --print-certs`, `zipalign -c -P 16 -v 4`;
     - `llvm-readelf -lW` on every `lib/*/*.so` in the APK (the core and JNA's `libjnidispatch.so`): LOAD alignment of
       at least `0x4000`;
     - `aapt2 dump badging`: the version name and code match the `version` job's outputs;
@@ -143,19 +144,18 @@
      - `macos-build` (both arches): bundles the `.app` with the version and commit from `version`, ad-hoc signs it
        in the final layout, and checks the layout;
      - `windows-build`: builds the unsigned MSI and zip plus the upgrade-test MSI;
-     - `android-build`: builds the unsigned AAB and APK with the `version` job's version name and code;
+     - `android-build`: builds the unsigned APK with the `version` job's version name and code;
      - `ios-build`: archives the iOS app unsigned and packs it as an IPA (Task 5);
      - each uploads its output as a tarball, so modes and symlinks survive, except finished packages that no later
        job unpacks (`linux`, `windows-build`, `ios-build`), which travel as plain files;
      - each reports a manifest per artifact (artifact id, file digests, release assets) as job outputs, with per-arch
        output names in matrix jobs, because legs writing the same output name overwrite each other;
-     - the upgrade-test MSI, the build tarballs, the AAB and an unsigned APK are never release assets.
+     - the upgrade-test MSI, the build tarballs and an unsigned APK are never release assets.
   4. Signing and packaging jobs (`environment: release` on a signed run, no cache, no cargo, no Gradle, no build
      output executed):
      - `macos-sign` (one job, both arches): packages the `.app.zip`, `.tar.gz`, DMG and PKG. Here it runs with the
        ad-hoc identity; the Apple plan gives it the Developer ID;
-     - `android-sign`: signs the APK (`zipalign -P 16 -f 4`, then `apksigner`, with the APK key) and the AAB
-       (`jarsigner`, with the upload key);
+     - `android-sign`: signs the APK (`zipalign -P 16 -f 4`, then `apksigner`, with the APK key);
      - every signing job checks its inputs against the build job's digests before using them. It rejects symlinks
        that are absolute or point outside the extracted tree, so a build can't aim release contents at the keychain
        or key files in `RUNNER_TEMP`. It reports its own outputs' manifests as job outputs.
@@ -176,11 +176,8 @@
      - minisign-signs `SHA256SUMS`;
      - when publishing: attests every asset, uploads to the draft release and undrafts it. A rehearsal stops after
        the signature (Task 7).
-  8. `play-upload` (publishing only, `environment: release`; needs `approve` and `android-verify` to succeed):
-     - logs in with Workload Identity Federation;
-     - sends the AAB to the internal track.
-  9. Channel jobs (publishing only, after `publish`): `aur` (Task 10); Flathub is a pull request to its own repository
-     (Task 11).
+  8. Channel jobs (publishing only, after `publish`): `aur` (Task 9); Flathub is a pull request to its own repository
+     (Task 10). The Google Play plan adds `play-upload`.
 - **Approval:** `release` has the `v*` tag deployment policy and no reviewer. A run reaching it without `approve` is
   prevented by two things:
   - the job graph: every job that uses `release` needs `approve`;
@@ -200,7 +197,7 @@
   - Missing secrets: `optional` writes a `::notice::` and ships the unsigned output; `required` fails, naming what's
     missing.
   - The exception is Android: an unsigned APK can't be installed. With no APK key it stays a workflow artifact only
-    and is left out of the release, and `play-upload` skips with no upload key.
+    and is left out of the release.
 - **Dry runs, rehearsals and publishing:**
   - A tag push publishes, and so does a dispatch with `publish: true` on a tag ref (`gh workflow run release --ref
     vX.Y.Z`). The `tag` input goes away, and `concurrency.group` and the checkout use `github.ref_name`/`github.ref`.
@@ -224,18 +221,14 @@
 ## Technical Details
 
 - **Secrets** (environment `release`):
-  - Android:
-    - `ANDROID_UPLOAD_KEYSTORE` (base64), `ANDROID_UPLOAD_KEYSTORE_PASSWORD`, `ANDROID_UPLOAD_KEY_ALIAS`,
-      `ANDROID_UPLOAD_KEY_PASSWORD`;
-    - the same four with `ANDROID_APK_` for the GitHub APK key;
+  - Android: `ANDROID_APK_KEYSTORE` (base64), `ANDROID_APK_KEYSTORE_PASSWORD`, `ANDROID_APK_KEY_ALIAS`,
+    `ANDROID_APK_KEY_PASSWORD`, the GitHub APK's key;
   - updater: `MINISIGN_SECRET_KEY`, generated with `minisign -G -W` (no password: the environment already protects
     it);
   - channels: `AUR_SSH_PRIVATE_KEY`.
   - Secrets are read only in the `env:` of the steps that use them, never at job level.
 - **Variables:** `NGTERM_RELEASE_SIGNING` is repository-level; every other variable lives in `release`.
-  - `NGTERM_RELEASE_SIGNING`;
-  - Google: `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_PLAY_SERVICE_ACCOUNT`, `PLAY_RELEASE_STATUS` (default
-    `completed`; `draft` while the Play app is still a draft).
+  - `NGTERM_RELEASE_SIGNING` (the Apple, Windows and Google Play plans add their own).
 - **iOS (unsigned IPA):**
   - `ios-build` runs on the Xcode runner `ios-release.yml` uses, checks out with the full history (the build number
     is the commit count), and runs `scripts/build-ios.sh archive` with none of the App Store Connect variables, so the
@@ -249,20 +242,14 @@
     defaults when they're absent.
   - `libngterm_mobile.so` is linked with `-z max-page-size=16384`. The APK is aligned with `zipalign -P 16 -f 4`.
     `android-verify` checks it with `zipalign -c -P 16 -v 4` and checks the ELF LOAD alignment of every `.so`.
-  - The APK is named `ngterm-<version>-android.apk`.
-  - The Play upload (`scripts/play-upload.sh AAB`):
-    - takes the access token from `google-github-actions/auth` (WIF, `token_format: access_token`, scope
-      `androidpublisher`);
-    - calls the Play Developer API v3: `edits.insert`, `edits.bundles.upload`, `edits.tracks.update` (internal track,
-      `PLAY_RELEASE_STATUS`), `edits.commit`;
-    - is four curl calls on purpose, so no third-party action runs in a job holding a Play token.
+  - The APK is named `ngterm-<version>-android.apk`. Its key is ngterm's own and permanent (an installed APK takes
+    updates only signed with it); Google Play signs its own copies with Play App Signing, so the two never mix.
 - **Attestations:** `actions/attest-build-provenance` over every asset in `publish`. Users verify with
   `gh attestation verify <file> --repo nickalie/ngterm`.
 - **Permissions:** a job-level `permissions:` replaces the workflow default, so each widened job lists everything it
   needs.
   - workflow level: `contents: read`;
-  - `publish`: `contents: write`, `id-token: write`, `attestations: write`;
-  - `play-upload`: `contents: read`, `id-token: write`.
+  - `publish`: `contents: write`, `id-token: write`, `attestations: write`.
 - **Hardening:**
   - every action in `release.yml` pinned by full commit SHA (tag in a comment). Other workflows hold no secrets and
     keep their tags; Dependabot keeps both kinds current;
@@ -280,7 +267,7 @@
 
 - **Implementation Steps:** workflows, scripts, the updater, Android and iOS build changes, LICENSE, docs.
 - **Credentials**, asked at the task that needs them: the keys repository flow above.
-- **Post-Completion:** what only the user can do in a store's console, and the first release's manual checks.
+- **Post-Completion:** what only the user can do (an account's console), and the first release's manual checks.
 
 ## Implementation Steps
 
@@ -365,7 +352,7 @@
       `publish` (publishing only) checks the `SHA256SUMS` digest and runs `sha256sum -c` before uploading
 - [x] job conditions as in Solution Overview: signing jobs accept a skipped `approve` only on dry runs; `checksums`
       skips after any failure; `publish` and `play-upload` need every verify job
-      (➕ `windows-sign` arrives with the Windows plan and `play-upload` with the Android tasks; until then
+      (➕ `windows-sign` arrives with the Windows plan and `play-upload` with the Google Play plan; until then
       `windows-verify` and `checksums` take `windows-build`'s files)
 - [x] macOS packaging runs in one `macos-sign` job for both arches from this task on, so the Developer ID steps (the
       Apple plan) only add to it
@@ -392,8 +379,8 @@ A rehearsal signs exactly as a release does and publishes nothing.
 - [x] a `rehearse` dispatch input (boolean): on a `vX.Y.Z` tag ref with `publish: false` it makes a rehearsal;
       `rehearse` on any other ref, or with `publish: true`, fails in the `version` job
 - [x] `version` outputs `signed_run` (publishing or rehearsal) besides `publishing`. `approve`, the signing jobs'
-      `environment: release` and their identity choice follow `signed_run`; `play-upload`, the release upload and
-      every channel job (the AUR and Flathub here; Homebrew and winget in the Apple and Windows plans) follow
+      `environment: release` and their identity choice follow `signed_run`; the release upload and every channel
+      job (the AUR and Flathub here; Homebrew, winget and `play-upload` in the Apple, Windows and Play plans) follow
       `publishing` only. The signing mode of a rehearsal is that of a release
 - [x] signing jobs accept a skipped `approve` only when `signed_run` is false
 - [x] `--self-test` covers the rehearsal outputs and its refusals
@@ -490,72 +477,42 @@ release is cut before it.
 
 **Credentials:** none new. A rehearsal (Task 4) checks the minisign key.
 
-### Task 8: Android release builds, signing and Play upload
+### Task 8: Android: the signed APK in the GitHub release
 
 **Files:**
 - Modify: `mobile/android/app/build.gradle.kts`, `scripts/build-android.sh`, `.cargo/config.toml` or the cargo-ndk
-  invocation
-- Create: `scripts/sign-android.sh`, `scripts/play-upload.sh`
-- Modify: `.github/workflows/release.yml`
+  invocation, `scripts/release-version.py` (if `android` isn't wired to a job yet)
+- Create: `scripts/sign-android.sh`
+- Modify: `.github/workflows/release.yml`, README > Downloads and releases
 
 - [ ] Gradle reads `ngterm.versionName`/`ngterm.versionCode`, keeping its defaults
 - [ ] link `libngterm_mobile.so` with `-z max-page-size=16384`
-- [ ] `android-build`: `scripts/build-android.sh bundleRelease assembleRelease` with the version properties; uploads
-      the unsigned AAB and APK with digests
-- [ ] `scripts/sign-android.sh`: keystores to temp files removed on exit; `zipalign -P 16 -f 4` then `apksigner sign`
-      for the APK; `jarsigner` for the AAB; both verified
-- [ ] `android-sign`: with the APK key, `ngterm-<version>-android.apk` joins the release assets; without it the APK
-      stays a workflow artifact. Dry runs sign with `keytool -genkeypair` throwaway keys
-- [ ] `play-upload` (`id-token: write`): WIF login, then `scripts/play-upload.sh`; skipped with a notice in `optional`
-      mode without the GCP variables or upload key, failing in `required` mode
+- [ ] `android-build` (platform `android`, no secrets): `scripts/build-android.sh assembleRelease` with the version
+      properties; uploads the unsigned APK with its manifest
+- [ ] `scripts/sign-android.sh`: the keystore to a temp file removed on exit; `zipalign -P 16 -f 4` then
+      `apksigner sign`; verified. It takes the key as the Play plan's upload key will (one script, a key per use)
+- [ ] `android-sign` (`environment: release` on a signed run, needs `approve`): with the APK key,
+      `ngterm-<version>-android.apk` joins the release assets; without it the APK stays a workflow artifact (a
+      notice in `optional` mode, a failure in `required` mode). Dry runs sign with a `keytool -genkeypair` throwaway
+      key
 - [ ] `android-verify`:
-      - `apksigner verify --print-certs`, `jarsigner -verify`;
+      - `apksigner verify --print-certs`, and the signer's certificate digest equal to the APK key's when signed with
+        it;
       - `zipalign -c -P 16 -v 4`;
       - `llvm-readelf -lW` LOAD alignment of at least `0x4000` on every `lib/*/*.so`, including JNA's
         `libjnidispatch.so`;
       - `aapt2 dump badging`: version name and code equal the `version` job's outputs
-- [ ] tests: `scripts/lint.sh`; `scripts/sign-android.sh` signs and verifies with throwaway `keytool` keys
-      locally
+- [ ] `checksums` and `publish` take `android-sign`'s manifest like the other platforms'
+- [ ] tests: `scripts/lint.sh`; `scripts/sign-android.sh` signs and verifies with a throwaway `keytool` key locally
 - [ ] run checks; must pass before Task 9
 
-**Credentials** (ask as this task starts; start the Play Console account earlier if it doesn't exist):
-- the APK signing key (permanent; it can't be reset, keep an offline backup):
-  `keytool -genkeypair -v -keystore apk.jks -alias ngterm -keyalg RSA -keysize 4096 -validity 36500`, then
-  `ANDROID_APK_KEYSTORE` (base64), `ANDROID_APK_KEYSTORE_PASSWORD`, `ANDROID_APK_KEY_ALIAS`, `ANDROID_APK_KEY_PASSWORD`;
-- the Play upload key, the same way with the `ANDROID_UPLOAD_` names;
-- the Play Console: the developer account, the app `com.nickalie.ngterm` created, Play App Signing enrolled;
-- GCP: a project, a Workload Identity Federation pool and provider for GitHub with the attribute condition of
-  `docs/release-signing.md`, a service account with release access in the Play Console; not secret:
-  `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_PLAY_SERVICE_ACCOUNT`, `PLAY_RELEASE_STATUS`;
-- a rehearsal with the Android keys, `android-verify` passing;
-- the first AAB uploaded by hand, as Post-Completion describes.
+**Credentials** (one step at a time, through zenity): the APK signing key, permanent (it can't be reset; the keys
+repository and Bitwarden are its backups): `keytool -genkeypair -v -keystore apk.jks -alias ngterm -keyalg RSA -keysize
+4096 -validity 36500`, the keystore password asked through zenity, then `ANDROID_APK_KEYSTORE` (base64),
+`ANDROID_APK_KEYSTORE_PASSWORD`, `ANDROID_APK_KEY_ALIAS`, `ANDROID_APK_KEY_PASSWORD`; then a rehearsal with
+`platforms=android`, `android-verify` passing.
 
-### Task 9: Google Play store listing
-
-**Files:**
-- Create: `mobile/android/play/` (listing text per locale, screenshots, feature graphic, the 512px icon, release
-  notes), `scripts/play-listing.sh`
-- Modify: `scripts/play-upload.sh`, `.github/workflows/release.yml`, `mobile/android/DESIGN.md` if a screenshot needs
-  a demo state
-
-- [ ] listing text: title, short and full description (en-US first), from the README and DESIGN.md, within Play's
-      limits (30/80/4000 characters)
-- [ ] graphics: phone and 7"/10" tablet screenshots made from the emulator by a scripted demo session (no real host
-      data), the 1024x500 feature graphic and the 512px icon from the app's icon source; sizes checked by the script
-- [ ] `play-listing.sh` uploads text and images through the Play Developer API (`edits.listings`, `edits.images`) in
-      the same edit as the AAB; `play-upload` runs it; release notes from the tag's notes
-- [ ] the forms the API can't fill are written out for the user in `docs/release-signing.md` with the answers: Data
-      safety (what the app collects and sends: nothing to us; ssh to the user's own hosts), content rating
-      questionnaire, target audience, app access (no login), ads (none)
-- [ ] a privacy policy page (the site's or the repo's) linked from the listing
-- [ ] tests: `scripts/lint.sh`; the listing files pass the script's limits locally
-- [ ] run checks; must pass before Task 10
-
-**Credentials:** none new (the service account of Task 8). The user fills the Data safety, content rating and target
-audience forms in the Play Console with the written answers, and promotes the internal release to production when
-ready.
-
-### Task 10: AUR
+### Task 9: AUR
 
 **Files:**
 - Create: `packaging/linux/aur/PKGBUILD.in`, `scripts/aur.py` (with `--self-test`)
@@ -568,12 +525,12 @@ ready.
       `archlinux` container), checks with `namcap`, builds it once with `makepkg`, and pushes to
       `ssh://aur@aur.archlinux.org/ngterm-bin.git` with the deploy key
 - [ ] tests: `scripts/lint.sh`; `makepkg -si` of the rendered package locally (CachyOS) with a rehearsal's tarball
-- [ ] run checks; must pass before Task 11
+- [ ] run checks; must pass before Task 10
 
 **Credentials:** an AUR account, an SSH key pair registered in it (`ssh-keygen -t ed25519 -f aur`):
 `gh secret set AUR_SSH_PRIVATE_KEY --env release < aur`. The first push creates the package.
 
-### Task 11: Flathub
+### Task 10: Flathub
 
 **Files:**
 - Create: `packaging/linux/flatpak/` (the manifest, MetaInfo, the desktop file and icons), `scripts/flatpak.sh`
@@ -589,12 +546,12 @@ ready.
 - [ ] the Flathub submission pull request (`flathub/flathub`, new-pr branch) prepared for the user; later releases
       update the app repository through `flatpak-external-data-checker` or a `flatpak` job
 - [ ] tests: `scripts/lint.sh`; `flatpak-builder --user --install` locally and a pane running the host shell
-- [ ] run checks; must pass before Task 12
+- [ ] run checks; must pass before Task 11
 
 **Credentials:** a Flathub account (GitHub login) to open the submission; for `com.nickalie.ngterm`, the domain
 verification token placed on nickalie.com.
 
-### Task 12: Verify acceptance criteria
+### Task 11: Verify acceptance criteria
 
 - [ ] every Overview item has its job or step; every secret and variable is read somewhere and documented
 - [ ] a release's assets: the signed APK, the Linux packages, the unsigned MSI and zip, the ad-hoc macOS packages, the
@@ -606,22 +563,16 @@ verification token placed on nickalie.com.
       - no signing job executes a staged or packaged binary;
       - every job using `release` needs `approve`, and none accepts a skipped `approve` on a signed run;
       - no job references a secret at job level;
-      - only `publish` and `play-upload` widen the workflow's read-only permissions;
-      - `aur`, the release upload and every store upload run only when `publishing`, never on a rehearsal
+      - only `publish` widens the workflow's read-only permissions, besides the jobs the other plans add if they
+        have landed (`windows-sign`, `play-upload`), each with only the permissions its plan names;
+      - `aur`, the release upload, and any channel or store job another plan added (`homebrew`, `winget`,
+        `play-upload`) run only when `publishing`, never on a rehearsal
 - [ ] `actionlint`, `shellcheck`; `cargo test -p ngterm-update` and clippy on the crate
 
-### Task 13: [Final] Documentation
+### Task 12: [Final] Documentation
 
-- [ ] `docs/release-signing.md` (the Apple and Windows plans add their sections):
+- [ ] `docs/release-signing.md` (the Apple, Windows and Google Play plans add their sections):
       - every secret and variable, with its source and the job that reads it;
-      - Google Play:
-        - app creation, Play App Signing, the upload key (`keytool`);
-        - the first manual AAB upload: where it comes from (Post-Completion), rolled out to internal testing so the
-          app leaves draft (or `PLAY_RELEASE_STATUS=draft` until then);
-        - the GCP WIF pool and provider: the attribute condition checks `assertion.repository_id`,
-          `assertion.ref.startsWith('refs/tags/v')` and `assertion.environment == 'release'`, since a job with an
-          environment gets an environment `sub`;
-        - the service account's Play Console access;
       - the APK key (`keytool`, with the warning that it can't be reset; keep an offline backup);
       - minisign (`minisign -G -W`, filling `trust/minisign.pub`);
       - running `setup-release-protection.sh`; rehearsals; switching to `NGTERM_RELEASE_SIGNING=required` once the
@@ -629,7 +580,7 @@ verification token placed on nickalie.com.
       - verifying downloads (`gh attestation verify`, `minisign -Vm`)
 - [ ] README: replace the release steps with a summary and a link to the page; say which assets are signed and which
       aren't yet (macOS without Developer ID, Windows without Authenticode, the IPA unsigned)
-- [ ] README: installing through the AUR and Flathub, and the Play link
+- [ ] README: installing the APK, and through the AUR and Flathub
 - [ ] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
@@ -637,14 +588,7 @@ verification token placed on nickalie.com.
 *Items requiring manual intervention or external systems.*
 
 **Accounts and credentials (user), as their tasks ask:**
-- Google Play Console:
-  - create the app, enroll in Play App Signing, generate the upload key;
-  - make the first AAB upload manually and roll it out to internal testing. The API can't make an app's first
-    upload, and dry-run AABs carry throwaway keys. So the AAB comes from the first publishing run with the upload
-    key set and the GCP variables still unset: `play-upload` skips, and `android-sign` keeps the signed AAB as a
-    workflow artifact. Its version code is then used up, so the next release bumps the patch version;
-  - a GCP project with the WIF pool and provider, and a service account with release access.
-- APK signing key (permanent; offline backup).
+- APK signing key (permanent; the keys repository and Bitwarden hold it).
 - minisign key pair: the secret key to `release`, the public key committed to `trust/minisign.pub`.
 
 **Repository settings (user, or with the user's go-ahead):**
@@ -652,6 +596,6 @@ verification token placed on nickalie.com.
 - Set `NGTERM_RELEASE_SIGNING=required` only once every platform signs, after the Apple and Windows plans.
 
 **First release:**
-- Android: the APK installs, and the AAB reaches the internal track.
+- Android: the APK installs on a phone, and a later release's APK installs over it.
 - The updater accepts the signed release and rejects one with a tampered `SHA256SUMS`.
 - macOS and Windows install as unsigned apps do (Gatekeeper's and SmartScreen's warnings), until their plans land.

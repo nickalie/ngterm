@@ -245,7 +245,7 @@ Needs the release plan's rehearsal runs (its Task 4).
 
 **Credentials** (one step at a time): the App Store Connect API key with the Admin role (`APP_STORE_CONNECT_KEY`,
 `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`), `IOS_DEVELOPMENT_TEAM`, the bundle id
-`com.nickalie.ngterm` registered and its app record created in App Store Connect.
+`com.nickalie.ngterm.ios` registered and its app record created in App Store Connect.
 
 ### Task 6: iOS App Store readiness
 
@@ -253,8 +253,8 @@ Needs the release plan's rehearsal runs (its Task 4).
 - Create: `mobile/ios/appstore/` (metadata per locale, screenshots, review notes), `scripts/appstore-listing.sh`
 - Modify: `.github/workflows/ios-release.yml`, `docs/ios-release.md`
 
-- [ ] metadata: name, subtitle, description, keywords, support and marketing URLs, the privacy policy URL (the release
-      plan's Task 9 makes the page), the copyright line, review notes (how to reach a test host: the demo mode or a
+- [ ] metadata: name, subtitle, description, keywords, support and marketing URLs, the privacy policy URL (the Google
+      Play plan's Task 4 makes the page; whichever lands first makes it), the copyright line, review notes (how to reach a test host: the demo mode or a
       reviewer-reachable sshd)
 - [ ] screenshots for the required display sizes (6.9" iPhone, 13" iPad) from the simulator with a scripted demo
       session, on the real Mac's Xcode
