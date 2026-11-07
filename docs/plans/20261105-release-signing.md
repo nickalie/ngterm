@@ -534,12 +534,20 @@ the committed certificate. Left: a rehearsal with `platforms=android`, `android-
 
 ### Task 9: Verify acceptance criteria
 
-- [ ] every Overview item has its job or step; every secret and variable is read somewhere and documented
-- [ ] a release's assets: the signed APK, the Linux packages, the unsigned MSI and zip, the ad-hoc macOS packages, the
+➕ The grep checks became `scripts/check-release-workflow.py`, which parses `release.yml` (PyYAML) so a line can't slip
+from one job to another. Its `--self-test` checks the real workflow and that each check catches a broken copy of it;
+`scripts/lint.sh` runs it, so `lint.yml` enforces the invariants from now on (it installs `python3-yaml` if the runner
+lacks it). It checks structure only (environments, approval conditions, caches, secrets, permissions, publishing-only
+steps, `publish`'s wiring): a shell-parsing allowlist of what signing jobs may start was tried and dropped (user,
+2026-11-07), since each review round found another shell form past it, and whoever can edit `release.yml` can edit the
+checker. That a signing job never starts a program it downloaded stays a review item.
+
+- [x] every Overview item has its job or step; every secret and variable is read somewhere and documented
+- [x] a release's assets: the signed APK, the Linux packages, the unsigned MSI and zip, the ad-hoc macOS packages, the
       unsigned IPA, `SHA256SUMS` and its `.minisig`
-- [ ] `release-version.py --self-test` covers `required` from the variable, the minisign anchor forcing only its own
+- [x] `release-version.py --self-test` covers `required` from the variable, the minisign anchor forcing only its own
       component, rehearsals and the `ios` platform
-- [ ] grep checks:
+- [x] grep checks:
       - no job that runs cargo, Gradle or Xcode references the `release` environment;
       - no signing job executes a staged or packaged binary;
       - every job using `release` needs `approve`, and none accepts a skipped `approve` on a signed run;
@@ -548,7 +556,14 @@ the committed certificate. Left: a rehearsal with `platforms=android`, `android-
         have landed (`windows-sign`, `play-upload`), each with only the permissions its plan names;
       - the release upload, and any channel or store job another plan added (`aur`, `homebrew`, `winget`,
         `play-upload`), run only when `publishing`, never on a rehearsal
-- [ ] `actionlint`, `shellcheck`; `cargo test -p ngterm-update` and clippy on the crate
+- [x] `actionlint`, `shellcheck`; `cargo test -p ngterm-update` and clippy on the crate
+- [x] ➕ results (2026-11-07): every check passes on `release.yml`. The jobs that build (`linux`, `windows-build`,
+      `macos-build`, `ios-build`, `android-build`) use no environment; the jobs that reach `release` (`macos-sign`,
+      `android-sign`, `publish`) need `approve` and restore no cache, and read by hand, they start only repository
+      scripts, system tools and the SDK's `sdkmanager`; only `publish` widens permissions. The workflow reads the secrets `MINISIGN_SECRET_KEY`, `ANDROID_APK_KEYSTORE`,
+      `ANDROID_APK_KEYSTORE_PASSWORD`, `ANDROID_APK_KEY_PASSWORD` and the Apple four, and the variables
+      `NGTERM_RELEASE_SIGNING`, `ANDROID_APK_KEY_ALIAS` and the Apple three, each listed in this plan's or the Apple
+      plan's Technical Details and in the keys repository; none listed goes unread
 
 ### Task 10: [Final] Documentation
 
