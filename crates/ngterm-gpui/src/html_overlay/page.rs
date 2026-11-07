@@ -347,6 +347,7 @@ impl Page {
             // a URL page keeps the browser's opaque canvas, which a web app styled against it relies on
             background: (themed || matches!(overlay.source, HtmlSource::Image { .. })).then_some(Rgba::TRANSPARENT),
             geometry: self.geometry.get().unwrap_or(FIRST_GEOMETRY),
+            block_network: overlay.blocks_network(),
         };
         let view = web.create_view(spec);
         self.view.set(Some(view));
@@ -454,6 +455,10 @@ impl Page {
             Event::ViewFailed { message, .. } => {
                 tracing::warn!(page = %self.id, message, "the web engine could not build the page");
                 self.fail(message.clone());
+            }
+            Event::NetworkFilterFailed { message, .. } => {
+                tracing::warn!(page = %self.id, message, "the page's network filter could not be compiled");
+                self.fail(errors::NETWORK_FILTER_UNAVAILABLE.to_owned());
             }
             _ => {}
         }
@@ -669,7 +674,10 @@ impl Page {
             state.overlay.source.clone()
         };
         let load = match source {
-            source @ (HtmlSource::Image { .. } | HtmlSource::Markdown { .. } | HtmlSource::Text { .. }) => {
+            source @ (HtmlSource::Image { .. }
+            | HtmlSource::Markdown { .. }
+            | HtmlSource::Text { .. }
+            | HtmlSource::Document { .. }) => {
                 registry::read_document(self.id, generation, source);
                 return;
             }
@@ -1011,14 +1019,14 @@ mod tests {
 
 #[cfg(test)]
 mod document_tests {
-    use super::{Life, Page, Storage};
+    use super::{Life, Page, Storage, THEME_WORLD};
     use crate::html_overlay::{
         engine::Web,
         panel::{PanelColors, TerminalColors},
         testing::{Call, Recorder},
     };
     use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
-    use ngterm_wpe::{Load, SessionId, Settings};
+    use ngterm_wpe::{Load, Rgba, SessionId, Settings};
     use std::rc::Rc;
 
     fn page(source: HtmlSource) -> Rc<Page> {
@@ -1098,6 +1106,61 @@ mod document_tests {
             page.navigate(ngterm_core::html::HtmlNavigation::Finder),
             Err(ngterm_core::html::errors::FINDER_REQUIRES_FILE.to_owned())
         );
+    }
+
+    /// A clicked HTML file (upstream's `testAClickedDocumentRunsNoTaggedControlAndNoScript`'s spec half and
+    /// `testAClickedDocumentStaysInItsOverlay`): its scripts off, no bridge, no renderer, only the theme, behind the
+    /// engine's network filter, and it stays in its overlay.
+    #[test]
+    fn a_clicked_document_runs_no_script_or_bridge_and_loads_behind_the_network_filter() {
+        let page = page(HtmlSource::Document {
+            path: "/not-read.html".to_owned(),
+        });
+        let recorder = Rc::new(Recorder::default());
+        let web: Rc<dyn Web> = recorder.clone();
+        page.realize(&web, Some(SessionId::from_raw(1)), 1.0);
+        {
+            let specs = recorder.specs.borrow();
+            let spec = &specs[0];
+            assert!(spec.block_network);
+            assert!(!spec.settings.intersects(
+                Settings::JAVASCRIPT_MARKUP
+                    | Settings::FILE_ACCESS_FROM_FILE_URLS
+                    | Settings::UNIVERSAL_ACCESS_FROM_FILE_URLS
+            ));
+            assert!(spec.message_handlers.is_empty());
+            assert_eq!(spec.scripts.len(), 1, "the theme alone");
+            assert_eq!(spec.scripts[0].world.as_deref(), Some(THEME_WORLD));
+            assert_eq!(spec.background, Some(Rgba::TRANSPARENT), "themed like a file page");
+        }
+        assert_eq!(
+            page.navigate(ngterm_core::html::HtmlNavigation::Browser),
+            Err(ngterm_core::html::errors::DOCUMENT_IN_OVERLAY.to_owned())
+        );
+        assert_eq!(
+            page.navigate(ngterm_core::html::HtmlNavigation::Finder),
+            Err(ngterm_core::html::errors::FINDER_REQUIRES_FILE.to_owned())
+        );
+    }
+
+    /// Every other page loads with no filter to wait for.
+    #[test]
+    fn only_a_clicked_document_blocks_the_network() {
+        for source in [
+            HtmlSource::Markdown {
+                path: "/not-read.md".to_owned(),
+            },
+            HtmlSource::File {
+                path: "/not-read.html".to_owned(),
+                grant_root: None,
+            },
+        ] {
+            let page = page(source);
+            let recorder = Rc::new(Recorder::default());
+            let web: Rc<dyn Web> = recorder.clone();
+            page.realize(&web, Some(SessionId::from_raw(1)), 1.0);
+            assert!(!recorder.specs.borrow()[0].block_network);
+        }
     }
 
     #[test]

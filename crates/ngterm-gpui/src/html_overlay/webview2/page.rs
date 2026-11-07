@@ -85,6 +85,29 @@ struct PageState {
     refused: Option<u64>,
     /// A text load the app started is the next main-frame navigation, at the text's address.
     text_pending: bool,
+    network: NetworkGate,
+}
+
+/// Where a page that blocks the network ([`HtmlOverlay::blocks_network`]) stands with its web view's network filter,
+/// which the web view reports once in place (`Report::NetworkFilterInstalled`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NetworkGate {
+    /// No filter is needed, or it is in place: the page loads at once.
+    Open,
+    /// The filter is being installed; a document read meanwhile (`pending`) loads once it is.
+    Waiting { pending: bool },
+    /// The filter could not be installed: the page loads nothing.
+    Failed,
+}
+
+impl NetworkGate {
+    fn initial(overlay: &HtmlOverlay) -> Self {
+        if overlay.blocks_network() {
+            Self::Waiting { pending: false }
+        } else {
+            Self::Open
+        }
+    }
 }
 
 impl PageState {
@@ -185,6 +208,7 @@ impl Page {
                 reported: None,
                 refused: None,
                 text_pending: false,
+                network: NetworkGate::initial(overlay),
             }),
             native: RefCell::new(None),
             building: Cell::new(false),
@@ -411,6 +435,11 @@ impl Page {
             ..Placement::default()
         });
         self.native.replace(Some(Rc::new(native)));
+        {
+            // a new web view installs its own filter
+            let mut state = self.state.borrow_mut();
+            state.network = NetworkGate::initial(&state.overlay);
+        }
         self.placement_changed();
         self.load_original();
     }
@@ -571,6 +600,12 @@ impl Page {
                 if self.reload_after_theme.take() {
                     self.reload_shown();
                 }
+            }
+            Report::NetworkFilterInstalled => self.network_filter_installed(),
+            Report::NetworkFilterFailed(message) => {
+                tracing::warn!(page = %self.id, message, "the page's network filter could not be installed");
+                self.state.borrow_mut().network = NetworkGate::Failed;
+                self.fail(errors::NETWORK_FILTER_UNAVAILABLE.to_owned());
             }
         }
     }
@@ -958,7 +993,10 @@ impl Page {
         };
         let Some(native) = self.native() else { return };
         let address = match source {
-            source @ (HtmlSource::Image { .. } | HtmlSource::Markdown { .. } | HtmlSource::Text { .. }) => {
+            source @ (HtmlSource::Image { .. }
+            | HtmlSource::Markdown { .. }
+            | HtmlSource::Text { .. }
+            | HtmlSource::Document { .. }) => {
                 registry::read_document(self.id, generation, source);
                 return;
             }
@@ -1001,13 +1039,38 @@ impl Page {
         }
         match result {
             Ok(html) => {
-                if let Some(native) = self.native() {
-                    self.text.lock().unwrap_or_else(PoisonError::into_inner).replace(html);
-                    self.state.borrow_mut().text_pending = true;
-                    native.load_url(&scheme::text_address(self.id));
+                let Some(native) = self.native() else { return };
+                self.text.lock().unwrap_or_else(PoisonError::into_inner).replace(html);
+                let gate = {
+                    let mut state = self.state.borrow_mut();
+                    state.text_pending = true;
+                    if let NetworkGate::Waiting { pending } = &mut state.network {
+                        *pending = true;
+                    }
+                    state.network
+                };
+                match gate {
+                    NetworkGate::Open => native.load_url(&scheme::text_address(self.id)),
+                    NetworkGate::Waiting { .. } => {}
+                    NetworkGate::Failed => self.fail(errors::NETWORK_FILTER_UNAVAILABLE.to_owned()),
                 }
             }
             Err(failure) => self.fail(failure),
+        }
+    }
+
+    /// The web view's network filter is in place: the document read while it was installed loads now.
+    fn network_filter_installed(&self) {
+        let pending = {
+            let mut state = self.state.borrow_mut();
+            let pending = matches!(state.network, NetworkGate::Waiting { pending: true });
+            if matches!(state.network, NetworkGate::Waiting { .. }) {
+                state.network = NetworkGate::Open;
+            }
+            pending
+        };
+        if pending && let Some(native) = self.native() {
+            native.load_url(&scheme::text_address(self.id));
         }
     }
 

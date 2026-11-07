@@ -70,6 +70,9 @@ pub enum LinkDisposition {
     Image(PathBuf),
     /// A local Markdown path, checked before it can occupy a document overlay.
     Markdown(PathBuf),
+    /// A local HTML file ([`crate::html::document_page::EXTENSIONS`]), read and checked before it can occupy a document
+    /// overlay, where it shows with no file grant, bridge or page JavaScript.
+    Document(PathBuf),
     /// A local file a text page shows ([`crate::html::text_page::is_eligible`]), at `line` when a `:line` suffix gave
     /// one, checked before it can occupy a document overlay.
     Text {
@@ -114,6 +117,12 @@ pub enum Route {
         session: Uuid,
         size_percent: Option<i64>,
     },
+    /// A local HTML document, sized as a Markdown document; a refused open reveals the file.
+    Document {
+        path: PathBuf,
+        session: Uuid,
+        size_percent: Option<i64>,
+    },
     /// A local text page marked at `line`, sized as a Markdown document; a refused open reveals the file.
     Text {
         path: PathBuf,
@@ -131,9 +140,11 @@ impl Route {
     #[must_use]
     pub fn local_file(&self) -> Option<&std::path::Path> {
         match self {
-            Self::Image { path, .. } | Self::Markdown { path, .. } | Self::Text { path, .. } | Self::Reveal(path) => {
-                Some(path)
-            }
+            Self::Image { path, .. }
+            | Self::Markdown { path, .. }
+            | Self::Document { path, .. }
+            | Self::Text { path, .. }
+            | Self::Reveal(path) => Some(path),
             Self::Browser(_) | Self::Overlay { .. } | Self::Ignore => None,
         }
     }
@@ -276,8 +287,8 @@ fn guarded_local_path(path: &str) -> Option<String> {
     (!is_automount_path(&normalized.replace('\\', "/"))).then_some(normalized)
 }
 
-/// Classifies a decoded local path (upstream's `localPath`): an image, a Markdown document, a text page at `line`, or
-/// a reveal; ignored when [`guarded_local_path`] refuses it.
+/// Classifies a decoded local path (upstream's `localPath`): an image, a Markdown document, an HTML document, a text
+/// page at `line`, or a reveal; ignored when [`guarded_local_path`] refuses it. HTML goes ahead of the text check.
 fn local_path(path: &str, line: Option<i64>) -> LinkDisposition {
     let Some(normalized) = guarded_local_path(path) else {
         return LinkDisposition::Ignore;
@@ -293,6 +304,8 @@ fn local_path(path: &str, line: Option<i64>) -> LinkDisposition {
         LinkDisposition::Image(path)
     } else if MARKDOWN_EXTENSIONS.contains(&extension.as_str()) {
         LinkDisposition::Markdown(path)
+    } else if crate::html::document_page::EXTENSIONS.contains(&extension.as_str()) {
+        LinkDisposition::Document(path)
     } else if text {
         LinkDisposition::Text { path, line }
     } else {
@@ -354,6 +367,14 @@ fn route_disposition(disposition: LinkDisposition, mode: LinkOpenMode, origin: C
         },
         LinkDisposition::Markdown(path) => match origin {
             ClickOrigin::Pane(session) | ClickOrigin::Scratch(session) => Route::Markdown {
+                path,
+                session,
+                size_percent: page_size,
+            },
+            _ => Route::Reveal(path),
+        },
+        LinkDisposition::Document(path) => match origin {
+            ClickOrigin::Pane(session) | ClickOrigin::Scratch(session) => Route::Document {
                 path,
                 session,
                 size_percent: page_size,
@@ -1104,6 +1125,84 @@ mod tests {
             }
             assert_eq!(route_of(&image, *mode, ClickOrigin::RemotePane(session)), Route::Ignore);
         }
+    }
+
+    /// Upstream's `localHtmlPathsOpenAsDocuments`: a bare, `~/` or `file://` path to an `.html` or `.htm` file, in any
+    /// case, is a document, ahead of the text check.
+    #[test]
+    fn local_html_paths_open_as_documents() {
+        let home = crate::html::os_path("/Users/me");
+        for (raw, path) in [
+            (
+                crate::html::os_path("/tmp/agdoc/pr.html"),
+                crate::html::os_path("/tmp/agdoc/pr.html"),
+            ),
+            (
+                crate::html::os_path("/tmp/INDEX.HTM"),
+                crate::html::os_path("/tmp/INDEX.HTM"),
+            ),
+            ("~/page.html".to_owned(), crate::html::os_path("/Users/me/page.html")),
+        ] {
+            assert_eq!(
+                disposition_for_hosts_and_home(&raw, &hosts(), &home),
+                LinkDisposition::Document(PathBuf::from(path)),
+                "{raw}"
+            );
+        }
+        let spaced = PathBuf::from(crate::html::os_path("/tmp/a b.html"));
+        let url = url::Url::from_file_path(&spaced).unwrap();
+        assert!(url.as_str().ends_with("/tmp/a%20b.html"));
+        assert_eq!(disposition_of(url.as_str()), LinkDisposition::Document(spaced));
+    }
+
+    /// Upstream's `documentOpensOnTheOwningSessionAtItsModeSize`, `sessionlessOriginsRevealDocuments` and the remote
+    /// pane's HTML rows: a pane or the scratch terminal shows the file over its session at the mode's size, 95 in
+    /// browser mode; every other origin reveals a `file://` link, and a remote pane ignores a bare path.
+    #[test]
+    fn a_document_opens_on_the_owning_session_at_its_mode_size() {
+        let session = Uuid::new_v4();
+        let path = PathBuf::from(crate::html::os_path("/tmp/pr.html"));
+        let bare = crate::html::os_path("/tmp/pr.html");
+        let file = url::Url::from_file_path(&path).unwrap().to_string();
+        for mode in LinkOpenMode::ALL {
+            let percent = if *mode == LinkOpenMode::Browser {
+                Some(95)
+            } else {
+                mode.overlay_size_percent()
+            };
+            for origin in [ClickOrigin::Pane(session), ClickOrigin::Scratch(session)] {
+                for raw in [&bare, &file] {
+                    assert_eq!(
+                        route_of(raw, *mode, origin),
+                        Route::Document {
+                            path: path.clone(),
+                            session,
+                            size_percent: percent
+                        },
+                        "{raw} {mode:?} {origin:?}"
+                    );
+                }
+            }
+            for origin in [
+                ClickOrigin::Hud,
+                ClickOrigin::ProgramOverlay,
+                ClickOrigin::Quick,
+                ClickOrigin::RemotePane(session),
+            ] {
+                assert_eq!(
+                    route_of(&file, *mode, origin),
+                    Route::Reveal(path.clone()),
+                    "{origin:?}"
+                );
+            }
+            assert_eq!(route_of(&bare, *mode, ClickOrigin::RemotePane(session)), Route::Ignore);
+        }
+        let route = Route::Document {
+            path: path.clone(),
+            session,
+            size_percent: Some(95),
+        };
+        assert_eq!(route.local_file(), Some(path.as_path()));
     }
 
     #[test]

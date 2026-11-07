@@ -204,6 +204,12 @@ pub enum Event {
         view: ViewId,
         message: String,
     },
+    /// The content filter a page that blocks the network ([`crate::ViewSpec::block_network`]) loads behind could not
+    /// be compiled: the page loads nothing, and each load it is asked for reports this again.
+    NetworkFilterFailed {
+        view: ViewId,
+        message: String,
+    },
     /// A store's data was cleared ([`crate::Host::clear_session`]), or why it was not.
     SessionCleared {
         session: SessionId,

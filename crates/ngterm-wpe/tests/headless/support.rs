@@ -128,6 +128,7 @@ impl Harness {
                 height: 240,
                 scale: 1.0,
             },
+            block_network: false,
         })
     }
 
@@ -155,6 +156,7 @@ impl Harness {
                 height: 240,
                 scale: 1.0,
             },
+            block_network: false,
         })
     }
 

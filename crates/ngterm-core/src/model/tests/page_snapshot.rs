@@ -318,6 +318,41 @@ fn a_text_page_round_trips_with_its_line() {
     assert!(shown(only_session(&round_trip(&store))).is_empty());
 }
 
+/// A clicked HTML document is written by its file and opens again as one; one whose file is gone, or that names no
+/// HTML file, is dropped.
+#[test]
+fn a_clicked_document_round_trips_by_its_file() {
+    let files = Files::new();
+    let (mut store, session) = store_with_split();
+    let document = HtmlSource::Document {
+        path: files.path("page.html"),
+    };
+    open(
+        &mut store,
+        session,
+        None,
+        page(document.clone(), HtmlPageFlags::default()),
+        OverlaySize::default(),
+    );
+    let written = serde_json::to_string(&store.snapshot()).unwrap();
+    assert!(written.contains("\"kind\":\"document\""), "{written}");
+    let back = round_trip(&store);
+    assert_eq!(shown(only_session(&back)), [(None, document, HtmlPageFlags::default())]);
+
+    for name in ["gone.html", "main.go"] {
+        let (mut store, session) = store_with_split();
+        let refused = HtmlSource::Document { path: files.path(name) };
+        open(
+            &mut store,
+            session,
+            None,
+            page(refused, HtmlPageFlags::default()),
+            OverlaySize::default(),
+        );
+        assert!(shown(only_session(&round_trip(&store))).is_empty(), "{name}");
+    }
+}
+
 #[test]
 fn a_replica_and_a_page_row_are_never_written_and_no_page_writes_no_key() {
     let (mut store, session) = store_with_split();

@@ -56,6 +56,7 @@ fn view(h: &Harness) -> ngterm_wpe::ViewId {
             height: 240,
             scale: 1.0,
         },
+        block_network: false,
     })
 }
 

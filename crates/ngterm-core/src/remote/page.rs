@@ -88,7 +88,8 @@ pub(crate) fn presentation_source(source: &HtmlSource) -> Option<PresentationPag
         HtmlSource::Replica { .. }
         | HtmlSource::Image { .. }
         | HtmlSource::Markdown { .. }
-        | HtmlSource::Text { .. } => None,
+        | HtmlSource::Text { .. }
+        | HtmlSource::Document { .. } => None,
     }
 }
 

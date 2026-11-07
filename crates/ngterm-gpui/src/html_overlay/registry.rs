@@ -682,7 +682,8 @@ pub(super) fn dispatch(event: &Event, cx: &mut App) {
         | Event::WebProcessTerminated { view, .. }
         | Event::Page { view, .. }
         | Event::CloseRequested { view }
-        | Event::ViewFailed { view, .. } => to_page(*view, event, cx),
+        | Event::ViewFailed { view, .. }
+        | Event::NetworkFilterFailed { view, .. } => to_page(*view, event, cx),
         Event::Policy(request) => match page_of_view(request.view) {
             Some(page) => page.event(event, cx),
             None => answer_with(|web| web.decide_policy(request.token, false)),

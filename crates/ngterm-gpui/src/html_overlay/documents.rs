@@ -1,8 +1,9 @@
 //! Trusted document rendering, isolated from authored page JavaScript (upstream's `MarkdownAssets`): the renderers
 //! Markdown and text pages run in the backend's named world (a `WKContentWorld`, a WPE script world, a CDP isolated
-//! world on `WebView2`), with the page's own JavaScript off, and the stylesheets they wear.
+//! world on `WebView2`), with the page's own JavaScript off, and the stylesheets they wear. A clicked HTML file runs no
+//! renderer: its own markup is the page, behind its policy (`document_page`).
 
-use ngterm_core::html::{HtmlSource, errors, image_page, markdown_page, text_page};
+use ngterm_core::html::{HtmlSource, document_page, errors, image_page, markdown_page, text_page};
 
 pub(super) const WORLD: &str = "ngterm-markdown";
 pub(super) const STYLE: &str = include_str!("../../../../resources/markdown/page.css");
@@ -44,7 +45,19 @@ pub(super) fn browser_refusal(source: &HtmlSource) -> Option<&'static str> {
     match source {
         HtmlSource::Markdown { .. } => Some(errors::MARKDOWN_IN_OVERLAY),
         HtmlSource::Text { .. } => Some(errors::TEXT_IN_OVERLAY),
+        HtmlSource::Document { .. } => Some(errors::DOCUMENT_IN_OVERLAY),
         _ => None,
+    }
+}
+
+/// The page a clicked HTML file's bytes make for this platform's engine: `WebView2`'s Chromium reaches link hints past
+/// the CSP and its request filter, so its page also makes every `<link>` inert and turns DNS prefetch off
+/// ([`document_page::chromium_page`]); `WebKit` checks them against the page's content filter.
+fn document_page_builder() -> fn(Vec<u8>) -> Option<String> {
+    if cfg!(windows) {
+        document_page::chromium_page
+    } else {
+        document_page::page
     }
 }
 
@@ -74,6 +87,9 @@ pub(super) fn read(source: &HtmlSource) -> Result<String, String> {
         HtmlSource::Text { path, line } => {
             let text = ngterm_app::documents::load_text(std::path::Path::new(path))?;
             Ok(text_page::html(&text, text_page::language(path), *line, &text_style()))
+        }
+        HtmlSource::Document { path } => {
+            ngterm_app::documents::load_document(std::path::Path::new(path), document_page_builder())
         }
         _ => unreachable!("only document sources are read through bounded probes"),
     }
@@ -127,5 +143,36 @@ mod tests {
         );
         assert_eq!(browser_refusal(&source), Some(errors::TEXT_IN_OVERLAY));
         assert_eq!(renderer(&source), Some(text_script()));
+    }
+
+    /// A clicked HTML file reads on the worker into its own markup behind the policy, with no renderer; an unreadable
+    /// one fails with upstream's probe message, and the browser hand-off is refused.
+    #[test]
+    fn a_document_source_reads_into_its_own_page_behind_the_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pr.html");
+        std::fs::write(
+            &path,
+            "<!doctype html><title>pr</title><link rel=preconnect href=http://h>",
+        )
+        .unwrap();
+        let source = HtmlSource::Document {
+            path: path.to_string_lossy().into_owned(),
+        };
+        let html = read(&source).unwrap();
+        assert!(
+            html.starts_with(&format!("<!doctype html>{}", document_page::POLICY)),
+            "{html}"
+        );
+        assert_eq!(html.contains("<ngterm-inert-link"), cfg!(windows), "{html}");
+        assert_eq!(renderer(&source), None);
+        assert_eq!(browser_refusal(&source), Some(errors::DOCUMENT_IN_OVERLAY));
+        let missing = HtmlSource::Document {
+            path: dir.path().join("missing.html").to_string_lossy().into_owned(),
+        };
+        assert_eq!(
+            read(&missing).unwrap_err(),
+            format!("unreadable html file: {}", dir.path().join("missing.html").display())
+        );
     }
 }

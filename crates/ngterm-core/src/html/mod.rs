@@ -6,6 +6,7 @@
 //! of their own.
 
 pub mod bridge;
+pub mod document_page;
 pub mod image_page;
 pub mod markdown_page;
 pub mod navigation;
@@ -229,6 +230,10 @@ pub enum HtmlSource {
     /// A source, config, text or log file shown read-only, scrolled to `line` when one is set: no file grant, bridge,
     /// link or navigation, but themed (upstream's `.text`).
     Text { path: String, line: Option<i64> },
+    /// An HTML file a terminal click named, so untrusted (upstream's `.document`): the app reads its text and loads it
+    /// with no file grant, bridge or page JavaScript, behind a policy and a network filter that load nothing from the
+    /// network, themed like a file page. Never a CLI page.
+    Document { path: String },
     /// A file page another machine opened, shown here from `ngterm-page://<page id>/` (upstream's `.replica`): `path`
     /// is its path on that machine, whose own grant decides what else may be fetched.
     Replica { path: String },
@@ -287,6 +292,7 @@ impl HtmlSource {
             | Self::Replica { path }
             | Self::Image { path }
             | Self::Markdown { path }
+            | Self::Document { path }
             | Self::Text { path, .. } => path.clone(),
             Self::Url(url) => url.as_str().to_owned(),
         }
@@ -456,7 +462,8 @@ impl HtmlOverlay {
         self.replica_of.is_none() && !self.row && !matches!(self.source, HtmlSource::Replica { .. })
     }
 
-    /// Whether ngterm themes the page: a file page, replica, Markdown or text document (upstream's `themed`).
+    /// Whether ngterm themes the page: a file page, replica, Markdown, text or clicked HTML document (upstream's
+    /// `themed`); a clicked HTML file takes a file page's theme, so it looks the same clicked or opened with `--html`.
     #[must_use]
     pub fn themed(&self) -> bool {
         matches!(
@@ -465,6 +472,7 @@ impl HtmlOverlay {
                 | HtmlSource::Replica { .. }
                 | HtmlSource::Markdown { .. }
                 | HtmlSource::Text { .. }
+                | HtmlSource::Document { .. }
         )
     }
 
@@ -474,13 +482,25 @@ impl HtmlOverlay {
         matches!(self.source, HtmlSource::File { .. } | HtmlSource::Replica { .. })
     }
 
-    /// Whether this is a local document with no browser/file access.
+    /// Whether this is a local content page the app reads and builds, with no browser or file access: an image,
+    /// Markdown, text or clicked HTML document (upstream's `isContent`).
     #[must_use]
-    pub fn document(&self) -> bool {
+    pub fn content(&self) -> bool {
         matches!(
             self.source,
-            HtmlSource::Image { .. } | HtmlSource::Markdown { .. } | HtmlSource::Text { .. }
+            HtmlSource::Image { .. }
+                | HtmlSource::Markdown { .. }
+                | HtmlSource::Text { .. }
+                | HtmlSource::Document { .. }
         )
+    }
+
+    /// Whether the page loads only once the frontend's network filter is in place, failing with
+    /// [`errors::NETWORK_FILTER_UNAVAILABLE`] when it cannot be: a clicked HTML document, whose link hints (preconnect,
+    /// DNS prefetch) no CSP covers (upstream's `DocumentRules`).
+    #[must_use]
+    pub fn blocks_network(&self) -> bool {
+        matches!(self.source, HtmlSource::Document { .. })
     }
 
     /// Whether a page is loaded from generated or file text without a file grant (upstream's `textLoaded`).
@@ -492,6 +512,7 @@ impl HtmlOverlay {
                 | HtmlSource::Image { .. }
                 | HtmlSource::Markdown { .. }
                 | HtmlSource::Text { .. }
+                | HtmlSource::Document { .. }
         )
     }
 
@@ -501,9 +522,10 @@ impl HtmlOverlay {
     #[must_use]
     pub fn identity(&self) -> String {
         match &self.source {
-            HtmlSource::Image { path } | HtmlSource::Markdown { path } | HtmlSource::Text { path, .. } => {
-                last_path_component(path)
-            }
+            HtmlSource::Image { path }
+            | HtmlSource::Markdown { path }
+            | HtmlSource::Text { path, .. }
+            | HtmlSource::Document { path } => last_path_component(path),
             HtmlSource::File { path, .. } | HtmlSource::Replica { path } => {
                 let shown = self
                     .current
@@ -659,6 +681,12 @@ pub mod errors {
     pub const MARKDOWN_IN_OVERLAY: &str = "a markdown page opens only in its overlay";
     /// A text page is built by the app, so a browser would get the raw file instead (upstream's `textInOverlay`).
     pub const TEXT_IN_OVERLAY: &str = "a text page opens only in its overlay";
+    /// A clicked HTML file came from terminal output, and a browser would run its scripts (upstream's
+    /// `documentInOverlay`).
+    pub const DOCUMENT_IN_OVERLAY: &str = "a clicked html page opens only in its overlay";
+    /// A clicked HTML document loads only behind its network filter, which the web engine refused (upstream's
+    /// `DocumentRules.unavailable`).
+    pub const NETWORK_FILTER_UNAVAILABLE: &str = "the network filter for a clicked html page could not be installed";
     pub const FINDER_REQUIRES_FILE: &str = "show in Finder requires a file page";
     pub const PERSISTENT_UNAVAILABLE: &str = "persistent browser storage is not available";
     /// The saved store is being emptied: neither a second clear nor a persistent page may use it (upstream's

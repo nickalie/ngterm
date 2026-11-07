@@ -23,10 +23,11 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR, COREWEBVIEW2_KEY_EVENT_KIND,
     COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN, COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
-    COREWEBVIEW2_WEB_ERROR_STATUS, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
-    COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT, ICoreWebView2, ICoreWebView2_11, ICoreWebView2_13,
-    ICoreWebView2_22, ICoreWebView2ContextMenuItem, ICoreWebView2ContextMenuItemCollection, ICoreWebView2Controller,
-    ICoreWebView2Environment, ICoreWebView2NavigationCompletedEventArgs, ICoreWebView2NavigationCompletedEventArgs2,
+    COREWEBVIEW2_WEB_ERROR_STATUS, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
+    COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL, COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT,
+    ICoreWebView2, ICoreWebView2_11, ICoreWebView2_13, ICoreWebView2_22, ICoreWebView2ContextMenuItem,
+    ICoreWebView2ContextMenuItemCollection, ICoreWebView2Controller, ICoreWebView2Environment,
+    ICoreWebView2NavigationCompletedEventArgs, ICoreWebView2NavigationCompletedEventArgs2,
     ICoreWebView2NavigationStartingEventArgs, ICoreWebView2Profile2,
 };
 use webview2_com::{
@@ -124,6 +125,11 @@ pub enum Report {
     Key(gpui_kit::Keystroke),
     /// A replaced theme script is in place: later loads wear it.
     ThemeInstalled,
+    /// The network filter of a page that blocks the network ([`Spec::block_network`]) is in place: its document may
+    /// load.
+    NetworkFilterInstalled,
+    /// That filter could not be installed: the page loads nothing.
+    NetworkFilterFailed(String),
 }
 
 /// Decides a navigation at once.
@@ -177,6 +183,8 @@ pub struct Spec {
     pub grant: Option<Grant>,
     pub replica: Option<ReplicaRead>,
     pub text: Option<Text>,
+    /// The page loads nothing from the network ([`ngterm_core::html::HtmlOverlay::blocks_network`]).
+    pub block_network: bool,
     pub decide: Decide,
     pub post: Post,
     pub take_key: TakeKey,
@@ -217,6 +225,12 @@ impl Native {
         wire_navigation(&webview, &spec.decide, &spec.post, &main_document).map_err(|err| err.to_string())?;
         wire_frame_requests(&webview, &native.environment(), &spec.decide, main_document)
             .map_err(|err| err.to_string())?;
+        if spec.block_network {
+            (spec.post)(match wire_network_block(&webview, &native.environment()) {
+                Ok(()) => Report::NetworkFilterInstalled,
+                Err(err) => Report::NetworkFilterFailed(err.to_string()),
+            });
+        }
         wire_page(&webview, &spec.post).map_err(|err| err.to_string())?;
         wire_refusals(&webview).map_err(|err| err.to_string())?;
         wire_focus(&native.view.controller(), &spec.post).map_err(|err| err.to_string())?;
@@ -634,6 +648,52 @@ fn wire_frame_requests(
             return Ok(());
         }
         tracing::debug!(uri = navigation.uri, "a page's frame request refused");
+        // SAFETY: a COM call on the web view's own thread, answering the event's own arguments.
+        let refusal =
+            unsafe { environment.CreateWebResourceResponse(None, 403, &HSTRING::from("Forbidden"), &HSTRING::new()) }?;
+        // SAFETY: as above.
+        unsafe { args.SetResponse(&refusal) }
+    }));
+    let mut token = 0i64;
+    // SAFETY: a COM registration on the web view's own thread; the handler lives as long as the web view.
+    unsafe { webview.add_WebResourceRequested(&handler, &raw mut token) }
+}
+
+/// A page that blocks the network (a clicked HTML document) answers every HTTP(S) request but its app protocols' with
+/// a 403, whatever asks for it, before its first load: its CSP keeps subresources off the network already, and this
+/// keeps anything the CSP misses off it too. A main-frame link the user clicks is the navigation policy's, which
+/// cancels it before any request. `WebView2` shows this filter no WebSocket (the CSP refuses one, and the page runs no
+/// script) and no link hint: Chromium preconnects and resolves names for those past both the CSP and this filter, so
+/// the page's markup has no live `<link>` and its DNS prefetch is off (`document_page::chromium_page`).
+fn wire_network_block(webview: &ICoreWebView2, environment: &ICoreWebView2Environment) -> ComResult<()> {
+    let filter = HSTRING::from("*");
+    // workers' and frames' requests reach the event only through the newer filter
+    if let Ok(newer) = webview.cast::<ICoreWebView2_22>() {
+        // SAFETY: a COM call on the web view's own thread.
+        unsafe {
+            newer.AddWebResourceRequestedFilterWithRequestSourceKinds(
+                &filter,
+                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+                COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
+            )
+        }?;
+    } else {
+        // SAFETY: as above.
+        unsafe { webview.AddWebResourceRequestedFilter(&filter, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL) }?;
+    }
+    let environment = environment.clone();
+    let handler = WebResourceRequestedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else { return Ok(()) };
+        // SAFETY: the event's own arguments, read on its thread.
+        let request = unsafe { args.Request() }?;
+        let uri = string(|out| {
+            // SAFETY: as above.
+            unsafe { request.Uri(out) }
+        })?;
+        if !scheme::is_network(&uri) {
+            return Ok(());
+        }
+        tracing::debug!(uri, "a network request of a page that blocks the network refused");
         // SAFETY: a COM call on the web view's own thread, answering the event's own arguments.
         let refusal =
             unsafe { environment.CreateWebResourceResponse(None, 403, &HSTRING::from("Forbidden"), &HSTRING::new()) }?;

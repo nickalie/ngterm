@@ -109,7 +109,8 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
     }
     match &overlay.source {
         HtmlSource::Image { .. } | HtmlSource::Text { .. } => Cancel,
-        HtmlSource::Markdown { .. } => {
+        // a clicked HTML file shares the Markdown arm: a user-activated web link is offered, nothing else leaves it
+        HtmlSource::Markdown { .. } | HtmlSource::Document { .. } => {
             if web {
                 offer
             } else {
@@ -363,7 +364,54 @@ mod tests {
         });
         assert_eq!(page.identity(), "main.go");
         assert_eq!(page.source.text(), "/tmp/src/main.go");
-        assert!(page.themed() && page.text_loaded() && page.document() && !page.bridged());
+        assert!(page.themed() && page.text_loaded() && page.content() && !page.bridged());
+    }
+
+    /// Upstream's `HtmlOverlayTests.documentPagePolicyHandsWebLinksOutAndKeepsEverythingElse`: a clicked HTML page
+    /// offers a user-activated web link to the browser and keeps everything else in its blank document.
+    #[test]
+    fn a_document_page_hands_web_links_out_and_keeps_everything_else() {
+        let page = HtmlOverlay::new(
+            HtmlSource::Document {
+                path: "/tmp/agdoc/pr.html".to_owned(),
+            },
+            HtmlPageFlags::default(),
+        );
+        for (url, target, user, decision) in [
+            ("https://example.com/", MainFrame, true, OpenExternal),
+            ("https://example.com/", MainFrame, false, Cancel),
+            ("https://example.com/", Subframe, false, Cancel),
+            ("about:blank", MainFrame, false, Allow),
+            ("file:///tmp/agdoc/other.html", MainFrame, true, Cancel),
+            ("file:///etc/passwd", Subframe, false, Cancel),
+            ("javascript:alert(1)", MainFrame, true, Cancel),
+            ("data:text/html,x", MainFrame, true, Cancel),
+        ] {
+            let decided = decide(&action(url, target, user), &page);
+            assert_eq!(decided, decision, "{url} {target:?} {user}");
+        }
+    }
+
+    /// Upstream's `HtmlOverlayTests.aDocumentPageIsNamedByItsFileNeverTheTitle`: and it is themed, loaded from text,
+    /// unbridged, and loads behind the network filter.
+    #[test]
+    fn a_document_page_is_named_by_its_file_never_the_title() {
+        let mut page = HtmlOverlay::new(
+            HtmlSource::Document {
+                path: "/tmp/agdoc/pr.html".to_owned(),
+            },
+            HtmlPageFlags::default(),
+        );
+        page.current = Some(crate::html::HtmlPageInfo {
+            page: "/tmp/agdoc/pr.html".to_owned(),
+            title: Some("enter your password".to_owned()),
+            can_go_back: false,
+            can_go_forward: false,
+        });
+        assert_eq!(page.identity(), "pr.html");
+        assert_eq!(page.source.text(), "/tmp/agdoc/pr.html");
+        assert!(page.themed() && page.text_loaded() && page.content() && !page.bridged());
+        assert!(page.blocks_network() && !page.flags.javascript);
     }
 
     /// Upstream's `HtmlOverlayTests.replicaPolicyAllowsOnlyItsOwnSchemeOrigin`, on the build's `ngterm-page` scheme.

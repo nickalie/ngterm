@@ -67,6 +67,7 @@ fn source_snapshot(source: &HtmlSource) -> Option<PageSourceSnapshot> {
             path: path.clone(),
             line: *line,
         },
+        HtmlSource::Document { path } => PageSourceSnapshot::Document { path: path.clone() },
         HtmlSource::Replica { .. } => return None,
     })
 }
@@ -356,6 +357,8 @@ fn restored_source(source: &PageSourceSnapshot, flags: HtmlPageFlags, home: &str
             path: path.clone(),
             line: *line,
         }),
+        PageSourceSnapshot::Document { path } => (document && shown_document(path, &html::document_page::EXTENSIONS))
+            .then(|| HtmlSource::Document { path: path.clone() }),
     }
 }
 

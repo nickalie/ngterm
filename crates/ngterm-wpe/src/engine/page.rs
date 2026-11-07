@@ -17,7 +17,7 @@ use glib::translate::ToGlibPtr;
 use super::platform::{Display, Link, View};
 use super::webkit::{
     JscValue, NavigationPolicyDecision, NetworkSession, PolicyDecision, ResponsePolicyDecision, ScriptReply, Settings,
-    UserContentManager, WebView, enum_arg, error_is, handled, object_arg, pointer_arg,
+    UserContentFilter, UserContentManager, WebView, enum_arg, error_is, handled, object_arg, pointer_arg,
 };
 use crate::event::{
     Event, LoadError, LoadErrorKind, LoadEvent, NavigationType, PageState, PolicyKind, ScriptMessage, Termination,
@@ -27,6 +27,18 @@ use crate::input::{Input, Key, Pointer, PointerKind, Scroll};
 use crate::platform_sys as platform;
 use crate::spec::{Geometry, MessageHandler, Rgba, ViewId, ViewSpec};
 use crate::webkit_sys as webkit;
+
+/// Where a page that blocks the network stands with its content filter ([`ViewSpec::block_network`]).
+enum NetworkBlock {
+    /// The page does not block the network: its loads run at once.
+    None,
+    /// The filter is being compiled: the last load asked for waits for it.
+    Waiting(Option<Load>),
+    /// The filter is on the page: its loads run at once.
+    Installed,
+    /// The filter could not be compiled: the page loads nothing, and says so for each load.
+    Failed(String),
+}
 
 /// A page's web view and what it was built with.
 pub(crate) struct Page {
@@ -47,6 +59,7 @@ pub(crate) struct Page {
     /// The web process is being ended for the fall-back to SHM: its termination is not reported, and the page
     /// reloads.
     falling_back: Cell<bool>,
+    network: std::cell::RefCell<NetworkBlock>,
 }
 
 impl Page {
@@ -90,6 +103,11 @@ impl Page {
             dmabuf: Cell::new(display.renders_dmabuf()),
             pressed_at: Rc::new(Cell::new((0, 0))),
             falling_back: Cell::new(false),
+            network: std::cell::RefCell::new(if spec.block_network {
+                NetworkBlock::Waiting(None)
+            } else {
+                NetworkBlock::None
+            }),
         });
         if let Some(background) = spec.background {
             page.web_view.set_background_color(background);
@@ -113,11 +131,61 @@ impl Page {
         }
     }
 
+    /// Whether the page waits for its network filter ([`super::request_network_filter`]).
+    pub(crate) fn awaits_network_filter(&self) -> bool {
+        matches!(*self.network.borrow(), NetworkBlock::Waiting(_))
+    }
+
+    /// The network filter compiled, or why it did not: the filter goes on the page and the load that waited for it
+    /// runs; a failure is reported, and the page loads nothing.
+    pub(crate) fn network_filter(&self, filter: Result<&UserContentFilter, &str>) {
+        let waiting = match filter {
+            Ok(filter) => {
+                self.content.add_filter(filter);
+                std::mem::replace(&mut *self.network.borrow_mut(), NetworkBlock::Installed)
+            }
+            Err(message) => {
+                tracing::warn!(view = ?self.id, message, "a page's network filter could not be compiled");
+                *self.network.borrow_mut() = NetworkBlock::Failed(message.to_owned());
+                self.send(Event::NetworkFilterFailed {
+                    view: self.id,
+                    message: message.to_owned(),
+                });
+                return;
+            }
+        };
+        if let NetworkBlock::Waiting(Some(load)) = waiting {
+            self.load(load);
+        }
+    }
+
+    /// Loads `load` now, once the page's network filter is on, or never when it failed.
+    fn load(&self, load: Load) {
+        let message = {
+            let mut network = self.network.borrow_mut();
+            match &mut *network {
+                NetworkBlock::None | NetworkBlock::Installed => None,
+                NetworkBlock::Waiting(pending) => {
+                    *pending = Some(load);
+                    return;
+                }
+                NetworkBlock::Failed(message) => Some(message.clone()),
+            }
+        };
+        if let Some(message) = message {
+            self.send(Event::NetworkFilterFailed { view: self.id, message });
+            return;
+        }
+        match load {
+            Load::Uri(uri) => self.web_view.load_uri(&uri),
+            Load::Html { html, base_uri } => self.web_view.load_html(&html, base_uri.as_deref()),
+        }
+    }
+
     /// Runs one command.
     pub(crate) fn apply(self: &Rc<Self>, command: ViewCommand) {
         match command {
-            ViewCommand::Load(Load::Uri(uri)) => self.web_view.load_uri(&uri),
-            ViewCommand::Load(Load::Html { html, base_uri }) => self.web_view.load_html(&html, base_uri.as_deref()),
+            ViewCommand::Load(load) => self.load(load),
             ViewCommand::Reload => self.web_view.reload(),
             ViewCommand::Stop => self.web_view.stop_loading(),
             ViewCommand::GoBack => self.web_view.go_back(),

@@ -89,6 +89,7 @@ fn view(h: &Harness, extra: Vec<UserScript>) -> ViewId {
             height: 240,
             scale: 1.0,
         },
+        block_network: false,
     })
 }
 

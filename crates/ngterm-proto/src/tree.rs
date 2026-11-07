@@ -439,6 +439,10 @@ pub struct ControlHtmlOverlayNode {
     pub image: Option<String>,
     #[serde(default)]
     pub markdown: Option<String>,
+    /// An HTML file a terminal click opened, shown with no file grant, bridge or page JavaScript (upstream's
+    /// `document`).
+    #[serde(default)]
+    pub document: Option<String>,
     /// A text page's source (upstream's `ControlTextOverlayNode`).
     #[serde(default)]
     pub text: Option<ControlTextOverlayNode>,

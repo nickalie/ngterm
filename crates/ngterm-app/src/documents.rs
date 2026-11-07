@@ -1,5 +1,5 @@
-//! Bounded local image/Markdown/text reads (upstream `ImageProbe.swift`, `MarkdownProbe.swift`, `TextProbe.swift`,
-//! `BoundedFile`).
+//! Bounded local image/Markdown/text/HTML reads (upstream `ImageProbe.swift`, `MarkdownProbe.swift`, `TextProbe.swift`,
+//! `DocumentProbe.swift`, `BoundedFile`).
 //! Click handlers and renderers call these services on a worker thread. The control path performs its initial
 //! probe synchronously, matching upstream; even opening a regular file can wait on network storage.
 
@@ -9,6 +9,7 @@ use std::io::{Cursor, Read as _};
 use std::path::{Path, PathBuf};
 
 use image::{ImageDecoder as _, ImageFormat, ImageReader};
+use ngterm_core::html::document_page;
 use ngterm_core::html::image_page::{self, ImageData};
 use ngterm_core::html::markdown_page::{self, Embedded, MarkdownDocument};
 use ngterm_core::html::text_page;
@@ -180,6 +181,33 @@ pub fn load_text(path: &Path) -> Result<String, String> {
 /// [`load_text`]'s refusals.
 pub fn check_text(path: &Path) -> Result<(), String> {
     load_text(path).map(|_| ())
+}
+
+/// Read a clicked HTML file and build its page with `page` ([`document_page::page`], or [`document_page::chromium_page`]
+/// for a Chromium engine), as upstream's `DocumentProbe.load` does: the read checks the content, so a binary file fails
+/// a click and is revealed instead of opening a failed page.
+///
+/// # Errors
+/// Upstream's document-probe refusal: `unreadable html file: P` (missing, not a regular file, unreadable), `html file
+/// too large (over 4 MB): P`, `not a UTF-8 html file: P` (invalid UTF-8 or a NUL byte).
+pub fn load_document(path: &Path, page: fn(Vec<u8>) -> Option<String>) -> Result<String, String> {
+    let bytes = bounded_read(path, document_page::MAX_BYTES).map_err(|failure| match failure {
+        Failure::Unreadable => format!("unreadable html file: {}", path.display()),
+        Failure::TooLarge => format!(
+            "html file too large (over {} MB): {}",
+            document_page::MAX_BYTES >> 20,
+            path.display()
+        ),
+    })?;
+    page(bytes).ok_or_else(|| format!("not a UTF-8 html file: {}", path.display()))
+}
+
+/// [`load_document`] with the page dropped: what a click checks before the page takes its slot.
+///
+/// # Errors
+/// [`load_document`]'s refusals.
+pub fn check_document(path: &Path) -> Result<(), String> {
+    load_document(path, document_page::page).map(|_| ())
 }
 
 fn embed(markdown: &str, folder: &Path) -> Embedded {

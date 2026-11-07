@@ -337,6 +337,8 @@ pub enum PageSourceSnapshot {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         line: Option<i64>,
     },
+    /// A clicked HTML file.
+    Document { path: String },
 }
 
 /// One page open in a session's overlay slot, written so the next launch opens it again (an extension beyond

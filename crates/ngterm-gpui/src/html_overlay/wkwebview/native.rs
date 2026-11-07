@@ -95,6 +95,11 @@ pub enum Report {
     Key(gpui_kit::Keystroke),
     /// A replaced theme script is in place: later loads wear it.
     ThemeInstalled,
+    /// The network filter of a page that blocks the network ([`Spec::block_network`]) is in place: its document may
+    /// load.
+    NetworkFilterInstalled,
+    /// That filter could not be installed: the page loads nothing.
+    NetworkFilterFailed(String),
 }
 
 /// Decides a navigation at once.
@@ -151,6 +156,9 @@ pub struct Spec {
     pub grant: Option<Grant>,
     pub replica: Option<ReplicaRead>,
     pub text: Option<Text>,
+    /// The page loads nothing from the network ([`ngterm_core::html::HtmlOverlay::blocks_network`]): a content rule
+    /// list blocking every network scheme goes on it, reported once in place.
+    pub block_network: bool,
     pub decide: Decide,
     pub post: Post,
     pub take_key: TakeKey,
@@ -183,6 +191,25 @@ unsafe extern "C" {
     fn ngterm_web_reply(view: *mut c_void, json: *const c_char);
     fn ngterm_web_theme(view: *mut c_void, script: *const c_char);
     fn ngterm_web_document_script(view: *mut c_void, script: *const c_char, world: *const c_char);
+    fn ngterm_web_block_network(
+        view: *mut c_void,
+        context: *mut c_void,
+        done: extern "C" fn(*mut c_void, bool, *const c_char),
+    );
+}
+/// The rule list's answer: the page's post, given back once.
+extern "C" fn network_blocked(context: *mut c_void, installed: bool, message: *const c_char) {
+    // SAFETY: the Box leaked for this install, which the adapter answers exactly once on the main thread.
+    let post = unsafe { Box::from_raw(context.cast::<Post>()) };
+    let report = if installed {
+        Report::NetworkFilterInstalled
+    } else if message.is_null() {
+        Report::NetworkFilterFailed("the content rule list did not compile".to_owned())
+    } else {
+        // SAFETY: the adapter passes a live NUL-terminated message for this call.
+        Report::NetworkFilterFailed(unsafe { CStr::from_ptr(message) }.to_string_lossy().into_owned())
+    };
+    post(report);
 }
 extern "C" fn decide(
     context: *mut c_void,
@@ -296,6 +323,17 @@ impl Native {
                     objc2::rc::Retained::as_ptr(&view.webview()).cast_mut().cast::<c_void>(),
                     script.as_ptr(),
                     world.as_ptr(),
+                );
+            }
+        }
+        if spec.block_network {
+            let context = Box::into_raw(Box::new(spec.post.clone())).cast();
+            // SAFETY: a main-thread web view; the completion takes the context back once.
+            unsafe {
+                ngterm_web_block_network(
+                    objc2::rc::Retained::as_ptr(&view.webview()).cast_mut().cast::<c_void>(),
+                    context,
+                    network_blocked,
                 );
             }
         }

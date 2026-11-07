@@ -619,6 +619,48 @@ void ngterm_web_theme(void *pointer, const char *script) {
     [controller addUserScript:theme];
 }
 
+// The rule list a clicked HTML document loads behind: it blocks every network
+// load, which the page's CSP cannot do alone, since WebKit checks preconnect
+// and DNS-prefetch hints against rule lists only (upstream's DocumentRules).
+// Content-blocker patterns have no alternation, so each scheme gets its own
+// rule. Compiled once; a failed compile is tried again for the next page.
+static WKContentRuleList *ngterm_network_rules;
+void ngterm_web_block_network(void *pointer, void *context,
+                              void (*done)(void *, bool, const char *)) {
+  WKUserContentController *controller =
+      [(__bridge WKWebView *)pointer configuration].userContentController;
+  void (^install)(void) = ^{
+    // only a document page carries a rule list, so replacing them keeps a
+    // rebuilt page from stacking them
+    [controller removeAllContentRuleLists];
+    [controller addContentRuleList:ngterm_network_rules];
+    done(context, true, NULL);
+  };
+  if (ngterm_network_rules) {
+    install();
+    return;
+  }
+  NSString *source =
+      @"[{\"trigger\":{\"url-filter\":\"^https?://\"},\"action\":{\"type\":"
+      @"\"block\"}},{\"trigger\":{\"url-filter\":\"^wss?://\"},\"action\":{"
+      @"\"type\":\"block\"}},{\"trigger\":{\"url-filter\":\"^ftps?://\"},"
+      @"\"action\":{\"type\":\"block\"}}]";
+  [WKContentRuleListStore.defaultStore
+      compileContentRuleListForIdentifier:@"ngterm.document"
+                   encodedContentRuleList:source
+                        completionHandler:^(WKContentRuleList *list,
+                                            NSError *error) {
+                          if (list && !ngterm_network_rules)
+                            ngterm_network_rules = list;
+                          if (ngterm_network_rules) {
+                            install();
+                          } else {
+                            done(context, false,
+                                 error.localizedDescription.UTF8String);
+                          }
+                        }];
+}
+
 void ngterm_clipboard_html(const char *text, const char *html) {
   NSPasteboard *board = NSPasteboard.generalPasteboard;
   [board clearContents];

@@ -353,6 +353,7 @@ pub(crate) fn navigate(
         match shown.source {
             HtmlSource::Markdown { .. } => return Err(ControlError::rejected(errors::MARKDOWN_IN_OVERLAY)),
             HtmlSource::Text { .. } => return Err(ControlError::rejected(errors::TEXT_IN_OVERLAY)),
+            HtmlSource::Document { .. } => return Err(ControlError::rejected(errors::DOCUMENT_IN_OVERLAY)),
             _ => {}
         }
     }

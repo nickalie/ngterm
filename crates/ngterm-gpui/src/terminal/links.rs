@@ -369,9 +369,11 @@ pub fn click_intent(mods: Mods, origin: Option<ClickOrigin>, captured: bool, cx:
 pub fn follow_link(raw: &str, mode: LinkOpenMode, origin: ClickOrigin, cx: &App) {
     match link_policy::route(raw, mode, origin) {
         Route::Browser(url) | Route::Overlay { url, .. } => cx.open_url(&url),
-        Route::Reveal(path) | Route::Image { path, .. } | Route::Markdown { path, .. } | Route::Text { path, .. } => {
-            cx.reveal_path(&path);
-        }
+        Route::Reveal(path)
+        | Route::Image { path, .. }
+        | Route::Markdown { path, .. }
+        | Route::Document { path, .. }
+        | Route::Text { path, .. } => cx.reveal_path(&path),
         Route::Ignore => tracing::debug!(raw, "link click ignored by the link policy"),
     }
 }

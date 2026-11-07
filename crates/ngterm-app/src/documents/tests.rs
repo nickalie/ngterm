@@ -346,6 +346,58 @@ fn text_reads_back_and_refuses_missing_directories_oversize_and_binaries() {
     }
 }
 
+/// Upstream's `DocumentProbeTests`: an HTML file loads as its page, the policy placed; one over the cap is too large, a
+/// binary one is no text, and a missing file or a directory is unreadable.
+#[test]
+fn an_html_file_loads_as_its_page_and_refuses_missing_directories_oversize_and_binaries() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "pr.html", "<h1>pr</h1>");
+    let page = document_page::page(b"<h1>pr</h1>".to_vec()).unwrap();
+    assert_eq!(load_document(&path, document_page::page).unwrap(), page);
+    assert!(
+        load_document(&path, document_page::chromium_page)
+            .unwrap()
+            .contains(document_page::NO_DNS_PREFETCH)
+    );
+    check_document(&path).unwrap();
+    let big = write(dir.path(), "big.html", []);
+    File::options()
+        .write(true)
+        .open(&big)
+        .unwrap()
+        .set_len((document_page::MAX_BYTES + 1) as u64)
+        .unwrap();
+    assert_eq!(
+        check_document(&big).unwrap_err(),
+        format!("html file too large (over 4 MB): {}", big.display())
+    );
+    let binary = write(dir.path(), "blob.html", [0x3C, 0x00, 0x3E]);
+    assert_eq!(
+        check_document(&binary).unwrap_err(),
+        format!("not a UTF-8 html file: {}", binary.display())
+    );
+    let folder = dir.path().join("sub.html");
+    fs::create_dir(&folder).unwrap();
+    let missing = dir.path().join("missing.html");
+    for unreadable in [folder, missing] {
+        assert_eq!(
+            check_document(&unreadable).unwrap_err(),
+            format!("unreadable html file: {}", unreadable.display())
+        );
+    }
+    #[cfg(unix)]
+    {
+        let fifo = dir.path().join("pipe.html");
+        let raw = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: a NUL-terminated path in a private temporary directory.
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        assert_eq!(
+            check_document(&fifo).unwrap_err(),
+            format!("unreadable html file: {}", fifo.display())
+        );
+    }
+}
+
 #[test]
 fn canonical_aliases_embed_one_payload_and_failures_consume_probe_budget() {
     let dir = tempfile::tempdir().unwrap();

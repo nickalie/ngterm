@@ -34,7 +34,7 @@ def test_image_page_reads_back_its_source(ctl):
         assert_ok(ctl.request("session.overlay.open", sid, image=str(path)))
         page = _page(ctl, sid)
         assert_subset(page, {"image": str(path), "javascript": False})
-        assert_absent(page, "file", "url", "markdown", "cwd")
+        assert_absent(page, "file", "url", "markdown", "document", "cwd")
         assert find_session(ctl.tree(), sid)["overlaySizePercent"] == 95
     finally:
         ctl.request("session.close", sid)
@@ -49,7 +49,7 @@ def test_markdown_page_reads_back_its_source(ctl):
         assert_ok(ctl.request("session.overlay.open", sid, markdownFile=str(path)))
         page = _page(ctl, sid)
         assert_subset(page, {"markdown": str(path), "javascript": False})
-        assert_absent(page, "file", "url", "image", "cwd")
+        assert_absent(page, "file", "url", "image", "document", "cwd")
         # Reload current is still the authored Markdown file, even though its generated page is about:blank.
         path.write_text("# Rewritten Heading\n", encoding="utf-8")
         assert_ok(ctl.request("session.overlay.reload", sid, current=True))
@@ -111,7 +111,7 @@ def test_text_page_reads_back_its_source(ctl):
         page = _page(ctl, sid)
         assert page["text"] == {"file": str(path), "language": "go", "line": 3}, page
         assert page["javascript"] is False
-        assert_absent(page, "file", "url", "image", "markdown", "cwd")
+        assert_absent(page, "file", "url", "image", "markdown", "document", "cwd")
         assert_error(ctl.request("session.overlay.navigate", sid, to="browser"),
                      "a text page opens only in its overlay")
         assert_error(ctl.request("session.overlay.navigate", sid, to="finder"),

@@ -1302,6 +1302,40 @@ fn a_markdown_path_ending_a_sentence_opens_the_file_without_the_period() {
     );
 }
 
+/// The clicked HTML page open over `session`, by its file, with whether its page JavaScript is on.
+fn document_page(state: &AppState, session: Uuid) -> Option<(String, bool)> {
+    let found = state.core.library().store_for_session(session)?.session(session)?;
+    found
+        .html_overlays()
+        .into_iter()
+        .find_map(|(_, page)| match &page.source {
+            ngterm_core::html::HtmlSource::Document { path } => Some((path.clone(), page.flags.javascript)),
+            _ => None,
+        })
+}
+
+/// Upstream's `testAClickedHtmlFileOpensAsADocumentAndAnUnreadableOneOpensNothing` and
+/// `testAPaneHtmlPathOpensAtItsModeSizeAndRevealsWhenItCannot`: a missing or binary HTML file opens nothing and is
+/// revealed; a readable one opens as a document page with its scripts off.
+#[test]
+fn a_clicked_html_file_opens_as_a_document_and_an_unreadable_one_is_revealed() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let missing = directory.path().join("missing.html");
+    click(&mut state, &main_loop, &missing.to_string_lossy(), session, "T");
+    let binary = directory.path().join("blob.html");
+    std::fs::write(&binary, [0x3C, 0x00]).unwrap();
+    click(&mut state, &main_loop, &binary.to_string_lossy(), session, "T");
+    assert_eq!(state.frontend.reveals, [missing, binary]);
+    assert_eq!(document_page(&state, session), None);
+
+    let page = directory.path().join("pr.html");
+    std::fs::write(&page, "<title>pr</title><script>document.title = 'ran'</script>").unwrap();
+    click(&mut state, &main_loop, "./pr.html", session, "T");
+    let file = page.to_string_lossy().into_owned();
+    assert_eq!(document_page(&state, session), Some((file, false)));
+    assert_eq!(state.frontend.reveals.len(), 2);
+}
+
 #[test]
 fn the_reveal_chord_reveals_and_never_opens() {
     let (mut state, (main_loop, _held), session, directory) = text_fixture();

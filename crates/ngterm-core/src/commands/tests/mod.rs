@@ -9,6 +9,7 @@ mod attach_remote;
 mod attention_nav;
 mod auto_follow;
 mod background;
+mod clicked_documents;
 mod companion_duplicate;
 mod companion_lists;
 mod companion_pages;

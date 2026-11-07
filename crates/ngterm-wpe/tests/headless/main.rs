@@ -22,6 +22,7 @@
 
 mod cases;
 mod dmabuf;
+mod document;
 mod interaction;
 mod markdown;
 mod support;

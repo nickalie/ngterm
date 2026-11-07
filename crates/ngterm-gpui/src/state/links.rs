@@ -19,6 +19,8 @@ use super::{AppState, post};
 enum Document {
     Image,
     Markdown,
+    /// A clicked HTML file, shown with no file grant, bridge or page JavaScript.
+    Html,
     /// A text page marked at its line.
     Text(Option<i64>),
 }
@@ -29,6 +31,7 @@ impl Document {
         match self {
             Self::Image => HtmlSource::Image { path },
             Self::Markdown => HtmlSource::Markdown { path },
+            Self::Html => HtmlSource::Document { path },
             Self::Text(line) => HtmlSource::Text { path, line },
         }
     }
@@ -135,6 +138,11 @@ impl AppState {
                 session,
                 size_percent,
             } => self.open_document_link(path, session, size_percent, Document::Markdown),
+            Route::Document {
+                path,
+                session,
+                size_percent,
+            } => self.open_document_link(path, session, size_percent, Document::Html),
             Route::Text {
                 path,
                 line,
@@ -159,6 +167,7 @@ impl AppState {
             let checked = match document {
                 Document::Image => ngterm_app::documents::probe_image(&path).map(Some),
                 Document::Markdown => ngterm_app::documents::check_markdown(&path).map(|()| None),
+                Document::Html => ngterm_app::documents::check_document(&path).map(|()| None),
                 Document::Text(_) => ngterm_app::documents::check_text(&path).map(|()| None),
             };
             post(&poster, move |state: &mut AppState| {

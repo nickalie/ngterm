@@ -249,7 +249,11 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
         HtmlSource::Replica { path } => (Some(path.clone()), None, None, None, None),
         HtmlSource::Image { path } => (None, None, None, Some(path.clone()), None),
         HtmlSource::Markdown { path } => (None, None, None, None, Some(path.clone())),
-        HtmlSource::Text { .. } => (None, None, None, None, None),
+        HtmlSource::Text { .. } | HtmlSource::Document { .. } => (None, None, None, None, None),
+    };
+    let document = match &page.source {
+        HtmlSource::Document { path } => Some(path.clone()),
+        _ => None,
     };
     // the language its name maps to, even past the highlight cap, and the line it was opened at, not the one in view
     let text = match &page.source {
@@ -268,6 +272,7 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
         url,
         image,
         markdown,
+        document,
         text,
         state: page.load_state.wire_name().to_owned(),
         error: page.load_error.clone(),

@@ -286,25 +286,29 @@ bullets).
 **Conformance:** add `"document"` to the absent-field lists of `test_image_page_reads_back_its_source`,
 `test_markdown_page_reads_back_its_source` and Task 3's text test (no socket path opens a document).
 
-- [ ] `HtmlSource::Document { path }`, from a click only: no file grant, no bridge, JavaScript off, the file page's
+- [x] `HtmlSource::Document { path }`, from a click only: no file grant, no bridge, JavaScript off, the file page's
   theme, loaded as text with no base URL; identity is the file name. `document_page::page()` validates (no NUL,
   UTF-8, 4 MiB) and inserts `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:;
   style-src 'unsafe-inline'; font-src data:; media-src data:">` right after a leading doctype (only HTML ASCII
   whitespace before it, case-insensitive), otherwise first. Probe strings "unreadable html file: P", "html file
   too large (over 4 MB): P", "not a UTF-8 html file: P".
-- [ ] Routing: `.html`/`.htm` checked before text eligibility; a pane or the scratch -> `Route::Document` at the
+- [x] Routing: `.html`/`.htm` checked before text eligibility; a pane or the scratch -> `Route::Document` at the
   mode's size; sessionless origins and refusals reveal. Navigation shares the Markdown arm; browser hand-off
   refuses "a clicked html page opens only in its overlay"; Finder "show in Finder requires a file page". Tree
   `htmlOverlays[].document = path`.
-- [ ] Network blocking before load, or the page fails with "the network filter for a clicked html page could not be
+- [x] Network blocking before load, or the page fails with "the network filter for a clicked html page could not be
   installed": macOS a WKContentRuleList blocking `^https?://`, `^wss?://`, `^ftps?://`; Linux the same rules through
   WPE's user content filter (verify WPE applies it to preconnect hints); Windows cancel http(s)/ws in the existing
   `WebResourceRequested` filter (`webview2/native.rs:603-645`) plus `x-dns-prefetch-control` off, and close or
   record the preconnect gap (research it in this task; strip `<link rel=preconnect|dns-prefetch|prefetch|prerender>`
-  if no engine switch exists).
-- [ ] write tests: document_page placement and refusals; link_policy cases; navigation; projection; probes; gpui
+  if no engine switch exists). (Linux: verified in real WPE that the filter stops the preconnect hint, which reaches
+  a local listener without it. Windows has no per-page engine switch for link hints: every `<link>` is made inert
+  instead, `document_page::chromium_page`.)
+- [x] write tests: document_page placement and refusals; link_policy cases; navigation; projection; probes; gpui
   state and registry (JS off, no bridge, filter installed before load); manual check with a `<script>`, a remote
-  `<img>` and a preconnect on each OS (a local listener sees nothing).
+  `<img>` and a preconnect on each OS (a local listener sees nothing). (Linux automated instead of a manual run:
+  `ngterm-wpe`'s headless `a_clicked_document_loads_nothing_from_the_network_behind_its_filter` and its unfiltered
+  control; macOS and Windows not run by hand here: CI builds and tests their code, a device check stays open.)
 
 ### Task 6: A click replaces a hidden page an earlier click opened (#880)
 
