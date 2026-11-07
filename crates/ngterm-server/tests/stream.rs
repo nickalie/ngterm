@@ -2,6 +2,7 @@
 //! named pipe on Windows) named by a path in a temp dir. A pair is a connection the server accepted and handed over,
 //! with its client, so the streams run on what the app's do on every OS.
 
+use std::cell::Cell;
 use std::error::Error;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -503,4 +504,147 @@ fn an_abandoned_line_stream_owner_reports_its_close() -> TestResult {
     assert_eq!(seen.recv_timeout(TIMEOUT)?, Seen::Closed);
     assert!(!stream.send(b"late".to_vec()), "the stream is shut");
     Ok(())
+}
+
+#[test]
+fn a_second_run_drops_its_connection_and_calls_nothing() -> TestResult {
+    let stream = LineStream::new(LIMITS);
+    let (mut peer, opened, runner) = run_on_pair(&stream)?;
+    let (mut second_peer, second) = pair()?;
+    let calls = Cell::new(0);
+    stream.run(
+        second,
+        b"never\n",
+        |_| calls.set(calls.get() + 1),
+        || calls.set(calls.get() + 1),
+    );
+    assert_eq!(calls.get(), 0, "a second run called back");
+    let mut rest = Vec::new();
+    second_peer.read_to_end(&mut rest)?;
+    assert_eq!(rest, b"", "the second connection was kept");
+
+    // the first run carries on
+    peer.say("still here")?;
+    assert_eq!(peer.line()?, "echo:still here\n");
+    stream.shutdown();
+    assert_eq!(peer.line()?, "");
+    opened.assert_closed_once()?;
+    runner.join().map_err(|_| "runner panicked")?;
+    Ok(())
+}
+
+/// [`LineStreamLimits::write_timeout`]: a zero one cannot be set on the socket, and the stream closes as soon as it
+/// runs, its queued lines unwritten.
+#[test]
+fn a_zero_write_timeout_closes_the_stream_as_it_runs() -> TestResult {
+    let stream = LineStream::new(LineStreamLimits {
+        write_timeout: Duration::ZERO,
+        ..LIMITS
+    });
+    assert!(stream.send(b"never written".to_vec()));
+    let (mut peer, opened, runner) = run_on_pair(&stream)?;
+    let mut rest = Vec::new();
+    peer.reader.read_to_end(&mut rest)?;
+    assert_eq!(rest, b"");
+    opened.assert_closed_once()?;
+    runner.join().map_err(|_| "runner panicked")?;
+    Ok(())
+}
+
+/// A peer that hangs up with a line it never read still closes the stream, long before the write timeout would.
+#[test]
+fn a_peer_hanging_up_mid_line_closes_the_stream() -> TestResult {
+    let stream = LineStream::new(LineStreamLimits {
+        write_timeout: Duration::from_secs(600),
+        ..LIMITS
+    });
+    let (mut peer, opened, runner) = run_on_pair(&stream)?;
+    // far more than the connection buffers: the writer blocks with the rest of it queued at the peer
+    assert!(stream.send(vec![b'x'; 4 << 20]));
+    let mut first = [0_u8; 1];
+    peer.writer.read_exact(&mut first)?;
+    assert_eq!(&first, b"x");
+    drop(peer);
+    opened.assert_closed_once()?;
+    runner.join().map_err(|_| "runner panicked")?;
+    Ok(())
+}
+
+/// A line that shuts the stream down is the last one delivered, even with more already received behind it.
+#[test]
+fn nothing_is_delivered_after_a_line_shuts_the_stream() -> TestResult {
+    let stream = LineStream::new(LIMITS);
+    let (mut peer, ours) = pair()?;
+    peer.write_all(b"after\n")?;
+    let mut lines = Vec::new();
+    let mut closed = false;
+    let stopper = stream.clone();
+    stream.run(
+        ours,
+        b"stop\n",
+        |line| {
+            lines.push(line.to_vec());
+            stopper.shutdown();
+        },
+        || closed = true,
+    );
+    assert_eq!(lines, vec![b"stop".to_vec()]);
+    assert!(closed, "on_close never ran");
+    let mut rest = Vec::new();
+    peer.read_to_end(&mut rest)?;
+    assert_eq!(rest, b"");
+    Ok(())
+}
+
+#[test]
+fn a_settled_reply_is_the_one_its_sender_sent() {
+    let ready = Reply::from(Response::failure("ready")).settled();
+    assert_eq!(ready.response, Response::failure("ready"));
+
+    let (reply, sender) = Reply::deferred();
+    sender.send(Response::failure("sent later"));
+    assert_eq!(reply.settled().response, Response::failure("sent later"));
+
+    // answered with another deferred reply, it waits that one out too
+    let (outer, first) = Reply::deferred();
+    let (inner, second) = Reply::deferred();
+    first.send(inner);
+    second.send(Response::with_result(serde_json::json!(7)));
+    assert_eq!(outer.settled().response, Response::with_result(serde_json::json!(7)));
+}
+
+#[test]
+fn a_deferred_reply_whose_sender_is_dropped_settles_as_shutting_down() {
+    let (reply, sender) = Reply::deferred();
+    drop(sender);
+    let settled = reply.settled();
+    assert_eq!(settled.response, Response::failure("the app is shutting down"));
+    assert!(settled.stream.is_none());
+}
+
+/// A connection gone before its deferred answer drops the answer: sending it neither blocks nor panics.
+#[test]
+fn a_deferred_answer_to_a_gone_connection_is_dropped() {
+    let (reply, sender) = Reply::deferred();
+    drop(reply);
+    sender.send(Response::success());
+}
+
+#[test]
+fn replies_and_line_stream_owners_debug_print_what_they_carry() {
+    let plain = format!("{:?}", Reply::from(Response::success()));
+    assert!(plain.starts_with("Reply { response: "), "{plain}");
+    assert!(plain.ends_with("streams: false, deferred: false }"), "{plain}");
+    let deferred = format!("{:?}", Reply::deferred().0);
+    assert!(deferred.ends_with("streams: false, deferred: true }"), "{deferred}");
+
+    let stream = LineStream::new(LIMITS);
+    let (owner, _seen) = recording_owner(&stream);
+    let streaming = format!("{:?}", Reply::streaming(Response::success(), Box::new(owner)));
+    assert!(streaming.ends_with("streams: true, deferred: false }"), "{streaming}");
+
+    let (owner, _seen) = recording_owner(&stream);
+    let owner = format!("{owner:?}");
+    assert!(owner.starts_with("LineStreamOwner { stream: LineStream { "), "{owner}");
+    assert!(owner.ends_with(", .. }"), "{owner}");
 }

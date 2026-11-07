@@ -7,8 +7,8 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
@@ -19,7 +19,7 @@ use ngterm_host::fakes::FakeMainLoop;
 use ngterm_proto::{AppIdentity, MAX_REQUEST_LINE_BYTES, Request, Response, VersionResult};
 #[cfg(unix)]
 use ngterm_server::MAX_SOCKET_PATH_BYTES;
-use ngterm_server::{Connection, ConnectionDeadlines, ControlServer, Reply, ServerError, StreamOwner};
+use ngterm_server::{Connection, ConnectionDeadlines, ControlServer, Reply, ReplySender, ServerError, StreamOwner};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -537,6 +537,122 @@ fn stale_socket_file_is_replaced() -> TestResult {
     assert_version_ok(&socket)
 }
 
+#[test]
+fn a_second_start_keeps_serving_on_the_same_socket() -> TestResult {
+    let mut fixture = start_core()?;
+    assert_eq!(fixture.server.socket_path(), fixture.socket);
+    let main_loop = Arc::clone(&fixture.main_loop) as Arc<dyn MainLoop<Core>>;
+    // a handler that would fail every request: a running server keeps its own
+    fixture.server.start(main_loop, |_: &mut Core, _: Request| {
+        Response::failure("replaced").into()
+    })?;
+    assert!(fixture.server.is_running());
+    assert_version_ok(&fixture.socket)
+}
+
+#[test]
+fn a_stopped_server_starts_again_and_takes_the_lock_back() -> TestResult {
+    let mut fixture = start_core()?;
+    fixture.server.stop();
+    let main_loop = Arc::clone(&fixture.main_loop) as Arc<dyn MainLoop<Core>>;
+    fixture.server.start(main_loop, core_handler())?;
+    assert!(fixture.server.is_running());
+    assert!(!fixture.server.is_refused());
+    assert_version_ok(&fixture.socket)?;
+    assert!(
+        ControlServer::new(&fixture.socket).is_refused(),
+        "the restarted server does not hold the lock"
+    );
+    Ok(())
+}
+
+/// A lock that cannot be taken (here its directory cannot be made: a file stands where it should be) is no refusal:
+/// the instance advertises the socket itself and its start reports the lock's failure.
+#[test]
+fn an_unlockable_socket_is_advertised_and_fails_to_start() -> TestResult {
+    let dir = short_dir()?;
+    let blocker = dir.path().join("file");
+    fs::write(&blocker, b"not a directory")?;
+    let socket = blocker.join("ngterm.sock");
+    let mut server = ControlServer::new(&socket);
+    assert!(!server.is_refused());
+    assert_eq!(server.advertised_path(), socket);
+
+    let main_loop: Arc<dyn MainLoop<Core>> = Arc::new(core_loop()?);
+    let lock = ownership_lock_path(&socket);
+    match server.start(main_loop, core_handler()) {
+        Err(error @ ServerError::Lock { .. }) => {
+            let text = error.to_string();
+            let expected = format!("cannot lock {}: ", lock.display());
+            assert!(text.starts_with(&expected), "{text}");
+            assert!(
+                matches!(&error, ServerError::Lock { path, .. } if *path == lock),
+                "{error:?}"
+            );
+        }
+        other => return Err(format!("not a lock error: {other:?}").into()),
+    }
+    assert!(!server.is_running());
+    assert!(!server.is_refused());
+    Ok(())
+}
+
+/// Unix only: a directory at the path is no stale socket to replace, so the bind fails; the lock stays held, so no
+/// other instance binds the path this one may advertise.
+#[cfg(unix)]
+#[test]
+fn a_directory_at_the_socket_path_fails_the_bind_and_keeps_the_lock() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    fs::create_dir(&socket)?;
+    let main_loop: Arc<dyn MainLoop<Core>> = Arc::new(core_loop()?);
+    let mut server = ControlServer::new(&socket);
+    match server.start(Arc::clone(&main_loop), core_handler()) {
+        Err(error @ ServerError::Bind { .. }) => {
+            let text = error.to_string();
+            let expected = format!("cannot bind {}: ", socket.display());
+            assert!(text.starts_with(&expected), "{text}");
+        }
+        other => return Err(format!("not a bind error: {other:?}").into()),
+    }
+    assert!(!server.is_running());
+    assert!(socket.is_dir(), "the bind removed what it could not replace");
+    assert!(
+        ControlServer::new(&socket).is_refused(),
+        "a failed bind let the lock go"
+    );
+
+    fs::remove_dir(&socket)?;
+    server.start(main_loop, core_handler())?;
+    assert_version_ok(&socket)
+}
+
+/// Unix only: a server whose socket was replaced behind its back (here by a directory) cannot wake its accept thread
+/// through it; its stop still returns, leaves what stands at the path alone and lets the lock go.
+#[cfg(unix)]
+#[test]
+fn stop_returns_when_the_socket_was_replaced() -> TestResult {
+    let mut fixture = start_core()?;
+    fs::remove_file(&fixture.socket)?;
+    fs::create_dir(&fixture.socket)?;
+    let (done_tx, done) = mpsc::channel();
+    let stopper = thread::spawn(move || {
+        fixture.server.stop();
+        done_tx.send(()).ok();
+        fixture
+    });
+    done.recv_timeout(CLIENT_TIMEOUT)
+        .map_err(|_| "the stop never returned")?;
+    let fixture = stopper.join().map_err(|_| "the stop panicked")?;
+    assert!(!fixture.server.is_running());
+    assert!(fixture.socket.is_dir());
+    assert!(
+        !ControlServer::new(&fixture.socket).is_refused(),
+        "the stopped server kept the lock"
+    );
+    Ok(())
+}
+
 /// Echoes the line the client sends after the request line, then closes.
 struct Echo;
 
@@ -638,6 +754,110 @@ fn stream_owner_takes_only_an_ok_connection() -> TestResult {
         assert!(std::time::Instant::now() < deadline, "the owner was never abandoned");
         thread::sleep(Duration::from_millis(5));
     }
+    Ok(())
+}
+
+/// Hands the connection to the test when it adopts one; it keeps the default `abandon`.
+struct Taker(mpsc::Sender<Connection>);
+
+impl StreamOwner for Taker {
+    fn adopt(self: Box<Self>, stream: Connection, _pending: Vec<u8>) {
+        self.0.send(stream).ok();
+    }
+}
+
+#[test]
+fn an_owner_of_a_failed_reply_never_gets_the_connection() -> TestResult {
+    let (taken_tx, taken) = mpsc::channel();
+    let fixture = start((), move |(), _: Request| {
+        Reply::streaming(Response::failure("refused"), Box::new(Taker(taken_tx.clone())))
+    })?;
+    let mut stream = connect(&fixture.socket)?;
+    stream.write_all(VERSION)?;
+    stream.write_all(b"\n")?;
+    let mut reader = BufReader::new(&stream);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    assert_eq!(serde_json::from_str::<Response>(&line)?, Response::failure("refused"));
+    // the server closes the connection instead of handing it over
+    line.clear();
+    assert_eq!(reader.read_line(&mut line)?, 0, "{line:?}");
+    assert!(taken.try_recv().is_err(), "the owner adopted a failed connection");
+    Ok(())
+}
+
+/// The handler's state for deferred replies: the senders it holds until a `version` request finishes them.
+type Deferred = Vec<ReplySender>;
+
+fn defer_tree_finish_on_version(deferred: &mut Deferred, request: &Request) -> Reply {
+    if request.cmd == ngterm_proto::Command::Tree {
+        let (reply, sender) = Reply::deferred();
+        deferred.push(sender);
+        return reply;
+    }
+    if deferred.is_empty() {
+        return Response::failure("nothing deferred yet").into();
+    }
+    for sender in deferred.drain(..) {
+        sender.send(Response::with_result(json!("finished later")));
+    }
+    Response::success().into()
+}
+
+#[test]
+fn a_deferred_reply_holds_its_connection_not_the_main_loop() -> TestResult {
+    let fixture = start(Deferred::new(), |deferred: &mut Deferred, request: Request| {
+        defer_tree_finish_on_version(deferred, &request)
+    })?;
+    let mut waiting = connect(&fixture.socket)?;
+    waiting.write_all(br#"{"cmd":"tree"}"#)?;
+    waiting.write_all(b"\n")?;
+    // the main loop keeps answering while the deferred connection waits; the first `ok` finished it
+    let deadline = Instant::now() + CLIENT_TIMEOUT;
+    while answer(&fixture.socket, VERSION)? != Response::success() {
+        assert!(
+            Instant::now() < deadline,
+            "the deferred request never reached the handler"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        read_response(&waiting)?,
+        Some(Response::with_result(json!("finished later")))
+    );
+    Ok(())
+}
+
+#[test]
+fn a_deferred_reply_dropped_unsent_answers_shutting_down() -> TestResult {
+    let fixture = start((), |(), _: Request| Reply::deferred().0)?;
+    assert_eq!(
+        answer(&fixture.socket, VERSION)?,
+        Response::failure("the app is shutting down")
+    );
+    Ok(())
+}
+
+/// A deferred reply may be answered with another deferred one, and the reply that finally settles it may stream.
+#[test]
+fn a_deferred_reply_may_defer_again_and_then_stream() -> TestResult {
+    let fixture = start((), |(), _: Request| {
+        let (outer, first) = Reply::deferred();
+        let (inner, second) = Reply::deferred();
+        first.send(inner);
+        second.send(Reply::streaming(Response::success(), Box::new(Echo)));
+        outer
+    })?;
+    let mut stream = connect(&fixture.socket)?;
+    stream.write_all(VERSION)?;
+    stream.write_all(b"\nframe\n")?;
+    let mut reader = BufReader::new(&stream);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    assert_eq!(serde_json::from_str::<Response>(&line)?, Response::success());
+    line.clear();
+    reader.read_line(&mut line)?;
+    assert_eq!(line, "echo:frame\n");
     Ok(())
 }
 
