@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Check the structural invariants .github/workflows/release.yml keeps around its keys
-(docs/plans/20261105-release-signing.md, Overview and Task 9). Each check reads the parsed workflow, not its text, so a
-line can't slip from one job to another:
+"""Check the structural invariants .github/workflows/release.yml keeps around its keys (docs/release-signing.md;
+docs/plans/completed/20261105-release-signing.md, Overview and Task 9). Each check reads the parsed workflow, not its
+text, so a line can't slip from one job to another:
 
 - builders: a job that builds (cargo, Gradle, Xcode, a packaging or staging script, a build cache) uses no
   environment, so no build step and no `build.rs` ever runs where a secret is;
 - signers: a job that names the `release` environment needs `approve`, and its condition is a plain conjunction
   with `approve` succeeding; or, only when its environment is exactly `signed_run == 'true' && 'release' || ''` (so an
-  unsigned run gets none), with `approve` skipped on an unsigned run (the shape `macos-sign` and `android-sign` use). It restores
-  no cache (the cache actions, or a `setup-*` action's cache) and builds nothing;
+  unsigned run gets none), with `approve` skipped on an unsigned run (the shape `macos-sign` and `android-sign` use).
+  It restores no cache (the cache actions, or a `setup-*` action's cache) and builds nothing;
 - secrets: none at workflow or job level (`secrets.X` in any case, `secrets['X']`, `toJSON(secrets)`, a job's
   `secrets:`), only in a step's `env:`;
 - permissions: read-only at the workflow level; only `publish` widens them (and `windows-sign` and `play-upload`,

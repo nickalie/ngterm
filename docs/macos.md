@@ -25,8 +25,8 @@ not even prompt when a tool in a pane asks for the microphone, camera, contacts 
 bundle uses `ngterm-debug.entitlements`, the same set plus `get-task-allow`, so a debugger can attach.
 `scripts/sign-macos.sh check ngterm.app` checks that layout without running anything; the release workflow runs it on
 every published bundle and archive. Releases are signed with Developer ID and notarized, the DMG and PKG stapled, when
-the `release` environment holds the Apple secrets (`sign-macos.sh package`; the plan in
-`docs/plans/20261105-release-signing.md` lists them); dry runs sign with a throwaway identity instead.
+the `release` environment holds the Apple secrets (`sign-macos.sh package`; `docs/release-signing.md` and
+`docs/plans/20261107-apple-signing.md` list them); dry runs sign with a throwaway identity instead.
 
 A second launch forwards activation over an owner-only Unix socket, protected by a file lock that also serializes
 recovery after a crash. Application ids and state directories isolate dev instances. The state and configuration

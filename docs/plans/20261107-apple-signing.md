@@ -2,8 +2,9 @@
 
 ## Overview
 
-- Split from `docs/plans/20261105-release-signing.md` (user, 2026-11-07), which delivers the GitHub release with the
-  macOS packages ad-hoc signed and the iOS app as an unsigned IPA. This plan signs them for distribution:
+- Split from `docs/plans/completed/20261105-release-signing.md` (user, 2026-11-07), which delivers the GitHub
+  release with the macOS packages ad-hoc signed and the iOS app as an unsigned IPA. This plan signs them for
+  distribution:
   - macOS: Developer ID signing, notarization and stapling of the `.app.zip`, `.tar.gz`, DMG and PKG in the GitHub
     release, so they open with no Gatekeeper prompt;
   - the updater: an installed build accepts only a macOS update signed by ngterm's team;
@@ -254,8 +255,8 @@ Needs the release plan's rehearsal runs (its Task 4).
 - Modify: `.github/workflows/ios-release.yml`, `docs/ios-release.md`
 
 - [ ] metadata: name, subtitle, description, keywords, support and marketing URLs, the privacy policy URL (the Google
-      Play plan's Task 4 makes the page; whichever lands first makes it), the copyright line, review notes (how to reach a test host: the demo mode or a
-      reviewer-reachable sshd)
+      Play plan's Task 4 makes the page; whichever lands first makes it), the copyright line, review notes (how to
+      reach a test host: the demo mode or a reviewer-reachable sshd)
 - [ ] screenshots for the required display sizes (6.9" iPhone, 13" iPad) from the simulator with a scripted demo
       session, on the real Mac's Xcode
 - [ ] `appstore-listing.sh` uploads metadata and screenshots through the App Store Connect API to the version being
@@ -276,7 +277,8 @@ for Review.
 - [ ] the cask: `app "ngterm.app"` from each arch's notarized `.app.zip` (`on_arm`/`on_intel`), `binary` for
       `ngtermctl` inside the app, `depends_on macos: ">= :sonoma"`, `livecheck` on GitHub releases, a `zap` of the
       state and config dirs, and `auto_updates true`: the `.app.zip` keeps its `macos-bundle` update marker, so the
-      app updates itself and `brew upgrade` must not fight it; Linux: decide with Homebrew's Linux cask support at the time, else macOS only
+      app updates itself and `brew upgrade` must not fight it; Linux: decide with Homebrew's Linux cask support at
+      the time, else macOS only
 - [ ] `homebrew-cask.py` renders it from the version and the digests in `SHA256SUMS`; its self-test pins the output
 - [ ] job `homebrew` (publishing only, `environment: release`, after `publish`): renders the cask, checks it with
       `brew audit --cask --strict` and `brew style` on a macOS runner, and pushes `Casks/ngterm.rb` to the tap's

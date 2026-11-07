@@ -567,17 +567,19 @@ checker. That a signing job never starts a program it downloaded stays a review 
 
 ### Task 10: [Final] Documentation
 
-- [ ] `docs/release-signing.md` (the Apple, Windows, Google Play and AUR plans add their sections):
+- [x] `docs/release-signing.md` (the Apple, Windows, Google Play and AUR plans add their sections):
       - every secret and variable, with its source and the job that reads it;
       - the APK key (`keytool`, with the warning that it can't be reset; keep an offline backup);
       - minisign (`minisign -G -W`, filling `trust/minisign.pub`);
       - running `setup-release-protection.sh`; rehearsals; switching to `NGTERM_RELEASE_SIGNING=required` once the
         Apple and Windows plans sign too;
       - verifying downloads (`gh attestation verify`, `minisign -Vm`)
-- [ ] README: replace the release steps with a summary and a link to the page; say which assets are signed and which
+- [x] README: replace the release steps with a summary and a link to the page; say which assets are signed and which
       aren't yet (macOS without Developer ID, Windows without Authenticode, the IPA unsigned)
-- [ ] README: installing the APK
-- [ ] move this plan to `docs/plans/completed/`
+- [x] README: installing the APK
+- [x] ➕ `docs/macos.md` points at `docs/release-signing.md` for the Apple secrets; the five plans split from this one
+      and `scripts/check-release-workflow.py` point at this plan's `completed/` path
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 

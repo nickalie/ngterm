@@ -132,27 +132,22 @@ sudo apparmor_parser -r /etc/apparmor.d/ngterm
 
 For a tarball, use the same commands with its extracted `ngterm` directory in place of `squashfs-root`.
 
-macOS bundles are ad-hoc signed; the PKG and DMG are not Developer ID signed or notarized. Public downloads can
-require a manual Gatekeeper approval until release signing credentials are configured. Windows installers are
-currently unsigned as well. The iOS `.ipa` is unsigned and installs only once re-signed (with a sideloading tool or
-your own Xcode team); the signed app comes through TestFlight and the App Store. The Android `.apk` is signed with
-ngterm's own key, which the Google Play release will carry too, so either install updates the other; its certificate's
-SHA-256 is in `packaging/android/apk-certificate.sha256`.
+What is signed: the Android `.apk` with ngterm's own key (which the Google Play release will carry too, so either
+install updates the other; its certificate's SHA-256 is in `packaging/android/apk-certificate.sha256`), and every
+asset through `SHA256SUMS`, its minisign signature `SHA256SUMS.minisig` and a GitHub build provenance attestation.
+Not yet: macOS bundles are ad-hoc signed, not Developer ID signed or notarized, so a download can need a manual
+Gatekeeper approval; Windows installers are unsigned; the iOS `.ipa` is unsigned and installs only once re-signed (with
+a sideloading tool or your own Xcode team), while the signed app comes through TestFlight and the App Store.
+[docs/release-signing.md](docs/release-signing.md) has the details and how to verify a download
+(`minisign -Vm SHA256SUMS`, `gh attestation verify <file> --repo nickalie/ngterm`).
 
-To release, update the workspace version and lockfile, commit, then push the matching tag (for example `v0.1.0`).
-The `release` workflow builds, packages and verifies all five desktop platform/architecture combinations, the iOS
-app and the Android APK before uploading
-assets, `SHA256SUMS` and its minisign signature `SHA256SUMS.minisig` to a GitHub Release, with a build provenance
-attestation for each (`gh attestation verify <file> --repo nickalie/ngterm`), once the release reviewer approves its
-`approve` job. New releases stay drafts until uploads
-finish. Run by hand (`gh workflow run release --ref <ref>`), it is a dry run on any ref: it builds the platforms its
-**platforms** input names and keeps them as workflow artifacts. With **publish** enabled on a tag ref
-(`--ref vX.Y.Z -f publish=true`) it publishes, or re-uploads, that tag's assets. With **rehearse** enabled on a tag
-ref (`--ref vX.Y.Z -f rehearse=true`) it is a rehearsal: approved and signed exactly as a release, with the real
-credentials, but nothing is published; its **platforms** input can limit it to the platform whose credentials are
-being checked. Pushing the tag first starts a publishing run, and the rehearsal queues behind it: reject (or cancel)
-that run's approval, then approve the rehearsal's. A rehearsal tag stays on the commit it rehearsed, so the release
-itself is tagged from the final commit, at a patch version bumped in `Cargo.toml` past every rehearsal tag.
+To install the Android app, download the `.apk` on the device (or `adb install ngterm-<version>-android.apk`) and
+allow installs from that source when Android asks. Later releases install over it.
+
+To release, set the workspace version and lockfile, commit, and push the matching tag (for example `v0.1.0`); the
+`release` workflow waits for the release reviewer's approval, then builds, signs, verifies and publishes every
+platform. A dispatch with **rehearse** on a tag signs with the real keys and publishes nothing; one without it is a dry
+run on any ref. [docs/release-signing.md](docs/release-signing.md) covers the runs, the keys and the signing mode.
 Tag/version mismatches fail before any builds. Packaging tool versions, checksums, and the WPE source checksum live
 in `packaging/release/pins.env`; update the WPE source checksum and relocation patch when changing `WPE_VERSION`.
 

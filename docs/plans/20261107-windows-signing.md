@@ -2,8 +2,8 @@
 
 ## Overview
 
-- Split from `docs/plans/20261105-release-signing.md` (user, 2026-11-07), which delivers the GitHub release with the
-  Windows MSI and portable zip unsigned. This plan signs them:
+- Split from `docs/plans/completed/20261105-release-signing.md` (user, 2026-11-07), which delivers the GitHub
+  release with the Windows MSI and portable zip unsigned. This plan signs them:
   - Authenticode through SignPath Foundation (free code signing for open-source projects) on the four exes, inside the
     MSI and the portable zip, and on the MSI itself, so SmartScreen shows the publisher;
   - every exe carries a `VERSIONINFO` resource, which SignPath Foundation requires;

@@ -2,8 +2,8 @@
 
 ## Overview
 
-- Split from `docs/plans/20261105-release-signing.md` (user, 2026-11-07). That plan ships the Android APK, signed
-  with ngterm's own APK key, in the GitHub release. This plan takes the app to Google Play:
+- Split from `docs/plans/completed/20261105-release-signing.md` (user, 2026-11-07). That plan ships the Android APK,
+  signed with ngterm's own APK key, in the GitHub release. This plan takes the app to Google Play:
   - the App Bundle (AAB), built beside the APK and signed with the Play upload key; Play App Signing re-signs what
     users install with ngterm's own APK key, the one the GitHub APK carries;
   - a `play-upload` job that sends each release's bundle to the internal track through the Play Developer API, logged
