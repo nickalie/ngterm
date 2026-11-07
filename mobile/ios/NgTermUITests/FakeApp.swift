@@ -15,6 +15,8 @@ internal enum FakeApp {
     private static let nudgePress: TimeInterval = 0.05
     // where in a list a nudge starts: its middle
     private static let middle: CGFloat = 0.5
+    // the audit's checks that make the app's text larger, and so lay its screen out again while they run
+    private static let resizingAudits: XCUIAccessibilityAuditType = [.dynamicType, .textClipped]
 
     /// Launches the app on the fake core for `test`: on the first run, or past it with a key when `withKey`.
     ///
@@ -189,7 +191,7 @@ internal enum FakeApp {
     /// ContrastTests checks against every ground.
     @MainActor
     internal static func audit(_ app: XCUIApplication) throws {
-        try app.performAccessibilityAudit { issue in
+        try performAudit(of: app, for: .all) { issue in
             isSetAside(issue, in: app, isSheet: false)
         }
     }
@@ -201,7 +203,7 @@ internal enum FakeApp {
     /// of that text (its contrast against the dimming, its lines cut by the sheet).
     @MainActor
     internal static func auditSheet(_ app: XCUIApplication) throws {
-        try app.performAccessibilityAudit { issue in
+        try performAudit(of: app, for: .all) { issue in
             isSetAside(issue, in: app, isSheet: true)
         }
     }
@@ -214,7 +216,7 @@ internal enum FakeApp {
     @MainActor
     internal static func auditSheet(_ app: XCUIApplication, page: XCUIElement) throws {
         let shown = page.frame
-        try app.performAccessibilityAudit { issue in
+        try performAudit(of: app, for: .all) { issue in
             if issue.auditType == .contrast, let element = issue.element, !shown.contains(element.frame) {
                 return true
             }
@@ -229,7 +231,7 @@ internal enum FakeApp {
     /// Dynamic Type style, and its golden at an accessibility text size (MachinesSnapshotTests) shows them scaling.
     @MainActor
     internal static func auditForm(_ app: XCUIApplication) throws {
-        try app.performAccessibilityAudit(for: XCUIAccessibilityAuditType.all.subtracting(.dynamicType)) { issue in
+        try performAudit(of: app, for: XCUIAccessibilityAuditType.all.subtracting(.dynamicType)) { issue in
             isSetAside(issue, in: app, isSheet: true)
         }
     }
@@ -239,11 +241,32 @@ internal enum FakeApp {
     @MainActor
     internal static func auditForm(_ app: XCUIApplication, page: XCUIElement) throws {
         let shown = page.frame
-        try app.performAccessibilityAudit(for: XCUIAccessibilityAuditType.all.subtracting(.dynamicType)) { issue in
+        try performAudit(of: app, for: XCUIAccessibilityAuditType.all.subtracting(.dynamicType)) { issue in
             if issue.auditType == .contrast, let element = issue.element, !shown.contains(element.frame) {
                 return true
             }
             return isSetAside(issue, in: app, isSheet: true)
+        }
+    }
+
+    /// Audits `app` for `types` in two passes, `handler` judging each issue: first the checks that look at the screen
+    /// as it is, then those that make its text larger to look at it (Dynamic Type, clipped text).
+    ///
+    /// In one pass, the larger text's checks lay the screen out again while the others look (a screen recording of the
+    /// audit shows the form at a large text size mid-audit), and the contrast check can then measure a row's text where
+    /// its frame no longer is: an iPad's machine form failed so, its Key rows' contrast, in every run for a while, and
+    /// passed in others, as the checks happened to follow each other. Apart, the contrast check only sees the screen at
+    /// the user's text size.
+    @MainActor
+    private static func performAudit(
+        of app: XCUIApplication,
+        for types: XCUIAccessibilityAuditType,
+        _ handler: @escaping (XCUIAccessibilityAuditIssue) throws -> Bool
+    ) throws {
+        try app.performAccessibilityAudit(for: types.subtracting(resizingAudits), handler)
+        let resizing = types.intersection(resizingAudits)
+        if !resizing.isEmpty {
+            try app.performAccessibilityAudit(for: resizing, handler)
         }
     }
 
