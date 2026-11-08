@@ -343,7 +343,7 @@ fn animation_notifications_are_followed_in_an_isolated_process() {
 #[ignore = "run by animation_notifications_are_followed_in_an_isolated_process"]
 fn windows_setting_changes_refresh_the_animation_preference(cx: &mut TestAppContext) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW, WM_SETTINGCHANGE,
+        SPI_GETCLIENTAREAANIMATION, SPI_SETCLIENTAREAANIMATION, SystemParametersInfoW, WM_SETTINGCHANGE,
     };
 
     if !crate::system_window::tests::is_child(
@@ -364,7 +364,8 @@ fn windows_setting_changes_refresh_the_animation_preference(cx: &mut TestAppCont
     cx.run_until_parked();
     assert_eq!(cx.update(|cx| animations_enabled(cx)), expected);
     cx.update(|cx| cx.set_global(Motion { animations: !expected }));
-    crate::system_window::tests::send(WM_SETTINGCHANGE, SPI_GETCLIENTAREAANIMATION as usize, 0);
+    // Windows broadcasts the SET action of the changed parameter.
+    crate::system_window::tests::send(WM_SETTINGCHANGE, SPI_SETCLIENTAREAANIMATION as usize, 0);
     cx.run_until_parked();
     assert_eq!(cx.update(|cx| animations_enabled(cx)), expected);
 }

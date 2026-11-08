@@ -154,10 +154,16 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(cx.update(|cx| system(cx)), expected);
         // Force the cached input to disagree; the next OS notification must read the real setting again and post.
+        let handlers = crate::system_window::tests::setting_handlers();
         cx.update(|cx| {
             set(!expected, cx);
             watch(&poster, cx);
         });
+        assert_eq!(
+            crate::system_window::tests::setting_handlers(),
+            handlers,
+            "watch installs only one subscription"
+        );
         while tasks.try_recv().is_ok() {}
         crate::system_window::tests::send(WM_SETTINGCHANGE, 0x7ffe, 0);
         cx.run_until_parked();
@@ -166,7 +172,7 @@ mod tests {
             tasks.try_recv().is_ok(),
             "a changed input must settle the app's windows"
         );
-        assert!(tasks.try_recv().is_err(), "watch installs only one subscription");
+        assert!(tasks.try_recv().is_err(), "one flip settles once");
         crate::system_window::tests::send(WM_SETTINGCHANGE, 0x7ffe, 0);
         cx.run_until_parked();
         assert!(tasks.try_recv().is_err(), "an unchanged input needs no settle");
