@@ -105,3 +105,264 @@ pub(super) fn write_out(bytes: &[u8]) -> io::Result<()> {
     stdout.write_all(bytes)?;
     stdout.flush()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::{FromRawFd as _, OwnedFd};
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use super::*;
+    use crate::attach_tty::{DEFAULT_GRID, Tty};
+
+    /// The test binary is the terminal client; only its standard descriptors and signal handlers are changed.
+    fn child(case: &str) -> Command {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "attach_tty::unix::tests::terminal_child", "--nocapture"]);
+        for (name, _) in std::env::vars_os().filter(|(name, _)| name.to_string_lossy().starts_with("NGTERM_")) {
+            command.env_remove(name);
+        }
+        command.env("SESSION_TTY_CASE", case);
+        command
+    }
+
+    fn pty() -> (OwnedFd, OwnedFd) {
+        let (mut master, mut slave) = (-1, -1);
+        let result =
+            // SAFETY: both out pointers are valid; null name, termios and winsize request the defaults.
+            unsafe {
+                libc::openpty(
+                    &raw mut master,
+                    &raw mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            };
+        assert_eq!(result, 0);
+        // SAFETY: openpty returned a fresh master descriptor owned by this test.
+        let master = unsafe { OwnedFd::from_raw_fd(master) };
+        // SAFETY: openpty returned a fresh slave descriptor owned by this test.
+        let slave = unsafe { OwnedFd::from_raw_fd(slave) };
+        (master, slave)
+    }
+
+    #[test]
+    fn a_terminal_client_restores_raw_mode_and_reports_pixels_and_resize() {
+        let (_master, slave) = pty();
+        let output = child("terminal")
+            .stdin(Stdio::from(slave.try_clone().unwrap()))
+            .stdout(Stdio::from(slave))
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[test]
+    fn piped_input_is_delivered_whole_then_ends_and_output_is_flushed() {
+        let mut process = child("pipe")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        process.stdin.take().unwrap().write_all(b"typed bytes").unwrap();
+        let output = process.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output
+                .stdout
+                .windows(b"flushed bytes".len())
+                .any(|bytes| bytes == b"flushed bytes")
+        );
+    }
+
+    #[test]
+    fn a_vanished_input_receiver_stops_the_reader() {
+        let mut process = child("dropped")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        process.stdin.take().unwrap().write_all(b"unused").unwrap();
+        let output = process.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[test]
+    fn terminal_child() {
+        match std::env::var("SESSION_TTY_CASE").as_deref() {
+            Ok("terminal") => terminal_case(),
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            Ok("refused") => refuse_terminal_writes(),
+            Ok("pipe") => pipe_case(),
+            Ok("dropped") => {
+                let (send, recv) = mpsc::channel::<TtyEvent>();
+                drop(recv);
+                read_input(&send);
+            }
+            _ => {}
+        }
+    }
+
+    fn terminal_case() {
+        assert!(is_terminal());
+        let before = tcgetattr(io::stdin()).unwrap();
+        let tty = Tty::open();
+        assert!(tty.is_terminal());
+        let raw = tcgetattr(io::stdin()).unwrap();
+        assert!(!raw.local_modes.contains(rustix::termios::LocalModes::ICANON));
+        rustix::termios::tcsetwinsize(
+            io::stdout(),
+            rustix::termios::Winsize {
+                ws_col: 91,
+                ws_row: 32,
+                ws_xpixel: 910,
+                ws_ypixel: 640,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            tty.size(),
+            TtySize {
+                grid: GridSize { cols: 91, rows: 32 },
+                pixels: Some((910, 640))
+            }
+        );
+        let (send, recv) = mpsc::channel::<TtyEvent>();
+        tty.start_threads(&send).unwrap();
+        resize_signal();
+        assert_eq!(recv.recv_timeout(Duration::from_secs(5)).unwrap(), TtyEvent::Resize);
+        drop(tty);
+        let restored = tcgetattr(io::stdin()).unwrap();
+        assert_eq!(restored.local_modes, before.local_modes);
+        assert_eq!(restored.input_modes, before.input_modes);
+        assert_eq!(restored.output_modes, before.output_modes);
+        assert_eq!(restored.control_modes, before.control_modes);
+        rustix::termios::tcsetwinsize(
+            io::stdout(),
+            rustix::termios::Winsize {
+                ws_col: 0,
+                ws_row: 0,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            Tty::open().size(),
+            TtySize {
+                grid: DEFAULT_GRID,
+                pixels: None
+            }
+        );
+        drop(recv);
+        // Wake the watcher so it observes the vanished receiver and ends.
+        resize_signal();
+    }
+
+    fn pipe_case() {
+        assert!(!is_terminal());
+        assert!(RawMode::enter().is_err());
+        let tty = Tty::open();
+        assert!(!tty.is_terminal());
+        assert_eq!(
+            tty.size(),
+            TtySize {
+                grid: DEFAULT_GRID,
+                pixels: None
+            }
+        );
+        let (send, recv) = mpsc::channel::<TtyEvent>();
+        tty.start_threads(&send).unwrap();
+        let mut bytes = Vec::new();
+        loop {
+            match recv.recv_timeout(Duration::from_secs(5)).unwrap() {
+                TtyEvent::Input(data) => bytes.extend(data),
+                TtyEvent::InputEnd => break,
+                TtyEvent::Resize => panic!("a pipe has no resize watcher"),
+            }
+        }
+        assert_eq!(bytes, b"typed bytes");
+        crate::attach_tty::write_out(b"flushed bytes").unwrap();
+    }
+
+    fn resize_signal() {
+        let pid = i32::try_from(std::process::id()).unwrap();
+        // SAFETY: the signal targets this test child alone, after its watcher was registered.
+        let result = unsafe { libc::kill(pid, SIGWINCH) };
+        assert_eq!(result, 0);
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn a_terminal_that_refuses_raw_mode_remains_usable_without_it() {
+        let (_master, slave) = pty();
+        let output = child("refused")
+            .stdin(Stdio::from(slave.try_clone().unwrap()))
+            .stdout(Stdio::from(slave))
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    /// Refuse terminal writes at the OS boundary, on this child test's thread alone; terminal detection still works.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn refuse_terminal_writes() {
+        let instruction = |code: u32, k, jt, jf| libc::sock_filter {
+            code: u16::try_from(code).unwrap(),
+            jt,
+            jf,
+            k,
+        };
+        // On Linux x86_64, seccomp_data holds the syscall number at byte 0 and the second argument at byte 24.
+        let mut filter = [
+            instruction(libc::BPF_LD | libc::BPF_W | libc::BPF_ABS, 0, 0, 0),
+            instruction(
+                libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
+                u32::try_from(libc::SYS_ioctl).unwrap(),
+                0,
+                4,
+            ),
+            instruction(libc::BPF_LD | libc::BPF_W | libc::BPF_ABS, 24, 0, 0),
+            instruction(
+                libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
+                u32::try_from(libc::TCGETS).unwrap(),
+                2,
+                0,
+            ),
+            instruction(
+                libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
+                u32::try_from(libc::TCGETS2).unwrap(),
+                1,
+                0,
+            ),
+            instruction(
+                libc::BPF_RET | libc::BPF_K,
+                libc::SECCOMP_RET_ERRNO | u32::try_from(libc::EPERM).unwrap(),
+                0,
+                0,
+            ),
+            instruction(libc::BPF_RET | libc::BPF_K, libc::SECCOMP_RET_ALLOW, 0, 0),
+        ];
+        let program = libc::sock_fprog {
+            len: u16::try_from(filter.len()).unwrap(),
+            filter: filter.as_mut_ptr(),
+        };
+        // SAFETY: prctl's no-new-privileges operation takes integer arguments only and affects this child thread.
+        let result = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+        assert_eq!(result, 0);
+        // SAFETY: the program and its instruction array are live for the call; the kernel copies them.
+        let result = unsafe { libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &raw const program) };
+        assert_eq!(result, 0);
+        assert!(is_terminal());
+        let before = tcgetattr(io::stdin()).unwrap();
+        assert!(!Tty::open().is_terminal());
+        assert_eq!(RawMode::enter().unwrap_err().raw_os_error(), Some(libc::EPERM));
+        assert_eq!(tcgetattr(io::stdin()).unwrap().local_modes, before.local_modes);
+    }
+}

@@ -157,4 +157,113 @@ mod tests {
         assert!(ends.iter().all(|&descriptor| descriptor < end), "{ends:?} past {end}");
         close(ends);
     }
+
+    #[test]
+    fn a_spawned_child_leads_its_session_and_is_reaped_with_its_exit_code() {
+        let root = tempfile::tempdir().unwrap();
+        let proof = root.path().join("detached");
+        let command = ServerCommand {
+            executable: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "test \"$(ps -o sid= -p $$ | tr -d ' ')\" = \"$$\" && printf detached > \"$1\"; exit 23".into(),
+                "sh".into(),
+                proof.as_os_str().to_owned(),
+            ],
+            env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+            cwd: None,
+        };
+        let (_pid, path, mut process) = spawn(&command).unwrap();
+        assert_eq!(path, SpawnPath::Detached);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let exit = loop {
+            if let Some(exit) = process.try_exit() {
+                break exit;
+            }
+            assert!(std::time::Instant::now() < deadline, "the child was not reaped");
+            std::thread::yield_now();
+        };
+        let super::super::Exit::Status(status) = exit else {
+            panic!("no exit status")
+        };
+        assert_eq!(status.code(), Some(23));
+        assert_eq!(std::fs::read(&proof).unwrap(), b"detached");
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn a_syscall_filter_refusing_both_marking_paths_is_reported() {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "--exact",
+            "server::spawn::linux::tests::refused_syscalls_child",
+            "--nocapture",
+        ]);
+        for (name, _) in std::env::vars_os().filter(|(name, _)| name.to_string_lossy().starts_with("NGTERM_")) {
+            command.env_remove(name);
+        }
+        let output = command.env("SESSION_SPAWN_REFUSED", "1").output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn refused_syscalls_child() {
+        use std::os::fd::AsRawFd as _;
+        if std::env::var_os("SESSION_SPAWN_REFUSED").is_none() {
+            return;
+        }
+        detach(descriptor_end()).unwrap();
+        assert!(current_process_is_detached());
+        let file = tempfile::tempfile().unwrap();
+        let instruction = |code: u32, k, jt, jf| libc::sock_filter {
+            code: u16::try_from(code).unwrap(),
+            jt,
+            jf,
+            k,
+        };
+        // On Linux x86_64, seccomp_data holds the syscall number at byte 0 and the second argument at byte 24.
+        let mut filter = [
+            instruction(libc::BPF_LD | libc::BPF_W | libc::BPF_ABS, 0, 0, 0),
+            instruction(
+                libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
+                u32::try_from(libc::SYS_close_range).unwrap(),
+                4,
+                0,
+            ),
+            instruction(
+                libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
+                u32::try_from(libc::SYS_fcntl).unwrap(),
+                0,
+                2,
+            ),
+            instruction(libc::BPF_LD | libc::BPF_W | libc::BPF_ABS, 24, 0, 0),
+            instruction(
+                libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
+                u32::try_from(libc::F_SETFD).unwrap(),
+                1,
+                0,
+            ),
+            instruction(libc::BPF_RET | libc::BPF_K, libc::SECCOMP_RET_ALLOW, 0, 0),
+            instruction(
+                libc::BPF_RET | libc::BPF_K,
+                libc::SECCOMP_RET_ERRNO | u32::try_from(libc::EPERM).unwrap(),
+                0,
+                0,
+            ),
+        ];
+        let program = libc::sock_fprog {
+            len: u16::try_from(filter.len()).unwrap(),
+            filter: filter.as_mut_ptr(),
+        };
+        // SAFETY: prctl's no-new-privileges operation takes integer arguments only and affects this child thread.
+        let result = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+        assert_eq!(result, 0);
+        // SAFETY: the program and its instruction array are live for the call; the kernel copies them.
+        let result = unsafe { libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &raw const program) };
+        assert_eq!(result, 0);
+        assert_eq!(close_range_cloexec().unwrap_err().raw_os_error(), Some(libc::EPERM));
+        let error = close_on_exec_past_stdio(close_range_cloexec, [file.as_raw_fd()]).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EPERM));
+    }
 }

@@ -317,3 +317,8 @@ impl Shared {
         self.changed.notify_all();
     }
 }
+
+#[cfg(test)]
+#[cfg(unix)]
+#[path = "attach_tests.rs"]
+mod tests;

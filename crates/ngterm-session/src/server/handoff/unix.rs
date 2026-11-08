@@ -306,4 +306,71 @@ mod tests {
         drop(left);
         assert!(recv_fd_batch(right.as_raw_fd(), 4).unwrap().is_empty());
     }
+
+    fn pair() -> (tempfile::TempDir, Stream, Stream) {
+        let root = tempfile::Builder::new().prefix("ngfd-").tempdir_in("/tmp").unwrap();
+        let endpoint = Endpoint::new(root.path());
+        let listener = endpoint.bind().unwrap();
+        let left = endpoint.connect().unwrap();
+        let right = listener.accept().unwrap();
+        (root, left, right)
+    }
+
+    #[test]
+    fn a_partial_handoff_reports_how_many_descriptors_arrived() {
+        let (_root, left, right) = pair();
+        let file = tempfile::tempfile().unwrap();
+        send_fds(&left, &[file.as_raw_fd()]).unwrap();
+        drop(left);
+        let error = recv_fds(&right, 2).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        assert_eq!(error.to_string(), "the handoff channel closed after 1 of 2 descriptors");
+    }
+
+    #[test]
+    fn a_message_without_descriptors_is_refused() {
+        let (mut left, right) = UnixStream::pair().unwrap();
+        left.write_all(b"F").unwrap();
+        let error = recv_fd_batch(right.as_raw_fd(), 2).unwrap_err();
+        assert_eq!(error.to_string(), "the handoff's message carried no descriptors");
+    }
+
+    #[test]
+    fn a_truncated_descriptor_message_is_refused() {
+        let (left, right) = UnixStream::pair().unwrap();
+        let file = tempfile::tempfile().unwrap();
+        send_fd_batch(left.as_raw_fd(), &[file.as_raw_fd(); 8]).unwrap();
+        let error = recv_fd_batch(right.as_raw_fd(), 1).unwrap_err();
+        assert_eq!(error.to_string(), "the handoff's descriptor message was truncated");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn extra_descriptors_that_fit_the_alignment_padding_are_refused() {
+        let (left, right) = UnixStream::pair().unwrap();
+        let file = tempfile::tempfile().unwrap();
+        send_fd_batch(left.as_raw_fd(), &[file.as_raw_fd(); 2]).unwrap();
+        let error = recv_fd_batch(right.as_raw_fd(), 1).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "the handoff's descriptor message carried 2 descriptors, at most 1 were due"
+        );
+    }
+
+    #[test]
+    fn invalid_descriptors_return_the_os_error_and_empty_batches_send_nothing() {
+        assert_eq!(send_fd_batch(-1, &[0]).unwrap_err().raw_os_error(), Some(libc::EBADF));
+        assert_eq!(recv_fd_batch(-1, 1).unwrap_err().raw_os_error(), Some(libc::EBADF));
+        send_fd_batch(-1, &[]).unwrap();
+    }
+
+    #[test]
+    fn lengths_that_do_not_fit_are_refused() {
+        assert_eq!(
+            fit::<_, u8>(256_u16).unwrap_err().to_string(),
+            "a length does not fit its control message field"
+        );
+        let count = usize::try_from(u32::MAX).unwrap() / size_of::<RawFd>() + 1;
+        assert!(control_buffer(count).is_err());
+    }
 }

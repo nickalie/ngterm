@@ -255,4 +255,24 @@ mod tests {
     fn this_unstaged_test_binary_reports_the_unstaged_id() {
         assert_eq!(of_this_process(), UNSTAGED);
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_the_running_image_matches_even_when_another_file_has_the_same_bytes() {
+        let executable = std::env::current_exe().unwrap();
+        assert!(is_running_image(&executable));
+        let root = tempfile::tempdir().unwrap();
+        let copy = root.path().join("copy");
+        fs::copy(&executable, &copy).unwrap();
+        assert!(!is_running_image(&copy));
+        assert!(!is_running_image(&root.path().join("missing")));
+    }
+
+    #[test]
+    fn a_missing_staged_root_is_an_error() {
+        // The file exists, so the error concerns the absent grandparent, not its metadata.
+        let error = Staged::write_beside(Path::new("/"), "id").unwrap_err();
+        assert_eq!(error.to_string(), "the executable has no staged root");
+        assert_eq!(Staged::beside(Path::new("/")), None);
+    }
 }

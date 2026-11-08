@@ -641,4 +641,60 @@ mod tests {
         assert_eq!(sizes, [CHUNK_SIZE, CHUNK_SIZE, 1]);
         assert_eq!(chunks(&[]).count(), 0);
     }
+
+    #[test]
+    fn recovery_bytes_follow_the_reset_and_preserve_the_parser_continuation() {
+        let mut session = tracked();
+        session.vt_write(b"text\x1b[3");
+        let attach = capture(&mut session, Kind::Attach).unwrap();
+        let mut unchanged = attach.clone();
+        insert_after_reset(&mut unchanged, b"clipboard");
+        assert_eq!(unchanged, attach);
+        let original = capture(&mut session, Kind::Resync).unwrap();
+        let mut resync = original.clone();
+        insert_after_reset(&mut resync, &[]);
+        assert_eq!(resync, original);
+        let recovery = b"\x1b]52;c;YQ==\x1b\\";
+        insert_after_reset(&mut resync, recovery);
+        assert_eq!(&resync[..RESYNC_RESET.len()], RESYNC_RESET);
+        assert_eq!(
+            &resync[RESYNC_RESET.len()..RESYNC_RESET.len() + recovery.len()],
+            recovery
+        );
+        assert_eq!(
+            &resync[RESYNC_RESET.len() + recovery.len()..],
+            &original[RESYNC_RESET.len()..]
+        );
+        assert!(resync.ends_with(b"\x1b[3"));
+    }
+
+    #[test]
+    fn snapshot_errors_explain_why_a_client_could_not_be_resynced() {
+        assert_eq!(
+            SnapshotError::Unavailable.to_string(),
+            "no consistent snapshot can be cut now: the session's terminal is inside a sequence it cannot hand on"
+        );
+        assert_eq!(
+            SnapshotError::Format("out of memory".to_owned()).to_string(),
+            "the session's terminal could not be formatted: out of memory"
+        );
+    }
+
+    #[test]
+    fn a_formatter_error_is_reported_without_changing_the_terminal() {
+        let mut terminal = tracked();
+        terminal.vt_write(b"preserved");
+        let before = state(&mut terminal);
+        let outside = Region::Range {
+            start: Point::new(PointTag::Viewport, 0, 0),
+            end: Point::new(PointTag::Viewport, 0, u32::from(ROWS)),
+            rectangle: false,
+        };
+        let error = format(&mut terminal, outside, FormatExtras::empty()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "the session's terminal could not be formatted: libghostty-vt refused an invalid value"
+        );
+        assert_eq!(state(&mut terminal), before);
+    }
 }
