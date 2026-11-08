@@ -85,8 +85,8 @@ impl Setting {
     }
 }
 
-/// What loading left, in libghostty's replay order: the lines, and the diagnostics of loading itself (unreadable
-/// files, includes, unresolvable paths) where they happened.
+/// What loading left, in libghostty's replay order: the lines, and the diagnostics of loading itself (includes
+/// that cannot be read or close a cycle, unresolvable paths) where they happened.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
     Setting(Setting),
@@ -152,17 +152,22 @@ impl Loader {
         self.load_lines(Some(Path::new(name)), &std::env::temp_dir(), text);
     }
 
-    /// Loads one config file. One that is not a regular file is skipped; one that cannot be read is a diagnostic.
+    /// Loads one config file. One that is not a regular file is skipped; one that cannot be read is only logged, as
+    /// `ghostty_config_load_file` logs the error of a base file and records no diagnostic for it.
     pub fn load_file(&mut self, path: &Path) {
-        let Ok(path) = std::path::absolute(path) else {
-            return self.note(format!("{}: cannot make the path absolute", path.display()));
+        let path = match std::path::absolute(path) {
+            Ok(path) => path,
+            Err(err) => {
+                tracing::warn!(path = %path.display(), "ghostty config file not loaded: {err}");
+                return;
+            }
         };
         if !path.is_file() {
             return;
         }
         match std::fs::read(&path) {
             Ok(bytes) => self.load_bytes(&path, &bytes),
-            Err(err) => self.note(format!("{}: {err}", path.display())),
+            Err(err) => tracing::warn!(path = %path.display(), "ghostty config file not loaded: {err}"),
         }
     }
 
@@ -316,14 +321,8 @@ pub fn open_theme(theme: &str, dirs: &[PathBuf]) -> Result<(PathBuf, String), Ve
     let path = Path::new(theme);
     if path.is_absolute() {
         return match std::fs::metadata(path) {
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                refuse(format!("failed to load theme from the path \"{theme}\""))
-            }
-            Err(err) => refuse(format!(
-                "failed to load theme from the path \"{theme}\": {}",
-                zig_error(&err)
-            )),
-            Ok(meta) => read_theme(theme, path, &meta),
+            Err(err) => refuse(open_failure(theme, None, &err)),
+            Ok(meta) => read_theme(theme, path, false, &meta),
         };
     }
     if path.file_name().is_none_or(|name| name != path.as_os_str()) {
@@ -335,14 +334,8 @@ pub fn open_theme(theme: &str, dirs: &[PathBuf]) -> Result<(PathBuf, String), Ve
         let candidate = dir.join(theme);
         match std::fs::metadata(&candidate) {
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => {
-                return refuse(format!(
-                    "failed to load theme \"{theme}\" from the file \"{}\": {}",
-                    candidate.display(),
-                    zig_error(&err)
-                ));
-            }
-            Ok(meta) => return read_theme(theme, &candidate, &meta),
+            Err(err) => return refuse(open_failure(theme, Some(&candidate), &err)),
+            Ok(meta) => return read_theme(theme, &candidate, true, &meta),
         }
     }
     Err(dirs
@@ -356,8 +349,14 @@ pub fn open_theme(theme: &str, dirs: &[PathBuf]) -> Result<(PathBuf, String), Ve
         .collect())
 }
 
-/// A found theme file's text; anything but a regular file is refused before it is opened (a FIFO would block).
-fn read_theme(theme: &str, path: &Path, meta: &std::fs::Metadata) -> Result<(PathBuf, String), Vec<Diagnostic>> {
+/// A found theme file's text, `by_name` when a bare name was looked up to `path`. Anything but a regular file is refused
+/// before it is opened (a FIFO would block); a read failure is reported as libghostty reports the open it fails at.
+fn read_theme(
+    theme: &str,
+    path: &Path,
+    by_name: bool,
+    meta: &std::fs::Metadata,
+) -> Result<(PathBuf, String), Vec<Diagnostic>> {
     if !meta.is_file() {
         return Err(vec![Diagnostic::file_level(format!(
             "not reading theme from \"{theme}\": it is a {}",
@@ -367,11 +366,26 @@ fn read_theme(theme: &str, path: &Path, meta: &std::fs::Metadata) -> Result<(Pat
     std::fs::read(path)
         .map(|bytes| (path.to_path_buf(), String::from_utf8_lossy(&bytes).into_owned()))
         .map_err(|err| {
-            vec![Diagnostic::file_level(format!(
-                "not reading theme from \"{theme}\": {}",
-                zig_error(&err)
+            vec![Diagnostic::file_level(open_failure(
+                theme,
+                by_name.then_some(path),
+                &err,
             ))]
         })
+}
+
+/// `theme.open`'s message for a theme file it cannot open: `found` is the file a bare name was found at, `None` for an
+/// absolute theme path (`openAbsolute`, which names no error for a missing file).
+fn open_failure(theme: &str, found: Option<&Path>, err: &io::Error) -> String {
+    match found {
+        Some(path) => format!(
+            "failed to load theme \"{theme}\" from the file \"{}\": {}",
+            path.display(),
+            zig_error(err)
+        ),
+        None if err.kind() == io::ErrorKind::NotFound => format!("failed to load theme from the path \"{theme}\""),
+        None => format!("failed to load theme from the path \"{theme}\": {}", zig_error(err)),
+    }
 }
 
 /// `Path.expand`: `~/` against the home, an absolute path as is, a relative one against `base`, through symlinks when

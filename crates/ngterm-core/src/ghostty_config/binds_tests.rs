@@ -485,7 +485,8 @@ fn the_physical_keys_are_ghosttys() {
     assert_eq!(
         PhysicalKey::from_w3c(&"A".repeat(129)),
         None,
-        "longer than ghostty's buffer"
+        "a code over ghostty's 128-byte buffer is refused without a panic; no key name is that long, so the result \
+         cannot show whether the length guard or the name lookup refused it"
     );
     assert!(physical("shift_left").is_modifier());
     assert!(!physical("key_a").is_modifier());
