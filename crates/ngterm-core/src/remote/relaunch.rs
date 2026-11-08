@@ -362,3 +362,7 @@ impl Core {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "relaunch_tests.rs"]
+mod tests;

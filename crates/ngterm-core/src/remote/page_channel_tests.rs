@@ -624,3 +624,128 @@ fn the_reader_stops_once_the_permits_close() {
     waiting.close();
     assert!(!blocked.join().unwrap(), "a closed channel delivers nothing more");
 }
+
+#[test]
+fn an_oversized_resource_fails_without_using_a_slot_or_closing_the_channel() {
+    let mut harness = Harness::new();
+    let oversized = harness.fetch(&"x".repeat(page_serve::MAX_FRAME_BYTES));
+    assert_eq!(harness.finished(oversized), Some(Err(ChannelFailure::TooLarge)));
+    assert!(harness.origin.resources().is_empty());
+    let next = harness.fetch("/docs/index.html");
+    assert_eq!(harness.read(next).unwrap(), INDEX);
+    assert_eq!(harness.closes(), 0);
+}
+
+#[test]
+fn a_bridge_refusal_releases_its_slot_and_preserves_the_origins_error() {
+    let mut harness = Harness::new();
+    harness.origin.reply = None;
+    let ids: Vec<_> = (0..=BRIDGE_LIMIT).map(|_| harness.bridge("{}").unwrap()).collect();
+    harness.origin.line(&PageServeFrame::Failure {
+        id: ids[0],
+        error: "permission denied".to_owned(),
+    });
+    assert_eq!(
+        harness.reply(ids[0]),
+        Some(Err(ChannelFailure::Refused("permission denied".to_owned())))
+    );
+    assert_eq!(
+        ChannelFailure::Refused("permission denied".to_owned()).to_string(),
+        "permission denied"
+    );
+    assert_eq!(harness.origin.link.0.borrow().received.len(), BRIDGE_LIMIT + 1);
+}
+
+#[test]
+fn closing_frees_buffered_chunks_and_fails_every_queued_call() {
+    let mut harness = Harness::new();
+    harness.origin.reply = None;
+    let resources: Vec<_> = (0..=RESOURCE_LIMIT).map(|_| harness.fetch("/docs/big.bin")).collect();
+    let bridges: Vec<_> = (0..=BRIDGE_LIMIT).map(|_| harness.bridge("{}").unwrap()).collect();
+    harness.pump();
+    assert_eq!(harness.permits.free(), 0);
+
+    let events = harness.channel.close("connection lost");
+
+    for id in resources {
+        assert!(events.contains(&ChannelEvent::Finished {
+            id,
+            result: Err(ChannelFailure::Closed),
+        }));
+    }
+    for id in bridges {
+        assert!(events.contains(&ChannelEvent::Reply {
+            id,
+            result: Err(ChannelFailure::Closed),
+        }));
+    }
+    assert_eq!(events.len(), RESOURCE_LIMIT + BRIDGE_LIMIT + 3);
+    assert_eq!(harness.permits.free(), INBOUND_LIMIT);
+    assert_eq!(harness.bridge("{}"), Err(ChannelFailure::Closed));
+    assert!(!harness.permits.take());
+}
+
+#[test]
+fn a_duplicate_cancel_sends_once_and_unknown_requests_are_already_closed() {
+    let mut harness = Harness::new();
+    harness.origin.held = vec!["/docs/held.bin"];
+    let id = harness.fetch("/docs/held.bin");
+    assert_eq!(harness.channel.pull(id), Pull::Wait);
+    assert!(harness.channel.cancel(id).is_empty());
+    assert!(harness.channel.cancel(id).is_empty());
+    assert!(harness.channel.cancel(999).is_empty());
+    assert_eq!(harness.origin.cancels(), [id]);
+    assert_eq!(harness.channel.pull(id), Pull::Done(Err(ChannelFailure::Cancelled)));
+    assert_eq!(ChannelFailure::Cancelled.to_string(), "cancelled");
+    harness.pump();
+    assert_eq!(harness.channel.pull(id), Pull::Done(Err(ChannelFailure::Closed)));
+}
+
+#[test]
+fn a_refused_cancel_closes_once_and_late_frames_return_their_permits() {
+    let mut harness = Harness::new();
+    harness.origin.held = vec!["/docs/held.bin"];
+    let id = harness.fetch("/docs/held.bin");
+    assert!(harness.permits.take());
+    harness.origin.link.0.borrow_mut().refusing = true;
+    assert_eq!(
+        harness.channel.cancel(id),
+        [ChannelEvent::Closed {
+            reason: "the channel stopped taking requests".to_owned(),
+        }]
+    );
+    let free = harness.permits.free();
+    // The reader had already taken a permit when the main loop closed the channel.
+    assert!(harness.channel.receive(b"late frame").is_empty());
+    assert_eq!(harness.permits.free(), free + 1);
+    assert_eq!(harness.permits.free(), INBOUND_LIMIT);
+    assert!(harness.channel.close("again").is_empty());
+}
+
+#[test]
+fn stale_resource_and_bridge_replies_do_not_finish_another_request() {
+    let mut harness = Harness::new();
+    harness.origin.held = vec!["/docs/held.bin"];
+    let id = harness.fetch("/docs/held.bin");
+    for frame in [
+        PageServeFrame::Head {
+            id: 999,
+            mime_type: "text/plain".to_owned(),
+        },
+        PageServeFrame::Chunk {
+            id: 999,
+            data: b"stale".to_vec(),
+        },
+        PageServeFrame::End { id: 999 },
+        PageServeFrame::Reply {
+            id: 999,
+            response: "{}".to_owned(),
+        },
+    ] {
+        harness.origin.line(&frame);
+    }
+    harness.pump();
+    assert!(harness.events.is_empty());
+    assert_eq!(harness.channel.pull(id), Pull::Wait);
+    assert_eq!(harness.permits.free(), INBOUND_LIMIT);
+}

@@ -46,6 +46,10 @@ use crate::html::{HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlReloadTarget, 
 use crate::model::{HtmlPageSlot, OverlayPane};
 use crate::pane_env::uuid_string;
 
+#[cfg(test)]
+#[path = "replica_page_tests.rs"]
+mod tests;
+
 /// Why a file page cannot be shown: the session names no host, or the token cannot travel (upstream's refusal).
 pub const ORIGIN_UNREACHABLE: &str = "the origin cannot be reached for this page";
 /// The page was placed and is gone already (upstream's refusal).
