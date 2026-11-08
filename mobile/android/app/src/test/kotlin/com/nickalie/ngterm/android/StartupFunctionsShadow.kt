@@ -4,7 +4,11 @@ import com.nickalie.ngterm.core.ffi.KeyPair
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 
-/** The activity's native version query; all activity, settings and navigation code stays real. */
+/**
+ * The core's native top-level functions: [coreVersion] for the activity and [generateKey] for the application's key
+ * maker (NativeKeyMaker), so a key made in a test is this fake pair; all activity, settings and navigation code stays
+ * real.
+ */
 @Implements(className = "com.nickalie.ngterm.core.ffi.Ngterm_mobileKt", isInAndroidSdk = false)
 object StartupFunctionsShadow {
     private const val VERSION = "test-core-version"

@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -86,17 +87,41 @@ class SettingsRestorationTest {
         return dispatcher
     }
 
+    // runs [dispatcher]'s queued work until [text] shows
+    private fun runUntilShown(
+        dispatcher: TestDispatcher,
+        text: String,
+    ) {
+        compose.waitUntil(10_000) {
+            dispatcher.scheduler.runCurrent()
+            compose
+                .onAllNodes(hasText(text))
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+    }
+
     @Test
     fun aKeyAbsentFromTheNewProcessReturnsToSettingsWhenTheStoresFinishReading() {
         val restoration = openKey()
         val dispatcher = restoreWith(restoration, graph("next"))
-        compose.waitUntil(10_000) {
-            dispatcher.scheduler.runCurrent()
-            compose
-                .onAllNodes(hasText("core restored"))
-                .fetchSemanticsNodes()
-                .isNotEmpty()
-        }
+        // until the stores are read, the restored page shows Settings' progress, not a blank screen
+        compose.onNodeWithContentDescription("Reading the settings").assertExists()
+        runUntilShown(dispatcher, "core restored")
         compose.onNodeWithText("No machine uses it").assertDoesNotExist()
+    }
+
+    @Test
+    fun aRestoredKeyPageWhoseStoresFailShowsWhyWithRetry() {
+        val restoration = openKey()
+        val broken = File(dir.root, "broken").apply { mkdirs() }
+        val settings = File(broken, "settings.preferences_pb").apply { writeBytes(byteArrayOf(-1, -1, -1, -1)) }
+        val dispatcher = restoreWith(restoration, graph("broken"))
+        runUntilShown(dispatcher, "Can't read the settings")
+        compose.onNodeWithText(FAKE_PUBLIC_KEY).assertDoesNotExist()
+        settings.delete()
+        compose.onNodeWithText("Retry").performClick()
+        runUntilShown(dispatcher, "core restored")
+        compose.onNodeWithText("Can't read the settings").assertDoesNotExist()
     }
 }
