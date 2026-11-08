@@ -328,9 +328,23 @@ mod tests {
         assert_eq!(parse_procargs(&short), None);
     }
 
+    #[test]
+    fn an_invalid_procargs_count_or_missing_argv_is_rejected() {
+        for count in [-1_i32, 0, 4097] {
+            let mut blob = count.to_ne_bytes().to_vec();
+            blob.extend_from_slice(b"/bin/codex\0codex\0");
+            assert_eq!(parse_procargs(&blob), None, "argc {count}");
+        }
+        for missing in [&b"/bin/codex"[..], &b"/bin/codex\0\0\0"[..]] {
+            let mut blob = 1_i32.to_ne_bytes().to_vec();
+            blob.extend_from_slice(missing);
+            assert_eq!(parse_procargs(&blob), None, "{missing:?}");
+        }
+    }
+
     /// A process whose argv says `codex … exec` and a child of it: the walk from the child finds that Codex above
     /// it, as a hook's walk finds the run that fired it; a plain process tree finds none.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn the_walk_finds_the_codex_a_hook_runs_under() {
         use std::io::{BufRead as _, BufReader};
@@ -359,11 +373,66 @@ mod tests {
             ("sh", &[], false),
         ] {
             let (mut parent, child) = spawn(arg0, script, extra);
-            assert_eq!(headless_codex_above(child), headless, "{arg0} {extra:?}");
+            let actual = headless_codex_above(child);
             // SAFETY: `kill` has no memory preconditions; the sleep is this test's own
             unsafe { libc::kill(libc::pid_t::try_from(child).unwrap(), libc::SIGKILL) };
             let _ = parent.kill();
             let _ = parent.wait();
+            assert_eq!(actual, headless, "{arg0} {extra:?}");
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reads_a_childs_exact_argv_and_parent() {
+        use std::os::unix::process::CommandExt as _;
+        use std::process::{Command, Stdio};
+
+        let probe = "agent::mail::codex_process::tests::macos_argv_probe";
+        for (subcommand, headless) in [("exec", true), ("resume", false)] {
+            let arguments = [subcommand, "--ignored", "--exact", probe, "", "a b", "a\"b", "日本語"];
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .arg0("/test tools/codex-macos")
+                .args(arguments)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap();
+            let actual_argv = argv_of(child.id());
+            let actual_parent = parent_of(child.id());
+            let actual_headless = headless_codex_above(child.id());
+            drop(child.stdin.take());
+            let status = child.wait().unwrap();
+
+            let mut expected = argv(&["/test tools/codex-macos"]);
+            expected.extend(argv(&arguments));
+            assert!(status.success(), "{status}");
+            assert_eq!(actual_argv, Some(expected));
+            assert_eq!(actual_parent, Some(std::process::id()));
+            assert_eq!(actual_headless, headless);
+            assert_eq!(argv_of(child.id()), None, "a reaped child has no argv");
+            assert_eq!(parent_of(child.id()), None, "a reaped child has no parent");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "the process reader's child, released by closing its stdin"]
+    fn macos_argv_probe() {
+        use std::io::Read as _;
+        std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_rejects_missing_and_out_of_range_processes() {
+        for pid in [i32::MAX.cast_unsigned(), u32::MAX] {
+            assert_eq!(argv_of(pid), None, "{pid}");
+            assert_eq!(parent_of(pid), None, "{pid}");
+            assert!(!headless_codex_above(pid), "{pid}");
+        }
+        // SAFETY: `getppid` has no preconditions and reads only this process's parent id.
+        let parent = unsafe { libc::getppid() };
+        assert_eq!(parent_of(std::process::id()), Some(parent.cast_unsigned()));
     }
 }

@@ -22,3 +22,7 @@ pub fn raise_open_files() {
         tracing::warn!(error = %std::io::Error::last_os_error(), "cannot raise the descriptor limit");
     }
 }
+
+#[cfg(test)]
+#[path = "limits_tests.rs"]
+mod tests;
