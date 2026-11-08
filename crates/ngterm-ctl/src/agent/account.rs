@@ -472,4 +472,32 @@ mod tests {
         );
         assert!(io.asked.lock().unwrap().is_empty());
     }
+    #[test]
+    fn unavailable_or_malformed_usage_keeps_the_signed_in_email() {
+        let mut io = Fake::default();
+        io.files.insert(
+            PathBuf::from("/home/u/.claude.json"),
+            br#"{"oauthAccount":{"emailAddress":"dev@example.com"}}"#.to_vec(),
+        );
+        io.files.insert(
+            PathBuf::from("/home/u/.claude/.credentials.json"),
+            br#"{"claudeAiOauth":{"accessToken":"tok","expiresAt":5000}}"#.to_vec(),
+        );
+        for answer in [
+            None,
+            Some(b"not json".to_vec()),
+            Some(br#"{"seven_day":null}"#.to_vec()),
+        ] {
+            io.usage = answer.map(|answer| ("tok".to_owned(), answer));
+            io.asked.lock().unwrap().clear();
+            assert_eq!(
+                read_account(&claude(), &io),
+                Account {
+                    email: Some("dev@example.com".to_owned()),
+                    weekly: None,
+                }
+            );
+            assert_eq!(*io.asked.lock().unwrap(), ["tok"]);
+        }
+    }
 }

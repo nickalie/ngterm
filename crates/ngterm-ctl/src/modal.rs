@@ -636,4 +636,28 @@ pub(crate) mod tests {
         assert_eq!(io.commands(), ["ask.result"]);
         assert_eq!(io.errors, ["error: ask.result missing result"]);
     }
+    #[cfg(unix)]
+    #[test]
+    fn live_dialogs_poll_and_report_a_missing_result() {
+        let (output, requests) = crate::messages::tests::run_command(
+            &["ask", "open", "Continue?", "--button", "ok"],
+            b"",
+            &[],
+            &[
+                r#"{"ok":true,"result":{"id":"dialog-1"}}"#,
+                r#"{"ok":true,"result":{"ask":{"result":"pending"}}}"#,
+                r#"{"ok":true,"result":{}}"#,
+                r#"{"ok":true}"#,
+            ],
+        );
+        assert_eq!(requests[0]["cmd"], "ask.open");
+        assert_eq!(
+            &requests[1..3],
+            &vec![json!({"cmd":"ask.result","target":"dialog-1"}); 2]
+        );
+        assert_eq!(requests[3], json!({"cmd":"ask.cancel","target":"dialog-1"}));
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(error.contains("error: ask.result missing result\n"), "{error}");
+        assert!(error.contains("PROBE_RESULT:Err(Exit("), "{error}");
+    }
 }

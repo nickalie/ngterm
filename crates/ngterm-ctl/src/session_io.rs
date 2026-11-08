@@ -521,4 +521,54 @@ mod tests {
             "--close cannot be combined with a needle"
         );
     }
+    #[cfg(unix)]
+    #[test]
+    fn terminal_commands_send_to_the_selected_socket_and_print_the_reply() {
+        for (argv, expected) in [
+            (
+                &["type", "--stdin", "--target", "S", "--pane-id", "P"][..],
+                json!({"cmd":"session.type","target":"S","args":{"text":"héllo\n","select":false,"paneID":"P"}}),
+            ),
+            (
+                &["copy", "--target", "S"][..],
+                json!({"cmd":"session.copy","target":"S"}),
+            ),
+            (
+                &["paste", "--pane", "right"][..],
+                json!({"cmd":"session.paste","target":"active","args":{"pane":"right"}}),
+            ),
+            (
+                &["select-all"][..],
+                json!({"cmd":"session.selectall","target":"active"}),
+            ),
+        ] {
+            let argv = [&["session"][..], argv, &["--json"]].concat();
+            let (output, requests) = crate::messages::tests::run_command(
+                &argv,
+                "héllo\n".as_bytes(),
+                &[],
+                &[r#"{"ok":true,"result":{"text":"selected"}}"#],
+            );
+            assert_eq!(requests, [expected]);
+            assert!(
+                String::from_utf8(output.stdout)
+                    .unwrap()
+                    .contains(r#"{"ok":true,"result":{"text":"selected"}}"#)
+            );
+            assert!(
+                String::from_utf8(output.stderr)
+                    .unwrap()
+                    .contains("PROBE_RESULT:Ok(())")
+            );
+        }
+    }
+
+    #[test]
+    fn a_literal_type_request_keeps_an_empty_payload_and_its_selectors() {
+        let command = type_command(&["", "--select", "--pane", "scratch", "--target", "S"]);
+        assert_eq!(
+            serde_json::to_value(command.make_request()).unwrap(),
+            json!({"cmd":"session.type","target":"S","args":{"text":"","select":true,"pane":"scratch"}})
+        );
+    }
 }

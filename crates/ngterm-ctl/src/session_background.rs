@@ -378,4 +378,37 @@ mod tests {
             assert_eq!(parse(words).0, Err(error.to_owned()), "{words:?}");
         }
     }
+    #[cfg(unix)]
+    #[test]
+    fn background_commands_send_their_pane_window_and_target() {
+        for (argv, expected) in [
+            (
+                &["image", "/private/image.png"][..],
+                json!({"mode":"image","path":"/private/image.png"}),
+            ),
+            (&["color", "#102030"][..], json!({"mode":"color","color":"#102030"})),
+            (&["clear"][..], json!({"mode":"clear"})),
+        ] {
+            let argv = [
+                &["session", "background"][..],
+                argv,
+                &["--target", "S", "--window", "W", "--pane", "scratch", "--json"],
+            ]
+            .concat();
+            let (output, requests) = crate::messages::tests::run_command(&argv, b"", &[], &[r#"{"ok":true}"#]);
+            let mut expected = expected;
+            expected["pane"] = json!("scratch");
+            expected["window"] = json!("W");
+            assert_eq!(
+                requests,
+                [json!({"cmd":"session.background","target":"S","args":expected})]
+            );
+            assert!(String::from_utf8(output.stdout).unwrap().contains(r#"{"ok":true}"#));
+            assert!(
+                String::from_utf8(output.stderr)
+                    .unwrap()
+                    .contains("PROBE_RESULT:Ok(())")
+            );
+        }
+    }
 }

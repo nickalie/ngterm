@@ -175,4 +175,105 @@ mod tests {
         assert_eq!(blocked, 0);
         assert_eq!(wake.read(&ours, &mut [0_u8; 8]).unwrap(), 0);
     }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn an_interrupted_poll_retries_until_the_source_is_readable() {
+        if std::env::var_os("READ_WAKE_INTERRUPT_CHILD").is_some() {
+            interrupted_poll();
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "read_wake::tests::an_interrupted_poll_retries_until_the_source_is_readable",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env_clear()
+            .envs(std::env::vars_os().filter(|(key, _)| !key.to_string_lossy().starts_with("NGTERM_")))
+            .env("READ_WAKE_INTERRUPT_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    static SIGNALS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    extern "C" fn signal_received(_: libc::c_int) {
+        SIGNALS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn waiting_in_poll(tid: libc::pid_t) -> bool {
+        std::fs::read_to_string(format!("/proc/self/task/{tid}/syscall"))
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .is_some_and(|number| number == libc::SYS_poll.to_string())
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn wait_until(condition: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !condition() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reader did not reach the expected state"
+            );
+            thread::yield_now();
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn interrupted_poll() {
+        // SAFETY: all-zero bytes are a valid initial sigaction before setting its handler and mask.
+        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+        action.sa_sigaction = signal_received as *const () as usize;
+        // SAFETY: action's mask is live and writable.
+        let emptied = unsafe { libc::sigemptyset(&raw mut action.sa_mask) };
+        assert_eq!(emptied, 0);
+        // SAFETY: action is initialized, the handler only updates a lock-free atomic, and this process runs one test.
+        let installed = unsafe { libc::sigaction(libc::SIGUSR1, &raw const action, std::ptr::null_mut()) };
+        assert_eq!(installed, 0);
+        let wake = ReadWake::new().unwrap();
+        let (ours, theirs) = ngterm_server::endpoint::pair().unwrap();
+        // SAFETY: returns the pthread identifier of this live thread.
+        let pthread = unsafe { libc::pthread_self() };
+        // SAFETY: returns the kernel identifier of this live thread.
+        let tid = unsafe { libc::gettid() };
+        let mut buffer = [0_u8; 8];
+        let count = thread::scope(|scope| {
+            let signaler = scope.spawn(|| {
+                let result = std::panic::catch_unwind(|| {
+                    wait_until(|| waiting_in_poll(tid));
+                    // SAFETY: the scoped reader thread remains live until this sender joins.
+                    assert_eq!(unsafe { libc::pthread_kill(pthread, libc::SIGUSR1) }, 0);
+                    wait_until(|| SIGNALS.load(Ordering::SeqCst) > 0 && waiting_in_poll(tid));
+                    crate::client::send_all(&theirs, b"ready").unwrap();
+                });
+                if result.is_err() {
+                    wake.wake();
+                }
+                result.unwrap();
+            });
+            let count = wake.read(&ours, &mut buffer).unwrap();
+            signaler.join().unwrap();
+            count
+        });
+        assert_eq!(&buffer[..count], b"ready");
+        assert!(!wake.is_woken());
+        assert_eq!(SIGNALS.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn source_read_errors_are_returned_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = std::fs::File::open(directory.path()).unwrap();
+        let error = ReadWake::new().unwrap().read(source, &mut [0_u8; 1]).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EISDIR));
+    }
 }

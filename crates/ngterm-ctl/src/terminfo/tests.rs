@@ -795,3 +795,20 @@ fn an_entry_tic_compiled_reaches_ssh_as_source() {
     let (_, body) = dumped.split_once('\n').unwrap();
     assert_eq!(body, "xterm-ghostty|ngterm test entry,\n\tcols#80, lines#24,\n");
 }
+
+#[test]
+fn a_client_without_parent_directories_still_has_a_stage_candidate() {
+    assert_eq!(
+        candidate_directories(Some(Path::new("/")), &HashMap::new()),
+        [ngterm_core::paths::join_relative(Path::new("/"), "share/terminfo")]
+    );
+}
+
+#[test]
+fn an_entry_removed_before_dumping_names_the_expected_file() {
+    let fixture = Fixture::new();
+    let directory = fixture.path("missing");
+    let entry = directory.join("x").join(ENTRY);
+    let reason = crate::client::os_message(&fs::read(&entry).unwrap_err());
+    assert_eq!(dump(&directory), Err(InstallFailure::EntryUnreadable { entry, reason }));
+}
