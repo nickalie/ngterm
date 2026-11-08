@@ -98,8 +98,10 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
   git-ignored `.claude/skills/agterm-upstream-sync/references/machines.local.md`, section "Linux distro VMs". Never
   copy them into a tracked file.
 - Use them as `.claude/skills/agterm-upstream-sync/references/machines.md` says for the Windows VM: check the state
-  first, start on demand, one VM at a time (the host's CPU cap), stop what you started when the step ends, failures
-  included.
+  first, start on demand, stop what you started when the step ends, failures included.
+- **Never more than two of these VMs running at once** (user, 2026-11-08), whatever started them: before starting one,
+  count the running ones, and wait for one to stop when two are up. Parallel checks (Task 1, Task 9) go in pairs at
+  most.
 - They are throwaway: a GUI run on their desktops is fine there. Before the first install, take a snapshot of each
   with no ngterm on it, and revert to it before every fresh-install check.
 - Ubuntu 24.04, the deb's baseline, has no VM: its download path is checked in a container (Task 9).
@@ -342,10 +344,10 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
 - [ ] a fresh Ubuntu 24.04 container (headless GUI as README > Test describes), runtime served locally through
       `NGTERM_WEB_ENGINE_URL`: the deb installs without WPE, the first page downloads the runtime, plays a video and
       Web Audio, the second app start reuses it
-- [ ] each of the four test machines, reverted to its clean snapshot: install the deb or rpm, then on its desktop open
-      a page that plays a video and Web Audio; it takes the engine path Task 1 recorded for it (system engine and no
-      download, or the download through `NGTERM_WEB_ENGINE_URL`); the tarball and the AppImage download on at least
-      one of them
+- [ ] each of the four test machines, at most two running at once, reverted to its clean snapshot: install the deb or
+      rpm, then on its desktop open a page that plays a video and Web Audio; it takes the engine path Task 1 recorded
+      for it (system engine and no download, or the download through `NGTERM_WEB_ENGINE_URL`); the tarball and the
+      AppImage download on at least one of them
 - [ ] Arch: the package pulls `wpewebkit`, the probe picks the system engine, nothing is downloaded
 - [ ] offline: `--install-web-engine` from a file; a tampered archive is refused
 - [ ] an older app and a newer one sharing the data dir: neither deletes the other's runtime while it runs
