@@ -61,6 +61,19 @@ def page_state(tree: dict[str, Any], session: str) -> dict[str, Any] | None:
     return pages[0] if pages else None
 
 
+def shown(state: dict[str, Any] | None) -> bool:
+    """Whether the page read back loaded with its title. `WebKit` reports a load finished before the title its document
+    set (a task the document queues), so a read-back between the two finds the page loaded without its title yet."""
+    return bool(state) and state.get("state") == "loaded" and state.get("title") == TITLE
+
+
+def missing(state: dict[str, Any] | None, timeout: int) -> str:
+    """Why a page that did not fail is not shown at the deadline."""
+    if (state or {}).get("state") == "loaded":
+        return f"the page loaded but did not show its title {TITLE!r} within {timeout}s"
+    return f"the page did not load within {timeout}s"
+
+
 def probe(bin: Path, timeout: int) -> dict[str, Any]:
     """WPE WebKit as the staged build runs it (module docs)."""
     from ghostty_probe import LAVAPIPE_ICD_VARIABLE, lavapipe_from_script
@@ -91,14 +104,13 @@ def probe(bin: Path, timeout: int) -> dict[str, Any]:
         state = None
         while time.monotonic() < deadline:
             state = page_state(assert_ok(instance.request("tree")), session)
-            if state and state.get("state") in ("loaded", "failed"):
+            if shown(state) or (state or {}).get("state") == "failed":
                 break
             time.sleep(0.2)
         report["page"] = state
-        loaded = bool(state) and state.get("state") == "loaded" and state.get("title") == TITLE
-        report["ok"] = loaded
-        if not loaded:
-            report["error"] = (state or {}).get("error") or f"the page did not load within {timeout}s"
+        report["ok"] = shown(state)
+        if not report["ok"]:
+            report["error"] = (state or {}).get("error") or missing(state, timeout)
     except Exception as error:  # noqa: BLE001 - the report names whatever stopped the probe
         report["error"] = f"{type(error).__name__}: {error}"
     finally:

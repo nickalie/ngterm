@@ -66,3 +66,55 @@ def test_the_probe_defaults_to_the_runners_stage(monkeypatch: pytest.MonkeyPatch
     assert webkit_probe.main([]) == 0
     assert seen == [(tmp_path / "ngterm").resolve(), webkit_probe.STAGE_BIN.resolve()]
     assert webkit_probe.STAGE_BIN.parts[-3:] == ("conformance-stage", "bin", "ngterm")
+
+
+def test_a_page_that_reads_back_loaded_before_its_title_is_waited_for(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WebKit reports a load finished before the title its document set (the title is a task the document queues), so
+    a read-back can find the page loaded without its title yet: the probe waits for the title, as the suite does."""
+    from agterm_conformance.client import Response
+    from agterm_conformance.impls import rust
+
+    def page(**fields: object) -> Response:
+        overlay = {"state": "loaded", "page": str(tmp_path / "webkit-probe.html"), **fields}
+        tree = {"tree": {"workspaces": [{"id": "W", "sessions": [{"id": "S", "htmlOverlays": [overlay]}]}]}}
+        return Response(True, tree, None, {})
+
+    reads = iter([page(), page(), page(title=webkit_probe.TITLE)])
+
+    class Instance:
+        root = tmp_path
+        log = tmp_path / "app.log"
+
+        def request(self, method: str, *args: object, **params: object) -> Response:
+            if method == "tree":
+                return next(reads)
+            return Response(True, {"id": "S"}, None, {})
+
+    class Adapter:
+        def __init__(self, bin: Path) -> None:
+            pass
+
+        def launch(self) -> Instance:
+            return Instance()
+
+        def stop(self, instance: Instance) -> None:
+            pass
+
+    (tmp_path / "app.log").write_text("")
+    (tmp_path / "ngterm").write_text("")
+    monkeypatch.setenv("CONFORMANCE_LAVAPIPE_ICD", str(tmp_path / "lvp_icd.json"))
+    monkeypatch.setattr(rust, "RustAdapter", Adapter)
+    monkeypatch.setattr(webkit_probe.time, "sleep", lambda _: None)
+    report = webkit_probe.probe(tmp_path / "ngterm", 5)
+    assert report["ok"] is True, report.get("error")
+    assert report["page"]["title"] == webkit_probe.TITLE
+
+
+def test_a_page_short_of_its_title_at_the_deadline_says_which_part_is_missing() -> None:
+    assert webkit_probe.missing({"state": "loaded"}, 60) == (
+        "the page loaded but did not show its title 'ngterm-webkit-probe' within 60s"
+    )
+    assert webkit_probe.missing({"state": "loading"}, 60) == "the page did not load within 60s"
+    assert webkit_probe.missing(None, 60) == "the page did not load within 60s"
