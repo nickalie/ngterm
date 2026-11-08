@@ -12,7 +12,8 @@ text, so a line can't slip from one job to another:
 - secrets: none at workflow or job level (`secrets.X` in any case, `secrets['X']`, `toJSON(secrets)`, a job's
   `secrets:`), only in a step's `env:`;
 - permissions: read-only at the workflow level; only `publish` widens them (and `windows-sign` and `play-upload`,
-  which other plans add), each to exactly its listed scopes;
+  which other plans add), and `linux` adds package and attestation reads (its WPE prefix from GHCR, provenance-checked),
+  each to exactly its listed scopes;
 - publishing only: a step that writes a GitHub release (`gh release`, `gh api .../releases`, a release action) or
   attests, and every channel or store job (`aur`, `homebrew`, `winget`, `play-upload`), has `publishing == 'true'`
   as a top-level conjunct of its own condition or its job's, so no `||` lets a rehearsal or a dry run through;
@@ -54,6 +55,7 @@ PERMISSIONS = {
     "publish": {"contents": "write", "id-token": "write", "attestations": "write"},
     "windows-sign": {"contents": "read", "actions": "read"},
     "play-upload": {"contents": "read", "id-token": "write"},
+    "linux": {"contents": "read", "packages": "read", "attestations": "read"},
 }
 CHANNELS = ("aur", "homebrew", "winget", "play-upload")
 PLATFORMS = ("LINUX_X86_64", "LINUX_AARCH64", "WINDOWS", "MACOS", "IOS", "ANDROID")
@@ -290,6 +292,7 @@ def self_test():
     # permissions
     caught("widens permissions", lambda j, w: j["checksums"].update(permissions={"contents": "write"}))
     caught("aren't", lambda j, w: j["publish"].update(permissions={"contents": "write", "packages": "write"}))
+    caught("aren't", lambda j, w: j["linux"]["permissions"].update(packages="write"))
     caught("workflow permissions", lambda j, w: w.update(permissions={"contents": "write"}))
     # publishing only
     caught("doesn't run only when publishing", lambda j, w: j.update(

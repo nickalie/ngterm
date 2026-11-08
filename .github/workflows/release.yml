@@ -122,10 +122,17 @@ jobs:
           - os: ubuntu-24.04-arm
             arch: aarch64
     runs-on: ${{ matrix.os }}
+    # packages and attestations: the portable WPE WebKit prefix from GHCR, and its provenance
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
     outputs:
       manifest_x86_64: ${{ steps.manifest.outputs.manifest_x86_64 }}
       manifest_aarch64: ${{ steps.manifest.outputs.manifest_aarch64 }}
-    # A cold WPE source build dominates this job. Its installed prefix is cached.
+    # A cold WPE source build dominates this job (hours). Its installed prefix comes from the GHCR package
+    # release-wpe-cache.yml publishes from main, and builds from source only when that holds none for its key or
+    # can't be read (a failed login, an auth or registry error), each with a warning.
     timeout-minutes: 350
     env:
       NGTERM_RELEASE_WPE: /home/runner/.cache/ngterm/release-wpe
@@ -136,24 +143,7 @@ jobs:
           ref: ${{ needs.version.outputs.commit }}
           persist-credentials: false
       - name: Build and packaging dependencies
-        run: |
-          # WPE and the Rust release build both need disk space on hosted runners.
-          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential clang-18 lld-18 cmake ninja-build pkg-config ruby perl python3 gperf \
-            curl xz-utils patch zstd file patchelf desktop-file-utils \
-            bubblewrap xdg-dbus-proxy apparmor dbus-daemon libseccomp-dev libfontconfig-dev libfreetype-dev libwayland-dev \
-            wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
-            libglib2.0-dev libharfbuzz-dev libharfbuzz-icu0 libicu-dev libjpeg-dev \
-            libepoxy-dev libgcrypt20-dev libsoup-3.0-dev libtasn1-6-dev libxml2-dev \
-            libpng-dev libsqlite3-dev libwebp-dev zlib1g-dev libavif-dev liblcms2-dev \
-            libjxl-dev libwoff-dev libxslt1-dev libinput-dev libudev-dev libdrm-dev \
-            libgbm-dev libegl-dev libgles-dev libatk1.0-dev libatk-bridge2.0-dev \
-            libhyphen-dev libenchant-2-dev flite1-dev libmanette-0.2-dev \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
-            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-            gstreamer1.0-libav glib-networking libvulkan1 mesa-vulkan-drivers
+        run: scripts/release-linux-deps.sh
       - name: Rust toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -163,15 +153,14 @@ jobs:
         with:
           path: ~/.cache/ngterm/vendor
           key: release-vendor-${{ matrix.os }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
-      - name: WPE cache identity
-        id: wpe-cache
-        run: |
-          key="$(scripts/build-release-wpe.sh --print-key)"
-          echo "key=$key" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ngterm/release-wpe
-          key: release-wpe-${{ matrix.os }}-${{ steps.wpe-cache.outputs.key }}
+      # Unpacked only once `gh attestation verify` ties it to release-wpe-cache.yml on main: a failed check fails the
+      # job. None stored for this key, or a store that can't be read: a warning naming which, and the next step builds
+      # it from source (hours).
+      - name: Portable WPE WebKit from GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OS: ${{ matrix.os }}
+        run: scripts/release-wpe-store.sh pull "$OS"
       - name: Portable WPE WebKit
         run: scripts/build-release-wpe.sh
       - name: libghostty-vt and embedded fonts

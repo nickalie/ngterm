@@ -1000,6 +1000,15 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 
 - `release.yml`: tag-triggered and manual release packaging, with Linux x86_64/aarch64, Windows x86_64, and macOS
   Intel/Apple Silicon builds; see [Downloads and releases](#downloads-and-releases).
+- `release-wpe-cache.yml` (on main: pushes that change the WPE build's inputs or its store, and by hand): keeps
+  `release.yml`'s portable WPE WebKit prefix, for both Linux arches, in the private GHCR package
+  `ghcr.io/<owner>/ngterm-release-wpe`, one tarball per runner image and `scripts/build-release-wpe.sh --print-key`
+  (`scripts/release-wpe-store.sh`). It builds only a missing one, with no write access to the package; a separate job
+  pushes it, attests its provenance and only then tags it, and never rewrites a tag. `release.yml`'s `linux` job
+  unpacks it only after `gh attestation verify` ties it to this workflow on main (a failed check fails the release);
+  with none for its key, or a store it can't read (a failed login, an auth or registry error), it warns and builds
+  WPE from source (hours). A package version outlives an actions/cache
+  entry, which a tag couldn't read anyway.
 - `linux.yml`: `linux` (format, clippy, the lint report into the job summary, `cargo test` with node for the
   OpenCode plugin's tests, all on the workspace without the WPE crates and the app without its HTML overlays), `wpe`
   (clippy, tests and the bindings' regeneration check of the WPE crates on Arch's `wpewebkit`, then the app with its

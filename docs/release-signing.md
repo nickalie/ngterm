@@ -31,6 +31,8 @@ minisign key their source commit carries, `crates/ngterm-update/trust/minisign.p
   after the `approve` job's `release-gate` environment is approved by the release reviewer. Building (cargo, Gradle,
   Xcode) happens in jobs with no environment; the signing jobs run no build and restore no cache; verify jobs check
   the signed output without secrets. `scripts/check-release-workflow.py`, run by the lint CI, keeps these rules.
+- The Linux build job takes its portable WPE WebKit prefix from GHCR, unpacked only once its provenance verifies as
+  `release-wpe-cache.yml`'s on main.
 - Pushing a tag starts a publishing run at once. To rehearse a tag first, reject (or cancel) that run's approval, then
   dispatch the rehearsal, which queues behind it on the same tag.
 - A tag stays on the commit it was made at. When a rehearsal finds something to fix, the fix goes out under a new

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build the full HTML engine against Ubuntu 24.04, instead of redistributing Arch's
-# glibc-2.44-only binary. The resulting prefix is cached separately from dev dependencies.
+# glibc-2.44-only binary. The resulting prefix lives apart from the dev dependencies: releases pull it from GHCR
+# (scripts/release-wpe-store.sh), keyed by --print-key.
 set -euo pipefail
 # shellcheck source=lib/native.sh
 source "$(dirname "$0")/lib/native.sh"
@@ -9,7 +10,8 @@ source "$NATIVE_ROOT/packaging/release/pins.env"
 key="$({
   grep -E '^WPE_(VERSION|API_VERSION)=' "$PINS"
   grep '^WPE_SOURCE_SHA256=' "$NATIVE_ROOT/packaging/release/pins.env"
-  cat "$0" "$NATIVE_ROOT/packaging/release/relocatable-wpe.patch"
+  # the Ubuntu packages it is built and linked against, too
+  cat "$0" "$NATIVE_ROOT/packaging/release/relocatable-wpe.patch" "$NATIVE_ROOT/scripts/release-linux-deps.sh"
 } | sha256_of)"
 if [[ "${1:-}" == --print-key ]]; then echo "$key"; exit 0; fi
 (($# == 0)) || die "usage: scripts/build-release-wpe.sh [--print-key]"

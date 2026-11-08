@@ -1,0 +1,160 @@
+# Keeps release.yml's portable WPE WebKit prefix where every release can pull it: GHCR's private package
+# ghcr.io/<owner>/ngterm-release-wpe, one OCI artifact per runner image and build key (scripts/release-wpe-store.sh).
+#
+# A release builds on its tag, and actions/cache can't carry hours of WPE build from one release to the next: a tag
+# reads no other tag's caches, and GitHub evicts a cache after 7 days unused, or sooner while the repository is over
+# its cache space. A package version stays. The key is scripts/build-release-wpe.sh --print-key: the WPE pins, the
+# source checksum, the relocation patch, the build script and scripts/release-linux-deps.sh's package set. A run whose
+# key is stored already builds nothing.
+#
+# `build` builds a missing prefix with no write access to the package: its token reads the package in the probe step
+# only, and logs out there. `publish` never unpacks or runs what `build` made: it pushes the tarball untagged, attests
+# that manifest's provenance (this workflow, on main), and only then tags it. release.yml's `linux` job pulls a tag
+# only through `gh attestation verify` against that provenance. Each `build` leg reports its archive's sha256 under its
+# own output name (legs writing one name overwrite each other), and `publish` pushes only an archive that matches it.
+name: release-wpe-cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-wpe-cache.yml
+      - scripts/build-release-wpe.sh
+      - scripts/release-linux-deps.sh
+      - scripts/release-wpe-store.sh
+      - scripts/lib/fetch-tool.sh
+      - scripts/lib/native.sh
+      - build/pins.env
+      - packaging/release/pins.env
+      - packaging/release/relocatable-wpe.patch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel a running source build: a second run would only start the same build over.
+concurrency:
+  group: release-wpe-cache
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    # Only main's provenance is what release.yml accepts.
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        # release.yml's `linux` matrix: the tag names the runner image
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      built_x86_64: ${{ steps.pack.outputs.built_x86_64 }}
+      built_aarch64: ${{ steps.pack.outputs.built_aarch64 }}
+    timeout-minutes: 350
+    env:
+      # release.yml's path: the prefix's pkg-config files name it
+      NGTERM_RELEASE_WPE: /home/runner/.cache/ngterm/release-wpe
+      OS: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Stored already?
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release-wpe-store.sh probe "$OS" >> "$GITHUB_OUTPUT"
+      - name: Build dependencies
+        if: steps.probe.outputs.exists == 'false'
+        run: scripts/release-linux-deps.sh
+      - name: Portable WPE WebKit
+        if: steps.probe.outputs.exists == 'false'
+        run: |
+          rm -rf "$NGTERM_RELEASE_WPE"
+          scripts/build-release-wpe.sh
+      - name: Tarball
+        id: pack
+        if: steps.probe.outputs.exists == 'false'
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          sum="$(scripts/release-wpe-store.sh pack "$RUNNER_TEMP/release-wpe.tar.zst")"
+          echo "built_$ARCH=$sum" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.probe.outputs.exists == 'false'
+        with:
+          name: release-wpe-${{ matrix.arch }}
+          path: ${{ runner.temp }}/release-wpe.tar.zst
+          if-no-files-found: error
+          # zstd already
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    needs: build
+    # each arch that built, even when the other one failed
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    timeout-minutes: 30
+    env:
+      OS: ${{ matrix.os }}
+      SHA256: ${{ needs.build.outputs[format('built_{0}', matrix.arch)] }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.SHA256 != ''
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: env.SHA256 != ''
+        with:
+          name: release-wpe-${{ matrix.arch }}
+          path: ${{ runner.temp }}/in
+      - name: Registry login
+        if: env.SHA256 != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release-wpe-store.sh login
+      - name: Push, untagged
+        id: push
+        if: env.SHA256 != ''
+        run: scripts/release-wpe-store.sh push "$OS" "$RUNNER_TEMP/in/release-wpe.tar.zst" "$SHA256" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: steps.push.outputs.digest != ''
+        with:
+          subject-name: ${{ steps.push.outputs.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          # storage records are for organization-owned repositories only
+          create-storage-record: false
+      - name: Tag
+        if: steps.push.outputs.digest != ''
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: scripts/release-wpe-store.sh tag "$OS" "$DIGEST"
+      - name: Registry logout
+        if: always() && env.SHA256 != ''
+        run: scripts/release-wpe-store.sh logout
