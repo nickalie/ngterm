@@ -218,7 +218,8 @@ impl Center {
         })
     }
 
-    /// The notifier handoff, also used when a test has no interactive toast session.
+    /// Builds the toast and its callbacks, hands them to `show`, and retains the toast if that succeeds. `show` is a
+    /// parameter because a test cannot make Windows report a click or a user's cancellation.
     fn show_with(
         &self,
         identity: &str,
