@@ -174,6 +174,9 @@ fn wait_event<T>(
         match events.try_recv() {
             Ok(Event::Policy(request)) => host.decide_policy(request.token, true),
             Ok(Event::Frame(frame)) => host.frame_presented(frame.view, frame.buffer),
+            Ok(Event::WebProcessTerminated { view, reason }) => {
+                panic!("page {view:?} web process terminated: {reason:?}");
+            }
             Ok(event) => {
                 if let Some(found) = pick(event) {
                     return found;
