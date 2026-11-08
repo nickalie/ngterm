@@ -113,6 +113,22 @@ class SessionViewTest : SessionViewFixture() {
         assertTrue(panes.getValue("P1").inputs.none { it is FakeInput.Key })
     }
 
+    @Test
+    @Config(qualifiers = "+qwerty")
+    fun aPaneChordInASessionOfOnePaneReachesTheProgram() {
+        compose.activity.resources.configuration.hardKeyboardHidden = Configuration.HARDKEYBOARDHIDDEN_NO
+        openSession(withLayout = false)
+        test.core.emit(MobileEvent.SessionLayout("m1", "s1", RemoteLayout(listOf("P1"), "P1", "vertical", true)))
+        waitFor { p1 in test.core.shownPanes && panes["P1"] != null }
+        terminal(0).performClick()
+        compose.waitForIdle()
+        panes.getValue("P1").inputs.clear()
+        // the session's only pane: the chords have nowhere to go, so they are the program's
+        chord(Key.DirectionLeft)
+        chord(Key.DirectionRight)
+        waitFor { pressed("P1").containsAll(listOf("arrow_left", "arrow_right")) }
+    }
+
     // the split's two panes side by side, both shown
     private fun openSplit() {
         openSession()

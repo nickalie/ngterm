@@ -115,8 +115,10 @@ private fun LiveSession(
 ) {
     val sessions by rememberUpdatedState(state.sessions.map { it.key })
     val key = open.key
+    // with no other attached session the session chords have nowhere to go: they are the program's
+    val roams = state.sessions.size > 1
     val view =
-        remember(actions, compact, key) {
+        remember(actions, compact, key, roams) {
             SessionViewActions(
                 onBack = if (compact) actions.onClose else null,
                 onFocus = actions.onFocus,
@@ -125,8 +127,8 @@ private fun LiveSession(
                 onTakeLead = actions.onTakeLead,
                 onDetach = actions.onDetach,
                 onEnd = actions.onEnd,
-                onNextSession = { sessions.cyclicNeighbor(key, forward = true)?.let(actions.onOpen) },
-                onPreviousSession = { sessions.cyclicNeighbor(key, forward = false)?.let(actions.onOpen) },
+                onNextSession = if (roams) ({ sessions.cyclicNeighbor(key, true)?.let(actions.onOpen) }) else null,
+                onPreviousSession = if (roams) ({ sessions.cyclicNeighbor(key, false)?.let(actions.onOpen) }) else null,
                 onView = actions.onView,
                 onChatView = actions.onChatView,
                 onAlone = { session, on ->
