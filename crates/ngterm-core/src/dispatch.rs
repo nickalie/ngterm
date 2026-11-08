@@ -775,6 +775,9 @@ impl Core {
             app: &self.app,
             settings: &self.settings,
             index_unsaved: self.persistence.as_ref().is_some_and(LibraryPersistence::index_unsaved),
+            snapshot_unsaved: scoped
+                .zip(self.persistence.as_ref())
+                .is_some_and(|(id, persistence)| self.library.is_open(id) && persistence.snapshot_unsaved(id)),
             quick_visible: commands::quick::visible(self),
         };
         let mut tree = control_tree(store, &context);

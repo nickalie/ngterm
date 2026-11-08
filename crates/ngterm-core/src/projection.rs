@@ -34,6 +34,8 @@ pub struct TreeContext<'a> {
     pub settings: &'a AppSettings,
     /// The last `windows.json` write failed.
     pub index_unsaved: bool,
+    /// The last snapshot save of the tree's window failed (per window, unlike `index_unsaved`).
+    pub snapshot_unsaved: bool,
     /// Whether the quick terminal is shown, app-wide.
     pub quick_visible: bool,
 }
@@ -79,6 +81,7 @@ pub fn control_tree(store: &AppStore, context: &TreeContext<'_>) -> ControlTree 
         quick_visible: Some(context.quick_visible),
         app: Some(context.app.clone()),
         index_unsaved: context.index_unsaved.then_some(true),
+        snapshot_unsaved: context.snapshot_unsaved.then_some(true),
         ..ControlTree::default()
     }
 }
@@ -493,6 +496,7 @@ mod tests {
             app: &app,
             settings,
             index_unsaved,
+            snapshot_unsaved: false,
             quick_visible: false,
         };
         serde_json::to_value(control_tree(store, &context)).unwrap()
@@ -794,6 +798,26 @@ mod tests {
         assert_eq!(nodes[0]["lastSelectedAt"], json!(1_600_000_000.0));
         assert_eq!(nodes[1]["lastSelectedAt"], json!(1_700_000_100.0));
         assert!(!nodes[2].as_object().unwrap().contains_key("lastSelectedAt"));
+    }
+
+    /// Upstream's `controlTreeSnapshotUnsavedRoundTripsAndOmitsWhenNil`, on the projection.
+    #[test]
+    fn the_tree_reports_a_failed_snapshot_save_apart_from_the_index() {
+        let store = AppStore::new();
+        let settings = AppSettings::default();
+        let app = app();
+        let context = TreeContext {
+            app: &app,
+            settings: &settings,
+            index_unsaved: false,
+            snapshot_unsaved: true,
+            quick_visible: false,
+        };
+        let tree = serde_json::to_value(control_tree(&store, &context)).unwrap();
+        assert_eq!(tree["snapshotUnsaved"], true);
+        assert!(!tree.as_object().unwrap().contains_key("indexUnsaved"));
+        let saved = tree_json(&store, &settings, true);
+        assert!(!saved.as_object().unwrap().contains_key("snapshotUnsaved"));
     }
 
     /// Upstream's `controlTreeReportsTheSavedFlaggedOrderAndOmitsItWhenNothingIsFlagged`.

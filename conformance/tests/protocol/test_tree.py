@@ -59,6 +59,7 @@ def test_fresh_tree_omits_unset_top_level_fields(ctl):
         "askPending",
         "liveReset",
         "indexUnsaved",
+        "snapshotUnsaved",
     )
 
 

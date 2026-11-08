@@ -599,10 +599,10 @@ top-level fields, `.claude/rules/windows.md`.
 **Conformance:** new `tests/protocol/test_tree.py::test_snapshot_unsaved_while_a_windows_file_cannot_be_written`
 (covers `field:tree.snapshotUnsaved`); add `snapshotUnsaved` to `::test_fresh_tree_omits_unset_top_level_fields` (listed).
 
-- [ ] A failed `windows/<id>.json` write (immediate or debounced) marks that window; the next landed write clears
+- [x] A failed `windows/<id>.json` write (immediate or debounced) marks that window; the next landed write clears
   it; launch-time writes leave it alone; other windows unaffected; forgotten when the window closes. `tree`
   (scoped to its window) carries `snapshotUnsaved: true` while marked, independent of `indexUnsaved`.
-- [ ] write tests: the two persistence cases (`indexUnsaved` stays absent); the conformance test (a directory in place
+- [x] write tests: the two persistence cases (`indexUnsaved` stays absent); the conformance test (a directory in place
   of the file; check the trick on Windows).
 
 ### Task 14: Live panes start the shell named by ghostty `command` (#895)

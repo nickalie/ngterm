@@ -13,9 +13,11 @@
 //! Recovery never fails: a corrupt, version-mismatched or empty index counts as absent, and the launch then recovers
 //! the surviving `windows/<ID>.json` files, else migrates a legacy `workspaces.json`, else seeds one window. A
 //! missing or corrupt window file opens as an empty tree. Write failures are logged and leave the model as it is; a
-//! failed index write is retried once a snapshot write shows the disk takes writes again.
+//! failed index write is retried once a snapshot write shows the disk takes writes again. A failed index write marks
+//! the library ([`LibraryPersistence::index_unsaved`]) and a failed snapshot save its window
+//! ([`LibraryPersistence::snapshot_unsaved`]) until a write of the same file lands.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -69,6 +71,9 @@ pub struct LibraryPersistence {
     directory: PathBuf,
     /// Set from a failed index write until one lands (upstream's `indexUnsaved`).
     index_unsaved: bool,
+    /// The open windows whose last snapshot save failed, each until one lands (upstream's per-store
+    /// `snapshotUnsaved`); launch-time writes leave it alone, as upstream's `WindowLibrary` writes skip `saveChecked`.
+    snapshot_unsaved: HashSet<Uuid>,
     /// The live debounced write of each window, by token.
     pending: HashMap<Uuid, u64>,
     next_token: u64,
@@ -80,6 +85,7 @@ impl LibraryPersistence {
         Self {
             directory: directory.into(),
             index_unsaved: false,
+            snapshot_unsaved: HashSet::new(),
             pending: HashMap::new(),
             next_token: 0,
         }
@@ -149,6 +155,12 @@ impl LibraryPersistence {
         self.index_unsaved
     }
 
+    /// Whether open window `id`'s last snapshot save failed and no later one landed (`tree.snapshotUnsaved`).
+    #[must_use]
+    pub fn snapshot_unsaved(&self, id: Uuid) -> bool {
+        self.snapshot_unsaved.contains(&id)
+    }
+
     // MARK: - Bootstrap
 
     /// Builds the library at launch: a valid index reopens its open set (never windowless: the frontmost, else the
@@ -179,7 +191,8 @@ impl LibraryPersistence {
         }
         let effects = library.drain_effects();
         for (id, _) in effects.window_saves {
-            self.save_window(&library, id);
+            // a launch write, so it marks nothing
+            self.write_window(&library, id);
         }
         self.save_index(&library);
         library
@@ -408,22 +421,35 @@ impl LibraryPersistence {
     }
 
     /// Writes an open window's snapshot now, cancelling its debounced write (upstream's `saveChecked`). Whether it
-    /// landed; false for a closed window.
+    /// landed; false for a closed window. A failed write marks the window [`Self::snapshot_unsaved`] and one that lands
+    /// clears it.
     pub fn save_window(&mut self, library: &WindowLibrary, id: Uuid) -> bool {
-        self.pending.remove(&id);
-        let Some(store) = library.store(id) else {
+        let Some(landed) = self.write_window(library, id) else {
             return false;
         };
+        if landed {
+            self.snapshot_unsaved.remove(&id);
+        } else {
+            self.snapshot_unsaved.insert(id);
+        }
+        landed
+    }
+
+    /// Writes an open window's snapshot now, cancelling its debounced write, without touching its unsaved mark.
+    /// Whether it landed; `None` for a closed window.
+    fn write_window(&mut self, library: &WindowLibrary, id: Uuid) -> Option<bool> {
+        self.pending.remove(&id);
+        let store = library.store(id)?;
         match self.window_store(id).save(&store.snapshot()) {
             Ok(()) => {
                 if self.index_unsaved {
                     self.save_index(library);
                 }
-                true
+                Some(true)
             }
             Err(error) => {
                 tracing::warn!(%error, window = %id, "saving the window failed");
-                false
+                Some(false)
             }
         }
     }
@@ -466,13 +492,17 @@ impl LibraryPersistence {
     // MARK: - Window lifecycle
 
     /// Closes a window: writes its snapshot, then drops its store (upstream's window `willClose` save before
-    /// `closeWindow`). A no-op while terminating, so the open set survives for the next launch. Commit afterwards.
+    /// `closeWindow`) and its unsaved mark with it. A no-op while terminating, so the open set survives for the next
+    /// launch. Commit afterwards.
     pub fn close_window(&mut self, library: &mut WindowLibrary, id: Uuid) {
         if library.is_terminating || !library.is_open(id) {
             return;
         }
         self.save_window(library, id);
         library.close_window(id);
+        if !library.is_open(id) {
+            self.snapshot_unsaved.remove(&id);
+        }
     }
 
     /// Removes a window for good: its pending write is dropped and its file deleted. Keeps the last window. Commit
@@ -482,6 +512,7 @@ impl LibraryPersistence {
             return;
         }
         self.pending.remove(&id);
+        self.snapshot_unsaved.remove(&id);
         // a closed window's sessions are destroyed for good too, so their rendered text goes now, read from its file;
         // an open window's leave through the library's effects
         if !library.is_open(id) {
