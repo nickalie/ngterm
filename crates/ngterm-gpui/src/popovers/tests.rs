@@ -37,6 +37,15 @@ struct Harness {
 
 /// One workspace with sessions "u", "srv" and "var", each selected in turn, so the first two are recent.
 fn harness(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
+    harness_with(cx, None, |_| {})
+}
+
+/// [`harness`] saving through `persistence`, over a core `prepare` adjusts first.
+fn harness_with(
+    cx: &mut TestAppContext,
+    persistence: Option<ngterm_core::persist::LibraryPersistence>,
+    prepare: impl FnOnce(&mut Core),
+) -> (Harness, &mut VisualTestContext) {
     cx.update(gpui_kit::init);
     let mut library = WindowLibrary::seeded("/home/u");
     let window = library.active_window_id().unwrap();
@@ -48,16 +57,18 @@ fn harness(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
     for id in [first, srv, var] {
         store.select_session(Some(id));
     }
-    let core = Core::new(
+    let mut core = Core::new(
         CoreConfig {
             app: AppIdentity::from_recorded("1.2.3", None),
             capabilities: Vec::new(),
         },
         CoreState {
             library,
+            persistence,
             ..CoreState::default()
         },
     );
+    prepare(&mut core);
     let posted = Arc::new(Posted::default());
     let weak: Poster = Arc::downgrade(&posted) as Poster;
     let mut state = AppState::new(core);
@@ -254,4 +265,189 @@ fn the_popovers_name_a_companion_after_its_parent(cx: &mut TestAppContext) {
     h.open(PopoverKind::Attention, cx);
     let rows = h.view.read_with(cx, |p, _| p.row_titles());
     assert_eq!(rows, ["api › logs"], "bell popover rows");
+}
+
+/// A core reading `keymap.conf` and the run counts from `dir`: six commands, "deploy" bound to a chord, "c3" run four
+/// times, so it leads the list above the separator.
+fn six_commands(dir: &std::path::Path) -> impl FnOnce(&mut Core) {
+    let config = dir.join("config");
+    std::fs::create_dir_all(&config).unwrap();
+    let keymap: String = std::iter::once("command \"deploy\" ctrl+alt+shift+j echo deploy\n".to_owned())
+        .chain((2..=6).map(|index| format!("command \"c{index}\" true\n")))
+        .collect();
+    std::fs::write(config.join("keymap.conf"), keymap).unwrap();
+    std::fs::write(
+        dir.join("custom-command-usage.json"),
+        r#"{"version": 1, "counts": {"c3": 4}}"#,
+    )
+    .unwrap();
+    let dir = dir.to_owned();
+    move |core: &mut Core| {
+        let env = ngterm_core::paths::MapEnv::new().with("NGTERM_STATE_DIR", dir.as_os_str());
+        core.set_config_locator(ngterm_core::paths::ConfigLocator::capture(&env));
+        core.reload_keymap();
+        core.update_settings(|settings| settings.shown_interface_elements = Some(vec!["customCommands".to_owned()]));
+    }
+}
+
+/// Upstream's custom-commands popover: the most-run commands lead above a separator, the rest follow in file order,
+/// each with its chord; the keyboard walks them both ways, wrapping, and Return runs the highlighted one and closes.
+#[gpui_kit::test]
+fn the_custom_commands_popover_leads_with_the_most_run_and_runs_by_keyboard(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let prepare = six_commands(dir.path());
+    let persistence = ngterm_core::persist::LibraryPersistence::new(dir.path());
+    let (mut h, cx) = harness_with(cx, Some(persistence), prepare);
+    eprintln!(
+        "DBG {} {:?} {:?}",
+        h.state.core.keymap().commands().len(),
+        h.state.core.keymap_diagnostics(),
+        h.state.core.titlebar(h.window).custom_commands
+    );
+    h.open(PopoverKind::CustomCommands, cx);
+    assert_eq!(
+        h.view.read_with(cx, |p, _| p.row_titles()),
+        ["c3", "deploy", "c2", "c4", "c5", "c6"]
+    );
+    assert!(cx.debug_bounds("popover").is_some());
+    // Up from no highlight lands on the last row, Down from there wraps to the first
+    cx.simulate_keystrokes("up");
+    assert_eq!(h.view.read_with(cx, |p, _| p.highlighted), Some(5));
+    cx.simulate_keystrokes("down down");
+    assert_eq!(h.view.read_with(cx, |p, _| p.highlighted), Some(1));
+    // a letter and a key the list does not read move nothing
+    cx.simulate_keystrokes("x f5");
+    assert_eq!(h.view.read_with(cx, |p, _| p.highlighted), Some(1));
+    cx.simulate_keystrokes("enter");
+    h.settle(cx);
+    assert!(!h.view.read_with(cx, |p, _| p.is_open()), "a run row closes it");
+}
+
+/// The bell's row selects its session in its window; opening it over the clock's popover swaps them without a second
+/// opening for the core to hear.
+#[gpui_kit::test]
+fn the_attention_popover_replaces_the_recent_one_and_selects_its_row(cx: &mut TestAppContext) {
+    use ngterm_core::model::{AgentIndicator, AgentStatus};
+
+    let (mut h, cx) = harness_with(cx, None, |core| {
+        core.update_settings(|settings| settings.attention_button_enabled = Some(true));
+    });
+    let srv = h.sessions[1];
+    h.state
+        .core
+        .library_mut()
+        .store_mut(h.window)
+        .unwrap()
+        .set_agent_indicator(
+            AgentIndicator {
+                status: AgentStatus::Blocked,
+                ..AgentIndicator::default()
+            },
+            srv,
+        );
+    h.settle(cx);
+    h.open(PopoverKind::Recent, cx);
+    let view = h.view.clone();
+    cx.update(|window, cx| {
+        view.update(cx, |popovers, cx| {
+            popovers.toggle(PopoverKind::Attention, point(px(400.), px(48.)), window, cx);
+        });
+    });
+    assert!(
+        h.posted.0.lock().unwrap().is_empty(),
+        "one popover replaced another: the core heard the first opening only"
+    );
+    h.settle(cx);
+    assert_eq!(h.view.read_with(cx, |p, _| p.open_kind()), Some(PopoverKind::Attention));
+    assert_eq!(h.view.read_with(cx, |p, _| p.row_titles()), ["srv"]);
+    // a row past the list runs nothing
+    h.view.update(cx, |popovers, cx| popovers.activate(7, cx));
+    assert!(h.view.read_with(cx, |p, _| p.is_open()));
+
+    cx.simulate_keystrokes("down enter");
+    h.settle(cx);
+    assert!(!h.view.read_with(cx, |p, _| p.is_open()));
+    assert_eq!(h.selected(), Some(srv), "the bell's row selected its session");
+}
+
+#[gpui_kit::test]
+fn a_right_press_outside_closes_it_and_closing_none_posts_nothing(cx: &mut TestAppContext) {
+    let (mut h, cx) = harness(cx);
+    h.view.update(cx, Popovers::close);
+    assert!(h.posted.0.lock().unwrap().is_empty(), "nothing was open");
+    h.open(PopoverKind::Recent, cx);
+    let at = point(px(20.), px(450.));
+    cx.simulate_mouse_down(at, gpui_kit::MouseButton::Right, gpui_kit::Modifiers::default());
+    cx.simulate_mouse_up(at, gpui_kit::MouseButton::Right, gpui_kit::Modifiers::default());
+    h.settle(cx);
+    assert!(
+        !h.view.read_with(cx, |p, _| p.is_open()),
+        "a right press outside closes"
+    );
+    assert_eq!(h.selected(), Some(h.sessions[2]), "and runs nothing");
+}
+
+/// A remote session's recent row carries its cloud, and its title stays the session's name.
+#[gpui_kit::test]
+fn a_remote_recent_row_lists_with_its_cloud(cx: &mut TestAppContext) {
+    let (mut h, cx) = harness(cx);
+    let store = h.state.core.library_mut().store_mut(h.window).unwrap();
+    let workspace = store.workspaces()[0].id();
+    let remote = store
+        .add_session(
+            workspace,
+            NewSession {
+                remote_host: Some("buildbox".to_owned()),
+                name: Some("api".to_owned()),
+                ..NewSession::at_cwd("/srv")
+            },
+        )
+        .unwrap();
+    store.select_session(Some(remote));
+    store.select_session(Some(h.sessions[2]));
+    h.settle(cx);
+    h.open(PopoverKind::Recent, cx);
+    let rows = h.view.read_with(cx, |p, _| p.recent.clone());
+    let row = rows.iter().find(|row| row.session == remote).expect("the remote row");
+    assert!(row.remote);
+    assert!(cx.debug_bounds("popover").is_some());
+}
+
+/// A click on a row runs it: the pointer's row highlights under it, and the press goes no further than the popover.
+#[gpui_kit::test]
+fn a_click_on_a_row_runs_it(cx: &mut TestAppContext) {
+    let (mut h, cx) = harness(cx);
+    h.open(PopoverKind::Recent, cx);
+    let first = h.view.read_with(cx, |p, _| p.recent[0].session);
+    let panel = cx.debug_bounds("popover").expect("the popover");
+    let at = point(panel.center().x, panel.origin.y + px(16.));
+    cx.simulate_mouse_move(at, None, gpui_kit::Modifiers::default());
+    cx.simulate_click(at, gpui_kit::Modifiers::default());
+    h.settle(cx);
+    assert!(!h.view.read_with(cx, |p, _| p.is_open()), "a run row closes it");
+    assert_eq!(h.selected(), Some(first), "the clicked row's session is selected");
+}
+
+/// A row the core marks disabled draws dimmed and runs nothing, by keyboard or by click.
+#[gpui_kit::test]
+fn a_disabled_row_runs_nothing(cx: &mut TestAppContext) {
+    let (mut h, cx) = harness(cx);
+    h.open(PopoverKind::Recent, cx);
+    h.view.update(cx, |popovers, cx| {
+        for row in &mut popovers.recent {
+            row.enabled = false;
+        }
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down enter");
+    let panel = cx.debug_bounds("popover").expect("the popover");
+    cx.simulate_click(
+        point(panel.center().x, panel.origin.y + px(16.)),
+        gpui_kit::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    assert!(h.view.read_with(cx, |p, _| p.is_open()), "still open");
+    assert!(h.posted.0.lock().unwrap().is_empty(), "nothing ran");
+    assert_eq!(h.selected(), Some(h.sessions[2]));
 }
