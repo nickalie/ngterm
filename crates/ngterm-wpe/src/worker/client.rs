@@ -1139,6 +1139,29 @@ mod tests {
     }
 
     #[test]
+    fn a_dmabuf_frame_of_a_page_the_app_never_made_is_dropped_before_its_planes_are_read() {
+        let (client, events, theirs) = with_page(ViewId(5));
+        assert_eq!(
+            (client.pid(), format!("{client:?}")),
+            (0, "Client { pid: 0, .. }".to_owned())
+        );
+        // its plane is no dmabuf: a frame of a page the app has would break the transport
+        let (frame, path) = dmabuf_frame(ViewId(6), 1);
+        let packet = FromWorker::event_packet(Event::Frame(frame)).unwrap();
+        wire::send(theirs.as_fd(), &packet).unwrap();
+        drop(packet);
+        wire::send(theirs.as_fd(), &marker(ViewId(6))).unwrap();
+        let next = events.recv_blocking();
+        assert!(
+            matches!(next, Ok(Event::CloseRequested { view }) if view == ViewId(6)),
+            "{next:?}"
+        );
+        assert!(!open_paths().contains(&path), "the dropped frame's plane closed");
+        drop(theirs);
+        client.shutdown();
+    }
+
+    #[test]
     fn frames_past_the_unanswered_bound_are_answered_unseen() {
         let view = ViewId(5);
         let (client, events, theirs) = with_page(view);
@@ -1647,6 +1670,10 @@ mod tests {
             1,
         );
         assert_eq!(waiting.recv_blocking(), Ok(Err(TOO_LARGE.to_owned())));
+        // a command that keeps no page's state goes without a word in its place
+        client.refuse(&ToWorker::Command(EngineCommand::CloseView(view)), 1);
+        client.send(EngineCommand::Clipboard("after".to_owned()));
+        assert!(matches!(next_command(&theirs), ToWorker::Command(EngineCommand::Clipboard(t)) if t == "after"));
         assert!(
             !events.is_closed() && !client.outgoing.is_closed(),
             "the transport is up"

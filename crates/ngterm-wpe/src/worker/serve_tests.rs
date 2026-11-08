@@ -193,3 +193,57 @@ fn a_worker_forwards_engine_events_and_flushes_its_stop_before_returning() {
         },
     );
 }
+
+/// The app's end of a worker serving on a thread, past the hello and the engine's start.
+fn started_worker() -> (OwnedFd, std::thread::JoinHandle<i32>) {
+    let (app, worker) = pair();
+    let serving = std::thread::spawn(move || serve(worker));
+    hello(&app);
+    let config = crate::HostConfig {
+        frames: crate::FrameMode::Shm,
+        schemes: Vec::new(),
+    };
+    wire::send(app.as_fd(), &ToWorker::Start(config).packet(None).unwrap()).unwrap();
+    assert!(matches!(answer(&app), FromWorker::Started(Ok(()))));
+    (app, serving)
+}
+
+#[test]
+fn a_worker_whose_app_goes_away_before_hearing_of_the_start_ends_quietly() {
+    crate::tests::isolated(
+        "worker::serve::tests::a_worker_whose_app_goes_away_before_hearing_of_the_start_ends_quietly",
+        || {
+            let (app, worker) = pair();
+            let serving = std::thread::spawn(move || serve(worker));
+            hello(&app);
+            let config = crate::HostConfig {
+                frames: crate::FrameMode::Shm,
+                schemes: Vec::new(),
+            };
+            wire::send(app.as_fd(), &ToWorker::Start(config).packet(None).unwrap()).unwrap();
+            drop(app);
+            assert_eq!(serving.join().unwrap(), 0);
+        },
+    );
+}
+
+#[test]
+fn a_worker_whose_app_stops_reading_its_events_ends() {
+    crate::tests::isolated(
+        "worker::serve::tests::a_worker_whose_app_stops_reading_its_events_ends",
+        || {
+            let (app, serving) = started_worker();
+            // the worker's next write fails (EPIPE) while the app's socket stays open: only that failure ends it
+            rustix::net::shutdown(&app, rustix::net::Shutdown::Read).unwrap();
+            let session = crate::SessionId(1);
+            for command in [
+                Command::CreateSession(session, crate::SessionSpec::Ephemeral),
+                Command::ClearSession(session),
+            ] {
+                let (message, blob) = ToWorker::command(command);
+                wire::send(app.as_fd(), &message.packet(blob).unwrap()).unwrap();
+            }
+            assert_eq!(serving.join().unwrap(), 0);
+        },
+    );
+}
