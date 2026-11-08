@@ -1,5 +1,7 @@
 use super::*;
 use crate::download::{Asset, Metadata};
+#[cfg(unix)]
+use crate::fakes;
 use std::io::{BufRead as _, Write as _};
 
 mod regressions;
@@ -56,16 +58,17 @@ fn record_test_installation(root: &Path, work: &Path) -> PathBuf {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn an_install_replaced_while_the_app_was_running_is_never_downgraded() {
     let fixture = tempfile::tempdir().unwrap();
-    let root = fixture.path().join("ngterm");
+    let root = fixture.path().join(fakes::ROOT);
     tree(&root, "0.3.0");
+    let install = fakes::installation(&fakes::executable(&root)).unwrap();
     assert!(
         download::select(
-            &metadata("0.2.0"),
+            &local_metadata("0.2.0"),
             download::DOWNLOADS,
-            &installation(&root),
+            &install,
             "0.1.0",
             &Trust::default()
         )
@@ -74,9 +77,9 @@ fn an_install_replaced_while_the_app_was_running_is_never_downgraded() {
     );
     assert!(
         download::select(
-            &metadata("0.3.0"),
+            &local_metadata("0.3.0"),
             download::DOWNLOADS,
-            &installation(&root),
+            &install,
             "0.1.0",
             &Trust::default()
         )
@@ -85,9 +88,9 @@ fn an_install_replaced_while_the_app_was_running_is_never_downgraded() {
     );
     assert!(
         download::select(
-            &metadata("0.4.0"),
+            &local_metadata("0.4.0"),
             download::DOWNLOADS,
-            &installation(&root),
+            &install,
             "0.1.0",
             &Trust::default()
         )
@@ -257,6 +260,17 @@ pub(super) fn metadata(version: &str) -> Metadata {
             })
             .collect(),
     }
+}
+
+/// [`metadata`] with this platform's [`fakes::asset`] as its archive, as a release on GitHub lists it.
+#[cfg(unix)]
+fn local_metadata(version: &str) -> Metadata {
+    let mut release = metadata(version);
+    let name = fakes::asset(version);
+    release.assets[0].browser_download_url =
+        format!("https://github.com/nickalie/ngterm/releases/download/v{version}/{name}");
+    release.assets[0].name = name;
+    release
 }
 
 #[test]
@@ -472,9 +486,9 @@ fn checksum_requires_one_exact_filename_and_a_valid_hash() {
     assert!(download::checksum(&format!("{hash}  app.tar.gz\n{hash}  app.tar.gz"), "app.tar.gz").is_err());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(super) fn tree(root: &Path, version: &str) {
-    crate::fakes::tree(root, version).unwrap();
+    fakes::tree(root, version).unwrap();
 }
 
 #[test]
@@ -836,9 +850,23 @@ fn detection_reports_paths_with_no_executable_directory_or_install_root() {
         "Executable has no install root."
     );
     let fixture = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        Installation::at(&fixture.path().join("missing")),
+        Err(Error::Io(_))
+    ));
     let root = fixture.path().join("loop");
     std::os::unix::fs::symlink(&root, &root).unwrap();
     assert!(installation(&root).contains_path(fixture.path()));
+}
+
+#[test]
+#[cfg(unix)]
+fn paths_that_cannot_be_resolved_count_as_protected() {
+    let fixture = tempfile::tempdir().unwrap();
+    let install = installation(&fixture.path().join("ngterm"));
+    // `absolute` refuses an empty path, and a missing `..` has no leaf to carry over to its parent.
+    assert!(install.contains_path(Path::new("")));
+    assert!(install.contains_path(&fixture.path().join("missing/..")));
 }
 
 #[test]
@@ -867,6 +895,152 @@ fn bundle_access_visits_files_and_propagates_missing_paths() {
     bundle_access(fixture.path(), fs::metadata(&file).unwrap().uid()).unwrap();
     fs::remove_file(&file).unwrap();
     assert!(matches!(bundle_access(&file, 0), Err(Error::Io(_))));
+}
+
+#[test]
+#[cfg(unix)]
+fn bundle_access_refuses_another_owner_and_a_directory_missing_an_owner_bit() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    const REFUSED: &str =
+        "This macOS app bundle is not owned and writable by your user. Update it manually with the PKG or DMG.";
+    let fixture = tempfile::tempdir().unwrap();
+    let bundle = fixture.path().join("ngterm.app");
+    let nested = bundle.join("Contents");
+    fs::create_dir_all(&nested).unwrap();
+    let user = fs::metadata(&bundle).unwrap().uid();
+    bundle_access(&bundle, user).unwrap();
+    assert_eq!(bundle_access(&bundle, user + 1).unwrap_err().to_string(), REFUSED);
+    for mode in [0o500, 0o600, 0o300] {
+        fs::set_permissions(&nested, fs::Permissions::from_mode(mode)).unwrap();
+        let refused = bundle_access(&bundle, user).unwrap_err().to_string();
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(refused, REFUSED, "mode {mode:o}");
+    }
+}
+
+/// The refusal of an installation no release packaging enabled.
+#[cfg(target_os = "macos")]
+const NOT_ENABLED: &str = "Automatic updates are available for official release archives, AppImages, macOS app bundles and Windows installers. Update package-manager installations with your package manager; rebuild development installations from source.";
+
+/// The loose tree of a macOS release archive at `version` under `root`.
+#[cfg(target_os = "macos")]
+pub(super) fn mac_archive_tree(root: &Path, version: &str) {
+    fs::create_dir_all(root.join("bin")).unwrap();
+    fs::create_dir_all(root.join("share/ngterm")).unwrap();
+    fs::write(root.join("share/ngterm/app-BUILD"), format!("{version}\ncommit\n")).unwrap();
+    fs::write(root.join(MARKER), "macos-archive\n").unwrap();
+    for name in ["ngterm", "ngtermctl", "ngterm-session", "ngterm-headless"] {
+        fs::write(root.join("bin").join(name), format!("ngterm {version}")).unwrap();
+    }
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn detects_a_bundle_root_and_keeps_a_bundle_without_its_marker_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(fakes::ROOT);
+    tree(&root, "0.1.0");
+    let install = Installation::at(&fakes::executable(&root)).unwrap();
+    assert_eq!(install.root, dunce::canonicalize(&root).unwrap());
+    assert_eq!(install.format, Format::MacBundle);
+    assert_eq!(install.installed_version(), Some(Version::parse("0.1.0").unwrap()));
+    fs::remove_file(root.join("Contents/Resources/update-format")).unwrap();
+    assert_eq!(
+        Installation::at(&fakes::executable(&root)).unwrap_err().to_string(),
+        NOT_ENABLED
+    );
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn a_bundle_outside_its_app_directory_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ngterm");
+    tree(&root, "0.1.0");
+    assert_eq!(
+        Installation::at(&fakes::executable(&root)).unwrap_err().to_string(),
+        "Keep the macOS release inside its .app bundle to use automatic updates."
+    );
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn a_macos_archive_is_replaceable_only_in_a_directory_named_ngterm() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ngterm");
+    mac_archive_tree(&root, "0.1.0");
+    let install = Installation::at(&root.join("bin/ngterm")).unwrap();
+    assert_eq!(install.root, dunce::canonicalize(&root).unwrap());
+    assert_eq!(install.format, Format::MacArchive);
+    let shared = dir.path().join("local");
+    mac_archive_tree(&shared, "0.1.0");
+    assert_eq!(
+        Installation::at(&shared.join("bin/ngterm")).unwrap_err().to_string(),
+        "For automatic updates, extract the release archive into a dedicated directory named ngterm. Shared installation prefixes must be updated manually."
+    );
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn updates_are_refused_once_a_bundle_directory_loses_an_owner_bit() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(fakes::ROOT);
+    tree(&root, "0.1.0");
+    let install = Installation::at(&fakes::executable(&root)).unwrap();
+    install.validate_paths(&[]).unwrap();
+    let programs = root.join("Contents/MacOS");
+    for mode in [0o500, 0o600, 0o300] {
+        fs::set_permissions(&programs, fs::Permissions::from_mode(mode)).unwrap();
+        let refused = install.validate_paths(&[]).unwrap_err().to_string();
+        fs::set_permissions(&programs, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            refused,
+            "This macOS app bundle is not owned and writable by your user. Update it manually with the PKG or DMG.",
+            "mode {mode:o}"
+        );
+    }
+    install.validate_paths(&[]).unwrap();
+    // Detection refuses such a bundle the same way, wherever the missing bit is.
+    let share = root.join("Contents/share");
+    fs::set_permissions(&share, fs::Permissions::from_mode(0o500)).unwrap();
+    let refused = Installation::at(&fakes::executable(&root)).unwrap_err().to_string();
+    fs::set_permissions(&share, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        refused,
+        "This macOS app bundle is not owned and writable by your user. Update it manually with the PKG or DMG."
+    );
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn detect_finds_the_bundle_this_executable_runs_in_and_refuses_a_bare_binary() {
+    const CHILD: &str = "UPDATE_DETECT_BUNDLE";
+    if let Some(root) = std::env::var_os(CHILD) {
+        let install = Installation::detect().unwrap();
+        assert_eq!(install.root, PathBuf::from(root));
+        assert_eq!(install.format, Format::MacBundle);
+        return;
+    }
+    assert_eq!(Installation::detect().unwrap_err().to_string(), NOT_ENABLED);
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().join(fakes::ROOT);
+    tree(&root, "0.1.0");
+    let executable = fakes::executable(&root);
+    fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+    let result = std::process::Command::new(&executable)
+        .args([
+            "--exact",
+            "tests::detect_finds_the_bundle_this_executable_runs_in_and_refuses_a_bare_binary",
+            "--nocapture",
+        ])
+        .env(CHILD, dunce::canonicalize(&root).unwrap())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(result.status.success(), "{stdout}");
+    // A filter that stops matching runs nothing and still exits successfully.
+    assert!(stdout.contains("test result: ok. 1 passed;"), "{stdout}");
 }
 
 #[test]

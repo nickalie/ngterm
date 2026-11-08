@@ -1,7 +1,7 @@
 use super::*;
+#[cfg(unix)]
+use crate::tests::metadata;
 use crate::tests::{HttpFixture, TEST_KEY, installation, keyed};
-#[cfg(target_os = "linux")]
-use crate::tests::{metadata, tree};
 
 struct Broken;
 impl std::io::Read for Broken {
@@ -25,7 +25,7 @@ fn metadata_reads_are_bounded_and_propagate_io_errors() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn selection_rejects_invalid_versions_and_asset_sizes() {
     let fixture = tempfile::tempdir().unwrap();
     let install = installation(fixture.path());
@@ -140,11 +140,9 @@ fn cancellation_happens_before_network_or_file_access() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn prepare_refuses_stale_or_invalid_installed_identity_and_cleans_its_stage() {
     let fixture = tempfile::tempdir().unwrap();
-    let root = fixture.path().join("ngterm");
-    let install = installation(&root);
     let release = local_release();
     for (identity, expected) in [
         ("not a version", "The installed version identity is invalid."),
@@ -157,7 +155,7 @@ fn prepare_refuses_stale_or_invalid_installed_identity_and_cleans_its_stage() {
             "The installation was updated while checking for releases. Check for updates again.",
         ),
     ] {
-        tree(&root, identity);
+        let install = installed(fixture.path(), identity);
         assert_eq!(
             Source::github()
                 .prepare(&install, &release, &Trust::default(), |_, _| true)
@@ -165,13 +163,9 @@ fn prepare_refuses_stale_or_invalid_installed_identity_and_cleans_its_stage() {
                 .to_string(),
             expected
         );
-        assert_eq!(fs::read_dir(fixture.path()).unwrap().count(), 1);
-        assert_eq!(
-            fs::read_to_string(root.join("usr/bin/ngterm")).unwrap(),
-            format!("ngterm {identity}")
-        );
+        untouched(fixture.path(), identity);
     }
-    tree(&root, "0.1.0");
+    let install = installed(fixture.path(), "0.1.0");
     assert!(matches!(
         Source::github().prepare(&install, &release, &Trust::default(), |_, _| true),
         Err(Error::Http(_))
@@ -315,14 +309,14 @@ fn prepare_requires_an_accessible_installation_and_a_parent_directory() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn image_prepare_keeps_the_original_file_when_transport_is_refused() {
     let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path().join("ngterm.AppImage");
     fs::write(&root, "original image").unwrap();
     let mut install = installation(&root);
     install.format = crate::Format::AppImage;
-    install.image_identity = Some(crate::install::image_stamp(&root).unwrap());
+    install.image_identity = Some(b"device:inode:size:time\n".to_vec());
     assert!(matches!(
         Source::github().prepare(&install, &local_release(), &Trust::default(), |_, _| true),
         Err(Error::Http(_))
@@ -332,31 +326,31 @@ fn image_prepare_keeps_the_original_file_when_transport_is_refused() {
 }
 
 // What follows runs `Source::check` and `Source::prepare` end to end over a release on 127.0.0.1 (`fakes::Server`),
-// into an installation tree in a temp directory: a Linux archive's, which only Linux accepts.
+// into an installation tree in a temp directory: a Linux archive's or a macOS bundle's, the tree its platform accepts.
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use crate::fakes;
 
-/// A Linux archive installation at `version` under `fixture`, found as the running one would be.
-#[cfg(target_os = "linux")]
+/// An installation at `version` under `fixture`, found as the running one would be.
+#[cfg(unix)]
 fn installed(fixture: &Path, version: &str) -> Installation {
-    let root = fixture.join("ngterm");
+    let root = fixture.join(fakes::ROOT);
     fakes::tree(&root, version).unwrap();
-    fakes::installation(&root.join("usr/bin/ngterm")).unwrap()
+    fakes::installation(&fakes::executable(&root)).unwrap()
 }
 
 /// Asserts the installation under `fixture` still holds `version` and no stage was left beside it.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn untouched(fixture: &Path, version: &str) {
     assert_eq!(
-        fs::read_to_string(fixture.join("ngterm/usr/share/ngterm/app-BUILD")).unwrap(),
+        fs::read_to_string(fakes::identity(&fixture.join(fakes::ROOT))).unwrap(),
         format!("{version}\ncommit\n")
     );
     assert_eq!(fs::read_dir(fixture).unwrap().count(), 1, "the stage is removed");
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn a_newer_release_is_checked_downloaded_verified_and_staged_beside_the_installation() {
     let fixture = tempfile::tempdir().unwrap();
     let install = installed(fixture.path(), "0.1.0");
@@ -393,10 +387,14 @@ fn a_newer_release_is_checked_downloaded_verified_and_staged_beside_the_installa
         ]
     );
     let stage = prepared.work.path().to_owned();
-    assert_eq!(stage.parent(), Some(fixture.path()), "staged beside the installation");
-    assert_eq!(prepared.candidate, stage.join("unpacked/ngterm"));
     assert_eq!(
-        fs::read_to_string(prepared.candidate.join("usr/share/ngterm/app-BUILD")).unwrap(),
+        stage.parent(),
+        Some(dunce::canonicalize(fixture.path()).unwrap().as_path()),
+        "staged beside the installation"
+    );
+    assert_eq!(prepared.candidate, stage.join("unpacked").join(fakes::ROOT));
+    assert_eq!(
+        fs::read_to_string(fakes::identity(&prepared.candidate)).unwrap(),
         "0.2.0\ncommit\n"
     );
     assert!(!stage.join(&asset).exists(), "the archive is removed once unpacked");
@@ -409,7 +407,7 @@ fn a_newer_release_is_checked_downloaded_verified_and_staged_beside_the_installa
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn a_check_reports_transport_and_metadata_failures_with_their_messages() {
     let fixture = tempfile::tempdir().unwrap();
     let install = installed(fixture.path(), "0.1.0");
@@ -464,15 +462,15 @@ fn a_check_reports_transport_and_metadata_failures_with_their_messages() {
 }
 
 /// The signed fixture manifest and its signature for v0.2.0 (tests.rs has how they were made).
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 const SIGNED_SUMS: &[u8] = include_bytes!("tests/minisign/SHA256SUMS");
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 const SIGNED_BY_TEST_KEY: &[u8] = include_bytes!("tests/minisign/SHA256SUMS.minisig");
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 const SIGNED_BY_OTHER_KEY: &[u8] = include_bytes!("tests/minisign/wrong-key.minisig");
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn prepare_refuses_a_manifest_whose_signature_is_missing_unreachable_or_from_another_key() {
     const REFUSED: &str = "Release signature verification failed. The installation was not changed.";
     let fixture = tempfile::tempdir().unwrap();
@@ -498,7 +496,7 @@ fn prepare_refuses_a_manifest_whose_signature_is_missing_unreachable_or_from_ano
         // signed by the trusted key: the manifest checks out and names the asset with another archive's hash
         (
             SIGNED_BY_TEST_KEY,
-            if cfg!(target_arch = "x86_64") {
+            if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
                 "Downloaded release failed SHA-256 verification. The installation was not changed."
             } else {
                 "Release checksum is missing or ambiguous."
@@ -529,7 +527,7 @@ fn prepare_refuses_a_manifest_whose_signature_is_missing_unreachable_or_from_ano
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn prepare_refuses_an_archive_the_manifest_or_the_release_does_not_vouch_for() {
     let fixture = tempfile::tempdir().unwrap();
     let install = installed(fixture.path(), "0.1.0");
