@@ -15,6 +15,32 @@ fn wait(what: &str, condition: impl Fn() -> bool) {
     assert!(condition(), "{what}");
 }
 
+/// Waits until the system's file events have caught up with every change made so far, by watching `directory` for a
+/// marker written into it. `FSEvents` hands a stream that starts right after a change that change too (its "since now"
+/// is the newest event it has numbered yet, events reach it in order, and one volume numbers them all), so a watcher
+/// following a file just written would read it once more than a test counts.
+fn settled(directory: &Path) {
+    let marker = directory.join("settled.marker");
+    let (seen, events) = mpsc::channel();
+    let mut probe = notify::recommended_watcher(move |event: notify::Result<Event>| {
+        if let Ok(event) = event {
+            let _ = seen.send(event.paths);
+        }
+    })
+    .unwrap();
+    probe.watch(directory, RecursiveMode::NonRecursive).unwrap();
+    std::fs::write(&marker, "").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let paths = events
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("the marker's event");
+        if paths.iter().any(|path| path.ends_with("settled.marker")) {
+            break;
+        }
+    }
+}
+
 /// What a watcher's handler saw: the file's text at each read, and how many reads.
 #[derive(Clone, Default)]
 struct Reads {
@@ -34,6 +60,7 @@ impl Reads {
 
 /// A watcher on `path` that reads the file on every change, as the core's refresh does.
 fn watching(path: &Path, test: impl FnOnce(&Reads)) {
+    settled(&nearest_existing_directory(&absolute(path)));
     let reads = Reads::default();
     *reads.text.lock().unwrap() = std::fs::read_to_string(path).unwrap_or_default();
     let file = path.to_path_buf();
@@ -325,6 +352,7 @@ fn following_the_same_path_again_keeps_the_watch_and_a_new_one_moves_it() {
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(file, "").unwrap();
     }
+    settled(dir.path());
     let count = Arc::new(AtomicUsize::new(0));
     let counting = Arc::clone(&count);
     let mut watcher = RemotesWatcher::new(move || {
