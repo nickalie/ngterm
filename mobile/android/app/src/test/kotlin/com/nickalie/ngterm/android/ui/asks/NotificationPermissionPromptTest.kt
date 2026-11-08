@@ -17,7 +17,11 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.TestApplication
 import com.nickalie.ngterm.android.TestGraph
 import com.nickalie.ngterm.android.awaitText
@@ -26,12 +30,13 @@ import com.nickalie.ngterm.android.service.LinkService
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.fake.fakeSession
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -44,7 +49,6 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import java.io.File
 import java.io.IOException
 
 // what the probe beside the prompt shows once the store has answered
@@ -67,16 +71,32 @@ class NotificationPermissionPromptTest {
 
     @After fun tearDown() = test.close()
 
-    private fun show() {
+    private fun show(prefs: NotificationPrefs = test.graph.notificationPrefs) {
+        val original = test.graph
+        val graph =
+            AppGraph(
+                machines = original.machines,
+                keys = original.keys,
+                pins = original.pins,
+                connections = original.connections,
+                clipboardReads = original.clipboardReads,
+                panes = original.panes,
+                chats = original.chats,
+                asks = original.asks,
+                notificationPrefs = prefs,
+                settings = original.settings,
+                opens = original.opens,
+                online = original.online,
+            )
         compose.setContent {
             NgtermTheme {
-                NotificationPermissionPrompt(test.graph)
-                StoreAnswered(test.graph.notificationPrefs)
+                NotificationPermissionPrompt(graph)
+                if (prefs === original.notificationPrefs) StoreAnswered(prefs)
             }
         }
     }
 
-    // the prompt reads the store on its own thread: a missing sheet means something only once the store has answered
+    // For a readable DataStore, both collectors share the completed initial read.
     private fun settled() {
         compose.awaitText(ANSWERED)
         compose.waitForIdle()
@@ -185,17 +205,31 @@ class NotificationPermissionPromptTest {
 
     @Test
     fun unreadablePermissionPreferencesDoNotFlashAQuestionOverAnAttachedSession() {
-        assertTrue(File(dir.root, "notifications.preferences_pb").mkdir())
         attach()
-        val failure =
-            runCatching {
-                runBlocking(Dispatchers.IO) { withTimeout(WAIT_MS) { test.notificationPrefs.permissionAsked.first() } }
-            }.exceptionOrNull()
-        assertTrue(failure is IOException)
-        show()
-        settled()
+        val store = FailingPermissionStore()
+        show(NotificationPrefs(store))
+        failRead(store)
         compose.onNodeWithText(TITLE).assertDoesNotExist()
         compose.onNodeWithText("Turn on notifications").assertDoesNotExist()
+    }
+
+    @Test
+    fun aPermissionReadFailureClosesAnAlreadyVisibleQuestion() {
+        attach()
+        val store = FailingPermissionStore(initiallyUnasked = true)
+        show(NotificationPrefs(store))
+        // Positive control: the prompt's collector is active and this session can show the question.
+        compose.awaitText(TITLE)
+        failRead(store)
+        compose.onNodeWithText(TITLE).assertDoesNotExist()
+    }
+
+    private fun failRead(store: FailingPermissionStore) {
+        compose.runOnIdle { store.fail.complete(Unit) }
+        compose.waitUntil(WAIT_MS) { store.finished.isCompleted }
+        // The fake throws in the prompt's collector, without an IO dispatcher.
+        // Idle also drains its catch and recomposition.
+        compose.waitForIdle()
     }
 
     @Test
@@ -216,10 +250,27 @@ class NotificationPermissionPromptTest {
     }
 }
 
-/** [ANSWERED] once [prefs] answer the prompt's read (or fail it), as the prompt reads them. */
+/** [ANSWERED] once this collector reads [prefs]; only a readable DataStore shares the prompt's initial read. */
 @Composable
 private fun StoreAnswered(prefs: NotificationPrefs) {
     val read = remember(prefs) { prefs.permissionAsked.map { true }.catch { emit(true) } }
     val answered by read.collectAsState(initial = false)
     if (answered) Text(ANSWERED)
+}
+
+/** Only the prompt collects this store, so completion belongs to its read rather than a separate readiness probe. */
+private class FailingPermissionStore(
+    private val initiallyUnasked: Boolean = false,
+) : DataStore<Preferences> {
+    val fail = CompletableDeferred<Unit>()
+    val finished = CompletableDeferred<Unit>()
+    override val data =
+        flow {
+            if (initiallyUnasked) emit(emptyPreferences())
+            fail.await()
+            throw IOException("Unreadable notification preferences")
+        }.onCompletion { finished.complete(Unit) }
+
+    override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences =
+        error("The permission test must not write preferences")
 }
