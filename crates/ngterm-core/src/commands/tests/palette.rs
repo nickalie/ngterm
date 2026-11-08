@@ -230,10 +230,9 @@ fn the_action_palette_lists_commands_windows_and_moves() {
         entry(&entries, "Open Window: archive").action,
         PaletteAction::OpenWindow(closed)
     );
-    let session = fixture.selected().unwrap();
     assert_eq!(
         entry(&entries, "Move Session to ops").action,
-        PaletteAction::MoveSession { session, workspace }
+        PaletteAction::MoveSession(workspace)
     );
     assert!(
         !titles
@@ -487,13 +486,7 @@ fn picking_a_session_selects_it_and_moving_one_moves_it() {
 
     let (ops, _) = fixture.add_workspace("ops", 0);
     fixture.core.toggle_palette(window, PaletteMode::Actions);
-    fixture.core.run_palette_entry(
-        window,
-        &PaletteAction::MoveSession {
-            session: first,
-            workspace: ops,
-        },
-    );
+    fixture.core.run_palette_entry(window, &PaletteAction::MoveSession(ops));
     assert_eq!(fixture.order(ops), [first]);
 }
 

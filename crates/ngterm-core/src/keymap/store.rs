@@ -27,8 +27,9 @@ pub fn load_keymap(path: &Path, defaults: &ShippedDefaults) -> (Keymap, Vec<Keym
 }
 
 /// Writes the starter `keymap.conf` at `path` when no file is there, creating its directory. Never overwrites: an
-/// existing file, even one created concurrently, is left alone. Failures are logged, not returned, since a missing
-/// starter only costs the user the commented reference.
+/// existing file, even one created concurrently, is left alone. A dangling symlink counts as no file and is replaced
+/// by the starter, its target left uncreated (upstream's `fileExists` check and atomic write). Failures are logged,
+/// not returned, since a missing starter only costs the user the commented reference.
 pub fn ensure_starter_keymap(path: &Path, defaults: &ShippedDefaults) {
     if let Err(error) = write_starter(path, defaults) {
         tracing::warn!(path = %path.display(), %error, "could not write the starter keymap.conf");
@@ -38,6 +39,9 @@ pub fn ensure_starter_keymap(path: &Path, defaults: &ShippedDefaults) {
 fn write_starter(path: &Path, defaults: &ShippedDefaults) -> io::Result<()> {
     if path.try_exists()? {
         return Ok(());
+    }
+    if fs::symlink_metadata(path).is_ok() {
+        fs::remove_file(path)?;
     }
     if let Some(directory) = path.parent() {
         fs::create_dir_all(directory)?;

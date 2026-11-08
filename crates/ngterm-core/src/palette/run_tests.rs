@@ -46,10 +46,7 @@ fn a_move_row_transfers_its_session_to_the_chosen_workspace() {
     let source = store.current_workspace_id().unwrap();
     let destination = store.add_workspace("destination");
     core.open_palette(window, PaletteMode::Sessions);
-    let action = PaletteAction::MoveSession {
-        session,
-        workspace: destination,
-    };
+    let action = PaletteAction::MoveSession(destination);
     assert_eq!(core.run_palette_entry(window, &action), Some(ActionEffect::Done));
     let store = core.library().store(window).unwrap();
     assert!(store.workspace(source).unwrap().sessions.is_empty());
@@ -84,13 +81,7 @@ fn a_covered_window_refuses_dynamic_rows_without_moving_the_session() {
         }),
     });
     assert!(response.ok, "{response:?}");
-    core.run_palette_entry(
-        window,
-        &PaletteAction::MoveSession {
-            session,
-            workspace: destination,
-        },
-    );
+    core.run_palette_entry(window, &PaletteAction::MoveSession(destination));
     assert_eq!(
         core.library()
             .store(window)
@@ -178,4 +169,117 @@ fn custom_rows_run_sessionless_and_ignore_commands_removed_since_listing() {
     core.open_palette(window, PaletteMode::CustomCommands);
     core.run_palette_entry(window, &PaletteAction::Custom(command));
     assert_eq!(launcher.launches().len(), 1);
+}
+
+/// The action palette's "Move Session to" row for workspace `target`, as the palette lists it now.
+fn move_row(core: &Core, target: Uuid) -> PaletteAction {
+    let id = format!("move-{}", uuid_string(target));
+    core.palette_entries(PaletteMode::Actions)
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .unwrap()
+        .action
+}
+
+/// `testMoveRowsMoveTheSessionSelectedWhenTheyRun`: a row listed while one session was selected moves the session
+/// selected when it runs.
+#[test]
+fn move_rows_move_the_session_selected_when_they_run() {
+    let (mut core, window) = core();
+    let store = core.library_mut().store_mut(window).unwrap();
+    let owner = store.current_workspace_id().unwrap();
+    let first = store.selected_session_id().unwrap();
+    let second = store.add_session(owner, NewSession::at_cwd("/tmp")).unwrap();
+    let target = store.add_workspace("target");
+    store.select_session(Some(first));
+    let action = move_row(&core, target);
+
+    let store = core.library_mut().store_mut(window).unwrap();
+    store.select_session(Some(second));
+    core.open_palette(window, PaletteMode::Actions);
+    assert!(core.palette_entry_enabled(window, &action));
+    assert_eq!(core.run_palette_entry(window, &action), Some(ActionEffect::Done));
+
+    let store = core.library().store(window).unwrap();
+    assert_eq!(store.workspace_for_session(first).unwrap().id(), owner);
+    assert_eq!(store.workspace_for_session(second).unwrap().id(), target);
+}
+
+/// `testAMoveRowGoesInertWhenTheSessionSelectedUnderItAlreadyLivesInItsTarget`: the row goes inert, and the palette
+/// stays open, once the selection already lives in its target or nothing is selected.
+#[test]
+fn a_move_row_goes_inert_when_the_session_selected_under_it_already_lives_in_its_target() {
+    let (mut core, window) = core();
+    let store = core.library_mut().store_mut(window).unwrap();
+    let owner = store.current_workspace_id().unwrap();
+    let first = store.selected_session_id().unwrap();
+    let target = store.add_workspace("target");
+    let resident = store.add_session(target, NewSession::at_cwd("/tmp")).unwrap();
+    store.select_session(Some(first));
+    let action = move_row(&core, target);
+
+    core.open_palette(window, PaletteMode::Actions);
+    let store = core.library_mut().store_mut(window).unwrap();
+    store.select_session(Some(resident));
+    assert!(!core.palette_entry_enabled(window, &action));
+    let store = core.library_mut().store_mut(window).unwrap();
+    store.select_session(None);
+    assert!(!core.palette_entry_enabled(window, &action));
+    assert_eq!(core.run_palette_entry(window, &action), None);
+    assert_eq!(core.palette_mode(), Some(PaletteMode::Actions));
+
+    let store = core.library().store(window).unwrap();
+    assert_eq!(store.workspace_for_session(first).unwrap().id(), owner);
+    assert_eq!(store.workspace_for_session(resident).unwrap().id(), target);
+}
+
+/// `testMoveRowsAreListedButInertForACompanion`: a companion only reorders inside its group, so its move rows are
+/// listed but never run.
+#[test]
+fn move_rows_are_listed_but_inert_for_a_companion() {
+    use crate::model::CompanionOptions;
+
+    let (mut core, window) = core();
+    let store = core.library_mut().store_mut(window).unwrap();
+    let owner = store.current_workspace_id().unwrap();
+    let parent = store.selected_session_id().unwrap();
+    let child = store
+        .add_companion(
+            parent,
+            CompanionOptions {
+                name: Some("child".to_owned()),
+                ..CompanionOptions::default()
+            },
+            "/tmp",
+        )
+        .unwrap();
+    let target = store.add_workspace("target");
+    store.select_session(Some(child));
+    let action = move_row(&core, target);
+
+    core.open_palette(window, PaletteMode::Actions);
+    assert!(!core.palette_entry_enabled(window, &action));
+    assert_eq!(core.run_palette_entry(window, &action), None);
+    let store = core.library().store(window).unwrap();
+    assert_eq!(store.workspace_for_session(child).unwrap().id(), owner);
+}
+
+/// `testAMoveRowGoesInertWhenItsTargetIsRemovedUnderIt`.
+#[test]
+fn a_move_row_goes_inert_when_its_target_is_removed_under_it() {
+    let (mut core, window) = core();
+    let store = core.library_mut().store_mut(window).unwrap();
+    let session = store.selected_session_id().unwrap();
+    let owner = store.current_workspace_id().unwrap();
+    let target = store.add_workspace("target");
+    store.select_session(Some(session));
+    let action = move_row(&core, target);
+
+    let store = core.library_mut().store_mut(window).unwrap();
+    assert!(store.remove_workspace(target).is_some());
+    core.open_palette(window, PaletteMode::Actions);
+    assert!(!core.palette_entry_enabled(window, &action));
+    assert_eq!(core.run_palette_entry(window, &action), None);
+    let store = core.library().store(window).unwrap();
+    assert_eq!(store.workspace_for_session(session).unwrap().id(), owner);
 }

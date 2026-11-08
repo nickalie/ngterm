@@ -108,8 +108,8 @@ pub enum PaletteAction {
     /// Opens the Settings popup: a Linux addition, as the app menu's Settings… is its only other path (upstream's
     /// macOS reaches Settings through the menu bar's ⌘,).
     Settings,
-    /// Moves the frontmost window's selected session to another workspace.
-    MoveSession { session: Uuid, workspace: Uuid },
+    /// Moves the session selected when the row runs to this workspace: a selection can move under an open palette.
+    MoveSession(Uuid),
     /// Tints the session selected when the row runs (`None` clears), keeping its placement: a selection can move under
     /// an open palette.
     TintSession(Option<TintColor>),

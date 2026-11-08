@@ -98,12 +98,13 @@ fn a_starter_cannot_write_in_a_read_only_directory() {
 
 #[cfg(unix)]
 #[test]
-fn a_dangling_link_is_not_overwritten_by_the_starter() {
+fn a_dangling_link_is_replaced_by_the_starter() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("keymap.conf");
     let target = dir.path().join("missing.conf");
     std::os::unix::fs::symlink(&target, &path).unwrap();
     ensure_starter_keymap(&path, &upstream());
-    assert_eq!(fs::read_link(path).unwrap(), target);
+    assert!(fs::symlink_metadata(&path).unwrap().file_type().is_file());
+    assert_eq!(fs::read_to_string(&path).unwrap(), starter_keymap_conf(&upstream()));
     assert!(!target.exists());
 }

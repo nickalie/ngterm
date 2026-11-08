@@ -104,11 +104,14 @@ fn window_dialogs_and_navigation_use_the_named_window() {
             sessions: 1
         })
     );
+    // a third window, so Next and Previous from the same window land on different neighbours
+    let last = f.core.library_mut().new_window(Some("last"));
     f.core.report_frontmost(window);
     f.run(BuiltinAction::NextWindow);
     assert_eq!(f.core.library().active_window_id(), Some(other));
+    f.core.report_frontmost(window);
     f.run(BuiltinAction::PreviousWindow);
-    assert_eq!(f.core.library().active_window_id(), Some(window));
+    assert_eq!(f.core.library().active_window_id(), Some(last));
 }
 
 #[test]
@@ -180,6 +183,9 @@ fn swapping_and_closing_a_split_changes_panes_and_restores_focus() {
     );
     f.install(StatusPane::Left);
     f.install(StatusPane::Right);
+    // the split toggle already asked for focus: clear it so only the swap can ask again
+    f.core.clear_pane_focus_requests();
+    assert!(!f.core.pane_focus_requested(session));
     f.menu(PaletteCommand::SwapPanes);
     let state = f.store().session(session).unwrap();
     assert_eq!(state.surface.get().unwrap().pane_token(), "Right");
@@ -258,21 +264,28 @@ fn menu_reload_reads_config_and_editor_exit_reloads_only_its_generation() {
     std::fs::write(config.join("keymap.conf"), "command \"Build\" echo build\n").unwrap();
     f.menu(PaletteCommand::ReloadKeymap);
     assert_eq!(f.core.keymap().commands()[0].name, "Build");
+    let hooks = f.core.hooks_path();
+    std::fs::write(&hooks, "on bogus echo x\n").unwrap();
     f.menu(PaletteCommand::ReloadHooks);
-    assert!(f.core.hooks_diagnostics().is_empty());
+    assert_eq!(f.core.hooks_diagnostics().len(), 1);
     f.menu(PaletteCommand::ReloadConfig);
     assert!(f.core.take_config_reload());
+    // ghostty.conf's editor first, so the broken hooks.conf is still loaded when its exit must not reload it
     for (command, file) in [
-        (PaletteCommand::EditHooks, ConfigFile::Hooks),
         (PaletteCommand::EditGhosttyConfig, ConfigFile::Ghostty),
+        (PaletteCommand::EditHooks, ConfigFile::Hooks),
     ] {
         f.menu(command);
         let state = f.store().session(f.session).unwrap();
         assert!(state.overlay.program_active());
         let generation = state.overlay.generation;
         assert_eq!(state.overlay.size_percent, Some(95));
+        // the edit fixes hooks.conf; only the hooks editor's own exit reloads it
+        std::fs::write(&hooks, "").unwrap();
         assert_eq!(f.core.config_edit_ended(f.session, generation + 1), None);
+        assert_eq!(f.core.hooks_diagnostics().len(), 1);
         assert_eq!(f.core.config_edit_ended(f.session, generation), Some(file));
+        assert_eq!(f.core.hooks_diagnostics().is_empty(), file == ConfigFile::Hooks);
         assert_eq!(f.core.config_edit_ended(f.session, generation), None);
         let session = f.session;
         f.store_mut().close_overlay(session);

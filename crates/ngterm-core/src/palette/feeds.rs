@@ -273,10 +273,7 @@ fn move_session_entries(store: &AppStore) -> Vec<PaletteEntry> {
             plain_entry(
                 format!("move-{}", uuid_string(workspace.id())),
                 format!("Move Session to {}", workspace.name),
-                PaletteAction::MoveSession {
-                    session,
-                    workspace: workspace.id(),
-                },
+                PaletteAction::MoveSession(workspace.id()),
             )
         })
         .collect()
