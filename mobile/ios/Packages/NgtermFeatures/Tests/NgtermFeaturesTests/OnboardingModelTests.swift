@@ -42,6 +42,69 @@ internal struct OnboardingModelTests {
         #expect(OnboardingModel(keys: early.graph.keys).step == .done)
     }
 
+    @Test("keys that can't be read don't show a clean first run")
+    internal func unreadableKeys() async throws {
+        defer { test.remove() }
+        _ = try await test.seedKey()
+        let file = test.directory.appending(path: KeyStore.fileName).path
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file)
+        }
+        let early = TestGraph(directory: test.directory)
+        // RootView reads the stores again before deciding the first run; the file still can't be read
+        early.graph.readUnreadStores()
+        let model = OnboardingModel(keys: early.graph.keys)
+        // the app has a key it can't read: neither a clean welcome (which invites a second key) nor done
+        #expect(model.step != .start)
+        #expect(model.step != .done)
+    }
+
+    @Test("keys that can't be read say why, make no key, and Retry reads them once they can be")
+    internal func retryAfterReadFailure() async throws {
+        defer { test.remove() }
+        let key = try await test.seedKey()
+        let file = test.directory.appending(path: KeyStore.fileName).path
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file)
+        }
+        let early = TestGraph(directory: test.directory)
+        let model = OnboardingModel(keys: early.graph.keys)
+        guard case .readFailed(let reason) = model.step else {
+            Issue.record("not a read failure: \(model.step)")
+            return
+        }
+        #expect(!reason.isEmpty)
+        // nothing makes or brings a key over keys it can't read
+        await model.create()
+        model.startImport()
+        #expect(model.step == .readFailed(reason: reason))
+        #expect(early.maker.generated == 0)
+        model.retry()
+        #expect(model.step == .readFailed(reason: reason), "still unreadable")
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file)
+        model.retry()
+        #expect(model.step == .done)
+        #expect(early.graph.keys.keys == [key])
+        // a retry past the failure does nothing
+        model.retry()
+        #expect(model.step == .done)
+    }
+
+    @Test("a retry that finds the keys' file gone shows the welcome")
+    internal func retryFindsNoKeys() async throws {
+        defer { test.remove() }
+        _ = try await test.seedKey()
+        let url = test.directory.appending(path: KeyStore.fileName)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        let early = TestGraph(directory: test.directory)
+        let model = OnboardingModel(keys: early.graph.keys)
+        try FileManager.default.removeItem(at: url)
+        model.retry()
+        #expect(model.step == .start)
+    }
+
     @Test("creating a key shows its public half, then finishes")
     internal func create() async {
         defer { test.remove() }
@@ -94,6 +157,113 @@ internal struct OnboardingModelTests {
         }
         #expect(key.isImported)
         #expect(bytes.allSatisfy { $0 == 0 })
+    }
+
+    @Test("Back and Import again while an import runs starts no second import")
+    internal func importOnceThroughBack() async {
+        defer { test.remove() }
+        let held = test.maker.holdImports()
+        let model = OnboardingModel(keys: test.graph.keys)
+        model.startImport()
+        let first = Task {
+            var key = Data(FakeKeyMaker.encryptedKey.utf8)
+            await model.importKey(privateKey: &key, passphrase: FakeKeyMaker.passphrase)
+        }
+        await Wait.until { model.step == .importing(isBusy: true, problem: nil) }
+        // Back, then Import a key again, while the first still runs
+        model.back()
+        model.startImport()
+        let second = Task {
+            var key = Data(FakeKeyMaker.encryptedKey.utf8)
+            await model.importKey(privateKey: &key, passphrase: FakeKeyMaker.passphrase)
+            return key
+        }
+        held.signal()
+        held.signal()
+        await first.value
+        let secondBytes = await second.value
+        #expect(secondBytes.allSatisfy { $0 == 0 })
+        #expect(test.graph.keys.keys.count == 1)
+    }
+
+    @Test("Back and Create while an import runs makes no second key")
+    internal func createDuringImport() async {
+        defer { test.remove() }
+        let held = test.maker.holdImports()
+        let model = OnboardingModel(keys: test.graph.keys)
+        model.startImport()
+        let first = Task {
+            var key = Data(FakeKeyMaker.encryptedKey.utf8)
+            await model.importKey(privateKey: &key, passphrase: FakeKeyMaker.passphrase)
+        }
+        await Wait.until { model.step == .importing(isBusy: true, problem: nil) }
+        model.back()
+        await model.create()
+        held.signal()
+        await first.value
+        #expect(test.maker.generated == 0)
+        #expect(test.graph.keys.keys.count == 1)
+    }
+
+    @Test("an import that goes on through Back shows on the welcome, and its key lands there")
+    internal func importLandsOnWelcome() async {
+        defer { test.remove() }
+        let held = test.maker.holdImports()
+        let model = OnboardingModel(keys: test.graph.keys)
+        model.startImport()
+        let first = Task {
+            var key = Data(FakeKeyMaker.encryptedKey.utf8)
+            await model.importKey(privateKey: &key, passphrase: FakeKeyMaker.passphrase)
+        }
+        await Wait.until { model.isImporting }
+        model.back()
+        #expect(model.step == .start)
+        #expect(model.isImporting)
+        held.signal()
+        await first.value
+        #expect(!model.isImporting)
+        guard case .keyReady(let key) = model.step else {
+            Issue.record("no key: \(model.step)")
+            return
+        }
+        #expect(key.isImported)
+    }
+
+    @Test("an import that fails after Back leaves the welcome ready, its problem unsaid")
+    internal func importFailsOnWelcome() async {
+        defer { test.remove() }
+        let held = test.maker.holdImports()
+        let model = OnboardingModel(keys: test.graph.keys)
+        model.startImport()
+        let first = Task {
+            var key = Data(FakeKeyMaker.encryptedKey.utf8)
+            await model.importKey(privateKey: &key, passphrase: "wrong")
+        }
+        await Wait.until { model.isImporting }
+        model.back()
+        held.signal()
+        await first.value
+        #expect(model.step == .start)
+        #expect(!model.isImporting)
+        // the welcome is ready again: Create makes a key
+        await model.create()
+        #expect(test.maker.generated == 1)
+    }
+
+    @Test("the import doesn't open past the welcome")
+    internal func importOnlyFromWelcome() async {
+        defer { test.remove() }
+        let model = OnboardingModel(keys: test.graph.keys)
+        await model.create()
+        guard case .keyReady = model.step else {
+            Issue.record("no key: \(model.step)")
+            return
+        }
+        model.startImport()
+        guard case .keyReady = model.step else {
+            Issue.record("the import opened over the key: \(model.step)")
+            return
+        }
     }
 
     @Test("back from the import returns to the welcome, and an unreadable file says so")

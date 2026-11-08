@@ -4,9 +4,9 @@ import SwiftUI
 
 /// A main window: the app's frame over its own navigation, and the questions over it, in Settings' appearance.
 ///
-/// The first run shows over it while the app has no key, then the questions the machines' connects wait on, the
-/// programs' clipboard reads, and the question about notifying as the first session is attached. A notification's tap
-/// brings its machine, session and pane here.
+/// The first run shows over it while the app has no key (or says why its keys couldn't be read), then the questions the
+/// machines' connects wait on, the programs' clipboard reads, and the question about notifying as the first session is
+/// attached. A notification's tap brings its machine, session and pane here.
 ///
 /// The machines' list shows each machine's attached sessions under it: beside a session in a regular width, and as a
 /// page of its own in a compact one, where it is the phone's view of every attached session (mobile/android's
@@ -64,9 +64,12 @@ internal struct RootView: View {
         self.coreVersion = coreVersion
         // a process started before the first unlock read no keys: read them now, or the first run would show over them
         graph.readUnreadStores()
-        _scaffold = State(initialValue: ScaffoldModel(windows: windows, needsOnboarding: graph.keys.keys.isEmpty))
+        // the first run decides: a cover while there is no key, or while the keys still can't be read (why, with
+        // Retry, never the welcome)
+        let firstRun = OnboardingModel(keys: graph.keys)
+        _scaffold = State(initialValue: ScaffoldModel(windows: windows, needsOnboarding: firstRun.step != .done))
         _machines = State(initialValue: MachinesModel(graph: graph))
-        _onboarding = State(initialValue: OnboardingModel(keys: graph.keys))
+        _onboarding = State(initialValue: firstRun)
     }
 
     // what the session view of `session` asks of this window

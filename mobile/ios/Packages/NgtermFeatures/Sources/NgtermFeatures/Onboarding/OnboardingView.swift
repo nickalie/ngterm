@@ -2,7 +2,8 @@ import NgtermDesign
 import SwiftUI
 
 /// The first run, over everything (there is nowhere to go without a key): the welcome, the import pushed over it, and
-/// the public key once there is one, whose Done ends the first run with `onFinish`.
+/// the public key once there is one, whose Done ends the first run with `onFinish`; or why the app's keys couldn't be
+/// read, with Retry, which ends it with `onFinish` too once they are read and there is one.
 public struct OnboardingView: View {
     private let model: OnboardingModel
     private let onFinish: @MainActor () -> Void
@@ -19,6 +20,9 @@ public struct OnboardingView: View {
 
             case .done:
                 Color(uiColor: .systemGroupedBackground)
+
+            case .readFailed(let reason):
+                readFailed(reason: reason)
 
             case .importing, .welcome:
                 WelcomeView(model: model)
@@ -66,5 +70,27 @@ public struct OnboardingView: View {
     public init(model: OnboardingModel, onFinish: @escaping @MainActor () -> Void) {
         self.model = model
         self.onFinish = onFinish
+    }
+
+    // why the keys couldn't be read (the system's words, which end their sentence), with Retry, which ends the first
+    // run once they are read and there is a key
+    private func readFailed(reason: String) -> some View {
+        let words = reason.hasSuffix(".") ? String(reason.dropLast()) : reason
+        return StatePanel.error(
+            String(localized: "Your keys couldn't be read"),
+            message: String(
+                localized: """
+                    The app's storage answered: \(words). \
+                    Try again; if it keeps failing, restart the app.
+                    """
+            ),
+            action: RowAction(String(localized: "Retry")) {
+                model.retry()
+                if model.step == .done {
+                    onFinish()
+                }
+            }
+        )
+        .background(Color(uiColor: .systemGroupedBackground))
     }
 }
