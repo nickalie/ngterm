@@ -1069,13 +1069,18 @@ mod tests {
             replies: b"x".to_vec(),
         };
         let sent = manifest(vec![first.state.clone(), second.state.clone()]);
-        send_manifest(&client, &sent, &[first.clone(), second.clone()]).unwrap();
+        // the exporter sends while the replacement reads, as in a handoff: a Windows pipe takes no more than its
+        // 512-byte buffer unread, so a send ahead of the read on one thread never ends there
+        let (done, sending) = mpsc::channel();
+        let (exporter, outgoing, cuts) = (Arc::clone(&client), sent.clone(), [first.clone(), second.clone()]);
+        thread::spawn(move || done.send(send_manifest(&exporter, &outgoing, &cuts)));
         let got: Manifest = read_json(&server, STEP_TIMEOUT, "the handoff manifest").unwrap();
         assert_eq!(got, sent);
         assert_eq!(
             read_payloads(&server, &got.panes, STEP_TIMEOUT).unwrap(),
             [(first.vt, first.replies), (second.vt, second.replies)]
         );
+        assert_eq!(sending.recv_timeout(STEP_TIMEOUT), Ok(Ok(())));
     }
 
     #[test]
