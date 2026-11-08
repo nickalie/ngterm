@@ -1008,13 +1008,16 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   (`coverage/lcov.info`, `html/`, `summary.md`), which `conformance/tools/check_coverage.py` holds against
   `conformance/coverage-floor-linux.txt` (conformance/README.md > Code coverage). It is CI's job; run it locally only
   for a change to the coverage tooling.
-- `scripts/unit-coverage.sh OUT_DIR [-p CRATE]...` measures what `cargo test` covers: one instrumented build and run
-  of the workspace's tests (the -sys crates left out, default features, so WPE WebKit too), or of the `-p` crates'
-  alone, with test code out of the denominator (`#[cfg(test)]` and `#[test]` items, the module files they declare and
-  test files by name, read from the sources by `conformance/agterm_conformance/rust_test_code.py`) and `vendor/` too.
+- `scripts/unit-coverage.sh OUT_DIR [-p CRATE]... [-- TEST_ARGS...]` measures what `cargo test` covers: one
+  instrumented build and run of the workspace's tests (the -sys crates left out, and `ngterm-wpe` too outside Linux;
+  default features), or of the `-p` crates' alone, with test code out of the denominator (`#[cfg(test)]` and `#[test]`
+  items, the module files they declare and test files by name, read from the sources by
+  `conformance/agterm_conformance/rust_test_code.py`) and `vendor/` too.
   It writes `OUT_DIR/summary.md` (lines, regions and functions % per crate), `OUT_DIR/summary-files.md` (lines,
   functions, regions and uncovered lines per file) and `OUT_DIR/lcov.info` (the uncovered lines by number), holding
-  only the `-p` crates' files when given; it exits 1 when a test fails, with the report still written.
+  only the `-p` crates' files when given; it exits 1 when a test fails, with the report still written. Arguments after
+  `--` go to the test harness (for example, `-- --skip TEST_NAME`); the build still includes every selected test.
+  The report uses `$PYTHON` when set, else a working `python3`, else `python`.
   `check_coverage.py` holds the summary against `scripts/unit-coverage-floor-linux.txt` (`crate lines functions
   regions`, the same 0.5 pt tolerance; floors only rise, toward 90 per crate). The gate is CI's job (linux.yml's
   `unit-coverage`, about an hour); locally, run it to see what a crate's tests leave uncovered while writing them, or
