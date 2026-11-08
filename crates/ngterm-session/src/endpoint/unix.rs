@@ -177,9 +177,9 @@ fn make_directory_private(directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// herdr's `prepare_socket_path`: a socket file nobody listens on is removed, a live one refused as busy. Only a
-/// missing socket counts as absent: a path that cannot be checked is an error. It runs under the namespace's lock
-/// ([`lock_namespace`]), so no other server is between its check and the bind.
+/// herdr's `prepare_socket_path`: a socket file nobody listens on is removed, a live one refused as busy. Changed in
+/// ngterm: only a missing socket counts as absent; a path that cannot be checked is an error. It runs under the
+/// namespace's lock ([`lock_namespace`]), so no other server is between its check and the bind.
 fn prepare_socket_path(socket: &Path) -> io::Result<()> {
     match fs::symlink_metadata(socket) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -397,6 +397,10 @@ mod tests {
 
     #[test]
     fn a_socket_that_cannot_be_reached_is_preserved() {
+        // root bypasses the socket file's permission bits, so its connection succeeds
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
         let root = tempfile::Builder::new().prefix("ngep-").tempdir_in("/tmp").unwrap();
         let endpoint = Endpoint::new(root.path().join("private"));
         let _listener = endpoint.bind().unwrap();
