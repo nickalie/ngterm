@@ -1,15 +1,59 @@
+import NgtermDesign
+import NgtermTerminal
+import SwiftUI
 import Testing
+import UIKit
 
 @testable import NgtermFeatures
 
 /// Goldens of the session view's other covers and views (mobile/android's `SessionScreenshotTest`): a pane that
-/// couldn't be shown with Retry, a program stopped by a signal or ended with no code, and a pane in chat view with the
-/// switch to its terminal in the toolbar, live and while its link comes back; and a machine whose ngterm can't share
-/// live sessions.
+/// couldn't be shown with Retry, a program stopped by a signal or ended with no code, and a pane in chat view, live and
+/// while its link comes back; and a machine whose ngterm can't share live sessions.
+///
+/// A golden's capture leaves a toolbar's glyphs out, so the switch to a chat's terminal is asserted on the toolbar's
+/// items instead.
 @MainActor
 @Suite("session covers snapshots")
 internal struct SessionCoversSnapshotTests {
     private static let phone = ScaffoldShot(device: .phone, isDark: false, isAccessibility: false)
+    // how many layout passes SwiftUI gets to build the toolbar
+    private static let passes = 4
+    // what the session view's actions do: nothing
+    private static let ignore: @MainActor () -> Void = {
+        // a test presses nothing
+    }
+
+    // the titles of the trailing toolbar items of `world`'s session view, laid out in a window of the test's own
+    private static func trailingTitles(_ world: SessionWorld) async throws -> [String] {
+        let host = UIHostingController(
+            rootView: NavigationStack {
+                SessionScreen(
+                    graph: world.graph,
+                    session: SessionWorld.key,
+                    actions: SessionActions(close: ignore, open: { _ in ignore() }, openInNewWindow: nil),
+                    keyboard: TerminalKeyboard(hardware: HardwareKeyboard(fixed: true))
+                )
+            }
+            .ngtermTheme()
+        )
+        // the frame's initializer, as SessionShot's: UIView's runs UIWindow's, which has no scene here
+        let made = (UIWindow.self as UIView.Type).init(frame: CGRect(origin: .zero, size: phone.size))
+        let window = try #require(made as? UIWindow)
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        for _ in 0..<passes {
+            window.setNeedsLayout()
+            window.layoutIfNeeded()
+            await Task.yield()
+        }
+        return titles(of: host)
+    }
+
+    private static func titles(of controller: UIViewController) -> [String] {
+        controller.navigationItem.trailingItemGroups.flatMap(\.barButtonItems).compactMap(\.title)
+            + controller.children.flatMap(titles)
+    }
 
     @Test("a pane that couldn't be shown says why, with Retry")
     internal func showFailed() async throws {
@@ -38,7 +82,16 @@ internal struct SessionCoversSnapshotTests {
         await SessionShot.check(world, named: "exited-no-code", shot: Self.phone, hasTerminals: true)
     }
 
-    @Test("a pane in chat view shows its chat, and the toolbar offers its terminal")
+    @Test("the toolbar of a pane in chat view offers its terminal")
+    internal func chatViewSwitch() async throws {
+        let world = ChatWorld()
+        defer { world.remove() }
+        try await world.open()
+        #expect(world.graph.chats.view(of: ChatWorld.pane) == .chat)
+        #expect(try await Self.trailingTitles(world.world).contains("Show terminal"))
+    }
+
+    @Test("a pane in chat view shows its chat")
     internal func chatView() async throws {
         let world = ChatWorld()
         defer { world.remove() }
