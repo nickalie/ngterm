@@ -641,10 +641,14 @@ contract `.claude/rules/settings.md`, `site/docs.html`.
 `crates/ngterm-core/src/commands/tests/`.
 **Conformance:** none.
 
-- [ ] write tests: an exit capture over a `SessionHost` whose `list()` takes 150 ms still fills every live pane's
-  foreground (passes on the current code: the upstream failure has no counterpart here).
-- [ ] Keep 500 ms (upstream's 700 ms answers zmx's per-daemon probes) and say why in the constant's doc; check
+- [x] write tests: an exit capture over a `SessionHost` whose `list()` takes 150 ms still fills every live pane's
+  foreground (passes on the current code: the upstream failure has no counterpart here). Done in
+  `commands/tests/live_capture.rs` (the fill passed on the old code; its one-bounded-listing assertion did not).
+- [x] Keep 500 ms (upstream's 700 ms answers zmx's per-daemon probes) and say why in the constant's doc; check
   whether the capture's leader refresh can exceed the budget through the 3 s client timeout, and bound it if so.
+  It could (any pane's read refreshed through `list()`, 3 s): the capture now lists once up front through
+  `SessionHost::list_within(EXIT_LISTING_TIMEOUT)` (300 ms), only with a live pane, keeps the cached leaders on a
+  failure, and its reads list nothing more.
 
 ### Task 16: Compact sidebar density (#884)
 

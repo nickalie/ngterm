@@ -25,6 +25,7 @@ mod hooks;
 mod hud;
 mod keymap;
 mod live;
+mod live_capture;
 mod messages;
 mod metadata;
 mod moves;

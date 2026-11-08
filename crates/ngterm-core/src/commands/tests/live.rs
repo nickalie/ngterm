@@ -35,7 +35,7 @@ pub(super) struct Live {
 }
 
 /// A resources directory holding the zsh integration a wrap checks for.
-fn resources() -> tempfile::TempDir {
+pub(super) fn resources() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let integration = dir.path().join("shell-integration/zsh");
     std::fs::create_dir_all(&integration).unwrap();
@@ -43,7 +43,7 @@ fn resources() -> tempfile::TempDir {
     dir
 }
 
-fn install<H: SessionHost + 'static>(core: &mut Core, host: &Arc<H>, resources: &Path, mode: RestoreMode) {
+pub(super) fn install<H: SessionHost + 'static>(core: &mut Core, host: &Arc<H>, resources: &Path, mode: RestoreMode) {
     core.set_restore_launch(RestoreLaunchDecision::new(mode, None));
     core.install_live_sessions(LiveInstall {
         host: Arc::clone(host) as Arc<dyn SessionHost>,

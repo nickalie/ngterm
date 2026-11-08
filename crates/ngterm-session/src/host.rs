@@ -10,7 +10,8 @@
 //!   that could not be read is an error, never a blank screen; a kill that could not be sent is
 //!   [`KillOutcome::Failed`] with the reason. Every call is bounded by the client's timeout
 //!   ([`crate::client::DEFAULT_TIMEOUT`], upstream's per zmx invocation; a kill [`crate::client::KILL_WAIT`] more,
-//!   for its programs' end) and never retried: a second typing after an unclear failure would type twice.
+//!   for its programs' end; a [`SessionHost::list_within`] its own timeout instead) and never retried: a second
+//!   typing after an unclear failure would type twice.
 //! - **The error texts** are upstream's in live-session wording: `live session list failed: <reason>`,
 //!   `live session screen failed: <reason>`, `live session type failed: <reason>` (upstream `ZmxClient`'s
 //!   `zmx list failed`, `zmx screen failed`, `zmx type failed`; its `zmx list output was incomplete` and
@@ -175,18 +176,28 @@ fn failed(operation: &str, name: Option<&str>, error: &ClientError) -> HostError
     HostError(format!("live session {operation} failed: {error}"))
 }
 
+/// Every session of `client`'s namespace; none without a server.
+fn list_through(client: &Client) -> Result<Vec<LiveSessionRecord>, HostError> {
+    match client.call(ApiRequest::List) {
+        Ok(None) => Ok(Vec::new()),
+        Ok(Some(ApiResponse::Sessions(sessions))) => Ok(as_claimed(sessions)),
+        Ok(Some(other)) => Err(failed("list", None, &unexpected("a list", &other))),
+        Err(error) => Err(failed("list", None, &error)),
+    }
+}
+
 impl SessionHost for ServerHost {
     fn is_available(&self) -> bool {
         is_executable_file(&self.executable)
     }
 
     fn list(&self) -> Result<Vec<LiveSessionRecord>, HostError> {
-        match self.client.call(ApiRequest::List) {
-            Ok(None) => Ok(Vec::new()),
-            Ok(Some(ApiResponse::Sessions(sessions))) => Ok(as_claimed(sessions)),
-            Ok(Some(other)) => Err(failed("list", None, &unexpected("a list", &other))),
-            Err(error) => Err(failed("list", None, &error)),
-        }
+        list_through(&self.client)
+    }
+
+    /// The listing on a client bounded by `timeout`, connecting included.
+    fn list_within(&self, timeout: Duration) -> Result<Vec<LiveSessionRecord>, HostError> {
+        list_through(&self.client.clone().with_timeout(timeout))
     }
 
     /// One session killed; without a server, or without a session of that name, nothing was left to kill.

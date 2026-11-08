@@ -201,6 +201,16 @@ pub trait SessionHost: Send + Sync {
     /// The listing could not be read or parsed. That is not an empty namespace: a caller must not act on it as one.
     fn list(&self) -> Result<Vec<LiveSessionRecord>, HostError>;
 
+    /// [`SessionHost::list`] within `timeout` rather than the host's own call timeout, for a caller on a deadline
+    /// (the quit capture). A host whose listing has no timeout of its own answers as `list` does.
+    ///
+    /// # Errors
+    ///
+    /// As [`SessionHost::list`]; a listing that outran `timeout` is one that could not be read.
+    fn list_within(&self, _timeout: Duration) -> Result<Vec<LiveSessionRecord>, HostError> {
+        self.list()
+    }
+
     /// Kills the daemon `name`; `force` also removes a stale socket.
     fn kill(&self, name: &str, force: bool) -> KillOutcome;
 

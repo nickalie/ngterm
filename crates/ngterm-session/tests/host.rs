@@ -92,6 +92,8 @@ fn the_listing_asks_only_for_the_list_and_keeps_every_field() -> TestResult {
             }
         ]
     );
+    let bounded = host(peer.directory())?.list_within(Duration::from_secs(1))?;
+    assert_eq!(bounded, records, "a bounded listing reads the same");
     Ok(())
 }
 
@@ -320,6 +322,22 @@ fn a_silent_server_fails_each_call_within_the_timeout() -> TestResult {
         "{elapsed:?} for five calls"
     );
     assert_eq!(calls(&log).len(), 5, "each call reached the server once, never retried");
+    Ok(())
+}
+
+#[test]
+fn a_bounded_listing_fails_at_its_own_timeout_rather_than_the_hosts() -> TestResult {
+    let (peer, log) = api_peer(|_| Answer::Silent)?;
+    // the host keeps the client's 3 s; the quit capture's listing asks for less
+    let host = host(peer.directory())?;
+    let started = Instant::now();
+    assert!(host.list_within(Duration::from_millis(300)).is_err());
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the listing's own timeout bounds it: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(calls(&log), [ApiRequest::List]);
     Ok(())
 }
 
