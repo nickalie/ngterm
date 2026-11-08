@@ -735,10 +735,10 @@ so replace their ratchet lines); new `test_session.py::test_tint_takes_a_hex_and
 **Rust side:** `docs/backlog/` (a new item via the `workflow:backlog` skill); no pin change in this plan.
 **Conformance:** none.
 
-- [ ] Confirm and record: ngterm's `LIBGHOSTTY_VT_REV` (81598385) is an ancestor of v1.4.0 and already has the page
+- [x] Confirm and record: ngterm's `LIBGHOSTTY_VT_REV` (81598385) is an ancestor of v1.4.0 and already has the page
   memory reclamation upstream's "fixed-memory trims" names; the display-link pause is the macOS app renderer's and
   the drain-mailbox patch touches App/Surface/renderer threads, none of which libghostty-vt has.
-- [ ] File a backlog item to evaluate a `LIBGHOSTTY_VT_REV` bump to the vt-1.0.0 tag as its own change: Zig 0.16 ->
+- [x] File a backlog item to evaluate a `LIBGHOSTTY_VT_REV` bump to the vt-1.0.0 tag as its own change: Zig 0.16 ->
   0.17, `vt_write_until_ground` -> `vt_write_until` (`crates/ngterm-ghostty-vt/src/terminal.rs:400-410`), the
   kitty_graphics.h rework (patch 0001), whether patch 0004 becomes removable, patch 0003, and the terminal fixes
   gained (#14761, #14762, #14814, #14812, #14832, #14856, #14858).
