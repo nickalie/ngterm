@@ -1676,4 +1676,60 @@ mod tests {
         assert_eq!(exit_byte(256 + 3), 3);
         assert_eq!(exit_byte(-1), 255);
     }
+
+    #[test]
+    fn every_overlay_command_exposes_its_connection_options() {
+        for arguments in [
+            vec!["open", "true"],
+            vec!["close"],
+            vec!["resize", "--full"],
+            vec!["copy"],
+            vec!["text"],
+            vec!["page-serve", "token"],
+            vec!["page-attach"],
+        ] {
+            let arguments = [arguments, vec!["--socket", "/private/socket", "--json"]].concat();
+            let parsed = Ngtermctl::try_parse_from(command_line(&arguments)).unwrap();
+            let Cli::Session(group) = parsed.command else {
+                unreachable!()
+            };
+            let options = group.command().options();
+            assert_eq!(options.socket.as_deref(), Some(std::path::Path::new("/private/socket")));
+            assert!(options.json);
+        }
+    }
+
+    #[test]
+    fn a_blocked_open_without_an_id_prints_the_reply_and_does_not_poll() {
+        for json in [false, true] {
+            let mut io = FakeIo::new(|_: &Request| Ok(answer(&json!({}))));
+            let arguments = if json {
+                vec!["true", "--block", "--json"]
+            } else {
+                vec!["true", "--block"]
+            };
+            assert_eq!(
+                exit_status(open(&arguments).block_program(&mut io)),
+                Some(ExitCode::FAILURE)
+            );
+            assert_eq!(io.requests.len(), 1);
+            assert_eq!(io.lines.len(), 1);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invoking_a_plain_open_and_an_unknown_companion_reports_the_server_response() {
+        for arguments in [
+            vec!["session", "overlay", "open", "echo"],
+            vec!["session", "overlay", "open", "--html", "/tmp/test.html", "--companion"],
+        ] {
+            let (output, requests) =
+                crate::messages::tests::run_command(&arguments, b"", &[], &[r#"{"ok":false,"error":"refused"}"#]);
+            assert_eq!(requests.len(), 1);
+            let error = String::from_utf8(output.stderr).unwrap();
+            assert!(error.contains("refused"), "{error}");
+            assert!(error.contains("PROBE_RESULT:Err(Exit("), "{error}");
+        }
+    }
 }

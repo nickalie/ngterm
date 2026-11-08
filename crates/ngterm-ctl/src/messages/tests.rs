@@ -344,3 +344,136 @@ fn environment<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> MapEn
         .into_iter()
         .fold(MapEnv::default(), |env, (key, value)| env.with(key, value))
 }
+
+/// Runs the command in a test subprocess so stdin and stdout belong only to this invocation.
+#[test]
+fn command_probe() {
+    let Ok(arguments) = std::env::var("CTL_COVERAGE_ARGUMENTS") else {
+        return;
+    };
+    let arguments: Vec<String> = serde_json::from_str(&arguments).unwrap();
+    let parsed = crate::Ngtermctl::try_parse_from(arguments).unwrap();
+    eprintln!("PROBE_RESULT:{:?}", parsed.command.run(&ngterm_core::paths::ProcessEnv));
+}
+
+#[cfg(unix)]
+pub(crate) fn run_command(
+    arguments: &[&str],
+    input: &[u8],
+    environment: &[(&str, &str)],
+    replies: &[&str],
+) -> (std::process::Output, Vec<serde_json::Value>) {
+    use std::io::{BufRead as _, Write as _};
+    use std::os::unix::net::UnixListener;
+    use std::process::Stdio;
+    use std::thread;
+
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("ctl.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let replies: Vec<String> = replies.iter().map(|reply| format!("{reply}\n")).collect();
+    let server = thread::spawn(move || {
+        let mut requests = Vec::new();
+        for reply in replies {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(pair) => break pair,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "command never connected");
+                        thread::yield_now();
+                    }
+                    Err(error) => panic!("accept: {error}"),
+                }
+            };
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(&stream).read_line(&mut line).unwrap();
+            requests.push(serde_json::from_str(&line).unwrap());
+            stream.write_all(reply.as_bytes()).unwrap();
+        }
+        requests
+    });
+    let mut argv = vec!["ngtermctl".to_owned()];
+    argv.extend(arguments.iter().map(|argument| (*argument).to_owned()));
+    argv.extend(["--socket".to_owned(), socket.to_string_lossy().into_owned()]);
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "messages::tests::command_probe",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env_clear()
+        .envs(std::env::vars_os().filter(|(key, _)| !key.to_string_lossy().starts_with("NGTERM_")))
+        .envs(environment.iter().copied())
+        .env("CTL_COVERAGE_ARGUMENTS", serde_json::to_string(&argv).unwrap())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    let output = child.wait_with_output().unwrap();
+    let requests = server.join().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    (output, requests)
+}
+
+#[cfg(unix)]
+#[test]
+fn commands_emit_the_servers_output_and_send_stdin_bytes_as_the_body() {
+    let (output, requests) = run_command(
+        &["msg", "send", "--stdin", "--to", "S:P"],
+        "héllo\n".as_bytes(),
+        &[],
+        &[r#"{"ok":true,"result":{"messageID":"m1"}}"#],
+    );
+    assert!(String::from_utf8(output.stdout).unwrap().contains("m1\n"));
+    assert_eq!(
+        requests,
+        [json!({"cmd":"msg.send","args":{"body":"héllo\n","recipients":["S:P"]}})]
+    );
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("PROBE_RESULT:Ok(())")
+    );
+    let (output, requests) = run_command(
+        &["msg", "ack", "m1", "--as", "S:P"],
+        b"",
+        &[],
+        &[r#"{"ok":false,"error":"unknown pane"}"#],
+    );
+    assert_eq!(requests[0]["cmd"], "msg.ack");
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("error: unknown pane\n"), "{error}");
+    assert!(error.contains("PROBE_RESULT:Err(Exit("), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_live_wait_reads_again_and_cancels_its_timeout_when_mail_arrives() {
+    let (output, requests) = run_command(
+        &["msg", "read", "--wait", "--timeout", "5", "--ack", "--as", "S:P"],
+        b"",
+        &[],
+        &[
+            r#"{"ok":true,"result":{"messages":[],"acked":[]}}"#,
+            r#"{"ok":true,"result":{"messages":[{"id":"m1","body":"ready","to":"S:P","ts":1}],"acked":["m1"]}}"#,
+        ],
+    );
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0], requests[1]);
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("m1 from outside ngterm\nready\n")
+    );
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("PROBE_RESULT:Ok(())")
+    );
+}

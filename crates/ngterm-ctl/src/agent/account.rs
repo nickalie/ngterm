@@ -381,4 +381,81 @@ mod tests {
         let switched = watch.accounts.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(switched, Account::default());
     }
+
+    #[test]
+    fn system_files_are_read_whole_or_as_a_bounded_tail() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("rollout.jsonl");
+        assert_eq!(System.read(&file), None);
+        assert_eq!(System.tail(&file, 4), None);
+        std::fs::write(&file, b"first\nlast\n").unwrap();
+        assert_eq!(System.read(&file), Some(b"first\nlast\n".to_vec()));
+        assert_eq!(System.tail(&file, 5), Some(b"last\n".to_vec()));
+        assert_eq!(System.tail(&file, 99), Some(b"first\nlast\n".to_vec()));
+        assert_eq!(System.tail(&file, 0), Some(Vec::new()));
+        let before = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+        let now = u128::from(System.now_ms());
+        let after = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+        assert!((before..=after).contains(&now));
+        assert_eq!(System.home(), std::env::home_dir());
+    }
+
+    #[test]
+    fn the_watch_stops_when_either_channel_is_disconnected() {
+        let (sources, wanted) = mpsc::channel();
+        let (found, accounts) = mpsc::channel();
+        drop(accounts);
+        // A closed account stream ends immediately, even while the source stream is open.
+        watch(claude(), &Fake::default(), REFRESH, &wanted, &found);
+        drop(sources);
+        let (found, accounts) = mpsc::channel();
+        watch(claude(), &Fake::default(), REFRESH, &wanted, &found);
+        assert_eq!(accounts.try_recv().unwrap(), Account::default());
+    }
+
+    #[test]
+    fn a_system_watch_switches_between_private_config_trees() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = Source {
+            agent: AgentKind::Codex,
+            transcript: directory.path().join("sessions/x.jsonl"),
+        };
+        std::fs::create_dir_all(source.transcript.parent().unwrap()).unwrap();
+        let watch = Watch::start(source.clone()).unwrap();
+        assert_eq!(
+            watch.accounts.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Account::default()
+        );
+        watch.switch(source);
+        drop(watch);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn an_unavailable_keychain_tool_leaves_credentials_unknown() {
+        assert_eq!(System.keychain("ngterm-coverage-nonexistent-item"), None);
+    }
+
+    #[test]
+    fn codex_reads_the_email_from_the_transcripts_own_config() {
+        use base64::Engine as _;
+        let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"email":"codex@example.com"}"#);
+        let auth = serde_json::json!({"tokens":{"id_token":format!("header.{claims}.signature")}});
+        let config = PathBuf::from("/private/codex");
+        let mut io = Fake::default();
+        io.files
+            .insert(config.join("auth.json"), serde_json::to_vec(&auth).unwrap());
+        let source = Source {
+            agent: AgentKind::Codex,
+            transcript: config.join("sessions/today/rollout.jsonl"),
+        };
+        assert_eq!(
+            read_account(&source, &io),
+            Account {
+                email: Some("codex@example.com".to_owned()),
+                weekly: None
+            }
+        );
+        assert!(io.asked.lock().unwrap().is_empty());
+    }
 }

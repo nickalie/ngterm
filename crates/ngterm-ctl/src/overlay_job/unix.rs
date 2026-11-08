@@ -221,3 +221,166 @@ pub(super) fn route_signals(canceler: Canceler) {
     // without the waiter the stop signals stay blocked: the program still ends with the terminal's hangup
     drop(waiter);
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+    use std::time::Duration;
+    #[cfg(target_os = "linux")]
+    use std::time::Instant;
+
+    use super::*;
+    use ngterm_core::overlay_jobs::OverlayJobFrame;
+
+    #[test]
+    fn hangup_checks_leave_input_for_the_program() {
+        use std::io::{Read as _, Write as _};
+        let (mut reader, mut writer) = std::os::unix::net::UnixStream::pair().unwrap();
+        assert!(!is_terminal(reader.as_raw_fd()));
+        assert!(!hung_up(reader.as_raw_fd()));
+        writer.write_all(b"keys").unwrap();
+        assert!(!hung_up(reader.as_raw_fd()));
+        let mut bytes = [0; 4];
+        reader.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"keys");
+        drop(writer);
+        assert!(hung_up(reader.as_raw_fd()));
+        assert!(hung_up(i32::MAX));
+        assert!(!is_terminal(-1));
+        assert_eq!(stdin_terminal(), libc::STDIN_FILENO);
+    }
+
+    /// Signal dispositions and session ownership belong to this subprocess alone.
+    #[test]
+    fn terminal_probe() {
+        let Ok(mode) = std::env::var("CTL_UNIX_PROBE") else {
+            return;
+        };
+        if mode == "signals" {
+            signal_probe();
+            return;
+        }
+        assert_eq!(prepare_child(Some(-1)).unwrap_err().raw_os_error(), Some(libc::EBADF));
+        let (mut master, mut slave) = (-1, -1);
+        // SAFETY: both outputs point at initialized descriptor slots; optional settings are null.
+        let opened = unsafe {
+            libc::openpty(
+                &raw mut master,
+                &raw mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(opened, 0);
+        // SAFETY: openpty returned two fresh owned descriptors.
+        let master = unsafe { OwnedFd::from_raw_fd(master) };
+        // SAFETY: as above.
+        let slave = unsafe { OwnedFd::from_raw_fd(slave) };
+        // SAFETY: this isolated process is not a process-group leader and may start its own session.
+        assert!(unsafe { libc::setsid() } > 0);
+        // SAFETY: the slave is an open pty in this process's new session.
+        assert_eq!(unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSCTTY, 0) }, 0);
+        // A master hangup sends SIGHUP to this session; keep it from ending the probe.
+        // SAFETY: installs no handler code, for a valid signal, in this subprocess alone.
+        unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
+        assert!(is_terminal(slave.as_raw_fd()));
+        prepare_child(Some(slave.as_raw_fd())).unwrap();
+        // SAFETY: tcgetpgrp only reads this open terminal's foreground group.
+        assert_eq!(unsafe { libc::tcgetpgrp(slave.as_raw_fd()) }, unsafe { libc::getpid() });
+        take_terminal_back(slave.as_raw_fd());
+
+        run_pty_jobs(slave.as_raw_fd());
+        // prepare_child reset SIGHUP; ignore it again before closing the master.
+        // SAFETY: valid signal and no handler code, in this subprocess alone.
+        unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
+        drop(master);
+        assert!(hung_up(slave.as_raw_fd()));
+    }
+
+    fn run_pty_jobs(tty: RawFd) {
+        for (command, cwd, expected) in [("exit 0", "/tmp", 0), ("exit 0", "/ngterm-missing-directory", 127)] {
+            let (origin, helper) = ngterm_server::endpoint::pair().unwrap();
+            let frames = thread::spawn(move || {
+                let mut frames = Vec::new();
+                while let Some(line) = crate::client::read_socket_line(&origin, 1024) {
+                    frames.push(ngterm_core::overlay_jobs::OverlayJobFrame::parse(&line).unwrap());
+                }
+                frames
+            });
+            let runner = super::super::JobRunner::new(helper, Some(tty), Duration::from_secs(1));
+            let context = OverlayLaunchContext::new(command, cwd, ngterm_core::pane_env::PaneEnv::new());
+            assert_eq!(runner.run(&context, &[]), expected);
+            let frames = frames.join().unwrap();
+            if expected == 0 {
+                assert_eq!(frames, [OverlayJobFrame::Started, OverlayJobFrame::Exited { code: 0 }]);
+            } else {
+                assert!(
+                    matches!(frames.as_slice(), [OverlayJobFrame::LaunchFailed { reason }] if reason.starts_with("could not start the program:"))
+                );
+            }
+            // SAFETY: these calls read this subprocess's terminal and process group.
+            assert_eq!(unsafe { libc::tcgetpgrp(tty) }, unsafe { libc::getpgrp() });
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn signal_probe() {
+        let shared = std::sync::Arc::new(super::super::Shared {
+            grace: Duration::from_secs(1),
+            stop: std::sync::Mutex::new(super::super::Stop::default()),
+        });
+        route_signals(Canceler(std::sync::Arc::clone(&shared)));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let tid = loop {
+            let tid = std::fs::read_dir("/proc/self/task")
+                .unwrap()
+                .filter_map(Result::ok)
+                .find_map(|entry| {
+                    let name = std::fs::read_to_string(entry.path().join("comm")).ok()?;
+                    (name.trim() == "ngtermctl.run-j")
+                        .then(|| entry.file_name().to_string_lossy().parse::<libc::pid_t>().unwrap())
+                });
+            if let Some(tid) = tid {
+                break tid;
+            }
+            assert!(Instant::now() < deadline, "signal waiter never started");
+            thread::yield_now();
+        };
+        // SAFETY: getpid reads this subprocess's id.
+        let pid = unsafe { libc::getpid() };
+        // SAFETY: direct a stop signal to the blocked waiter in this process, leaving the test harness alone.
+        let sent = unsafe { libc::syscall(libc::SYS_tgkill, pid, tid, libc::SIGTERM) };
+        assert_eq!(sent, 0);
+        while shared.deadline().is_none() {
+            assert!(Instant::now() < deadline, "stop did not cancel the job");
+            thread::yield_now();
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn signal_probe() {}
+
+    #[test]
+    fn a_child_takes_the_terminal_and_a_stop_signal_cancels_the_helper() {
+        let mut modes = vec!["terminal"];
+        if cfg!(target_os = "linux") {
+            modes.push("signals");
+        }
+        for mode in modes {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "overlay_job::sys::tests::terminal_probe",
+                    "--exact",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env_clear()
+                .envs(std::env::vars_os().filter(|(key, _)| !key.to_string_lossy().starts_with("NGTERM_")))
+                .env("CTL_UNIX_PROBE", mode)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{mode}: {output:?}");
+        }
+    }
+}

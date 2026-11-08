@@ -432,4 +432,251 @@ mod tests {
         assert_eq!(refused(&["--limit", "0"]), Err("--limit must be at least 1".to_owned()));
         assert_eq!(refused(&["--pane", "split"]), Ok(()));
     }
+
+    fn record(path: &Path) -> ControlAgent {
+        ControlAgent {
+            agent: "claude".to_owned(),
+            pane: "left".to_owned(),
+            transcript_path: path.to_string_lossy().into_owned(),
+            conversation_id: "c1".to_owned(),
+            updated_at: 1.0,
+            approval: None,
+        }
+    }
+
+    fn stream(chat: &Chat, record: ControlAgent) -> Stream<'_> {
+        Stream {
+            chat,
+            socket: PathBuf::new(),
+            limit: 10,
+            follower: follower(&record).unwrap(),
+            record,
+            approvals: Approvals::new(),
+            account: None,
+            position: 0,
+            announced: false,
+        }
+    }
+
+    fn transcript(directory: &Path, name: &str) -> PathBuf {
+        let path = directory.join("projects/work").join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            b"{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":\"hello\"}}\n",
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn followers_refuse_unknown_agents_and_paths_outside_the_agents_tree() {
+        let mut record = record(Path::new("/tmp/outside.jsonl"));
+        let Err(Failure::Local(error)) = follower(&record) else {
+            panic!("accepted outside path")
+        };
+        assert_eq!(
+            error,
+            "transcript path is outside a Claude projects/ tree: /tmp/outside.jsonl"
+        );
+        record.agent = "other".to_owned();
+        let Err(Failure::Local(error)) = follower(&record) else {
+            panic!("accepted unknown agent")
+        };
+        assert_eq!(error, "unknown agent: other");
+        assert!(source(&record).is_none());
+        let Failure::Local(error) = read_failure(&io::Error::other("reader refused")) else {
+            unreachable!()
+        };
+        assert_eq!(error, "could not read the transcript: reader refused");
+    }
+
+    #[test]
+    fn a_recheck_resets_only_when_the_transcript_moves_and_keeps_the_new_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let old = record(&transcript(directory.path(), "old.jsonl"));
+        let chat = chat(&[]).unwrap();
+        let mut stream = stream(&chat, old.clone());
+        assert!(stream.recheck(old).unwrap().is_empty());
+        let new = record(&transcript(directory.path(), "new.jsonl"));
+        let events = stream.recheck(new.clone()).unwrap();
+        assert_eq!(events.first(), Some(&reset()));
+        assert!(
+            events.iter().any(|event| event.to_ndjson().contains("hello")),
+            "{events:?}"
+        );
+        assert_eq!(stream.record, new);
+        let mut invalid = new;
+        invalid.agent = "unknown".to_owned();
+        assert!(matches!(stream.recheck(invalid), Err(Failure::Local(error)) if error == "unknown agent: unknown"));
+    }
+
+    #[test]
+    fn stream_positions_ignore_subagents_and_reset_before_a_new_conversation() {
+        let directory = tempfile::tempdir().unwrap();
+        let chat = chat(&[]).unwrap();
+        let mut stream = stream(&chat, record(&transcript(directory.path(), "c.jsonl")));
+        let mut main = reset();
+        main.body = EventBody::Live;
+        main.cursor = 20;
+        let mut subagent = main.clone();
+        subagent.parent = Some("task".to_owned());
+        subagent.cursor = 999;
+        stream.stand(&mut vec![main.clone(), subagent]);
+        assert_eq!(stream.position, 20);
+        main.cursor = 3;
+        stream.stand(&mut vec![reset(), main]);
+        assert_eq!(stream.position, 3);
+    }
+
+    #[test]
+    fn a_changed_account_is_announced_at_the_streams_current_position() {
+        let directory = tempfile::tempdir().unwrap();
+        let record = record(&transcript(directory.path(), "c.jsonl"));
+        std::fs::write(
+            directory.path().join(".claude.json"),
+            br#"{"oauthAccount":{"emailAddress":"a@example.com"}}"#,
+        )
+        .unwrap();
+        let chat = chat(&[]).unwrap();
+        let mut stream = stream(&chat, record.clone());
+        stream.account = source(&record).and_then(Watch::start);
+        stream.position = 42;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut events = Vec::new();
+        while events.is_empty() {
+            assert!(Instant::now() < deadline, "account was not announced");
+            stream.stand(&mut events);
+            thread::yield_now();
+        }
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].cursor, 42);
+        assert!(events[0].to_ndjson().contains("a@example.com"));
+        assert!(stream.announced);
+        let next = record.clone();
+        assert!(stream.recheck(next).unwrap().is_empty());
+        let moved = self::record(&transcript(directory.path(), "next.jsonl"));
+        assert_eq!(stream.recheck(moved).unwrap().first(), Some(&reset()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chat_pages_reset_mismatched_conversations_and_following_ends_with_stdin() {
+        use crate::messages::tests::run_command;
+        let directory = tempfile::tempdir().unwrap();
+        let record = record(&transcript(directory.path(), "c.jsonl"));
+        let reply = serde_json::json!({"ok":true,"result":{"agent":record}}).to_string();
+        for arguments in [
+            vec!["agent", "chat", "--before", "10000"],
+            vec!["agent", "chat", "--before", "10000", "--conversation", "old"],
+            vec!["agent", "chat"],
+            vec!["agent", "chat", "--after", "0"],
+            vec!["agent", "chat", "--after", "0", "--conversation", "old"],
+        ] {
+            let (output, requests) = run_command(&arguments, b"", &[], &[&reply]);
+            assert_eq!(requests[0]["cmd"], "agent.get");
+            assert!(
+                String::from_utf8(output.stderr)
+                    .unwrap()
+                    .contains("PROBE_RESULT:Ok(())")
+            );
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            if arguments.contains(&"old") {
+                assert!(stdout.contains("\"type\":\"reset\""), "{stdout}");
+            } else {
+                assert!(stdout.contains("hello"), "{stdout}");
+            }
+        }
+        let (output, _) = run_command(
+            &["agent", "chat"],
+            b"",
+            &[],
+            &[r#"{"ok":false,"error":"no agent in this pane"}"#],
+        );
+        assert!(String::from_utf8(output.stderr).unwrap().contains("PROBE_RESULT:Err("));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stream_rechecks_the_pane_and_ends_when_its_agent_is_gone() {
+        use std::io::{BufRead as _, Write as _};
+        use std::os::unix::net::UnixListener;
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("ctl.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let moved = record(&transcript(directory.path(), "next.jsonl"));
+        let responses = [
+            serde_json::json!({"ok":true,"result":{"agent":moved}}).to_string(),
+            serde_json::json!({"ok":false,"error":NO_AGENT}).to_string(),
+        ];
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            for response in responses {
+                let mut socket = accept_before(&listener, deadline);
+                socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = String::new();
+                std::io::BufReader::new(&socket).read_line(&mut request).unwrap();
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&request).unwrap()["cmd"],
+                    "agent.get"
+                );
+                writeln!(socket, "{response}").unwrap();
+            }
+        });
+        let chat = chat(&[]).unwrap();
+        let mut stream = stream(&chat, record(&transcript(directory.path(), "c.jsonl")));
+        stream.socket = socket;
+        let first = stream.follower.backlog(10).unwrap();
+        let (_sender, ended) = mpsc::channel();
+        let result = stream.run(first, &ended);
+        server.join().unwrap();
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[cfg(unix)]
+    fn accept_before(listener: &std::os::unix::net::UnixListener, deadline: Instant) -> std::os::unix::net::UnixStream {
+        loop {
+            match listener.accept() {
+                Ok((socket, _)) => return socket,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "stream never rechecked its pane");
+                    thread::yield_now();
+                }
+                Err(error) => panic!("accept: {error}"),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cyclic_transcript_paths_fail_pages_and_backlogs_with_the_local_read_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let unreadable = directory.path().join("projects/work/cycle.jsonl");
+        std::fs::create_dir_all(unreadable.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("cycle.jsonl", &unreadable).unwrap();
+        let record = record(&unreadable);
+        let reply = serde_json::json!({"ok":true,"result":{"agent":record}}).to_string();
+        for arguments in [
+            vec!["agent", "chat", "--before", "10"],
+            vec!["agent", "chat"],
+            vec!["agent", "chat", "--after", "0"],
+        ] {
+            let (output, _) = crate::messages::tests::run_command(&arguments, b"", &[], &[&reply]);
+            let error = String::from_utf8(output.stderr).unwrap();
+            assert!(
+                error.contains("could not read the transcript: Too many levels of symbolic links"),
+                "{error}"
+            );
+        }
+        let chat = chat(&[]).unwrap();
+        let mut stream = stream(&chat, self::record(&transcript(directory.path(), "valid.jsonl")));
+        let Err(Failure::Local(error)) = stream.recheck(record) else {
+            panic!("accepted an unreadable transcript")
+        };
+        assert_eq!(
+            error,
+            "could not read the transcript: Too many levels of symbolic links"
+        );
+    }
 }
