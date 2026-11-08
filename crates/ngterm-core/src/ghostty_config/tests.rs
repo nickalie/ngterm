@@ -1356,6 +1356,35 @@ fn a_base_file_that_is_not_regular_is_skipped() -> TestResult {
 }
 
 #[test]
+#[cfg(unix)]
+fn a_base_file_that_cannot_be_read_is_logged_not_counted() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let locked = write(&dir.path().join("locked.conf"), "font-size = 30\n")?;
+    if !deny_reading(&locked)? {
+        return Ok(());
+    }
+    let mut loader = Loader::new(None);
+    let warnings = Warnings::logged_by(|| loader.load_file(&locked));
+    assert!(
+        loader.finish().steps().is_empty(),
+        "ghostty_config_load_file only logs a file it cannot read"
+    );
+    assert_eq!(warnings, 1);
+    Ok(())
+}
+
+#[test]
+fn a_base_file_with_no_path_is_logged_not_counted() {
+    let mut loader = Loader::new(None);
+    let warnings = Warnings::logged_by(|| loader.load_file(Path::new("")));
+    assert!(
+        loader.finish().steps().is_empty(),
+        "libghostty has no diagnostic for it"
+    );
+    assert_eq!(warnings, 1);
+}
+
+#[test]
 fn an_include_of_an_empty_path_keeps_the_includes_before_it() -> TestResult {
     let dir = tempfile::tempdir()?;
     let main = write(
@@ -1698,9 +1727,24 @@ fn a_theme_file_that_cannot_be_read_counts_once() -> TestResult {
     }
     let built = finalize_with(None, "theme = Locked\n", false, &[dir.path().to_path_buf()]);
     let messages: Vec<_> = built.diagnostics.iter().map(ToString::to_string).collect();
-    assert_eq!(messages, ["not reading theme from \"Locked\": error.AccessDenied"]);
+    assert_eq!(
+        messages,
+        [format!(
+            "failed to load theme \"Locked\" from the file \"{}\": error.AccessDenied",
+            locked.display()
+        )],
+        "libghostty opens the file first, so the lookup's open failure names it"
+    );
     assert_eq!(built.theme_path, None);
     assert_ne!(built.config.colors.background, Rgb::new(1, 1, 1));
+    assert_eq!(
+        theme_messages(&locked.display().to_string(), &[]),
+        [format!(
+            "failed to load theme from the path \"{}\": error.AccessDenied",
+            locked.display()
+        )],
+        "an absolute path fails at its open too"
+    );
     Ok(())
 }
 
