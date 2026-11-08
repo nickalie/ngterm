@@ -35,3 +35,7 @@ pub fn hide(element: &gpui_kit::Entity<PageView>, cx: &mut gpui_kit::App) {
     let page = std::rc::Rc::clone(element.read(cx).page());
     page.apply(&page.overlay(), false, cx);
 }
+
+#[cfg(test)]
+#[path = "wkwebview_tests.rs"]
+mod tests;
