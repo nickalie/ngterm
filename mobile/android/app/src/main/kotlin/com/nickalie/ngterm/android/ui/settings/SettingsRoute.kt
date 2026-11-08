@@ -52,7 +52,6 @@ fun SettingsRoute(
     model: SettingsViewModel = viewModel { SettingsViewModel(graph) },
 ) {
     var page by rememberSaveable { mutableStateOf(HOME) }
-    BackHandler(enabled = page != HOME) { page = HOME }
     val state by model.state.collectAsStateWithLifecycle()
     val work by model.keyWork.collectAsStateWithLifecycle()
     val fresh by model.newKey.collectAsStateWithLifecycle()
@@ -65,6 +64,7 @@ fun SettingsRoute(
     val back = ScreenExit(R.drawable.ic_back, stringResource(R.string.action_back)) { page = HOME }
     val shown = page.takeIf { it.startsWith(KEY) }?.removePrefix(KEY)
     val item = shown?.let { id -> (state as? SettingsUiState.Ready)?.keys?.firstOrNull { it.key.id == id } }
+    BackHandler(enabled = page == IMPORT || item != null) { page = HOME }
     when {
         page == IMPORT -> {
             ImportKeyScreen(

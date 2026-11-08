@@ -1,11 +1,12 @@
 package com.nickalie.ngterm.android.ui.settings
 
+import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.StateRestorationTester
-import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -24,6 +25,8 @@ import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -38,7 +41,7 @@ import java.io.File
 class SettingsRestorationTest {
     @get:Rule val dir = TemporaryFolder()
 
-    @get:Rule val compose = createComposeRule()
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private val graphs = mutableListOf<TestGraph>()
     private val models = mutableListOf<SettingsViewModel>()
     private var graph by mutableStateOf<TestGraph?>(null)
@@ -101,6 +104,35 @@ class SettingsRestorationTest {
         }
     }
 
+    private fun assertNoRouteBack() {
+        compose.runOnIdle { assertFalse(compose.activity.onBackPressedDispatcher.hasEnabledCallbacks()) }
+    }
+
+    // Bringing the old key back must not reopen it: Ready without it must have cleared the saved page id.
+    private fun assertMissingKeyPageWasCleared() {
+        assertNoRouteBack()
+        compose.runOnIdle {
+            graph = graphs.first()
+            model = models.first()
+        }
+        compose.awaitText("core restored")
+        compose.onNodeWithText(FAKE_PUBLIC_KEY).assertDoesNotExist()
+        assertNoRouteBack()
+    }
+
+    @Test
+    fun aRestoredKeyPageLetsBackThroughWhileLoadingThenShowsItsExistingKey() {
+        val restoration = openKey()
+        val dispatcher = restoreWith(restoration, requireNotNull(graph))
+        compose.onNodeWithContentDescription("Reading the settings").assertExists()
+        assertNoRouteBack()
+        runUntilShown(dispatcher, FAKE_PUBLIC_KEY)
+        compose.runOnIdle { assertTrue(compose.activity.onBackPressedDispatcher.hasEnabledCallbacks()) }
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        runUntilShown(dispatcher, "core restored")
+        assertNoRouteBack()
+    }
+
     @Test
     fun aKeyAbsentFromTheNewProcessReturnsToSettingsWhenTheStoresFinishReading() {
         val restoration = openKey()
@@ -109,6 +141,7 @@ class SettingsRestorationTest {
         compose.onNodeWithContentDescription("Reading the settings").assertExists()
         runUntilShown(dispatcher, "core restored")
         compose.onNodeWithText("No machine uses it").assertDoesNotExist()
+        assertMissingKeyPageWasCleared()
     }
 
     @Test
@@ -119,9 +152,11 @@ class SettingsRestorationTest {
         val dispatcher = restoreWith(restoration, graph("broken"))
         runUntilShown(dispatcher, "Can't read the settings")
         compose.onNodeWithText(FAKE_PUBLIC_KEY).assertDoesNotExist()
+        assertNoRouteBack()
         settings.delete()
         compose.onNodeWithText("Retry").performClick()
         runUntilShown(dispatcher, "core restored")
         compose.onNodeWithText("Can't read the settings").assertDoesNotExist()
+        assertMissingKeyPageWasCleared()
     }
 }
