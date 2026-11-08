@@ -18,8 +18,6 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 
 #[cfg(unix)]
-use signal_hook::SigId;
-#[cfg(unix)]
 use signal_hook::consts::SIGTERM;
 #[cfg(unix)]
 use signal_hook::iterator::Signals;
@@ -78,21 +76,9 @@ pub fn quit_on_sigterm(poster: Poster) -> io::Result<()> {
 /// The first SIGTERM sets a flag, and a SIGTERM finding it set gets the default action. The conditional default is
 /// registered first, so it sees the flag the next registration sets on the first signal.
 #[cfg(unix)]
-fn second_sigterm_terminates() -> io::Result<[SigId; 2]> {
+fn second_sigterm_terminates() -> io::Result<()> {
     let seen = Arc::new(AtomicBool::new(false));
-    let default = signal_hook::flag::register_conditional_default(SIGTERM, Arc::clone(&seen))?;
-    match signal_hook::flag::register(SIGTERM, seen) {
-        Ok(flag) => Ok([default, flag]),
-        Err(error) => {
-            unregister(&[default]);
-            Err(error)
-        }
-    }
-}
-
-#[cfg(unix)]
-fn unregister(ids: &[SigId]) {
-    for id in ids {
-        signal_hook::low_level::unregister(*id);
-    }
+    signal_hook::flag::register_conditional_default(SIGTERM, Arc::clone(&seen))?;
+    signal_hook::flag::register(SIGTERM, seen)?;
+    Ok(())
 }

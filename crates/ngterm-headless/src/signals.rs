@@ -21,11 +21,13 @@ const QUITTING: [i32; 3] = [
 ///
 /// # Errors
 ///
-/// The handler could not be installed; the system's request then ends the process without the quit save.
+/// The handler could not be installed; the system's request then ends the process without the quit save. A failed
+/// install leaves no flag behind to swallow the first signal.
 #[cfg(unix)]
 pub fn quit_on_termination(poster: Poster) -> io::Result<()> {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
 
     use signal_hook::iterator::Signals;
 
@@ -33,21 +35,31 @@ pub fn quit_on_termination(poster: Poster) -> io::Result<()> {
         .into_iter()
         .filter(|signal| *signal == signal_hook::consts::SIGTERM || !ignored_at_start(*signal))
         .collect();
+    // The thread starts first and is handed the iterator once it is registered, as in the GPUI frontend's
+    // `signals.rs`: a registration cannot be undone, since signal-hook keeps its handler once installed and, with no
+    // action left, ignores the signal. The iterator's registration installs the handlers, and the flags' then only add
+    // to them.
+    let (hand, handed) = mpsc::channel::<Signals>();
+    std::thread::Builder::new()
+        .name("ngterm-headless-signals".to_owned())
+        .spawn(move || {
+            let Ok(mut signals) = handed.recv() else {
+                return;
+            };
+            if let Some(signal) = signals.forever().next() {
+                tracing::info!(signal, "quitting");
+                post(&poster, HeadlessState::request_quit);
+            }
+        })?;
+    let signals = Signals::new(&quitting)?;
     // the conditional default first, so it sees the flag the next registration sets on the first signal
     for signal in quitting.iter().copied() {
         let seen = Arc::new(AtomicBool::new(false));
         signal_hook::flag::register_conditional_default(signal, Arc::clone(&seen))?;
         signal_hook::flag::register(signal, seen)?;
     }
-    let mut signals = Signals::new(&quitting)?;
-    std::thread::Builder::new()
-        .name("ngterm-headless-signals".to_owned())
-        .spawn(move || {
-            if let Some(signal) = signals.forever().next() {
-                tracing::info!(signal, "quitting");
-                post(&poster, HeadlessState::request_quit);
-            }
-        })?;
+    // the thread waits on its receiver until it has the iterator
+    let _ = hand.send(signals);
     Ok(())
 }
 

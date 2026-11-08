@@ -117,3 +117,57 @@ fn signal_child() {
     });
     assert!(state.quit_requested());
 }
+
+/// Names the child that installs the handlers with no thread to spare.
+const INSTALL_CHILD: &str = "HEADLESS_SIGNAL_INSTALL_CHILD";
+
+/// Handlers that could not be installed leave SIGTERM its default action: the install fails in a child that may start
+/// no thread, and the child's SIGTERM ends it.
+#[test]
+fn a_failed_install_leaves_sigterm_its_default_action() {
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::Command;
+    // SAFETY: a plain call.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipped: RLIMIT_NPROC does not bind root");
+        return;
+    }
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("NGTERM_") {
+            command.env_remove(name);
+        }
+    }
+    let status = command
+        .args([
+            "--exact",
+            "signals::tests::signal_install_child",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(INSTALL_CHILD, "1")
+        .status()
+        .unwrap();
+    // a child SIGTERM ends writes no coverage profile: the parent's assertion is what counts
+    assert_eq!(status.signal(), Some(libc::SIGTERM), "{status:?}");
+}
+
+#[test]
+fn signal_install_child() {
+    if std::env::var_os(INSTALL_CHILD).is_none() {
+        return;
+    }
+    let none = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: a plain call with a live local.
+    assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &raw const none) }, 0);
+    let poster: crate::state::Poster =
+        std::sync::Weak::<crate::main_loop::ThreadMainLoop<crate::state::HeadlessState>>::new();
+    let installed = super::quit_on_termination(poster);
+    assert!(installed.is_err(), "the thread started after all");
+    // SAFETY: raising a signal at this process.
+    unsafe { libc::raise(libc::SIGTERM) };
+    eprintln!("survived SIGTERM");
+}
