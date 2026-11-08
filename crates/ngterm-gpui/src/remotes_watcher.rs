@@ -95,27 +95,35 @@ struct Watch {
 }
 
 impl Watch {
-    /// Replaces the watcher with one over the paths the file needs now; the new one starts before the old one stops,
-    /// so an edit in between is not lost.
-    fn arm(&mut self, events: &mpsc::Sender<Message>) {
-        let Some(path) = self.path.as_deref().map(absolute) else {
-            return;
-        };
+    /// Replaces the watcher with one over the paths the file needs now and hands back the old one: the new one starts
+    /// before the old one stops, so an edit in between is not lost, and the caller drops the old one after its read,
+    /// so the read waits for no stream to stop (an `FSEvents` stream's stop takes up to seconds under load).
+    fn arm(&mut self, events: &mpsc::Sender<Message>) -> Option<RecommendedWatcher> {
+        let path = self.path.as_deref().map(absolute)?;
         let sender = events.clone();
         let watcher = notify::recommended_watcher(move |event| {
             let _ = sender.send(Message::Event(event));
         });
-        match watcher {
+        let replaced = match watcher {
             Ok(mut watcher) => {
+                // one batch: FSEvents restarts its stream (a thread, the daemon's round trips) for each `watch` call,
+                // which under load took seconds per arm
+                let mut paths = watcher.paths_mut();
                 for watched in watched_paths(&path) {
-                    if let Err(error) = watcher.watch(&watched, RecursiveMode::NonRecursive) {
+                    if let Err(error) = paths.add(&watched, RecursiveMode::NonRecursive) {
                         tracing::debug!(path = %watched.display(), %error, "remotes.conf: no watch");
                     }
                 }
-                self.watcher = Some(watcher);
+                if let Err(error) = paths.commit() {
+                    tracing::debug!(%error, "remotes.conf: the watches did not start");
+                }
+                self.watcher.replace(watcher)
             }
-            Err(error) => tracing::warn!(%error, "remotes.conf: no watcher; edits are seen at the next launch"),
-        }
+            Err(error) => {
+                tracing::warn!(%error, "remotes.conf: no watcher; edits are seen at the next launch");
+                None
+            }
+        };
         let mut interest = vec![path.clone()];
         interest.extend(symlink_targets(&path));
         #[cfg(target_os = "macos")]
@@ -131,6 +139,7 @@ impl Watch {
             interest.extend(canonical);
         }
         self.interest = interest;
+        replaced
     }
 
     /// Whether `event` changed the file or the way to it.
@@ -153,9 +162,10 @@ fn run(messages: &mpsc::Receiver<Message>, events: &mpsc::Sender<Message>, on_ch
             Ok(Message::Follow(path)) => {
                 tracing::debug!(path = %path.display(), "remotes.conf: following");
                 watch.path = Some(path);
-                watch.arm(events);
+                let replaced = watch.arm(events);
                 // a change between the caller's own read and the watch's start is read now
                 on_change();
+                drop(replaced);
             }
             Ok(Message::Event(Ok(event))) => {
                 if watch.concerns(&event) {
@@ -165,9 +175,10 @@ fn run(messages: &mpsc::Receiver<Message>, events: &mpsc::Sender<Message>, on_ch
             Ok(Message::Event(Err(error))) => tracing::debug!(%error, "remotes.conf: a watch error"),
             Err(RecvTimeoutError::Timeout) => {
                 burst = Burst::default();
-                watch.arm(events);
+                let replaced = watch.arm(events);
                 tracing::debug!("remotes.conf: changed; reading it again");
                 on_change();
+                drop(replaced);
             }
             Ok(Message::Stop) | Err(RecvTimeoutError::Disconnected) => return,
         }

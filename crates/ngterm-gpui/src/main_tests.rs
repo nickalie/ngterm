@@ -17,11 +17,54 @@ fn identity_query_requires_the_single_exact_argument() {
 
 #[test]
 fn state_directory_claim_refuses_a_second_owner_and_an_unusable_path() {
+    claims_refuse_a_second_owner_and_an_unusable_path();
+}
+
+/// The claim's checks hold while another thread of this harness spawns children, as this binary's other tests do: a
+/// child holds a duplicate of every descriptor of the harness from its fork until its exec.
+#[test]
+fn the_state_directory_claims_hold_while_other_tests_spawn_children() {
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let spawner = std::thread::spawn({
+        let stop = std::sync::Arc::clone(&stop);
+        move || {
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                spawn_a_child();
+            }
+        }
+    });
+    let checked = std::panic::catch_unwind(|| {
+        for _ in 0..200 {
+            claims_refuse_a_second_owner_and_an_unusable_path();
+        }
+    });
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    spawner.join().unwrap();
+    if let Err(panic) = checked {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// Runs a child of this binary that lists no test, as this binary's other tests spawn theirs.
+fn spawn_a_child() {
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("NGTERM_") {
+            command.env_remove(key);
+        }
+    }
+    let _ = command
+        .args(["--list", "--exact", "tests::no_such_test"])
+        .stdout(std::process::Stdio::null())
+        .status();
+}
+
+/// The lock's release is not checked here: a child another test forks keeps it until its exec, so a claim right after
+/// the drop can be refused (`ngterm_core::state_lock`'s tests check it alone in a fresh process).
+fn claims_refuse_a_second_owner_and_an_unusable_path() {
     let dir = tempfile::tempdir().unwrap();
-    let lock = claim_state_dir(dir.path()).unwrap();
+    let _lock = claim_state_dir(dir.path()).unwrap();
     assert!(matches!(claim_state_dir(dir.path()), Err(ExitCode::FAILURE)));
-    drop(lock);
-    assert!(claim_state_dir(dir.path()).is_ok());
     let file = dir.path().join("file");
     std::fs::write(&file, b"not a directory").unwrap();
     assert!(matches!(claim_state_dir(&file.join("state")), Err(ExitCode::FAILURE)));
