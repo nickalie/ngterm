@@ -63,6 +63,60 @@ internal struct TerminalTextInputTests {
         #expect(view.composition.isEmpty)
     }
 
+    @Test(
+        "a deletion with the caret inside a composed character takes that whole character",
+        arguments: ["😀", "e\u{301}", "👩‍💻"], [false, true]
+    )
+    internal func deletionInsideCharacter(_ character: String, movingSelection: Bool) throws {
+        let rig = Self.rig()
+        let view = rig.view
+        let text = "a" + character + "z"
+        view.setMarkedText(text, selectedRange: NSRange(location: movingSelection ? text.utf16.count : 2, length: 0))
+        if movingSelection {
+            view.selectedTextRange = try Self.span(2, 2, in: view)
+        }
+        view.deleteBackward()
+        #expect(view.composition == "az")
+        let selected = try #require(view.selectedTextRange)
+        #expect(Self.offset(of: selected.start, in: view) == 1)
+        #expect(selected.isEmpty)
+        #expect(rig.inputs.isEmpty)
+    }
+
+    @Test(
+        "an insertion inside a composed character goes before it, with its caret after the inserted text",
+        arguments: ["😀", "e\u{301}", "👩‍💻"]
+    )
+    internal func replacementInsideCharacter(_ character: String) throws {
+        let rig = Self.rig()
+        let view = rig.view
+        view.setMarkedText(character, selectedRange: NSRange(location: character.utf16.count, length: 0))
+        view.replace(try Self.span(1, 1, in: view), withText: "x")
+        #expect(view.composition == "x" + character)
+        let selected = try #require(view.selectedTextRange)
+        #expect(Self.offset(of: selected.start, in: view) == 1)
+        #expect(selected.isEmpty)
+        view.deleteBackward()
+        #expect(view.composition == character, "backspace takes only the inserted x")
+        #expect(rig.inputs.isEmpty)
+    }
+
+    @Test(
+        "a replacement that selects part of a composed character takes the whole character",
+        arguments: ["😀", "e\u{301}", "👩‍💻"]
+    )
+    internal func replacementOfPartialCharacter(_ character: String) throws {
+        let rig = Self.rig()
+        let view = rig.view
+        view.setMarkedText("a" + character + "z", selectedRange: NSRange(location: 0, length: 0))
+        view.replace(try Self.span(2, 3, in: view), withText: "XY")
+        #expect(view.composition == "aXYz")
+        let selected = try #require(view.selectedTextRange)
+        #expect(Self.offset(of: selected.start, in: view) == 3)
+        #expect(selected.isEmpty)
+        #expect(rig.inputs.isEmpty)
+    }
+
     @Test("the text of a span the composition no longer has is none")
     internal func textPastComposition() throws {
         let view = Self.rig().view

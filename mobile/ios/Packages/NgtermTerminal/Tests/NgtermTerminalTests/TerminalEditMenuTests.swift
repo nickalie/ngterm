@@ -48,9 +48,13 @@ internal struct TerminalEditMenuTests {
     }
 
     @Test("the system taking the menu down leaves it gone, and a selection's next frame doesn't bring it back")
-    internal func dismissed() {
+    internal func dismissed() throws {
         let rig = TerminalRig(clipboard: nil)
-        rig.view.pointerGestures.press(.began, at: rig.point(4, 2), buttons: .secondary, mods: [], time: 1)
+        let selected = [SelectedSpan(row: 1, first: 0, last: 5)]
+        rig.view.gestures.longPress(.began, at: rig.point(2, 1))
+        rig.show(selected)
+        rig.view.gestures.longPress(.ended, at: rig.point(2, 1))
+        let spots = try #require(rig.view.handleSpots)
         #expect(rig.view.isMenuShown)
         rig.view.editMenu.editMenuInteraction(
             Self.interaction,
@@ -58,7 +62,8 @@ internal struct TerminalEditMenuTests {
             animator: Animator()
         )
         #expect(!rig.view.isMenuShown)
-        rig.view.drawFrame()
+        rig.show(selected)
+        #expect(rig.view.handleSpots?.rows == spots.rows, "the touch selection still has its handles")
         #expect(!rig.view.isMenuShown)
     }
 }
