@@ -132,6 +132,102 @@ fn a_fresh_native_press_after_an_unheard_release_passes() {
     );
 }
 
+/// A chord pressed in a web view: the release standing in for the real one comes right after each dispatched press,
+/// and the key is still down. Upstream's `handleKeyEvent`: "Repeats and releases of consumed presses stay consumed
+/// without firing again".
+#[test]
+fn an_autorepeat_after_a_dispatched_release_stays_consumed() {
+    let now = Instant::now();
+    let mut router = router("");
+    assert!(matches!(
+        router.press(&native_s(true, false), now, false),
+        Press::Fired(Fired::Builtin(_))
+    ));
+    let identity = native_s(true, false).identity;
+    assert!(router.release(identity, now));
+    for repeat in 1..=3 {
+        assert_eq!(
+            router.press(&native_s(true, true), now, false),
+            Press::Consumed,
+            "autorepeat {repeat} of the held chord"
+        );
+        assert!(router.release(identity, now), "its release is the keymap's");
+    }
+    assert!(
+        matches!(
+            router.press(&native_s(true, false), now, false),
+            Press::Fired(Fired::Builtin(_))
+        ),
+        "a fresh press fires again"
+    );
+}
+
+/// The S key as a `--repeat` tail, with its leader typed (`ctrl+a` released) and the tail fired once and let go at
+/// `now`, as a web view's dispatch does.
+fn router_with_dispatched_tail(now: Instant) -> (Router, u32) {
+    let mut router = router("command \"s\" ctrl+a>s --repeat true\n");
+    assert!(press(&mut router, "ctrl-a", now));
+    release(&mut router, "ctrl-a", now);
+    assert!(matches!(
+        router.press(&native_s(false, false), now, false),
+        Press::Fired(Fired::Command(_))
+    ));
+    let identity = native_s(false, false).identity;
+    router.release(identity, now);
+    assert_eq!(router.deadline, Some(now + super::REPEAT_TIMEOUT), "its window opens");
+    (router, identity)
+}
+
+#[test]
+fn a_held_tail_keeps_firing_past_the_window_its_dispatched_release_opened() {
+    let start = Instant::now();
+    let (mut router, identity) = router_with_dispatched_tail(start);
+    // each autorepeat within the half second after the one before, the last well past the first window
+    for millis in [400, 800, 1200] {
+        let now = start + Duration::from_millis(millis);
+        assert!(
+            matches!(
+                router.press(&native_s(false, true), now, false),
+                Press::Fired(Fired::Command(_))
+            ),
+            "the autorepeat at {millis} ms"
+        );
+        assert_eq!(router.deadline, None, "the window waits for the key's release");
+        router.release(identity, now);
+        assert_eq!(
+            router.deadline,
+            Some(now + super::REPEAT_TIMEOUT),
+            "and reopens after it"
+        );
+    }
+}
+
+/// The first autorepeat comes after the system's initial delay, which can be longer than the window: the key was held
+/// all along, so upstream's window, which starts at the real release, is still open.
+#[test]
+fn a_held_tail_outlasts_a_key_repeat_delay_longer_than_the_window() {
+    let start = Instant::now();
+    let (mut router, _) = router_with_dispatched_tail(start);
+    let now = start + super::REPEAT_TIMEOUT + Duration::from_millis(500);
+    assert!(matches!(
+        router.press(&native_s(false, true), now, false),
+        Press::Fired(Fired::Command(_))
+    ));
+}
+
+#[test]
+fn a_fresh_press_after_a_dispatched_release_finds_the_window_lapsed() {
+    let start = Instant::now();
+    let (mut router, _) = router_with_dispatched_tail(start);
+    let now = start + super::REPEAT_TIMEOUT;
+    assert_eq!(
+        router.press(&native_s(false, false), now, false),
+        Press::Passed,
+        "not an autorepeat, so the key went up and the window ran out"
+    );
+    assert!(!router.engine.as_ref().is_some_and(CustomCommandEngine::is_repeating));
+}
+
 #[test]
 fn an_autorepeat_of_a_held_repeat_tail_fires_again() {
     let now = Instant::now();
@@ -315,18 +411,29 @@ fn native_identity(text: &str) -> u32 {
     KeyStroke::new(&dispatched(text), &native_source(text, false), false).identity
 }
 
+/// What `text` reads as when a web view holds the key, `repeat` when the platform says it is an autorepeat.
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn native_stroke(text: &str, repeat: bool) -> KeyStroke {
+    KeyStroke::new(&dispatched(text), &native_source(text, repeat), false)
+}
+
 /// Presses `text` on this thread's monitor, as the dispatch of a key a web view handed over does.
 #[cfg(all(feature = "html", target_os = "macos"))]
 fn press_monitor(text: &str, repeat: bool, now: Instant) -> Press {
-    let stroke = KeyStroke::new(&dispatched(text), &native_source(text, repeat), false);
+    let stroke = native_stroke(text, repeat);
     super::ROUTER.with_borrow_mut(|router| router.press(&stroke, now, false))
 }
 
-/// Lets go of `text` as the page does right after dispatching it, with the platform's record still the press's.
+/// Lets go of `text` as the page does right after dispatching it.
 #[cfg(all(feature = "html", target_os = "macos"))]
 fn release_monitor(text: &str) {
-    super::ROUTER.with_borrow_mut(|router| router.dispatched_source = Some(native_source(text, false)));
     super::release_dispatched(&dispatched(text));
+}
+
+/// Ends this thread's monitor's window, as time passing would.
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn lapse_monitor() {
+    super::ROUTER.with_borrow_mut(|router| router.deadline = Some(Instant::now()));
 }
 
 #[test]
@@ -383,17 +490,23 @@ fn a_dispatched_key_is_released_for_the_monitor() {
         press_monitor("ctrl-shift-t", false, now),
         Press::Fired(Fired::Builtin(_))
     ));
-    assert_eq!(
-        press_monitor("ctrl-shift-t", true, now),
-        Press::Consumed,
-        "an autorepeat before the release"
-    );
     release_monitor("ctrl-shift-t");
     let identity = native_identity("ctrl-shift-t");
+    assert_ne!(
+        identity,
+        stroke("ctrl-shift-t").identity,
+        "the press is held by the physical key, not by the key's name"
+    );
     assert!(
         !super::ROUTER.with_borrow(|router| router.consumed.contains(&identity)),
         "the dispatched release lets go of the key the press held"
     );
+    assert_eq!(
+        press_monitor("ctrl-shift-t", true, now),
+        Press::Consumed,
+        "the key is still down: its autorepeat does not fire again"
+    );
+    release_monitor("ctrl-shift-t");
     assert!(
         super::ROUTER.with_borrow_mut(|router| router.release(identity, now)),
         "a late key-up listener still learns the release was the keymap's"
@@ -410,10 +523,88 @@ fn releasing_a_dispatched_repeat_tail_opens_its_repeat_window() {
     assert!(matches!(press_monitor("n", false, now), Press::Fired(_)));
     release_monitor("n");
     assert!(
+        super::ROUTER.with_borrow(|router| router.deadline.is_some() && router.held_repeat.is_none()),
+        "the dispatched release lets go of the tail under the identity it was pressed with, so its window opens"
+    );
+    assert!(
         matches!(press_monitor("n", false, now), Press::Fired(_)),
         "the tail fires again inside the window"
     );
     release_monitor("n");
+    assert!(
+        matches!(press_monitor("n", true, now), Press::Fired(_)),
+        "a held tail's autorepeat fires"
+    );
+    release_monitor("n");
+    assert!(super::takes(&native_stroke("n", false)), "the window is open");
+    lapse_monitor();
+    assert!(
+        !super::takes(&native_stroke("n", false)),
+        "the window lapsed, so the page keeps the next key"
+    );
     let past = Instant::now() + super::REPEAT_TIMEOUT + Duration::from_millis(50);
     assert_eq!(press_monitor("n", false, past), Press::Passed, "the window lapsed");
+}
+
+/// Asked before the press reaches the monitor, as the web view does: a held tail stays the keymap's even with its
+/// window run out, and so does a leader's last chord, which the matcher no longer knows.
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_web_view_hands_over_the_autorepeat_of_a_key_the_keymap_took() {
+    let (keymap, _) = parse_keymap(
+        "command \"n\" ctrl+a>n --repeat true\ncommand \"g\" ctrl+a>g true\n",
+        &linux_defaults(),
+    );
+    super::load_keymap(&keymap);
+    let now = Instant::now();
+    assert_eq!(press_monitor("ctrl-a", false, now), Press::Consumed);
+    release_monitor("ctrl-a");
+    assert!(matches!(press_monitor("n", false, now), Press::Fired(_)));
+    release_monitor("n");
+    lapse_monitor();
+    assert!(
+        super::takes(&native_stroke("n", true)),
+        "the key is still down, so the lapse is not one yet"
+    );
+    super::ROUTER.with_borrow_mut(Router::reset);
+    assert_eq!(press_monitor("ctrl-a", false, now), Press::Consumed);
+    release_monitor("ctrl-a");
+    assert!(matches!(press_monitor("g", false, now), Press::Fired(_)));
+    release_monitor("g");
+    assert!(
+        super::takes(&native_stroke("g", true)),
+        "a held last chord does not type into the page"
+    );
+    assert!(!super::takes(&native_stroke("g", false)), "a fresh press does");
+}
+
+/// A half-typed leader run out: the page keeps the key the leader was waiting for.
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_web_view_keeps_the_chord_of_a_lapsed_leader() {
+    let (keymap, _) = parse_keymap("command \"g\" ctrl+a>g true\n", &linux_defaults());
+    super::load_keymap(&keymap);
+    assert_eq!(press_monitor("ctrl-a", false, Instant::now()), Press::Consumed);
+    release_monitor("ctrl-a");
+    assert!(super::takes(&native_stroke("g", false)), "the leader is armed");
+    lapse_monitor();
+    assert!(!super::takes(&native_stroke("g", false)));
+}
+
+/// A dispatch the monitor passed over lets go of nothing, the key it last handled included.
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_dispatched_release_with_no_press_lets_go_of_nothing() {
+    let (keymap, _) = parse_keymap("", &linux_defaults());
+    super::load_keymap(&keymap);
+    assert!(matches!(
+        press_monitor("ctrl-shift-t", false, Instant::now()),
+        Press::Fired(_)
+    ));
+    release_monitor("ctrl-shift-t");
+    let identity = native_identity("ctrl-shift-t");
+    super::ROUTER.with_borrow_mut(|router| router.consume(identity));
+    super::ROUTER.with_borrow_mut(|router| router.pressed = None);
+    release_monitor("ctrl-shift-t");
+    assert!(super::ROUTER.with_borrow(|router| router.consumed.contains(&identity)));
 }
