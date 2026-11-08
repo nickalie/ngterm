@@ -540,7 +540,7 @@ fn accept_within(listener: Listener, channel: &Endpoint, timeout: Duration) -> R
             let _waker = channel.connect_timeout(Duration::from_secs(1));
             Err(format!(
                 "the replacement did not connect to the handoff channel within {}s",
-                timeout.as_secs()
+                timeout.as_secs_f32()
             ))
         }
     }
@@ -1110,8 +1110,8 @@ mod tests {
         let listener = silent.bind().unwrap();
         let started = Instant::now();
         assert_eq!(
-            accept_within(listener, &silent, Duration::from_secs(1)).map(drop),
-            Err("the replacement did not connect to the handoff channel within 1s".to_owned())
+            accept_within(listener, &silent, Duration::from_millis(500)).map(drop),
+            Err("the replacement did not connect to the handoff channel within 0.5s".to_owned())
         );
         assert!(started.elapsed() < STEP_TIMEOUT, "{:?}", started.elapsed());
 
@@ -1197,7 +1197,7 @@ mod tests {
             write_line(stream, &serde_json::to_string(&sent).unwrap()).unwrap();
             (&**stream).write_all(b"only").unwrap();
         });
-        assert!(!cut_short.is_empty(), "the payload of 10 bytes was cut at 4");
+        assert_eq!(cut_short, "failed to fill whole buffer");
     }
 
     /// A handoff whose channel cannot be bound fails before anything is started, and is not run again.

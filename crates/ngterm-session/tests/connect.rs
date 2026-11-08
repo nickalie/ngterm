@@ -71,8 +71,8 @@ impl Greeting {
 /// What the fake server does.
 struct Script {
     greet: Box<dyn Fn(&Hello) -> Greeting + Send + Sync>,
-    /// The answer to a handoff request on a welcomed control connection, written after the pause.
-    answer: Option<(Control, Duration)>,
+    /// The answer to a handoff request on a welcomed control connection, once at least this many hellos arrived.
+    answer: Option<(Control, usize)>,
     /// The listener is dropped at the first connection, before it is answered: no server listens after it.
     once: bool,
 }
@@ -206,8 +206,12 @@ fn serve(mut stream: Stream, script: &Script, seen: &Mutex<Seen>, requested: &Se
             .requests
             .push(request);
         let _ = requested.send(());
-        if let Some((answer, pause)) = &script.answer {
-            thread::sleep(*pause);
+        if let Some((answer, hellos)) = &script.answer {
+            support::wait_for(
+                "the callers' hellos before the handoff answer",
+                || seen.lock().unwrap_or_else(PoisonError::into_inner).hellos.len(),
+                |count| count >= hellos,
+            );
             let _ = write_control(&mut stream, answer);
         }
     }
@@ -365,7 +369,7 @@ fn a_handoff_request_answered_with_something_else_fails_with_that_answer() -> Te
             Role::Control => Greeting::welcome("old"),
             _ => Greeting::refusal("old", ErrorCode::ProtocolMismatch, handoff_capability()),
         }),
-        answer: Some((Control::Hello(hello(Role::Api)), Duration::ZERO)),
+        answer: Some((Control::Hello(hello(Role::Api)), 0)),
         once: false,
     })?;
     let executable = missing_executable();
@@ -450,7 +454,7 @@ fn a_caller_racing_a_handoff_attempt_waits_for_it_and_asks_nothing() -> TestResu
                 ErrorCode::HandoffFailed,
                 "refused by the fake",
             )))),
-            Duration::from_millis(300),
+            3,
         ))
     };
     let failed = HandoffAttempt::Failed {
@@ -470,6 +474,11 @@ fn a_caller_racing_a_handoff_attempt_waits_for_it_and_asks_nothing() -> TestResu
     assert_eq!(first, Ok(Some(failed.clone())));
     assert_eq!(second, Ok(Some(failed)));
     assert_eq!(of_another_build.requests().len(), 1, "asked once");
+    assert_eq!(
+        of_another_build.hellos().len(),
+        5,
+        "both callers probe again after waiting"
+    );
 
     let of_another_protocol = Fake::start(Script {
         greet: Box::new(|hello| match hello.role {
@@ -488,6 +497,11 @@ fn a_caller_racing_a_handoff_attempt_waits_for_it_and_asks_nothing() -> TestResu
     assert_eq!(first, Err(expected.clone()));
     assert_eq!(second, Err(expected));
     assert_eq!(of_another_protocol.requests().len(), 1, "asked once");
+    assert_eq!(
+        of_another_protocol.hellos().len(),
+        5,
+        "both callers probe again after waiting"
+    );
     Ok(())
 }
 
@@ -602,7 +616,8 @@ fn a_server_that_exits_before_it_is_ready_fails_the_start_or_is_started_again() 
         )
     );
 
-    let stopping = script_executable(root.path(), "exit 0")?;
+    std::fs::create_dir_all(&directory)?;
+    let stopping = script_executable(root.path(), "echo x >> \"$2/starts\"\nexit 0")?;
     let found = connect_or_start(
         &endpoint,
         &hello(Role::Api),
@@ -611,7 +626,13 @@ fn a_server_that_exits_before_it_is_ready_fails_the_start_or_is_started_again() 
     let Err(StartError::NotReady { last, .. }) = &found else {
         return Err(format!("the wait did not run out: {found:?}").into());
     };
-    assert!(!last.is_empty(), "{found:?}");
+    let starts = std::fs::read_to_string(directory.join("starts"))?;
+    assert!(
+        starts.lines().count() > 1,
+        "the stopped server was started again: {starts:?}"
+    );
+    assert!(last.starts_with(": "), "{last}");
+    assert!(last.contains("(os error "), "the last probe names its OS error: {last}");
     Ok(())
 }
 

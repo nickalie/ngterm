@@ -857,7 +857,10 @@ mod tests {
             started: adopted.started.map(|started| started + 1),
         };
         assert!(!later.alive(me), "another start under the pid is another program");
-        assert_eq!(Adopted::of(u32::MAX), None, "no process has that pid");
+        let absent = u32::try_from(i32::MAX).unwrap();
+        assert_eq!(Adopted::of(absent), None, "no process has that pid");
+        assert!(!adopted.alive(absent));
+        assert_eq!(Adopted::of(u32::MAX), None, "the pid does not fit in the table");
         assert!(!adopted.alive(u32::MAX));
     }
 
@@ -865,6 +868,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn an_import_over_a_terminal_it_cannot_drive_fails_and_ends_nothing() {
+        use rustix::process::{Pid, Signal, kill_process};
+        use std::os::unix::process::ExitStatusExt as _;
+
         let mut program = std::process::Command::new("sleep").arg("60").spawn().unwrap();
         let state = PaneState {
             name: "undriven".to_owned(),
@@ -888,8 +894,11 @@ mod tests {
                 .starts_with("the handed-over terminal could not be driven: "),
             "{error}"
         );
-        assert!(program.try_wait().unwrap().is_none(), "the program runs on");
-        program.kill().unwrap();
-        program.wait().unwrap();
+        kill_process(
+            Pid::from_raw(i32::try_from(program.id()).unwrap()).unwrap(),
+            Signal::TERM,
+        )
+        .unwrap();
+        assert_eq!(program.wait().unwrap().signal(), Some(libc::SIGTERM));
     }
 }
