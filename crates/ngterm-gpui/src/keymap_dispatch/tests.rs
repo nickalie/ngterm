@@ -447,6 +447,43 @@ fn a_web_view_hands_the_find_chord_to_the_window() {
     assert!(super::takes(&stroke("ctrl-shift-f")));
 }
 
+/// Full screen still belongs to the app with no live leader, or to a custom sequence that matches its chord.
+#[test]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn a_web_view_hands_over_full_screen_unless_it_ends_a_live_leader() {
+    for tail in ["g", "f11"] {
+        let (keymap, diagnostics) = parse_keymap(&format!("command \"g\" ctrl+a>{tail} true\n"), &linux_defaults());
+        assert!(diagnostics.is_empty());
+        for lapsed in [false, true] {
+            super::load_keymap(&keymap);
+            assert!(super::takes(&stroke("f11")), "no leader");
+            let now = Instant::now();
+            assert!(super::takes(&stroke("ctrl-a")));
+            super::ROUTER.with_borrow_mut(|router| {
+                assert_eq!(router.press(&stroke("ctrl-a"), now, true), Press::Consumed);
+                assert!(router.engine.as_ref().is_some_and(CustomCommandEngine::is_armed));
+                assert!(router.release(stroke("ctrl-a").identity, now));
+                if lapsed {
+                    router.deadline = Some(now);
+                }
+            });
+            let taken = lapsed || tail == "f11";
+            assert_eq!(super::takes(&stroke("f11")), taken, "tail={tail}, lapsed={lapsed}");
+            if taken {
+                let fired = super::ROUTER.with_borrow_mut(|router| router.press(&stroke("f11"), now, true));
+                if lapsed {
+                    assert_eq!(
+                        fired,
+                        Press::Fired(Fired::Builtin(ngterm_core::keymap::BuiltinAction::ToggleFullscreen))
+                    );
+                } else {
+                    assert!(matches!(fired, Press::Fired(Fired::Command(command)) if command.name == "g"));
+                }
+            }
+        }
+    }
+}
+
 #[cfg(all(feature = "html", target_os = "macos"))]
 fn dispatched(text: &str) -> Keystroke {
     Keystroke::parse(text).unwrap().with_simulated_ime()
@@ -950,15 +987,19 @@ fn monitor_is_live() -> bool {
 }
 
 /// Upstream's monitor sees a key typed into a page too, and an unmatched press ends the sequence: the page types the
-/// leader's next chord instead of losing it to the command. A bound menu chord the page keeps counts as unmatched.
+/// leader's next chord instead of losing it to the command. Undo and full screen's menu chords count as unmatched.
 #[test]
 #[cfg(all(feature = "html", target_os = "macos"))]
 fn a_key_the_page_keeps_drops_a_half_typed_leader() {
-    for kept in ["x", "ctrl-shift-z"] {
-        load_monitor("command \"g\" ctrl+a>g true\n");
+    for kept in ["x", "ctrl-shift-z", "ctrl-cmd-f"] {
+        load_monitor("command \"g\" ctrl+a>g true\nmap cmd+ctrl+f toggle_fullscreen\n");
+        assert_eq!(
+            super::menu_action(&native_stroke("ctrl-cmd-f", false)),
+            Some(ngterm_core::keymap::BuiltinAction::ToggleFullscreen)
+        );
         let now = Instant::now();
         assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
-        assert_eq!(page_press(kept, false, now), Press::Passed, "{kept}");
+        assert!(!super::takes(&native_stroke(kept, false)), "the page keeps {kept}");
         assert!(!monitor_is_live(), "{kept}");
         assert_eq!(super::ROUTER.with_borrow(|router| router.deadline), None, "{kept}");
         assert_eq!(page_press("g", false, now), Press::Passed, "{kept}");
