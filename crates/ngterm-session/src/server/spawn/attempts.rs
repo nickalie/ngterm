@@ -10,7 +10,8 @@
 //! attempt is reserved before its request, so a caller racing on it waits for it to settle and then looks again
 //! instead of asking a second time; one whose outcome never settled (a reconnect that failed after the request, a
 //! panic) counts as failed, with its outcome unknown. Settled with Codex (the run's
-//! `discussions/fixer-task-21-handoff-retry`).
+//! `discussions/fixer-task-21-handoff-retry`). The callers waiting are counted, for a test that races an attempt
+//! ([`super::handoff_waiters`]).
 
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
@@ -38,8 +39,14 @@ enum Entry {
 
 /// The attempts, with a condition variable the callers waiting on a running one wait on.
 pub(super) struct Attempts {
-    entries: Mutex<Vec<(AttemptKey, Entry)>>,
+    state: Mutex<State>,
     settled: Condvar,
+}
+
+/// The attempts' entries, and the key each caller waiting on a running one waits on.
+struct State {
+    entries: Vec<(AttemptKey, Entry)>,
+    waiting: Vec<AttemptKey>,
 }
 
 /// This process's attempts.
@@ -58,30 +65,51 @@ pub(super) enum Claim<'a> {
 impl Attempts {
     pub(super) const fn new() -> Self {
         Self {
-            entries: Mutex::new(Vec::new()),
+            state: Mutex::new(State {
+                entries: Vec::new(),
+                waiting: Vec::new(),
+            }),
             settled: Condvar::new(),
         }
     }
 
-    fn lock(&self) -> MutexGuard<'_, Vec<(AttemptKey, Entry)>> {
-        self.entries.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// How many callers wait on a running attempt on the server at `endpoint`.
+    pub(super) fn waiting(&self, endpoint: &str) -> usize {
+        self.lock()
+            .waiting
+            .iter()
+            .filter(|key| key.endpoint == endpoint)
+            .count()
     }
 
     /// Reserve the attempt `key` names, or say why not: it failed before, or it was running and the caller waited for
     /// it to settle.
     pub(super) fn claim(&self, key: AttemptKey) -> Claim<'_> {
-        let mut entries = self.lock();
+        let mut state = self.lock();
         let mut waited = false;
         loop {
-            match entries.iter().find(|(entry, _)| *entry == key).map(|(_, entry)| entry) {
+            match state
+                .entries
+                .iter()
+                .find(|(entry, _)| *entry == key)
+                .map(|(_, entry)| entry)
+            {
                 Some(Entry::Running) => {
                     waited = true;
-                    entries = self.settled.wait(entries).unwrap_or_else(PoisonError::into_inner);
+                    state.waiting.push(key.clone());
+                    state = self.settled.wait(state).unwrap_or_else(PoisonError::into_inner);
+                    if let Some(at) = state.waiting.iter().position(|waiting| *waiting == key) {
+                        state.waiting.swap_remove(at);
+                    }
                 }
                 _ if waited => return Claim::Waited,
                 Some(Entry::Failed(reason)) => return Claim::Failed(reason.clone()),
                 None => {
-                    entries.push((key.clone(), Entry::Running));
+                    state.entries.push((key.clone(), Entry::Running));
                     return Claim::Ask(Ticket {
                         attempts: self,
                         key,
@@ -119,12 +147,12 @@ impl Ticket<'_> {
 
 impl Drop for Ticket<'_> {
     fn drop(&mut self) {
-        let mut entries = self.attempts.lock();
-        entries.retain(|(key, _)| *key != self.key);
+        let mut state = self.attempts.lock();
+        state.entries.retain(|(key, _)| *key != self.key);
         if let Some(reason) = self.failure.take() {
-            entries.push((self.key.clone(), Entry::Failed(reason)));
+            state.entries.push((self.key.clone(), Entry::Failed(reason)));
         }
-        drop(entries);
+        drop(state);
         self.attempts.settled.notify_all();
     }
 }
@@ -133,13 +161,15 @@ impl Drop for Ticket<'_> {
 mod tests {
     use std::sync::Arc;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::*;
 
+    const ENDPOINT: &str = "/tmp/live/server.sock";
+
     fn key(pid: u32, expected: &str) -> AttemptKey {
         AttemptKey {
-            endpoint: "/tmp/live/server.sock".to_owned(),
+            endpoint: ENDPOINT.to_owned(),
             pid,
             build: "old".to_owned(),
             expected: expected.to_owned(),
@@ -211,14 +241,19 @@ mod tests {
                 };
                 (first, again)
             });
-            thread::sleep(Duration::from_millis(100));
-            assert!(!racer.is_finished(), "the racing claim waits for the attempt");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while attempts.waiting(ENDPOINT) == 0 {
+                assert!(Instant::now() < deadline, "the racing claim waits for the attempt");
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(attempts.waiting("/tmp/other/server.sock"), 0, "counted by endpoint");
             match reason {
                 Some(reason) => ticket.settle(&failed(reason)),
                 None => drop(ticket),
             }
             let (first, again) = racer.join().unwrap();
             assert!(first, "the racing claim reports that it waited");
+            assert_eq!(attempts.waiting(ENDPOINT), 0, "no caller waits once it settled");
             assert_eq!(again.as_deref(), Some(reason.unwrap_or(UNKNOWN)));
         }
     }

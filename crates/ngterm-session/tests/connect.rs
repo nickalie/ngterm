@@ -30,7 +30,9 @@ use ngterm_session::protocol::{
     CAPABILITY_HANDOFF_REQUEST, Control, ControlError, ErrorCode, HandoffRequest, HandoffResult, Hello,
     PROTOCOL_VERSION, Role, Welcome, read_frame, write_control,
 };
-use ngterm_session::server::spawn::{HandoffAttempt, StartError, StartOptions, connect_existing, connect_or_start};
+use ngterm_session::server::spawn::{
+    HandoffAttempt, StartError, StartOptions, connect_existing, connect_or_start, handoff_waiters,
+};
 use support::{PATIENCE, TestResult};
 
 /// How the fake server answers a hello.
@@ -71,7 +73,8 @@ impl Greeting {
 /// What the fake server does.
 struct Script {
     greet: Box<dyn Fn(&Hello) -> Greeting + Send + Sync>,
-    /// The answer to a handoff request on a welcomed control connection, once at least this many hellos arrived.
+    /// The answer to a handoff request on a welcomed control connection, once at least this many other callers of
+    /// this process wait for the attempt that asked it ([`handoff_waiters`]).
     answer: Option<(Control, usize)>,
     /// The listener is dropped at the first connection, before it is answered: no server listens after it.
     once: bool,
@@ -104,6 +107,7 @@ impl Fake {
         let (tell, requested) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let (script, recorded, stopping) = (Arc::new(script), Arc::clone(&seen), Arc::clone(&stop));
+        let served = endpoint.clone();
         let accept = thread::spawn(move || {
             let mut listener = Some(listener);
             while let Some(Ok(stream)) = listener.as_ref().map(ngterm_session::endpoint::Listener::accept) {
@@ -114,7 +118,8 @@ impl Fake {
                     drop(listener.take());
                 }
                 let (script, recorded, tell) = (Arc::clone(&script), Arc::clone(&recorded), tell.clone());
-                thread::spawn(move || serve(stream, &script, &recorded, &tell));
+                let served = served.clone();
+                thread::spawn(move || serve(stream, &served, &script, &recorded, &tell));
             }
         });
         Ok(Self {
@@ -162,7 +167,7 @@ fn namespace() -> TestResult<(tempfile::TempDir, PathBuf)> {
     Ok((root, directory))
 }
 
-fn serve(mut stream: Stream, script: &Script, seen: &Mutex<Seen>, requested: &Sender<()>) {
+fn serve(mut stream: Stream, endpoint: &Endpoint, script: &Script, seen: &Mutex<Seen>, requested: &Sender<()>) {
     let Ok(frame) = read_frame(&mut stream) else {
         return;
     };
@@ -206,11 +211,11 @@ fn serve(mut stream: Stream, script: &Script, seen: &Mutex<Seen>, requested: &Se
             .requests
             .push(request);
         let _ = requested.send(());
-        if let Some((answer, hellos)) = &script.answer {
+        if let Some((answer, waiters)) = &script.answer {
             support::wait_for(
-                "the callers' hellos before the handoff answer",
-                || seen.lock().unwrap_or_else(PoisonError::into_inner).hellos.len(),
-                |count| count >= hellos,
+                "the callers waiting for the attempt before the handoff answer",
+                || handoff_waiters(endpoint),
+                |count| count >= waiters,
             );
             let _ = write_control(&mut stream, answer);
         }
@@ -445,7 +450,8 @@ fn a_server_gone_before_its_handoff_is_asked_leaves_a_start_that_fails() -> Test
 }
 
 /// Of two callers finding a server of another build, the second waits for the first one's attempt and reports its
-/// outcome: the server is asked once. So for a server of another protocol, which fails both calls.
+/// outcome: the server is asked once. So for a server of another protocol, which fails both calls. The fake answers
+/// the request only once the second caller waits, so the waiting path is the one taken: it probes again after it.
 #[test]
 fn a_caller_racing_a_handoff_attempt_waits_for_it_and_asks_nothing() -> TestResult {
     let refused = || {
@@ -454,7 +460,7 @@ fn a_caller_racing_a_handoff_attempt_waits_for_it_and_asks_nothing() -> TestResu
                 ErrorCode::HandoffFailed,
                 "refused by the fake",
             )))),
-            3,
+            1,
         ))
     };
     let failed = HandoffAttempt::Failed {
@@ -477,7 +483,7 @@ fn a_caller_racing_a_handoff_attempt_waits_for_it_and_asks_nothing() -> TestResu
     assert_eq!(
         of_another_build.hellos().len(),
         5,
-        "both callers probe again after waiting"
+        "each caller connects again: the asking one after its request, the waiting one once the attempt settled"
     );
 
     let of_another_protocol = Fake::start(Script {
@@ -500,7 +506,7 @@ fn a_caller_racing_a_handoff_attempt_waits_for_it_and_asks_nothing() -> TestResu
     assert_eq!(
         of_another_protocol.hellos().len(),
         5,
-        "both callers probe again after waiting"
+        "each caller connects again: the asking one after its request, the waiting one once the attempt settled"
     );
     Ok(())
 }

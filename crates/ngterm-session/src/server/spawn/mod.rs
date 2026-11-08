@@ -316,6 +316,14 @@ fn of_build(
     }
 }
 
+/// How many callers of [`connect_or_start`] in this process wait for another one's handoff attempt on the server at
+/// `endpoint` to settle: a test racing an attempt holds its server's answer until a caller waits on it.
+#[doc(hidden)]
+#[must_use]
+pub fn handoff_waiters(endpoint: &Endpoint) -> usize {
+    ATTEMPTS.waiting(&endpoint.to_string())
+}
+
 /// The attempt to have the server of `welcome` at `endpoint` hand over to `build`.
 fn attempt_key(endpoint: &Endpoint, welcome: &Welcome, build: &str) -> AttemptKey {
     AttemptKey {
