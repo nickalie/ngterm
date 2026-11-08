@@ -1,8 +1,9 @@
 //! The remote links' sources and `remotes.conf`'s watch on private buses: a fake `NetworkManager` and logind on the
 //! sandbox's "system" bus and a fake portal network monitor on its session bus, never the machine's
 //! (`support::Sandbox`). First the sources as the library starts them (what each reports, which network source is
-//! picked, none without a service), then the GPUI build launched on those buses retrying its links when the network
-//! comes back and when the machine wakes, and posting the remotes problems banner when `remotes.conf` turns bad on disk.
+//! picked, none without a service, a state or an answer that cannot be read reporting nothing), then the GPUI build
+//! launched on those buses retrying its links when the network comes back and when the machine wakes, and posting the
+//! remotes problems banner when `remotes.conf` turns bad on disk.
 //!
 //! Linux only: `NetworkManager`, logind and the portal faked on private D-Bus buses.
 
@@ -314,6 +315,147 @@ fn without_a_service_the_network_reads_as_always_reachable() -> TestResult {
     assert_eq!(ended(sources.network)?, NetworkSource::None);
     assert!(!ended(sources.resume)?);
     quiet(&reports, "nothing to report");
+    drop(portal);
+    Ok(())
+}
+
+/// The state a flaky service serves, `None` while it cannot be read.
+type Flaky<T> = Arc<Mutex<Option<T>>>;
+
+fn not_now() -> zbus::fdo::Error {
+    zbus::fdo::Error::Failed("not now".to_owned())
+}
+
+/// A `NetworkManager` manager object whose properties cannot be read while its state is `None`.
+struct FlakyManager {
+    state: Flaky<(u32, u32, OwnedObjectPath)>,
+}
+
+impl FlakyManager {
+    fn read<T>(&self, pick: impl FnOnce(&(u32, u32, OwnedObjectPath)) -> T) -> zbus::fdo::Result<T> {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(pick)
+            .ok_or_else(not_now)
+    }
+}
+
+#[zbus::interface(name = "org.freedesktop.NetworkManager")]
+impl FlakyManager {
+    #[zbus(property)]
+    fn connectivity(&self) -> zbus::fdo::Result<u32> {
+        self.read(|state| state.0)
+    }
+
+    #[zbus(property)]
+    fn state(&self) -> zbus::fdo::Result<u32> {
+        self.read(|state| state.1)
+    }
+
+    #[zbus(property)]
+    fn primary_connection(&self) -> zbus::fdo::Result<OwnedObjectPath> {
+        self.read(|state| state.2.clone())
+    }
+}
+
+/// The portal's network monitor, which does not answer while its state is `None`.
+struct FlakyMonitor {
+    available: Flaky<bool>,
+}
+
+#[zbus::interface(name = "org.freedesktop.portal.NetworkMonitor")]
+impl FlakyMonitor {
+    fn get_available(&self) -> zbus::fdo::Result<bool> {
+        self.available
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .ok_or_else(not_now)
+    }
+}
+
+#[test]
+fn a_network_manager_state_that_cannot_be_read_reports_nothing_until_it_can() -> TestResult {
+    let sandbox = Sandbox::new()?;
+    let up = (4, 70, path("/org/freedesktop/NetworkManager/ActiveConnection/1"));
+    let state: Flaky<(u32, u32, OwnedObjectPath)> = Arc::new(Mutex::new(Some(up)));
+    let manager = zbus::blocking::connection::Builder::address(sandbox.system_bus_address())?
+        .name(NETWORK_MANAGER)?
+        .serve_at(
+            NETWORK_MANAGER_PATH,
+            FlakyManager {
+                state: Arc::clone(&state),
+            },
+        )?
+        .build()?;
+    let changed = |now: Option<(u32, u32, &str)>| -> TestResult {
+        *state.lock().unwrap_or_else(PoisonError::into_inner) = now.map(|now| (now.0, now.1, path(now.2)));
+        manager.emit_signal(
+            None::<zbus::names::BusName<'_>>,
+            NETWORK_MANAGER_PATH,
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+            &(NETWORK_MANAGER, HashMap::<&str, Value<'_>>::new(), Vec::<&str>::new()),
+        )?;
+        Ok(())
+    };
+    let (sources, reports) = started(&endpoints(&sandbox));
+    assert_eq!(
+        next(&reports)?,
+        LinkEvent::Network { available: true },
+        "the state at start"
+    );
+    changed(None)?;
+    quiet(&reports, "a state that cannot be read");
+    changed(Some((1, 20, "/")))?;
+    assert_eq!(
+        next(&reports)?,
+        LinkEvent::Network { available: false },
+        "the next readable state against the last one read"
+    );
+    drop(sandbox);
+    assert_eq!(ended(sources.network)?, NetworkSource::NetworkManager);
+    drop(manager);
+    Ok(())
+}
+
+#[test]
+fn a_portal_monitor_that_does_not_answer_a_change_reports_nothing_for_it() -> TestResult {
+    let sandbox = Sandbox::new()?;
+    let available: Flaky<bool> = Arc::new(Mutex::new(Some(true)));
+    let portal = zbus::blocking::connection::Builder::address(sandbox.bus_address())?
+        .name(PORTAL)?
+        .serve_at(
+            PORTAL_PATH,
+            FlakyMonitor {
+                available: Arc::clone(&available),
+            },
+        )?
+        .build()?;
+    let changed = |now: Option<bool>| -> TestResult {
+        *available.lock().unwrap_or_else(PoisonError::into_inner) = now;
+        portal.emit_signal(
+            None::<zbus::names::BusName<'_>>,
+            PORTAL_PATH,
+            NETWORK_MONITOR,
+            "changed",
+            &(),
+        )?;
+        Ok(())
+    };
+    let (sources, reports) = started(&endpoints(&sandbox));
+    assert_eq!(
+        next(&reports)?,
+        LinkEvent::Network { available: true },
+        "the state at start"
+    );
+    changed(None)?;
+    quiet(&reports, "a change the monitor does not answer for");
+    changed(Some(false))?;
+    assert_eq!(next(&reports)?, LinkEvent::Network { available: false });
+    drop(sandbox);
+    assert_eq!(ended(sources.network)?, NetworkSource::Portal);
     drop(portal);
     Ok(())
 }

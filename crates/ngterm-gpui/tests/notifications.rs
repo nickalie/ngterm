@@ -13,13 +13,28 @@
 //! `notify` replaces the first, a clear withdraws the control banner with the panes', and a click on it reveals the
 //! main pane.
 //!
+//! A second scenario, on a bus its child starts and restarts itself, meets a server's quirks: an activation token sent
+//! before `Notify`'s reply counts for its banner, signals of another member or body count for nothing, a repeat the
+//! server posts under a new id is clicked by that id alone, a refused `CloseNotification` still forgets its banner, and
+//! a name left without an owner forgets the banners known; then the bus restarts under the banner task, whose banners
+//! while it is down are dropped and whose next one reaches the new bus. Last, the app itself: its banner's click
+//! raises its window with the server's token.
+//!
 //! Linux only: the freedesktop notification server on a private D-Bus bus.
 
 #![cfg(target_os = "linux")]
 
+#[macro_use]
+#[expect(
+    dead_code,
+    unused_imports,
+    reason = "the sandbox serves the process tests too; this one runs headless, without lavapipe"
+)]
+mod support;
+
 use std::collections::HashMap;
 use std::io::{BufRead as _, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -611,5 +626,507 @@ fn refused_and_closed_banners(scenario: &Scenario) -> TestResult {
         },
         "a closed banner and a peer's signal reveal nothing; a click without a token carries none"
     );
+    Ok(())
+}
+
+/// Names the configuration the second scenario's child starts its own private bus daemons from, and the daemon.
+const BUS_CONFIG: &str = "NGTERM_GPUI_TEST_BUS_CONFIG";
+const BUS_DAEMON: &str = "NGTERM_GPUI_TEST_BUS_DAEMON";
+/// A body the quirky server answers only after sending its banner's activation token.
+const EARLY: &str = "early";
+/// A body whose repeat the quirky server posts under a new id.
+const RENUMBER: &str = "renumber";
+/// A body whose banner the quirky server refuses to close.
+const STUCK: &str = "stuck";
+const INTERFACE: &str = "org.freedesktop.Notifications";
+
+/// The second scenario, in a child whose session bus is a daemon it starts, stops and starts again itself: a server's
+/// quirks (an activation token sent before `Notify`'s reply, signals the specification does not name or that carry
+/// another body, a repeat posted under a new id, a refused `CloseNotification`), the server's name left without an
+/// owner, and the bus restarting under the banner task.
+#[test]
+fn a_quirky_server_and_a_bus_restart_on_a_private_bus() {
+    let Some(daemon) = dbus_daemon() else {
+        eprintln!("skipped: no dbus-daemon to run a private session bus on");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("bus.conf");
+    std::fs::write(&config, bus_config(&dir.path().join("bus"))).unwrap();
+    let address = format!("unix:path={}", dir.path().join("bus").display());
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "quirks_on_the_private_bus",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env_clear()
+        // a coverage run's profile destination (cargo llvm-cov), where this child's coverage goes
+        .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|profile| ("LLVM_PROFILE_FILE", profile)))
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", dir.path())
+        .env("DBUS_SESSION_BUS_ADDRESS", &address)
+        .env(PRIVATE_BUS, &address)
+        .env(BUS_CONFIG, &config)
+        .env(BUS_DAEMON, &daemon)
+        .status();
+    assert!(status.unwrap().success(), "the scenario failed on the private bus");
+}
+
+/// A private bus daemon at the scenario's socket, killed when dropped.
+struct Daemon(std::process::Child);
+
+impl Daemon {
+    /// The daemon `program` serving `config`, once it listens; a stopped daemon's socket at `socket` is removed first.
+    fn start(program: &Path, config: &Path, socket: &Path) -> TestResult<Self> {
+        let _ = std::fs::remove_file(socket);
+        let mut child = Command::new(program)
+            .arg(format!("--config-file={}", config.display()))
+            .args(["--nofork", "--print-address=1"])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let mut address = String::new();
+        BufReader::new(child.stdout.take().ok_or("no daemon output")?).read_line(&mut address)?;
+        let daemon = Self(child);
+        if !address.starts_with("unix:") {
+            return Err(format!("the daemon gave no address: {address:?}").into());
+        }
+        Ok(daemon)
+    }
+
+    fn stop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// A notification server with real servers' quirks (the bodies [`EARLY`], [`RENUMBER`] and [`STUCK`] ask for them):
+/// records its calls and numbers banners from 1.
+struct Quirky {
+    calls: Arc<Mutex<Vec<Call>>>,
+    last: u32,
+    bodies: HashMap<u32, String>,
+}
+
+#[zbus::interface(name = "org.freedesktop.Notifications")]
+impl Quirky {
+    #[zbus(name = "Notify")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the freedesktop `Notify` method's eight arguments and the emitter"
+    )]
+    async fn notify_method(
+        &mut self,
+        app_name: String,
+        replaces_id: u32,
+        app_icon: String,
+        summary: String,
+        body: String,
+        actions: Vec<String>,
+        hints: HashMap<String, OwnedValue>,
+        expire_timeout: i32,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<u32> {
+        drop((summary, hints, expire_timeout));
+        let id = if replaces_id == 0 || body == RENUMBER {
+            self.last += 1;
+            self.last
+        } else {
+            replaces_id
+        };
+        if body == EARLY {
+            Self::activation_token(&emitter, id, "early-token")
+                .await
+                .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
+        }
+        self.bodies.insert(id, body.clone());
+        record(
+            &self.calls,
+            Call::Notify {
+                app: app_name,
+                icon: app_icon,
+                replaces: replaces_id,
+                id,
+                body,
+                actions,
+                desktop_entry: None,
+            },
+        );
+        Ok(id)
+    }
+
+    fn close_notification(&mut self, id: u32) -> zbus::fdo::Result<()> {
+        record(&self.calls, Call::Close(id));
+        if self.bodies.get(&id).is_some_and(|body| body == STUCK) {
+            return Err(zbus::fdo::Error::Failed("stuck".to_owned()));
+        }
+        Ok(())
+    }
+
+    #[zbus(signal)]
+    async fn action_invoked(emitter: &SignalEmitter<'_>, id: u32, action_key: &str) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn activation_token(emitter: &SignalEmitter<'_>, id: u32, activation_token: &str) -> zbus::Result<()>;
+}
+
+/// A quirky server recording into `calls`, serving on the bus at `address` under the server's name.
+fn serve_quirky(address: &str, calls: &Arc<Mutex<Vec<Call>>>) -> TestResult<zbus::blocking::Connection> {
+    Ok(zbus::blocking::connection::Builder::address(address)?
+        .serve_at(
+            PATH,
+            Quirky {
+                calls: Arc::clone(calls),
+                last: 0,
+                bodies: HashMap::new(),
+            },
+        )?
+        .name(SERVER_NAME)?
+        .build()?)
+}
+
+/// Clicks banner `id` on `server`, as its user would.
+fn click_on(server: &zbus::blocking::Connection, id: u32) -> TestResult {
+    let interface = server.object_server().interface::<_, Quirky>(PATH)?;
+    emit(Quirky::action_invoked(interface.signal_emitter(), id, "default"))
+}
+
+/// Waits until `done` holds, or fails.
+fn wait_until(what: &str, done: impl Fn() -> bool) -> TestResult {
+    let deadline = Instant::now() + DEADLINE;
+    while !done() {
+        if Instant::now() > deadline {
+            return Err(format!("timed out waiting for {what}").into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
+/// The second scenario's parts: the quirky server, what it was asked, the banner task's sink, its queue as the task
+/// takes from it, and its clicks, with the three panes' identities of one session.
+struct Quirks {
+    address: String,
+    calls: Arc<Mutex<Vec<Call>>>,
+    server: zbus::blocking::Connection,
+    sink: Desktop,
+    pending: async_channel::Receiver<ngterm_gpui::notifications::Banner>,
+    clicks: std::sync::mpsc::Receiver<Click>,
+    window: Uuid,
+    session: Uuid,
+    main: String,
+    split: String,
+    overlay: String,
+}
+
+impl Quirks {
+    fn start(address: String) -> TestResult<Self> {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let server = serve_quirky(&address, &calls)?;
+        let (sink, queue) = Desktop::new();
+        let pending = queue.clone();
+        let (clicked, clicks) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            zbus::block_on(run(queue, APP_ID.to_owned(), move |click| {
+                let _ = clicked.send(click);
+            }));
+        });
+        let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
+        Ok(Self {
+            address,
+            calls,
+            server,
+            sink,
+            pending,
+            clicks,
+            window,
+            session,
+            main: notification_identity(window, session, PaneRole::Main),
+            split: notification_identity(window, session, PaneRole::Split),
+            overlay: notification_identity(window, session, PaneRole::Overlay),
+        })
+    }
+
+    fn click(&self) -> TestResult<Click> {
+        Ok(self.clicks.recv_timeout(DEADLINE)?)
+    }
+
+    /// The core's clear of the scenario's session: every pane's and the control slot's withdrawal.
+    fn clear(&self) {
+        deliver(
+            &self.sink,
+            &[NotificationEffect::Clear {
+                window: self.window,
+                session: self.session,
+            }],
+        );
+    }
+
+    /// Waits until the task took every banner queued: all but the last are handled.
+    fn taken(&self) -> TestResult {
+        wait_until("the task to take the queued banners", || self.pending.is_empty())
+    }
+}
+
+#[test]
+#[ignore = "run by a_quirky_server_and_a_bus_restart_on_a_private_bus, on its private bus"]
+fn quirks_on_the_private_bus() -> TestResult {
+    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap_or_default();
+    // only ever on the private bus the parent test named, which this child starts itself: never the user's
+    let socket = address.strip_prefix("unix:path=").map(PathBuf::from);
+    let (Some(socket), Some(config), Some(program)) = (
+        socket.filter(|_| std::env::var(PRIVATE_BUS).ok().as_deref() == Some(address.as_str())),
+        std::env::var_os(BUS_CONFIG).map(PathBuf::from),
+        std::env::var_os(BUS_DAEMON).map(PathBuf::from),
+    ) else {
+        eprintln!("skipped: not on the parent test's private bus");
+        return Ok(());
+    };
+    let mut daemon = Daemon::start(&program, &config, &socket)?;
+    let scenario = Quirks::start(address)?;
+    an_early_token_and_stray_signals(&scenario)?;
+    a_renumbered_repeat_and_a_refused_close(&scenario)?;
+    let successor = nobody_serving_forgets_the_banners(&scenario)?;
+    daemon.stop();
+    drop(successor);
+    the_task_reconnects_after_its_bus_restarted(&scenario, || Daemon::start(&program, &config, &socket))
+}
+
+/// A token the server sent before its `Notify` reply still counts for that banner; a signal the specification does not
+/// name, and its own signals with another body, change nothing.
+fn an_early_token_and_stray_signals(scenario: &Quirks) -> TestResult {
+    let Quirks {
+        calls,
+        server,
+        sink,
+        main,
+        split,
+        ..
+    } = scenario;
+    sink.send(main, "t", EARLY);
+    wait_for(calls, "the early banner", |calls| notifies(calls).len() == 1);
+    click_on(server, 1)?;
+    assert_eq!(
+        scenario.click()?,
+        Click {
+            identity: main.clone(),
+            token: Some("early-token".to_owned())
+        },
+        "the token sent while the post waited for its reply raises the window"
+    );
+
+    sink.send(split, "t", "two");
+    let seen = wait_for(calls, "the split's banner", |calls| notifies(calls).len() == 2);
+    assert_eq!(notifies(&seen)[1], (0, 2, "two".to_owned()));
+    server.emit_signal(None::<&str>, PATH, INTERFACE, "Unexpected", &(2_u32,))?;
+    server.emit_signal(None::<&str>, PATH, INTERFACE, "ActionInvoked", &("2",))?;
+    server.emit_signal(None::<&str>, PATH, INTERFACE, "ActivationToken", &(2_u32,))?;
+    server.emit_signal(None::<&str>, PATH, INTERFACE, "NotificationClosed", &(2_u32, "gone"))?;
+    click_on(server, 2)?;
+    assert_eq!(
+        scenario.click()?,
+        Click {
+            identity: split.clone(),
+            token: None
+        },
+        "a stray member and malformed bodies neither click, nor close, nor hand a token"
+    );
+    Ok(())
+}
+
+/// A repeat the server posts under a new id: the old id names nothing, the new one the pane. A banner the server
+/// refuses to close is still forgotten.
+fn a_renumbered_repeat_and_a_refused_close(scenario: &Quirks) -> TestResult {
+    let Quirks {
+        calls,
+        server,
+        sink,
+        main,
+        overlay,
+        ..
+    } = scenario;
+    sink.send(main, "t", "three");
+    sink.send(main, "t", RENUMBER);
+    let seen = wait_for(calls, "the renumbered repeat", |calls| notifies(calls).len() == 4);
+    assert_eq!(
+        notifies(&seen)[2..],
+        [(0, 3, "three".to_owned()), (3, 4, RENUMBER.to_owned())]
+    );
+    let interface = server.object_server().interface::<_, Quirky>(PATH)?;
+    emit(Quirky::activation_token(interface.signal_emitter(), 4, "token-4"))?;
+    click_on(server, 3)?;
+    click_on(server, 4)?;
+    assert_eq!(
+        scenario.click()?,
+        Click {
+            identity: main.clone(),
+            token: Some("token-4".to_owned())
+        },
+        "the replaced id reveals nothing; the new one reveals the pane, with its token"
+    );
+
+    sink.send(overlay, "t", STUCK);
+    wait_for(calls, "the stuck banner", |calls| notifies(calls).len() == 5);
+    scenario.clear();
+    wait_for(calls, "the refused withdrawal", |calls| calls.contains(&Call::Close(5)));
+    sink.send(overlay, "t", "again");
+    let seen = wait_for(calls, "the overlay's next banner", |calls| notifies(calls).len() == 6);
+    assert_eq!(
+        notifies(&seen)[5],
+        (0, 6, "again".to_owned()),
+        "a banner whose close was refused is forgotten all the same"
+    );
+    Ok(())
+}
+
+/// The server's name left without an owner: a withdrawal finds nobody to ask, and the banners known are forgotten, so
+/// the server that takes the name next gets none of their ids. That server, serving on.
+fn nobody_serving_forgets_the_banners(scenario: &Quirks) -> TestResult<zbus::blocking::Connection> {
+    let Quirks {
+        calls,
+        sink,
+        overlay,
+        split,
+        ..
+    } = scenario;
+    sink.send(split, "t", "seven");
+    wait_for(calls, "the split's banner", |calls| notifies(calls).len() == 7);
+    scenario.server.release_name(SERVER_NAME)?;
+    scenario.clear();
+    scenario.taken()?;
+    let asked = calls.lock().map(|calls| calls.clone()).unwrap_or_default();
+
+    let successor_calls = Arc::new(Mutex::new(Vec::new()));
+    let successor = serve_quirky(&scenario.address, &successor_calls)?;
+    sink.send(overlay, "t", "eight");
+    sink.send(split, "t", "nine");
+    let seen = wait_for(&successor_calls, "the successor's banners", |calls| {
+        notifies(calls).len() == 2
+    });
+    assert_eq!(
+        seen,
+        [notify_call(0, 1, "eight"), notify_call(0, 2, "nine"),],
+        "no replaces_id and no withdrawal of the ids the old server handed out"
+    );
+    assert_eq!(
+        calls.lock().map(|calls| calls.clone()).unwrap_or_default(),
+        asked,
+        "the old server, no longer named, is asked nothing"
+    );
+    assert_eq!(
+        asked.last(),
+        Some(&notify_call(0, 7, "seven")),
+        "the clear closed nothing"
+    );
+    Ok(successor)
+}
+
+/// The quirky server's record of a `Notify`.
+fn notify_call(replaces: u32, id: u32, body: &str) -> Call {
+    Call::Notify {
+        app: "ngterm".to_owned(),
+        icon: ngterm_gpui::instance::DEFAULT_APP_ID.to_owned(),
+        replaces,
+        id,
+        body: body.to_owned(),
+        actions: vec!["default".to_owned(), String::new()],
+        desktop_entry: None,
+    }
+}
+
+/// The bus went away under the task and came back: the banners while it was gone are dropped, the next one opens a
+/// connection to the new bus, whose server gets none of the old ids and whose clicks count.
+fn the_task_reconnects_after_its_bus_restarted(
+    scenario: &Quirks,
+    restart: impl FnOnce() -> TestResult<Daemon>,
+) -> TestResult {
+    let Quirks {
+        address,
+        sink,
+        main,
+        split,
+        ..
+    } = scenario;
+    // the bus is down: these find none to post on
+    sink.send(split, "t", "lost");
+    sink.send(main, "t", "lost too");
+    sink.withdraw("no banner of the task's");
+    scenario.taken()?;
+    let _daemon = restart()?;
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let server = serve_quirky(address, &calls)?;
+    sink.send(split, "t", "after");
+    let seen = wait_for(&calls, "the banner after the restart", |calls| {
+        notifies(calls).len() == 1
+    });
+    assert_eq!(
+        seen,
+        [notify_call(0, 1, "after")],
+        "the banners while the bus was down were dropped; the old server's id is not reused"
+    );
+    click_on(&server, 1)?;
+    assert_eq!(
+        scenario.click()?,
+        Click {
+            identity: split.clone(),
+            token: None
+        },
+        "the new connection hears the new server's clicks"
+    );
+    Ok(())
+}
+
+/// One control request to the sandbox's app; its reply.
+fn control(sandbox: &support::Sandbox, request: &serde_json::Value) -> TestResult<serde_json::Value> {
+    use std::io::Write as _;
+    let mut socket = std::os::unix::net::UnixStream::connect(sandbox.path("state/ngterm.sock"))?;
+    socket.set_read_timeout(Some(DEADLINE))?;
+    writeln!(socket, "{request}")?;
+    let mut reply = String::new();
+    BufReader::new(socket).read_line(&mut reply)?;
+    Ok(serde_json::from_str(&reply)?)
+}
+
+/// The app end to end, headless on the sandbox's private bus with the fake server: a `notify` posts its banner, and the
+/// server's click raises the app's window with the activation token the server sent first.
+#[test]
+fn the_apps_banner_click_raises_its_window_with_the_servers_token() -> TestResult {
+    if dbus_daemon().is_none() {
+        skip!("no dbus-daemon to run a private session bus on");
+    }
+    let mut sandbox = support::Sandbox::new()?;
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let server = serve(sandbox.bus_address(), &calls)?;
+    let primary = sandbox.start_gpui_primary("primary.log")?;
+    let reply = control(
+        &sandbox,
+        &serde_json::json!({ "cmd": "notify", "args": { "title": "Build", "body": "tests passed" } }),
+    )?;
+    assert_eq!(reply["ok"], serde_json::json!(true), "{reply}");
+    wait_for(&calls, "the app's banner", |calls| notifies(calls).len() == 1);
+    let raised = |sandbox: &support::Sandbox| {
+        sandbox
+            .log("primary.log")
+            .matches("activation: no display server to raise a window on")
+            .count()
+    };
+    let before = raised(&sandbox);
+    let interface = server.object_server().interface::<_, Server>(PATH)?;
+    emit(Server::activation_token(interface.signal_emitter(), 1, "token-1"))?;
+    emit(Server::action_invoked(interface.signal_emitter(), 1, "default"))?;
+    support::wait_for(|| (raised(&sandbox) > before).then_some(()))
+        .map_err(|_| format!("the click raised nothing:\n{}", sandbox.log("primary.log")))?;
+    sandbox.terminate(primary)?;
+    assert_eq!(sandbox.wait_exit(primary, Duration::from_secs(10))?.0.code(), Some(0));
     Ok(())
 }

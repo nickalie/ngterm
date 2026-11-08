@@ -112,3 +112,26 @@ fn the_desktop_sink_queues_banners_in_order_for_the_task() {
         "the split's, the overlay's and the control slot's identities follow"
     );
 }
+
+/// A click on a banner whose session no open window holds any more, its window still open: nothing to reveal, so the
+/// server's token raises nothing.
+#[test]
+fn a_click_for_a_session_gone_from_its_open_window_raises_nothing() {
+    let library = ngterm_core::model::WindowLibrary::seeded("/home/u");
+    let window = library.active_window_id().unwrap();
+    let mut state = AppState::new(ngterm_core::Core::new(
+        ngterm_core::CoreConfig {
+            app: ngterm_proto::AppIdentity::from_recorded("1.2.3", None),
+            capabilities: Vec::new(),
+        },
+        ngterm_core::CoreState {
+            library,
+            ..ngterm_core::CoreState::default()
+        },
+    ));
+    state.reveal_notification(
+        &identity(window, Uuid::new_v4(), PaneRole::Main),
+        Some("token".to_owned()),
+    );
+    assert!(state.take_frontend_work().activations.is_empty());
+}
