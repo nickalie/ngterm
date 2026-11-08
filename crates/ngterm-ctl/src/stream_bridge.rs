@@ -428,6 +428,213 @@ mod tests {
         }
     }
 
+    /// A socket that fails to read ends the bridge as the app hanging up does, though the app and the viewer are
+    /// both still there: the input's read is cancelled, and nothing reaches the output.
+    #[cfg(windows)]
+    #[test]
+    fn a_socket_that_fails_to_read_ends_the_bridge() {
+        let Rig {
+            app,
+            viewer_in,
+            viewer_out,
+            bridge,
+            _ends: ends,
+        } = rig();
+        client::send_all(&app, b"{\"ok\":true}\n").unwrap();
+        bridge.open(&present()).unwrap();
+        // the app stays silent, so the bridge's next read times out
+        bridge
+            .socket
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let pumping = thread::spawn(move || bridge.pump());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !pumping.is_finished() {
+            assert!(std::time::Instant::now() < deadline, "the bridge outlived its socket");
+            thread::sleep(Duration::from_millis(10));
+        }
+        pumping.join().unwrap();
+        drop(ends);
+        let mut written = Vec::new();
+        viewer_out.into_inner().read_to_end(&mut written).unwrap();
+        assert!(written.is_empty(), "{written:?}");
+        drop((app, viewer_in));
+    }
+
+    /// A reader that no cancel ends is left to the process's exit once the drain has passed, and the stop says so;
+    /// one that sees the stop ends, and the stop says that too.
+    #[cfg(windows)]
+    #[test]
+    fn a_reader_that_will_not_stop_is_given_up_after_the_drain() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let stop = Arc::new(AtomicBool::new(false));
+        // in no read a cancel could end
+        let stuck = thread::spawn(|| thread::sleep(Duration::from_secs(4)));
+        let stopping = std::time::Instant::now();
+        assert!(!windows::stop_reader(&stuck, &stop));
+        assert!(stopping.elapsed() >= Duration::from_secs(2), "{:?}", stopping.elapsed());
+        assert!(stop.load(Ordering::SeqCst));
+        stuck.join().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&stop);
+        let watching = thread::spawn(move || {
+            while !seen.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(1));
+            }
+        });
+        assert!(windows::stop_reader(&watching, &stop));
+        assert!(watching.is_finished());
+    }
+
+    /// Set in the environment of [`the_console_probe`]'s process.
+    #[cfg(windows)]
+    const CONSOLE_PROBE: &str = "NGTERMCTL_TEST_STREAM_CONSOLE_PROBE";
+
+    /// A console on both ends of the bridge: while it pumps, the input is raw VT (a key reaches the app at once, with
+    /// no Enter and no echo) and the output takes VT; a frame lands on the screen as it was sent; and once the app
+    /// hangs up, both are put back as they were. In a copy of this binary in a console of its own, since the tests'
+    /// stdio is piped and the console is the process's.
+    #[cfg(windows)]
+    #[test]
+    fn a_console_on_both_ends_is_put_in_vt_mode_while_the_bridge_pumps() {
+        use std::os::windows::process::CommandExt as _;
+        use windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "stream_bridge::tests::the_console_probe",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CONSOLE_PROBE, "1")
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let printed = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "{printed}");
+        assert!(printed.contains("the console probe ran"), "{printed}");
+    }
+
+    /// A console handle of this process's console: `CONIN$` or `CONOUT$`.
+    #[cfg(windows)]
+    fn console(name: &str) -> File {
+        std::fs::OpenOptions::new().read(true).write(true).open(name).unwrap()
+    }
+
+    #[cfg(windows)]
+    fn console_mode(console: &File) -> u32 {
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::System::Console::GetConsoleMode;
+        let mut mode = 0;
+        // SAFETY: the handle is an open console handle, `mode` a writable `u32`.
+        assert_ne!(unsafe { GetConsoleMode(console.as_raw_handle(), &raw mut mode) }, 0);
+        mode
+    }
+
+    /// Waits up to ten seconds for `ready`.
+    #[cfg(windows)]
+    fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !ready() {
+            assert!(std::time::Instant::now() < deadline, "never: {what}");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Types `key` into the console's input, as a key press.
+    #[cfg(windows)]
+    fn type_key(input: &File, key: u8) {
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::System::Console::{INPUT_RECORD, KEY_EVENT, WriteConsoleInputW};
+        let mut record = INPUT_RECORD {
+            EventType: u16::try_from(KEY_EVENT).unwrap(),
+            ..INPUT_RECORD::default()
+        };
+        record.Event.KeyEvent.bKeyDown = 1;
+        record.Event.KeyEvent.wRepeatCount = 1;
+        record.Event.KeyEvent.wVirtualKeyCode = u16::from(key.to_ascii_uppercase());
+        record.Event.KeyEvent.uChar.UnicodeChar = u16::from(key);
+        let mut written = 0;
+        // SAFETY: the handle is the console's input, `record` one live record and `written` a writable `u32`.
+        let ok = unsafe { WriteConsoleInputW(input.as_raw_handle(), &raw const record, 1, &raw mut written) };
+        assert_ne!(ok, 0);
+        assert_eq!(written, 1);
+    }
+
+    /// The text of the console screen's first row.
+    #[cfg(windows)]
+    fn first_row(output: &File) -> String {
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::System::Console::{COORD, ReadConsoleOutputCharacterW};
+        let mut row = [0_u16; 64];
+        let mut read = 0;
+        // SAFETY: the handle is the console's screen, `row` holds the `u16`s asked for and `read` is writable.
+        let ok = unsafe {
+            ReadConsoleOutputCharacterW(
+                output.as_raw_handle(),
+                row.as_mut_ptr(),
+                u32::try_from(row.len()).unwrap(),
+                COORD { X: 0, Y: 0 },
+                &raw mut read,
+            )
+        };
+        assert_ne!(ok, 0);
+        String::from_utf16_lossy(&row[..usize::try_from(read).unwrap()])
+    }
+
+    /// Not a test of its own: [`a_console_on_both_ends_is_put_in_vt_mode_while_the_bridge_pumps`] in the console of
+    /// its own it runs in; without [`CONSOLE_PROBE`], nothing.
+    #[cfg(windows)]
+    #[test]
+    fn the_console_probe() {
+        use windows_sys::Win32::System::Console::{
+            DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
+            ENABLE_PROCESSED_OUTPUT, ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+        };
+        if std::env::var_os(CONSOLE_PROBE).is_none() {
+            return;
+        }
+        let (input, output) = (console("CONIN$"), console("CONOUT$"));
+        let (input_was, output_was) = (console_mode(&input), console_mode(&output));
+        let (app, bridge_side) = ngterm_server::endpoint::pair().unwrap();
+        let bridge = StreamBridge::new(bridge_side, input.try_clone().unwrap(), output.try_clone().unwrap());
+        client::send_all(&app, b"{\"ok\":true}\n").unwrap();
+        bridge.open(&present()).unwrap();
+        let pumping = thread::spawn(move || bridge.pump());
+
+        let cooked = ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT;
+        wait_until("raw VT input", || {
+            let mode = console_mode(&input);
+            mode & ENABLE_VIRTUAL_TERMINAL_INPUT != 0 && mode & cooked == 0
+        });
+        let vt = ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+        assert_eq!(console_mode(&output) & vt, vt);
+        app.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        // past the request
+        client::read_socket_line(&app, MAX_REQUEST_LINE_BYTES).unwrap();
+        type_key(&input, b'x');
+        let mut key = [0_u8; 1];
+        (&app).read_exact(&mut key).unwrap();
+        assert_eq!(&key, b"x");
+        client::send_all(&app, b"{\"kind\":\"hello\"}\n").unwrap();
+        wait_until("the frame on the screen", || {
+            first_row(&output).starts_with("{\"kind\":\"hello\"}")
+        });
+
+        app.shutdown(Shutdown::Both).unwrap();
+        wait_until("the bridge's end", || pumping.is_finished());
+        pumping.join().unwrap();
+        assert_eq!(console_mode(&input), input_was);
+        assert_eq!(console_mode(&output), output_was);
+        println!("the console probe ran");
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_viewer_leaving_first_ends_the_bridge_without_sigpipe() {
@@ -499,6 +706,16 @@ mod tests {
         // macOS needs the peer to stay connected until the shutdown.
         let Rig { app: _app, bridge, .. } = rig();
         bridge.socket.shutdown(Shutdown::Write).unwrap();
+        assert_eq!(bridge.open(&present()), Err("could not send the request".to_owned()));
+    }
+
+    /// A request that cannot go out is an error. A pipe has no half-close, so the bridge's own side is shut down
+    /// whole, with the app's end still there.
+    #[cfg(windows)]
+    #[test]
+    fn a_request_that_cannot_be_sent_is_an_error() {
+        let Rig { app: _app, bridge, .. } = rig();
+        bridge.socket.shutdown(Shutdown::Both).unwrap();
         assert_eq!(bridge.open(&present()), Err("could not send the request".to_owned()));
     }
 

@@ -236,6 +236,28 @@ mod tests {
         assert!(!walk(30, mid_exec, |_| None));
     }
 
+    /// The walk looks at the hook's process and its five nearest ancestors: a Codex further up is not the run that
+    /// fired the hook, so a chain that long with no Codex in it is not headless.
+    #[test]
+    fn a_codex_past_the_walks_reach_is_not_found() {
+        // 100's parent is 99, 99's is 98, and so on: a chain longer than the walk
+        let parents = |pid: u32| (pid > 2).then(|| pid - 1);
+        let headless_at = |codex: u32| move |pid| (pid == codex).then(|| argv(&["codex", "exec", "task"]));
+        assert!(walk(100, headless_at(95), parents), "the sixth process walked");
+        assert!(!walk(100, headless_at(94), parents), "the seventh, past the walk");
+    }
+
+    /// Neither Linux nor macOS: no process is read, so no Codex is found above any process, this one included, and
+    /// the rollout alone decides.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[test]
+    fn no_process_is_read_on_other_systems() {
+        let me = std::process::id();
+        assert_eq!(argv_of(me), None);
+        assert_eq!(parent_of(me), None);
+        assert!(!headless_codex_above(me));
+    }
+
     #[test]
     fn the_subcommand_is_the_first_word_past_the_options() {
         for headless in [
