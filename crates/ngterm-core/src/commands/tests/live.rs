@@ -2398,13 +2398,14 @@ fn live_install_debug_names_the_endpoint_and_state_directory() {
             socket_directory: "test-sockets".to_owned(),
         },
         wrap: Inputs::default(),
-        state_dir: resources.path().to_path_buf(),
+        // A backslash needs Debug escaping even when this test runs on Unix.
+        state_dir: resources.path().join(r"state\directory"),
         outdated_before: None,
     };
     let debug = format!("{install:?}");
     assert!(debug.contains("test-session-host"));
     assert!(debug.contains("test-sockets"));
-    assert!(debug.contains(&resources.path().display().to_string()));
+    assert!(debug.contains(&format!("state_dir: {:?}", install.state_dir)));
 }
 
 #[test]
