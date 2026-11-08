@@ -23,7 +23,7 @@ use ngterm_term::Rgb;
 
 use super::super::Shared;
 use super::super::kitty::textures::{MAX_TEXTURE_SIDE, resample, texture_size};
-use super::{MIN_REPEAT_SIDE, Spec};
+use super::{BackgroundPaint, MIN_REPEAT_SIDE, Spec};
 
 /// A background file as it is on disk, and whether it is repeated (small repeated images are tiled when decoded).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -286,6 +286,24 @@ impl Loader {
 }
 
 impl Shared {
+    /// The image and its paint settings: a retained texture keeps the repeat mode it was decoded with, until a
+    /// replacement is ready. Otherwise a pre-tiled texture would be squeezed into one image rectangle.
+    pub(in crate::terminal) fn background_paint(
+        self: &Rc<Self>,
+        spec: Option<Spec>,
+        cx: &App,
+    ) -> Option<BackgroundPaint> {
+        self.background_image(spec.clone(), cx);
+        let loader = self.background.borrow();
+        let (key, decoded) = loader.current.as_ref()?;
+        let mut spec = spec?;
+        spec.repeat = key.0.repeat;
+        Some(BackgroundPaint {
+            decoded: Arc::clone(decoded),
+            spec,
+        })
+    }
+
     /// The background image to draw for `spec`, starting a decode when its file changed and a bake when how it is
     /// baked did; `None` before the first one is ready.
     pub(in crate::terminal) fn background_image(self: &Rc<Self>, spec: Option<Spec>, cx: &App) -> Option<Arc<Decoded>> {

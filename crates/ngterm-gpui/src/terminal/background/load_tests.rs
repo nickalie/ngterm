@@ -129,3 +129,138 @@ fn a_file_that_goes_missing_keeps_painting_the_image_on_screen(cx: &mut TestAppC
     }
     assert!(!shared.background_loader().is_loading(), "nothing to load");
 }
+
+use super::super::super::{TerminalView, ViewRole};
+use super::super::BackgroundPaint;
+use gpui_kit::VisualTestContext;
+
+fn prepared(view: &Entity<TerminalView>, cx: &mut VisualTestContext) -> Option<BackgroundPaint> {
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let metrics = view.shared.metrics();
+            view.prepare_images(None, &metrics, window, cx).background
+        })
+    })
+}
+
+fn background_config(path: &std::path::Path, repeat: bool) -> TerminalConfig {
+    let mut config = TerminalConfig::default();
+    config.background_image.path = Some(ngterm_core::ghostty_config::ConfigPath {
+        path: path.to_path_buf(),
+        optional: false,
+    });
+    config.background_image.repeat = repeat;
+    config.background_image.fit = ngterm_core::ghostty_config::BackgroundImageFit::None;
+    Arc::make_mut(&mut config.palette).background_alpha = 128;
+    config
+}
+
+fn loaded(view: &Entity<TerminalView>, cx: &mut VisualTestContext) -> BackgroundPaint {
+    for _ in 0..4 {
+        prepared(view, cx);
+        cx.run_until_parked();
+    }
+    prepared(view, cx).expect("the background loaded")
+}
+
+fn assert_retained(fallback: &BackgroundPaint, loaded: &BackgroundPaint) {
+    assert!(Arc::ptr_eq(&fallback.decoded, &loaded.decoded));
+    assert_eq!(
+        fallback.spec.repeat, loaded.spec.repeat,
+        "the texture keeps its loaded repeat mode"
+    );
+    let screen = (800., 600.);
+    assert_eq!(
+        super::super::layout(screen, fallback.decoded.size, fallback.decoded.tiles, &fallback.spec),
+        super::super::layout(screen, loaded.decoded.size, loaded.decoded.tiles, &loaded.spec),
+        "each source tile keeps its size"
+    );
+    assert_eq!(fallback.color_areas(screen), loaded.color_areas(screen));
+}
+
+#[gpui_kit::test]
+fn a_missing_background_keeps_the_loaded_repeat_geometry(cx: &mut TestAppContext) {
+    for repeat in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pattern.png");
+        image::RgbaImage::from_fn(4, 2, |x, y| {
+            image::Rgba([u8::try_from(x * 60).unwrap(), u8::try_from(y * 120).unwrap(), 30, 255])
+        })
+        .save(&path)
+        .unwrap();
+        let (terminal, shared) = idle(cx);
+        let mut config = background_config(&path, repeat);
+        terminal.update(cx, |terminal, cx| terminal.set_config(config.clone(), cx));
+        let cx = cx.add_empty_window();
+        let view = cx.new(|cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
+        let loaded = loaded(&view, cx);
+        assert_eq!(loaded.spec.repeat, repeat);
+        assert_eq!(loaded.decoded.tiles, if repeat { (64, 128) } else { (1, 1) });
+        let screen = (800., 600.);
+        let geometry = super::super::layout(screen, loaded.decoded.size, loaded.decoded.tiles, &loaded.spec);
+        assert_eq!(
+            (geometry[0].width, geometry[0].height),
+            if repeat { (256., 256.) } else { (4., 2.) }
+        );
+        std::fs::remove_file(&path).unwrap();
+        config.background_image.repeat = !repeat;
+        terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
+        for _ in 0..2 {
+            let fallback = prepared(&view, cx).unwrap();
+            assert_retained(&fallback, &loaded);
+            cx.run_until_parked();
+        }
+        assert!(!shared.background_loader().is_loading());
+    }
+}
+
+#[gpui_kit::test]
+fn a_replacement_background_changes_repeat_only_when_its_texture_is_ready(cx: &mut TestAppContext) {
+    for valid in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.png");
+        image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+        let (terminal, shared) = idle(cx);
+        terminal.update(cx, |terminal, cx| {
+            terminal.set_config(background_config(&path, true), cx);
+        });
+        // only explicit preparations drive the load, so a redraw cannot finish both stages between assertions
+        let cx = cx.add_empty_window();
+        let view = cx.new(|cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
+        let initial = loaded(&view, cx);
+        let replacement = dir.path().join("new.png");
+        if valid {
+            image::RgbaImage::from_pixel(4, 2, image::Rgba([40, 50, 60, 255]))
+                .save(&replacement)
+                .unwrap();
+        } else {
+            std::fs::write(&replacement, b"broken image").unwrap();
+        }
+        terminal.update(cx, |terminal, cx| {
+            terminal.set_config(background_config(&replacement, false), cx);
+        });
+        assert_retained(&prepared(&view, cx).unwrap(), &initial);
+        assert!(shared.background_loader().is_loading(), "the decode is in flight");
+        cx.run_until_parked();
+        assert_retained(&prepared(&view, cx).unwrap(), &initial);
+        if valid {
+            assert!(
+                shared.background_loader().pending_bake().is_some(),
+                "the bake is in flight"
+            );
+            let replacement = loaded(&view, cx);
+            assert!(!Arc::ptr_eq(&replacement.decoded, &initial.decoded));
+            assert!(!replacement.spec.repeat);
+            assert_eq!(replacement.decoded.tiles, (1, 1));
+            let rects = super::super::layout((800., 600.), replacement.decoded.size, (1, 1), &replacement.spec);
+            assert_eq!(rects.len(), 1);
+            assert_eq!((rects[0].width, rects[0].height), (4., 2.));
+        } else {
+            cx.run_until_parked();
+            assert_retained(&prepared(&view, cx).unwrap(), &initial);
+        }
+        assert!(!shared.background_loader().is_loading());
+    }
+}
