@@ -135,3 +135,79 @@ fn the_relaunch_fixture_starts_while_other_threads_fork() {
         std::panic::resume_unwind(panic);
     }
 }
+
+/// Names the child that relaunches on Windows.
+#[cfg(windows)]
+const RELAUNCH_CHILD: &str = "HEADLESS_RELAUNCH_CHILD";
+
+/// On Windows the relaunch starts the binary again with the next instance's arguments and returns. It runs in a child
+/// whose output the new instance inherits, so the parent's read ends with the new instance: this test binary, which
+/// refuses the grid option it was started with.
+#[cfg(windows)]
+#[test]
+fn the_binary_is_started_again_with_the_next_instances_arguments() {
+    if std::env::var_os(RELAUNCH_CHILD).is_some() {
+        let options = Options {
+            grid: (120, 40),
+            ..Options::default()
+        };
+        relaunch(&options).unwrap();
+        return;
+    }
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "relaunch::tests::the_binary_is_started_again_with_the_next_instances_arguments",
+            "--nocapture",
+        ])
+        .env(RELAUNCH_CHILD, "1");
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("NGTERM_") {
+            command.env_remove(name);
+        }
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Unrecognized option: 'grid'"), "{output:?}");
+}
+
+/// Names the child, running from a copy of this test binary, that moves its own file away before relaunching.
+#[cfg(windows)]
+const MOVED_CHILD: &str = "HEADLESS_RELAUNCH_MOVED_CHILD";
+
+/// Windows lets a running binary's file be renamed, and the process still names it by its old path: with no file there
+/// the relaunch starts nothing and says why.
+#[cfg(windows)]
+#[test]
+fn a_binary_moved_away_is_not_relaunched() {
+    if let Some(binary) = std::env::var_os(MOVED_CHILD) {
+        let binary = std::path::PathBuf::from(binary);
+        std::fs::rename(&binary, binary.with_extension("moved.exe")).unwrap();
+        assert_eq!(std::env::current_exe().unwrap(), binary);
+        let error = relaunch(&Options::default()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(error.to_string(), "the binary to restart is gone");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let binary = dir.path().join("relaunch-test.exe");
+    ngterm_host::fakes::copy_executable(&std::env::current_exe().unwrap(), &binary).unwrap();
+    let mut command = std::process::Command::new(&binary);
+    command
+        .args([
+            "--exact",
+            "relaunch::tests::a_binary_moved_away_is_not_relaunched",
+            "--nocapture",
+        ])
+        .env(MOVED_CHILD, &binary);
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("NGTERM_") {
+            command.env_remove(name);
+        }
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(!binary.exists(), "the child did not move its binary");
+}
