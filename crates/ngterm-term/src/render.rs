@@ -946,6 +946,210 @@ mod tests {
     }
 
     #[test]
+    fn the_configured_cursor_style_and_blink_reach_the_frame() {
+        use ngterm_core::ghostty_config::{Cursor as Config, CursorStyle as ConfigStyle};
+        for (configured, style) in [
+            (ConfigStyle::Bar, CursorStyle::Bar),
+            (ConfigStyle::Block, CursorStyle::Block),
+            (ConfigStyle::Underline, CursorStyle::Underline),
+            (ConfigStyle::BlockHollow, CursorStyle::BlockHollow),
+        ] {
+            let defaults = CursorDefaults::from_config(&Config {
+                style: configured,
+                style_blink: Some(false),
+                ..Config::default()
+            });
+            assert_eq!(defaults, CursorDefaults { style, blink: false });
+            let mut terminal = terminal(4, 1);
+            defaults.apply(&mut terminal).unwrap();
+            let mut state = Capture::new().unwrap();
+            let frame = capture(&mut terminal, &mut state, &Frame::default()).unwrap();
+            assert_eq!(
+                (frame.cursor.style, frame.cursor.blinking),
+                (style, false),
+                "{configured:?}"
+            );
+        }
+        // an unset blink blinks, as in Ghostty
+        assert_eq!(
+            CursorDefaults::default(),
+            CursorDefaults {
+                style: CursorStyle::Block,
+                blink: true
+            }
+        );
+    }
+
+    #[test]
+    fn only_a_fixed_cursor_color_of_the_config_is_the_themes() {
+        use ngterm_core::chrome::Rgb as ConfigRgb;
+        use ngterm_core::ghostty_config::{Colors as ConfigColors, Cursor as Config, TerminalColor};
+        let colors = ConfigColors {
+            foreground: ConfigRgb::new(1, 2, 3),
+            background: ConfigRgb::new(4, 5, 6),
+            palette: [(3, ConfigRgb::new(7, 8, 9))].into(),
+        };
+        let fixed = ThemeColors::from_config(
+            &colors,
+            &Config {
+                color: Some(TerminalColor::Color(ConfigRgb::new(10, 11, 12))),
+                ..Config::default()
+            },
+        );
+        assert_eq!(
+            fixed,
+            ThemeColors {
+                foreground: Rgb::new(1, 2, 3),
+                background: Rgb::new(4, 5, 6),
+                cursor: Some(Rgb::new(10, 11, 12)),
+                palette: [(3, Rgb::new(7, 8, 9))].into(),
+            }
+        );
+        let following = ThemeColors::from_config(
+            &colors,
+            &Config {
+                color: Some(TerminalColor::CellForeground),
+                ..Config::default()
+            },
+        );
+        assert_eq!(following.cursor, None, "a cursor following the cell is the renderer's");
+    }
+
+    #[test]
+    fn every_osc_22_shape_becomes_its_css_cursor() {
+        use MouseShape as S;
+        let shapes = [
+            ("default", S::Default),
+            ("context-menu", S::ContextMenu),
+            ("help", S::Help),
+            ("pointer", S::Pointer),
+            ("progress", S::Progress),
+            ("wait", S::Wait),
+            ("cell", S::Cell),
+            ("crosshair", S::Crosshair),
+            ("text", S::Text),
+            ("vertical-text", S::VerticalText),
+            ("alias", S::Alias),
+            ("copy", S::Copy),
+            ("move", S::Move),
+            ("no-drop", S::NoDrop),
+            ("not-allowed", S::NotAllowed),
+            ("grab", S::Grab),
+            ("grabbing", S::Grabbing),
+            ("all-scroll", S::AllScroll),
+            ("col-resize", S::ColResize),
+            ("row-resize", S::RowResize),
+            ("n-resize", S::NResize),
+            ("e-resize", S::EResize),
+            ("s-resize", S::SResize),
+            ("w-resize", S::WResize),
+            ("ne-resize", S::NeResize),
+            ("nw-resize", S::NwResize),
+            ("se-resize", S::SeResize),
+            ("sw-resize", S::SwResize),
+            ("ew-resize", S::EwResize),
+            ("ns-resize", S::NsResize),
+            ("nesw-resize", S::NeswResize),
+            ("nwse-resize", S::NwseResize),
+            ("zoom-in", S::ZoomIn),
+            ("zoom-out", S::ZoomOut),
+        ];
+        let mut terminal = terminal(4, 1);
+        for (name, shape) in shapes {
+            terminal.vt_write(format!("\x1b]22;{name}\x07").as_bytes());
+            assert_eq!(MouseShape::from_engine(terminal.mouse_shape()), shape, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_selection_alone_makes_a_frame_whose_rows_carry_it() {
+        let mut terminal = terminal(10, 2);
+        terminal.vt_write(b"one\r\ntwo");
+        let mut state = Capture::new().unwrap();
+        let first = capture(&mut terminal, &mut state, &Frame::default()).unwrap();
+        terminal
+            .set_selection(
+                vt::Point::new(vt::PointTag::Viewport, 0, 1),
+                vt::Point::new(vt::PointTag::Viewport, 1, 1),
+                false,
+            )
+            .unwrap();
+        state.touch();
+        let next = capture(&mut terminal, &mut state, &first).unwrap();
+        assert_eq!(next.seq, first.seq + 1);
+        assert_eq!(next.rows[0].selection(), None);
+        let row = &next.rows[1];
+        assert_eq!(row.selection(), Some((0, 1)));
+        assert_eq!(row.changed(), next.seq);
+        assert_eq!(first.rows[1].changed(), first.seq);
+        assert_eq!(row.cells(), first.rows[1].cells());
+        assert_eq!(row.line(), "two");
+    }
+
+    #[test]
+    fn every_underline_style_and_flag_comes_through() {
+        let mut terminal = terminal(12, 1);
+        terminal.vt_write(b"\x1b[4:1mA\x1b[4:2mB\x1b[4:4mC\x1b[4:5;58;2;9;8;7mD\x1b[0;2;5;7;8;9;53mE\x1b[0m\x1b[4:0mF");
+        let mut state = Capture::new().unwrap();
+        let frame = capture(&mut terminal, &mut state, &Frame::default()).unwrap();
+        let cells = frame.rows[0].cells();
+        let underlines: Vec<Underline> = cells[..6].iter().map(|cell| cell.underline).collect();
+        assert_eq!(
+            underlines,
+            [
+                Underline::Single,
+                Underline::Double,
+                Underline::Dotted,
+                Underline::Dashed,
+                Underline::None,
+                Underline::None
+            ]
+        );
+        assert_eq!(cells[3].underline_color, Some(Rgb::new(9, 8, 7)));
+        assert_eq!(cells[0].underline_color, None);
+        assert_eq!(
+            cells[4].flags,
+            CellFlags::FAINT
+                | CellFlags::BLINK
+                | CellFlags::INVERSE
+                | CellFlags::INVISIBLE
+                | CellFlags::STRIKETHROUGH
+                | CellFlags::OVERLINE
+        );
+        assert_eq!(cells[5].flags, CellFlags::empty());
+    }
+
+    #[test]
+    fn a_wide_character_that_wraps_leaves_a_spacer_head() {
+        let mut terminal = terminal(3, 2);
+        terminal.vt_write("ab日".as_bytes());
+        let mut state = Capture::new().unwrap();
+        let frame = capture(&mut terminal, &mut state, &Frame::default()).unwrap();
+        assert_eq!(frame.rows[0].cells()[2].width, CellWidth::SpacerHead);
+        assert!(frame.rows[0].wrapped());
+        assert_eq!(frame.rows[0].text(2), "");
+        assert_eq!(frame.lines(), ["ab", "日"]);
+    }
+
+    #[test]
+    fn an_unstyled_placeholder_cell_names_no_image_or_placement() {
+        let mut terminal = terminal(4, 1);
+        terminal.vt_write("\u{10EEEE}\u{0305}".as_bytes());
+        let mut state = Capture::new().unwrap();
+        let frame = capture(&mut terminal, &mut state, &Frame::default()).unwrap();
+        let placeholders = frame.rows[0].placeholders();
+        assert_eq!(placeholders.len(), 1);
+        assert_eq!(
+            (
+                placeholders[0].image_id_low,
+                placeholders[0].placement_id,
+                placeholders[0].row
+            ),
+            (0, None, Some(0))
+        );
+    }
+
+    #[test]
     fn a_hold_expires_after_the_timeout() {
         let mut state = Capture::new().unwrap();
         assert!(!state.hold_expired(Instant::now()));

@@ -1633,4 +1633,273 @@ mod tests {
         assert!(lock(&shared.armed).is_none());
         assert_eq!(shared.replies.queued(), b"\x1b]52;c;YWJj\x07".len());
     }
+
+    #[test]
+    fn a_config_and_a_pane_describe_themselves_without_their_callbacks() {
+        let config = PaneConfig {
+            wake: Some(Arc::new(|| {})),
+            ..PaneConfig::new(SIZE)
+        };
+        let described = format!("{config:?}");
+        assert!(
+            described.starts_with("PaneConfig { size: GridSize { cols: 20, rows: 4"),
+            "{described}"
+        );
+        assert!(described.contains("write_limit: 1048576"), "{described}");
+        assert!(described.ends_with("wake: true }"), "{described}");
+        let pane = Pane::spawn(&long_child(false), &config).unwrap();
+        assert_eq!(
+            format!("{pane:?}"),
+            format!("Pane {{ pid: Some({}), .. }}", pane.pid().unwrap())
+        );
+    }
+
+    #[test]
+    fn a_size_the_terminal_refuses_stops_the_child_it_started() {
+        let zero = GridSize {
+            cols: 0,
+            rows: 0,
+            ..SIZE
+        };
+        let error = Pane::spawn(&long_child(true), &PaneConfig::new(zero)).unwrap_err();
+        assert!(matches!(error, PaneError::Terminal(_)), "{error:?}");
+        let pid = LAST_CHILD.with(std::cell::Cell::get).unwrap();
+        assert!(gone(pid), "child {pid} is left");
+    }
+
+    /// Runs `start` on a fresh thread whose thread `fail` cannot start, returning its error.
+    fn failed_thread<T: std::fmt::Debug>(
+        fail: &'static str,
+        start: impl FnOnce() -> Result<T, PaneError> + Send + 'static,
+    ) -> PaneError {
+        std::thread::spawn(move || {
+            FAIL_THREAD.with(|cell| cell.set(Some(fail)));
+            start().unwrap_err()
+        })
+        .join()
+        .unwrap()
+    }
+
+    #[test]
+    fn a_live_pane_that_fails_to_start_a_thread_reports_which() {
+        for thread in ["pane-io", "pane-live-out", "pane-live"] {
+            let error = failed_thread(thread, || {
+                Pane::attach_live(Err(Outcome::failed("never attached")), &PaneConfig::new(SIZE))
+            });
+            assert_eq!(
+                error,
+                PaneError::Pty(format!("cannot start the {thread} thread: injected"))
+            );
+        }
+    }
+
+    #[test]
+    fn a_painted_pane_that_fails_to_start_a_thread_reports_which() {
+        let dir = tempfile::tempdir().unwrap();
+        for thread in ["pane-io", "pane-paint"] {
+            let file = dir.path().join("body");
+            let error = failed_thread(thread, move || Pane::paint(file, &PaneConfig::new(SIZE)));
+            assert_eq!(
+                error,
+                PaneError::Pty(format!("cannot start the {thread} thread: injected"))
+            );
+        }
+    }
+
+    #[test]
+    fn a_pane_with_no_pty_has_no_process_group_password_or_queue() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = Pane::attach_live(Err(Outcome::failed("never attached")), &PaneConfig::new(SIZE)).unwrap();
+        let painted = Pane::paint(dir.path().join("body"), &PaneConfig::new(SIZE)).unwrap();
+        for pane in [&live, &painted] {
+            assert_eq!(pane.pid(), None);
+            assert_eq!(pane.foreground_pid(), None);
+            assert!(!pane.password_input());
+            assert_eq!(pane.queued_input(), 0);
+        }
+        // a painted pane takes no input
+        painted.write(b"typed").unwrap();
+        assert_eq!(painted.queued_input(), 0);
+        // a stream pane's program runs elsewhere: its embedder's channel says nothing of it
+        let (stream, _feed, _out) = Pane::stream(&PaneConfig::new(SIZE)).unwrap();
+        assert_eq!(stream.pid(), None);
+        assert_eq!(stream.foreground_pid(), None);
+        assert!(!stream.password_input());
+    }
+
+    #[test]
+    fn a_live_panes_facts_follow_its_kitty_limit_and_color_scheme() {
+        let pane = Pane::attach_live(Err(Outcome::failed("never attached")), &PaneConfig::new(SIZE)).unwrap();
+        let Io::Live(live) = &pane.io else {
+            panic!("not live");
+        };
+        let facts = || live.metadata_of(&pane.shared, pane.color_scheme());
+        assert!(facts().kitty_graphics);
+        pane.set_kitty_image_limit(0).unwrap();
+        assert!(!facts().kitty_graphics, "zero turns the protocol off");
+        pane.set_kitty_image_limit(1_000_000).unwrap();
+        assert!(facts().kitty_graphics);
+        let other = if pane.color_scheme() == ColorScheme::Dark {
+            ColorScheme::Light
+        } else {
+            ColorScheme::Dark
+        };
+        pane.set_color_scheme(other);
+        assert_eq!(pane.color_scheme(), other);
+        assert_eq!(
+            facts().color_scheme,
+            Some(match other {
+                ColorScheme::Light => ngterm_session::protocol::ColorScheme::Light,
+                ColorScheme::Dark => ngterm_session::protocol::ColorScheme::Dark,
+            })
+        );
+        // the server answers and reports the scheme for a live pane: its terminal queues nothing
+        assert_eq!(pane.shared.replies.queued(), 0);
+    }
+
+    #[test]
+    fn a_poisoned_terminal_lock_still_paints() {
+        let (events, _received) = mpsc::channel();
+        let shared = Arc::new(shared(&PaneConfig::new(SIZE), events, mailbox()).unwrap());
+        lock(&shared.vt).terminal.vt_write(b"kept");
+        let poisoner = Arc::clone(&shared);
+        let panicked = std::thread::spawn(move || {
+            let _vt = lock(&poisoner.vt);
+            panic!("poisoning the VT lock on purpose");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(shared.vt.is_poisoned());
+        let snapshot = frame(&shared);
+        assert!(!snapshot.stale);
+        assert_eq!(snapshot.frame.lines()[0], "kept");
+    }
+
+    // the programs are POSIX shell scripts
+    #[cfg(unix)]
+    fn wait_events(pane: &Pane, mut done: impl FnMut(&[PaneEvent]) -> bool) -> Vec<PaneEvent> {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut events = Vec::new();
+        loop {
+            events.extend(pane.take_events());
+            if done(&events) {
+                return events;
+            }
+            assert!(Instant::now() < deadline, "timed out: {events:?}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[cfg(unix)]
+    fn exited(events: &[PaneEvent]) -> bool {
+        events.iter().any(|event| matches!(event, PaneEvent::Exited(_)))
+    }
+
+    #[cfg(unix)]
+    fn sh(script: &str, dir: &std::path::Path) -> PaneCommand {
+        PaneCommand::new("/bin/sh").arg("-c").arg(script).cwd(dir)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_stats_count_what_the_program_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let pane = Pane::spawn(&sh("printf counted; exec sleep 30", dir.path()), &PaneConfig::new(SIZE)).unwrap();
+        wait_for(&pane, "counted");
+        let stats = pane.stats();
+        assert!(stats.bytes >= 7, "{stats:?}");
+        assert!(stats.batches >= 1, "{stats:?}");
+        assert!(stats.max_hold_nanos <= stats.vt_nanos, "{stats:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_status_file_that_cannot_be_written_does_not_hold_up_the_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("missing").join("status");
+        let config = PaneConfig {
+            status_file: Some(file.clone()),
+            ..PaneConfig::new(SIZE)
+        };
+        let pane = Pane::spawn(&sh("exit 3", dir.path()), &config).unwrap();
+        let events = wait_events(&pane, exited);
+        let code = events.iter().find_map(|event| match event {
+            PaneEvent::Exited(status) => Some(status.code),
+            _ => None,
+        });
+        assert_eq!(code, Some(3));
+        assert!(!file.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_after_the_childs_exit_are_denied_without_asking() {
+        let dir = tempfile::tempdir().unwrap();
+        // the first read waits for an answer nobody gives until the child is gone; the second is denied at once
+        let script = "printf '\\033]52;c;?\\007first \\033]52;c;?\\007second'; exit 0";
+        let pane = Pane::spawn(&sh(script, dir.path()), &PaneConfig::new(SIZE)).unwrap();
+        let events = wait_events(&pane, exited);
+        let asked = events
+            .iter()
+            .filter(|event| matches!(event, PaneEvent::ClipboardRead(_)))
+            .count();
+        assert_eq!(asked, 1, "{events:?}");
+        wait_for(&pane, "first second");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hold_expires_while_a_read_waits_for_its_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = "printf 'held\\033[?2026h\\033]52;c;?\\007'; exec sleep 30";
+        let pane = Pane::spawn(&sh(script, dir.path()), &PaneConfig::new(SIZE)).unwrap();
+        let events = wait_events(&pane, |events| {
+            events.iter().any(|event| matches!(event, PaneEvent::ClipboardRead(_)))
+        });
+        assert!(!exited(&events));
+        assert!(lock(&pane.shared.capture).held());
+        // no paint from here: the IO worker, parked on the read, ends the hold itself once it expired
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while lock(&pane.shared.capture).held() {
+            assert!(Instant::now() < deadline, "the hold never ended");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!lock(&pane.shared.vt).terminal.mode(vt::Mode::SYNC_OUTPUT));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_past_the_high_mark_waits_for_a_read_and_resumes_after_its_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        // a read, then more output than the mailbox takes before it pauses the PTY's reads
+        let script =
+            "printf '\\033]52;c;?\\007'; head -c 3000000 /dev/zero | tr '\\0' x; printf '\\r\\nthe end'; exec sleep 30";
+        let pane = Pane::spawn(&sh(script, dir.path()), &PaneConfig::new(SIZE)).unwrap();
+        let events = wait_events(&pane, |events| {
+            events.iter().any(|event| matches!(event, PaneEvent::ClipboardRead(_)))
+        });
+        let id = events
+            .iter()
+            .find_map(|event| match event {
+                PaneEvent::ClipboardRead(read) => Some(read.id),
+                _ => None,
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while pane.shared.mailbox.pending() < crate::mailbox::HIGH_WATER {
+            assert!(Instant::now() < deadline, "the reads never paused");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        pane.answer_clipboard_read(id, ClipboardAnswer::Denied);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let frame = pane.frame().frame;
+            if frame.lines().iter().any(|line| line == "the end") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the output never resumed");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(pane.stats().bytes > 3_000_000);
+    }
 }

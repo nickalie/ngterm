@@ -277,4 +277,63 @@ mod tests {
         wait_line(&pane, 0, "two");
         assert!(!lock(&pane.shared().vt).pending_clear);
     }
+
+    fn spawn(script: &str, dir: &std::path::Path) -> Pane {
+        let command = PaneCommand::new("/bin/sh").arg("-c").arg(script).cwd(dir);
+        Pane::spawn(&command, &PaneConfig::new(SIZE)).unwrap()
+    }
+
+    #[test]
+    fn an_adjusted_selection_inside_the_viewport_leaves_it_where_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let pane = spawn("stty -echo; seq 1 10; printf 'a b'; exec sleep 5", dir.path());
+        wait_line(&pane, 3, "a b");
+        pane.scroll(crate::Scroll::Row(2));
+        wait_line(&pane, 0, "3");
+        // the "4" on viewport row 1; its next non-blank cell is the "5" below it, still in view
+        pane.select(
+            crate::GridPoint::viewport(0, 1),
+            crate::GridPoint::viewport(0, 1),
+            false,
+        )
+        .unwrap();
+        assert!(pane.adjust_selection(SelectionAdjust::Right));
+        assert_eq!(
+            pane.format(FormatRegion::Selection, TextFormat::Plain, true).as_deref(),
+            Some("4\n5")
+        );
+        assert_eq!(pane.frame().frame.lines()[0], "3", "the viewport did not move");
+    }
+
+    #[test]
+    fn a_clear_waiting_while_the_program_enters_the_alternate_screen_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = "stty -echo; printf 'one\\r\\ntwo'; read _; printf 'h'; printf '\\033[?1049l!'; exec sleep 5";
+        let pane = spawn(script, dir.path());
+        wait_line(&pane, 1, "two");
+        // the program's output stopped in the middle of the switch to the alternate screen
+        lock(&pane.shared().vt).terminal.vt_write(b"\x1b[?1049");
+        assert!(pane.clear_screen());
+        assert!(lock(&pane.shared().vt).pending_clear);
+        pane.write(b"\n").unwrap();
+        // the clear reached its ground point on the alternate screen: nothing was cleared, and nothing waits
+        wait_line(&pane, 1, "two!");
+        assert_eq!(pane.frame().frame.lines()[0], "one");
+        assert!(!lock(&pane.shared().vt).pending_clear);
+    }
+
+    #[test]
+    fn a_clear_with_the_cursor_on_the_top_row_drops_only_the_scrollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let pane = spawn("stty -echo; seq 1 10; printf '\\033[Htop'; exec sleep 5", dir.path());
+        wait_line(&pane, 0, "top");
+        assert!(pane.format(FormatRegion::History, TextFormat::Plain, true).is_some());
+        assert!(pane.clear_screen());
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while pane.format(FormatRegion::History, TextFormat::Plain, true).is_some() {
+            assert!(Instant::now() < deadline, "the scrollback stayed");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(pane.frame().frame.lines(), ["top", "9", "10", ""]);
+    }
 }

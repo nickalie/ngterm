@@ -179,4 +179,106 @@ mod tests {
             Ok(Some(crate::Outgoing::Bytes(b"\x1b[0n\x0c".to_vec())))
         );
     }
+
+    #[test]
+    fn a_new_stream_takes_the_replies_from_then_on() {
+        let outlet = ReplyOutlet::default();
+        let (first, second) = (Arc::new(Outbound::new(16)), Arc::new(Outbound::new(16)));
+        outlet.attach_stream(&first);
+        outlet.push_reply(b"one");
+        outlet.attach_stream(&second);
+        outlet.push_reply(b"two");
+        assert_eq!(first.next(None), Ok(Some(crate::Outgoing::Bytes(b"one".to_vec()))));
+        assert_eq!(second.next(None), Ok(Some(crate::Outgoing::Bytes(b"two".to_vec()))));
+    }
+
+    #[test]
+    fn a_closed_outlet_takes_no_stream_and_has_no_kitty_answers() {
+        let outlet = ReplyOutlet::default();
+        outlet.push_reply(b"\x1b_Gi=1;OK\x1b\\");
+        // only a live pane's outlet keeps Kitty answers for a barrier
+        #[cfg(feature = "local")]
+        assert!(outlet.take_kitty_answers().is_empty());
+        outlet.close();
+        let outbound = Arc::new(Outbound::new(16));
+        outlet.attach_stream(&outbound);
+        outlet.push_reply(b"\x1b[0n");
+        outlet.push_input(b"\x0c");
+        assert_eq!(outbound.queued(), 0);
+        assert_eq!(outlet.queued(), 0);
+    }
+
+    // the program is a POSIX shell script
+    #[cfg(all(feature = "local", unix))]
+    mod actor {
+        use std::time::{Duration, Instant};
+
+        use ngterm_pty::{Actor, ActorConfig, Command, Size, Spawned};
+
+        use super::*;
+
+        const SIZE: Size = Size {
+            rows: 4,
+            cols: 40,
+            cell_width: 8,
+            cell_height: 16,
+        };
+
+        /// A PTY running `script`, its actor collecting the output.
+        fn actor(script: &str) -> (ActorHandle, ngterm_pty::Child, Arc<Mutex<Vec<u8>>>) {
+            let Spawned { master, child } =
+                ngterm_pty::spawn(&Command::new("/bin/sh").arg("-c").arg(script), SIZE).unwrap();
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let read = Arc::clone(&output);
+            let config = ActorConfig::new(
+                "outlet-test",
+                master,
+                Box::new(move |bytes| {
+                    lock(&read).extend_from_slice(bytes);
+                    Vec::new()
+                }),
+            );
+            (Actor::spawn(config).unwrap(), child, output)
+        }
+
+        fn wait_output(output: &Mutex<Vec<u8>>, needle: &str) {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                let text = String::from_utf8_lossy(&lock(output)).into_owned();
+                if text.contains(needle) {
+                    return;
+                }
+                assert!(Instant::now() < deadline, "timed out: {text:?}");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        #[test]
+        fn the_replies_made_before_the_actor_reach_the_program_first() {
+            let (handle, mut child, output) = actor("stty -echo; read first; read second; echo \"got $first,$second\"");
+            let outlet = ReplyOutlet::default();
+            outlet.push_reply(b"one\n");
+            outlet.attach(&handle);
+            outlet.push_input(b"two\n");
+            wait_output(&output, "got one,two");
+            outlet.close();
+            handle.shutdown();
+            child.wait().unwrap();
+        }
+
+        #[test]
+        fn a_closed_outlet_does_not_take_the_actor() {
+            let (handle, mut child, _output) = actor("exec sleep 30");
+            let outlet = ReplyOutlet::default();
+            outlet.push_reply(b"early");
+            outlet.close();
+            outlet.attach(&handle);
+            outlet.push_reply(b"late");
+            assert_eq!(outlet.queued(), 0);
+            assert_eq!(handle.queued(), 0, "nothing reached the actor");
+            child.killer().kill_tree().unwrap();
+            handle.shutdown();
+            child.wait().unwrap();
+        }
+    }
 }
