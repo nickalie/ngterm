@@ -511,29 +511,39 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[gpui_kit::test]
     fn strip_actions_reload_hide_copy_and_close_the_model_page(cx: &mut gpui_kit::TestAppContext) {
-        use crate::html_overlay::registry::tests::{Model, url_overlay};
+        use crate::html_overlay::page::Storage;
+        use crate::html_overlay::registry::tests::{Model, register, replies, url_overlay};
+        let _web = replies();
         let source = url_overlay();
         let mut model = Model::new(&source);
         let poster = model.poster();
+        register(&source, Storage::Ephemeral);
+        cx.update(|cx| act(source.id, StripItem::CopyLink, &poster, cx));
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some("https://example.invalid/start")
+        );
         cx.update(|cx| act(source.id, StripItem::Reload, &poster, cx));
         model.drain();
         assert_eq!(model.overlay().reload_revision, 1);
         assert_eq!(model.overlay().reload_target, HtmlReloadTarget::Current);
         cx.update(|cx| act(source.id, StripItem::Hide, &poster, cx));
         model.drain();
-        let session = model
-            .state
-            .core
-            .library()
-            .store(model.window)
-            .unwrap()
-            .session(model.session)
-            .unwrap();
-        assert!(session.overlay_hidden(None));
+        assert!(model.session_overlay_hidden());
         cx.update(|cx| act(source.id, StripItem::Close, &poster, cx));
         model.drain();
         assert!(model.state.core.html_overlay_slot(source.id).is_none());
-        // late strip callbacks have no page to act on
+        // late strip callbacks leave the page that took the slot alone
+        let next = url_overlay();
+        model
+            .state
+            .core
+            .library_mut()
+            .store_mut(model.window)
+            .unwrap()
+            .open_html_overlay(model.session, None, next.clone(), None, None)
+            .unwrap();
+        assert!(!model.session_overlay_hidden());
         for item in [
             StripItem::Reload,
             StripItem::Hide,
@@ -543,7 +553,9 @@ mod tests {
             cx.update(|cx| act(source.id, item, &poster, cx));
         }
         model.drain();
-        assert!(model.state.core.html_overlay_slot(source.id).is_none());
+        assert_eq!(model.overlay().id, next.id);
+        assert_eq!(model.overlay().reload_revision, 0);
+        assert!(!model.session_overlay_hidden());
     }
 
     #[test]

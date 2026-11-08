@@ -1,20 +1,23 @@
 //! The forwarding adapter against the real engine, isolated because `WebKit` starts once per process.
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use ngterm_wpe::{Event, FrameContent, FrameMode, HostConfig, InjectionTime, MessageHandler, Settings};
+use ngterm_wpe::{Event, FrameMode, HostConfig, InjectionTime, MessageHandler, Settings};
 
 use super::*;
 
 const CHILD: &str = "html_overlay::engine::tests::real_engine_child";
 const WAIT: Duration = Duration::from_secs(30);
+/// The child's exit code when it ran and passed: a stale `CHILD` selects no test, and that exits 0.
+const PASSED: i32 = 77;
 
 #[test]
 fn engine_commands_reach_webkit_and_its_replies_reach_the_page() {
     let home = tempfile::tempdir().unwrap();
-    let mut command = Command::new(std::env::current_exe().unwrap());
+    // under the vendored package's overlay when that is the provider, so the engine runs in this process
+    let mut command = ngterm_wpe::launcher::command(&std::env::current_exe().unwrap());
     command
         .args(["--exact", CHILD, "--ignored", "--nocapture"])
         .env_clear()
@@ -50,13 +53,14 @@ fn engine_commands_reach_webkit_and_its_replies_reach_the_page() {
     let waiter = std::thread::spawn(move || send.send(child.wait_with_output()).unwrap());
     let output = received.recv_timeout(Duration::from_secs(120));
     if output.is_err() {
-        // SAFETY: the pid is our unreaped child; this ends only that isolated test process.
+        // SAFETY: the pid is our unreaped child; this ends only that isolated test process (bwrap ends it with itself).
         unsafe { libc::kill(pid, libc::SIGKILL) };
     }
     waiter.join().unwrap();
     let output = output.expect("the engine child exceeded its deadline").unwrap();
-    assert!(
-        output.status.success(),
+    assert_eq!(
+        output.status.code(),
+        Some(PASSED),
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -190,7 +194,7 @@ fn real_engine_child() {
         assert!(matches!(error, Event::ViewFailed { message, .. } if message == "no such browser store"));
         fixture.stop();
     });
-    ngterm_wpe::exit_process(i32::from(result.is_err()));
+    ngterm_wpe::exit_process(if result.is_ok() { PASSED } else { 101 });
 }
 
 fn history_and_scripts(fixture: &Fixture, view: ViewId) {
@@ -294,7 +298,10 @@ fn input_and_geometry(fixture: &Fixture, view: ViewId) {
         "\"[\\\"Escape\\\"]\""
     );
     assert_eq!(fixture.evaluate(view, "innerWidth"), "300");
+    // an SHM engine leaves the page alone (a dmabuf one would reload it): its script state stays
     web.fall_back_to_shm(view);
-    let frame = fixture.wait(|event| matches!(event, Event::Frame(_)));
-    assert!(matches!(frame, Event::Frame(frame) if matches!(frame.content, FrameContent::Shm(_))));
+    assert_eq!(
+        fixture.evaluate(view, "JSON.stringify(window.keys)"),
+        "\"[\\\"Escape\\\"]\""
+    );
 }

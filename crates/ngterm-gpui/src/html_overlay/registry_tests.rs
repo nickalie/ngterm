@@ -108,7 +108,7 @@ pub(crate) fn replies() -> Rc<Recorded> {
     web
 }
 
-fn register(overlay: &HtmlOverlay, storage: Storage) -> Rc<Page> {
+pub(crate) fn register(overlay: &HtmlOverlay, storage: Storage) -> Rc<Page> {
     let page = new_page(overlay, storage);
     with(|registry| registry.pages.insert(page.id(), page.clone()));
     page
@@ -493,6 +493,11 @@ impl Model {
         Arc::downgrade(&self.main_loop)
     }
 
+    /// How many posted tasks wait for [`Model::drain`].
+    pub(crate) fn pending(&self) -> usize {
+        self.posted.0.lock().unwrap().len()
+    }
+
     pub(crate) fn drain(&mut self) {
         let tasks = std::mem::take(&mut *self.posted.0.lock().unwrap());
         for task in tasks {
@@ -508,6 +513,18 @@ impl Model {
             .unwrap()
             .html_overlay(self.session, None)
             .unwrap()
+    }
+
+    /// Whether the session's overlays are hidden.
+    pub(crate) fn session_overlay_hidden(&self) -> bool {
+        self.state
+            .core
+            .library()
+            .store(self.window)
+            .unwrap()
+            .session(self.session)
+            .unwrap()
+            .overlay_hidden(None)
     }
 }
 
