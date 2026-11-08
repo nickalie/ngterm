@@ -143,7 +143,7 @@ full error text directly.
 
 The Rust build is held to upstream's contract, its capability branches included: it claims the capabilities listed
 in [docs/rust-build.md](docs/rust-build.md) > Rust target profile, and where a test branches on a capability it
-takes upstream's branch unless that list says otherwise. The Rust claim is v0.40.0
+takes upstream's branch unless that list says otherwise. The Rust claim is v0.41.1
 (docs/rust-build.md > `version` extension), so tests introduced through that release are eligible. The catalog's
 reference release and the implementation claim are independent: updating the catalog alone never unlocks `since`
 tests. Host capability skips remain recorded separately from passing coverage.
@@ -153,6 +153,10 @@ A Rust-only extension (today `live-any-shell`, Live sessions in bash and PowerSh
 agent record behind the Android chat view; and `pages-survive`, a page parked while no presenter shows it) is a
 capability the reference does not claim: its tests skip as unsupported there and are validated by the Rust CI with
 `--must-pass` on the capability (see rust-build.md > Rust-only extensions).
+A platform adaptation no test reads differently stays a recorded divergence, with no capability of its own. v0.41's
+are in rust-build.md > Release behavior at v0.41.1: Live panes also start a bash or PowerShell that a ghostty
+`command` names (under `live-any-shell`), a clicked HTML page on Windows has its link hints made inert, and the
+compact sidebar's metrics apply upstream's trims to this build's own row geometry.
 
 ## Rust runner and ratchet
 

@@ -829,11 +829,11 @@ optionally `crates/ngterm-core/src/{model/session.rs,commands/panes.rs}`; a real
 `conformance/README.md`, `conformance/docs/rust-build.md`; `conformance/rust-passing*.txt`.
 **Conformance:** every new id from Tasks 1-23 and the existing ratchet.
 
-- [ ] Bump `PARITY_LEVEL` and its mirrors once every task above is done.
-- [ ] Run the newly unlocked `since("0.41.0")`/`since("0.41.1")` cases and the existing ratchet; add actually passing
+- [x] Bump `PARITY_LEVEL` and its mirrors once every task above is done.
+- [x] Run the newly unlocked `since("0.41.0")`/`since("0.41.1")` cases and the existing ratchet; add actually passing
   ids from the reports to the right OS's ratchet; never remove an old id to hide a failure; no skip counts.
-- [ ] README.md (Parity: what v0.41.x brought and how each OS does it: the reveal chord, file stamps, the Find
+- [x] README.md (Parity: what v0.41.x brought and how each OS does it: the reveal chord, file stamps, the Find
   chord), conformance/README.md and rust-build.md (the recorded divergences: bash/pwsh Live command shells, the
   Windows preconnect handling, the density metrics) describe what changed.
-- [ ] manual (user): push, run `reference-macos.yml` on the branch, open the PR so the cross-platform jobs and the
-  full suite run.
+- [x] manual (user) — left to the user: push, run `reference-macos.yml` on the branch, open the PR so the
+  cross-platform jobs and the full suite run.

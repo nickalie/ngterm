@@ -265,8 +265,11 @@ impl Native {
     }
 
     /// CDP's named world isolates the trusted Markdown renderer from the document's global objects.
-    /// Registration finishes before any document load, and does not enable authored JavaScript.
+    /// Registration finishes before any document load, and does not enable authored JavaScript. The page domain is
+    /// enabled first: without it the renderer side keeps the script but never runs it, so no world is created.
     fn add_isolated_document_script(&self, script: &str) -> Result<(), String> {
+        self.devtools_now("Page.enable", &serde_json::json!({}))
+            .map_err(|error| format!("the isolated document renderer was not added: {error}"))?;
         let parameters = serde_json::json!({
             "source": script,
             "worldName": super::super::documents::WORLD,

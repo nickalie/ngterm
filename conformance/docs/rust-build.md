@@ -9,7 +9,7 @@ Rust build reports, and no other key (`assert_version_result` in `agterm_conform
 ```json
 {"app": {"version": "0.1.0", "commit": "abc1234"},
  "installed": {"version": "0.1.0", "commit": "abc1234"},
- "conformance": {"parityLevel": "0.40.0", "capabilities": ["posix-shell", "live-sessions"]}}
+ "conformance": {"parityLevel": "0.41.1", "capabilities": ["posix-shell", "live-sessions"]}}
 ```
 
 - `app.version`: a non-empty string; `app.commit` is optional, and the CLI's `version` prints `version (commit)`.
@@ -22,9 +22,9 @@ Rust build reports, and no other key (`assert_version_result` in `agterm_conform
 - `conformance.parityLevel`: the upstream version whose behavior the build claims, a dotted version with an optional
   `v` (no suffix such as `-beta`).
   A test marked `since(V)` above it skips as `not-yet-at-level`.
-  The Rust build claims `0.40.0` (`PARITY_LEVEL` in `ngterm-proto`), raised after the release's feature ports.
+  The Rust build claims `0.41.1` (`PARITY_LEVEL` in `ngterm-proto`), raised after the release's feature ports.
   The catalog independently names the reference release: a mechanical catalog bump does not raise the Rust claim.
-  Tests through v0.40.0 are eligible at this level; capabilities and host requirements still govern execution.
+  Tests through v0.41.1 are eligible at this level; capabilities and host requirements still govern execution.
 - `conformance.capabilities`: names from the vocabulary below; a test whose `requires` names one missing skips as
   `unsupported`.
   Names outside the vocabulary match nothing.
@@ -296,6 +296,43 @@ The [README parity notes](../../README.md#parity) describe the user-facing addit
 - Managed attach cleanup preserves screen and scrollback, resetting reports, SGR and colors; a creation command
   that has ended is never replaced by a new login shell. Linux runtime conformance covers the held output; Windows
   ConPTY and native macOS rendering remain platform checks.
+
+## Release behavior at v0.41.1
+
+The claim covers v0.41.0 and v0.41.1; the [README parity notes](../../README.md#parity) describe the user-facing
+additions and how each OS does them. Their observable contracts are:
+
+- Text pages: `session.overlay.open` takes `textFile` (with an optional `line`) and tree `htmlOverlays[].text` names
+  the source; a log page adds `tail` and `followFile`, refused without a text file, with a line or out of `1...100000`,
+  and reports its tail and follow state; `session.overlay.follow` sets `on|off|toggle` and answers the state it left.
+  `session.overlay.search` sets, steps and closes a text page's search, a step pausing a following log page;
+  `session.overlay.changes` steps a diff page between changes (`text.changes`). A step the renderer does not answer
+  is refused `page not loaded`. Clicked pages carry `clicked`, clicked HTML files `document`; a socket page is never
+  marked clicked.
+- Presented sessions: image, Markdown and text pages go only to a presenter whose viewer lists `page.content`; the
+  page serve channel serves a content page's files under the page's own rules. Status shapes go to a viewer as the
+  original six unless it lists `status.shapes`.
+- `tree.sidebarDensity` (`default` or `compact`, set app-wide by `sidebar.density`, which echoes it) is always
+  reported; `tree.snapshotUnsaved` is `true` while a window's state file cannot be written and absent otherwise.
+- Tints take the five new names and `#rrggbb`, read back lowercase; info markup takes the new names but no hex.
+
+Recorded divergences, each a platform adaptation of upstream's macOS mechanism rather than a capability:
+
+- Live command shells: upstream starts the zsh or fish a ghostty `command` names; this build also starts bash and
+  PowerShell (`pwsh`/`powershell` on Windows, a drive or UNC absolute path), the shells it wraps under
+  `live-any-shell`. A bare `bash -l` is a shell here where upstream ignores it, PowerShell's login and interactive
+  flags count in any case, and only one `direct:`/`shell:` prefix is stripped, as Ghostty reads one. Upstream's
+  `SHELL` re-export in the attach line works around macOS's `login -flp`, which this build does not run.
+- Windows preconnect: WebView2 has no per-page switch for link hints, so a clicked HTML page on Windows renames
+  every `<link>` start tag to an inert element and turns DNS prefetch off on top of the request filter; under the
+  page's CSP no link could load anything anyway. On WPE a clicked link may still open a TCP connection without a
+  request, the caveat upstream documents for WKWebView, and the tests assert no request rather than no connection.
+- Density metrics: compact takes upstream's deltas off this build's own default geometry (row padding 13 to 8, the
+  nesting indent 20 to 16, the info line's lift and bottom padding 6 to 4, the pill's vertical inset 1.5 to 0.5, the
+  name lifted 1 point), so compact rows are 5 points shorter at every font size as upstream's, starting from rows 2
+  points shorter than upstream's. With workspace chevrons hidden, nested rows shift by the strip less a disclosure
+  width, since session icons sit under their workspace's here. To fit the new picker, Settings ▸ Appearance pairs its
+  Terminal fields in two columns and the popup takes upstream's 540x710.
 
 ## Pane messaging identity
 

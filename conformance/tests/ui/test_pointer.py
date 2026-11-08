@@ -8,6 +8,7 @@ Every test leaves the shared instance's workspaces, sidebar and selection as it 
 import time
 
 import pytest
+from agterm_conformance.drivers.base import DriverError
 from agterm_conformance.match import assert_ok, find_session, sessions, workspaces
 from agterm_conformance.wait import WaitTimeout, wait_until
 
@@ -30,6 +31,16 @@ ABOVE_ROW = (0.5, 0.05)
 def _row(ui, ui_id, name):
     """The `ui_id` row whose text is `name`: rows share their id, the text tells them apart."""
     return wait_until(lambda: next((row for row in ui.all(ui_id) if ui.text(row) == name), None), timeout=ui.timeout)
+
+
+def _open_submenu(ui, name):
+    """Opens the open menu's `name` submenu: pressed where its item takes a press (AppKit's), else under the pointer,
+    as a GPUI submenu opens on hover and its item has no press action."""
+    item = ui.menu_item(name)
+    try:
+        ui.click(item)
+    except DriverError:
+        ui.hover(item)
 
 
 def _workspace(ctl, name):
@@ -248,7 +259,7 @@ def test_a_hex_tinted_rows_menu_lists_its_custom_entry(ctl, ui):
         sid = _named_sessions(ctl, wid, ["ui-hex-row"])["ui-hex-row"]
         assert_ok(ctl.request("session.tint", sid, mode="set", tint="#3A7BD5", tintOn=["name"]))
         ui.mouse_click(_row(ui, "session-row", "ui-hex-row"), button="right")
-        ui.click(ui.menu_item("Tint"))
+        _open_submenu(ui, "Tint")
         ui.menu_item("Custom #3a7bd5")
         ui.click(ui.menu_item("Mint"))
         ctl.wait_tree(lambda tree: (find_session(tree, sid).get("tint"), find_session(tree, sid).get("tintOn"))
