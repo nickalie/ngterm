@@ -357,4 +357,84 @@ mod tests {
         a.store.remote_pane_resumed(primary, a.id);
         assert!(!a.store.remote_pane_is_held(primary, a.id));
     }
+
+    fn core_with(a: Attached) -> (Core, Uuid) {
+        let mut library = crate::model::WindowLibrary::new("/tmp");
+        let window = library.new_window(None);
+        *library.store_mut(window).unwrap() = a.store;
+        let core = Core::new(
+            crate::CoreConfig {
+                app: ngterm_proto::AppIdentity::from_recorded("0.1.0", None),
+                capabilities: Vec::new(),
+            },
+            crate::CoreState {
+                library,
+                settings: crate::persist::AppSettings::default(),
+                persistence: None,
+            },
+        );
+        (core, a.id)
+    }
+
+    #[test]
+    fn an_invalid_layout_cannot_replace_the_last_confirmed_layout() {
+        let mut a = attached();
+        let good = layout(vec![a.origin_a, a.origin_b], a.origin_a, Some("vertical"), true);
+        a.store.apply_remote_layout(&good, a.id);
+        assert!(
+            a.store
+                .apply_remote_layout(&PresentationLayout::invalid(), a.id)
+                .is_empty()
+        );
+        assert_eq!(
+            a.store.session(a.id).unwrap().remote_presentation().unwrap().layout,
+            Some(good.clone())
+        );
+        assert!(a.store.apply_remote_layout(&good, Uuid::new_v4()).is_empty());
+        let missing = Uuid::new_v4();
+        assert!(!a.store.can_close_removed_remote_pane(missing, missing));
+        a.store.remote_pane_held(missing, missing);
+        a.store.remote_pane_held(missing, a.id);
+        assert!(!a.store.remote_pane_is_held(missing, a.id));
+    }
+
+    #[test]
+    fn a_removed_split_without_a_terminal_closes_immediately() {
+        let mut a = attached();
+        drop(a.store.session_mut(a.id).unwrap().split_surface.take());
+        let removal = layout(vec![a.origin_a], a.origin_a, None, false);
+        let (mut core, id) = core_with(a);
+        core.apply_remote_layout(&removal, id);
+        let row = core.library().held_session(id).unwrap();
+        assert!(!row.split.exists);
+        assert!(row.split_pane_identity.is_none());
+        assert!(row.surface.is_present());
+    }
+
+    #[test]
+    fn the_last_terminal_waits_for_ssh_to_end_after_origin_removal() {
+        let mut a = attached();
+        a.store.close_split(a.id);
+        let primary = a.store.session(a.id).unwrap().pane_identity;
+        let removal = layout(vec![a.origin_b], a.origin_b, None, false);
+        let (mut core, id) = core_with(a);
+        core.apply_remote_layout(&removal, id);
+        assert!(core.library().held_session(id).unwrap().surface.is_present());
+        assert!(core.remote_pane_held(id, &crate::pane_env::uuid_string(primary)));
+        assert!(core.library().store_for_session(id).is_none());
+    }
+
+    #[test]
+    fn a_removed_primary_without_a_terminal_keeps_the_row() {
+        let mut a = attached();
+        drop(a.store.session_mut(a.id).unwrap().surface.take());
+        let primary = a.store.session(a.id).unwrap().pane_identity;
+        let removal = layout(vec![a.origin_b], a.origin_b, None, false);
+        let (mut core, id) = core_with(a);
+        core.apply_remote_layout(&removal, id);
+        assert!(!core.remote_pane_held(id, &crate::pane_env::uuid_string(primary)));
+        assert!(core.library().held_session(id).is_some());
+        assert!(!core.remote_pane_held(id, "bad token"));
+        assert!(!core.remote_pane_held(Uuid::new_v4(), &crate::pane_env::uuid_string(primary)));
+    }
 }

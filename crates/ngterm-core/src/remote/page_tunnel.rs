@@ -250,4 +250,40 @@ mod tests {
             "http://localhost:41163/"
         );
     }
+
+    #[test]
+    fn a_zero_target_port_asks_for_a_usable_ephemeral_port() {
+        let port = forward_port(0, []).unwrap();
+        assert_ne!(port, 0);
+        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok());
+    }
+
+    #[test]
+    fn query_and_fragment_navigation_read_back_on_the_origin() {
+        let plan = TunnelPlan::new("https://localhost/", 50123).unwrap();
+        for (local, origin) in [
+            ("https://127.0.0.1:50123?q=x", "https://localhost?q=x"),
+            ("https://127.0.0.1:50123#top", "https://localhost#top"),
+            ("https://127.0.0.1:50123.evil/x", "https://127.0.0.1:50123.evil/x"),
+        ] {
+            assert_eq!(plan.origin_address(local), origin);
+        }
+    }
+
+    #[test]
+    fn an_ipv6_only_listener_prevents_a_conflicting_dual_stack_probe() {
+        let Ok(socket) = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP)) else {
+            return; // IPv6 is optional on the host.
+        };
+        socket.set_only_v6(true).unwrap();
+        socket
+            .bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)).into())
+            .unwrap();
+        socket.listen(1).unwrap();
+        let port = socket.local_addr().unwrap().as_socket().unwrap().port();
+        let forward = forward_port(port, []).unwrap();
+        assert_ne!(forward, port);
+        assert_ne!(forward, 0);
+        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, forward)).is_ok());
+    }
 }
