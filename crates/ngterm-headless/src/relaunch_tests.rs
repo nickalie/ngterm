@@ -85,10 +85,10 @@ fn a_failed_exec_reports_the_os_error_in_an_isolated_process() {
 }
 
 #[cfg(unix)]
-fn fork_children_holding_inherited_descriptors() {
+fn fork_children_holding_inherited_descriptors(stop: &std::sync::atomic::AtomicBool) {
     use std::os::unix::process::CommandExt as _;
 
-    for _ in 0..64 {
+    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
         let mut command = std::process::Command::new("/bin/sh");
         command.args(["-c", "exit 0"]).env_clear();
         // Keep the child before exec long enough to retain write descriptors from other test threads.
@@ -110,10 +110,28 @@ fn fork_children_holding_inherited_descriptors() {
 #[cfg(unix)]
 #[test]
 fn the_relaunch_fixture_starts_while_other_threads_fork() {
-    std::thread::scope(|threads| {
-        threads.spawn(fork_children_holding_inherited_descriptors);
-        for _ in 0..16 {
-            a_failed_exec_reports_the_os_error_in_an_isolated_process();
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let stop = AtomicBool::new(false);
+    let ready = std::sync::Barrier::new(5);
+    let result = std::thread::scope(|threads| {
+        for _ in 0..4 {
+            threads.spawn(|| {
+                ready.wait();
+                fork_children_holding_inherited_descriptors(&stop);
+            });
         }
+        ready.wait();
+        // Stop and reap the forkers even when a fixture fails, before propagating its panic.
+        let result = std::panic::catch_unwind(|| {
+            for _ in 0..16 {
+                a_failed_exec_reports_the_os_error_in_an_isolated_process();
+            }
+        });
+        stop.store(true, Ordering::Relaxed);
+        result
     });
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
 }
