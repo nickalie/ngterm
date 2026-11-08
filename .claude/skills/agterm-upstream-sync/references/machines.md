@@ -60,7 +60,7 @@ The sync's commits stay local, so the remote clones get the code from the host, 
   `git worktree add --detach <worktree> refs/agent/<name>`.
 - Uncommitted work: a worktree at the host's `HEAD` that way first, then `git add -N <new files>` and
   `git diff --binary HEAD > <file>` on the host (it holds staged and unstaged changes and the new files), and
-  `git apply <file>` in the worktree.
+  `git apply <file>` in the worktree, never in the clone's own checkout.
 - Builds go to the worktree's own `target`, removed with it; never point `CARGO_TARGET_DIR` at the clone's or
   another worktree's. To skip a cold build of every dependency, seed it from the clone's `target` with timestamps
   kept, so only the worktree's own crates rebuild: `cp -cRp` on the Mac (an APFS clone, instant),
@@ -68,14 +68,35 @@ The sync's commits stay local, so the remote clones get the code from the host, 
   the vendor cache under the user's home.
 - A conformance suite runs one per machine (`conformance/tools/run-windows.sh`'s header): before starting one, check
   that no other session's suite runs there, and wait if one does.
-- When done, from the clone: `git worktree remove --force <worktree>` and `git update-ref -d refs/agent/<name>`,
-  failures included, before you report.
+- Nothing stays behind in a clone: no branch or commit of yours, no applied patch or other change in its own
+  checkout, no worktree or `refs/agent/*` ref of yours. When done, from the clone: `git worktree remove --force
+  <worktree>` and `git update-ref -d refs/agent/<name>`, then check `git branch --list`, `git worktree list`,
+  `git for-each-ref refs/agent` and `git status` there and clear what is yours, failures included, before you report.
+
+## Waiting on a remote run
+
+A run that outlasts one ssh call (a build, a test or conformance run) is started, then waited on in bounded steps: a
+run that dies has to show up as a failure, never as a wait that goes on.
+
+- A script in the run's worktree starts it and writes its log and an exit marker (the exit code) inside that
+  worktree, never in the remote user's home or a shared directory, where other sessions and cleanups reach them. It
+  writes the marker on every exit path, failures included (a `trap` in a shell, `try`/`finally` in PowerShell).
+- Note the run's process id when it starts, and set an overall deadline from its expected duration, two to three times
+  that. Past the deadline the run counts as hung: stop it and report it.
+- Wait in foreground calls of under 10 minutes each, each bounded by its own `timeout` on the host and repeated until
+  the marker appears or the deadline passes. Each call checks both the marker and that the run's process is still
+  alive on the remote.
+- A missing log, or a dead process with no marker, is a failed run: read what log there is, then report it or re-run
+  it once; never keep waiting.
+- Never wait in an unbounded `until`/`while … sleep` loop, in the foreground or the background: one that cannot see
+  the run end spins silently for hours.
 
 ## Quirks
 
 - Windows: OpenSSH keeps an ssh session open until every process started in it exits, so a background watcher (a
-  `sleep` timer, a server) holds the call open. Long runs go to a script that logs to a file you poll. One cargo
-  build at a time in the VM. Its GUI runs need a console logon; ask the user if you lack it.
+  `sleep` timer, a server) holds the call open. A long run starts detached from the ssh call and is waited on as
+  [Waiting on a remote run](#waiting-on-a-remote-run) says. One cargo build at a time in the VM. Its GUI runs need a
+  console logon; ask the user if you lack it.
 - Mac: no `timeout` (`perl -e 'alarm N; exec @ARGV' cmd` does it); wrap long work in `caffeinate -is`. Over ssh there
   is no Screen Recording grant, so no screenshots, and a locked screen gives GPUI no frames (`session not realized`):
   check the lock before reading anything into that. A dev run there follows AGENTS.md > Never touch the user's
