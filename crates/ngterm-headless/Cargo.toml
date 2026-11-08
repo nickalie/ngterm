@@ -44,8 +44,8 @@ ngterm-host = { workspace = true, features = ["fakes"] }
 tempfile.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
-# the console-signal tests' private consoles and close messages
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+# the console-signal tests' pseudo consoles and the children started on them
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Threading"] }
 
 [lints]
 workspace = true

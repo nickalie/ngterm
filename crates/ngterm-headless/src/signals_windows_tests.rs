@@ -80,12 +80,26 @@ impl PseudoConsole {
     }
 
     /// Closes it as a terminal closing its window or tab does: its processes get the console's close. What it showed.
-    fn close(self) -> String {
-        // SAFETY: the handle CreatePseudoConsole made, closed once.
-        unsafe { ClosePseudoConsole(self.handle) };
+    fn close(mut self) -> String {
+        self.release();
         self.shown
             .recv_timeout(WAIT)
             .unwrap_or_else(|_| "(its output did not end)".to_owned())
+    }
+
+    /// Closes the console unless that was done already.
+    fn release(&mut self) {
+        let handle = std::mem::take(&mut self.handle);
+        if handle != 0 {
+            // SAFETY: the handle CreatePseudoConsole made, taken out of `self` so it is closed once.
+            unsafe { ClosePseudoConsole(handle) };
+        }
+    }
+}
+
+impl Drop for PseudoConsole {
+    fn drop(&mut self) {
+        self.release();
     }
 }
 
@@ -156,7 +170,7 @@ fn environment_block(extra: &[(&str, &OsStr)]) -> Vec<u16> {
 
 /// Starts [`console_signal_child`] on `console` with `first` (`Ctrl+C` or `Ctrl+Break`) as the first key it sends and
 /// its steps written to `steps`; its process.
-fn spawn_child(console: &PseudoConsole, first: &str, steps: &Path) -> OwnedHandle {
+fn spawn_child(console: &PseudoConsole, first: &str, steps: &Path) -> Child {
     let exe = std::env::current_exe().unwrap();
     let mut command_line = wide(OsStr::new(&format!(
         "\"{}\" --exact signals::windows_tests::console_signal_child --nocapture --test-threads=1",
@@ -193,14 +207,28 @@ fn spawn_child(console: &PseudoConsole, first: &str, steps: &Path) -> OwnedHandl
     // SAFETY: a thread handle CreateProcessW opened, closed here.
     drop(unsafe { OwnedHandle::from_raw_handle(process.hThread) });
     // SAFETY: the process handle CreateProcessW opened, owned from here on.
-    unsafe { OwnedHandle::from_raw_handle(process.hProcess) }
+    Child(unsafe { OwnedHandle::from_raw_handle(process.hProcess) })
 }
 
-/// Whether `process` ended, waiting up to `wait` for it.
-fn ended(process: &OwnedHandle, wait: Duration) -> bool {
-    let milliseconds = u32::try_from(wait.as_millis()).unwrap();
-    // SAFETY: an open process handle.
-    unsafe { WaitForSingleObject(process.as_raw_handle(), milliseconds) == WAIT_OBJECT_0 }
+/// The child's process, which goes with the test however the test ends: one left running would keep its console and
+/// the steps' directory.
+struct Child(OwnedHandle);
+
+impl Child {
+    /// Whether it ended, waiting up to `wait` for it.
+    fn ended(&self, wait: Duration) -> bool {
+        let milliseconds = u32::try_from(wait.as_millis()).unwrap();
+        // SAFETY: an open process handle.
+        unsafe { WaitForSingleObject(self.0.as_raw_handle(), milliseconds) == WAIT_OBJECT_0 }
+    }
+}
+
+impl Drop for Child {
+    fn drop(&mut self) {
+        // SAFETY: an open process handle; for a process that ended already the call only fails.
+        unsafe { TerminateProcess(self.0.as_raw_handle(), 1) };
+        self.ended(WAIT);
+    }
 }
 
 /// The steps the child wrote so far.
@@ -217,21 +245,21 @@ fn run_child(first: &str) -> (u32, String, String) {
     let console = PseudoConsole::new();
     let process = spawn_child(&console, first, &steps);
     let deadline = Instant::now() + CHILD_WAIT;
-    while !steps_in(&steps).contains(READY_TO_CLOSE) && !ended(&process, Duration::from_millis(50)) {
+    while !steps_in(&steps).contains(READY_TO_CLOSE) && !process.ended(Duration::from_millis(50)) {
         assert!(
             Instant::now() < deadline,
             "the child neither ended nor waited for the close"
         );
     }
     let shown = console.close();
-    if !ended(&process, CHILD_WAIT) {
-        // SAFETY: an open process handle.
-        unsafe { TerminateProcess(process.as_raw_handle(), 1) };
-        panic!("the console signal child did not end: {}", steps_in(&steps));
-    }
+    assert!(
+        process.ended(CHILD_WAIT),
+        "the console signal child did not end: {}",
+        steps_in(&steps)
+    );
     let mut code = 0;
     // SAFETY: an ended process's handle and a place for its exit code.
-    let read = unsafe { GetExitCodeProcess(process.as_raw_handle(), &raw mut code) };
+    let read = unsafe { GetExitCodeProcess(process.0.as_raw_handle(), &raw mut code) };
     assert_ne!(read, FALSE, "{}", std::io::Error::last_os_error());
     (code, steps_in(&steps), shown)
 }
