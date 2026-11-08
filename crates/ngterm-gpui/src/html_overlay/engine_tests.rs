@@ -83,10 +83,13 @@ impl Fixture {
             .unwrap()
             .join("ngterm-web");
         ngterm_wpe_client::worker::pin_worker_path(&worker).unwrap();
-        let (host, queue) = Host::start_worker(&HostConfig {
-            frames: FrameMode::Shm,
-            schemes: vec!["overlay-test".to_owned()],
-        })
+        let (host, queue) = Host::start_worker(
+            &HostConfig {
+                frames: FrameMode::Shm,
+                schemes: vec!["overlay-test".to_owned()],
+            },
+            &ngterm_wpe_client::EngineSource::System,
+        )
         .unwrap();
         let (send, events) = mpsc::channel();
         let input = queue.clone();

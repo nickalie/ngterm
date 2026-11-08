@@ -13,6 +13,51 @@ use super::*;
 use crate::html_overlay::engine::Presenter;
 use crate::html_overlay::testing::{Call, Recorder};
 
+#[test]
+fn missing_worker_reports_its_path_before_resolving_an_engine() {
+    if std::env::var_os("WPE_MISSING_WORKER_PROBE").is_some() {
+        let config = HostConfig {
+            frames: FrameMode::Shm,
+            schemes: Vec::new(),
+        };
+        let state = tempfile::tempdir().unwrap();
+        let Err(ngterm_wpe_client::StartError::Worker(error)) = start_worker(&config, state.path()) else {
+            panic!("a missing worker must fail before engine source resolution");
+        };
+        let worker = std::env::current_exe().unwrap().with_file_name("ngterm-web");
+        assert!(
+            error.starts_with(&format!("cannot open worker {}:", worker.display())),
+            "{error}"
+        );
+        assert!(!state.path().join("web-engine").exists());
+        return;
+    }
+    // A relocated test image has no sibling worker, independent of the developer's build outputs.
+    let root = tempfile::tempdir().unwrap();
+    let executable = root.path().join("frontend-tests");
+    ngterm_host::fakes::copy_executable(&std::env::current_exe().unwrap(), &executable).unwrap();
+    let mut command = std::process::Command::new(executable);
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("NGTERM_") || name.to_string_lossy().starts_with("AGTERM_") {
+            command.env_remove(name);
+        }
+    }
+    let output = command
+        .args([
+            "--exact",
+            "html_overlay::registry::tests::missing_worker_reports_its_path_before_resolving_an_engine",
+        ])
+        .env("WPE_MISSING_WORKER_PROBE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// Keeps the replies and store commands whose arguments the element's recorder does not need.
 #[derive(Default)]
 pub(crate) struct Recorded {

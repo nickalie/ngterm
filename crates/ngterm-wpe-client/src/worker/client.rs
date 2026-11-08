@@ -426,8 +426,105 @@ pub fn pin_worker_path(path: &std::path::Path) -> Result<(), String> {
         .map_err(|_| "the worker image is already pinned".to_owned())
 }
 
-fn worker_command(image: i32) -> Command {
+/// Probes the pinned worker without runtime paths. Loader failures and a timeout mean absent;
+/// failures are logged with their diagnostics, and the app checks the returned version.
+#[must_use]
+pub fn probe_system() -> Option<String> {
+    if let Err(error) = pin_worker() {
+        tracing::warn!(%error, "cannot probe the system web engine");
+        return None;
+    }
+    let image = IMAGE.get()?.as_ref().ok()?;
+    probe_image(image.as_raw_fd())
+}
+
+fn probe_image(image: i32) -> Option<String> {
+    match run_probe(probe_command(image), Duration::from_secs(5)) {
+        Ok(version) => Some(version),
+        Err(error) => {
+            tracing::warn!(%error, "cannot probe the system web engine");
+            None
+        }
+    }
+}
+
+fn probe_command(image: i32) -> Command {
     let mut command = Command::new(format!("/proc/self/fd/{image}"));
+    command
+        .arg("--probe")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_remove("LD_LIBRARY_PATH");
+    // Never inherit a live app's socket. Match the System worker's library search environment.
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("NGTERM_") {
+            command.env_remove(name);
+        }
+    }
+    let keep_open = move || {
+        // SAFETY: fcntl changes only the child's copy of its inherited image descriptor.
+        if unsafe { libc::fcntl(image, libc::F_SETFD, 0) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    };
+    // SAFETY: keep_open calls only the async-signal-safe fcntl in the forked child.
+    unsafe { command.pre_exec(keep_open) };
+    command
+}
+
+fn run_probe(mut command: Command, timeout: Duration) -> Result<String, String> {
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("cannot start probe: {error}"))?;
+    let waited = wait_for_probe(&mut child, timeout);
+    if waited.is_err() {
+        let _ = child.kill();
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("cannot read probe output: {error}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    waited.map_err(|error| format!("{error}; stderr: {stderr}"))?;
+    if !output.status.success() {
+        return Err(format!("probe ended with {}; stderr: {stderr}", output.status));
+    }
+    String::from_utf8(output.stdout)
+        .map(|value| value.trim().to_owned())
+        .map_err(|error| format!("invalid probe version: {error}; stderr: {stderr}"))
+}
+
+fn wait_for_probe(child: &mut Child, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => return Err(format!("probe timed out after {timeout:?}")),
+            Err(error) => return Err(format!("cannot wait for probe: {error}")),
+        }
+    }
+}
+
+/// Temporary compatibility for packages that still carry the engine beside the worker.
+#[must_use]
+pub fn bundled_engine_available() -> bool {
+    let executable = IMAGE
+        .get()
+        .and_then(|image| image.as_ref().ok())
+        .and_then(|image| std::fs::read_link(format!("/proc/self/fd/{}", image.as_raw_fd())).ok());
+    executable
+        .as_deref()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .is_some_and(|prefix| prefix.join("share/ngterm/bundled-wpe").is_file())
+}
+
+fn worker_command(image: i32, source: &crate::EngineSource) -> Command {
+    let mut command = Command::new(format!("/proc/self/fd/{image}"));
+    source.configure(&mut command);
     command.env(PULSE_PROP, web_audio_props(std::env::var_os(PULSE_PROP).as_deref()));
     command
 }
@@ -461,13 +558,13 @@ impl Client {
     /// Starts the worker and its engine with `config` (module docs of `worker`).
     /// # Errors
     /// Returns an executable, transport or engine startup error.
-    pub fn start(config: &HostConfig) -> Result<(Self, Receiver<Event>), StartError> {
+    pub fn start(config: &HostConfig, source: &crate::EngineSource) -> Result<(Self, Receiver<Event>), StartError> {
         pin_worker().map_err(StartError::Worker)?;
         let image = IMAGE
             .get()
             .and_then(|image| image.as_ref().ok())
             .ok_or_else(|| StartError::Worker("the worker image is unavailable".to_owned()))?;
-        let (child, socket) = spawn(worker_command(image.as_raw_fd()), Some(image.as_raw_fd()))?;
+        let (child, socket) = spawn(worker_command(image.as_raw_fd(), source), Some(image.as_raw_fd()))?;
         let worker = Arc::new(Worker {
             group: i32::try_from(child.id()).unwrap_or(i32::MAX),
             child: Mutex::new(Some(child)),
@@ -911,6 +1008,102 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_system_probe_treats_loader_or_process_failure_as_absent() {
+        let image = open_worker(std::path::Path::new("/bin/false")).unwrap();
+        assert_eq!(probe_image(image.as_raw_fd()), None);
+        let root = tempfile::tempdir().unwrap();
+        let invalid = root.path().join("bad-image");
+        std::fs::write(&invalid, "not an executable").unwrap();
+        let image = open_worker(&invalid).unwrap();
+        assert_eq!(probe_image(image.as_raw_fd()), None);
+    }
+
+    #[test]
+    fn probe_failures_preserve_loader_diagnostics_exit_status_and_timeout() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("probe");
+        ngterm_host::fakes::write_executable(
+            &path,
+            "#!/bin/sh\necho 'undefined symbol: wpe_platform_display_new' >&2\nexit 42\n",
+        )
+        .unwrap();
+        let image = open_worker(&path).unwrap();
+        let error = run_probe(probe_command(image.as_raw_fd()), Duration::from_secs(1)).unwrap_err();
+        assert!(error.contains("42"), "{error}");
+        assert!(error.contains("undefined symbol: wpe_platform_display_new"), "{error}");
+
+        ngterm_host::fakes::write_executable(&path, "#!/bin/sh\necho 'probe still loading' >&2\nexec sleep 10\n")
+            .unwrap();
+        let image = open_worker(&path).unwrap();
+        let error = run_probe(probe_command(image.as_raw_fd()), Duration::from_millis(100)).unwrap_err();
+        assert!(error.contains("timed out"), "{error}");
+        assert!(error.contains("probe still loading"), "{error}");
+
+        ngterm_host::fakes::write_executable(&path, "#!/bin/sh\necho 2.54.1\n").unwrap();
+        let image = open_worker(&path).unwrap();
+        assert_eq!(probe_image(image.as_raw_fd()).as_deref(), Some("2.54.1"));
+    }
+
+    #[test]
+    fn runtime_paths_and_removals_reach_the_worker_command_without_changing_the_app() {
+        let names = [
+            "LD_LIBRARY_PATH",
+            "GIO_MODULE_DIR",
+            "GIO_EXTRA_MODULES",
+            "GST_PLUGIN_PATH",
+            "GST_PLUGIN_PATH_1_0",
+            "GST_PLUGIN_SYSTEM_PATH_1_0",
+            "GST_PLUGIN_SCANNER",
+            "GST_REGISTRY_1_0",
+            "WEBKIT_INJECTED_BUNDLE_PATH",
+            crate::RUNTIME_ENV,
+            PULSE_PROP,
+        ];
+        let inherited = names.map(std::env::var_os);
+        let root = tempfile::tempdir().unwrap();
+        let worker = worker_command(12, &crate::EngineSource::Runtime(root.path().to_owned()));
+        assert_eq!(worker.get_program(), "/proc/self/fd/12");
+        let env: HashMap<_, _> = worker.get_envs().collect();
+        for (name, relative) in [
+            ("LD_LIBRARY_PATH", "lib"),
+            ("GIO_MODULE_DIR", "lib/gio/modules"),
+            ("GST_PLUGIN_SYSTEM_PATH_1_0", "lib/gstreamer-1.0"),
+            ("GST_PLUGIN_SCANNER", "libexec/gstreamer-1.0/gst-plugin-scanner"),
+            ("GST_REGISTRY_1_0", "gstreamer-registry.bin"),
+            ("WEBKIT_INJECTED_BUNDLE_PATH", "lib/wpe-webkit-2.0/injected-bundle"),
+        ] {
+            assert_eq!(env[OsStr::new(name)], Some(root.path().join(relative).as_os_str()));
+        }
+        for name in ["GIO_EXTRA_MODULES", "GST_PLUGIN_PATH", "GST_PLUGIN_PATH_1_0"] {
+            assert_eq!(env[OsStr::new(name)], None);
+        }
+        assert_eq!(env[OsStr::new(crate::RUNTIME_ENV)], Some(OsStr::new("1")));
+        assert_eq!(
+            env[OsStr::new(PULSE_PROP)],
+            Some(web_audio_props(std::env::var_os(PULSE_PROP).as_deref()).as_os_str())
+        );
+        assert_eq!(names.map(std::env::var_os), inherited);
+    }
+
+    #[test]
+    fn system_probe_and_worker_use_the_same_loader_search_environment() {
+        for command in [probe_command(12), worker_command(12, &crate::EngineSource::System)] {
+            let env: HashMap<_, _> = command.get_envs().collect();
+            assert_eq!(env[OsStr::new("LD_LIBRARY_PATH")], None);
+            for name in [
+                "GIO_MODULE_DIR",
+                "GST_PLUGIN_SYSTEM_PATH_1_0",
+                "GST_PLUGIN_SCANNER",
+                "GST_REGISTRY_1_0",
+                "WEBKIT_INJECTED_BUNDLE_PATH",
+            ] {
+                assert!(!env.contains_key(OsStr::new(name)), "{name}");
+            }
+            assert_ne!(env.get(OsStr::new(crate::RUNTIME_ENV)), Some(&Some(OsStr::new("1"))));
+        }
+    }
+
+    #[test]
     fn the_handshake_rejects_a_different_build_with_the_same_protocol() {
         let first = FromWorker::Hello {
             protocol: PROTOCOL,
@@ -931,7 +1124,11 @@ mod tests {
         let replacement = root.path().join("replacement");
         ngterm_host::fakes::copy_executable(std::path::Path::new("/bin/false"), &replacement).unwrap();
         std::fs::rename(replacement, &path).unwrap();
-        let (mut child, socket) = spawn(worker_command(image.as_raw_fd()), Some(image.as_raw_fd())).unwrap();
+        let (mut child, socket) = spawn(
+            worker_command(image.as_raw_fd(), &crate::EngineSource::System),
+            Some(image.as_raw_fd()),
+        )
+        .unwrap();
         drop(socket);
         assert!(child.wait().unwrap().success());
         assert!(!Command::new(&path).status().unwrap().success());

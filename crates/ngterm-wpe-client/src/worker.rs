@@ -6,7 +6,7 @@ pub mod message;
 pub mod wire;
 #[doc(hidden)]
 pub use client::Client;
-pub use client::{pin_worker, pin_worker_path};
+pub use client::{bundled_engine_available, pin_worker, pin_worker_path, probe_system};
 /// The variable that makes a process the worker: the number of the socket descriptor it inherited.
 pub const WORKER_FD_ENV: &str = "NGTERM_WPE_WORKER_FD";
 /// The descriptor of the pinned worker image (`/proc/self/fd/<n>`), closed on worker entry.

@@ -34,9 +34,11 @@ pub mod host;
 mod host_commands;
 #[doc(hidden)]
 pub mod input;
+mod source;
 #[doc(hidden)]
 pub mod spec;
 pub mod worker;
+pub use source::{EngineSource, RUNTIME_ENV};
 
 pub use config::{
     BufferFormat, ConfigError, DmaBufTarget, FrameMode, HostConfig, MODIFIER_INVALID, MODIFIER_LINEAR, fourcc,

@@ -170,6 +170,10 @@ fn run_child(exe: &Path, mode: &str, backend: &str, node: Option<&Path>, args: &
     ] {
         command.env(variable, home.path().join(dir));
     }
+    if backend == "worker" {
+        // A harmless loader path proves that the worker strips it before launching real web processes.
+        command.env("LD_LIBRARY_PATH", "/ngterm-test-no-libraries");
+    }
     if let Some(node) = node {
         command.env(RENDER_NODE, node);
     }

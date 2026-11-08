@@ -314,16 +314,16 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
   `crates/ngterm-gpui/src/html_overlay/registry.rs` (resolution), `crates/ngterm-update/src/lib.rs` (the pins, the
   runtime dir under `ngterm_core::paths`)
 
-- [ ] `ngterm-web --probe`: print the loaded WebKit version, exit; loader failure and old versions map to "absent"
-- [ ] `Host::start_worker(config, source)` with `source` = `System | Runtime(dir)`; the client turns it into the
+- [x] `ngterm-web --probe`: print the loaded WebKit version, exit; loader failure and old versions map to "absent"
+- [x] `Host::start_worker(config, source)` with `source` = `System | Runtime(dir)`; the client turns it into the
       command and the environment from Technical Details, on the worker's command only
-- [ ] the app resolves the source in order: system probe, complete runtime dir for the pinned key, else
+- [x] the app resolves the source in order: system probe, complete runtime dir for the pinned key, else
       `NeedsDownload` (handled in Tasks 5–6; until then the bundled engine keeps the `bundled-wpe` marker path, which
       Task 7 removes)
-- [ ] write tests: resolution order with a fake probe and temp runtime dirs; a `.partial` dir is not used; the
+- [x] write tests: resolution order with a fake probe and temp runtime dirs; a `.partial` dir is not used; the
       runtime environment (`GIO_MODULE_DIR`, `GST_*` set and removed) reaches only the worker command; a web process
       started by the worker carries no `LD_LIBRARY_PATH`
-- [ ] run tests - must pass before Task 4
+- [x] run tests - must pass before Task 4
 
 ### Task 4: The engine runtime archive
 

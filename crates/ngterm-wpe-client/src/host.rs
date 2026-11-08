@@ -109,9 +109,12 @@ impl Host {
     /// Starts a worker with the supplied configuration.
     /// # Errors
     /// Returns a configuration, executable, transport or engine startup error.
-    pub fn start_worker(config: &HostConfig) -> Result<(Self, Receiver<Event>), StartError> {
+    pub fn start_worker(
+        config: &HostConfig,
+        source: &crate::EngineSource,
+    ) -> Result<(Self, Receiver<Event>), StartError> {
         config.validate()?;
-        let (engine, events) = Client::start(config)?;
+        let (engine, events) = Client::start(config, source)?;
         Ok((Self { engine }, events))
     }
     fn send(&self, command: Command) {

@@ -116,14 +116,36 @@ mod tests {
                 unsafe { __llvm_profile_initialize_file() };
             }
             if std::env::var("WPE_WORKER_ENTRY_PROBE").as_deref() == Ok("prepare") {
+                // Keep the expectation across a vendored re-exec, which consumes the private runtime flag.
+                let runtime = std::env::var("WPE_WORKER_EXPECT_RUNTIME").as_deref() == Ok("1");
                 // SAFETY: the ELF initializer runs before main, while this process still has one thread.
                 unsafe { crate::launcher::prepare_worker() };
-                assert!(std::env::var_os("LD_LIBRARY_PATH").is_none());
+                assert_prepared_environment(runtime);
                 crate::exit_process(77);
             }
             // SAFETY: the ELF initializer runs before main, while this process still has one thread.
             unsafe { super::serve_if_asked(|| eprintln!("worker setup ran")) };
         }
+    }
+
+    fn assert_prepared_environment(runtime: bool) {
+        let executable = std::env::current_exe().unwrap();
+        let prefix = executable.parent().unwrap().parent().unwrap();
+        for (name, relative) in [
+            ("GIO_EXTRA_MODULES", "lib/gio/modules"),
+            ("GST_PLUGIN_SYSTEM_PATH_1_0", "lib/gstreamer-1.0"),
+            ("GST_PLUGIN_SCANNER", "libexec/gstreamer-1.0/gst-plugin-scanner"),
+            ("WEBKIT_INJECTED_BUNDLE_PATH", "lib/wpe-webkit-2.0/injected-bundle"),
+        ] {
+            let expected = if runtime {
+                OsString::from("runtime-sentinel")
+            } else {
+                prefix.join(relative).into_os_string()
+            };
+            assert_eq!(std::env::var_os(name), Some(expected), "{name}");
+        }
+        assert!(std::env::var_os("LD_LIBRARY_PATH").is_none());
+        assert!(std::env::var_os(ngterm_wpe_client::RUNTIME_ENV).is_none());
     }
 
     fn refused_worker(value: &OsStr) -> std::process::Output {
@@ -144,23 +166,43 @@ mod tests {
 
     #[test]
     fn worker_preparation_removes_the_loaders_path_before_starting_helpers() {
-        let mut command = Command::new(std::env::current_exe().unwrap());
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("usr/bin/ngterm-web");
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        ngterm_host::fakes::copy_executable(&std::env::current_exe().unwrap(), &executable).unwrap();
+        let marker = root.path().join("usr/share/ngterm/bundled-wpe");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(marker, "").unwrap();
+        let mut command = Command::new(executable);
+        for name in [
+            "GIO_EXTRA_MODULES",
+            "GST_PLUGIN_SYSTEM_PATH_1_0",
+            "GST_PLUGIN_SCANNER",
+            "WEBKIT_INJECTED_BUNDLE_PATH",
+        ] {
+            command.env(name, "runtime-sentinel");
+        }
         for (key, _) in std::env::vars_os() {
             if key.to_string_lossy().starts_with("NGTERM_") || key.to_string_lossy().starts_with("AGTERM_") {
                 command.env_remove(key);
             }
         }
-        let output = command
+        command
             .env("WPE_WORKER_ENTRY_PROBE", "prepare")
-            .env("LD_LIBRARY_PATH", "/no-such-loader-path")
-            .output()
-            .unwrap();
-        assert_eq!(
-            output.status.code(),
-            Some(77),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+            .env("LD_LIBRARY_PATH", "/no-such-loader-path");
+        for runtime in [false, true] {
+            command.env("WPE_WORKER_EXPECT_RUNTIME", if runtime { "1" } else { "0" });
+            if runtime {
+                command.env(ngterm_wpe_client::RUNTIME_ENV, "1");
+            }
+            let output = command.output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(77),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     #[test]

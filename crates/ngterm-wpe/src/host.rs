@@ -186,7 +186,7 @@ impl Host {
                 (Engine::Local(local), events)
             }
             Backend::Worker => {
-                let (client, events) = Client::start(&config)?;
+                let (client, events) = Client::start(&config, &ngterm_wpe_client::EngineSource::System)?;
                 (Engine::Worker(client), events)
             }
         };

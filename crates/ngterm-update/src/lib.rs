@@ -7,6 +7,7 @@ mod download;
 pub mod fakes;
 mod install;
 mod staging;
+pub mod web_engine;
 
 use std::fs;
 use std::path::{Path, PathBuf};

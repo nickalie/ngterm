@@ -387,8 +387,10 @@ fn engine() -> Result<Rc<dyn Web>, String> {
     let Some(pump) = with(|registry| registry.pump.clone()) else {
         return failed("the web engine has no event pump (html_overlay::init was not called)".to_owned());
     };
+    let state_dir = with(|registry| registry.state_dir.clone())
+        .unwrap_or_else(|| ngterm_core::paths::state_dir(&ngterm_core::paths::ProcessEnv));
     let spawned = std::thread::Builder::new().name("wpe-start".to_owned()).spawn(move || {
-        let _ = pump.send_blocking(ngterm_wpe_client::Host::start_worker(&config));
+        let _ = pump.send_blocking(start_worker(&config, &state_dir));
     });
     match spawned {
         Ok(_) => {
@@ -397,6 +399,26 @@ fn engine() -> Result<Rc<dyn Web>, String> {
         }
         Err(err) => failed(format!("the web engine did not start: {err}")),
     }
+}
+
+/// Source probing and filesystem access stay off the UI thread, alongside worker startup.
+fn start_worker(config: &HostConfig, state_dir: &std::path::Path) -> Started {
+    use ngterm_update::web_engine::{self, Resolution};
+    use ngterm_wpe_client::{EngineSource, StartError, worker};
+    worker::pin_worker().map_err(StartError::Worker)?;
+    let source = match web_engine::resolve(state_dir, web_engine::KEY, worker::probe_system) {
+        Resolution::System => EngineSource::System,
+        Resolution::Runtime(directory) => EngineSource::Runtime(directory),
+        // Release packages keep their bundled engine until packaging switches to downloads.
+        Resolution::NeedsDownload if worker::bundled_engine_available() => EngineSource::System,
+        Resolution::NeedsDownload => {
+            return Err(StartError::Worker(format!(
+                "the web engine is not installed; install WPE WebKit {} or newer",
+                web_engine::MIN_VERSION
+            )));
+        }
+    };
+    ngterm_wpe_client::Host::start_worker(config, &source)
 }
 
 /// The start thread's outcome, on the main thread: the engine runs and the waiting pages are realized on it, or they

@@ -845,6 +845,12 @@ fn pulse_request(h: &Harness, _: &Context) -> Outcome {
     for pid in processes {
         let environ =
             std::fs::read(format!("/proc/{pid}/environ")).map_err(|err| format!("web process {pid}: {err}"))?;
+        ensure(
+            !environ
+                .split(|byte| *byte == 0)
+                .any(|entry| entry.starts_with(b"LD_LIBRARY_PATH=")),
+            || format!("web process {pid} inherited LD_LIBRARY_PATH"),
+        )?;
         let prop = environ
             .split(|byte| *byte == 0)
             .find_map(|entry| entry.strip_prefix(b"PULSE_PROP="))

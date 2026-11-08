@@ -121,6 +121,12 @@ pub unsafe fn prepare_worker() {
     // The dynamic loader already consumed this; helpers and host tools must not inherit it.
     // SAFETY: caller guarantees that no other thread can read the environment.
     unsafe { std::env::remove_var("LD_LIBRARY_PATH") };
+    let runtime = std::env::var_os(ngterm_wpe_client::RUNTIME_ENV).is_some();
+    // SAFETY: caller guarantees a single thread; this flag must not reach WebKit's processes.
+    unsafe { std::env::remove_var(ngterm_wpe_client::RUNTIME_ENV) };
+    if runtime {
+        return;
+    }
     let Ok(executable) = std::env::current_exe() else {
         return;
     };
