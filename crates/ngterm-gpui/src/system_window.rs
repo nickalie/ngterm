@@ -219,3 +219,7 @@ fn run() -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "system_window_tests.rs"]
+pub(crate) mod tests;

@@ -316,3 +316,55 @@ fn the_slot_reads_as_text_valued_with_the_status_name() {
     assert_eq!(node.value(), Some("blocked"));
     assert_eq!(node.description(), Some(blocked.tooltip.as_str()));
 }
+
+#[gpui_kit::test]
+fn watching_motion_keeps_an_existing_preference_and_set_motion_reports_both_states(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_global(Motion { animations: false }));
+    cx.update(watch_motion);
+    assert!(!cx.update(|cx| animations_enabled(cx)));
+    let mut app = cx.to_async();
+    set_motion(&mut app, true);
+    assert!(cx.update(|cx| animations_enabled(cx)));
+    set_motion(&mut app, true);
+    set_motion(&mut app, false);
+    assert!(!cx.update(|cx| animations_enabled(cx)));
+}
+
+#[cfg(windows)]
+#[test]
+fn animation_notifications_are_followed_in_an_isolated_process() {
+    crate::system_window::tests::run_child(
+        "status_glyph::tests::windows_setting_changes_refresh_the_animation_preference",
+    );
+}
+
+#[cfg(windows)]
+#[gpui_kit::test]
+#[ignore = "run by animation_notifications_are_followed_in_an_isolated_process"]
+fn windows_setting_changes_refresh_the_animation_preference(cx: &mut TestAppContext) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW, WM_SETTINGCHANGE,
+    };
+
+    if !crate::system_window::tests::is_child(
+        "status_glyph::tests::windows_setting_changes_refresh_the_animation_preference",
+    ) {
+        return;
+    }
+    // The real window thread wakes the foreground task when its notification arrives.
+    cx.executor().allow_parking();
+    let _events = crate::system_window::tests::EVENTS.lock().unwrap();
+    let mut on: windows_sys::core::BOOL = 0;
+    // SAFETY: a writable BOOL, exactly the output SPI_GETCLIENTAREAANIMATION requires.
+    let read = unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut on).cast(), 0) };
+    assert_ne!(read, 0);
+    let expected = on != 0;
+    assert_eq!(client_area_animation(), expected);
+    cx.update(watch_motion);
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| animations_enabled(cx)), expected);
+    cx.update(|cx| cx.set_global(Motion { animations: !expected }));
+    crate::system_window::tests::send(WM_SETTINGCHANGE, SPI_GETCLIENTAREAANIMATION as usize, 0);
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| animations_enabled(cx)), expected);
+}

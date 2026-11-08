@@ -78,3 +78,7 @@ unsafe extern "system" fn on_console_event(kind: u32) -> i32 {
         _ => FALSE,
     }
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;
