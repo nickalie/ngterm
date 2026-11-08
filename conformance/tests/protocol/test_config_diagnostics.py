@@ -144,8 +144,7 @@ CASES = [
     ),
     (
         "theme",
-        # parse-time refusals only: a theme Ghostty refuses when it loads it (`sub/dir`, a path separator) never loads
-        # on the reference, whose fresh install seeds a theme of its own that its settings conf sets over this file
+        # parse-time refusals; one Ghostty refuses as it loads the theme is test_reload_counts_a_theme_refused_as_it_loads
         [
             ("theme = light:Only", 1),
             ('theme = light:"\\q",dark:x', 1),
@@ -230,3 +229,17 @@ def test_reload_counts_each_line_the_config_loader_refuses(ctl, config, lines):
     finally:
         path.write_text(original, encoding="utf-8")
         assert assert_ok(ctl.request("config.reload")) == {"count": 0}
+
+
+@pytest.mark.covers("config.reload", "field:result.count")
+def test_reload_counts_a_theme_refused_as_it_loads(launch):
+    """`theme = sub/dir` parses, and Ghostty refuses it as it loads the theme (`theme.zig` `open`: a theme name has no
+    path separators): one diagnostic, an unloadable theme reported as any other refused line is. The instance's
+    settings name no theme, so the theme loaded is this file's: upstream seeds its own `agterm` theme only on a fresh
+    install, with no settings file, and its settings conf sets that over this file; the Rust build seeds none."""
+    ctl = launch(settings={"restoreMode": "none"})
+    path = ctl.instance.state_dir / "config" / "ghostty.conf"
+    original = path.read_text(encoding="utf-8")
+    path.write_text(original.rstrip("\n") + "\ntheme = sub/dir\n", encoding="utf-8")
+    count = assert_ok(ctl.request("config.reload"))["count"]
+    assert count == 1, f"'theme = sub/dir': {count} diagnostics, libghostty gives 1"

@@ -2,6 +2,8 @@
 grid, search, and the recent-sessions, attention and custom-commands popovers. Each click is read back through the
 tree; a test that opens something closes it."""
 
+import re
+
 import pytest
 from agterm_conformance.match import active_session_id, assert_ok, find_session, session_ids
 from agterm_conformance.wait import WaitTimeout, wait_until
@@ -233,6 +235,13 @@ def test_find_bar_counts_the_matches(ctl, ui):
     ui.menu("View", "Find…")
     field = ui.find("search-field", role="text-field")
 
+    def matches():
+        """The counter counts what the pane holds: the two lines printed, and the needle itself when a press went to
+        the terminal before the field took the focus (it then waits on the prompt line)."""
+        found = len(re.findall(marker, assert_ok(ctl.request("session.text", sid, all=True))["text"]))
+        assert found >= 2, found
+        return any(re.search(rf"\b{found}\b", ui.text(counter)) for counter in ui.all("search-counter"))
+
     def counted():
         # Typed, as the counter fills only once a typed needle searches; retyped, since a needle typed before the
         # output rendered never counts.
@@ -240,7 +249,7 @@ def test_find_bar_counts_the_matches(ctl, ui):
         ui.focus(field)
         ui.press(*marker)
         try:
-            return wait_until(lambda: any("2" in ui.text(counter) for counter in ui.all("search-counter")), 3)
+            return wait_until(matches, 3)
         except WaitTimeout:
             return None
 
@@ -248,7 +257,11 @@ def test_find_bar_counts_the_matches(ctl, ui):
         wait_until(counted, 20)
     except WaitTimeout as error:
         pane = assert_ok(ctl.request("session.text", sid))["text"][-300:]
-        raise AssertionError(f"{error}; field {ui.text(field)!r}; pane ends {pane!r}") from None
+        counters = [ui.text(counter) for counter in ui.all("search-counter")]
+        # read afresh: `field` is the snapshot taken before typing
+        raise AssertionError(
+            f"{error}; field {ui.text('search-field')!r}; counters {counters!r}; pane ends {pane!r}"
+        ) from None
     ui.menu("View", "Find…")
     ui.absent("search-field")
     assert_ok(ctl.request("session.close", sid))

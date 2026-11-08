@@ -183,6 +183,7 @@ def test_live_one():
     pass
 
 @pytest.mark.requires("live-sessions")
+@pytest.mark.requires("pages-survive")
 def test_live_two():
     {body}
 
@@ -213,6 +214,43 @@ def test_must_pass_needs_every_required_test_to_pass(
     assert result.ret == ret
     if ret != pytest.ExitCode.OK:
         result.stdout.fnmatch_lines(["*--must-pass live-sessions: not passed*", "*test_live_two*"])
+
+
+def test_must_pass_excuses_a_skip_only_for_the_tests_own_requirements(pytester: pytest.Pytester) -> None:
+    """A skip naming a capability the test does not require is no recorded divergence of it."""
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.requires("live-sessions")
+        def test_live_one():
+            pass
+
+        @pytest.mark.requires("live-sessions")
+        def test_live_two():
+            pytest.skip("unsupported: swift-macos lacks pages-survive (upstream ends it)")
+        """
+    )
+    result = pytester.runpytest("--must-pass", "live-sessions")
+    assert result.ret == pytest.ExitCode.TESTS_FAILED
+    result.stdout.fnmatch_lines(["*--must-pass live-sessions: not passed*", "*test_live_two*"])
+
+
+def test_must_pass_needs_a_passing_test_for_each_capability(pytester: pytest.Pytester) -> None:
+    """Every required test excused is no pass: the run owes at least one test requiring the capability."""
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.requires("live-sessions", "pages-survive")
+        def test_parked():
+            pytest.skip("unsupported: swift-macos lacks pages-survive (upstream ends it)")
+        """
+    )
+    result = pytester.runpytest("--must-pass", "live-sessions")
+    assert result.ret == pytest.ExitCode.TESTS_FAILED
+    result.stdout.fnmatch_lines(["*--must-pass live-sessions: not passed*", "no test requiring live-sessions passed"])
+    result.stdout.no_fnmatch_line("*test_parked*")
 
 
 def test_must_pass_with_no_required_test_fails(pytester: pytest.Pytester) -> None:
@@ -263,6 +301,79 @@ def test_requires_refuses_unknown_options(pytester: pytest.Pytester, kwargs: str
 
         @pytest.mark.requires("live-sessions", "live-any-shell", {kwargs})
         def test_live():
+            pass
+        """
+    )
+    result = pytester.runpytest()
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines([f"*{error}*"])
+
+
+UPSTREAM_BUG_TESTS = """
+import pytest
+
+@pytest.mark.requires("live-sessions")
+@pytest.mark.upstream_bug("lost-output", reason="upstream loses it")
+def test_bug_shows():
+    assert False
+
+@pytest.mark.requires("live-sessions")
+@pytest.mark.upstream_bug("lost-output", reason="upstream loses it")
+def test_bug_hides():
+    pass
+
+@pytest.mark.requires("live-sessions")
+def test_plain():
+    {body}
+"""
+
+
+@pytest.mark.parametrize(
+    ("impl", "outcomes", "ret"),
+    [
+        # the reference: an expected failure, not strict
+        ("swift-macos", {"passed": 1, "xfailed": 1, "xpassed": 1}, pytest.ExitCode.OK),
+        # every other implementation owes the correct behavior
+        ("rust", {"passed": 2, "failed": 1}, pytest.ExitCode.TESTS_FAILED),
+    ],
+)
+def test_an_upstream_bug_is_allowed_on_the_reference_only(
+    pytester: pytest.Pytester, bin_path: Path, impl: str, outcomes: dict[str, int], ret: pytest.ExitCode
+) -> None:
+    pytester.makepyfile(UPSTREAM_BUG_TESTS.format(body="pass"))
+    result = pytester.runpytest("--impl", impl, "--bin", str(bin_path), "-rxX", "--must-pass", "live-sessions")
+    result.assert_outcomes(**outcomes)
+    assert result.ret == ret
+    if impl == "swift-macos":
+        result.stdout.fnmatch_lines(["*XFAIL*test_bug_shows*upstream bug: lost-output (upstream loses it)*"])
+        result.stdout.no_fnmatch_line("*--must-pass live-sessions: not passed*")
+
+
+def test_must_pass_excuses_only_an_upstream_bug_allowance(pytester: pytest.Pytester, bin_path: Path) -> None:
+    pytester.makepyfile(UPSTREAM_BUG_TESTS.format(body="pytest.xfail('some other reason')"))
+    result = pytester.runpytest("--impl", "swift-macos", "--bin", str(bin_path), "--must-pass", "live-sessions")
+    assert result.ret == pytest.ExitCode.TESTS_FAILED
+    result.stdout.fnmatch_lines(["*--must-pass live-sessions: not passed*", "*test_plain*"])
+    result.stdout.no_fnmatch_line("*test_bug_shows*")
+
+
+@pytest.mark.parametrize(
+    ("args", "error"),
+    [
+        ("", "upstream_bug takes one kebab-case name, got ()"),
+        ("'Lost Output', reason='x'", "upstream_bug takes one kebab-case name"),
+        ("'lost-output'", "upstream_bug lost-output needs a reason"),
+        ("'lost-output', reason=' '", "upstream_bug lost-output needs a reason"),
+        ("'lost-output', reason='x', impl='rust'", "upstream_bug takes no impl"),
+    ],
+)
+def test_upstream_bug_refuses_a_malformed_allowance(pytester: pytest.Pytester, args: str, error: str) -> None:
+    pytester.makepyfile(
+        f"""
+        import pytest
+
+        @pytest.mark.upstream_bug({args})
+        def test_bug():
             pass
         """
     )

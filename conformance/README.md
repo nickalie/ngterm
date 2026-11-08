@@ -75,6 +75,10 @@ vocabulary) is in [docs/rust-build.md](docs/rust-build.md).
   Both refuse names outside the vocabulary in `impls/base.py`.
 - `covers("item", ..., streams=(...))`: the catalog keys a test covers; a stream-mode command counts only when
   `streams` names it too, from a test that drives the stream after the ok.
+- `upstream_bug("name", reason=...)`: the test asserts the correct behavior where the reference has a named bug (see
+  Reference discipline). On `swift-macos` the test is an expected failure, not strict (`xfailed` when the bug shows,
+  `xpassed` when it does not). The Rust build gets no allowance and must pass. The reason cites upstream's code or
+  its own backlog note.
 
 The run summary prints pass, fail, both skip kinds and reruns, and parity: passed over passed, failed and
 not-yet-at-level, so an unsupported capability is a recorded divergence, not a gap.
@@ -82,6 +86,7 @@ not-yet-at-level, so an unsupported capability is a recorded divergence, not a g
 - `--must-pass CAPABILITY` fails the run unless every collected test requiring it ran and passed, and at least one
   did (reference-macos uses it for `live-sessions`). A test skipped as unsupported for lacking only other
   capabilities it requires is excused: the reference's skip of a Rust-only extension's Live tests is that divergence.
+  So is the reference's expected failure under an `upstream_bug` allowance, and no other xfail.
 - `--nodeid-report PATH` writes one JSON line per run test with its outcome merged over setup, call and teardown,
   plus the run's collection errors and `--must-pass` problems; `tools/check_ratchet.py` reads it.
   A run pytest refuses (a usage error, a path or node id that matches nothing) or that breaks internally writes none.
@@ -135,7 +140,11 @@ jobs upload them with their reports.
 ## Reference discipline
 
 The reference is upstream's macOS release: a test is accepted only when it is green on reference-macos in CI.
-Red on the reference means the test is wrong.
+Red on the reference means the test is wrong, unless the reference is: upstream is a reference, not the source of
+truth. Where upstream's behavior is a bug (lost output, a race, a doubled message, a pane that never starts), the
+test asserts the correct behavior and the Rust build must show it. The reference run then gets an `upstream_bug`
+allowance that names the bug and cites its cause. A test is never weakened to match an upstream bug, and a test that
+merely races the reference is fixed in the test, not allowed.
 
 Where the Rust build legitimately differs from the reference on observable state or effects (a platform divergence,
 such as Wayland giving a client no window position), the divergence becomes a capability with a reason, and the test
