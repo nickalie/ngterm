@@ -1149,3 +1149,1253 @@ fn detected_relative_resolution_refuses_network_and_automount_targets_before_exi
         );
     }
 }
+
+fn send(state: &mut AppState, cmd: Command, target: Option<String>, args: Args) -> ngterm_proto::Response {
+    state
+        .handle_request(&Request {
+            cmd,
+            target,
+            args: Some(args),
+        })
+        .settled()
+        .response
+}
+
+#[test]
+fn the_keyboard_owner_survives_a_late_blur_from_another_window() {
+    let (mut state, first, _) = state_with_terminal();
+    let second = state.core.library_mut().new_window(None);
+    state.set_key_window(Some(first));
+    state.set_key_window(Some(second));
+    state.key_window_lost(first);
+    assert_eq!(state.key_window(), Some(second));
+    state.key_window_lost(second);
+    assert_eq!(state.key_window(), None);
+}
+
+#[test]
+fn sidebar_width_rounds_clamps_and_ignores_missing_windows() {
+    let (mut state, window, _) = state_with_terminal();
+    state.sidebar_resized(Uuid::new_v4(), 300.0);
+    state.sidebar_resized(window, 300.4);
+    assert!((state.core.library().store(window).unwrap().sidebar().width - 300.0).abs() < f64::EPSILON);
+    state.sidebar_resized(window, 300.49);
+    assert!((state.core.library().store(window).unwrap().sidebar().width - 300.0).abs() < f64::EPSILON);
+    state.sidebar_resized(window, 0.0);
+    assert!(
+        (state.core.library().store(window).unwrap().sidebar().width - ngterm_core::model::SIDEBAR_WIDTH_MIN).abs()
+            < f64::EPSILON
+    );
+    state.sidebar_resized(window, 1e6);
+    assert!(
+        (state.core.library().store(window).unwrap().sidebar().width - ngterm_core::model::SIDEBAR_WIDTH_MAX).abs()
+            < f64::EPSILON
+    );
+}
+
+#[test]
+fn frontend_requests_are_drained_once_and_settings_stop_at_quit() {
+    let (mut state, window, _) = state_with_terminal();
+    state.show_welcome();
+    state.ask_quit("End the running sessions?".into());
+    state.open_settings(window);
+    let work = state.take_frontend_work();
+    assert!(work.welcome);
+    assert_eq!(work.quit_prompt.as_deref(), Some("End the running sessions?"));
+    assert_eq!(work.settings, Some(window));
+    assert_eq!(state.take_frontend_work(), FrontendWork::default());
+    state.save_on_quit();
+    state.open_settings(window);
+    assert_eq!(state.take_frontend_work(), FrontendWork::default());
+}
+
+#[test]
+fn a_deferred_step_can_wait_again_and_panics_answer_the_socket() {
+    let (mut state, _, _) = state_with_terminal();
+    let (main_loop, _held) = record(&mut state);
+    let (reply, sender) = Reply::deferred();
+    state.resume(
+        Command::Tree,
+        Box::new(|_| Dispatched::Pending {
+            after: Duration::from_millis(9),
+            resume: Box::new(|_| {
+                Dispatched::Done(ngterm_proto::Response::with_result(serde_json::json!({"ready": true})))
+            }),
+        }),
+        Waiter::Socket(sender),
+    );
+    for (delay, task) in main_loop.take() {
+        if delay == Some(Duration::from_millis(9)) {
+            task(&mut state);
+        }
+    }
+    assert_eq!(
+        reply.settled().response.result,
+        Some(serde_json::json!({"ready": true}))
+    );
+    let (reply, sender) = Reply::deferred();
+    state.resume(
+        Command::Tree,
+        Box::new(|_| panic!("host boundary failed")),
+        Waiter::Socket(sender),
+    );
+    let response = reply.settled().response;
+    assert!(!response.ok);
+    assert_eq!(
+        response,
+        ngterm_proto::Response::from(ControlError::HandlerPanicked(Command::Tree))
+    );
+}
+
+#[test]
+fn a_detached_loop_drops_tasks_and_deferred_replies_answer_shutting_down() {
+    let (mut state, _, _) = state_with_terminal();
+    post(state.poster(), AppState::request_quit);
+    assert!(!state.take_frontend_work().quit);
+    let (reply, sender) = Reply::deferred();
+    state.schedule(
+        Command::Tree,
+        Duration::ZERO,
+        Box::new(|_| panic!("must not run")),
+        Waiter::Socket(sender),
+    );
+    assert_eq!(
+        reply.settled().response,
+        ngterm_proto::Response::from(ControlError::ShuttingDown)
+    );
+}
+
+#[test]
+fn a_notification_is_suppressed_only_when_its_pane_and_window_hold_the_keyboard() {
+    let (mut state, _, session) = state_with_terminal();
+    state.terminal_notification(
+        session,
+        "T",
+        "build",
+        "done",
+        NotifyFocus {
+            pane: true,
+            active: true,
+        },
+    );
+    assert!(state.take_frontend_work().banners.is_empty());
+    state.terminal_notification(
+        session,
+        "T",
+        "build",
+        "done",
+        NotifyFocus {
+            pane: true,
+            active: false,
+        },
+    );
+    assert!(!state.take_frontend_work().banners.is_empty());
+    state.save_on_quit();
+    let _ = state.take_frontend_work();
+    state.terminal_notification(session, "T", "build", "done", NotifyFocus::default());
+    assert!(state.take_frontend_work().banners.is_empty());
+}
+
+#[test]
+fn info_and_hud_expiries_ignore_stale_timers_and_hide_the_current_message() {
+    for cmd in [SessionCmd::Info, SessionCmd::HudOpen] {
+        let (mut state, window, session) = state_with_terminal();
+        let dir = tempfile::tempdir().unwrap();
+        state.core.set_hud_body_dir(dir.path().to_path_buf());
+        let (main_loop, _held) = record(&mut state);
+        let mut batches = Vec::new();
+        for text in ["old", "new"] {
+            let response = send(
+                &mut state,
+                Command::Session(cmd),
+                Some(session.to_string()),
+                Args {
+                    mode: (cmd == SessionCmd::Info).then(|| "set".into()),
+                    text: (cmd == SessionCmd::Info).then(|| text.into()),
+                    message: (cmd == SessionCmd::HudOpen).then(|| text.into()),
+                    hide_after: Some(0.01),
+                    ..Args::default()
+                },
+            );
+            assert!(response.ok, "{response:?}");
+            batches.push(main_loop.take());
+        }
+        let mut batches = batches.into_iter();
+        for (delay, task) in batches.next().unwrap() {
+            if delay == Some(Duration::from_millis(10)) {
+                task(&mut state);
+            }
+        }
+        let found = state.core.library().store(window).unwrap().session(session).unwrap();
+        let message = if cmd == SessionCmd::Info {
+            found.effective_info().unwrap().source.clone()
+        } else {
+            found.overlay.effective_hud_spec().unwrap().message
+        };
+        assert_eq!(message, "new", "the earlier timer cannot hide its replacement");
+        for (delay, task) in batches.next().unwrap() {
+            if delay == Some(Duration::from_millis(10)) {
+                task(&mut state);
+            }
+        }
+        let found = state.core.library().store(window).unwrap().session(session).unwrap();
+        assert!(found.effective_info().is_none());
+        assert!(found.overlay.hud.is_none());
+    }
+}
+
+#[test]
+fn builtin_frontend_actions_keep_their_window_and_soft_close_setting() {
+    use ngterm_core::keymap::BuiltinAction;
+    let (mut state, window, _) = state_with_terminal();
+    state.keymap_fired(
+        KeyOrigin::Window(window),
+        Fired::Builtin(BuiltinAction::ToggleFullscreen),
+        None,
+    );
+    assert_eq!(
+        state.take_frontend_work().actions,
+        [(FrontendAction::ToggleFullscreen(window), true)]
+    );
+    state.keymap_fired(KeyOrigin::Quick, Fired::Builtin(BuiltinAction::ToggleFullscreen), None);
+    assert_eq!(
+        state.take_frontend_work().actions,
+        [(FrontendAction::ToggleFullscreen(window), true)]
+    );
+    state.save_on_quit();
+    state.keymap_fired(
+        KeyOrigin::Window(window),
+        Fired::Builtin(BuiltinAction::ToggleFullscreen),
+        None,
+    );
+    assert!(state.take_frontend_work().actions.is_empty());
+}
+
+#[test]
+fn malformed_or_unavailable_links_leave_only_allowed_desktop_work() {
+    let (mut state, _, session) = state_with_terminal();
+    for raw in ["", "javascript:alert(1)", "https://example.com/\n"] {
+        state.follow_link(raw, ClickOrigin::Pane(session), false);
+    }
+    assert!(state.take_frontend_work().open_urls.is_empty());
+    state.follow_link("https://example.com/docs", ClickOrigin::Pane(Uuid::new_v4()), false);
+    assert_eq!(state.take_frontend_work().open_urls, ["https://example.com/docs"]);
+    state.follow_link("https://example.com/browser", ClickOrigin::Pane(session), true);
+    assert_eq!(state.take_frontend_work().open_urls, ["https://example.com/browser"]);
+    let path = std::env::temp_dir().join("missing-document.md");
+    state.open_document_link(path.clone(), Uuid::new_v4(), None, false);
+    assert_eq!(state.take_frontend_work().reveals, [path]);
+}
+
+fn open_input_ask(state: &mut AppState, session: Uuid, gui: bool) -> String {
+    let response = send(
+        state,
+        Command::Ask(ngterm_proto::command::AskCmd::Open),
+        Some(session.to_string()),
+        Args {
+            title: Some("Name".into()),
+            input: Some("line".into()),
+            style: gui.then(|| "gui".into()),
+            ..Args::default()
+        },
+    );
+    assert!(response.ok, "{response:?}");
+    result_id(&response).unwrap()
+}
+
+fn ask_result(state: &mut AppState, id: &str) -> serde_json::Value {
+    let response = send(
+        state,
+        Command::Ask(ngterm_proto::command::AskCmd::Result),
+        Some(id.into()),
+        Args::default(),
+    );
+    assert!(response.ok, "{response:?}");
+    response.result.unwrap()["ask"].clone()
+}
+
+#[test]
+fn session_and_window_asks_answer_with_their_edited_drafts_and_ignore_stale_ids() {
+    use crate::ask_dialog::form::DraftEdit;
+    let (mut state, window, session) = state_with_split();
+    for gui in [false, true] {
+        let id = open_input_ask(&mut state, session, gui);
+        let edit = DraftEdit::Text("typed name".into());
+        if gui {
+            state.edit_window_ask_draft(window, "stale", &edit);
+            state.edit_window_ask_draft(window, &id, &edit);
+            state.answer_window_ask_button(window, "stale", 0);
+            state.answer_window_ask_button(window, &id, 0);
+        } else {
+            state.select_ask_pane(Uuid::new_v4());
+            state.select_ask_pane(session);
+            state.edit_session_ask_draft(session, "stale", &edit);
+            state.edit_session_ask_draft(session, &id, &edit);
+            state.answer_session_ask_button(session, "stale", 0);
+            state.answer_session_ask_button(session, &id, 0);
+        }
+        let answer = ask_result(&mut state, &id);
+        assert_eq!(answer["result"], "answered");
+        assert_eq!(answer["text"], "typed name");
+    }
+}
+
+#[test]
+fn ask_dismissals_and_picker_answers_reach_the_wire() {
+    use ngterm_proto::{ControlAskOutcome, ControlAskResult, ControlPickOutcome, ControlPickResult};
+    let (mut state, window, session) = state_with_terminal();
+    for gui in [false, true] {
+        let id = open_input_ask(&mut state, session, gui);
+        let escaped = ControlAskResult::outcome(ControlAskOutcome::Escaped);
+        if gui {
+            state.answer_window_ask(window, &id, escaped);
+        } else {
+            state.answer_session_ask(session, &id, escaped);
+        }
+        assert_eq!(ask_result(&mut state, &id)["result"], "escaped");
+    }
+    let response = send(
+        &mut state,
+        Command::Pick(ngterm_proto::command::PickCmd::Open),
+        None,
+        Args {
+            items: Some(vec![ngterm_proto::PickItem {
+                id: "one".into(),
+                label: "One".into(),
+                ..Default::default()
+            }]),
+            ..Args::default()
+        },
+    );
+    assert!(response.ok, "{response:?}");
+    let id = result_id(&response).unwrap();
+    state.resolve_pick(
+        window,
+        "stale",
+        ControlPickResult::outcome(ControlPickOutcome::Cancelled),
+    );
+    assert!(state.core.modal_pending(window));
+    state.resolve_pick(window, &id, ControlPickResult::outcome(ControlPickOutcome::Cancelled));
+    let result = send(
+        &mut state,
+        Command::Pick(ngterm_proto::command::PickCmd::Result),
+        Some(id),
+        Args::default(),
+    );
+    assert_eq!(result.result.unwrap()["pick"]["result"], "cancelled");
+    assert!(!state.core.modal_pending(window));
+}
+
+/// A gone loop and a loop refusing new work have the same user-visible shutdown behavior.
+struct ClosedLoop;
+
+impl MainLoop<AppState> for ClosedLoop {
+    fn post(&self, _: MainTask<AppState>) -> Result<(), MainLoopClosed> {
+        Err(MainLoopClosed)
+    }
+    fn post_after(&self, _: Duration, _: MainTask<AppState>) -> Result<(), MainLoopClosed> {
+        Err(MainLoopClosed)
+    }
+}
+
+#[test]
+fn a_closed_loop_releases_deferred_replies_and_inbound_stream_capacity() {
+    let (mut state, _, _) = state_with_terminal();
+    let main_loop: Arc<dyn MainLoop<AppState>> = Arc::new(ClosedLoop);
+    state.poster = Arc::downgrade(&main_loop);
+    post(state.poster(), AppState::request_quit);
+    let (reply, sender) = Reply::deferred();
+    state.schedule(
+        Command::Tree,
+        Duration::ZERO,
+        Box::new(|_| panic!("closed")),
+        Waiter::Socket(sender),
+    );
+    assert_eq!(
+        reply.settled().response,
+        ngterm_proto::Response::from(ControlError::ShuttingDown)
+    );
+    let mut reader = presentation_reader(state.poster.clone(), 1);
+    for _ in 0..=ngterm_core::remote::INBOUND_LIMIT {
+        reader(b"ignored".to_vec());
+    }
+    assert!(!state.take_frontend_work().quit);
+}
+
+#[test]
+fn presentation_lines_and_closes_are_main_loop_work_and_stand_down_after_quit() {
+    let (mut state, _, _) = state_with_terminal();
+    let (main_loop, _held) = record(&mut state);
+    let mut reader = presentation_reader(state.poster.clone(), 0);
+    reader(b"invalid frame".to_vec());
+    presentation_closer(state.poster.clone(), 0)();
+    let posted = main_loop.take();
+    assert_eq!(posted.len(), 2);
+    for (_, task) in posted {
+        task(&mut state);
+    }
+    assert!(!state.core.has_presentation_streams());
+    state.save_on_quit();
+    for _ in 0..=ngterm_core::remote::INBOUND_LIMIT {
+        reader(b"ignored while quitting".to_vec());
+        for (_, task) in main_loop.take() {
+            task(&mut state);
+        }
+    }
+    presentation_closer(state.poster.clone(), 0)();
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    assert!(!state.core.has_presentation_streams());
+}
+
+fn state_with_live_terminal() -> (AppState, Uuid, Uuid) {
+    let (mut state, window, session) = state_with_terminal();
+    state
+        .core
+        .library_mut()
+        .store_mut(window)
+        .unwrap()
+        .session_mut(session)
+        .unwrap()
+        .surface
+        .replace(Box::new(FakeSurface::new("T").with_live_session(true)));
+    (state, window, session)
+}
+
+#[test]
+fn a_presentation_handoff_streams_hello_and_snapshot_then_releases_on_disconnect() {
+    use std::io::{BufRead as _, Write as _};
+    let (mut state, _, session) = state_with_live_terminal();
+    let (main_loop, _held) = record(&mut state);
+    let request = Request {
+        target: Some(session.to_string()),
+        ..Request::new(Command::Live(LiveCmd::Present))
+    };
+    let mut reply = state.handle_request(&request);
+    assert!(reply.response.ok, "{:?}", reply.response);
+    let owner = reply.stream.take().expect("presentation owns the connection");
+    let (server, mut peer) = ngterm_server::endpoint::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let worker = std::thread::spawn(move || owner.adopt(server, Vec::new()));
+    peer.write_all(b"{\"kind\":\"hello\",\"gen\":0,\"rev\":0,\"hello\":{\"version\":1,\"kinds\":[\"status\",\"hud\"],\"mode\":\"mirror\"}}\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let posted = main_loop.take();
+        let received = posted.iter().any(|(delay, _)| delay.is_none());
+        for (delay, task) in posted {
+            if delay.is_none() {
+                task(&mut state);
+            }
+        }
+        if received {
+            break;
+        }
+        assert!(Instant::now() < deadline, "presentation did not post its hello");
+        std::thread::yield_now();
+    }
+    let mut reader = std::io::BufReader::new(peer.try_clone().unwrap());
+    let mut kinds = Vec::new();
+    for _ in 0..2 {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
+        kinds.push(frame["kind"].as_str().unwrap().to_owned());
+    }
+    peer.shutdown(std::net::Shutdown::Both).unwrap();
+    worker.join().unwrap();
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    assert_eq!(kinds, ["hello", "snapshot"]);
+    assert!(!state.core.has_presentation_streams());
+}
+
+#[test]
+fn presentation_deadlines_and_heartbeats_stop_after_the_last_stream_or_quit() {
+    let (mut state, _, session) = state_with_live_terminal();
+    let (main_loop, _held) = record(&mut state);
+    let mut reply = state.handle_request(&Request {
+        target: Some(session.to_string()),
+        ..Request::new(Command::Live(LiveCmd::Present))
+    });
+    assert!(reply.response.ok, "{:?}", reply.response);
+    assert!(state.core.has_presentation_streams());
+    let posted = main_loop.take();
+    state.arm_presentation_heartbeat();
+    assert!(main_loop.take().is_empty(), "the existing heartbeat is not duplicated");
+    for (delay, task) in posted {
+        if delay == Some(ngterm_core::remote::HELLO_DEADLINE) {
+            task(&mut state);
+        }
+    }
+    reply.stream.take().unwrap().abandon();
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    assert!(!state.core.has_presentation_streams());
+    state.save_on_quit();
+    state.heartbeat_armed = false;
+    state.arm_presentation_heartbeat();
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    assert!(!state.heartbeat_armed);
+}
+
+#[test]
+fn a_ready_pane_gets_one_spawn_grant_and_quit_prevents_new_grants() {
+    let (mut state, _, session) = state_with_terminal();
+    state.pane_spawn_ready(session, "T");
+    let spawns = state.take_spawns();
+    assert_eq!(spawns.len(), 1);
+    assert_eq!(spawns[0].session, session);
+    assert_eq!(spawns[0].token, "T");
+    assert!(state.take_spawns().is_empty());
+    state.save_on_quit();
+    state.pane_spawn_ready(session, "T");
+    assert!(state.take_spawns().is_empty());
+}
+
+#[test]
+fn stale_remote_reports_are_ignored_before_and_after_quit() {
+    let (mut state, _, session) = state_with_terminal();
+    let key = ngterm_core::remote::LinkKey {
+        session,
+        client: 99,
+        launch: 1,
+    };
+    let helper = ngterm_core::remote::replica_page::HelperKey {
+        page: Uuid::new_v4(),
+        launch: 1,
+    };
+    for quitting in [false, true] {
+        if quitting {
+            state.save_on_quit();
+        }
+        state.viewer_line(key, b"{}");
+        state.viewer_closed(key, "closed");
+        state.page_helper_line(helper, b"{}");
+        state.page_helper_closed(helper, "closed");
+        state.retry_remote_links();
+        assert_eq!(state.take_frontend_work(), FrontendWork::default());
+    }
+}
+
+/// The origin's presentation transport, with frames read as the remote presenter sees them.
+#[derive(Clone, Default)]
+struct Presenter(Rc<RefCell<Vec<serde_json::Value>>>);
+
+impl ngterm_core::LineChannel for Presenter {
+    fn send(&self, line: Vec<u8>) -> bool {
+        self.0.borrow_mut().push(serde_json::from_slice(&line).unwrap());
+        true
+    }
+    fn shutdown(&self) {}
+}
+
+impl Presenter {
+    fn last(&self, kind: &str) -> serde_json::Value {
+        self.0
+            .borrow()
+            .iter()
+            .rev()
+            .find(|frame| frame["kind"] == kind)
+            .unwrap()
+            .clone()
+    }
+}
+
+/// A local live pane reported as a follower, with a presenter ready to receive its overlays.
+fn presented_state() -> (AppState, Uuid, Presenter, tempfile::TempDir) {
+    let (mut state, window, session) = state_with_terminal();
+    let dir = tempfile::tempdir().unwrap();
+    let integration = dir.path().join("shell-integration/zsh");
+    std::fs::create_dir_all(&integration).unwrap();
+    std::fs::write(integration.join(".zshenv"), "").unwrap();
+    state
+        .core
+        .set_restore_launch(ngterm_core::restore::mode::RestoreLaunchDecision::new(
+            ngterm_core::persist::RestoreMode::Live,
+            None,
+        ));
+    state.core.install_live_sessions(ngterm_core::LiveInstall {
+        host: Arc::new(ngterm_host::fakes::FakeSessionHost::new()),
+        endpoint: ngterm_proto::ControlLiveEndpoint {
+            executable: "ngterm-session".into(),
+            socket_directory: dir.path().to_string_lossy().into_owned(),
+        },
+        wrap: ngterm_core::live::support::Inputs {
+            executable: std::env::current_exe().unwrap(),
+            login_shell: Some("/bin/zsh".into()),
+            resources_dir: Some(dir.path().to_owned()),
+            state_dir: dir.path().join("state"),
+            ..Default::default()
+        },
+        state_dir: dir.path().to_owned(),
+        outdated_before: None,
+    });
+    let found = state
+        .core
+        .library_mut()
+        .store_mut(window)
+        .unwrap()
+        .session_mut(session)
+        .unwrap();
+    let token = found.pane_identity.to_string().to_uppercase();
+    found
+        .surface
+        .replace(Box::new(FakeSurface::new(&token).with_live_session(true)));
+    let seed = state.core.request_pane_spawn(session, &token).unwrap();
+    let nonce = seed
+        .env
+        .iter()
+        .find(|(key, _)| key == "NGTERM_LIVE_MANAGED")
+        .expect("the live attachment nonce")
+        .1
+        .clone();
+    state.report_pane(
+        session,
+        &token,
+        &PaneReport::Title(format!("ngterm-live-role;{nonce}:follower:1")),
+    );
+    let presenter = Presenter::default();
+    let serial = state
+        .core
+        .adopt_presentation_stream(&session.to_string(), Box::new(presenter.clone()));
+    state.core.presentation_line(serial, &serde_json::to_vec(&serde_json::json!({"kind":"hello", "gen":0, "rev":0, "hello":{"version":1, "kinds":ngterm_core::remote::hub::SUPPORTED_KINDS, "mode":"presenter"}})).unwrap());
+    let generation = presenter.last("hello")["gen"].clone();
+    state.core.presentation_line(
+        serial,
+        &serde_json::to_vec(&serde_json::json!({"kind":"presenter.acquire", "gen":generation, "rev":1})).unwrap(),
+    );
+    assert_eq!(presenter.last("presenter.granted")["kind"], "presenter.granted");
+    (state, session, presenter, dir)
+}
+
+/// Runs posted socket callbacks until `done` observes their effect, without advancing timers.
+fn run_until(state: &mut AppState, main_loop: &RecordingLoop<AppState>, done: impl Fn(&AppState) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !done(state) {
+        for (delay, task) in main_loop.take() {
+            if delay.is_none() {
+                task(state);
+            }
+        }
+        assert!(Instant::now() < deadline, "the main-loop effect did not arrive");
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn a_job_handoff_reports_the_helpers_exit_code_to_the_overlay_result() {
+    use std::io::{BufRead as _, Write as _};
+    let (mut state, session, presenter, _dir) = presented_state();
+    let (main_loop, _held) = record(&mut state);
+    assert!(
+        send(
+            &mut state,
+            Command::Session(SessionCmd::OverlayOpen),
+            Some(session.to_string()),
+            Args {
+                command: Some("printf done".into()),
+                follow: Some(true),
+                ..Args::default()
+            }
+        )
+        .ok
+    );
+    let job = presenter.last("overlay.request")["overlay"]["job"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut reply = state.handle_request(&Request {
+        target: Some(job),
+        ..Request::new(Command::Session(SessionCmd::OverlayJobRun))
+    });
+    assert!(reply.response.ok, "{:?}", reply.response);
+    let owner = reply.stream.take().unwrap();
+    let (server, mut peer) = ngterm_server::endpoint::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let worker = std::thread::spawn(move || owner.adopt(server, Vec::new()));
+    let mut line = String::new();
+    std::io::BufReader::new(peer.try_clone().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
+    peer.write_all(b"{\"kind\":\"started\"}\n{\"kind\":\"exited\",\"code\":7}\n")
+        .unwrap();
+    peer.shutdown(std::net::Shutdown::Write).unwrap();
+    worker.join().unwrap();
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    assert_eq!(frame["kind"], "context");
+    let result = send(
+        &mut state,
+        Command::Session(SessionCmd::OverlayResult),
+        Some(session.to_string()),
+        Args::default(),
+    );
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.result.unwrap()["exitCode"], 7);
+}
+
+fn open_served_page(
+    state: &mut AppState,
+    session: Uuid,
+    presenter: &Presenter,
+    dir: &std::path::Path,
+) -> (String, String) {
+    let file = dir.join("index.html");
+    std::fs::write(&file, "<p>served</p>").unwrap();
+    let response = send(
+        state,
+        Command::Session(SessionCmd::OverlayOpen),
+        Some(session.to_string()),
+        Args {
+            html: Some(file.to_string_lossy().into_owned()),
+            cwd: Some(dir.to_string_lossy().into_owned()),
+            javascript: Some(true),
+            follow: Some(true),
+            ..Args::default()
+        },
+    );
+    assert!(response.ok, "{response:?}");
+    let page = response.result.unwrap()["pageID"].as_str().unwrap().to_owned();
+    let token = presenter.last("page.request")["page"]["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    (page, token)
+}
+
+#[test]
+fn a_page_channel_runs_bridge_requests_and_returns_their_wire_reply() {
+    use std::io::{BufRead as _, Write as _};
+    let (mut state, session, presenter, dir) = presented_state();
+    let (main_loop, _held) = record(&mut state);
+    let (_, token) = open_served_page(&mut state, session, &presenter, dir.path());
+    let mut reply = state.handle_request(&Request {
+        target: Some(token),
+        ..Request::new(Command::Session(SessionCmd::OverlayPageServe))
+    });
+    assert!(reply.response.ok, "{:?}", reply.response);
+    let (server, mut peer) = ngterm_server::endpoint::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let owner = reply.stream.take().unwrap();
+    let worker = std::thread::spawn(move || owner.adopt(server, Vec::new()));
+    let frame = serde_json::json!({"kind":"bridge", "id":1, "request":r#"{"cmd":"session.rename","args":{"name":"from page"}}"#});
+    writeln!(peer, "{frame}").unwrap();
+    run_until(&mut state, &main_loop, |state| {
+        state.core.library().held_session(session).unwrap().display_name() == "from page"
+    });
+    let mut line = String::new();
+    std::io::BufReader::new(peer.try_clone().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    peer.shutdown(std::net::Shutdown::Both).unwrap();
+    worker.join().unwrap();
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(frame["kind"], "reply");
+    assert_eq!(frame["id"], 1);
+    let response: ngterm_proto::Response = serde_json::from_str(frame["response"].as_str().unwrap()).unwrap();
+    assert!(response.ok, "{response:?}");
+}
+
+#[test]
+fn abandoning_a_page_claim_ends_its_page_and_a_late_adoption_stays_closed() {
+    let (mut state, session, presenter, dir) = presented_state();
+    let (main_loop, _held) = record(&mut state);
+    let (page, token) = open_served_page(&mut state, session, &presenter, dir.path());
+    let mut reply = state.handle_request(&Request {
+        target: Some(token),
+        ..Request::new(Command::Session(SessionCmd::OverlayPageServe))
+    });
+    assert!(reply.response.ok, "{:?}", reply.response);
+    reply.stream.take().unwrap().abandon();
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    assert_eq!(presenter.last("page.close")["page"]["page"], page);
+    let closes = presenter
+        .0
+        .borrow()
+        .iter()
+        .filter(|frame| frame["kind"] == "page.close")
+        .count();
+    let mut late = state.page_serve_stream(reply.response);
+    late.stream.take().unwrap().abandon();
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    assert_eq!(
+        presenter
+            .0
+            .borrow()
+            .iter()
+            .filter(|frame| frame["kind"] == "page.close")
+            .count(),
+        closes
+    );
+}
+
+/// The HTML engine boundary: an available engine that accepts navigation.
+struct HtmlEngine;
+
+impl ngterm_core::html::HtmlHost for HtmlEngine {
+    fn persistent_store_failure(&self) -> Option<String> {
+        None
+    }
+    fn navigate(&self, _: Uuid, _: ngterm_core::html::HtmlNavigation) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[test]
+fn document_probes_open_supported_documents_and_reveal_failed_probes() {
+    use image::ImageEncoder as _;
+    for (name, bytes, image) in [
+        ("notes.md", b"# Notes".to_vec(), false),
+        ("broken.png", b"not an image".to_vec(), true),
+        (
+            "pixel.png",
+            {
+                let mut bytes = Vec::new();
+                image::codecs::png::PngEncoder::new(&mut bytes)
+                    .write_image(&[255, 0, 0, 255], 1, 1, image::ExtendedColorType::Rgba8)
+                    .unwrap();
+                bytes
+            },
+            true,
+        ),
+    ] {
+        let (mut state, _, session) = state_with_terminal();
+        let (main_loop, _held) = record(&mut state);
+        state.core.set_html_host(Box::new(HtmlEngine));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        state.open_document_link(path.clone(), session, Some(60), image);
+        run_until(&mut state, &main_loop, |state| {
+            !state.frontend.reveals.is_empty()
+                || state
+                    .core
+                    .library()
+                    .held_session(session)
+                    .unwrap()
+                    .overlay
+                    .page()
+                    .is_some()
+        });
+        if name == "broken.png" {
+            assert_eq!(state.take_frontend_work().reveals, [path]);
+        } else {
+            assert!(state.take_frontend_work().reveals.is_empty());
+        }
+    }
+}
+
+#[test]
+fn web_links_open_overlays_and_quit_discards_an_inflight_document_probe() {
+    let (mut state, _, session) = state_with_terminal();
+    state.core.set_html_host(Box::new(HtmlEngine));
+    state.follow_link("https://example.com", ClickOrigin::Pane(session), false);
+    // Browser is the default.
+    assert_eq!(state.take_frontend_work().open_urls, ["https://example.com"]);
+    state
+        .core
+        .change_settings(ngterm_core::settings_model::SettingsChange::General(
+            ngterm_core::settings_model::GeneralChange::LinkOpenMode(LinkOpenMode::Overlay),
+        ));
+    state.follow_link("https://example.com/overlay", ClickOrigin::Pane(session), false);
+    assert!(
+        state
+            .core
+            .library()
+            .held_session(session)
+            .unwrap()
+            .overlay
+            .page()
+            .is_some()
+    );
+    assert!(state.take_frontend_work().open_urls.is_empty());
+    let (main_loop, _held) = record(&mut state);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("notes.md");
+    std::fs::write(&path, "# Notes").unwrap();
+    state.open_document_link(path, session, None, false);
+    state.save_on_quit();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let tasks = main_loop.take();
+        if !tasks.is_empty() {
+            for (_, task) in tasks {
+                task(&mut state);
+            }
+            break;
+        }
+        assert!(Instant::now() < deadline, "the document probe never completed");
+        std::thread::yield_now();
+    }
+    assert_eq!(state.take_frontend_work(), FrontendWork::default());
+}
+
+#[test]
+fn the_remotes_watch_refreshes_the_model_and_stops_on_drop() {
+    let (mut state, _, _) = state_with_terminal();
+    let dir = tempfile::tempdir().unwrap();
+    state
+        .core
+        .set_config_locator(ngterm_core::paths::ConfigLocator::capture(
+            &ngterm_core::paths::MapEnv::new().with("NGTERM_STATE_DIR", dir.path()),
+        ));
+    let path = dir.path().join("config/remotes.conf");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "studio\n").unwrap();
+    state.core.load_remotes_at_launch();
+    let (main_loop, _held) = record(&mut state);
+    state.watch_remotes();
+    assert!(state.remotes_watcher.is_some());
+    // The watch's first callback is sent after its OS watch has been armed.
+    run_until(&mut state, &main_loop, |state| {
+        !state.core.configured_remotes().is_empty()
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let tasks = main_loop.take();
+        if !tasks.is_empty() {
+            for (_, task) in tasks {
+                task(&mut state);
+            }
+            break;
+        }
+        assert!(Instant::now() < deadline, "watch never armed");
+        std::thread::yield_now();
+    }
+    std::fs::write(&path, "studio\nlaptop\n").unwrap();
+    run_until(&mut state, &main_loop, |state| {
+        state.core.configured_remotes().len() == 2
+    });
+    assert_eq!(state.core.watched_remotes_path(), path);
+    state.save_on_quit();
+    std::fs::write(&path, "studio\n").unwrap();
+    drop(state.remotes_watcher.take());
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    assert_eq!(
+        state.core.configured_remotes().len(),
+        2,
+        "quit ignores late watch callbacks"
+    );
+}
+
+#[test]
+fn page_bridge_requests_type_immediately_or_resume_when_the_terminal_is_ready() {
+    let (mut state, window, session) = state_with_terminal();
+    let surface = FakeSurface::new("T").with_realized(false);
+    let probe = surface.probe();
+    state
+        .core
+        .library_mut()
+        .store_mut(window)
+        .unwrap()
+        .session_mut(session)
+        .unwrap()
+        .surface
+        .replace(Box::new(surface));
+    let (main_loop, _held) = record(&mut state);
+    let request = Request {
+        cmd: Command::Session(SessionCmd::Type),
+        target: Some(session.to_string()),
+        args: Some(Args {
+            text: Some("from bridge".into()),
+            ..Args::default()
+        }),
+    };
+    state.handle_page_request(&request, u64::MAX);
+    let posted = main_loop.take();
+    probe.set_realized(true);
+    for (_, task) in posted {
+        task(&mut state);
+    }
+    assert_eq!(probe.typed(), ["from bridge"]);
+    state.handle_page_request(&request, u64::MAX);
+    assert_eq!(probe.typed(), ["from bridge", "from bridge"]);
+}
+
+#[test]
+fn window_state_zoom_and_user_activity_reach_the_model() {
+    let (mut state, window, session) = state_with_terminal();
+    let changed = ngterm_core::WindowState {
+        fullscreen: true,
+        ..Default::default()
+    };
+    state.window_state_changed(window, changed);
+    assert_eq!(state.core.window_state(window), Some(changed));
+    state.core.set_zoom_target(
+        window,
+        Some(ngterm_core::zoom::SurfaceId {
+            session,
+            surface: ngterm_core::zoom::ZoomSurface::Primary,
+        }),
+    );
+    state.exit_zoom(window);
+    assert!(state.core.zoom_target(window).is_none());
+    state.quick_keystroke();
+    state.overlay_keystroke(session);
+    assert!(state.core.tree(None).unwrap().idle_ms.is_some());
+    state.save_on_quit();
+    state.window_state_changed(window, ngterm_core::WindowState::default());
+    assert_eq!(state.core.window_state(window), Some(changed));
+}
+
+fn configure_remote_choices(state: &mut AppState, dir: &std::path::Path) {
+    state
+        .core
+        .set_config_locator(ngterm_core::paths::ConfigLocator::capture(
+            &ngterm_core::paths::MapEnv::new().with("NGTERM_STATE_DIR", dir),
+        ));
+    let path = dir.join("config/remotes.conf");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, "studio\nlaptop\n").unwrap();
+    state.core.load_remotes_at_launch();
+}
+
+#[test]
+fn the_remote_tick_rearms_while_a_host_picker_waits_and_stops_after_cancel() {
+    let (mut state, window, _) = state_with_terminal();
+    let dir = tempfile::tempdir().unwrap();
+    configure_remote_choices(&mut state, dir.path());
+    let (main_loop, _held) = record(&mut state);
+    state.core.attach_remote(window);
+    state.settle();
+    let id = state.core.tree(None).unwrap().pick_pending.unwrap();
+    let first = main_loop.take();
+    state.arm_remote_tick();
+    assert!(main_loop.take().is_empty(), "a waiting picker has one tick");
+    for (_, task) in first {
+        task(&mut state);
+    }
+    assert!(state.core.modal_pending(window));
+    state.resolve_pick(
+        window,
+        &id,
+        ngterm_proto::ControlPickResult::outcome(ngterm_proto::ControlPickOutcome::Cancelled),
+    );
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    assert!(!state.core.modal_pending(window));
+    assert_eq!(state.core.remote_wake(), None);
+    state.save_on_quit();
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    assert!(!state.remote_tick_armed);
+}
+
+#[test]
+fn a_closed_loop_leaves_remote_timers_unarmed_and_panels_usable() {
+    let (mut state, window, _) = state_with_terminal();
+    let dir = tempfile::tempdir().unwrap();
+    configure_remote_choices(&mut state, dir.path());
+    let main_loop: Arc<dyn MainLoop<AppState>> = Arc::new(ClosedLoop);
+    state.poster = Arc::downgrade(&main_loop);
+    state.core.attach_remote(window);
+    state.settle();
+    assert!(!state.remote_tick_armed);
+    assert!(state.core.modal_pending(window));
+    let id = state.core.tree(None).unwrap().pick_pending.unwrap();
+    state.resolve_pick(
+        window,
+        &id,
+        ngterm_proto::ControlPickResult::outcome(ngterm_proto::ControlPickOutcome::Cancelled),
+    );
+    assert!(!state.core.modal_pending(window));
+}
+
+#[test]
+fn quitting_ignores_late_ask_edits_answers_and_window_confirmations() {
+    use crate::ask_dialog::form::DraftEdit;
+    use ngterm_proto::{ControlAskOutcome, ControlAskResult, ControlPickOutcome, ControlPickResult};
+    let (mut state, window, session) = state_with_terminal();
+    let id = open_input_ask(&mut state, session, true);
+    state.save_on_quit();
+    let before = serde_json::to_value(state.core.tree(None).unwrap()).unwrap();
+    let answer = ControlAskResult::outcome(ControlAskOutcome::Escaped);
+    state.edit_window_ask_draft(window, &id, &DraftEdit::Text("late".into()));
+    state.edit_session_ask_draft(session, &id, &DraftEdit::Text("late".into()));
+    state.answer_window_ask_button(window, &id, 0);
+    state.answer_session_ask_button(session, &id, 0);
+    state.answer_window_ask(window, &id, answer.clone());
+    state.answer_session_ask(session, &id, answer);
+    state.resolve_pick(window, &id, ControlPickResult::outcome(ControlPickOutcome::Cancelled));
+    state.close_requested(window);
+    state.close_confirmed(window);
+    state.clear_flags_requested(window);
+    state.clear_flags_confirmed(window);
+    state.report_pane(session, "T", &PaneReport::Title("late".into()));
+    state.window_command(WindowCmd::Rename, window, Some("late".into()));
+    state.pane_focused(session, "T");
+    state.save_on_quit();
+    assert_eq!(serde_json::to_value(state.core.tree(None).unwrap()).unwrap(), before);
+    assert_eq!(state.take_frontend_work(), FrontendWork::default());
+}
+
+#[test]
+fn a_soft_close_timer_finalizes_its_held_session_and_tears_down_its_terminal() {
+    let (mut state, window, session) = state_with_terminal();
+    let store = state.core.library_mut().store_mut(window).unwrap();
+    let workspace = store.workspaces()[0].id();
+    let survivor = store.add_session(workspace, NewSession::at_cwd("/srv")).unwrap();
+    let surface = FakeSurface::new("T");
+    let probe = surface.probe();
+    store.session_mut(session).unwrap().surface.replace(Box::new(surface));
+    assert!(store.soft_close_session(session));
+    let (main_loop, _held) = record(&mut state);
+    state.settle();
+    assert!(state.core.library().held_session(session).is_some());
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    assert!(state.core.library().held_session(session).is_none());
+    assert!(state.core.library().held_session(survivor).is_some());
+    assert_eq!(probe.teardowns(), 1);
+}
+
+#[test]
+fn a_pane_keystroke_clears_only_the_status_owned_by_that_pane() {
+    use ngterm_core::model::{AgentIndicator, AgentStatus};
+    let (mut state, window, session) = state_with_terminal();
+    state.core.library_mut().store_mut(window).unwrap().set_agent_indicator(
+        AgentIndicator {
+            status: AgentStatus::Blocked,
+            ..Default::default()
+        },
+        session,
+    );
+    state.pane_keystroke(session, "stale", StatusKeystroke::Other);
+    assert_eq!(
+        state
+            .core
+            .library()
+            .held_session(session)
+            .unwrap()
+            .agent_indicator
+            .status,
+        AgentStatus::Blocked
+    );
+    state.pane_keystroke(session, "T", StatusKeystroke::Other);
+    assert_eq!(
+        state
+            .core
+            .library()
+            .held_session(session)
+            .unwrap()
+            .agent_indicator
+            .status,
+        AgentStatus::Idle
+    );
+}
+
+#[test]
+fn a_live_reset_quit_is_deferred_until_the_reply_has_time_to_leave() {
+    let (mut state, _, _) = state_with_terminal();
+    let (main_loop, _held) = record(&mut state);
+    state.schedule_live_quit(ngterm_core::LiveQuit { relaunch: false });
+    assert!(!state.take_frontend_work().quit);
+    for (delay, task) in main_loop.take() {
+        assert_eq!(delay, Some(LIVE_QUIT_DELAY));
+        task(&mut state);
+    }
+    assert!(state.take_frontend_work().quit);
+    state.ask_live_reset(crate::live_runtime::ResetAlert::Refused(
+        ngterm_core::ResetRefusal::NothingToReset,
+    ));
+    assert_eq!(
+        state.take_frontend_work().live_reset,
+        Some(crate::live_runtime::ResetAlert::Refused(
+            ngterm_core::ResetRefusal::NothingToReset
+        ))
+    );
+}
+
+#[test]
+fn a_custom_keybind_launches_with_its_typing_sessions_context() {
+    let (mut state, window, session) = state_with_terminal();
+    let launcher = Arc::new(ngterm_host::fakes::FakeProcessLauncher::new());
+    state.core.set_process_host(ngterm_core::ProcessHost {
+        launcher: launcher.clone(),
+        poster: Arc::new(|_| {}),
+        socket: "/private/control.sock".into(),
+        cli_dir: None,
+        path: None,
+    });
+    let command = ngterm_core::keymap::CustomCommand::new("mark", "echo {AGT_SESSION_ID}", "");
+    state.keymap_fired(
+        KeyOrigin::Window(window),
+        Fired::Command(command),
+        Some(TypingSurface {
+            owner: ngterm_core::keymap::SurfaceOwner::Pane {
+                session,
+                token: "T".into(),
+            },
+            selection: None,
+        }),
+    );
+    let attempts = launcher.launches();
+    assert_eq!(attempts.len(), 1);
+    let expected = ngterm_host::ShellCommand::new(&format!("echo {}", session.to_string().to_uppercase()));
+    assert_eq!(attempts[0].program, expected.program);
+    assert_eq!(attempts[0].args, expected.args);
+    assert_eq!(attempts[0].raw_tail, expected.raw_tail);
+    assert!(launcher.finish(
+        ngterm_host::fakes::FakeProcessLauncher::FIRST_PID,
+        ngterm_host::ProcessExit::default()
+    ));
+}
+
+#[test]
+fn hud_frame_reports_update_the_live_hud_but_quit_keeps_the_last_geometry() {
+    let (mut state, _, session) = state_with_terminal();
+    let dir = tempfile::tempdir().unwrap();
+    state.core.set_hud_body_dir(dir.path().to_path_buf());
+    let response = send(
+        &mut state,
+        Command::Session(SessionCmd::HudOpen),
+        Some(session.to_string()),
+        Args {
+            message: Some("Building".into()),
+            ..Args::default()
+        },
+    );
+    assert!(response.ok, "{response:?}");
+    let frames = ngterm_core::hud::HudPaneFrames {
+        detail: Some(ngterm_core::hud::HudPaneFrame {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 500.0,
+        }),
+        ..Default::default()
+    };
+    state.report_hud_frames(session, &frames);
+    assert_eq!(state.core.library().held_session(session).unwrap().hud_frames, frames);
+    state.report_hud_frames(session, &frames);
+    state.save_on_quit();
+    let changed = ngterm_core::hud::HudPaneFrames {
+        detail: Some(ngterm_core::hud::HudPaneFrame {
+            width: 100.0,
+            height: 100.0,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    state.report_hud_frames(session, &changed);
+    assert_eq!(state.core.library().held_session(session).unwrap().hud_frames, frames);
+}
