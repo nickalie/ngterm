@@ -1486,12 +1486,16 @@ fn an_old_program_that_will_not_die_closes_the_pane() {
 #[test]
 fn a_pane_that_cannot_be_rebuilt_after_the_kill_is_closed() {
     let mut live = live();
-    live.host.set_record(&daemon_name(live.left), Some(1), Some(100), None);
-    let integration = live.resources.path().join("shell-integration/zsh/.zshenv");
-    let response = run_restart(&mut live, |_, step| {
-        if step == 0 {
-            std::fs::remove_file(&integration).unwrap();
-        }
+    // the kill is held until the wrap breaks, so the rebuild always runs after it whichever thread is faster
+    let (wait, release) = block_kills(&mut live);
+    let dispatched = begin_restart(&mut live);
+    wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    std::fs::remove_file(live.resources.path().join("shell-integration/zsh/.zshenv")).unwrap();
+    release.send(()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let response = drive(live.core(), dispatched, |_, _| {
+        assert!(std::time::Instant::now() < deadline, "restart did not settle");
+        std::thread::yield_now();
     });
     assert_eq!(
         response,
@@ -2221,8 +2225,14 @@ fn a_leading_pane_s_cursor_is_its_daemon_s() {
 #[test]
 fn a_search_refuses_a_pane_covered_while_it_waits() {
     const COVERED: &str = "pane is covered while another Mac leads it; take the lead first (session lead)";
-    // the pending step before which the cover lands, and whether the terminal is up at the start
-    for (covered_at, realized) in [(0, false), (0, true), (1, true)] {
+    // the pending step before which the cover lands, whether the terminal is up at the start, and what reached the
+    // pane before the refusal: each later wait refuses too, so only these tell which wait held the cover back
+    let cases: [(usize, bool, &[&str]); 3] = [
+        (0, false, &[]),
+        (0, true, &["start_search"]),
+        (1, true, &["start_search", "search:needle"]),
+    ];
+    for (covered_at, realized, sent) in cases {
         let mut live = live();
         let token = uuid_string(live.left);
         let nonce = spawn_live(&mut live);
@@ -2243,10 +2253,14 @@ fn a_search_refuses_a_pane_covered_while_it_waits() {
                 core.report_search(session, &token, crate::model::SearchReport::Total(Some(1)));
             }
         });
+        let case = format!("covered at {covered_at}, realized {realized}");
+        assert_eq!(response, failure(COVERED), "{case}");
+        assert_eq!(live.probe.actions(), sent, "{case}");
+        let needle = &live.fixture.store().session(session).unwrap().search.needle;
         assert_eq!(
-            response,
-            failure(COVERED),
-            "covered at {covered_at}, realized {realized}"
+            needle == "needle",
+            sent.contains(&"search:needle"),
+            "{case}: {needle:?}"
         );
     }
 }
