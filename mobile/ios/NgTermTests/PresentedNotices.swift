@@ -48,7 +48,8 @@ internal final class PresentedNotices: NSObject, UNUserNotificationCenterDelegat
         try await presented(id, timeout: Self.presentationLimit)
     }
 
-    /// The notification `id` once the system presents it, or an error on cancellation or after `timeout`.
+    /// The notification `id` once the system presents it, or an error on cancellation or after `timeout`; one presented
+    /// before the wait returns at once.
     internal func presented(_ id: String, timeout: Duration) async throws -> Shown {
         try Task.checkCancellation()
         if let seen = shown[id] {

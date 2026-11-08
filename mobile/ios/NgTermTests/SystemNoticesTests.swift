@@ -9,8 +9,12 @@ import UserNotifications
 ///
 /// Each test's actions carry a tag of its own, by which it finds the categories the system reads back. The suite runs
 /// one test at a time, as every post sets the app's whole set of categories.
+///
+/// A simulator's notification service can leave the first calls unanswered for well over a minute (a CI tablet's, a
+/// few minutes after its first boot, answered after about 100 seconds), so a test has longer than other suites' minute;
+/// a presentation is waited for only once the system has the notices, its own limit counting from there.
 @MainActor
-@Suite("the system's notifications", .serialized, .timeLimit(.minutes(1)))
+@Suite("the system's notifications", .serialized, .timeLimit(.minutes(3)))
 internal struct SystemNoticesTests {
     private let tag = UUID().uuidString
 
@@ -90,9 +94,9 @@ internal struct SystemNoticesTests {
         defer { presented.restore() }
         let asking = ask("shown", actions: [NoticeAction(id: action("shown"), title: "Allow")])
         let plain = ask("plain", actions: [])
-        let askingPresentation = Task.immediate { try await presented.presented(asking.id) }
         try await Self.withPosted([asking, plain]) {
-            let shown = try await askingPresentation.value
+            // the wait starts once the system has the notices: one it presented before is kept for it
+            let shown = try await presented.presented(asking.id)
             let category = try #require(await Self.category(offering: action("shown")))
             let expected = PresentedNotices.Shown(
                 title: "Claude asks",
