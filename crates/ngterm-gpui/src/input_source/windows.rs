@@ -158,3 +158,7 @@ impl Backend for KeyboardLayouts {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;
