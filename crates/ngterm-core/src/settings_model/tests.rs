@@ -340,7 +340,8 @@ fn chrome_elements_split_between_title_bar_and_sidebar() {
             "Workspace filter",
             "Workspace add-session",
             "Workspace icons",
-            "Session icons"
+            "Session icons",
+            "Workspace chevrons"
         ]
     );
     assert_eq!(
@@ -700,9 +701,9 @@ fn a_chosen_directory_is_stored_exactly_and_a_blank_one_is_the_default() {
     assert_eq!(blank, AppSettings::default());
 }
 
-/// Upstream's `rowIconElementsAreShownByDefaultAndHideIndependently` and `SettingsModel`'s raw storage.
+/// Upstream's `rowElementsAreShownByDefaultAndHideIndependently` and `SettingsModel`'s raw storage.
 #[test]
-fn row_icon_elements_are_shown_by_default_and_hide_independently() {
+fn row_elements_are_shown_by_default_and_hide_independently() {
     for (element, name, other) in [
         (
             InterfaceElement::SessionIcons,
@@ -713,6 +714,11 @@ fn row_icon_elements_are_shown_by_default_and_hide_independently() {
             InterfaceElement::WorkspaceIcons,
             "Workspace icons",
             InterfaceElement::SessionIcons,
+        ),
+        (
+            InterfaceElement::WorkspaceChevrons,
+            "Workspace chevrons",
+            InterfaceElement::WorkspaceIcons,
         ),
     ] {
         assert!(!element.in_title_bar());

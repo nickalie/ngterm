@@ -265,6 +265,7 @@ raw_enum! {
         WorkspaceAddSession => "workspaceAddSession",
         WorkspaceIcons => "workspaceIcons",
         SessionIcons => "sessionIcons",
+        WorkspaceChevrons => "workspaceChevrons",
     }
 }
 

@@ -417,8 +417,8 @@ impl Sidebar {
     }
 
     /// Opens or folds workspace row `id`, or parent row `id`'s companions, persisted (a user toggle: the disclosure,
-    /// or a workspace row click). A parent row follows at once, the fold persisting through the store (upstream's
-    /// `parentExpansionChanged`).
+    /// a workspace row click, or the row menu's Collapse Workspace / Expand Workspace). A parent row follows at once,
+    /// the fold persisting through the store (upstream's `parentExpansionChanged`).
     pub fn toggle(&mut self, id: Uuid) {
         match self.row(id).map(|row| row.kind) {
             Some(RowKind::Workspace { expanded }) => {
@@ -528,8 +528,8 @@ impl Sidebar {
         let Some(row) = self.row(id) else {
             return Vec::new();
         };
-        if row.is_workspace() {
-            menu::workspace_menu(&self.context.menu, id)
+        if let RowKind::Workspace { expanded } = row.kind {
+            menu::workspace_menu(&self.context.menu, id, expanded)
         } else {
             menu::session_menu(&self.context.menu, id, |cwd| Path::new(cwd).is_dir())
         }
@@ -554,6 +554,7 @@ impl Sidebar {
             MenuAction::Close(ids) => self.close_sessions(ids, window, cx),
             MenuAction::NewSession(workspace) => self.act(SidebarAction::NewSession { workspace }),
             MenuAction::OpenDirectory(workspace) => self.open_directory(workspace, window, cx),
+            MenuAction::ToggleExpansion(workspace) => self.toggle(workspace),
             MenuAction::ToggleFocus(id) => self.act(SidebarAction::ToggleFocus(id)),
             MenuAction::FocusMembership { workspace, member } => {
                 self.act(SidebarAction::SetFocusMembership { workspace, member });

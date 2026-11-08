@@ -1597,3 +1597,187 @@ fn hidden_remote_icon_moves_only_its_connection_notice_to_the_name() {
         );
     }
 }
+
+// MARK: - workspace chevrons (#909: upstream's `SidebarRowIndentTests`, `SidebarWorkspaceExpansionMenuTests`)
+
+fn chevrons_hidden(hidden: bool) -> ngterm_core::settings_model::SettingsChange {
+    use ngterm_core::persist::settings::InterfaceElement;
+    use ngterm_core::settings_model::{InterfaceChange, SettingsChange};
+    SettingsChange::Interface(InterfaceChange::ElementVisible {
+        element: InterfaceElement::WorkspaceChevrons,
+        visible: !hidden,
+    })
+}
+
+/// Upstream's `testHiddenChevronsStartWorkspaceRowsAtTheEdgeOnEveryVersion` and
+/// `testHiddenChevronsKeepACompanionParentsTriangleWholeAheadOfItsContent`, on the leads: a workspace row starts at the
+/// edge, the nested rows shift left by its strip short of a disclosure, so a parent's disclosure fits whole ahead of
+/// its glyph and a companion still indents one level past its parent, at both densities.
+#[test]
+fn hidden_chevrons_start_workspace_rows_at_the_edge_and_keep_a_parents_disclosure_whole() {
+    use ngterm_core::persist::settings::SidebarDensity;
+    use view::row_lead;
+    let session = |group| {
+        let mut row = session_row(Uuid::new_v4(), false);
+        if let RowKind::Session { group: slot, .. } = &mut row.kind {
+            *slot = group;
+        }
+        row
+    };
+    let mut workspace = session_row(Uuid::new_v4(), false);
+    workspace.kind = RowKind::Workspace { expanded: true };
+    let plain = session(RowGroup::Plain);
+    let parent = session(RowGroup::Parent { expanded: true });
+    let companion = session(RowGroup::Companion { nested: true });
+    let mut flat = session(RowGroup::Plain);
+    flat.kind = RowKind::Session {
+        workspace: Uuid::nil(),
+        nested: false,
+        selected: false,
+        group: RowGroup::Plain,
+    };
+    for density in [SidebarDensity::Default, SidebarDensity::Compact] {
+        let shown = Look {
+            density,
+            ..Look::default()
+        };
+        let hidden = Look {
+            chevrons: false,
+            ..shown
+        };
+        // compared as points: clippy's float_cmp holds raw f32s to an epsilon, and these are exact sums
+        let lead_of = |row: &SidebarRow, look: &Look| px(row_lead(row, look));
+        let indent = px(shown.metrics().nested_indent);
+        let edge = px(0.0);
+        assert_eq!(
+            lead_of(&workspace, &shown),
+            indent,
+            "{density:?}: the disclosure's strip"
+        );
+        assert_eq!(lead_of(&workspace, &hidden), edge, "{density:?}: at the edge");
+        assert_eq!(
+            lead_of(&flat, &hidden),
+            edge,
+            "{density:?}: a flat row never had the strip"
+        );
+        let lead = lead_of(&parent, &hidden);
+        assert_eq!(lead, lead_of(&plain, &hidden), "{density:?}: siblings line up");
+        assert!(
+            lead >= px(look::DISCLOSURE),
+            "{density:?}: the parent's disclosure fits whole"
+        );
+        assert!(lead <= lead_of(&parent, &shown), "{density:?}: never further in");
+        assert_eq!(
+            lead_of(&companion, &hidden) - lead,
+            indent,
+            "{density:?}: one level past its parent"
+        );
+        // the shift is the same for every nested row, so the tree's own indent survives it
+        assert_eq!(
+            lead_of(&companion, &shown) - lead_of(&companion, &hidden),
+            lead_of(&plain, &shown) - lead
+        );
+    }
+    let settings = AppSettings {
+        hidden_interface_elements: Some(vec!["workspaceChevrons".to_owned()]),
+        ..AppSettings::default()
+    };
+    assert!(!Look::of(crate::chrome::default_colors(), &settings).chevrons);
+    assert!(Look::default().chevrons);
+}
+
+/// Upstream's `testTogglingChevronsOnAMountedSidebarReappliesTheLayoutBothWays`: hiding the chevrons drops every
+/// workspace disclosure and moves the rows left, a parent's disclosure staying ahead of its glyph, and showing them
+/// again restores the layout exactly; the row still folds by a click while the chevrons are hidden.
+#[gpui_kit::test]
+fn toggling_the_chevrons_on_a_mounted_sidebar_relays_the_rows_out_both_ways(cx: &mut TestAppContext) {
+    let (library, srv, _) = library_with_companions(&["log"]);
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let two = h.id_of("two", cx);
+    let workspace_disclosure: &'static str = Box::leak(format!("disclosure:{two}").into_boxed_str());
+    let parent_disclosure: &'static str = Box::leak(format!("disclosure:{srv}").into_boxed_str());
+    let layout = |cx: &mut VisualTestContext| {
+        ["name:two", "name:var", "name:srv", "companion-row"].map(|selector| bounds(cx, selector).origin.x)
+    };
+    let shown = layout(cx);
+    assert!(cx.debug_bounds(workspace_disclosure).is_some());
+
+    h.state.core.change_settings(chevrons_hidden(true));
+    h.settle(cx);
+    assert!(cx.debug_bounds(workspace_disclosure).is_none(), "no workspace chevron");
+    let hidden = layout(cx);
+    let strip = px(look::Metrics::of(ngterm_core::persist::settings::SidebarDensity::Default).nested_indent);
+    assert_eq!(shown[0] - hidden[0], strip, "the workspace row takes the strip");
+    assert!(
+        hidden[1] < shown[1] && hidden[1] > hidden[0],
+        "a session moves left and stays nested"
+    );
+    let disclosure = bounds(cx, parent_disclosure);
+    assert!(disclosure.right() <= bounds(cx, "name:srv").left());
+    assert!(
+        disclosure.left() >= bounds(cx, "row:srv").left() + px(look::CONTENT_INSET),
+        "inside the row"
+    );
+    assert_eq!(
+        hidden[3] - hidden[2],
+        shown[3] - shown[2],
+        "the companion keeps its level"
+    );
+
+    // a row click still folds it: the chevron and the row click are separate settings
+    let at = bounds(cx, "row:two").center();
+    cx.simulate_click(at, Modifiers::default());
+    cx.executor().advance_clock(DOUBLE_CLICK);
+    h.settle(cx);
+    assert!(!h.store().workspace(two).unwrap().is_expanded);
+    h.store_mut().set_workspace_expanded(two, true);
+    h.settle(cx);
+
+    h.state.core.change_settings(chevrons_hidden(false));
+    h.settle(cx);
+    assert_eq!(layout(cx), shown, "showing them restores the layout");
+    assert!(cx.debug_bounds(workspace_disclosure).is_some());
+}
+
+/// Upstream's `SidebarWorkspaceExpansionMenuTests` and `testHiddenChevronsWithRowClickOffFoldThroughTheRowMenu`: the
+/// row menu's Collapse Workspace folds the clicked workspace (not the active one) and persists, and Expand Workspace
+/// opens it again, with the chevrons hidden and the whole-row click off.
+#[gpui_kit::test]
+fn the_workspace_row_menu_folds_the_clicked_workspace_with_chevrons_hidden_and_row_click_off(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let settings = AppSettings {
+        hidden_interface_elements: Some(vec!["workspaceChevrons".to_owned()]),
+        workspace_row_click_expands: Some(false),
+        ..AppSettings::default()
+    };
+    let (mut h, cx) = harness(cx, library, settings);
+    let one = h.store().workspaces()[0].id();
+    let two = h.id_of("two", cx);
+    assert_eq!(
+        h.store().current_workspace_id(),
+        Some(one),
+        "the active workspace is the other one"
+    );
+    // Rename, Copy Name, New Session, Open Directory…, then the fold
+    let fold = "down down down down down enter";
+    right_click(cx, "row:two");
+    cx.simulate_keystrokes(fold);
+    h.settle(cx);
+    assert_eq!(h.names(cx), ["w:workspace 1", "s:u", "s:srv*", "w:two"]);
+    assert!(!h.store().workspace(two).unwrap().is_expanded, "the fold persists");
+    assert!(h.store().workspace(one).unwrap().is_expanded);
+    let menu = h.view.read_with(cx, |sidebar, _| sidebar.menu_entries(two));
+    assert!(menu.contains(&menu::MenuEntry::Item(menu::MenuItem {
+        label: "Expand Workspace".to_owned(),
+        action: menu::MenuAction::ToggleExpansion(two),
+        enabled: true,
+        checked: false,
+        swatch: None,
+    })));
+
+    right_click(cx, "row:two");
+    cx.simulate_keystrokes(fold);
+    h.settle(cx);
+    assert_eq!(h.names(cx).len(), 5);
+    assert!(h.store().workspace(two).unwrap().is_expanded);
+}

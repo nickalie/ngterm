@@ -249,6 +249,8 @@ impl Sidebar {
             .h(px(look.row_height()))
             .min_w(px(0.));
         let content = match (row.kind, row.group()) {
+            // hidden chevrons take the disclosure and its strip with them (#909)
+            (RowKind::Workspace { .. }, _) if !look.chevrons => content,
             (RowKind::Workspace { expanded }, _) => content
                 .child(Self::disclosure(row.id, expanded, &look, selected, cx))
                 .child(div().flex_none().w(px(look.metrics().nested_indent - DISCLOSURE))),
@@ -641,15 +643,19 @@ fn leading_icon(row: &SidebarRow, color: Hsla) -> impl IntoElement {
 }
 
 /// How far a row's content is indented: a level per nesting (the density's step), the workspace row's disclosure
-/// taking its first.
-fn row_lead(row: &SidebarRow, look: &Look) -> f32 {
+/// taking its first. With the workspace chevrons hidden (upstream's `reservesDisclosureColumn` false, #909) the
+/// workspace row drops that strip and starts at the edge, and the nested rows shift left by it, stopping short of a
+/// disclosure's width so a companion parent's still fits whole ahead of its glyph at either density.
+pub(super) fn row_lead(row: &SidebarRow, look: &Look) -> f32 {
     let indent = look.metrics().nested_indent;
+    let shift = if look.chevrons { 0.0 } else { indent - DISCLOSURE };
     match row.kind {
+        RowKind::Workspace { .. } if !look.chevrons => 0.0,
         RowKind::Workspace { .. } => indent,
         RowKind::Session { .. } => match row.depth() {
             0 => 0.0,
-            1 => indent,
-            _ => 2.0 * indent,
+            1 => indent - shift,
+            _ => 2.0 * indent - shift,
         },
     }
 }

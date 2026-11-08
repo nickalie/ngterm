@@ -8,7 +8,7 @@ use gpui_kit::Hsla;
 use ngterm_core::chrome::{ChromeColors, Rgb};
 use ngterm_core::model::{SidebarTint, TintColor, TintPart, TintValue};
 use ngterm_core::persist::AppSettings;
-use ngterm_core::persist::settings::SidebarDensity;
+use ngterm_core::persist::settings::{InterfaceElement, SidebarDensity};
 
 pub use crate::chrome::color;
 
@@ -99,6 +99,8 @@ pub struct Look {
     pub colors: ChromeColors,
     pub font_size: f32,
     pub density: SidebarDensity,
+    /// Workspace rows draw their disclosure chevron and reserve its strip (the `workspaceChevrons` interface element).
+    pub chevrons: bool,
 }
 
 impl Default for Look {
@@ -107,19 +109,21 @@ impl Default for Look {
             colors: crate::chrome::default_colors(),
             font_size: DEFAULT_FONT_SIZE,
             density: SidebarDensity::Default,
+            chevrons: true,
         }
     }
 }
 
 impl Look {
     /// The look of the chrome's `colors` (the window's, [`crate::chrome::current`]) under `settings`: the rows' text
-    /// size and density.
+    /// size, density and whether workspace rows show their chevron.
     #[must_use]
     pub fn of(colors: ChromeColors, settings: &AppSettings) -> Self {
         Self {
             colors,
             font_size: font_size(settings.sidebar_font_size),
             density: settings.effective_sidebar_density(),
+            chevrons: !settings.is_interface_element_hidden(InterfaceElement::WorkspaceChevrons),
         }
     }
 

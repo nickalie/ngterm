@@ -215,6 +215,30 @@ def test_a_workspace_row_context_menu_opens_a_session_in_it(ctl, ui):
 
 
 @pytest.mark.since("0.41.0")
+@pytest.mark.covers("ui:workspace-row", "field:tree.workspace.collapsed", "behavior:sidebar.row-context-menu")
+def test_the_workspace_row_menu_collapses_and_expands_it(ctl, ui):
+    """The workspace row menu's Collapse Workspace folds the clicked workspace, not the others, and persists it; Expand
+    Workspace opens it again (#909, `SidebarWorkspaceExpansionMenuTests`)."""
+    wid = _workspace(ctl, "ui-menu-fold")
+    try:
+        _named_sessions(ctl, wid, ["ui-fold-row"])
+        others = [node["id"] for node in workspaces(ctl.tree()) if node["id"] != wid and not node.get("collapsed")]
+
+        def collapsed(tree):
+            return {node["id"]: node.get("collapsed", False) for node in workspaces(tree)}
+
+        ui.mouse_click(_row(ui, "workspace-row", "ui-menu-fold"), button="right")
+        ui.click(ui.menu_item("Collapse Workspace"))
+        ctl.wait_tree(lambda tree: collapsed(tree)[wid] is True)
+        assert not any(collapsed(ctl.tree())[other] for other in others), "only the clicked workspace folds"
+        ui.mouse_click(_row(ui, "workspace-row", "ui-menu-fold"), button="right")
+        ui.click(ui.menu_item("Expand Workspace"))
+        ctl.wait_tree(lambda tree: collapsed(tree)[wid] is False)
+    finally:
+        ctl.request("workspace.delete", wid)
+
+
+@pytest.mark.since("0.41.0")
 @pytest.mark.covers("ui:session-row", "session.tint", "behavior:sidebar.row-context-menu")
 def test_a_hex_tinted_rows_menu_lists_its_custom_entry(ctl, ui):
     """A hex tint shows in the row's Tint submenu as "Custom #3a7bd5", and a palette name picked there replaces it,

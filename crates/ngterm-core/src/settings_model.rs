@@ -627,6 +627,7 @@ impl InterfaceElement {
                 | Self::WorkspaceAddSession
                 | Self::WorkspaceIcons
                 | Self::SessionIcons
+                | Self::WorkspaceChevrons
         )
     }
 
@@ -681,6 +682,7 @@ impl InterfaceElement {
             Self::WorkspaceAddSession => "Workspace add-session",
             Self::WorkspaceIcons => "Workspace icons",
             Self::SessionIcons => "Session icons",
+            Self::WorkspaceChevrons => "Workspace chevrons",
         }
     }
 }

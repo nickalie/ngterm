@@ -111,6 +111,8 @@ pub enum MenuAction {
     Close(Vec<Uuid>),
     NewSession(Uuid),
     OpenDirectory(Uuid),
+    /// Collapse Workspace / Expand Workspace: folds or opens the clicked workspace row.
+    ToggleExpansion(Uuid),
     ToggleFocus(Uuid),
     FocusMembership {
         workspace: Uuid,
@@ -290,10 +292,12 @@ fn move_to_submenu(context: &MenuContext, facts: &[&SessionFacts], targets: &[Uu
     })
 }
 
-/// A workspace row's menu: Rename, Copy Name, the session creators, the focus pair, Flag All Sessions or Unflag All
-/// Sessions (disabled for an empty workspace), Delete Workspace (disabled at the last workspace).
+/// A workspace row's menu: Rename, Copy Name, the session creators, Collapse Workspace while the row shows `expanded`
+/// (else Expand Workspace), the focus pair, Flag All Sessions or Unflag All Sessions (disabled for an empty workspace),
+/// Delete Workspace (disabled at the last workspace). The fold item is the one per-row fold left with the chevrons
+/// hidden and the whole-row click off (#909).
 #[must_use]
-pub fn workspace_menu(context: &MenuContext, id: Uuid) -> Vec<MenuEntry> {
+pub fn workspace_menu(context: &MenuContext, id: Uuid, expanded: bool) -> Vec<MenuEntry> {
     let facts = context.workspace(id);
     let name = facts
         .map(|facts| facts.name.trim().to_owned())
@@ -307,6 +311,14 @@ pub fn workspace_menu(context: &MenuContext, id: Uuid) -> Vec<MenuEntry> {
         MenuEntry::Item(MenuItem::new("Copy Name", MenuAction::CopyName(name))),
         MenuEntry::Item(MenuItem::new("New Session", MenuAction::NewSession(id))),
         MenuEntry::Item(MenuItem::new("Open Directory…", MenuAction::OpenDirectory(id))),
+        MenuEntry::Item(MenuItem::new(
+            if expanded {
+                "Collapse Workspace"
+            } else {
+                "Expand Workspace"
+            },
+            MenuAction::ToggleExpansion(id),
+        )),
         MenuEntry::Separator,
         MenuEntry::Item(MenuItem::new(
             if focused { "Unfocus" } else { "Focus" },
@@ -713,12 +725,13 @@ mod tests {
     fn a_workspace_menu_reflects_focus_and_the_last_workspace() {
         let (mut context, [one, _], _) = context();
         assert_eq!(
-            labels(&workspace_menu(&context, one)),
+            labels(&workspace_menu(&context, one, true)),
             [
                 "Rename",
                 "Copy Name",
                 "New Session",
                 "Open Directory…",
+                "Collapse Workspace",
                 "-",
                 "Focus",
                 "Add to Focus",
@@ -733,9 +746,9 @@ mod tests {
         context.workspaces[0].sole_focus = true;
         context.workspaces[0].name = "  ".into();
         context.can_remove_workspace = false;
-        let menu = workspace_menu(&context, one);
+        let menu = workspace_menu(&context, one, true);
         assert_eq!(
-            labels(&menu)[5..],
+            labels(&menu)[6..],
             [
                 "Unfocus",
                 "Remove from Focus",
@@ -752,13 +765,38 @@ mod tests {
         );
     }
 
+    /// `SidebarWorkspaceExpansionMenuTests`, the menu half: Collapse Workspace on an open row, Expand Workspace on a
+    /// folded one, right after Open Directory…, acting on the clicked workspace.
+    #[test]
+    fn a_workspace_menu_folds_or_opens_the_clicked_workspace() {
+        let (context, [one, two], _) = context();
+        for (id, expanded, label) in [(one, true, "Collapse Workspace"), (two, false, "Expand Workspace")] {
+            let menu = workspace_menu(&context, id, expanded);
+            let at = labels(&menu).iter().position(|item| item == "Open Directory…").unwrap();
+            assert_eq!(
+                menu[at + 1],
+                MenuEntry::Item(MenuItem::new(label, MenuAction::ToggleExpansion(id)))
+            );
+            assert!(
+                !labels(&menu).contains(
+                    &if expanded {
+                        "Expand Workspace"
+                    } else {
+                        "Collapse Workspace"
+                    }
+                    .to_owned()
+                )
+            );
+        }
+    }
+
     /// `SidebarWorkspaceFlagTests`: Flag All Sessions until every session is flagged, then Unflag All Sessions, both
     /// acting on the clicked workspace; disabled for an empty workspace.
     #[test]
     fn a_workspace_menu_flags_or_unflags_all_its_sessions() {
         let (mut context, [one, two], _) = context();
         let flag_item = |context: &MenuContext, id| {
-            workspace_menu(context, id)
+            workspace_menu(context, id, true)
                 .into_iter()
                 .find_map(|entry| match entry {
                     MenuEntry::Item(item) if item.action == MenuAction::ToggleWorkspaceFlags(id) => Some(item),
@@ -968,7 +1006,7 @@ mod tests {
         context.tint_placement = TintParts::NAME;
         let labels = tint_labels(&tint_entries(&session_menu(&context, a, |_| true)));
         assert_eq!(labels[15..], ["(Icon)", "(Name)*", "(Icon and Name)"]);
-        let labels = tint_labels(&tint_entries(&workspace_menu(&context, one)));
+        let labels = tint_labels(&tint_entries(&workspace_menu(&context, one, true)));
         assert_eq!(labels[15..], ["(Icon)", "(Name)*", "(Icon and Name)"]);
 
         context.sessions.get_mut(&b).unwrap().tint = Some(SidebarTint::on_icon(TintColor::Red));
@@ -988,7 +1026,7 @@ mod tests {
     fn the_workspace_tint_submenu_acts_on_the_workspace_row() {
         let (mut context, [one, _], _) = context();
         context.workspaces[0].tint = Some(SidebarTint::new(TintColor::Purple, TintParts::BOTH));
-        let entries = tint_entries(&workspace_menu(&context, one));
+        let entries = tint_entries(&workspace_menu(&context, one, true));
         let labels = tint_labels(&entries);
         assert_eq!(labels[6], "~Purple*");
         assert_eq!(labels[17], "Icon and Name*");

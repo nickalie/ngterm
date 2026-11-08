@@ -239,7 +239,8 @@ fn only_interface_and_appearance_pair_their_rows() {
 }
 
 /// Upstream's `testInterfaceTabFitsWithTheOverlaysToggle`: the overlays button is off until opted in, and the
-/// multi-window toggle is the Sidebar section's last row rather than a section of its own.
+/// multi-window toggle shares the Sidebar section's last row with the info picker rather than taking a section of its
+/// own.
 #[test]
 fn the_interface_tab_offers_the_overlays_button_off_and_ends_the_sidebar_with_multiple_windows() {
     let shown = snapshot(AppSettings::default());
@@ -261,31 +262,24 @@ fn the_interface_tab_offers_the_overlays_button_off_and_ends_the_sidebar_with_mu
         matches!(toggle.control, Control::Toggle { on: false, .. }),
         "off by default"
     );
+    // #909: the eight element toggles fill the grid, and the info picker and the multi-window toggle share its last row
     let sidebar = &sections[1];
-    assert!(
-        sidebar
-            .items
-            .iter()
-            .all(|item| item.id.starts_with("settings-interface-"))
-    );
+    let ids: Vec<&str> = sidebar.rows().map(|item| item.id.as_str()).collect();
+    assert_eq!(ids.len(), 10);
+    assert!(ids[..8].iter().all(|id| id.starts_with("settings-interface-")));
+    assert_eq!(ids[7], "settings-interface-workspaceChevrons");
     assert_eq!(
-        sidebar.items.len(),
-        7,
-        "the final half is available for the info picker"
-    );
-    assert_eq!(
-        sidebar.fill.as_ref().map(|item| item.id.as_str()),
-        Some("settings-session-info-display")
-    );
-    let trailing: Vec<&str> = sidebar.trailing.iter().map(|item| item.id.as_str()).collect();
-    assert_eq!(
-        trailing,
-        ["settings-auto-hide-inactive-sidebars"],
+        ids[8..],
+        ["settings-session-info-display", "settings-auto-hide-inactive-sidebars"],
         "the section's last row"
     );
+    assert!(sidebar.fill.is_none() && sidebar.trailing.is_empty());
+    let multi_window = sidebar.rows().last().unwrap();
+    assert_eq!(multi_window.title, "Active window only");
     assert_eq!(
-        sidebar.rows().last().map(|item| item.title.as_str()),
-        Some("Show sidebar only in the active window")
+        multi_window.leading,
+        Some(super::form::GlyphSlot(None)),
+        "its label lines up with the glyph rows'"
     );
 
     let opted_in = snapshot(AppSettings {
@@ -321,7 +315,11 @@ fn interface_toggles_lead_with_their_controls_glyph_text_only_first() {
         ]
     );
     for section in &sections[..2] {
-        for item in &section.items {
+        for item in section
+            .items
+            .iter()
+            .filter(|item| item.id.starts_with("settings-interface-"))
+        {
             let element = InterfaceElement::ALL
                 .iter()
                 .copied()
@@ -340,7 +338,11 @@ fn interface_toggles_lead_with_their_controls_glyph_text_only_first() {
         .into_iter()
         .filter(|(_, item)| !item.id.starts_with("settings-interface-"));
     for (tab, item) in others {
-        let expected = (item.id == "settings-session-info-display").then_some(GlyphSlot(None));
+        let expected = matches!(
+            item.id.as_str(),
+            "settings-session-info-display" | "settings-auto-hide-inactive-sidebars"
+        )
+        .then_some(GlyphSlot(None));
         assert_eq!(item.leading, expected, "{tab:?} {}", item.id);
     }
 }
@@ -1523,7 +1525,8 @@ fn a_long_picker_value_truncates_inside_its_half(cx: &mut TestAppContext) {
     assert_appearance_fits(&mut h, cx, "long names");
 }
 
-/// The upstream Interface layout keeps both new icon toggles, the info picker and Size on screen.
+/// The upstream Interface layout keeps the row toggles, the info picker, the multi-window toggle and Size on screen
+/// (upstream's `testInterfaceTabFits…`, the chevrons toggle hittable), the picker and the toggle sharing the last row.
 #[gpui_kit::test]
 fn the_interface_grid_keeps_the_info_picker_and_quick_terminal_size_visible(cx: &mut TestAppContext) {
     let (mut h, cx) = harness(cx, AppSettings::default());
@@ -1532,7 +1535,9 @@ fn the_interface_grid_keeps_the_info_picker_and_quick_terminal_size_visible(cx: 
     for id in [
         "settings-interface-workspaceIcons",
         "settings-interface-sessionIcons",
+        "settings-interface-workspaceChevrons",
         "settings-session-info-display",
+        "settings-auto-hide-inactive-sidebars",
         "settings-quick-terminal-size",
     ] {
         let control = bounds(cx, id);
@@ -1553,10 +1558,18 @@ fn the_interface_grid_keeps_the_info_picker_and_quick_terminal_size_visible(cx: 
         size_before_scroll,
         "Interface fits without scrolling"
     );
-    let icons = bounds(cx, "settings-interface-sessionIcons");
+    let chevrons = bounds(cx, "settings-interface-workspaceChevrons");
     let picker = bounds(cx, "settings-session-info-display");
-    assert_eq!(icons.center().y, picker.center().y, "picker fills the odd grid half");
-    assert!(picker.origin.x > icons.origin.x);
+    let multi_window = bounds(cx, "settings-auto-hide-inactive-sidebars");
+    assert!(
+        picker.center().y > chevrons.center().y,
+        "the picker opens the row after the grid"
+    );
+    assert!(
+        (picker.center().y - multi_window.center().y).abs() < px(1.),
+        "one row: {picker:?} {multi_window:?}"
+    );
+    assert!(multi_window.origin.x > picker.origin.x);
     click(cx, "settings-session-info-display");
     h.settle(cx);
     cx.simulate_keystrokes("down down enter");

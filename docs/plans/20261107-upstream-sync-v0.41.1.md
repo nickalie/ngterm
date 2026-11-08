@@ -756,15 +756,19 @@ contract `.claude/rules/{sidebar,settings}.md`.
 `tests/ui/test_pointer.py::test_the_workspace_row_menu_collapses_and_expands_it`,
 `tests/ui/test_settings.py::test_hidden_workspace_chevrons_persist`.
 
-- [ ] `InterfaceElement::WorkspaceChevrons` ("workspaceChevrons", sidebar section after session icons, shown by
+- [x] `InterfaceElement::WorkspaceChevrons` ("workspaceChevrons", sidebar section after session icons, shown by
   default, "Workspace chevrons", chevron glyph).
-- [ ] Hidden: no workspace disclosure and no reserved strip; nested rows shift left by it; a companion parent keeps
-  its whole disclosure ahead of its content (both densities); toggling re-lays out both ways.
-- [ ] Workspace row menu: "Collapse Workspace"/"Expand Workspace" after "Open Directory…", folding the clicked
+- [x] Hidden: no workspace disclosure and no reserved strip; nested rows shift left by it; a companion parent keeps
+  its whole disclosure ahead of its content (both densities); toggling re-lays out both ways. The workspace row
+  drops the whole strip; the nested rows shift by it less a disclosure's width (4 points default, 0 compact), since
+  this build's sessions sit under the workspace icon and a parent's disclosure needs that room (upstream's "the shift
+  stops short of a nested triangle's width"). Upstream's 8 -> 6 scroll inset has no counterpart: the rows keep
+  `CONTENT_INSET` inside the pill, and the flat lists already start there.
+- [x] Workspace row menu: "Collapse Workspace"/"Expand Workspace" after "Open Directory…", folding the clicked
   workspace (not the active one), persisted, working with chevrons hidden and with row click off.
-- [ ] Interface tab: the Session info picker and the active-window toggle share the Sidebar section's last row,
-  the toggle labelled "Active window only".
-- [ ] write tests: element default/section/name/order; menu entries per expansion and the clicked-row fold; row
+- [x] Interface tab: the Session info picker and the active-window toggle share the Sidebar section's last row,
+  the toggle labelled "Active window only" (the two close the even grid as its last pair).
+- [x] write tests: element default/section/name/order; menu entries per expansion and the clicked-row fold; row
   leads with chevrons hidden at both densities; the conformance tests above.
 
 ### Task 21: Palette Move Session rows act on the live selection (#879)

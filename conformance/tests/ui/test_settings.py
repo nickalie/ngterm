@@ -13,7 +13,7 @@ STATUSES = ("active", "blocked", "completed")
 INTERFACE_ELEMENTS = (
     "sidebarToggle", "workspaceName", "sessionName", "windowName", "remoteHost", "sessionContext", "recentSessions",
     "scratch", "split", "dashboard", "quickTerminal", "customCommands", "newWorkspace", "newSession", "flaggedView",
-    "focusFilter", "workspaceAddSession",
+    "focusFilter", "workspaceAddSession", "workspaceChevrons",
 )  # fmt: skip
 
 
@@ -335,6 +335,26 @@ def test_row_icons_hide_independently(seeded, ui_for):
         wait_until(lambda: element not in _settings(seeded).get("hiddenInterfaceElements", []))
         ui.find(icon)
         ui.find(other)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("ui:settings-interface-{element}", "ui:workspace-row", "ui:session-row")
+def test_hidden_workspace_chevrons_persist(seeded, ui_for):
+    """The Workspace chevrons toggle hides the workspace disclosure and persists as `workspaceChevrons` in
+    `hiddenInterfaceElements`; the rows stay (#909)."""
+    ui = ui_for(seeded)
+    _open(ui, "Interface")
+    toggle = ui.ui_ids.expand("settings-interface-{element}", element="workspaceChevrons")
+    assert "workspaceChevrons" not in _settings(seeded).get("hiddenInterfaceElements", [])
+    ui.click(ui.find(toggle, role="checkbox", value=1))
+    try:
+        wait_until(lambda: "workspaceChevrons" in _settings(seeded).get("hiddenInterfaceElements", []))
+        ui.find(toggle, role="checkbox", value=0)
+        assert ui.all("workspace-row") and ui.all("session-row")
+    finally:
+        ui.click(ui.find(toggle, role="checkbox", value=0))
+    wait_until(lambda: "workspaceChevrons" not in _settings(seeded).get("hiddenInterfaceElements", []))
+    ui.find(toggle, role="checkbox", value=1)
 
 
 @pytest.mark.since("0.41.0")

@@ -6,9 +6,9 @@
 //!
 //! A glyph comes from the drawing its control already uses: Lucide's catalog for the title bar's plain buttons (served
 //! by [`crate::titlebar::Icons`]), the title bar's traced pane glyphs for the scratch and split toggles, and the
-//! sidebar's masks ([`crate::row_icon`]) for the footer and the row's "+". A control whose glyph follows its state
-//! (scratch shown, split panes, overlays hidden, the focus filter or the flagged view on) shows the one here in its
-//! neutral state.
+//! sidebar's masks ([`crate::row_icon`]) for the footer, the row's "+" and its disclosure chevron. A control whose
+//! glyph follows its state (scratch shown, split panes, overlays hidden, the focus filter or the flagged view on) shows
+//! the one here in its neutral state.
 //!
 //! The dashboard is Lucide's `grid-2x2`, a frame split in four (upstream's `rectangle.split.2x2`), not `layout-grid`'s
 //! four squares, which read as the focus filter's `square.grid.2x2`.
@@ -49,6 +49,8 @@ pub const NEW_SESSION: Glyph = Glyph::AddSession;
 pub const FLAGGED_VIEW: Glyph = Glyph::Flag { filled: false };
 pub const FOCUS_FILTER: Glyph = Glyph::Grid { filled: false };
 pub const WORKSPACE_ADD_SESSION: Glyph = Glyph::Plus;
+/// The workspace row's disclosure, folded (upstream's `chevron.right`).
+pub const WORKSPACE_CHEVRONS: Glyph = Glyph::Disclosure { expanded: false };
 
 /// `element`'s glyph at rest; `None` for a text-only element.
 #[must_use]
@@ -73,6 +75,7 @@ pub fn of(element: InterfaceElement) -> Option<ElementGlyph> {
         InterfaceElement::FlaggedView => Row(FLAGGED_VIEW),
         InterfaceElement::FocusFilter | InterfaceElement::WorkspaceIcons => Row(FOCUS_FILTER),
         InterfaceElement::WorkspaceAddSession => Row(WORKSPACE_ADD_SESSION),
+        InterfaceElement::WorkspaceChevrons => Row(WORKSPACE_CHEVRONS),
     })
 }
 
