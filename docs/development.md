@@ -1065,7 +1065,9 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   `--` go to every test binary's harness (for example, `-- --test-threads=1`); the build still includes every selected
   test. The `harness = false` binaries read a bare argument as a name filter and take no `--skip`: a `--skip` there runs
   only the cases its name matches, so their code reads as uncovered.
-  The report uses `$PYTHON` when set, else a working `python3`, else `python`.
+  The report needs Python 3.11+ (for `tomllib`): `$PYTHON` when set, else the first of `python3`, `python`,
+  `python3.13`, `python3.12` and `python3.11` that can import it; the script checks this before the build and exits 2
+  when `$PYTHON` cannot import it or no candidate can.
   `check_coverage.py` holds the summary against `scripts/unit-coverage-floor-linux.txt` (`crate lines functions
   regions`, the same 0.5 pt tolerance; floors only rise, toward 90 per crate). The gate is CI's job (linux.yml's
   `unit-coverage`, about an hour); locally, run it to see what a crate's tests leave uncovered while writing them, or

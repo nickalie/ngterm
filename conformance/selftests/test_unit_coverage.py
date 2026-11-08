@@ -152,12 +152,15 @@ def test_python_without_tomllib_uses_the_first_capable_fallback(checkout: Checko
     assert checkout.calls(fallback)[-1][:2] == ["-m", "agterm_conformance.code_coverage"]
 
 
-def test_python_override_without_tomllib_falls_back(checkout: Checkout) -> None:
+def test_python_override_without_tomllib_is_refused_before_cargo(checkout: Checkout) -> None:
     override = checkout.tool("old-python", PYTHON)
     result = checkout.run("-p", "ngterm-proto", PYTHON=str(override), WITHOUT_TOMLLIB=override.name)
-    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr == f"unit-coverage: PYTHON={override} cannot import tomllib (Python 3.11+ required)\n"
     assert checkout.calls(override.name) == [["-c", "import tomllib"]]
-    assert checkout.calls("python3")[-1][:2] == ["-m", "agterm_conformance.code_coverage"]
+    assert checkout.calls("python3") == []
+    assert checkout.calls("cargo") == []
 
 
 def test_no_python_with_tomllib_fails_before_cargo(checkout: Checkout) -> None:

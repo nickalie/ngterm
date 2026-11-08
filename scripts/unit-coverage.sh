@@ -24,8 +24,9 @@
 #
 # On Linux the default features need WPE WebKit (docs/development.md > WPE WebKit) and the app's tests a display and a
 # session bus: run it as docs/development.md > Test runs `cargo test` (under xvfb-run and dbus-run-session). Needs
-# cargo-llvm-cov and the toolchain's `llvm-tools` component, Python 3.11+ for the report (the first of $PYTHON, python3,
-# python, python3.13, python3.12, python3.11 that can import tomllib, checked before the build).
+# cargo-llvm-cov and the toolchain's `llvm-tools` component, Python 3.11+ for the report ($PYTHON when set, else the
+# first of python3, python, python3.13, python3.12, python3.11 that can import tomllib; checked before the build, which
+# an incapable $PYTHON stops).
 #
 # Usage: scripts/unit-coverage.sh OUT_DIR [-p CRATE]... [-- TEST_ARGS...]
 # Exit 0: tests passed and the report is written; 1: a test failed (the report is still written); 2: usage, a failed
@@ -82,15 +83,23 @@ if ((${#select[@]} == 0)); then
 fi
 
 python=""
-for candidate in "${PYTHON:-}" python3 python python3.13 python3.12 python3.11; do
-  if [[ -n "$candidate" ]] && "$candidate" -c 'import tomllib' >/dev/null 2>&1; then
-    python="$candidate"
-    break
+if [[ -n "${PYTHON:-}" ]]; then
+  if ! "$PYTHON" -c 'import tomllib' >/dev/null 2>&1; then
+    echo "unit-coverage: PYTHON=$PYTHON cannot import tomllib (Python 3.11+ required)" >&2
+    exit 2
   fi
-done
-if [[ -z "$python" ]]; then
-  echo "unit-coverage: Python 3.11+ with tomllib is required (set PYTHON)" >&2
-  exit 2
+  python="$PYTHON"
+else
+  for candidate in python3 python python3.13 python3.12 python3.11; do
+    if "$candidate" -c 'import tomllib' >/dev/null 2>&1; then
+      python="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$python" ]]; then
+    echo "unit-coverage: Python 3.11+ with tomllib is required (set PYTHON)" >&2
+    exit 2
+  fi
 fi
 
 # Instrumented in cargo-llvm-cov's own target directory (as `cargo llvm-cov` builds, so its builds are reused), where
