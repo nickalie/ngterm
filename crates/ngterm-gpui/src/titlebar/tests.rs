@@ -622,7 +622,8 @@ fn a_remote_hosts_title_names_the_host_and_the_compact_bar_its_context(cx: &mut 
 }
 
 /// A primary press on the bar may become a window move and its release ends it; a secondary press under the window
-/// manager's own title bar opens no menu of the bar's.
+/// manager's own title bar opens no menu of the bar's. Windows has no such title bar: the bar draws the controls
+/// there ([`draws_controls`]), and its secondary press opens the system menu, which GPUI's test window cannot show.
 #[gpui_kit::test]
 fn a_press_on_the_bar_is_held_until_its_release(cx: &mut TestAppContext) {
     let (h, cx) = harness(cx, |_| {});
@@ -634,9 +635,11 @@ fn a_press_on_the_bar_is_held_until_its_release(cx: &mut TestAppContext) {
     assert!(pressed(&h, cx), "a primary press may move the window");
     cx.simulate_mouse_up(at, MouseButton::Left, gpui_kit::Modifiers::default());
     assert!(!pressed(&h, cx), "its release ends it");
-    cx.simulate_mouse_down(at, MouseButton::Right, gpui_kit::Modifiers::default());
-    cx.simulate_mouse_up(at, MouseButton::Right, gpui_kit::Modifiers::default());
-    assert!(!pressed(&h, cx), "a secondary press moves nothing");
+    if !cfg!(windows) {
+        cx.simulate_mouse_down(at, MouseButton::Right, gpui_kit::Modifiers::default());
+        cx.simulate_mouse_up(at, MouseButton::Right, gpui_kit::Modifiers::default());
+        assert!(!pressed(&h, cx), "a secondary press moves nothing");
+    }
     // a press elsewhere ends a press the bar saw
     cx.simulate_mouse_down(at, MouseButton::Left, gpui_kit::Modifiers::default());
     cx.simulate_mouse_down(
