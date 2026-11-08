@@ -307,6 +307,30 @@ fn the_newest_claim_supersedes_the_last_and_only_its_owner_releases_it() {
 }
 
 #[test]
+fn a_claim_taken_between_a_release_check_and_its_removal_survives() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("ctl.sock");
+    let first = Claim::take(&socket, "S:P").unwrap();
+    std::thread::scope(|scope| {
+        let mut taker = None;
+        first.release_checked(|| {
+            let handle = scope.spawn(|| Claim::take(&socket, "S:P").unwrap());
+            // without a lock the new claim lands before the removal; with one it waits for the release to end
+            let started = std::time::Instant::now();
+            while !handle.is_finished() && started.elapsed() < Duration::from_millis(200) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            taker = Some(handle);
+        });
+        let second = taker.expect("the release never checked").join().unwrap();
+        assert!(
+            second.held(),
+            "a waiter's release removed the claim a newer waiter took meanwhile"
+        );
+    });
+}
+
+#[test]
 fn a_claim_cannot_be_taken_under_a_file_and_a_removed_claim_is_not_held() {
     let directory = tempfile::tempdir().unwrap();
     let blocked = directory.path().join("blocked");
@@ -417,13 +441,24 @@ fn mail_outside_a_pane_and_empty_mail_are_quiet_and_bad_payloads_fail() {
             .unwrap()
             .contains("PROBE_RESULT:Ok(())")
     );
-    let (output, _) = run_command(
+    let (output, requests) = run_command(
         &["agent", "mail", "claude", "--as", "S:P"],
         br#"{"hook_event_name":"Stop"}"#,
         &environment,
         &[r#"{"ok":true,"result":{"messages":[],"acked":[]}}"#],
     );
-    assert!(!String::from_utf8(output.stdout).unwrap().contains("ngterm mail:"));
+    assert_eq!(
+        requests,
+        [json!({"cmd":"msg.read","args":{"identity":"S:P","ack":true}})]
+    );
+    // the probe's stdout also carries libtest's own lines: the hook's answer would be a JSON object
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("{\""), "{stdout}");
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("PROBE_RESULT:Ok(())")
+    );
     let (output, _) = run_command(&["agent", "mail", "claude"], b"not json", &environment, &[]);
     assert!(
         String::from_utf8(output.stderr)

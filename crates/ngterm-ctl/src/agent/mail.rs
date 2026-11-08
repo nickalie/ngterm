@@ -362,10 +362,29 @@ impl Waiting for LiveWaiting<'_> {
 }
 
 /// A waiter's claim on its pane: a file under the control socket's directory naming the newest waiter. Without a
-/// writable directory a waiter runs unclaimed, and an older one is then superseded only by its agent's exit.
+/// writable directory a waiter runs unclaimed, and an older one is then superseded only by its agent's exit. Taking a
+/// claim and releasing one (the ownership check and the removal) run under the directory's [`CLAIMS_LOCK`], so a
+/// superseded waiter cannot remove a claim a newer one wrote between its check and its removal.
 struct Claim {
     path: PathBuf,
+    lock: PathBuf,
     token: String,
+}
+
+/// The lock file beside the claims, created and never removed: a process locking a fresh inode would exclude nobody.
+const CLAIMS_LOCK: &str = "claims.lock";
+
+/// Takes the exclusive lock on `path`, held until the file is dropped (or the process ends).
+fn lock_claims(path: &Path) -> Option<fs::File> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    file.lock().ok()?;
+    Some(file)
 }
 
 impl Claim {
@@ -377,8 +396,10 @@ impl Claim {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
         let token = format!("{}-{nanos}", std::process::id());
+        let lock = directory.join(CLAIMS_LOCK);
+        let _locked = lock_claims(&lock)?;
         fs::write(&path, &token).ok()?;
-        Some(Self { path, token })
+        Some(Self { path, lock, token })
     }
 
     fn held(&self) -> bool {
@@ -387,7 +408,16 @@ impl Claim {
 
     /// Removes the claim if it is still this waiter's, so the next one starts clean.
     fn release(&self) {
+        self.release_checked(|| ());
+    }
+
+    /// [`Claim::release`], running `checked` between the ownership check and the removal.
+    fn release_checked(&self, checked: impl FnOnce()) {
+        let Some(_locked) = lock_claims(&self.lock) else {
+            return;
+        };
         if self.held() {
+            checked();
             let _ = fs::remove_file(&self.path);
         }
     }

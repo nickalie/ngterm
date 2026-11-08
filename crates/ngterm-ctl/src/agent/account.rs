@@ -415,19 +415,33 @@ mod tests {
 
     #[test]
     fn a_system_watch_switches_between_private_config_trees() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = Source {
-            agent: AgentKind::Codex,
-            transcript: directory.path().join("sessions/x.jsonl"),
+        use base64::Engine as _;
+        let codex_tree = |directory: &Path| {
+            let source = Source {
+                agent: AgentKind::Codex,
+                transcript: directory.join("sessions/x.jsonl"),
+            };
+            std::fs::create_dir_all(source.transcript.parent().unwrap()).unwrap();
+            source
         };
-        std::fs::create_dir_all(source.transcript.parent().unwrap()).unwrap();
-        let watch = Watch::start(source.clone()).unwrap();
+        let unknown = tempfile::tempdir().unwrap();
+        let signed_in = tempfile::tempdir().unwrap();
+        let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"email":"codex@example.com"}"#);
+        let auth = serde_json::json!({"tokens":{"id_token":format!("header.{claims}.signature")}});
+        std::fs::write(signed_in.path().join("auth.json"), auth.to_string()).unwrap();
+        let watch = Watch::start(codex_tree(unknown.path())).unwrap();
         assert_eq!(
             watch.accounts.recv_timeout(Duration::from_secs(5)).unwrap(),
             Account::default()
         );
-        watch.switch(source);
-        drop(watch);
+        watch.switch(codex_tree(signed_in.path()));
+        assert_eq!(
+            watch.accounts.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Account {
+                email: Some("codex@example.com".to_owned()),
+                weekly: None
+            }
+        );
     }
 
     #[cfg(not(target_os = "macos"))]
