@@ -177,11 +177,11 @@ and how this build does it where the OS matters:
   (`crates/ngterm-core/src/remote/page_tunnel.rs`); `ask` forms show and status sounds play on the
   presenting machine too. A status sound on Linux, which has none of macOS's named sounds, rings the display's bell
   (Wayland's `xdg_system_bell_v1`, X11's core bell).
-- Settings ▸ Key Mapping ▸ "Lock in terminals" selects a keyboard layout while a terminal has the keyboard and
-  restores the previous one when it leaves: macOS Text Input Source Services, Windows' keyboard layouts, and on Linux
-  XKB's group lock on X11 or, on Wayland, the compositor's own control (sway, Hyprland, niri, KDE Plasma); on GNOME,
-  weston and any other compositor the setting is disabled with the reason shown
-  (`crates/ngterm-gpui/src/input_source.rs`).
+- Settings ▸ Key Mapping ▸ "Lock in terminals" selects a keyboard layout while a terminal or an HTML overlay page (its
+  fields included) has the keyboard and restores the previous one when the keyboard goes to another app or to an ngterm
+  text field outside the page: macOS Text Input Source Services, Windows' keyboard layouts, and on Linux XKB's group
+  lock on X11 or, on Wayland, the compositor's own control (sway, Hyprland, niri, KDE Plasma); on GNOME, weston and any
+  other compositor the setting is disabled with the reason shown (`crates/ngterm-gpui/src/input_source.rs`).
 - `notify` banners get a notification slot of their own per session, replaced and cleared as upstream's
   (freedesktop `replaces_id` and `CloseNotification` on Linux, a toast's group and tag on Windows).
 - Live sessions: a fish login shell claims `live-sessions` as zsh does, with the shell integration's root merged into

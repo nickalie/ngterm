@@ -960,3 +960,50 @@ fn the_undo_close_chord_goes_to_a_focused_page_and_undoes_the_close_otherwise(cx
         .collect();
     assert_eq!(keys, [true, false], "the page's engine gets the chord and its release");
 }
+
+/// Upstream's `TerminalInputSourceTests` (`testPageAndItsSubviewsHoldTheLock`, `testTextFieldsAndChromeReleaseTheLock`):
+/// the keyboard-layout lock holds while the page has the keyboard and lets go when a text field outside the page
+/// (Settings, the palette, an ask dialog) takes it or the window loses its activation; each move re-evaluates by
+/// itself, with no terminal involved.
+#[gpui_kit::test]
+fn the_layout_lock_holds_while_the_page_has_the_keyboard_and_not_a_field_outside_it(cx: &mut TestAppContext) {
+    use crate::input_source::fake::{RU, US, installed};
+
+    let system = installed(cx, RU);
+    let (harness, cx) = harness(cx);
+    let field = cx.new(|cx| Modal {
+        focus: cx.focus_handle(),
+    });
+    cx.update(|_, cx| crate::input_source::set_target(Some(US.to_owned()), cx));
+    cx.run_until_parked();
+    assert!(system.borrow().selected.is_empty(), "nothing holds the keyboard yet");
+
+    harness.focus_page(cx);
+    assert_eq!(
+        system.borrow().selected,
+        [US],
+        "the page taking the keyboard engages the lock"
+    );
+    let focus = field.read_with(cx, |field, _| field.focus.clone());
+    cx.update(|window, cx| window.focus(&focus, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        system.borrow().selected,
+        [US, RU],
+        "a field outside the page releases it"
+    );
+
+    harness.focus_page(cx);
+    assert_eq!(
+        system.borrow().selected,
+        [US, RU, US],
+        "back in the page, it engages again"
+    );
+    cx.deactivate_window();
+    cx.run_until_parked();
+    assert_eq!(
+        system.borrow().selected,
+        [US, RU, US, RU],
+        "an inactive window's page holds nothing"
+    );
+}

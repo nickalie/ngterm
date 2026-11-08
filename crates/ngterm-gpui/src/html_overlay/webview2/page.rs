@@ -775,9 +775,11 @@ impl Page {
         self.report_page();
     }
 
-    /// The web view took or lost the keyboard: a click into the page gives its element the window's keyboard too.
+    /// The web view took or lost the keyboard: a click into the page gives its element the window's keyboard too, and
+    /// the keyboard-layout lock re-evaluates (a field inside the page holds it, the palette or an ask dialog does not).
     fn native_focus(&self, focused: bool, cx: &mut App) {
         self.native_focused.set(focused);
+        crate::input_source::request_refresh(cx);
         if !focused {
             return;
         }

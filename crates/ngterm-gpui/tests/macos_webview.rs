@@ -24,13 +24,15 @@ mod smoke {
     use std::{
         ffi::{CStr, CString, c_char, c_void},
         ptr::NonNull,
-        sync::atomic::{AtomicBool, AtomicPtr, Ordering},
+        sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering},
         time::{Duration, Instant},
     };
     use wry::WebViewExtMacOS as _;
     static PAGE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
     static LOADED: AtomicBool = AtomicBool::new(false);
     static REPLIED: AtomicBool = AtomicBool::new(false);
+    /// The delegate's last focus report: 0 none yet, 1 the page lost the keyboard, 2 it holds it.
+    static FOCUS: AtomicU8 = AtomicU8::new(0);
     static NONCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     unsafe extern "C" {
         fn ngterm_web_attach(
@@ -54,6 +56,9 @@ mod smoke {
         // SAFETY: native callback lends a NUL-terminated JSON string for this call.
         let json = unsafe { CStr::from_ptr(json) }.to_str().unwrap();
         let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        if value["kind"] == "focus" {
+            FOCUS.store(if value["focused"] == true { 2 } else { 1 }, Ordering::Relaxed);
+        }
         if value["kind"] == "complete" && value["success"] == true {
             LOADED.store(true, Ordering::Relaxed);
         }
@@ -88,6 +93,32 @@ mod smoke {
             // SAFETY: main run loop and live date returned above.
             let _: () = unsafe { msg_send![run_loop,runUntilDate:date] };
         }
+    }
+    /// The keyboard-layout lock's page half (upstream's `testPageAndItsSubviewsHoldTheLock`): the delegate reports the
+    /// page holding the keyboard while the first responder is the web view or a field inside it, and losing it when
+    /// the first responder moves outside, which is what `page_holds_keyboard` and the lock's refresh read.
+    fn focus_follows_the_first_responder(window: &AnyObject, page: &AnyObject) {
+        // SAFETY: main thread; the window and the web view are live, the text view is retained until the end.
+        let field: Retained<AnyObject> = unsafe { msg_send![class!(NSTextView), new] };
+        // SAFETY: as above; the web view retains its subview.
+        let _: () = unsafe { msg_send![page, addSubview:&*field] };
+        let focus = |responder: Option<&AnyObject>| {
+            let target = responder.map_or(std::ptr::null(), std::ptr::from_ref);
+            // SAFETY: main thread; `target` is a live view of this window, or nil for the window itself.
+            let made: bool = unsafe { msg_send![window, makeFirstResponder:target] };
+            assert!(made, "the first responder moved");
+        };
+        focus(Some(page));
+        pump_until(|| FOCUS.load(Ordering::Relaxed) == 2);
+        focus(None);
+        pump_until(|| FOCUS.load(Ordering::Relaxed) == 1);
+        focus(Some(&*field));
+        pump_until(|| FOCUS.load(Ordering::Relaxed) == 2);
+        focus(None);
+        pump_until(|| FOCUS.load(Ordering::Relaxed) == 1);
+        // SAFETY: main thread; the text view is the web view's live subview.
+        let _: () = unsafe { msg_send![&*field, removeFromSuperview] };
+        println!("PASS: the page reports the keyboard while it or a field inside it is the first responder");
     }
     fn isolated_document_renderer(parent: &Parent) {
         let view = wry::WebViewBuilder::new()
@@ -151,6 +182,7 @@ mod smoke {
         // This starts in Wry's pending queue. Replacing its delegate used to leave it there forever.
         view.evaluate_script("window.wryQueueFlushed=true").unwrap();
         pump_until(|| LOADED.load(Ordering::Relaxed));
+        focus_follows_the_first_responder(&window, &view.webview());
         view.evaluate_script_with_callback("window.wryQueueFlushed===true", move |value| {
             assert_eq!(value, "true");
             result.store(true, Ordering::Relaxed);

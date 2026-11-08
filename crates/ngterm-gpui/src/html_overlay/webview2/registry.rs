@@ -854,12 +854,23 @@ pub fn key_down(
     true
 }
 
-/// Whether a page's element holds `window`'s keyboard (upstream's `htmlPageOwnsKeys` with no session), never a page
-/// that merely covers the session while the terminal, the sidebar or the chrome has it. A key pressed in the web view
-/// itself never reaches the window's interceptor: `keys::app_key` decides those.
+/// Whether a page holds `window`'s keyboard (upstream's `htmlPageOwnsKeys` with no session): its element has the
+/// window's focus, or its web view itself, a field inside the page included, has the native keyboard (upstream's
+/// first responder inside an `HtmlOverlayWebView`); never a page that merely covers the session while the terminal,
+/// the sidebar or the chrome has it. A key pressed in the web view itself never reaches the window's interceptor:
+/// `keys::app_key` decides those.
 #[must_use]
 pub fn page_holds_keyboard(window: &Window, cx: &App) -> bool {
-    focused_page(window, cx).is_some()
+    focused_page(window, cx).is_some() || natively_focused_page(window)
+}
+
+/// Whether a mounted page of `window` has its web view holding the native keyboard.
+fn natively_focused_page(window: &Window) -> bool {
+    let handle = window.window_handle();
+    let pages: Vec<Rc<Page>> = with(|registry| registry.pages.values().cloned().collect());
+    pages
+        .into_iter()
+        .any(|page| page.holds_native_keyboard() && page.element_window() == Some(handle) && page.element().is_some())
 }
 
 /// The page whose element holds `window`'s keyboard.

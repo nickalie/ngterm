@@ -814,11 +814,11 @@ optionally `crates/ngterm-core/src/{model/session.rs,commands/panes.rs}`; a real
 `html_overlay.rs` (stub), `input_source/tests.rs`, `crates/ngterm-gpui/tests/input_source.rs`; README.md (~180).
 **Conformance:** none (it switches the system layout).
 
-- [ ] Held while a terminal (main, split, scratch, overlay, quick) or an HTML overlay page, its fields included, holds
+- [x] Held while a terminal (main, split, scratch, overlay, quick) or an HTML overlay page, its fields included, holds
   an active ngterm window's keyboard; a page focus change requests a refresh; Settings fields, the palette, ask
   dialogs, another app and no ngterm window release it. Make `page_holds_keyboard` reflect native web-view focus on
   Windows and macOS (check on a runner or the VM).
-- [ ] write tests: the holds predicate (terminal, page, text field, palette, inactive window) and the refresh on a
+- [x] write tests: the holds predicate (terminal, page, text field, palette, inactive window) and the refresh on a
   page focus change.
 
 ### Task 24: Claim v0.41.1 parity and update the docs
