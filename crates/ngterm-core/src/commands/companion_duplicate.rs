@@ -191,14 +191,14 @@ impl Core {
     fn creation_line(&self, argv: &[String]) -> Option<String> {
         let live_shell = self
             .live
-            .login_shell()
+            .shell()
             .filter(|_| self.restore.decision.active == RestoreMode::Live);
         creation_line(ORDINARY_DIALECT, live_shell, argv)
     }
 }
 
 /// `argv` as a copy's stored creation command: the line the `ordinary` dialect (`/bin/sh -c`'s, `cmd.exe`'s) reads,
-/// and only when `live_shell`, the login shell new panes run in Live sessions now, can carry it too; `None` otherwise.
+/// and only when `live_shell`, the shell new panes run in Live sessions now, can carry it too; `None` otherwise.
 pub(crate) fn creation_line(ordinary: ShellDialect, live_shell: Option<&str>, argv: &[String]) -> Option<String> {
     if let Some(shell) = live_shell {
         ShellDialect::of_shell(shell).line(argv)?;

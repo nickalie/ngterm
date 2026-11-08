@@ -139,6 +139,17 @@ pub fn load_app_config(env: &dyn Env, terminfo_resolved: bool, overlay: Option<&
     loader.finish()
 }
 
+/// The raw value of the last `command` line of the app's config chain (defaults, the user files, their includes, in
+/// [`load_app_config`]'s order), as ghostty's last line wins; `None` when no line sets it, `Some("")` when the last one
+/// resets it. The live launch latches the shell it names (upstream's `GhosttyApp.resolveLiveCommandShell`): the raw
+/// last value decides, so a later unsupported `command` cancels an earlier shell.
+#[must_use]
+pub fn configured_command(env: &dyn Env) -> Option<String> {
+    load_app_config(env, true, None)
+        .last_value("command")
+        .map(str::to_owned)
+}
+
 /// What loading the config files left, before the theme: every line in replay order and the loading diagnostics.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedConfig {
@@ -160,6 +171,15 @@ impl LoadedConfig {
     #[must_use]
     pub fn steps(&self) -> &[Step] {
         &self.steps
+    }
+
+    /// The value of the last line setting `key`, as written (a bare key's is empty); `None` when no line sets it.
+    #[must_use]
+    pub fn last_value(&self, key: &str) -> Option<&str> {
+        self.steps.iter().rev().find_map(|step| match step {
+            Step::Setting(setting) if setting.key == key => Some(setting.value.as_deref().unwrap_or("")),
+            _ => None,
+        })
     }
 
     /// The config on the `dark` or light side of a dual theme, the theme found in `theme_dirs` by name (or by its

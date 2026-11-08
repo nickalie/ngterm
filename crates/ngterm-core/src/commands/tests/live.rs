@@ -1958,3 +1958,46 @@ fn a_leader_outliving_the_reset_suppresses_its_pane_s_payloads() {
     let policy = live.core().seed_policy();
     assert!(policy.suppressed_daemons.contains(&daemon_name(live.left)));
 }
+
+/// Upstream's `GhosttyApp.liveCommandShell`, latched with the restore decision (#895): the shell ghostty `command`
+/// named at launch stays the one new live panes start after a `config.reload`, which reloads the terminals' config but
+/// never the wrap the frontend installed, since a running daemon keeps the shell it started with.
+#[test]
+fn a_config_reload_keeps_the_shell_the_launch_latched() {
+    let mut fixture = Fixture::new(0);
+    let resources = tempfile::tempdir().unwrap();
+    let fish = resources.path().join("shell-integration/fish/vendor_conf.d");
+    std::fs::create_dir_all(&fish).unwrap();
+    std::fs::write(fish.join("ghostty-shell-integration.fish"), "").unwrap();
+    let host = Arc::new(FakeSessionHost::new());
+    fixture
+        .core
+        .set_restore_launch(RestoreLaunchDecision::new(RestoreMode::Live, None));
+    fixture.core.install_live_sessions(LiveInstall {
+        host: Arc::clone(&host) as Arc<dyn SessionHost>,
+        endpoint: ControlLiveEndpoint {
+            executable: "/opt/ngterm/bin/ngterm-session".to_owned(),
+            socket_directory: "/tmp/ngterm-live-test".to_owned(),
+        },
+        wrap: Inputs {
+            executable: crate::live::test_executable(resources.path(), "sh"),
+            login_shell: Some("/bin/tcsh".to_owned()),
+            command_shell: Some("/opt/homebrew/bin/fish".to_owned()),
+            resources_dir: Some(resources.path().to_path_buf()),
+            state_dir: resources.path().join("state"),
+            ..Inputs::default()
+        },
+        state_dir: resources.path().to_path_buf(),
+        outdated_before: None,
+    });
+    let shell = |core: &Core| {
+        core.wrap_configuration(Uuid::new_v4(), None)
+            .and_then(|configuration| configuration.environment.get("SHELL").cloned())
+    };
+    assert_eq!(shell(&fixture.core).as_deref(), Some("/opt/homebrew/bin/fish"));
+    let _pending = fixture
+        .core
+        .begin(&Request::new(Command::Config(ngterm_proto::command::ConfigCmd::Reload)));
+    assert_eq!(shell(&fixture.core).as_deref(), Some("/opt/homebrew/bin/fish"));
+    assert_eq!(fixture.core.live.shell(), Some("/opt/homebrew/bin/fish"));
+}

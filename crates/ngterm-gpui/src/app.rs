@@ -19,6 +19,7 @@ use ngterm_core::{Core, CoreConfig, CoreState};
 use ngterm_host::MainLoop;
 use ngterm_proto::{AppIdentity, Request};
 use ngterm_server::ControlServer;
+use ngterm_session::launch::Runtime;
 
 use crate::deck::{DeckEnv, Watermarks};
 use crate::instance::{Activation, BusRequest};
@@ -57,8 +58,7 @@ pub const CAPABILITIES: &[&str] = &[
     "pages-survive",
 ];
 
-/// The capabilities this host claims: the profile's, and the `live` ones by host
-/// ([`session_host::live_capabilities`]).
+/// The capabilities this host claims: the profile's, and the `live` ones by host ([`session_host::claims`]).
 #[must_use]
 pub fn capabilities(live: &[&str]) -> Vec<String> {
     CAPABILITIES.iter().chain(live).copied().map(str::to_owned).collect()
@@ -130,7 +130,7 @@ fn process_host(poster: &Poster, socket: String) -> ngterm_core::ProcessHost {
 }
 
 /// What the core reaches the host through, and the launch decisions frozen before the first terminal.
-fn install_launch_hosts(core: &mut Core, poster: &Poster, socket: String) {
+fn install_launch_hosts(core: &mut Core, runtime: &Runtime, poster: &Poster, socket: String) {
     // `version`'s `installed`: the build on disk where this executable was started from, re-read on every request
     core.set_installed_source(
         std::env::current_exe()
@@ -139,7 +139,7 @@ fn install_launch_hosts(core: &mut Core, poster: &Poster, socket: String) {
     );
     core.set_config_locator(paths::ConfigLocator::capture(&ProcessEnv));
     core.set_ui_test_launch(ngterm_core::is_ui_test_launch(&ProcessEnv));
-    let decision = ngterm_app::restore_launch::launch_decision(core.settings(), &ProcessEnv);
+    let decision = ngterm_app::restore_launch::launch_decision(core.settings(), runtime, &ProcessEnv);
     core.set_restore_launch(decision);
     core.load_restore_denylist_at_launch();
     core.set_process_table(
@@ -150,7 +150,7 @@ fn install_launch_hosts(core: &mut Core, poster: &Poster, socket: String) {
     // the launch reap and a pending live sessions reset finish before any window mounts (upstream's
     // `GhosttyApp.restoreLaunchDecision`), and the selected sessions wake before any window shows, so their panes
     // spawn on their first ask while the rest of the restore stays dormant
-    session_host::install(core, &ProcessEnv);
+    session_host::install(core, runtime);
     core.wake_shown_sessions();
     // read at launch: a file edited later takes effect only on reload
     core.load_keymap_at_launch();
@@ -316,10 +316,13 @@ fn init_frontend(poster: &Poster, cx: &mut App) {
 /// ghostty config (written before the config loads, so the first terminal has the theme), the launch hosts, the HUD's
 /// painter and the cell a HUD over a session no terminal draws yet is sized with.
 fn launch_core(identity: AppIdentity, resources: Option<&Path>, poster: &Poster, socket: String, cx: &App) -> Core {
+    // the live launch's inputs, the shell ghostty `command` names among them, captured once: the claims, the restore
+    // decision and the wrap all read this capture, which no config reload replaces
+    let runtime = Runtime::capture(&ProcessEnv);
     let mut core = Core::new(
         CoreConfig {
             app: identity,
-            capabilities: capabilities(&session_host::live_capabilities(&ProcessEnv)),
+            capabilities: capabilities(&session_host::claims(&runtime, &ProcessEnv)),
         },
         load_state(&ProcessEnv),
     );
@@ -330,7 +333,7 @@ fn launch_core(identity: AppIdentity, resources: Option<&Path>, poster: &Poster,
     // the windows draw Settings ▸ Appearance ▸ Window's translucency themselves (`chrome::Translucency`)
     core.set_translucent_host(true);
     core.write_settings_config();
-    install_launch_hosts(&mut core, poster, socket);
+    install_launch_hosts(&mut core, &runtime, poster, socket);
     core.set_hud_body_dir(paths::hud_body_dir(&ProcessEnv));
     core.set_cell_estimator(crate::hud::cell_estimator(Arc::clone(cx.text_system())));
     core
@@ -340,11 +343,7 @@ fn launch_core(identity: AppIdentity, resources: Option<&Path>, poster: &Poster,
 /// host they launch under, what their shells are told (`context`), Ghostty's `resources`.
 fn windows(context: PaneContext, resources: Option<PathBuf>, dark: bool, poster: &Poster, launch: &Launch) -> Windows {
     let config = AppConfig::load(&ProcessEnv, resources.as_deref(), dark);
-    let host = Rc::new(RefCell::new(session_host::launch_host(
-        &config,
-        resources.clone(),
-        &ProcessEnv,
-    )));
+    let host = Rc::new(RefCell::new(session_host::launch_host(&config, resources.clone())));
     let overlay_resources = resources.clone();
     let side = Rc::new(Cell::new(dark));
     let overlay_side = Rc::clone(&side);

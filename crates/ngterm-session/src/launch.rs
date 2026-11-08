@@ -11,11 +11,14 @@
 //! The login shell is the password database's on Unix ([`login_shell`]); Windows has none, so there it is PowerShell:
 //! the first launchable `pwsh.exe` on `PATH` (an image, or the App Execution Alias of an MSIX install), else
 //! `powershell.exe` there or in the system directory (`windows_shell`, after herdr), none when there is neither: the
-//! live launch then refuses with the unsupported-shell reason.
+//! live launch then refuses with the unsupported-shell reason. A Live pane runs the shell ghostty `command` names in
+//! its place when Live can run that one ([`support::command_shell`], upstream's #895), read from the config chain once,
+//! when the launch captures its inputs ([`Runtime::capture`]): a config reload never changes it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use ngterm_core::ghostty_config;
 use ngterm_core::live::lead::LeadAttachment;
 use ngterm_core::live::shell_integration::Inherited;
 use ngterm_core::live::support::{self, Configuration, Inputs};
@@ -51,6 +54,8 @@ pub struct Runtime {
     pub executable: PathBuf,
     /// The shell a pane runs: the password database's login shell on Unix, PowerShell on Windows.
     pub login_shell: Option<String>,
+    /// The shell ghostty `command` names in its place for a Live pane ([`Inputs::command_shell`]).
+    pub command_shell: Option<String>,
     pub resources_dir: Option<PathBuf>,
     /// ngterm's own staged resources ([`OWN_RESOURCES`]), holding the PowerShell integration.
     pub own_resources_dir: Option<PathBuf>,
@@ -60,13 +65,20 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// The inputs of this process: the session host beside the running executable, this host's login shell.
+    /// The inputs of this process: the session host beside the running executable, this host's login shell and the
+    /// shell its ghostty config's `command` names ([`ghostty_config::configured_command`]). A launch captures them once,
+    /// beside its restore decision, and hands the same capture to the probe, the claims and the wrap.
     #[must_use]
     pub fn capture(env: &dyn Env) -> Self {
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf));
-        Self::resolve(env, exe_dir.as_deref(), login_shell(), cfg!(debug_assertions))
+        Self {
+            command_shell: ghostty_config::configured_command(env)
+                .as_deref()
+                .and_then(support::command_shell),
+            ..Self::resolve(env, exe_dir.as_deref(), login_shell(), cfg!(debug_assertions))
+        }
     }
 
     /// The inputs for an executable in `exe_dir` (`<root>/bin` of the staged layout) under `env`; the debug override
@@ -87,6 +99,7 @@ impl Runtime {
         Self {
             executable,
             login_shell,
+            command_shell: None,
             resources_dir: var("GHOSTTY_RESOURCES_DIR")
                 .or_else(|| staged_root.map(|root| paths::join_relative(root, BUNDLED_RESOURCES))),
             own_resources_dir: staged_root.map(|root| paths::join_relative(root, OWN_RESOURCES)),
@@ -103,6 +116,7 @@ impl Runtime {
             ui_test_opt_in: env.var(UI_TEST_OPT_IN).is_some_and(|value| value == "1"),
             executable: self.executable.clone(),
             login_shell: self.login_shell.clone(),
+            command_shell: self.command_shell.clone(),
             resources_dir: self.resources_dir.clone(),
             own_resources_dir: self.own_resources_dir.clone(),
         }
@@ -122,6 +136,7 @@ impl Runtime {
         support::configuration(&Inputs {
             executable: self.executable.clone(),
             login_shell: self.login_shell.clone(),
+            command_shell: self.command_shell.clone(),
             resources_dir: self.resources_dir.clone(),
             own_resources_dir: self.own_resources_dir.clone(),
             state_dir: self.state_dir.clone(),
@@ -407,6 +422,61 @@ mod tests {
             zsh.live_probe(&ui_test.with(UI_TEST_OPT_IN, "1")).unavailable_reason(),
             None
         );
+    }
+
+    /// Upstream's `testBashLoginShellIsEligibleWithAFishCommandShell` and
+    /// `testCommandShellReplacesTheLoginShellInThePaneConfiguration`, over a login shell no build wraps.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_shell_makes_the_host_eligible_and_takes_the_panes_shell() {
+        let root = staged();
+        let bin = root.path().join("bin");
+        let env = MapEnv::new().with("NGTERM_STATE_DIR", root.path().join("state"));
+        let mut runtime = Runtime::resolve(&env, Some(&bin), Some("/bin/tcsh".to_owned()), false);
+        assert_eq!(runtime.command_shell, None, "only a launch's capture reads the config");
+        assert_eq!(
+            runtime.live_probe(&env).unavailable_reason().as_deref(),
+            Some(ngterm_core::restore::mode::UNSUPPORTED_LOGIN_SHELL)
+        );
+        runtime.command_shell = Some("/opt/homebrew/bin/fish".to_owned());
+        assert_eq!(runtime.live_probe(&env).unavailable_reason(), None);
+        let environment = runtime
+            .configuration(Uuid::new_v4(), BTreeMap::new(), None)
+            .unwrap()
+            .environment;
+        assert_eq!(
+            environment.get("SHELL").map(String::as_str),
+            Some("/opt/homebrew/bin/fish")
+        );
+        assert_eq!(
+            environment.get("GHOSTTY_SHELL_INTEGRATION_XDG_DIR").map(PathBuf::from),
+            Some(root.path().join("share/ghostty/shell-integration"))
+        );
+    }
+
+    /// The capture reads the shell from the config chain the terminals load, and a later edit reaches only a later
+    /// capture: the launch keeps the one it took.
+    #[test]
+    fn the_capture_latches_the_shell_the_configs_command_names() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        let config = state.join("config").join("ghostty.conf");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let (command, named) = if cfg!(windows) {
+            ("C:/Tools/pwsh.exe -NoLogo", "C:/Tools/pwsh.exe")
+        } else {
+            ("/opt/homebrew/bin/fish --login", "/opt/homebrew/bin/fish")
+        };
+        fs::write(&config, format!("command = direct:{command}\n")).unwrap();
+        let env = MapEnv::new()
+            .with("NGTERM_STATE_DIR", &state)
+            .with("HOME", root.path().join("home"));
+        let launch = Runtime::capture(&env);
+        let expected = Some(named.to_owned());
+        assert_eq!(launch.command_shell, expected);
+        fs::write(&config, "command = /usr/bin/tmux new\n").unwrap();
+        assert_eq!(launch.command_shell, expected, "the launch's capture stays");
+        assert_eq!(Runtime::capture(&env).command_shell, None);
     }
 
     #[test]

@@ -113,7 +113,7 @@ share is asserted directly, with no capability.
 |---|---|---|
 | `posix-shell` | yes | panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic |
 | `live-sessions` | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's per-session daemons; the Rust build's one session server per instance, ngterm-session) |
-| `live-any-shell` |  | Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and ngterm-session is staged |
+| `live-any-shell` |  | Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the pane shell (the password-database login shell, or the one ghostty `command` names in its place) is one of them and ngterm-session is staged |
 | `agent-chat` |  | Rust-only: the agent record behind the Android chat view: `ngtermctl agent hook` keeps a pane's Claude Code or Codex conversation from its hook payload, `agent.get` reads it back, `ngtermctl agent chat` streams its transcript as chat events, `ngtermctl agent commands` lists the agent's slash commands and `ngtermctl agent upload` stores a file the chat attaches |
 | `pages-survive` |  | Rust-only: an HTML page lives until it is closed: a page handed to the viewer presenting a session is parked, its slot reserved and its outcome pending, when that presenter or its page helper goes, and handed again to the next presenter that speaks pages |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
@@ -141,9 +141,12 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `windows-shells`: on Windows, where a pane's shell may be PowerShell or `cmd.exe` and a rerun restore types its
   replay quoted for that shell (`ngterm-core`'s `shell_dialect`; the harness picks the shell with
   `launch(pane_shell=...)`), where upstream types a POSIX line into any shell;
-- `live-sessions`: by host, where the login shell is zsh or fish (upstream's two) and `ngterm-session` is staged;
-- `live-any-shell`: by host, live sessions for bash and PowerShell login shells too, a Rust-only extension
-  (below): claimed together with `live-sessions` for a zsh or fish login shell, alone for the others;
+- `live-sessions`: by host, where the pane shell is zsh or fish (upstream's two) and `ngterm-session` is staged. The
+  pane shell is the login shell, or the one the ghostty config's last `command` names when that is an absolute
+  path to a shell Live wraps with only login or interactive flags (upstream's #895; `live::support::command_shell`),
+  read once at launch. The suite's `command = /bin/sh` names none, so its hosts claim by the login shell;
+- `live-any-shell`: by host, live sessions for bash and PowerShell pane shells too, a Rust-only extension
+  (below): claimed together with `live-sessions` for a zsh or fish pane shell, alone for the others;
 - `agent-chat`: on every OS, the `agent.*` group and `ngtermctl agent` behind the Android chat view, a Rust-only
   extension (below);
 - `pages-survive`: on every OS, a page handed to a presenter parked on its presenter's loss and handed to the next, a
@@ -192,11 +195,11 @@ ghostty config sets `copy-on-select = false`.
 A Rust-only extension is a capability the reference does not claim, so its tests (`requires` on it) skip as
 `unsupported` on the reference and the reference discipline holds them to nothing there: the Rust CI validates them
 instead, with `--must-pass` on the capability in every job whose host can claim it.
-Today there are three. `live-any-shell`: a Live pane runs the password database's login shell in its live session, zsh
-and fish as upstream, bash and PowerShell as well, each started with its shell integration the way libghostty starts a
-shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in POSIX mode for bash, `XDG_DATA_DIRS` for fish, the integration's
-root merged in front of the pane's own value as upstream; ngterm's own script for PowerShell, which Ghostty does not
-integrate).
+Today there are three. `live-any-shell`: a Live pane runs its shell in its live session (the password database's login
+shell, or the one ghostty `command` names in its place), zsh and fish as upstream, bash and PowerShell as well, each
+started with its shell integration the way libghostty starts a shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in
+POSIX mode for bash, `XDG_DATA_DIRS` for fish, the integration's root merged in front of the pane's own value as
+upstream; ngterm's own script for PowerShell, which Ghostty does not integrate).
 Its tests are in `tests/protocol/test_live_any_shell.py`; the upstream Live tests that type no line of a particular
 shell (`LIVE_IN_ANY_SHELL`: the inventory, lead, kill, presentation and tree reads) require either capability
 (`requires(..., any=True)`), so they hold for bash and PowerShell too; a test that branches on Live being active

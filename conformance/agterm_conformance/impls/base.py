@@ -176,8 +176,9 @@ CAPABILITIES: Mapping[str, str] = {
     "live-sessions": "restoreMode live keeps panes in live sessions that outlive the app (upstream's per-session daemons; "
     "the Rust build's one session server per instance, ngterm-session)",
     "live-any-shell": "Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, "
-    "each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the "
-    "password-database login shell is one of them and ngterm-session is staged",
+    "each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the pane "
+    "shell (the password-database login shell, or the one ghostty `command` names in its place) is one of them and "
+    "ngterm-session is staged",
     "agent-chat": "Rust-only: the agent record behind the Android chat view: `ngtermctl agent hook` keeps a pane's "
     "Claude Code or Codex conversation from its hook payload, `agent.get` reads it back, `ngtermctl agent chat` "
     "streams its transcript as chat events, `ngtermctl agent commands` lists the agent's slash commands and "

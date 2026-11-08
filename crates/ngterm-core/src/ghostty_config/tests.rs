@@ -1266,6 +1266,90 @@ fn an_empty_config_file_value_drops_the_includes_named_before_it() -> TestResult
     Ok(())
 }
 
+/// The `command` values `loader` loaded, in replay order.
+fn commands(loader: Loader) -> Vec<String> {
+    loader
+        .finish()
+        .steps()
+        .iter()
+        .filter_map(|step| match step {
+            Step::Setting(setting) if setting.key == "command" => setting.value.clone(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Upstream's `includesLoadAfterEverySourceInQueueOrder`: every base file loads before any include, and an include's
+/// own includes queue behind the ones already named.
+#[test]
+fn includes_load_after_every_source_in_queue_order() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().canonicalize()?;
+    let two = write(&root.join("abs/two.conf"), "command = two\n")?;
+    let a = write(&root.join("cfg/a.conf"), "config-file = inc/one.conf\ncommand = a\n")?;
+    let b = write(
+        &root.join("cfg/b.conf"),
+        &format!("command = b\nconfig-file = {}\n", two.display()),
+    )?;
+    write(
+        &root.join("cfg/inc/one.conf"),
+        "command = one\nconfig-file = nested.conf\n",
+    )?;
+    write(&root.join("cfg/inc/nested.conf"), "command = nested\n")?;
+    let mut loader = Loader::new(None);
+    loader.load_file(&a);
+    loader.load_file(&b);
+    loader.load_includes();
+    assert_eq!(commands(loader), ["a", "b", "one", "two", "nested"]);
+    Ok(())
+}
+
+/// Upstream's `aNestedIncludeResolvesFromTheSymlinkTargetDirectory`: a symlinked include is resolved to its target, as
+/// ghostty's `realPathFile` does, so the includes it names resolve against the target's directory.
+#[cfg(unix)]
+#[test]
+fn a_nested_include_resolves_from_the_symlink_target_directory() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let (scoped, dotfiles) = (dir.path().join("scoped"), dir.path().join("dotfiles"));
+    let main = write(&scoped.join("ghostty.conf"), "config-file = shell.conf\n")?;
+    write(&dotfiles.join("shell.conf"), "config-file = fish.conf\n")?;
+    write(&dotfiles.join("fish.conf"), "command = target\n")?;
+    write(&scoped.join("fish.conf"), "command = alias\n")?;
+    std::os::unix::fs::symlink(dotfiles.join("shell.conf"), scoped.join("shell.conf"))?;
+    let mut loader = Loader::new(None);
+    loader.load_file(&main);
+    loader.load_includes();
+    assert_eq!(commands(loader), ["target"]);
+    Ok(())
+}
+
+/// The live launch's `command` (upstream's `resolveLiveCommandShell`): the raw last value across the user files and
+/// their includes, so a later `command` Live cannot run cancels an earlier shell it can.
+#[test]
+fn the_configured_command_is_the_last_raw_value_across_files_and_includes() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let state = dir.path().join("state");
+    let env = paths::MapEnv::new()
+        .with("NGTERM_STATE_DIR", &state)
+        .with("HOME", dir.path().join("home"));
+    assert_eq!(configured_command(&env), None, "the defaults set none");
+    let scoped = write(
+        &state.join("config/ghostty.conf"),
+        "command = /usr/bin/fish --login\nconfig-file = later.conf\n",
+    )?;
+    assert_eq!(configured_command(&env).as_deref(), Some("/usr/bin/fish --login"));
+    write(&state.join("config/later.conf"), "command = /usr/bin/tmux new\n")?;
+    assert_eq!(configured_command(&env).as_deref(), Some("/usr/bin/tmux new"));
+    // the Settings window's file loads after the scoped one, and an include after both
+    write(&state.join("ghostty-settings.conf"), "command = /bin/zsh\n")?;
+    assert_eq!(configured_command(&env).as_deref(), Some("/usr/bin/tmux new"));
+    std::fs::write(&scoped, "command = /usr/bin/fish\n")?;
+    assert_eq!(configured_command(&env).as_deref(), Some("/bin/zsh"));
+    write(&state.join("ghostty-settings.conf"), "command =\n")?;
+    assert_eq!(configured_command(&env).as_deref(), Some(""), "a reset is a value too");
+    Ok(())
+}
+
 #[test]
 fn home_relative_paths_expand_against_the_home() -> TestResult {
     let home = tempfile::tempdir()?;

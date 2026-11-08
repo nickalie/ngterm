@@ -618,18 +618,18 @@ contract `.claude/rules/settings.md`, `site/docs.html`.
 `crates/ngterm-core/src/restore/mode.rs`, `crates/ngterm-core/src/ghostty_config/tests.rs`.
 **Conformance:** none (the suite cannot vary the password-database shell).
 
-- [ ] `command_shell(command)`: optional `direct:`/`shell:`, an absolute path to a shell ngterm integrates (zsh,
+- [x] `command_shell(command)`: optional `direct:`/`shell:`, an absolute path to a shell ngterm integrates (zsh,
   bash, fish; on Windows an absolute pwsh.exe/powershell.exe path, a whole value that is an existing file taken as
   one path), followed only by live flags (-l, --login, -i, --interactive, -il, -li; decide the pwsh flag set);
   otherwise None ("fish --login", "/usr/bin/env fish", "-C 'echo hi'", "tmux new" refused). Upstream's
   "/bin/bash -l" -> nil is Some here: record the divergence.
-- [ ] The last raw `command` across sources and includes decides; latch it at launch beside the restore decision in
+- [x] The last raw `command` across sources and includes decides; latch it at launch beside the restore decision in
   GPUI and headless; a config reload never changes it; a pane whose daemon runs keeps its shell until Reset Live
   Sessions. `eligibility`/configuration use `command_shell.or(login_shell)` for `SHELL`, integration and probe;
   `live-sessions` is claimed only for an effective zsh or fish.
-- [ ] The live-unavailable reason names the command setting too, in ngterm's wording; note it in
+- [x] The live-unavailable reason names the command setting too, in ngterm's wording; note it in
   `conformance/docs/rust-build.md` if a test reads it.
-- [ ] write tests: the classifier table (upstream cases + bash, pwsh, Windows paths); configuration with and without
+- [x] write tests: the classifier table (upstream cases + bash, pwsh, Windows paths); configuration with and without
   a command shell; tcsh login + fish command is eligible; reload keeps the latch; the two missing ghostty include
   tests.
 

@@ -48,7 +48,7 @@ pub struct LiveInstall {
     /// The session host executable and the namespace every invocation runs in.
     pub endpoint: ControlLiveEndpoint,
     /// The wrap inputs every pane's configuration extends (the pane identity, base environment and lead are filled
-    /// per pane); the session host executable, the login shell and the integration are checked again per pane.
+    /// per pane); the session host executable, the pane shell and the integration are checked again per pane.
     pub wrap: Inputs,
     /// The state directory the reset marker lives in.
     pub state_dir: PathBuf,
@@ -137,9 +137,10 @@ impl LiveRuntime {
         self.host.clone().ok_or_else(|| ControlError::rejected(UNAVAILABLE))
     }
 
-    /// The login shell a wrapped pane's daemon runs; `None` when this instance wraps no pane or names none.
-    pub(crate) fn login_shell(&self) -> Option<&str> {
-        self.wrap.as_ref()?.login_shell.as_deref()
+    /// The shell a wrapped pane's daemon runs ([`Inputs::shell`]: ghostty `command`'s, else the login shell); `None`
+    /// when this instance wraps no pane or names none.
+    pub(crate) fn shell(&self) -> Option<&str> {
+        self.wrap.as_ref()?.shell()
     }
 }
 

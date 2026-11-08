@@ -1,7 +1,8 @@
 //! The restore decision this launch takes before its first terminal (upstream's `GhosttyApp.init` latching
 //! `restoreLaunchDecision` from the settings and `ZmxLaunch.liveUnavailableReason`), and the host facts the foreground
 //! reads need: the user's `$SHELL`. The live probe's inputs (the staged `ngterm-session`, the password-database login
-//! shell, its integration) are [`Runtime`]'s.
+//! shell, the shell ghostty `command` names in its place, their integration) are [`Runtime`]'s, which the launch
+//! captures once and hands to the claims and the wrap as well.
 
 use ngterm_core::command_restore::basename;
 use ngterm_core::paths::Env;
@@ -9,15 +10,16 @@ use ngterm_core::persist::AppSettings;
 use ngterm_core::restore::mode::RestoreLaunchDecision;
 use ngterm_session::launch::Runtime;
 
-/// The decision for this launch: the settings' mode, `live` falling back to fresh shells with the probe's reason. Call
-/// it after libghostty's resources dir is exported.
-pub fn launch_decision(settings: &AppSettings, env: &dyn Env) -> RestoreLaunchDecision {
-    let probe = Runtime::capture(env).live_probe(env);
+/// The decision for this launch: the settings' mode, `live` falling back to fresh shells with the probe of the launch's
+/// capture `runtime`'s reason. Capture it after libghostty's resources dir is exported.
+pub fn launch_decision(settings: &AppSettings, runtime: &Runtime, env: &dyn Env) -> RestoreLaunchDecision {
+    let probe = runtime.live_probe(env);
     let decision = RestoreLaunchDecision::new(settings.effective_restore_mode(), probe.unavailable_reason());
     tracing::info!(
         requested = decision.requested.wire_name(),
         active = decision.active.wire_name(),
         reason = decision.live_unavailable_reason.as_deref().unwrap_or(""),
+        command_shell = runtime.command_shell.as_deref().unwrap_or(""),
         "restore mode for this launch"
     );
     decision
@@ -43,7 +45,8 @@ mod tests {
             restore_mode: Some(RestoreMode::Live),
             ..AppSettings::default()
         };
-        let decision = launch_decision(&settings, &MapEnv::new());
+        let env = MapEnv::new();
+        let decision = launch_decision(&settings, &Runtime::capture(&env), &env);
         assert_eq!(decision.active, RestoreMode::None);
         assert_eq!(
             decision.live_unavailable_reason.as_deref(),
