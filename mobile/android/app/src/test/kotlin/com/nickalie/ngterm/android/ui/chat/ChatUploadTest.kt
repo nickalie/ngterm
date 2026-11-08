@@ -62,7 +62,7 @@ class ChatUploadTest {
         eventually { (upload() as? ChatUpload.Sending)?.sent == 2L }
         assertEquals(ChatUpload.Sending("shot.png", 2, 4), upload())
         gate.complete(Unit)
-        eventually { upload() == null }
+        eventually { upload() == null && chat.composer.draft.text == "Look at this /state/uploads/1/shot.png " }
         assertEquals("Look at this /state/uploads/1/shot.png ", chat.composer.draft.text)
         assertEquals(
             "shot.png",
@@ -115,7 +115,7 @@ class ChatUploadTest {
         chat.cancelUpload()
         assertEquals(ChatUpload.Sending("notes.txt", 4, 4, saving = true), upload())
         saving.complete(Unit)
-        eventually { upload() == null }
+        eventually { upload() == null && chat.composer.draft.text == "See /state/uploads/1/notes.txt " }
         assertEquals("See /state/uploads/1/notes.txt ", chat.composer.draft.text)
     }
 
