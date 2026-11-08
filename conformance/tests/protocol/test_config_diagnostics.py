@@ -1,10 +1,12 @@
 """`config.reload`'s `count`: one diagnostic per line of the agterm-scoped `<state>/config/ghostty.conf` Ghostty's
 config loader refuses, none for a line it takes, by the kind of the key's value.
 
-Each case appends its lines to the instance's own config, reloads and puts the file back. The counts are libghostty's
-own (its `cli/args.zig` and the config types' `parseCLI`, `Binding.zig` for `keybind`), as the Rust build's goldens
-recorded them against a linked libghostty (crates/ngterm-core/src/ghostty_config/counts_tests.rs); the cases keep to
-keys and values every Ghostty the reference and the Rust build carry agree on. The module shares one instance."""
+The table-driven cases share one instance: each appends its lines to that instance's config, reloads and puts the
+file back. The counts are libghostty's own (its `cli/args.zig` and the config types' `parseCLI`, `Binding.zig` for
+`keybind`), as the Rust build's goldens recorded them against a linked libghostty
+(crates/ngterm-core/src/ghostty_config/counts_tests.rs); the cases keep to keys and values every Ghostty the reference
+and the Rust build carry agree on. The theme test launches its own instance with settings that prevent the reference
+from seeding its theme over the config under test."""
 
 import pytest
 from agterm_conformance.match import assert_ok

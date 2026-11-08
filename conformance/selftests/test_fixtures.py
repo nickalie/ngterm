@@ -11,7 +11,7 @@ from agterm_conformance.client import Response, SocketOutsideRoot
 from agterm_conformance.impls.base import Instance, Profile
 from upstream_adapter import UpstreamVocabularyAdapter
 from agterm_conformance.match import session_ids
-from agterm_conformance.plugin import Cli, Ctl, skip_reason
+from agterm_conformance.plugin import Cli, Ctl, skip_reason, summary_line
 from agterm_conformance.wait import (
     Cursor,
     WaitTimeout,
@@ -73,6 +73,25 @@ def fake_ctl(tmp_path: Path) -> Path:
 
 
 # -- skips and the summary
+
+
+@pytest.mark.parametrize(
+    ("stats", "expected"),
+    [
+        ({"xpassed": ["fixed"], "xfailed": ["bug"]}, "1 pass, 0 fail"),
+        ({"xpassed": ["fixed"], "error": ["fixed"], "xfailed": ["bug"]}, "0 pass, 1 fail"),
+    ],
+)
+def test_summary_counts_upstream_bug_outcomes(stats: dict[str, list[str]], expected: str) -> None:
+    reports = {key: [SimpleNamespace(nodeid=nodeid) for nodeid in nodes] for key, nodes in stats.items()}
+    # A passing selftest and an unexercised xfail must not change the conformance totals.
+    reports["passed"] = [SimpleNamespace(nodeid="selftest")]
+    reports["xfailed"].append(SimpleNamespace(nodeid="unexercised"))
+    line = summary_line(reports, "swift-macos", frozenset({"fixed", "bug"}))
+    assert line == (
+        f"swift-macos: {expected}, 0 skip(unsupported), 0 skip(not-yet-at-level), 0 skip(other), "
+        f"1 xfailed, 0 reruns, parity {'50.0' if not stats.get('error') else '0.0'}%"
+    )
 
 
 def test_skip_reasons_and_summary(pytester: pytest.Pytester, roots: list[Path], fake_bin: Path) -> None:
