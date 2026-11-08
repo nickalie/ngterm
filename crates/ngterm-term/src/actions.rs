@@ -341,4 +341,43 @@ mod tests {
         }
         assert_eq!(pane.frame().frame.lines(), ["top", "9", "10", ""]);
     }
+
+    #[test]
+    fn an_adjusted_selection_below_the_viewport_scrolls_its_end_to_the_bottom() {
+        let dir = tempfile::tempdir().unwrap();
+        let pane = spawn("stty -echo; seq 1 10; printf 'last'; exec sleep 5", dir.path());
+        wait_line(&pane, 3, "last");
+        pane.select(crate::GridPoint::screen(0, 7), crate::GridPoint::screen(0, 7), false)
+            .unwrap();
+        pane.scroll(crate::Scroll::Top);
+        wait_line(&pane, 0, "1");
+        assert!(pane.adjust_selection(SelectionAdjust::Right));
+        wait_line(&pane, 3, "9");
+        assert_eq!(
+            pane.format(FormatRegion::Selection, TextFormat::Plain, true).as_deref(),
+            Some("8\n9")
+        );
+        assert!(pane.scroll_to_selection());
+        wait_line(&pane, 0, "8");
+    }
+
+    #[test]
+    fn reset_drops_history_selection_and_terminal_modes_without_ending_the_program() {
+        let dir = tempfile::tempdir().unwrap();
+        let pane = spawn(
+            "stty -echo; seq 1 10; printf '\\033[?25lready'; read _; printf 'alive'; exec sleep 5",
+            dir.path(),
+        );
+        wait_line(&pane, 3, "ready");
+        pane.select_all().unwrap();
+        assert!(pane.format(FormatRegion::Selection, TextFormat::Plain, true).is_some());
+        pane.reset();
+        let frame = pane.frame().frame;
+        assert!(frame.lines().iter().all(String::is_empty));
+        assert!(frame.cursor.visible);
+        assert_eq!(pane.format(FormatRegion::History, TextFormat::Plain, true), None);
+        assert_eq!(pane.format(FormatRegion::Selection, TextFormat::Plain, true), None);
+        pane.write(b"\n").unwrap();
+        wait_line(&pane, 0, "alive");
+    }
 }

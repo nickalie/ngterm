@@ -585,4 +585,133 @@ mod tests {
             Ok(ApiResponse::JobRunning(true))
         );
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_session_ending_after_lookup_is_gone_for_screen_typing_and_printing() {
+        use crate::protocol::{GridSize, SessionSpec};
+        use crate::server::pane::PaneConfig;
+
+        let root = tempfile::tempdir().unwrap();
+        let config = PaneConfig::new(
+            "ended",
+            root.path(),
+            SessionSpec {
+                argv: vec!["/bin/sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()],
+                env: Vec::new(),
+                cwd: None,
+                tracked_env: Vec::new(),
+            },
+            GridSize { cols: 20, rows: 4 },
+        );
+        let (pane, _attached) = Pane::spawn(config).unwrap();
+        assert!(pane.wait_exit(std::time::Duration::from_secs(5)).is_some());
+        let gone = ApiError {
+            kind: ApiErrorKind::NoSuchSession,
+            message: "no live session named \"ended\"".to_owned(),
+        };
+        assert_eq!(screen(&pane, "ended", false), Err(gone.clone()));
+        assert_eq!(type_input(&pane, "ended", b"text\r"), Err(gone.clone()));
+        assert_eq!(print(&pane, "ended", b"text"), Err(gone));
+    }
+
+    #[cfg(unix)]
+    fn pair() -> (tempfile::TempDir, Arc<Shared>, Arc<Stream>, Stream) {
+        let root = tempfile::Builder::new().prefix("ngapi-").tempdir_in("/tmp").unwrap();
+        let endpoint = endpoint::Endpoint::new(root.path());
+        let listener = endpoint.bind().unwrap();
+        let client = endpoint.connect().unwrap();
+        let server = Arc::new(listener.accept().unwrap());
+        super::super::set_recv_timeout(&server, Some(std::time::Duration::from_secs(5)));
+        super::super::set_recv_timeout(&client, Some(std::time::Duration::from_secs(5)));
+        let shared = Shared::new(&endpoint, &super::super::ServerConfig::default());
+        (root, shared, server, client)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_oversized_reply_is_replaced_by_an_error_with_the_calls_id() {
+        let (_root, _shared, server, mut client) = pair();
+        let max = crate::protocol::MAX_MESSAGE_SIZE;
+        let reply = ApiReply {
+            id: 41,
+            result: Err(ApiError {
+                kind: ApiErrorKind::Failed,
+                message: "x".repeat(max),
+            }),
+        };
+        send(&server, &reply).unwrap();
+        let refusal: ApiReply = read_frame(&mut client).unwrap().message(PROTOCOL_VERSION).unwrap();
+        assert_eq!(
+            refusal,
+            ApiReply {
+                id: 41,
+                result: Err(ApiError {
+                    kind: ApiErrorKind::Failed,
+                    message: format!(
+                        "the reply of {} bytes exceeds the largest message the session server sends ({max} bytes)",
+                        max + 8
+                    ),
+                }),
+            }
+        );
+        let next = ApiReply {
+            id: 42,
+            result: Ok(ApiResponse::Done),
+        };
+        send(&server, &next).unwrap();
+        assert_eq!(
+            read_frame(&mut client)
+                .unwrap()
+                .message::<ApiReply>(PROTOCOL_VERSION)
+                .unwrap(),
+            next
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_call_admitted_before_handoff_is_not_executed_or_answered() {
+        use std::io::Read as _;
+        use std::sync::atomic::Ordering;
+
+        use interprocess::local_socket::traits::Stream as _;
+
+        let (_root, mut shared, server, mut client) = pair();
+        let sent = Arc::default();
+        let process = entry(11, 11, 11, 10);
+        Arc::get_mut(&mut shared).unwrap().jobs = sweeper(Some(vec![process]), &sent);
+        let connection = shared.register(&server, 0);
+        shared.generation.fetch_add(1, Ordering::AcqRel);
+        write_message(
+            &mut client,
+            &ApiCall {
+                id: 8,
+                request: ApiRequest::EndJob {
+                    job: vec![JobProcess::from(process.record)],
+                },
+            },
+        )
+        .unwrap();
+        serve(&server, &shared, &connection).unwrap();
+        client.set_nonblocking(true).unwrap();
+        assert_eq!(
+            client.read(&mut [0]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        assert!(sent.lock().unwrap_or_else(PoisonError::into_inner).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_malformed_call_is_reported_as_a_framing_error() {
+        let (_root, shared, server, mut client) = pair();
+        let connection = shared.register(&server, 0);
+        client.write_all(b"not a frame header at all").unwrap();
+        endpoint::close(&client);
+        assert!(matches!(
+            serve(&server, &shared, &connection),
+            Err(FramingError::BadMagic([110, 111, 116, 32]))
+        ));
+    }
 }
