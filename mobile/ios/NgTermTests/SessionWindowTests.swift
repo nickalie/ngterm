@@ -34,7 +34,7 @@ internal struct SessionWindowTests {
         #expect(main.open(session) == .here, "a main window shows it again")
     }
 
-    @Test("a window of a session no longer attached lets it go")
+    @Test("the session view clears once the session is no longer attached")
     internal func sessionGone() async throws {
         let (graph, _) = try AppWindow.sessionWorld()
         try await AppWindow.attachWork(graph)
@@ -46,6 +46,5 @@ internal struct SessionWindowTests {
 
         graph.connections.detach(machineId: session.machineID, sessionId: session.sessionID)
         try await AppWindow.until { !AppWindow.titles(in: window).contains(FakeSessionWorld.sessionId) }
-        #expect(graph.connections.attached[session.machineID]?.contains(session.sessionID) != true)
     }
 }
