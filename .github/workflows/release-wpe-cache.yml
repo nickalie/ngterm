@@ -1,4 +1,4 @@
-# Keeps release.yml's portable WPE WebKit prefix where every release can pull it: GHCR's private package
+# Keeps release.yml's portable WPE WebKit prefix where every release can pull it: GHCR's public package
 # ghcr.io/<owner>/ngterm-release-wpe, one OCI artifact per runner image and build key (scripts/release-wpe-store.sh).
 #
 # A release builds on its tag, and actions/cache can't carry hours of WPE build from one release to the next: a tag
@@ -12,6 +12,9 @@
 # that manifest's provenance (this workflow, on main), and only then tags it. release.yml's `linux` job pulls a tag
 # only through `gh attestation verify` against that provenance. Each `build` leg reports its archive's sha256 under its
 # own output name (legs writing one name overwrite each other), and `publish` pushes only an archive that matches it.
+#
+# When only `publish` fails (a registry or download error), re-run its failed jobs (`gh run rerun <id> --failed`): the
+# archives stay a day as artifacts. A new run would find no tag and build WPE again (hours).
 name: release-wpe-cache
 
 on:
@@ -107,6 +110,8 @@ jobs:
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
     strategy:
       fail-fast: false
+      # one push at a time: two first pushes into a package that doesn't exist yet race, and GHCR denies the second
+      max-parallel: 1
       matrix:
         include:
           - os: ubuntu-24.04
