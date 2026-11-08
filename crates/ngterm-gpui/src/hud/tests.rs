@@ -494,23 +494,59 @@ fn panel_harness<'a>(dir: &std::path::Path, cx: &'a mut gpui_kit::TestAppContext
     harness
 }
 
+/// The (row, column) of the panel link's first cell on a screen of `lines`.
+fn link_cell(lines: &[String]) -> Option<(usize, usize)> {
+    lines
+        .iter()
+        .enumerate()
+        .find_map(|(row, line)| line.find("https://").map(|column| (row, column)))
+}
+
+/// Where the painter puts the panel link's first cell for `body` (the body file as written now), read off its own
+/// frame: each row starts with a CNL, a line's indent is one CUF.
+fn settled_link_cell(body: &str) -> Option<(usize, usize)> {
+    let frame = ngterm_core::hud::painter::Painter::new().tick(body).output?;
+    let before = &frame[..frame.find("https://")?];
+    let line = before.rsplit("\x1b[E").next().unwrap_or(before);
+    let indent = line
+        .rsplit_once("\x1b[")
+        .and_then(|(_, last)| last.strip_suffix('C'))
+        .map_or(0, |columns| columns.parse().unwrap());
+    Some((before.matches("\x1b[E").count(), indent))
+}
+
 #[gpui_kit::test]
 fn hovering_a_hud_link_marks_it_and_leaving_or_adding_a_modifier_clears_it(cx: &mut gpui_kit::TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let mut h = panel_harness(dir.path(), cx);
     let (_, view) = h.panel();
+    let body = h
+        .state
+        .core
+        .library()
+        .held_session(h.session)
+        .unwrap()
+        .overlay
+        .hud
+        .as_ref()
+        .unwrap()
+        .file
+        .clone();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    // the panel shows first at its unmeasured size; its measure (posted once it spawns) resizes it, and until the
+    // painter paints again the screen keeps the old frame reflowed, its link where the settled panel has none
     loop {
         h.turn();
-        if view.read_with(h.cx, |view, _| {
-            view.painted()
-                .is_some_and(|frame| frame.lines().join("\n").contains("https://example.com/panel"))
-        }) {
+        let expected = settled_link_cell(&std::fs::read_to_string(&body).unwrap_or_default());
+        let painted = view.read_with(h.cx, |view, _| {
+            view.painted().and_then(|frame| link_cell(&frame.lines()))
+        });
+        if h.posted.0.lock().unwrap().is_empty() && painted.is_some() && painted == expected {
             break;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "the painter's link never appeared"
+            "the painter's link never settled: painted at {painted:?}, expected at {expected:?}"
         );
         std::thread::yield_now();
     }
@@ -525,15 +561,7 @@ fn hovering_a_hud_link_marks_it_and_leaving_or_adding_a_modifier_clears_it(cx: &
             height: 600,
         });
         let (cell_x, cell_y) = terminal.read(cx).shared().cell_size();
-        let (row, column) = view
-            .read(cx)
-            .painted()
-            .unwrap()
-            .lines()
-            .iter()
-            .enumerate()
-            .find_map(|(row, line)| line.find("https://").map(|column| (row, column)))
-            .expect("the link has a painted cell");
+        let (row, column) = link_cell(&view.read(cx).painted().unwrap().lines()).expect("the link has a painted cell");
         #[expect(clippy::cast_precision_loss, reason = "the panel's row and column fit f64")]
         let (row, column) = (row as f64, column as f64);
         #[expect(clippy::cast_possible_truncation, reason = "the test window's coordinates fit f32")]
