@@ -784,7 +784,8 @@ impl Core {
         true
     }
 
-    /// Takes down the overlay showing `job`, once its origin closed it (upstream's `closeReplicaOverlay`).
+    /// Takes down the overlay showing `job`, once its origin closed it (upstream's `closeReplicaOverlay`), while its
+    /// slot still holds the replica's generation: an overlay that replaced it before the record was pruned stays.
     fn close_replica_overlay(&mut self, job: &str, session: Uuid) -> bool {
         let Some(replica) = self
             .remote
@@ -800,9 +801,15 @@ impl Core {
             return false;
         };
         let closed = match replica.pane.and_then(|identity| found.pane_role_for_identity(identity)) {
-            Some(role) => found.pane_overlays.slot_mut(role).close(),
+            Some(role)
+                if found
+                    .pane_overlay(role)
+                    .is_some_and(|open| open.generation == replica.generation) =>
+            {
+                found.pane_overlays.slot_mut(role).close()
+            }
             None if replica.pane.is_none() && found.overlay.generation == replica.generation => found.overlay.close(),
-            None => false,
+            Some(_) | None => false,
         };
         if closed {
             self.library_mut().schedule_tree_changed_for(session);
