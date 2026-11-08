@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use semver::Version;
 
-pub use download::{Release, Source, check, prepare};
+pub use download::{Release, Source};
 pub use install::Prepared;
 
 /// The release signing keys this build trusts. A build trusts exactly what its source commit's `trust/` directory

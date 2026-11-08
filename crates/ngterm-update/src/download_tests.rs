@@ -118,7 +118,7 @@ fn cancellation_happens_before_network_or_file_access() {
     let fixture = tempfile::tempdir().unwrap();
     let release = local_release();
     let mut events = Vec::new();
-    let result = prepare(
+    let result = Source::github().prepare(
         &installation(&fixture.path().join("missing")),
         &release,
         &Trust::default(),
@@ -159,23 +159,27 @@ fn prepare_refuses_stale_or_invalid_installed_identity_and_cleans_its_stage() {
     ] {
         tree(&root, identity);
         assert_eq!(
-            prepare(&install, &release, &Trust::default(), |_, _| true)
+            Source::github()
+                .prepare(&install, &release, &Trust::default(), |_, _| true)
                 .unwrap_err()
                 .to_string(),
             expected
         );
         assert_eq!(fs::read_dir(fixture.path()).unwrap().count(), 1);
-        assert_eq!(fs::read_to_string(root.join("usr/bin/ngterm")).unwrap(), "binary");
+        assert_eq!(
+            fs::read_to_string(root.join("usr/bin/ngterm")).unwrap(),
+            format!("ngterm {identity}")
+        );
     }
     tree(&root, "0.1.0");
     assert!(matches!(
-        prepare(&install, &release, &Trust::default(), |_, _| true),
+        Source::github().prepare(&install, &release, &Trust::default(), |_, _| true),
         Err(Error::Http(_))
     ));
     assert_eq!(fs::read_dir(fixture.path()).unwrap().count(), 1);
     fs::remove_file(install.identity_file()).unwrap();
     assert!(matches!(
-        prepare(&install, &release, &Trust::default(), |_, _| true),
+        Source::github().prepare(&install, &release, &Trust::default(), |_, _| true),
         Err(Error::Io(_))
     ));
     assert_eq!(fs::read_dir(fixture.path()).unwrap().count(), 1);
@@ -183,6 +187,7 @@ fn prepare_refuses_stale_or_invalid_installed_identity_and_cleans_its_stage() {
 
 fn http_agent() -> ureq::Agent {
     ureq::Agent::config_builder()
+        .proxy(None)
         .timeout_global(Some(Duration::from_secs(5)))
         .build()
         .into()
@@ -297,11 +302,12 @@ fn prepare_requires_an_accessible_installation_and_a_parent_directory() {
     let release = local_release();
     let missing = installation(&fixture.path().join("missing"));
     assert!(matches!(
-        prepare(&missing, &release, &Trust::default(), |_, _| true),
+        Source::github().prepare(&missing, &release, &Trust::default(), |_, _| true),
         Err(Error::Io(_))
     ));
     assert_eq!(
-        prepare(&installation(Path::new("/")), &release, &Trust::default(), |_, _| true)
+        Source::github()
+            .prepare(&installation(Path::new("/")), &release, &Trust::default(), |_, _| true)
             .unwrap_err()
             .to_string(),
         "Installation has no parent directory."
@@ -318,7 +324,7 @@ fn image_prepare_keeps_the_original_file_when_transport_is_refused() {
     install.format = crate::Format::AppImage;
     install.image_identity = Some(crate::install::image_stamp(&root).unwrap());
     assert!(matches!(
-        prepare(&install, &local_release(), &Trust::default(), |_, _| true),
+        Source::github().prepare(&install, &local_release(), &Trust::default(), |_, _| true),
         Err(Error::Http(_))
     ));
     assert_eq!(fs::read_to_string(&root).unwrap(), "original image");
@@ -433,7 +439,8 @@ fn a_check_reports_transport_and_metadata_failures_with_their_messages() {
     server.route(
         "/latest",
         "200 OK",
-        ureq::get(&elsewhere.url("/latest"))
+        http_agent()
+            .get(&elsewhere.url("/latest"))
             .call()
             .unwrap()
             .body_mut()

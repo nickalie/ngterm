@@ -120,13 +120,14 @@ impl Server {
     }
 
     /// Where releases come from on this server: the latest at `/latest`, downloads under `/download/`, read over
-    /// plain HTTP with a short timeout.
+    /// plain HTTP with a short timeout and no environment proxy.
     #[must_use]
     pub fn source(&self) -> Source {
         Source {
             api: self.url("/latest"),
             downloads: self.url("/download/"),
             agent: ureq::Agent::config_builder()
+                .proxy(None)
                 .timeout_global(Some(Duration::from_secs(10)))
                 .build()
                 .into(),

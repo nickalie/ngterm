@@ -98,14 +98,6 @@ impl Source {
     }
 }
 
-/// Queries GitHub's latest stable release, as [`Source::check`] over [`Source::github`].
-///
-/// # Errors
-/// Returns network, metadata or incompatible release errors.
-pub fn check(installation: &Installation, current: &str, trust: &Trust) -> Result<Option<Release>, Error> {
-    Source::github().check(installation, current, trust)
-}
-
 pub(crate) fn select(
     metadata: &Metadata,
     downloads: &str,
@@ -208,19 +200,6 @@ pub(crate) fn checksum(manifest: &str, name: &str) -> Result<String, Error> {
         return Err(error("Release checksum is invalid."));
     }
     Ok(hash.to_ascii_lowercase())
-}
-
-/// Downloads and prepares `release` from GitHub, as [`Source::prepare`] over [`Source::github`].
-///
-/// # Errors
-/// Returns download, signature, checksum, extraction or filesystem errors; the installation is left untouched.
-pub fn prepare(
-    installation: &Installation,
-    release: &Release,
-    trust: &Trust,
-    progress: impl FnMut(u64, u64) -> bool,
-) -> Result<Prepared, Error> {
-    Source::github().prepare(installation, release, trust, progress)
 }
 
 impl Source {

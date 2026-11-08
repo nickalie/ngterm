@@ -1068,22 +1068,35 @@ mod tests {
         cx.update(|_, cx| cx.global::<Updater>().status.clone())
     }
 
-    /// Stops the installer helper that took `stage` over, and returns its process id.
+    /// Stops and reaps the installer helper that took `stage` over, proving it had not exited on its own.
     #[cfg(target_os = "linux")]
-    fn stop_helper(stage: &Path) -> u64 {
+    fn stop_helper(stage: &Path) {
         let owner: serde_json::Value =
             serde_json::from_slice(&std::fs::read(stage.join("owner.json")).unwrap()).unwrap();
-        let pid = owner["pid"].as_u64().unwrap();
-        assert_ne!(pid, u64::from(std::process::id()), "the helper owns the stage");
-        let killed = std::process::Command::new("kill")
-            .arg(pid.to_string())
-            .status()
-            .unwrap();
+        let pid = libc::pid_t::try_from(owner["pid"].as_u64().unwrap()).unwrap();
+        assert!(pid > 0);
+        assert_ne!(
+            pid,
+            libc::pid_t::try_from(std::process::id()).unwrap(),
+            "the helper owns the stage"
+        );
+        // SAFETY: pid names the helper spawned by this test, never the test process or a process group.
+        let killed = unsafe { libc::kill(pid, libc::SIGTERM) };
+        let mut status = 0;
+        loop {
+            // SAFETY: pid names our child and status is a valid writable exit-status pointer.
+            let waited = unsafe { libc::waitpid(pid, &raw mut status, 0) };
+            if waited == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            assert_eq!(waited, pid, "the helper is reaped");
+            break;
+        }
+        assert_eq!(killed, 0, "the helper received SIGTERM");
         assert!(
-            killed.success(),
+            libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGTERM,
             "the helper was still waiting for this process to quit"
         );
-        pid
     }
 
     #[gpui_kit::test]
@@ -1116,12 +1129,12 @@ mod tests {
         assert_eq!(alert.heading, "Update ready");
         assert_eq!(fixture.server.requests().len(), 3);
         press(cx, "Restart to Update");
+        stop_helper(&stage);
         cx.update(|_, cx| {
             let updater = cx.global::<Updater>();
             assert!(updater.restart && updater.prepared.is_none());
         });
         assert!(stage.join("install.sh").is_file(), "the helper's script is staged");
-        stop_helper(&stage);
         assert_eq!(
             std::fs::read_to_string(fixture.root().join("usr/share/ngterm/app-BUILD")).unwrap(),
             "0.1.0\ncommit\n",
@@ -1225,6 +1238,9 @@ mod tests {
             let [stage] = <[PathBuf; 1]>::try_from(fixture.stages()).unwrap();
             cx.update(|cx| {
                 on_quit(live_reset, cx);
+                if !live_reset {
+                    stop_helper(&stage);
+                }
                 let updater = cx.global::<Updater>();
                 assert!(updater.prepared.is_none() && updater.polling.is_none());
             });
@@ -1232,7 +1248,6 @@ mod tests {
                 assert!(fixture.stages().is_empty(), "a live reset discards the update");
             } else {
                 assert!(stage.join("install.sh").is_file(), "the installer takes the stage over");
-                stop_helper(&stage);
             }
             assert!(!error_file(&fixture.state_dir()).exists());
         }
