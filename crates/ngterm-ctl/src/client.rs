@@ -515,6 +515,151 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_client_error_reads_as_its_message() {
+        let error = ClientError::new("no response from /tmp/ngterm.sock");
+        assert_eq!(error.to_string(), "no response from /tmp/ngterm.sock");
+    }
+
+    /// A connect that fails for a reason other than a refusal or a missing socket asks whether the app runs, without
+    /// consulting the ownership lock (upstream's `hint(forConnect:)`).
+    #[cfg(unix)]
+    #[test]
+    fn a_connect_failing_otherwise_asks_whether_ngterm_is_running() {
+        let dir = tempfile::Builder::new().prefix("agc").tempdir_in("/tmp").unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+        let path = file.join("ngterm.sock");
+        let error = connect(&path).unwrap_err();
+        assert_eq!(error.connect_error, Some(ErrorKind::NotADirectory));
+        assert_eq!(
+            error.message,
+            format!(
+                "connect({}) failed: Not a directory — is ngterm running?",
+                path.display()
+            )
+        );
+    }
+
+    /// The size check runs before the connect, so the error names the size rather than a missing socket.
+    #[test]
+    fn a_request_over_the_line_cap_is_refused_before_connecting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.sock");
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "cmd": "msg.send",
+            "args": {"body": "x".repeat(MAX_REQUEST_LINE_BYTES)},
+        }))
+        .unwrap();
+        let size = serde_json::to_vec(&request).unwrap().len();
+        let error = send(&path, &request).unwrap_err();
+        assert_eq!(
+            error,
+            ClientError::new(format!(
+                "request too large ({size} bytes, cap {MAX_REQUEST_LINE_BYTES}) — split the input into smaller \
+                 requests"
+            ))
+        );
+    }
+
+    /// An instance that reads the request and hangs up without a reply is no response, bounded or not; a bounded
+    /// send ended before its limit does not claim the limit passed.
+    #[cfg(unix)]
+    #[test]
+    fn an_instance_that_hangs_up_without_answering_is_no_response() {
+        use std::io::BufRead as _;
+        let dir = tempfile::Builder::new().prefix("agc").tempdir_in("/tmp").unwrap();
+        let path = dir.path().join("silent.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            (0..2)
+                .map(|_| {
+                    let (stream, _) = listener.accept().unwrap();
+                    let mut line = String::new();
+                    io::BufReader::new(&stream).read_line(&mut line).unwrap();
+                    line
+                })
+                .collect::<Vec<_>>()
+        });
+        let request: Request = serde_json::from_str(r#"{"cmd":"version"}"#).unwrap();
+        let expected = format!("no response from {}", path.display());
+        assert_eq!(send(&path, &request).unwrap_err().message, expected);
+        let bounded = send_within(&path, &request, Duration::from_secs(30)).unwrap_err();
+        assert_eq!(bounded.message, expected);
+        assert_eq!(server.join().unwrap(), ["{\"cmd\":\"version\"}\n"; 2]);
+    }
+
+    /// An instance that takes the connection and hangs up without reading fails the write, rather than reading as no
+    /// response: the request is larger than the socket's buffer, so the write is still going when the peer leaves.
+    #[cfg(unix)]
+    #[test]
+    fn an_instance_that_hangs_up_before_reading_fails_the_write() {
+        let dir = tempfile::Builder::new().prefix("agc").tempdir_in("/tmp").unwrap();
+        let path = dir.path().join("closing.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let server = std::thread::spawn(move || drop(listener.accept().unwrap()));
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "cmd": "msg.send",
+            "args": {"body": "x".repeat(MAX_REQUEST_LINE_BYTES - 1024)},
+        }))
+        .unwrap();
+        let error = send(&path, &request).unwrap_err();
+        assert!(error.message.starts_with("write failed: "), "{error}");
+        assert!(!error.message.contains("os error"), "{error}");
+        assert_eq!(error.connect_error, None);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_bounded_read_past_its_deadline_times_out_without_reading() {
+        let (ours, theirs) = ngterm_server::endpoint::pair().unwrap();
+        send_all(&theirs, b"late\n").unwrap();
+        let mut bounded = Bounded {
+            stream: &ours,
+            deadline: Instant::now(),
+        };
+        let mut buffer = [0_u8; 8];
+        assert_eq!(bounded.read(&mut buffer).unwrap_err().kind(), ErrorKind::TimedOut);
+        // what was waiting is still there for the next reader
+        assert_eq!(read_socket_line(&ours, 16), Some(b"late".to_vec()));
+    }
+
+    #[test]
+    fn a_streamed_line_retries_an_interrupted_read_and_leaves_what_follows() {
+        let mut source = b"ok\nrest".iter();
+        let mut interrupted = false;
+        let line = read_line_with(16, |byte| {
+            if !interrupted {
+                interrupted = true;
+                return Err(ErrorKind::Interrupted.into());
+            }
+            Ok(source.next().map_or(0, |next| {
+                byte[0] = *next;
+                1
+            }))
+        });
+        assert_eq!(line, Some(b"ok".to_vec()));
+        assert_eq!(source.as_slice(), b"rest");
+    }
+
+    #[test]
+    fn a_streamed_line_ends_at_its_cap_its_source_or_a_read_error() {
+        let endless = |byte: &mut [u8]| {
+            byte[0] = b'x';
+            Ok(1)
+        };
+        assert_eq!(read_line_with(4, endless), None);
+        let mut short = b"abc".iter();
+        let line = read_line_with(4, |byte| {
+            Ok(short.next().map_or(0, |next| {
+                byte[0] = *next;
+                1
+            }))
+        });
+        assert_eq!(line, None, "a streamed line needs its newline");
+        assert_eq!(read_line_with(4, |_| Err(ErrorKind::ConnectionReset.into())), None);
+    }
+
     /// Binds a stream socket at `path` and closes it without ever listening, leaving the socket file behind.
     #[cfg(unix)]
     fn bind_without_listening(path: &[u8]) {

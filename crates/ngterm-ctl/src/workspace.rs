@@ -516,4 +516,38 @@ mod tests {
             assert_eq!(parsed(argv).command().echoes_result_id(), echoes, "{argv:?}");
         }
     }
+
+    /// Every subcommand connects where `--socket` says and prints the raw reply under `--json`, after its own
+    /// arguments.
+    #[test]
+    fn every_subcommand_takes_the_connection_options() {
+        for argv in [
+            &["new"][..],
+            &["rename", "x"],
+            &["delete"],
+            &["select"],
+            &["go", "--to", "next"],
+            &["move", "--to", "up"],
+            &["focus"],
+            &["filter"],
+            &["flag"],
+            &["collapse"],
+            &["expand"],
+            &["tint", "off"],
+        ] {
+            let argv: Vec<&str> = argv
+                .iter()
+                .copied()
+                .chain(["--socket", "/tmp/w.sock", "--json"])
+                .collect();
+            let group = parsed(&argv);
+            let options = group.command().options();
+            assert_eq!(
+                options.socket.as_deref(),
+                Some(std::path::Path::new("/tmp/w.sock")),
+                "{argv:?}"
+            );
+            assert!(options.json, "{argv:?}");
+        }
+    }
 }

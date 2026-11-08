@@ -408,6 +408,13 @@ mod tests {
                 },
                 "the live-session print exited 1: session not found",
             ),
+            (
+                CopyFailure::SpawnFailed {
+                    path: PathBuf::from("/x/ngterm-session"),
+                    reason: "Permission denied".to_owned(),
+                },
+                "could not start /x/ngterm-session: Permission denied",
+            ),
         ];
         for (failure, message) in cases {
             assert_eq!(failure.message(), message);
@@ -674,6 +681,52 @@ mod tests {
                 status: 4,
                 stderr: String::new()
             })
+        );
+    }
+
+    #[test]
+    fn a_print_that_cannot_start_names_the_executable_and_why() {
+        let fixture = Fixture::new();
+        let missing = fixture.path(EXECUTABLE_FILE);
+        let Err(CopyFailure::SpawnFailed { path, reason }) = copy(b"hello", None, &live(), Some(&missing)) else {
+            panic!("a missing executable started");
+        };
+        assert_eq!(path, missing);
+        #[cfg(unix)]
+        assert_eq!(reason, "No such file or directory");
+        assert!(!reason.contains("os error"), "{reason}");
+    }
+
+    /// With no text argument, a terminal on standard input is refused rather than read until the user thinks to end
+    /// it; nothing is copied.
+    #[cfg(unix)]
+    #[test]
+    fn set_refuses_a_terminal_on_standard_input() {
+        let (_controller, terminal) = crate::local::stdin_probe::terminal();
+        let output = crate::local::stdin_probe::run(&["clipboard", "set"], terminal.into());
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            error.contains(r#"PROBE_RESULT:Err(Usage("give the text as an argument or pipe it on standard input"))"#),
+            "{error}"
+        );
+    }
+
+    /// A standard input that cannot be read fails the command with the OS's reason, before anything is printed.
+    #[cfg(unix)]
+    #[test]
+    fn set_reports_a_standard_input_it_cannot_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let unreadable = fs::File::open(directory.path()).unwrap();
+        let output = crate::local::stdin_probe::run(&["clipboard", "set"], unreadable.into());
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            error.contains(r#"PROBE_RESULT:Err(Local("could not read standard input: "#),
+            "{error}"
+        );
+        #[cfg(target_os = "linux")]
+        assert!(
+            error.contains("could not read standard input: Is a directory"),
+            "{error}"
         );
     }
 
