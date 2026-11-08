@@ -24,6 +24,7 @@ use ngterm_term::{GridPoint, Pane, PaneCommand, PaneConfig, SelectionText};
 
 use super::input::{self, KeyStroke, NativeKey, Source};
 use super::links::{self, LinkKind};
+use super::tests::run_queued;
 use super::{Terminal, TerminalConfig, TerminalEvent, TerminalSpec, TerminalView, ViewRole};
 use crate::keymap_dispatch::{self, Fired, KeyOrigin};
 
@@ -661,6 +662,7 @@ fn a_composition_shows_at_the_cursor_and_its_commit_is_typed(cx: &mut TestAppCon
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn drags_and_double_and_triple_clicks_select_and_copy_to_primary(cx: &mut TestAppContext) {
     let mut f = fixture(cx, "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30", config(""));
+    f.wait_painted("hello world");
     // a drag from the first cell past the middle of the fifth
     f.cx.simulate_mouse_down(
         point(px(3.), Fixture::at(0, 1).y),
@@ -678,6 +680,7 @@ fn drags_and_double_and_triple_clicks_select_and_copy_to_primary(cx: &mut TestAp
         Modifiers::default(),
     );
     assert_eq!(f.selection().as_deref(), Some("hello"));
+    run_queued(&f.terminal, f.cx);
     let primary = f.cx.update(|_, cx| {
         super::selection_clipboard::read(ngterm_term::ClipboardLocation::Selection, cx).and_then(|item| item.text())
     });
@@ -786,7 +789,7 @@ fn a_ctrl_click_on_a_link_opens_it_through_the_link_route(cx: &mut TestAppContex
         &mut surface,
         "copy_url_to_clipboard"
     ));
-    f.cx.run_until_parked();
+    run_queued(&f.terminal, f.cx);
     let copied = f.cx.read_from_clipboard().and_then(|item| item.text());
     assert_eq!(copied.as_deref(), Some("https://osc8.test/x"));
     f.click(5, 1, Modifiers::control());
@@ -810,6 +813,7 @@ fn a_ctrl_click_on_a_link_opens_it_through_the_link_route(cx: &mut TestAppContex
 fn read_only_mode_keeps_the_users_input_from_the_program(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nhello\\r\\n'; exec cat -v";
     let mut f = fixture(cx, script, config(""));
+    f.wait_painted("hello");
     f.focus();
     let shared = f.view.read_with(f.cx, |view, _| Rc::clone(view.shared()));
     shared.set_readonly(true);
@@ -969,6 +973,7 @@ fn releasing_a_lone_modifier_puts_out_the_link_it_lit(cx: &mut TestAppContext) {
 fn links_open_with_ctrl_shift_while_the_program_has_the_mouse(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nsee https://example.com/p\\r\\n'; exec cat -v";
     let mut f = fixture(cx, script, config(""));
+    f.wait_painted("example.com/p");
     let ctrl_shift = Modifiers {
         control: true,
         shift: true,
@@ -1104,6 +1109,7 @@ fn the_chord_opens_a_detected_url_or_an_osc8_link_in_the_browser(cx: &mut TestAp
 fn shift_alone_extends_the_selection_in_an_overlay_mode_and_the_chord_does_not(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
     let mut f = fixture(cx, script, config(""));
+    f.wait_painted("hello world");
     link_owner(&mut f, true, LinkOpenMode::Overlay);
     for (modifiers, extends) in [(Modifiers::shift(), true), (CTRL_SHIFT, false)] {
         std::thread::sleep(Duration::from_millis(600));
@@ -1163,6 +1169,7 @@ fn the_chord_on_a_still_pointer_without_a_modifier_change_opens_the_browser(cx: 
 fn the_chord_under_mouse_capture_follows_the_overlay_setting(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nsee https://example.com/p\\r\\n'; exec cat -v";
     let mut f = fixture(cx, script, config(""));
+    f.wait_painted("example.com/p");
     link_owner(&mut f, true, LinkOpenMode::Overlay);
     f.cx.simulate_mouse_move(Fixture::at(8, 1), None, CTRL_SHIFT);
     f.click(8, 1, CTRL_SHIFT);
@@ -1255,6 +1262,7 @@ fn right_click_follows_right_click_action(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf 'ready\\r\\nhello world\\r\\n'; exec cat";
     // paste (ngterm's default setting writes it): the selection goes, the clipboard is pasted
     let mut f = fixture(cx, script, config("right-click-action = paste\n"));
+    f.wait_painted("hello world");
     f.cx.write_to_clipboard(ClipboardItem::new_string("from-clipboard".into()));
     f.click(1, 1, Modifiers::default());
     f.click(1, 1, Modifiers::default());
@@ -1270,11 +1278,12 @@ fn right_click_follows_right_click_action(cx: &mut TestAppContext) {
 fn right_click_copy_and_ignore(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
     let mut f = fixture(cx, script, config("right-click-action = copy\n"));
+    f.wait_painted("hello world");
     f.click(7, 1, Modifiers::default());
     f.click(7, 1, Modifiers::default());
     f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Right, Modifiers::default());
     f.cx.simulate_mouse_up(Fixture::at(1, 1), MouseButton::Right, Modifiers::default());
-    f.cx.run_until_parked();
+    run_queued(&f.terminal, f.cx);
     let copied = f.cx.read_from_clipboard().and_then(|item| item.text());
     assert_eq!(copied.as_deref(), Some("world"));
     assert_eq!(f.selection(), None, "copied and dropped");
@@ -1284,7 +1293,8 @@ fn right_click_copy_and_ignore(cx: &mut TestAppContext) {
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn right_click_ignore_and_context_menu(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
-    let f = fixture(cx, script, config("right-click-action = ignore\n"));
+    let mut f = fixture(cx, script, config("right-click-action = ignore\n"));
+    f.wait_painted("hello world");
     f.cx.update(|_, cx| {
         super::selection_clipboard::write(
             ngterm_term::ClipboardLocation::Selection,
@@ -1301,7 +1311,7 @@ fn right_click_ignore_and_context_menu(cx: &mut TestAppContext) {
     });
     f.cx.simulate_mouse_down(Fixture::at(8, 1), MouseButton::Right, Modifiers::default());
     f.cx.simulate_mouse_up(Fixture::at(8, 1), MouseButton::Right, Modifiers::default());
-    f.cx.run_until_parked();
+    run_queued(&f.terminal, f.cx);
     assert_eq!(f.selection().as_deref(), Some("world"));
     let primary = f.cx.update(|_, cx| {
         super::selection_clipboard::read(ngterm_term::ClipboardLocation::Selection, cx).and_then(|item| item.text())
@@ -1353,6 +1363,7 @@ fn middle_click_follows_its_action_not_copy_on_select(cx: &mut TestAppContext) {
 fn copy_on_select_false_leaves_the_primary_selection_alone(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
     let mut f = fixture(cx, script, config("copy-on-select = false\n"));
+    f.wait_painted("hello world");
     f.cx.update(|_, cx| {
         super::selection_clipboard::write(
             ngterm_term::ClipboardLocation::Selection,
@@ -1376,6 +1387,7 @@ fn a_mouse_selection_leaves_the_system_clipboard_alone_unless_copy_on_select_say
     // the defaults copy a selection to the selection clipboard only (upstream #792)
     let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
     let mut f = fixture(cx, script, config(""));
+    f.wait_painted("hello world");
     f.cx.write_to_clipboard(ClipboardItem::new_string("seeded".into()));
     let clipboard = |f: &mut Fixture<'_>| f.cx.read_from_clipboard().and_then(|item| item.text());
     let primary = |f: &mut Fixture<'_>| {
@@ -1385,7 +1397,7 @@ fn a_mouse_selection_leaves_the_system_clipboard_alone_unless_copy_on_select_say
     };
     f.click(1, 1, Modifiers::default());
     f.click(1, 1, Modifiers::default());
-    f.cx.run_until_parked();
+    run_queued(&f.terminal, f.cx);
     assert_eq!(f.selection().as_deref(), Some("hello"));
     assert_eq!(primary(&mut f).as_deref(), Some("hello"));
     assert_eq!(clipboard(&mut f).as_deref(), Some("seeded"));
@@ -1397,7 +1409,7 @@ fn a_mouse_selection_leaves_the_system_clipboard_alone_unless_copy_on_select_say
     std::thread::sleep(Duration::from_millis(600));
     f.click(8, 1, Modifiers::default());
     f.click(8, 1, Modifiers::default());
-    f.cx.run_until_parked();
+    run_queued(&f.terminal, f.cx);
     assert_eq!(f.selection().as_deref(), Some("world"));
     assert_eq!(clipboard(&mut f).as_deref(), Some("world"));
     assert_eq!(primary(&mut f).as_deref(), Some("hello"));
@@ -1408,7 +1420,7 @@ fn a_mouse_selection_leaves_the_system_clipboard_alone_unless_copy_on_select_say
     std::thread::sleep(Duration::from_millis(600));
     f.click(1, 0, Modifiers::default());
     f.click(1, 0, Modifiers::default());
-    f.cx.run_until_parked();
+    run_queued(&f.terminal, f.cx);
     assert_eq!(f.selection().as_deref(), Some("ready"));
     assert_eq!(clipboard(&mut f).as_deref(), Some("ready"));
     assert_eq!(primary(&mut f).as_deref(), Some("ready"));
@@ -1419,6 +1431,7 @@ fn a_mouse_selection_leaves_the_system_clipboard_alone_unless_copy_on_select_say
 fn toggling_mouse_reporting_lasts_past_the_next_event(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nhello\\r\\n'; exec cat -v";
     let mut f = fixture(cx, script, config(""));
+    f.wait_painted("hello");
     let shared = f.view.read_with(f.cx, |view, _| Rc::clone(view.shared()));
     let mut surface = super::TerminalSurface::new(Rc::clone(&shared));
     assert!(ngterm_host::Surface::binding_action(

@@ -9,6 +9,7 @@ use ngterm_core::ghostty_config::{DEFAULTS, Loader};
 use ngterm_host::TextScope;
 use ngterm_term::{GridPoint, Pane, PaneCommand, PaneConfig, SelectionText};
 
+use super::super::tests::run_queued;
 use super::super::{Shared, Terminal, TerminalConfig, TerminalEvent, TerminalSpec, TerminalView, ViewRole};
 use super::*;
 
@@ -198,7 +199,7 @@ fn copy_clears_selection_only_when_configured(cx: &mut TestAppContext) {
         .select(GridPoint::viewport(0, 0), GridPoint::viewport(4, 0), false)
         .unwrap();
     assert!(f.perform("copy_to_clipboard"));
-    f.cx.run_until_parked();
+    run_queued(&f.terminal, f.cx);
     assert_eq!(
         f.cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
         Some("ready")

@@ -109,7 +109,7 @@ fn powerline_row_does_not_extend_vertically_under_conditional_padding(cx: &mut T
 #[gpui_kit::test]
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn focused_cursor_shapes_paint_a_bar_and_an_underline(cx: &mut TestAppContext) {
-    let mut f = Fixture::new(cx, "printf 'ready\\033[6 q'; exec cat", "cursor-color = #00ff00\n");
+    let mut f = Fixture::new(cx, "printf '\\033[6 qready'; exec cat", "cursor-color = #00ff00\n");
     let view = f.view.clone();
     f.cx.update(|window, cx| window.focus(&view.read(cx).focus.clone(), cx));
     f.cx.run_until_parked();

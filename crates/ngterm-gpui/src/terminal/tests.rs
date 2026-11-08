@@ -360,7 +360,7 @@ fn runs_split_by_style_and_keep_wide_characters_on_their_columns() {
         "printf 'ab\\033[1mcd\\033[0m e日本x\\033[31my\\033[0m'; exec sleep 5",
         dir.path(),
     );
-    let frame = wait_text(&pane, "x");
+    let frame = wait_text(&pane, "y");
     let layout = layout_row(&frame.rows[0], &frame.colors, &Palette::default(), &RowMarks::default());
     let texts: Vec<(&str, bool, u16)> = layout
         .runs
@@ -483,7 +483,7 @@ fn a_path_link_ends_at_the_path_not_at_the_rows_blank_tail() {
 fn marks_color_the_selection_and_search_and_a_hovered_link_is_underlined() {
     let dir = tempfile::tempdir().unwrap();
     let pane = pane("printf 'hello world\\033[4m!\\033[0m'; exec sleep 5", dir.path());
-    let frame = wait_text(&pane, "world");
+    let frame = wait_text(&pane, "world!");
     let colors = &frame.colors;
     let marks = RowMarks {
         selection: Some((0, 1)),
@@ -720,7 +720,7 @@ fn wait_painted(view: &Entity<TerminalView>, cx: &mut VisualTestContext, needle:
 /// Runs the app until the pump has done what the terminal queued. Parking alone doesn't promise that: a wake from the
 /// pane's IO thread whose token is in the one-token channel but which has not woken the pump yet turns the queue's own
 /// wake into a no-op, and until that thread goes on the test scheduler has nothing to run.
-fn run_queued(terminal: &Entity<Terminal>, cx: &mut VisualTestContext) {
+pub(super) fn run_queued(terminal: &Entity<Terminal>, cx: &mut VisualTestContext) {
     let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
     settle(cx, |_| shared.effects.borrow().is_empty());
 }
@@ -761,7 +761,7 @@ fn glyphs_sit_at_their_clusters_columns(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let terminal = terminal(cx, "printf 'a日b\\342\\200\\224c'; exec sleep 5", dir.path());
     let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
-    wait_painted(&view, cx, "a日b");
+    wait_painted(&view, cx, "a日b—c");
     view.read_with(cx, |view, _| {
         let glyphs = &view.row_glyphs(0).expect("row 0 is shaped").glyphs;
         let cols: Vec<u16> = glyphs.iter().map(|glyph| glyph.col).collect();
@@ -895,7 +895,7 @@ fn sprite_characters_leave_the_font_and_split_the_runs(cx: &mut TestAppContext) 
     let script = r"printf 'a\342\224\200\342\224\274b \356\202\260\342\243\277 \356\203\200'; exec sleep 5";
     let terminal = terminal(cx, script, dir.path());
     let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
-    wait_painted(&view, cx, "a─┼b");
+    wait_painted(&view, cx, "\u{e0c0}");
     view.read_with(cx, |view, _| {
         let sprites: Vec<(u16, u32, u16)> = view
             .row_sprites(0)
@@ -1039,9 +1039,19 @@ fn a_cursor_a_program_starts_blinking_while_idle_blinks(cx: &mut TestAppContext)
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_cursor_takes_the_background_of_an_erased_cell(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    // the cursor's cell is blank but erased with a blue background
-    let script = "printf 'ready\\r\\n\\033[44m\\033[K'; exec sleep 5";
-    let (_terminal, view, _events, cx) = realized(cx, script, dir.path());
+    // The cursor's cell is blank but erased with a blue background. A read separates the bytes after `ready`
+    // into another PTY read, as a split printf can arrive.
+    let script = "stty -echo; printf ready; read _; printf '\\r\\n\\033[44m\\033[K'; exec sleep 5";
+    let (terminal, view, _events, cx) = realized(cx, script, dir.path());
+    terminal.read_with(cx, |terminal, _| {
+        terminal.shared().pane().unwrap().write(b"\n").unwrap();
+    });
+    settle(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            view.painted()
+                .is_some_and(|frame| frame.rows[1].cells()[0].background == Some(frame.colors.palette[4]))
+        })
+    });
     let frame = view.read_with(cx, |view, _| view.painted().cloned()).unwrap();
     let cursor = frame.cursor.position.unwrap();
     let blue = frame.colors.palette[4];
@@ -1451,7 +1461,8 @@ fn copied(terminal: &Entity<Terminal>, cx: &mut VisualTestContext, action: &str)
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn copy_actions_follow_their_formats(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    let (terminal, _view, _events, cx) = realized(cx, "printf 'ready \\033[31mred\\033[0m'; exec cat", dir.path());
+    let (terminal, view, _events, cx) = realized(cx, "printf 'ready \\033[31mred\\033[0m'; exec cat", dir.path());
+    wait_painted(&view, cx, "red");
     assert!(!perform(&terminal, cx, "copy_to_clipboard"), "no selection");
     assert!(perform(&terminal, cx, "select_all"));
     run_queued(&terminal, cx);
@@ -1580,7 +1591,8 @@ fn a_copy_is_on_its_clipboard_though_the_io_thread_is_waking_the_pump(cx: &mut T
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn search_selection_takes_the_selection_untrimmed(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    let (terminal, _view, events, cx) = realized(cx, "printf 'ready  x'; exec cat", dir.path());
+    let (terminal, view, events, cx) = realized(cx, "printf 'ready  x'; exec cat", dir.path());
+    wait_painted(&view, cx, "ready  x");
     let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
     let pane = shared.pane().unwrap();
     pane.select(GridPoint::viewport(0, 0), GridPoint::viewport(6, 0), false)
@@ -1636,7 +1648,8 @@ fn opened(events: &Events) -> Option<std::path::PathBuf> {
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn screen_files_are_written_and_copied(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    let (terminal, _view, events, cx) = realized(cx, "printf 'ready \\033[31mred\\033[0m'; exec cat", dir.path());
+    let (terminal, view, events, cx) = realized(cx, "printf 'ready \\033[31mred\\033[0m'; exec cat", dir.path());
+    wait_painted(&view, cx, "red");
     assert!(perform(&terminal, cx, "write_screen_file:copy"));
     let (name, text) = take_screen_file(&terminal, cx);
     assert_eq!(name, "screen.txt");
