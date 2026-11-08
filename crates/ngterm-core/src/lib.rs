@@ -67,6 +67,8 @@ pub mod sidebar_drop;
 pub mod sound_throttle;
 pub mod state_lock;
 pub mod theme;
+pub mod title_admission;
+pub mod title_throttle;
 pub mod titlebar;
 pub mod watermark;
 pub mod window_geometry;

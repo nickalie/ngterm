@@ -1,7 +1,7 @@
 //! The window shell: its title (ported from the GTK build's `window.rs` tests), the state `window.list` reads, and the
 //! shell over a deck in GPUI's test window.
 
-use gpui_kit::{TestAppContext, px, size};
+use gpui_kit::{TestAppContext, VisualTestContext, px, size};
 use ngterm_core::app_actions::FrontendAction;
 use ngterm_core::model::WindowLibrary;
 use ngterm_core::{CoreConfig, CoreState};
@@ -216,6 +216,7 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
         assert_eq!(view.title(), "u — work");
         assert!(!view.has_layer(Layer::Ask));
     });
+    rapid_title_changes_coalesce_into_one_trailing_write(cx, &view, &mut core, window);
     let session = view.read_with(cx, |view, cx| view.deck().read(cx).shown());
     assert!(session.is_some(), "the deck shows the selected session");
     let (ask, picker) = (cx.new(|_| Blank).into(), cx.new(|_| Blank).into());
@@ -248,6 +249,34 @@ fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut Test
     view.update_in(cx, |view, root, cx| view.close(root, cx));
     assert_eq!(crate::keymap_dispatch::window_of(origin), None);
     assert!(!crate::keymap_dispatch::holds_keyboard(Some(handle)));
+}
+
+/// Upstream's `testRapidTitleChangesAreCoalescedIntoOneTrailingWrite` (#817) through the window's sync: the first
+/// change after a quiet interval lands at once, later ones wait for one trailing write with the latest title. The
+/// interval is an hour of the test executor's clock, so the real time the syncs take never decides it.
+fn rapid_title_changes_coalesce_into_one_trailing_write(
+    cx: &mut VisualTestContext,
+    view: &Entity<WindowView>,
+    core: &mut Core,
+    window: Uuid,
+) {
+    let interval = Duration::from_secs(3600);
+    view.update(cx, |view, _| {
+        view.title = TitleThrottle::new(interval, view.title.written());
+    });
+    let mut rename = |cx: &mut VisualTestContext, name: &str| {
+        core.library_mut().rename_window(window, name);
+        let _ = view.update_in(cx, |view, root, cx| view.sync(core, root, cx));
+        view.read_with(cx, |view, _| view.title().to_owned())
+    };
+    assert_eq!(rename(cx, "a"), "u — a", "the first change lands at once");
+    assert_eq!(rename(cx, "b"), "u — a", "a change within the interval waits");
+    assert_eq!(rename(cx, "work"), "u — a");
+    cx.executor().advance_clock(interval);
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.title(), "u — work", "the trailing write carries the latest title");
+    });
 }
 
 /// The keymap's Rename Session and Rename Workspace reach the window's sidebar, and its field keeps the keys the key

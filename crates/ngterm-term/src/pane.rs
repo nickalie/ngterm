@@ -37,7 +37,7 @@ use ngterm_session::cli::{Outcome, Prepared};
 
 use crate::effects::{
     ArmedRead, ArmedSlot, ClipboardAnswer, ClipboardLocation, ClipboardReadRequest, ColorScheme, DivertSlot,
-    PaneEffects, PaneEvent, SchemeSlot, TerminalColors,
+    PaneEffects, PaneEvent, SchemeSlot, TerminalColors, TitleSlot,
 };
 use crate::exit::{ExitPolicy, Layout};
 use crate::input::InputState;
@@ -254,6 +254,8 @@ pub(crate) struct Shared {
     /// What reaches the IO worker.
     mailbox: Arc<Mailbox>,
     events: Sender<PaneEvent>,
+    /// Which program titles reach `events` (shared with the effects; drained in [`Pane::take_events`]).
+    titles: TitleSlot,
     /// The color scheme the terminal answers queries with (dark when set).
     scheme: SchemeSlot,
     wake: Option<Wake>,
@@ -768,10 +770,14 @@ impl Pane {
         frame(&self.shared)
     }
 
-    /// Every event reported since the last call, in order.
+    /// Every event reported since the last call, in order. A program title equal to one still waiting here was
+    /// dropped as it came (upstream's `TitleAdmission`, #911): a program writing one title in a loop leaves a few
+    /// events, not one per write.
     pub fn take_events(&self) -> Vec<PaneEvent> {
         self.shared.wake_pending.store(false, Ordering::Release);
-        lock(&self.events).try_iter().collect()
+        let events: Vec<PaneEvent> = lock(&self.events).try_iter().collect();
+        crate::effects::complete_titles(&self.shared.titles, &events);
+        events
     }
 
     /// Answer the clipboard read `id` ([`PaneEvent::ClipboardRead`]); an answer for any other id is ignored.
@@ -868,9 +874,11 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
     let divert: DivertSlot = Arc::default();
     let replies = Arc::new(ReplyOutlet::default());
     let scheme: SchemeSlot = Arc::new(AtomicBool::new(config.color_scheme == ColorScheme::Dark));
+    let titles = TitleSlot::default();
     terminal
         .set_effects(Box::new(PaneEffects {
             events: events.clone(),
+            titles: Arc::clone(&titles),
             replies: Arc::clone(&replies),
             capture: Arc::clone(&capture),
             armed: Arc::clone(&armed),
@@ -904,6 +912,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
         replies,
         mailbox,
         events,
+        titles,
         scheme,
         wake: config.wake.clone(),
         wake_pending: AtomicBool::new(false),

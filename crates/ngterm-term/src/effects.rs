@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use ngterm_core::title_admission::{TitleAdmission, is_notice};
 use ngterm_ghostty_vt as vt;
 use vt::ReadScope;
 
@@ -254,9 +255,29 @@ pub(crate) fn scheme_of(slot: &AtomicBool) -> ColorScheme {
     }
 }
 
+/// The pane's [`TitleAdmission`]: admitted on the IO thread as a title is reported, completed by
+/// [`Pane::take_events`](crate::Pane::take_events) for each title it drains ([`complete_titles`]).
+pub(crate) type TitleSlot = Arc<Mutex<TitleAdmission>>;
+
+/// Completes the admission of every admitted title among `events`, which the frontend just took.
+pub(crate) fn complete_titles(titles: &TitleSlot, events: &[PaneEvent]) {
+    let taken = events
+        .iter()
+        .filter(|event| matches!(event, PaneEvent::Title(title) if !is_notice(title)))
+        .count();
+    if taken == 0 {
+        return;
+    }
+    let mut admission = titles.lock().unwrap_or_else(PoisonError::into_inner);
+    for _ in 0..taken {
+        admission.complete();
+    }
+}
+
 /// The pane's [`vt::Effects`].
 pub(crate) struct PaneEffects {
     pub events: Sender<PaneEvent>,
+    pub titles: TitleSlot,
     pub replies: Arc<ReplyOutlet>,
     pub capture: Arc<Mutex<Capture>>,
     pub armed: ArmedSlot,
@@ -269,6 +290,15 @@ impl PaneEffects {
     fn send(&self, event: PaneEvent) {
         // a closed channel means the pane is going away; nothing is waiting for the event
         let _ = self.events.send(event);
+    }
+
+    /// Queues `title` unless the same one still waits to be drained (upstream's `TitleAdmission`, #911); a lead or
+    /// remote-link notice always goes.
+    fn send_title(&self, title: &str) {
+        if !is_notice(title) && !self.titles.lock().unwrap_or_else(PoisonError::into_inner).admit(title) {
+            return;
+        }
+        self.send(PaneEvent::Title(title.to_owned()));
     }
 
     fn answer(&self, request: &vt::ClipboardReadRequest<'_>) -> vt::ClipboardReadReply {
@@ -353,7 +383,7 @@ impl vt::Effects for PaneEffects {
     }
 
     fn title_changed(&mut self, title: &str) {
-        self.send(PaneEvent::Title(title.to_owned()));
+        self.send_title(title);
     }
 
     fn pwd_changed(&mut self, pwd: &str) {
@@ -421,7 +451,7 @@ impl vt::Effects for PaneEffects {
 
     fn reset(&mut self) {
         // a full reset clears the title and pwd without their own callbacks
-        self.send(PaneEvent::Title(String::new()));
+        self.send_title("");
         self.send(PaneEvent::Pwd(String::new()));
     }
 }
@@ -436,6 +466,7 @@ mod tests {
         let (events, _) = mpsc::channel();
         PaneEffects {
             events,
+            titles: TitleSlot::default(),
             replies: Arc::default(),
             capture: Arc::new(Mutex::new(Capture::new().unwrap())),
             armed: Arc::new(Mutex::new(armed)),

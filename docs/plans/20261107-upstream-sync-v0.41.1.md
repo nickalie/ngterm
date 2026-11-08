@@ -795,13 +795,13 @@ contract `.claude/rules/{sidebar,settings}.md`.
 optionally `crates/ngterm-core/src/{model/session.rs,commands/panes.rs}`; a real-PTY test in `crates/ngterm-term/tests/pane.rs`.
 **Conformance:** none (performance).
 
-- [ ] TitleAdmission per pane: a title equal to the last queued one is skipped while that one is queued; a different
+- [x] TitleAdmission per pane: a title equal to the last queued one is skipped while that one is queued; a different
   title, or the same after the queue drains, is queued; completion happens where `Pane::take_events` drains (so
   GPUI, headless and mobile all benefit); lead and remote-link notice titles bypass it.
-- [ ] OS window title (all three OSes, through GPUI's `set_window_title`): the first change after a quiet 500 ms writes
+- [x] OS window title (all three OSes, through GPUI's `set_window_title`): the first change after a quiet 500 ms writes
   at once, later ones collapse into one trailing write with the latest title, an unchanged title writes nothing. An
   unchanged reported title does not settle the window.
-- [ ] write tests: the five TitleAdmission cases; the throttle with an injected clock; the real-PTY flood test (5,000
+- [x] write tests: the five TitleAdmission cases; the throttle with an injected clock; the real-PTY flood test (5,000
   identical titles give a few events, the last differing title arrives).
 
 ### Task 23: The layout lock holds while an HTML page has the keyboard (#904)
