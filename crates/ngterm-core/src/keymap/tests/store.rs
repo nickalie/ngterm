@@ -72,3 +72,38 @@ fn the_starter_is_written_only_when_no_file_is_there() {
     ensure_starter_keymap(&path, &upstream());
     assert_eq!(fs::read_to_string(&path).unwrap(), "map cmd+shift+e toggle_split\n");
 }
+
+#[test]
+fn a_starter_failure_preserves_the_file_blocking_its_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("config");
+    fs::write(&parent, "user data").unwrap();
+    ensure_starter_keymap(&parent.join("keymap.conf"), &upstream());
+    assert_eq!(fs::read_to_string(parent).unwrap(), "user data");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_starter_cannot_write_in_a_read_only_directory() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keymap.conf");
+    let permissions = fs::metadata(dir.path()).unwrap().permissions();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o500)).unwrap();
+    ensure_starter_keymap(&path, &upstream());
+    fs::set_permissions(dir.path(), permissions).unwrap();
+    assert!(!path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_link_is_not_overwritten_by_the_starter() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keymap.conf");
+    let target = dir.path().join("missing.conf");
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    ensure_starter_keymap(&path, &upstream());
+    assert_eq!(fs::read_link(path).unwrap(), target);
+    assert!(!target.exists());
+}

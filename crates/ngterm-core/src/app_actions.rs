@@ -887,3 +887,7 @@ fn session_step(action: BuiltinAction) -> &'static str {
         _ => "next",
     }
 }
+
+#[cfg(test)]
+#[path = "app_actions_tests.rs"]
+mod tests;

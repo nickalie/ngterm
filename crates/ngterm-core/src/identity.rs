@@ -270,4 +270,20 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn bundle_layout_recognition_requires_each_bundle_directory() {
+        let bundle = Path::new("/Applications/ngterm.app");
+        assert_eq!(bundle_of(&bundle.join("Contents/MacOS")), Some(bundle));
+        for holder in [
+            "MacOS",
+            "Contents/MacOS",
+            "/Applications/ngterm.app/Contents/bin",
+            "/Applications/ngterm.app/Resources/MacOS",
+            "/Applications/ngterm/Contents/MacOS",
+            "/Applications/ngterm.d/Contents/MacOS",
+        ] {
+            assert_eq!(bundle_of(Path::new(holder)), None, "{holder}");
+        }
+    }
 }
