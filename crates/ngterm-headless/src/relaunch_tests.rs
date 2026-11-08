@@ -61,7 +61,7 @@ fn a_failed_exec_reports_the_os_error_in_an_isolated_process() {
     let Ok(path) = std::env::var("HEADLESS_RELAUNCH_CHILD") else {
         let dir = tempfile::tempdir().unwrap();
         let binary = dir.path().join("relaunch-test");
-        std::fs::copy(std::env::current_exe().unwrap(), &binary).unwrap();
+        ngterm_host::fakes::copy_executable(&std::env::current_exe().unwrap(), &binary).unwrap();
         let mut command = std::process::Command::new(&binary);
         command
             .args([
@@ -82,4 +82,38 @@ fn a_failed_exec_reports_the_os_error_in_an_isolated_process() {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let error = relaunch(&Options::default());
     assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+}
+
+#[cfg(unix)]
+fn fork_children_holding_inherited_descriptors() {
+    use std::os::unix::process::CommandExt as _;
+
+    for _ in 0..64 {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "exit 0"]).env_clear();
+        // Keep the child before exec long enough to retain write descriptors from other test threads.
+        let delay_exec = || {
+            let delay = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 20_000_000,
+            };
+            // SAFETY: a live timespec and no remainder requested.
+            unsafe { libc::nanosleep(&raw const delay, std::ptr::null_mut()) };
+            Ok(())
+        };
+        // SAFETY: the child only calls the async-signal-safe nanosleep before exec.
+        unsafe { command.pre_exec(delay_exec) };
+        assert!(command.status().unwrap().success());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn the_relaunch_fixture_starts_while_other_threads_fork() {
+    std::thread::scope(|threads| {
+        threads.spawn(fork_children_holding_inherited_descriptors);
+        for _ in 0..16 {
+            a_failed_exec_reports_the_os_error_in_an_isolated_process();
+        }
+    });
 }
