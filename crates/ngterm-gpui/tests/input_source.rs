@@ -1,11 +1,12 @@
 //! The keyboard-layout lock against real layouts on private displays, never the user's: a private Xvfb's XKB groups
 //! (listed, locked and read back), a niri nested in a private headless weston (found by the Wayland probe through its
-//! socket's peer, listed, switched and read back), a fake KDE keyboard service on the sandbox's private session bus
-//! (alone, and found by the Wayland probe when Plasma's `kwin_wayland_wrapper` serves the display), and the app end to
-//! end on the Xvfb: with "Lock in terminals" on Russian, the group locks while the terminal holds the keyboard, a
-//! manual switch there is switched back, and the earlier group returns when the keyboard goes elsewhere and on quit;
-//! and a keymap that only changes the layout list (`setxkbmap`, the selected layout's name unchanged) is seen while the
-//! terminal keeps the keyboard: Russian enabled again locks it.
+//! socket's peer, listed, switched and read back), the X backend failing without its server, a fake KDE keyboard
+//! service on the sandbox's private session bus (alone, refusing, gone, reached on the session bus the environment
+//! names, and found by the Wayland probe when Plasma's `kwin_wayland_wrapper` serves the display, which without the
+//! service gives no backend), and the app end to end on the Xvfb: with "Lock in terminals" on Russian, the group
+//! locks while the terminal holds the keyboard, a manual switch there is switched back, and the earlier group returns
+//! when the keyboard goes elsewhere and on quit; and a keymap that only changes the layout list (`setxkbmap`, the
+//! selected layout's name unchanged) is seen while the terminal keeps the keyboard: Russian enabled again locks it.
 //!
 //! A test whose tool is missing prints `SKIPPED:` and passes, unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set. The
 //! nested-niri check is `#[ignore]`d (CI has no niri): run it with `--ignored`.
@@ -157,6 +158,36 @@ fn xkb_groups_are_listed_locked_and_read_back() -> TestResult {
 }
 
 #[test]
+fn xkb_without_a_display_or_after_it_is_gone_fails() -> TestResult {
+    if !have("Xvfb") {
+        skip!("no Xvfb");
+    }
+    assert!(x11::Xkb::connect(Some("no display name")).is_err());
+    let sandbox = Sandbox::new()?;
+    // an X server of this test's own, to stop under the backend
+    let mut xvfb = sandbox
+        .command("Xvfb")
+        .args(["-displayfd", "1", "-nolisten", "tcp"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    let mut number = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(xvfb.stdout.take().ok_or("no Xvfb output")?),
+        &mut number,
+    )?;
+    let xvfb = Killed(xvfb);
+    let mut xkb = ok(x11::Xkb::connect(Some(&format!(":{}", number.trim()))))?;
+    assert!(!ok(xkb.layouts())?.is_empty());
+    drop(xvfb);
+    assert!(xkb.layouts().is_err(), "the server is gone");
+    assert!(xkb.current().is_err());
+    assert!(xkb.select(US).is_err());
+    assert!(xkb.lock_group(0).is_err());
+    Ok(())
+}
+
+#[test]
 #[ignore = "needs niri (none in CI): niri nested in a private headless weston; run with --ignored"]
 fn a_nested_niri_is_found_by_its_socket_and_switched() -> TestResult {
     if !have("niri") {
@@ -199,29 +230,44 @@ impl Layouts {
         *self.current.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Selects the first two layouts, refuses the third and fails past it.
     #[zbus(name = "setLayout")]
-    fn set_layout(&self, index: u32) -> bool {
+    fn set_layout(&self, index: u32) -> zbus::fdo::Result<bool> {
+        if index > 2 {
+            return Err(zbus::fdo::Error::Failed(format!("no layout {index}")));
+        }
         if index > 1 {
-            return false;
+            return Ok(false);
         }
         *self.current.lock().unwrap_or_else(PoisonError::into_inner) = index;
-        true
+        Ok(true)
     }
 }
 
 /// The fake KDE keyboard service on the sandbox's session bus, US and Russian with US current; the index it holds.
 fn serve_kde(sandbox: &Sandbox) -> TestResult<(zbus::blocking::Connection, Arc<Mutex<u32>>)> {
+    // (short name, display name, long name): the long name is the XKB layout name
+    serve_kde_layouts(
+        sandbox,
+        vec![
+            ("us".to_owned(), "EN".to_owned(), US.to_owned()),
+            ("ru".to_owned(), String::new(), RU.to_owned()),
+        ],
+    )
+}
+
+/// The fake KDE keyboard service on the sandbox's session bus with `list`, the first current; the index it holds.
+fn serve_kde_layouts(
+    sandbox: &Sandbox,
+    list: Vec<(String, String, String)>,
+) -> TestResult<(zbus::blocking::Connection, Arc<Mutex<u32>>)> {
     let current = Arc::new(Mutex::new(0));
     let service = zbus::blocking::connection::Builder::address(sandbox.bus_address())?
         .name("org.kde.keyboard")?
         .serve_at(
             "/Layouts",
             Layouts {
-                // (short name, display name, long name): the long name is the XKB layout name
-                list: vec![
-                    ("us".to_owned(), "EN".to_owned(), US.to_owned()),
-                    ("ru".to_owned(), String::new(), RU.to_owned()),
-                ],
+                list,
                 current: Arc::clone(&current),
             },
         )?
@@ -258,27 +304,23 @@ impl Drop for Killed {
     }
 }
 
-#[test]
-fn kde_is_found_when_plasmas_kwin_wrapper_serves_the_display() -> TestResult {
-    if !have("dbus-daemon") {
-        skip!("no dbus-daemon");
-    }
-    let sandbox = Sandbox::new()?;
+/// Plasma's `kwin_wayland_wrapper` serving a Wayland display socket in the sandbox, and that socket; `None` without the
+/// system's python to stand in for it.
+fn kwin_wrapper(sandbox: &Sandbox) -> TestResult<Option<(Killed, PathBuf)>> {
     // the system's python, from the sandbox's PATH: a version manager's shim on the user's PATH execs by its own name
     let Some(python) = sandbox.env_var("PATH").and_then(|path| {
         std::env::split_paths(path)
             .map(|dir| dir.join("python3"))
             .find(|path| path.is_file())
     }) else {
-        skip!("no python3");
+        return Ok(None);
     };
-    let (_service, current) = serve_kde(&sandbox)?;
     // Plasma's `kwin_wayland_wrapper` listens on the display's socket and hands it to `kwin_wayland`, so the socket's
     // peer is the wrapper: a listener exec'd under that name (its command name cut to `kwin_wayland_wr`)
     let wrapper = sandbox.path("kwin_wayland_wrapper");
     std::os::unix::fs::symlink(python.canonicalize()?, &wrapper)?;
     let display = sandbox.path("run/wayland-kde");
-    let _kwin = Killed(
+    let kwin = Killed(
         Command::new(&wrapper)
             .args([
                 "-I",
@@ -294,6 +336,19 @@ fn kde_is_found_when_plasmas_kwin_wrapper_serves_the_display() -> TestResult {
             .spawn()?,
     );
     wait_for_socket(&display)?;
+    Ok(Some((kwin, display)))
+}
+
+#[test]
+fn kde_is_found_when_plasmas_kwin_wrapper_serves_the_display() -> TestResult {
+    if !have("dbus-daemon") {
+        skip!("no dbus-daemon");
+    }
+    let sandbox = Sandbox::new()?;
+    let Some((_kwin, display)) = kwin_wrapper(&sandbox)? else {
+        skip!("no python3");
+    };
+    let (_service, current) = serve_kde(&sandbox)?;
     let var = |name: &str| match name {
         "WAYLAND_DISPLAY" => Some(display.clone()),
         "XDG_CURRENT_DESKTOP" => Some(PathBuf::from("KDE")),
@@ -306,6 +361,126 @@ fn kde_is_found_when_plasmas_kwin_wrapper_serves_the_display() -> TestResult {
     );
     ok(kde.select(RU))?;
     assert_eq!(*current.lock().unwrap_or_else(PoisonError::into_inner), 1);
+    Ok(())
+}
+
+/// A backend's failure, as the picker shows it.
+fn failure<T>(result: Result<T, Failure>) -> TestResult<String> {
+    match result {
+        Ok(_) => Err("the call succeeded".into()),
+        Err(error) => Ok(error.to_string()),
+    }
+}
+
+#[test]
+fn kdes_refusals_and_a_missing_service_are_failures() -> TestResult {
+    if !have("dbus-daemon") {
+        skip!("no dbus-daemon");
+    }
+    let sandbox = Sandbox::new()?;
+    let client = || zbus::blocking::connection::Builder::address(sandbox.bus_address())?.build();
+    assert!(kde::Kde::over(client()?).is_err(), "nobody serves the keyboard service");
+    // a third layout the service refuses to select, known by its short name alone, and a fourth it fails to
+    let (service, current) = serve_kde_layouts(
+        &sandbox,
+        vec![
+            ("us".to_owned(), "EN".to_owned(), US.to_owned()),
+            ("ru".to_owned(), String::new(), RU.to_owned()),
+            ("de".to_owned(), String::new(), String::new()),
+            ("fr".to_owned(), String::new(), "French".to_owned()),
+        ],
+    )?;
+    let mut kde = ok(kde::Kde::over(client()?))?;
+    assert_eq!(
+        ok(kde.layouts())?,
+        [
+            KeyboardLayout::named(US),
+            KeyboardLayout::named(RU),
+            KeyboardLayout::named("de"),
+            KeyboardLayout::named("French")
+        ],
+        "a layout without a long name goes by its short one"
+    );
+    assert_eq!(failure(kde.select("de"))?, "KDE refused layout 2");
+    assert!(
+        failure(kde.select("French"))?.contains("no layout 3"),
+        "the service's own failure"
+    );
+    assert_eq!(failure(kde.select("fr"))?, r#"no layout named "fr""#);
+    *current.lock().unwrap_or_else(PoisonError::into_inner) = 5;
+    assert_eq!(failure(kde.current())?, "no layout 5");
+
+    // the service gone: every call fails
+    service.release_name("org.kde.keyboard")?;
+    assert!(kde.layouts().is_err() && kde.current().is_err() && kde.select(US).is_err());
+    assert!(kde::Kde::connect(Some("no bus address")).is_err());
+    let nobody = format!("unix:path={}", sandbox.path("run/no-bus").display());
+    assert!(kde::Kde::connect(Some(&nobody)).is_err(), "no bus at the address");
+    Ok(())
+}
+
+/// Names the private bus the KDE child runs on; the child refuses any other.
+const PRIVATE_BUS: &str = "NGTERM_GPUI_TEST_PRIVATE_BUS";
+
+#[test]
+fn kde_is_reached_on_the_session_bus_the_environment_names() -> TestResult {
+    if !have("dbus-daemon") {
+        skip!("no dbus-daemon");
+    }
+    let sandbox = Sandbox::new()?;
+    let (_service, _) = serve_kde(&sandbox)?;
+    let status = sandbox
+        .command(std::env::current_exe()?)
+        .args([
+            "--exact",
+            "kde_on_the_session_bus",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PRIVATE_BUS, sandbox.bus_address())
+        .status()?;
+    assert!(status.success(), "the KDE service was not reached on the session bus");
+    Ok(())
+}
+
+/// [`kde::Kde::connect`] without an address, in a child of this test whose session bus is the sandbox's.
+#[test]
+#[ignore = "run by kde_is_reached_on_the_session_bus_the_environment_names, on its private bus"]
+fn kde_on_the_session_bus() -> TestResult {
+    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap_or_default();
+    // only ever on the sandbox's private bus the parent named: never the user's
+    if address.is_empty() || std::env::var(PRIVATE_BUS).ok().as_deref() != Some(address.as_str()) {
+        eprintln!("skipped: not on the parent test's private bus");
+        return Ok(());
+    }
+    let mut kde = ok(kde::Kde::connect(None))?;
+    assert_eq!(
+        ok(kde.layouts())?,
+        [KeyboardLayout::named(US), KeyboardLayout::named(RU)]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_kwin_without_its_keyboard_service_has_no_backend() -> TestResult {
+    if !have("dbus-daemon") {
+        skip!("no dbus-daemon");
+    }
+    let sandbox = Sandbox::new()?;
+    let Some((_kwin, display)) = kwin_wrapper(&sandbox)? else {
+        skip!("no python3");
+    };
+    let var = |name: &str| match name {
+        "WAYLAND_DISPLAY" => Some(display.clone()),
+        "XDG_CURRENT_DESKTOP" => Some(PathBuf::from("KDE")),
+        _ => sandbox.env_var(name).map(PathBuf::from),
+    };
+    assert_eq!(
+        wayland(&var).err().as_deref(),
+        Some(ngterm_gpui::input_source::linux::DESKTOP_UNAVAILABLE),
+        "KWin serves the display, but nothing answers for its layouts"
+    );
     Ok(())
 }
 

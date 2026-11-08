@@ -1,7 +1,8 @@
 //! The GPUI build as a process: single instance over a private session bus, the activation token reaching the
 //! primary and raising its window (Xvfb; a niri nested in a headless weston), the SIGTERM quit and its exit status,
-//! and the app id fallback. Every process runs in a [`Sandbox`]: nothing here can reach the user's session bus,
-//! desktop or live ngterm.
+//! and the app id fallback; and the library's registration on its own in a child on the private bus (`Open`,
+//! `org.gtk.Actions`, an activation after the app is gone, ids the bus refuses). Every process runs in a [`Sandbox`]:
+//! nothing here can reach the user's session bus, desktop or live ngterm.
 //!
 //! A test that needs a tool this machine lacks (weston, Xvfb, lavapipe) prints `SKIPPED:` with the reason (seen with
 //! `--nocapture`) and passes, unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set, as CI sets it: then it fails. The
@@ -15,8 +16,11 @@
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]
 mod support;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
+
+use ngterm_gpui::instance::gapplication::object_path;
+use ngterm_gpui::instance::{Activation, BusRequest, Registration, register};
 
 use support::{
     DEADLINE, Display, NO_SEATED_WESTON, Sandbox, TestResult, have, lavapipe_icd, seated_weston, wait_for,
@@ -173,6 +177,128 @@ fn without_a_session_bus_the_launch_runs_alone() -> TestResult {
     sandbox.terminate(primary)?;
     let (status, _) = sandbox.wait_exit(primary, Duration::from_secs(10))?;
     assert_eq!(status.code(), Some(0));
+    Ok(())
+}
+
+/// Names the private bus the registration child runs on; the child refuses any other.
+const PRIVATE_BUS: &str = "NGTERM_GPUI_TEST_PRIVATE_BUS";
+
+#[test]
+fn a_registration_serves_gapplications_interfaces_and_refuses_an_id_the_bus_cannot_take() -> TestResult {
+    let sandbox = Sandbox::new()?;
+    let status = sandbox
+        .command(std::env::current_exe()?)
+        .args([
+            "--exact",
+            "registration_on_the_private_bus",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PRIVATE_BUS, sandbox.bus_address())
+        .status()?;
+    assert!(status.success(), "the registration failed on the private bus");
+    Ok(())
+}
+
+/// The next request the primary's handlers queued, or a failure.
+fn next_request(requests: &async_channel::Receiver<BusRequest>) -> TestResult<BusRequest> {
+    wait_for(|| requests.try_recv().ok()).map_err(|_| "no request reached the primary".into())
+}
+
+/// The library's registration on the session bus, in a child of this test whose session bus is the sandbox's: the
+/// primary, a second registration of the id forwarding to it, `Open` raising as `Activate` does, `org.gtk.Actions`
+/// with no actions, an activation answered after the app is gone, and ids the bus refuses.
+#[test]
+#[ignore = "run by a_registration_serves_gapplications_interfaces_and_refuses_an_id_the_bus_cannot_take"]
+fn registration_on_the_private_bus() -> TestResult {
+    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap_or_default();
+    // only ever on the sandbox's private bus the parent named: never the user's
+    if address.is_empty() || std::env::var(PRIVATE_BUS).ok().as_deref() != Some(address.as_str()) {
+        eprintln!("skipped: not on the parent test's private bus");
+        return Ok(());
+    }
+    let app_id = std::env::var("NGTERM_APP_ID")?;
+    let state = std::env::temp_dir();
+    let (requests, received) = async_channel::unbounded();
+    let Registration::Primary(_primary) = register(&app_id, &state, requests)? else {
+        return Err("the first registration is not the primary".into());
+    };
+    let Registration::Remote(remote) = register(&app_id, &state, async_channel::unbounded().0)? else {
+        return Err("a second registration of the id does not find the primary".into());
+    };
+    let forwarded = Activation {
+        token: Some(TOKEN.to_owned()),
+        startup_id: None,
+    };
+    remote.activate(&forwarded, Some(std::path::Path::new("/srv")))?;
+    assert_eq!(next_request(&received)?, BusRequest::Activate(forwarded));
+
+    let client = zbus::blocking::connection::Builder::address(address.as_str())?.build()?;
+    let path = object_path(&app_id);
+    let data = HashMap::from([("desktop-startup-id", zbus::zvariant::Value::from(STARTUP_ID))]);
+    client.call_method(
+        Some(app_id.as_str()),
+        path.as_str(),
+        Some("org.gtk.Application"),
+        "Open",
+        &(vec!["file:///srv/notes.txt"], "", data),
+    )?;
+    assert_eq!(
+        next_request(&received)?,
+        BusRequest::Activate(Activation {
+            token: None,
+            startup_id: Some(STARTUP_ID.to_owned()),
+        }),
+        "an Open raises the window as an Activate does"
+    );
+    gapplications_actions_are_none(&client, &app_id)?;
+    assert!(received.is_empty(), "an action asks the app nothing");
+
+    // the app is gone: the activation is dropped, the call still answered
+    drop(received);
+    let empty = HashMap::<&str, zbus::zvariant::Value<'_>>::new();
+    client.call_method(
+        Some(app_id.as_str()),
+        path.as_str(),
+        Some("org.gtk.Application"),
+        "Activate",
+        &(empty,),
+    )?;
+
+    for (id, why) in [("io..ngterm", "no object path"), ("io.9ngterm", "no bus name")] {
+        let Err(error) = register(id, &state, async_channel::unbounded().0) else {
+            return Err(format!("{id} registered: {why}").into());
+        };
+        let message = error.to_string();
+        assert!(
+            message.starts_with(&format!("failed to register {id} on the session bus: ")),
+            "{why}: {message}"
+        );
+    }
+    Ok(())
+}
+
+/// `org.gtk.Actions` on the primary of `app_id`: no actions to list or describe, and an unknown one's activation is
+/// answered.
+fn gapplications_actions_are_none(client: &zbus::blocking::Connection, app_id: &str) -> TestResult {
+    let path = object_path(app_id);
+    let call = |member: &str| -> TestResult<zbus::Message> {
+        Ok(client.call_method(Some(app_id), path.as_str(), Some("org.gtk.Actions"), member, &())?)
+    };
+    assert!(call("List")?.body().deserialize::<Vec<String>>()?.is_empty());
+    let described = call("DescribeAll")?;
+    let described: HashMap<String, (bool, zbus::zvariant::Signature, Vec<zbus::zvariant::OwnedValue>)> =
+        described.body().deserialize()?;
+    assert!(described.is_empty());
+    let platform_data = HashMap::<&str, zbus::zvariant::Value<'_>>::new();
+    client.call_method(
+        Some(app_id),
+        path.as_str(),
+        Some("org.gtk.Actions"),
+        "Activate",
+        &("quit", Vec::<zbus::zvariant::Value<'_>>::new(), platform_data),
+    )?;
     Ok(())
 }
 
