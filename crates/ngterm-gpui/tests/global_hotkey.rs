@@ -421,10 +421,10 @@ fn a_chord_another_client_holds_is_refused_and_a_cleared_chord_lets_its_key_go()
     Ok(())
 }
 
-/// The fake portal on the sandbox's bus, recording into `asked`.
-fn serve_portal(sandbox: &Sandbox, asked: &Arc<Mutex<Asked>>) -> TestResult<zbus::blocking::Connection> {
+/// The fake portal on the bus at `address`, recording into `asked`.
+fn serve_portal(address: &str, asked: &Arc<Mutex<Asked>>) -> TestResult<zbus::blocking::Connection> {
     let connection = Arc::new(std::sync::OnceLock::new());
-    let portal = zbus::blocking::connection::Builder::address(sandbox.bus_address())?
+    let portal = zbus::blocking::connection::Builder::address(address)?
         .name("org.freedesktop.portal.Desktop")?
         .serve_at(
             "/org/freedesktop/portal/desktop",
@@ -463,7 +463,7 @@ fn a_reload_closes_the_portal_session_and_binds_the_new_chord_in_a_fresh_one() -
     };
     let mut sandbox = Sandbox::new()?;
     let asked = Arc::new(Mutex::new(Asked::default()));
-    let _portal = serve_portal(&sandbox, &asked)?;
+    let _portal = serve_portal(sandbox.bus_address(), &asked)?;
     let primary = start_on_weston(&mut sandbox, "global-hotkey ctrl+`\n", &lavapipe)?;
     wait_asked(&asked, "the first binding", |asked| asked.bound.len() == 1)?;
     let session = |asked: &Mutex<Asked>| asked.lock().unwrap_or_else(PoisonError::into_inner).session.clone();
@@ -496,6 +496,72 @@ fn a_reload_closes_the_portal_session_and_binds_the_new_chord_in_a_fresh_one() -
     Ok(())
 }
 
+/// Names the private bus the binding's child runs on; the child refuses any other.
+const PRIVATE_BUS: &str = "NGTERM_GPUI_TEST_PRIVATE_BUS";
+
+#[test]
+fn the_bindings_end_closes_its_portal_session() -> TestResult {
+    let sandbox = Sandbox::new()?;
+    let status = sandbox
+        .command(std::env::current_exe()?)
+        .args([
+            "--exact",
+            "binding_on_the_private_bus",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PRIVATE_BUS, sandbox.bus_address())
+        .status()?;
+    assert!(status.success(), "the binding's end failed on the private bus");
+    Ok(())
+}
+
+/// Runs `cx`'s tasks until `done` holds of what the portal was asked, or the deadline passes; whether it held.
+fn settle(cx: &mut gpui_kit::TestAppContext, asked: &Mutex<Asked>, done: impl Fn(&Asked) -> bool) -> bool {
+    let deadline = std::time::Instant::now() + DEADLINE;
+    loop {
+        cx.run_until_parked();
+        if done(&asked.lock().unwrap_or_else(PoisonError::into_inner)) {
+            return true;
+        }
+        if std::time::Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The binding of the app's, in a child of this test whose session bus is the sandbox's with the fake portal on it:
+/// the binding's end (its drop, at the app's teardown) closes the session it holds.
+#[gpui_kit::test]
+#[ignore = "run by the_bindings_end_closes_its_portal_session"]
+fn binding_on_the_private_bus(cx: &mut gpui_kit::TestAppContext) {
+    use ngterm_gpui::global_hotkey::portal::{Binding, Wanted};
+
+    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap_or_default();
+    // only ever on the sandbox's private bus the parent named: never the user's
+    if address.is_empty() || std::env::var(PRIVATE_BUS).ok().as_deref() != Some(address.as_str()) {
+        eprintln!("skipped: not on the parent test's private bus");
+        return;
+    }
+    cx.executor().allow_parking();
+    let asked = Arc::new(Mutex::new(Asked::default()));
+    let _portal = serve_portal(&address, &asked).unwrap();
+    let binding = cx.update(|cx| Binding::start(|| {}, cx));
+    binding.set(Wanted::Bound(Some("CTRL+grave".into())));
+    assert!(
+        settle(cx, &asked, |asked| asked.bound.len() == 1),
+        "the chord was never bound"
+    );
+
+    drop(binding);
+    settle(cx, &asked, |asked| !asked.closed.is_empty());
+    let asked = asked.lock().unwrap_or_else(PoisonError::into_inner);
+    let session = asked.session.clone().unwrap();
+    assert_eq!(asked.closed, [session], "the binding's end closes its session");
+}
+
 #[test]
 fn a_portal_that_refuses_the_session_or_the_binding_leaves_the_chord_unbound() -> TestResult {
     if seated_weston().is_none() {
@@ -509,7 +575,7 @@ fn a_portal_that_refuses_the_session_or_the_binding_leaves_the_chord_unbound() -
         refuse: Some("CreateSession"),
         ..Asked::default()
     }));
-    let portal = serve_portal(&sandbox, &asked)?;
+    let portal = serve_portal(sandbox.bus_address(), &asked)?;
     let primary = start_on_weston(&mut sandbox, "global-hotkey ctrl+`\n", &lavapipe)?;
     sandbox.wait_log("primary.log", "the global shortcuts portal opened no session")?;
 
@@ -543,6 +609,25 @@ fn a_portal_that_refuses_the_session_or_the_binding_leaves_the_chord_unbound() -
         !quick_visible(&sandbox),
         "an unbound shortcut's activation does nothing"
     );
+
+    // the same listener must still deliver an activation once a binding succeeds
+    asked.lock().unwrap_or_else(PoisonError::into_inner).refuse = None;
+    reload(&sandbox, "global-hotkey ctrl+`\n")?;
+    sandbox.wait_log("primary.log", "global hotkey: bound through the portal")?;
+    let session = asked
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .session
+        .clone()
+        .ok_or("no accepted session was created")?;
+    portal.emit_signal(
+        None::<()>,
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.GlobalShortcuts",
+        "Activated",
+        &(session, "quick-terminal", 0_u64, HashMap::<String, OwnedValue>::new()),
+    )?;
+    wait_quick(&sandbox, true)?;
 
     sandbox.terminate(primary)?;
     assert_eq!(sandbox.wait_exit(primary, Duration::from_secs(10))?.0.code(), Some(0));
@@ -598,13 +683,32 @@ fn a_desktop_portal_without_global_shortcuts_leaves_the_chord_unbound() -> TestR
     };
     let mut sandbox = Sandbox::new()?;
     let _portal = portal_without_global_shortcuts(&sandbox)?;
-    let primary = start_on_weston(&mut sandbox, "global-hotkey ctrl+`\n", &lavapipe)?;
+    ignored_on_reload(&mut sandbox, &lavapipe)
+}
+
+#[test]
+fn without_a_portal_service_the_chord_is_ignored_once() -> TestResult {
+    if seated_weston().is_none() {
+        skip!("{NO_SEATED_WESTON}");
+    }
+    let Some(lavapipe) = lavapipe_icd() else {
+        skip!("no lavapipe ICD (scripts/fetch-lavapipe.sh)");
+    };
+    let mut sandbox = Sandbox::new()?;
+    ignored_on_reload(&mut sandbox, &lavapipe)
+}
+
+/// A missing portal ends the binding: a reload reaches it, logs no second warning and binds nothing.
+fn ignored_on_reload(sandbox: &mut Sandbox, lavapipe: &std::path::Path) -> TestResult {
+    sandbox.set_env("NGTERM_LOG", "info,ngterm_gpui::global_hotkey::portal=debug");
+    let primary = start_on_weston(sandbox, "global-hotkey ctrl+`\n", lavapipe)?;
     sandbox.wait_log(
         "primary.log",
         "no global shortcuts portal: global-hotkey is ignored on this desktop",
     )?;
     // the binding has ended: a new chord is handed to nobody
-    reload(&sandbox, "global-hotkey ctrl+alt+t\n")?;
+    reload(sandbox, "global-hotkey ctrl+alt+t\n")?;
+    sandbox.wait_log("primary.log", "the global shortcuts binding has ended")?;
     sandbox.terminate(primary)?;
     assert_eq!(sandbox.wait_exit(primary, Duration::from_secs(10))?.0.code(), Some(0));
     let log = sandbox.log("primary.log");
@@ -614,5 +718,6 @@ fn a_desktop_portal_without_global_shortcuts_leaves_the_chord_unbound() -> TestR
         "said once:\n{log}"
     );
     assert!(!log.contains("global hotkey: bound"), "nothing was bound:\n{log}");
+    assert!(!log.contains("opened no session"), "no session was attempted:\n{log}");
     Ok(())
 }

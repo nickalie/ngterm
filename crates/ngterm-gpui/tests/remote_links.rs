@@ -329,6 +329,7 @@ fn not_now() -> zbus::fdo::Error {
 /// A `NetworkManager` manager object whose properties cannot be read while its state is `None`.
 struct FlakyManager {
     state: Flaky<(u32, u32, OwnedObjectPath)>,
+    unreadable: mpsc::Sender<()>,
 }
 
 impl FlakyManager {
@@ -338,7 +339,10 @@ impl FlakyManager {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .map(pick)
-            .ok_or_else(not_now)
+            .ok_or_else(|| {
+                let _ = self.unreadable.send(());
+                not_now()
+            })
     }
 }
 
@@ -363,6 +367,7 @@ impl FlakyManager {
 /// The portal's network monitor, which does not answer while its state is `None`.
 struct FlakyMonitor {
     available: Flaky<bool>,
+    unreadable: mpsc::Sender<()>,
 }
 
 #[zbus::interface(name = "org.freedesktop.portal.NetworkMonitor")]
@@ -371,7 +376,10 @@ impl FlakyMonitor {
         self.available
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .ok_or_else(not_now)
+            .ok_or_else(|| {
+                let _ = self.unreadable.send(());
+                not_now()
+            })
     }
 }
 
@@ -380,12 +388,14 @@ fn a_network_manager_state_that_cannot_be_read_reports_nothing_until_it_can() ->
     let sandbox = Sandbox::new()?;
     let up = (4, 70, path("/org/freedesktop/NetworkManager/ActiveConnection/1"));
     let state: Flaky<(u32, u32, OwnedObjectPath)> = Arc::new(Mutex::new(Some(up)));
+    let (unreadable, failed_reads) = mpsc::channel();
     let manager = zbus::blocking::connection::Builder::address(sandbox.system_bus_address())?
         .name(NETWORK_MANAGER)?
         .serve_at(
             NETWORK_MANAGER_PATH,
             FlakyManager {
                 state: Arc::clone(&state),
+                unreadable,
             },
         )?
         .build()?;
@@ -407,6 +417,7 @@ fn a_network_manager_state_that_cannot_be_read_reports_nothing_until_it_can() ->
         "the state at start"
     );
     changed(None)?;
+    failed_reads.recv_timeout(DEADLINE)?;
     quiet(&reports, "a state that cannot be read");
     changed(Some((1, 20, "/")))?;
     assert_eq!(
@@ -424,12 +435,14 @@ fn a_network_manager_state_that_cannot_be_read_reports_nothing_until_it_can() ->
 fn a_portal_monitor_that_does_not_answer_a_change_reports_nothing_for_it() -> TestResult {
     let sandbox = Sandbox::new()?;
     let available: Flaky<bool> = Arc::new(Mutex::new(Some(true)));
+    let (unreadable, failed_reads) = mpsc::channel();
     let portal = zbus::blocking::connection::Builder::address(sandbox.bus_address())?
         .name(PORTAL)?
         .serve_at(
             PORTAL_PATH,
             FlakyMonitor {
                 available: Arc::clone(&available),
+                unreadable,
             },
         )?
         .build()?;
@@ -451,6 +464,7 @@ fn a_portal_monitor_that_does_not_answer_a_change_reports_nothing_for_it() -> Te
         "the state at start"
     );
     changed(None)?;
+    failed_reads.recv_timeout(DEADLINE)?;
     quiet(&reports, "a change the monitor does not answer for");
     changed(Some(false))?;
     assert_eq!(next(&reports)?, LinkEvent::Network { available: false });

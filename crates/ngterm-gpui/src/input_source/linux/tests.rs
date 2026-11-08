@@ -341,6 +341,8 @@ fn sways_refused_switch_and_a_reply_of_another_protocol_are_failures() {
         "a keyboard without an active index reads its first layout"
     );
     assert_eq!(failure(sway.select("Russian")), r#"sway refused the switch: "denied""#);
+    // the server accepts this connection only after recording the refused command
+    sway.layouts().unwrap();
     assert_eq!(
         sent(&commands),
         [r#"input "kbd \"1\"" xkb_switch_layout 0"#],
