@@ -69,7 +69,7 @@ allprojects {
 val coverageFloors =
     mapOf(
         "core" to mapOf(CoverageUnit.LINE to 0, CoverageUnit.INSTRUCTION to 0, CoverageUnit.BRANCH to 0),
-        "app" to mapOf(CoverageUnit.LINE to 93, CoverageUnit.INSTRUCTION to 91, CoverageUnit.BRANCH to 70),
+        "app" to mapOf(CoverageUnit.LINE to 98, CoverageUnit.INSTRUCTION to 97, CoverageUnit.BRANCH to 79),
     )
 
 subprojects {
