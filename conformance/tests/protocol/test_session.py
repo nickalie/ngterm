@@ -817,7 +817,7 @@ def test_status_shape(ctl):
     sid = _new(ctl)
     assert_ok(ctl.request("session.status", sid, status="active", shape="star"))
     rejected = ctl.request("session.status", sid, status="blocked", shape="hexagon")
-    assert_error(rejected, "invalid shape: hexagon (circle|square|triangle|diamond|capsule|star)")
+    assert_error(rejected, "invalid shape: hexagon (circle|square|triangle|triangle-down|play|diamond|capsule|seal|star|bolt|bell)")
     assert_subset(_node(ctl, sid), {"status": "active", "statusShape": "star"})
 
 

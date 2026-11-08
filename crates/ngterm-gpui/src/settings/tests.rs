@@ -590,6 +590,37 @@ fn sliders_read_their_setting_and_move_it_in_whole_steps() {
     assert_eq!(form::whole(9.5), 10);
 }
 
+/// Upstream's `testAgentStatusShapePickerRowLayoutAndOptions`: every shape's display name, and nothing else; a new
+/// shape stored in the settings shows as the picker's choice.
+#[test]
+fn each_status_shape_picker_offers_the_eleven_shapes_by_display_name() {
+    let shapes = [
+        "Circle",
+        "Square",
+        "Triangle",
+        "Down Triangle",
+        "Play",
+        "Diamond",
+        "Capsule",
+        "Seal",
+        "Star",
+        "Bolt",
+        "Bell",
+    ];
+    let items = every_item(&snapshot(AppSettings {
+        completed_status_shape: Some("triangle-down".to_owned()),
+        blocked_status_shape: Some("bell".to_owned()),
+        ..AppSettings::default()
+    }));
+    for status in [AgentStatus::Active, AgentStatus::Blocked, AgentStatus::Completed] {
+        let picker = picker_of(item(&items, &format!("settings-status-shape-{}", status.wire_name())));
+        assert_eq!(picker.options, shapes, "{status:?}");
+    }
+    let completed = picker_of(item(&items, "settings-status-shape-completed"));
+    assert_eq!(completed.label(), "Down Triangle");
+    assert_eq!(picker_of(item(&items, "settings-status-shape-blocked")).label(), "Bell");
+}
+
 #[test]
 fn colors_are_stored_as_lower_case_hex_and_statuses_title_cased() {
     assert_eq!(hex_of(crate::status_glyph::hsla((1.0, 0.5, 0.0))), "#ff8000");

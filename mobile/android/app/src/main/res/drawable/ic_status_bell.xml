@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- status glyph, a filled bell with its knob and clapper (upstream's bell) (16dp; StatusGlyph tints it) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16">
+  <path
+      android:pathData="M14,12.2H2C2,11.2 3.4,10.6 3.4,8.5C3.4,5 5.2,3 8,3C10.8,3 12.6,5 12.6,8.5C12.6,10.6 14,11.2 14,12.2zM7,2.5a1,1 0 1,1 2,0a1,1 0 1,1 -2,0zM6.8,13.3a1.2,1.2 0 1,1 2.4,0a1.2,1.2 0 1,1 -2.4,0z"
+      android:fillColor="#FF000000" />
+</vector>

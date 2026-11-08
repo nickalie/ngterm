@@ -63,7 +63,7 @@ fn glyph_row(settings: &AppSettings, status: AgentStatus) -> Item {
     let shape = settings.effective_status_shape(status).unwrap_or(StatusShape::Circle);
     let shapes = StatusShape::ALL
         .into_iter()
-        .map(|shape| (title_case(shape.wire_name()), shape))
+        .map(|shape| (shape.display_name().to_owned(), shape))
         .collect();
     let mut picker = Picker::new(shapes, &shape, move |shape| {
         change(AgentStatusChange::Shape { status, shape })

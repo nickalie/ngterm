@@ -576,16 +576,16 @@ contract `session status --shape`, `.claude/rules/notifications.md`.
 **Conformance:** listed `tests/protocol/test_session.py::test_status_shape`, `tests/protocol/test_ask_pick.py::test_pick_refusals[status-shape]`
 (strings change in this commit); new `test_live_sessions.py::test_a_viewer_without_status_shapes_gets_only_shapes_it_decodes`.
 
-- [ ] Order: circle, square, triangle, triangle-down, play, diamond, capsule, seal, star, bolt, bell; display
+- [x] Order: circle, square, triangle, triangle-down, play, diamond, capsule, seal, star, bolt, bell; display
   "Down Triangle" etc.; `ORIGINAL` (what a viewer without `status.shapes` decodes) is v0.40.0's set, upstream's
   `StatusShape.original`: circle, square, triangle, diamond, capsule, star (not the first six of the new order). "invalid shape: <v> (circle|square|triangle|triangle-down|play|diamond|capsule|seal|star|bolt|bell)",
   "invalid pick item shape (...)", ctl "shape must be one of: circle, square, triangle, triangle-down, play, diamond,
   capsule, seal, star, bolt, bell"; settings accept the new names.
-- [ ] Hub: advertise `status.shapes`; a subscriber without it gets `shape` cleared for a non-original shape in Status,
+- [x] Hub: advertise `status.shapes`; a subscriber without it gets `shape` cleared for a non-original shape in Status,
   Snapshot and held deltas. Viewer hellos list it only once they draw the shapes (desktop and both mobile apps in
   this change).
-- [ ] GPUI glyphs for the five shapes at the existing size; the Settings picker shows 11 options from `display_name`.
-- [ ] write tests: the Swift cases; pick refusal; ctl phrase; glyph coverage per shape; picker labels; the listed
+- [x] GPUI glyphs for the five shapes at the existing size; the Settings picker shows 11 options from `display_name`.
+- [x] write tests: the Swift cases; pick refusal; ctl phrase; glyph coverage per shape; picker labels; the listed
   conformance strings and the new mirror test.
 
 ### Task 13: `tree.snapshotUnsaved` (#900)

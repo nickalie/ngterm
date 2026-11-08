@@ -39,7 +39,8 @@ pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
 /// headless origin's page companions ([`COMPANION_PAGE_KIND`]) and the page detach ([`PAGE_DETACHED_KIND`]), the last
 /// three extensions of this build. Upstream's hello lists them all; an origin a viewer
 /// leaves them out for hands it no page and keeps its own refusal, rather than handing over a page that is refused at
-/// once.
+/// once. `status.shapes` ([`super::hub::STATUS_SHAPES_KIND`]) is always listed: desktop and both mobile apps draw
+/// every status shape.
 #[must_use]
 pub fn viewer_kinds(pages: bool) -> Vec<String> {
     SUPPORTED_KINDS
@@ -686,12 +687,18 @@ mod tests {
                 .all(|kind| showing.iter().any(|listed| listed == kind)),
             "a viewer that shows pages builds content and document pages"
         );
-        // desktop Attach Remote shows no agent chat, so it never asks for the agent kind
+        // desktop Attach Remote shows no agent chat, so it never asks for the agent kind; every viewer (desktop, both
+        // mobile apps) draws all eleven status shapes, so each lists `status.shapes`
         for pages in [false, true] {
             assert!(
                 !viewer_kinds(pages)
                     .iter()
                     .any(|kind| kind == crate::remote::hub::AGENT_KIND)
+            );
+            assert!(
+                viewer_kinds(pages)
+                    .iter()
+                    .any(|kind| kind == crate::remote::hub::STATUS_SHAPES_KIND)
             );
         }
         assert_eq!(harness.connections(), [RemoteConnection::Connecting]);

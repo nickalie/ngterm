@@ -76,8 +76,11 @@ Defined in `ui/theme/Color.kt`. `ContrastTest` checks every promise below, light
 - Every status color is 4.5:1 on every surface up to `surfaceContainerHigh`, so it can be text.
 - No two tones share a glyph.
 - An agent's status comes from its origin as its wire name (`active`, `blocked`, `completed`, `idle`), with a hex
-  color and one of upstream's six shapes (circle, square, triangle, diamond, capsule, star) only when the agent
-  overrode them. `AgentStatusBadge` says the name as a word and draws the origin's shape, lifting its color toward
+  color and one of upstream's eleven shapes (circle, square, triangle, triangle-down, play, diamond, capsule, seal,
+  star, bolt, bell) only when the agent overrode them. Each has a 16dp vector drawable of its own, a solid
+  silhouette like the rest, drawn within the same 12-13dp extent so no shape reads larger than another in a row. The
+  app's hello lists `status.shapes`, so an origin sends it all eleven; a name this build doesn't know draws the
+  circle. `AgentStatusBadge` says the name as a word and draws the origin's shape, lifting its color toward
   white or black (`readableOn`) until it reads on every surface up to `surfaceContainerHigh`, so it holds on a card
   or the sidebar as on the ground: the origin's color is the user's choice, the legibility is ours. What the origin
   leaves unset comes from `AgentState`, the app's tones in desktop's roles (orange blocked, green completed):

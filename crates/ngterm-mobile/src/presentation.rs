@@ -14,7 +14,8 @@
 //!   desktop's viewer applies them (`viewer.rs::apply_client_effect`), re-derived for a phone:
 //!   - a snapshot's status is no change on the origin ([`MobileEvent::SessionStatus`]'s `changed` is false), so the
 //!     app notifies nothing for it;
-//!   - the hello lists `viewer_kinds(false)`: no page kinds, as the app shows no handed-over pages; and the opt-in
+//!   - the hello lists `viewer_kinds(false)`: no page kinds, as the app shows no handed-over pages; `status.shapes`, as
+//!     both apps draw every status shape (their `StatusShape`); and the opt-in
 //!     `agent` kind, whose frames become [`MobileEvent::PaneAgent`] for the chat view ([`crate::chat`]). They are not
 //!     cleared when the stream leaves `connected`: the origin announces every pane again when it reconnects, and a
 //!     chat follows its own channel meanwhile;

@@ -26,7 +26,17 @@ internal struct StatusTests {
         #expect(StatusShape.fromWire("hexagon") == .circle)
         #expect(StatusShape.fromWire("ring") == .circle)
         #expect(StatusShape.fromWire("slash") == .circle)
-        #expect(StatusShape.wire.count == 6)
+        #expect(StatusShape.fromWire("triangle-down") == .triangleDown)
+        #expect(StatusShape.fromWire("triangleDown") == .circle)
+        #expect(StatusShape.fromWire("bolt") == .bolt)
+        #expect(StatusShape.fromWire("Bell") == .bell)
+        #expect(
+            StatusShape.wire.map(\.wireName) == [
+                "circle", "square", "triangle", "triangle-down", "play", "diamond", "capsule", "seal", "star", "bolt",
+                "bell",
+            ]
+        )
+        #expect(Set(StatusShape.wire.map(\.symbolName)).count == StatusShape.wire.count)
     }
 
     @Test("an agent state follows the origin's wire names")

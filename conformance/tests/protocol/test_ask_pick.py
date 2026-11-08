@@ -453,7 +453,7 @@ def test_ask_refusals(ctl, args, error):
         ),
         pytest.param(
             {"items": [{"id": "a", "label": "A", "status": "active", "statusShape": "hexagon"}]},
-            "invalid pick item shape (circle|square|triangle|diamond|capsule|star)",
+            "invalid pick item shape (circle|square|triangle|triangle-down|play|diamond|capsule|seal|star|bolt|bell)",
             id="status-shape",
         ),
     ],

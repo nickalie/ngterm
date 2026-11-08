@@ -780,6 +780,50 @@ def test_tree_rows_carry_the_session_status(live):
     assert_ok(live.request("session.close", sid))
 
 
+# A viewer that draws the shapes added after upstream's first six (#898).
+SHAPES_KINDS = [*OLDER_KINDS, "status.shapes"]
+
+
+def _subscribed_snapshot(live, sid, kinds):
+    """A mirror of `sid` whose hello lists `kinds`, and the snapshot it was sent."""
+    stream = live.stream(live.vocabulary.command("live.present"), sid)
+    assert stream.reply.ok, stream.reply.raw
+    stream.send(_hello("mirror", kinds))
+    wait_frame(stream.read, "hello", stream.send)
+    return stream, wait_frame(stream.read, "snapshot", stream.send)
+
+
+@LIVE_IN_ANY_SHELL
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.status", "live.present", streams=("live.present",))
+def test_a_viewer_without_status_shapes_gets_only_shapes_it_decodes(live):
+    """An older viewer decodes only upstream's first six shapes, so the origin clears any other from its status and
+    snapshot; a viewer listing `status.shapes` gets every shape as set (#898)."""
+    sid = _live_session(live)
+    older, _ = _subscribed(live, sid, "mirror")
+    capable, _ = _subscribed(live, sid, "mirror", SHAPES_KINDS)
+    with older, capable:
+        for status, shape in [("blocked", "bolt"), ("active", "star"), ("completed", "triangle-down")]:
+            assert_ok(live.request("session.status", sid, status=status, color="#ff8800", shape=shape))
+            seen = wait_frame(older.read, "status", older.send)["status"]
+            assert_subset(seen, {"status": status, "color": "#ff8800"})
+            if shape == "star":
+                assert seen["shape"] == "star"
+            else:
+                assert_absent(seen, "shape")
+            assert_subset(wait_frame(capable.read, "status", capable.send)["status"], {"status": status, "shape": shape})
+        # the shape set when a viewer subscribes reaches it in the snapshot, cleared for an older one alike
+        late_older, snapshot = _subscribed_snapshot(live, sid, OLDER_KINDS)
+        with late_older:
+            assert_subset(snapshot["snapshot"]["status"], {"status": "completed", "color": "#ff8800"})
+            assert_absent(snapshot["snapshot"]["status"], "shape")
+        late_capable, snapshot = _subscribed_snapshot(live, sid, SHAPES_KINDS)
+        with late_capable:
+            assert_subset(snapshot["snapshot"]["status"], {"status": "completed", "shape": "triangle-down"})
+    assert_ok(live.request("session.status", sid, status="idle"))
+    assert_ok(live.request("session.close", sid))
+
+
 @LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("live.tree", "field:result.remote", "session.companion.page", "session.companion.new")

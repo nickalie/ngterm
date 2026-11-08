@@ -11,20 +11,42 @@ use super::store::AppStore;
 use crate::interrupt;
 
 /// The silhouette a status glyph draws, per status in the settings or per call with `session.status --shape`;
-/// `circle` is what an unset one draws (upstream's `StatusShape`).
+/// `circle` is what an unset one draws (upstream's `StatusShape`). The wire name is the public name the CLI, the
+/// settings and `tree` carry, so it never changes once released.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StatusShape {
     Circle,
     Square,
     Triangle,
+    TriangleDown,
+    Play,
     Diamond,
     Capsule,
+    Seal,
     Star,
+    Bolt,
+    Bell,
 }
 
 impl StatusShape {
-    /// Every shape, in upstream's declaration order (the order of the accepted-names lists).
-    pub const ALL: [Self; 6] = [
+    /// Every shape, in upstream's declaration order (the order of the accepted-names lists and the Settings picker).
+    pub const ALL: [Self; 11] = [
+        Self::Circle,
+        Self::Square,
+        Self::Triangle,
+        Self::TriangleDown,
+        Self::Play,
+        Self::Diamond,
+        Self::Capsule,
+        Self::Seal,
+        Self::Star,
+        Self::Bolt,
+        Self::Bell,
+    ];
+
+    /// The shapes a viewer that does not list `status.shapes` decodes (upstream's `StatusShape.original`): v0.40.0's
+    /// set, which such a viewer parses strictly, so the origin clears any other shape before it reaches one.
+    pub const ORIGINAL: [Self; 6] = [
         Self::Circle,
         Self::Square,
         Self::Triangle,
@@ -40,10 +62,40 @@ impl StatusShape {
             Self::Circle => "circle",
             Self::Square => "square",
             Self::Triangle => "triangle",
+            Self::TriangleDown => "triangle-down",
+            Self::Play => "play",
             Self::Diamond => "diamond",
             Self::Capsule => "capsule",
+            Self::Seal => "seal",
             Self::Star => "star",
+            Self::Bolt => "bolt",
+            Self::Bell => "bell",
         }
+    }
+
+    /// The Settings picker's label for the shape (upstream's `displayName`): `Down Triangle` for `triangle-down`, the
+    /// capitalized wire name otherwise.
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Circle => "Circle",
+            Self::Square => "Square",
+            Self::Triangle => "Triangle",
+            Self::TriangleDown => "Down Triangle",
+            Self::Play => "Play",
+            Self::Diamond => "Diamond",
+            Self::Capsule => "Capsule",
+            Self::Seal => "Seal",
+            Self::Star => "Star",
+            Self::Bolt => "Bolt",
+            Self::Bell => "Bell",
+        }
+    }
+
+    /// Whether a viewer that predates `status.shapes` decodes the shape ([`Self::ORIGINAL`]).
+    #[must_use]
+    pub fn is_original(self) -> bool {
+        Self::ORIGINAL.contains(&self)
     }
 
     /// Parses the wire spelling; `None` for anything else.
