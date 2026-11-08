@@ -199,3 +199,223 @@ fn facts_are_sent_only_when_they_change_and_an_unknown_answer_is_dropped() {
         .collect();
     assert!(queued[1].starts_with("Resize"), "{queued:?}");
 }
+
+#[test]
+fn a_launch_that_clears_the_environment_keeps_only_its_own_variables() {
+    let command = PaneCommand::new("x").env_clear().env("B", "launch");
+    let env = child_environment(&command, [("A".to_owned(), "1".to_owned())]);
+    assert_eq!(env, [("B".to_owned(), "launch".to_owned())]);
+}
+
+#[test]
+fn a_live_outlet_keeps_kitty_answers_and_sends_the_panes_own_input() {
+    let live = Arc::new(Live::new(ReadPause::new(), 1024, true));
+    let outlet = crate::outlet::ReplyOutlet::default();
+    outlet.go_live(Arc::clone(&live));
+    outlet.push_reply(b"\x1b[0n");
+    outlet.push_reply(b"\x1b_Gi=1;OK\x1b\\");
+    outlet.push_input(b"\x0c");
+    assert_eq!(outlet.take_kitty_answers(), b"\x1b_Gi=1;OK\x1b\\");
+    assert!(outlet.take_kitty_answers().is_empty(), "taken");
+    let queued: Vec<String> = lock(&live.outbox)
+        .queue
+        .iter()
+        .map(|message| format!("{message:?}"))
+        .collect();
+    assert_eq!(queued, [format!("{:?}", Message::Input(b"\x0c".to_vec()))]);
+    // the program's own input is not the pane's to count against its write limit
+    assert_eq!(live.queued(), 0);
+}
+
+#[test]
+fn nothing_is_queued_once_the_pane_left() {
+    let live = Live::new(ReadPause::new(), 1024, true);
+    live.leave();
+    live.resize(GridSize {
+        cols: 80,
+        rows: 24,
+        cell_width: 8,
+        cell_height: 16,
+    });
+    live.program_input(b"\x0c");
+    live.update_metadata(ReplyMetadata {
+        cell_width_px: 9,
+        ..ReplyMetadata::default()
+    });
+    assert!(lock(&live.outbox).queue.is_empty());
+    assert!(live.next_message().is_none(), "the sender ends");
+}
+
+#[test]
+fn a_paused_reader_waits_for_the_resume_or_the_pane_leaving() {
+    let pause = ReadPause::new();
+    let live = Arc::new(Live::new(pause.clone(), 1024, true));
+    assert!(live.wait_resumed(), "not paused: no wait");
+    pause.pause();
+    let waiting = {
+        let live = Arc::clone(&live);
+        std::thread::spawn(move || live.wait_resumed())
+    };
+    pause.resume();
+    live.wake_reader();
+    assert!(waiting.join().unwrap(), "resumed");
+    pause.pause();
+    let waiting = {
+        let live = Arc::clone(&live);
+        std::thread::spawn(move || live.wait_resumed())
+    };
+    live.leave();
+    assert!(!waiting.join().unwrap(), "the pane left");
+}
+
+const SIZE: GridSize = GridSize {
+    cols: 40,
+    rows: 4,
+    cell_width: 8,
+    cell_height: 16,
+};
+
+/// A stream pane: a real terminal and IO worker, with no PTY, session or thread of a channel's.
+fn pane() -> crate::Pane {
+    crate::Pane::stream(&crate::PaneConfig::new(SIZE)).unwrap().0
+}
+
+fn delegated(id: u64, selection: &str, list_only: bool) -> LiveMail {
+    LiveMail::Delegated {
+        request: Delegated {
+            id,
+            epoch: 1,
+            request: DelegatedRequest::ClipboardRead {
+                selection: selection.to_owned(),
+                list_only,
+            },
+        },
+        connection: 1,
+    }
+}
+
+fn clipboard_reads(pane: &crate::Pane) -> Vec<ClipboardReadRequest> {
+    pane.take_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            PaneEvent::ClipboardRead(read) => Some(read),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_delegated_read_is_asked_of_the_frontend_and_its_answer_sent_on_its_connection() {
+    let pane = pane();
+    let live = Live::new(ReadPause::new(), 1024, true);
+    handle(&live, pane.shared(), delegated(10, "s", false));
+    handle(&live, pane.shared(), delegated(11, "p", true));
+    handle(&live, pane.shared(), delegated(12, "c", false));
+    let reads = clipboard_reads(&pane);
+    assert_eq!(
+        reads.iter().map(|read| (read.location, read.scope)).collect::<Vec<_>>(),
+        [
+            (ClipboardLocation::Selection, ReadScope::Data),
+            (ClipboardLocation::Primary, ReadScope::ListOnly),
+            (ClipboardLocation::Standard, ReadScope::Data),
+        ]
+    );
+    live.answer(reads[0].id, ClipboardAnswer::Text(Some("copied".to_owned())));
+    live.answer(reads[0].id, ClipboardAnswer::Denied);
+    let queued: Vec<String> = lock(&live.outbox)
+        .queue
+        .iter()
+        .map(|message| format!("{message:?}"))
+        .collect();
+    assert_eq!(queued.len(), 1, "answered once: {queued:?}");
+    assert!(queued[0].contains("Clipboard { text: Some(\"copied\") }"), "{queued:?}");
+    assert!(
+        queued[0].contains("id: 10") && queued[0].contains("connection: 1"),
+        "{queued:?}"
+    );
+    live.answer(reads[2].id, ClipboardAnswer::Denied);
+    let denied = format!("{:?}", lock(&live.outbox).queue[1]);
+    assert!(
+        denied.contains("id: 12") && denied.contains("reply: Denied"),
+        "{denied}"
+    );
+    // a lost connection's requests are nobody's
+    live.lost();
+    live.answer(reads[1].id, ClipboardAnswer::Denied);
+    assert_eq!(lock(&live.outbox).queue.len(), 2);
+}
+
+#[test]
+fn the_facts_are_the_terminals_with_the_kitty_graphics_shown_and_the_scheme() {
+    let pane = pane();
+    let live = Live::new(ReadPause::new(), 1024, true);
+    let facts = live.metadata_of(pane.shared(), ColorScheme::Light);
+    assert_eq!((facts.cell_width_px, facts.cell_height_px), (8, 16));
+    assert!(facts.kitty_graphics);
+    assert_eq!(facts.color_scheme, Some(wire::ColorScheme::Light));
+    assert_eq!(facts.palette.len(), 256);
+    live.set_kitty_graphics(false);
+    let facts = live.metadata_of(pane.shared(), ColorScheme::Dark);
+    assert!(!facts.kitty_graphics);
+    assert_eq!(facts.color_scheme, Some(wire::ColorScheme::Dark));
+}
+
+fn wait_exit(pane: &crate::Pane, events: &mut Vec<PaneEvent>) -> crate::ExitStatus {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        events.extend(pane.take_events());
+        if let Some(status) = events.iter().find_map(|event| match event {
+            PaneEvent::Exited(status) => Some(status.clone()),
+            _ => None,
+        }) {
+            return status;
+        }
+        assert!(std::time::Instant::now() < deadline, "no exit: {events:?}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_refused_attach_writes_why_and_ends_the_pane_with_the_clis_status() {
+    let pane = crate::Pane::attach_live(
+        Err(Outcome::failed("ngterm-session: no session here")),
+        &crate::PaneConfig::new(SIZE),
+    )
+    .unwrap();
+    let status = wait_exit(&pane, &mut Vec::new());
+    assert_eq!(status.code, u32::from(EXIT_FAILED));
+    assert_eq!(status.signal, None);
+    let lines = pane.frame().frame.lines();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("ngterm-session: no session here")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_pane_that_left_is_not_ended_by_its_attach_failing() {
+    let pane = pane();
+    let live = Arc::new(Live::new(ReadPause::new(), 1024, true));
+    live.leave();
+    Reader {
+        live,
+        shared: Arc::clone(pane.shared()),
+        session: Err(Outcome::failed("refused")),
+    }
+    .run();
+    // the complaint is written, but nothing ends the pane that is going away
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !pane.frame().frame.lines().iter().any(|line| line == "refused") {
+        assert!(std::time::Instant::now() < deadline, "no complaint");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        !pane
+            .take_events()
+            .iter()
+            .any(|event| matches!(event, PaneEvent::Exited(_))),
+        "no exit reported"
+    );
+}

@@ -663,6 +663,88 @@ mod tests {
     }
 
     #[test]
+    fn a_storage_gone_removes_every_image_and_forgets_the_prefetched_ones() {
+        let mut terminal = terminal();
+        terminal.vt_write(CHUNKED);
+        let first = capture(terminal.kitty_graphics(), &KittyView::default(), &Prefetch::default()).unwrap();
+        let mut prefetched = Prefetch::default();
+        prefetched.update(terminal.kitty_graphics());
+        assert_eq!(prefetched.images.len(), 1);
+        let gone = capture(None, &first, &prefetched).unwrap();
+        assert_eq!(
+            gone,
+            KittyView {
+                removed: vec![first.images[0].key],
+                ..KittyView::default()
+            }
+        );
+        assert!(capture(None, &gone, &prefetched).is_none(), "nothing left to remove");
+        prefetched.update(None);
+        assert!(prefetched.images.is_empty());
+        assert_eq!(prefetched.generation, 0);
+    }
+
+    #[test]
+    fn an_image_placed_twice_is_carried_once() {
+        let mut terminal = terminal();
+        terminal.vt_write(CHUNKED);
+        terminal.vt_write(b"\x1b_Ga=p,q=2,i=7,p=5,C=1\x1b\\");
+        let mut prefetched = Prefetch::default();
+        prefetched.update(terminal.kitty_graphics());
+        assert_eq!(prefetched.images.len(), 1);
+        let view = capture(terminal.kitty_graphics(), &KittyView::default(), &Prefetch::default()).unwrap();
+        assert_eq!(view.images.len(), 1);
+        assert_eq!(view.placements.len(), 2);
+        assert!(
+            view.placements
+                .iter()
+                .all(|placement| placement.image == view.images[0].key)
+        );
+    }
+
+    #[test]
+    fn a_placements_z_picks_its_layer() {
+        let mut terminal = terminal();
+        terminal.vt_write(b"\x1b_Ga=t,q=2,f=24,s=1,v=1,i=1;AAAA\x1b\\");
+        for (placement, z) in [(1, 0), (2, -1), (3, -1_073_741_825)] {
+            terminal.vt_write(format!("\x1b_Ga=p,q=2,i=1,p={placement},z={z},C=1\x1b\\").as_bytes());
+        }
+        let view = capture(terminal.kitty_graphics(), &KittyView::default(), &Prefetch::default()).unwrap();
+        let mut layers: Vec<(u32, i32, KittyLayer)> = view
+            .placements
+            .iter()
+            .map(|placement| (placement.placement_id, placement.z, placement.layer))
+            .collect();
+        layers.sort_unstable_by_key(|(placement, ..)| *placement);
+        assert_eq!(
+            layers,
+            [
+                (1, 0, KittyLayer::AboveText),
+                (2, -1, KittyLayer::BelowText),
+                (3, -1_073_741_825, KittyLayer::BelowBackground)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_image_still_loading_is_not_shown_until_it_completes() {
+        let mut terminal = terminal();
+        let (first_chunk, rest) = CHUNKED.split_at(CHUNKED.len() - b"\x1b_Gm=0;Bwg=\x1b\\".len());
+        terminal.vt_write(first_chunk);
+        let loading = capture(terminal.kitty_graphics(), &KittyView::default(), &Prefetch::default());
+        assert!(loading.as_ref().is_none_or(KittyView::is_empty), "{loading:?}");
+        terminal.vt_write(rest);
+        let view = capture(
+            terminal.kitty_graphics(),
+            &loading.unwrap_or_default(),
+            &Prefetch::default(),
+        )
+        .unwrap();
+        assert_eq!(view.images.len(), 1);
+        assert_eq!(view.placements.len(), 1);
+    }
+
+    #[test]
     fn a_deleted_image_is_reported_removed() {
         let mut terminal = terminal();
         terminal.vt_write(CHUNKED);
