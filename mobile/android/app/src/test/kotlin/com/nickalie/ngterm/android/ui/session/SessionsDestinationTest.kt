@@ -2,9 +2,6 @@ package com.nickalie.ngterm.android.ui.session
 
 import android.content.res.Configuration
 import android.view.inputmethod.InputMethodManager
-import androidx.activity.ComponentActivity
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
@@ -16,7 +13,6 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.StateRestorationTester
-import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -26,110 +22,31 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.withKeysDown
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.nickalie.ngterm.android.TestGraph
 import com.nickalie.ngterm.android.awaitText
 import com.nickalie.ngterm.android.data.OpenTarget
-import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.android.ui.NavLayout
-import com.nickalie.ngterm.android.ui.NgtermApp
-import com.nickalie.ngterm.android.ui.terminal.SelectingPane
-import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.fake.FakeInput
-import com.nickalie.ngterm.core.fake.FakePane
 import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneEnd
 import com.nickalie.ngterm.core.ffi.PaneKeyAction
-import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneRole
 import com.nickalie.ngterm.core.ffi.RemoteLayout
 import com.nickalie.ngterm.core.ffi.StreamState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
-import java.util.concurrent.ConcurrentHashMap
-
-private const val WAIT_MS = 10_000L
-
-/** The app and its fake-core terminal fixture, shared by the session interaction tests. */
-abstract class SessionViewFixture {
-    @get:Rule
-    val compose = createAndroidComposeRule<ComponentActivity>()
-
-    @get:Rule
-    val dir = TemporaryFolder()
-
-    protected lateinit var test: TestGraph
-    protected val layout = mutableStateOf(NavLayout.Bar)
-    protected val panes = ConcurrentHashMap<String, FakePane>()
-    protected val p1 = PaneRef("m1", "s1", "P1")
-    protected val p2 = PaneRef("m1", "s1", "P2")
-
-    @Before
-    fun setUp() {
-        test = TestGraph(dir.root)
-    }
-
-    @After
-    fun tearDown() = test.close()
-
-    protected fun waitFor(check: () -> Boolean) = compose.waitUntil(WAIT_MS, check)
-
-    protected fun shows(text: String) = compose.onAllNodes(hasText(text)).fetchSemanticsNodes().isNotEmpty()
-
-    protected fun described(text: String) =
-        compose.onAllNodes(hasContentDescription(text)).fetchSemanticsNodes().isNotEmpty()
-
-    // the app with docs-site (s1) on build-01 opened from the machine's list, its stream live with panes P1 and P2
-    protected fun openSession(
-        withLayout: Boolean = true,
-        restoration: StateRestorationTester? = null,
-    ) {
-        val key = test.seedKey()
-        test.seedMachine(testMachine(keyId = key.id))
-        val content: @Composable () -> Unit = {
-            NgtermTheme { NgtermApp(graph = test.graph, coreVersion = "1.2.3", layout = layout.value) }
-        }
-        if (restoration == null) compose.setContent(content) else restoration.setContent(content)
-        waitFor { test.connections.trees.value["m1"] != null }
-        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "docs-site"))
-        test.core.paneFactory =
-            { _, _, pane, _ -> SelectingPane(List(4) { "$pane line $it" }).also { panes[pane] = it } }
-        compose.onNodeWithText("build-01").performClick()
-        compose.waitUntil(WAIT_MS) { shows("docs-site") }
-        compose.onNodeWithText("docs-site").performClick()
-        waitFor {
-            "s1" in
-                test.connections.attached.value["m1"]
-                    .orEmpty()
-        }
-        test.core.emit(MobileEvent.SessionConnection("m1", "s1", StreamState.Connected))
-        if (withLayout) {
-            test.core.emit(
-                MobileEvent.SessionLayout("m1", "s1", RemoteLayout(listOf("P1", "P2"), "P1", "vertical", true)),
-            )
-            compose.waitForIdle()
-            waitFor { p1 in test.core.shownPanes }
-        } else {
-            compose.awaitText("Opening docs-site")
-        }
-    }
-}
 
 /** Session navigation, confirmation, failure recovery and saved state over the real app. */
 @RunWith(AndroidJUnit4::class)
 @Config(qualifiers = "w1000dp-h800dp-mdpi")
-class SessionDestinationTest : SessionViewFixture() {
+class SessionsDestinationTest : SessionViewFixture() {
     private fun openSplit() {
         openSession()
         layout.value = NavLayout.Sidebar
@@ -209,7 +126,7 @@ class SessionDestinationTest : SessionViewFixture() {
     }
 
     @Test
-    fun theAttachedListOpensAndDetachesAndItsEndDialogCancelsOrConfirms() {
+    fun theAttachedListOpensAndTogglesChatViewAndItsEndDialogCancelsOrConfirms() {
         openSession()
         compose.onNodeWithContentDescription("Back").performClick()
         waitFor { !described("Escape") }
@@ -286,15 +203,19 @@ class SessionDestinationTest : SessionViewFixture() {
     fun hardwareSessionChordsMoveForwardAndBackBetweenAttachedSessions() {
         compose.activity.resources.configuration.hardKeyboardHidden = Configuration.HARDKEYBOARDHIDDEN_NO
         openSession()
+        // three sessions, so the next one (api-refactor) and the previous one (ops, wrapping round) differ
         test.core.sessions.getValue("m1") += fakeSession("s2", "api-refactor")
+        test.core.sessions.getValue("m1") += fakeSession("s3", "ops")
         runBlocking {
             test.connections.listSessions("m1")
             test.connections.attach("m1", "s2")
+            test.connections.attach("m1", "s3")
         }
         terminal(0).performClick()
         compose.waitForIdle()
         chord(Key.DirectionDown)
         compose.awaitText("Opening api-refactor")
+        compose.onNodeWithText("Opening ops").assertDoesNotExist()
         // The new session has not received its layout yet; Back returns to the attached list.
         compose.onNodeWithContentDescription("Back").performClick()
         compose.awaitText("docs-site")
@@ -303,7 +224,8 @@ class SessionDestinationTest : SessionViewFixture() {
         terminal(0).performClick()
         compose.waitForIdle()
         chord(Key.DirectionUp)
-        compose.awaitText("Opening api-refactor")
+        compose.awaitText("Opening ops")
+        compose.onNodeWithText("Opening api-refactor").assertDoesNotExist()
     }
 
     @Test
@@ -363,7 +285,8 @@ class SessionDestinationTest : SessionViewFixture() {
             MobileEvent.SessionLayout("m1", "s1", RemoteLayout(listOf("P1", "P2"), "P1", "horizontal", true)),
         )
         compose.waitForIdle()
-        val before = panes.mapValues { it.value.sizes.last() }
+        // every resize each pane was given: switching views must add none, not even one it later undoes
+        val before = panes.mapValues { it.value.sizes.toList() }
         test.core.emit(MobileEvent.PaneAgent("m1", "s1", "P1", "claude", "c1"))
         test.core.emit(MobileEvent.PaneAgent("m1", "s1", "P2", "codex", "c2"))
         waitFor {
@@ -372,11 +295,11 @@ class SessionDestinationTest : SessionViewFixture() {
         assertEquals(setOf(p1, p2), test.core.openChats)
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Escape").assertDoesNotExist()
-        assertEquals(before, panes.mapValues { it.value.sizes.last() })
+        assertEquals(before, panes.mapValues { it.value.sizes.toList() })
         compose.onNodeWithContentDescription("Show terminal").performClick()
         waitFor { described("Terminal") }
         compose.waitForIdle()
-        assertEquals(before, panes.mapValues { it.value.sizes.last() })
+        assertEquals(before, panes.mapValues { it.value.sizes.toList() })
     }
 
     @Test
