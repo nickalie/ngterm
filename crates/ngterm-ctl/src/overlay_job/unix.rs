@@ -243,6 +243,9 @@ mod tests {
         let mut bytes = [0; 4];
         reader.read_exact(&mut bytes).unwrap();
         assert_eq!(&bytes, b"keys");
+        // Shut the socket down rather than only drop it: another test's fork may hold a copy of this descriptor
+        // until its exec, and the peer hangs up only when the last copy closes.
+        writer.shutdown(std::net::Shutdown::Both).unwrap();
         drop(writer);
         assert!(hung_up(reader.as_raw_fd()));
         assert!(hung_up(i32::MAX));
@@ -279,8 +282,13 @@ mod tests {
         let slave = unsafe { OwnedFd::from_raw_fd(slave) };
         // SAFETY: this isolated process is not a process-group leader and may start its own session.
         assert!(unsafe { libc::setsid() } > 0);
+        // ioctl's request is a c_ulong, and TIOCSCTTY one too on Linux but a u32 on macOS.
+        #[cfg(target_vendor = "apple")]
+        let request = libc::c_ulong::from(libc::TIOCSCTTY);
+        #[cfg(not(target_vendor = "apple"))]
+        let request = libc::TIOCSCTTY;
         // SAFETY: the slave is an open pty in this process's new session.
-        assert_eq!(unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSCTTY, 0) }, 0);
+        assert_eq!(unsafe { libc::ioctl(slave.as_raw_fd(), request, 0) }, 0);
         // A master hangup sends SIGHUP to this session; keep it from ending the probe.
         // SAFETY: installs no handler code, for a valid signal, in this subprocess alone.
         unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
