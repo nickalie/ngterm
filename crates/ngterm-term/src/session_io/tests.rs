@@ -6,6 +6,18 @@ use ngterm_session::server::{EXIT_FAILED, EXIT_USAGE};
 
 use super::*;
 
+impl Live {
+    /// The single metadata message actually posted by a pane's setter, with no session connected to drain it.
+    pub(crate) fn take_posted_metadata(&self) -> ReplyMetadata {
+        let mut outbox = lock(&self.outbox);
+        assert_eq!(outbox.queue.len(), 1, "{:?}", outbox.queue);
+        let Some(Message::Metadata(metadata)) = outbox.queue.pop_front() else {
+            panic!("not metadata");
+        };
+        metadata
+    }
+}
+
 fn attach(argv: &[&str]) -> LiveAttach {
     LiveAttach {
         executable: "/opt/ngterm/bin/ngterm-session".to_owned(),
@@ -251,21 +263,30 @@ fn a_paused_reader_waits_for_the_resume_or_the_pane_leaving() {
     let pause = ReadPause::new();
     let live = Arc::new(Live::new(pause.clone(), 1024, true));
     assert!(live.wait_resumed(), "not paused: no wait");
-    pause.pause();
-    let waiting = {
-        let live = Arc::clone(&live);
-        std::thread::spawn(move || live.wait_resumed())
-    };
-    pause.resume();
-    live.wake_reader();
-    assert!(waiting.join().unwrap(), "resumed");
-    pause.pause();
-    let waiting = {
-        let live = Arc::clone(&live);
-        std::thread::spawn(move || live.wait_resumed())
-    };
-    live.leave();
-    assert!(!waiting.join().unwrap(), "the pane left");
+    for leaving in [false, true] {
+        pause.pause();
+        let (started, ready) = std::sync::mpsc::channel();
+        let (finished, result) = std::sync::mpsc::channel();
+        let waiting = {
+            let live = Arc::clone(&live);
+            std::thread::spawn(move || {
+                started.send(()).unwrap();
+                finished.send(live.wait_resumed()).unwrap();
+            })
+        };
+        ready.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
+        let before_resume = result.recv_timeout(std::time::Duration::from_millis(100));
+        if leaving {
+            live.leave();
+        } else {
+            pause.resume();
+            live.wake_reader();
+        }
+        let after_resume = result.recv_timeout(std::time::Duration::from_secs(20));
+        waiting.join().unwrap();
+        assert_eq!(before_resume, Err(std::sync::mpsc::RecvTimeoutError::Timeout));
+        assert_eq!(after_resume.unwrap(), !leaving);
+    }
 }
 
 const SIZE: GridSize = GridSize {

@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn a_clear_waiting_while_the_program_enters_the_alternate_screen_is_dropped() {
         let dir = tempfile::tempdir().unwrap();
-        let script = "stty -echo; printf 'one\\r\\ntwo'; read _; printf 'h'; printf '\\033[?1049l!'; exec sleep 5";
+        let script = "stty -echo; printf 'one\\r\\ntwo'; read _; printf 'halt\\r\\nscreen'; read _; printf '\\033[?1049l!'; exec sleep 5";
         let pane = spawn(script, dir.path());
         wait_line(&pane, 1, "two");
         // the program's output stopped in the middle of the switch to the alternate screen
@@ -317,6 +317,11 @@ mod tests {
         assert!(lock(&pane.shared().vt).pending_clear);
         pane.write(b"\n").unwrap();
         // the clear reached its ground point on the alternate screen: nothing was cleared, and nothing waits
+        wait_line(&pane, 2, "screen");
+        assert_eq!(pane.frame().frame.lines(), ["", "   alt", "screen", ""]);
+        assert_eq!(lock(&pane.shared().vt).terminal.cursor(), (6, 2));
+        assert!(!lock(&pane.shared().vt).pending_clear);
+        pane.write(b"\n").unwrap();
         wait_line(&pane, 1, "two!");
         assert_eq!(pane.frame().frame.lines()[0], "one");
         assert!(!lock(&pane.shared().vt).pending_clear);
