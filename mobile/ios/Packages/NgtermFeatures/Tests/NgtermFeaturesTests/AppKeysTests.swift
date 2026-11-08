@@ -106,4 +106,17 @@ internal struct AppKeysTests {
                 == "mkdir -p ~/.ssh && chmod 700 ~/.ssh && \(quoted)"
         )
     }
+
+    @Test("the core makes an ed25519 key under the comment, reads it back, and refuses what isn't a key")
+    internal func coreKeys() throws {
+        let core = CoreKeyMaker()
+        let made = try core.generate(comment: "ngterm@phone")
+        #expect(made.authorizedKey.hasPrefix("ssh-ed25519 "))
+        #expect(made.authorizedKey.hasSuffix(" ngterm@phone"))
+        let read = try core.importKey(privateKey: made.privateKey, passphrase: nil)
+        #expect(read.fingerprint == made.fingerprint)
+        #expect(throws: KeyError.self) {
+            try core.importKey(privateKey: Data("not a key".utf8), passphrase: nil)
+        }
+    }
 }

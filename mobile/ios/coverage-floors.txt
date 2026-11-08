@@ -7,6 +7,6 @@
 NgTerm 73
 NgtermCore 66
 NgtermDesign 97
-NgtermFeatures 84
+NgtermFeatures 92
 NgtermPlatform 76
 NgtermTerminal 94
