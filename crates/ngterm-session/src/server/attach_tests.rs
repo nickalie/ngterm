@@ -23,6 +23,21 @@ fn pair() -> (tempfile::TempDir, Arc<Shared>, Arc<Stream>, Stream) {
     (root, shared, server, client)
 }
 
+/// Closes `client` and waits until `server`'s writes fail. Linux fails them once the client shuts its socket down;
+/// macOS takes them until its last descriptor closes, which a fork elsewhere in the test process may hold a moment.
+fn close_client(server: &Stream, client: Stream) {
+    crate::endpoint::disconnect(&client);
+    drop(client);
+    let deadline = std::time::Instant::now() + WAIT;
+    while { server }.write(&[0]).is_ok() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "writes to a closed client still succeed"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn request(create: bool) -> AttachRequest {
     AttachRequest {
         name: "test".to_owned(),
@@ -169,7 +184,7 @@ fn a_writer_of_a_closed_client_detaches_its_subscription() {
     let (_root, shared, server, client) = pair();
     let (pane, attached) = open(&shared, &request(true)).unwrap();
     let running = Running(pane);
-    crate::endpoint::disconnect(&client);
+    close_client(&server, client);
     write_events(&server, &running.0, attached.subscription);
     assert_eq!(running.0.clients(), 0);
 }
@@ -177,7 +192,7 @@ fn a_writer_of_a_closed_client_detaches_its_subscription() {
 #[test]
 fn a_snapshot_send_failure_is_reported_instead_of_sending_its_end() {
     let (_root, _shared, server, client) = pair();
-    crate::endpoint::disconnect(&client);
+    close_client(&server, client);
     assert!(
         send_event(
             &server,
