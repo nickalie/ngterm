@@ -7,6 +7,11 @@ use std::path::PathBuf;
 
 use gpui_kit::{AnyWindowHandle, App, Task};
 
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+use fallback as platform;
+#[cfg(target_os = "macos")]
+use macos as platform;
+
 /// What the chooser asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderRequest {
@@ -31,6 +36,9 @@ mod platform {
     use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
     use super::FolderRequest;
+
+    #[cfg(test)]
+    use super::tests::portal::send;
 
     pub fn choose(parent: AnyWindowHandle, request: FolderRequest, cx: &mut App) -> Task<Option<PathBuf>> {
         cx.spawn(async move |cx| {
@@ -71,24 +79,31 @@ mod platform {
             Some(folder) => base().current_folder(folder).unwrap_or_else(|_| base()),
             None => base(),
         };
-        let chooser = match chooser.identifier(parent).send().await {
-            Ok(chooser) => chooser,
+        let selected = match send(chooser.identifier(parent)).await {
+            Ok(selected) => selected?,
             Err(err) => {
                 tracing::warn!(%err, "the folder chooser did not open");
                 return None;
             }
         };
-        let selected = chooser.response().ok()?;
         selected
-            .uris()
             .first()
             .and_then(|uri| url::Url::parse(uri.as_str()).ok())
             .and_then(|url| url.to_file_path().ok())
     }
+
+    /// Only the transport touches the bus; unit tests replace it before any portal can be activated.
+    #[cfg(not(test))]
+    async fn send(
+        chooser: ashpd::desktop::file_chooser::OpenFileRequest,
+    ) -> Result<Option<Vec<ashpd::Uri>>, ashpd::Error> {
+        let chooser = chooser.send().await?;
+        Ok(chooser.response().ok().map(|selected| selected.uris().to_vec()))
+    }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-mod platform {
+#[cfg(any(not(any(target_os = "linux", target_os = "macos")), test))]
+mod fallback {
     use std::path::PathBuf;
 
     use gpui_kit::{AnyWindowHandle, App, PathPromptOptions, Task};
@@ -118,11 +133,14 @@ mod platform {
     }
 }
 
-#[cfg(target_os = "macos")]
-mod platform {
+#[cfg(any(target_os = "macos", test))]
+mod macos {
     use super::{AnyWindowHandle, App, FolderRequest, PathBuf, Task};
     use std::ffi::{CStr, CString, c_char, c_void};
     type Reply = async_channel::Sender<Option<PathBuf>>;
+    #[cfg(test)]
+    use super::tests::macos::ngterm_choose_folder;
+    #[cfg(not(test))]
     unsafe extern "C" {
         fn ngterm_choose_folder(
             title: *const c_char,
@@ -165,3 +183,6 @@ mod platform {
         cx.spawn(async move |_| result.recv().await.ok().flatten())
     }
 }
+
+#[cfg(test)]
+mod tests;
