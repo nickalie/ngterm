@@ -78,6 +78,7 @@ fn a_controls_default_value_is_stored_as_nil() {
         appearance(AppearanceChange::IgnoreReduceTransparency(false)),
         appearance(AppearanceChange::SidebarBackgroundShift(5)),
         appearance(AppearanceChange::SidebarFontSize(13.0)),
+        appearance(AppearanceChange::SidebarDensity(SidebarDensity::Default)),
         appearance(AppearanceChange::InterfaceFontSize(13.0)),
         appearance(AppearanceChange::InactivePaneMute(5)),
         SettingsChange::Notifications(NotificationsChange::Banners(true)),
@@ -132,6 +133,16 @@ fn a_non_default_value_is_stored_raw() {
     assert_eq!(settings.auto_follow_stay_on_active, Some(true));
     assert_eq!(settings.attention_includes_active, Some(true));
     assert_eq!(settings.attention_navigation_across_windows, Some(true));
+}
+
+/// Upstream's `SettingsModel.setSidebarDensity`: compact is stored raw, the default removes the key.
+#[test]
+fn the_sidebar_density_stores_compact_and_removes_the_key_for_the_default() {
+    let compact = applied([appearance(AppearanceChange::SidebarDensity(SidebarDensity::Compact))]);
+    assert_eq!(compact.sidebar_density.as_deref(), Some("compact"));
+    let mut standard = compact;
+    appearance(AppearanceChange::SidebarDensity(SidebarDensity::Default)).apply_to(&mut standard);
+    assert_eq!(standard.sidebar_density, None);
 }
 
 /// Upstream's `setIgnoreReduceTransparency($0 ? true : nil)`: on is stored, off removes the key.

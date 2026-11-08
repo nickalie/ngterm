@@ -2,12 +2,13 @@
 //! the title bar and the sidebar share: the GTK build's `chrome.rs` stylesheet for the sidebar, upstream's
 //! `sidebarTintWash`, `SidebarRowView` and `SidebarCellView.setColors`) and the rows' metrics (upstream's
 //! `WorkspaceSidebar+RowRendering.swift` `makeCell`, `SidebarRowViews.swift` `BadgeView`, `WindowContentView.swift`
-//! `bottomBar`).
+//! `bottomBar`), with the compact density's trims (upstream's `SidebarDensity`).
 
 use gpui_kit::Hsla;
 use ngterm_core::chrome::{ChromeColors, Rgb};
 use ngterm_core::model::{SidebarTint, TintColor, TintPart};
 use ngterm_core::persist::AppSettings;
+use ngterm_core::persist::settings::SidebarDensity;
 
 pub use crate::chrome::color;
 
@@ -15,11 +16,13 @@ pub use crate::chrome::color;
 pub const DEFAULT_FONT_SIZE: f32 = 13.0;
 /// The `sidebarFontSize` setting's range.
 const FONT_SIZE_RANGE: (f64, f64) = (9.0, 20.0);
-/// A row's height over its text size: 26 at the default 13.
+/// A row's height over its text size: 26 at the default 13. This build's rows run 2 points shorter than upstream's (15);
+/// the compact density takes upstream's trims off it.
 const ROW_PADDING: f32 = 13.0;
 /// The selection pill's inset from the row's edges and its corner radius (upstream's `SidebarRowView.drawBackground`).
+/// The vertical inset is the default density's ([`Metrics::pill_inset_y`]).
 pub const PILL_INSET_X: f32 = 8.0;
-pub const PILL_INSET_Y: f32 = 1.5;
+const PILL_INSET_Y: f32 = 1.5;
 pub const PILL_RADIUS: f32 = 7.0;
 /// The content's inset from the row's edges: inside the pill, the icon two points in.
 pub const CONTENT_INSET: f32 = PILL_INSET_X + 2.0;
@@ -28,7 +31,9 @@ pub const GAP: f32 = 6.0;
 /// The disclosure's slot before a workspace row's icon, and the indent of a nested session row: its icon sits under
 /// its workspace's.
 pub const DISCLOSURE: f32 = 16.0;
-pub const NESTED_INDENT: f32 = DISCLOSURE + 4.0;
+const NESTED_INDENT: f32 = DISCLOSURE + 4.0;
+/// How far an info line lifts into the row above it, and the padding under it, at the default density.
+const INFO_SPACING: f32 = 6.0;
 /// The unseen badge: the capsule's height (its minimum width), the room the count's text gets, the gap before it, and
 /// its text size (upstream's `BadgeView`, `NSFont.smallSystemFontSize` bold).
 pub const BADGE_HEIGHT: f32 = 16.0;
@@ -47,11 +52,53 @@ pub const FOOTER_PADDING: (f32, f32) = (6.0, 4.0);
 /// The divider's grab handle: wider than the 1-point line it centers on (upstream's `sidebarDivider`).
 pub const DIVIDER_HANDLE: f32 = 12.0;
 
-/// The sidebar's colors and text size.
+/// The row geometry a [`SidebarDensity`] sets (upstream's `SidebarDensity` metrics). Compact applies upstream's deltas
+/// to this build's default geometry: 5 points off the row padding, 4 off the nesting indent, 2 off the info line's lift
+/// and bottom padding, the pill's vertical inset down to 0.5, and the name lifted 1 point so lowercase text sits
+/// centered in the tighter pill.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Metrics {
+    /// The vertical padding a row adds to its text size.
+    pub row_padding: f32,
+    /// The step per nesting level, a workspace row's disclosure taking its first.
+    pub nested_indent: f32,
+    /// How far an info line lifts into the row above it, and the padding under it.
+    pub info_spacing: f32,
+    /// How far the name sits above the row's center.
+    pub name_lift: f32,
+    /// The selection pill's (and the drop frame's) inset from the row's top and bottom edges.
+    pub pill_inset_y: f32,
+}
+
+impl Metrics {
+    /// The geometry of `density`.
+    #[must_use]
+    pub fn of(density: SidebarDensity) -> Self {
+        match density {
+            SidebarDensity::Default => Self {
+                row_padding: ROW_PADDING,
+                nested_indent: NESTED_INDENT,
+                info_spacing: INFO_SPACING,
+                name_lift: 0.0,
+                pill_inset_y: PILL_INSET_Y,
+            },
+            SidebarDensity::Compact => Self {
+                row_padding: ROW_PADDING - 5.0,
+                nested_indent: NESTED_INDENT - 4.0,
+                info_spacing: INFO_SPACING - 2.0,
+                name_lift: 1.0,
+                pill_inset_y: 0.5,
+            },
+        }
+    }
+}
+
+/// The sidebar's colors, text size and row spacing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Look {
     pub colors: ChromeColors,
     pub font_size: f32,
+    pub density: SidebarDensity,
 }
 
 impl Default for Look {
@@ -59,25 +106,33 @@ impl Default for Look {
         Self {
             colors: crate::chrome::default_colors(),
             font_size: DEFAULT_FONT_SIZE,
+            density: SidebarDensity::Default,
         }
     }
 }
 
 impl Look {
     /// The look of the chrome's `colors` (the window's, [`crate::chrome::current`]) under `settings`: the rows' text
-    /// size.
+    /// size and density.
     #[must_use]
     pub fn of(colors: ChromeColors, settings: &AppSettings) -> Self {
         Self {
             colors,
             font_size: font_size(settings.sidebar_font_size),
+            density: settings.effective_sidebar_density(),
         }
     }
 
-    /// A row's height.
+    /// The row geometry of the look's density.
+    #[must_use]
+    pub fn metrics(&self) -> Metrics {
+        Metrics::of(self.density)
+    }
+
+    /// A row's height (an info row's title band).
     #[must_use]
     pub fn row_height(&self) -> f32 {
-        self.font_size + ROW_PADDING
+        self.font_size + self.metrics().row_padding
     }
 
     /// The divider's line: the chrome text at low opacity.

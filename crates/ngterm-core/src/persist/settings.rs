@@ -148,6 +148,31 @@ impl SessionInfoDisplay {
 }
 
 raw_enum! {
+    /// The sidebar's row spacing (upstream's `SidebarDensity`): `default`, or `compact`, which tightens the row padding,
+    /// the nesting indent and the info line's spacing. App-wide; unset and unknown values mean default. The metrics it
+    /// sets are the frontend's.
+    SidebarDensity { Default => "default", Compact => "compact" }
+}
+
+/// The default spacing, as an unset setting reads.
+impl Default for SidebarDensity {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
+impl SidebarDensity {
+    /// The Appearance picker's label.
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Compact => "Compact",
+        }
+    }
+}
+
+raw_enum! {
     /// Where a clicked web link from terminal output opens: the desktop's browser, or a session web overlay at full
     /// size (`overlay`), 95%, 75% or 50%.
     LinkOpenMode {
@@ -369,6 +394,9 @@ pub struct AppSettings {
     /// Sidebar info-line visibility; a GUI-only setting, never a Ghostty config key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_info_display: Option<String>,
+    /// The raw [`SidebarDensity`], `None` for the default; a GUI-only setting, never a Ghostty config key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidebar_density: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_open_mode: Option<String>,
     /// The keyboard layout held while a terminal has the keyboard, `None` for off (Settings ▸ Key Mapping ▸ "Lock in
@@ -468,6 +496,15 @@ impl AppSettings {
         self.flagged_view_layout
             .as_deref()
             .and_then(FlaggedViewLayout::from_raw)
+            .unwrap_or_default()
+    }
+
+    /// The sidebar's row spacing: a known `sidebarDensity`, else the default.
+    #[must_use]
+    pub fn effective_sidebar_density(&self) -> SidebarDensity {
+        self.sidebar_density
+            .as_deref()
+            .and_then(SidebarDensity::from_raw)
             .unwrap_or_default()
     }
 
@@ -813,6 +850,48 @@ mod tests {
                 .map(|display| display.display_name())
                 .collect::<Vec<_>>(),
             ["Always", "Flagged", "Off"]
+        );
+    }
+
+    /// Upstream's `sidebarDensityDefaultsToStandardResolvesTolerantlyAndIsNotAGhosttyKey` and
+    /// `sidebarDensityDisplayNamesAndWireValues`.
+    #[test]
+    fn sidebar_density_defaults_to_default_resolves_tolerantly_and_is_not_a_ghostty_key() {
+        let defaults = AppSettings::default();
+        assert_eq!(defaults.sidebar_density, None);
+        assert_eq!(defaults.effective_sidebar_density(), SidebarDensity::Default);
+        for density in SidebarDensity::ALL {
+            let settings = AppSettings {
+                sidebar_density: Some(density.raw().to_owned()),
+                ..AppSettings::default()
+            };
+            let encoded = serde_json::to_string(&settings).unwrap();
+            assert!(
+                encoded.contains(&format!(r#""sidebarDensity":"{}""#, density.raw())),
+                "{encoded}"
+            );
+            let decoded: AppSettings = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(decoded.sidebar_density.as_deref(), Some(density.raw()));
+            assert_eq!(decoded.effective_sidebar_density(), *density);
+            assert_eq!(settings.ghostty_config_lines(), defaults.ghostty_config_lines());
+        }
+        for raw in [r#"{"sidebarDensity":"dense"}"#, r#"{"fontSize":16}"#] {
+            let decoded: AppSettings = serde_json::from_str(raw).unwrap();
+            assert_eq!(decoded.effective_sidebar_density(), SidebarDensity::Default, "{raw}");
+        }
+        assert_eq!(
+            SidebarDensity::ALL
+                .iter()
+                .map(|density| density.raw())
+                .collect::<Vec<_>>(),
+            ["default", "compact"]
+        );
+        assert_eq!(
+            SidebarDensity::ALL
+                .iter()
+                .map(|density| density.display_name())
+                .collect::<Vec<_>>(),
+            ["Default", "Compact"]
         );
     }
 

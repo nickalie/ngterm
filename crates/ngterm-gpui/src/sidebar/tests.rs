@@ -379,6 +379,147 @@ fn the_look_paints_the_chromes_colors_in_the_font_setting() {
     }
 }
 
+/// Upstream's `sidebarDensityMetrics`, `sidebarRowHeightFollowsDensity` and
+/// `testCompactRowsAreShorterThanDefaultAtEveryFontBound`, over this build's default geometry: compact takes upstream's
+/// trims off it, its rows are 5 points shorter at every font bound, and the row icon still fits the tighter pill.
+#[test]
+fn compact_trims_upstreams_deltas_and_its_rows_still_fit_the_icon() {
+    use look::Metrics;
+    use ngterm_core::persist::settings::SidebarDensity;
+    assert_eq!(
+        Metrics::of(SidebarDensity::Default),
+        Metrics {
+            row_padding: 13.0,
+            nested_indent: 20.0,
+            info_spacing: 6.0,
+            name_lift: 0.0,
+            pill_inset_y: 1.5,
+        }
+    );
+    assert_eq!(
+        Metrics::of(SidebarDensity::Compact),
+        Metrics {
+            row_padding: 8.0,
+            nested_indent: 16.0,
+            info_spacing: 4.0,
+            name_lift: 1.0,
+            pill_inset_y: 0.5,
+        }
+    );
+    for size in [9.0, 13.0, 20.0] {
+        let look = |density: Option<&str>| {
+            let settings = AppSettings {
+                sidebar_font_size: Some(size),
+                sidebar_density: density.map(str::to_owned),
+                ..AppSettings::default()
+            };
+            Look::of(crate::chrome::default_colors(), &settings)
+        };
+        let (standard, compact) = (look(None), look(Some("compact")));
+        assert_eq!(
+            (standard.density, compact.density),
+            (SidebarDensity::Default, SidebarDensity::Compact)
+        );
+        assert!(
+            (standard.row_height() - compact.row_height() - 5.0).abs() < f32::EPSILON,
+            "font {size}"
+        );
+        assert!(
+            compact.row_height() - 2.0 * compact.metrics().pill_inset_y >= crate::row_icon::SLOT,
+            "font {size}: the row icon fits the pill"
+        );
+        assert_eq!(
+            look(Some("dense")).density,
+            SidebarDensity::Default,
+            "an unknown density"
+        );
+    }
+}
+
+/// `a` and `b` within a hundredth of a point.
+fn near(a: Pixels, b: Pixels) -> bool {
+    (f32::from(a) - f32::from(b)).abs() < 0.01
+}
+
+/// Checks the mounted rows against `density`'s metrics: the plain row's height, the info row's title band, info line
+/// and indent, the selection pill's inset and the name's lift. `info_line` is the info line's height, which no density
+/// changes.
+fn assert_row_metrics(
+    h: &Harness,
+    cx: &mut VisualTestContext,
+    density: ngterm_core::persist::settings::SidebarDensity,
+    info_line: Pixels,
+) {
+    let look = h.view.read_with(cx, |sidebar, _| sidebar.look);
+    assert_eq!(look.density, density);
+    let metrics = look::Metrics::of(density);
+    let band = px(look.font_size + metrics.row_padding);
+    let (srv, u) = (h.id_of("srv", cx), h.id_of("u", cx));
+    let plain = row_bounds(h, srv, cx);
+    assert!(near(plain.size.height, band), "{density:?} plain row {plain:?}");
+    let info = row_bounds(h, u, cx);
+    assert!(
+        near(info.size.height, band + info_line),
+        "{density:?} info row {info:?}"
+    );
+    let line = bounds(cx, "session-info");
+    assert!(
+        near(line.origin.y, info.origin.y + band - px(metrics.info_spacing)),
+        "{density:?} info line {line:?} in {info:?}"
+    );
+    let lead = look::CONTENT_INSET + metrics.nested_indent + crate::row_icon::SLOT + look::GAP;
+    assert!(
+        near(line.origin.x - info.origin.x, px(lead)),
+        "{density:?} indent: {line:?} in {info:?}"
+    );
+    let pill = bounds(cx, "selection-pill");
+    assert!(
+        near(pill.origin.y, plain.origin.y + px(metrics.pill_inset_y))
+            && near(pill.size.height, band - px(2.0 * metrics.pill_inset_y)),
+        "{density:?} pill {pill:?} in {plain:?}"
+    );
+    let name = bounds(cx, "name:srv");
+    assert!(
+        near(name.center().y, plain.origin.y + band / 2.0 - px(metrics.name_lift)),
+        "{density:?} name {name:?} in {plain:?}"
+    );
+}
+
+/// Upstream's `testSwitchingDensityOnAMountedSidebarReappliesEveryMetricBothWays`: `sidebar.density` and the Settings
+/// picker's change reshape the mounted rows, and back.
+#[gpui_kit::test]
+fn switching_the_density_on_a_mounted_sidebar_reapplies_every_metric_both_ways(cx: &mut TestAppContext) {
+    use ngterm_core::persist::settings::SidebarDensity;
+    use ngterm_core::settings_model::{AppearanceChange, SettingsChange};
+    let (mut h, cx) = harness(cx, library().0, AppSettings::default());
+    let (srv, u) = (h.id_of("srv", cx), h.id_of("u", cx));
+    put_info(&mut h, u, Some("3 agents"));
+    h.settle(cx);
+    let info_line = row_bounds(&h, u, cx).size.height - row_bounds(&h, srv, cx).size.height;
+    assert!(info_line > px(0.));
+    assert_row_metrics(&h, cx, SidebarDensity::Default, info_line);
+
+    let response = h.state.core.dispatch(&ngterm_proto::Request {
+        cmd: ngterm_proto::Command::Sidebar(ngterm_proto::command::SidebarCmd::Density),
+        target: None,
+        args: Some(ngterm_proto::Args {
+            mode: Some("compact".to_owned()),
+            ..ngterm_proto::Args::default()
+        }),
+    });
+    assert!(response.ok, "{response:?}");
+    h.settle(cx);
+    assert_row_metrics(&h, cx, SidebarDensity::Compact, info_line);
+
+    h.state
+        .core
+        .change_settings(SettingsChange::Appearance(AppearanceChange::SidebarDensity(
+            SidebarDensity::Default,
+        )));
+    h.settle(cx);
+    assert_row_metrics(&h, cx, SidebarDensity::Default, info_line);
+}
+
 #[gpui_kit::test]
 fn the_sidebar_paints_the_chrome_the_window_shows(cx: &mut TestAppContext) {
     let (mut h, cx) = harness(cx, library().0, AppSettings::default());

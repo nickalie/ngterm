@@ -1,6 +1,7 @@
 //! `sidebar` and `sidebar.*` (upstream's `ControlDispatcher.swift` sidebar arms for the argument checks, and
 //! `ControlServer+AppCommands.swift` for the effects): visibility and view mode act on the frontmost window, the
-//! flagged layout is an app-wide setting, and expand, collapse and width take an optional open `--window`.
+//! flagged layout and the density are app-wide settings, and expand, collapse and width take an optional open
+//! `--window`.
 //!
 //! Expand and collapse persist the model first and then ask that window's outline to follow, so they hold with the
 //! sidebar hidden too (where upstream's coordinator, mounted only while the sidebar shows, would drop them).
@@ -12,7 +13,7 @@ use super::{ToggleMode, args_of};
 use crate::Core;
 use crate::error::ControlError;
 use crate::model::{AppStore, SidebarMode};
-use crate::persist::settings::FlaggedViewLayout;
+use crate::persist::settings::{FlaggedViewLayout, SidebarDensity};
 use crate::resolve::Resolver;
 
 /// `sidebar.mode`'s argument (upstream's `ControlSidebarViewMode`): `toggle` when absent.
@@ -56,6 +57,31 @@ impl LayoutMode {
             Self::Set(layout) => layout,
             Self::Toggle if current == FlaggedViewLayout::Tree => FlaggedViewLayout::Flat,
             Self::Toggle => FlaggedViewLayout::Tree,
+        }
+    }
+}
+
+/// `sidebar.density`'s argument (upstream's `ControlSidebarDensityMode`): `toggle` when absent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DensityMode {
+    Set(SidebarDensity),
+    Toggle,
+}
+
+impl DensityMode {
+    fn parse(mode: Option<&str>) -> Option<Self> {
+        match mode.unwrap_or("toggle") {
+            "toggle" => Some(Self::Toggle),
+            raw => SidebarDensity::from_raw(raw).map(Self::Set),
+        }
+    }
+
+    /// The density asked for given the `current` one: a toggle flips between the two.
+    fn resolve(self, current: SidebarDensity) -> SidebarDensity {
+        match self {
+            Self::Set(density) => density,
+            Self::Toggle if current == SidebarDensity::Compact => SidebarDensity::Default,
+            Self::Toggle => SidebarDensity::Compact,
         }
     }
 }
@@ -107,8 +133,20 @@ pub(crate) fn dispatch(
             }
             Ok(Some(ControlResult::text(want.raw())))
         }
-        // registered ahead of its handler: refused by name until it lands
-        SidebarCmd::Density => Err(ControlError::NotSupported(ngterm_proto::Command::Sidebar(cmd))),
+        SidebarCmd::Density => {
+            let mode = DensityMode::parse(mode).ok_or_else(|| {
+                ControlError::rejected(format!("invalid sidebar density: {}", mode.unwrap_or("toggle")))
+            })?;
+            let current = core.settings().effective_sidebar_density();
+            let want = mode.resolve(current);
+            // upstream's `SettingsModel.setSidebarDensity`: skips an unchanged effective density, stores the default
+            // as unset
+            if want != current {
+                let stored = (want != SidebarDensity::Default).then(|| want.raw().to_owned());
+                core.update_settings(|settings| settings.sidebar_density = stored);
+            }
+            Ok(Some(ControlResult::text(want.raw())))
+        }
         SidebarCmd::Expand => {
             let layout = core.settings().effective_flagged_view_layout();
             open_store(core, window)?.expand_all_workspaces(layout);

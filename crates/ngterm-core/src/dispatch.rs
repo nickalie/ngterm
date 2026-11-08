@@ -918,6 +918,7 @@ mod tests {
         Command::Workspace(WorkspaceCmd::New),
         // app-wide: they need no window (a bare `theme.set` returns to ghostty's built-in colors)
         Command::Sidebar(SidebarCmd::FlaggedLayout),
+        Command::Sidebar(SidebarCmd::Density),
         Command::Theme(ThemeCmd::Set),
         Command::Theme(ThemeCmd::List),
         Command::Keymap(KeymapCmd::Reload),
@@ -934,19 +935,6 @@ mod tests {
         Command::Recent(RecentCmd::List),
         Command::Recent(RecentCmd::Clear),
     ];
-
-    /// v0.41's commands are registered ahead of their handlers and refused by name until those land.
-    #[test]
-    fn registered_v041_commands_refuse_until_their_feature_handlers_land() {
-        let name = "sidebar.density";
-        let response = core().dispatch(&Request::new(name.parse().unwrap()));
-        assert!(!response.ok, "{name}");
-        assert_eq!(
-            response.error.as_deref(),
-            Some(format!("{name} is not supported by this host").as_str())
-        );
-        assert!(response.result.is_none(), "{name}");
-    }
 
     #[test]
     fn version_reports_app_and_profile() {

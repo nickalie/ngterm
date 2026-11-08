@@ -670,16 +670,16 @@ a new `since("0.41.0")` `tests/cli/test_cli_output.py::test_sidebar_density` cov
 writes it; not the listed `::test_sidebar`, which would go red or skip while the command is a skeleton); `tests/ui/test_sidebar_rows.py::test_density_command_resizes_the_rendered_rows`;
 `tests/ui/test_settings.py::test_sidebar_density_picker_persists` and `"settings-sidebar-density": "popup"` in `test_appearance_tab`.
 
-- [ ] `SidebarDensity` raw "default"|"compact" ("Default"/"Compact"); stored `sidebarDensity` absent for default,
+- [x] `SidebarDensity` raw "default"|"compact" ("Default"/"Compact"); stored `sidebarDensity` absent for default,
   unknown raw resolves to default; not a ghostty key.
-- [ ] `sidebar.density [default|compact|toggle]` (absent = toggle) echoes `text`, writes nothing when unchanged,
+- [x] `sidebar.density [default|compact|toggle]` (absent = toggle) echoes `text`, writes nothing when unchanged,
   needs no window; "invalid sidebar density: X"; the tree always reports it. ctl "density must be default, compact,
   or toggle", no `--window`.
-- [ ] GPUI: compact trims row padding, nested indent, info lift and bottom padding, selection inset; name lift 1.
+- [x] GPUI: compact trims row padding, nested indent, info lift and bottom padding, selection inset; name lift 1.
   ngterm's default row padding (13) differs from upstream's (15): apply upstream's deltas and record the choice.
   Settings ▸ Appearance "Sidebar density" picker under Sidebar font size, id `settings-sidebar-density`; the tab
   still fits.
-- [ ] write tests: the Swift cases (resolve, metrics, row height at font bounds, mode parse, echo and no-write, no
+- [x] write tests: the Swift cases (resolve, metrics, row height at font bounds, mode parse, echo and no-write, no
   window, tree, ctl); the conformance tests above.
 
 ### Task 17: Tint palette, hex tints and the Show On memory (#890, #910)

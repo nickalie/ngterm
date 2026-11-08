@@ -1,5 +1,6 @@
 //! `sidebar` and `sidebar.*`: each command's effect and upstream's refusals (`ControlDispatcherSidebarTests`,
-//! `ControlServerSidebarWidthTests`, `ControlServerFlaggedLayoutTests`, `ControlServer+AppCommands.swift`).
+//! `ControlServerSidebarWidthTests`, `ControlServerFlaggedLayoutTests`, `ControlServerSidebarDensityTests`,
+//! `ControlServer+AppCommands.swift`).
 
 use ngterm_proto::command::SidebarCmd;
 use ngterm_proto::{Args, Command, Response};
@@ -9,7 +10,7 @@ use uuid::Uuid;
 use super::{Fixture, UNKNOWN, args, core_over, failure, send, wire};
 use crate::model::{SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN, SidebarMode, WindowLibrary};
 use crate::persist::AppSettings;
-use crate::persist::settings::FlaggedViewLayout;
+use crate::persist::settings::{FlaggedViewLayout, SidebarDensity};
 
 impl Fixture {
     fn sidebar(&mut self, cmd: SidebarCmd, args: Args) -> Response {
@@ -196,6 +197,130 @@ fn the_flagged_layout_reaches_the_library_and_every_open_store() {
 
     assert_eq!(fixture.core.library().flagged_layout(), FlaggedViewLayout::Plain);
     assert_eq!(layouts(&fixture), [FlaggedViewLayout::Plain; 2]);
+}
+
+// MARK: - density
+
+/// A core over one window whose settings are written to `dir`.
+fn persisted_core(dir: &std::path::Path) -> crate::Core {
+    let mut library = WindowLibrary::new("/home/u");
+    library.new_window(None);
+    crate::Core::new(
+        crate::CoreConfig {
+            app: ngterm_proto::AppIdentity::from_recorded("0.1.0", None),
+            capabilities: Vec::new(),
+        },
+        crate::CoreState {
+            library,
+            settings: AppSettings::default(),
+            persistence: Some(crate::persist::LibraryPersistence::new(dir)),
+        },
+    )
+}
+
+/// Upstream's `sidebarDensityRoutesTheParsedMode`, `testSetsTheDensityPersistsItAndEchoesTheResult` and
+/// `testToggleResolvesFromTheCurrentDensityBothWays`.
+#[test]
+fn density_sets_toggles_and_echoes_the_density() {
+    let mut fixture = Fixture::new(0);
+    let steps = [
+        (Some("compact"), "compact"),
+        (Some("compact"), "compact"),
+        (Some("toggle"), "default"),
+        (None, "compact"),
+        (Some("default"), "default"),
+        (Some("default"), "default"),
+    ];
+    for (mode, density) in steps {
+        let response = fixture.sidebar(SidebarCmd::Density, Fixture::mode_arg(mode));
+        assert_eq!(value(&response), ok_with(&json!({"text": density})), "{mode:?}");
+        assert_eq!(
+            fixture.core.settings().effective_sidebar_density().raw(),
+            density,
+            "{mode:?}"
+        );
+    }
+    // the default is stored as no key at all
+    assert_eq!(fixture.core.settings().sidebar_density, None);
+}
+
+/// Upstream's `sidebarDensityRejectsAnUnknownModeWithoutCallingActions` and `testNeedsNoOpenWindow`.
+#[test]
+fn density_refuses_an_unknown_density_and_needs_no_window() {
+    let mut fixture = Fixture::new(0);
+    for mode in ["dense", "standard", "Compact"] {
+        let response = fixture.sidebar(SidebarCmd::Density, Fixture::mode_arg(Some(mode)));
+        assert_eq!(response, failure(&format!("invalid sidebar density: {mode}")));
+    }
+    assert_eq!(fixture.core.settings().sidebar_density, None);
+
+    let mut library = WindowLibrary::new("/home/u");
+    let window = library.new_window(None);
+    library.close_window(window);
+    let mut core = core_over(library, AppSettings::default());
+    let response = send(
+        &mut core,
+        Command::Sidebar(SidebarCmd::Density),
+        None,
+        Fixture::mode_arg(Some("compact")),
+    );
+    assert_eq!(value(&response), ok_with(&json!({"text": "compact"})));
+    assert_eq!(core.settings().effective_sidebar_density(), SidebarDensity::Compact);
+}
+
+/// Upstream's `testAnUnchangedDensityAnswersOkWithoutABroadcast` and the persisted round trip: an unchanged density
+/// writes nothing, a change writes `sidebarDensity`, and the default removes it again.
+#[test]
+fn density_is_written_to_the_settings_file_only_when_it_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut core = persisted_core(dir.path());
+    let path = crate::persist::SettingsStore::new(dir.path()).path();
+    let density = |core: &mut crate::Core, mode: &str| {
+        send(
+            core,
+            Command::Sidebar(SidebarCmd::Density),
+            None,
+            Fixture::mode_arg(Some(mode)),
+        )
+    };
+    assert_eq!(
+        value(&density(&mut core, "default")),
+        ok_with(&json!({"text": "default"}))
+    );
+    assert!(!path.exists(), "the effective density was already default");
+
+    density(&mut core, "compact");
+    let saved = crate::persist::SettingsStore::new(dir.path()).load();
+    assert_eq!(saved.sidebar_density.as_deref(), Some("compact"));
+
+    density(&mut core, "toggle");
+    let saved = crate::persist::SettingsStore::new(dir.path()).load();
+    assert_eq!(saved.sidebar_density, None);
+}
+
+/// Upstream's `testTreeReportsTheDensityInBothSidebarModes`: app-wide, so every window's tree reads the same density.
+#[test]
+fn every_windows_tree_reports_the_density_in_either_sidebar_mode() {
+    let mut fixture = Fixture::new(0);
+    let second = fixture.core.library_mut().new_window(Some("second"));
+    let densities = |fixture: &mut Fixture| {
+        [fixture.window, second].map(|window| {
+            let response = send(
+                &mut fixture.core,
+                Command::Tree,
+                None,
+                args(|a| a.window = Some(wire(window))),
+            );
+            value(&response)["result"]["tree"]["sidebarDensity"].clone()
+        })
+    };
+    assert_eq!(densities(&mut fixture), [json!("default"), json!("default")]);
+
+    fixture.sidebar(SidebarCmd::Density, Fixture::mode_arg(Some("compact")));
+    assert_eq!(densities(&mut fixture), [json!("compact"), json!("compact")]);
+
+    fixture.store_mut().unwrap().set_sidebar_mode(SidebarMode::Flagged);
+    assert_eq!(densities(&mut fixture), [json!("compact"), json!("compact")]);
 }
 
 // MARK: - width

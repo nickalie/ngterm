@@ -74,6 +74,7 @@ pub fn control_tree(store: &AppStore, context: &TreeContext<'_>) -> ControlTree 
         sidebar_visible: Some(sidebar.visible),
         sidebar_mode: Some(sidebar.mode.wire_name().to_owned()),
         sidebar_flagged_layout: Some(settings.effective_flagged_view_layout().raw().to_owned()),
+        sidebar_density: Some(settings.effective_sidebar_density().raw().to_owned()),
         flagged_order: store.flagged_order_readback(),
         link_open_mode: Some(settings.effective_link_open_mode().raw().to_owned()),
         sidebar_width: Some(sidebar.width),
@@ -526,8 +527,8 @@ mod tests {
                 "realized": false,
             }]}],
             "attentionIncludesActive": false, "attentionNavigationAcrossWindows": false,
-            "sidebarVisible": true, "sidebarMode": "tree", "sidebarFlaggedLayout": "flat", "linkOpenMode": "browser",
-            "sidebarWidth": 220.0, "workspaceFilter": false, "quickVisible": false,
+            "sidebarVisible": true, "sidebarMode": "tree", "sidebarFlaggedLayout": "flat", "sidebarDensity": "default",
+            "linkOpenMode": "browser", "sidebarWidth": 220.0, "workspaceFilter": false, "quickVisible": false,
             "app": {"version": "0.1.0", "commit": "abc1234"},
         });
         assert_eq!(tree_json(store, &AppSettings::default(), false), expected);
@@ -722,12 +723,14 @@ mod tests {
         session.restore.command = Some(String::new());
         let settings = AppSettings {
             flagged_view_layout: Some("tree".to_owned()),
+            sidebar_density: Some("compact".to_owned()),
             link_open_mode: Some("overlay".to_owned()),
             auto_follow_attention: Some("s30".to_owned()),
             ..AppSettings::default()
         };
         let tree = tree_json(store, &settings, true);
         assert_eq!(tree["sidebarFlaggedLayout"], "tree");
+        assert_eq!(tree["sidebarDensity"], "compact");
         assert_eq!(tree["linkOpenMode"], "overlay");
         assert_eq!(tree["autoFollowMs"], 30_000);
         assert_eq!(tree["indexUnsaved"], true);
@@ -841,11 +844,11 @@ mod tests {
         );
         let keys: Vec<&String> = tree.as_object().unwrap().keys().collect();
         let at = |key: &str| keys.iter().position(|candidate| *candidate == key).unwrap();
-        // upstream's order: `sidebarFlaggedLayout`, `sidebarDensity` (when reported), `flaggedOrder`
+        // upstream's order: `sidebarFlaggedLayout`, `sidebarDensity`, `flaggedOrder`
         let between: Vec<&str> = keys[at("sidebarFlaggedLayout") + 1..at("flaggedOrder")]
             .iter()
             .map(|key| key.as_str())
             .collect();
-        assert!(between.is_empty() || between == ["sidebarDensity"], "{between:?}");
+        assert_eq!(between, ["sidebarDensity"]);
     }
 }

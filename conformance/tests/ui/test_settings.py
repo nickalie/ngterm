@@ -147,6 +147,7 @@ def test_appearance_tab(seeded, ui_for):
             "settings-ignore-reduce-transparency": "checkbox",
             "settings-sidebar-shift": "slider",
             "settings-sidebar-font-size": None,
+            "settings-sidebar-density": "popup",
             "settings-interface-font-size": None,
             "settings-inactive-pane-mute": "slider",
         },
@@ -338,15 +339,18 @@ def test_row_icons_hide_independently(seeded, ui_for):
 
 @pytest.mark.since("0.41.0")
 @pytest.mark.covers("ui:settings-sidebar-density")
-def test_sidebar_density_picker_persists(seeded, ui_for):
+def test_sidebar_density_picker_persists(seeded, ui_for, adapter):
+    def value(text):
+        return {"value": text} if adapter.has("ui-string-values") else {}
+
     ui = ui_for(seeded)
     _open(ui, "Appearance")
-    picker = ui.find("settings-sidebar-density", role="popup", value="Default")
+    picker = ui.find("settings-sidebar-density", role="popup", **value("Default"))
     ui.click(picker)
     ui.click(ui.menu_item("Compact"))
     try:
         wait_until(lambda: _settings(seeded).get("sidebarDensity") == "compact")
-        ui.find("settings-sidebar-density", role="popup", value="Compact")
+        ui.find("settings-sidebar-density", role="popup", **value("Compact"))
         assert seeded.tree()["tree"]["sidebarDensity"] == "compact"
     finally:
         ui.click(ui.find("settings-sidebar-density", role="popup"))
