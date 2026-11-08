@@ -381,6 +381,11 @@ mod tests {
                 .output()
                 .unwrap();
             assert!(output.status.success(), "{mode}: {output:?}");
+            // the filter matched the probe: a mistyped name would pass with no test run
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{mode}: {output:?}"
+            );
         }
     }
 }

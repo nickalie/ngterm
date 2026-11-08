@@ -559,6 +559,16 @@ mod tests {
         assert_eq!(stream.recheck(moved).unwrap().first(), Some(&reset()));
     }
 
+    /// The NDJSON events in a probe's stdout, which also carries libtest's own lines (the first event shares the
+    /// probe's `test ... ` line).
+    #[cfg(unix)]
+    fn probe_events(stdout: &str) -> Vec<&str> {
+        stdout
+            .lines()
+            .filter_map(|line| line.find("{\"").map(|at| &line[at..]))
+            .collect()
+    }
+
     #[cfg(unix)]
     #[test]
     fn chat_pages_reset_mismatched_conversations_and_following_ends_with_stdin() {
@@ -581,10 +591,18 @@ mod tests {
                     .contains("PROBE_RESULT:Ok(())")
             );
             let stdout = String::from_utf8(output.stdout).unwrap();
-            if arguments.contains(&"old") {
-                assert!(stdout.contains("\"type\":\"reset\""), "{stdout}");
-            } else {
-                assert!(stdout.contains("hello"), "{stdout}");
+            let events = probe_events(&stdout);
+            let reset = reset().to_ndjson();
+            match (arguments.contains(&"old"), arguments.contains(&"--before")) {
+                (true, true) => assert_eq!(events, [reset.as_str()], "{stdout}"),
+                (true, false) => {
+                    assert_eq!(events.first(), Some(&reset.as_str()), "{stdout}");
+                    assert!(events[1..].iter().any(|event| event.contains("hello")), "{stdout}");
+                }
+                (false, _) => {
+                    assert!(!events.contains(&reset.as_str()), "{stdout}");
+                    assert!(events.iter().any(|event| event.contains("hello")), "{stdout}");
+                }
             }
         }
         let (output, _) = run_command(
@@ -593,19 +611,68 @@ mod tests {
             &[],
             &[r#"{"ok":false,"error":"no agent in this pane"}"#],
         );
-        assert!(String::from_utf8(output.stderr).unwrap().contains("PROBE_RESULT:Err("));
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr.contains(r#"PROBE_RESULT:Err(Local("no agent in this pane"))"#),
+            "{stderr}"
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn a_stream_rechecks_the_pane_and_ends_when_its_agent_is_gone() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "agent::chat::tests::stream_probe",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env_clear()
+            .envs(std::env::vars_os().filter(|(key, _)| !key.to_string_lossy().starts_with("NGTERM_")))
+            .env("CTL_STREAM_PROBE", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            output.status.success(),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // the filter matched the probe: a mistyped name would pass with no test run
+        assert!(stdout.contains("1 passed"), "{stdout}");
+        let events = probe_events(&stdout);
+        let reset = reset().to_ndjson();
+        let at = events
+            .iter()
+            .position(|event| *event == reset)
+            .unwrap_or_else(|| panic!("no reset after the transcript moved: {stdout}"));
+        assert!(events[..at].iter().any(|event| event.contains("hello")), "{stdout}");
+        assert!(!events[..at].iter().any(|event| event.contains("moved on")), "{stdout}");
+        assert!(events[at..].iter().any(|event| event.contains("moved on")), "{stdout}");
+    }
+
+    /// The stream of [`a_stream_rechecks_the_pane_and_ends_when_its_agent_is_gone`], run in a child process of it:
+    /// the events go to the process's real stdout, which the harness does not capture.
+    #[cfg(unix)]
+    #[test]
+    fn stream_probe() {
         use std::io::{BufRead as _, Write as _};
         use std::os::unix::net::UnixListener;
+        if std::env::var_os("CTL_STREAM_PROBE").is_none() {
+            return;
+        }
         let directory = tempfile::tempdir().unwrap();
         let socket = directory.path().join("ctl.sock");
         let listener = UnixListener::bind(&socket).unwrap();
         listener.set_nonblocking(true).unwrap();
-        let moved = record(&transcript(directory.path(), "next.jsonl"));
+        let next = transcript(directory.path(), "next.jsonl");
+        std::fs::write(
+            &next,
+            b"{\"type\":\"user\",\"uuid\":\"u2\",\"message\":{\"content\":\"moved on\"}}\n",
+        )
+        .unwrap();
+        let moved = record(&next);
         let responses = [
             serde_json::json!({"ok":true,"result":{"agent":moved}}).to_string(),
             serde_json::json!({"ok":false,"error":NO_AGENT}).to_string(),

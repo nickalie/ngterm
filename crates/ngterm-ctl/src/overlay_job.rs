@@ -1086,7 +1086,8 @@ mod tests {
             ),
             (r#"{"ok":false}"#, "the app refused the stream"),
         ] {
-            let (helper, origin) = FakeOrigin::serve(reply, None, true);
+            // the origin stays to read what the helper sends until its end closes
+            let (helper, origin) = FakeOrigin::serve(reply, None, false);
             let runner = runner(helper, DEFAULT_GRACE);
             assert_eq!(runner.claim("job").unwrap_err(), expected);
             drop(runner);
