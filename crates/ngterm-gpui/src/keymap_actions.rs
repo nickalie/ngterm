@@ -217,4 +217,248 @@ mod tests {
         assert_eq!(request.target, Some(uuid_string(window)));
         assert_eq!(request.args.and_then(|args| args.name).as_deref(), Some("w"));
     }
+
+    /// A loop at the frontend boundary: dialogs enqueue model work for the test to run.
+    #[derive(Default)]
+    struct Posted(std::sync::Mutex<Vec<ngterm_host::MainTask<AppState>>>);
+
+    impl ngterm_host::MainLoop<AppState> for Posted {
+        fn post(&self, task: ngterm_host::MainTask<AppState>) -> Result<(), ngterm_host::MainLoopClosed> {
+            self.0.lock().unwrap().push(task);
+            Ok(())
+        }
+
+        fn post_after(
+            &self,
+            _: std::time::Duration,
+            _: ngterm_host::MainTask<AppState>,
+        ) -> Result<(), ngterm_host::MainLoopClosed> {
+            Ok(())
+        }
+    }
+
+    impl Posted {
+        fn drain(&self, state: &mut AppState) {
+            for task in std::mem::take(&mut *self.0.lock().unwrap()) {
+                task(state);
+            }
+        }
+    }
+
+    fn model() -> (AppState, Uuid) {
+        let library = ngterm_core::model::WindowLibrary::seeded("/home/u");
+        let window = library.active_window_id().unwrap();
+        let core = ngterm_core::Core::new(
+            ngterm_core::CoreConfig {
+                app: ngterm_proto::AppIdentity::from_recorded("1.2.3", None),
+                capabilities: Vec::new(),
+            },
+            ngterm_core::CoreState {
+                library,
+                settings: ngterm_core::persist::AppSettings {
+                    confirm_close_session: Some(true),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        (AppState::new(core), window)
+    }
+
+    struct Blank;
+
+    impl gpui_kit::Render for Blank {
+        fn render(&mut self, _: &mut gpui_kit::Window, _: &mut gpui_kit::Context<Self>) -> impl gpui_kit::IntoElement {
+            gpui_kit::div()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn window_dialogs_cancel_or_commit_through_the_model(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _| Blank);
+        let (mut state, window) = model();
+        let queue = std::sync::Arc::new(Posted::default());
+        let poster: Poster = std::sync::Arc::downgrade(&queue) as Poster;
+        let handle = cx.update(|root, _| root.window_handle());
+        keymap_dispatch::register_window(handle, KeyOrigin::Window(window));
+        for (answer, expected) in [("Cancel", "window 1"), ("OK", "renamed")] {
+            cx.cx.update(|cx| {
+                perform(
+                    &poster,
+                    FrontendAction::RenameWindow {
+                        window,
+                        name: "renamed".into(),
+                    },
+                    false,
+                    cx,
+                );
+            });
+            cx.update(|root, cx| assert!(crate::modal::answer_front_alert(root, answer, cx)));
+            queue.drain(&mut state);
+            assert_eq!(state.core.library().windows()[0].name, expected);
+        }
+        state.core.library_mut().new_window(None);
+        for answer in ["Cancel", "Delete"] {
+            cx.cx.update(|cx| {
+                perform(
+                    &poster,
+                    FrontendAction::DeleteWindow {
+                        window,
+                        name: "renamed".into(),
+                        sessions: 1,
+                    },
+                    true,
+                    cx,
+                );
+            });
+            cx.update(|root, cx| assert!(crate::modal::answer_front_alert(root, answer, cx)));
+            queue.drain(&mut state);
+            assert_eq!(state.core.library().is_open(window), answer == "Cancel");
+        }
+        keymap_dispatch::unregister_window(handle);
+    }
+
+    #[gpui_kit::test]
+    fn actions_without_dialogs_post_their_frontend_or_model_effect(cx: &mut gpui_kit::TestAppContext) {
+        let (mut state, window) = model();
+        let queue = std::sync::Arc::new(Posted::default());
+        let poster: Poster = std::sync::Arc::downgrade(&queue) as Poster;
+        cx.update(|cx| {
+            perform(&poster, FrontendAction::OpenSettings(window), false, cx);
+            perform(&poster, FrontendAction::CloseWindow(window), false, cx);
+        });
+        queue.drain(&mut state);
+        let work = state.take_frontend_work();
+        assert_eq!(work.settings, Some(window));
+        assert_eq!(work.window_closes.len(), 1);
+        let empty = state.core.library_mut().new_window(None);
+        cx.update(|cx| {
+            perform(
+                &poster,
+                FrontendAction::DeleteWindow {
+                    window: empty,
+                    name: "empty".into(),
+                    sessions: 0,
+                },
+                false,
+                cx,
+            );
+        });
+        queue.drain(&mut state);
+        assert!(!state.core.library().is_open(empty));
+    }
+
+    #[gpui_kit::test]
+    fn fullscreen_and_bell_reach_a_registered_window(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _| Blank);
+        let window = Uuid::new_v4();
+        let handle = cx.update(|root, _| root.window_handle());
+        keymap_dispatch::register_window(handle, KeyOrigin::Window(window));
+        let poster = state::detached_poster();
+        cx.cx
+            .update(|cx| perform(&poster, FrontendAction::ToggleFullscreen(window), false, cx));
+        assert!(cx.update(|root, _| root.is_fullscreen()));
+        cx.cx
+            .update(|cx| perform(&poster, FrontendAction::ToggleFullscreen(window), false, cx));
+        assert!(!cx.update(|root, _| root.is_fullscreen()));
+        cx.cx
+            .update(|cx| perform(&poster, FrontendAction::AlertBell(window), false, cx));
+        keymap_dispatch::unregister_window(handle);
+    }
+
+    #[gpui_kit::test]
+    fn actions_for_a_window_that_has_gone_do_not_post_model_changes(cx: &mut gpui_kit::TestAppContext) {
+        let window = Uuid::new_v4();
+        let id = Uuid::new_v4();
+        let queue = std::sync::Arc::new(Posted::default());
+        let poster: Poster = std::sync::Arc::downgrade(&queue) as Poster;
+        let actions = [
+            FrontendAction::ToggleFullscreen(window),
+            FrontendAction::AlertBell(window),
+            FrontendAction::RenameWindow {
+                window,
+                name: "gone".into(),
+            },
+            FrontendAction::DeleteWindow {
+                window,
+                name: "gone".into(),
+                sessions: 1,
+            },
+            FrontendAction::ConfirmCloseSession { window, session: id },
+            FrontendAction::RenameSession { window, session: id },
+            FrontendAction::RenameWorkspace { window, workspace: id },
+            FrontendAction::DeleteWorkspace { window, workspace: id },
+            FrontendAction::OpenDirectory { window, workspace: id },
+        ];
+        cx.update(|cx| {
+            for action in actions {
+                perform(&poster, action, false, cx);
+            }
+        });
+        assert!(queue.0.lock().unwrap().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn session_and_workspace_actions_reach_the_registered_sidebar(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext as _;
+        use std::rc::Rc;
+        cx.update(gpui_kit::init);
+        let (mut state, window) = model();
+        let store = state.core.library().store(window).unwrap();
+        let session = store.sessions().next().unwrap().id();
+        let workspace = store.workspaces()[0].id();
+        let queue = std::sync::Arc::new(Posted::default());
+        let poster: Poster = std::sync::Arc::downgrade(&queue) as Poster;
+        let dir = tempfile::tempdir().unwrap();
+        let launcher: crate::pane::Launcher = Rc::new(|_| Box::new(|_| Err(ngterm_term::PaneError::Closed)));
+        let env = Rc::new(crate::deck::DeckEnv::new(
+            crate::pane::PaneContext {
+                socket: dir.path().join("control.sock").to_string_lossy().into_owned(),
+                program_version: "1.2.3".into(),
+            },
+            launcher,
+            crate::terminal::TerminalConfig::default(),
+            poster.clone(),
+            crate::deck::Watermarks {
+                state_dir: dir.path().to_owned(),
+                config_with: Rc::new(|_| crate::terminal::TerminalConfig::default()),
+            },
+        ));
+        let keys = poster.clone();
+        let (view, cx) = cx.add_window_view(move |root, cx| {
+            let deck = cx.new(|_| crate::deck::Deck::new(window, env));
+            WindowView::new(window, deck, poster, 0, root, cx)
+        });
+        let sidebar = view.read_with(cx, |view, _| view.sidebar().clone());
+        sidebar.update(cx, |sidebar, cx| sidebar.sync(&mut state.core, cx));
+        let actions = [
+            FrontendAction::ConfirmCloseSession { window, session },
+            FrontendAction::DeleteWorkspace { window, workspace },
+        ];
+        for action in actions {
+            cx.cx.update(|cx| perform(&keys, action, false, cx));
+            cx.update(|root, cx| {
+                if crate::modal::alert_open(root.window_handle(), cx) {
+                    assert!(crate::modal::answer_front_alert(root, "Cancel", cx));
+                }
+            });
+        }
+        for action in [
+            FrontendAction::RenameSession { window, session },
+            FrontendAction::RenameWorkspace { window, workspace },
+        ] {
+            let id = match action {
+                FrontendAction::RenameSession { session, .. } => session,
+                _ => workspace,
+            };
+            cx.cx.update(|cx| perform(&keys, action, false, cx));
+            assert_eq!(sidebar.read_with(cx, |sidebar, _| sidebar.editing()), Some(id));
+            cx.simulate_keystrokes("escape");
+        }
+        view.update_in(cx, |view, root, cx| view.close(root, cx));
+        queue.drain(&mut state);
+        assert!(state.core.library().store(window).unwrap().session(session).is_some());
+    }
 }
