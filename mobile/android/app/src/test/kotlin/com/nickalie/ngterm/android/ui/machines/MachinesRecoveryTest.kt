@@ -76,6 +76,20 @@ class MachinesRecoveryTest {
     }
 
     @Test
+    fun retryingTheInitialReadConnectsMachinesFromTheFirstSuccessfulList() {
+        val blocked = File(dir.root, "machines.preferences_pb")
+        assertTrue(blocked.mkdir())
+        val model = model()
+        model.state.await { it is MachinesUiState.Failed }
+        assertTrue(blocked.delete())
+        val key = test.seedKey()
+        test.seedMachine(testMachine(keyId = key.id))
+        model.retry()
+        model.state.await { (it as? MachinesUiState.Ready)?.items?.size == 1 }
+        test.connections.links.await { it["m1"] == Link.Connected }
+    }
+
+    @Test
     fun removingAnUnpinnedMachineCanBeUndoneOnceAndAnExpiredUndoDoesNothing() {
         val key = test.seedKey()
         test.seedMachine(testMachine(keyId = key.id))

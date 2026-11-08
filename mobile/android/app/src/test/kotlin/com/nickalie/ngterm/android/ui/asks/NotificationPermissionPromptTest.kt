@@ -1,8 +1,14 @@
 package com.nickalie.ngterm.android.ui.asks
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -15,12 +21,15 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.TestApplication
 import com.nickalie.ngterm.android.TestGraph
 import com.nickalie.ngterm.android.awaitText
+import com.nickalie.ngterm.android.data.NotificationPrefs
 import com.nickalie.ngterm.android.service.LinkService
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.fake.fakeSession
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
@@ -37,6 +46,9 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.File
 import java.io.IOException
+
+// what the probe beside the prompt shows once the store has answered
+private const val ANSWERED = "the store answered"
 
 /** The permission is explained at first attachment, asked once, and its system answer updates the service. */
 @RunWith(AndroidJUnit4::class)
@@ -56,7 +68,18 @@ class NotificationPermissionPromptTest {
     @After fun tearDown() = test.close()
 
     private fun show() {
-        compose.setContent { NgtermTheme { NotificationPermissionPrompt(test.graph) } }
+        compose.setContent {
+            NgtermTheme {
+                NotificationPermissionPrompt(test.graph)
+                StoreAnswered(test.graph.notificationPrefs)
+            }
+        }
+    }
+
+    // the prompt reads the store on its own thread: a missing sheet means something only once the store has answered
+    private fun settled() {
+        compose.awaitText(ANSWERED)
+        compose.waitForIdle()
     }
 
     private fun attach() {
@@ -83,6 +106,7 @@ class NotificationPermissionPromptTest {
     @Test
     fun noSessionMeansNoPromptAndNotNowLeavesItForSettingsEvenAfterReattaching() {
         show()
+        settled()
         compose.onNodeWithText(TITLE).assertDoesNotExist()
         assertFalse(asked())
         attach()
@@ -143,6 +167,7 @@ class NotificationPermissionPromptTest {
         shadowOf(compose.activity.application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         attach()
         show()
+        settled()
         compose.onNodeWithText(TITLE).assertDoesNotExist()
         assertFalse(asked())
     }
@@ -168,7 +193,7 @@ class NotificationPermissionPromptTest {
             }.exceptionOrNull()
         assertTrue(failure is IOException)
         show()
-        compose.waitForIdle()
+        settled()
         compose.onNodeWithText(TITLE).assertDoesNotExist()
         compose.onNodeWithText("Turn on notifications").assertDoesNotExist()
     }
@@ -176,8 +201,11 @@ class NotificationPermissionPromptTest {
     @Test
     @Config(sdk = [32])
     fun androidBeforeRuntimeNotificationPermissionsShowsNoQuestion() {
+        // notifications turned off: the compat check reads that as no permission, so only the SDK check keeps it away
+        shadowOf(compose.activity.getSystemService(NotificationManager::class.java)).setNotificationsEnabled(false)
         attach()
         show()
+        settled()
         compose.onNodeWithText(TITLE).assertDoesNotExist()
         assertFalse(asked())
     }
@@ -186,4 +214,12 @@ class NotificationPermissionPromptTest {
         const val WAIT_MS = 10_000L
         const val TITLE = "Get told when an agent needs you"
     }
+}
+
+/** [ANSWERED] once [prefs] answer the prompt's read (or fail it), as the prompt reads them. */
+@Composable
+private fun StoreAnswered(prefs: NotificationPrefs) {
+    val read = remember(prefs) { prefs.permissionAsked.map { true }.catch { emit(true) } }
+    val answered by read.collectAsState(initial = false)
+    if (answered) Text(ANSWERED)
 }
