@@ -21,3 +21,7 @@ pub fn start(report: &Report) {
         unsafe { ngterm_network_start(changed) };
     }
 }
+
+#[cfg(test)]
+#[path = "macos_tests.rs"]
+mod tests;

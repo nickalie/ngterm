@@ -117,3 +117,7 @@ impl Backend for InputSources {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "macos_tests.rs"]
+mod tests;
