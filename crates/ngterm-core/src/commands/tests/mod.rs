@@ -219,3 +219,26 @@ fn answered_affected(response: &Response) -> Option<i64> {
 fn failure(error: &str) -> Response {
     Response::failure(error)
 }
+
+#[test]
+fn pane_parsers_preserve_their_distinct_wire_errors() {
+    use crate::model::StatusPane;
+    for (raw, expected) in [
+        ("left", StatusPane::Left),
+        ("right", StatusPane::Right),
+        ("scratch", StatusPane::Scratch),
+    ] {
+        assert_eq!(super::parse_pane(Some(raw)), Ok(Some(expected)));
+        assert_eq!(super::parse_surface_pane(Some(raw)), Ok(Some(expected)));
+    }
+    assert_eq!(super::parse_pane(None), Ok(None));
+    assert_eq!(super::parse_surface_pane(None), Ok(None));
+    assert_eq!(
+        super::parse_pane(Some("bogus")).unwrap_err().to_string(),
+        "--pane must be left, right, or scratch"
+    );
+    assert_eq!(
+        super::parse_surface_pane(Some("bogus")).unwrap_err().to_string(),
+        "invalid pane: bogus"
+    );
+}

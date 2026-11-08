@@ -87,3 +87,40 @@ pub fn parse_uuid_string(text: &str) -> Option<uuid::Uuid> {
     }
     uuid::Uuid::try_parse(text).ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(serde::Serialize)]
+    struct NullableIds {
+        #[serde(serialize_with = "upper::option")]
+        selected: Option<uuid::Uuid>,
+        #[serde(serialize_with = "upper::option_vec")]
+        order: Option<Vec<uuid::Uuid>>,
+    }
+
+    #[test]
+    fn optional_ids_write_null_or_uppercase_strings_in_order() {
+        let empty = NullableIds {
+            selected: None,
+            order: None,
+        };
+        assert_eq!(
+            serde_json::to_value(empty).unwrap(),
+            serde_json::json!({"selected": null, "order": null})
+        );
+        let id = uuid::Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8").unwrap();
+        let ids = NullableIds {
+            selected: Some(id),
+            order: Some(vec![id, uuid::Uuid::nil()]),
+        };
+        assert_eq!(
+            serde_json::to_value(ids).unwrap(),
+            serde_json::json!({
+                "selected": "6BA7B810-9DAD-11D1-80B4-00C04FD430C8",
+                "order": ["6BA7B810-9DAD-11D1-80B4-00C04FD430C8", "00000000-0000-0000-0000-000000000000"]
+            })
+        );
+    }
+}

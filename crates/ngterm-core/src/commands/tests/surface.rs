@@ -908,3 +908,46 @@ fn the_active_zoom_toggles_the_zoomed_surface() {
     assert_eq!(result(&zoom(&mut fixture, Some("active"), None)), json!({"id": left}));
     assert_eq!(zoomed(&mut fixture), None);
 }
+
+#[test]
+fn typing_poll_reports_a_pane_token_that_disappeared() {
+    let mut fixture = Fixture::new(0);
+    let id = fixture.sessions[0];
+    let probe = install(&mut fixture, id, FakeSurface::new(TOKEN).with_realized(false));
+    let request = request(Command::Session(SessionCmd::Type), Some(&wire(id)), |a| {
+        a.text = Some("late".to_owned());
+        a.pane_id = Some(TOKEN.to_owned());
+    });
+    let pending = fixture.core.begin(&request);
+    assert!(matches!(pending, Dispatched::Pending { .. }));
+    fixture.store_mut().unwrap().session_mut(id).unwrap().surface.teardown();
+    let response = answer(resume(&mut fixture.core, pending));
+    assert_eq!(response, failure("unknown pane id: TOKEN-L"));
+    assert!(probe.typed().is_empty());
+}
+
+#[test]
+fn typing_poll_refuses_a_pane_that_became_covered_before_it_realized() {
+    let mut fixture = Fixture::new(0);
+    let id = fixture.sessions[0];
+    let identity = fixture.store().session(id).unwrap().pane_identity;
+    let token = wire(identity);
+    let probe = install(&mut fixture, id, FakeSurface::new(&token).with_realized(false));
+    let request = request(Command::Session(SessionCmd::Type), Some(&wire(id)), |a| {
+        a.text = Some("late".to_owned());
+    });
+    let pending = fixture.core.begin(&request);
+    assert!(matches!(pending, Dispatched::Pending { .. }));
+    fixture
+        .core
+        .live
+        .leads
+        .begin(identity, crate::live::lead::LeadAttachment::new(false), true);
+    probe.set_realized(true);
+    let response = answer(resume(&mut fixture.core, pending));
+    assert_eq!(
+        response,
+        failure("pane is in use on the Mac it runs on; take the lead to drive it from here")
+    );
+    assert!(probe.typed().is_empty());
+}

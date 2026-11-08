@@ -170,4 +170,10 @@ mod tests {
         // the rest of the path compares exactly: canonicalizing gives each name its spelling on disk
         assert!(!strictly_inside(Path::new(r"\\?\C:\Site\a"), Path::new(r"\\?\C:\site")));
     }
+
+    #[test]
+    fn an_invalid_server_name_preserves_its_spelling_in_lowercase() {
+        assert_eq!(server("BAD HOST"), "bad host");
+        assert_eq!(server("[INVALID"), "[invalid");
+    }
 }

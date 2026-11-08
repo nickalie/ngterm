@@ -428,3 +428,44 @@ fn reopening_a_companion_whose_parent_is_gone_names_that_reason() {
 
     assert_eq!(response, failure("parent session is not open or in Recent Closed"));
 }
+
+#[test]
+fn an_unrelated_session_command_is_not_supported_by_the_companion_handler() {
+    let mut fixture = super::Fixture::new(0);
+    let request = ngterm_proto::Request {
+        cmd: ngterm_proto::Command::Session(ngterm_proto::command::SessionCmd::New),
+        target: None,
+        args: None,
+    };
+    let result =
+        crate::commands::companions::dispatch(&mut fixture.core, ngterm_proto::command::SessionCmd::New, &request);
+    assert!(matches!(result, Err(crate::ControlError::NotSupported(cmd)) if cmd == request.cmd));
+}
+
+#[test]
+fn the_local_companion_handler_refuses_a_remote_parent() {
+    let mut fixture = Fixture::new(0);
+    let workspace = fixture.workspace;
+    let remote = fixture
+        .store_mut()
+        .unwrap()
+        .add_session(
+            workspace,
+            NewSession {
+                remote_host: Some("far".to_owned()),
+                ..NewSession::at_cwd("/r")
+            },
+        )
+        .unwrap();
+    let request = ngterm_proto::Request {
+        cmd: ngterm_proto::Command::Session(SessionCmd::CompanionNew),
+        target: Some(wire(remote)),
+        args: None,
+    };
+    let result = crate::commands::companions::dispatch(&mut fixture.core, SessionCmd::CompanionNew, &request);
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "companions of a remote session are not supported yet"
+    );
+    assert!(fixture.store().companions(remote).is_empty());
+}

@@ -54,3 +54,16 @@ fn lexical_escape_and_schemes_are_rejected_before_probing() {
     assert_eq!(MAX_BYTES, 4 << 20);
     assert_eq!(MAX_IMAGE_BYTES, 32 << 20);
 }
+
+#[test]
+fn invalid_percent_encoding_stays_a_literal_picture_reference() {
+    let folder = tempfile::tempdir().unwrap();
+    let found = image_references("![a](%FF.png)", folder.path());
+    assert_eq!(
+        found,
+        vec![ImageReference {
+            reference: "%FF.png".to_owned(),
+            path: folder.path().join("%FF.png"),
+        }]
+    );
+}

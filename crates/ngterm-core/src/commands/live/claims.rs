@@ -206,4 +206,117 @@ mod tests {
         assert_eq!(persisted_name(None, "/"), "/");
         assert_eq!(persisted_name(None, ""), "~");
     }
+
+    fn core(directory: &std::path::Path) -> crate::Core {
+        crate::Core::new(
+            crate::CoreConfig {
+                app: ngterm_proto::AppIdentity::from_recorded("0.1.0", None),
+                capabilities: Vec::new(),
+            },
+            crate::CoreState {
+                library: crate::model::WindowLibrary::new("/home/u"),
+                settings: crate::persist::AppSettings::default(),
+                persistence: Some(crate::persist::LibraryPersistence::new(directory)),
+            },
+        )
+    }
+
+    fn snapshot(primary: Option<uuid::Uuid>, split: Option<uuid::Uuid>, legacy: bool) -> crate::persist::Snapshot {
+        crate::persist::Snapshot {
+            workspaces: vec![crate::persist::WorkspaceSnapshot {
+                id: uuid::Uuid::new_v4(),
+                name: "work".to_owned(),
+                collapsed: None,
+                tint: None,
+                sessions: vec![crate::persist::SessionSnapshot {
+                    id: uuid::Uuid::new_v4(),
+                    cwd: "/srv/project".to_owned(),
+                    pane_identity: primary,
+                    split_pane_identity: split,
+                    has_split: (!legacy).then_some(true),
+                    is_split: legacy.then_some(true),
+                    ..crate::persist::SessionSnapshot::default()
+                }],
+            }],
+            ..crate::persist::Snapshot::default()
+        }
+    }
+
+    #[test]
+    fn unindexed_files_claim_each_good_pane_without_rewriting_missing_identities() {
+        use crate::live::inventory::{OwnerWindowState, PaneRole};
+        let dir = tempfile::tempdir().unwrap();
+        let core = core(dir.path());
+        let persistence = core.persistence.as_ref().unwrap();
+        std::fs::create_dir_all(persistence.directory().join("windows")).unwrap();
+        let primary = uuid::Uuid::new_v4();
+        let split = uuid::Uuid::new_v4();
+        for (left, right, legacy) in [(Some(primary), None, false), (None, Some(split), true)] {
+            let id = uuid::Uuid::new_v4();
+            let path = persistence.window_path(id);
+            let bytes = serde_json::to_vec(&snapshot(left, right, legacy)).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            let walk = core.pane_claims();
+            assert!(!walk.complete);
+            assert_eq!(walk.claims.len(), 1);
+            let claim = walk.claims.iter().find(|claim| claim.window_id == id).unwrap();
+            assert_eq!(claim.window_state, OwnerWindowState::Unindexed);
+            assert_eq!(claim.window_name, None);
+            assert_eq!(claim.workspace_name.as_deref(), Some("work"));
+            assert_eq!(claim.session_name.as_deref(), Some("project"));
+            assert!(!claim.pending_close);
+            assert_eq!(claim.pane_identity, left.or(right).unwrap());
+            assert_eq!(
+                claim.pane,
+                if left.is_some() {
+                    PaneRole::Left
+                } else {
+                    PaneRole::Right
+                }
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_closed_window_reads_its_saved_claims_and_an_unreadable_file_is_incomplete() {
+        use crate::live::inventory::OwnerWindowState;
+        let dir = tempfile::tempdir().unwrap();
+        let mut core = core(dir.path());
+        let id = core.library_mut().new_window(Some("closed"));
+        core.library_mut().close_window(id);
+        assert!(!core.pane_claims().complete);
+        let persistence = core.persistence.as_ref().unwrap();
+        std::fs::create_dir_all(persistence.directory().join("windows")).unwrap();
+        let primary = uuid::Uuid::new_v4();
+        let split = uuid::Uuid::new_v4();
+        std::fs::write(
+            persistence.window_path(id),
+            serde_json::to_vec(&snapshot(Some(primary), Some(split), false)).unwrap(),
+        )
+        .unwrap();
+        let walk = core.pane_claims();
+        assert!(walk.complete);
+        assert_eq!(walk.claims.len(), 2);
+        for claim in &walk.claims {
+            assert_eq!(claim.window_id, id);
+            assert_eq!(claim.window_name.as_deref(), Some("closed"));
+            assert_eq!(claim.window_state, OwnerWindowState::Closed);
+        }
+        assert_eq!(
+            walk.claims.iter().map(|claim| claim.pane_identity).collect::<Vec<_>>(),
+            [primary, split]
+        );
+    }
+
+    #[test]
+    fn an_unenumerable_windows_directory_makes_the_claim_walk_incomplete() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = core(dir.path());
+        assert!(core.pane_claims().complete);
+        let windows = core.persistence.as_ref().unwrap().directory().join("windows");
+        std::fs::write(windows, "not a directory").unwrap();
+        assert!(!core.pane_claims().complete);
+    }
 }

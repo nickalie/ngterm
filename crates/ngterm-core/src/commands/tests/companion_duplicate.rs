@@ -410,3 +410,14 @@ fn the_creation_line_needs_both_the_ordinary_shell_and_the_live_one() {
     );
     assert_eq!(creation_line(ShellDialect::Posix, Some("/usr/bin/nu"), &spaced), None);
 }
+
+#[test]
+fn duplicating_an_unknown_session_creates_nothing() {
+    let mut fixture = super::Fixture::new(0);
+    let before = fixture.order(fixture.workspace);
+    assert_eq!(
+        fixture.core.duplicate_companion(uuid::Uuid::new_v4(), true),
+        Err("no such session".to_owned())
+    );
+    assert_eq!(fixture.order(fixture.workspace), before);
+}

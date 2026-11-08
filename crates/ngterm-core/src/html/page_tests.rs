@@ -146,3 +146,83 @@ fn zoom_resolves_a_stored_factor_into_range() {
         assert_eq!(zoom::resolve(stored), resolved, "{stored:?}");
     }
 }
+
+#[test]
+fn navigation_and_load_state_use_their_wire_spellings() {
+    for (raw, navigation) in [
+        ("back", HtmlNavigation::Back),
+        ("forward", HtmlNavigation::Forward),
+        ("browser", HtmlNavigation::Browser),
+        ("finder", HtmlNavigation::Finder),
+    ] {
+        assert_eq!(HtmlNavigation::from_wire(raw), Some(navigation));
+        assert_eq!(navigation.wire_name(), raw);
+    }
+    assert_eq!(HtmlNavigation::from_wire("Back"), None);
+    for (state, raw) in [
+        (HtmlLoadState::Loading, "loading"),
+        (HtmlLoadState::Loaded, "loaded"),
+        (HtmlLoadState::Failed, "failed"),
+    ] {
+        assert_eq!(state.wire_name(), raw);
+        assert_eq!(serde_json::to_value(state).unwrap(), raw);
+    }
+}
+
+#[test]
+fn source_text_and_chrome_follow_the_source_and_flags() {
+    let path = os_path("/tmp/page");
+    let sources = [
+        HtmlSource::File {
+            path: path.clone(),
+            grant_root: None,
+        },
+        HtmlSource::Replica { path: path.clone() },
+        HtmlSource::Image { path: path.clone() },
+        HtmlSource::Markdown { path: path.clone() },
+    ];
+    for source in sources {
+        assert_eq!(source.text(), path);
+        let mut overlay = HtmlOverlay::new(source, HtmlPageFlags::default());
+        assert!((overlay.chrome() - HtmlOverlay::CHROME_HEIGHT).abs() < f64::EPSILON);
+        overlay.flags.chromeless = true;
+        assert!(overlay.chrome().abs() < f64::EPSILON);
+    }
+    let source = HtmlSource::Url(Url::parse("https://example.com/page").unwrap());
+    assert_eq!(source.text(), "https://example.com/page");
+    assert_eq!(file("/", None).identity(), "/");
+    assert_eq!(file("", None).identity(), "");
+}
+
+/// A frontend implementing only the required operations inherits conservative document/storage defaults.
+struct MinimalHost;
+
+impl HtmlHost for MinimalHost {
+    fn persistent_store_failure(&self) -> Option<String> {
+        None
+    }
+    fn navigate(&self, _page: uuid::Uuid, _navigation: HtmlNavigation) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_minimal_html_host_refuses_document_reads_and_persistent_clears() {
+    let host = MinimalHost;
+    assert_eq!(
+        host.probe_image("/tmp/image.png"),
+        Err("could not read image".to_owned())
+    );
+    assert_eq!(
+        host.check_markdown("/tmp/readme.md"),
+        Err("could not read markdown file".to_owned())
+    );
+    assert!((host.page_zoom() - 1.0).abs() < f64::EPSILON);
+    assert!((host.display_scale(uuid::Uuid::nil()) - 1.0).abs() < f64::EPSILON);
+    assert_eq!(host.web_views_unavailable(), None);
+    assert_eq!(
+        host.clear_saved_store(),
+        Err("persistent browser storage is not available".to_owned())
+    );
+    assert_eq!(host.saved_store_clear(), ClearProgress::Done);
+}

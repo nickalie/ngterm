@@ -85,3 +85,31 @@ fn image_html_embeds_data_with_aspect_fill_and_no_remote_loading() {
     assert!(document.contains("default-src 'none'; img-src data:"));
     assert!(!document.contains("<script"));
 }
+
+#[test]
+fn image_data_exposes_the_probed_bytes_and_oriented_size() {
+    let image = ImageData {
+        bytes: vec![1, 2, 3],
+        mime_type: "image/png".to_owned(),
+        width: 800,
+        height: 600,
+        orientation: 6,
+    };
+    assert_eq!(image.data_uri(), "data:image/png;base64,AQID");
+    assert_eq!(image.natural(2.0), (300.0, 400.0));
+    assert!(image.html().contains(&image.data_uri()));
+}
+
+#[test]
+fn invalid_dimensions_fall_back_to_a_square() {
+    for natural in [(0.0, 1.0), (1.0, 0.0), (f64::NAN, 1.0), (1.0, f64::INFINITY)] {
+        assert_eq!(
+            points(natural, 1.0, None),
+            OverlayPointSize {
+                width: Some(240),
+                height: Some(240)
+            }
+        );
+    }
+    assert_eq!(natural(800, 600, 1, f64::INFINITY), (800.0, 600.0));
+}

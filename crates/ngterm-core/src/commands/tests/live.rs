@@ -2264,3 +2264,224 @@ fn a_search_refuses_a_pane_covered_while_it_waits() {
         );
     }
 }
+
+#[test]
+fn typing_to_a_missing_live_daemon_reports_refusal_without_writing_to_the_surface() {
+    let mut live = live();
+    let token = uuid_string(live.left);
+    let nonce = spawn_live(&mut live);
+    assert!(report(&mut live, &token, &nonce, "leader", 1));
+    let sid = wire(live.session);
+    assert_eq!(
+        live.fixture.session(
+            SessionCmd::Type,
+            Some(&sid),
+            args(|a| a.text = Some("hello".to_owned()))
+        ),
+        failure("the pane's live session did not accept the input")
+    );
+    assert!(live.probe.typed().is_empty());
+}
+
+#[test]
+fn daemon_typing_preserves_interior_returns_and_accepts_empty_input() {
+    let mut live = live();
+    let token = uuid_string(live.left);
+    let nonce = spawn_live(&mut live);
+    assert!(report(&mut live, &token, &nonce, "leader", 1));
+    let daemon = daemon_name(live.left);
+    live.host.insert(&daemon, "");
+    for text in ["", "one\ntwo"] {
+        let sid = wire(live.session);
+        assert!(
+            live.fixture
+                .session(SessionCmd::Type, Some(&sid), args(|a| a.text = Some(text.to_owned())))
+                .ok
+        );
+    }
+    assert_eq!(live.host.session(&daemon).unwrap().typed, b"one\rtwo");
+    assert!(live.probe.typed().is_empty());
+}
+
+#[test]
+fn dropping_an_uninstalled_replacement_restores_its_previous_lead() {
+    let mut live = live();
+    let token = uuid_string(live.left);
+    let nonce = spawn_live(&mut live);
+    assert!(report(&mut live, &token, &nonce, "leader", 1));
+    let previous = live.core().pane_lead(&token);
+    let replacement = PaneReplacement {
+        session: live.session,
+        token: token.clone(),
+        command: "attach".to_owned(),
+        attach: None,
+        env: Vec::new(),
+        cwd: None,
+        remote: false,
+    };
+    let left = live.left;
+    live.core()
+        .begin_replacement_lead(&token, left, crate::live::lead::LeadAttachment::new(true), true);
+    assert!(live.core().pane_lead_cover(&token).is_some());
+    assert!(!live.core().replacement_dropped(&replacement));
+    assert_eq!(live.core().pane_lead(&token), previous);
+    assert_eq!(live.core().pane_lead_cover(&token), None);
+    assert!(!live.core().replacement_dropped(&replacement));
+    assert!(live.fixture.store().session(live.session).is_some());
+}
+
+#[test]
+fn runtime_debug_readback_includes_the_endpoint_without_needing_a_host_debug_impl() {
+    let mut live = live();
+    let runtime = format!("{:?}", live.core().live);
+    assert!(runtime.contains("ngterm-session"));
+    assert!(runtime.contains("/tmp/ngterm-live-test"));
+}
+
+/// The daemon accepted the text but lost the acknowledgement of its separate submit byte.
+struct UnconfirmedReturn(Arc<FakeSessionHost>);
+
+impl SessionHost for UnconfirmedReturn {
+    fn is_available(&self) -> bool {
+        self.0.is_available()
+    }
+    fn list(&self) -> Result<Vec<LiveSessionRecord>, HostError> {
+        self.0.list()
+    }
+    fn kill(&self, name: &str, force: bool) -> KillOutcome {
+        self.0.kill(name, force)
+    }
+    fn screen(&self, name: &str, all: bool) -> Result<LiveScreen, HostError> {
+        self.0.screen(name, all)
+    }
+    fn type_input(&self, name: &str, bytes: &[u8]) -> Result<(), HostError> {
+        self.0.type_input(name, bytes)?;
+        if bytes == [0x0d] {
+            Err(HostError("acknowledgement lost".to_owned()))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn an_unconfirmed_submit_warns_against_retyping_text_the_daemon_already_accepted() {
+    let mut live = live();
+    let host = Arc::new(UnconfirmedReturn(Arc::clone(&live.host)));
+    install(&mut live.fixture.core, &host, live.resources.path(), RestoreMode::Live);
+    let token = wire(live.left);
+    let nonce = spawn_live(&mut live);
+    assert!(report(&mut live, &token, &nonce, "leader", 1));
+    let daemon = daemon_name(live.left);
+    live.host.insert(&daemon, "");
+    let sid = wire(live.session);
+    let response = live.fixture.session(
+        SessionCmd::Type,
+        Some(&sid),
+        args(|a| a.text = Some("echo once\n".to_owned())),
+    );
+    assert_eq!(
+        response,
+        failure("text typed, but its final Return could not be confirmed; do not retype the text")
+    );
+    assert_eq!(live.host.session(&daemon).unwrap().typed, b"echo once\r");
+    assert!(live.probe.typed().is_empty());
+}
+
+#[test]
+fn live_install_debug_names_the_endpoint_and_state_directory() {
+    let resources = resources();
+    let install = LiveInstall {
+        host: Arc::new(FakeSessionHost::new()),
+        endpoint: ControlLiveEndpoint {
+            executable: "test-session-host".to_owned(),
+            socket_directory: "test-sockets".to_owned(),
+        },
+        wrap: Inputs::default(),
+        state_dir: resources.path().to_path_buf(),
+        outdated_before: None,
+    };
+    let debug = format!("{install:?}");
+    assert!(debug.contains("test-session-host"));
+    assert!(debug.contains("test-sockets"));
+    assert!(debug.contains(&resources.path().display().to_string()));
+}
+
+#[test]
+fn a_live_companion_copy_observes_the_daemon_shell_instead_of_the_attach_client() {
+    let mut live = live();
+    let table = FakeProcessTable::default();
+    table.insert(
+        ProcessStat {
+            pid: 100,
+            ppid: 1,
+            pgrp: 100,
+            session: 100,
+        },
+        Some(&["-sh"]),
+    );
+    table.set_terminal_foreground(100, 100);
+    let directory = live.resources.path().display().to_string();
+    table.set_working_directory(100, &directory);
+    live.fixture
+        .core
+        .set_process_table(Box::new(table), Some("sh".to_owned()));
+    let daemon = daemon_name(live.left);
+    live.host.insert(&daemon, "");
+    live.host.set_record(&daemon, Some(1), Some(100), None);
+    let sid = wire(live.session);
+    let response = live
+        .fixture
+        .session(SessionCmd::CompanionDuplicate, Some(&sid), Args::default());
+    let copy = super::answered_id(&response).unwrap();
+    let session = live.fixture.store().session(copy).unwrap();
+    assert_eq!(session.parent_id(), Some(live.session));
+    assert_eq!(session.initial_cwd(), directory);
+    assert_eq!(session.launch.command, None);
+}
+
+#[test]
+fn finalized_panes_are_forgotten_even_when_the_daemon_kill_fails() {
+    let mut live = live();
+    let token = wire(live.left);
+    let nonce = spawn_live(&mut live);
+    assert!(report(&mut live, &token, &nonce, "leader", 1));
+    let daemon = daemon_name(live.left);
+    live.host.insert(&daemon, "");
+    live.host
+        .set_kill_outcome(&daemon, Some(KillOutcome::Failed("kill refused".to_owned())));
+    let left = live.left;
+    live.core().finalize_panes(vec![left]);
+    assert_eq!(live.core().pane_lead(&token), None);
+    assert_eq!(live.host.kills(), [(daemon.clone(), true)]);
+    assert!(live.host.session(&daemon).is_some());
+}
+
+#[test]
+fn live_reset_readback_includes_the_last_launch_outcome() {
+    let outcome = crate::live::reset::Outcome {
+        panes: crate::live::reset::PaneCounts {
+            confirmed: 2,
+            killed: 1,
+            gone: 1,
+            skipped: 0,
+        },
+        unconfirmed: Vec::new(),
+        sessions: crate::live::reset::SessionCounts {
+            affected: 1,
+            reset: 1,
+            partial: 0,
+            unconfirmed: 0,
+        },
+        inventory_failed: false,
+    };
+    assert_eq!(
+        crate::commands::live::readback(None, Some(&outcome)),
+        Some(json!({"last": {
+            "panes": {"confirmed": 2, "killed": 1, "gone": 1, "skipped": 0},
+            "unconfirmed": [],
+            "sessions": {"affected": 1, "reset": 1, "partial": 0, "unconfirmed": 0},
+            "inventoryFailed": false
+        }}))
+    );
+}
