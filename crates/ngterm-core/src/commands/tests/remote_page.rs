@@ -450,11 +450,15 @@ impl HtmlHost for MarkdownHost {
     }
 }
 
-/// A document no presenter can be handed stays local by the placement rule, and the store's own guard then refuses it
-/// on a pane that follows the presenter, as upstream's `openHtmlOverlay` does.
+/// A document a presenter without content pages cannot be handed stays local by the placement rule, and the store's
+/// own guard then refuses it on a pane that follows the presenter, as upstream's `openHtmlOverlay` does.
 #[test]
 fn a_document_page_over_a_following_pane_meets_the_presenter_refusal() {
-    let mut origin = Origin::build(false, &SUPPORTED_KINDS, false);
+    let older: Vec<&str> = SUPPORTED_KINDS
+        .into_iter()
+        .filter(|kind| *kind != crate::remote::hub::PAGE_CONTENT_KIND)
+        .collect();
+    let mut origin = Origin::build(false, &older, false);
     origin.fixture().core.set_html_host(Box::new(MarkdownHost));
     let opened = origin.overlay(SessionCmd::OverlayOpen, |a| {
         a.markdown_file = Some(crate::html::os_path("/tmp/docs/notes.md"));
