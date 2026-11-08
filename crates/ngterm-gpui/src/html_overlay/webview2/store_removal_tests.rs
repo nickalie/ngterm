@@ -70,11 +70,11 @@ fn a_missing_profile_ends_the_tries_at_once() {
 #[test]
 fn remove_later_gives_the_browser_its_pause_and_then_removes_the_folder() {
     let dir = tempfile::tempdir().unwrap();
-    let folder = dir.path().join("closed");
-    std::fs::create_dir(&folder).unwrap();
-    std::fs::write(folder.join("data"), "profile").unwrap();
+    let (folder, held) = held_profile(dir.path(), "closed");
     let began = Instant::now();
     remove_later(folder.clone());
+    // only a caller it has returned to can let go: tries made on this thread would all find the file held and give up
+    drop(held);
     let deadline = began + Duration::from_secs(60);
     while folder.exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));

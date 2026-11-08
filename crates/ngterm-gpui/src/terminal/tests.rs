@@ -14,6 +14,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::str::FromStr as _;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
@@ -716,6 +717,14 @@ fn wait_painted(view: &Entity<TerminalView>, cx: &mut VisualTestContext, needle:
     settle(cx, |cx| painted_text(view, cx).contains(needle));
 }
 
+/// Runs the app until the pump has done what the terminal queued. Parking alone doesn't promise that: a wake from the
+/// pane's IO thread whose token is in the one-token channel but which has not woken the pump yet turns the queue's own
+/// wake into a no-op, and until that thread goes on the test scheduler has nothing to run.
+fn run_queued(terminal: &Entity<Terminal>, cx: &mut VisualTestContext) {
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    settle(cx, |_| shared.effects.borrow().is_empty());
+}
+
 #[gpui_kit::test]
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_owner_starts_the_pane_at_its_grid_and_resizes_it(cx: &mut TestAppContext) {
@@ -1334,7 +1343,7 @@ fn font_actions_change_the_size_and_the_cell_at_once(cx: &mut TestAppContext) {
     assert_eq!(surface.font_size(), Some(255.0), "clamped as Ghostty clamps");
     assert!(surface.binding_action("reset_font_size"));
     assert_eq!(surface.font_size(), Some(12.0));
-    cx.run_until_parked();
+    run_queued(&terminal, cx);
     assert!(events.borrow().contains(&TerminalEvent::FontSize));
     // the owner lays the grid out again at the new size
     assert!(surface.binding_action("set_font_size:24"));
@@ -1395,7 +1404,7 @@ fn search_actions_report_performed_as_libghostty_did(cx: &mut TestAppContext) {
     for action in ["start_search", "end_search", "not_an_action"] {
         assert!(surface.binding_action(action), "{action}");
     }
-    cx.run_until_parked();
+    run_queued(&terminal, cx);
     let seen = events.borrow().clone();
     for event in [
         TerminalEvent::StartSearch("ready".into()),
@@ -1434,7 +1443,7 @@ fn teardown_kills_the_shell(
 /// Performs `action`, then the clipboard's text.
 fn copied(terminal: &Entity<Terminal>, cx: &mut VisualTestContext, action: &str) -> String {
     assert!(perform(terminal, cx, action), "{action}");
-    cx.run_until_parked();
+    run_queued(terminal, cx);
     clipboard_text(cx)
 }
 
@@ -1445,7 +1454,7 @@ fn copy_actions_follow_their_formats(cx: &mut TestAppContext) {
     let (terminal, _view, _events, cx) = realized(cx, "printf 'ready \\033[31mred\\033[0m'; exec cat", dir.path());
     assert!(!perform(&terminal, cx, "copy_to_clipboard"), "no selection");
     assert!(perform(&terminal, cx, "select_all"));
-    cx.run_until_parked();
+    run_queued(&terminal, cx);
     // select_all copies to the selection clipboard, as copy-on-select does
     assert!(primary_text(cx).starts_with("ready red"));
     assert!(copied(&terminal, cx, "copy_to_clipboard:plain").starts_with("ready red"));
@@ -1485,7 +1494,7 @@ fn select_all_copies(
         );
     });
     assert!(perform(terminal, cx, "select_all"));
-    cx.run_until_parked();
+    run_queued(terminal, cx);
     (clipboard_text(cx), primary_text(cx))
 }
 
@@ -1493,7 +1502,9 @@ fn select_all_copies(
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn select_all_copies_per_copy_on_select(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    let (terminal, _view, _events, cx) = realized(cx, "printf 'ready  \\r\\nnext'; exec cat", dir.path());
+    let (terminal, view, _events, cx) = realized(cx, "printf 'ready  \\r\\nnext'; exec cat", dir.path());
+    // a pty can hand the two lines over in two reads
+    wait_painted(&view, cx, "next");
     assert_eq!(
         select_all_copies(&terminal, cx, CopyOnSelect::None, true),
         ("standard".to_owned(), "primary".to_owned())
@@ -1514,6 +1525,57 @@ fn select_all_copies_per_copy_on_select(cx: &mut TestAppContext) {
     );
 }
 
+/// Stops the thread that polls it when dropped, a failed assertion included.
+struct StopOnDrop(Arc<AtomicBool>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+/// The pump's channel holds one token and an IO-thread wake puts its token in before it wakes the pump. A copy queued
+/// in between finds the channel full, and the test scheduler has nothing to run until that thread goes on.
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn a_copy_is_on_its_clipboard_though_the_io_thread_is_waking_the_pump(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (terminal, view, _events, cx) = realized(cx, "printf 'ready  \\r\\nnext'; exec cat", dir.path());
+    wait_painted(&view, cx, "next");
+    let wake = terminal.read_with(cx, |terminal, _| terminal.shared().wake.clone());
+    let stop = StopOnDrop(Arc::new(AtomicBool::new(false)));
+    let stopped = Arc::clone(&stop.0);
+    // odd: a wake is asked for; one wake a round, as an endless stream of them would keep the scheduler from parking
+    let turn = Arc::new(AtomicU32::new(0));
+    let asked = Arc::clone(&turn);
+    let waker = std::thread::spawn(move || {
+        while !stopped.load(Ordering::Relaxed) {
+            let round = asked.load(Ordering::Acquire);
+            if round % 2 == 1 {
+                // the wake's moment sweeps across the round, to meet the copy's
+                let began = Instant::now();
+                while began.elapsed() < Duration::from_nanos(u64::from(round) * 37 % 200_000) {
+                    std::hint::spin_loop();
+                }
+                let _ = wake.try_send(());
+                asked.store(round + 1, Ordering::Release);
+            }
+            std::hint::spin_loop();
+        }
+    });
+    for _ in 0..3000 {
+        cx.run_until_parked();
+        turn.fetch_add(1, Ordering::AcqRel);
+        let copies = select_all_copies(&terminal, cx, CopyOnSelect::Primary, true);
+        while turn.load(Ordering::Acquire) % 2 == 1 {
+            std::hint::spin_loop();
+        }
+        assert_eq!(copies, ("standard".to_owned(), "ready\nnext".to_owned()));
+    }
+    drop(stop);
+    waker.join().unwrap();
+}
+
 #[gpui_kit::test]
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn search_selection_takes_the_selection_untrimmed(cx: &mut TestAppContext) {
@@ -1524,7 +1586,7 @@ fn search_selection_takes_the_selection_untrimmed(cx: &mut TestAppContext) {
     pane.select(GridPoint::viewport(0, 0), GridPoint::viewport(6, 0), false)
         .unwrap();
     assert!(perform(&terminal, cx, "search_selection"));
-    cx.run_until_parked();
+    run_queued(&terminal, cx);
     assert!(events.borrow().contains(&TerminalEvent::StartSearch("ready  ".into())));
 }
 
@@ -1543,8 +1605,8 @@ fn the_url_and_title_copies_follow_the_gtk_build(cx: &mut TestAppContext) {
 
 /// The screen file a `write_*_file:copy` put its path of on the clipboard, by name, with its text; its directory is
 /// removed.
-fn take_screen_file(cx: &mut VisualTestContext) -> (String, String) {
-    cx.run_until_parked();
+fn take_screen_file(terminal: &Entity<Terminal>, cx: &mut VisualTestContext) -> (String, String) {
+    run_queued(terminal, cx);
     let path = std::path::PathBuf::from(clipboard_text(cx));
     let text = std::fs::read_to_string(&path).expect("the screen file exists");
     // on Windows the file takes the user's own temporary directory's access
@@ -1576,18 +1638,18 @@ fn screen_files_are_written_and_copied(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, _view, events, cx) = realized(cx, "printf 'ready \\033[31mred\\033[0m'; exec cat", dir.path());
     assert!(perform(&terminal, cx, "write_screen_file:copy"));
-    let (name, text) = take_screen_file(cx);
+    let (name, text) = take_screen_file(&terminal, cx);
     assert_eq!(name, "screen.txt");
     assert!(text.starts_with("ready red"), "{text:?}");
     assert!(perform(&terminal, cx, "write_screen_file:copy,html"));
-    let (name, text) = take_screen_file(cx);
+    let (name, text) = take_screen_file(&terminal, cx);
     assert_eq!(name, "screen.html");
     assert!(text.contains('<'));
     // no scrollback and no selection: nothing to write, performed all the same
     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("kept".into()));
     assert!(perform(&terminal, cx, "write_scrollback_file:copy"));
     assert!(perform(&terminal, cx, "write_selection_file:open"));
-    cx.run_until_parked();
+    run_queued(&terminal, cx);
     assert_eq!(clipboard_text(cx), "kept");
     assert_eq!(opened(&events), None);
 }
@@ -1601,7 +1663,7 @@ fn screen_files_are_opened_and_pasted(cx: &mut TestAppContext) {
     // with no newline after it, `cat` has not read it yet)
     assert!(perform(&terminal, cx, "select_all"));
     assert!(perform(&terminal, cx, "write_selection_file:open"));
-    cx.run_until_parked();
+    run_queued(&terminal, cx);
     let path = opened(&events).expect("an open request");
     assert_eq!(path.file_name().unwrap(), "selection.txt");
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -1662,7 +1724,7 @@ fn read_only_keeps_the_users_input_from_the_program(cx: &mut TestAppContext) {
     assert!(perform(&terminal, cx, "text:bound"), "performed, its bytes dropped");
     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("pasted".into()));
     assert!(perform(&terminal, cx, "paste_from_clipboard"));
-    cx.run_until_parked();
+    run_queued(&terminal, cx);
     assert!(perform(&terminal, cx, "toggle_readonly"));
     assert!(surface.type_text("after\n"));
     wait_painted(&view, cx, "after");
@@ -1709,7 +1771,7 @@ fn paste_and_copy_go_through_the_clipboard(cx: &mut TestAppContext) {
     wait_painted(&view, cx, "pasted");
     assert!(surface.binding_action("select_all"));
     assert!(surface.binding_action("copy_to_clipboard"));
-    cx.run_until_parked();
+    run_queued(&terminal, cx);
     let copied = cx
         .read_from_clipboard()
         .and_then(|item| item.text())
