@@ -137,12 +137,20 @@ fn a_handed_over_child_is_killed_through_its_process_handle() {
 fn a_handed_over_childs_killer_clone_kills_it() {
     let running = lasting();
     let mut handed = handed_over(&running.child, None, None);
+    let view = running.child.job_view();
+    wait_until("cmd started its ping", || {
+        view.process_ids().is_some_and(|pids| pids.len() >= 2)
+    });
     let mut killer = handed.inner.clone_killer();
     killer.kill().expect("the kill");
     assert_eq!(handed.wait().expect("the exit").exit_code(), 1);
+    wait_until("the child left its job", || {
+        view.process_ids()
+            .is_some_and(|pids| !pids.contains(&running.child.pid()))
+    });
     assert!(
-        running.child.job_view().process_ids().is_some(),
-        "the job outlived the child"
+        !view.process_ids().expect("the job's processes").is_empty(),
+        "the child's kill ended its tree"
     );
 }
 
@@ -176,6 +184,8 @@ fn a_process_handle_without_the_right_to_wait_fails_the_wait() {
     let running = lasting();
     let mut handed = handed_over(&running.child, Some(PROCESS_QUERY_LIMITED_INFORMATION), None);
     assert_eq!(handed.pid(), running.child.pid());
+    let err = handed.try_wait().expect_err("polled without the right");
+    assert_eq!(os_error(&err), Some(ERROR_ACCESS_DENIED), "{err}");
     let err = handed.wait().expect_err("waited without the right");
     assert_eq!(os_error(&err), Some(ERROR_ACCESS_DENIED), "{err}");
 }
@@ -279,4 +289,19 @@ fn a_console_without_its_pipes_makes_no_master() {
     drop(conpty.take_pipes().expect("the pipes"));
     let err = Master::new(conpty).expect_err("a master without pipes");
     assert_eq!(err.to_string(), "writer already taken");
+}
+
+/// Dimensions past the signed COORD range are refused without wrapping the requested size.
+#[test]
+fn an_oversized_console_is_refused_with_the_requested_size() {
+    for (rows, cols) in [(24, 32_768), (32_768, 80), (40_000, 40_000), (u16::MAX, u16::MAX)] {
+        let err = ConPtySystem::default()
+            .openpty(Size::cells(rows, cols).pty())
+            .err()
+            .expect("a pseudoconsole past i16");
+        assert_eq!(
+            err.to_string(),
+            format!("pseudoconsole size {cols}x{rows} exceeds the maximum 32767x32767")
+        );
+    }
 }

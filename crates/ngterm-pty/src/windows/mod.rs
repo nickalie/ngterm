@@ -16,7 +16,7 @@ use std::sync::{Arc, Weak};
 
 use portable_pty::win::conpty::{ConPtyHandoff, ConPtyMasterPty, ConPtySystem};
 use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySystem};
-use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, FALSE, GetLastError, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, FALSE, GetLastError, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_PROCESS_ID_LIST,
@@ -210,10 +210,11 @@ impl portable_pty::ChildKiller for HandedProcess {
 impl portable_pty::Child for HandedProcess {
     fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         // SAFETY: polls the process handle `process` owns.
-        if unsafe { WaitForSingleObject(self.process.as_raw_handle(), 0) } != WAIT_OBJECT_0 {
-            return Ok(None);
+        match unsafe { WaitForSingleObject(self.process.as_raw_handle(), 0) } {
+            WAIT_OBJECT_0 => self.exit_code().map(|code| Some(ExitStatus::with_exit_code(code))),
+            WAIT_TIMEOUT => Ok(None),
+            _ => Err(io::Error::last_os_error()),
         }
-        self.exit_code().map(|code| Some(ExitStatus::with_exit_code(code)))
     }
 
     fn wait(&mut self) -> io::Result<ExitStatus> {

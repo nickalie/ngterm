@@ -3,26 +3,37 @@ use crate::win::psuedocon::PsuedoCon;
 use crate::{Child, MasterPty, PtyPair, PtySize, PtySystem, SlavePty};
 use anyhow::Error;
 use filedescriptor::{FileDescriptor, Pipe};
+use std::convert::TryFrom;
 use std::os::windows::io::{FromRawHandle, IntoRawHandle, OwnedHandle, RawHandle};
 use std::sync::{Arc, Mutex};
 use winapi::um::wincon::COORD;
+
+// COORD is signed; reject dimensions outside its range before the Windows API
+// sees a wrapped value, keeping the requested dimensions in the error.
+fn console_size(rows: u16, cols: u16) -> Result<COORD, Error> {
+    let (Ok(signed_cols), Ok(signed_rows)) = (i16::try_from(cols), i16::try_from(rows)) else {
+        anyhow::bail!(
+            "pseudoconsole size {}x{} exceeds the maximum 32767x32767",
+            cols,
+            rows
+        );
+    };
+    Ok(COORD {
+        X: signed_cols,
+        Y: signed_rows,
+    })
+}
 
 #[derive(Default)]
 pub struct ConPtySystem {}
 
 impl PtySystem for ConPtySystem {
     fn openpty(&self, size: PtySize) -> anyhow::Result<PtyPair> {
+        let dimensions = console_size(size.rows, size.cols)?;
         let stdin = Pipe::new()?;
         let stdout = Pipe::new()?;
 
-        let con = PsuedoCon::new(
-            COORD {
-                X: size.cols as i16,
-                Y: size.rows as i16,
-            },
-            stdin.read,
-            stdout.write,
-        )?;
+        let con = PsuedoCon::new(dimensions, stdin.read, stdout.write)?;
 
         let master = ConPtyMasterPty {
             inner: Arc::new(Mutex::new(Inner {
@@ -59,10 +70,7 @@ impl Inner {
         pixel_width: u16,
         pixel_height: u16,
     ) -> Result<(), Error> {
-        self.con.resize(COORD {
-            X: num_cols as i16,
-            Y: num_rows as i16,
-        })?;
+        self.con.resize(console_size(num_rows, num_cols)?)?;
         self.size = PtySize {
             rows: num_rows,
             cols: num_cols,
