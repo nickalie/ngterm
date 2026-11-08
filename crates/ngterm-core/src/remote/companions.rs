@@ -302,7 +302,15 @@ fn handed_page(result: &RemoteCommandResult, host: &str) -> Result<PresentationP
     if result.refused_arguments() {
         return Err(too_old());
     }
-    let Some(reply) = reply_of(result) else {
+    // upstream decodes the page with the rest of the reply, so a page that won't decode makes it no answer
+    let decoded = reply_of(result).and_then(|reply| {
+        let page = reply.result.as_ref().and_then(|result| result.companion_page.clone());
+        match page.map(serde_json::from_value::<PresentationPage>).transpose() {
+            Ok(page) => Some((reply, page)),
+            Err(_) => None,
+        }
+    });
+    let Some((reply, page)) = decoded else {
         let stderr = result.stderr.trim();
         return Err(if stderr.is_empty() {
             format!("{host} gave no answer")
@@ -310,11 +318,6 @@ fn handed_page(result: &RemoteCommandResult, host: &str) -> Result<PresentationP
             stderr.to_owned()
         });
     };
-    let page = reply
-        .result
-        .as_ref()
-        .and_then(|result| result.companion_page.clone())
-        .and_then(|page| serde_json::from_value::<PresentationPage>(page).ok());
     match page {
         Some(page) if result.status == 0 && reply.ok => Ok(page),
         _ => {

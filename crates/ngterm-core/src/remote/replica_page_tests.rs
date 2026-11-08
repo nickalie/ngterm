@@ -7,6 +7,7 @@ use serde_json::json;
 
 use super::*;
 use crate::model::{NewSession, RemoteBinding, WindowLibrary};
+use crate::remote::{LinkKey, PresentationLink, PresentationTransport};
 use crate::{CoreConfig, CoreState};
 
 struct Host;
@@ -81,6 +82,49 @@ fn core() -> (Core, Uuid, Rc<Launcher>) {
     (core, row, launcher)
 }
 
+/// The origin's end of a row's presentation stream: every frame this machine sent it.
+#[derive(Clone, Default)]
+struct Origin(Rc<RefCell<Vec<serde_json::Value>>>);
+
+impl PresentationLink for Origin {
+    fn send(&self, line: &[u8]) {
+        self.0.borrow_mut().push(serde_json::from_slice(line).unwrap());
+    }
+
+    fn stop(&self) {}
+}
+
+impl PresentationTransport for Origin {
+    fn open(&self, _argv: &[String], _key: LinkKey) -> Box<dyn PresentationLink> {
+        Box::new(self.clone())
+    }
+}
+
+impl Origin {
+    /// Opens `row`'s presentation stream onto a new origin that records what it hears.
+    fn listening(core: &mut Core, row: Uuid) -> Self {
+        let origin = Self::default();
+        let store = core.library_mut().store_for_session_mut(row).unwrap();
+        store.bind_remote(
+            RemoteBinding::new(uuid_string(Uuid::new_v4()), HashMap::new(), Some(1), None),
+            row,
+        );
+        core.set_presentation_transport(Rc::new(origin.clone()));
+        core.start_remote_presentation(row);
+        origin
+    }
+
+    /// The page payloads of the frames of `kind` the origin heard, in order.
+    fn heard(&self, kind: &str) -> Vec<serde_json::Value> {
+        self.0
+            .borrow()
+            .iter()
+            .filter(|frame| frame["kind"] == kind)
+            .map(|frame| frame["page"].clone())
+            .collect()
+    }
+}
+
 fn page(source: &serde_json::Value) -> PresentationPage {
     serde_json::from_value(json!({
         "page": uuid_string(Uuid::new_v4()), "token": "tok-1", "identity": "report.html", "source": source,
@@ -97,12 +141,14 @@ fn loopback() -> PresentationPage {
 #[test]
 fn a_forward_stops_if_its_page_cannot_be_placed_when_it_becomes_ready() {
     let (mut core, row, launcher) = core();
+    let origin = Origin::listening(&mut core, row);
     let mut page = loopback();
     page.page = "invalid".to_owned();
     core.show_replica_page(&page, row).unwrap();
     let (key, permits, helper) = launcher.launches.borrow()[0].clone();
     assert!(!helper.0.get());
     assert!(permits.take());
+    assert!(origin.heard("page.rejected").is_empty());
 
     core.page_helper_line(key, READY_LINE.as_bytes());
 
@@ -110,9 +156,14 @@ fn a_forward_stops_if_its_page_cannot_be_placed_when_it_becomes_ready() {
     assert!(!permits.take());
     assert!(core.library().held_session(row).unwrap().overlay.page().is_none());
     assert!(core.remote.viewer.pages.pending.is_empty());
-    // An already queued report from the stopped helper cannot put the refused page back.
+    assert_eq!(
+        origin.heard("page.rejected"),
+        [json!({"page": "invalid", "reason": "invalid page id"})]
+    );
+    // An already queued report from the stopped helper cannot put the refused page back, nor refuse it twice.
     core.page_helper_line(key, READY_LINE.as_bytes());
     assert!(core.library().held_session(row).unwrap().overlay.page().is_none());
+    assert_eq!(origin.heard("page.rejected").len(), 1);
 }
 
 #[test]
@@ -163,8 +214,9 @@ fn replica_debug_output_names_live_and_pending_pages_without_the_token() {
 #[test]
 fn requests_after_helper_exit_fail_once_before_the_page_sweep() {
     let (mut core, row, launcher) = core();
-    core.show_replica_page(&page(&json!({"file": {"path": "/srv/report.html"}})), row)
-        .unwrap();
+    let origin = Origin::listening(&mut core, row);
+    let request = page(&json!({"file": {"path": "/srv/report.html"}}));
+    core.show_replica_page(&request, row).unwrap();
     let (key, _, helper) = launcher.launches.borrow()[0].clone();
     core.page_helper_closed(key, "ssh exited");
     assert!(helper.0.get());
@@ -185,5 +237,11 @@ fn requests_after_helper_exit_fail_once_before_the_page_sweep() {
         Box::new(move |result| answers.borrow_mut().push(result)),
     );
     assert_eq!(*bridge.borrow(), [Err("page channel closed".to_owned())]);
+    assert!(origin.heard("page.closed").is_empty());
+
+    // The sweep tells the origin once, and a page already released says nothing more.
     core.replica_page_released(key.page);
+    core.replica_page_released(key.page);
+    assert_eq!(origin.heard("page.closed"), [json!({"page": request.page})]);
+    assert!(origin.heard("page.detached").is_empty());
 }
