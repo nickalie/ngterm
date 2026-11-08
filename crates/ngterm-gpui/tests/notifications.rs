@@ -737,7 +737,7 @@ impl Quirky {
         expire_timeout: i32,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<u32> {
-        drop((summary, hints, expire_timeout));
+        drop((summary, expire_timeout));
         let id = if replaces_id == 0 || body == RENUMBER {
             self.last += 1;
             self.last
@@ -750,6 +750,9 @@ impl Quirky {
                 .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
         }
         self.bodies.insert(id, body.clone());
+        let desktop_entry = hints
+            .get("desktop-entry")
+            .and_then(|value| String::try_from(value.try_clone().ok()?).ok());
         record(
             &self.calls,
             Call::Notify {
@@ -759,7 +762,7 @@ impl Quirky {
                 id,
                 body,
                 actions,
-                desktop_entry: None,
+                desktop_entry,
             },
         );
         Ok(id)
@@ -1040,7 +1043,7 @@ fn notify_call(replaces: u32, id: u32, body: &str) -> Call {
         id,
         body: body.to_owned(),
         actions: vec!["default".to_owned(), String::new()],
-        desktop_entry: None,
+        desktop_entry: Some(APP_ID.to_owned()),
     }
 }
 
