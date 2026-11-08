@@ -1,13 +1,16 @@
-//! A local release for tests of the updater and of the app around it: a Linux installation tree in a temp
-//! directory, its release archive, and a [`Server`] on 127.0.0.1 whose [`Server::source`] reads releases over plain
-//! HTTP. Behind the `fakes` feature, which shipped builds never enable: they have only [`Source::github`].
+//! A local release for tests of the updater and of the app around it: an installation tree in a temp directory (an
+//! `ngterm.app` bundle on macOS, a Linux archive's tree elsewhere), its release archive, and a [`Server`] on 127.0.0.1
+//! whose [`Server::source`] reads releases over plain HTTP. Behind the `fakes` feature, which shipped builds never
+//! enable: they have only [`Source::github`].
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{BufRead as _, Write as _};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
@@ -15,13 +18,79 @@ use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 
-use crate::{Error, Installation, MARKER, Source};
+#[cfg(not(target_os = "macos"))]
+use crate::MARKER;
+use crate::{Error, Installation, Source};
+
+/// What the updater requires an installation's root directory to be called on this platform.
+#[cfg(target_os = "macos")]
+pub const ROOT: &str = "ngterm.app";
+/// What the updater requires an installation's root directory to be called on this platform.
+#[cfg(not(target_os = "macos"))]
+pub const ROOT: &str = "ngterm";
+
+#[cfg(target_os = "macos")]
+const EXECUTABLE: &str = "Contents/MacOS/ngterm";
+#[cfg(not(target_os = "macos"))]
+const EXECUTABLE: &str = "usr/bin/ngterm";
+
+#[cfg(target_os = "macos")]
+const IDENTITY: &str = "Contents/share/ngterm/app-BUILD";
+#[cfg(not(target_os = "macos"))]
+const IDENTITY: &str = "usr/share/ngterm/app-BUILD";
+
+/// The main program of the installation [`tree`] at `root`.
+#[must_use]
+pub fn executable(root: &Path) -> PathBuf {
+    root.join(EXECUTABLE)
+}
+
+/// The identity file of the installation [`tree`] at `root`.
+#[must_use]
+pub fn identity(root: &Path) -> PathBuf {
+    root.join(IDENTITY)
+}
+
+/// Writes the unsigned tree of a macOS app bundle at `version` under `root`: its identity, its update marker and its
+/// programs. The updater accepts it as an installation when `root` is named [`ROOT`]; [`seal`] signs it.
+///
+/// # Errors
+/// Returns the filesystem's error.
+#[cfg(target_os = "macos")]
+pub fn tree(root: &Path, version: &str) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let contents = root.join("Contents");
+    let programs = contents.join("MacOS");
+    fs::create_dir_all(&programs)?;
+    fs::create_dir_all(contents.join("Resources"))?;
+    fs::create_dir_all(contents.join("share/ngterm"))?;
+    fs::write(contents.join("Info.plist"), INFO_PLIST)?;
+    fs::write(contents.join("share/ngterm/app-BUILD"), format!("{version}\ncommit\n"))?;
+    fs::write(contents.join("Resources/update-format"), "macos-bundle\n")?;
+    for name in ["ngterm", "ngtermctl", "ngterm-session", "ngterm-headless"] {
+        // codesign seals a bundle around real Mach-O programs, whose signatures survive the zip.
+        let program = programs.join(name);
+        fs::copy("/usr/bin/true", &program)?;
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+const INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>ngterm</string>
+<key>CFBundleIdentifier</key><string>com.ngterm.update-fixture</string>
+</dict></plist>
+"#;
 
 /// Writes the installation tree of a Linux release archive at `version` under `root`: its identity, its update
 /// marker and its programs. On Linux the updater accepts it as an installation when `root` is named `ngterm`.
 ///
 /// # Errors
 /// Returns the filesystem's error.
+#[cfg(not(target_os = "macos"))]
 pub fn tree(root: &Path, version: &str) -> std::io::Result<()> {
     let usr = root.join("usr");
     fs::create_dir_all(usr.join("bin"))?;
@@ -34,10 +103,66 @@ pub fn tree(root: &Path, version: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The release archive (`.app.zip`) of an ad-hoc signed macOS bundle [`tree`] at `version`.
+///
+/// # Errors
+/// Returns the filesystem's error, or `codesign`'s or `ditto`'s.
+#[cfg(target_os = "macos")]
+pub fn archive(version: &str) -> std::io::Result<Vec<u8>> {
+    let source = tempfile::tempdir()?;
+    let root = source.path().join(ROOT);
+    tree(&root, version)?;
+    seal(&root)?;
+    zip(&root)
+}
+
+/// Signs `bundle` ad hoc, as a release's signing does with its identity: `codesign --verify` then holds every file
+/// under it to what it is now.
+///
+/// # Errors
+/// Returns the failure of `codesign`, with its standard error.
+#[cfg(target_os = "macos")]
+pub fn seal(bundle: &Path) -> std::io::Result<()> {
+    tool(
+        Command::new("/usr/bin/codesign")
+            .args(["--force", "--deep", "--sign", "-"])
+            .arg(bundle),
+    )
+}
+
+/// `bundle` as a release ships it: a `ditto` zip with the bundle itself at its top.
+///
+/// # Errors
+/// Returns the filesystem's error, or the failure of `ditto` with its standard error.
+#[cfg(target_os = "macos")]
+pub fn zip(bundle: &Path) -> std::io::Result<Vec<u8>> {
+    let dir = tempfile::tempdir()?;
+    let zip = dir.path().join("release.zip");
+    tool(
+        Command::new("/usr/bin/ditto")
+            .args(["-c", "-k", "--keepParent"])
+            .arg(bundle)
+            .arg(&zip),
+    )?;
+    fs::read(zip)
+}
+
+#[cfg(target_os = "macos")]
+fn tool(command: &mut Command) -> std::io::Result<()> {
+    let output = command.output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(std::io::Error::other(
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
+}
+
 /// The release archive (`.tar.gz`) of a Linux installation [`tree`] at `version`.
 ///
 /// # Errors
 /// Returns the filesystem's error.
+#[cfg(not(target_os = "macos"))]
 pub fn archive(version: &str) -> std::io::Result<Vec<u8>> {
     let source = tempfile::tempdir()?;
     let root = source.path().join("ngterm");
@@ -55,7 +180,18 @@ pub fn installation(executable: &Path) -> Result<Installation, Error> {
     Installation::at(executable)
 }
 
+/// The asset a macOS bundle installation on this machine downloads at `version`.
+#[cfg(target_os = "macos")]
+#[must_use]
+pub fn asset(version: &str) -> String {
+    format!(
+        "ngterm-{version}-macos-{}.app.zip",
+        std::env::consts::ARCH.replace("aarch64", "arm64")
+    )
+}
+
 /// The asset a Linux archive installation on this machine downloads at `version`.
+#[cfg(not(target_os = "macos"))]
 #[must_use]
 pub fn asset(version: &str) -> String {
     format!("ngterm-{version}-linux-{}.tar.gz", std::env::consts::ARCH)
@@ -237,3 +373,7 @@ fn answer(
     response.extend_from_slice(&body);
     stream.write_all(&response)
 }
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "fakes_tests.rs"]
+mod tests;

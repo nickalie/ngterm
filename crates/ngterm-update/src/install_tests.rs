@@ -1,6 +1,10 @@
 use super::*;
+#[cfg(unix)]
+use crate::fakes;
 use crate::tests::installation;
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "macos")]
+use crate::tests::mac_archive_tree;
+#[cfg(unix)]
 use crate::tests::tree;
 
 #[test]
@@ -159,14 +163,20 @@ fn failed_helper_script_write_drops_the_prepared_stage() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn launch_transfers_ownership_and_installs_after_the_parent_exits() {
     const CHILD_FIXTURE: &str = "UPDATE_LAUNCH_FIXTURE";
     if let Some(path) = std::env::var_os(CHILD_FIXTURE) {
         launch_child(Path::new(&path));
         return;
     }
-    for (image, reopen) in [(false, false), (false, true), (true, false), (true, true)] {
+    // Only Linux has application images, and only GNU's stat their stamp.
+    let images: &[bool] = if cfg!(target_os = "linux") {
+        &[false, true]
+    } else {
+        &[false]
+    };
+    for (image, reopen) in images.iter().flat_map(|image| [(*image, false), (*image, true)]) {
         let fixture = tempfile::tempdir().unwrap();
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
@@ -190,7 +200,7 @@ fn launch_transfers_ownership_and_installs_after_the_parent_exits() {
             );
         } else {
             assert_eq!(
-                fs::read_to_string(fixture.path().join("ngterm/usr/share/ngterm/app-BUILD")).unwrap(),
+                fs::read_to_string(fakes::identity(&fixture.path().join(fakes::ROOT))).unwrap(),
                 "0.2.0\ncommit\n"
             );
         }
@@ -201,20 +211,22 @@ fn launch_transfers_ownership_and_installs_after_the_parent_exits() {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn launch_child(fixture: &Path) {
     use std::os::unix::fs::PermissionsExt as _;
-    let root = fixture.join("ngterm");
+    let root = fixture.join(fakes::ROOT);
     let image = std::env::var("UPDATE_IMAGE").unwrap() == "yes";
-    let mut install = installation(&root);
-    if image {
+    let install = if image {
         fs::write(&root, "old image").unwrap();
+        let mut install = installation(&root);
         install.format = Format::AppImage;
         install.executable = root.clone();
         install.image_identity = Some(image_stamp(&root).unwrap());
+        install
     } else {
         tree(&root, "0.1.0");
-    }
+        fakes::installation(&fakes::executable(&root)).unwrap()
+    };
     let work = tempfile::Builder::new().prefix("stage").tempdir_in(fixture).unwrap();
     record_installation(&install, work.path()).unwrap();
     let stage = work.path().to_owned();
@@ -223,7 +235,7 @@ fn launch_child(fixture: &Path) {
         candidate.clone()
     } else {
         tree(&candidate, "0.2.0");
-        candidate.join("usr/bin/ngterm")
+        fakes::executable(&candidate)
     };
     fs::write(&executable, reopen_script()).unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
@@ -245,6 +257,17 @@ fn launch_child(fixture: &Path) {
     fs::write(fixture.join("stage-path"), stage.to_str().unwrap()).unwrap();
 }
 
+#[cfg(target_os = "macos")]
+fn wait_for_helper(pid: &str) {
+    let helper = pid.parse().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    // SAFETY: signal 0 only asks whether the helper, a process this test's child started, still exists.
+    while unsafe { libc::kill(helper, 0) } == 0 {
+        assert!(std::time::Instant::now() < deadline, "helper {pid} did not exit");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn wait_for_helper(pid: &str) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -261,7 +284,7 @@ fn wait_for_helper(pid: &str) {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn reopen_script() -> &'static str {
     "#!/bin/sh\nprintf reopened > \"$UPDATE_REOPEN_RESULT\"\n"
 }
@@ -357,5 +380,201 @@ fn bundle_validation_requires_the_contents_identity_and_resource_marker() {
     assert_eq!(
         validate(&root, Format::MacBundle, &version).unwrap_err().to_string(),
         "Downloaded archive has an incompatible installation format."
+    );
+}
+
+/// The refusal text a failed `ditto` or `codesign` starts with.
+#[cfg(target_os = "macos")]
+const NOT_EXTRACTED: &str = "Release extraction or signature validation failed: ";
+
+#[cfg(target_os = "macos")]
+fn extract_bundle(fixture: &Path, archive: &[u8], version: &Version) -> Result<PathBuf, Error> {
+    let asset = fixture.join("release.app.zip");
+    fs::write(&asset, archive).unwrap();
+    let mut install = installation(&fixture.join(fakes::ROOT));
+    install.format = Format::MacBundle;
+    let work = tempfile::Builder::new()
+        .prefix("work")
+        .tempdir_in(fixture)
+        .unwrap()
+        .keep();
+    extract(&install, &asset, &work, version)
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn a_signed_bundle_is_extracted_and_verified_as_the_candidate() {
+    let fixture = tempfile::tempdir().unwrap();
+    let version = Version::parse("0.2.0").unwrap();
+    let candidate = extract_bundle(fixture.path(), &fakes::archive("0.2.0").unwrap(), &version).unwrap();
+    assert_eq!(
+        candidate.parent().unwrap().file_name().unwrap(),
+        "unpacked",
+        "{candidate:?}"
+    );
+    assert_eq!(candidate.file_name().unwrap(), fakes::ROOT);
+    assert_eq!(
+        fs::read_to_string(fakes::identity(&candidate)).unwrap(),
+        "0.2.0\ncommit\n"
+    );
+    assert!(candidate.join("Contents/MacOS/ngterm-session").is_file());
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn unsigned_tampered_or_corrupt_bundle_archives_are_refused_before_validation() {
+    let fixture = tempfile::tempdir().unwrap();
+    let version = Version::parse("0.2.0").unwrap();
+    let refused = |archive: &[u8]| {
+        extract_bundle(fixture.path(), archive, &version)
+            .unwrap_err()
+            .to_string()
+    };
+    let corrupt = refused(b"not a zip");
+    assert!(corrupt.starts_with(NOT_EXTRACTED), "{corrupt}");
+
+    let source = tempfile::tempdir().unwrap();
+    let unsigned = source.path().join("unsigned").join(fakes::ROOT);
+    tree(&unsigned, "0.2.0");
+    let refusal = refused(&fakes::zip(&unsigned).unwrap());
+    assert!(refusal.starts_with(NOT_EXTRACTED), "{refusal}");
+    // /usr/bin/true's own signature doesn't cover the bundle; the tool's refusal names the bundle.
+    assert!(refusal.contains("ngterm.app:"), "{refusal}");
+
+    let tampered = source.path().join("tampered").join(fakes::ROOT);
+    tree(&tampered, "0.2.0");
+    fakes::seal(&tampered).unwrap();
+    fs::write(fakes::identity(&tampered), "0.2.0\nsomething else\n").unwrap();
+    let refusal = refused(&fakes::zip(&tampered).unwrap());
+    assert!(refusal.starts_with(NOT_EXTRACTED), "{refusal}");
+    assert!(refusal.contains("a sealed resource is missing or invalid"), "{refusal}");
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn a_macos_archive_unpacks_as_its_own_candidate() {
+    let fixture = tempfile::tempdir().unwrap();
+    let source = fixture.path().join("source");
+    mac_archive_tree(&source, "0.2.0");
+    let asset = fixture.path().join("release.tar.gz");
+    let encoder = flate2::write::GzEncoder::new(File::create(&asset).unwrap(), flate2::Compression::fast());
+    let mut archive = tar::Builder::new(encoder);
+    archive.append_dir_all(".", &source).unwrap();
+    archive.into_inner().unwrap().finish().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut install = installation(fixture.path());
+    install.format = Format::MacArchive;
+    assert_eq!(
+        extract(&install, &asset, work.path(), &Version::parse("0.2.0").unwrap()).unwrap(),
+        work.path().join("unpacked")
+    );
+    assert!(work.path().join("unpacked/bin/ngterm-headless").is_file());
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn a_linux_archive_is_refused_on_macos_after_unpacking() {
+    let fixture = tempfile::tempdir().unwrap();
+    let share = fixture.path().join("source/usr/share/ngterm");
+    fs::create_dir_all(&share).unwrap();
+    fs::write(share.join("app-BUILD"), "0.2.0\ncommit\n").unwrap();
+    fs::write(share.join("update-format"), "linux-archive\n").unwrap();
+    let asset = fixture.path().join("release.tar.gz");
+    let encoder = flate2::write::GzEncoder::new(File::create(&asset).unwrap(), flate2::Compression::fast());
+    let mut archive = tar::Builder::new(encoder);
+    archive.append_dir_all("ngterm", fixture.path().join("source")).unwrap();
+    archive.into_inner().unwrap().finish().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    assert_eq!(
+        extract(
+            &installation(fixture.path()),
+            &asset,
+            work.path(),
+            &Version::parse("0.2.0").unwrap()
+        )
+        .unwrap_err()
+        .to_string(),
+        "Downloaded archive has an incompatible installation format."
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_missing_download_is_an_io_error_for_every_format_extraction_reads() {
+    let fixture = tempfile::tempdir().unwrap();
+    let version = Version::parse("0.2.0").unwrap();
+    for format in [Format::AppImage, Format::LinuxArchive, Format::MacArchive] {
+        let work = tempfile::tempdir().unwrap();
+        let mut install = installation(fixture.path());
+        install.format = format;
+        assert!(matches!(
+            extract(&install, &fixture.path().join("missing"), work.path(), &version),
+            Err(Error::Io(_))
+        ));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn an_empty_error_file_path_refuses_the_launch_and_drops_the_stage() {
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().join("ngterm");
+    fs::create_dir(&root).unwrap();
+    let work = tempfile::tempdir_in(fixture.path()).unwrap();
+    let stage = work.path().to_owned();
+    let prepared = Prepared {
+        installation: installation(&root),
+        candidate: work.path().join("unused"),
+        work,
+    };
+    assert!(matches!(prepared.launch(Path::new(""), false, &[]), Err(Error::Io(_))));
+    assert!(!stage.exists());
+    assert!(root.exists());
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn bundle_validation_reports_identity_format_and_each_missing_program() {
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().join(fakes::ROOT);
+    let version = Version::parse("0.2.0").unwrap();
+    assert!(matches!(
+        validate(&root, Format::MacBundle, &version),
+        Err(Error::Io(_))
+    ));
+    tree(&root, "0.1.0");
+    assert_eq!(
+        validate(&root, Format::MacBundle, &version).unwrap_err().to_string(),
+        "Downloaded archive identity does not match the release."
+    );
+    tree(&root, "0.2.0");
+    validate(&root, Format::MacBundle, &version).unwrap();
+    fs::write(root.join("Contents/Resources/update-format"), "windows-archive").unwrap();
+    assert_eq!(
+        validate(&root, Format::MacBundle, &version).unwrap_err().to_string(),
+        "Downloaded archive has an incompatible installation format."
+    );
+    for name in ["ngterm", "ngtermctl", "ngterm-session", "ngterm-headless"] {
+        tree(&root, "0.2.0");
+        fs::remove_file(root.join("Contents/MacOS").join(name)).unwrap();
+        assert_eq!(
+            validate(&root, Format::MacBundle, &version).unwrap_err().to_string(),
+            format!("Downloaded archive has no {name}.")
+        );
+    }
+    fs::remove_file(root.join("Contents/Resources/update-format")).unwrap();
+    assert!(matches!(
+        validate(&root, Format::MacBundle, &version),
+        Err(Error::Io(_))
+    ));
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn a_missing_image_has_no_stamp() {
+    let fixture = tempfile::tempdir().unwrap();
+    assert_eq!(
+        image_stamp(&fixture.path().join("missing")).unwrap_err().to_string(),
+        "Could not identify the installed application image."
     );
 }
