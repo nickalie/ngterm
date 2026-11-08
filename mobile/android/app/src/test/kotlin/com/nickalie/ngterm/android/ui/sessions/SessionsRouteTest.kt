@@ -41,7 +41,7 @@ private const val ROUTE_WAIT_MS = 10_000L
 
 /** The machine session route's failure recovery and menus, through real stores and view models. */
 @RunWith(RobolectricTestRunner::class)
-class SessionsRouteCoverageTest {
+class SessionsRouteTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @get:Rule val dir = TemporaryFolder()
@@ -199,6 +199,8 @@ class SessionsRouteCoverageTest {
         compose.onNodeWithText("build").performClick()
         compose.waitUntil(ROUTE_WAIT_MS) { opened.size == 1 }
         assertEquals(SessionKey("m1", "s1"), opened.single())
+        compose.waitForIdle()
+        compose.onNodeWithText("attach refused").assertDoesNotExist()
     }
 
     @Test
