@@ -1,9 +1,10 @@
 //! A painted pane on every OS: what the painter draws reaches the terminal, an update repaints in place, a resize keeps
 //! the frame, and the body file's removal ends the pane with status 0. Each wait follows the pane's own wake, never a
-//! poll.
+//! poll; only a stale frame is read again without one.
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
@@ -36,13 +37,19 @@ fn write_body(file: &Path, body: &str) {
     std::fs::rename(&staging, file).unwrap();
 }
 
-/// Waits for wakes until the screen's lines are `expected`, collecting the events on the way.
+/// Waits for wakes until the screen's lines are `expected`, collecting the events on the way. A stale frame (a lock
+/// was busy) is read again at once, as a frontend asks for another: the wake for what it missed may have come before.
 fn until_screen(pane: &Pane, wakes: &Receiver<()>, expected: &[&str], events: &mut Vec<PaneEvent>) {
     loop {
-        let lines = pane.frame().frame.lines();
+        let snapshot = pane.frame();
+        let lines = snapshot.frame.lines();
         events.extend(pane.take_events());
         if lines.iter().map(|line| line.trim_end()).eq(expected.iter().copied()) {
             return;
+        }
+        if snapshot.stale {
+            std::thread::yield_now();
+            continue;
         }
         wakes
             .recv_timeout(WAKE_LIMIT)
@@ -105,4 +112,32 @@ fn a_painted_pane_without_its_file_ends_at_once_and_one_dropped_stops_painting()
     // dropping joins the pane's worker; the painter's thread leaves without reporting an end
     drop(pane);
     assert!(file.exists(), "the pane never removes the body");
+}
+
+/// Sets its flag when dropped, a panic's unwinding included.
+struct SetOnDrop<'a>(&'a AtomicBool);
+
+impl Drop for SetOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+#[test]
+fn a_painted_pane_shows_its_body_while_another_view_paints_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("body.txt");
+    write_body(&file, "20 4 0 0 0.05 - 0\nkept\n");
+    let (pane, wakes) = painted(&file);
+    let done = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        // a second view painting the same pane: a frame read while it captures is the previous one, marked stale
+        scope.spawn(|| {
+            while !done.load(Ordering::Acquire) {
+                let _ = pane.frame();
+            }
+        });
+        let _stop = SetOnDrop(&done);
+        until_screen(&pane, &wakes, &["", "        kept", "", ""], &mut Vec::new());
+    });
 }

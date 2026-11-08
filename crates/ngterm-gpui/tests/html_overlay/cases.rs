@@ -1329,8 +1329,10 @@ fn replica_held_failure_told_on_removal(fixture: &mut Fixture, _: &Gpu) -> Resul
         fixture.frame()?;
     }
     let (width, pixels) = fixture.frame()?;
-    check(close(pixel(&pixels, width, width / 2, 200), RED), || {
-        "the last source's failure was told while the first one was still being read".to_owned()
+    let early = pixel(&pixels, width, width / 2, 200);
+    let stats = fixture.stats(&element);
+    check(close(early, RED), || {
+        format!("the last source's failure was told while the first one was still being read: {early:?} ({stats:?})")
     })?;
     fixture.click(point(px(160.), px(120.)))?;
     let settle = Instant::now() + Duration::from_millis(300);
