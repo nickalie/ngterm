@@ -444,3 +444,7 @@ fn fractional_page(fraction: f32, page: isize) -> isize {
     let rows = rows.trunc() as isize;
     rows
 }
+
+#[cfg(test)]
+#[path = "surface_tests.rs"]
+pub(super) mod tests;

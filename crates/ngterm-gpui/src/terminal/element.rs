@@ -989,3 +989,7 @@ fn paint_preedit(window: &mut Window, plan: &Plan, frame: &Frame, preedit: &str)
         hsla(colors.foreground, u8::MAX),
     ));
 }
+
+#[cfg(test)]
+#[path = "element_tests.rs"]
+mod tests;
