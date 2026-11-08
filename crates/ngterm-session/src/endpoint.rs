@@ -9,6 +9,7 @@
 //! kinds; on Windows the owner-only pipe DACL of `bind_private_local_listener` with the integrity label of
 //! `platform/windows.rs` `local_server_security_descriptor`. Changed: the paths come from ngterm's namespace, not
 //! herdr's session directories and overrides; an over-long Unix socket path is refused before anything is touched;
+//! the Unix stale-socket check reports a path it cannot check, where herdr's `exists()` treats it as absent;
 //! Windows derives the pipe's name from the namespace directory instead of writing a marker file, creates it with
 //! `FILE_FLAG_FIRST_PIPE_INSTANCE` (ngterm's addition, which `interprocess` sets on a listener's first instance); a
 //! Unix server holds the namespace's `flock` from before the stale-socket check for as long as it listens (ngterm's
