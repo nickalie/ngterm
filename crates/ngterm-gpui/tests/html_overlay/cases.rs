@@ -29,7 +29,7 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 30] = [
+pub const CASES: [(&str, Case); 31] = [
     (
         "an_image_document_renders_and_current_reload_rereads_the_source",
         image_document,
@@ -58,6 +58,10 @@ pub const CASES: [(&str, Case); 30] = [
         replica_image,
     ),
     ("a_markdown_replica_renders_with_its_fetched_picture", replica_markdown),
+    (
+        "a_windows_origins_markdown_replica_renders_its_picture",
+        replica_markdown_windows,
+    ),
     ("a_replica_reads_nothing_of_another_page", replica_other_page),
     ("a_slow_replica_read_blocks_no_other", replica_slow),
     ("a_replicas_bridge_reply_keeps_unknown_fields", replica_bridge),
@@ -687,6 +691,29 @@ fn replica_markdown(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     )?;
     let requested = origin.requested.borrow().clone();
     check(requested == ["/docs/doc.md", "/docs/shot.png"], || {
+        format!("the origin was asked for {requested:?}")
+    })
+}
+
+/// A Markdown replica of a Windows origin's file, shown on this POSIX host: its picture is asked for as that machine
+/// spells it, so it is drawn.
+fn replica_markdown_windows(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let origin = FakeOrigin::new(&[]);
+    let markdown = b"![shot](img/shot.png)\n".to_vec();
+    origin.content.borrow_mut().insert(r"C:\docs\doc.md", markdown);
+    origin
+        .content
+        .borrow_mut()
+        .insert(r"C:\docs\img\shot.png", png(300, 180, RED)?);
+    let overlay = content_replica(&origin, r"C:\docs\doc.md", ngterm_core::html::ReplicaContent::Markdown);
+    let element = fixture.mount(&overlay, 320.0, 300.0)?;
+    fixture.until(
+        "the fetched picture in the rendered page",
+        &element,
+        |_, width, pixels| close(pixel(pixels, width, 160, 130), RED),
+    )?;
+    let requested = origin.requested.borrow().clone();
+    check(requested == [r"C:\docs\doc.md", r"C:\docs\img\shot.png"], || {
         format!("the origin was asked for {requested:?}")
     })
 }

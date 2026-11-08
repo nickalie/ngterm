@@ -126,6 +126,14 @@ fn page(id: Uuid) -> Option<Rc<Page>> {
     with(|registry| registry.pages.get(&id).cloned())
 }
 
+/// Find over text replica `id` (`crate::html_overlay::focus_page_search`): the keyboard goes into its renderer's own
+/// field, which no bridge reaches.
+pub fn focus_replica_search(id: Uuid) {
+    if let Some(page) = page(id) {
+        super::super::text_page::focus_replica_search(&page.overlay(), &*page);
+    }
+}
+
 fn send(job: Job) {
     if let Some(jobs) = with(|registry| registry.jobs.clone()) {
         let _ = jobs.try_send(job);

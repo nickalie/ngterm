@@ -145,7 +145,7 @@ pub(super) fn build_replica(path: &str, content: ReplicaContent, read: &mut Orig
     };
     let bytes = read(path, limit, failures)?;
     match content {
-        ReplicaContent::Html => Err(errors::REMOTE_FILE.to_owned()),
+        ReplicaContent::Html => unreachable!("an HTML replica is refused by replica_read"),
         ReplicaContent::Image { .. } => {
             let image = ngterm_app::documents::image_from_bytes(bytes, path)?;
             Ok(image_page::html(&image.bytes, &image.mime_type))

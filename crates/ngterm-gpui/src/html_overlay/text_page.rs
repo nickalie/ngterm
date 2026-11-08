@@ -29,7 +29,9 @@ use std::rc::{Rc, Weak};
 use gpui_kit::{App, AppContext as _, AsyncApp, Task};
 use ngterm_app::log_follower::{LogFollower, LogRead, LogSink, ReadResult, Update};
 use ngterm_core::html::text_page::{self as core_text, PageState, SearchState, TextChanges, TextLogReport};
-use ngterm_core::html::{ChangesAnswer, HtmlOverlay, HtmlSource, SearchAnswer, SearchCount, SearchStep};
+use ngterm_core::html::{
+    ChangesAnswer, HtmlOverlay, HtmlSource, ReplicaContent, SearchAnswer, SearchCount, SearchStep,
+};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -41,6 +43,9 @@ pub(super) const HANDLER: &str = "ngtermTextPage";
 
 /// Reads where a shown page is scrolled, so its rebuild reopens there.
 const SCROLL_TOP: &str = "document.scrollingElement.scrollTop";
+
+/// Moves the keyboard into the renderer's own search field.
+const FOCUS_SEARCH: &str = "ngtermTextFocusSearch()";
 
 /// What a call into the renderer's world answered: its value as JSON (`None` for `undefined`), or why it failed.
 pub(super) type Answer = Result<Option<String>, String>;
@@ -240,10 +245,28 @@ pub(super) fn step_changes(page: Uuid, forward: bool) -> Option<ChangesAnswer> {
 }
 
 /// Moves the keyboard into text page `page`'s own search field (upstream's `focusSearch`); the deck gives the page's
-/// element the keyboard.
-pub(crate) fn focus_search(page: Uuid) {
-    if let Some(bridge) = bridge(page) {
-        bridge.run("ngtermTextFocusSearch()".to_owned());
+/// element the keyboard. False when `page` has no bridge here, as a text page shown for another machine has none
+/// ([`focus_replica_search`]).
+pub(crate) fn focus_search(page: Uuid) -> bool {
+    let Some(bridge) = bridge(page) else {
+        return false;
+    };
+    bridge.run(FOCUS_SEARCH.to_owned());
+    true
+}
+
+/// Moves the keyboard into the search field of `overlay`'s page reached through `channel` when it is a text page shown
+/// here for another machine (upstream's `focusSearch` on a replica): its static document runs the text renderer, which
+/// carries the field, but no bridge does. Any other page is left alone.
+pub(super) fn focus_replica_search(overlay: &HtmlOverlay, channel: &dyn PageChannel) {
+    if matches!(
+        overlay.source,
+        HtmlSource::Replica {
+            content: ReplicaContent::Text { .. },
+            ..
+        }
+    ) {
+        drop(channel.call(FOCUS_SEARCH.to_owned()));
     }
 }
 
@@ -1019,8 +1042,43 @@ mod tests {
             "{rebuilt}"
         );
         assert!(channel.failures.borrow().is_empty(), "the kept text, not a read");
-        focus_search(overlay.id);
+        assert!(focus_search(overlay.id));
         assert_eq!(channel.take_calls(), ["ngtermTextFocusSearch()"]);
+    }
+
+    /// Upstream's `focusSearch` on a replica: a text page shown here for another machine has no bridge, so Find goes
+    /// straight into its renderer's field; a replica of another kind and a local page are left alone by that path.
+    #[test]
+    fn find_reaches_a_text_replicas_field_without_a_bridge() {
+        let replica = |content| {
+            HtmlOverlay::new(
+                HtmlSource::Replica {
+                    path: "/o/main.go".to_owned(),
+                    content,
+                },
+                ngterm_core::html::HtmlPageFlags::default(),
+            )
+        };
+        let text = replica(ReplicaContent::Text { line: None });
+        let channel = Channel::default();
+        assert!(!focus_search(text.id), "no bridge holds a replica");
+        focus_replica_search(&text, &channel);
+        assert_eq!(channel.take_calls(), ["ngtermTextFocusSearch()"]);
+
+        for other in [
+            replica(ReplicaContent::Markdown),
+            replica(ReplicaContent::Html),
+            HtmlOverlay::new(
+                HtmlSource::Text {
+                    path: "/o/main.go".to_owned(),
+                    line: None,
+                },
+                ngterm_core::html::HtmlPageFlags::default(),
+            ),
+        ] {
+            focus_replica_search(&other, &channel);
+            assert!(channel.take_calls().is_empty(), "{:?}", other.source);
+        }
     }
 
     // MARK: - a diff page's changes

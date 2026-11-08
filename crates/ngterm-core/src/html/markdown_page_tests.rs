@@ -97,9 +97,16 @@ fn listed_references_ignore_symlinks_here_and_local_paths_resolve_them() {
     std::os::unix::fs::symlink(&shot, root.join("out.png")).unwrap();
     std::fs::write(root.join("in.png"), "x").unwrap();
 
-    let found = image_references("![o](out.png) ![m](img/missing.png) ![e](../up.png)", root);
+    let markdown = "![o](out.png) ![m](img/missing.png) ![e](../up.png)";
+    let found = image_references(markdown, root);
     let paths: Vec<_> = found.iter().map(|image| image.path.clone()).collect();
     assert_eq!(paths, [root.join("out.png"), root.join("img/missing.png")]);
+    let remote = remote_image_references(markdown, &root.join("README.md").to_string_lossy());
+    let remote: Vec<_> = remote.iter().map(|image| PathBuf::from(&image.path)).collect();
+    assert_eq!(
+        remote, paths,
+        "a listing of another machine's file ignores links here too"
+    );
 
     assert_eq!(local_path("out.png", root), None);
     let real_root = root.canonicalize().unwrap();

@@ -149,8 +149,10 @@ impl PageOpening {
 /// `session.overlay.open --html|--url|--image|--markdown` once validated (upstream's `openHtmlOverlay`): a local
 /// document's descriptor is probed and an image's natural size resolved before the page takes its slot. It follows
 /// a program's slot rules and answers with its id, the one `session.overlay.result --page` reads. A page the
-/// placement rule hands to the presenting machine is reserved for it before any local check: nothing renders here,
-/// so neither the web views, the saved store nor `--follow` are this machine's concern.
+/// placement rule hands to the presenting machine has its file read here first (an image's probe, a Markdown or text
+/// file's check, through the web views or the headless probe: [`read_for_hand_over`]), so a missing, oversized or binary
+/// file or a log page is refused before any slot is reserved; it is then reserved for that machine. Nothing renders
+/// here, so neither the saved store nor `--follow` are this machine's concern.
 pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, opening: PageOpening) -> Outcome {
     open_checked(core, target, window, opening, None, false)
 }

@@ -392,8 +392,9 @@ pub fn document_from_bytes(bytes: Vec<u8>, label: &str, page: fn(Vec<u8>) -> Opt
 }
 
 /// Builds a Markdown page's document from bytes fetched from another machine (upstream's replica Markdown arm): the
-/// references are listed lexically against `path`'s folder there ([`markdown_page::image_references`]), each picture
-/// read through `fetch` (its path there and the bytes it may take) under the page's shared budget and judged here.
+/// references are listed lexically against `path`'s folder there by that machine's path rules, whatever OS this one
+/// runs ([`markdown_page::remote_image_references`]), each picture read through `fetch` (its path there and the bytes
+/// it may take) under the page's shared budget and judged here.
 ///
 /// # Errors
 /// `not a UTF-8 text file: path`.
@@ -403,10 +404,9 @@ pub fn markdown_from_bytes(
     mut fetch: impl FnMut(&str, usize) -> Option<Vec<u8>>,
 ) -> Result<MarkdownDocument, String> {
     let markdown = String::from_utf8(bytes).map_err(|_| format!("not a UTF-8 text file: {path}"))?;
-    let folder = Path::new(path).parent().map(Path::to_path_buf).unwrap_or_default();
     let mut embedding = Embedding::default();
-    for image in markdown_page::image_references(&markdown, &folder) {
-        let key = image.path.to_string_lossy().into_owned();
+    for image in markdown_page::remote_image_references(&markdown, path) {
+        let key = image.path;
         let Some(room) = embedding.room(&key, &image.reference) else {
             continue;
         };

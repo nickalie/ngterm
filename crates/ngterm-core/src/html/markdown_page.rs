@@ -32,26 +32,55 @@ pub struct ImageReference {
     pub path: PathBuf,
 }
 
+/// A decoded image reference of a Markdown file on another machine and its lexically-contained candidate path there,
+/// spelled as that machine spells paths; that machine still resolves it before it serves a picture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteImageReference {
+    pub reference: String,
+    pub path: String,
+}
+
 /// The picture references of `markdown` lexically inside `folder`, in document order, each decoded reference once
-/// (upstream's `imageReferences` without its symlink half, and its `remoteImageReferences`). No filesystem access:
-/// the local page's reader resolves each candidate before it reads it, and a viewer lists a markdown file on another
-/// machine this way, `folder` being its folder there, whose page channel resolves symlinks before it serves a picture.
+/// (upstream's `imageReferences` without its symlink half). No filesystem access: the local page's reader resolves
+/// each candidate before it reads it.
 #[must_use]
 pub fn image_references(markdown: &str, folder: &Path) -> Vec<ImageReference> {
-    let mut seen = HashSet::new();
-    Parser::new_ext(markdown, Options::all())
-        .filter_map(|event| match event {
-            Event::Start(Tag::Image { dest_url, .. }) => {
-                let reference = crate::link_policy::percent_decode(&dest_url).unwrap_or_else(|| dest_url.into_string());
-                if !seen.insert(reference.clone()) {
-                    return None;
-                }
-                let path = lexical_path(&reference, folder)?;
-                Some(ImageReference { reference, path })
-            }
-            _ => None,
+    decoded_references(markdown)
+        .filter_map(|reference| {
+            let path = lexical_path(&reference, folder)?;
+            Some(ImageReference { reference, path })
         })
         .collect()
+}
+
+/// The picture references of the Markdown file `markdown` that another machine holds at `file`, lexically inside its
+/// folder there, in document order, each decoded reference once (upstream's `remoteImageReferences`). They are listed
+/// by that machine's path rules, read from `file`'s own shape (`origin_path`), not by this OS's, so a viewer on Windows
+/// lists a POSIX machine's pictures and the other way round; none for a `file` that is absolute on no machine. That
+/// machine's page channel resolves symlinks before it serves a picture.
+#[must_use]
+pub fn remote_image_references(markdown: &str, file: &str) -> Vec<RemoteImageReference> {
+    let Some(folder) = super::origin_path::OriginFolder::of_file(file) else {
+        return Vec::new();
+    };
+    decoded_references(markdown)
+        .filter_map(|reference| {
+            let path = folder.lexical_path(&reference)?;
+            Some(RemoteImageReference { reference, path })
+        })
+        .collect()
+}
+
+/// The decoded picture references of `markdown`, in document order, each once.
+fn decoded_references(markdown: &str) -> impl Iterator<Item = String> + '_ {
+    let mut seen = HashSet::new();
+    Parser::new_ext(markdown, Options::all()).filter_map(move |event| match event {
+        Event::Start(Tag::Image { dest_url, .. }) => {
+            let reference = crate::link_policy::percent_decode(&dest_url).unwrap_or_else(|| dest_url.into_string());
+            seen.insert(reference.clone()).then_some(reference)
+        }
+        _ => None,
+    })
 }
 
 /// One decoded reference joined to `folder` and normalized without reading the filesystem (upstream's `lexicalPath`):
@@ -81,7 +110,7 @@ pub fn local_path(reference: &str, folder: &Path) -> Option<PathBuf> {
     super::strictly_inside(&file, &root).then_some(file)
 }
 
-fn has_scheme(reference: &str) -> bool {
+pub(super) fn has_scheme(reference: &str) -> bool {
     let Some((scheme, _)) = reference.split_once(':') else {
         return false;
     };

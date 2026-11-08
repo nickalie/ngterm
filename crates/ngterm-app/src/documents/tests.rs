@@ -785,6 +785,29 @@ fn a_fetched_markdown_file_embeds_the_pictures_its_fetch_brings() {
     );
 }
 
+/// A viewer lists a fetched Markdown file's pictures by its origin's path rules whatever OS it runs: a POSIX origin's
+/// and a Windows origin's pictures are asked for as each spells them there, on any host.
+#[test]
+fn a_fetched_markdown_file_lists_its_pictures_by_its_origins_path_rules() {
+    let markdown = "![a](img/a.png) ![b](img\\b.png) ![up](../up.png)\n";
+    for (path, expected) in [
+        ("/srv/docs/README.md", ["/srv/docs/img/a.png", "/srv/docs/img\\b.png"]),
+        (
+            r"C:\Users\me\docs\README.md",
+            [r"C:\Users\me\docs\img\a.png", r"C:\Users\me\docs\img\b.png"],
+        ),
+    ] {
+        let mut asked = Vec::new();
+        let document = markdown_from_bytes(markdown.as_bytes().to_vec(), path, |requested, _| {
+            asked.push(requested.to_owned());
+            Some(png())
+        })
+        .unwrap();
+        assert_eq!(asked, expected, "{path}");
+        assert_eq!(document.images.uris.len(), 2, "{path}");
+    }
+}
+
 /// A content replica reads under its kind's cap and words its failures as that kind's local probe; an HTML replica
 /// loads through its scheme instead.
 #[test]

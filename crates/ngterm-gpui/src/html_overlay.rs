@@ -72,7 +72,7 @@ pub use registry::{
     page_holds_keyboard, refresh_themes, reject, set_replica_link, set_window_scale, settle, shutdown,
 };
 #[cfg(all(feature = "html", target_os = "linux"))]
-use registry::{copy_link, navigate};
+use registry::{copy_link, focus_replica_search, navigate};
 #[cfg(all(feature = "html", target_os = "linux"))]
 pub use view::{FrameStats, PageView};
 #[cfg(all(feature = "html", windows))]
@@ -81,7 +81,7 @@ pub use webview2::{
     set_covered, set_window_scale, settle, shutdown,
 };
 #[cfg(all(feature = "html", windows))]
-use webview2::{copy_link, navigate};
+use webview2::{copy_link, focus_replica_search, navigate};
 
 #[cfg(all(feature = "html", target_os = "macos"))]
 mod wkwebview;
@@ -91,7 +91,7 @@ pub use wkwebview::{
     set_covered, set_window_scale, settle, shutdown,
 };
 #[cfg(all(feature = "html", target_os = "macos"))]
-use wkwebview::{copy_link, navigate};
+use wkwebview::{copy_link, focus_replica_search, navigate};
 
 /// The terminal's colors of `config`, which the pages are drawn in.
 #[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
@@ -135,11 +135,14 @@ pub fn step_text_changes(page: uuid::Uuid, forward: bool) -> Option<ngterm_core:
     text_page::step_changes(page, forward)
 }
 
-/// Find over a text page on top: the keyboard goes into that page's own search field (upstream's `focusSearch`); the
-/// deck gives the page's element the keyboard.
+/// Find over a text page on top: the keyboard goes into that page's own search field (upstream's `focusSearch`), a
+/// local page's through its bridge and a replica's straight into its renderer; the deck gives the page's element the
+/// keyboard.
 pub fn focus_page_search(page: uuid::Uuid) {
     #[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
-    text_page::focus_search(page);
+    if !text_page::focus_search(page) {
+        focus_replica_search(page);
+    }
     #[cfg(not(all(feature = "html", any(target_os = "linux", target_os = "macos", windows))))]
     let _ = page;
 }

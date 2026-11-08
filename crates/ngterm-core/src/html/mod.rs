@@ -11,6 +11,7 @@ pub mod image_page;
 pub mod log_tail;
 pub mod markdown_page;
 pub mod navigation;
+mod origin_path;
 pub mod outcomes;
 pub mod profile;
 pub mod text_page;

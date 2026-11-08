@@ -46,7 +46,7 @@ pub use registry::{
     answer, apply, init, install, key_down, mount, page_holds_keyboard, refresh_themes, reject, set_covered,
     set_window_scale, settle, shutdown,
 };
-pub(super) use registry::{copy_link, navigate};
+pub(super) use registry::{copy_link, focus_replica_search, navigate};
 pub use view::PageView;
 
 /// Marks `element`'s page off screen: its deck page is held out of the tree (a pending close) or hidden.
