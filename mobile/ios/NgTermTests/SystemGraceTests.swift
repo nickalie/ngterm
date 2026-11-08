@@ -2,7 +2,7 @@ import NgtermPlatform
 import Testing
 
 /// The grace on iOS, a background task the hosted app begins (an unhosted test bundle has no application to ask): it
-/// runs out by its own limit, and an end or a new grace calls the one running off.
+/// runs out by its own limit, an end calls it off, and beginning again uses the latest expired callback.
 @MainActor
 @Suite("the system's grace", .timeLimit(.minutes(1)))
 internal struct SystemGraceTests {
@@ -51,8 +51,8 @@ internal struct SystemGraceTests {
         #expect(runs.times == 0)
     }
 
-    @Test("beginning a grace again calls the running one off: only the new one's expired runs")
-    internal func beginningAgainReplaces() async {
+    @Test("beginning a grace again runs only the latest expired callback")
+    internal func beginningAgainUsesLatestCallback() async {
         let grace = SystemGrace(limit: Self.limit)
         let first = Runs()
         let second = Runs()

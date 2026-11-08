@@ -21,9 +21,15 @@ internal final class PresentedNotices: NSObject, UNUserNotificationCenterDelegat
         internal var info: [String: String]
     }
 
+    /// The system did not present the notice before the wait's deadline.
+    internal struct TimedOut: Error {}
+
+    private static let limitSeconds = 10
+    private static let presentationLimit = Duration.seconds(limitSeconds)
+
     private let previous: (any UNUserNotificationCenterDelegate)?
     private var shown: [String: Shown] = [:]
-    private var waiting: [String: CheckedContinuation<Shown, Never>] = [:]
+    private var waiting: [String: AsyncStream<Shown>.Continuation] = [:]
 
     /// Stands in from now on.
     override internal init() {
@@ -37,14 +43,34 @@ internal final class PresentedNotices: NSObject, UNUserNotificationCenterDelegat
         UNUserNotificationCenter.current().delegate = previous
     }
 
-    /// The notification `id` once the system presents it.
-    internal func presented(_ id: String) async -> Shown {
+    /// The notification `id` once the system presents it, bounded by the presentation limit.
+    internal func presented(_ id: String) async throws -> Shown {
+        try await presented(id, timeout: Self.presentationLimit)
+    }
+
+    /// The notification `id` once the system presents it, or an error on cancellation or after `timeout`.
+    internal func presented(_ id: String, timeout: Duration) async throws -> Shown {
+        try Task.checkCancellation()
         if let seen = shown[id] {
             return seen
         }
-        return await withCheckedContinuation { continuation in
-            waiting[id] = continuation
+        let (presentations, continuation) = AsyncStream<Shown>.makeStream()
+        waiting[id] = continuation
+        let deadline = Task {
+            try? await Task.sleep(for: timeout)
+            continuation.finish()
         }
+        defer {
+            deadline.cancel()
+            waiting[id] = nil
+        }
+        var iterator = presentations.makeAsyncIterator()
+        let seen = await iterator.next()
+        try Task.checkCancellation()
+        guard let seen else {
+            throw TimedOut()
+        }
+        return seen
     }
 
     nonisolated internal func userNotificationCenter(
@@ -69,7 +95,8 @@ internal final class PresentedNotices: NSObject, UNUserNotificationCenterDelegat
             shown[id] = seen
             return
         }
-        waiter.resume(returning: seen)
+        waiter.yield(seen)
+        waiter.finish()
     }
 
     deinit {

@@ -22,6 +22,25 @@ internal struct SystemNoticesTests {
         }
     }
 
+    /// Withdraws the notices and waits for that withdrawal even when the check throws.
+    private static func withPosted(_ posted: [Notice], checking: () async throws -> Void) async rethrows {
+        let notices = SystemNotices()
+        for notice in posted {
+            notices.post(notice)
+        }
+        await notices.delivered()
+        let ids = posted.map(\.id)
+        do {
+            try await checking()
+        } catch {
+            notices.withdraw(ids)
+            await notices.delivered()
+            throw error
+        }
+        notices.withdraw(ids)
+        await notices.delivered()
+    }
+
     private func action(_ name: String) -> String {
         "\(name)-\(tag)"
     }
@@ -40,7 +59,6 @@ internal struct SystemNoticesTests {
 
     @Test("a notice's actions are registered as its buttons, each asking for the device to be unlocked")
     internal func actionsAreRegistered() async throws {
-        let notices = SystemNotices()
         let notice = ask(
             "ask",
             actions: [
@@ -49,48 +67,86 @@ internal struct SystemNoticesTests {
                 NoticeAction(id: action("reply"), title: "Reply", replyPlaceholder: "Your answer"),
             ]
         )
-        notices.post(notice)
-        await notices.delivered()
-        let category = try #require(await Self.category(offering: action("allow")))
-        #expect(category.actions.map(\.identifier) == [action("allow"), action("deny"), action("reply")])
-        #expect(category.actions.map(\.title) == ["Allow", "Deny", "Reply"])
-        #expect(
-            category.actions.map(\.options) == [
-                [.authenticationRequired],
-                [.authenticationRequired, .destructive],
-                [.authenticationRequired],
-            ])
-        #expect(!(category.actions[0] is UNTextInputNotificationAction))
-        let reply = try #require(category.actions[2] as? UNTextInputNotificationAction)
-        #expect(reply.textInputPlaceholder == "Your answer")
-        #expect(reply.textInputButtonTitle == "Send")
-        notices.withdraw([notice.id])
-        await notices.delivered()
+        try await Self.withPosted([notice]) {
+            let category = try #require(await Self.category(offering: action("allow")))
+            #expect(category.actions.map(\.identifier) == [action("allow"), action("deny"), action("reply")])
+            #expect(category.actions.map(\.title) == ["Allow", "Deny", "Reply"])
+            #expect(
+                category.actions.map(\.options) == [
+                    [.authenticationRequired],
+                    [.authenticationRequired, .destructive],
+                    [.authenticationRequired],
+                ])
+            #expect(!(category.actions[0] is UNTextInputNotificationAction))
+            let reply = try #require(category.actions.last as? UNTextInputNotificationAction)
+            #expect(reply.textInputPlaceholder == "Your answer")
+            #expect(reply.textInputButtonTitle == "Send")
+        }
     }
 
     @Test("a posted notice reaches the user as made: its words, thread, buttons and what its tap carries")
     internal func presentedAsPosted() async throws {
         let presented = PresentedNotices()
         defer { presented.restore() }
-        let notices = SystemNotices()
         let asking = ask("shown", actions: [NoticeAction(id: action("shown"), title: "Allow")])
         let plain = ask("plain", actions: [])
-        notices.post(asking)
-        notices.post(plain)
-        let shown = await presented.presented(asking.id)
-        let category = try #require(await Self.category(offering: action("shown")))
-        let expected = PresentedNotices.Shown(
-            title: "Claude asks",
-            subtitle: "box",
-            body: "May it run the tests?",
-            threadId: "m1/s1",
-            category: category.identifier,
-            info: ["machine": "m1", "session": "s1"]
-        )
-        #expect(shown == expected)
-        #expect(await presented.presented(plain.id).category.isEmpty)
-        notices.withdraw([asking.id, plain.id])
-        await notices.delivered()
+        let askingPresentation = Task.immediate { try await presented.presented(asking.id) }
+        try await Self.withPosted([asking, plain]) {
+            let shown = try await askingPresentation.value
+            let category = try #require(await Self.category(offering: action("shown")))
+            let expected = PresentedNotices.Shown(
+                title: "Claude asks",
+                subtitle: "box",
+                body: "May it run the tests?",
+                threadId: "m1/s1",
+                category: category.identifier,
+                info: ["machine": "m1", "session": "s1"]
+            )
+            #expect(shown == expected)
+            #expect(try await presented.presented(plain.id).category.isEmpty)
+        }
+    }
+
+    @Test("a throwing check still withdraws its notices and buttons before returning")
+    internal func throwingCheckWithdraws() async {
+        let notice = ask("throws", actions: [NoticeAction(id: action("throws"), title: "Allow")])
+        await #expect(throws: CancellationError.self) {
+            try await Self.withPosted([notice]) {
+                #expect(await Self.category(offering: action("throws")) != nil)
+                throw CancellationError()
+            }
+        }
+        #expect(await Self.category(offering: action("throws")) == nil)
+        let center = UNUserNotificationCenter.current()
+        #expect(await !center.deliveredNotifications().contains { $0.request.identifier == notice.id })
+        #expect(await !center.pendingNotificationRequests().contains { $0.identifier == notice.id })
+    }
+
+    @Test("a presentation wait ends on cancellation, including cancellation before the wait starts")
+    internal func cancelledPresentationWait() async {
+        let presented = PresentedNotices()
+        defer { presented.restore() }
+        let waiting = Task.immediate { try await presented.presented(action("waiting")) }
+        waiting.cancel()
+        await #expect(throws: CancellationError.self) { try await waiting.value }
+
+        let cancelled = Task { try await presented.presented(action("cancelled")) }
+        cancelled.cancel()
+        await #expect(throws: CancellationError.self) { try await cancelled.value }
+    }
+
+    @Test("a notice that never arrives times out and the app's delegate is restored")
+    internal func presentationTimeoutRestoresDelegate() async {
+        let center = UNUserNotificationCenter.current()
+        let previous = center.delegate
+        do {
+            let presented = PresentedNotices()
+            defer { presented.restore() }
+            await #expect(throws: PresentedNotices.TimedOut.self) {
+                try await presented.presented(action("missing"), timeout: .zero)
+            }
+        }
+        #expect(center.delegate === previous)
     }
 
     @Test("withdrawing a notice takes its buttons down, and another notice's stay")
