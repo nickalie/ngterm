@@ -63,6 +63,8 @@ fun SettingsRoute(
         }
     }
     val back = ScreenExit(R.drawable.ic_back, stringResource(R.string.action_back)) { page = HOME }
+    val shown = page.takeIf { it.startsWith(KEY) }?.removePrefix(KEY)
+    val item = shown?.let { id -> (state as? SettingsUiState.Ready)?.keys?.firstOrNull { it.key.id == id } }
     when {
         page == IMPORT -> {
             ImportKeyScreen(
@@ -75,23 +77,19 @@ fun SettingsRoute(
             )
         }
 
-        page.startsWith(KEY) -> {
-            val id = page.removePrefix(KEY)
-            val item = (state as? SettingsUiState.Ready)?.keys?.firstOrNull { it.key.id == id }
-            if (item == null) {
-                // the key's list is on its way (or the key is gone): Settings until it is
-                LaunchedEffect(state) { if (state is SettingsUiState.Ready) page = HOME }
-            } else {
-                PublicKeyScreen(
-                    key = item.key,
-                    exit = back,
-                    modifier = modifier,
-                    footer = { SwitchMachines(item, onUse = { model.useEverywhere(id) }) },
-                )
-            }
+        item != null -> {
+            PublicKeyScreen(
+                key = item.key,
+                exit = back,
+                modifier = modifier,
+                footer = { SwitchMachines(item, onUse = { model.useEverywhere(item.key.id) }) },
+            )
         }
 
         else -> {
+            // a key page whose key isn't there: Settings (its progress while the stores are read, why with Retry when
+            // they can't be), back on Settings itself once they are read without the key
+            if (shown != null) LaunchedEffect(state) { if (state is SettingsUiState.Ready) page = HOME }
             val actions = rememberSettingsActions(model) { page = it }
             SettingsScreen(
                 state = state,
