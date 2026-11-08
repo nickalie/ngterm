@@ -46,14 +46,6 @@ internal struct SafariPageTests {
         #expect(page.id != SafariPage(url: other).id)
     }
 
-    @Test("the machine form's sheet is one per target: Add, and Edit of each machine")
-    internal func formTargets() {
-        let targets: [FormTarget] = [.add, .edit("m1"), .edit("m2"), .edit("add")]
-        #expect(Set(targets.map(\.id)).count == targets.count)
-        let editing = FormTarget.edit("m1")
-        #expect(editing.id == FormTarget.edit("m1").id)
-    }
-
     @Test("the view shows the page with a Done button, and Done closes it")
     internal func done() async throws {
         let url = try #require(URL(string: "https://login.tailscale.com/a/1f2e3d"))

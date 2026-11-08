@@ -1,3 +1,4 @@
+import NgtermCoreFakes
 import NgtermFeatures
 import NgtermPlatform
 import SwiftUI
@@ -12,6 +13,8 @@ import UIKit
 @MainActor
 @Suite("the connect questions' sheets")
 internal struct ConnectPromptSheetTests {
+    private let directory = FileManager.default.temporaryDirectory.appending(path: "ConnectPromptSheetTests-\(UUID())")
+
     // waits up to 5 s for `condition`
     private static func until(_ condition: () -> Bool) async throws {
         var waited = 0
@@ -19,24 +22,12 @@ internal struct ConnectPromptSheetTests {
             waited += 1
             try await Task.sleep(for: .milliseconds(50))
         }
+        try #require(condition(), "timed out waiting")
     }
 
     // a machine of the fake world at `host`, signing in with the fake key
     private static func machine(_ id: String, host: String) -> StoredMachine {
         StoredMachine(id: id, label: id, host: host, port: StoredMachine.sshPort, user: "nick", keyId: "fake-key")
-    }
-
-    // the machines list over the fake world's graph with `machines` saved, connecting
-    private static func connecting(_ machines: [StoredMachine]) throws -> MachinesModel {
-        let graph = CoreChoice(arguments: [CoreChoice.fakeArgument, CoreChoice.fakeKeyArgument]).graph
-        for machine in machines {
-            try graph.machines.save(machine)
-        }
-        let model = MachinesModel(graph: graph)
-        for machine in machines {
-            model.connect(machineId: machine.id)
-        }
-        return model
     }
 
     // the questions of `model` over a window of the app's scene
@@ -90,9 +81,51 @@ internal struct ConnectPromptSheetTests {
         model.items.first { $0.id == machineId }?.link
     }
 
+    // the fake world's hosts, with stores in this test's own directory (removed even when setup fails)
+    private func connecting(_ machines: [StoredMachine]) throws -> MachinesModel {
+        let pins = MemoryHostKeyPins()
+        let core = FakeMobileCore(hosts: pins)
+        core.hostKeys = ["build-01.lan": FakeWorld.buildHostKey, "signin.lan": FakeWorld.signInHostKey]
+        core.signIns = ["signin.lan": .tailscale]
+        let graph = AppGraph(
+            machines: MachineStore(directory: directory),
+            settings: SettingsStore(directory: directory),
+            keys: AppKeys(
+                store: KeyStore(directory: directory),
+                vault: MemoryPrivateKeys(),
+                maker: CoreKeyMaker(),
+                comment: "ngterm@test"
+            ),
+            pins: pins,
+            stores: GraphStores(directory: directory),
+            core: core,
+            notices: FakeNotices()
+        )
+        for machine in machines {
+            try graph.machines.save(machine)
+        }
+        let model = MachinesModel(graph: graph)
+        for machine in machines {
+            model.connect(machineId: machine.id)
+        }
+        return model
+    }
+
+    private func remove() {
+        guard FileManager.default.fileExists(atPath: directory.path) else {
+            return
+        }
+        do {
+            try FileManager.default.removeItem(at: directory)
+        } catch {
+            Issue.record(error)
+        }
+    }
+
     @Test("a host key's sheet, then the sign-in's once the key is trusted, and none once the connect ends")
     internal func oneAfterAnother() async throws {
-        let model = try Self.connecting([Self.machine("signin", host: "signin.lan")])
+        defer { remove() }
+        let model = try connecting([Self.machine("signin", host: "signin.lan")])
         let (window, host) = try Self.show(model)
         defer { window.isHidden = true }
         try await Self.until { model.prompt != nil && Self.showsSheet(host) }
@@ -115,7 +148,8 @@ internal struct ConnectPromptSheetTests {
 
     @Test("swiping a host key's sheet away declines the key, and the connect stops")
     internal func hostKeySwiped() async throws {
-        let model = try Self.connecting([Self.machine("build", host: "build-01.lan")])
+        defer { remove() }
+        let model = try connecting([Self.machine("build", host: "build-01.lan")])
         let (window, host) = try Self.show(model)
         defer { window.isHidden = true }
         try await Self.until { model.prompt != nil && Self.showsSheet(host) }
@@ -127,7 +161,8 @@ internal struct ConnectPromptSheetTests {
 
     @Test("swiping a sign-in's sheet away doesn't connect")
     internal func signInSwiped() async throws {
-        let model = try Self.connecting([Self.machine("signin", host: "signin.lan")])
+        defer { remove() }
+        let model = try connecting([Self.machine("signin", host: "signin.lan")])
         let (window, host) = try Self.show(model)
         defer { window.isHidden = true }
         try await Self.until { model.prompt != nil && Self.showsSheet(host) }
