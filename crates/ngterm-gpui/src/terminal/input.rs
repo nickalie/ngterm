@@ -159,6 +159,23 @@ pub fn current_source(_keystroke: &Keystroke) -> Source {
             128,
         )
     };
+    // SAFETY: the adapter always NUL-terminates the output buffer.
+    let text = unsafe { std::ffi::CStr::from_ptr(text.as_ptr()) };
+    // SAFETY: the adapter always NUL-terminates this output buffer too.
+    let without_option = unsafe { std::ffi::CStr::from_ptr(without_option.as_ptr()) };
+    decode_macos_key(code, flags, plain, command, text, without_option)
+}
+
+/// The adapter's out-parameters as the terminal's native key, without reading `AppKit`'s current event.
+#[cfg(target_os = "macos")]
+fn decode_macos_key(
+    code: i32,
+    flags: u32,
+    plain: u32,
+    command: u32,
+    text: &std::ffi::CStr,
+    without_option: &std::ffi::CStr,
+) -> Source {
     let Some(keycode) = u32::try_from(code).ok().and_then(|code| {
         crate::macos::KEYCODES
             .iter()
@@ -174,10 +191,7 @@ pub fn current_source(_keystroke: &Keystroke) -> Source {
         platform: flags & (1 << 20) != 0,
         function: flags & (1 << 23) != 0,
     };
-    // SAFETY: the adapter always NUL-terminates the buffer.
-    let text = unsafe { std::ffi::CStr::from_ptr(text.as_ptr()) }
-        .to_string_lossy()
-        .into_owned();
+    let text = text.to_string_lossy().into_owned();
     let mut locks = Mods::empty();
     locks.set(Mods::CAPS_LOCK, flags & (1 << 16) != 0);
     Source::Native(NativeKey {
@@ -203,12 +217,7 @@ pub fn current_source(_keystroke: &Keystroke) -> Source {
             sides.set(ngterm_term::ModSides::SUPER, flags & 64 != 0);
             sides
         },
-        // SAFETY: the adapter always NUL-terminates this output buffer too.
-        without_option: Some(
-            unsafe { std::ffi::CStr::from_ptr(without_option.as_ptr()) }
-                .to_string_lossy()
-                .into_owned(),
-        ),
+        without_option: Some(without_option.to_string_lossy().into_owned()),
     })
 }
 
@@ -680,3 +689,7 @@ pub fn latin_key(keycode: u32) -> Option<&'static str> {
         keys.split(' ').nth(index)
     })
 }
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "input_macos_tests.rs"]
+mod macos_tests;
