@@ -218,6 +218,27 @@ def test_retry():
     assert not list((pytester.path / 'evidence').glob('*/actions.jsonl'))
 
 
+@pytest.mark.parametrize('phase,outcomes', [('call', {'xfailed': 1}), ('setup', {'errors': 1})])
+def test_an_upstream_bug_failure_keeps_its_trace(pytester, phase, outcomes):
+    bin_path = pytester.path / 'agterm'
+    bin_path.write_text('#!/bin/sh\n')
+    pytester.makepyfile(f'''
+import pytest
+
+@pytest.fixture
+def resource():
+    assert {phase!r} != 'setup'
+
+@pytest.mark.upstream_bug('lost-output', reason='upstream loses it')
+def test_bug(resource, impl_options):
+    assert False
+''')
+    result = pytester.runpytest('--impl', 'swift-macos', '--bin', str(bin_path),
+                                '--trace-dir', str(pytester.path / 'evidence'))
+    result.assert_outcomes(**outcomes)
+    assert list((pytester.path / 'evidence').glob('*/actions.jsonl'))
+
+
 def test_released_trace_drops_in_memory_evidence(tmp_path):
     record = trace.Trace('released', tmp_path / 'traces', 'on-failure')
     record.remember(instance(tmp_path))

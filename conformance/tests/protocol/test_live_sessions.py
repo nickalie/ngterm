@@ -46,11 +46,12 @@ PAGES_SURVIVE = pytest.mark.requires("pages-survive", reason="upstream ends a pa
 ATTRIBUTIONS = ("supervisor", "app", "orphaned", "unknown")
 PRESENTATION_VERSION = 1
 # These observed failures have no established cause (README > Reference observations). In particular, a command
-# still running, or one released only after attach, cannot have ended in upstream's documented host-handoff gap.
+# released only after attach cannot have ended in upstream's documented host-handoff gap.
 RESTART_OUTPUT_MISSING = pytest.mark.upstream_bug(
     "live-restarted-command-output-missing",
-    reason="a restarted Live command's first line can be absent for 10 s while its sleep 600 still runs; "
-    "cause unknown, observed in reference-macos 42520472215 (conformance/README.md > Reference observations)",
+    reason="a restarted Live command's first line can stay absent for 10 s, the pane showing only a shell prompt; "
+    "whether the command ran is unknown, cause unknown, observed in reference-macos 42520472215 "
+    "(conformance/README.md > Reference observations)",
 )
 WAIT_OUTPUT_LOST = pytest.mark.upstream_bug(
     "live-wait-command-loses-output",
