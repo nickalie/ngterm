@@ -288,7 +288,7 @@ and how this build does it where the OS matters:
 
 - Rust 1.98.1 with clippy and rustfmt, pinned by `rust-toolchain.toml` (`rustup toolchain install` reads it).
 - Zig 0.16.0 for libghostty-vt (`LIBGHOSTTY_VT_ZIG_VERSION` in `build/pins.env`). `scripts/build-ghostty-vt.sh`
-  takes `NGTERM_GHOSTTY_VT_ZIG`, a zig 0.16.0 on `PATH` or from mise, else it downloads the pinned ziglang.org archive
+  takes `NGTERM_GHOSTTY_VT_ZIG`, a zig 0.16.0 on `PATH`, else it downloads the pinned ziglang.org archive
   of the host's OS and arch and checks its sha256. A Mac or a Windows machine needs a little more
   ([macOS and Windows](#macos-and-windows)).
 - pkg-config, and the development files GPUI links: Wayland, xkbcommon, xcb, fontconfig and freetype.

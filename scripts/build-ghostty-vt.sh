@@ -41,7 +41,7 @@
 # Portable shell); on Windows the stamp records native paths, which the build script hands to zig. It needs curl, tar,
 # patch, sha256sum or shasum, and tic with infocmp where tic exists; find_zig needs xz (Linux, macOS) or unzip
 # (Windows) only when it fetches zig. LIBGHOSTTY_VT_ZIG_VERSION comes from NGTERM_GHOSTTY_VT_ZIG, a matching zig on
-# PATH, mise, or the pinned ziglang.org archive of the host's OS and arch (LIBGHOSTTY_VT_ZIG_SHA256_<OS>_<ARCH>).
+# PATH, or the pinned ziglang.org archive of the host's OS and arch (LIBGHOSTTY_VT_ZIG_SHA256_<OS>_<ARCH>).
 set -euo pipefail
 
 # shellcheck source=lib/native.sh

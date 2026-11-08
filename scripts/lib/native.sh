@@ -278,7 +278,7 @@ zig_pin_sha256() {
   echo "${!name}"
 }
 
-# Print a zig of exactly VERSION: $OVERRIDE_VAR, a matching zig on PATH, mise's, or the pinned ziglang.org archive
+# Print a zig of exactly VERSION: $OVERRIDE_VAR, a matching zig on PATH, or the pinned ziglang.org archive
 # of this OS and arch (sha256 SHA) unpacked once into the vendor root: a .tar.xz on Linux and macOS (tar with xz), a
 # .zip on Windows (Git Bash's unzip).
 #
@@ -286,8 +286,7 @@ zig_pin_sha256() {
 # failed fetch or unpack must never leave a partial tree in the final directory, which later runs would reuse.
 find_zig() {
   local version="$1" sha="$2" override="$3" candidate os arch name exe format dir archive
-  for candidate in "$override" "$(command -v zig 2>/dev/null || true)" \
-    "$(mise where "zig@$version" 2>/dev/null || true)/bin/zig"; do
+  for candidate in "$override" "$(command -v zig 2>/dev/null || true)"; do
     if [[ -n "$candidate" && -x "$candidate" && "$("$candidate" version 2>/dev/null)" == "$version" ]]; then
       echo "$candidate"
       return
