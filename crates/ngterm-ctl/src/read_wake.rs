@@ -179,23 +179,12 @@ mod tests {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn an_interrupted_poll_retries_until_the_source_is_readable() {
-        if std::env::var_os("READ_WAKE_INTERRUPT_CHILD").is_some() {
-            interrupted_poll();
-            return;
-        }
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "read_wake::tests::an_interrupted_poll_retries_until_the_source_is_readable",
-                "--exact",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env_clear()
-            .envs(std::env::vars_os().filter(|(key, _)| !key.to_string_lossy().starts_with("NGTERM_")))
-            .env("READ_WAKE_INTERRUPT_CHILD", "1")
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
+        // alone in its own process: the signal handler it installs is process-wide
+        crate::local::stdin_probe::run_local(
+            "read_wake::tests::an_interrupted_poll_retries_until_the_source_is_readable",
+            std::process::Stdio::null(),
+            interrupted_poll,
+        );
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

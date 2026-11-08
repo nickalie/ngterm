@@ -565,9 +565,8 @@ mod tests {
 
     #[test]
     fn a_literal_type_request_keeps_an_empty_payload_and_its_selectors() {
-        let command = type_command(&["", "--select", "--pane", "scratch", "--target", "S"]);
         assert_eq!(
-            serde_json::to_value(command.make_request()).unwrap(),
+            request(&["type", "", "--select", "--pane", "scratch", "--target", "S"]),
             json!({"cmd":"session.type","target":"S","args":{"text":"","select":true,"pane":"scratch"}})
         );
     }

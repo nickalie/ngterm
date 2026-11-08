@@ -308,15 +308,6 @@ mod tests {
 
     #[test]
     fn a_literal_type_request_preserves_empty_text() {
-        let crate::Command::Quick(group) = Ngtermctl::try_parse_from(["ngtermctl", "quick", "type", ""])
-            .unwrap()
-            .command
-        else {
-            panic!("not quick")
-        };
-        assert_eq!(
-            serde_json::to_value(group.command().make_request()).unwrap(),
-            json!({"cmd":"quick.type","args":{"text":""}})
-        );
+        assert_eq!(request(&["type", ""]), json!({"cmd":"quick.type","args":{"text":""}}));
     }
 }
