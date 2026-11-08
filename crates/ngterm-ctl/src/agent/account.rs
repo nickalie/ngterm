@@ -311,7 +311,11 @@ mod tests {
         let started = Instant::now();
         loop {
             match listener.accept() {
-                Ok((stream, _)) => return stream,
+                Ok((stream, _)) => {
+                    // macOS and Windows hand the listener's nonblocking mode on to the accepted socket.
+                    stream.set_nonblocking(false).unwrap();
+                    return stream;
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     assert!(started.elapsed() < Duration::from_secs(5), "no usage request");
                     thread::sleep(Duration::from_millis(1));
