@@ -396,11 +396,7 @@ impl TerminalView {
         let config = self.shared.config();
         let color = frame.map_or(config.theme.background, |frame| frame.colors.background);
         let spec = Spec::from_config(&config.background_image, config.palette.background_alpha, color);
-        let background = self
-            .shared
-            .background_image(spec.clone(), cx)
-            .zip(spec)
-            .map(|(decoded, spec)| BackgroundPaint { decoded, spec });
+        let background = self.shared.background_paint(spec, cx);
         let used: Vec<Arc<RenderImage>> = kitty
             .images()
             .chain(background.iter().map(|paint| Arc::clone(&paint.decoded.texture)))
