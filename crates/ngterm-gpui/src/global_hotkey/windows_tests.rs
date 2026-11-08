@@ -6,9 +6,14 @@ use gpui_kit::TestAppContext;
 use ngterm_core::keymap::{Modifiers, parse_keybind};
 use ngterm_host::{MainLoop, MainLoopClosed, MainTask};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
-use windows_sys::Win32::System::Threading::{OpenThread, THREAD_SYNCHRONIZE, WaitForSingleObject};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_F19;
-use windows_sys::Win32::UI::WindowsAndMessaging::{PM_REMOVE, WM_NULL, WM_QUIT};
+use windows_sys::Win32::System::Threading::{AttachThreadInput, OpenThread, THREAD_SYNCHRONIZE, WaitForSingleObject};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    ActivateKeyboardLayout, GetKeyboardLayoutList, HKL, KLF_NOTELLSHELL, KLF_SETFORPROCESS, LoadKeyboardLayoutW,
+    UnloadKeyboardLayout, VK_F19, VK_OEM_3, VK_OEM_5,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DestroyWindow, PM_REMOVE, SetForegroundWindow, WM_NULL, WM_QUIT, WS_POPUP, WS_VISIBLE,
+};
 
 use super::*;
 use crate::global_hotkey::{GlobalHotkey, win32_keys};
@@ -16,6 +21,9 @@ use crate::state::AppState;
 
 const CHILD: &str = "global_hotkey::windows::tests::hotkey_child";
 const FLAGS: u32 = win32_keys::MOD_CONTROL | win32_keys::MOD_ALT | win32_keys::MOD_SHIFT;
+/// The key left of 1, which the layouts below give different virtual keys.
+const LEFT_OF_ONE: &str = "ctrl+alt+shift+`";
+const LEFT_OF_ONE_SCAN: u32 = 0x29;
 
 fn chord(text: &str) -> Chord {
     parse_keybind(text).unwrap().remove(0)
@@ -100,6 +108,7 @@ fn hotkey_child(cx: &mut TestAppContext) {
         return;
     }
     held_chords_reserve_and_release_the_os_keys();
+    the_registrar_moves_the_chord_with_the_foreground_layout();
     let (sender, tasks) = mpsc::channel();
     let owner: Arc<dyn MainLoop<AppState>> = Arc::new(Queue(sender));
     let poster = Arc::downgrade(&owner);
@@ -148,9 +157,9 @@ fn held_chords_reserve_and_release_the_os_keys() {
     assert!(!available(VK_F19));
     held.refresh();
     assert!(!available(VK_F19), "refresh retains an unchanged registration");
-    held.set(Some(&chord("ctrl+alt+shift+`")));
+    held.set(Some(&chord(LEFT_OF_ONE)));
     assert!(available(VK_F19), "replacement releases the old key");
-    let vk = foreground_virtual_key(0x29).unwrap();
+    let vk = foreground_virtual_key(LEFT_OF_ONE_SCAN).unwrap();
     assert!(
         !available(vk),
         "the physical key is registered in the foreground layout"
@@ -160,8 +169,28 @@ fn held_chords_reserve_and_release_the_os_keys() {
     held.set(None);
     held.unregister();
     assert_eq!(foreground_virtual_key(u32::MAX), None);
+    a_moved_key_replaces_the_stale_registration(&mut held);
     a_taken_chord_is_refused(&mut held);
     foreground_callback_posts_a_layout_refresh();
+}
+
+/// A chord left holding another virtual key, as a change of layout leaves it, gets the foreground layout's key instead.
+fn a_moved_key_replaces_the_stale_registration(held: &mut Held) {
+    held.set(Some(&chord(LEFT_OF_ONE)));
+    assert_ne!(held.timer, 0, "a key that follows the layout arms the check");
+    let vk = held.tried.unwrap();
+    held.unregister();
+    // SAFETY: a thread hotkey of this thread under the id `Held` would hold it by.
+    let stale = unsafe { RegisterHotKey(std::ptr::null_mut(), HOTKEY_ID, FLAGS, u32::from(VK_F19)) };
+    assert_ne!(stale, 0);
+    held.tried = Some(VK_F19);
+    held.registered = true;
+    held.refresh();
+    assert!(available(VK_F19), "the key the layout moved away from is released");
+    assert!(!available(vk), "the key the layout has there now is registered");
+    held.set(Some(&chord("ctrl+alt+shift+f19")));
+    assert_eq!(held.timer, 0, "a key every layout agrees on needs no check");
+    held.set(None);
 }
 
 fn a_taken_chord_is_refused(held: &mut Held) {
@@ -187,9 +216,213 @@ fn a_taken_chord_is_refused(held: &mut Held) {
     held.refresh();
     assert!(
         available(VK_F19),
-        "a refused key is retried only when its layout changes"
+        "a refused key is not retried while its virtual key stays the same"
     );
     held.set(None);
+}
+
+/// Held while this test depends on the foreground: the browser hand-off test's handler console would take it (and the
+/// foreground hook would stand in for the check this test watches). Shared with it across processes, released at the end.
+fn foreground_lock() -> std::fs::File {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(std::env::temp_dir().join("ngterm-test-foreground.lock"))
+        .unwrap();
+    file.lock().unwrap();
+    file
+}
+
+/// A window of this thread in the foreground, so the layout the registrar reads is one this test can change.
+struct Foreground(HWND);
+
+impl Foreground {
+    fn new() -> Self {
+        let class: Vec<u16> = "STATIC".encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: a built-in window class named by a NUL-terminated string; a parentless 1x1 popup, destroyed in Drop.
+        let window = unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_POPUP | WS_VISIBLE,
+                0,
+                0,
+                1,
+                1,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!window.is_null());
+        Self(window)
+    }
+
+    fn holds(&self) -> bool {
+        // SAFETY: a plain query.
+        unsafe { GetForegroundWindow() == self.0 }
+    }
+
+    /// Takes the foreground, or takes it back from whatever raised itself meanwhile.
+    fn raise(&self) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.holds() {
+            assert!(Instant::now() < deadline, "the test window cannot take the foreground");
+            self.try_raise();
+            self.pump();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Windows lets a window be raised by a thread that shares its input state with the foreground's.
+    fn try_raise(&self) {
+        // SAFETY: a plain query.
+        let foreground = unsafe { GetForegroundWindow() };
+        // SAFETY: a plain query of a window handle; no process id asked for.
+        let owner = unsafe { GetWindowThreadProcessId(foreground, std::ptr::null_mut()) };
+        // SAFETY: a plain query.
+        let this = unsafe { GetCurrentThreadId() };
+        // SAFETY: both are live thread ids, or the call fails harmlessly on a foreground that has just gone.
+        let attached = owner != 0 && owner != this && unsafe { AttachThreadInput(this, owner, 1) } != 0;
+        // SAFETY: this thread's own live window.
+        unsafe { SetForegroundWindow(self.0) };
+        if attached {
+            // SAFETY: undoes the attachment made above.
+            unsafe { AttachThreadInput(this, owner, 0) };
+        }
+    }
+
+    /// Answers the window's messages, so Windows does not swap a hung window's ghost into the foreground.
+    fn pump(&self) {
+        // SAFETY: MSG is plain data the call fills.
+        let mut message: MSG = unsafe { std::mem::zeroed() };
+        // SAFETY: a valid MSG; only this window's messages are taken and dispatched to its built-in class.
+        while unsafe { PeekMessageW(&raw mut message, self.0, 0, 0, PM_REMOVE) } != 0 {
+            // SAFETY: the message PeekMessageW filled.
+            unsafe { DispatchMessageW(&raw const message) };
+        }
+    }
+}
+
+impl Drop for Foreground {
+    fn drop(&mut self) {
+        // SAFETY: this thread's own window, destroyed once.
+        unsafe { DestroyWindow(self.0) };
+    }
+}
+
+/// The US and German layouts for this process; what it loaded is unloaded and its layout restored in Drop.
+struct Layouts {
+    original: HKL,
+    added: Vec<HKL>,
+}
+
+impl Layouts {
+    fn new() -> Self {
+        Self {
+            // SAFETY: a query of this thread's layout.
+            original: unsafe { GetKeyboardLayout(0) },
+            added: Vec::new(),
+        }
+    }
+
+    fn load(&mut self, id: &str) -> HKL {
+        let before = installed_layouts();
+        let id: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: a NUL-terminated system layout id; no activation or shell notification is requested.
+        let layout = unsafe { LoadKeyboardLayoutW(id.as_ptr(), KLF_NOTELLSHELL) };
+        assert!(!layout.is_null());
+        if !before.contains(&layout) {
+            self.added.push(layout);
+        }
+        layout
+    }
+}
+
+impl Drop for Layouts {
+    fn drop(&mut self) {
+        activate(self.original);
+        for layout in &self.added {
+            // SAFETY: only layouts this process loaded, after switching away from them.
+            unsafe { UnloadKeyboardLayout(*layout) };
+        }
+    }
+}
+
+fn installed_layouts() -> Vec<HKL> {
+    // SAFETY: a null buffer of size 0 asks for the count.
+    let count = unsafe { GetKeyboardLayoutList(0, std::ptr::null_mut()) };
+    let mut layouts = vec![std::ptr::null_mut(); usize::try_from(count).unwrap()];
+    // SAFETY: a writable buffer `count` long.
+    let written = unsafe { GetKeyboardLayoutList(count, layouts.as_mut_ptr()) };
+    layouts.truncate(usize::try_from(written).unwrap());
+    layouts
+}
+
+fn activate(layout: HKL) {
+    // SAFETY: a layout handle loaded in this process.
+    assert!(!unsafe { ActivateKeyboardLayout(layout, KLF_SETFORPROCESS) }.is_null());
+}
+
+/// Returns once the registrar has handled every message posted before this: it handles them in order, one at a time.
+fn settled(thread: &HotkeyThread, pressed: &mpsc::Receiver<()>) {
+    thread.send(WM_HOTKEY, HOTKEY_PARAM);
+    pressed.recv_timeout(Duration::from_secs(5)).unwrap();
+}
+
+/// The registrar reads the layout only on its messages: `REFRESH` here, and the armed check once nothing is posted.
+fn the_registrar_moves_the_chord_with_the_foreground_layout() {
+    let _foreground = foreground_lock();
+    let (us_key, german_key) = (VK_OEM_3, VK_OEM_5);
+    let window = Foreground::new();
+    let mut layouts = Layouts::new();
+    let (us, german) = (layouts.load("00000409"), layouts.load("00000407"));
+    activate(us);
+    window.raise();
+    assert_eq!(foreground_virtual_key(LEFT_OF_ONE_SCAN), Some(us_key));
+    let (press, pressed) = mpsc::channel();
+    let registrar = Registrar::start(move || press.send(()).unwrap()).unwrap();
+    let thread = HotkeyThread::new(registrar.thread);
+    registrar.set(Some(&chord(LEFT_OF_ONE)));
+    settled(&thread, &pressed);
+    assert!(!available(us_key), "the chord starts on the layout's key");
+    assert!(available(german_key));
+
+    activate(german);
+    loop {
+        window.raise();
+        thread.send(REFRESH, 0);
+        settled(&thread, &pressed);
+        if window.holds() {
+            break;
+        }
+    }
+    assert!(
+        available(us_key),
+        "a refresh releases the key the layout moved away from"
+    );
+    assert!(!available(german_key), "and registers the one it moved to");
+
+    // only the released key is polled: a probe of the arriving key could take it from the registrar
+    activate(us);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !available(german_key) {
+        assert!(Instant::now() < deadline, "the layout check never ran");
+        window.raise();
+        window.pump();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    settled(&thread, &pressed);
+    assert!(
+        !available(us_key),
+        "the check registers the layout's key with nothing posted"
+    );
+    registrar.set(None);
+    settled(&thread, &pressed);
+    assert!(available(us_key));
 }
 
 fn foreground_callback_posts_a_layout_refresh() {
