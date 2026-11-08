@@ -1608,7 +1608,7 @@ fn a_hud_panel_mounts_passive_is_replaced_and_goes_with_the_slot(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
-fn a_ctrl_click_on_the_hud_opens_its_link_and_a_plain_click_reaches_the_pane(cx: &mut TestAppContext) {
+fn the_platform_link_modifier_opens_a_hud_link_and_a_plain_click_reaches_the_pane(cx: &mut TestAppContext) {
     let (library, window, ids) = three_sessions();
     let mut h = harness(cx, core_of(library), window);
     let session = ids[0];
@@ -1651,7 +1651,14 @@ fn a_ctrl_click_on_the_hud_opens_its_link_and_a_plain_click_reaches_the_pane(cx:
         px((f64::from(rect.x) + 8.0 + 5.5 * cell_x) as f32),
         px((f64::from(rect.y) + 6.0 + 0.75 * cell_y) as f32),
     );
-    h.cx.simulate_click(at, gpui_kit::Modifiers::control());
+    h.cx.simulate_click(
+        at,
+        gpui_kit::Modifiers {
+            platform: cfg!(target_os = "macos"),
+            control: !cfg!(target_os = "macos"),
+            ..gpui_kit::Modifiers::default()
+        },
+    );
     h.turn();
     let opened = h.state.take_frontend_work().open_urls;
     assert_eq!(opened, ["https://example.com/hud"], "the panel's link opened");
