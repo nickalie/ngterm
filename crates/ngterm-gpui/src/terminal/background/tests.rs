@@ -617,3 +617,53 @@ fn a_background_color_change_rebakes_without_reading_the_file(cx: &mut TestAppCo
 fn shared_texture(decoded: &Arc<Decoded>) -> Arc<RenderImage> {
     Arc::clone(&decoded.texture)
 }
+
+#[test]
+fn nonfinite_opacity_defaults_and_transparent_background_keeps_excess_opacity() {
+    let mut config = BackgroundImage {
+        path: Some(ngterm_core::ghostty_config::ConfigPath {
+            path: "image.png".into(),
+            optional: false,
+        }),
+        ..BackgroundImage::default()
+    };
+    for opacity in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        config.opacity = opacity;
+        let spec = Spec::from_config(&config, 255, Rgb::default()).unwrap();
+        assert!((spec.alpha - 1.).abs() < f32::EPSILON);
+        assert_eq!(spec.composite, None);
+    }
+    config.opacity = 2.;
+    let spec = Spec::from_config(&config, 0, Rgb::default()).unwrap();
+    assert!((spec.alpha - 2.).abs() < f32::EPSILON);
+    assert_eq!(spec.composite, Some((Rgb::default(), 0)));
+}
+
+#[gpui_kit::test]
+#[cfg(unix)]
+fn a_translucent_image_is_baked_and_drawn_at_the_surfaces_alpha(cx: &mut TestAppContext) {
+    use crate::terminal::surface::tests::{ECHO, Fixture};
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("background.png");
+    write_png(&file, 8, 4);
+    let mut f = Fixture::new(
+        cx,
+        ECHO,
+        &format!(
+            "background-image = {}\nbackground-opacity = 0.5\nbackground-image-opacity = 1.5\n",
+            file.display()
+        ),
+    );
+    f.settle(|f| f.shared().background_loader().current().is_some());
+    let current = f.shared().background_loader().current().unwrap();
+    assert_eq!(current.bake.composite.map(|(_, alpha)| alpha), Some(128));
+    assert_eq!(current.texture.as_bytes(0).unwrap()[3], 192);
+    f.settle(|f| {
+        f.view.read_with(f.cx, |view, _| {
+            view.images()
+                .drawn()
+                .iter()
+                .any(|image| Arc::ptr_eq(image, &current.texture))
+        })
+    });
+}

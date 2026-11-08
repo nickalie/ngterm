@@ -177,3 +177,35 @@ fn cancel_keeps_the_app_and_quit_posts_the_quit(cx: &mut TestAppContext) {
     }
     assert!(state.take_frontend_work().quit);
 }
+
+#[test]
+fn quitting_does_not_enqueue_another_prompt_or_a_welcome() {
+    let core = ngterm_core::Core::new(
+        ngterm_core::CoreConfig {
+            app: ngterm_proto::AppIdentity::from_recorded("1.2.3", None),
+            capabilities: Vec::new(),
+        },
+        ngterm_core::CoreState::default(),
+    );
+    let mut state = AppState::new(core);
+    state.save_on_quit();
+    assert!(state.is_quitting());
+    state.quit_from_menu();
+    state.request_welcome();
+    let work = state.take_frontend_work();
+    assert!(!work.quit && !work.welcome && work.quit_prompt.is_none());
+    assert_eq!(state.core.settings().welcome_shown, None);
+}
+
+#[gpui_kit::test]
+fn install_with_both_options_unchecked_runs_no_installer(cx: &mut gpui_kit::TestAppContext) {
+    let cx = crate::modal::tests::host(cx);
+    cx.update(|window, cx| {
+        crate::integrations::Source::new(|| None).install(cx);
+        present(window, cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("shift-tab shift-tab space shift-tab space tab tab tab enter");
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
+}

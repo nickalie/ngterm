@@ -206,4 +206,49 @@ mod tests {
         assert_eq!(role(Slot::Primary), "left");
         assert_eq!(role(Slot::Split), "right");
     }
+    struct CoverView {
+        cover: PaneCover,
+        focus: FocusHandle,
+    }
+
+    impl gpui_kit::Render for CoverView {
+        fn render(&mut self, _: &mut Window, _: &mut gpui_kit::Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .children(element(&self.cover, Slot::Scratch, Rgb::BLACK, Rgb::WHITE, &self.focus))
+        }
+    }
+
+    #[gpui_kit::test]
+    fn clicking_the_cover_focuses_its_terminal_and_a_note_renders_without_a_cover(cx: &mut gpui_kit::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| CoverView {
+            cover: PaneCover {
+                cover: Some(LeadCover {
+                    title: "In use from another machine",
+                    offers_takeover: true,
+                }),
+                holds_keys: true,
+                note: Some("Connection refused".to_owned()),
+            },
+            focus: cx.focus_handle(),
+        });
+        cx.simulate_resize(gpui_kit::size(px(400.), px(240.)));
+        cx.run_until_parked();
+        cx.simulate_mouse_down(
+            gpui_kit::point(px(100.), px(100.)),
+            MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        assert!(cx.update(|window, cx| view.read(cx).focus.is_focused(window)));
+        view.update(cx, |view, cx| {
+            view.cover.cover = None;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.cover.shows()));
+        cx.update(|_, cx| {
+            let focus = cx.focus_handle();
+            assert!(element(&PaneCover::default(), Slot::Primary, Rgb::BLACK, Rgb::WHITE, &focus).is_none());
+        });
+    }
 }

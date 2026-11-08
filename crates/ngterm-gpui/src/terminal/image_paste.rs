@@ -69,3 +69,7 @@ fn show_error(key: u64, error: &str, cx: &mut gpui_kit::App) {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "image_paste_tests.rs"]
+mod tests;

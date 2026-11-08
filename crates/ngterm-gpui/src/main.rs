@@ -216,3 +216,7 @@ fn exit_now(status: i32) -> ! {
         std::process::exit(status)
     }
 }
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;

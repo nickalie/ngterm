@@ -292,4 +292,42 @@ mod tests {
             assert!(fitted.iter().map(|(_, line, _)| f32::from(line.width)).sum::<f32>() <= 25.);
         });
     }
+    struct InfoView;
+
+    impl gpui_kit::Render for InfoView {
+        fn render(&mut self, window: &mut Window, _: &mut gpui_kit::Context<Self>) -> impl IntoElement {
+            div().w(px(40.)).child(element(
+                &[SessionInfoSpan {
+                    text: "a long session description".into(),
+                    ..SessionInfoSpan::default()
+                }],
+                Look::default(),
+                false,
+                40.,
+                window,
+            ))
+        }
+    }
+
+    #[gpui_kit::test]
+    fn truncated_info_exposes_its_full_text_in_a_tooltip(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _| InfoView);
+        cx.run_until_parked();
+        cx.activate_a11y();
+        let tree = cx.a11y_tree_update().unwrap();
+        let info = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| node.author_id() == Some("session-info"))
+            .unwrap();
+        assert_eq!(info.1.value(), Some("a long session description"));
+        let bounds = cx.debug_bounds("session-info").expect("the info is drawn");
+        assert!(bounds.size.width <= px(40.));
+        cx.simulate_mouse_move(bounds.center(), None, gpui_kit::Modifiers::default());
+        cx.run_until_parked();
+        cx.executor().advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(cx.update(|window, _| window.painted_quads().len()) > 0);
+    }
 }

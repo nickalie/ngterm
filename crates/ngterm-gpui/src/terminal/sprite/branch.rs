@@ -193,3 +193,7 @@ fn fading_line(m: &CellMetrics, canvas: &mut Canvas, to: Edge) {
         color += step;
     }
 }
+
+#[cfg(test)]
+#[path = "branch_tests.rs"]
+mod tests;

@@ -253,3 +253,7 @@ fn present(key: PromptKey, id: u64, cx: &mut App) {
         answer(key, id, false, false, cx);
     }
 }
+
+#[cfg(test)]
+#[path = "clipboard_tests.rs"]
+mod tests;

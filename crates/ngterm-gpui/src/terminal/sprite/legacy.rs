@@ -397,3 +397,7 @@ pub(super) fn circle(m: &CellMetrics, canvas: &mut Canvas, position: Alignment, 
         canvas.stroke(path, thick, ON);
     }
 }
+
+#[cfg(test)]
+#[path = "legacy_tests.rs"]
+mod tests;
