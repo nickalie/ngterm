@@ -197,8 +197,7 @@ fn an_override_reports_nothing_and_its_revert_is_dropped_once() {
     assert_eq!(font_report(None, Some(13.0), 16.0), (true, None));
 }
 
-/// A blocked status chip over a dark color takes white text and a black wash, as one over a light color takes black
-/// text and a white one.
+/// A status chip over a dark color takes white text and a black wash.
 #[test]
 fn a_dark_status_chip_takes_white_text_and_a_dark_wash() {
     let look = Look {
@@ -259,6 +258,8 @@ impl ngterm_host::MainLoop<AppState> for Posted {
 struct GridView {
     cells: Vec<ChromeCell>,
     poster: Poster,
+    window: Uuid,
+    animate: bool,
 }
 
 impl gpui_kit::Render for GridView {
@@ -282,7 +283,7 @@ impl gpui_kit::Render for GridView {
             .collect();
         div()
             .size_full()
-            .child(grid(Uuid::nil(), cells, look, &self.poster, true))
+            .child(grid(self.window, cells, look, &self.poster, self.animate))
     }
 }
 
@@ -301,10 +302,31 @@ fn grid_window(
     cells: Vec<ChromeCell>,
     poster: Poster,
 ) -> &mut gpui_kit::VisualTestContext {
-    let (_, cx) = cx.add_window_view(move |_, _| GridView { cells, poster });
+    let (_, cx) = cx.add_window_view(move |_, _| GridView {
+        cells,
+        poster,
+        window: Uuid::nil(),
+        animate: true,
+    });
     cx.simulate_resize(gpui_kit::size(px(800.), px(500.)));
     cx.run_until_parked();
     cx
+}
+
+/// Reads the cover's published lines by their identifiers, so swapping their text fails too.
+fn assert_cover_lines(cx: &mut gpui_kit::VisualTestContext, expected: &[(&str, &str)]) {
+    cx.activate_a11y();
+    let tree = cx.a11y_tree_update().expect("the cover's accessibility tree");
+    for (id, text) in expected {
+        let node = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| node.author_id() == Some(*id))
+            .map(|(_, node)| node)
+            .expect("the cover line");
+        assert_eq!(node.label(), Some(*text), "{id}");
+        assert_eq!(node.value(), Some(*text), "{id}");
+    }
 }
 
 /// Upstream's `DashboardOverlayCover`: a page names itself an HTML overlay with its source and its own title dimmed
@@ -316,17 +338,18 @@ fn a_covered_cell_names_its_cover_kind_source_and_title(cx: &mut gpui_kit::TestA
         title: Some("Build status".to_owned()),
     };
     let cx = grid_window(cx, vec![chrome_cell(Some(page))], crate::state::detached_poster());
-    for selector in [
-        "dashboard-overlay-cover",
-        "dashboard-overlay-cover-source",
-        "dashboard-overlay-cover-title",
-    ] {
-        assert!(cx.debug_bounds(selector).is_some(), "{selector}");
-    }
+    assert_cover_lines(
+        cx,
+        &[
+            ("dashboard-overlay-cover", "HTML overlay"),
+            ("dashboard-overlay-cover-source", "example.com"),
+            ("dashboard-overlay-cover-title", "Build status"),
+        ],
+    );
 }
 
 #[gpui_kit::test]
-fn a_program_cover_has_no_title_and_one_from_elsewhere_no_source(cx: &mut gpui_kit::TestAppContext) {
+fn a_program_cover_names_its_command_and_has_no_title(cx: &mut gpui_kit::TestAppContext) {
     let program = |command: Option<&str>| DashboardCover::Program {
         command: command.map(str::to_owned),
     };
@@ -335,10 +358,12 @@ fn a_program_cover_has_no_title_and_one_from_elsewhere_no_source(cx: &mut gpui_k
         vec![chrome_cell(Some(program(Some("htop"))))],
         crate::state::detached_poster(),
     );
-    assert!(cx.debug_bounds("dashboard-overlay-cover").is_some());
-    assert!(
-        cx.debug_bounds("dashboard-overlay-cover-source").is_some(),
-        "its command"
+    assert_cover_lines(
+        cx,
+        &[
+            ("dashboard-overlay-cover", "Program overlay"),
+            ("dashboard-overlay-cover-source", "htop"),
+        ],
     );
     assert!(
         cx.debug_bounds("dashboard-overlay-cover-title").is_none(),
@@ -350,11 +375,12 @@ fn a_program_cover_has_no_title_and_one_from_elsewhere_no_source(cx: &mut gpui_k
 fn a_program_shown_from_another_instance_names_no_command(cx: &mut gpui_kit::TestAppContext) {
     let cover = DashboardCover::Program { command: None };
     let cx = grid_window(cx, vec![chrome_cell(Some(cover))], crate::state::detached_poster());
-    assert!(cx.debug_bounds("dashboard-overlay-cover").is_some());
+    assert_cover_lines(cx, &[("dashboard-overlay-cover", "Program overlay")]);
     assert!(cx.debug_bounds("dashboard-overlay-cover-source").is_none());
+    assert!(cx.debug_bounds("dashboard-overlay-cover-title").is_none());
 }
 
-/// A blinking chip draws its pulsing wash; the cells without a cover draw none.
+/// Only a blinking chip draws a wash, and disabling animations removes it from the grid.
 #[gpui_kit::test]
 fn a_blinking_chip_pulses_in_the_grid(cx: &mut gpui_kit::TestAppContext) {
     let mut blinking = chrome_cell(None);
@@ -365,27 +391,106 @@ fn a_blinking_chip_pulses_in_the_grid(cx: &mut gpui_kit::TestAppContext) {
         blink: true,
         tooltip: String::new(),
     });
-    let cx = grid_window(cx, vec![blinking, chrome_cell(None)], crate::state::detached_poster());
-    assert!(cx.debug_bounds("dashboard-cell-1").is_some(), "two cells");
-    assert!(cx.debug_bounds("dashboard-overlay-cover").is_none());
+    let (view, cx) = cx.add_window_view(move |_, _| GridView {
+        cells: vec![blinking, chrome_cell(None)],
+        poster: crate::state::detached_poster(),
+        window: Uuid::nil(),
+        animate: true,
+    });
+    cx.simulate_resize(gpui_kit::size(px(800.), px(500.)));
+    cx.run_until_parked();
+    let washes = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.update(|window, _| {
+            window
+                .painted_quads()
+                .into_iter()
+                .filter(|quad| {
+                    quad.background
+                        .as_solid()
+                        .is_some_and(|fill| (fill.l - 1.0).abs() < f32::EPSILON)
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    // The first animation sample is transparent; paint a later sample before inspecting the wash.
+    std::thread::sleep(Duration::from_millis(10));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let drawn = washes(cx);
+    assert_eq!(drawn.len(), 1, "only the blinking cell draws a white wash");
+    let alpha = drawn[0].background.as_solid().unwrap().a;
+    assert!(
+        alpha > 0.0 && alpha <= WASH_PEAK,
+        "the wash is animated, not an opaque fill: {alpha}"
+    );
+    let idle = cx.debug_bounds("dashboard-cell-1").unwrap();
+    let scale = cx.update(|window, _| window.scale_factor());
+    assert!(
+        drawn[0].bounds.right().0 / scale < f32::from(idle.origin.x),
+        "the wash belongs to the blinking cell"
+    );
+    view.update(cx, |grid, cx| {
+        grid.animate = false;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(washes(cx).is_empty(), "animations are off");
+    view.update(cx, |grid, cx| {
+        grid.animate = true;
+        grid.cells[0].status.as_mut().unwrap().blink = false;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(washes(cx).is_empty(), "a steady status draws no wash");
 }
 
-/// A click posts its highlight at once and its enter after the flash; with the loop closed to delayed tasks only the
-/// highlight goes, and with the loop gone nothing does.
+/// A click highlights its member in its window immediately and enters that member only after the flash.
 #[gpui_kit::test]
 fn a_click_posts_its_highlight_and_its_delayed_enter(cx: &mut gpui_kit::TestAppContext) {
+    let (mut state, window) = dashboard_state();
+    let model = GridModel::of(&state.core, window).unwrap();
+    let member = model.members[1];
+    state.dashboard_click(window, model.members[0]);
+    let cells = model.cells(state.core.library().store(window), state.core.settings());
     let open = std::sync::Arc::new(Posted::default());
     let poster: Poster = std::sync::Arc::downgrade(&open) as Poster;
-    let cx = grid_window(cx, vec![chrome_cell(None)], poster);
-    let at = cx.debug_bounds("dashboard-cell-0").unwrap().center();
+    let (_, cx) = cx.add_window_view(move |_, _| GridView {
+        cells,
+        poster,
+        window,
+        animate: true,
+    });
+    cx.simulate_resize(gpui_kit::size(px(800.), px(500.)));
+    cx.run_until_parked();
+    let at = cx.debug_bounds("dashboard-cell-1").unwrap().center();
     cx.simulate_click(at, Modifiers::default());
     cx.run_until_parked();
-    assert_eq!(open.now.lock().unwrap().len(), 1, "the highlight");
-    let later = open.later.lock().unwrap();
+    let now = std::mem::take(&mut *open.now.lock().unwrap());
+    assert_eq!(now.len(), 1, "the highlight");
+    for task in now {
+        task(&mut state);
+    }
+    assert_eq!(highlighted(&state, window), Some(member));
+    assert!(
+        state.core.dashboard(window).is_some(),
+        "highlighting keeps the grid open"
+    );
+    let mut later = std::mem::take(&mut *open.later.lock().unwrap());
     assert_eq!(later.len(), 1, "the enter");
-    assert_eq!(later[0].0, CLICK_ENTER_DELAY);
+    let (delay, task) = later.pop().unwrap();
+    assert_eq!(delay, CLICK_ENTER_DELAY);
+    task(&mut state);
+    assert!(
+        state.core.dashboard(window).is_none(),
+        "the delayed task enters the cell"
+    );
+    assert_eq!(
+        state.core.library().store(window).unwrap().selected_session_id(),
+        Some(member.session)
+    );
 }
 
+/// A closing loop accepts only the highlight; a gone loop accepts nothing.
 #[test]
 fn a_click_on_a_closing_loop_posts_only_its_highlight_and_on_a_gone_one_nothing() {
     let member = DashboardMember::primary(Uuid::new_v4());

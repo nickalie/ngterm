@@ -291,25 +291,33 @@ fn six_commands(dir: &std::path::Path) -> impl FnOnce(&mut Core) {
 }
 
 /// Upstream's custom-commands popover: the most-run commands lead above a separator, the rest follow in file order,
-/// each with its chord; the keyboard walks them both ways, wrapping, and Return runs the highlighted one and closes.
+/// the keyboard walks them both ways, wrapping, and Return runs the highlighted one and closes.
 #[gpui_kit::test]
 fn the_custom_commands_popover_leads_with_the_most_run_and_runs_by_keyboard(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let prepare = six_commands(dir.path());
     let persistence = ngterm_core::persist::LibraryPersistence::new(dir.path());
     let (mut h, cx) = harness_with(cx, Some(persistence), prepare);
-    eprintln!(
-        "DBG {} {:?} {:?}",
-        h.state.core.keymap().commands().len(),
-        h.state.core.keymap_diagnostics(),
-        h.state.core.titlebar(h.window).custom_commands
-    );
     h.open(PopoverKind::CustomCommands, cx);
     assert_eq!(
         h.view.read_with(cx, |p, _| p.row_titles()),
         ["c3", "deploy", "c2", "c4", "c5", "c6"]
     );
-    assert!(cx.debug_bounds("popover").is_some());
+    let panel = cx.debug_bounds("popover").unwrap();
+    let separator = cx.update(|window, cx| {
+        let color = crate::chrome::separator(&crate::chrome::current(cx));
+        let scale = window.scale_factor();
+        window
+            .painted_quads()
+            .into_iter()
+            .filter(|quad| {
+                quad.background.as_solid() == Some(color)
+                    && (quad.bounds.size.height.0 / scale - 1.0).abs() < 0.1
+                    && quad.bounds.size.width.0 / scale > f32::from(panel.size.width) / 2.0
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(separator.len(), 1, "one separator after the leading commands");
     // Up from no highlight lands on the last row, Down from there wraps to the first
     cx.simulate_keystrokes("up");
     assert_eq!(h.view.read_with(cx, |p, _| p.highlighted), Some(5));
@@ -321,6 +329,54 @@ fn the_custom_commands_popover_leads_with_the_most_run_and_runs_by_keyboard(cx: 
     cx.simulate_keystrokes("enter");
     h.settle(cx);
     assert!(!h.view.read_with(cx, |p, _| p.is_open()), "a run row closes it");
+    assert_eq!(
+        h.state.take_frontend_work().banners,
+        vec![ngterm_core::NotificationEffect::App {
+            identity: "command-failure:deploy".to_owned(),
+            title: "Command failed".to_owned(),
+            body: "deploy (custom commands are not available)".to_owned(),
+        }],
+        "Return ran exactly the highlighted command"
+    );
+}
+
+/// A bound command draws its chord after the name; a palette-only command has no trailing label.
+#[gpui_kit::test]
+fn a_custom_command_line_draws_its_chord_at_the_trailing_edge(cx: &mut TestAppContext) {
+    let (_, cx) = harness(cx);
+    for shortcut in ["ctrl+alt+shift+j", ""] {
+        let command = CustomCommand::new("deploy", "echo deploy", shortcut);
+        let children = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured = std::rc::Rc::clone(&children);
+        let expected_width = cx.update(|window, _| {
+            let run = window.text_style().to_run(shortcut.len());
+            window
+                .text_system()
+                .shape_line(SharedString::from(shortcut.to_owned()), px(11.), &[run], None)
+                .width
+        });
+        cx.draw(point(px(0.), px(0.)), size(px(300.), px(48.)), |_, cx| {
+            command_line(
+                div()
+                    .flex()
+                    .flex_row()
+                    .size_full()
+                    .on_children_prepainted(move |bounds, _, _| *captured.borrow_mut() = bounds)
+                    .id("command-line"),
+                &command,
+                crate::chrome::current(cx),
+            )
+        });
+        let children = children.borrow();
+        assert_eq!(children.len(), if shortcut.is_empty() { 1 } else { 2 });
+        if !shortcut.is_empty() {
+            assert!(
+                (children[1].size.width - expected_width).abs() < px(1.),
+                "the shortcut's text at 11px"
+            );
+            assert!(children[0].right() <= children[1].left(), "the chord trails the name");
+        }
+    }
 }
 
 /// The bell's row selects its session in its window; opening it over the clock's popover swaps them without a second
@@ -410,7 +466,33 @@ fn a_remote_recent_row_lists_with_its_cloud(cx: &mut TestAppContext) {
     let rows = h.view.read_with(cx, |p, _| p.recent.clone());
     let row = rows.iter().find(|row| row.session == remote).expect("the remote row");
     assert!(row.remote);
-    assert!(cx.debug_bounds("popover").is_some());
+    assert_eq!(row.title, "api");
+    cx.activate_a11y();
+    let tree = cx.a11y_tree_update().expect("the popover's accessibility tree");
+    assert!(
+        tree.nodes
+            .iter()
+            .any(|(_, node)| node.role() == gpui_kit::Role::MenuItem && node.label() == Some("api"))
+    );
+    // Inspect the same line builder the popover uses: the cloud takes its own 16px slot before the text.
+    let children = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let captured = std::rc::Rc::clone(&children);
+    cx.draw(point(px(0.), px(0.)), size(px(300.), px(48.)), |_, cx| {
+        session_line(
+            div()
+                .flex()
+                .flex_row()
+                .size_full()
+                .on_children_prepainted(move |bounds, _, _| *captured.borrow_mut() = bounds)
+                .id("remote-line"),
+            row,
+            crate::chrome::current(cx),
+        )
+    });
+    let children = children.borrow();
+    assert_eq!(children.len(), 2, "the cloud and the session text");
+    assert_eq!(children[0].size, size(px(row_icon::SLOT), px(row_icon::SLOT)));
+    assert!(children[0].right() <= children[1].left(), "the cloud precedes the text");
 }
 
 /// A click on a row runs it: the pointer's row highlights under it, and the press goes no further than the popover.

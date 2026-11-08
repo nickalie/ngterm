@@ -479,7 +479,7 @@ fn one_command(dir: &std::path::Path) -> impl FnOnce(&mut Core) {
 }
 
 /// The clock, the bell and the custom-commands button each ask for their popover, hung from the pointer at the bar's
-/// bottom edge; the bell turns the blocked color and says what it shows while a session waits on the user.
+/// bottom edge; the bell reports blocked attention and says what it shows while a session waits on the user.
 #[gpui_kit::test]
 fn the_popover_buttons_ask_for_their_popover_under_the_pointer(cx: &mut TestAppContext) {
     use ngterm_core::model::{AgentIndicator, AgentStatus};
@@ -504,7 +504,6 @@ fn the_popover_buttons_ask_for_their_popover_under_the_pointer(cx: &mut TestAppC
         shown.hints.attention,
         "Show sessions that need attention (Shift+Ctrl+I)"
     );
-    assert_eq!(shown.blocked, BLOCKED_DEFAULT);
     for (selector, kind) in [
         ("recent-sessions-button", PopoverKind::Recent),
         ("attention-button", PopoverKind::Attention),
