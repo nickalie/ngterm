@@ -189,6 +189,9 @@ jobs:
           print(f"NGTERM_WPE_SMOKE_BINARY={binaries[0]}")
           PY
       - name: Linux archive, native packages and AppImage
+        env:
+          # the packaging tools' API fallback (scripts/lib/fetch-tool.sh): unauthenticated calls hit the shared limit
+          GH_TOKEN: ${{ github.token }}
         run: scripts/package-release.sh "$RUNNER_TEMP/stage" "${{ needs.version.outputs.version }}" dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: upload

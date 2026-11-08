@@ -5276,7 +5276,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "ngterm-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "image",
@@ -5297,7 +5297,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "bitflags 2.13.2",
@@ -5326,7 +5326,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-ctl"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -5347,7 +5347,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-ghostty-vt"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "bitflags 2.13.2",
@@ -5356,14 +5356,14 @@ dependencies = [
 
 [[package]]
 name = "ngterm-ghostty-vt-sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "ngterm-gpui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ashpd",
  "async-channel",
@@ -5426,7 +5426,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-headless"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "libc",
@@ -5447,11 +5447,11 @@ dependencies = [
 
 [[package]]
 name = "ngterm-host"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "ngterm-mobile"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures-lite",
  "ngterm-core",
@@ -5469,7 +5469,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5480,7 +5480,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-pty"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libc",
  "portable-pty",
@@ -5492,7 +5492,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "interprocess",
  "libc",
@@ -5509,7 +5509,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-session"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "interprocess",
@@ -5535,7 +5535,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-term"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "bitflags 2.13.2",
@@ -5555,7 +5555,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-update"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dunce",
  "flate2",
@@ -5574,7 +5574,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-wpe"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-channel",
  "bitflags 2.13.2",
@@ -5596,7 +5596,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-wpe-javascriptcore-sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glib-sys",
  "gobject-sys",
@@ -5608,7 +5608,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-wpe-platform-sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "gio-sys",
  "glib-sys",
@@ -5621,7 +5621,7 @@ dependencies = [
 
 [[package]]
 name = "ngterm-wpe-sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "gio-sys",
  "glib-sys",

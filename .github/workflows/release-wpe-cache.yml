@@ -123,6 +123,9 @@ jobs:
     env:
       OS: ${{ matrix.os }}
       SHA256: ${{ needs.build.outputs[format('built_{0}', matrix.arch)] }}
+      # every step: the login, and each ORAS fetch's API fallback (scripts/lib/fetch-tool.sh). This job runs nothing
+      # `build` made, so the token reaches no build code.
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.SHA256 != ''
@@ -135,8 +138,6 @@ jobs:
           path: ${{ runner.temp }}/in
       - name: Registry login
         if: env.SHA256 != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: scripts/release-wpe-store.sh login
       - name: Push, untagged
         id: push

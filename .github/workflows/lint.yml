@@ -40,4 +40,7 @@ jobs:
       - name: PyYAML
         run: python3 -c 'import yaml' 2>/dev/null || { sudo apt-get update -q && sudo apt-get install -yq python3-yaml; }
       - name: actionlint, shellcheck and the scripts' self-tests
+        env:
+          # the linters' API fallback (scripts/lib/fetch-tool.sh): unauthenticated calls hit the shared limit
+          GH_TOKEN: ${{ github.token }}
         run: scripts/lint.sh

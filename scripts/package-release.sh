@@ -13,6 +13,8 @@
 set -euo pipefail
 # shellcheck source=lib/native.sh
 source "$(dirname "$0")/lib/native.sh"
+# shellcheck source=lib/fetch-tool.sh
+source "$(dirname "$0")/lib/fetch-tool.sh"
 # shellcheck source=../packaging/release/pins.env
 source "$NATIVE_ROOT/packaging/release/pins.env"
 usage() {
@@ -88,7 +90,7 @@ arch="$(uname -m)"
 
 # Execute only checksum-verified release tools. AppImages run extracted, without FUSE.
 download() {
-  curl --fail --location --retry 5 "$1" -o "$2"
+  github_download "$1" "$2"
   echo "$3  $2" | sha256sum --check
 }
 
