@@ -80,7 +80,8 @@ The run summary prints pass, fail, both skip kinds and reruns, and parity: passe
 not-yet-at-level, so an unsupported capability is a recorded divergence, not a gap.
 
 - `--must-pass CAPABILITY` fails the run unless every collected test requiring it ran and passed, and at least one
-  did (reference-macos uses it for `live-sessions`).
+  did (reference-macos uses it for `live-sessions`). A test skipped as unsupported for lacking only other
+  capabilities it requires is excused: the reference's skip of a Rust-only extension's Live tests is that divergence.
 - `--nodeid-report PATH` writes one JSON line per run test with its outcome merged over setup, call and teardown,
   plus the run's collection errors and `--must-pass` problems; `tools/check_ratchet.py` reads it.
   A run pytest refuses (a usage error, a path or node id that matches nothing) or that breaks internally writes none.

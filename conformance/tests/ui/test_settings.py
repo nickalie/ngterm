@@ -67,6 +67,28 @@ def _open(ui, tab):
     ui.click(found)
 
 
+# How long a pressed popup gets to show its menu before the press counts as missed.
+MENU_SHOWN = 3.0
+
+
+def _choose(ui, picker, item):
+    """Pick `item` from the menu of the popup `picker`. Right after a tab switch the reference's press can land on the
+    popup the previous tab showed in that place and open that one's menu (reference-macos: the Interface tab's
+    session-info menu over Appearance's density picker), so the test goes on once the open menu is the picker's own:
+    a menu without `item` is dismissed and the picker pressed again."""
+
+    def opened():
+        ui.click(ui.find(picker, role="popup"))
+        try:
+            return ui.menu_item(item, timeout=MENU_SHOWN)
+        except ElementNotFound as error:
+            ui.press("escape")
+            raise AssertionError(f"the open menu has no {item!r}: {error}") from None
+
+    opened.__qualname__ = f"{picker}'s menu listing {item!r}"
+    ui.click(wait_until(opened, timeout=30))
+
+
 def _check(ui, expected):
     """`expected` maps an id to its role, or to None where the role is the platform's own (a stepper, a color well)."""
     for ui_id, role in expected.items():
@@ -296,19 +318,16 @@ def test_session_info_display_picker_persists(seeded, ui_for, adapter):
         return {"value": text} if adapter.has("ui-string-values") else {}
 
     assert "sessionInfoDisplay" not in _settings(seeded)
-    picker = ui.find("settings-session-info-display", role="popup", **value("Always"))
-    ui.click(picker)
-    ui.click(ui.menu_item("Flagged"))
+    ui.find("settings-session-info-display", role="popup", **value("Always"))
+    _choose(ui, "settings-session-info-display", "Flagged")
     try:
         wait_until(lambda: _settings(seeded).get("sessionInfoDisplay") == "flagged")
         ui.find("settings-session-info-display", role="popup", **value("Flagged"))
-        ui.click(ui.find("settings-session-info-display", role="popup"))
-        ui.click(ui.menu_item("Off"))
+        _choose(ui, "settings-session-info-display", "Off")
         wait_until(lambda: _settings(seeded).get("sessionInfoDisplay") == "off")
         ui.find("settings-session-info-display", role="popup", **value("Off"))
     finally:
-        ui.click(ui.find("settings-session-info-display", role="popup"))
-        ui.click(ui.menu_item("Always"))
+        _choose(ui, "settings-session-info-display", "Always")
     wait_until(lambda: "sessionInfoDisplay" not in _settings(seeded))
 
 
@@ -365,15 +384,13 @@ def test_sidebar_density_picker_persists(seeded, ui_for, adapter):
 
     ui = ui_for(seeded)
     _open(ui, "Appearance")
-    picker = ui.find("settings-sidebar-density", role="popup", **value("Default"))
-    ui.click(picker)
-    ui.click(ui.menu_item("Compact"))
+    ui.find("settings-sidebar-density", role="popup", **value("Default"))
+    _choose(ui, "settings-sidebar-density", "Compact")
     try:
         wait_until(lambda: _settings(seeded).get("sidebarDensity") == "compact")
         ui.find("settings-sidebar-density", role="popup", **value("Compact"))
         assert seeded.tree()["tree"]["sidebarDensity"] == "compact"
     finally:
-        ui.click(ui.find("settings-sidebar-density", role="popup"))
-        ui.click(ui.menu_item("Default"))
+        _choose(ui, "settings-sidebar-density", "Default")
     # the default density is stored as no key at all
     wait_until(lambda: "sidebarDensity" not in _settings(seeded))
