@@ -99,12 +99,12 @@ tests/cli/test_cli_output.py::test_sidebar
 tests/cli/test_cli_output.py::test_surface_and_dashboard
 tests/cli/test_cli_output.py::test_theme
 tests/cli/test_cli_output.py::test_tint_commands
-tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv0-tint must be one of: red|orange|yellow|green|blue|purple|gray, or clear]
+tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv0-message0]
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv1---on does not apply to clear]
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv2---on must list icon and/or name, comma-separated]
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv3---on must list icon and/or name, comma-separated]
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv4---tint-on requires --tint]
-tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv5---tint must be one of: red|orange|yellow|green|blue|purple|gray]
+tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv5-message5]
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv6---tint-on must list icon and/or name, comma-separated]
 tests/cli/test_cli_output.py::test_tree_lists_workspaces_and_tagged_sessions
 tests/cli/test_cli_output.py::test_version

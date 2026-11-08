@@ -101,7 +101,7 @@ fn workspace_node(
         active: current == Some(id),
         focused: store.focus().ids().contains(&id).then_some(true),
         collapsed: (!workspace.is_expanded).then_some(true),
-        tint: workspace.tint.map(|tint| tint.color().wire_name().to_owned()),
+        tint: workspace.tint.map(|tint| tint.color().wire()),
         tint_on: workspace.tint.map(|tint| tint.parts().wire_names()),
         sessions: workspace
             .sessions
@@ -166,7 +166,7 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
         .flatten();
     node.status_changed_at = session.status_changed_at.map(epoch_seconds);
     node.last_selected_at = session.last_selected_at.map(epoch_seconds);
-    node.tint = session.tint.map(|tint| tint.color().wire_name().to_owned());
+    node.tint = session.tint.map(|tint| tint.color().wire());
     node.tint_on = session.tint.map(|tint| tint.parts().wire_names());
     node.parent = session.parent_id().map(uuid_string);
     node.content = (session.content() == SessionContent::Page).then(|| "page".to_owned());

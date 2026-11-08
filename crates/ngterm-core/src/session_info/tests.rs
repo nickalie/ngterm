@@ -129,7 +129,7 @@ fn links_keep_labels_only_and_unknown_attributes_are_unstyled() {
 fn link_metadata_never_interprets_attributes_but_visible_labels_do() {
     for source in [
         "[PR](https://example.com \"^[x](color: red)\")",
-        "[PR](https://example.com '^[x](color: \"pink\")')",
+        "[PR](https://example.com '^[x](color: \"maroon\")')",
         "[PR](https://example.com (^[x]\\(dim: 42\\)))",
         "[PR](https://example.com/^[x](color:red))",
     ] {
@@ -172,8 +172,20 @@ fn link_metadata_never_interprets_attributes_but_visible_labels_do() {
 #[test]
 fn bad_colors_and_typed_attributes_are_rejected() {
     assert_eq!(
-        SessionInfo::make("^[a](color: \"pink\")", true, 0.0).unwrap_err(),
-        "unknown info color: pink (red|orange|yellow|green|blue|purple|gray)"
+        SessionInfo::make("^[a](color: \"maroon\")", true, 0.0).unwrap_err(),
+        "unknown info color: maroon (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint)"
+    );
+    // markup keeps the palette names: a hex the row tints take is refused here
+    assert_eq!(
+        SessionInfo::make("^[a](color: \"#3a7bd5\")", true, 0.0).unwrap_err(),
+        "unknown info color: #3a7bd5 (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint)"
+    );
+    assert_eq!(
+        info("^[ok](color: \"pink\")").spans,
+        vec![SessionInfoSpan {
+            color: Some(TintColor::Pink),
+            ..span("ok")
+        }]
     );
     for raw in [
         "^[a](color: 42)",

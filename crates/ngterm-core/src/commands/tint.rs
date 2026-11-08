@@ -12,7 +12,7 @@ use ngterm_proto::{Args, ControlResult};
 use super::{Outcome, session_store, with_id, workspace_store};
 use crate::Core;
 use crate::error::ControlError;
-use crate::model::{SidebarTint, TintColor, TintPart, TintParts, TintUpdate};
+use crate::model::{SidebarTint, TintPart, TintParts, TintUpdate, TintValue};
 
 /// `session.tint`: the session's tint set (a set without `tintOn` keeps the row's own parts) or cleared. An unchanged
 /// value neither saves nor emits.
@@ -65,10 +65,10 @@ pub(crate) fn creation_tint(args: &Args) -> Result<Option<SidebarTint>, ControlE
     Ok(Some(SidebarTint::new(color, parts.unwrap_or(TintParts::ICON))))
 }
 
-/// A color, matched case-insensitively.
-fn tint_color(raw: &str) -> Result<TintColor, ControlError> {
-    TintColor::from_wire(&raw.to_lowercase())
-        .ok_or_else(|| ControlError::rejected(format!("invalid tint: {raw} ({})", TintColor::valid_names_list())))
+/// A palette name matched case-insensitively, or a `#rrggbb` hex (the `#` optional) read as lowercase.
+fn tint_color(raw: &str) -> Result<TintValue, ControlError> {
+    TintValue::parse(raw)
+        .ok_or_else(|| ControlError::rejected(format!("invalid tint: {raw} ({})", TintValue::valid_values_list())))
 }
 
 /// An optional placement list; an empty one or an unknown part is refused, naming the list as sent.
@@ -88,6 +88,9 @@ fn tint_parts(raw: Option<&[String]>) -> Result<Option<TintParts>, ControlError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::TintColor;
+
+    const BLUE_HEX: TintValue = TintValue::Hex([0x3a, 0x7b, 0xd5]);
 
     fn args(edit: impl FnOnce(&mut Args)) -> Args {
         let mut args = Args::default();
@@ -117,15 +120,16 @@ mod tests {
                 "session.tint",
             )
         };
-        assert_eq!(set("Red", None), Ok(TintUpdate::Set(TintColor::Red, None)));
+        assert_eq!(set("Red", None), Ok(TintUpdate::Set(TintColor::Red.into(), None)));
         assert_eq!(
             set("blue", Some(strings(&["name", "icon"]))),
-            Ok(TintUpdate::Set(TintColor::Blue, Some(TintParts::BOTH)))
+            Ok(TintUpdate::Set(TintColor::Blue.into(), Some(TintParts::BOTH)))
         );
         assert_eq!(
             set("gray", Some(strings(&["name"]))),
-            Ok(TintUpdate::Set(TintColor::Gray, Some(TintParts::NAME)))
+            Ok(TintUpdate::Set(TintColor::Gray.into(), Some(TintParts::NAME)))
         );
+        assert_eq!(set("Teal", None), Ok(TintUpdate::Set(TintColor::Teal.into(), None)));
         assert_eq!(
             tint_update(&args(|a| a.mode = Some("clear".to_owned())), "workspace.tint"),
             Ok(TintUpdate::Clear)
@@ -143,9 +147,16 @@ mod tests {
             (
                 args(|a| {
                     a.mode = Some("set".to_owned());
-                    a.tint = Some("teal".to_owned());
+                    a.tint = Some("maroon".to_owned());
                 }),
-                "invalid tint: teal (red|orange|yellow|green|blue|purple|gray)",
+                "invalid tint: maroon (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)",
+            ),
+            (
+                args(|a| {
+                    a.mode = Some("set".to_owned());
+                    a.tint = Some("#3a7bd".to_owned());
+                }),
+                "invalid tint: #3a7bd (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)",
             ),
             (
                 args(|a| {
@@ -209,8 +220,8 @@ mod tests {
                 "--tint-on requires --tint",
             ),
             (
-                args(|a| a.tint = Some("teal".to_owned())),
-                "invalid tint: teal (red|orange|yellow|green|blue|purple|gray)",
+                args(|a| a.tint = Some("maroon".to_owned())),
+                "invalid tint: maroon (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)",
             ),
             (
                 args(|a| {
@@ -223,5 +234,22 @@ mod tests {
         for (args, message) in cases {
             assert_eq!(creation_tint(&args), Err(rejected(message)), "{args:?}");
         }
+    }
+
+    /// `tintSetAndCreationTakeANormalizedHex`.
+    #[test]
+    fn a_set_and_a_creation_take_a_normalized_hex() {
+        let set = tint_update(
+            &args(|a| {
+                a.mode = Some("set".to_owned());
+                a.tint = Some("#3A7BD5".to_owned());
+            }),
+            "workspace.tint",
+        );
+        assert_eq!(set, Ok(TintUpdate::Set(BLUE_HEX, None)));
+        assert_eq!(
+            creation_tint(&args(|a| a.tint = Some("3a7bd5".to_owned()))),
+            Ok(Some(SidebarTint::on_icon(BLUE_HEX)))
+        );
     }
 }

@@ -6,7 +6,7 @@
 
 use gpui_kit::Hsla;
 use ngterm_core::chrome::{ChromeColors, Rgb};
-use ngterm_core::model::{SidebarTint, TintColor, TintPart};
+use ngterm_core::model::{SidebarTint, TintColor, TintPart, TintValue};
 use ngterm_core::persist::AppSettings;
 use ngterm_core::persist::settings::SidebarDensity;
 
@@ -182,7 +182,7 @@ impl Look {
     pub fn row_inks(&self, tint: Option<SidebarTint>, selected: bool) -> (Hsla, Hsla) {
         let tinted = |part| {
             tint.filter(|tint| tint.shows(part))
-                .map(|tint| self::tint(tint.color(), self.dark()))
+                .map(|tint| tint_value(tint.color(), self.dark()))
         };
         (
             tinted(TintPart::Name).unwrap_or_else(|| self.text(selected)),
@@ -192,7 +192,8 @@ impl Look {
 }
 
 /// A tint color: the macOS system color of the same name (`NSColor.systemRed` and kin), its dark-appearance variant
-/// on a dark chrome, as `AppKit`'s dynamic colors follow the appearance.
+/// on a dark chrome, as `AppKit`'s dynamic colors follow the appearance. The five upstream added in v0.41.0 (teal to
+/// mint) are their sRGB values read from macOS 27.2 in the aqua and dark aqua appearances.
 #[must_use]
 pub fn tint_rgb(tint: TintColor, dark: bool) -> Rgb {
     let (light, dark_variant) = match tint {
@@ -203,6 +204,11 @@ pub fn tint_rgb(tint: TintColor, dark: bool) -> Rgb {
         TintColor::Blue => (Rgb::new(0x00, 0x7A, 0xFF), Rgb::new(0x0A, 0x84, 0xFF)),
         TintColor::Purple => (Rgb::new(0xAF, 0x52, 0xDE), Rgb::new(0xBF, 0x5A, 0xF2)),
         TintColor::Gray => (Rgb::new(0x8E, 0x8E, 0x93), Rgb::new(0x98, 0x98, 0x9D)),
+        TintColor::Teal => (Rgb::new(0x00, 0xC3, 0xD0), Rgb::new(0x00, 0xD2, 0xE0)),
+        TintColor::Pink => (Rgb::new(0xFF, 0x2D, 0x55), Rgb::new(0xFF, 0x37, 0x5F)),
+        TintColor::Brown => (Rgb::new(0xAC, 0x7F, 0x5E), Rgb::new(0xB7, 0x8A, 0x66)),
+        TintColor::Indigo => (Rgb::new(0x61, 0x55, 0xF5), Rgb::new(0x6D, 0x7C, 0xFF)),
+        TintColor::Mint => (Rgb::new(0x00, 0xC8, 0xB3), Rgb::new(0x00, 0xDA, 0xC3)),
     };
     if dark { dark_variant } else { light }
 }
@@ -211,6 +217,22 @@ pub fn tint_rgb(tint: TintColor, dark: bool) -> Rgb {
 #[must_use]
 pub fn tint(tint: TintColor, dark: bool) -> Hsla {
     color(tint_rgb(tint, dark), 1.0)
+}
+
+/// A row tint's color (upstream's `NSColor.tint(_: TintValue)`): a name as [`tint_rgb`], a hex as its fixed sRGB on
+/// either side.
+#[must_use]
+pub fn tint_value_rgb(value: TintValue, dark: bool) -> Rgb {
+    match value {
+        TintValue::Named(name) => tint_rgb(name, dark),
+        TintValue::Hex([red, green, blue]) => Rgb::new(red, green, blue),
+    }
+}
+
+/// [`tint_value_rgb`] as a fill.
+#[must_use]
+pub fn tint_value(value: TintValue, dark: bool) -> Hsla {
+    color(tint_value_rgb(value, dark), 1.0)
 }
 
 /// The rows' text size from the `sidebarFontSize` setting, clamped to 9...20; 13 when unset.

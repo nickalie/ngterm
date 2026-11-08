@@ -185,6 +185,8 @@ pub struct Core {
     pub(crate) remote: crate::remote::PresentationRuntime,
     /// Every pane's agent record ([`commands::agent`]).
     pub(crate) agents: commands::agent::AgentRecords,
+    /// The Tint submenu's last Show On pick ([`Core::tint_placement`]).
+    pub(crate) tint_placement: crate::model::TintParts,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -269,6 +271,7 @@ impl Core {
             live: commands::live::LiveRuntime::default(),
             remote: crate::remote::PresentationRuntime::default(),
             agents: commands::agent::AgentRecords::default(),
+            tint_placement: crate::model::TintParts::ICON,
         };
         core.sync_session_naming();
         core.sync_flagged_layout();

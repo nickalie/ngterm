@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use super::support::{add, add_background};
 use crate::model::{
-    AppStore, NewSession, SaveRequest, SidebarTint, TintChoice, TintColor, TintParts, WorkspaceOptions,
+    AppStore, NewSession, SaveRequest, SidebarTint, TintChoice, TintColor, TintParts, TintValue, WorkspaceOptions,
 };
 use crate::persist::Snapshot;
 
@@ -78,7 +78,11 @@ fn a_batch_color_keeps_each_rows_placement_and_starts_untinted_rows_on_the_icon(
     let plain = add(&mut store, work, "/b");
     store.set_session_tint(Some(SidebarTint::new(TintColor::Green, TintParts::NAME)), named);
 
-    assert!(store.apply_session_tints(TintChoice::Color(Some(TintColor::Red)), &[named, plain]));
+    assert!(store.apply_session_tints(
+        TintChoice::Color(Some(TintColor::Red.into())),
+        &[named, plain],
+        TintParts::ICON
+    ));
 
     assert_eq!(
         session_tint(&store, named),
@@ -88,8 +92,50 @@ fn a_batch_color_keeps_each_rows_placement_and_starts_untinted_rows_on_the_icon(
         session_tint(&store, plain),
         Some(SidebarTint::new(TintColor::Red, TintParts::ICON))
     );
-    store.apply_session_tints(TintChoice::Color(None), &[named, plain]);
+    store.apply_session_tints(TintChoice::Color(None), &[named, plain], TintParts::ICON);
     assert_eq!((session_tint(&store, named), session_tint(&store, plain)), (None, None));
+}
+
+const BLUE_HEX: TintValue = TintValue::Hex([0x3a, 0x7b, 0xd5]);
+
+/// `batchHexColorKeepsEachRowsPlacement`.
+#[test]
+fn a_batch_hex_color_keeps_each_rows_placement() {
+    let mut store = AppStore::new();
+    let work = store.add_workspace("work");
+    let named = add(&mut store, work, "/a");
+    let plain = add(&mut store, work, "/b");
+    store.set_session_tint(Some(SidebarTint::new(TintColor::Green, TintParts::NAME)), named);
+
+    store.apply_session_tints(TintChoice::Color(Some(BLUE_HEX)), &[named, plain], TintParts::ICON);
+
+    assert_eq!(
+        session_tint(&store, named),
+        Some(SidebarTint::new(BLUE_HEX, TintParts::NAME))
+    );
+    assert_eq!(
+        session_tint(&store, plain),
+        Some(SidebarTint::new(BLUE_HEX, TintParts::ICON))
+    );
+}
+
+/// `batchColorStartsUntintedRowsOnTheGivenPlacement`.
+#[test]
+fn a_batch_color_starts_untinted_rows_on_the_given_placement() {
+    let mut store = AppStore::new();
+    let work = store.add_workspace("work");
+    let named = add(&mut store, work, "/a");
+    let plain = add(&mut store, work, "/b");
+    store.set_session_tint(Some(SidebarTint::on_icon(TintColor::Green)), named);
+
+    let red = TintChoice::Color(Some(TintColor::Red.into()));
+    store.apply_session_tints(red, &[named, plain], TintParts::NAME);
+
+    assert_eq!(session_tint(&store, named), Some(SidebarTint::on_icon(TintColor::Red)));
+    assert_eq!(
+        session_tint(&store, plain),
+        Some(SidebarTint::new(TintColor::Red, TintParts::NAME))
+    );
 }
 
 /// `batchPlacementKeepsEachRowsColorAndSkipsUntintedRows`.
@@ -104,7 +150,7 @@ fn a_batch_placement_keeps_each_rows_color_and_skips_untinted_rows() {
     store.set_session_tint(Some(SidebarTint::on_icon(TintColor::Blue)), blue);
     store.take_outbox();
 
-    store.apply_session_tints(TintChoice::Parts(TintParts::BOTH), &[red, blue, plain]);
+    store.apply_session_tints(TintChoice::Parts(TintParts::BOTH), &[red, blue, plain], TintParts::ICON);
 
     assert_eq!(
         session_tint(&store, red),
@@ -117,7 +163,7 @@ fn a_batch_placement_keeps_each_rows_color_and_skips_untinted_rows() {
     assert_eq!(session_tint(&store, plain), None);
     store.take_outbox();
     assert!(
-        !store.apply_session_tints(TintChoice::Parts(TintParts::BOTH), &[red, blue, plain]),
+        !store.apply_session_tints(TintChoice::Parts(TintParts::BOTH), &[red, blue, plain], TintParts::ICON),
         "nothing changes the second time"
     );
     assert_eq!(store.outbox().save, SaveRequest::None);
@@ -155,7 +201,7 @@ fn tints_survive_a_save_and_reload() {
     let work = store.add_workspace("work");
     let session = add(&mut store, work, "/a");
     store.set_session_tint(Some(SidebarTint::new(TintColor::Purple, TintParts::BOTH)), session);
-    store.set_workspace_tint(Some(SidebarTint::new(TintColor::Gray, TintParts::NAME)), work);
+    store.set_workspace_tint(Some(SidebarTint::new(BLUE_HEX, TintParts::NAME)), work);
     let text = serde_json::to_string(&store.snapshot()).unwrap();
 
     let mut reloaded = AppStore::new();
@@ -167,7 +213,7 @@ fn tints_survive_a_save_and_reload() {
     );
     assert_eq!(
         workspace_tint(&reloaded, work),
-        Some(SidebarTint::new(TintColor::Gray, TintParts::NAME))
+        Some(SidebarTint::new(BLUE_HEX, TintParts::NAME))
     );
 }
 
@@ -248,7 +294,7 @@ fn reopening_a_session_whose_workspace_was_closed_rebuilds_it_with_its_tint() {
 fn an_unknown_tint_color_drops_only_the_tint() {
     let text = r#"{"version": 1, "workspaces": [{"id": "00000000-0000-0000-0000-000000000004", "name": "w",
         "collapsed": true, "tint": "red", "sessions": [{"id": "00000000-0000-0000-0000-000000000003",
-        "cwd": "/tmp", "flagged": true, "tint": {"color": "teal", "on": ["name"]}}]}]}"#;
+        "cwd": "/tmp", "flagged": true, "tint": {"color": "maroon", "on": ["name"]}}]}]}"#;
     let snapshot: Snapshot = serde_json::from_str(text).unwrap();
     let workspace = &snapshot.workspaces[0];
     assert_eq!((workspace.tint, workspace.collapsed), (None, Some(true)));

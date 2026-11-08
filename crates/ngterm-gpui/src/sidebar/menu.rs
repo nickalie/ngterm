@@ -10,7 +10,7 @@ use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::{
     Context, ElementId, IntoElement as _, ParentElement as _, SharedString, Styled as _, Text, Window, div, px,
 };
-use ngterm_core::model::{MoveTree, SessionContent, SidebarTint, TintChoice, TintColor, TintParts};
+use ngterm_core::model::{MoveTree, SessionContent, SidebarTint, TintChoice, TintColor, TintParts, TintValue};
 use uuid::Uuid;
 
 /// What a session row's menu reads of its session.
@@ -62,6 +62,8 @@ pub struct MenuContext {
     /// The tree as a move sees it: Move to offers only the workspaces the move takes (a companion moves only among
     /// its siblings).
     pub moves: MoveTree,
+    /// The last Show On pick ([`ngterm_core::Core::tint_placement`]), what an untinted row's Show On checks.
+    pub tint_placement: TintParts,
 }
 
 impl MenuContext {
@@ -137,7 +139,7 @@ pub struct MenuItem {
     /// Drawn with a check mark.
     pub checked: bool,
     /// A tint color's swatch drawn before the label.
-    pub swatch: Option<TintColor>,
+    pub swatch: Option<TintValue>,
 }
 
 impl MenuItem {
@@ -330,9 +332,11 @@ pub fn workspace_menu(context: &MenuContext, id: Uuid) -> Vec<MenuEntry> {
                 MenuAction::ToggleWorkspaceFlags(id),
             )
         }),
-        tint_submenu(&[facts.and_then(|facts| facts.tint)], |choice| {
-            MenuAction::TintWorkspace { workspace: id, choice }
-        }),
+        tint_submenu(
+            &[facts.and_then(|facts| facts.tint)],
+            context.tint_placement,
+            |choice| MenuAction::TintWorkspace { workspace: id, choice },
+        ),
         MenuEntry::Separator,
         MenuEntry::Item(MenuItem {
             enabled: context.can_remove_workspace,
@@ -347,32 +351,53 @@ fn session_tint_submenu(context: &MenuContext, targets: &[Uuid]) -> MenuEntry {
         .iter()
         .map(|id| context.sessions.get(id).and_then(|facts| facts.tint))
         .collect();
-    tint_submenu(&tints, |choice| MenuAction::Tint {
+    tint_submenu(&tints, context.tint_placement, |choice| MenuAction::Tint {
         sessions: targets.to_vec(),
         choice,
     })
 }
 
-/// The Tint submenu (upstream's `tintMenuItem`): None and the seven colors with their swatches, then Show On's
-/// placements, enabled only while every target is tinted. An entry is checked only when every target shares it.
-fn tint_submenu(current: &[Option<SidebarTint>], action: impl Fn(TintChoice) -> MenuAction) -> MenuEntry {
-    let colors: Vec<Option<TintColor>> = current.iter().map(|tint| tint.map(SidebarTint::color)).collect();
-    let shared = |color: Option<TintColor>| !colors.is_empty() && colors.iter().all(|each| *each == color);
+/// The Tint submenu (upstream's `tintMenuItem`): None and the twelve colors with their swatches, a checked "Custom
+/// #rrggbb" entry while every target shares one hex (the menu has no picker: a hex comes from the control API), then
+/// Show On's placements, enabled only while every target is tinted. An entry is checked only when every target shares
+/// it; an untinted target counts as on `placement`, the last Show On pick, which a color from here starts it on.
+fn tint_submenu(
+    current: &[Option<SidebarTint>],
+    placement: TintParts,
+    action: impl Fn(TintChoice) -> MenuAction,
+) -> MenuEntry {
+    let colors: Vec<Option<TintValue>> = current.iter().map(|tint| tint.map(SidebarTint::color)).collect();
+    let shared = |color: Option<TintValue>| !colors.is_empty() && colors.iter().all(|each| *each == color);
+    let swatched = |label: String, value: TintValue| {
+        MenuEntry::Item(MenuItem {
+            checked: shared(Some(value)),
+            swatch: Some(value),
+            ..MenuItem::new(label, action(TintChoice::Color(Some(value))))
+        })
+    };
     let mut items = vec![MenuEntry::Item(MenuItem {
         checked: shared(None),
         ..MenuItem::new("None", action(TintChoice::Color(None)))
     })];
-    items.extend(TintColor::ALL.into_iter().map(|color| {
-        MenuEntry::Item(MenuItem {
-            checked: shared(Some(color)),
-            swatch: Some(color),
-            ..MenuItem::new(color.title(), action(TintChoice::Color(Some(color))))
-        })
-    }));
+    items.extend(
+        TintColor::ALL
+            .into_iter()
+            .map(|color| swatched(color.title().to_owned(), TintValue::Named(color))),
+    );
+    if let [Some(hex @ TintValue::Hex(_)), ..] = colors[..]
+        && shared(Some(hex))
+    {
+        items.push(swatched(format!("Custom {}", hex.wire()), hex));
+    }
     items.push(MenuEntry::Separator);
     items.push(MenuEntry::Header("Show On".to_owned()));
     let all_tinted = current.iter().all(Option::is_some);
-    let placed = |parts| !current.is_empty() && current.iter().all(|tint| tint.map(SidebarTint::parts) == Some(parts));
+    let placed = |parts| {
+        !current.is_empty()
+            && current
+                .iter()
+                .all(|tint| tint.map_or(placement, SidebarTint::parts) == parts)
+    };
     for (title, parts) in [
         ("Icon", TintParts::ICON),
         ("Name", TintParts::NAME),
@@ -426,7 +451,7 @@ fn item_of(item: MenuItem, perform: &Perform) -> PopupMenuItem {
         Some(color) => {
             let label = SharedString::from(item.label);
             PopupMenuItem::element(move |_, cx| {
-                let ink = super::look::tint(color, cx.theme().mode.is_dark());
+                let ink = super::look::tint_value(color, cx.theme().mode.is_dark());
                 div()
                     .flex()
                     .items_center()
@@ -498,6 +523,7 @@ mod tests {
             moves: MoveTree {
                 workspaces: vec![(one, vec![(a, None), (b, None)]), (two, vec![(c, None)])],
             },
+            tint_placement: TintParts::ICON,
         };
         (context, [one, two], [a, b, c])
     }
@@ -573,7 +599,7 @@ mod tests {
                 "Duplicate as Companion",
                 "Move to [1]",
                 "Flag",
-                "Tint [13]",
+                "Tint [18]",
                 "Reveal in Files",
                 "Close Session"
             ]
@@ -633,7 +659,7 @@ mod tests {
                 "-",
                 "Move to [2]",
                 "Flag Sessions",
-                "Tint [13]",
+                "Tint [18]",
                 "Close 2 Sessions"
             ]
         );
@@ -698,7 +724,7 @@ mod tests {
                 "Add to Focus",
                 "-",
                 "Flag All Sessions",
-                "Tint [13]",
+                "Tint [18]",
                 "-",
                 "Delete Workspace"
             ]
@@ -715,7 +741,7 @@ mod tests {
                 "Remove from Focus",
                 "-",
                 "Flag All Sessions",
-                "Tint [13]",
+                "Tint [18]",
                 "-",
                 "(Delete Workspace)"
             ]
@@ -807,9 +833,14 @@ mod tests {
                 "~Blue",
                 "~Purple",
                 "~Gray",
+                "~Teal",
+                "~Pink",
+                "~Brown",
+                "~Indigo",
+                "~Mint",
                 "-",
                 "# Show On",
-                "(Icon)",
+                "(Icon)*",
                 "(Name)",
                 "(Icon and Name)"
             ]
@@ -818,7 +849,7 @@ mod tests {
             tint_action(&entries, "Red"),
             MenuAction::Tint {
                 sessions: vec![a],
-                choice: TintChoice::Color(Some(TintColor::Red)),
+                choice: TintChoice::Color(Some(TintColor::Red.into())),
             }
         );
 
@@ -826,7 +857,7 @@ mod tests {
         let entries = tint_entries(&session_menu(&context, a, |_| true));
         let labels = tint_labels(&entries);
         assert_eq!((labels[0].as_str(), labels[1].as_str()), ("None", "~Red*"));
-        assert_eq!(labels[10..], ["Icon*", "Name", "Icon and Name"]);
+        assert_eq!(labels[15..], ["Icon*", "Name", "Icon and Name"]);
         assert_eq!(
             tint_action(&entries, "None"),
             MenuAction::Tint {
@@ -865,9 +896,90 @@ mod tests {
         context.sessions.get_mut(&b).unwrap().tint = None;
         let labels = tint_labels(&tint_entries(&session_menu(&context, a, |_| true)));
         assert_eq!(
-            labels[10..],
+            labels[15..],
+            ["(Icon)*", "(Name)", "(Icon and Name)"],
+            "one untinted target disables Show On; it counts as on the last pick, the icon"
+        );
+    }
+
+    const BLUE_HEX: TintValue = TintValue::Hex([0x3a, 0x7b, 0xd5]);
+
+    /// `testEveryPaletteColorIsListedWithASwatch`, `testAHexTintShowsACheckedCustomEntryThatANameReplaces`: a hex tint
+    /// checks a swatched Custom entry after the palette and no palette color; a name picked replaces it.
+    #[test]
+    fn a_hex_tint_shows_a_checked_custom_entry() {
+        let (mut context, _, [a, ..]) = context();
+        context.sessions.get_mut(&a).unwrap().tint = Some(SidebarTint::new(BLUE_HEX, TintParts::NAME));
+        let entries = tint_entries(&session_menu(&context, a, |_| true));
+        let labels = tint_labels(&entries);
+        assert_eq!(labels[0], "None");
+        assert!(
+            labels[1..13]
+                .iter()
+                .all(|label| label.starts_with('~') && !label.ends_with('*')),
+            "{labels:?}"
+        );
+        assert_eq!(labels[13], "~Custom #3a7bd5*");
+        assert_eq!(labels[16..], ["Icon", "Name*", "Icon and Name"]);
+        assert_eq!(
+            tint_action(&entries, "Custom #3a7bd5"),
+            MenuAction::Tint {
+                sessions: vec![a],
+                choice: TintChoice::Color(Some(BLUE_HEX)),
+            }
+        );
+        assert_eq!(
+            tint_action(&entries, "Mint"),
+            MenuAction::Tint {
+                sessions: vec![a],
+                choice: TintChoice::Color(Some(TintColor::Mint.into())),
+            }
+        );
+
+        context.sessions.get_mut(&a).unwrap().tint = Some(SidebarTint::new(TintColor::Mint, TintParts::NAME));
+        let labels = tint_labels(&tint_entries(&session_menu(&context, a, |_| true)));
+        assert!(!labels.iter().any(|label| label.contains("Custom")), "{labels:?}");
+        assert_eq!(labels[12], "~Mint*");
+    }
+
+    /// `testAMixedBatchShowsNoCustomEntry`: two different hexes check nothing and list no Custom entry; a shared
+    /// placement still checks.
+    #[test]
+    fn a_mixed_hex_batch_shows_no_custom_entry() {
+        let (mut context, _, [a, b, _]) = context();
+        context.selection = vec![a, b];
+        context.sessions.get_mut(&a).unwrap().tint = Some(SidebarTint::on_icon(BLUE_HEX));
+        context.sessions.get_mut(&b).unwrap().tint = Some(SidebarTint::on_icon(TintValue::Hex([0x11, 0x22, 0x33])));
+        let labels = tint_labels(&tint_entries(&session_menu(&context, a, |_| true)));
+        assert!(!labels.iter().any(|label| label.contains("Custom")), "{labels:?}");
+        assert!(labels[..13].iter().all(|label| !label.ends_with('*')), "{labels:?}");
+        assert_eq!(labels[15], "Icon*");
+
+        context.sessions.get_mut(&b).unwrap().tint = Some(SidebarTint::on_icon(BLUE_HEX));
+        let labels = tint_labels(&tint_entries(&session_menu(&context, a, |_| true)));
+        assert_eq!(labels[13], "~Custom #3a7bd5*", "a shared hex");
+    }
+
+    /// `testLastPlacementPickStartsTheNextUntintedRow`, the menu side: an untinted row shows the last Show On pick
+    /// checked and disabled; a tinted row shows its own.
+    #[test]
+    fn an_untinted_row_shows_the_last_show_on_pick() {
+        let (mut context, [one, _], [a, b, _]) = context();
+        context.tint_placement = TintParts::NAME;
+        let labels = tint_labels(&tint_entries(&session_menu(&context, a, |_| true)));
+        assert_eq!(labels[15..], ["(Icon)", "(Name)*", "(Icon and Name)"]);
+        let labels = tint_labels(&tint_entries(&workspace_menu(&context, one)));
+        assert_eq!(labels[15..], ["(Icon)", "(Name)*", "(Icon and Name)"]);
+
+        context.sessions.get_mut(&b).unwrap().tint = Some(SidebarTint::on_icon(TintColor::Red));
+        let labels = tint_labels(&tint_entries(&session_menu(&context, b, |_| true)));
+        assert_eq!(labels[15..], ["Icon*", "Name", "Icon and Name"]);
+        context.selection = vec![a, b];
+        let labels = tint_labels(&tint_entries(&session_menu(&context, a, |_| true)));
+        assert_eq!(
+            labels[15..],
             ["(Icon)", "(Name)", "(Icon and Name)"],
-            "one untinted target"
+            "a tinted row on the icon and an untinted one on the name share nothing"
         );
     }
 
@@ -879,12 +991,12 @@ mod tests {
         let entries = tint_entries(&workspace_menu(&context, one));
         let labels = tint_labels(&entries);
         assert_eq!(labels[6], "~Purple*");
-        assert_eq!(labels[12], "Icon and Name*");
+        assert_eq!(labels[17], "Icon and Name*");
         assert_eq!(
             tint_action(&entries, "Gray"),
             MenuAction::TintWorkspace {
                 workspace: one,
-                choice: TintChoice::Color(Some(TintColor::Gray)),
+                choice: TintChoice::Color(Some(TintColor::Gray.into())),
             }
         );
     }

@@ -12,7 +12,7 @@ use uuid::Uuid;
 use super::{PaletteAction, PaletteMode, feeds::window_holds};
 use crate::Core;
 use crate::app_actions::{ActionEffect, ActionOrigin, FrontendAction};
-use crate::model::{AppStore, TintChoice};
+use crate::model::{AppStore, TintChoice, TintParts, TintValue};
 use crate::palette_catalog::PaletteCommand;
 use crate::pane_env::uuid_string;
 use crate::windows::WindowRequest;
@@ -131,7 +131,9 @@ impl Core {
                 if let Some(store) = self.library_mut().store_mut(window)
                     && let Some(session) = store.selected_session_id()
                 {
-                    store.apply_session_tints(TintChoice::Color(*color), &[session]);
+                    // the palette keeps the icon start; only the row menu starts on the last Show On pick
+                    let choice = TintChoice::Color(color.map(TintValue::Named));
+                    store.apply_session_tints(choice, &[session], TintParts::ICON);
                 }
             }
             PaletteAction::SelectSession(session) if window_holds(self.library(), window, *session) => {

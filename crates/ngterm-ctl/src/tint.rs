@@ -3,7 +3,7 @@
 //! `clear`; on the wire that is `mode` `set` with `tint`/`tintOn`, or `mode` `clear`. A bad color or placement is
 //! refused before anything is sent, in upstream's words; the server checks them again for a raw socket client.
 
-use ngterm_core::model::{TintColor, TintParts};
+use ngterm_core::model::{TintColor, TintParts, TintValue};
 use ngterm_proto::command::{SessionCmd, WorkspaceCmd};
 use ngterm_proto::{Args, Command, Request};
 
@@ -23,9 +23,9 @@ fn validate(value: &str, on: Option<&str>) -> Result<(), String> {
             None => Ok(()),
         };
     }
-    if TintColor::from_wire(&value.to_lowercase()).is_none() {
+    if TintValue::parse(value).is_none() {
         return Err(format!(
-            "tint must be one of: {}, or clear",
+            "tint must be one of: {}, a #rrggbb color, or clear",
             TintColor::valid_names_list()
         ));
     }
@@ -64,7 +64,7 @@ fn tint_args(value: &str, on: Option<&str>) -> Args {
 pub struct TintCreateOptions {
     #[arg(
         long,
-        help = "Create it tinted this color (red|orange|yellow|green|blue|purple|gray)."
+        help = "Create it tinted this color (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint, or a #rrggbb hex)."
     )]
     tint: Option<String>,
 
@@ -81,8 +81,11 @@ impl TintCreateOptions {
                 None => Ok(()),
             };
         };
-        if TintColor::from_wire(&tint.to_lowercase()).is_none() {
-            return Err(format!("--tint must be one of: {}", TintColor::valid_names_list()));
+        if TintValue::parse(tint).is_none() {
+            return Err(format!(
+                "--tint must be one of: {}, or a #rrggbb color",
+                TintColor::valid_names_list()
+            ));
         }
         validate_parts(self.tint_on.as_deref(), "--tint-on")
     }
@@ -94,7 +97,8 @@ impl TintCreateOptions {
     }
 }
 
-const COLOR_HELP: &str = "A color (red|orange|yellow|green|blue|purple|gray) or 'clear'.";
+const COLOR_HELP: &str =
+    "A color (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint), a #rrggbb hex, or 'clear'.";
 const ON_HELP: &str =
     "Where the color shows: icon, name, or icon,name. Omitted keeps the current placement, else icon.";
 
@@ -211,8 +215,12 @@ mod tests {
     fn a_bad_tint_is_refused_before_anything_is_sent() {
         for (argv, error) in [
             (
-                &["session", "tint", "teal"][..],
-                "tint must be one of: red|orange|yellow|green|blue|purple|gray, or clear",
+                &["session", "tint", "maroon"][..],
+                "tint must be one of: red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint, a #rrggbb color, or clear",
+            ),
+            (
+                &["session", "tint", "#3a7bd"],
+                "tint must be one of: red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint, a #rrggbb color, or clear",
             ),
             (
                 &["session", "tint", "clear", "--on", "icon"],
@@ -240,16 +248,16 @@ mod tests {
                 "--tint-on requires --tint",
             ),
             (
-                &["workspace", "new", "--tint", "teal"],
-                "--tint must be one of: red|orange|yellow|green|blue|purple|gray",
+                &["workspace", "new", "--tint", "maroon"],
+                "--tint must be one of: red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint, or a #rrggbb color",
             ),
             (
                 &["workspace", "new", "--tint", "red", "--tint-on", "both"],
                 "--tint-on must list icon and/or name, comma-separated",
             ),
             (
-                &["session", "new", "--wait", "--tint", "teal"],
-                "--tint must be one of: red|orange|yellow|green|blue|purple|gray",
+                &["session", "new", "--wait", "--tint", "maroon"],
+                "--tint must be one of: red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint, or a #rrggbb color",
             ),
         ] {
             assert_eq!(outcome(argv), Err(error.to_owned()), "{argv:?}");
@@ -302,5 +310,27 @@ mod tests {
             request(&["workspace", "new", "w", "--tint", "gray"]),
             json!({"cmd": "workspace.new", "args": {"name": "w", "tint": "gray"}})
         );
+    }
+
+    /// `tintTakesAHexForSetAndCreation`: sent lower-cased as typed, the `#` optional; the new palette names too.
+    #[test]
+    fn tint_takes_a_hex_for_set_and_creation() {
+        assert_eq!(
+            request(&["session", "tint", "#3A7BD5"])["args"],
+            json!({"mode": "set", "tint": "#3a7bd5"})
+        );
+        assert_eq!(
+            request(&["workspace", "tint", "3a7bd5", "--on", "name"])["args"],
+            json!({"mode": "set", "tint": "3a7bd5", "tintOn": ["name"]})
+        );
+        assert_eq!(
+            request(&["session", "new", "--tint", "#3a7bd5"])["args"]["tint"],
+            "#3a7bd5"
+        );
+        assert_eq!(
+            request(&["workspace", "new", "--tint", "3A7BD5"])["args"]["tint"],
+            "3a7bd5"
+        );
+        assert_eq!(request(&["session", "tint", "Mint"])["args"]["tint"], "mint");
     }
 }

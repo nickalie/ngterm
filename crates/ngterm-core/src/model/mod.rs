@@ -95,6 +95,6 @@ pub use store::{
     AppStore, FocusFilter, NewSession, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN, SessionLocation,
     SidebarState, WorkspaceOptions, WorkspaceStep, attention_order, clamp_sidebar_width,
 };
-pub use tint::{SidebarTint, TintChoice, TintColor, TintPart, TintParts, TintUpdate};
+pub use tint::{SidebarTint, TintChoice, TintColor, TintPart, TintParts, TintUpdate, TintValue};
 pub use window_library::{LibraryEffects, WindowEvent, WindowInfo, WindowLibrary};
 pub use workspace::{ReorderDirection, SidebarMode, Workspace};

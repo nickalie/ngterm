@@ -1071,6 +1071,19 @@ fn a_tint_takes_the_system_color_of_the_chromes_side() {
     assert_eq!(look::tint_rgb(TintColor::Red, false), Rgb::new(0xFF, 0x3B, 0x30));
     assert_eq!(look::tint_rgb(TintColor::Red, true), Rgb::new(0xFF, 0x45, 0x3A));
     assert_eq!(look::tint_rgb(TintColor::Gray, true), Rgb::new(0x98, 0x98, 0x9D));
+    // the five v0.41.0 colors, as macOS 27 draws them
+    assert_eq!(look::tint_rgb(TintColor::Teal, false), Rgb::new(0x00, 0xC3, 0xD0));
+    assert_eq!(look::tint_rgb(TintColor::Indigo, true), Rgb::new(0x6D, 0x7C, 0xFF));
+    assert_eq!(look::tint_rgb(TintColor::Mint, false), Rgb::new(0x00, 0xC8, 0xB3));
+    // a hex is fixed sRGB on either side; a name follows the side
+    let hex = ngterm_core::model::TintValue::Hex([0x3a, 0x7b, 0xd5]);
+    for dark in [false, true] {
+        assert_eq!(look::tint_value_rgb(hex, dark), Rgb::new(0x3a, 0x7b, 0xd5));
+        assert_eq!(
+            look::tint_value_rgb(TintColor::Pink.into(), dark),
+            look::tint_rgb(TintColor::Pink, dark)
+        );
+    }
     let mut colors = crate::chrome::default_colors();
     colors.sidebar = Rgb::new(0x10, 0x10, 0x10);
     assert!(
@@ -1091,10 +1104,10 @@ fn a_tint_takes_the_system_color_of_the_chromes_side() {
 }
 
 /// `testTintColorsTheIconOrNameAndSurvivesSelection`: the row's glyph or name takes the tint, selected or not, its
-/// glyph names the tint, and a clear gives the theme's colors back; the row menu's choices land in the model.
+/// glyph names the tint, and a clear gives the theme's colors back.
 #[gpui_kit::test]
 fn a_tint_colors_the_icon_or_the_name_and_survives_selection(cx: &mut TestAppContext) {
-    use ngterm_core::model::{SidebarTint, TintChoice, TintColor, TintParts};
+    use ngterm_core::model::{SidebarTint, TintColor, TintParts};
     let (library, _) = library();
     let (mut h, cx) = harness(cx, library, AppSettings::default());
     let srv = h.id_of("srv", cx);
@@ -1125,12 +1138,29 @@ fn a_tint_colors_the_icon_or_the_name_and_survives_selection(cx: &mut TestAppCon
     assert_eq!(name, look::tint(TintColor::Green, look.dark()));
     assert_eq!(glyph, plain.1);
 
+    // a hex colors the glyph its fixed sRGB and names itself by the hex
+    let hex = ngterm_core::model::TintValue::Hex([0x3a, 0x7b, 0xd5]);
+    h.store_mut().set_session_tint(Some(SidebarTint::on_icon(hex)), srv);
+    h.settle(cx);
+    let row = h.view.read_with(cx, |sidebar, _| sidebar.rows()[2].clone());
+    assert_eq!(look.row_inks(row.tint, false).1, look::tint_value(hex, look.dark()));
+    assert!(cx.debug_bounds("session-icon:#3a7bd5 tint").is_some());
+
     h.store_mut().set_session_tint(None, srv);
     h.settle(cx);
+    assert!(cx.debug_bounds("session-icon:#3a7bd5 tint").is_none());
     assert!(cx.debug_bounds("session-icon:red tint").is_none());
     assert!(cx.debug_bounds("session-icon:green tint").is_none());
+}
 
-    // the row menu's choices
+/// The row menu's Tint choices land in the model, and a Show On pick reaches the next sync's menus, whose untinted
+/// rows check it, while a color from there starts the row on it (`testLastPlacementPickStartsTheNextUntintedRow`).
+#[gpui_kit::test]
+fn the_row_menus_tint_choices_land_in_the_model(cx: &mut TestAppContext) {
+    use ngterm_core::model::{SidebarTint, TintChoice, TintColor, TintParts};
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let srv = h.id_of("srv", cx);
     let one = h.store().workspaces()[0].id();
     let perform = |h: &mut Harness, cx: &mut VisualTestContext, action: menu::MenuAction| {
         cx.update(|window, cx| h.view.update(cx, |sidebar, cx| sidebar.perform(action, window, cx)));
@@ -1141,7 +1171,7 @@ fn a_tint_colors_the_icon_or_the_name_and_survives_selection(cx: &mut TestAppCon
         cx,
         menu::MenuAction::Tint {
             sessions: vec![srv],
-            choice: TintChoice::Color(Some(TintColor::Blue)),
+            choice: TintChoice::Color(Some(TintColor::Blue.into())),
         },
     );
     assert_eq!(
@@ -1153,7 +1183,7 @@ fn a_tint_colors_the_icon_or_the_name_and_survives_selection(cx: &mut TestAppCon
         cx,
         menu::MenuAction::TintWorkspace {
             workspace: one,
-            choice: TintChoice::Color(Some(TintColor::Purple)),
+            choice: TintChoice::Color(Some(TintColor::Purple.into())),
         },
     );
     assert_eq!(
@@ -1161,6 +1191,30 @@ fn a_tint_colors_the_icon_or_the_name_and_survives_selection(cx: &mut TestAppCon
         Some(SidebarTint::on_icon(TintColor::Purple))
     );
     assert!(cx.debug_bounds("workspace-icon:purple tint").is_some());
+
+    perform(
+        &mut h,
+        cx,
+        menu::MenuAction::Tint {
+            sessions: vec![srv],
+            choice: TintChoice::Parts(TintParts::NAME),
+        },
+    );
+    let var = h.id_of("var", cx);
+    let context = h.view.read_with(cx, |sidebar, _| sidebar.context.menu.clone());
+    assert_eq!(context.tint_placement, TintParts::NAME);
+    perform(
+        &mut h,
+        cx,
+        menu::MenuAction::Tint {
+            sessions: vec![var],
+            choice: TintChoice::Color(Some(TintColor::Teal.into())),
+        },
+    );
+    assert_eq!(
+        h.store().session(var).unwrap().tint,
+        Some(SidebarTint::new(TintColor::Teal, TintParts::NAME))
+    );
 }
 
 // MARK: - companions (upstream's `WorkspaceSidebarCompanionsTests`, `SidebarRowIndentTests`)

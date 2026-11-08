@@ -520,6 +520,11 @@ fn the_tint_rows_tint_the_session_selected_when_they_run() {
             "Tint Session: Blue",
             "Tint Session: Purple",
             "Tint Session: Gray",
+            "Tint Session: Teal",
+            "Tint Session: Pink",
+            "Tint Session: Brown",
+            "Tint Session: Indigo",
+            "Tint Session: Mint",
             "Tint Session: None"
         ]
     );

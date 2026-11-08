@@ -1,6 +1,6 @@
 //! Sidebar row tints (upstream's `SidebarTint.swift`, `ControlTintUpdate` in `ControlModes.swift` and
-//! `AppStore+Tint.swift`): one color from a fixed palette, shown on a session or workspace row's icon, its name, or
-//! both. A workspace's tint colors its own row only; the sessions inside keep theirs.
+//! `AppStore+Tint.swift`): one color, a palette name or a `#rrggbb` hex, shown on a session or workspace row's icon,
+//! its name, or both. A workspace's tint colors its own row only; the sessions inside keep theirs.
 //!
 //! The store seam here is what `session.tint`, `workspace.tint`, the row menus' Tint submenu and the palette's Tint
 //! Session rows share: an unchanged value is a no-op, so a repeated set neither saves nor emits `tree.changed`.
@@ -10,6 +10,7 @@ use serde::ser::SerializeStruct as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
+use super::status::is_valid_color_hex;
 use super::store::AppStore;
 
 /// The fixed palette a tint picks from. The wire and snapshot spelling is the lower-case name; the frontend maps each
@@ -23,11 +24,16 @@ pub enum TintColor {
     Blue,
     Purple,
     Gray,
+    Teal,
+    Pink,
+    Brown,
+    Indigo,
+    Mint,
 }
 
 impl TintColor {
     /// Every color, in upstream's declaration order (the menus', the palette's and the accepted-names list's).
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 12] = [
         Self::Red,
         Self::Orange,
         Self::Yellow,
@@ -35,6 +41,11 @@ impl TintColor {
         Self::Blue,
         Self::Purple,
         Self::Gray,
+        Self::Teal,
+        Self::Pink,
+        Self::Brown,
+        Self::Indigo,
+        Self::Mint,
     ];
 
     /// The wire, snapshot and read-back spelling.
@@ -48,6 +59,11 @@ impl TintColor {
             Self::Blue => "blue",
             Self::Purple => "purple",
             Self::Gray => "gray",
+            Self::Teal => "teal",
+            Self::Pink => "pink",
+            Self::Brown => "brown",
+            Self::Indigo => "indigo",
+            Self::Mint => "mint",
         }
     }
 
@@ -62,6 +78,11 @@ impl TintColor {
             Self::Blue => "Blue",
             Self::Purple => "Purple",
             Self::Gray => "Gray",
+            Self::Teal => "Teal",
+            Self::Pink => "Pink",
+            Self::Brown => "Brown",
+            Self::Indigo => "Indigo",
+            Self::Mint => "Mint",
         }
     }
 
@@ -75,6 +96,56 @@ impl TintColor {
     #[must_use]
     pub fn valid_names_list() -> String {
         Self::ALL.map(Self::wire_name).join("|")
+    }
+}
+
+/// A row tint's color (upstream's `TintValue`): a palette name, or a `#rrggbb` hex the control API takes. A hex is fixed
+/// sRGB, so unlike a name it does not follow light and dark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TintValue {
+    Named(TintColor),
+    /// The red, green and blue bytes.
+    Hex([u8; 3]),
+}
+
+impl TintValue {
+    /// Parses a name in any case, or a hex with or without `#` (upstream's `init(rawValue:)`); `None` for anything else.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        if let Some(color) = TintColor::from_wire(&raw.to_lowercase()) {
+            return Some(Self::Named(color));
+        }
+        if !is_valid_color_hex(raw) {
+            return None;
+        }
+        let digits = raw.strip_prefix('#').unwrap_or(raw);
+        let byte = |at: usize| {
+            digits
+                .get(at..at + 2)
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+        };
+        Some(Self::Hex([byte(0)?, byte(2)?, byte(4)?]))
+    }
+
+    /// The wire, snapshot and read-back spelling: the name, or the lowercase `#rrggbb`.
+    #[must_use]
+    pub fn wire(self) -> String {
+        match self {
+            Self::Named(color) => color.wire_name().to_owned(),
+            Self::Hex([red, green, blue]) => format!("#{red:02x}{green:02x}{blue:02x}"),
+        }
+    }
+
+    /// The accepted names plus the hex form, pipe-joined, for rejection text (upstream's `validValuesList`).
+    #[must_use]
+    pub fn valid_values_list() -> String {
+        format!("{}|#rrggbb", TintColor::valid_names_list())
+    }
+}
+
+impl From<TintColor> for TintValue {
+    fn from(color: TintColor) -> Self {
+        Self::Named(color)
     }
 }
 
@@ -179,26 +250,29 @@ impl TintParts {
 /// A session or workspace row's tint: one color on one or more parts. Its parts are never empty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SidebarTint {
-    color: TintColor,
+    color: TintValue,
     parts: TintParts,
 }
 
 impl SidebarTint {
     /// A tint of `color` on `parts`, the icon when `parts` is empty: the one placement every tint must have.
     #[must_use]
-    pub fn new(color: TintColor, parts: TintParts) -> Self {
+    pub fn new(color: impl Into<TintValue>, parts: TintParts) -> Self {
         let parts = if parts.is_empty() { TintParts::ICON } else { parts };
-        Self { color, parts }
+        Self {
+            color: color.into(),
+            parts,
+        }
     }
 
     /// A tint of `color` on the icon.
     #[must_use]
-    pub fn on_icon(color: TintColor) -> Self {
+    pub fn on_icon(color: impl Into<TintValue>) -> Self {
         Self::new(color, TintParts::ICON)
     }
 
     #[must_use]
-    pub fn color(self) -> TintColor {
+    pub fn color(self) -> TintValue {
         self.color
     }
 
@@ -213,11 +287,11 @@ impl SidebarTint {
         self.parts.contains(part)
     }
 
-    /// The tint a row with `current` gets for `color`: its own parts kept, an untinted row starting on the icon. `None`
-    /// clears.
+    /// The tint a row with `current` gets for `color`: its own parts kept, an untinted row starting on `start` (the
+    /// icon for the control API and the palette, the last Show On pick for the row menu).
     #[must_use]
-    pub fn recolor(current: Option<Self>, color: Option<TintColor>) -> Option<Self> {
-        color.map(|color| Self::new(color, current.map_or(TintParts::ICON, Self::parts)))
+    pub fn recolor(current: Option<Self>, color: TintValue, start: TintParts) -> Self {
+        Self::new(color, current.map_or(start, Self::parts))
     }
 
     /// `current`'s color shown on `parts` instead. An untinted row stays untinted, so no row holds a placement it does
@@ -228,13 +302,13 @@ impl SidebarTint {
     }
 }
 
-/// Persisted as `{"color": "red", "on": ["icon"]}`. Decoding is lossy like the snapshots around it: an unknown color
+/// Persisted as `{"color": "red", "on": ["icon"]}`, a hex as its lowercase `#rrggbb`. Decoding is lossy like the snapshots around it: an unknown color
 /// fails, so the caller's lossy field drops the tint alone, while unknown parts are skipped and an empty, missing or
 /// malformed list reads as the icon.
 impl Serialize for SidebarTint {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut state = serializer.serialize_struct("SidebarTint", 2)?;
-        state.serialize_field("color", self.color.wire_name())?;
+        state.serialize_field("color", &self.color.wire())?;
         state.serialize_field("on", &self.parts.wire_names())?;
         state.end()
     }
@@ -249,8 +323,8 @@ impl<'de> Deserialize<'de> for SidebarTint {
             on: serde_json::Value,
         }
         let stored = Stored::deserialize(deserializer)?;
-        let color = TintColor::from_wire(&stored.color)
-            .ok_or_else(|| D::Error::custom(format!("unknown tint color {}", stored.color)))?;
+        let color = TintValue::parse(&stored.color)
+            .ok_or_else(|| D::Error::custom(format!("unknown tint color: {}", stored.color)))?;
         let names: Vec<String> = serde_json::from_value(stored.on).unwrap_or_default();
         let parts = TintParts::of(names.iter().filter_map(|name| TintPart::from_wire(name)));
         Ok(Self::new(color, parts))
@@ -261,7 +335,7 @@ impl<'de> Deserialize<'de> for SidebarTint {
 /// a clear.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TintUpdate {
-    Set(TintColor, Option<TintParts>),
+    Set(TintValue, Option<TintParts>),
     Clear,
 }
 
@@ -273,7 +347,7 @@ impl TintUpdate {
         match self {
             Self::Clear => None,
             Self::Set(color, Some(parts)) => Some(SidebarTint::new(color, parts)),
-            Self::Set(color, None) => SidebarTint::recolor(current, Some(color)),
+            Self::Set(color, None) => Some(SidebarTint::recolor(current, color, TintParts::ICON)),
         }
     }
 }
@@ -282,16 +356,16 @@ impl TintUpdate {
 /// the tinted rows show their own colors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TintChoice {
-    Color(Option<TintColor>),
+    Color(Option<TintValue>),
     Parts(TintParts),
 }
 
 impl TintChoice {
-    /// The tint a row with `current` gets for this choice.
+    /// The tint a row with `current` gets for this choice, an untinted row a color starts on `start`.
     #[must_use]
-    pub fn applied(self, current: Option<SidebarTint>) -> Option<SidebarTint> {
+    pub fn applied(self, current: Option<SidebarTint>, start: TintParts) -> Option<SidebarTint> {
         match self {
-            Self::Color(color) => SidebarTint::recolor(current, color),
+            Self::Color(color) => color.map(|color| SidebarTint::recolor(current, color, start)),
             Self::Parts(parts) => SidebarTint::place(current, parts),
         }
     }
@@ -328,9 +402,9 @@ impl AppStore {
     }
 
     /// Applies a Tint submenu choice to every session in `ids`: a color keeps each tinted row's parts and starts an
-    /// untinted one on the icon, a placement moves each tinted row's own color and leaves an untinted one alone. One
+    /// untinted one on `start`, a placement moves each tinted row's own color and leaves an untinted one alone. One
     /// save for the batch; returns whether any row changed.
-    pub fn apply_session_tints(&mut self, choice: TintChoice, ids: &[Uuid]) -> bool {
+    pub fn apply_session_tints(&mut self, choice: TintChoice, ids: &[Uuid], start: TintParts) -> bool {
         let mut changed = false;
         for session in self
             .workspaces
@@ -338,7 +412,7 @@ impl AppStore {
             .flat_map(|workspace| workspace.sessions.iter_mut())
             .filter(|session| ids.contains(&session.id()))
         {
-            let tint = choice.applied(session.tint);
+            let tint = choice.applied(session.tint, start);
             if tint != session.tint {
                 session.tint = tint;
                 changed = true;
@@ -376,11 +450,49 @@ mod tests {
         let named = SidebarTint::new(TintColor::Red, TintParts::NAME);
         assert!(named.shows(TintPart::Name));
         assert!(!named.shows(TintPart::Icon));
+        assert_eq!(TintPart::valid_names_list(), "icon,name");
+    }
+
+    /// `paletteListsTheTwelveNamesInMenuOrder`.
+    #[test]
+    fn the_palette_lists_the_twelve_names_in_menu_order() {
         assert_eq!(
             TintColor::valid_names_list(),
-            "red|orange|yellow|green|blue|purple|gray"
+            "red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint"
         );
-        assert_eq!(TintPart::valid_names_list(), "icon,name");
+        assert_eq!(
+            TintColor::ALL.map(TintColor::title).join(","),
+            "Red,Orange,Yellow,Green,Blue,Purple,Gray,Teal,Pink,Brown,Indigo,Mint"
+        );
+        assert!(
+            TintColor::ALL
+                .iter()
+                .all(|color| TintColor::from_wire(color.wire_name()) == Some(*color))
+        );
+    }
+
+    const BLUE_HEX: TintValue = TintValue::Hex([0x3a, 0x7b, 0xd5]);
+
+    /// `valueParsesANameOrANormalizedHex`, `valueRejectsAnythingElse`, `valueRawIsTheNameOrTheHex`.
+    #[test]
+    fn a_value_parses_a_name_or_a_normalized_hex_and_nothing_else() {
+        for (raw, value) in [
+            ("red", TintValue::Named(TintColor::Red)),
+            ("Teal", TintValue::Named(TintColor::Teal)),
+            ("#3A7BD5", BLUE_HEX),
+            ("3a7bd5", BLUE_HEX),
+        ] {
+            assert_eq!(TintValue::parse(raw), Some(value), "{raw}");
+        }
+        for raw in ["", "maroon", "#3a7bd", "#3a7bd5ff", "#3a7bdz", "##3a7bd5"] {
+            assert_eq!(TintValue::parse(raw), None, "{raw}");
+        }
+        assert_eq!(TintValue::Named(TintColor::Indigo).wire(), "indigo");
+        assert_eq!(BLUE_HEX.wire(), "#3a7bd5");
+        assert_eq!(
+            TintValue::valid_values_list(),
+            "red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb"
+        );
     }
 
     /// `parsePartsAcceptsKnownParts`, `parsePartsRejectsEmptyOrUnknown`.
@@ -408,22 +520,60 @@ mod tests {
     #[test]
     fn recolor_keeps_the_parts_and_place_keeps_the_color() {
         let named = SidebarTint::new(TintColor::Green, TintParts::NAME);
+        let red = TintValue::Named(TintColor::Red);
         assert_eq!(
-            SidebarTint::recolor(Some(named), Some(TintColor::Red)),
-            Some(SidebarTint::new(TintColor::Red, TintParts::NAME))
+            SidebarTint::recolor(Some(named), red, TintParts::ICON),
+            SidebarTint::new(TintColor::Red, TintParts::NAME)
         );
         assert_eq!(
-            SidebarTint::recolor(None, Some(TintColor::Red)),
-            Some(SidebarTint::on_icon(TintColor::Red))
+            SidebarTint::recolor(None, red, TintParts::ICON),
+            SidebarTint::on_icon(TintColor::Red)
         );
-        assert_eq!(SidebarTint::recolor(Some(named), None), None);
+        assert_eq!(TintChoice::Color(None).applied(Some(named), TintParts::ICON), None);
         assert_eq!(
             SidebarTint::place(Some(SidebarTint::on_icon(TintColor::Blue)), TintParts::NAME),
             Some(SidebarTint::new(TintColor::Blue, TintParts::NAME))
         );
         assert_eq!(SidebarTint::place(None, TintParts::NAME), None);
-        assert_eq!(TintChoice::Color(None).applied(Some(named)), None);
-        assert_eq!(TintChoice::Parts(TintParts::BOTH).applied(None), None);
+        assert_eq!(TintChoice::Parts(TintParts::BOTH).applied(None, TintParts::BOTH), None);
+    }
+
+    /// `recolorTakesAHexAndKeepsParts`.
+    #[test]
+    fn recolor_takes_a_hex_and_keeps_the_parts() {
+        let named = SidebarTint::new(TintColor::Green, TintParts::NAME);
+        assert_eq!(
+            SidebarTint::recolor(Some(named), BLUE_HEX, TintParts::ICON),
+            SidebarTint::new(BLUE_HEX, TintParts::NAME)
+        );
+        assert_eq!(
+            SidebarTint::recolor(
+                Some(SidebarTint::new(BLUE_HEX, TintParts::NAME)),
+                TintColor::Red.into(),
+                TintParts::ICON
+            ),
+            SidebarTint::new(TintColor::Red, TintParts::NAME)
+        );
+    }
+
+    /// `recolorStartsAnUntintedRowOnTheGivenPlacement`: the menu's last Show On pick starts an untinted row; a tinted
+    /// one keeps its own.
+    #[test]
+    fn recolor_starts_an_untinted_row_on_the_given_placement() {
+        let named = SidebarTint::new(TintColor::Green, TintParts::NAME);
+        let red = TintValue::Named(TintColor::Red);
+        assert_eq!(
+            SidebarTint::recolor(None, red, TintParts::BOTH),
+            SidebarTint::new(TintColor::Red, TintParts::BOTH)
+        );
+        assert_eq!(
+            SidebarTint::recolor(Some(named), red, TintParts::ICON),
+            SidebarTint::new(TintColor::Red, TintParts::NAME)
+        );
+        assert_eq!(
+            TintChoice::Color(Some(red)).applied(None, TintParts::NAME),
+            Some(SidebarTint::new(TintColor::Red, TintParts::NAME))
+        );
     }
 
     /// `codableRoundTripsColorAndParts`.
@@ -446,7 +596,32 @@ mod tests {
         for icon in [r#"{"color":"red"}"#, r#"{"color":"red","on":"icon"}"#] {
             assert_eq!(decode(icon).unwrap(), SidebarTint::on_icon(TintColor::Red), "{icon}");
         }
-        assert!(decode(r#"{"color":"teal","on":["icon"]}"#).is_err());
+        for color in ["maroon", "#12345", "#1234567", "#12345g"] {
+            let error = decode(&format!(r#"{{"color":"{color}","on":["icon"]}}"#)).unwrap_err();
+            assert!(
+                error.to_string().contains(&format!("unknown tint color: {color}")),
+                "{error}"
+            );
+        }
+    }
+
+    /// `hexTintEncodesAsOneColorString`, `namedTintKeepsItsSnapshotSpelling`.
+    #[test]
+    fn a_hex_tint_is_one_lowercase_color_string_and_a_name_keeps_its_spelling() {
+        let tint = SidebarTint::new(BLUE_HEX, TintParts::NAME);
+        let text = serde_json::to_string(&tint).unwrap();
+        assert_eq!(text, r##"{"color":"#3a7bd5","on":["name"]}"##);
+        assert_eq!(serde_json::from_str::<SidebarTint>(&text).unwrap(), tint);
+        assert_eq!(
+            serde_json::from_str::<SidebarTint>(r##"{"color":"#3A7BD5","on":["name"]}"##).unwrap(),
+            tint
+        );
+        let mint = serde_json::to_string(&SidebarTint::on_icon(TintColor::Mint)).unwrap();
+        assert_eq!(mint, r#"{"color":"mint","on":["icon"]}"#);
+        assert_eq!(
+            SidebarTint::on_icon(TintColor::Mint),
+            SidebarTint::on_icon(TintValue::Named(TintColor::Mint))
+        );
     }
 
     /// `updateResolvesAgainstTheCurrentTint`.
@@ -454,17 +629,21 @@ mod tests {
     fn an_update_resolves_against_the_current_tint() {
         let named = SidebarTint::new(TintColor::Green, TintParts::NAME);
         assert_eq!(
-            TintUpdate::Set(TintColor::Red, None).resolved(Some(named)),
+            TintUpdate::Set(TintColor::Red.into(), None).resolved(Some(named)),
             Some(SidebarTint::new(TintColor::Red, TintParts::NAME))
         );
         assert_eq!(
-            TintUpdate::Set(TintColor::Red, None).resolved(None),
+            TintUpdate::Set(TintColor::Red.into(), None).resolved(None),
             Some(SidebarTint::on_icon(TintColor::Red))
         );
         assert_eq!(
-            TintUpdate::Set(TintColor::Red, Some(TintParts::BOTH)).resolved(Some(named)),
+            TintUpdate::Set(TintColor::Red.into(), Some(TintParts::BOTH)).resolved(Some(named)),
             Some(SidebarTint::new(TintColor::Red, TintParts::BOTH))
         );
         assert_eq!(TintUpdate::Clear.resolved(Some(named)), None);
+        assert_eq!(
+            TintUpdate::Set(BLUE_HEX, None).resolved(Some(named)),
+            Some(SidebarTint::new(BLUE_HEX, TintParts::NAME))
+        );
     }
 }

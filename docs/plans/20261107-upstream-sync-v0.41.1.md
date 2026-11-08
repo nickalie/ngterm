@@ -700,20 +700,20 @@ so replace their ratchet lines); new `test_session.py::test_tint_takes_a_hex_and
 `::test_tint_takes_the_new_palette_names`, hex cases in `test_workspace.py`, `tests/behaviors/test_relaunch.py`,
 `test_session_info.py`, `test_cli_output.py::test_tint_commands`; `tests/ui/test_pointer.py` "Custom #3a7bd5" entry.
 
-- [ ] `TintColor` adds teal, pink, brown, indigo, mint in that order; `TintValue` = a name (any case) or `#rrggbb`
+- [x] `TintColor` adds teal, pink, brown, indigo, mint in that order; `TintValue` = a name (any case) or `#rrggbb`
   (with or without "#", stored lowercase; keep `SidebarTint: Copy` with an `[u8; 3]`); rejects "", "maroon",
   "#3a7bd", "#3a7bd5ff", "#3a7bdz", "##3a7bd5". Snapshot `{"color": "#3a7bd5", "on": [...]}`; decode of an unknown
   color fails "unknown tint color: <raw>" and the lossy caller drops it.
-- [ ] Set and creation tints take a hex; "invalid tint: <raw> (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)";
+- [x] Set and creation tints take a hex; "invalid tint: <raw> (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)";
   the tree reads back the name or the lowercase hex. ctl "tint must be one of: <names>, a #rrggbb color, or clear",
   "--tint must be one of: <names>, or a #rrggbb color". `session.info` markup stays names only.
-- [ ] GPUI: the five colors' light/dark values (check against the macOS system colors on the real Mac); a hex draws
+- [x] GPUI: the five colors' light/dark values (check against the macOS system colors on the real Mac); a hex draws
   as fixed sRGB; the icon's accessibility value "#3a7bd5 tint"; the Tint menu adds the five colors and a checked
   "Custom #rrggbb" entry when every target shares one hex.
-- [ ] The last Show On pick: in memory, app-wide, never persisted, default icon; a menu Parts pick records it; an
+- [x] The last Show On pick: in memory, app-wide, never persisted, default icon; a menu Parts pick records it; an
   untinted row shows it checked; a menu color pick on an untinted row starts on it; the palette and `session.tint`
   without `--on` keep the icon start.
-- [ ] write tests: every Swift case listed; the conformance edits and new tests above.
+- [x] write tests: every Swift case listed; the conformance edits and new tests above.
 
 ### Task 18: Refresh the bundled skill
 

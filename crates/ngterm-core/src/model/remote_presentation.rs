@@ -593,7 +593,7 @@ mod tests {
         store.set_info(None, id);
         assert_eq!(store.session(id).unwrap().effective_info().unwrap().source, "second");
         let invalid = PresentationInfo {
-            source: "^[x](color: \"pink\")".to_owned(),
+            source: "^[x](color: \"maroon\")".to_owned(),
             ..origin.clone()
         };
         store.apply_remote_info(Some(&invalid), id);

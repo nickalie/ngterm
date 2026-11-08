@@ -625,7 +625,7 @@ fn leading_icon(row: &SidebarRow, color: Hsla) -> impl IntoElement {
         .role(gpui_kit::Role::Image)
         .aria_label(tooltip.clone().unwrap_or(SharedString::from(name)))
         .when_some(row.tint, |icon, tint| {
-            let value = format!("{} tint", tint.color().wire_name());
+            let value = format!("{} tint", tint.color().wire());
             icon.debug_selector({
                 let value = value.clone();
                 move || format!("{id}:{value}")

@@ -1414,7 +1414,8 @@ OPTIONS:
                           (id/prefix/active), placed under it in the sidebar; a
                           companion target means its parent.
   --tint <tint>           Create it tinted this color
-                          (red|orange|yellow|green|blue|purple|gray).
+                          (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint,
+                          or a #rrggbb hex).
   --tint-on <tint-on>     With --tint: icon, name, or icon,name (default icon).
   --socket <socket>       Override the control socket path.
   --json                  Print the raw JSON response.
@@ -1707,7 +1708,8 @@ ARGUMENTS:
 OPTIONS:
   --collapsed             Create the workspace collapsed in the sidebar.
   --tint <tint>           Create it tinted this color
-                          (red|orange|yellow|green|blue|purple|gray).
+                          (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint,
+                          or a #rrggbb hex).
   --tint-on <tint-on>     With --tint: icon, name, or icon,name (default icon).
   --socket <socket>       Override the control socket path.
   --json                  Print the raw JSON response.

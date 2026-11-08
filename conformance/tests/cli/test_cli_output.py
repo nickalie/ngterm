@@ -542,23 +542,55 @@ def test_tint_commands(cli, ctl):
     assert_ok(ctl.request("workspace.delete", wid))
 
 
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("cli:session tint", "cli:workspace tint", "cli:session new", "cli:workspace new")
+def test_tint_commands_take_a_hex(cli, ctl):
+    """`TintCommandsTests.tintTakesAHexForSetAndCreation`: a hex with or without `#`, read back lowercase."""
+    sid = _new(ctl)
+    _ok(cli("session", "tint", "#3A7BD5", "--on", "name", "--target", sid), "ok\n")
+    assert (_node(ctl, sid)["tint"], _node(ctl, sid)["tintOn"]) == ("#3a7bd5", ["name"])
+    _ok(cli("session", "tint", "Teal", "--target", sid), "ok\n")
+    assert (_node(ctl, sid)["tint"], _node(ctl, sid)["tintOn"]) == ("teal", ["name"])
+    assert_ok(ctl.request("session.close", sid))
+
+    wid = _created(cli("workspace", "new", _name("cli-hex-tint"), "--tint", "3A7BD5"))
+    created = _created(cli("session", "new", "--workspace", wid, "--tint", "#112233", "--no-select"))
+    (node,) = [node for node in workspaces(ctl.tree()) if node["id"] == wid]
+    assert (node["tint"], node["tintOn"]) == ("#3a7bd5", ["icon"])
+    assert _node(ctl, created)["tint"] == "#112233"
+    _ok(cli("workspace", "tint", "abcdef", "--on", "icon,name", "--target", wid), "ok\n")
+    (node,) = [node for node in workspaces(ctl.tree()) if node["id"] == wid]
+    assert (node["tint"], node["tintOn"]) == ("#abcdef", ["icon", "name"])
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("cli:session tint", "cli:workspace tint", "cli:session new", "cli:workspace new")
 @pytest.mark.parametrize(
     ("argv", "message"),
     [
         (
-            ("session", "tint", "teal"),
-            "tint must be one of: red|orange|yellow|green|blue|purple|gray, or clear",
+            ("session", "tint", "maroon"),
+            "tint must be one of: red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint, a #rrggbb color, or clear",
         ),
         (("session", "tint", "clear", "--on", "icon"), "--on does not apply to clear"),
         (("session", "tint", "red", "--on", "icon,strip"), "--on must list icon and/or name, comma-separated"),
         (("workspace", "tint", "red", "--on", ""), "--on must list icon and/or name, comma-separated"),
         (("session", "new", "--tint-on", "icon"), "--tint-on requires --tint"),
-        (("workspace", "new", "--tint", "teal"), "--tint must be one of: red|orange|yellow|green|blue|purple|gray"),
+        (("workspace", "new", "--tint", "maroon"), "--tint must be one of: red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint, or a #rrggbb color"),
         (
             ("workspace", "new", "--tint", "red", "--tint-on", "both"),
             "--tint-on must list icon and/or name, comma-separated",
+        ),
+        pytest.param(
+            ("session", "tint", "#3a7bdz"),
+            "tint must be one of: red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint, a #rrggbb color, or clear",
+            marks=pytest.mark.since("0.41.0"),
+        ),
+        pytest.param(
+            ("session", "new", "--tint", "#3a7bd"),
+            "--tint must be one of: red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint, or a #rrggbb color",
+            marks=pytest.mark.since("0.41.0"),
         ),
     ],
 )

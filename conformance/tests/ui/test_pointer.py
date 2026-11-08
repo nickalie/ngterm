@@ -212,3 +212,22 @@ def test_a_workspace_row_context_menu_opens_a_session_in_it(ctl, ui):
         ctl.wait_tree(lambda tree: len(sessions(tree, wid)) == 1)
     finally:
         ctl.request("workspace.delete", wid)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("ui:session-row", "session.tint", "behavior:sidebar.row-context-menu")
+def test_a_hex_tinted_rows_menu_lists_its_custom_entry(ctl, ui):
+    """A hex tint shows in the row's Tint submenu as "Custom #3a7bd5", and a palette name picked there replaces it,
+    keeping the placement (`WorkspaceSidebarTintMenuTests.testAHexTintShowsACheckedCustomEntryThatANameReplaces`)."""
+    wid = _workspace(ctl, "ui-menu-hex")
+    try:
+        sid = _named_sessions(ctl, wid, ["ui-hex-row"])["ui-hex-row"]
+        assert_ok(ctl.request("session.tint", sid, mode="set", tint="#3A7BD5", tintOn=["name"]))
+        ui.mouse_click(_row(ui, "session-row", "ui-hex-row"), button="right")
+        ui.click(ui.menu_item("Tint"))
+        ui.menu_item("Custom #3a7bd5")
+        ui.click(ui.menu_item("Mint"))
+        ctl.wait_tree(lambda tree: (find_session(tree, sid).get("tint"), find_session(tree, sid).get("tintOn"))
+                      == ("mint", ["name"]))
+    finally:
+        ctl.request("workspace.delete", wid)

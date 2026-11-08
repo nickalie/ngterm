@@ -246,6 +246,7 @@ impl Sidebar {
         let id = self.window;
         let covered = core.zoom_target(id).is_some() || core.dashboard(id).is_some();
         let settings = core.settings().clone();
+        let tint_placement = core.tint_placement();
         self.look = Look::of(crate::chrome::current(cx), &settings);
         let Some(store) = core.library_mut().store_mut(id) else {
             return;
@@ -257,7 +258,7 @@ impl Sidebar {
         let open = self.expansion.sync(store, layout).clone();
         let rows = rows::rows(store, &open, RowSettings { settings: &settings });
         store.note_sidebar_expansion(open.workspaces);
-        self.context = SidebarContext::take(store, &settings);
+        self.context = SidebarContext::take(store, &settings, tint_placement);
         let selected = store.selected_session_id();
         self.show(rows, selected, cx);
         cx.notify();

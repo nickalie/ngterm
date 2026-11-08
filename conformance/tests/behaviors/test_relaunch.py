@@ -116,6 +116,28 @@ def test_relaunch_keeps_workspaces_sessions_and_their_metadata(launch):
     assert (restored["id"], restored["name"]) == (window["id"], "kept window")
 
 
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("behavior:restore.relaunch-keeps-layout")
+def test_hex_tints_survive_a_relaunch(launch):
+    """A hex tint is saved as its one lowercase color string and read back after a relaunch
+    (`AppStoreTintTests.tintsSurviveASaveAndReload`, `SidebarTintTests.hexTintEncodesAsOneColorString`)."""
+    ctl = launch()
+    work = assert_ok(ctl.request("workspace.new", name="hex"))["id"]
+    sid = _new(ctl, workspace=work)
+    assert_ok(ctl.request("session.tint", sid, mode="set", tint="#3A7BD5", tintOn=["icon", "name"]))
+    assert_ok(ctl.request("workspace.tint", work, mode="set", tint="112233", tintOn=["name"]))
+    assert_ok(ctl.request("session.select", sid))
+    before = ctl.tree()
+
+    ctl = launch.relaunch(ctl)
+    after = ctl.wait_tree(lambda tree: find_session(tree, sid)["realized"] is True)
+    session = find_session(after, sid)
+    assert (session["tint"], session["tintOn"]) == ("#3a7bd5", ["icon", "name"])
+    (workspace,) = [node for node in workspaces(after) if node["id"] == work]
+    assert (workspace["tint"], workspace["tintOn"]) == ("#112233", ["name"])
+    assert _layout(after) == _layout(before)
+
+
 @pytest.mark.covers("behavior:restore.relaunch-keeps-layout")
 def test_relaunch_forgets_what_is_not_persisted(launch):
     ctl = launch()

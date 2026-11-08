@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{Fixture, UNKNOWN, answered_id, args, failure, wire};
-use crate::model::{SidebarTint, TintColor, TintParts};
+use crate::model::{SidebarTint, TintColor, TintParts, TintValue};
 
 /// One way to fill a request's arguments.
 type ArgsEdit = fn(&mut Args);
@@ -110,14 +110,69 @@ fn a_refused_tint_changes_nothing_and_is_checked_before_the_target() {
         failure("session.tint clear takes no color or placement")
     );
     assert_eq!(
-        fixture.send(Command::Workspace(WorkspaceCmd::Tint), Some(UNKNOWN), set("teal", None)),
-        failure("invalid tint: teal (red|orange|yellow|green|blue|purple|gray)")
+        fixture.send(
+            Command::Workspace(WorkspaceCmd::Tint),
+            Some(UNKNOWN),
+            set("maroon", None)
+        ),
+        failure("invalid tint: maroon (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)")
     );
     assert_eq!(
         fixture.send(Command::Workspace(WorkspaceCmd::Tint), None, Args::default()),
         failure("invalid tint mode:  (set|clear)")
     );
     assert_eq!(session_tint(&fixture, id), Some(SidebarTint::on_icon(TintColor::Green)));
+}
+
+/// `testSessionTintTakesAHexAndReadsItBack`, `controlTreeProjectsTints` with a hex: stored and read back lowercase,
+/// for a session, a workspace and a creation tint alike; the new palette names set as any other.
+#[test]
+fn a_hex_tint_is_stored_and_read_back_lowercase() {
+    let mut fixture = Fixture::new(0);
+    let id = fixture.sessions[0];
+    let workspace = fixture.workspace;
+    let blue = TintValue::Hex([0x3a, 0x7b, 0xd5]);
+
+    assert!(
+        fixture
+            .session(SessionCmd::Tint, Some(&wire(id)), set("#3A7BD5", Some(&["name"])))
+            .ok
+    );
+    assert_eq!(
+        session_tint(&fixture, id),
+        Some(SidebarTint::new(blue, TintParts::NAME))
+    );
+    let node = session_node(&mut fixture, id);
+    assert_eq!((&node["tint"], &node["tintOn"]), (&json!("#3a7bd5"), &json!(["name"])));
+
+    assert!(
+        fixture
+            .send(Command::Workspace(WorkspaceCmd::Tint), None, set("3a7bd5", None))
+            .ok
+    );
+    assert_eq!(workspace_tint(&fixture, workspace), Some(SidebarTint::on_icon(blue)));
+    assert_eq!(workspace_node(&mut fixture, workspace)["tint"], json!("#3a7bd5"));
+
+    let created = answered_id(&new_session(&mut fixture, |a| a.tint = Some("#112233".into()))).unwrap();
+    assert_eq!(session_node(&mut fixture, created)["tint"], json!("#112233"));
+
+    for (name, color) in [
+        ("teal", TintColor::Teal),
+        ("Pink", TintColor::Pink),
+        ("brown", TintColor::Brown),
+        ("INDIGO", TintColor::Indigo),
+        ("mint", TintColor::Mint),
+    ] {
+        assert!(
+            fixture.session(SessionCmd::Tint, Some(&wire(id)), set(name, None)).ok,
+            "{name}"
+        );
+        assert_eq!(
+            session_tint(&fixture, id),
+            Some(SidebarTint::new(color, TintParts::NAME))
+        );
+        assert_eq!(session_node(&mut fixture, id)["tint"], json!(color.wire_name()));
+    }
 }
 
 /// `testWorkspaceTintColorsOnlyTheWorkspace`.
@@ -224,8 +279,8 @@ fn a_bad_creation_tint_is_refused_before_anything_is_created() {
     let cases: [(ArgsEdit, &str); 3] = [
         (|a| a.tint_on = Some(vec!["icon".into()]), "--tint-on requires --tint"),
         (
-            |a| a.tint = Some("teal".into()),
-            "invalid tint: teal (red|orange|yellow|green|blue|purple|gray)",
+            |a| a.tint = Some("maroon".into()),
+            "invalid tint: maroon (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)",
         ),
         (
             |a| {
