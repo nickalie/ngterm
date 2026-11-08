@@ -1310,3 +1310,32 @@ fn hiding_a_page_withdraws_its_external_link_prompt(cx: &mut TestAppContext) {
     assert!(cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
     cx.update(|window, cx| assert!(crate::modal::answer_front_alert(window, "Cancel", cx)));
 }
+
+#[gpui_kit::test]
+fn a_late_withdrawal_leaves_the_prompt_that_replaced_its_own(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    let view = harness.view(cx);
+    Harness::dispatch(&external_link(view), cx);
+    let first = cx
+        .update(|window, cx| crate::modal::front_alert(window.window_handle(), cx))
+        .unwrap();
+    // a hand-off asked before a hide and a show in one flush opens its prompt before the hide withdraws the first
+    cx.update(|_, cx| {
+        registry::dispatch(&external_link(view), cx);
+        registry::apply(&harness.overlay, false, cx);
+        registry::apply(&harness.overlay, true, cx);
+    });
+    cx.run_until_parked();
+    let second = cx
+        .update(|window, cx| crate::modal::front_alert(window.window_handle(), cx))
+        .unwrap();
+    assert_ne!(first, second);
+    // the page still holds the new prompt: hiding withdraws it, unanswered, so the page asks again once shown
+    cx.update(|_, cx| registry::apply(&harness.overlay, false, cx));
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
+    cx.update(|_, cx| registry::apply(&harness.overlay, true, cx));
+    Harness::dispatch(&external_link(view), cx);
+    assert!(cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
+    cx.update(|window, cx| assert!(crate::modal::answer_front_alert(window, "Cancel", cx)));
+}

@@ -69,6 +69,9 @@ struct PageState {
     grant_root: Option<policy::GrantRoot>,
     storage_failure: Option<String>,
     prompt: Option<Entity<Alert>>,
+    /// Counts the prompts the page opened, so an answer reaches only the prompt it belongs to: a withdrawal answers
+    /// its prompt late, after another may have taken its place.
+    prompt_serial: u64,
     /// A declined prompt silences the page until real input reaches its view: script can click links in a loop, but
     /// it cannot make native pointer or key events.
     prompts_silenced: bool,
@@ -157,6 +160,7 @@ impl Page {
                 grant_root: None,
                 storage_failure,
                 prompt: None,
+                prompt_serial: 0,
                 prompts_silenced: false,
                 on_screen: false,
                 life: Life::Active,
@@ -890,13 +894,18 @@ impl Page {
             field: None,
         };
         let page = self.me.clone();
+        let serial = {
+            let mut state = self.state.borrow_mut();
+            state.prompt_serial += 1;
+            state.prompt_serial
+        };
         let opened = window.update(cx, |_, window, cx| {
             crate::modal::open_alert(
                 window,
                 spec,
                 move |answer, _, _| {
                     if let Some(page) = page.upgrade() {
-                        page.answer_prompt(&url, answer.button == 1);
+                        page.answer_prompt(serial, &url, answer.button == 1);
                     }
                 },
                 cx,
@@ -907,12 +916,14 @@ impl Page {
         }
     }
 
-    fn answer_prompt(&self, url: &Url, approved: bool) {
+    /// Prompt `serial`'s answer; one the page no longer holds (withdrawn, or replaced since) changes nothing.
+    fn answer_prompt(&self, serial: u64, url: &Url, approved: bool) {
         {
             let mut state = self.state.borrow_mut();
-            if state.prompt.take().is_none() {
+            if state.prompt.is_none() || state.prompt_serial != serial {
                 return;
             }
+            state.prompt = None;
             if !approved {
                 state.prompts_silenced = true;
             }
