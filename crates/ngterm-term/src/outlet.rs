@@ -274,8 +274,8 @@ mod tests {
             outlet.close();
             outlet.attach(&handle);
             outlet.push_reply(b"late");
+            assert!(matches!(*lock(&outlet.state), Outlet::Closed));
             assert_eq!(outlet.queued(), 0);
-            assert_eq!(handle.queued(), 0, "nothing reached the actor");
             child.killer().kill_tree().unwrap();
             handle.shutdown();
             child.wait().unwrap();

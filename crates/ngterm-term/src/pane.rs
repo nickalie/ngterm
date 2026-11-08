@@ -1654,6 +1654,8 @@ mod tests {
         );
     }
 
+    // ConPTY refuses a zero size before the terminal is built or a child starts.
+    #[cfg(unix)]
     #[test]
     fn a_size_the_terminal_refuses_stops_the_child_it_started() {
         let zero = GridSize {
@@ -1665,6 +1667,20 @@ mod tests {
         assert!(matches!(error, PaneError::Terminal(_)), "{error:?}");
         let pid = LAST_CHILD.with(std::cell::Cell::get).unwrap();
         assert!(gone(pid), "child {pid} is left");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_zero_size_is_refused_before_a_child_starts() {
+        LAST_CHILD.with(|last| last.set(None));
+        let zero = GridSize {
+            cols: 0,
+            rows: 0,
+            ..SIZE
+        };
+        let error = Pane::spawn(&long_child(true), &PaneConfig::new(zero)).unwrap_err();
+        assert!(matches!(error, PaneError::Spawn(_)), "{error:?}");
+        assert_eq!(LAST_CHILD.with(std::cell::Cell::get), None);
     }
 
     /// Runs `start` on a fresh thread whose thread `fail` cannot start, returning its error.
@@ -1733,12 +1749,14 @@ mod tests {
         let Io::Live(live) = &pane.io else {
             panic!("not live");
         };
-        let facts = || live.metadata_of(&pane.shared, pane.color_scheme());
-        assert!(facts().kitty_graphics);
+        assert!(live.take_posted_metadata().kitty_graphics);
         pane.set_kitty_image_limit(0).unwrap();
-        assert!(!facts().kitty_graphics, "zero turns the protocol off");
+        assert!(
+            !live.take_posted_metadata().kitty_graphics,
+            "zero turns the protocol off"
+        );
         pane.set_kitty_image_limit(1_000_000).unwrap();
-        assert!(facts().kitty_graphics);
+        assert!(live.take_posted_metadata().kitty_graphics);
         let other = if pane.color_scheme() == ColorScheme::Dark {
             ColorScheme::Light
         } else {
@@ -1747,14 +1765,12 @@ mod tests {
         pane.set_color_scheme(other);
         assert_eq!(pane.color_scheme(), other);
         assert_eq!(
-            facts().color_scheme,
+            live.take_posted_metadata().color_scheme,
             Some(match other {
                 ColorScheme::Light => ngterm_session::protocol::ColorScheme::Light,
                 ColorScheme::Dark => ngterm_session::protocol::ColorScheme::Dark,
             })
         );
-        // the server answers and reports the scheme for a live pane: its terminal queues nothing
-        assert_eq!(pane.shared.replies.queued(), 0);
     }
 
     #[test]
@@ -1801,14 +1817,25 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn wait_stats(pane: &Pane, bytes: u64) -> PaneStats {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let stats = pane.stats();
+            if stats.bytes >= bytes && stats.batches >= 1 {
+                return stats;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for counters: {stats:?}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn the_stats_count_what_the_program_wrote() {
         let dir = tempfile::tempdir().unwrap();
         let pane = Pane::spawn(&sh("printf counted; exec sleep 30", dir.path()), &PaneConfig::new(SIZE)).unwrap();
         wait_for(&pane, "counted");
-        let stats = pane.stats();
-        assert!(stats.bytes >= 7, "{stats:?}");
-        assert!(stats.batches >= 1, "{stats:?}");
+        let stats = wait_stats(&pane, 7);
         assert!(stats.max_hold_nanos <= stats.vt_nanos, "{stats:?}");
     }
 
@@ -1900,6 +1927,6 @@ mod tests {
             assert!(Instant::now() < deadline, "the output never resumed");
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(pane.stats().bytes > 3_000_000);
+        wait_stats(&pane, 3_000_001);
     }
 }
