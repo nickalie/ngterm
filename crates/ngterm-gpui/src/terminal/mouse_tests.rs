@@ -114,22 +114,9 @@ fn context_menu_selects_a_link_and_preserves_an_existing_selection(cx: &mut Test
     );
     assert_eq!(f.selection().as_deref(), Some("https://example.com"));
     f.cx.run_until_parked();
-    f.cx.simulate_mouse_down(
-        Fixture::at(5, 0),
-        MouseButton::Right,
-        Modifiers {
-            control: true,
-            ..Modifiers::default()
-        },
-    );
-    f.cx.simulate_mouse_up(
-        Fixture::at(5, 0),
-        MouseButton::Right,
-        Modifiers {
-            control: true,
-            ..Modifiers::default()
-        },
-    );
+    // without Ctrl the link is not live, so a re-selection would take the word `//example.com` instead
+    f.cx.simulate_mouse_down(Fixture::at(10, 0), MouseButton::Right, Modifiers::default());
+    f.cx.simulate_mouse_up(Fixture::at(10, 0), MouseButton::Right, Modifiers::default());
     assert_eq!(f.selection().as_deref(), Some("https://example.com"));
 }
 
@@ -145,6 +132,12 @@ fn dragging_above_the_view_autoscrolls_and_stops_when_back_inside(cx: &mut TestA
     f.settle(|f| f.text().lines().next() != original.lines().next());
     assert!(f.selection().is_some());
     f.cx.simulate_mouse_move(Fixture::at(2, 1), Some(MouseButton::Left), Modifiers::default());
+    f.cx.run_until_parked();
+    // back inside with the button still held: no more scrolling
+    let inside = f.text();
+    f.cx.executor().advance_clock(AUTOSCROLL_INTERVAL * 3);
+    f.cx.run_until_parked();
+    assert_eq!(f.text(), inside);
     f.cx.simulate_mouse_up(Fixture::at(2, 1), MouseButton::Left, Modifiers::default());
     f.cx.run_until_parked();
     let stopped = f.text();
