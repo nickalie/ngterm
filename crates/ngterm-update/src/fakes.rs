@@ -22,7 +22,7 @@ use sha2::{Digest as _, Sha256};
 use crate::MARKER;
 use crate::{Error, Installation, Source};
 
-/// What the updater requires an installation's root directory to be called on this platform.
+/// The bundle name a release archive carries; an installed bundle only needs the `.app` extension.
 #[cfg(target_os = "macos")]
 pub const ROOT: &str = "ngterm.app";
 /// What the updater requires an installation's root directory to be called on this platform.
@@ -52,7 +52,7 @@ pub fn identity(root: &Path) -> PathBuf {
 }
 
 /// Writes the unsigned tree of a macOS app bundle at `version` under `root`: its identity, its update marker and its
-/// programs. The updater accepts it as an installation when `root` is named [`ROOT`]; [`seal`] signs it.
+/// programs. The updater accepts it as an installation when `root` has the `.app` extension; [`seal`] signs it.
 ///
 /// # Errors
 /// Returns the filesystem's error.
