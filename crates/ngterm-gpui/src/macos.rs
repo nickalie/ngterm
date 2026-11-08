@@ -218,3 +218,7 @@ pub fn graphics_available() -> bool {
     // SAFETY: a device availability query without application state.
     unsafe { ngterm_metal_available() }
 }
+
+#[cfg(test)]
+#[path = "macos_tests.rs"]
+mod tests;
