@@ -571,6 +571,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn an_empty_directory_is_not_a_transcript() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("projects/work/empty.jsonl");
+        std::fs::create_dir_all(&path).unwrap();
+        let agent = record(&path);
+        let reply = serde_json::json!({"ok": true, "result": {"agent": agent}}).to_string();
+        let (output, _) =
+            crate::messages::tests::run_command(&["agent", "chat", "--before", "10"], b"", &[], &[&reply]);
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            error.contains(
+                r#"PROBE_RESULT:Err(Local("could not read the transcript: transcript is not a regular file"))"#
+            ),
+            "{error}"
+        );
+        assert!(probe_events(&String::from_utf8(output.stdout).unwrap()).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn chat_pages_reset_mismatched_conversations_and_following_ends_with_stdin() {
         use crate::messages::tests::run_command;
         let directory = tempfile::tempdir().unwrap();

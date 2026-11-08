@@ -11,7 +11,7 @@ use tempfile::TempDir;
 
 use super::support::tool;
 use crate::agent_chat::event::{LINE_CAP, OVERSIZED};
-use crate::agent_chat::follow::{BACKLOG, CONTEXT, Clock, DISCOVERY_INTERVAL, Files, POLL_INTERVAL, REACH};
+use crate::agent_chat::follow::{BACKLOG, CONTEXT, Clock, DISCOVERY_INTERVAL, Disk, Files, POLL_INTERVAL, REACH};
 use crate::agent_chat::{AgentKind, ChatEvent, EventBody, Follower, ToolStatus};
 
 /// Files on disk, counting every byte read.
@@ -51,7 +51,7 @@ impl Files for Counting {
     }
 
     fn size(&self, path: &Path) -> io::Result<u64> {
-        Ok(fs::metadata(path)?.len())
+        Disk.size(path)
     }
 }
 
@@ -143,6 +143,29 @@ fn is_live(event: &ChatEvent, cursor: u64) -> bool {
 
 fn transcript(dir: &TempDir) -> PathBuf {
     dir.path().join("transcript.jsonl")
+}
+
+#[test]
+fn an_empty_directory_is_not_a_transcript() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("projects/work/empty.jsonl");
+    fs::create_dir_all(&path).unwrap();
+    let mut follower = Follower::new(AgentKind::Claude, &path);
+    assert!(follower.page(10, 10).is_err());
+    assert!(follower.backlog(10).is_err());
+    assert!(follower.after(0).is_err());
+}
+
+#[test]
+fn a_transcript_replaced_by_an_empty_directory_is_a_read_error() {
+    let dir = TempDir::new().unwrap();
+    let path = transcript(&dir);
+    fs::write(&path, b"").unwrap();
+    let mut follower = Follower::new(AgentKind::Claude, &path);
+    follower.backlog(10).unwrap();
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    assert!(follower.poll().is_err());
 }
 
 #[test]

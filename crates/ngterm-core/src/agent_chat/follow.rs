@@ -122,7 +122,14 @@ impl Files for Disk {
     }
 
     fn size(&self, path: &Path) -> io::Result<u64> {
-        Ok(std::fs::metadata(path)?.len())
+        let metadata = std::fs::metadata(path)?;
+        if !metadata.is_file() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "transcript is not a regular file",
+            ));
+        }
+        Ok(metadata.len())
     }
 }
 
