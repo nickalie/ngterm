@@ -139,4 +139,20 @@ internal struct SettingsModelTests {
         #expect(SettingsChoices.name(of: .ghostty, isDark: true) == "Ghostty")
         #expect(SettingsChoices.name(of: .drafting, isDark: true) == "Drafting")
     }
+
+    @Test("a control's binding shows the setting and stores each change as it is made")
+    internal func bindings() {
+        defer { test.remove() }
+        let model = SettingsModel(graph: test.graph)
+        let size = model.binding(\.textSize)
+        #expect(size.wrappedValue == AppSettings().textSize)
+        size.wrappedValue = 18
+        #expect(model.settings.textSize == 18)
+        #expect(SettingsStore(directory: test.directory).settings.textSize == 18)
+        let done = model.noticeBinding(.done)
+        #expect(done.wrappedValue)
+        done.wrappedValue = false
+        #expect(!done.wrappedValue)
+        #expect(!NotificationPrefsStore(directory: test.directory).prefs.enabled.contains(.done))
+    }
 }
