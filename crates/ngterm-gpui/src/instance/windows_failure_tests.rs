@@ -39,7 +39,11 @@ fn an_unreadable_forward_posts_no_activation() {
 }
 
 #[test]
-fn a_valid_forward_after_shutdown_is_dropped_without_blocking() {
+fn a_valid_forward_activates_the_app_and_one_after_shutdown_is_dropped() {
+    let received = receive_bytes(b"{\"cwd\":null}\n", false);
+    assert_eq!(received.try_recv(), Ok(BusRequest::Activate(Activation::default())));
+    assert_eq!(received.try_recv(), Err(async_channel::TryRecvError::Closed));
+    // the same forward once the app is gone: `receive` returns (its thread joined) without panicking
     let received = receive_bytes(b"{\"cwd\":null}\n", true);
     assert_eq!(received.try_recv(), Err(async_channel::TryRecvError::Closed));
 }
@@ -98,6 +102,43 @@ fn a_pipe_whose_security_refuses_this_user_reports_the_registration_error() {
             "failed to register {id} on its instance pipe: {}",
             io::Error::from_raw_os_error(5)
         )
+    );
+}
+
+#[test]
+fn a_primary_with_no_free_instance_is_given_up_on_after_the_retries() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = "test.busy";
+    let path = pipe_path(id, dir.path());
+    // the primary between two instances: its one instance taken and the next not made yet (no accept), so a client
+    // finds the pipe busy while `bind` still finds it held
+    let _listener = bind(&path).unwrap();
+    let _occupant = Pipe::connect_by_path(path.as_str()).unwrap();
+    let (done, outcome) = std::sync::mpsc::channel();
+    let (state_dir, attempted) = (dir.path().to_path_buf(), path.clone());
+    // on a thread of its own: a connect that waits for the primary would block until this test drops the pipe
+    thread::spawn(move || {
+        let connected = Remote::connect(&attempted).err().map(|error| error.raw_os_error());
+        let began = std::time::Instant::now();
+        let (requests, _) = async_channel::unbounded();
+        let registered = register(id, &state_dir, requests).err().map(|error| error.to_string());
+        let _ = done.send((connected, registered, began.elapsed()));
+    });
+    let (connected, registered, elapsed) = outcome
+        .recv_timeout(Duration::from_secs(30))
+        .expect("a busy primary must not hold up the launch");
+    let busy = ERROR_PIPE_BUSY.cast_signed();
+    assert_eq!(connected, Some(Some(busy)), "a busy pipe fails at once");
+    assert_eq!(
+        registered,
+        Some(format!(
+            "failed to register {id} on its instance pipe: {}",
+            io::Error::from_raw_os_error(busy)
+        ))
+    );
+    assert!(
+        elapsed >= CONNECT_PAUSE * CONNECT_ATTEMPTS,
+        "every attempt waited its pause first: {elapsed:?}"
     );
 }
 

@@ -160,12 +160,14 @@ fn toast_round_trip(app_id: &str) {
     dismissed_but_retained(&center, &first, identity);
     center.show(identity, "Replacement", "newer", &clicked).unwrap();
     wait_history(&center, identity, true);
+    let replacement = center.shown.lock().unwrap()[identity].clone();
+    assert_ne!(replacement, first, "the second toast replaced the first");
     forget(&center.shown, identity, Some(&first));
-    assert!(
-        contains(&center, identity),
+    assert_eq!(
+        center.shown.lock().unwrap().get(identity),
+        Some(&replacement),
         "a late dismissal cannot remove the replacement"
     );
-    let replacement = center.shown.lock().unwrap()[identity].clone();
     forget(&center.shown, identity, None);
     assert!(center.shown.lock().unwrap().contains_key(identity));
     forget(&center.shown, identity, Some(&replacement));
