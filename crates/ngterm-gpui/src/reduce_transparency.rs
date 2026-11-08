@@ -118,4 +118,64 @@ mod tests {
             assert!(!system(cx));
         });
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn transparency_notifications_are_followed_in_an_isolated_process() {
+        crate::system_window::tests::run_child(
+            "reduce_transparency::tests::windows_settings_notifications_refresh_the_system_input",
+        );
+    }
+
+    #[cfg(windows)]
+    #[gpui_kit::test]
+    #[ignore = "run by transparency_notifications_are_followed_in_an_isolated_process"]
+    fn windows_settings_notifications_refresh_the_system_input(cx: &mut TestAppContext) {
+        use ngterm_host::MainLoop;
+        use std::sync::Arc;
+        use windows_sys::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE;
+
+        if !crate::system_window::tests::is_child(
+            "reduce_transparency::tests::windows_settings_notifications_refresh_the_system_input",
+        ) {
+            return;
+        }
+        // The real window thread wakes the foreground task when its notification arrives.
+        cx.executor().allow_parking();
+        let _events = crate::system_window::tests::EVENTS.lock().unwrap();
+        let expected = !transparency_effects();
+        let main_loop = Arc::new(crate::main_loop::GpuiMainLoop::<crate::state::AppState>::new(
+            cx.executor(),
+        ));
+        let owner: Arc<dyn MainLoop<crate::state::AppState>> = main_loop.clone();
+        let poster = Arc::downgrade(&owner);
+        let tasks = main_loop.tasks();
+        cx.update(|cx| watch(&poster, cx));
+        cx.run_until_parked();
+        assert_eq!(cx.update(|cx| system(cx)), expected);
+        // Force the cached input to disagree; the next OS notification must read the real setting again and post.
+        cx.update(|cx| {
+            set(!expected, cx);
+            watch(&poster, cx);
+        });
+        while tasks.try_recv().is_ok() {}
+        crate::system_window::tests::send(WM_SETTINGCHANGE, 0x7ffe, 0);
+        cx.run_until_parked();
+        assert_eq!(cx.update(|cx| system(cx)), expected);
+        assert!(
+            tasks.try_recv().is_ok(),
+            "a changed input must settle the app's windows"
+        );
+        assert!(tasks.try_recv().is_err(), "watch installs only one subscription");
+        crate::system_window::tests::send(WM_SETTINGCHANGE, 0x7ffe, 0);
+        cx.run_until_parked();
+        assert!(tasks.try_recv().is_err(), "an unchanged input needs no settle");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_transparency_read_agrees_with_windows_ui_settings() {
+        let settings = ::windows::UI::ViewManagement::UISettings::new().unwrap();
+        assert_eq!(transparency_effects(), settings.AdvancedEffectsEnabled().unwrap());
+    }
 }

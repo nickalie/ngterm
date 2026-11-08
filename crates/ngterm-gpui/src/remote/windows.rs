@@ -185,4 +185,87 @@ mod tests {
     fn the_hint_function_is_there_on_this_windows() {
         assert!(notify_hint_change().is_some(), "Windows 10 2004 and later have it");
     }
+
+    #[test]
+    fn live_sources_report_network_changes_once_and_resume_after_display_wake() {
+        use std::sync::{Arc, mpsc};
+        use std::time::Duration;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{PBT_APMRESUMEAUTOMATIC, WM_POWERBROADCAST};
+
+        let _events = crate::system_window::tests::EVENTS.lock().unwrap();
+        let (sender, received) = mpsc::channel();
+        let report: Report = Arc::new(move |event| {
+            let _ = sender.send(event);
+        });
+        report_hint(NetworkConnectivityLevelHintNone, 0);
+        start(&report);
+        assert!(
+            matches!(
+                received.recv_timeout(Duration::from_secs(5)).unwrap(),
+                LinkEvent::Network { .. }
+            ),
+            "the OS supplies the initial connectivity hint"
+        );
+        // Calling follow again must retain the first subscriber and not register a second OS source.
+        let (unused, extra) = mpsc::channel();
+        let duplicate: Report = Arc::new(move |event| {
+            let _ = unused.send(event);
+        });
+        follow_network(&duplicate);
+        for (level, cost, expected) in [
+            (NetworkConnectivityLevelHintNone, 71, Some(false)),
+            (NetworkConnectivityLevelHintNone, 71, None),
+            (NetworkConnectivityLevelHintInternetAccess, 71, Some(true)),
+            (NetworkConnectivityLevelHintInternetAccess, 72, Some(true)),
+            (NetworkConnectivityLevelHintInternetAccess, 72, None),
+        ] {
+            report_hint(level, cost);
+            if let Some(available) = expected {
+                assert_eq!(
+                    received.recv_timeout(Duration::from_secs(2)).unwrap(),
+                    LinkEvent::Network { available }
+                );
+            } else {
+                assert!(received.try_recv().is_err(), "an identical hint is no change");
+            }
+        }
+        assert!(extra.try_recv().is_err(), "the original reporter stays subscribed");
+        // The real initial state may be off on an idle VM; establish on before testing dimming.
+        crate::system_window::tests::display(1);
+        while received.try_recv().is_ok() {}
+        crate::system_window::tests::display(2);
+        crate::system_window::tests::display(1);
+        assert!(
+            received.try_recv().is_err(),
+            "dimming and the initial on state are not wakes"
+        );
+        crate::system_window::tests::display(0);
+        crate::system_window::tests::display(2);
+        crate::system_window::tests::display(1);
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(2)).unwrap(),
+            LinkEvent::Resumed
+        );
+        crate::system_window::tests::display(1);
+        assert!(received.try_recv().is_err(), "one resume per off/on transition");
+        crate::system_window::tests::send(WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC as usize, 0);
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(2)).unwrap(),
+            LinkEvent::Resumed
+        );
+    }
+
+    fn report_hint(level: i32, cost: i32) {
+        let hint = NL_NETWORK_CONNECTIVITY_HINT {
+            ConnectivityLevel: level,
+            ConnectivityCost: cost,
+            ApproachingDataLimit: false,
+            OverDataLimit: false,
+            Roaming: false,
+        };
+        // SAFETY: the callback takes its hint by value and does not use the context.
+        unsafe {
+            hint_changed(std::ptr::null(), hint);
+        }
+    }
 }

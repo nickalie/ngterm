@@ -1844,3 +1844,88 @@ fn option_as_alt_selects_the_configured_side_and_unmodified_text() {
         }
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn a_keystroke_outside_native_dispatch_uses_the_fallback_source() {
+    assert_eq!(input::current_source(&keystroke("ctrl-a")), Source::Keystroke);
+    assert_eq!(input::current_source(&keystroke("enter")), Source::Keystroke);
+}
+
+#[test]
+fn synthetic_navigation_keys_keep_their_physical_positions_and_space_binds_by_name() {
+    for (name, physical) in [
+        ("delete", "delete"),
+        ("insert", "insert"),
+        ("home", "home"),
+        ("end", "end"),
+        ("pagedown", "page_down"),
+    ] {
+        let stroke = KeyStroke::new(&keystroke(name), &Source::Keystroke, false);
+        assert_eq!(stroke.key.name(), physical, "{name}");
+        assert_eq!(stroke.unshifted, None, "navigation keys do not type a character");
+    }
+    let space = KeyStroke::new(&keystroke("space"), &Source::Keystroke, false);
+    assert_eq!(input::chord(&space).unwrap().key, "space");
+}
+
+#[test]
+fn text_without_an_ime_character_and_native_keys_without_a_position_keep_their_identity() {
+    let key = Keystroke {
+        key: "é".into(),
+        key_char: None,
+        ..Keystroke::default()
+    };
+    let text = KeyStroke::new(&key, &Source::Text, false);
+    assert_eq!(text.text, "é", "committed text can arrive without key_char");
+    assert_eq!(text.key.name(), "unidentified");
+    let source = Source::Native(NativeKey {
+        text: "é".into(),
+        repeat: true,
+        composing: true,
+        ..NativeKey::default()
+    });
+    let repeat = KeyStroke::new(&key, &source, false);
+    let release = KeyStroke::new(&key, &source, true);
+    assert_eq!(
+        repeat.identity, text.identity,
+        "the same key name identifies an unpositioned key"
+    );
+    assert_eq!(
+        release.identity, repeat.identity,
+        "release still identifies the held key"
+    );
+    assert_ne!(
+        repeat.identity,
+        KeyStroke::new(&keystroke("a"), &source, false).identity
+    );
+    assert_eq!(repeat.action, ngterm_core::ghostty_config::binds::KeyAction::Repeat);
+    assert_eq!(release.action, ngterm_core::ghostty_config::binds::KeyAction::Release);
+    assert!(repeat.composing);
+    assert!(!release.composing);
+}
+
+#[test]
+fn bare_modifiers_are_not_chords_and_the_keypad_enter_is_submit() {
+    for code in [37, 50, 64, 133] {
+        let native = Source::Native(NativeKey {
+            keycode: code,
+            ..NativeKey::default()
+        });
+        let stroke = KeyStroke::new(&keystroke("a"), &native, false);
+        assert!(stroke.key.is_modifier());
+        assert_eq!(input::chord(&stroke), None, "a modifier alone has no chord");
+    }
+    let native = Source::Native(NativeKey {
+        keycode: 104,
+        text: "\r".into(),
+        ..NativeKey::default()
+    });
+    let enter = KeyStroke::new(&keystroke("enter"), &native, false);
+    assert_eq!(enter.key.name(), "numpad_enter");
+    assert_eq!(
+        input::status_keystroke(&enter),
+        ngterm_core::model::StatusKeystroke::Submit
+    );
+    assert_eq!(input::chord(&enter).unwrap().key, "return");
+}
