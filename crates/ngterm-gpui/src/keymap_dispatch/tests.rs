@@ -1,5 +1,6 @@
 //! The key monitor's router without a window (the GTK build's `keymap_dispatch` tests, by GPUI keystrokes): chords and
 //! commands consumed, autorepeats of consumed keys, `--repeat` tails, leaders and their timeouts, the menu's chords.
+//! The macOS web view's handoff uses native physical identities; dispatch tests also exercise the real interceptor.
 
 use std::time::{Duration, Instant};
 
@@ -424,10 +425,10 @@ fn press_monitor(text: &str, repeat: bool, now: Instant) -> Press {
     super::ROUTER.with_borrow_mut(|router| router.press(&stroke, now, false))
 }
 
-/// Lets go of `text` as the page does right after dispatching it.
+/// Lets go of the last dispatch as the page does right after dispatching it.
 #[cfg(all(feature = "html", target_os = "macos"))]
-fn release_monitor(text: &str) {
-    super::release_dispatched(&dispatched(text));
+fn release_monitor() {
+    super::release_dispatched();
 }
 
 /// Ends this thread's monitor's window, as time passing would.
@@ -465,7 +466,7 @@ fn a_web_view_keeps_a_bare_modifier() {
 
 #[test]
 #[cfg(all(feature = "html", target_os = "macos"))]
-fn a_web_view_hands_over_the_keymap_commands_and_asking_changes_nothing() {
+fn a_web_view_hands_over_the_keymap_commands_without_advancing_the_matcher() {
     let (keymap, _) = parse_keymap(
         "command \"x\" ctrl+shift+b true\ncommand \"g\" ctrl+a>g true\n",
         &linux_defaults(),
@@ -490,7 +491,7 @@ fn a_dispatched_key_is_released_for_the_monitor() {
         press_monitor("ctrl-shift-t", false, now),
         Press::Fired(Fired::Builtin(_))
     ));
-    release_monitor("ctrl-shift-t");
+    release_monitor();
     let identity = native_identity("ctrl-shift-t");
     assert_ne!(
         identity,
@@ -506,7 +507,7 @@ fn a_dispatched_key_is_released_for_the_monitor() {
         Press::Consumed,
         "the key is still down: its autorepeat does not fire again"
     );
-    release_monitor("ctrl-shift-t");
+    release_monitor();
     assert!(
         super::ROUTER.with_borrow_mut(|router| router.release(identity, now)),
         "a late key-up listener still learns the release was the keymap's"
@@ -521,7 +522,7 @@ fn releasing_a_dispatched_repeat_tail_opens_its_repeat_window() {
     let now = Instant::now();
     assert_eq!(press_monitor("ctrl-a", false, now), Press::Consumed);
     assert!(matches!(press_monitor("n", false, now), Press::Fired(_)));
-    release_monitor("n");
+    release_monitor();
     assert!(
         super::ROUTER.with_borrow(|router| router.deadline.is_some() && router.held_repeat.is_none()),
         "the dispatched release lets go of the tail under the identity it was pressed with, so its window opens"
@@ -530,20 +531,22 @@ fn releasing_a_dispatched_repeat_tail_opens_its_repeat_window() {
         matches!(press_monitor("n", false, now), Press::Fired(_)),
         "the tail fires again inside the window"
     );
-    release_monitor("n");
+    release_monitor();
     assert!(
         matches!(press_monitor("n", true, now), Press::Fired(_)),
         "a held tail's autorepeat fires"
     );
-    release_monitor("n");
+    release_monitor();
     assert!(super::takes(&native_stroke("n", false)), "the window is open");
     lapse_monitor();
     assert!(
         !super::takes(&native_stroke("n", false)),
         "the window lapsed, so the page keeps the next key"
     );
-    let past = Instant::now() + super::REPEAT_TIMEOUT + Duration::from_millis(50);
-    assert_eq!(press_monitor("n", false, past), Press::Passed, "the window lapsed");
+    assert!(
+        !super::takes(&native_stroke("n", true)),
+        "the page keeps that press's repeats too"
+    );
 }
 
 /// Asked before the press reaches the monitor, as the web view does: a held tail stays the keymap's even with its
@@ -558,9 +561,9 @@ fn a_web_view_hands_over_the_autorepeat_of_a_key_the_keymap_took() {
     super::load_keymap(&keymap);
     let now = Instant::now();
     assert_eq!(press_monitor("ctrl-a", false, now), Press::Consumed);
-    release_monitor("ctrl-a");
+    release_monitor();
     assert!(matches!(press_monitor("n", false, now), Press::Fired(_)));
-    release_monitor("n");
+    release_monitor();
     lapse_monitor();
     assert!(
         super::takes(&native_stroke("n", true)),
@@ -568,14 +571,18 @@ fn a_web_view_hands_over_the_autorepeat_of_a_key_the_keymap_took() {
     );
     super::ROUTER.with_borrow_mut(Router::reset);
     assert_eq!(press_monitor("ctrl-a", false, now), Press::Consumed);
-    release_monitor("ctrl-a");
+    release_monitor();
     assert!(matches!(press_monitor("g", false, now), Press::Fired(_)));
-    release_monitor("g");
+    release_monitor();
     assert!(
         super::takes(&native_stroke("g", true)),
         "a held last chord does not type into the page"
     );
     assert!(!super::takes(&native_stroke("g", false)), "a fresh press does");
+    assert!(
+        !super::takes(&native_stroke("g", true)),
+        "and its autorepeat stays there"
+    );
 }
 
 /// A half-typed leader run out: the page keeps the key the leader was waiting for.
@@ -585,26 +592,261 @@ fn a_web_view_keeps_the_chord_of_a_lapsed_leader() {
     let (keymap, _) = parse_keymap("command \"g\" ctrl+a>g true\n", &linux_defaults());
     super::load_keymap(&keymap);
     assert_eq!(press_monitor("ctrl-a", false, Instant::now()), Press::Consumed);
-    release_monitor("ctrl-a");
+    release_monitor();
     assert!(super::takes(&native_stroke("g", false)), "the leader is armed");
     lapse_monitor();
     assert!(!super::takes(&native_stroke("g", false)));
 }
 
-/// A dispatch the monitor passed over lets go of nothing, the key it last handled included.
+/// A fresh press starts new ownership for the physical key (upstream's `handleKeyEvent`), even when its modifiers
+/// changed and only the page sees it. Exercise a web view's dispatched release, a terminal's real release and a lost
+/// release.
 #[test]
 #[cfg(all(feature = "html", target_os = "macos"))]
-fn a_dispatched_release_with_no_press_lets_go_of_nothing() {
+fn a_page_keeps_a_fresh_plain_keys_repeats_after_the_keymap_owned_its_chord() {
+    for dispatched_release in [None, Some(false), Some(true)] {
+        let (keymap, _) = parse_keymap("", &linux_defaults());
+        super::load_keymap(&keymap);
+        let now = Instant::now();
+        assert!(super::takes(&native_stroke("ctrl-shift-t", false)));
+        assert!(matches!(press_monitor("ctrl-shift-t", false, now), Press::Fired(_)));
+        let identity = native_identity("t");
+        assert_eq!(identity, native_identity("ctrl-shift-t"));
+        assert_ne!(identity, stroke("t").identity);
+        match dispatched_release {
+            Some(true) => release_monitor(),
+            Some(false) => assert!(super::ROUTER.with_borrow_mut(|router| router.release(identity, now))),
+            None => {} // a release outside the app was never reported
+        }
+        page_keeps_press("t", now);
+        assert!(super::takes(&native_stroke("ctrl-shift-t", false)));
+        assert!(matches!(press_monitor("ctrl-shift-t", false, now), Press::Fired(_)));
+    }
+}
+
+/// The page callback dispatches only a key the monitor takes, then stands in for its release. A passed key never
+/// reaches `press`, which matters when the page's next event is an autorepeat of that key.
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn page_press(text: &str, repeat: bool, now: Instant) -> Press {
+    if !super::takes(&native_stroke(text, repeat)) {
+        return Press::Passed;
+    }
+    let result = press_monitor(text, repeat, now);
+    release_monitor();
+    result
+}
+
+/// A press the page keeps never reaches the monitor, and its autorepeats, release and next press stay the page's.
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn page_keeps_press(text: &str, now: Instant) {
+    assert_eq!(page_press(text, false, now), Press::Passed);
+    for _ in 0..3 {
+        assert_eq!(page_press(text, true, now), Press::Passed);
+    }
+    assert!(!super::ROUTER.with_borrow_mut(|router| router.release(native_identity(text), now)));
+    assert_eq!(page_press(text, false, now), Press::Passed);
+}
+
+/// Upstream's ownership table, through the page's native identity path: a plain chord fires once per press, while
+/// an unbound key's press, repeats and release all stay with the page. Modifiers changing never changes the identity.
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_pages_plain_chord_and_unbound_key_keep_their_press_ownership() {
     let (keymap, _) = parse_keymap("", &linux_defaults());
     super::load_keymap(&keymap);
-    assert!(matches!(
-        press_monitor("ctrl-shift-t", false, Instant::now()),
-        Press::Fired(_)
-    ));
-    release_monitor("ctrl-shift-t");
-    let identity = native_identity("ctrl-shift-t");
-    super::ROUTER.with_borrow_mut(|router| router.consume(identity));
-    super::ROUTER.with_borrow_mut(|router| router.pressed = None);
-    release_monitor("ctrl-shift-t");
-    assert!(super::ROUTER.with_borrow(|router| router.consumed.contains(&identity)));
+    let now = Instant::now();
+    let fired = Press::Fired(Fired::Builtin(ngterm_core::keymap::BuiltinAction::NewSession));
+    assert_eq!(page_press("ctrl-shift-t", false, now), fired);
+    for repeat in ["ctrl-shift-t", "t"] {
+        assert_eq!(page_press(repeat, true, now), Press::Consumed);
+    }
+    assert!(super::ROUTER.with_borrow_mut(|router| router.release(native_identity("t"), now)));
+    assert_eq!(page_press("ctrl-shift-t", false, now), fired);
+    page_keeps_press("t", now);
+}
+
+/// A leader's held prefix stays consumed without restarting its timer. Its tail fires inside the leader window and
+/// belongs to the page past it; a completed nonrepeat tail's next press belongs to the page too.
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_pages_leader_and_nonrepeat_tail_follow_the_leader_window() {
+    for lapsed in [false, true] {
+        let (keymap, _) = parse_keymap("command \"g\" ctrl+a>g true\n", &linux_defaults());
+        super::load_keymap(&keymap);
+        let now = Instant::now();
+        assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
+        let deadline = super::ROUTER.with_borrow(|router| router.deadline);
+        assert_eq!(page_press("a", true, now), Press::Consumed);
+        assert_eq!(super::ROUTER.with_borrow(|router| router.deadline), deadline);
+        if lapsed {
+            lapse_monitor();
+            assert_eq!(page_press("a", true, Instant::now()), Press::Consumed);
+        }
+        assert!(super::ROUTER.with_borrow_mut(|router| router.release(native_identity("a"), now)));
+        if !lapsed {
+            assert!(matches!(page_press("g", false, now), Press::Fired(Fired::Command(_))));
+            assert_eq!(page_press("g", true, now), Press::Consumed);
+            assert!(super::ROUTER.with_borrow_mut(|router| router.release(native_identity("g"), now)));
+        }
+        page_keeps_press("g", Instant::now());
+        assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
+    }
+}
+
+/// A repeat tail fires while held even beyond the synthetic release's window, and on a fresh press inside the real
+/// release's window. Once that window lapses a fresh press and all its repeats belong to the page.
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_pages_repeat_tail_follows_the_release_window() {
+    let (keymap, _) = parse_keymap("command \"n\" ctrl+a>n --repeat true\n", &linux_defaults());
+    super::load_keymap(&keymap);
+    let now = Instant::now();
+    assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
+    assert!(matches!(page_press("n", false, now), Press::Fired(Fired::Command(_))));
+    assert!(super::ROUTER.with_borrow(|router| router.deadline.is_some()));
+    for delayed in [false, true] {
+        if delayed {
+            lapse_monitor();
+        }
+        assert!(matches!(
+            page_press("n", true, Instant::now()),
+            Press::Fired(Fired::Command(_))
+        ));
+    }
+    assert!(super::ROUTER.with_borrow_mut(|router| router.release(native_identity("n"), now)));
+    assert!(matches!(page_press("n", false, now), Press::Fired(Fired::Command(_))));
+    lapse_monitor();
+    page_keeps_press("n", Instant::now());
+}
+
+#[cfg(all(feature = "html", target_os = "macos"))]
+mod dispatch_tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui_kit::{
+        AppContext as _, Context, FocusHandle, InteractiveElement as _, IntoElement, Render, Styled as _,
+        TestAppContext, Window, div,
+    };
+
+    use super::*;
+
+    struct InputTarget {
+        focus: FocusHandle,
+        seen: Rc<Cell<usize>>,
+    }
+
+    impl Render for InputTarget {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let seen = self.seen.clone();
+            div()
+                .size_full()
+                .key_context("Input")
+                .track_focus(&self.focus)
+                .on_key_down(move |_, _, _| seen.set(seen.get() + 1))
+        }
+    }
+
+    /// A dispatch passed over for a focused field lets go of nothing, including the key the monitor last handled.
+    /// No assignment to `pressed`: only the real interceptor can clear the preceding dispatch's identity.
+    #[gpui_kit::test]
+    fn a_dispatched_release_with_no_press_lets_go_of_nothing(cx: &mut TestAppContext) {
+        let seen = Rc::new(Cell::new(0));
+        let (target, cx) = cx.add_window_view(|_, cx| InputTarget {
+            focus: cx.focus_handle(),
+            seen: seen.clone(),
+        });
+        cx.update(|window, cx| {
+            super::super::init(cx);
+            super::super::register_window(
+                window.window_handle(),
+                super::super::KeyOrigin::Window(uuid::Uuid::new_v4()),
+            );
+            let focus = target.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        });
+        cx.run_until_parked();
+        let (keymap, _) = parse_keymap("", &linux_defaults());
+        super::super::load_keymap(&keymap);
+        assert!(matches!(
+            press_monitor("ctrl-shift-t", false, Instant::now()),
+            Press::Fired(_)
+        ));
+        let identity = native_identity("ctrl-shift-t");
+        cx.update(|window, cx| window.dispatch_keystroke(dispatched("g"), cx));
+        assert_eq!(seen.get(), 1, "the focused field received the dispatch");
+        release_monitor();
+        assert!(super::super::ROUTER.with_borrow(|router| router.consumed.contains(&identity)));
+    }
+
+    /// Ctrl+Tab goes through the window's own keys and `consume`, rather than `Router::press`. The dispatched release
+    /// must still know its identity.
+    #[gpui_kit::test]
+    fn a_dispatched_window_owned_key_is_released(cx: &mut TestAppContext) {
+        use crate::deck::{Deck, DeckEnv, Watermarks};
+        use crate::terminal::TerminalConfig;
+
+        cx.update(gpui_kit::init);
+        let state_dir = tempfile::tempdir().unwrap();
+        let env = Rc::new(DeckEnv::new(
+            crate::pane::PaneContext {
+                socket: state_dir.path().join("control.sock").to_string_lossy().into_owned(),
+                program_version: "1.2.3".to_owned(),
+            },
+            Rc::new(|_| Box::new(|_| Err(ngterm_term::PaneError::Closed))),
+            TerminalConfig::default(),
+            crate::state::detached_poster(),
+            Watermarks {
+                state_dir: state_dir.path().to_path_buf(),
+                config_with: Rc::new(|_| TerminalConfig::default()),
+            },
+        ));
+        let (_, cx) = cx.add_window_view(move |root, cx| {
+            let id = uuid::Uuid::new_v4();
+            let poster = env.poster.clone();
+            let deck = cx.new(|_| Deck::new(id, env));
+            crate::window::WindowView::new(id, deck, poster, 0, root, cx)
+        });
+        let keystroke = dispatched("ctrl-tab");
+        let identity = KeyStroke::new(&keystroke, &crate::terminal::input::current_source(&keystroke), false).identity;
+        cx.update(|window, cx| {
+            super::super::init(cx);
+            window.dispatch_keystroke(keystroke, cx);
+        });
+        assert!(super::super::ROUTER.with_borrow(|router| router.consumed.contains(&identity)));
+        release_monitor();
+        assert!(!super::super::ROUTER.with_borrow(|router| router.consumed.contains(&identity)));
+        assert!(super::super::ROUTER.with_borrow(|router| router.released.contains(&identity)));
+    }
+}
+
+/// A repeat belongs to the page if its press did, even if a leader armed meanwhile would take a fresh tail.
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_page_keeps_an_unowned_repeat_even_when_the_matcher_would_take_its_chord() {
+    let (keymap, _) = parse_keymap("command \"g\" ctrl+a>g true\n", &linux_defaults());
+    super::load_keymap(&keymap);
+    let now = Instant::now();
+    assert_eq!(page_press("g", false, now), Press::Passed);
+    assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
+    assert_eq!(page_press("g", true, now), Press::Passed);
+    assert!(matches!(page_press("g", false, now), Press::Fired(Fired::Command(_))));
+}
+
+/// Autorepeating a held prefix after the tail's release must not suspend the tail's timeout (upstream's
+/// `testHeldRepeatTailAutorepeatsOnlyWhileTheWindowIsOpen` also checks that other consumed repeats leave the window alone).
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_pages_held_prefix_does_not_suspend_a_released_tails_window() {
+    let (keymap, _) = parse_keymap("command \"n\" ctrl+a>n --repeat true\n", &linux_defaults());
+    super::load_keymap(&keymap);
+    let now = Instant::now();
+    assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
+    assert!(matches!(page_press("n", false, now), Press::Fired(_)));
+    let deadline = super::ROUTER.with_borrow(|router| router.deadline);
+    assert!(deadline.is_some());
+    assert_eq!(page_press("ctrl-a", true, now), Press::Consumed);
+    assert_eq!(super::ROUTER.with_borrow(|router| router.deadline), deadline);
+    lapse_monitor();
+    assert_eq!(page_press("n", false, Instant::now()), Press::Passed);
 }

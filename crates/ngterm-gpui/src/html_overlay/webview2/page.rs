@@ -806,7 +806,7 @@ impl Page {
         };
         let _ = window.update(cx, |_, window, cx| {
             window.dispatch_keystroke(keystroke.clone(), cx);
-            crate::keymap_dispatch::release_dispatched(keystroke);
+            crate::keymap_dispatch::release_dispatched();
         });
     }
 

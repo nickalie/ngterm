@@ -18,10 +18,11 @@
 //!
 //! A chord is the key's physical identity resolved per layout (`terminal::input::chord`). A consumed key's next press
 //! reads as its autorepeat until its release, which reaches [`key_up`] from the window's (and the terminal's) key-up
-//! listener, or is stood in for right after the press when a web view holds the key (`release_dispatched`), where a
-//! later autorepeat still reads as one; [`keyboard_left`] forgets them when no ngterm window holds the keyboard any
-//! more. The leader and repeat
-//! timeouts are deadlines checked at the next key, which is when they matter. Matched chords fire as main-loop tasks
+//! listener, or is stood in for right after the press when a web view holds the key (`release_dispatched`). A macOS
+//! web view preserves the physical identity and autorepeat flag; a Windows dispatch has only the keystroke, so each
+//! autorepeat there reads as a fresh press. [`keyboard_left`] forgets ownership when no ngterm window holds the
+//! keyboard any more. The leader and repeat timeouts are deadlines checked at the next key, which is when they
+//! matter. Matched chords fire as main-loop tasks
 //! (`AppState::keymap_fired`); a custom command carries the terminal typed in, read now (its selection included), as
 //! the keyboard may move before the task runs.
 
@@ -169,21 +170,26 @@ pub fn menu_action(stroke: &KeyStroke) -> Option<BuiltinAction> {
     ROUTER.with_borrow(|router| router.menu.get(&chord).copied())
 }
 
-/// Whether the keymap or the window's own keys would take `stroke` now, changing nothing: a key pressed in an HTML
-/// page's native web view (macOS and Windows, `html_overlay::webview2::keys`) goes to the window only then, every other key
-/// staying the page's. The window's own keys there are Ctrl+Tab's switcher.
+/// Whether the keymap or the window's own keys take `stroke` now: a key pressed in an HTML page's native web view
+/// (macOS and Windows, `html_overlay::webview2::keys`) goes to the window only then. The matcher does not advance, but
+/// a fresh press forgets that physical key's old ownership, even when the page keeps it and the monitor never hears
+/// it. The window's own keys there are Ctrl+Tab's switcher.
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 #[must_use]
 pub fn takes(stroke: &KeyStroke) -> bool {
-    let Some(chord) = input::chord(stroke) else {
-        return false;
-    };
-    if chord.key == "tab" && chord.mods.contains(ngterm_core::keymap::Modifiers::CONTROL) {
-        return true;
-    }
-    ROUTER.with_borrow(|router| {
-        // an autorepeat of a key the keymap took stays the keymap's, whatever the matcher would make of it by now
-        if stroke.action == KeyAction::Repeat && router.owns(stroke.identity) {
+    ROUTER.with_borrow_mut(|router| {
+        // macOS reports autorepeats: ownership follows the press, regardless of what the matcher would take now
+        if stroke.action == KeyAction::Repeat {
+            return router.owns(stroke.identity);
+        }
+        if stroke.action == KeyAction::Press {
+            router.released.remove(&stroke.identity);
+            router.consumed.remove(&stroke.identity);
+        }
+        let Some(chord) = input::chord(stroke) else {
+            return false;
+        };
+        if chord.key == "tab" && chord.mods.contains(ngterm_core::keymap::Modifiers::CONTROL) {
             return true;
         }
         // the key was pressed in the web view, so the page holds the keyboard
@@ -202,9 +208,10 @@ fn page_keeps(action: BuiltinAction) -> bool {
 /// Lets go of a press dispatched for an HTML page's native web view (`takes`), whose release the window never sees.
 /// Called right after the press's synchronous dispatch, so the key is the one the monitor just handled, under the
 /// identity it holds it by, however the platform named it. Standing in for the real release, this opens a `--repeat`
-/// window; an autorepeat arriving later says the key is still down ([`Router::resume_held`]).
+/// window; on macOS an autorepeat arriving later says the key is still down ([`Router::resume_held`]). Windows
+/// dispatches only the keystroke, so its autorepeats currently read as fresh presses.
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
-pub fn release_dispatched(_keystroke: &gpui_kit::Keystroke) {
+pub fn release_dispatched() {
     ROUTER.with_borrow_mut(|router| {
         if let Some(identity) = router.pressed.take() {
             router.release(identity, Instant::now());
@@ -352,12 +359,14 @@ impl Router {
     }
 
     /// Forgets `stroke`'s key's release, as it is pressed again. An autorepeat says the key never went up, so that
-    /// release was the one a web view's dispatch reports at once ([`release_dispatched`]): the press's ownership
-    /// stands, and a repeat window, which counts from the real release (upstream's), has not started.
+    /// release was the one a macOS web view's dispatch reports at once ([`release_dispatched`]): the press's ownership
+    /// stands. Only the live repeat tail suspends its window, which counts from the real release (upstream's).
     fn resume_held(&mut self, stroke: &KeyStroke) {
         if self.released.remove(&stroke.identity) && stroke.action == KeyAction::Repeat {
             self.consumed.insert(stroke.identity);
-            if self.engine.as_ref().is_some_and(CustomCommandEngine::is_repeating) {
+            if self.engine.as_ref().is_some_and(|engine| {
+                engine.is_repeating() && input::chord(stroke).is_some_and(|chord| engine.is_repeat_tail(&chord))
+            }) {
                 self.deadline = None;
             }
         }
