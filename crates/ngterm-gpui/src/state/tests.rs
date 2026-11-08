@@ -1646,7 +1646,9 @@ fn a_presentation_handoff_streams_hello_and_snapshot_then_releases_on_disconnect
         let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
         kinds.push(frame["kind"].as_str().unwrap().to_owned());
     }
-    peer.shutdown(std::net::Shutdown::Both).unwrap();
+    // the viewer hangs up by closing its end: a Windows pipe client's shutdown ends its server's read only once its
+    // last handle closes
+    drop((reader, peer));
     worker.join().unwrap();
     for (_, task) in main_loop.take() {
         task(&mut state);
@@ -1916,7 +1918,8 @@ fn a_job_handoff_reports_the_helpers_exit_code_to_the_overlay_result() {
     let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
     peer.write_all(b"{\"kind\":\"started\"}\n{\"kind\":\"exited\",\"code\":7}\n")
         .unwrap();
-    peer.shutdown(std::net::Shutdown::Write).unwrap();
+    // the helper hangs up by closing its end: a Windows pipe has no half-close
+    drop(peer);
     worker.join().unwrap();
     for (_, task) in main_loop.take() {
         task(&mut state);
@@ -1985,7 +1988,9 @@ fn a_page_channel_runs_bridge_requests_and_returns_their_wire_reply() {
     std::io::BufReader::new(peer.try_clone().unwrap())
         .read_line(&mut line)
         .unwrap();
-    peer.shutdown(std::net::Shutdown::Both).unwrap();
+    // the helper hangs up by closing its end: a Windows pipe client's shutdown ends its server's read only once its
+    // last handle closes
+    drop(peer);
     worker.join().unwrap();
     for (_, task) in main_loop.take() {
         task(&mut state);
