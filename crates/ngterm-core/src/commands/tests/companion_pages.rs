@@ -15,6 +15,7 @@ use super::page_serve::FakeChannel;
 use super::{Fixture, answered_id, args, failure, wire};
 use crate::app_actions::{ActionEffect, ActionOrigin, FrontendAction};
 use crate::commands::companion_page::refusal;
+#[cfg(not(windows))]
 use crate::html::HtmlSource;
 use crate::keymap::BuiltinAction;
 use crate::model::{NewSession, SessionContent};
@@ -297,6 +298,26 @@ fn a_rooted_page_path_keeps_its_spelling_whatever_the_callers_drive() {
             grant_root: Some(docs.root.clone()),
         }
     );
+}
+
+/// Off Windows a backslash-rooted spelling is relative: the caller's drive must not make it an absolute file path.
+#[test]
+#[cfg(not(windows))]
+fn a_backslash_rooted_page_path_is_relative_whatever_the_callers_drive() {
+    let (mut fixture, _) = fixture_with_host(0);
+    let parent = fixture.sessions[0];
+    for drive in [None, Some("D:")] {
+        let response = companion_page(&mut fixture, parent, |a| {
+            a.html = Some(r"\docs\index.html".into());
+            a.caller_drive = drive.map(str::to_owned);
+        });
+        assert_eq!(
+            response,
+            failure("session.overlay.open: html file must be an absolute path"),
+            "{drive:?}"
+        );
+    }
+    assert_eq!(fixture.order(fixture.workspace), [parent], "no row was added");
 }
 
 /// A valid page for a target that does not resolve meets the target's refusal.
