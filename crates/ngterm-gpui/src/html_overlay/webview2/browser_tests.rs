@@ -2,6 +2,7 @@
 
 use super::*;
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -20,10 +21,23 @@ const CHILD: &str = "html_overlay::webview2::browser::tests::association_child";
 const HELPER: &str = "html_overlay::webview2::browser::tests::browser_process";
 const CASE: &str = "W_GPUI_HTTPS_CASE";
 const HANDSHAKE: &str = "W_GPUI_BROWSER_HANDSHAKE";
+/// An https command that names a program started through the seam only.
+const READER: &str = r#""C:\browser test\reader.exe" --single-argument "%L""#;
+/// A file type only the test hive knows, so nothing but the shell's open can reach its handler.
+const PAGE_EXTENSION: &str = ".ngterm-test-page";
+const PAGE_TYPE: &str = "ngterm.test.page";
 
 #[test]
 fn https_associations_launch_the_browser_command_or_fall_back() {
-    for scenario in ["command", "missing", "blank", "long", "launch"] {
+    for scenario in [
+        "command",
+        "missing",
+        "blank",
+        "long",
+        "launch",
+        "shell-after-failed-spawn",
+        "shell-without-command",
+    ] {
         let directory = tempfile::tempdir().unwrap();
         let mut child = Command::new(std::env::current_exe().unwrap());
         for (key, _) in std::env::vars_os() {
@@ -154,18 +168,34 @@ impl Drop for Association {
     }
 }
 
+/// Held while a handler may start: its console takes the foreground, which the global hotkey's layout test holds. Shared
+/// with it across processes, released at the end.
+fn foreground_lock() -> std::fs::File {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(std::env::temp_dir().join("ngterm-test-foreground.lock"))
+        .unwrap();
+    file.lock().unwrap();
+    file
+}
+
 #[test]
 #[ignore = "run by https_associations_launch_the_browser_command_or_fall_back"]
 fn association_child() {
     let Ok(scenario) = std::env::var(CASE) else { return };
+    let _foreground = foreground_lock();
     let directory = PathBuf::from(std::env::var_os(HANDSHAKE).unwrap());
     let missing = directory.join("no-such-program.exe").to_string_lossy().into_owned();
-    if scenario == "launch" {
-        launch_and_reap(&directory);
-        return;
+    match scenario.as_str() {
+        "launch" => return launch_and_reap(&directory),
+        "shell-after-failed-spawn" => return the_shell_takes_over(&directory, Some(READER)),
+        "shell-without-command" => return the_shell_takes_over(&directory, None),
+        _ => {}
     }
     let template = match scenario.as_str() {
-        "command" => Some(r#""C:\browser test\reader.exe" --single-argument "%L""#.to_owned()),
+        "command" => Some(READER.to_owned()),
         "blank" => Some("   ".to_owned()),
         "long" => Some(format!(r#""C:\{}.exe" "%1""#, "x".repeat(2200))),
         "missing" => None,
@@ -222,16 +252,25 @@ fn wait_for_file(path: &Path) -> String {
     }
 }
 
-fn launch_and_reap(directory: &Path) {
-    let executable = std::env::current_exe().unwrap();
-    let template = format!(
+/// The command line that starts the helper as a handler; the address it is given arrives as its last argument.
+fn helper_command() -> String {
+    format!(
         r#""{}" --exact {HELPER} --ignored --nocapture --test-threads=1"#,
-        executable.display()
-    );
+        std::env::current_exe().unwrap().display()
+    )
+}
+
+fn launch_and_reap(directory: &Path) {
+    let template = helper_command();
     let _association = Association::new(Some(&template));
     assert_eq!(https_command().as_deref(), Some(template.as_str()));
     let uri = directory.join("no-such-program.exe").to_string_lossy().into_owned();
     assert!(open(&uri));
+    assert_eq!(reap_helper(directory), uri);
+}
+
+/// Waits for the handler the hand-off started, lets it end and returns the address it was given.
+fn reap_helper(directory: &Path) -> String {
     let pid: u32 = wait_for_file(&directory.join("pid")).parse().unwrap();
     // SAFETY: the child wrote its own pid and waits for release; waiting/querying/cleanup rights only.
     let handle = unsafe {
@@ -250,14 +289,46 @@ fn launch_and_reap(directory: &Path) {
     // SAFETY: the process handle and a live exit-code output.
     assert_ne!(unsafe { GetExitCodeProcess(process.0, &raw mut code) }, 0);
     assert_eq!(code, 0, "the associated program ran and exited successfully");
+    std::fs::read_to_string(directory.join("address")).unwrap()
+}
+
+/// `spawn` starts nothing and only the hive's file type names the helper, so a true result and a running helper can
+/// only be the shell's own open of the address.
+fn the_shell_takes_over(directory: &Path, https: Option<&str>) {
+    // the shell loads its COM classes on its first open, and the hive hides their registration: as in Association::new
+    let missing = directory.join("no-such-page").to_string_lossy().into_owned();
+    assert!(!shell_open(&missing));
+    let association = Association::new(https);
+    let extension = create_key(association.classes, PAGE_EXTENSION);
+    string_value(extension, "", PAGE_TYPE);
+    // SAFETY: the key just opened, no longer used.
+    unsafe { RegCloseKey(extension) };
+    let command = create_key(association.classes, &format!(r"{PAGE_TYPE}\shell\open\command"));
+    string_value(command, "", &format!(r#"{} "%1""#, helper_command()));
+    // SAFETY: the key just opened, no longer used.
+    unsafe { RegCloseKey(command) };
+    let page = directory.join(format!("page{PAGE_EXTENSION}"));
+    std::fs::write(&page, "page").unwrap();
+    let address = page.to_string_lossy().into_owned();
+    let spawns = Cell::new(0);
+    assert!(
+        open_with(&address, |_, _| {
+            spawns.set(spawns.get() + 1);
+            Err(std::io::Error::from_raw_os_error(2))
+        }),
+        "the shell opens what the browser command could not"
+    );
+    assert_eq!(spawns.get(), usize::from(https.is_some()));
+    assert_eq!(reap_helper(directory), address);
 }
 
 #[test]
-#[ignore = "launched as the test https handler by launch_and_reap"]
+#[ignore = "launched as the test handler; reap_helper ends it"]
 fn browser_process() {
     let Some(directory) = std::env::var_os(HANDSHAKE).map(PathBuf::from) else {
         return;
     };
+    std::fs::write(directory.join("address"), std::env::args().next_back().unwrap()).unwrap();
     std::fs::write(directory.join("pid"), std::process::id().to_string()).unwrap();
     assert_eq!(wait_for_file(&directory.join("release")), "done");
 }
