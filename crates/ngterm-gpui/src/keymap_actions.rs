@@ -275,25 +275,27 @@ mod tests {
 
     #[gpui_kit::test]
     fn window_dialogs_cancel_or_commit_through_the_model(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(gpui_kit::init);
-        let (_, cx) = cx.add_window_view(|_, _| Blank);
+        let cx = crate::modal::tests::host(cx);
         let (mut state, window) = model();
         let queue = std::sync::Arc::new(Posted::default());
         let poster: Poster = std::sync::Arc::downgrade(&queue) as Poster;
         let handle = cx.update(|root, _| root.window_handle());
         keymap_dispatch::register_window(handle, KeyOrigin::Window(window));
-        for (answer, expected) in [("Cancel", "window 1"), ("OK", "renamed")] {
+        // the field holds the current name, all of it selected: what the user types replaces it
+        for (answer, expected) in [("Cancel", "window 1"), ("OK", "typed")] {
             cx.cx.update(|cx| {
                 perform(
                     &poster,
                     FrontendAction::RenameWindow {
                         window,
-                        name: "renamed".into(),
+                        name: "window 1".into(),
                     },
                     false,
                     cx,
                 );
             });
+            cx.run_until_parked();
+            cx.simulate_keystrokes("t y p e d");
             cx.update(|root, cx| assert!(crate::modal::answer_front_alert(root, answer, cx)));
             queue.drain(&mut state);
             assert_eq!(state.core.library().windows()[0].name, expected);
@@ -305,7 +307,7 @@ mod tests {
                     &poster,
                     FrontendAction::DeleteWindow {
                         window,
-                        name: "renamed".into(),
+                        name: "typed".into(),
                         sessions: 1,
                     },
                     true,
@@ -363,13 +365,21 @@ mod tests {
         cx.cx
             .update(|cx| perform(&poster, FrontendAction::ToggleFullscreen(window), false, cx));
         assert!(!cx.update(|root, _| root.is_fullscreen()));
+        let before = crate::status_sound::alerts();
         cx.cx
             .update(|cx| perform(&poster, FrontendAction::AlertBell(window), false, cx));
+        assert_eq!(crate::status_sound::alerts(), before + 1, "the bell sounded once");
         keymap_dispatch::unregister_window(handle);
     }
 
     #[gpui_kit::test]
-    fn actions_for_a_window_that_has_gone_do_not_post_model_changes(cx: &mut gpui_kit::TestAppContext) {
+    fn actions_for_a_window_that_has_gone_leave_the_open_windows_and_the_model_alone(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _| Blank);
+        let open = cx.update(|root, _| root.window_handle());
+        keymap_dispatch::register_window(open, KeyOrigin::Window(Uuid::new_v4()));
         let window = Uuid::new_v4();
         let id = Uuid::new_v4();
         let queue = std::sync::Arc::new(Posted::default());
@@ -392,12 +402,19 @@ mod tests {
             FrontendAction::DeleteWorkspace { window, workspace: id },
             FrontendAction::OpenDirectory { window, workspace: id },
         ];
-        cx.update(|cx| {
-            for action in actions {
-                perform(&poster, action, false, cx);
-            }
-        });
+        let bells = crate::status_sound::alerts();
+        for action in actions {
+            cx.cx.update(|cx| perform(&poster, action, false, cx));
+            // nothing lands on the window that is open instead
+            cx.update(|root, cx| {
+                assert!(!root.is_fullscreen());
+                assert!(!crate::modal::alert_open(open, cx));
+            });
+        }
+        assert_eq!(crate::status_sound::alerts(), bells, "no window rang");
+        // a confirmation that had no window to show over is not taken as given
         assert!(queue.0.lock().unwrap().is_empty());
+        keymap_dispatch::unregister_window(open);
     }
 
     #[gpui_kit::test]
@@ -409,6 +426,10 @@ mod tests {
         let store = state.core.library().store(window).unwrap();
         let session = store.sessions().next().unwrap().id();
         let workspace = store.workspaces()[0].id();
+        let headings = [
+            format!("Close “{}”?", store.session(session).unwrap().display_name()),
+            format!("Delete “{}”?", store.workspaces()[0].name),
+        ];
         let queue = std::sync::Arc::new(Posted::default());
         let poster: Poster = std::sync::Arc::downgrade(&queue) as Poster;
         let dir = tempfile::tempdir().unwrap();
@@ -437,12 +458,12 @@ mod tests {
             FrontendAction::ConfirmCloseSession { window, session },
             FrontendAction::DeleteWorkspace { window, workspace },
         ];
-        for action in actions {
+        for (action, heading) in actions.into_iter().zip(headings) {
             cx.cx.update(|cx| perform(&keys, action, false, cx));
             cx.update(|root, cx| {
-                if crate::modal::alert_open(root.window_handle(), cx) {
-                    assert!(crate::modal::answer_front_alert(root, "Cancel", cx));
-                }
+                let alert = crate::modal::front_alert(root.window_handle(), cx).expect("the sidebar's confirmation");
+                assert_eq!(alert.read(cx).spec().heading, heading);
+                assert!(crate::modal::answer_front_alert(root, "Cancel", cx));
             });
         }
         for action in [
