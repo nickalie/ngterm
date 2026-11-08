@@ -717,8 +717,9 @@ mod tests {
         let first = stream.follower.backlog(10).unwrap();
         let (_sender, ended) = mpsc::channel();
         let result = stream.run(first, &ended);
-        server.join().unwrap();
+        // the stream's own error first: a stream that failed leaves the server waiting for a recheck that never comes
         assert!(result.is_ok(), "{result:?}");
+        server.join().unwrap();
     }
 
     #[cfg(unix)]
