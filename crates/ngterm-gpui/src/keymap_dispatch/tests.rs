@@ -286,15 +286,47 @@ fn a_web_view_hands_the_find_chord_to_the_window() {
     assert!(super::takes(&stroke("ctrl-shift-f")));
 }
 
-/// Presses `text` on this thread's monitor, as a key the window saw.
-#[cfg(all(feature = "html", target_os = "macos"))]
-fn press_monitor(text: &str, now: Instant) -> Press {
-    super::ROUTER.with_borrow_mut(|router| router.press(&stroke(text), now, false))
-}
-
 #[cfg(all(feature = "html", target_os = "macos"))]
 fn dispatched(text: &str) -> Keystroke {
     Keystroke::parse(text).unwrap().with_simulated_ime()
+}
+
+/// The platform's record of `text`, a letter chord: what `NSApp.currentEvent` holds while a key a web view handed over
+/// is dispatched, so the press carries the physical key's identity rather than its name's.
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn native_source(text: &str, repeat: bool) -> Source {
+    let keystroke = dispatched(text);
+    let letter = keystroke.key.chars().next().unwrap();
+    let code = format!("Key{}", letter.to_ascii_uppercase());
+    Source::Native(NativeKey {
+        keycode: crate::terminal::input::xkb_keycode(&code).unwrap(),
+        modifiers: keystroke.modifiers,
+        unshifted: Some(letter),
+        ascii_layout: true,
+        text: letter.to_string(),
+        repeat,
+        ..NativeKey::default()
+    })
+}
+
+/// The identity the monitor holds `text` under, a key dispatched for a web view.
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn native_identity(text: &str) -> u32 {
+    KeyStroke::new(&dispatched(text), &native_source(text, false), false).identity
+}
+
+/// Presses `text` on this thread's monitor, as the dispatch of a key a web view handed over does.
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn press_monitor(text: &str, repeat: bool, now: Instant) -> Press {
+    let stroke = KeyStroke::new(&dispatched(text), &native_source(text, repeat), false);
+    super::ROUTER.with_borrow_mut(|router| router.press(&stroke, now, false))
+}
+
+/// Lets go of `text` as the page does right after dispatching it, with the platform's record still the press's.
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn release_monitor(text: &str) {
+    super::ROUTER.with_borrow_mut(|router| router.dispatched_source = Some(native_source(text, false)));
+    super::release_dispatched(&dispatched(text));
 }
 
 #[test]
@@ -310,8 +342,11 @@ fn a_web_view_keeps_every_key_until_a_keymap_is_loaded_except_the_switcher() {
 #[cfg(all(feature = "html", target_os = "macos"))]
 fn a_web_view_keeps_a_bare_modifier() {
     let keystroke = dispatched("shift");
+    // a base the chord could resolve from, so only the key being a modifier keeps it from being one
     let native = NativeKey {
         keycode: 50,
+        unshifted: Some('a'),
+        ascii_layout: true,
         ..NativeKey::default()
     };
     let shift = KeyStroke::new(&keystroke, &Source::Native(native), false);
@@ -335,7 +370,7 @@ fn a_web_view_hands_over_the_keymap_commands_and_asking_changes_nothing() {
         "a leader's first chord is the keymap's"
     );
     assert!(!super::takes(&stroke("g")), "asking about the leader did not arm it");
-    assert_eq!(press_monitor("g", Instant::now()), Press::Passed);
+    assert_eq!(press_monitor("g", false, Instant::now()), Press::Passed);
 }
 
 #[test]
@@ -345,22 +380,23 @@ fn a_dispatched_key_is_released_for_the_monitor() {
     super::load_keymap(&keymap);
     let now = Instant::now();
     assert!(matches!(
-        press_monitor("ctrl-shift-t", now),
+        press_monitor("ctrl-shift-t", false, now),
         Press::Fired(Fired::Builtin(_))
     ));
     assert_eq!(
-        press_monitor("ctrl-shift-t", now),
+        press_monitor("ctrl-shift-t", true, now),
         Press::Consumed,
         "an autorepeat before the release"
     );
-    super::release_dispatched(&dispatched("ctrl-shift-t"));
+    release_monitor("ctrl-shift-t");
+    let identity = native_identity("ctrl-shift-t");
     assert!(
-        super::release_simulated("ctrl-shift-t"),
-        "a late key-up listener still learns the release was the keymap's"
+        !super::ROUTER.with_borrow(|router| router.consumed.contains(&identity)),
+        "the dispatched release lets go of the key the press held"
     );
     assert!(
-        matches!(press_monitor("ctrl-shift-t", now), Press::Fired(Fired::Builtin(_))),
-        "the next press is a new one, not an autorepeat"
+        super::ROUTER.with_borrow_mut(|router| router.release(identity, now)),
+        "a late key-up listener still learns the release was the keymap's"
     );
 }
 
@@ -370,14 +406,14 @@ fn releasing_a_dispatched_repeat_tail_opens_its_repeat_window() {
     let (keymap, _) = parse_keymap("command \"n\" ctrl+a>n --repeat true\n", &linux_defaults());
     super::load_keymap(&keymap);
     let now = Instant::now();
-    assert_eq!(press_monitor("ctrl-a", now), Press::Consumed);
-    assert!(matches!(press_monitor("n", now), Press::Fired(_)));
-    super::release_dispatched(&dispatched("n"));
+    assert_eq!(press_monitor("ctrl-a", false, now), Press::Consumed);
+    assert!(matches!(press_monitor("n", false, now), Press::Fired(_)));
+    release_monitor("n");
     assert!(
-        matches!(press_monitor("n", now), Press::Fired(_)),
+        matches!(press_monitor("n", false, now), Press::Fired(_)),
         "the tail fires again inside the window"
     );
-    super::release_dispatched(&dispatched("n"));
+    release_monitor("n");
     let past = Instant::now() + super::REPEAT_TIMEOUT + Duration::from_millis(50);
-    assert_eq!(press_monitor("n", past), Press::Passed, "the window lapsed");
+    assert_eq!(press_monitor("n", false, past), Press::Passed, "the window lapsed");
 }

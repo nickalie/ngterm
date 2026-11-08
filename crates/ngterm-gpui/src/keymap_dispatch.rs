@@ -79,6 +79,9 @@ struct Router {
     /// What fired, in order, for the unit tests.
     #[cfg(test)]
     fired: Vec<Fired>,
+    /// What [`release_dispatched`] reads as the event being dispatched, standing in for the platform's (tests).
+    #[cfg(all(test, feature = "html", any(windows, target_os = "macos")))]
+    dispatched_source: Option<input::Source>,
 }
 
 thread_local! {
@@ -195,13 +198,24 @@ fn page_keeps(action: BuiltinAction) -> bool {
 }
 
 /// Lets go of `keystroke`, a press dispatched for an HTML page's native web view (`takes`), whose release the window
-/// never sees.
+/// never sees. Called right after the press's synchronous dispatch, so it reads the source the press did and holds
+/// the same identity: macOS's current event names the physical key, where a Windows dispatch has only the keystroke.
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 pub fn release_dispatched(keystroke: &gpui_kit::Keystroke) {
-    let stroke = KeyStroke::new(keystroke, &input::Source::Keystroke, true);
+    let stroke = KeyStroke::new(keystroke, &dispatched_source(keystroke), true);
     ROUTER.with_borrow_mut(|router| {
         router.release(stroke.identity, Instant::now());
     });
+}
+
+/// The source of the key event being dispatched for a web view.
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn dispatched_source(keystroke: &gpui_kit::Keystroke) -> input::Source {
+    #[cfg(test)]
+    if let Some(source) = ROUTER.with_borrow_mut(|router| router.dispatched_source.take()) {
+        return source;
+    }
+    input::current_source(keystroke)
 }
 
 /// What fired since the last call (tests).
