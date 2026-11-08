@@ -119,11 +119,7 @@ fn replace_dangling_link(
 fn put_back(aside: tempfile::TempDir, moved: &Path, path: &Path) -> io::Result<()> {
     // the entry must outlive every failure below, so the directory is no longer removed on drop.
     let aside = aside.keep();
-    let restored = tempfile::TempPath::try_from_path(moved).and_then(|mut entry| {
-        entry.disable_cleanup(true);
-        entry.persist_noclobber(path).map_err(|error| error.error)
-    });
-    match restored {
+    match move_noclobber(moved, path) {
         Ok(()) => fs::remove_dir(&aside),
         Err(error) => Err(io::Error::new(
             error.kind(),
@@ -134,4 +130,37 @@ fn put_back(aside: tempfile::TempDir, moved: &Path, path: &Path) -> io::Result<(
             ),
         )),
     }
+}
+
+/// Renames `from` to `to` unless an entry is at `to`, through tempfile's no-clobber persist (`renameat2` with
+/// `RENAME_NOREPLACE`, `renamex_np` with `RENAME_EXCL`, or a hard link and an unlink).
+#[cfg(not(windows))]
+fn move_noclobber(from: &Path, to: &Path) -> io::Result<()> {
+    let mut entry = tempfile::TempPath::try_from_path(from)?;
+    // the entry is the user's, so a failed move must leave it where it is.
+    entry.disable_cleanup(true);
+    entry.persist_noclobber(to).map_err(|error| error.error)
+}
+
+/// Renames `from` to `to` unless an entry is at `to`: `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`. tempfile's
+/// persist would reset the entry's attributes to normal first and mark it temporary when the move fails, which suits
+/// its own staged file but not the user's entry.
+#[cfg(windows)]
+fn move_noclobber(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    let wide = |path: &Path| {
+        let mut units: Vec<u16> = path.as_os_str().encode_wide().collect();
+        if units.contains(&0) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "a path with a NUL in it"));
+        }
+        units.push(0);
+        Ok(units)
+    };
+    let (from, to) = (wide(from)?, wide(to)?);
+    // SAFETY: both are NUL-terminated UTF-16 paths that outlive the call.
+    if unsafe { windows_sys::Win32::Storage::FileSystem::MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
