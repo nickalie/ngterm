@@ -13,19 +13,26 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 /// Opens `uri` in the default web browser; false when there is none.
 #[must_use]
 pub fn open(uri: &str) -> bool {
+    open_with(uri, |program, args| {
+        Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+    })
+}
+
+/// The browser hand-off, with the process launch supplied by the caller.
+fn open_with(uri: &str, spawn: impl FnOnce(&str, &[String]) -> std::io::Result<()>) -> bool {
     if let Some(argv) = https_command()
         .map(|template| command_line(&template, uri))
         .and_then(|line| split(&line))
         && let Some((program, args)) = argv.split_first()
     {
-        let spawned = Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-        match spawned {
-            Ok(_) => return true,
+        match spawn(program, args) {
+            Ok(()) => return true,
             Err(err) => tracing::warn!(%err, program, "the web browser did not start"),
         }
     }
@@ -120,25 +127,5 @@ fn wide(text: &str) -> Vec<u16> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_address_takes_the_placeholder_or_goes_last() {
-        let edge = r#""C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --single-argument %1"#;
-        let line = command_line(edge, "file:///C:/site/page.html");
-        assert!(line.ends_with("--single-argument file:///C:/site/page.html"), "{line}");
-        assert_eq!(
-            split(&line).unwrap(),
-            [
-                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-                "--single-argument",
-                "file:///C:/site/page.html"
-            ]
-        );
-        assert_eq!(
-            command_line(r"C:\b\browser.exe", "https://example.com/"),
-            r#"C:\b\browser.exe "https://example.com/""#
-        );
-    }
-}
+#[path = "browser_tests.rs"]
+mod tests;

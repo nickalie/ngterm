@@ -230,3 +230,7 @@ unsafe extern "system" fn foreground_changed(
     // SAFETY: a message with no pointers to this thread's own queue.
     unsafe { PostThreadMessageW(thread, REFRESH, 0, 0) };
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;
