@@ -146,55 +146,8 @@ case "$(host_os)" in
     install -m755 "$NATIVE_ROOT/packaging/linux/AppRun" "$root/AppRun"
     # linuxdeploy relocates copies into usr/bin and usr/lib. Fix every original
     # nested ELF as well, including WebKit helpers and the GStreamer scanner.
-    python3 - "$root" "$NATIVE_ROOT/packaging/linux/runtime-libraries.txt" <<'PY'
-import os
-import pathlib
-import re
-import subprocess
-import sys
-
-root = pathlib.Path(sys.argv[1])
-library = root / "usr/lib"
-allowed = {line for line in pathlib.Path(sys.argv[2]).read_text().splitlines() if line and not line.startswith("#")}
-allowed.update({"libc.so.6", "libm.so.6", "libmvec.so.1", "libresolv.so.2", "libpthread.so.0",
-                "libdl.so.2", "librt.so.1", "libutil.so.1", "libanl.so.1"})
-files = []
-for folder in (root / "usr/bin", library, root / "usr/libexec"):
-    for path in folder.rglob("*"):
-        if not path.is_file() or path.is_symlink():
-            continue
-        with path.open("rb") as source:
-            if source.read(4) != b"\x7fELF":
-                continue
-        relative = os.path.relpath(library, path.parent)
-        rpath = "$ORIGIN" if relative == "." else f"$ORIGIN:$ORIGIN/{relative}"
-        subprocess.run(["patchelf", "--set-rpath", rpath, str(path)], check=True)
-        files.append(path)
-# A runner has development libraries installed: reject undeclared host fallbacks
-# as well as missing libraries, rather than accepting anything ldd can find there.
-environment = os.environ.copy()
-environment.pop("LD_LIBRARY_PATH", None)
-dependencies = {}
-system_libraries = set()
-for path in files:
-    result = subprocess.run(["ldd", str(path)], env=environment, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, check=False)
-    if result.returncode or "not found" in result.stdout:
-        raise SystemExit(f"unresolved dependencies: {path}\n{result.stdout}")
-    dependencies[path] = re.findall(r"\s+(\S+)\s+=>\s+(/\S+)", result.stdout)
-    system_libraries.update(resolved for name, resolved in dependencies[path]
-                            if name in allowed and not pathlib.Path(resolved).resolve().is_relative_to(root))
-# Host packages bring their own dependency closure (for example Wayland's libffi).
-# Their internal dependencies may resolve on the host even when a copy is bundled.
-for library_path in sorted(system_libraries):
-    result = subprocess.run(["ldd", library_path], env=environment, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, check=True)
-    allowed.update(name for name, _ in re.findall(r"\s+(\S+)\s+=>\s+(/\S+)", result.stdout))
-for path, needed in dependencies.items():
-    for name, resolved in needed:
-        if not pathlib.Path(resolved).resolve().is_relative_to(root) and name not in allowed:
-            raise SystemExit(f"undeclared host library: {name} ({path})")
-PY
+    python3 "$NATIVE_ROOT/scripts/web-engine-closure.py" check \
+      "$root" "$root/usr/lib" "$NATIVE_ROOT/packaging/linux/runtime-libraries.txt"
     "$root/usr/bin/ngterm" --build-identity
     "$root/usr/bin/ngtermctl" --help >/dev/null
     if [[ -n "${NGTERM_WPE_SMOKE_BINARY:-}" ]]; then

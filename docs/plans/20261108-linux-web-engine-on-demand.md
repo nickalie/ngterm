@@ -225,7 +225,12 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
   `share/doc/` (licenses), `MANIFEST` (key, arch, WPE version). Every ELF in it gets an `$ORIGIN` RUNPATH into the
   runtime's `lib/`.
 - **Key**: the WPE build key, the architecture, the plugin allowlist, `package-web-engine.sh`,
-  `web-engine-closure.py`, and the versions of the copied Ubuntu packages.
+  `web-engine-closure.py`, the host-library allowlist, and the versions of the copied Ubuntu packages.
+  Task 4's interface: `NGTERM_RELEASE_WPE=/absolute/prefix scripts/package-web-engine.sh --print-key`;
+  replace `--print-key` with an output directory to build the archive. The prefix must match the current WPE build
+  key. `HOST-LIBRARIES` in the archive lists its external SONAMEs for Task 7's hard dependencies;
+  `packaging/linux/runtime-libraries.txt` remains the shared host-library policy. `PACKAGES` records the copied
+  Ubuntu packages and versions, and `share/doc/` retains their copyright notices and WPE's licenses.
 - **Hosting**: a GitHub release `web-engine-<key>` per key, created **as a prerelease with `--latest=false`**, so
   `releases/latest` (the update check) keeps naming the app release. The release workflow looks for this arch's asset
   by `--print-key` before building the runtime and uploads it only when missing; the engine release is published
@@ -332,16 +337,16 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
   `conformance/selftests/test_package_web_engine.py`
 - Modify: `scripts/package-release.sh` (shares the host-library check)
 
-- [ ] build the runtime from the release WPE prefix, the allowlisted plugins (Task 1), the GIO modules and the plugin
+- [x] build the runtime from the release WPE prefix, the allowlisted plugins (Task 1), the GIO modules and the plugin
       scanner; collect their library closure once, set `$ORIGIN` RUNPATHs into the runtime's `lib/`
-- [ ] run the undeclared-host-library check on the runtime and write the host libraries it needs to a list that Task 7
+- [x] run the undeclared-host-library check on the runtime and write the host libraries it needs to a list that Task 7
       keeps as package dependencies
-- [ ] write `MANIFEST` and the licenses; compute the key from Technical Details; `--print-key` prints it without
+- [x] write `MANIFEST` and the licenses; compute the key from Technical Details; `--print-key` prints it without
       building
-- [ ] pack as `tar.zst` (level 19, `--long=27`); print size and SHA-256
-- [ ] write tests: an allowlisted plugin and its dependency land in the runtime, a plugin off the list does not, no
+- [x] pack as `tar.zst` (level 19, `--long=27`); print size and SHA-256
+- [x] write tests: an allowlisted plugin and its dependency land in the runtime, a plugin off the list does not, no
       library appears twice, the key changes with the allowlist, the scripts and the arch
-- [ ] run `python -m pytest conformance/selftests/test_package_web_engine.py` and `scripts/lint.sh` - must pass
+- [x] run `python -m pytest conformance/selftests/test_package_web_engine.py` and `scripts/lint.sh` - must pass
       before Task 5
 
 ### Task 5: Download, verify and cache the runtime

@@ -1,4 +1,4 @@
-# Host libraries excluded by linuxdeploy, declared in nfpm.yaml.
+# Host libraries kept external by linuxdeploy and the web engine packager, declared in nfpm.yaml.
 # glibc's own loader, libc, libm, libresolv and compatibility DSOs are checked separately.
 libEGL.so.1
 libGL.so.1

@@ -20,4 +20,4 @@ sudo apt-get install -y --no-install-recommends \
   libhyphen-dev libenchant-2-dev flite1-dev libmanette-0.2-dev \
   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-  gstreamer1.0-libav glib-networking libvulkan1 mesa-vulkan-drivers
+  gstreamer1.0-libav gstreamer1.0-gl gstreamer1.0-alsa glib-networking libvulkan1 mesa-vulkan-drivers
