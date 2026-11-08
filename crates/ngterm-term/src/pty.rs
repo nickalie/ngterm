@@ -141,4 +141,83 @@ mod tests {
         assert_eq!(PaneError::from(WriteError::Backpressure), PaneError::Backpressure);
         assert_eq!(PaneError::from(WriteError::Closed), PaneError::Closed);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_tty_reports_neither_a_foreground_job_nor_password_input() {
+        let tty = Tty {
+            master: std::fs::File::open("/dev/null").unwrap().into(),
+        };
+        assert_eq!(tty.foreground_pid(), None);
+        assert!(!tty.password_input());
+    }
+
+    /// Descriptor limits belong to the whole process, so the failure runs in its own copy of the test binary.
+    #[cfg(unix)]
+    #[test]
+    fn keeping_a_tty_without_spare_descriptors_reports_the_os_error() {
+        const CHILD: &str = "T_SMALL_TTY_NOFILE";
+        if std::env::var_os(CHILD).is_some() {
+            check_descriptor_exhaustion();
+            println!("tty descriptor exhaustion checked");
+            return;
+        }
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "pty::tests::keeping_a_tty_without_spare_descriptors_reports_the_os_error",
+                "--nocapture",
+            ])
+            .env(CHILD, "1");
+        for (key, _) in std::env::vars_os().filter(|(key, _)| key.to_string_lossy().starts_with("NGTERM_")) {
+            command.env_remove(key);
+        }
+        let output = command.output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("tty descriptor exhaustion checked"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    fn check_descriptor_exhaustion() {
+        let mut spawned = ngterm_pty::spawn(
+            &PaneCommand::new("/bin/sh").arg("-c").arg("read line"),
+            ngterm_pty::Size::cells(4, 20),
+        )
+        .unwrap();
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: `getrlimit` fills a valid writable `rlimit`.
+        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) }, 0);
+        let lowered = libc::rlimit {
+            rlim_cur: limit.rlim_cur.min(32),
+            rlim_max: limit.rlim_max,
+        };
+        // SAFETY: only this isolated process's soft limit changes, and the hard limit stays restorable.
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const lowered) }, 0);
+        let mut descriptors = Vec::new();
+        let exhausted = loop {
+            match std::fs::File::open("/dev/null") {
+                Ok(file) => descriptors.push(file),
+                Err(err) => break err,
+            }
+        };
+        let result = Tty::of(&spawned.master, &spawned.child);
+        // SAFETY: restore the limit read above before cleanup or assertions can open more descriptors.
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) }, 0);
+        drop(descriptors);
+        spawned.child.killer().kill_tree().unwrap();
+        spawned.child.wait().unwrap();
+        assert_eq!(exhausted.raw_os_error(), Some(libc::EMFILE));
+        assert_eq!(
+            result.unwrap_err(),
+            PaneError::Pty(std::io::Error::from_raw_os_error(libc::EMFILE).to_string())
+        );
+    }
 }
