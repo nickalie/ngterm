@@ -832,19 +832,23 @@ mod tests {
         actor.handle.resize(Size::cells(30, 100));
     }
 
-    /// A size past what the console takes (beyond `i16`) is refused, with `ResizePseudoConsole`'s `E_INVALIDARG`.
+    /// A size beyond `i16` is refused with the requested dimensions, and the console keeps its last size.
     #[test]
     fn a_resize_the_console_refuses_is_reported() {
         let actor = start(console_master(), |_| {});
-        let err = actor
-            .handle
-            .try_resize(Size::cells(40_000, 40_000))
-            .expect_err("the console took a size past i16");
-        let shown = err.to_string();
-        assert!(
-            shown.starts_with("failed to resize console to ") && shown.ends_with("HRESULT: -2147024809"),
-            "{shown}"
-        );
+        for (rows, cols) in [(24, 32_768), (32_768, 80), (40_000, 40_000), (u16::MAX, u16::MAX)] {
+            let err = actor
+                .handle
+                .try_resize(Size::cells(rows, cols))
+                .expect_err("the console took a size past i16");
+            assert_eq!(
+                err.to_string(),
+                format!("pseudoconsole size {cols}x{rows} exceeds the maximum 32767x32767")
+            );
+            let console = lock(&actor.handle.inner().conpty);
+            let size = console.as_ref().expect("the console").get_size().expect("the size");
+            assert_eq!((size.rows, size.cols), (24, 80));
+        }
         actor
             .handle
             .try_resize(Size::cells(30, 100))
@@ -951,6 +955,8 @@ mod tests {
             Err(WriteError::Closed),
             "still quiesced"
         );
+        // Keep the original console owner for cleanup: a release otherwise forgets it for the next owner.
+        let _console = lock(&actor.handle.inner().conpty).take().expect("the console");
         let released = actor.handle.release_after_commit().expect("the release");
         assert_eq!(released.pending_output, b"", "the delivered read is pending again");
         assert_eq!(actor.stopped(), ExitReason::Released);
@@ -977,6 +983,8 @@ mod tests {
         quiesce_mid_read(&actor.handle);
         pipes.feed(b"pending");
         wait_for_held(&actor.handle, 7);
+        // Keep the original console owner for cleanup: a release otherwise forgets it for the next owner.
+        let _console = lock(&actor.handle.inner().conpty).take().expect("the console");
         let released = actor.handle.release_after_commit().expect("the release");
         assert_eq!(released.pending_output, b"pending");
         assert_eq!(actor.stopped(), ExitReason::Released);
