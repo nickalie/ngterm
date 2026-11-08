@@ -77,11 +77,13 @@ vocabulary) is in [docs/rust-build.md](docs/rust-build.md).
   `streams` names it too, from a test that drives the stream after the ok.
 - `upstream_bug("name", reason=...)`: the test asserts the correct behavior where the reference has a named bug (see
   Reference discipline). On `swift-macos` the test is an expected failure, not strict (`xfailed` when the bug shows,
-  `xpassed` when it does not). The Rust build gets no allowance and must pass. The reason cites upstream's code or
-  its own backlog note.
+  `xpassed` when it does not). Only assertions in the test body are excused: other exceptions and setup or teardown
+  failures remain failures. The Rust build gets no allowance and must pass. The reason cites upstream's code or
+  backlog, or the evidence under Reference observations when the cause is unknown.
 
-The run summary prints pass, fail, both skip kinds and reruns, and parity: passed over passed, failed and
-not-yet-at-level, so an unsupported capability is a recorded divergence, not a gap.
+The run summary prints pass (including xpassed), fail, both skip kinds and reruns, plus xfailed when nonzero, and
+parity: passed over passed, failed, xfailed and not-yet-at-level. Expected failures remain gaps in parity even when
+the reference gate excuses them; an unsupported capability is a recorded divergence, not a gap.
 
 - `--must-pass CAPABILITY` fails the run unless every collected test requiring it ran and passed, and at least one
   did (reference-macos uses it for `live-sessions`). A test skipped as unsupported for lacking only other
@@ -143,8 +145,39 @@ The reference is upstream's macOS release: a test is accepted only when it is gr
 Red on the reference means the test is wrong, unless the reference is: upstream is a reference, not the source of
 truth. Where upstream's behavior is a bug (lost output, a race, a doubled message, a pane that never starts), the
 test asserts the correct behavior and the Rust build must show it. The reference run then gets an `upstream_bug`
-allowance that names the bug and cites its cause. A test is never weakened to match an upstream bug, and a test that
-merely races the reference is fixed in the test, not allowed.
+allowance that names the bug and cites its cause. When the cause is unknown, its reason must say so and cite a
+Reference observation below recording the failed assertion, run and evidence; a related bug is not evidence of the
+same cause. A test is never weakened to match an upstream bug, and a test that merely races the reference is fixed
+in the test, not allowed. An unexplained stall remains an observation, not an established upstream mechanism.
+
+### Reference observations
+
+These symptoms were reproduced against v0.41.1; their causes remain unknown. The allowances keep the assertions on
+both builds and excuse only the reference. They are separate from upstream's
+`docs/backlog/fast-live-command-loses-output-in-host-handoff.md`, whose command ends before the pane attaches, and
+`docs/backlog/session-host-attach-to-ended-command-misses-its-window-on-ci.md`, whose guard client is slow to exit.
+
+- `live-restarted-shell-reads-no-input`: in reference-macos runs
+  [42515259661](https://github.com/nickalie/ngterm/actions/runs/42515259661) and
+  [42524091626](https://github.com/nickalie/ngterm/actions/runs/42524091626), the command-parent half of
+  `test_a_parent_whose_shell_exits_restarts_it[live]` timed out after Ctrl+C ended `sleep 600`: the new shell echoed
+  typed marker commands for 10 s without a prompt or marker output. The marker helper retries input while waiting,
+  so this is not a single keystroke sent before the pane exists. That half now has its own test,
+  `test_a_command_parent_whose_command_exits_restarts_as_a_shell`; the plain-shell respawn has no allowance.
+- `live-restarted-command-output-missing`: in the eight-iteration diagnostic run
+  [42520472215](https://github.com/nickalie/ngterm/actions/runs/42520472215), with allowances disabled,
+  `test_restart_command_interrupted_by_ctrl_c_leaves_a_prompt` missed its first-line marker from the whole text in
+  one iteration while the command's `sleep 600` still ran. A separate observation was a marker in scrollback above
+  an empty visible screen. The test requires the marker on the visible screen before sending Ctrl+C.
+- `live-wait-command-loses-output`: in that same diagnostic run, the `--wait` tests failed three of eight
+  (`test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wait`) and two of eight
+  (`test_a_wait_command_keeps_scrollback_after_attached_exit`) iterations after their readiness checks read output.
+  The former's traces retained only `Process exited...` in the whole text at exit; the latter releases its command
+  only after the pane has read the marker, so its failure cannot be a command ending before attach. Output was also
+  seen in scrollback above an empty visible screen. Both readiness checks require the visible marker; the latter
+  still asserts the entire scrollback after exit.
+
+### Recorded divergences
 
 Where the Rust build legitimately differs from the reference on observable state or effects (a platform divergence,
 such as Wayland giving a client no window position), the divergence becomes a capability with a reason, and the test

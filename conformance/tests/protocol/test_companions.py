@@ -222,18 +222,16 @@ def _interrupts(ctl, sid):
 # 10 s, the pane only echoing the lines typed into it.
 RESTARTED_SHELL_STALLS = pytest.mark.upstream_bug(
     "live-restarted-shell-reads-no-input",
-    reason="a Live pane's restarted shell can read no input; upstream records a session-host attach stall of unknown "
-    "cause in docs/backlog/session-host-attach-to-ended-command-misses-its-window-on-ci.md",
+    reason="a Live command parent's restarted shell only echoes typed lines without a prompt or output for 10 s; "
+    "cause unknown, observed in reference-macos 42515259661 and 42524091626 "
+    "(conformance/README.md > Reference observations)",
 )
 
 
-@pytest.mark.parametrize(
-    "shells", ["plain", pytest.param("live", marks=[LIVE, RESTARTED_SHELL_STALLS])], indirect=True
-)
+@pytest.mark.parametrize("shells", ["plain", pytest.param("live", marks=LIVE)], indirect=True)
 @pytest.mark.covers("session.companion.new")
 def test_a_parent_whose_shell_exits_restarts_it(shells):
-    """A parent whose last pane exits while it has companions restarts a plain login shell in place, keeping its
-    pane; a command parent restarts as a shell, not its command (#840)."""
+    """A parent whose last pane exits while it has companions restarts a plain login shell in place, keeping its pane."""
     ctl = shells
     wid, (parent,) = _workspace(ctl)
     _companion(ctl, parent)
@@ -244,7 +242,17 @@ def test_a_parent_whose_shell_exits_restarts_it(shells):
     _prints(ctl, parent)
     assert parent in session_ids(ctl.tree(), wid)
     assert _left_pane_id(ctl, parent) == pane
+    assert_ok(ctl.request("workspace.delete", wid))
 
+
+@pytest.mark.parametrize(
+    "shells", ["plain", pytest.param("live", marks=[LIVE, RESTARTED_SHELL_STALLS])], indirect=True
+)
+@pytest.mark.covers("session.companion.new")
+def test_a_command_parent_whose_command_exits_restarts_as_a_shell(shells):
+    """A command parent restarts as a shell, not its command (#840)."""
+    ctl = shells
+    wid = assert_ok(ctl.request("workspace.new"))["id"]
     command = assert_ok(ctl.request("session.new", workspace=wid, cwd="/tmp", command="sleep 600", noSelect=True))["id"]
     _companion(ctl, command)
     ctl.wait_tree(lambda tree: (find_session(tree, command).get("foreground") or [])[:1] == ["sleep"])

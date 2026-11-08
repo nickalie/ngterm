@@ -327,7 +327,8 @@ class MustPass:
             self.passed.add(report.nodeid)
         elif report.skipped and self._divergence(report):
             self.excused.add(report.nodeid)
-        elif report.skipped and str(getattr(report, "wasxfail", "")).startswith(f"{UPSTREAM_BUG}:"):
+        elif (report.when == "call" and report.skipped
+              and str(getattr(report, "wasxfail", "")).startswith(f"{UPSTREAM_BUG}:")):
             self.excused.add(report.nodeid)
         elif not report.passed:
             self.spoiled.add(report.nodeid)
@@ -350,7 +351,10 @@ class MustPass:
             for capability in sorted(self.capabilities - self.uncollected)
             if not any(capability in self.requires_of[nodeid] for nodeid in self.required if nodeid in passed)
         ]
-        self.problems += [nodeid for nodeid in self.required if nodeid not in passed and nodeid not in self.excused]
+        self.problems += [
+            nodeid for nodeid in self.required
+            if nodeid not in passed and (nodeid not in self.excused or nodeid in self.spoiled)
+        ]
         if self.problems and session.exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
@@ -462,7 +466,7 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
     for item in items:
         check_markers(item)
         if options.impl == REFERENCE_IMPL and (allowance := upstream_bug_reason(item)) is not None:
-            item.add_marker(pytest.mark.xfail(reason=allowance, strict=False))
+            item.add_marker(pytest.mark.xfail(reason=allowance, strict=False, raises=AssertionError))
     # trylast: -k/-m deselection has already run, so only tests that will execute demand --impl.
     exercised = frozenset(item.nodeid for item in items if _uses_impl(item))
     if exercised:
@@ -705,7 +709,8 @@ def summary_line(stats: Mapping[str, list[Any]], impl: str | None, exercised: fr
         return [report for report in stats.get(key, []) if report.nodeid in exercised]
 
     failed = {report.nodeid for key in ("failed", "error") for report in reports(key)}
-    passed = {report.nodeid for report in reports("passed")} - failed
+    passed = {report.nodeid for key in ("passed", "xpassed") for report in reports(key)} - failed
+    xfailed = {report.nodeid for report in reports("xfailed")} - failed - passed
     skips = {UNSUPPORTED: 0, NOT_YET_AT_LEVEL: 0, "other": 0}
     for report in reports("skipped"):
         skips[_skip_category(report)] += 1
@@ -713,10 +718,11 @@ def summary_line(stats: Mapping[str, list[Any]], impl: str | None, exercised: fr
         f"{len(passed)} pass",
         f"{len(failed)} fail",
         *(f"{count} skip({category})" for category, count in skips.items()),
+        *([f"{len(xfailed)} xfailed"] if xfailed else []),
         f"{len(reports('rerun'))} reruns",
     ]
     # Parity is judged on the tests the build owes: an unsupported capability is a recorded divergence, not a gap.
-    owed = len(passed) + len(failed) + skips[NOT_YET_AT_LEVEL]
+    owed = len(passed) + len(failed) + len(xfailed) + skips[NOT_YET_AT_LEVEL]
     counts.append(f"parity {100 * len(passed) / owed:.1f}%" if owed else "parity n/a")
     return f"{impl}: " + ", ".join(counts)
 
@@ -1203,10 +1209,16 @@ def pytest_runtest_protocol(item, nextitem):
         del item.stash[_TRACE_FAILED]
 
 
-@pytest.hookimpl(hookwrapper=True, trylast=True)
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
+    # Outside pytest's xfail wrapper: even an assertion in fixture setup or teardown is a harness error, not the
+    # named bug in the test body. Restore it before the trace and the outcome consumers decide whether it failed.
+    if (report.when != "call" and report.skipped
+            and str(getattr(report, "wasxfail", "")).startswith(f"{UPSTREAM_BUG}:")):
+        report.outcome = "failed"
+        del report.wasxfail
     record = item.stash.get(_TRACE_KEY, None)
     if record is not None and report.when == "setup":
         from agterm_conformance.impls.base import Instance

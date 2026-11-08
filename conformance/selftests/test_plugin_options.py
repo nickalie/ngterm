@@ -357,6 +357,52 @@ def test_must_pass_excuses_only_an_upstream_bug_allowance(pytester: pytest.Pytes
     result.stdout.no_fnmatch_line("*test_bug_shows*")
 
 
+@pytest.mark.parametrize("must_pass", [False, True])
+@pytest.mark.parametrize(
+    ("phase", "exception", "outcomes"),
+    [
+        ("setup", "AssertionError", {"passed": 1, "errors": 1}),
+        ("setup", "RuntimeError", {"passed": 1, "errors": 1}),
+        ("call", "KeyError", {"passed": 1, "failed": 1}),
+        ("teardown", "AssertionError", {"passed": 1, "xfailed": 1, "errors": 1}),
+        ("teardown", "RuntimeError", {"passed": 1, "xfailed": 1, "errors": 1}),
+    ],
+)
+def test_an_upstream_bug_does_not_excuse_harness_errors(
+    pytester: pytest.Pytester, bin_path: Path, must_pass: bool, phase: str, exception: str, outcomes: dict[str, int]
+) -> None:
+    pytester.makepyfile(
+        f"""
+        import pytest
+
+        @pytest.fixture
+        def resource():
+            if {phase!r} == "setup":
+                raise {exception}("broken setup")
+            yield
+            if {phase!r} == "teardown":
+                raise {exception}("broken teardown")
+
+        @pytest.mark.requires("live-sessions")
+        @pytest.mark.upstream_bug("lost-output", reason="upstream loses it")
+        def test_bug(resource, impl_options):
+            if {phase!r} == "call":
+                raise {exception}("broken call")
+            assert False
+
+        @pytest.mark.requires("live-sessions")
+        def test_healthy(impl_options):
+            pass
+        """
+    )
+    args = ["--must-pass", "live-sessions"] if must_pass else []
+    result = pytester.runpytest("--impl", "swift-macos", "--bin", str(bin_path), *args)
+    result.assert_outcomes(**outcomes)
+    assert result.ret == pytest.ExitCode.TESTS_FAILED
+    if must_pass:
+        result.stdout.fnmatch_lines(["*--must-pass live-sessions: not passed*", "*test_bug*"])
+
+
 @pytest.mark.parametrize(
     ("args", "error"),
     [

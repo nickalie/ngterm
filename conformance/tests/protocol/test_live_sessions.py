@@ -45,13 +45,18 @@ LIVE_IN_ANY_SHELL = pytest.mark.requires(
 PAGES_SURVIVE = pytest.mark.requires("pages-survive", reason="upstream ends a page with its presenter")
 ATTRIBUTIONS = ("supervisor", "app", "orphaned", "unknown")
 PRESENTATION_VERSION = 1
-# The reference's pane can lose what a Live command printed: a `--wait` pane's text, seen while the command ran, is gone
-# from the whole scrollback at exit, and a restarted command's first line can never show. The tests assert the
-# documented behavior (#773, #840, #859) and hold the Rust build to it.
-LOSES_OUTPUT_IN_HANDOFF = pytest.mark.upstream_bug(
-    "live-command-output-lost-in-host-handoff",
-    reason="a Live pane can lose its command's output around the session host's handoff to the pane's client; "
-    "upstream records the fast-command case in docs/backlog/fast-live-command-loses-output-in-host-handoff.md",
+# These observed failures have no established cause (README > Reference observations). In particular, a command
+# still running, or one released only after attach, cannot have ended in upstream's documented host-handoff gap.
+RESTART_OUTPUT_MISSING = pytest.mark.upstream_bug(
+    "live-restarted-command-output-missing",
+    reason="a restarted Live command's first line can be absent for 10 s while its sleep 600 still runs; "
+    "cause unknown, observed in reference-macos 42520472215 (conformance/README.md > Reference observations)",
+)
+WAIT_OUTPUT_LOST = pytest.mark.upstream_bug(
+    "live-wait-command-loses-output",
+    reason="a Live --wait pane can leave its output above an empty visible screen or lose it from the whole "
+    "scrollback at exit even after attach; cause unknown, observed in reference-macos 42520472215 "
+    "(conformance/README.md > Reference observations)",
 )
 # The line a `--wait` pane holds on once its command ended (Ghostty's `wait-after-command`).
 HELD_PROMPT = r"Process exited\. Press any key to close the terminal\."
@@ -437,7 +442,7 @@ def _ctrl_c_leaves_a_prompt(live, sid, daemon):
 
 
 @LIVE
-@LOSES_OUTPUT_IN_HANDOFF
+@RESTART_OUTPUT_MISSING
 @pytest.mark.covers("session.restart")
 def test_restart_command_interrupted_by_ctrl_c_leaves_a_prompt(live):
     sid = _live_session(live)
@@ -447,10 +452,9 @@ def test_restart_command_interrupted_by_ctrl_c_leaves_a_prompt(live):
     assert_ok(live.request("session.restart", sid, paneID=_pane_id(live, sid), command=line))
     # The reply comes once the daemon runs the new shell, before the pane's own client has attached to it: until the
     # marker shows, the pane's terminal is not yet the client's raw one, and a Ctrl+C there ends the client and the
-    # pane with it (upstream's session host hands a daemon it created over to the pane's client afterwards). The whole
-    # text: on the reference the marker has been seen in the scrollback above an empty screen.
+    # pane with it (upstream's session host hands a daemon it created over to the pane's client afterwards).
     # test_ctrl_c_right_after_a_restart_reaches_its_command holds the reply itself to the attach.
-    live.wait_text(sid, rf"(?m)^{marker}$", all=True)
+    live.wait_text(sid, rf"(?m)^{marker}$")
     _ctrl_c_leaves_a_prompt(live, sid, daemon)
 
 
@@ -474,7 +478,7 @@ def test_ctrl_c_right_after_a_restart_reaches_its_command(live):
 @LIVE
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("session.new")
-@LOSES_OUTPUT_IN_HANDOFF
+@WAIT_OUTPUT_LOST
 def test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wait(live):
     """A Live `--command` session closes when its command exits, as outside Live, and `--wait` holds its final output
     after the command and its daemon have ended (#840). This replaced #773's Ctrl+C-leaves-a-prompt case for
@@ -484,8 +488,7 @@ def test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wai
 
     holding = assert_ok(live.request("session.new", command="echo held-output; sleep 1", wait=True))["id"]
     live.wait_mounted(holding, "left")
-    # the whole text: attaching can leave what the command printed in the scrollback above an empty screen
-    live.wait_text(holding, r"(?m)^held-output$", all=True)
+    live.wait_text(holding, r"(?m)^held-output$")
 
     def ended(response):
         row = _rows(live, response, holding).get("left", {})
@@ -503,7 +506,7 @@ def test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wai
 @LIVE
 @pytest.mark.since("0.40.0")
 @pytest.mark.covers("session.new", "session.text", "field:result.text")
-@LOSES_OUTPUT_IN_HANDOFF
+@WAIT_OUTPUT_LOST
 def test_a_wait_command_keeps_scrollback_after_attached_exit(live, tmp_path):
     """An attached Live client keeps both scrollback and the final screen when its command exits (#859)."""
     release = tmp_path / "release-scrollback"
@@ -516,9 +519,8 @@ def test_a_wait_command_keeps_scrollback_after_attached_exit(live, tmp_path):
     sid = assert_ok(live.request("session.new", command=f"sh -c {shlex.quote(script)}", wait=True))["id"]
     try:
         live.wait_mounted(sid, "left")
-        # Seeing the marker through session.text proves the pane's client has attached before the exit payload runs;
-        # the whole text, as attaching can leave it in the scrollback above an empty screen.
-        live.wait_text(sid, r"(?m)^pane-attached-marker$", all=True)
+        # Seeing the marker on the visible screen proves the pane's client has attached before the exit payload runs.
+        live.wait_text(sid, r"(?m)^pane-attached-marker$")
         release.touch()
         live.wait_text(sid, HELD_PROMPT)
         text = assert_ok(live.request("session.text", sid, all=True))["text"]
