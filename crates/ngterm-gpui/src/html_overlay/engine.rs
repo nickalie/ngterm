@@ -153,3 +153,7 @@ impl Web for Engine {
         self.0.shutdown();
     }
 }
+
+#[cfg(test)]
+#[path = "engine_tests.rs"]
+mod tests;

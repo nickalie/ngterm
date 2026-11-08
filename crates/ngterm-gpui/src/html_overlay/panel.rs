@@ -508,4 +508,57 @@ mod tests {
         assert_eq!(colors.palette.len(), 16);
         assert_eq!(colors.palette[3], "#010203");
     }
+    #[cfg(target_os = "linux")]
+    #[gpui_kit::test]
+    fn strip_actions_reload_hide_copy_and_close_the_model_page(cx: &mut gpui_kit::TestAppContext) {
+        use crate::html_overlay::registry::tests::{Model, url_overlay};
+        let source = url_overlay();
+        let mut model = Model::new(&source);
+        let poster = model.poster();
+        cx.update(|cx| act(source.id, StripItem::Reload, &poster, cx));
+        model.drain();
+        assert_eq!(model.overlay().reload_revision, 1);
+        assert_eq!(model.overlay().reload_target, HtmlReloadTarget::Current);
+        cx.update(|cx| act(source.id, StripItem::Hide, &poster, cx));
+        model.drain();
+        let session = model
+            .state
+            .core
+            .library()
+            .store(model.window)
+            .unwrap()
+            .session(model.session)
+            .unwrap();
+        assert!(session.overlay_hidden(None));
+        cx.update(|cx| act(source.id, StripItem::Close, &poster, cx));
+        model.drain();
+        assert!(model.state.core.html_overlay_slot(source.id).is_none());
+        // late strip callbacks have no page to act on
+        for item in [
+            StripItem::Reload,
+            StripItem::Hide,
+            StripItem::Close,
+            StripItem::Identity,
+        ] {
+            cx.update(|cx| act(source.id, item, &poster, cx));
+        }
+        model.drain();
+        assert!(model.state.core.html_overlay_slot(source.id).is_none());
+    }
+
+    #[test]
+    fn incomplete_hex_channels_and_unknown_terminal_colors_use_fallbacks() {
+        for invalid in ["#", "#ff", "#ffff", "#ffffzz", "#é0000"] {
+            assert_eq!(rgb(invalid), None);
+        }
+        let colors = PanelColors::resolve(&terminal(Some("unknown"), Some("unknown"), Vec::new()), None);
+        assert!(colors.dark);
+        let background: gpui_kit::Rgba = colors.background().into();
+        assert_eq!(
+            (background.r, background.g, background.b, background.a),
+            (0., 0., 0., 1.)
+        );
+        let strip: gpui_kit::Rgba = colors.strip().into();
+        assert!((strip.r - 0.06).abs() < 0.001);
+    }
 }
