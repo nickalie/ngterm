@@ -118,10 +118,13 @@ fn focused_cursor_shapes_paint_a_bar_and_an_underline(cx: &mut TestAppContext) {
     assert!(bar[0].bounds.size.width.0 < bar[0].bounds.size.height.0);
     f.configure("cursor-color = #00ff00\ncursor-style = underline\n");
     assert!(f.perform("reset"));
-    f.cx.run_until_parked();
-    let underline = colored_quads(&mut f, 0x0000_ff00);
-    assert_eq!(underline.len(), 1);
-    assert!(underline[0].bounds.size.width.0 > underline[0].bounds.size.height.0);
+    // the reset's repaint comes from the pump, which parking alone doesn't promise has run
+    f.settle(|f| {
+        colored_quads(f, 0x0000_ff00)
+            .first()
+            .is_some_and(|quad| quad.bounds.size.width.0 > quad.bounds.size.height.0)
+    });
+    assert_eq!(colored_quads(&mut f, 0x0000_ff00).len(), 1);
 }
 
 #[test]

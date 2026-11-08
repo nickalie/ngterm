@@ -525,6 +525,7 @@ fn remote_image_paste_reports_upload_failure_and_readonly_does_not_upload(cx: &m
     let shared = f.view.read_with(f.cx, |view, _| Rc::clone(view.shared()));
     shared.set_readonly(true);
     f.type_keys("ctrl-v");
+    run_queued(&f.terminal, f.cx);
     assert!(!f.alert_open());
     shared.set_readonly(false);
     f.type_keys("ctrl-v");
@@ -709,7 +710,7 @@ fn drags_and_double_and_triple_clicks_select_and_copy_to_primary(cx: &mut TestAp
 fn a_double_click_selects_a_whole_url_only_while_urls_are_links(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nsee https://example.com/p\\r\\n'; exec sleep 30";
     let mut f = fixture(cx, script, config("link-url = false\n"));
-    f.wait_painted("example.com");
+    f.wait_painted("example.com/p");
     // `link-url = false`: the word under the pointer, as Ghostty's double click finds no link
     f.click(14, 1, Modifiers::default());
     f.click(14, 1, Modifiers::default());
@@ -1677,10 +1678,10 @@ fn a_program_tracking_every_motion_hears_none_through_an_overlay(cx: &mut TestAp
     cx.simulate_mouse_move(Fixture::at(5, 1), None, Modifiers::default());
     cx.run_until_parked();
     cx.simulate_mouse_move(Fixture::at(30, 10), None, Modifiers::default());
-    let painted = wait_view(&view, "^[[M", cx);
+    // the uncovered cell's motion, whole: the report can arrive in more than one read
+    let painted = wait_view(&view, "^[[MC?+", cx);
     // the pty keeps the order: a report of the covered move would show before the uncovered one's
     assert_eq!(painted.matches("^[[M").count(), 1, "{painted}");
-    assert!(painted.contains("^[[MC?+"), "the uncovered cell's motion:\n{painted}");
 }
 
 #[gpui_kit::test]

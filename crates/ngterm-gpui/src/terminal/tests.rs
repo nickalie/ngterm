@@ -1328,7 +1328,8 @@ fn a_realized_surface_types_and_reads_back(cx: &mut TestAppContext) {
     // keystrokes, not a paste: the line ending is a Return the tty turns into a newline
     assert!(surface.type_text("hello\n"));
     wait_painted(&view, cx, "hello\nhello");
-    assert_eq!(surface.cursor_column(), Some(0));
+    // the newline after the second `hello` can reach the VT in a later read than the text
+    settle(cx, |_| surface.cursor_column() == Some(0));
     let screen = surface.read_text(TextScope::Screen).unwrap();
     assert!(screen.starts_with("ready\nhello\nhello"), "{screen:?}");
     assert!(surface.read_text(TextScope::All).unwrap().contains("hello"));
