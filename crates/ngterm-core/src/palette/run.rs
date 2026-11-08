@@ -9,7 +9,8 @@ use ngterm_proto::command::WindowCmd;
 use ngterm_proto::{Args, Command};
 use uuid::Uuid;
 
-use super::{PaletteAction, PaletteMode, feeds::window_holds};
+use super::feeds::{movable_session, window_holds};
+use super::{PaletteAction, PaletteMode};
 use crate::Core;
 use crate::app_actions::{ActionEffect, ActionOrigin, FrontendAction};
 use crate::model::{AppStore, TintChoice, TintParts, TintValue};
@@ -20,7 +21,8 @@ use crate::windows::WindowRequest;
 impl Core {
     /// Whether `action`, a row of the palette window `window` draws, can run now. The static rows read the menu's
     /// predicate; an attention row asks its own window's modal gate (upstream's `canSelectAttention`); a Tint Session
-    /// row needs that gate and a selected session (the `isEnabled` of upstream's `tintItems`); a membership editor's row
+    /// row needs that gate and a selected session (the `isEnabled` of upstream's `tintItems`); a Move Session row needs
+    /// that gate and a selected session it can move to its workspace (upstream's `moveItems`); a membership editor's row
     /// needs the gate and its session or workspace still in the window, so a gone row goes inert; the rest are gated
     /// when they run.
     #[must_use]
@@ -28,6 +30,14 @@ impl Core {
         match action {
             PaletteAction::Command(command) => command.is_enabled(&self.palette_context(window)),
             PaletteAction::Attention { window, session } => self.can_select_attention(*window, *session),
+            PaletteAction::MoveSession { workspace } => {
+                self.ui_actions_enabled(window)
+                    && self
+                        .library()
+                        .store(window)
+                        .and_then(|store| movable_session(store, *workspace))
+                        .is_some()
+            }
             PaletteAction::TintSession(_) => {
                 self.ui_actions_enabled(window)
                     && self
@@ -121,9 +131,11 @@ impl Core {
                     Args::default(),
                 );
             }
-            PaletteAction::MoveSession { session, workspace } => {
-                if let Some(store) = self.library_mut().store_mut(window) {
-                    store.move_session(*session, *workspace, None);
+            PaletteAction::MoveSession { workspace } => {
+                if let Some(store) = self.library_mut().store_mut(window)
+                    && let Some(session) = movable_session(store, *workspace)
+                {
+                    store.move_session(session, *workspace, None);
                 }
             }
             PaletteAction::Custom(id) => self.run_palette_custom_command(window, *id),

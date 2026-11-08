@@ -780,10 +780,10 @@ contract `.claude/rules/{sidebar,settings}.md`.
 ~124-128, `palette_entry_enabled` ~27-50), `commands/tests/palette.rs`.
 **Conformance:** none (Rust tests on the fakes).
 
-- [ ] `PaletteAction::MoveSession { workspace }` captures no session; enabled = UI actions enabled, a selected session,
+- [x] `PaletteAction::MoveSession { workspace }` captures no session; enabled = UI actions enabled, a selected session,
   its workspace differs from the target and `can_move_sessions` allows it; run moves the session selected then; an
   inert row does nothing and keeps the palette open.
-- [ ] write tests: the four Swift cases.
+- [x] write tests: the four Swift cases.
 
 ### Task 22: One queued title per pane; the OS window title coalesced (#911, #817)
 

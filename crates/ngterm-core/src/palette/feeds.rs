@@ -257,7 +257,9 @@ fn focus_editor_entries(store: &AppStore) -> Vec<PaletteEntry> {
 }
 
 /// A "Move Session to <workspace>" row per workspace other than the selected session's own (upstream skips the
-/// session's workspace, not the current one: a fresh workspace is current while the selection sits elsewhere).
+/// session's workspace, not the current one: a fresh workspace is current while the selection sits elsewhere). The
+/// session is read again when the row renders and runs ([`movable_session`]), since the selection can move under an
+/// open palette (upstream's `moveItems`).
 fn move_session_entries(store: &AppStore) -> Vec<PaletteEntry> {
     let Some(session) = store.selected_session_id() else {
         return Vec::new();
@@ -274,7 +276,6 @@ fn move_session_entries(store: &AppStore) -> Vec<PaletteEntry> {
                 format!("move-{}", uuid_string(workspace.id())),
                 format!("Move Session to {}", workspace.name),
                 PaletteAction::MoveSession {
-                    session,
                     workspace: workspace.id(),
                 },
             )
@@ -312,6 +313,14 @@ fn plain_entry(id: String, title: String, action: PaletteAction) -> PaletteEntry
         mark: None,
         action,
     }
+}
+
+/// The session a Move Session row to `target` moves now (upstream's `movable` in `moveItems`): the selected one, unless
+/// none is, it already lives in `target`, or the move would refuse (a companion, `target` gone).
+pub(crate) fn movable_session(store: &AppStore, target: Uuid) -> Option<Uuid> {
+    let session = store.selected_session_id()?;
+    let owner = store.workspace_for_session(session)?.id();
+    (owner != target && store.can_move_sessions(&[session], target, None)).then_some(session)
 }
 
 /// Whether `window`'s store holds `session`.
