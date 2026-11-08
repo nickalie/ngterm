@@ -174,25 +174,50 @@ pub mod stdin_probe {
     use std::os::fd::{FromRawFd as _, OwnedFd};
     use std::process::{Command, Output, Stdio};
 
-    /// Runs `ngtermctl <arguments>` with `stdin` as its standard input and every `NGTERM_*` variable stripped. The
-    /// probe passes whatever the command returns, which its stderr names on a `PROBE_RESULT:` line.
-    pub fn run(arguments: &[&str], stdin: Stdio) -> Output {
-        let argv: Vec<&str> = std::iter::once("ngtermctl").chain(arguments.iter().copied()).collect();
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "messages::tests::command_probe",
-                "--exact",
-                "--nocapture",
-                "--test-threads=1",
-            ])
+    /// Names the local test re-run with its chosen standard input.
+    const LOCAL_PROBE: &str = "CTL_LOCAL_STDIN_PROBE";
+
+    /// A fresh copy of `test`, alone, with `stdin` and every `NGTERM_*` variable stripped.
+    fn probe(test: &str, stdin: Stdio) -> Command {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([test, "--exact", "--nocapture", "--test-threads=1"])
             .env_clear()
             .envs(std::env::vars_os().filter(|(key, _)| !key.to_string_lossy().starts_with("NGTERM_")))
+            .stdin(stdin);
+        command
+    }
+
+    /// Runs `ngtermctl <arguments>` with `stdin` as its standard input and every `NGTERM_*` variable stripped. The
+    /// command gets an explicit private socket. The probe passes whatever the command returns, which its stderr
+    /// names on a `PROBE_RESULT:` line.
+    pub fn run(arguments: &[&str], stdin: Stdio) -> Output {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("ctl.sock");
+        let mut argv = vec!["ngtermctl".to_owned()];
+        argv.extend(arguments.iter().map(|argument| (*argument).to_owned()));
+        argv.extend(["--socket".to_owned(), socket.to_string_lossy().into_owned()]);
+        let output = probe("messages::tests::command_probe", stdin)
             .env("CTL_COVERAGE_ARGUMENTS", serde_json::to_string(&argv).unwrap())
-            .stdin(stdin)
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         output
+    }
+
+    /// Runs `body` alone in a copy of `test` with `stdin`. Local-only commands have no `--socket`; testing their
+    /// methods directly keeps them out of the socket command probe.
+    pub fn run_local(test: &str, stdin: Stdio, body: impl FnOnce()) {
+        if std::env::var(LOCAL_PROBE).is_ok_and(|probed| probed == test) {
+            body();
+            return;
+        }
+        let output = probe(test, stdin).env(LOCAL_PROBE, test).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{test} did not run"
+        );
     }
 
     /// What the command itself printed on stdout in a probe run (`run`, `messages::tests::run_command`), without the

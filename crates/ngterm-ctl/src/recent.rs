@@ -331,10 +331,8 @@ mod tests {
         );
         assert_eq!(requests, [json!({"cmd": "recent.clear"})]);
         assert_eq!(command_stdout(&output), "{\"ok\":false,\"error\":\"no window\"}\n");
-        assert!(
-            String::from_utf8(output.stderr)
-                .unwrap()
-                .contains("PROBE_RESULT:Err(Exit(")
-        );
+        let error = String::from_utf8(output.stderr).unwrap();
+        let expected = Err::<(), _>(crate::Failure::Exit(std::process::ExitCode::FAILURE));
+        assert!(error.contains(&format!("PROBE_RESULT:{expected:?}")), "{error}");
     }
 }

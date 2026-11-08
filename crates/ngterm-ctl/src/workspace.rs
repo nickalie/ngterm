@@ -517,8 +517,7 @@ mod tests {
         }
     }
 
-    /// Every subcommand connects where `--socket` says and prints the raw reply under `--json`, after its own
-    /// arguments.
+    /// Every subcommand parses `--socket` and `--json` after its own arguments.
     #[test]
     fn every_subcommand_takes_the_connection_options() {
         for argv in [
