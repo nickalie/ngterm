@@ -130,8 +130,27 @@ mod tests {
         false
     }
 
+    /// The case runs in a process of its own: under the test binary, [`end`] would also end the web processes of the
+    /// page tests running meanwhile (each an [`isolated`](crate::tests::isolated) child of the binary).
     #[test]
     fn the_web_processes_under_this_process_end_and_nothing_else() {
+        // a web process of another test running meanwhile: under the test binary, not under the case (in the case's
+        // own process this makes one more stand-in, which the case ends with its own)
+        let neighbours = tempfile::tempdir().unwrap();
+        let mut neighbour = stand_in(neighbours.path(), WEB_PROCESS);
+        crate::tests::isolated(
+            "engine::spares::tests::the_web_processes_under_this_process_end_and_nothing_else",
+            web_processes_end,
+        );
+        assert!(
+            neighbour.try_wait().unwrap().is_none(),
+            "a web process of another test was ended too"
+        );
+        neighbour.kill().unwrap();
+        neighbour.wait().unwrap();
+    }
+
+    fn web_processes_end() {
         let dir = tempfile::tempdir().unwrap();
         let mut web = stand_in(dir.path(), WEB_PROCESS);
         let mut other = stand_in(dir.path(), "WPENetworkProcess");
