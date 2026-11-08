@@ -12,6 +12,7 @@
 //! naming no page or buffer of the app are dropped or ignored where they arrive (crate `worker::client`, the consumer).
 
 use std::os::fd::OwnedFd;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -21,11 +22,11 @@ use crate::config::HostConfig;
 use crate::event::{Area, Event, SchemeResponse, SchemeToken};
 use crate::frames::{BufferId, DmaBuf, Frame, FrameContent, Plane, Rect, ShmRegion, clip};
 use crate::host::{Command, Evaluation, StartError};
-use crate::spec::ViewId;
+use crate::spec::{SessionId, SessionSpec, ViewId};
 
 /// The protocol's version: the app and its worker are one executable, so a mismatch means the file on disk was
 /// replaced by another build while the app ran.
-pub(crate) const PROTOCOL: u32 = 1;
+pub(crate) const PROTOCOL: u32 = 2;
 
 /// The longest side of a frame the app takes from a worker, in pixels: the largest 2D image today's desktop GPUs make
 /// (Vulkan's `maxImageDimension2D`).
@@ -45,8 +46,22 @@ const DMA_BUF_MAGIC: u64 = 0x444d_4142;
 pub(crate) enum ToWorker {
     /// The engine's configuration, once, after the worker's [`FromWorker::Hello`].
     Start(HostConfig),
-    /// Any command but an evaluation and a scheme's bytes (`Command::Quit` included).
+    /// Commands without paths or out-of-band bytes, other than evaluations (`Command::Quit` included).
     Command(Command),
+    /// A persistent store's paths as filename bytes, which need not be UTF-8.
+    PersistentSession {
+        session: SessionId,
+        #[serde(with = "path_bytes")]
+        data_dir: PathBuf,
+        #[serde(with = "path_bytes")]
+        cache_dir: PathBuf,
+    },
+    /// A scheme's file path as filename bytes too.
+    SchemeFile {
+        token: SchemeToken,
+        #[serde(with = "path_bytes")]
+        path: PathBuf,
+    },
     /// [`crate::Host::evaluate`], answered by [`FromWorker::Evaluation`] with its `id`.
     Evaluate {
         id: u64,
@@ -56,6 +71,23 @@ pub(crate) enum ToWorker {
     },
     /// [`SchemeResponse::Bytes`], its data in the blob.
     SchemeBytes { token: SchemeToken, mime: String },
+}
+
+/// Unix filenames on the JSON wire, with no Unicode conversion in either direction.
+mod path_bytes {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+    use std::path::{Path, PathBuf};
+
+    use serde::{Deserialize as _, Serialize as _};
+
+    pub(super) fn serialize<S: serde::Serializer>(path: &Path, serializer: S) -> Result<S::Ok, S::Error> {
+        path.as_os_str().as_bytes().serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<PathBuf, D::Error> {
+        Vec::<u8>::deserialize(deserializer).map(|bytes| OsString::from_vec(bytes).into())
+    }
 }
 
 /// From the worker to the app.
@@ -151,6 +183,15 @@ impl ToWorker {
     /// `command` as the message that carries it, and the bytes that go with it.
     pub(crate) fn command(command: Command) -> (Self, Option<Vec<u8>>) {
         match command {
+            Command::CreateSession(session, SessionSpec::Persistent { data_dir, cache_dir }) => (
+                Self::PersistentSession {
+                    session,
+                    data_dir,
+                    cache_dir,
+                },
+                None,
+            ),
+            Command::Scheme(token, SchemeResponse::File(path)) => (Self::SchemeFile { token, path }, None),
             Command::Scheme(token, SchemeResponse::Bytes { data, mime }) => {
                 (Self::SchemeBytes { token, mime }, Some(data))
             }
@@ -443,6 +484,45 @@ fn bounded_area(area: Area) -> Area {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persistent_session_paths_need_not_be_utf8() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let spec = crate::SessionSpec::Persistent {
+            data_dir: std::ffi::OsString::from_vec(b"/tmp/data-\xff".to_vec()).into(),
+            cache_dir: std::ffi::OsString::from_vec(b"/tmp/cache-\xfe".to_vec()).into(),
+        };
+        let (message, blob) = ToWorker::command(Command::CreateSession(crate::SessionId(5), spec.clone()));
+        let packet = message.packet(blob).unwrap();
+        let ToWorker::PersistentSession {
+            session,
+            data_dir,
+            cache_dir,
+        } = body(&packet).unwrap()
+        else {
+            panic!("persistent session")
+        };
+        assert_eq!(session, crate::SessionId(5));
+        assert_eq!(SessionSpec::Persistent { data_dir, cache_dir }, spec);
+    }
+
+    #[test]
+    fn scheme_file_paths_keep_their_filename_bytes() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        for bytes in [b"/tmp/file-\xff".as_slice(), b"/tmp/plain", b""] {
+            let path = PathBuf::from(std::ffi::OsString::from_vec(bytes.to_vec()));
+            let (message, blob) =
+                ToWorker::command(Command::Scheme(SchemeToken(7), SchemeResponse::File(path.clone())));
+            let packet = message.packet(blob).unwrap();
+            let ToWorker::SchemeFile { token, path: restored } = body(&packet).unwrap() else {
+                panic!("scheme file")
+            };
+            assert_eq!(token, SchemeToken(7));
+            assert_eq!(restored, path);
+        }
+    }
 
     fn rect(width: u32, height: u32) -> Rect {
         Rect {

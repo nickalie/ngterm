@@ -124,6 +124,15 @@ fn serve_until_end(socket: &OwnedFd, engine: &Local, outgoing: &async_channel::S
                 return 0;
             }
             Ok(ToWorker::Command(command)) => engine.post(command),
+            Ok(ToWorker::PersistentSession {
+                session,
+                data_dir,
+                cache_dir,
+            }) => engine.post(Command::CreateSession(
+                session,
+                crate::SessionSpec::Persistent { data_dir, cache_dir },
+            )),
+            Ok(ToWorker::SchemeFile { token, path }) => engine.post(Command::Scheme(token, SchemeResponse::File(path))),
             Ok(ToWorker::SchemeBytes { token, mime }) => engine.post(Command::Scheme(
                 token,
                 SchemeResponse::Bytes {

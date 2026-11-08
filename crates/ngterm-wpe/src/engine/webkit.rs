@@ -536,13 +536,11 @@ impl NetworkSession {
     /// unless told where to save them, so they go to `cookies.sqlite` in the data directory, which a later session
     /// on the same directories reads back.
     pub(crate) fn persistent(data_dir: &std::path::Path, cache_dir: &std::path::Path) -> Self {
-        let data = c_string(&data_dir.to_string_lossy());
-        let cache = c_string(&cache_dir.to_string_lossy());
         // SAFETY: NUL-terminated paths the call copies; a new reference, which we take over.
-        let raw = unsafe { webkit::webkit_network_session_new(data.as_ptr(), cache.as_ptr()) };
+        let raw = unsafe { webkit::webkit_network_session_new(data_dir.to_glib_none().0, cache_dir.to_glib_none().0) };
         // SAFETY: `raw` comes straight from that call, owned as its documentation says.
         let session: Self = unsafe { from_glib_full(raw) };
-        let cookies = c_string(&data_dir.join("cookies.sqlite").to_string_lossy());
+        let cookies = data_dir.join("cookies.sqlite");
         // SAFETY: a live session; the cookie manager is owned by it.
         let manager = unsafe { webkit::webkit_network_session_get_cookie_manager(session.to_glib_none().0) };
         if !manager.is_null() {
@@ -550,7 +548,7 @@ impl NetworkSession {
             unsafe {
                 webkit::webkit_cookie_manager_set_persistent_storage(
                     manager,
-                    cookies.as_ptr(),
+                    cookies.to_glib_none().0,
                     webkit::WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE,
                 );
             };
@@ -891,6 +889,44 @@ pub(crate) fn handled(handled: bool) -> Option<glib::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persistent_session_directories_keep_their_filename_bytes() {
+        crate::tests::isolated(
+            "engine::webkit::tests::persistent_session_directories_keep_their_filename_bytes",
+            || {
+                use std::ffi::CStr;
+                use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+                let home = tempfile::tempdir().unwrap();
+                let data = home.path().join(std::ffi::OsString::from_vec(b"data-\xff".to_vec()));
+                let cache = home.path().join(std::ffi::OsString::from_vec(b"cache-\xfe".to_vec()));
+                let context = glib::MainContext::new();
+                context
+                    .with_thread_default(|| {
+                        let session = NetworkSession::persistent(&data, &cache);
+                        let manager = session.website_data_manager().unwrap();
+                        // SAFETY: a live manager; the directory strings are owned by it and live through comparison.
+                        let actual_data = unsafe {
+                            webkit::webkit_website_data_manager_get_base_data_directory(manager.to_glib_none().0)
+                        };
+                        // SAFETY: as above, the manager owns the returned directory string.
+                        let actual_cache = unsafe {
+                            webkit::webkit_website_data_manager_get_base_cache_directory(manager.to_glib_none().0)
+                        };
+                        assert!(!actual_data.is_null());
+                        assert!(!actual_cache.is_null());
+                        // SAFETY: the live manager owns these non-null, NUL-terminated strings.
+                        let actual_data = unsafe { CStr::from_ptr(actual_data) };
+                        // SAFETY: as above.
+                        let actual_cache = unsafe { CStr::from_ptr(actual_cache) };
+                        assert_eq!(actual_data.to_bytes(), data.as_os_str().as_bytes());
+                        assert_eq!(actual_cache.to_bytes(), cache.as_os_str().as_bytes());
+                    })
+                    .unwrap();
+            },
+        );
+    }
 
     #[test]
     fn c_strings_end_at_an_interior_nul() {

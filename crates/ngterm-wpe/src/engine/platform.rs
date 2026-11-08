@@ -833,8 +833,12 @@ unsafe extern "C" fn view_render_buffer(
 fn rect_of(rect: &platform::WPERectangle) -> Option<Rect> {
     let x = u32::try_from(rect.x.max(0)).ok()?;
     let y = u32::try_from(rect.y.max(0)).ok()?;
-    let width = u32::try_from(rect.width).ok().filter(|width| *width > 0)?;
-    let height = u32::try_from(rect.height).ok().filter(|height| *height > 0)?;
+    let width = u32::try_from(i64::from(rect.width) + i64::from(rect.x.min(0)))
+        .ok()
+        .filter(|width| *width > 0)?;
+    let height = u32::try_from(i64::from(rect.height) + i64::from(rect.y.min(0)))
+        .ok()
+        .filter(|height| *height > 0)?;
     Some(Rect { x, y, width, height })
 }
 
