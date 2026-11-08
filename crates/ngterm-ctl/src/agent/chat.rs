@@ -705,7 +705,11 @@ mod tests {
     fn accept_before(listener: &std::os::unix::net::UnixListener, deadline: Instant) -> std::os::unix::net::UnixStream {
         loop {
             match listener.accept() {
-                Ok((socket, _)) => return socket,
+                Ok((socket, _)) => {
+                    // On macOS an accepted socket inherits the listener's non-blocking mode; the caller reads blocking.
+                    socket.set_nonblocking(false).unwrap();
+                    return socket;
+                }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => {
                     assert!(Instant::now() < deadline, "stream never rechecked its pane");
                     thread::yield_now();

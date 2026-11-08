@@ -387,6 +387,8 @@ pub(crate) fn run_command(
                     Err(error) => panic!("accept: {error}"),
                 }
             };
+            // On macOS an accepted socket inherits the listener's non-blocking mode; the request is read blocking.
+            stream.set_nonblocking(false).unwrap();
             stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
             let mut line = String::new();
             std::io::BufReader::new(&stream).read_line(&mut line).unwrap();
