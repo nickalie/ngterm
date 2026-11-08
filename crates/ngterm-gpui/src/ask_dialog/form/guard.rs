@@ -263,15 +263,19 @@ mod tests {
                 editor.holds(&format!("xy{rest}"), cx),
                 "a replacement within the cap goes in"
             );
-            // with no range the selection (in bytes) is what is replaced
-            editor.restore(&format!("xy{rest}"), 0..2, window, cx);
-            guard.replace_text_in_range(None, "abc", window, cx);
+            // with no range the selection (in bytes) is what is replaced: two characters, four bytes, two UTF-16 units
+            editor.restore(&full, 0..4, window, cx);
+            guard.replace_text_in_range(None, "abcde", window, cx);
             assert!(
-                editor.holds(&format!("xy{rest}"), cx),
-                "three bytes over a two-byte selection pass the cap"
+                editor.holds(&full, cx),
+                "five bytes over a four-byte selection pass the cap"
             );
-            guard.replace_text_in_range(None, "ab", window, cx);
-            assert!(editor.holds(&format!("ab{rest}"), cx), "two bytes over it fill the cap");
+            guard.replace_text_in_range(None, "abcd", window, cx);
+            let rest = "\u{e9}".repeat(cap / 2 - 2);
+            assert!(
+                editor.holds(&format!("abcd{rest}"), cx),
+                "four bytes over it fill the cap"
+            );
         });
     }
 
@@ -311,8 +315,13 @@ mod tests {
                 editor.holds(&format!("{start}\u{706b}"), cx),
                 "the commit replaces the marked text"
             );
+            assert_eq!(guard.marked_text_range(window, cx), None, "committed");
+            // a composition over a range, ended by the input method without a commit
+            guard.replace_and_mark_text_in_range(Some(end..end + 1), "\u{304b}", None, window, cx);
+            assert_eq!(guard.marked_text_range(window, cx), Some(end..end + 1));
             guard.unmark_text(window, cx);
-            assert_eq!(guard.marked_text_range(window, cx), None);
+            assert_eq!(guard.marked_text_range(window, cx), None, "no longer composing");
+            assert!(editor.holds(&format!("{start}\u{304b}"), cx), "the composed text stays");
         });
     }
 
