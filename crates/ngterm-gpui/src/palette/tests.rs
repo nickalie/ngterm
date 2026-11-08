@@ -241,17 +241,25 @@ fn a_refresh_keeps_the_query_and_selected_row_but_runs_its_new_action(cx: &mut T
 }
 
 #[gpui_kit::test]
-fn focus_membership_and_custom_command_badges_are_drawn_and_the_scrim_closes(cx: &mut TestAppContext) {
+fn focus_membership_marks_and_a_rows_badge_are_drawn_and_the_scrim_closes(cx: &mut TestAppContext) {
     let mut focused = entry("focused", PaletteAction::Theme(None));
     focused.mark = Some(PaletteMark::Focus(true));
     focused.badge = Some("current".to_owned());
     let mut other = entry("other", PaletteAction::Theme(None));
     other.mark = Some(PaletteMark::Focus(false));
-    let mut opened = view(PaletteMode::FocusEditor, 1, vec![focused, other], &[true, true]);
-    opened.looks[0].shortcut = Some("Ctrl+1".to_owned());
+    let opened = view(PaletteMode::FocusEditor, 1, vec![focused, other], &[true, true]);
     let (_, cx, requests) = open(cx, opened);
     assert!(cx.debug_bounds("palette-mark:focused").is_some());
     assert!(cx.debug_bounds("palette-mark:unfocused").is_some());
+    cx.activate_a11y();
+    let tree = cx.a11y_tree_update().expect("the palette's accessibility tree");
+    let badges: Vec<_> = tree
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.author_id() == Some("palette-badge"))
+        .map(|(_, node)| node.label())
+        .collect();
+    assert_eq!(badges, [Some("current")], "only the focused row has its badge");
     cx.simulate_click(gpui_kit::point(px(5.), px(5.)), gpui_kit::Modifiers::default());
     cx.run_until_parked();
     assert_eq!(*requests.borrow(), [Request::Close]);

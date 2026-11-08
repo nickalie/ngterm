@@ -847,6 +847,17 @@ mod tests {
             windows.sync(&mut state, cx);
         });
         cx.run_until_parked();
+        let size_of = |windows: &Windows, id: Uuid, cx: &mut App| {
+            windows
+                .get(id)
+                .unwrap()
+                .handle
+                .update(cx, |_, window, _| window.bounds().size)
+                .unwrap()
+        };
+        let first_size = cx.update(|cx| size_of(&windows, first, cx));
+        let asked = gpui_kit::size(gpui_kit::px(1050.), gpui_kit::px(720.));
+        assert_ne!(first_size, asked, "the asked size is not where the windows start");
         cx.update(|cx| {
             windows.apply(
                 WindowRequest::Resize {
@@ -859,10 +870,13 @@ mod tests {
                 0,
                 cx,
             );
+            assert_eq!(size_of(&windows, work, cx), asked, "the resize reached its window");
+            assert_eq!(size_of(&windows, first, cx), first_size, "and only that one");
             windows.apply(WindowRequest::ToggleFullscreen(work), 0, cx);
         });
         let handle = windows.get(work).unwrap().handle;
-        cx.simulate_window_resize(handle.into(), gpui_kit::size(gpui_kit::px(1050.), gpui_kit::px(720.)));
+        // the window manager hands the full screen window the screen's size, and the window draws in its new state
+        cx.simulate_window_resize(handle.into(), gpui_kit::size(gpui_kit::px(1920.), gpui_kit::px(1080.)));
         cx.run_until_parked();
         cx.update(|cx| {
             handle
@@ -871,13 +885,6 @@ mod tests {
             windows.report_states(&mut state.core, cx);
             assert!(state.core.window_state(work).unwrap().fullscreen);
             assert!(!state.core.window_state(first).unwrap().fullscreen);
-            let bounds = windows
-                .get(work)
-                .unwrap()
-                .handle
-                .update(cx, |_, window, _| window.bounds())
-                .unwrap();
-            assert_eq!(bounds.size, gpui_kit::size(gpui_kit::px(1050.), gpui_kit::px(720.)));
             windows.apply(WindowRequest::Raise(Uuid::new_v4()), 0, cx);
             windows.present_settings(Opening::of(&state, cx), Uuid::new_v4(), None, cx);
             assert_eq!(windows.settings_host(cx), None);
