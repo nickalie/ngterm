@@ -74,8 +74,9 @@ struct Router {
     released: HashSet<u32>,
     /// The fired `--repeat` tail still held down.
     held_repeat: Option<u32>,
-    /// The tail whose release opened the repeat window, while that window is the one open: an autorepeat of that key
-    /// says the release was a web view's stand-in and it is held after all ([`Router::resume_held`]).
+    /// The tail whose release last opened a repeat window, meaningful only while the matcher is repeating: an
+    /// autorepeat of that key says the release was a web view's stand-in and it is held after all
+    /// ([`Router::resume_held`]).
     released_tail: Option<u32>,
     /// When the armed leader or the open repeat window lapses.
     deadline: Option<Instant>,
@@ -179,6 +180,9 @@ pub fn menu_action(stroke: &KeyStroke) -> Option<BuiltinAction> {
 /// does what upstream's monitor does with it: a fresh press forgets that physical key's old ownership, and unless it
 /// is a bare modifier it ends a half-typed leader or an open repeat window. Esc is the keymap's only to cancel a
 /// leader. The window's own keys there are Ctrl+Tab's switcher.
+/// Windows only asks about chords with Control, Alt or the Windows key held, and function keys
+/// (`html_overlay::webview2::keys::chord_keystroke`): plain typing and plain Esc never reach this check, so they leave
+/// a leader or repeat window as it was. The unmatched-press reset applies only to the keys Windows asks about.
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 #[must_use]
 pub fn takes(stroke: &KeyStroke) -> bool {
@@ -204,12 +208,12 @@ pub fn takes(stroke: &KeyStroke) -> bool {
     })
 }
 
-/// Whether an HTML page holding the keyboard keeps `action`'s menu chord for itself (upstream's
-/// `UndoCloseShortcut.yieldsChord`, 00fc83d): `undo_close`, so the chord undoes an edit in the page's form field rather
-/// than a pending session close. With the terminal, the sidebar or the chrome focused the chord still undoes the
-/// close, even while a page covers the session. Every other menu chord stays the app's.
-fn page_keeps(action: BuiltinAction) -> bool {
-    action == BuiltinAction::UndoClose
+/// Whether the app takes `action`'s menu chord: full screen yields after a half-typed leader, and `undo_close`
+/// yields while an HTML page holds the keyboard (upstream's `UndoCloseShortcut.yieldsChord`, 00fc83d), so the chord
+/// undoes an edit in the page's form field rather than a pending session close. With the terminal, the sidebar or
+/// the chrome focused the chord still undoes the close, even while a page covers the session.
+fn menu_takes(action: BuiltinAction, was_armed: bool, page_keys: bool) -> bool {
+    !(was_armed && action == BuiltinAction::ToggleFullscreen || page_keys && action == BuiltinAction::UndoClose)
 }
 
 /// Lets go of a press dispatched for an HTML page's native web view (`takes`), whose release the window never sees.
@@ -392,10 +396,14 @@ impl Router {
     /// same way, the page holding the keyboard.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn page_press_taken(&self, stroke: &KeyStroke, chord: &Chord) -> bool {
+        let armed = !self.lapsed() && self.engine.as_ref().is_some_and(CustomCommandEngine::is_armed);
         if stroke.is_escape() {
-            return !self.lapsed() && self.engine.as_ref().is_some_and(CustomCommandEngine::is_armed);
+            return armed;
         }
-        self.menu.get(chord).is_some_and(|action| !page_keeps(*action)) || self.sequence_takes(chord)
+        self.menu
+            .get(chord)
+            .is_some_and(|action| menu_takes(*action, armed, true))
+            || self.sequence_takes(chord)
     }
 
     /// Whether the leader or repeat window has run out (the next press lapses it for real).
@@ -494,7 +502,7 @@ impl Router {
                 let Some(action) = self.menu.get(chord).copied() else {
                     return Press::Passed;
                 };
-                if (was_armed && action == BuiltinAction::ToggleFullscreen) || (page_keys && page_keeps(action)) {
+                if !menu_takes(action, was_armed, page_keys) {
                     return Press::Passed;
                 }
                 Press::Fired(Fired::Builtin(action))
