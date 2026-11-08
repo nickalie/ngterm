@@ -801,11 +801,49 @@ fn typing_into_a_full_input_queue_types_nothing() -> TestResult {
 #[test]
 fn a_print_waiting_on_a_program_that_ends_finds_no_session() -> TestResult {
     let server = Server::start()?;
-    let mut ending = server.attach("ending", Some(script("printf 'ready\\033['; sleep 1")), None)?;
+    let mut ending = server.attach(
+        "ending",
+        Some(script("stty -echo; printf 'ready\\033['; read line")),
+        None,
+    )?;
     ending.attached()?;
     let mut api = server.api()?;
     api.ready_screen("ending", "ready")?;
-    assert_eq!(api.print("ending", b"mark")?, Err(no_such_session("ending")));
+    let mut release = server.api()?;
+    let id = api.next;
+    write_message(
+        &mut api.stream,
+        &ApiCall {
+            id,
+            request: ApiRequest::Print {
+                name: "ending".to_owned(),
+                data: b"mark".to_vec(),
+            },
+        },
+    )?;
+    thread::scope(|scope| -> TestResult {
+        let (answered, answer) = mpsc::channel();
+        let stream = &mut api.stream;
+        scope.spawn(move || {
+            let reply = read_frame(stream)
+                .and_then(|frame| frame.message::<ApiReply>(PROTOCOL_VERSION))
+                .map_err(|err| err.to_string());
+            let _ = answered.send(reply);
+        });
+        assert!(
+            matches!(
+                answer.recv_timeout(Duration::from_millis(100)),
+                Err(RecvTimeoutError::Timeout)
+            ),
+            "the print must stay pending while the program waits inside its sequence"
+        );
+        assert_eq!(release.type_text("ending", "exit\r")?, Ok(ApiResponse::Done));
+        let reply = answer.recv_timeout(PATIENCE)??;
+        assert_eq!(reply.id, id);
+        assert_eq!(reply.result, Err(no_such_session("ending")));
+        Ok(())
+    })?;
+    drop(release);
     drop((ending, api));
     assert_eq!(server.stopped()?, StopReason::Idle);
     Ok(())

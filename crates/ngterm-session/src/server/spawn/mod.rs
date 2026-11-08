@@ -1425,15 +1425,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn stopping_a_server_that_ended_signals_nothing() {
+        use rustix::process::{Pid, Signal, kill_process};
+        use std::os::unix::process::ExitStatusExt as _;
+
         let mut other = std::process::Command::new("sleep").arg("60").spawn().unwrap();
         let mut gone = reaper::Process::reap(|| Err(io::Error::from_raw_os_error(libc::ECHILD))).unwrap();
         assert_eq!(ended(&mut gone), Exit::Unknown);
         gone.terminate(other.id());
-        assert!(
-            other.try_wait().unwrap().is_none(),
-            "the process that has the pid now runs on"
-        );
-        other.kill().unwrap();
-        other.wait().unwrap();
+        kill_process(Pid::from_raw(i32::try_from(other.id()).unwrap()).unwrap(), Signal::TERM).unwrap();
+        assert_eq!(other.wait().unwrap().signal(), Some(libc::SIGTERM));
     }
 }
