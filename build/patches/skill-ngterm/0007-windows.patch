@@ -8,7 +8,7 @@ where upstream's reads `infocmp exited N: <stderr>`) are this build's, and 128 p
 Applied after 0006-show-image-socket.patch.
 
 diff --git a/SKILL.md b/SKILL.md
-index 1c6e135..86bb4c1 100644
+index c4be03e..a54ee95 100644
 --- a/SKILL.md
 +++ b/SKILL.md
 @@ -73,7 +73,8 @@ Code background sessions have no status") passes them in through `--settings`.
@@ -31,7 +31,7 @@ index 1c6e135..86bb4c1 100644
  **quick terminal** (a scratch shell in a floating panel at 90% of the focused screen capped at 1100x700,
  or whatever share Settings sets instead; not part of the tree and not owned by a window).
 diff --git a/reference.md b/reference.md
-index 1c8bde2..d0b30e8 100644
+index 423d7df..24b1444 100644
 --- a/reference.md
 +++ b/reference.md
 @@ -7,8 +7,11 @@ Full detail for every `ngtermctl` command. See `SKILL.md` for the model and addr
@@ -48,7 +48,7 @@ index 1c8bde2..d0b30e8 100644
  - **`--json`**: prints the raw response object. Without it, ordinary mutations print `ok`, batch
    close/move prints the affected session count, and `tree`/`window list` print a human listing. Use
    `--json` when you need to read ids or values back.
-@@ -2449,10 +2452,11 @@ text on the Mac showing it, and on the Mac it runs on as well.
+@@ -2522,10 +2525,11 @@ text on the Mac showing it, and on the Mac it runs on as well.
 
  `ngtermctl terminfo install DESTINATION [-p PORT] [-i FILE ...] [-J HOST] [-F FILE]` — install the bundled
  `xterm-ghostty` terminfo entry into a remote account's `~/.terminfo`. Local-only: it never opens the
@@ -64,7 +64,7 @@ index 1c8bde2..d0b30e8 100644
 
  - `DESTINATION` — as ssh takes it: host, `user@host`, or an alias from `~/.ssh/config`. Refused when it
    starts with `-` or contains whitespace or a control character.
-@@ -2463,10 +2467,10 @@ ssh connection with the source on stdin. Nothing is cached; run it once per host
+@@ -2536,10 +2540,10 @@ ssh connection with the source on stdin. Nothing is cached; run it once per host
    Do not run it from a hook or a non-interactive script unless key auth already works for the host.
 
  Human output on success is `installed xterm-ghostty on DESTINATION`. It exits with ssh's status (128 plus
@@ -78,7 +78,7 @@ index 1c8bde2..d0b30e8 100644
  - `ngterm: tic is not installed on this host, install ncurses first` — printed by the remote and followed
    by `ssh exited 3; xterm-ghostty was not installed`.
 diff --git a/troubleshooting.md b/troubleshooting.md
-index dd438ad..8ae4400 100644
+index 729c0cd..f52ca86 100644
 --- a/troubleshooting.md
 +++ b/troubleshooting.md
 @@ -46,7 +46,8 @@ You are inside ngterm (`NGTERM_ENABLED=1`). Use:

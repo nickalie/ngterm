@@ -723,10 +723,10 @@ so replace their ratchet lines); new `test_session.py::test_tint_takes_a_hex_and
 `crates/ngterm-app/src/integrations/mod.rs`'s header.
 **Conformance:** none.
 
-- [ ] Rebase `0001-live-group.patch` (fails at `SKILL.md:160`) and every later patch that conflicts, regenerating
+- [x] Rebase `0001-live-group.patch` (fails at `SKILL.md:160`) and every later patch that conflicts, regenerating
   each as `diff -u` of upstream's files and the hand-merged copy; new `agtermctl` calls (`overlay open --text`,
   `follow`, `search`, `changes`, `sidebar density`) come out as `ngtermctl`, zmx wording as live.
-- [ ] `sync-resources.sh --check v0.41.1 v0.41.1` passes; the integrations header names v0.41.1 for every payload.
+- [x] `sync-resources.sh --check v0.41.1 v0.41.1` passes; the integrations header names v0.41.1 for every payload.
 
 ### Task 19: Review upstream's Ghostty v1.4.0 move (#883)
 

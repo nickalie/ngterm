@@ -6,10 +6,10 @@ The real-pane short and past-one-screen wait regressions in crates/ngterm-term/t
 Applied after 0009-other-platforms.patch.
 
 diff --git a/SKILL.md b/SKILL.md
-index 0812083..9938fbd 100644
+index c4c3a22..0debd71 100644
 --- a/SKILL.md
 +++ b/SKILL.md
-@@ -198,9 +198,10 @@ ngtermctl session new --cwd ~/proj --name worker \
+@@ -201,9 +201,10 @@ ngtermctl session new --cwd ~/proj --name worker \
 
  The session closes when this command exits unless `--wait` holds the final output. In Live sessions mode the
  command is a create-only live-session payload, which bypasses the 1,024-byte PTY input cap. A surviving daemon ignores
@@ -24,10 +24,10 @@ index 0812083..9938fbd 100644
  `session type` drives an ALREADY-RUNNING program — it is not a launcher. Its keystrokes land in a line
  buffer you do not own: a newline submits (a multi-line brief becomes N premature Enters), and the user
 diff --git a/reference.md b/reference.md
-index 0349209..49e5d12 100644
+index 85bc403..b42d87b 100644
 --- a/reference.md
 +++ b/reference.md
-@@ -484,10 +484,11 @@ buys nothing. A caller with no tree uses `version`.
+@@ -488,10 +488,11 @@ buys nothing. A caller with no tree uses `version`.
    so a restored command session that starts its command again also holds; read it back on `tree`'s
    `commandWait`. Live sessions mode passes the command as a create-only live-session payload, which bypasses the
    1,024-byte PTY input cap. A surviving daemon ignores the payload; a new daemon runs it, and the pane closes or,

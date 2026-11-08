@@ -3,10 +3,10 @@ and hands it to the machine presenting the parent (`companion.page`), and refuse
 Applied after 0016-remote-name-mirroring.patch.
 
 diff --git a/reference.md b/reference.md
-index 312f8cd6..bf46ab7a 100644
+index 1d46eb4..2f6cd30 100644
 --- a/reference.md
 +++ b/reference.md
-@@ -1162,6 +1162,11 @@ error keeps those names for compatibility.
+@@ -1219,6 +1219,11 @@ error keeps those names for compatibility.
    reload and navigation act on that view; its other commands run on the other Mac. The row mirrors no
    status, notification or context. A loopback `--url` is refused, since it names a server on the other Mac.
    `live attach HOST ID` shows a page companion again under the one row here attached to its parent.
