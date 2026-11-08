@@ -892,3 +892,7 @@ pub(crate) struct GuiCompanion {
     due: Instant,
     flow: Option<CompanionFlow>,
 }
+
+#[cfg(test)]
+#[path = "companions_tests.rs"]
+mod tests;

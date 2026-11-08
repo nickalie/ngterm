@@ -1,0 +1,161 @@
+//! Saved rows are forgotten only on a definitive refusal, with a banner explaining the loss.
+
+use ngterm_proto::AppIdentity;
+use serde_json::json;
+
+use super::*;
+use crate::model::WindowLibrary;
+use crate::{CoreConfig, CoreState, NotificationEffect};
+
+fn core() -> (Core, Uuid, Uuid) {
+    let mut library = WindowLibrary::new("/tmp");
+    let window = library.new_window(None);
+    let workspace = library.store(window).unwrap().workspaces()[0].id();
+    let core = Core::new(
+        CoreConfig {
+            app: AppIdentity::from_recorded("0.1.0", None),
+            capabilities: Vec::new(),
+        },
+        CoreState {
+            library,
+            settings: crate::persist::AppSettings::default(),
+            persistence: None,
+        },
+    );
+    (core, window, workspace)
+}
+
+fn saved(host: &str, name: &str, workspace: Uuid) -> RemoteSessionSnapshot {
+    RemoteSessionSnapshot {
+        host: host.to_owned(),
+        session_id: uuid::Uuid::new_v4().to_string(),
+        name: name.to_owned(),
+        local_name: None,
+        workspace_id: workspace,
+        after_session_id: None,
+        order: 0,
+        parent_session_id: None,
+        waiting_since: None,
+    }
+}
+
+fn banners(core: &mut Core) -> Vec<(String, String, String)> {
+    core.take_notifications()
+        .into_iter()
+        .map(|effect| match effect {
+            NotificationEffect::App { identity, title, body } => (identity, title, body),
+            other => panic!("unexpected notification: {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn invalid_saved_hosts_are_forgotten_in_every_window_and_named_once() {
+    let (mut core, first, workspace) = core();
+    let second = core.library_mut().new_window(None);
+    let other_workspace = core.library().store(second).unwrap().workspaces()[0].id();
+    let third = core.library_mut().new_window(None);
+    for (window, rows) in [
+        (first, vec![saved("-invalid", "one", workspace)]),
+        (second, vec![saved("-invalid", "two", other_workspace)]),
+    ] {
+        core.library_mut()
+            .store_mut(window)
+            .unwrap()
+            .restore_saved_remote_rows(Some(&rows));
+    }
+
+    core.reattach_saved_remotes();
+
+    assert_eq!(core.relaunch_pending(), None);
+    for window in [first, second, third] {
+        assert!(core.library().store(window).unwrap().saved_remote_rows().is_empty());
+        assert_eq!(core.library().store(window).unwrap().snapshot().remote_sessions, None);
+    }
+    assert_eq!(
+        banners(&mut core),
+        [(
+            "remote-relaunch-invalid--invalid".to_owned(),
+            "Attach Remote".to_owned(),
+            "2 sessions from -invalid not attached again (an invalid host): one, two".to_owned()
+        )]
+    );
+    core.reattach_saved_remotes();
+    assert!(banners(&mut core).is_empty());
+}
+
+#[test]
+fn retry_waits_for_its_deadline_and_stops_when_the_saved_row_is_forgotten() {
+    let (mut core, window, workspace) = core();
+    let row = saved("studio", "one", workspace);
+    core.library_mut()
+        .store_mut(window)
+        .unwrap()
+        .restore_saved_remote_rows(Some(std::slice::from_ref(&row)));
+    let now = Instant::now();
+    core.remote.viewer.relaunch_reads.push(RelaunchRead {
+        host: "studio".to_owned(),
+        answer: None,
+        failures: 1,
+        failing_since: Some(now),
+        retry_at: now + std::time::Duration::from_secs(30),
+    });
+    core.tick_relaunch(now);
+    assert_eq!(core.relaunch_pending(), Some(false));
+    assert_eq!(
+        core.library().store(window).unwrap().saved_remote_rows(),
+        std::slice::from_ref(&row)
+    );
+    core.forget_saved_remote_session("studio", &row.session_id);
+    core.tick_relaunch(now);
+    assert_eq!(core.relaunch_pending(), None);
+    assert_eq!(core.library().store(window).unwrap().snapshot().remote_sessions, None);
+    assert!(banners(&mut core).is_empty());
+}
+
+#[test]
+fn a_listing_still_in_flight_keeps_the_saved_row_without_a_banner() {
+    let (mut core, window, workspace) = core();
+    let row = saved("studio", "one", workspace);
+    core.library_mut()
+        .store_mut(window)
+        .unwrap()
+        .restore_saved_remote_rows(Some(std::slice::from_ref(&row)));
+    let now = Instant::now();
+    core.remote.viewer.relaunch_reads.push(RelaunchRead {
+        host: "studio".to_owned(),
+        answer: Some(Answer::default()),
+        failures: 0,
+        failing_since: None,
+        retry_at: now,
+    });
+    core.reattach_saved_remotes();
+    core.tick_relaunch(now);
+    assert_eq!(core.relaunch_pending(), Some(true));
+    assert_eq!(core.library().store(window).unwrap().saved_remote_rows(), &[row]);
+    assert!(banners(&mut core).is_empty());
+}
+
+#[test]
+fn an_unattachable_saved_session_is_forgotten_with_its_exact_refusal() {
+    let (mut core, window, workspace) = core();
+    let row = saved("studio", "broken", workspace);
+    core.library_mut()
+        .store_mut(window)
+        .unwrap()
+        .restore_saved_remote_rows(Some(std::slice::from_ref(&row)));
+    let tree = serde_json::from_value(json!({
+        "endpoint": {"executable": "/ngterm-session", "socketDirectory": "/tmp/ngterm-live-x"},
+        "sessions": [{"id": row.session_id, "name": "broken", "windowID": "w", "windowName": "main",
+            "workspaceID": "ws", "workspaceName": "work", "cwd": "/repo", "panes": []}]
+    }))
+    .unwrap();
+
+    core.reattach_from(&tree, "studio");
+
+    assert!(core.library().store(window).unwrap().saved_remote_rows().is_empty());
+    assert_eq!(banners(&mut core), [(
+        "remote-relaunch-failed-studio".to_owned(), "Attach Remote".to_owned(),
+        "1 session from studio not attached again (could not be attached): broken: studio reported panes ngterm cannot address".to_owned()
+    )]);
+}
