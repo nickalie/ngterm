@@ -362,13 +362,16 @@ iOS's own: the keyboard's accessory, on the keyboard's own ground, not a Materia
 
 ### First run (`Onboarding/`)
 
-A full-screen cover while the app has no key, in a `NavigationStack`, its column at most 520 pt wide:
+A full-screen cover while the app has no key (or can't read its keys), in a `NavigationStack`, its column at most
+520 pt wide:
 
 - **Welcome:** the key glyph in the tint, "Set up a key" (large title, a heading), what the key is for, and the
   Keychain note beside a verdigris lock. **Create a key** is the prominent action (a spinner and "Creating a key"
   while it runs, and no second tap); **Import a key** is the quiet one, the tint on the ground (a tinted fill under
   it stays under 4.5:1). A key that couldn't be made says why under the text
-  (`InlineProblem`).
+  (`InlineProblem`). An import goes on through Back: the welcome shows a spinner with "Importing a key" over the
+  actions, **Create a key** is disabled, and **Import a key** reopens the import busy. Its key shows its public half
+  even from the welcome; what was wrong with it shows only on the import, so a failure leaves the welcome ready.
 - **Import a key** (pushed): a scroll view of grouped fields, not a `Form` (a list lets go of the rows larger text
   pushes off the screen, which the accessibility audit reads as text that doesn't scale). The private key in a mono `TextEditor`, Choose file (the system's file importer,
   64 KB at most), the passphrase (`SecureField` with Show and Hide), and **Import key**. A problem shows under the field
@@ -377,6 +380,10 @@ A full-screen cover while the app has no key, in a `NavigationStack`, its column
 - **Add this key to your machines:** the three numbered steps, the public key's plate with Copy and Share
   (`ShareLink`), the fingerprint, the plate of the command that appends it, and **Done**, which ends the first run.
   The machine form pushes the same screen without Done.
+- **States:** the keys are read before the cover goes up, so there is no loading state. Keys that can't be read (the
+  file is there, but not readable yet) are no first run: the cover says "Your keys couldn't be read" with the system's
+  reason and **Retry** (`StatePanel.error`), never the welcome, so no second key is made over them. A retry that reads
+  them ends the first run when there is a key, and shows the welcome when there is none.
 
 ### Machines (`Machines/`)
 

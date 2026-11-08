@@ -1,9 +1,11 @@
 import Foundation
+import NgtermPlatform
 import Testing
 
 @testable import NgtermFeatures
 
-/// Goldens of the first run: the welcome, the import with a problem and while it runs, the public key, and the end.
+/// Goldens of the first run: the welcome (also while an import goes on after Back), the import with a problem and while
+/// it runs, the public key, keys that can't be read, and the end.
 @MainActor
 @Suite("first run snapshots")
 internal struct OnboardingSnapshotTests {
@@ -29,6 +31,45 @@ internal struct OnboardingSnapshotTests {
         await model.create()
         ScreenSnapshot.check(
             OnboardingView(model: model, onFinish: ScreenSnapshot.ignore), named: "welcome-failed", variant: .light
+        )
+    }
+
+    @Test("the welcome while an import goes on after Back: Create waits, and says why")
+    internal func welcomeImporting() async {
+        defer { test.remove() }
+        let held = test.maker.holdImports()
+        let model = model()
+        model.startImport()
+        let reading = Task {
+            var bytes = Data(FakeKeyMaker.encryptedKey.utf8)
+            await model.importKey(privateKey: &bytes, passphrase: FakeKeyMaker.passphrase)
+        }
+        await Wait.until { model.isImporting }
+        model.back()
+        ScreenSnapshot.check(
+            OnboardingView(model: model, onFinish: ScreenSnapshot.ignore), named: "welcome-importing", variant: .light
+        )
+        held.signal()
+        await reading.value
+    }
+
+    @Test("keys that can't be read: why, with Retry", arguments: ScreenVariant.allCases)
+    internal func keysUnread(variant: ScreenVariant) async throws {
+        defer { test.remove() }
+        _ = try await test.seedKey()
+        let file = test.directory.appending(path: KeyStore.fileName).path
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file)
+        }
+        let early = TestGraph(directory: test.directory)
+        let model = OnboardingModel(keys: early.graph.keys)
+        guard case .readFailed = model.step else {
+            Issue.record("not a read failure: \(model.step)")
+            return
+        }
+        ScreenSnapshot.check(
+            OnboardingView(model: model, onFinish: ScreenSnapshot.ignore), named: "keys-unread", variant: variant
         )
     }
 

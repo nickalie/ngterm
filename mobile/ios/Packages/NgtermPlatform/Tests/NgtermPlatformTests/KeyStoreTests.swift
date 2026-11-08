@@ -39,6 +39,29 @@ internal struct KeyStoreTests {
         #expect(try directory.names() == [KeyStore.fileName])
     }
 
+    @Test("a file that can't be read says why until it can be, and its keys show then")
+    internal func unreadableFile() throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        try KeyStore(directory: directory.url).add(Self.made)
+        let path = directory.file(KeyStore.fileName).path
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path)
+        let store = KeyStore(directory: directory.url)
+        #expect(store.keys.isEmpty)
+        guard case .unreadable(let reason) = store.readFailure else {
+            Issue.record("no read failure: \(String(describing: store.readFailure))")
+            return
+        }
+        #expect(!reason.isEmpty)
+        store.readIfUnread()
+        #expect(store.readFailure != nil, "still unreadable")
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
+        store.readIfUnread()
+        #expect(store.readFailure == nil)
+        #expect(store.keys == [Self.made])
+        #expect(KeyStore(directory: directory.url).readFailure == nil)
+    }
+
     @Test("a corrupt file reads as no keys and is kept aside")
     internal func corruptFile() throws {
         let directory = try TemporaryDirectory()

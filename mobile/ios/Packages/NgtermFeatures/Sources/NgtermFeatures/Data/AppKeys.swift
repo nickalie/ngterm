@@ -22,6 +22,12 @@ public final class AppKeys {
         store.keys
     }
 
+    /// Why the keys' file couldn't be read, while it can't be (``KeyStore/readFailure``): ``keys`` is empty then, not
+    /// what the app has.
+    public var readFailure: StoreError? {
+        store.readFailure
+    }
+
     /// The keys shown by `store`, their private halves in `vault`, made or read by `maker`; a key made here has its
     /// public half commented `comment` (`ngterm@iPhone`), which shows in a machine's `authorized_keys`.
     public init(store: KeyStore, vault: any PrivateKeys, maker: any KeyMaker, comment: String) {

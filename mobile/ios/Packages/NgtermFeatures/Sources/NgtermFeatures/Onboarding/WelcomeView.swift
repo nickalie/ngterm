@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The first run's first screen, while the app has no key.
 ///
-/// Create one (the main action) or import one.
+/// Create one (the main action) or import one. An import that goes on after Back says so here, and Create waits for it.
 internal struct WelcomeView: View {
     internal let model: OnboardingModel
 
@@ -37,6 +37,9 @@ internal struct WelcomeView: View {
                 if let failure {
                     InlineProblem(String(localized: "The key couldn't be created: \(failure)"))
                 }
+                if model.isImporting {
+                    importProgress
+                }
                 actions(isBusy: isBusy)
             }
             .frame(maxWidth: OnboardingLayout.width, alignment: .leading)
@@ -54,6 +57,17 @@ internal struct WelcomeView: View {
         return (false, nil)
     }
 
+    // an import that goes on after Back: why Create waits
+    private var importProgress: some View {
+        HStack(spacing: Spacing.small) {
+            ProgressView()
+            Text("Importing a key")
+        }
+        .font(.subheadline)
+        .foregroundStyle(Palette.secondaryText.color)
+        .accessibilityElement(children: .combine)
+    }
+
     private func actions(isBusy: Bool) -> some View {
         VStack(spacing: Spacing.medium) {
             BusyButton(
@@ -64,6 +78,7 @@ internal struct WelcomeView: View {
                     await model.create()
                 }
             }
+            .disabled(model.isImporting)
             .accessibilityIdentifier("create-key")
             Button {
                 model.startImport()

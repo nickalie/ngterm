@@ -8,6 +8,9 @@ public enum OnboardingStep: Hashable, Sendable {
     case importing(isBusy: Bool, problem: ImportProblem?)
     /// A key is ready: its public half is shown, to put on the machines.
     case keyReady(AppKey)
+    /// The app's keys couldn't be read, for `reason` (the system's words): whether it has one is unknown until a retry
+    /// reads them.
+    case readFailed(reason: String)
     /// No key yet: make one or bring one; `isBusy` while one is being made, `failure` why the last attempt failed.
     case welcome(isBusy: Bool, failure: String?)
 
