@@ -13,8 +13,9 @@
 //! `scripts/gen-ghostty-config-keys.sh`), the value by its key's type ([`validate`]), supported by ngterm or not: an
 //! unknown key, a malformed value of any known key, an include that cannot be read or closes a cycle each count once, a
 //! theme that cannot be found once per theme directory tried, as libghostty counts them. A valid value of a key ngterm
-//! does not support counts nothing; the key is ignored and logged. libghostty finalizes a fresh config on the light
-//! side of a dual theme, so [`LoadedConfig::diagnostic_count`] does too.
+//! does not support counts nothing; the key is ignored and logged. A base config file that cannot be read or made
+//! absolute counts nothing and is only logged, as `ghostty_config_load_file` logs it. libghostty finalizes a fresh
+//! config on the light side of a dual theme, so [`LoadedConfig::diagnostic_count`] does too.
 //!
 //! **Residual differences** from libghostty at `LIBGHOSTTY_VT_REV` (the count ones pinned by the `counts_tests`
 //! goldens, which hold every other case above at the counts libghostty gave for it; no libghostty is linked to
