@@ -7,6 +7,10 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+# A local release server and installation for tests of the updater and its callers; shipped builds never enable it.
+fakes = []
+
 [dependencies]
 dunce.workspace = true
 flate2.workspace = true
