@@ -176,3 +176,64 @@ fn reconnects_require_a_current_remote_terminal() {
     assert!(!core.reattach_remote_pane(session, pane, LeadAttachment::new(false), false));
     assert_eq!(core.remote_wake(), None);
 }
+
+#[test]
+fn a_stale_pane_overlay_close_keeps_its_local_replacement() {
+    let (mut core, _, session) = core();
+    let found = core.library().held_session(session).unwrap();
+    let remote = found
+        .remote_presentation()
+        .unwrap()
+        .binding
+        .remote_pane(found.pane_identity)
+        .unwrap();
+    let overlay = |job: &str| -> PresentationOverlay {
+        serde_json::from_value(json!({
+            "job": job,
+            "pane": uuid_string(remote),
+            "wait": false,
+            "follow": false
+        }))
+        .unwrap()
+    };
+    assert!(core.show_replica_overlay(&overlay("live-job"), session));
+    assert!(
+        core.close_replica_overlay("live-job", session),
+        "the origin closes the overlay its job still holds"
+    );
+    let left = |core: &Core| {
+        core.library()
+            .held_session(session)
+            .unwrap()
+            .pane_overlay(OverlayPane::Left)
+            .is_some()
+    };
+    assert!(!left(&core));
+
+    assert!(core.show_replica_overlay(&overlay("old-job"), session));
+
+    let store = core.library_mut().store_for_session_mut(session).unwrap();
+    assert!(store.close_pane_overlay(session, OverlayPane::Left));
+    store
+        .open_pane_overlay(
+            session,
+            OverlayPane::Left,
+            OverlayProgram {
+                command: "local-program".to_owned(),
+                ..OverlayProgram::default()
+            },
+        )
+        .unwrap();
+
+    assert!(!core.close_replica_overlay("old-job", session));
+    let replacement = core
+        .library()
+        .held_session(session)
+        .unwrap()
+        .pane_overlay(OverlayPane::Left);
+    assert_eq!(
+        replacement.map(|open| open.command.as_str()),
+        Some("local-program"),
+        "the old job's generation no longer owns the slot"
+    );
+}

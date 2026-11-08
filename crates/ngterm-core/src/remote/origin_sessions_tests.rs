@@ -69,6 +69,7 @@ fn an_invalid_host_refuses_create_before_running_a_remote_command() {
 fn an_invalid_host_after_live_check_never_runs_create() {
     let (mut core, window, session, _dir) = core();
     let mut flow = AttachFlow::new(window, Some(session));
+    flow.action = CreateRequest::New.action();
     let answer = Arc::new(Mutex::new(Some(RemoteCommandResult {
         status: 0,
         stdout: r#"{"ok":true,"result":{"restore":{"configured":"live","requestedAtLaunch":"live","active":"live","restartRequired":false}}}"#.to_owned(),
@@ -78,8 +79,7 @@ fn an_invalid_host_after_live_check_never_runs_create() {
         core.step_checking(&mut flow, "-invalid", &CreateRequest::New, answer)
             .is_none()
     );
-    // The flow's default title is Attach Remote until start_create_session sets it.
-    failed_panel(&core, session, "Attach Remote", "the remote command failed on -invalid");
+    failed_panel(&core, session, NEW_SESSION, "the remote command failed on -invalid");
     assert_eq!(core.library().store(window).unwrap().sessions().count(), 1);
 }
 
@@ -110,6 +110,7 @@ fn a_created_session_that_cannot_be_listed_is_reported_without_retrying_create()
     let created = crate::pane_env::uuid_string(Uuid::new_v4());
     let wait = ListingWait::new(created.clone(), core.remote_now());
     let mut flow = AttachFlow::new(window, Some(session));
+    flow.action = CreateRequest::New.action();
     assert!(
         core.step_waiting(
             &mut flow,
@@ -123,7 +124,7 @@ fn a_created_session_that_cannot_be_listed_is_reported_without_retrying_create()
     failed_panel(
         &core,
         session,
-        "Attach Remote",
+        NEW_SESSION,
         &format!(
             "created session {created} on -invalid but could not attach it: invalid host; `ngtermctl live attach -invalid {created}` attaches it"
         ),
