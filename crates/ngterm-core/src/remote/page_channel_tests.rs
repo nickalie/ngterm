@@ -628,11 +628,25 @@ fn the_reader_stops_once_the_permits_close() {
 #[test]
 fn an_oversized_resource_fails_without_using_a_slot_or_closing_the_channel() {
     let mut harness = Harness::new();
-    let oversized = harness.fetch(&"x".repeat(page_serve::MAX_FRAME_BYTES));
-    assert_eq!(harness.finished(oversized), Some(Err(ChannelFailure::TooLarge)));
+    // More oversized fetches than there are slots: one that kept its slot would leave the last of them queued.
+    for _ in 0..=RESOURCE_LIMIT {
+        let oversized = harness.fetch(&"x".repeat(page_serve::MAX_FRAME_BYTES));
+        assert_eq!(harness.finished(oversized), Some(Err(ChannelFailure::TooLarge)));
+    }
     assert!(harness.origin.resources().is_empty());
     let next = harness.fetch("/docs/index.html");
     assert_eq!(harness.read(next).unwrap(), INDEX);
+
+    harness.origin.held = vec!["/docs/held.bin"];
+    for _ in 0..RESOURCE_LIMIT {
+        harness.fetch("/docs/held.bin");
+    }
+    harness.pump();
+    assert_eq!(
+        harness.origin.resources().len(),
+        RESOURCE_LIMIT + 1,
+        "every slot is still free"
+    );
     assert_eq!(harness.closes(), 0);
 }
 

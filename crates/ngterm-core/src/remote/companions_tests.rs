@@ -127,8 +127,21 @@ fn a_page_handover_reports_transport_and_receipt_failures_exactly() {
             "studio did not hand the page over",
         ),
         (result(0, r#"{"ok":false,"error":"page ended"}"#, ""), "page ended"),
+        // upstream decodes the page with the whole reply, so a page that won't decode is no answer at all
         (
             result(0, r#"{"ok":true,"result":{"companionPage":{}}}"#, ""),
+            "studio gave no answer",
+        ),
+        (
+            result(
+                0,
+                r#"{"ok":false,"error":"page ended","result":{"companionPage":{}}}"#,
+                " ssh: mux closed\n",
+            ),
+            "ssh: mux closed",
+        ),
+        (
+            result(0, r#"{"ok":true,"result":{"companionPage":null}}"#, ""),
             "studio did not hand the page over",
         ),
         (

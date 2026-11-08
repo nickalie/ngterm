@@ -1,17 +1,33 @@
 //! Saved rows are forgotten only on a definitive refusal, with a banner explaining the loss.
 
+use std::sync::Arc;
+
 use ngterm_proto::AppIdentity;
 use serde_json::json;
 
 use super::*;
 use crate::model::WindowLibrary;
+use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
 use crate::{CoreConfig, CoreState, NotificationEffect};
+
+/// An ssh that never reaches any machine, so no listing leaves this one.
+struct Offline;
+
+impl RemoteCommandRunner for Offline {
+    fn run(&self, _argv: &[String], _deadline: std::time::Duration) -> RemoteCommandResult {
+        RemoteCommandResult {
+            status: 255,
+            stdout: String::new(),
+            stderr: "ssh: offline in tests".to_owned(),
+        }
+    }
+}
 
 fn core() -> (Core, Uuid, Uuid) {
     let mut library = WindowLibrary::new("/tmp");
     let window = library.new_window(None);
     let workspace = library.store(window).unwrap().workspaces()[0].id();
-    let core = Core::new(
+    let mut core = Core::new(
         CoreConfig {
             app: AppIdentity::from_recorded("0.1.0", None),
             capabilities: Vec::new(),
@@ -22,6 +38,7 @@ fn core() -> (Core, Uuid, Uuid) {
             persistence: None,
         },
     );
+    core.set_remote_runner(Arc::new(Offline));
     (core, window, workspace)
 }
 
@@ -131,6 +148,11 @@ fn a_listing_still_in_flight_keeps_the_saved_row_without_a_banner() {
     });
     core.reattach_saved_remotes();
     core.tick_relaunch(now);
+    assert_eq!(
+        core.remote.viewer.relaunch_reads.len(),
+        1,
+        "no second listing of studio"
+    );
     assert_eq!(core.relaunch_pending(), Some(true));
     assert_eq!(core.library().store(window).unwrap().saved_remote_rows(), &[row]);
     assert!(banners(&mut core).is_empty());
