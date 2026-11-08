@@ -127,6 +127,19 @@ unsigned ngterm_key_flags(unsigned long flags, bool repeat, bool ascii,
     packed |= 64;
   return packed;
 }
+// The first Unicode scalar of `string`: 0 for an empty string or a lone
+// surrogate.
+unsigned ngterm_first_scalar(NSString *string) {
+  UTF32Char scalar = 0;
+  [string getBytes:&scalar
+           maxLength:sizeof scalar
+          usedLength:NULL
+            encoding:NSUTF32LittleEndianStringEncoding
+             options:0
+               range:NSMakeRange(0, string.length)
+      remainingRange:NULL];
+  return scalar;
+}
 int ngterm_key_event(void *pointer, unsigned *mods, unsigned *plain,
                      unsigned *command, char *text, char *withoutOption,
                      unsigned capacity) {
@@ -147,8 +160,8 @@ int ngterm_key_event(void *pointer, unsigned *mods, unsigned *plain,
   NSString *base = [event charactersByApplyingModifiers:0];
   NSString *cmd =
       [event charactersByApplyingModifiers:NSEventModifierFlagCommand];
-  *plain = base.length ? [base characterAtIndex:0] : 0;
-  *command = cmd.length ? [cmd characterAtIndex:0] : 0;
+  *plain = ngterm_first_scalar(base);
+  *command = ngterm_first_scalar(cmd);
   NSEventModifierFlags held =
       event.modifierFlags &
       ~(NSEventModifierFlagControl | NSEventModifierFlagCommand);

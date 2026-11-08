@@ -159,9 +159,9 @@ pub fn current_source(_keystroke: &Keystroke) -> Source {
             128,
         )
     };
-    // SAFETY: the adapter always NUL-terminates the output buffer.
+    // SAFETY: the buffer starts zeroed and the adapter only ever writes a NUL-terminated string into it.
     let text = unsafe { std::ffi::CStr::from_ptr(text.as_ptr()) };
-    // SAFETY: the adapter always NUL-terminates this output buffer too.
+    // SAFETY: as above.
     let without_option = unsafe { std::ffi::CStr::from_ptr(without_option.as_ptr()) };
     decode_macos_key(code, flags, plain, command, text, without_option)
 }
@@ -208,7 +208,11 @@ fn decode_macos_key(
         composing: flags & 4 != 0,
         repeat: flags & 1 != 0,
         locks,
-        command: modifiers.platform.then(|| char::from_u32(command)).flatten(),
+        command: modifiers
+            .platform
+            .then(|| char::from_u32(command))
+            .flatten()
+            .filter(|ch| *ch != '\0'),
         sides: {
             let mut sides = ngterm_term::ModSides::empty();
             sides.set(ngterm_term::ModSides::ALT, flags & 8 != 0);

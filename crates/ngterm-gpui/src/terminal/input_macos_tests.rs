@@ -148,6 +148,7 @@ fn layout_characters_and_command_table_keep_unicode_and_reject_invalid_scalars()
         for (flags, command, expected_command) in [
             (0, u32::from('1'), None),
             (1 << 20, u32::from('1'), Some('1')),
+            (1 << 20, 0, None),
             (1 << 20, 0xdfff, None),
             (1 << 20, 0x11_0000, None),
         ] {
@@ -163,7 +164,7 @@ fn layout_characters_and_command_table_keep_unicode_and_reject_invalid_scalars()
 }
 
 #[test]
-fn typed_and_option_free_text_are_lossy_utf8_and_stop_at_nul() {
+fn typed_and_option_free_text_are_lossy_utf8() {
     let invalid = c"\xff";
     for (text, without_option, expected_text, expected_without) in [
         (c"", c"", "", ""),
@@ -171,12 +172,6 @@ fn typed_and_option_free_text_are_lossy_utf8_and_stop_at_nul() {
         (c"你好", c"é", "你好", "é"),
         (invalid, c"a", "�", "a"),
         (c"a", invalid, "a", "�"),
-        (
-            std::ffi::CStr::from_bytes_until_nul(b"a\0ignored").unwrap(),
-            c"a",
-            "a",
-            "a",
-        ),
     ] {
         let Source::Native(key) = decode_macos_key(0, 0, 0, 0, text, without_option) else {
             panic!("the A key has a native record");
