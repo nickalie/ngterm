@@ -99,6 +99,55 @@ fn a_line_longer_than_libghostty_reads_ends_the_file() {
     assert_eq!(count(&fits), 1, "a 4094-byte line is still a line: an unknown key");
 }
 
+/// Counts the warnings logged while it is the thread's subscriber.
+#[derive(Default)]
+struct Warnings(std::sync::atomic::AtomicUsize);
+
+impl Warnings {
+    /// How many warnings `run` logs on this thread.
+    fn logged_by(run: impl FnOnce()) -> usize {
+        let dispatch = tracing::Dispatch::new(Self::default());
+        tracing::dispatcher::with_default(&dispatch, run);
+        dispatch
+            .downcast_ref::<Self>()
+            .map_or(0, |warnings| warnings.0.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+impl tracing::Subscriber for Warnings {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if *event.metadata().level() == tracing::Level::WARN {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+#[test]
+fn a_line_too_long_to_read_is_logged_not_counted() {
+    let text = format!("{}\nfont-size = 14\n", "x".repeat(4095));
+    let mut read = None;
+    let warnings = Warnings::logged_by(|| read = Some(lines(&text)));
+    assert_eq!(read, Some(Vec::new()), "the file stops at the long line");
+    assert_eq!(warnings, 1);
+    assert_eq!(Warnings::logged_by(|| drop(lines("font-size = 14\n"))), 0);
+}
+
 #[test]
 fn diagnostics_display_as_ghostty_formats_them() {
     let built = load("font-size = 12\nno-such-key = 1\n");
@@ -112,6 +161,15 @@ fn diagnostics_display_as_ghostty_formats_them() {
         message: "config-file /x: cycle detected".to_owned(),
     };
     assert_eq!(file_level.to_string(), "config-file /x: cycle detected");
+    let located_without_key = Diagnostic {
+        location: Some(Location {
+            path: PathBuf::from("a.conf"),
+            line: 3,
+        }),
+        key: String::new(),
+        message: "bad line".to_owned(),
+    };
+    assert_eq!(located_without_key.to_string(), "a.conf:3: bad line");
 }
 
 // -- values by kind
@@ -1297,6 +1355,155 @@ fn a_base_file_that_is_not_regular_is_skipped() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn an_include_of_an_empty_path_keeps_the_includes_before_it() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let main = write(
+        &dir.path().join("main.conf"),
+        "config-file = kept.conf\nconfig-file = ?\nconfig-file = ?\"\"\n",
+    )?;
+    write(&dir.path().join("kept.conf"), "font-size = 17\n")?;
+    let mut loader = Loader::new(None);
+    loader.load_file(&main);
+    loader.load_includes();
+    let built = loader.finish().finalize(false, &[]);
+    assert_eq!(built.diagnostics, [], "a path empty after `?` and quotes is ignored");
+    assert!((built.config.font.size - 17.0).abs() < f32::EPSILON);
+    Ok(())
+}
+
+/// Takes the read permission off `path`; `false` when that does not stop this process reading it (as root).
+#[cfg(unix)]
+fn deny_reading(path: &Path) -> std::io::Result<bool> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000))?;
+    Ok(std::fs::read(path).is_err())
+}
+
+/// The loading diagnostics of `text` loaded as a file in `dir`, its includes after it.
+#[cfg(unix)]
+fn file_messages(dir: &Path, text: &str) -> std::io::Result<Vec<String>> {
+    let main = write(&dir.join("main.conf"), text)?;
+    let mut loader = Loader::new(None);
+    loader.load_file(&main);
+    loader.load_includes();
+    Ok(loader
+        .finish()
+        .finalize(false, &[])
+        .diagnostics
+        .iter()
+        .map(ToString::to_string)
+        .collect())
+}
+
+#[test]
+#[cfg(unix)]
+fn an_include_that_cannot_be_read_counts_once() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().canonicalize()?;
+    let locked = write(&root.join("locked.conf"), "font-size = 30\n")?;
+    if !deny_reading(&locked)? {
+        return Ok(());
+    }
+    assert_eq!(
+        file_messages(&root, "config-file = ?locked.conf\n")?,
+        [format!(
+            "error opening config-file {}: error.AccessDenied",
+            locked.display()
+        )],
+        "even an optional one: it is there"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn an_include_of_a_device_is_refused_by_its_file_type() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    assert_eq!(
+        file_messages(dir.path(), "config-file = /dev/null\n")?,
+        ["config-file /dev/null: not reading because file type is character_device"]
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn a_relative_path_through_a_file_counts_and_stays_unset() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().canonicalize()?;
+    write(&root.join("plain"), "")?;
+    let main = write(&root.join("main.conf"), "background-image = plain/w.png\n")?;
+    let mut loader = Loader::new(None);
+    loader.load_file(&main);
+    let built = loader.finish().finalize(false, &[]);
+    let messages: Vec<_> = built.diagnostics.iter().map(ToString::to_string).collect();
+    assert_eq!(messages, ["error resolving file path plain/w.png: error.NotDir"]);
+    assert_eq!(built.config.background_image.path, None);
+    Ok(())
+}
+
+// -- file errors
+
+#[test]
+fn io_errors_take_the_closest_zig_name() {
+    use std::io::{Error, ErrorKind};
+    for (kind, name) in [
+        (ErrorKind::NotFound, "error.FileNotFound"),
+        (ErrorKind::PermissionDenied, "error.AccessDenied"),
+        (ErrorKind::IsADirectory, "error.IsDir"),
+        (ErrorKind::NotADirectory, "error.NotDir"),
+        (ErrorKind::InvalidFilename, "error.NameTooLong"),
+        (ErrorKind::Interrupted, "error.Unexpected"),
+    ] {
+        assert_eq!(parse::zig_error(&Error::from(kind)), name, "{kind:?}");
+    }
+}
+
+#[test]
+fn paths_resolve_dots_lexically() {
+    assert_eq!(parse::normalized(Path::new("./a/./b/../c")), PathBuf::from("a/c"));
+    assert_eq!(
+        parse::normalized(Path::new("/a/../../b")),
+        PathBuf::from("/b"),
+        "nothing above the root"
+    );
+}
+
+#[test]
+fn file_types_take_zigs_kind_names() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let file = write(&dir.path().join("file"), "")?;
+    let kind = |path: &Path| std::fs::symlink_metadata(path).map(|meta| parse::file_kind(meta.file_type()));
+    assert_eq!(kind(&file)?, "file");
+    assert_eq!(kind(dir.path())?, "directory");
+    #[cfg(unix)]
+    {
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&file, &link)?;
+        assert_eq!(kind(&link)?, "sym_link");
+        let socket = dir.path().join("socket");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket)?;
+        assert_eq!(kind(&socket)?, "unix_domain_socket");
+        let fifo = dir.path().join("fifo");
+        make_fifo(&fifo)?;
+        assert_eq!(kind(&fifo)?, "named_pipe");
+        assert_eq!(kind(Path::new("/dev/null"))?, "character_device");
+    }
+    Ok(())
+}
+
+/// A named pipe at `path`: std has no `mkfifo`, the tool does.
+#[cfg(unix)]
+fn make_fifo(path: &Path) -> std::io::Result<()> {
+    let status = std::process::Command::new("mkfifo").arg(path).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("mkfifo {}: {status}", path.display())))
+    }
+}
+
 // -- themes
 
 #[test]
@@ -1422,6 +1629,78 @@ fn theme_paths_absolute_or_bare_names_only() -> TestResult {
         1,
         "a pair without its dark side is malformed"
     );
+    Ok(())
+}
+
+/// The diagnostics of a config setting `theme`, with the theme directories `dirs`.
+#[cfg(unix)]
+fn theme_messages(theme: &str, dirs: &[PathBuf]) -> Vec<String> {
+    finalize_with(None, &format!("theme = {theme}\n"), false, dirs)
+        .diagnostics
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+#[test]
+#[cfg(unix)]
+fn a_theme_that_cannot_be_opened_counts_once_with_its_error() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let plain = write(&dir.path().join("plain"), "")?;
+    write(&dir.path().join("Ink"), "background = #010101\n")?;
+    let through_file = plain.join("Ink");
+    assert_eq!(
+        theme_messages(&through_file.display().to_string(), &[]),
+        [format!(
+            "failed to load theme from the path \"{}\": error.NotDir",
+            through_file.display()
+        )]
+    );
+    assert_eq!(
+        theme_messages("Ink", &[plain.clone(), dir.path().to_path_buf()]),
+        [format!(
+            "failed to load theme \"Ink\" from the file \"{}\": error.NotDir",
+            through_file.display()
+        )],
+        "the lookup stops at a directory that cannot be searched"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn a_theme_that_is_no_regular_file_is_refused_before_it_is_opened() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let fifo = dir.path().join("Pipe");
+    make_fifo(&fifo)?;
+    assert_eq!(
+        theme_messages(&fifo.display().to_string(), &[]),
+        [format!(
+            "not reading theme from \"{}\": it is a named_pipe",
+            fifo.display()
+        )],
+        "a FIFO is not read, so loading does not block on it"
+    );
+    assert_eq!(
+        theme_messages("Pipe", &[dir.path().to_path_buf()]),
+        ["not reading theme from \"Pipe\": it is a named_pipe"]
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn a_theme_file_that_cannot_be_read_counts_once() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let locked = write(&dir.path().join("Locked"), "background = #010101\n")?;
+    if !deny_reading(&locked)? {
+        return Ok(());
+    }
+    let built = finalize_with(None, "theme = Locked\n", false, &[dir.path().to_path_buf()]);
+    let messages: Vec<_> = built.diagnostics.iter().map(ToString::to_string).collect();
+    assert_eq!(messages, ["not reading theme from \"Locked\": error.AccessDenied"]);
+    assert_eq!(built.theme_path, None);
+    assert_ne!(built.config.colors.background, Rgb::new(1, 1, 1));
     Ok(())
 }
 

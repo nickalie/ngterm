@@ -315,6 +315,51 @@ fn an_action_prints_as_a_config_line_writes_it() {
 }
 
 #[test]
+fn every_parameter_prints_back_as_the_line_that_set_it() {
+    for text in [
+        "csi:A",
+        "esc:b",
+        "search:needle",
+        "set_surface_title:a title",
+        "set_tab_title:tab",
+        "set_window_title:window",
+        "activate_key_table:vim",
+        "activate_key_table_once:vim",
+        "increase_font_size:1",
+        "decrease_font_size:1.5",
+        "scroll_page_fractional:0.25",
+        "navigate_search:next",
+        "goto_window:previous",
+        "scroll_to_row:5",
+        "goto_tab:3",
+        "scroll_page_lines:-3",
+        "jump_to_prompt:1",
+        "adjust_selection:page_up",
+        "write_screen_file:open,html",
+        "write_selection_file:copy,plain",
+        "new_split:left",
+        "inspector:toggle",
+        "open_config:new_window",
+        "close_tab:right",
+        "crash:render",
+    ] {
+        let printed = action(text).to_string();
+        assert_eq!(printed, text);
+        assert_eq!(action(&printed), action(text), "{text} parses back to itself");
+    }
+    assert_eq!(
+        action("new_split").to_string(),
+        "new_split:auto",
+        "a defaulted parameter prints"
+    );
+    assert_eq!(
+        action("goto_split:top").to_string(),
+        "goto_split:up",
+        "an alias prints as its tag"
+    );
+}
+
+#[test]
 fn csi_esc_and_text_write_their_bytes() {
     assert_eq!(action("csi:A").pty_bytes(), Some(b"\x1b[A".to_vec()));
     assert_eq!(action("esc:b").pty_bytes(), Some(b"\x1bb".to_vec()));
@@ -395,6 +440,20 @@ fn old_key_names_still_parse_and_malformed_triggers_do_not() {
 }
 
 #[test]
+fn triggers_print_modifiers_in_ghosttys_order_then_the_key() {
+    for (text, printed) in [
+        ("shift+alt+ctrl+super+key_c", "super+ctrl+alt+shift+key_c"),
+        ("opt+cmd+ф", "super+alt+ф"),
+        ("control+catch_all", "ctrl+catch_all"),
+        ("ctrl++", "ctrl++"),
+        ("caps_lock+a", "a"),
+        ("ArrowUp", "arrow_up"),
+    ] {
+        assert_eq!(trigger(text).to_string(), printed, "{text}");
+    }
+}
+
+#[test]
 fn character_triggers_compare_case_folded() {
     assert_eq!(trigger("ctrl+A"), trigger("ctrl+a"));
     assert_eq!(trigger("Ф"), trigger("ф"));
@@ -423,6 +482,11 @@ fn the_physical_keys_are_ghosttys() {
     );
     assert_eq!(PhysicalKey::from_w3c("IntlRo").map(PhysicalKey::name), Some("intl_ro"));
     assert_eq!(PhysicalKey::from_w3c("Key-A"), None);
+    assert_eq!(
+        PhysicalKey::from_w3c(&"A".repeat(129)),
+        None,
+        "longer than ghostty's buffer"
+    );
     assert!(physical("shift_left").is_modifier());
     assert!(!physical("key_a").is_modifier());
 }
@@ -472,7 +536,31 @@ fn a_value_is_checked_alone_as_the_config_table_checks_it() {
     }
 }
 
+#[test]
+fn a_refusal_prints_as_its_zig_error() {
+    assert_eq!(BindError::InvalidFormat.to_string(), "error.InvalidFormat");
+    assert_eq!(
+        "nope".parse::<Action>().map_err(|error| error.to_string()),
+        Err("error.InvalidAction".to_owned())
+    );
+}
+
 // -- the built-in binds
+
+#[test]
+fn a_config_starts_from_ghosttys_binds() {
+    assert_eq!(Keybinds::default(), Keybinds::defaults());
+    assert_ne!(Keybinds::default(), Keybinds::cleared());
+}
+
+#[test]
+fn binds_are_equal_by_their_sets_and_tables_whatever_the_tables_order() {
+    let vim_then_emacs = with_lines(&["vim/j=ignore", "emacs/n=ignore"]);
+    assert_eq!(vim_then_emacs, with_lines(&["emacs/n=ignore", "vim/j=ignore"]));
+    assert_ne!(vim_then_emacs, with_lines(&["vim/j=ignore", "emacs/p=ignore"]));
+    assert_ne!(vim_then_emacs, with_lines(&["vim/j=ignore", "other/n=ignore"]));
+    assert_ne!(vim_then_emacs, with_lines(&["vim/j=ignore"]));
+}
 
 #[test]
 fn ghosttys_linux_binds_are_the_defaults() {
