@@ -80,11 +80,11 @@ fn passive_link_hover_and_click_require_a_modifier_and_in_bounds_position(cx: &m
         .borrow()
         .iter()
         .filter_map(|event| match event {
-            TerminalEvent::OpenUrl { url, browser, .. } => Some((url.clone(), *browser)),
+            TerminalEvent::OpenUrl { url, intent, .. } => Some((url.clone(), *intent)),
             _ => None,
         })
         .collect();
-    assert_eq!(opened, [("https://example.com".to_owned(), false)]);
+    assert_eq!(opened, [("https://example.com".to_owned(), ClickIntent::Normal)]);
     assert!(view.read_with(f.cx, |view, _| view.hovered_link().is_none()));
 }
 

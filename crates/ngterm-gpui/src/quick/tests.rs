@@ -739,7 +739,7 @@ fn a_quick_link_opens_in_the_browser_and_a_spawn_failure_dismisses_the_panel(cx:
         &h.env.poster,
         &TerminalEvent::OpenUrl {
             url: "https://example.com/quick".to_owned(),
-            browser: true,
+            intent: ngterm_core::link_policy::ClickIntent::Browser,
             kind: crate::terminal::LinkKind::Osc8,
         },
     );

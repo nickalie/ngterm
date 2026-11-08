@@ -392,7 +392,7 @@ fn font_and_spawn_events_refresh_the_body_and_hud_links_use_the_browser() {
     }
     let event = TerminalEvent::OpenUrl {
         url: "https://example.com/hud".to_owned(),
-        browser: true,
+        intent: ngterm_core::link_policy::ClickIntent::Browser,
         kind: crate::terminal::LinkKind::Osc8,
     };
     send_event(&mut state, &posted, session, generation, &event);
