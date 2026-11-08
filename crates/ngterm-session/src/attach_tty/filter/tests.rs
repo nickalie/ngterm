@@ -226,3 +226,82 @@ fn a_reset_that_passes_is_followed_by_what_comes_after_it() {
     assert_eq!(out, b"\x1b#c");
     assert_eq!(filtered(b"\x1bc"), b"\x1bc", "nothing after it unless asked");
 }
+
+#[test]
+fn a_default_filter_is_a_new_one() {
+    let mut filter = OutputFilter::default();
+    assert!(filter.at_ground());
+    let mut out = Vec::new();
+    filter.feed(b"a\x1b[cb", &mut out);
+    assert_eq!(out, b"ab");
+}
+
+#[test]
+fn a_csi_past_its_limit_passes_whole_even_when_it_ends_as_a_query() {
+    let mut long = b"\x1b[".to_vec();
+    long.extend(b"1;".repeat(CSI_LIMIT));
+    long.push(b'c');
+    assert_split_safe(&long, &long);
+}
+
+#[test]
+fn a_c1_introducer_inside_a_sequence_abandons_it_and_starts_its_own() {
+    // the CSI held passes, unfinished, and the C1 CSI after it is classified on its own
+    assert_split_safe(b"\x1b[1\x9b6nx", b"\x1b[1x");
+    assert_split_safe(b"\x1b[1\x9b1mx", b"\x1b[1\x9b1mx");
+    // a C1 DCS and a C1 OSC, queries both, dropped with what ends them
+    assert_split_safe(b"\x1b[\x90$qm\x1b\\x", b"\x1b[x");
+    assert_split_safe(b"\x1b[\x9d11;?\x07x", b"\x1b[x");
+    // a C1 SOS passes as it comes, up to the C1 ST that ends it
+    assert_split_safe(b"\x1b[1\x98ab\x9cx", b"\x1b[1\x98ab\x9cx");
+    // an escape with an intermediate is abandoned the same way
+    assert_split_safe(b"\x1b(\x18x", b"\x1b(\x18x");
+    assert_split_safe(b"\x1b(\x9b5nx", b"\x1b(x");
+}
+
+#[test]
+fn a_dcs_the_terminal_ignores_passes_unchanged() {
+    for ignored in [b"\x1bP:x\x1b\\y".as_slice(), b"\x1bP1<x\x1b\\y", b"\x1bP$0x\x1b\\y"] {
+        assert_split_safe(ignored, ignored);
+    }
+}
+
+#[test]
+fn a_dcs_header_ignores_del_and_is_abandoned_by_can() {
+    // DEL inside the header is ignored: still DECRQSS, dropped
+    assert_split_safe(b"\x1bP$\x7fqm\x1b\\z", b"z");
+    // CAN abandons the header, and the string after it, unfinished, passes
+    assert_split_safe(b"\x1bP1\x18z", b"\x1bP1\x18z");
+    // CAN ends a DCS string that is no query, which passed as it came
+    assert_split_safe(b"\x1bPqab\x18z", b"\x1bPqab\x18z");
+}
+
+#[test]
+fn a_prompt_mark_of_another_kind_is_not_rewritten() {
+    assert_split_safe(b"\x1b]133;AB\x07", b"\x1b]133;AB\x07");
+}
+
+#[test]
+fn a_utf8_character_of_four_bytes_holds_the_ground_until_its_last_byte() {
+    let emoji = "\u{1f600}".as_bytes();
+    let mut filter = OutputFilter::new();
+    let mut out = Vec::new();
+    for byte in &emoji[..3] {
+        filter.feed(std::slice::from_ref(byte), &mut out);
+        assert!(!filter.at_ground());
+    }
+    filter.feed(&emoji[3..], &mut out);
+    assert!(filter.at_ground());
+    assert_eq!(out, emoji);
+}
+
+#[test]
+fn feeding_until_ground_takes_everything_when_the_sequence_stays_open() {
+    let mut filter = OutputFilter::new();
+    let mut out = Vec::new();
+    assert_eq!(filter.feed_until_ground(b"\x1b[1;3", &mut out), 5);
+    assert!(!filter.at_ground());
+    assert_eq!(out, b"", "an unfinished CSI is held");
+    assert_eq!(filter.feed_until_ground(b"1mxyz", &mut out), 2);
+    assert_eq!(out, b"\x1b[1;31m");
+}

@@ -24,11 +24,12 @@ use ngterm_session::client::{
     AttachEvent, AttachReader, Attachment, Barrier, Client, ClientError, DETACH_WAIT, Delegated,
 };
 use ngterm_session::protocol::{
-    AttachClientMessage, AttachRefusal, AttachRequest, AttachServerMessage, ColorScheme, DelegatedReply,
-    DelegatedRequest, ExitStatus, FramingError, GridSize, LeadRole, MAGIC, Managed, ReplyMetadata, Rgb, SessionSpec,
+    ApiRequest, ApiResponse, AttachClientMessage, AttachRefusal, AttachRequest, AttachServerMessage, ColorScheme,
+    DelegatedReply, DelegatedRequest, ExitStatus, FramingError, GridSize, LeadRole, MAGIC, Managed, ReplyMetadata, Rgb,
+    SessionRecord, SessionSpec,
 };
 use ngterm_session::server::lifecycle::StopReason;
-use peer::{Server, Step, attach_peer, next_message};
+use peer::{Answer, Server, Step, api_peer, attach_peer, next_message};
 use support::{PATIENCE, SIZE, TestResult, shell, shown, tagged};
 
 const OTHER: GridSize = GridSize { cols: 100, rows: 40 };
@@ -661,5 +662,133 @@ fn a_delegated_clipboard_read_and_the_reply_metadata_go_end_to_end() -> TestResu
     assert_eq!(printed(&text, "scheme2"), hex(b"\x1b[?997;1n"), "{text:?}");
     drop(writer);
     assert_eq!(server.stopped()?, StopReason::Idle);
+    Ok(())
+}
+
+/// A Kitty barrier or a delegated request of a superseded epoch, arriving after the resync, is dropped by the reader:
+/// the next event is what follows it.
+#[test]
+fn a_request_of_a_superseded_epoch_is_skipped_by_the_reader() -> TestResult {
+    let (peer, _received) = attach_peer(vec![
+        owner(),
+        begin(1, 0),
+        end(1),
+        begin(2, 0),
+        end(2),
+        Step::Send(AttachServerMessage::KittyBarrier { id: 1, epoch: 1 }),
+        Step::Send(AttachServerMessage::DelegatedRequest {
+            id: 2,
+            epoch: 1,
+            request: clipboard(),
+        }),
+        output(0, b"after"),
+        Step::Receive,
+    ])?;
+    let Attachment { mut reader, writer, .. } = Client::new(peer.directory()).attach(request("stale", None))?;
+    let resync = AttachEvent::SnapshotBegin {
+        epoch: 2,
+        offset: 0,
+        size: SIZE,
+    };
+    while event(&mut reader)? != resync {}
+    assert_eq!(event(&mut reader)?, AttachEvent::SnapshotEnd);
+    assert_eq!(
+        event(&mut reader)?,
+        AttachEvent::Output {
+            offset: 0,
+            data: b"after".to_vec()
+        }
+    );
+    writer.detach()?;
+    assert_eq!(reader.recv()?, None);
+    Ok(())
+}
+
+/// Each api call checks the kind of its reply: another kind is the server's error, named after the call.
+#[test]
+fn an_api_reply_of_another_kind_than_its_call_is_unexpected() -> TestResult {
+    let (peer, log) = api_peer(|_| Answer::Reply(Ok(ApiResponse::JobRunning(true))))?;
+    let mut api = Client::new(peer.directory())
+        .with_timeout(PATIENCE)
+        .api()?
+        .ok_or("no server")?;
+    let unexpected = |call: &str| format!("the live session server answered {call} with JobRunning(true)");
+    assert_eq!(api.list().map_err(|err| err.to_string()), Err(unexpected("a list")));
+    assert_eq!(
+        api.kill(&["a".to_owned()], false).map_err(|err| err.to_string()),
+        Err(unexpected("a kill"))
+    );
+    assert_eq!(
+        api.screen("a", false).map_err(|err| err.to_string()),
+        Err(unexpected("a screen read"))
+    );
+    assert_eq!(
+        api.type_input("a", b"x").map_err(|err| err.to_string()),
+        Err(unexpected("typing"))
+    );
+    assert_eq!(
+        api.print("a", b"x").map_err(|err| err.to_string()),
+        Err(unexpected("a print"))
+    );
+    assert_eq!(
+        api.foreground_job(7).map_err(|err| err.to_string()),
+        Err(unexpected("a foreground job read"))
+    );
+    assert_eq!(peer::calls(&log).len(), 6, "the connection stays usable after each");
+    Ok(())
+}
+
+#[test]
+fn a_shells_foreground_job_is_read_through_the_api() -> TestResult {
+    let (peer, log) = api_peer(|request| match request {
+        ApiRequest::ForegroundJob { shell: 7 } => Answer::Reply(Ok(ApiResponse::ForegroundJob(None))),
+        _ => Answer::Close,
+    })?;
+    let mut api = Client::new(peer.directory())
+        .with_timeout(PATIENCE)
+        .api()?
+        .ok_or("no server")?;
+    assert_eq!(api.foreground_job(7)?, None, "a table the server cannot read");
+    assert_eq!(peer::calls(&log), [ApiRequest::ForegroundJob { shell: 7 }]);
+    Ok(())
+}
+
+/// The app's daemon under its name from before the rename: found in a listing that holds only the old name; none
+/// without a server, or when the listing fails.
+#[test]
+fn an_old_name_is_looked_up_only_where_a_listing_holds_it() -> TestResult {
+    const DAEMON: &str = "ngterm-00112233445566778899aabbccddeeff";
+    const LEGACY: &str = "agterm-00112233445566778899aabbccddeeff";
+    let (listing, _) = api_peer(|_| {
+        Answer::Reply(Ok(ApiResponse::Sessions(vec![SessionRecord {
+            name: LEGACY.to_owned(),
+            clients: 0,
+            leader_pid: Some(1),
+            created_at: 0,
+        }])))
+    })?;
+    let client = Client::new(listing.directory()).with_timeout(PATIENCE);
+    assert_eq!(client.legacy_stand_in(DAEMON), Some(LEGACY.to_owned()));
+    assert_eq!(client.legacy_stand_in("notes"), None, "no app daemon");
+
+    let (unexpected, _) = api_peer(|_| Answer::Reply(Ok(ApiResponse::Done)))?;
+    let client = Client::new(unexpected.directory()).with_timeout(PATIENCE);
+    assert_eq!(
+        client.legacy_stand_in(DAEMON),
+        None,
+        "a listing answered with another kind"
+    );
+
+    let (failing, log) = api_peer(|_| Answer::Close)?;
+    let client = Client::new(failing.directory()).with_timeout(PATIENCE);
+    assert_eq!(client.legacy_stand_in(DAEMON), None);
+    assert_eq!(
+        peer::calls(&log),
+        [ApiRequest::List],
+        "the listing was asked, and failed"
+    );
+
+    let root = tempfile::tempdir()?;
+    assert_eq!(Client::new(root.path().join("live")).legacy_stand_in(DAEMON), None);
     Ok(())
 }

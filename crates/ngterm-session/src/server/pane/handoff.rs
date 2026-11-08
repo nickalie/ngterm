@@ -750,4 +750,146 @@ mod tests {
         assert!(pane.wait_exit(PATIENCE).is_some());
         assert!(!pane.freeze());
     }
+
+    /// The formatter's restoration carries the primary screen only: a session on its alternate screen fails such a cut,
+    /// and the binary snapshot still carries it.
+    #[test]
+    fn a_session_on_its_alternate_screen_crosses_only_by_the_binary_snapshot() {
+        let namespace = tempfile::tempdir().unwrap();
+        let config = PaneConfig::new("alternate", namespace.path(), shell(), GridSize { cols: 80, rows: 24 });
+        let (pane, _creator) = Pane::spawn(config).unwrap();
+        wait_prompt(&pane);
+        pane.print(b"\x1b[?1049h").unwrap();
+        assert!(pane.with_terminal(|terminal| terminal.alternate_screen()));
+
+        assert!(pane.freeze());
+        pane.quiesce(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            pane.cut(VtEncoding::Formatter),
+            Err(
+                "the live session \"alternate\" shows its alternate screen, whose primary screen the formatter cannot \
+                 carry to a server of another libghostty-vt"
+                    .to_owned()
+            )
+        );
+        assert_eq!(pane.cut(VtEncoding::Binary).unwrap().state.vt, VtEncoding::Binary);
+        pane.resume(true);
+        type_line(&pane, &tagged("resumed"));
+        wait_screen(&pane, "got:resumed");
+        assert!(pane.kill(true).unwrap());
+    }
+
+    /// The replies a cut held are the imported program's first input, and the imported terminal has the grid the
+    /// manifest names, whatever the snapshot's.
+    #[test]
+    fn an_import_writes_the_replies_its_cut_held_at_the_manifests_size() {
+        let namespace = tempfile::tempdir().unwrap();
+        let config = PaneConfig::new("held", namespace.path(), shell(), GridSize { cols: 80, rows: 24 });
+        let (pane, _creator) = Pane::spawn(config).unwrap();
+        type_line(&pane, &tagged("ready"));
+        wait_screen(&pane, "got:ready");
+
+        assert!(pane.freeze());
+        pane.quiesce(Duration::from_secs(5)).unwrap();
+        let held = if cfg!(windows) {
+            "echo got^:held\r"
+        } else {
+            "echo got\"\":held\n"
+        };
+        pane.core.outlet.push(held.as_bytes());
+        let mut cut = pane.cut(VtEncoding::Binary).unwrap();
+        assert_eq!(cut.replies, held.as_bytes());
+        let size = GridSize { cols: 100, rows: 30 };
+        cut.state.size = size;
+        let imported = Pane::import(&cut.state, &cut.vt, &cut.replies, taken_over(&pane), Limits::default()).unwrap();
+        assert_eq!(
+            imported.with_terminal(|terminal| (terminal.cols(), terminal.rows())),
+            (size.cols, size.rows)
+        );
+        pane.hand_over();
+        imported.activate();
+        wait_screen(&imported, "got:held");
+        assert!(imported.kill(true).unwrap());
+        drop(pane);
+    }
+
+    /// A session whose terminal stands inside a sequence longer than it tracks has no consistent cut in either
+    /// encoding: the handoff fails, and the session runs on once rolled back.
+    #[test]
+    fn a_session_inside_a_sequence_it_cannot_hand_on_has_no_cut() {
+        let namespace = tempfile::tempdir().unwrap();
+        let mut config = PaneConfig::new("long", namespace.path(), shell(), GridSize { cols: 80, rows: 24 });
+        config.continuation_limit = 64;
+        let (pane, _creator) = Pane::spawn(config).unwrap();
+        wait_prompt(&pane);
+        let mut title = b"\x1b]2;".to_vec();
+        title.extend([b'x'; 100]);
+        pane.print(&title).unwrap();
+
+        assert!(pane.freeze());
+        pane.quiesce(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            pane.cut(VtEncoding::Formatter),
+            Err(
+                "the live session \"long\": no consistent snapshot can be cut now: the session's terminal is inside a \
+                 sequence it cannot hand on"
+                    .to_owned()
+            )
+        );
+        let binary = pane.cut(VtEncoding::Binary).unwrap_err();
+        assert!(
+            binary.starts_with("the terminal of the live session \"long\" could not be encoded: "),
+            "{binary}"
+        );
+        pane.resume(true);
+        assert!(pane.kill(true).unwrap());
+    }
+
+    /// An adopted program is told from a later process of its pid by its start time.
+    #[cfg(unix)]
+    #[test]
+    fn an_adopted_program_is_known_by_its_pid_and_start_time() {
+        let me = std::process::id();
+        let adopted = Adopted::of(me).unwrap();
+        assert!(adopted.started.is_some(), "the table names this process's start");
+        assert!(adopted.alive(me));
+        let later = Adopted {
+            started: adopted.started.map(|started| started + 1),
+        };
+        assert!(!later.alive(me), "another start under the pid is another program");
+        assert_eq!(Adopted::of(u32::MAX), None, "no process has that pid");
+        assert!(!adopted.alive(u32::MAX));
+    }
+
+    /// A handed-over PTY this server cannot resize fails the import, which leaves the program alone.
+    #[cfg(unix)]
+    #[test]
+    fn an_import_over_a_terminal_it_cannot_drive_fails_and_ends_nothing() {
+        let mut program = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let state = PaneState {
+            name: "undriven".to_owned(),
+            pid: program.id(),
+            created_at: 0,
+            tracked_env: Vec::new(),
+            term: None,
+            size: GridSize { cols: 80, rows: 24 },
+            offset: 0,
+            revision: 0,
+            vt: VtEncoding::Formatter,
+            vt_len: 0,
+            replies_len: 0,
+        };
+        let not_a_terminal = std::os::fd::OwnedFd::from(std::fs::File::open("/dev/null").unwrap());
+        let taken = (Master::from_fd(not_a_terminal), Child::adopt(program.id()));
+        let error = Pane::import(&state, b"", b"", taken, Limits::default()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("the handed-over terminal could not be driven: "),
+            "{error}"
+        );
+        assert!(program.try_wait().unwrap().is_none(), "the program runs on");
+        program.kill().unwrap();
+        program.wait().unwrap();
+    }
 }

@@ -1376,4 +1376,64 @@ mod tests {
         assert_eq!(SpawnPath::Breakaway.to_string(), "breakaway from the launcher's job");
         assert_eq!(SpawnPath::Wmi.to_string(), "WMI Win32_Process.Create");
     }
+
+    #[test]
+    fn an_executable_that_names_no_file_or_cannot_be_copied_has_no_image() {
+        let namespace = tempfile::tempdir().unwrap();
+        let error = private_image(Path::new("/"), namespace.path()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(error.to_string(), "the server executable names no file");
+        // a directory is no binary: the copy fails, and what it made is gone
+        let (root, executable) = staged_root(b"build a", None);
+        let directory = root.path().join("bin").join("ngterm-session.d");
+        std::fs::create_dir(&directory).unwrap();
+        assert!(private_image(&directory, namespace.path()).is_err());
+        let left: Vec<_> = std::fs::read_dir(namespace.path().join(IMAGES))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+        assert!(private_image(&executable, namespace.path()).is_ok());
+    }
+
+    /// Polls `process` until it ended.
+    #[cfg(unix)]
+    fn ended(process: &mut reaper::Process) -> Exit {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Some(exit) = process.try_exit() {
+                return exit;
+            }
+            assert!(Instant::now() < deadline, "the reaper never told the end");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_reaper_tells_the_status_or_an_end_whose_status_was_lost() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let status = ExitStatus::from_raw(3 << 8);
+        let mut reaped = reaper::Process::reap(move || Ok(status)).unwrap();
+        assert_eq!(ended(&mut reaped), Exit::Status(status));
+        assert_eq!(reaped.try_exit(), Some(Exit::Status(status)), "kept once read");
+        let mut lost = reaper::Process::reap(|| Err(io::Error::from_raw_os_error(libc::ECHILD))).unwrap();
+        assert_eq!(ended(&mut lost), Exit::Unknown);
+    }
+
+    /// A server the reaper saw end may have given its pid to another process: stopping it signals nothing.
+    #[cfg(unix)]
+    #[test]
+    fn stopping_a_server_that_ended_signals_nothing() {
+        let mut other = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let mut gone = reaper::Process::reap(|| Err(io::Error::from_raw_os_error(libc::ECHILD))).unwrap();
+        assert_eq!(ended(&mut gone), Exit::Unknown);
+        gone.terminate(other.id());
+        assert!(
+            other.try_wait().unwrap().is_none(),
+            "the process that has the pid now runs on"
+        );
+        other.kill().unwrap();
+        other.wait().unwrap();
+    }
 }
