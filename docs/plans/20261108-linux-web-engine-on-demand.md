@@ -82,6 +82,28 @@
 - **real systems**: a fresh Ubuntu 24.04 (download path) and Arch (system path), Task 9, against a local HTTP server
   through the URL override.
 
+## Test machines
+
+Four desktop Linux VMs on the host, created for this plan (2026-11-08), check the packages on real distros. Each has a
+GNOME desktop, the operator's user with sudo and the host's ssh key; none starts on its own.
+
+| placeholder | distro | expected engine path (Task 1 confirms) |
+|---|---|---|
+| `<ubuntu-ssh>` | Ubuntu 26.10 desktop | deb: system WPE if 26.10 ships 2.54+, else download |
+| `<debian-ssh>` | Debian 13 (trixie), GNOME | deb: download |
+| `<fedora-ssh>` | Fedora 45 Workstation | rpm: system WPE if Fedora ships 2.54+, else download |
+| `<opensuse-ssh>` | openSUSE Leap 16.1, GNOME | rpm: download |
+
+- The values (ssh aliases, VM names, state, start, stop and snapshot commands, the password variable) are in the
+  git-ignored `.claude/skills/agterm-upstream-sync/references/machines.local.md`, section "Linux distro VMs". Never
+  copy them into a tracked file.
+- Use them as `.claude/skills/agterm-upstream-sync/references/machines.md` says for the Windows VM: check the state
+  first, start on demand, one VM at a time (the host's CPU cap), stop what you started when the step ends, failures
+  included.
+- They are throwaway: a GUI run on their desktops is fine there. Before the first install, take a snapshot of each
+  with no ngterm on it, and revert to it before every fresh-install check.
+- Ubuntu 24.04, the deb's baseline, has no VM: its download path is checked in a container (Task 9).
+
 ## Progress Tracking
 
 - Mark completed items with `[x]` immediately when done.
@@ -173,7 +195,8 @@
 
 - [ ] list, for Debian (stable, testing), Ubuntu (24.04, the latest release), Fedora (current two) and openSUSE
       Tumbleweed: the package that ships `libWPEWebKit-2.0.so.1`, its version, whether it has the WPEPlatform API,
-      and whether it recommends the GStreamer plugins playback needs
+      and whether it recommends the GStreamer plugins playback needs; for the four test machines' distros, check it
+      there too (`apt-cache policy`, `dnf info`, `zypper info`)
 - [ ] confirm from WebKit's API/ABI policy that a binary built against the 2.54 headers runs on later 2.x releases
       with the same soname (the probe's lower bound only), and note any WPEPlatform API marked unstable
 - [ ] derive the plugin allowlist from the elements WPE 2.54 creates (`makeGStreamerElement`,
@@ -316,9 +339,13 @@
 ### Task 9: Verify acceptance criteria
 
 - [ ] every Linux package is under 45 MB; the runtime archive under 130 MB per architecture
-- [ ] a fresh Ubuntu 24.04 (container or VM, headless GUI as README > Test describes), runtime served locally through
+- [ ] a fresh Ubuntu 24.04 container (headless GUI as README > Test describes), runtime served locally through
       `NGTERM_WEB_ENGINE_URL`: the deb installs without WPE, the first page downloads the runtime, plays a video and
       Web Audio, the second app start reuses it
+- [ ] each of the four test machines, reverted to its clean snapshot: install the deb or rpm, then on its desktop open
+      a page that plays a video and Web Audio; it takes the engine path Task 1 recorded for it (system engine and no
+      download, or the download through `NGTERM_WEB_ENGINE_URL`); the tarball and the AppImage download on at least
+      one of them
 - [ ] Arch: the package pulls `wpewebkit`, the probe picks the system engine, nothing is downloaded
 - [ ] offline: `--install-web-engine` from a file; a tampered archive is refused
 - [ ] an older app and a newer one sharing the data dir: neither deletes the other's runtime while it runs
