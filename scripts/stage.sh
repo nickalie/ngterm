@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Assemble the staging layout the conformance runner, scripts/run-gpui-dev.sh and the install check run from:
 #
-#   bin/{ngterm,ngterm-headless,ngtermctl,ngterm-session}  share/ghostty/{themes,shell-integration}  share/terminfo
+#   bin/{ngterm,ngterm-headless,ngtermctl,ngterm-session}  bin/ngterm-web (Linux)
+#   share/ghostty/{themes,shell-integration}  share/terminfo
 #   share/ngterm/session-BUILD (the staged ngterm-session's build id, with bin/ngterm-session)
 #   share/ngterm/app-BUILD (the staged ngterm's version and commit, with bin/ngterm)
 #   share/ngterm/{agent-status,skills/ngterm}  share/ngterm/shell-integration/pwsh/ngterm.ps1
 #
 # from cargo's target dir and the vendored prefixes, plus ngterm's PowerShell integration and the agent
 # integrations' payloads from resources/. Binaries are staged when they exist (each appears with its crate's build:
-# ngterm, ngterm-headless, ngtermctl and the live sessions' server, ngterm-session); Ghostty's resources are
-# required. There is no lib/: libghostty-vt is linked statically. The terminfo, themes and shell integration are
+# ngterm, ngterm-headless, ngtermctl, the live sessions' server ngterm-session and the HTML worker ngterm-web on
+# Linux); Ghostty's resources are required. There is no lib/: libghostty-vt is linked statically. The terminfo,
+# themes and shell integration are
 # Ghostty's at LIBGHOSTTY_VT_REV, from the libghostty-vt prefix (scripts/build-ghostty-vt.sh).
 #
 # On Windows (Git Bash) the binaries are bin/{ngterm,ngterm-headless,ngtermctl,ngterm-session}.exe, the rest as on
@@ -61,7 +63,9 @@ cp -R "$GHOSTTY/share/ghostty/themes" "$GHOSTTY/share/ghostty/shell-integration"
 cp -R "$GHOSTTY/share/terminfo" "$DEST/share/terminfo"
 
 staged=()
-for binary in ngterm ngterm-headless ngtermctl; do
+stage_binaries=(ngterm ngterm-headless ngtermctl)
+[[ "$(host_os)" != linux ]] || stage_binaries+=(ngterm-web)
+for binary in "${stage_binaries[@]}"; do
   if [[ -x "$TARGET/$binary$EXE" ]]; then
     install -m755 "$TARGET/$binary$EXE" "$DEST/bin/$binary$EXE"
     staged+=("$binary$EXE")

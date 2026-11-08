@@ -27,6 +27,7 @@ ngterm-wpe-javascriptcore-sys = { path = "crates/ngterm-wpe-javascriptcore-sys" 
 ngterm-wpe-platform-sys = { path = "crates/ngterm-wpe-platform-sys" }
 ngterm-wpe-sys = { path = "crates/ngterm-wpe-sys" }
 ngterm-wpe = { path = "crates/ngterm-wpe" }
+ngterm-wpe-client = { path = "crates/ngterm-wpe-client" }
 # Release checks and streamed downloads run on a worker, with rustls TLS and bounded requests.
 ureq = "3.5.1"
 semver = "1"

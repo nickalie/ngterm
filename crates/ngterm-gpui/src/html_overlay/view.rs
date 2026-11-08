@@ -6,7 +6,7 @@
 //! - Frames: a dmabuf frame is imported once per buffer (its planes duplicated once, the import dropped when the buffer
 //!   leaves the page's set) and shown once its implicit fence signals (WPE hands no rendering fence); an SHM frame
 //!   updates its damage. Every outcome (presented, discarded, failed) tells the engine the buffer may be reused; a
-//!   buffer that does not import switches the page to SHM frames ([`ngterm_wpe::Host::fall_back_to_shm`]), logged with
+//!   buffer that does not import switches the page to SHM frames ([`ngterm_wpe_client::Host::fall_back_to_shm`]), logged with
 //!   the note that video is not supported there: refused at once by the device's caps, or failed later in the
 //!   renderer, whose report wakes the element at once (a still page sends no further frame to notice it by). SHM is
 //!   never chosen while dmabufs import.
@@ -41,7 +41,7 @@ use gpui_kit::{
     Pixels, Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
     UTF16Selection, Window, canvas, div, point, px, size,
 };
-use ngterm_wpe::{
+use ngterm_wpe_client::{
     Area, BufferId, ContextMenu, EditingCommand, Event, Frame, FrameContent, Geometry, Input, Key, Modifiers,
     OptionMenu, Pointer, PointerKind, Scroll, ViewId,
 };
@@ -174,7 +174,7 @@ impl PageView {
     }
 
     /// The engine closed popup `token` itself.
-    pub(super) fn menu_closed(&mut self, token: ngterm_wpe::MenuToken, cx: &mut Context<Self>) {
+    pub(super) fn menu_closed(&mut self, token: ngterm_wpe_client::MenuToken, cx: &mut Context<Self>) {
         if matches!(&self.menu, Some(Menu::Options { token: shown, .. }) if *shown == token) {
             self.menu = None;
             cx.notify();
@@ -693,7 +693,7 @@ fn listen(view: &gpui_kit::Entity<PageView>, hitbox: &gpui_kit::Hitbox, window: 
 }
 
 /// The engine's dmabuf as GPUI's, its planes duplicated (the engine's own copies go with its frame).
-fn gpui_buffer(dmabuf: &ngterm_wpe::DmaBuf) -> std::io::Result<DmaBuffer> {
+fn gpui_buffer(dmabuf: &ngterm_wpe_client::DmaBuf) -> std::io::Result<DmaBuffer> {
     let planes = dmabuf
         .planes
         .iter()

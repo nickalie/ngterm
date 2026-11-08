@@ -1,10 +1,10 @@
-//! The forwarding adapter against the real engine, isolated because `WebKit` starts once per process.
+//! The forwarding adapter against the real worker, with isolated storage and process exit.
 
 use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use ngterm_wpe::{Event, FrameMode, HostConfig, InjectionTime, MessageHandler, Settings};
+use ngterm_wpe_client::{Event, FrameMode, HostConfig, InjectionTime, MessageHandler, Settings};
 
 use super::*;
 
@@ -16,8 +16,7 @@ const PASSED: i32 = 77;
 #[test]
 fn engine_commands_reach_webkit_and_its_replies_reach_the_page() {
     let home = tempfile::tempdir().unwrap();
-    // under the vendored package's overlay when that is the provider, so the engine runs in this process
-    let mut command = ngterm_wpe::launcher::command(&std::env::current_exe().unwrap());
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command
         .args(["--exact", CHILD, "--ignored", "--nocapture"])
         .env_clear()
@@ -76,7 +75,15 @@ struct Fixture {
 
 impl Fixture {
     fn start() -> Self {
-        let (host, queue) = Host::start(HostConfig {
+        let worker = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("ngterm-web");
+        ngterm_wpe_client::worker::pin_worker_path(&worker).unwrap();
+        let (host, queue) = Host::start_worker(&HostConfig {
             frames: FrameMode::Shm,
             schemes: vec!["overlay-test".to_owned()],
         })
@@ -123,7 +130,7 @@ impl Fixture {
 
     fn loaded(&self, view: ViewId) {
         self.wait(
-            |event| matches!(event, Event::Load { view: id, event: ngterm_wpe::LoadEvent::Finished } if *id == view),
+            |event| matches!(event, Event::Load { view: id, event: ngterm_wpe_client::LoadEvent::Finished } if *id == view),
         );
     }
 
@@ -133,7 +140,7 @@ impl Fixture {
             .unwrap_or_else(|| panic!("script returned undefined: {script}"))
     }
 
-    fn evaluate_answer(&self, view: ViewId, script: &str) -> ngterm_wpe::Evaluation {
+    fn evaluate_answer(&self, view: ViewId, script: &str) -> ngterm_wpe_client::Evaluation {
         let queue = self.engine.0.evaluate(view, script.to_owned(), None);
         let input = queue.clone();
         let (send, receive) = mpsc::channel();
@@ -195,7 +202,7 @@ fn real_engine_child() {
         assert!(matches!(error, Event::ViewFailed { message, .. } if message == "no such browser store"));
         fixture.stop();
     });
-    ngterm_wpe::exit_process(if result.is_ok() { PASSED } else { 101 });
+    std::process::exit(if result.is_ok() { PASSED } else { 101 });
 }
 
 fn history_and_scripts(fixture: &Fixture, view: ViewId) {
@@ -250,16 +257,16 @@ fn input_and_geometry(fixture: &Fixture, view: ViewId) {
     fixture.evaluate(view, "document.getElementById('field').focus();0");
     fixture.evaluate(view, "field.addEventListener('compositionstart',()=>document.title='composing');field.addEventListener('compositionend',e=>document.title='composed:'+e.data);0");
     for kind in [
-        ngterm_wpe::PointerKind::Down(ngterm_wpe::Button::Primary),
-        ngterm_wpe::PointerKind::Up(ngterm_wpe::Button::Primary),
+        ngterm_wpe_client::PointerKind::Down(ngterm_wpe_client::Button::Primary),
+        ngterm_wpe_client::PointerKind::Up(ngterm_wpe_client::Button::Primary),
     ] {
         web.input(
             view,
-            Input::Pointer(ngterm_wpe::Pointer {
+            Input::Pointer(ngterm_wpe_client::Pointer {
                 kind,
                 x: 20.,
                 y: 20.,
-                modifiers: ngterm_wpe::Modifiers::empty(),
+                modifiers: ngterm_wpe_client::Modifiers::empty(),
             }),
         );
     }
@@ -287,11 +294,11 @@ fn input_and_geometry(fixture: &Fixture, view: ViewId) {
     fixture.evaluate(view, "window.keys=[];0");
     web.input(
         view,
-        Input::Key(ngterm_wpe::Key {
+        Input::Key(ngterm_wpe_client::Key {
             pressed: true,
             keyval: 0xff1b,
             keycode: None,
-            modifiers: ngterm_wpe::Modifiers::empty(),
+            modifiers: ngterm_wpe_client::Modifiers::empty(),
         }),
     );
     assert_eq!(

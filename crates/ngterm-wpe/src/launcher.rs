@@ -113,6 +113,52 @@ pub(crate) fn overlay_args(
     args
 }
 
+/// Re-executes a vendored worker under its helper overlay.
+/// # Safety
+/// Call first in main, before any other thread exists: changes the environment.
+pub unsafe fn prepare_worker() {
+    use std::os::unix::process::CommandExt as _;
+    // The dynamic loader already consumed this; helpers and host tools must not inherit it.
+    // SAFETY: caller guarantees that no other thread can read the environment.
+    unsafe { std::env::remove_var("LD_LIBRARY_PATH") };
+    let Ok(executable) = std::env::current_exe() else {
+        return;
+    };
+    if !helpers_reachable() {
+        let Provider::Vendored { libdir } = provider() else {
+            return;
+        };
+        let image = std::env::var(crate::worker::WORKER_IMAGE_ENV)
+            .ok()
+            .map_or_else(|| executable.clone(), |fd| PathBuf::from(format!("/proc/self/fd/{fd}")));
+        let mut command = worker_overlay(&libdir, &image);
+        command.args(std::env::args_os().skip(1));
+        let error = command.exec();
+        eprintln!("ngterm-web: cannot enter the WPE helper overlay: {error}");
+        crate::exit_process(2);
+    }
+    let mut environment = Command::new(&executable);
+    bundle_environment(&mut environment, &executable);
+    for (name, value) in environment.get_envs() {
+        if let Some(value) = value {
+            // SAFETY: caller guarantees a single thread.
+            unsafe { std::env::set_var(name, value) };
+        }
+    }
+}
+
+fn worker_overlay(libdir: &Path, image: &Path) -> Command {
+    let mut command = Command::new("bwrap");
+    command.args(overlay_args(
+        libdir,
+        std::env::current_dir().ok().as_deref(),
+        false,
+        &[],
+        image,
+    ));
+    command
+}
+
 /// Whether the engine's web process is where this build's WPE `WebKit` looks for it: true for the system's, and for
 /// the vendored package only inside its overlay ([`command`], the worker).
 #[must_use]
@@ -133,6 +179,15 @@ pub fn helpers_reachable() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_worker_reexec_uses_the_vendored_overlay_without_dying_with_its_launcher_thread() {
+        let command = worker_overlay(Path::new("/vendor/lib"), Path::new("/proc/self/fd/12"));
+        assert_eq!(command.get_program(), "bwrap");
+        assert_eq!(command.get_args().last().unwrap(), "/proc/self/fd/12");
+        assert!(command.get_args().any(|arg| arg == "/vendor/lib"));
+        assert!(!command.get_args().any(|arg| arg == "--die-with-parent"));
+    }
 
     #[test]
     fn bundled_module_paths_are_scoped_to_the_worker_command() {

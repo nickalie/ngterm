@@ -558,7 +558,7 @@ pub struct FakeOrigin {
     held: Option<&'static str>,
     /// How many reads of the held path are answered before the rest are held.
     answered_first: usize,
-    parked: RefCell<Vec<ngterm_wpe::SchemeToken>>,
+    parked: RefCell<Vec<ngterm_wpe_client::SchemeToken>>,
 }
 
 impl FakeOrigin {
@@ -580,7 +580,7 @@ impl FakeOrigin {
 }
 
 impl ReplicaLink for FakeOrigin {
-    fn fetch(&self, _: Uuid, path: String, token: ngterm_wpe::SchemeToken) {
+    fn fetch(&self, _: Uuid, path: String, token: ngterm_wpe_client::SchemeToken) {
         let earlier = self.requested.borrow().iter().filter(|read| **read == path).count();
         if self.held == Some(path.as_str()) && earlier >= self.answered_first {
             self.requested.borrow_mut().push(path);

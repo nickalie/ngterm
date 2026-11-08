@@ -61,7 +61,7 @@ fn load_failures_keep_the_message_and_classify_only_the_known_domain_and_code() 
 
 fn spec() -> ViewSpec {
     ViewSpec {
-        session: crate::SessionId(1),
+        session: crate::SessionId::from_raw(1),
         settings: crate::Settings::overlay(true),
         scripts: Vec::new(),
         message_handlers: Vec::new(),
@@ -95,7 +95,7 @@ fn native_page() {
         background: Some(Rgba::TRANSPARENT),
         ..spec()
     };
-    let page = Page::new(ViewId(5), &appearance, &display, &session, &events).unwrap();
+    let page = Page::new(ViewId::from_raw(5), &appearance, &display, &session, &events).unwrap();
     native_appearance(&page);
     native_input(&page);
     native_permission(&page);
@@ -111,16 +111,18 @@ fn native_page() {
     page.web_view.emit_by_name::<()>("close", &[]);
     assert!(matches!(
         received.try_recv().unwrap(),
-        Event::CloseRequested { view: ViewId(5) }
+        Event::CloseRequested {
+            view
+        } if view == ViewId::from_raw(5)
     ));
     assert!(page.web_view.emit_by_name::<bool>("enter-fullscreen", &[]));
     page.terminated(Termination::Crashed);
     assert!(matches!(
         received.try_recv().unwrap(),
         Event::WebProcessTerminated {
-            view: ViewId(5),
+            view,
             reason: Termination::Crashed
-        }
+        } if view == ViewId::from_raw(5)
     ));
     page.close();
     page.terminated(Termination::TerminatedByApi);
@@ -274,7 +276,7 @@ fn load_signals() {
     let display = Display::connect(None).unwrap();
     let session = NetworkSession::ephemeral();
     let (events, received) = async_channel::unbounded();
-    let page = Page::new(ViewId(8), &spec(), &display, &session, &events).unwrap();
+    let page = Page::new(ViewId::from_raw(8), &spec(), &display, &session, &events).unwrap();
     // SAFETY: registers the native enum type.
     let load_type = unsafe { webkit::webkit_load_event_get_type() };
     // SAFETY: the type was registered above.
@@ -301,7 +303,7 @@ fn load_signals() {
     else {
         panic!("a load failure");
     };
-    assert_eq!(view, ViewId(8));
+    assert_eq!(view, ViewId::from_raw(8));
     assert_eq!(uri, "");
     assert_eq!(failure.kind, LoadErrorKind::Failed);
     assert_eq!(failure.message, "connection lost");
@@ -310,9 +312,9 @@ fn load_signals() {
     assert!(matches!(
         received.try_recv().unwrap(),
         Event::WebProcessTerminated {
-            view: ViewId(8),
+            view,
             reason: Termination::ExceededMemoryLimit
-        }
+        } if view == ViewId::from_raw(8)
     ));
     // dropped unclosed, so only the handlers' weak hold on the page keeps these from reporting it
     let web_view = page.web_view.clone();

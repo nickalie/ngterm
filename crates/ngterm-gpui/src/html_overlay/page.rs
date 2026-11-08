@@ -3,7 +3,7 @@
 //! `html_overlay/page.rs` onto the engine's events).
 //!
 //! A page is made at its mount and loads at once, shown or not, as the GTK build's web view did; its engine page
-//! (`ngterm_wpe::ViewId`) exists once the engine runs, which is from the first page a drawn window mounts (the engine
+//! (`ngterm_wpe_client::ViewId`) exists once the engine runs, which is from the first page a drawn window mounts (the engine
 //! renders on the GPU that window's renderer opened, `super::registry`). Every report to the core is a posted
 //! main-loop task, never a call in place: the engine's events arrive while the app state may be busy.
 
@@ -17,7 +17,7 @@ use ngterm_core::html::{
     HtmlLoadState, HtmlNavigation, HtmlNavigationDecision, HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlPageKind,
     HtmlReloadTarget, HtmlSource, ReplicaContent, decide, errors,
 };
-use ngterm_wpe::{
+use ngterm_wpe_client::{
     Event, Geometry, InjectionTime, Load, MessageHandler, NavigationType, PageState as EngineState, PolicyKind,
     PolicyRequest, Rgba, ScriptMessage, SessionId, Settings, UserScript, ViewId, ViewSpec,
 };
@@ -457,10 +457,10 @@ impl Page {
     pub(super) fn event(&self, event: &Event, cx: &mut App) {
         match event {
             Event::Load { event, .. } => match event {
-                ngterm_wpe::LoadEvent::Started => self.load_event(&LoadEvent::Started),
-                ngterm_wpe::LoadEvent::Committed => self.committed(),
-                ngterm_wpe::LoadEvent::Finished => self.load_event(&LoadEvent::Finished),
-                ngterm_wpe::LoadEvent::Redirected => {}
+                ngterm_wpe_client::LoadEvent::Started => self.load_event(&LoadEvent::Started),
+                ngterm_wpe_client::LoadEvent::Committed => self.committed(),
+                ngterm_wpe_client::LoadEvent::Finished => self.load_event(&LoadEvent::Finished),
+                ngterm_wpe_client::LoadEvent::Redirected => {}
             },
             Event::LoadFailed { error, .. } => self.load_event(&policy::failure_event(error)),
             Event::WebProcessTerminated { .. } => {
@@ -1110,7 +1110,7 @@ mod tests {
     use crate::html_overlay::registry::tests::{Model, Recorded, new_page, overlay, replies, url_overlay};
     use crate::html_overlay::testing::Call;
     use gpui_kit::TestAppContext;
-    use ngterm_wpe::{LoadError, LoadErrorKind, PolicyToken, ReplyToken, Termination};
+    use ngterm_wpe_client::{LoadError, LoadErrorKind, PolicyToken, ReplyToken, Termination};
 
     fn realized(overlay: &HtmlOverlay) -> (Rc<Page>, Rc<Recorded>) {
         let web = replies();
@@ -1137,7 +1137,7 @@ mod tests {
         (page, web, model)
     }
 
-    fn progress(page: &Page, event: ngterm_wpe::LoadEvent, cx: &mut App) {
+    fn progress(page: &Page, event: ngterm_wpe_client::LoadEvent, cx: &mut App) {
         page.event(
             &Event::Load {
                 view: page.view_id().unwrap(),
@@ -1159,8 +1159,8 @@ mod tests {
             can_go_forward: false,
         };
         cx.update(|cx| {
-            progress(&page, ngterm_wpe::LoadEvent::Started, cx);
-            progress(&page, ngterm_wpe::LoadEvent::Redirected, cx);
+            progress(&page, ngterm_wpe_client::LoadEvent::Started, cx);
+            progress(&page, ngterm_wpe_client::LoadEvent::Redirected, cx);
             page.event(
                 &Event::Page {
                     view,
@@ -1168,8 +1168,8 @@ mod tests {
                 },
                 cx,
             );
-            progress(&page, ngterm_wpe::LoadEvent::Committed, cx);
-            progress(&page, ngterm_wpe::LoadEvent::Finished, cx);
+            progress(&page, ngterm_wpe_client::LoadEvent::Committed, cx);
+            progress(&page, ngterm_wpe_client::LoadEvent::Finished, cx);
         });
         model.drain();
         assert_eq!(model.overlay().load_state, HtmlLoadState::Loaded);
@@ -1209,7 +1209,7 @@ mod tests {
         assert_eq!(model.overlay().load_state, HtmlLoadState::Failed);
         assert_eq!(model.overlay().load_error.as_deref(), Some("TLS certificate rejected"));
         cx.update(|cx| page.apply(model.overlay(), false, cx));
-        cx.update(|cx| progress(&page, ngterm_wpe::LoadEvent::Started, cx));
+        cx.update(|cx| progress(&page, ngterm_wpe_client::LoadEvent::Started, cx));
         model.drain();
         assert_eq!(model.overlay().load_state, HtmlLoadState::Loading);
         assert_eq!(model.overlay().load_error, None);
@@ -1239,7 +1239,7 @@ mod tests {
                 .take()
                 .contains(&Call::Load(Load::Uri("https://example.invalid/start".to_owned())))
         );
-        cx.update(|cx| progress(&page, ngterm_wpe::LoadEvent::Committed, cx));
+        cx.update(|cx| progress(&page, ngterm_wpe_client::LoadEvent::Committed, cx));
         source.reload_revision += 1;
         cx.update(|cx| page.apply(&source, true, cx));
         assert_eq!(web.recorder.take(), [Call::Reload]);
@@ -1529,14 +1529,14 @@ mod tests {
             page.event(
                 &Event::Load {
                     view,
-                    event: ngterm_wpe::LoadEvent::Committed,
+                    event: ngterm_wpe_client::LoadEvent::Committed,
                 },
                 cx,
             );
             page.event(
                 &Event::Load {
                     view,
-                    event: ngterm_wpe::LoadEvent::Finished,
+                    event: ngterm_wpe_client::LoadEvent::Finished,
                 },
                 cx,
             );
@@ -1696,7 +1696,7 @@ mod document_tests {
         testing::{Call, Recorder},
     };
     use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
-    use ngterm_wpe::{Load, Rgba, SessionId, Settings};
+    use ngterm_wpe_client::{Load, Rgba, SessionId, Settings};
     use std::rc::Rc;
 
     fn page(source: HtmlSource) -> Rc<Page> {
@@ -1730,7 +1730,7 @@ mod document_tests {
             spec.scripts[1].world.as_deref(),
             Some(crate::html_overlay::documents::WORLD)
         );
-        assert_eq!(spec.scripts[1].time, ngterm_wpe::InjectionTime::End);
+        assert_eq!(spec.scripts[1].time, ngterm_wpe_client::InjectionTime::End);
     }
 
     /// Upstream's `testTheRendererRunsIsolatedWithPageScriptOffNoBridgeAndNoBaseURL`: a text page runs highlight.js and
@@ -1754,7 +1754,7 @@ mod document_tests {
         // the renderer's own reports, heard in its world alone (upstream's `TextPageBridge.handlerName`)
         assert_eq!(
             spec.message_handlers,
-            [ngterm_wpe::MessageHandler {
+            [ngterm_wpe_client::MessageHandler {
                 name: "ngtermTextPage".to_owned(),
                 world: Some(crate::html_overlay::documents::WORLD.to_owned()),
             }]
@@ -1762,7 +1762,7 @@ mod document_tests {
         assert_eq!(spec.scripts.len(), 2);
         let renderer = &spec.scripts[1];
         assert_eq!(renderer.world.as_deref(), Some(crate::html_overlay::documents::WORLD));
-        assert_eq!(renderer.time, ngterm_wpe::InjectionTime::End);
+        assert_eq!(renderer.time, ngterm_wpe_client::InjectionTime::End);
         assert_eq!(renderer.source, crate::html_overlay::documents::text_script());
         assert!(!renderer.source.contains("markdownit"));
     }
@@ -1865,9 +1865,9 @@ mod document_tests {
     }
 
     /// A report `page`'s renderer posts.
-    fn renderer_message(page: &Page, body: &str) -> ngterm_wpe::Event {
-        ngterm_wpe::Event::ScriptMessage(ngterm_wpe::ScriptMessage {
-            token: ngterm_wpe::ReplyToken::from_raw(1),
+    fn renderer_message(page: &Page, body: &str) -> ngterm_wpe_client::Event {
+        ngterm_wpe_client::Event::ScriptMessage(ngterm_wpe_client::ScriptMessage {
+            token: ngterm_wpe_client::ReplyToken::from_raw(1),
             view: page.view_id().unwrap(),
             handler: "ngtermTextPage".to_owned(),
             body: Some(body.to_owned()),

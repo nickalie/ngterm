@@ -198,13 +198,13 @@ jobs:
           key: vendor-ngterm-wpe-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
       - name: clippy
         run: >-
-          cargo clippy -p ngterm-wpe -p ngterm-wpe-sys -p ngterm-wpe-platform-sys -p ngterm-wpe-javascriptcore-sys
+          cargo clippy -p ngterm-wpe-client -p ngterm-wpe -p ngterm-wpe-sys -p ngterm-wpe-platform-sys -p ngterm-wpe-javascriptcore-sys
           --all-targets --all-features -- -D warnings
       # ngterm-wpe's engine tests run pages headless in SHM mode here (the runner has no DRM render node, so its
       # dmabuf mode reports itself skipped), in process and through a worker process (the system's package needs no
       # worker; the vendored one always gets one, so its transport is tested here too)
       - name: test
-        run: cargo test -p ngterm-wpe -p ngterm-wpe-sys -p ngterm-wpe-platform-sys -p ngterm-wpe-javascriptcore-sys
+        run: cargo test -p ngterm-wpe-client -p ngterm-wpe -p ngterm-wpe-sys -p ngterm-wpe-platform-sys -p ngterm-wpe-javascriptcore-sys
       - name: the bindings are a regeneration at the pins
         run: scripts/gen-wpe-bindings.sh --check
       # The app with its HTML overlays (feature `html`, the default): its clippy, its unit tests and the headless page
@@ -221,6 +221,8 @@ jobs:
           scripts/fetch-lavapipe.sh
       - name: clippy (ngterm-gpui, html)
         run: cargo clippy -p ngterm-gpui --all-targets -- -D warnings
+      - name: build HTML worker
+        run: cargo build -p ngterm-wpe --bin ngterm-web
       - name: test (ngterm-gpui, html)
         run: |
           cargo test -p ngterm-gpui --lib
@@ -469,10 +471,10 @@ jobs:
         if: matrix.shell == 'bash' && !matrix.coverage
         env:
           NGTERM_REQUIRE_DISPLAY_TESTS: "1"
-        # the app's live panes attach through the cargo-built ngterm-session beside it, which a gpui-only test run
-        # does not build
+        # live panes need ngterm-session and HTML overlays need ngterm-web beside the app; a gpui-only test run
+        # builds neither sibling binary
         run: |
-          cargo build -p ngterm-session --bin ngterm-session
+          cargo build -p ngterm-session --bin ngterm-session -p ngterm-wpe --bin ngterm-web
           cargo test -p ngterm-gpui --test instance --test privileges --test quit
       - name: install the suite
         run: |

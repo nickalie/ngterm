@@ -44,7 +44,6 @@ use crate::config::HostConfig;
 use crate::event::{Event, SchemeError, SchemeResponse};
 use crate::frames::{BufferId, DmaBuf, Frame, FrameContent};
 use crate::host::{Command as EngineCommand, Evaluation, StartError, ViewCommand};
-use crate::launcher::{self, Provider};
 use crate::spec::ViewId;
 
 /// How long the worker may take to say hello and start its engine.
@@ -367,7 +366,7 @@ impl Worker {
 }
 
 /// The app's handle on a running worker.
-pub(crate) struct Client {
+pub struct Client {
     outgoing: Outgoing,
     socket: Arc<OwnedFd>,
     evaluations: Arc<Mutex<Evaluations>>,
@@ -388,34 +387,47 @@ impl std::fmt::Debug for Client {
     }
 }
 
-/// This process's own image, open for the worker to run: the image the app runs even if its file was replaced since.
-/// (The worker cannot reach it as `/proc/<pid>/exe` from inside the overlay's user namespace.)
-fn own_image() -> Result<OwnedFd, StartError> {
+/// The worker image is opened once at app startup and held across package replacement.
+static IMAGE: std::sync::OnceLock<Result<OwnedFd, String>> = std::sync::OnceLock::new();
+
+fn sibling_worker() -> Result<PathBuf, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    Ok(executable.with_file_name("ngterm-web"))
+}
+
+fn open_worker(path: &std::path::Path) -> Result<OwnedFd, String> {
     use std::os::unix::fs::OpenOptionsExt as _;
     std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_PATH)
-        .open("/proc/self/exe")
+        .open(path)
         .map(OwnedFd::from)
-        .map_err(|err| StartError::Worker(format!("this program cannot open its own image: {err}")))
+        .map_err(|error| format!("cannot open worker {}: {error}", path.display()))
 }
 
-/// What the worker runs: the image `image` names (inherited as that descriptor), under the overlay for a vendored WPE
-/// `WebKit`.
+/// Pins the sibling worker image. A missing worker stays a page startup error.
+/// # Errors
+/// Returns an error if the worker cannot be opened.
+pub fn pin_worker() -> Result<(), String> {
+    IMAGE
+        .get_or_init(|| sibling_worker().and_then(|path| open_worker(&path)))
+        .as_ref()
+        .map(|_| ())
+        .map_err(Clone::clone)
+}
+
+/// Pins a supplied worker image, for process test harnesses; call before starting a host.
+/// # Errors
+/// Returns an error if the image cannot be opened or was already pinned.
+pub fn pin_worker_path(path: &std::path::Path) -> Result<(), String> {
+    let image = open_worker(path)?;
+    IMAGE
+        .set(Ok(image))
+        .map_err(|_| "the worker image is already pinned".to_owned())
+}
+
 fn worker_command(image: i32) -> Command {
-    let image = PathBuf::from(format!("/proc/self/fd/{image}"));
-    let mut command = match launcher::provider() {
-        Provider::System => Command::new(image),
-        Provider::Vendored { libdir } => {
-            let cwd = std::env::current_dir().ok();
-            let mut command = Command::new("bwrap");
-            command.args(launcher::overlay_args(&libdir, cwd.as_deref(), false, &[], &image));
-            command
-        }
-    };
-    if let Ok(executable) = std::env::current_exe() {
-        launcher::bundle_environment(&mut command, &executable);
-    }
+    let mut command = Command::new(format!("/proc/self/fd/{image}"));
     command.env(PULSE_PROP, web_audio_props(std::env::var_os(PULSE_PROP).as_deref()));
     command
 }
@@ -447,10 +459,15 @@ fn web_audio_props(current: Option<&OsStr>) -> OsString {
 
 impl Client {
     /// Starts the worker and its engine with `config` (module docs of `worker`).
-    pub(crate) fn start(config: &HostConfig) -> Result<(Self, Receiver<Event>), StartError> {
-        let image = own_image()?;
+    /// # Errors
+    /// Returns an executable, transport or engine startup error.
+    pub fn start(config: &HostConfig) -> Result<(Self, Receiver<Event>), StartError> {
+        pin_worker().map_err(StartError::Worker)?;
+        let image = IMAGE
+            .get()
+            .and_then(|image| image.as_ref().ok())
+            .ok_or_else(|| StartError::Worker("the worker image is unavailable".to_owned()))?;
         let (child, socket) = spawn(worker_command(image.as_raw_fd()), Some(image.as_raw_fd()))?;
-        drop(image);
         let worker = Arc::new(Worker {
             group: i32::try_from(child.id()).unwrap_or(i32::MAX),
             child: Mutex::new(Some(child)),
@@ -519,7 +536,7 @@ impl Client {
     }
 
     /// The worker's pid.
-    pub(crate) fn pid(&self) -> u32 {
+    pub fn pid(&self) -> u32 {
         self.pid
     }
 
@@ -567,14 +584,14 @@ impl Client {
     }
 
     /// Queues `command` for the worker.
-    pub(crate) fn send(&self, command: EngineCommand) {
+    pub fn send(&self, command: EngineCommand) {
         lock(&self.pages).track(&command);
         let (message, blob) = ToWorker::command(command);
         self.queue(&message, blob);
     }
 
     /// Runs `script` in the worker's page `view`; the answer arrives on the returned channel.
-    pub(crate) fn evaluate(&self, view: ViewId, script: String, world: Option<String>) -> Receiver<Evaluation> {
+    pub fn evaluate(&self, view: ViewId, script: String, world: Option<String>) -> Receiver<Evaluation> {
         let (reply, result) = async_channel::bounded(1);
         let id = {
             let mut evaluations = self.evaluations.lock().unwrap_or_else(PoisonError::into_inner);
@@ -601,7 +618,7 @@ impl Client {
 
     /// Quits the worker's engine and waits for it (a bounded time), then closes the socket and reaps the worker.
     /// Once: a second call returns at once.
-    pub(crate) fn shutdown(&self) {
+    pub fn shutdown(&self) {
         let taken = self.stopped.lock().unwrap_or_else(PoisonError::into_inner).take();
         let Some(stopped) = taken else { return };
         // nobody reads the events past here: a reader held by a full queue goes on to the worker's last word
@@ -692,12 +709,16 @@ fn handshake(socket: BorrowedFd<'_>, config: &HostConfig, timeout: Duration) -> 
     let broken = |err: WireError| StartError::Worker(err.to_string());
     let hello = recv_before(socket, deadline, timeout)?;
     let pid = match message::body::<FromWorker>(&hello).map_err(broken)? {
-        FromWorker::Hello { protocol, pid, .. } if protocol == PROTOCOL => pid,
+        FromWorker::Hello {
+            protocol,
+            ref version,
+            pid,
+        } if protocol == PROTOCOL && *version == super::build_identity() => pid,
         FromWorker::Hello { protocol, version, .. } => {
             return Err(StartError::Worker(format!(
                 "the worker speaks protocol {protocol} ({version}), this build {PROTOCOL} ({}): the executable was \
                  replaced while ngterm ran; restart it",
-                env!("CARGO_PKG_VERSION")
+                super::build_identity()
             )));
         }
         other => return Err(StartError::Worker(format!("the worker said {other:?} before hello"))),
@@ -888,6 +909,48 @@ fn keep_buffer(page: &mut PageFrames, frame: &Frame) -> Option<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_handshake_rejects_a_different_build_with_the_same_protocol() {
+        let first = FromWorker::Hello {
+            protocol: PROTOCOL,
+            version: "different:commit".to_owned(),
+            pid: 123,
+        };
+        let error = handshake_answer(first, None).unwrap_err();
+        assert!(error.to_string().contains("replaced while ngterm ran; restart it"));
+        assert!(error.to_string().contains("different:commit"));
+    }
+
+    #[test]
+    fn a_worker_descriptor_survives_replacing_its_path() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("ngterm-web");
+        ngterm_host::fakes::copy_executable(std::path::Path::new("/bin/true"), &path).unwrap();
+        let image = open_worker(&path).unwrap();
+        let replacement = root.path().join("replacement");
+        ngterm_host::fakes::copy_executable(std::path::Path::new("/bin/false"), &replacement).unwrap();
+        std::fs::rename(replacement, &path).unwrap();
+        let (mut child, socket) = spawn(worker_command(image.as_raw_fd()), Some(image.as_raw_fd())).unwrap();
+        drop(socket);
+        assert!(child.wait().unwrap().success());
+        assert!(!Command::new(&path).status().unwrap().success());
+    }
+
+    #[test]
+    fn an_explicit_worker_path_overrides_the_sibling() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("custom-worker");
+        ngterm_host::fakes::copy_executable(std::path::Path::new("/bin/true"), &path).unwrap();
+        pin_worker_path(&path).unwrap();
+        let image = IMAGE.get().unwrap().as_ref().unwrap();
+        assert_eq!(
+            std::fs::read_link(format!("/proc/self/fd/{}", image.as_raw_fd())).unwrap(),
+            path
+        );
+        assert!(pin_worker_path(&path).unwrap_err().contains("already pinned"));
+        assert!(open_worker(&root.path().join("missing")).is_err());
+    }
 
     #[test]
     fn the_worker_asks_for_the_least_request_and_keeps_the_users_properties() {
@@ -1753,7 +1816,7 @@ mod tests {
     fn hello(protocol: u32) -> FromWorker {
         FromWorker::Hello {
             protocol,
-            version: "test-version".to_owned(),
+            version: super::super::build_identity(),
             pid: 123,
         }
     }
@@ -1787,9 +1850,10 @@ mod tests {
         assert_eq!(
             error.to_string(),
             format!(
-                "the WPE worker failed: the worker speaks protocol {} (test-version), this build {PROTOCOL} ({}): the executable was replaced while ngterm ran; restart it",
+                "the WPE worker failed: the worker speaks protocol {} ({}), this build {PROTOCOL} ({}): the executable was replaced while ngterm ran; restart it",
                 PROTOCOL + 1,
-                env!("CARGO_PKG_VERSION")
+                super::super::build_identity(),
+                super::super::build_identity()
             )
         );
         assert_eq!(

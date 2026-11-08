@@ -101,7 +101,7 @@ fn archive_validation_reports_identity_format_and_each_missing_binary() {
         validate(&root, Format::LinuxArchive, &version).unwrap_err().to_string(),
         "Downloaded archive has an incompatible installation format."
     );
-    for name in ["ngterm", "ngtermctl", "ngterm-session", "ngterm-headless"] {
+    for name in ["ngterm", "ngtermctl", "ngterm-session", "ngterm-headless", "ngterm-web"] {
         tree(&root, "0.2.0");
         fs::remove_file(root.join("usr/bin").join(name)).unwrap();
         assert_eq!(

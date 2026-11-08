@@ -28,7 +28,7 @@ pub fn tree(root: &Path, version: &str) -> std::io::Result<()> {
     fs::create_dir_all(usr.join("share/ngterm"))?;
     fs::write(usr.join("share/ngterm/app-BUILD"), format!("{version}\ncommit\n"))?;
     fs::write(usr.join(MARKER), "linux-archive\n")?;
-    for name in ["ngterm", "ngtermctl", "ngterm-session", "ngterm-headless"] {
+    for name in ["ngterm", "ngtermctl", "ngterm-session", "ngterm-headless", "ngterm-web"] {
         fs::write(usr.join("bin").join(name), format!("ngterm {version}"))?;
     }
     Ok(())

@@ -477,13 +477,14 @@ Build. The native inputs come first, each into its vendored prefix (README > Nat
 `scripts/build-ghostty-vt.sh` (the patched libghostty-vt source, which `ngterm-ghostty-vt-sys`'s build script builds
 with Zig, offline, and Ghostty's resources at `LIBGHOSTTY_VT_REV`) and `scripts/fetch-fonts.sh` (the fonts the
 terminal embeds); the live sessions' server, `ngterm-session`, is a workspace binary. `run-linux.sh` then builds
-the release workspace without what links WPE WebKit and `ngterm-gpui` with its default `html` feature, so the staged
-app shows HTML overlays and needs a WPE WebKit (README > WPE WebKit; the CI's is Arch's `wpewebkit`). `--stage DIR`
-runs a tree staged elsewhere instead.
+the release workspace without what links WPE WebKit, `ngterm-gpui` with its default `html` feature and
+`ngterm-wpe`'s `ngterm-web` worker, so the staged app shows HTML overlays and the worker needs WPE WebKit
+(README > WPE WebKit; the CI's is Arch's `wpewebkit`). `--stage DIR` runs a tree staged elsewhere instead.
 
 Staging. `scripts/stage.sh` assembles the tree the harness launches, `target/conformance-stage` by default:
 `bin/ngterm`, `bin/ngtermctl` (the harness takes it from beside `--bin`; upstream's CLI is `agtermctl`,
-and the CLI tests expect the adapter's name in usage lines) and `bin/ngterm-session` with
+and the CLI tests expect the adapter's name in usage lines), `bin/ngterm-web` (the Linux HTML worker beside the app)
+and `bin/ngterm-session` with
 `share/ngterm/session-BUILD` (the staged server's build id), Ghostty's `share/terminfo` (`xterm-ghostty`) and
 `share/ghostty` (themes, shell integration) from the libghostty-vt prefix, and the agent integrations' payloads under `share/ngterm` (this build's own name, not upstream's `share/agterm`).
 There is no `lib/`: libghostty-vt is linked statically, and nothing of GTK,

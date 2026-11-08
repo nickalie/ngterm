@@ -74,7 +74,7 @@ fi
 
 if ((${#select[@]} == 0)); then
   select=(--workspace)
-  [[ "$(host_os)" == linux ]] || select+=(--exclude ngterm-wpe)
+  [[ "$(host_os)" == linux ]] || select+=(--exclude ngterm-wpe --exclude ngterm-wpe-client)
   for crate in crates/*-sys; do
     select+=(--exclude "${crate#crates/}")
   done

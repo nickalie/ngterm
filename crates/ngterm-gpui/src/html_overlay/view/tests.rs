@@ -1,5 +1,5 @@
 //! The element in GPUI's test window against a recording engine (`testing::Recorder`, the registry's stand-in for
-//! `ngterm_wpe::Host`): the page made and loaded at its mount, its geometry and visibility, the pointer and the keys
+//! `ngterm_wpe_client::Host`): the page made and loaded at its mount, its geometry and visibility, the pointer and the keys
 //! in the content's coordinates, a paste key handing the clipboard over first, a click a GPUI popover still sees, the
 //! frames' answers and the fall-back, the `<select>` popup and the context menu.
 
@@ -13,7 +13,7 @@ use gpui_kit::{
     ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px, size,
 };
 use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
-use ngterm_wpe::{
+use ngterm_wpe_client::{
     Area, BufferId, ContextMenu, DmaBuf, EditingCommand, Event, Frame, FrameContent, Geometry, Input, Load, MenuToken,
     OptionItem, OptionKind, OptionMenu, Plane, PointerKind, Rect, SessionSpec, ShmRegion, ViewId,
 };
@@ -297,10 +297,10 @@ fn a_press_focuses_the_page_goes_in_at_its_content_and_still_closes_a_popover(cx
     );
     let pressed = pointers(&calls);
     assert!(
-        pressed.contains(&(PointerKind::Down(ngterm_wpe::Button::Primary), 100., 10.)),
+        pressed.contains(&(PointerKind::Down(ngterm_wpe_client::Button::Primary), 100., 10.)),
         "in the content's coordinates: {pressed:?}"
     );
-    assert!(pressed.contains(&(PointerKind::Up(ngterm_wpe::Button::Primary), 100., 10.)));
+    assert!(pressed.contains(&(PointerKind::Up(ngterm_wpe_client::Button::Primary), 100., 10.)));
     assert!(
         !harness.popover_open(cx),
         "GPUI's own handlers saw the press: a popover elsewhere closed"
@@ -382,8 +382,8 @@ fn every_frame_is_answered_and_a_buffer_that_does_not_import_falls_back_to_shm(c
         content: FrameContent::DmaBuf(Arc::new(DmaBuf {
             width: 2,
             height: 2,
-            fourcc: ngterm_wpe::fourcc(b"XR24"),
-            modifier: ngterm_wpe::MODIFIER_LINEAR,
+            fourcc: ngterm_wpe_client::fourcc(b"XR24"),
+            modifier: ngterm_wpe_client::MODIFIER_LINEAR,
             planes: vec![Plane {
                 fd: file.into(),
                 offset: 0,
@@ -583,9 +583,9 @@ fn a_renderer_side_import_failure_falls_back_without_another_frame(cx: &mut Test
         adapter: "test".to_owned(),
         render_node: None,
         formats: vec![gpui_kit::DmaBufFormat {
-            fourcc: ngterm_wpe::fourcc(b"XR24"),
+            fourcc: ngterm_wpe_client::fourcc(b"XR24"),
             modifiers: vec![gpui_kit::DmaBufModifier {
-                modifier: ngterm_wpe::MODIFIER_LINEAR,
+                modifier: ngterm_wpe_client::MODIFIER_LINEAR,
                 plane_count: 1,
             }],
         }],
@@ -604,8 +604,8 @@ fn a_renderer_side_import_failure_falls_back_without_another_frame(cx: &mut Test
         content: FrameContent::DmaBuf(Arc::new(DmaBuf {
             width: 2,
             height: 2,
-            fourcc: ngterm_wpe::fourcc(b"XR24"),
-            modifier: ngterm_wpe::MODIFIER_LINEAR,
+            fourcc: ngterm_wpe_client::fourcc(b"XR24"),
+            modifier: ngterm_wpe_client::MODIFIER_LINEAR,
             planes: vec![Plane {
                 fd: file.into(),
                 offset: 0,
@@ -764,7 +764,7 @@ fn a_start_off_the_main_thread_leaves_pages_waiting_and_its_failure_fails_them(c
     assert!(page.web().is_none(), "not realized while the engine starts");
     assert_eq!(page.failure(), None, "nor failed");
     assert_eq!(registry::refusal(), None, "pages are still accepted");
-    finish(Err(ngterm_wpe::StartError::Worker("no bwrap".to_owned())));
+    finish(Err(ngterm_wpe_client::StartError::Worker("no bwrap".to_owned())));
     let failure = page.failure().expect("the waiting page failed");
     assert!(
         failure.contains("did not start") && failure.contains("no bwrap"),
@@ -1106,10 +1106,10 @@ fn modifier_changes_emit_only_the_keys_that_changed(cx: &mut TestAppContext) {
             (true, 0xffe3, held),
             (true, 0xffe9, held),
             (true, 0xffeb, held),
-            (false, 0xffe1, ngterm_wpe::Modifiers::empty()),
-            (false, 0xffe3, ngterm_wpe::Modifiers::empty()),
-            (false, 0xffe9, ngterm_wpe::Modifiers::empty()),
-            (false, 0xffeb, ngterm_wpe::Modifiers::empty()),
+            (false, 0xffe1, ngterm_wpe_client::Modifiers::empty()),
+            (false, 0xffe3, ngterm_wpe_client::Modifiers::empty()),
+            (false, 0xffe9, ngterm_wpe_client::Modifiers::empty()),
+            (false, 0xffeb, ngterm_wpe_client::Modifiers::empty()),
         ]
     );
 }
@@ -1238,7 +1238,7 @@ fn middle_click_hands_the_primary_selection_to_the_engine_before_paste(cx: &mut 
     let calls = harness.web.take();
     assert!(
         matches!(&calls[..], [Call::Clipboard(text), Call::Input(Input::Pointer(pointer)), Call::Editing(EditingCommand::Paste), ..]
-        if text == "primary" && pointer.kind == PointerKind::Down(ngterm_wpe::Button::Middle)),
+        if text == "primary" && pointer.kind == PointerKind::Down(ngterm_wpe_client::Button::Middle)),
         "{calls:?}"
     );
 }
@@ -1260,12 +1260,12 @@ fn a_released_element_draws_nothing_and_ignores_late_engine_events(cx: &mut Test
 }
 
 fn external_link(view: ViewId) -> Event {
-    Event::Policy(ngterm_wpe::PolicyRequest {
+    Event::Policy(ngterm_wpe_client::PolicyRequest {
         view,
-        token: ngterm_wpe::PolicyToken::from_raw(90),
-        kind: ngterm_wpe::PolicyKind::Navigation {
+        token: ngterm_wpe_client::PolicyToken::from_raw(90),
+        kind: ngterm_wpe_client::PolicyKind::Navigation {
             uri: "https://outside.invalid/path".to_owned(),
-            navigation: ngterm_wpe::NavigationType::LinkClicked,
+            navigation: ngterm_wpe_client::NavigationType::LinkClicked,
             new_window: true,
         },
     })

@@ -21,8 +21,8 @@
 //!   path, reachable only inside an overlay of `/usr/lib`, [`launcher`]) always gets, so the consumer itself never runs
 //!   in that overlay's user namespace; [`Host::start_worker`] asks for one anywhere. The worker's environment, which
 //!   its web processes inherit, carries a request size for their `PulseAudio` streams that keeps Web Audio playing on
-//!   a Bluetooth sink (module `worker`). Every program that may start an engine calls [`worker::serve_if_asked`] first
-//!   thing in its `main`.
+//!   a Bluetooth sink (module `worker`). The separate `ngterm-web` executable serves the worker; the frontend uses `ngterm-wpe-client`
+//!   and never links these engine libraries.
 //!   Release bundles additionally scope their module and injected-bundle paths to that worker, preserving the
 //!   environment of programs the consumer starts.
 //!
@@ -33,29 +33,6 @@
 //!   commits and reports the caret's area).
 //!
 //! Not here: accessibility (an offscreen page has no AT-SPI bridge into the consumer's tree).
-
-/// `from_raw` and `raw` on the engine's id types: a consumer's stand-in for the engine in its own tests makes ids
-/// with them, and logs read them; the engine itself never takes an id it did not hand out.
-macro_rules! raw_ids {
-    ($($id:ident),+) => {
-        $(
-            impl $id {
-                /// The id numbered `raw` (crate docs: for a consumer's stand-in engine).
-                #[must_use]
-                pub const fn from_raw(raw: u64) -> Self {
-                    Self(raw)
-                }
-
-                /// The id's number.
-                #[must_use]
-                pub const fn raw(self) -> u64 {
-                    self.0
-                }
-            }
-        )+
-    };
-}
-pub(crate) use raw_ids;
 
 mod config;
 mod engine;

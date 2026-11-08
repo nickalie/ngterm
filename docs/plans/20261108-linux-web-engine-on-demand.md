@@ -291,20 +291,20 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
   `scripts/lib/native.sh`, `scripts/lib/dev-instance.sh`, `conformance/tools/run-linux.sh`,
   `.github/workflows/release.yml`, `.github/workflows/linux.yml`, `AGENTS.md` (crate table)
 
-- [ ] move the client side into `ngterm-wpe-client` with no `-sys` dependency and no pkg-config build script; the
+- [x] move the client side into `ngterm-wpe-client` with no `-sys` dependency and no pkg-config build script; the
       modifier bits become client constants, with an engine-side test that they equal the `platform_sys` ones
-- [ ] add the `ngterm-web` binary that serves the engine; it re-executes itself under the `bwrap` overlay for a
+- [x] add the `ngterm-web` binary that serves the engine; it re-executes itself under the `bwrap` overlay for a
       vendored libdir (reusing `overlay_args`) and drops `LD_LIBRARY_PATH` from its environment at start
-- [ ] `ngterm` depends on the client only and opens the sibling `ngterm-web` as a descriptor in `main`; `Hello` carries
+- [x] `ngterm` depends on the client only and opens the sibling `ngterm-web` as a descriptor in `main`; `Hello` carries
       a build identity, a mismatch fails with the "replaced while ngterm ran; restart" message; the client takes a
       worker path override for test harnesses
-- [ ] every build of the frontend also builds `ngterm-web` (release, linux CI, run-linux, dev-instance, native.sh);
+- [x] every build of the frontend also builds `ngterm-web` (release, linux CI, run-linux, dev-instance, native.sh);
       `stage.sh` stages it; `package-release.sh` bundles it with the engine as today (RUNPATH into the bundle until
       Task 7) and points the smoke test at it; `validate()` requires `ngterm-web` in a Linux tree
-- [ ] write tests: build identity match and mismatch; the descriptor survives replacing the file; the vendored
+- [x] write tests: build identity match and mismatch; the descriptor survives replacing the file; the vendored
       re-exec builds the overlay command; the worker path override; `validate()` without `ngterm-web`; the modifier
       bits
-- [ ] run the `ngterm-wpe` worker and headless tests, the `ngterm-gpui` HTML overlay tests (headless) and
+- [x] run the `ngterm-wpe` worker and headless tests, the `ngterm-gpui` HTML overlay tests (headless) and
       `cargo test -p ngterm-update` - must pass before Task 3
 
 ### Task 3: Engine source and the worker's environment

@@ -159,7 +159,7 @@ fn rectangle(rect: *const webkit::WebKitRectangle) -> Area {
 fn show_option_menu(view: ViewId, menu: &OptionMenuObject, area: Area) {
     let items = option_items(menu);
     let Some((token, events)) = with(|engine| {
-        let token = MenuToken(token(engine));
+        let token = MenuToken::from_raw(token(engine));
         engine.menus.insert(token, menu.clone());
         (token, engine.events.clone())
     }) else {

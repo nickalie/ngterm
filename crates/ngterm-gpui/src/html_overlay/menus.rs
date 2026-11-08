@@ -10,7 +10,7 @@ use gpui_kit::{
     AnyElement, Bounds, Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels,
     SharedString, StatefulInteractiveElement as _, Styled as _, anchored, deferred, div, point, px,
 };
-use ngterm_wpe::{ContextMenu, EditingCommand, MenuToken, OptionKind, OptionMenu};
+use ngterm_wpe_client::{ContextMenu, EditingCommand, MenuToken, OptionKind, OptionMenu};
 
 use super::panel::PanelColors;
 use super::view::PageView;
@@ -247,7 +247,7 @@ fn row_element(
 
 #[cfg(test)]
 mod tests {
-    use ngterm_wpe::{Area, OptionItem, ViewId};
+    use ngterm_wpe_client::{Area, OptionItem, ViewId};
 
     use super::*;
 

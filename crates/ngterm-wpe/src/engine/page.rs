@@ -661,7 +661,7 @@ fn pointer_event(view: *mut platform::WPEView, time: u32, pointer: Pointer) -> *
             // SAFETY: a live view; a move-type event carries no button.
             unsafe {
                 platform::wpe_event_pointer_move_new(
-                    pointer.kind.event_type(),
+                    crate::input::event_type(pointer.kind),
                     view,
                     source,
                     time,
@@ -680,7 +680,7 @@ fn pointer_event(view: *mut platform::WPEView, time: u32, pointer: Pointer) -> *
             // SAFETY: a live view.
             unsafe {
                 platform::wpe_event_pointer_button_new(
-                    pointer.kind.event_type(),
+                    crate::input::event_type(pointer.kind),
                     view,
                     source,
                     time,
@@ -696,7 +696,7 @@ fn pointer_event(view: *mut platform::WPEView, time: u32, pointer: Pointer) -> *
         // SAFETY: a live view.
         PointerKind::Up(button) => unsafe {
             platform::wpe_event_pointer_button_new(
-                pointer.kind.event_type(),
+                crate::input::event_type(pointer.kind),
                 view,
                 source,
                 time,

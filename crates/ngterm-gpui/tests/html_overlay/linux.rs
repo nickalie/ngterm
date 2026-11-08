@@ -7,6 +7,7 @@ mod gpus;
 #[path = "../support/lavapipe.rs"]
 mod lavapipe;
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
 use std::time::{Duration, Instant};
@@ -19,8 +20,10 @@ const REQUIRE_ENV: &str = "NGTERM_REQUIRE_DISPLAY_TESTS";
 const CHILD_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub fn main() -> ExitCode {
-    // SAFETY: first thing in main, while the process has one thread.
-    unsafe { ngterm_wpe::worker::serve_if_asked(|| {}) };
+    if let Err(error) = pin_test_worker() {
+        eprintln!("{error}; build ngterm-web before the HTML harness");
+        return ExitCode::FAILURE;
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--list") {
         for (name, _) in cases::CASES {
@@ -32,11 +35,25 @@ pub fn main() -> ExitCode {
     match std::env::var(GPU_ENV) {
         Ok(gpu) => {
             let status = cases::run(&gpu, filter.as_deref());
-            // WebKit's exit handlers must run on its own thread, which never ends: the process ends without them
-            ngterm_wpe::exit_process(status)
+            // GPUI's wgpu GLES instance can crash in its TLS destructor after the display is gone, as in
+            // main.rs's exit_now: flush output and coverage, then skip exit handlers.
+            let _ = std::io::stdout().flush();
+            let _ = std::io::stderr().flush();
+            ngterm_app::coverage::write_profile();
+            // SAFETY: `_exit` ends this harness child without touching its torn-down graphics state.
+            unsafe { libc::_exit(status) }
         }
         Err(_) => parent(&args),
     }
+}
+
+fn pin_test_worker() -> Result<(), String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let directory = executable
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("no target directory for the test worker")?;
+    ngterm_wpe_client::worker::pin_worker_path(&directory.join("ngterm-web"))
 }
 
 fn parent(args: &[String]) -> ExitCode {

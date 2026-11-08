@@ -5,9 +5,8 @@
 //! that overlays the package on `/usr/lib` (`bwrap --ro-overlay`). That namespace comes with a user namespace and
 //! `PR_SET_NO_NEW_PRIVS`, which every process started inside it inherits, so the app itself must never run there: its
 //! terminals, their sessions and everything they start would lose `sudo` and every setuid program, and see root's
-//! files as `nobody`'s. Only `WebKit` goes there: the app re-runs its own executable as the worker (the image it runs,
-//! opened from `/proc/self/exe` and passed down as a descriptor, so a file replaced since does not matter), under the
-//! overlay for the vendored package and plainly for the system's, and drives the engine through a [`crate::Host`] whose
+//! files as `nobody`'s. Only `WebKit` goes there: the client launches the sibling `ngterm-web` image
+//! pinned by descriptor at app startup; the worker re-executes itself under the vendored overlay when needed, and drives the engine through a [`crate::Host`] whose
 //! calls travel over a socket. The worker runs the ordinary in-process engine and nothing else.
 //!
 //! The worker's environment is the app's plus `PULSE_PROP` naming a least request size for `pipewire-pulse`, which
@@ -17,8 +16,7 @@
 //! A marked release bundle also gives only the worker its bundled GIO, `GStreamer` and injected-bundle paths;
 //! these module settings never enter the app's terminal or session-server environment.
 //!
-//! - Every program that may start an engine calls [`serve_if_asked`] first thing in its `main`: in the worker it serves
-//!   the engine and ends the process; anywhere else it returns at once.
+//! - The `ngterm-web` binary calls [`serve_if_asked`] after preparing its worker environment.
 //! - The transport (`wire`): an `AF_UNIX` `SOCK_SEQPACKET` socket pair, close-on-exec on both sides (the worker's end
 //!   is kept open across its exec alone and made close-on-exec again first thing), one JSON message per packet
 //!   (`message`), large bodies and blobs in sealed `memfd`s, a dmabuf's planes passed as descriptors. A call on the
@@ -37,19 +35,14 @@
 //!   ends unasked answers every evaluation still waiting with an error and closes the event channel: the consumer's
 //!   pages cannot come back in this process.
 
-mod client;
-mod message;
+pub use ngterm_wpe_client::worker::{message, wire};
 mod serve;
-mod wire;
 
 use std::os::fd::{FromRawFd as _, OwnedFd};
 
-pub(crate) use client::Client;
+pub(crate) use ngterm_wpe_client::worker::Client;
 
-/// The variable that makes a process the worker: the number of the socket descriptor it inherited.
-pub const WORKER_FD_ENV: &str = "NGTERM_WPE_WORKER_FD";
-/// The number of the descriptor of the image the worker was started from (`/proc/self/fd/<n>`), closed at once.
-pub const WORKER_IMAGE_ENV: &str = "NGTERM_WPE_WORKER_IMAGE_FD";
+pub use ngterm_wpe_client::worker::{WORKER_FD_ENV, WORKER_IMAGE_ENV};
 
 /// Serves the engine and ends the process when this process was started as the worker ([`WORKER_FD_ENV`]); returns
 /// at once otherwise. `setup` runs first in the worker (the app's logging, say).
@@ -122,6 +115,12 @@ mod tests {
                 // initializer can run later than ours, whereas an ordinary main runs after both.
                 unsafe { __llvm_profile_initialize_file() };
             }
+            if std::env::var("WPE_WORKER_ENTRY_PROBE").as_deref() == Ok("prepare") {
+                // SAFETY: the ELF initializer runs before main, while this process still has one thread.
+                unsafe { crate::launcher::prepare_worker() };
+                assert!(std::env::var_os("LD_LIBRARY_PATH").is_none());
+                crate::exit_process(77);
+            }
             // SAFETY: the ELF initializer runs before main, while this process still has one thread.
             unsafe { super::serve_if_asked(|| eprintln!("worker setup ran")) };
         }
@@ -141,6 +140,27 @@ mod tests {
             .stdin(Stdio::null())
             .output()
             .unwrap()
+    }
+
+    #[test]
+    fn worker_preparation_removes_the_loaders_path_before_starting_helpers() {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("NGTERM_") || key.to_string_lossy().starts_with("AGTERM_") {
+                command.env_remove(key);
+            }
+        }
+        let output = command
+            .env("WPE_WORKER_ENTRY_PROBE", "prepare")
+            .env("LD_LIBRARY_PATH", "/no-such-loader-path")
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(77),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

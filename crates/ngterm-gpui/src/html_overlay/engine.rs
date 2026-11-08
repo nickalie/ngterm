@@ -1,10 +1,10 @@
-//! The web engine as the overlay drives it: [`Web`], the commands of `ngterm_wpe::Host` the pages send, so the
+//! The web engine as the overlay drives it: [`Web`], the commands of `ngterm_wpe_client::Host` the pages send, so the
 //! registry, the pages and the element run against a recording stand-in in the unit tests (`testing::Recorder`), where
-//! no `WebKit` can start (one engine per process, and it needs the overlay of a vendored package).
+//! no built `ngterm-web` worker is guaranteed to be available.
 
 use std::sync::Arc;
 
-use ngterm_wpe::{
+use ngterm_wpe_client::{
     BufferId, EditingCommand, Evaluation, Geometry, Host, Input, Load, MenuToken, PolicyToken, ReplyToken,
     SchemeResponse, SchemeToken, SessionId, SessionSpec, UserScript, ViewId, ViewSpec,
 };
@@ -12,7 +12,7 @@ use ngterm_wpe::{
 /// Tells the engine a page's frame is on screen; called from the renderer's threads.
 pub type Presenter = Arc<dyn Fn(ViewId, BufferId) + Send + Sync>;
 
-/// The engine's commands (`ngterm_wpe::Host`'s, one for one).
+/// The engine's commands (`ngterm_wpe_client::Host`'s, one for one).
 pub trait Web {
     fn create_session(&self, spec: SessionSpec) -> SessionId;
     fn drop_session(&self, session: SessionId);

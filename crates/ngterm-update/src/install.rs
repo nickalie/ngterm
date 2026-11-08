@@ -183,6 +183,9 @@ pub(crate) fn validate(candidate: &Path, format: Format, version: &Version) -> R
             return Err(error(format!("Downloaded archive has no {name}{suffix}.")));
         }
     }
+    if format == Format::LinuxArchive && !prefix.join("bin/ngterm-web").is_file() {
+        return Err(error("Downloaded archive has no ngterm-web."));
+    }
     Ok(())
 }
 

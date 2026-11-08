@@ -1,4 +1,5 @@
 use super::*;
+use crate::{Rgba, UserScript};
 
 fn local() -> (Host, Receiver<Command>) {
     let (commands, queue) = async_channel::unbounded();
@@ -18,7 +19,7 @@ fn local() -> (Host, Receiver<Command>) {
 #[test]
 fn local_commands_preserve_history_and_scripts() {
     let (host, commands) = local();
-    let view = ViewId(9);
+    let view = ViewId::from_raw(9);
     assert_eq!(host.backend(), Backend::InProcess);
     assert_eq!(host.worker_pid(), None);
     host.stop(view);
@@ -44,7 +45,7 @@ fn local_commands_preserve_history_and_scripts() {
 #[test]
 fn local_commands_preserve_background_and_focus() {
     let (host, commands) = local();
-    let view = ViewId(9);
+    let view = ViewId::from_raw(9);
     host.set_background(view, Some(Rgba::TRANSPARENT));
     host.set_focused(view, false);
     assert!(
@@ -56,13 +57,13 @@ fn local_commands_preserve_background_and_focus() {
 #[test]
 fn local_evaluation_preserves_its_world_and_answers_through_the_returned_channel() {
     let (host, commands) = local();
-    let result = host.evaluate(ViewId(7), "2 + 2".to_owned(), Some("reader".to_owned()));
+    let result = host.evaluate(ViewId::from_raw(7), "2 + 2".to_owned(), Some("reader".to_owned()));
     let Command::View(id, ViewCommand::Evaluate { script, world, reply }) = commands.recv_blocking().unwrap() else {
         panic!("evaluation")
     };
     assert_eq!(
         (id, script.as_str(), world.as_deref()),
-        (ViewId(7), "2 + 2", Some("reader"))
+        (ViewId::from_raw(7), "2 + 2", Some("reader"))
     );
     reply.try_send(Ok(Some("4".to_owned()))).unwrap();
     assert_eq!(result.recv_blocking().unwrap(), Ok(Some("4".to_owned())));

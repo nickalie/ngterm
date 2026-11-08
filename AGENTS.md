@@ -25,7 +25,8 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
 | `ngterm-update` | verified release downloads, staging and installation | any |
 | `ngterm-headless` | the core, control socket and live sessions with no window (an Attach Remote origin) | any |
 | `ngterm-mobile` | the mobile apps' Rust core: a remote-only viewer over ssh, exposed to Kotlin and Swift through UniFFI | any |
-| `ngterm-wpe-sys` and kin, `ngterm-wpe` | WPE WebKit bindings and the HTML overlays' host | Linux |
+| `ngterm-wpe-client` | HTML overlay socket client and shared wire types, without WebKit | Linux |
+| `ngterm-wpe-sys` and kin, `ngterm-wpe` → `ngterm-web` | WPE WebKit bindings and the HTML overlays' engine worker | Linux |
 | `ngterm-gpui` → `ngterm` | the GPUI frontend | Linux, macOS, Windows |
 
 - `any` means CI builds and tests the crate on all three OSes, so its dependencies must build there too.

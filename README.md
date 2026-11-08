@@ -301,7 +301,9 @@ and how this build does it where the OS matters:
   instance).
 - For the app's tests: Xvfb's `xvfb-run` and dbus' `dbus-run-session`, so they get a display and a session bus of
   their own instead of the desktop's.
-- For the HTML page harness (`cargo test -p ngterm-gpui --test html_overlay`): GStreamer's base and good plugins,
+- For the HTML page harness (`cargo test -p ngterm-gpui --test html_overlay`): first build its worker with
+  `cargo build -p ngterm-wpe --bin ngterm-web`. The process tests that load pages (`--test privileges`,
+  `--test quit`) need that worker too. The HTML harness also needs GStreamer's base and good plugins,
   whose absence fails its audio case (it is not skipped).
 - For the app's process tests (`crates/ngterm-gpui/tests`): dbus-daemon, a private bus per test; the ones with a
   display also need weston, Xvfb and Mesa's lavapipe (`mesa-vulkan-drivers`, an unpacked one under the vendor dir, or
@@ -511,8 +513,7 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
   from that prefix needs the helper path overlaid (`bwrap --ro-overlay /usr/lib` with the prefix's `lib/` on top),
   since nothing relocates it. That overlay is a user namespace with `PR_SET_NO_NEW_PRIVS`, inherited by everything
   started in it (no `sudo` or setuid program, root's files shown as `nobody`'s), so the app never enters it: the
-  engine runs in a worker process under it (`ngterm_wpe::worker`: the app's own executable re-run, driven over a
-  socket; every `main` that may start an engine calls `ngterm_wpe::worker::serve_if_asked` first), and the app, its
+  engine runs in the sibling `ngterm-web` worker under it, driven over a socket by `ngterm-wpe-client`, and the app, its
   terminals, their live sessions and everything they start keep the user's privileges (`cargo test -p ngterm-gpui --test
   privileges`). `ngterm-wpe`'s engine tests (`cargo test -p ngterm-wpe`) run every case through a worker and again in
   process inside the overlay (`ngterm_wpe::launcher::command`). Pick the distribution package whenever you can.
@@ -527,7 +528,11 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
   frontend with its HTML overlays (clippy, unit tests, the headless page harness on lavapipe); the `conformance` jobs
   run in the same container.
 
-`ngterm-wpe` is the host over those bindings: WPE WebKit on an engine thread with its own `GMainContext`, a
+`ngterm-wpe-client` is the frontend's socket client, with no WebKit link or build dependency. Build
+`cargo build -p ngterm-wpe --bin ngterm-web` alongside the frontend; staging keeps the worker beside `ngterm`.
+The client pins its image at app startup and verifies its version and recorded commit during the handshake.
+
+`ngterm-wpe` is the engine worker over those bindings: WPE WebKit on an engine thread with its own `GMainContext`, a
 `WPEDisplay`/`WPEView` subclass rendering on the render node the GPUI side names with the formats it imports, frames
 out as dmabufs (SHM as a last-resort fallback), and the WebKit surface the HTML overlay uses: stores, scripts and the
 bridge, policies, schemes, the clipboard, `<select>` popups, the context menu's hit test and input methods; in this
@@ -536,10 +541,10 @@ app runs its engine in a worker with either package, whose environment alone its
 least `PulseAudio` request size (`PULSE_PROP`) that keeps a page's Web Audio playing on a Bluetooth sink, and no
 terminal sees it. Its
 engine tests render headless on this machine's first DRM render node (Mesa; `WPE_TEST_RENDER_NODE` picks another) and
-in shared memory, each frame mode on each backend in a child process of its own. The GPUI side (`ngterm-gpui`'s `html_overlay`) has a
-headless harness of its own (`cargo test -p ngterm-gpui --test html_overlay`): the real engine on the GPU GPUI's
-headless renderer opened, its frames read back through the external texture element, on lavapipe (SHM) and on a Mesa
-render node (dmabufs).
+in shared memory, each frame mode on each backend in a child process of its own. The GPUI side
+(`ngterm-gpui`'s `html_overlay`) has a headless harness of its own (build `ngterm-web` first, then
+`cargo test -p ngterm-gpui --test html_overlay`): the real engine on the GPU GPUI's headless renderer opened, its frames
+read back through the external texture element, on lavapipe (SHM) and on a Mesa render node (dmabufs).
 
 Cargo does not notice the provider changing: after installing or removing either, run
 `cargo clean -p ngterm-wpe -p ngterm-wpe-sys -p ngterm-wpe-platform-sys -p ngterm-wpe-javascriptcore-sys`.

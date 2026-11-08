@@ -52,7 +52,7 @@ run_dev_instance() {
   local profile_args=()
   [[ "$profile" == release ]] && profile_args=(--release)
   (cd "$NATIVE_ROOT" && cargo build "${profile_args[@]}" "${WORKSPACE_WITHOUT_WPE[@]}" \
-    && cargo build "${profile_args[@]}" -p ngterm-gpui)
+    && cargo build "${profile_args[@]}" -p ngterm-gpui "${WEB_WORKER_BUILD[@]}")
   "$NATIVE_ROOT/scripts/stage.sh" "$root/stage" --profile "$profile"
   local app="$root/stage/bin/ngterm$exe" ctl="$root/stage/bin/ngtermctl$exe"
   [[ -x "$app" ]] || die "no bin/ngterm$exe staged in $root/stage"

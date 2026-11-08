@@ -5392,7 +5392,7 @@ dependencies = [
  "ngterm-session",
  "ngterm-term",
  "ngterm-update",
- "ngterm-wpe",
+ "ngterm-wpe-client",
  "notify",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -5578,15 +5578,31 @@ name = "ngterm-wpe"
 version = "0.1.1"
 dependencies = [
  "async-channel",
- "bitflags 2.13.2",
  "gio",
  "glib",
  "libc",
+ "ngterm-app",
+ "ngterm-core",
  "ngterm-host",
+ "ngterm-wpe-client",
  "ngterm-wpe-javascriptcore-sys",
  "ngterm-wpe-platform-sys",
  "ngterm-wpe-sys",
  "pkg-config",
+ "rustix",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "ngterm-wpe-client"
+version = "0.1.1"
+dependencies = [
+ "async-channel",
+ "bitflags 2.13.2",
+ "libc",
+ "ngterm-host",
  "rustix",
  "serde",
  "serde_json",

@@ -66,7 +66,9 @@ if [[ "$(host_os)" == windows ]]; then stage="$(cygpath -u "$stage")"; fi
 stage="$(cd "$stage" && pwd)"
 exe=""
 [[ "$(host_os)" != windows ]] || exe=.exe
-for binary in ngterm ngtermctl ngterm-session ngterm-headless; do
+package_binaries=(ngterm ngtermctl ngterm-session ngterm-headless)
+[[ "$(host_os)" != linux ]] || package_binaries+=(ngterm-web)
+for binary in "${package_binaries[@]}"; do
   [[ -f "$stage/bin/$binary$exe" ]] || die "missing staged $binary$exe"
 done
 [[ "$(head -n1 "$stage/share/ngterm/app-BUILD" | tr -d '\r')" == "$version" ]] \
@@ -206,7 +208,7 @@ PY
       status=0
       dbus-run-session -- timeout 180s env HOME="$work/home" XDG_RUNTIME_DIR="$work/runtime" \
         XDG_CONFIG_HOME="$work/home/config" XDG_DATA_HOME="$work/home/data" XDG_CACHE_HOME="$work/home/cache" \
-        WPE_TEST_MODE=shm WPE_TEST_BACKEND=worker \
+        WPE_TEST_MODE=shm WPE_TEST_BACKEND=worker WPE_TEST_WORKER="$root/usr/bin/ngterm-web" \
         "$root/usr/bin/wpe-release-smoke" frames_arrive_in_the_configured_mode_and_follow_the_geometry || status=$?
       mv "$hidden_wpe" "$wpe"
       hidden_wpe=""

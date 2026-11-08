@@ -58,8 +58,16 @@ source "$PINS"
 # the feature (the core then refuses every page). The app with its pages, and its conformance, need a WPE WebKit
 # (README > WPE WebKit): run-linux.sh and run-gpui-dev.sh build it so, and CI runs them in its Arch jobs.
 # shellcheck disable=SC2034 # for the sourcing scripts
-WORKSPACE_WITHOUT_WPE=(--workspace --exclude ngterm-wpe --exclude ngterm-wpe-sys --exclude ngterm-wpe-platform-sys
+WORKSPACE_WITHOUT_WPE=(--workspace --exclude ngterm-wpe --exclude ngterm-wpe-client --exclude ngterm-wpe-sys --exclude ngterm-wpe-platform-sys
   --exclude ngterm-wpe-javascriptcore-sys --exclude ngterm-gpui)
+# shellcheck disable=SC2034 # for the sourcing scripts
+# Linux frontend builds stage the separately linked HTML worker beside the app.
+WEB_WORKER_BUILD=()
+if [[ "$(uname -s)" == Linux ]]; then
+  # shellcheck disable=SC2034 # for dev-instance.sh
+  WEB_WORKER_BUILD=(-p ngterm-wpe --bin ngterm --bin ngterm-web)
+fi
+
 # shellcheck disable=SC2034 # for the sourcing scripts
 GPUI_WITHOUT_HTML=(-p ngterm-gpui --no-default-features)
 

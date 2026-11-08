@@ -196,7 +196,7 @@ if [[ -z "$stage" && -n "$coverage" ]]; then
         eval "$(cargo llvm-cov show-env --sh)" || exit
         cargo llvm-cov clean --workspace || exit
         cargo build --release "${WORKSPACE_WITHOUT_WPE[@]}" || exit
-        cargo build --release -p ngterm-gpui || exit
+        cargo build --release -p ngterm-gpui -p ngterm-wpe --bin ngterm --bin ngterm-web || exit
         rm -rf "$stage"
         "$repo/scripts/stage.sh" "$stage"
     )
@@ -208,7 +208,7 @@ elif [[ -z "$stage" ]]; then
     # shellcheck source=../../scripts/lib/native.sh
     (
         cd "$repo" && source scripts/lib/native.sh && cargo build --release "${WORKSPACE_WITHOUT_WPE[@]}" || exit
-        cargo build --release -p ngterm-gpui
+        cargo build --release -p ngterm-gpui -p ngterm-wpe --bin ngterm --bin ngterm-web
     )
     rm -rf "$stage"
     "$repo/scripts/stage.sh" "$stage"

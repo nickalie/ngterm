@@ -447,7 +447,7 @@ fn view_command(id: ViewId, command: ViewCommand) {
 /// Holds a policy decision for the consumer's answer; `None` once the engine has stopped.
 fn hold_policy(view: ViewId, decision: &PolicyDecision) -> Option<PolicyToken> {
     with(|engine| {
-        let token = PolicyToken(token(engine));
+        let token = PolicyToken::from_raw(token(engine));
         engine.policies.insert(token, (view, decision.clone()));
         token
     })
@@ -468,7 +468,7 @@ fn decide_policy(token: PolicyToken, allow: bool) {
 fn hold_reply(view: ViewId, reply: ScriptReply, context: JscContext) -> Result<ReplyToken, ScriptReply> {
     ENGINE.with(|engine| match engine.borrow_mut().as_mut() {
         Some(engine) => {
-            let token = ReplyToken(token(engine));
+            let token = ReplyToken::from_raw(token(engine));
             engine.replies.insert(token, Parked { view, reply, context });
             Ok(token)
         }
@@ -495,7 +495,7 @@ fn scheme_requested(request: &UriSchemeRequest) {
     let web_view = request.web_view();
     let held = with(|engine| {
         let view = page_of(engine, web_view.as_ref());
-        let token = SchemeToken(token(engine));
+        let token = SchemeToken::from_raw(token(engine));
         engine.schemes.insert(token, (view, request.clone()));
         send(&engine.events, Event::SchemeRequest(SchemeRequest { token, view, uri }));
     });

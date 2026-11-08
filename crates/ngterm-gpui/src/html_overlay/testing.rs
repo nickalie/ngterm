@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use ngterm_wpe::{
+use ngterm_wpe_client::{
     BufferId, EditingCommand, Evaluation, Geometry, Input, Load, MenuToken, PolicyToken, ReplyToken, SchemeResponse,
     SchemeToken, SessionId, SessionSpec, UserScript, ViewId, ViewSpec,
 };
@@ -92,7 +92,7 @@ impl Web for Recorder {
         self.specs.borrow_mut().push(spec.clone());
         self.record(Call::CreateView {
             handlers: spec.message_handlers.len(),
-            transparent: spec.background == Some(ngterm_wpe::Rgba::TRANSPARENT),
+            transparent: spec.background == Some(ngterm_wpe_client::Rgba::TRANSPARENT),
         });
         ViewId::from_raw(self.id())
     }

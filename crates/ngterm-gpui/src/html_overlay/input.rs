@@ -1,9 +1,9 @@
-//! GPUI's input in the engine's terms (`ngterm_wpe::Input`): keys as XKB keysyms with the platform's keycode, the
+//! GPUI's input in the engine's terms (`ngterm_wpe_client::Input`): keys as XKB keysyms with the platform's keycode, the
 //! modifiers and pressed buttons as `WPEModifiers`, the wheel in steps or a touchpad's pixels, and the page's CSS cursor
 //! names as GPUI cursors. Pure functions, so the element's input is tested without an engine.
 
 use gpui_kit::{CursorStyle, Keystroke, MouseButton, Pixels, Point, ScrollDelta};
-use ngterm_wpe::{Button, Modifiers};
+use ngterm_wpe_client::{Button, Modifiers};
 
 /// GPUI's lines per wheel notch (`SCROLL_LINES` of its Linux platform): a step of the engine's wheel is one notch.
 const LINES_PER_STEP: f32 = 3.0;

@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use gpui_kit::TestAppContext;
 use ngterm_core::html::HtmlPageFlags;
-use ngterm_wpe::{EditingCommand, Geometry, Input, Load, MenuToken, PolicyToken, ReplyToken, UserScript, ViewSpec};
+use ngterm_wpe_client::{
+    EditingCommand, Geometry, Input, Load, MenuToken, PolicyToken, ReplyToken, UserScript, ViewSpec,
+};
 
 use super::*;
 use crate::html_overlay::engine::Presenter;
@@ -39,7 +41,7 @@ impl Web for Recorded {
         create_view(spec: ViewSpec) -> ViewId;
         close_view(view: ViewId);
         load(view: ViewId, load: Load);
-        evaluate(view: ViewId, script: String, world: Option<String>) -> async_channel::Receiver<ngterm_wpe::Evaluation>;
+        evaluate(view: ViewId, script: String, world: Option<String>) -> async_channel::Receiver<ngterm_wpe_client::Evaluation>;
         reload(view: ViewId);
         go_back(view: ViewId);
         go_forward(view: ViewId);
@@ -243,7 +245,7 @@ fn an_engine_exit_finishes_a_pending_clear_and_shutdown_refuses_late_starts() {
     shutdown();
     assert!(web.stopped.get());
     assert_eq!(engine().err().as_deref(), Some("the app is quitting"));
-    assert!(started_engine(Err(ngterm_wpe::StartError::AlreadyStarted)).is_none());
+    assert!(started_engine(Err(ngterm_wpe_client::StartError::AlreadyStarted)).is_none());
     engine_ended();
     assert_eq!(engine().err().as_deref(), Some("the app is quitting"));
     shutdown();
@@ -282,10 +284,10 @@ fn events_for_closed_pages_are_refused_and_resources_preserve_bytes(cx: &mut Tes
     let reply = ReplyToken::from_raw(2);
     cx.update(|cx| {
         dispatch(
-            &Event::Policy(ngterm_wpe::PolicyRequest {
+            &Event::Policy(ngterm_wpe_client::PolicyRequest {
                 token: policy,
                 view,
-                kind: ngterm_wpe::PolicyKind::Response {
+                kind: ngterm_wpe_client::PolicyKind::Response {
                     uri: "https://example.invalid".to_owned(),
                     main_frame: true,
                     mime_supported: true,
@@ -294,7 +296,7 @@ fn events_for_closed_pages_are_refused_and_resources_preserve_bytes(cx: &mut Tes
             cx,
         );
         dispatch(
-            &Event::ScriptMessage(ngterm_wpe::ScriptMessage {
+            &Event::ScriptMessage(ngterm_wpe_client::ScriptMessage {
                 token: reply,
                 view,
                 handler: "ngterm".to_owned(),
@@ -623,21 +625,21 @@ fn the_document_host_checks_real_files_and_reports_invalid_documents() {
 fn unmounted_frames_and_popups_are_answered_without_a_page(cx: &mut TestAppContext) {
     let web = replies();
     let view = ViewId::from_raw(100);
-    let frame = Event::Frame(ngterm_wpe::Frame {
+    let frame = Event::Frame(ngterm_wpe_client::Frame {
         view,
-        buffer: ngterm_wpe::BufferId::from_raw(23),
+        buffer: ngterm_wpe_client::BufferId::from_raw(23),
         width: 1,
         height: 1,
         damage: Vec::new(),
-        content: ngterm_wpe::FrameContent::Shm(Vec::new()),
+        content: ngterm_wpe_client::FrameContent::Shm(Vec::new()),
     });
     cx.update(|cx| {
         dispatch(&frame, cx);
         dispatch(
-            &Event::OptionMenu(ngterm_wpe::OptionMenu {
+            &Event::OptionMenu(ngterm_wpe_client::OptionMenu {
                 token: MenuToken::from_raw(24),
                 view,
-                area: ngterm_wpe::Area {
+                area: ngterm_wpe_client::Area {
                     x: 0,
                     y: 0,
                     width: 1,
@@ -656,6 +658,6 @@ fn unmounted_frames_and_popups_are_answered_without_a_page(cx: &mut TestAppConte
             cx,
         );
     });
-    assert_eq!(web.recorder.presented(), [ngterm_wpe::BufferId::from_raw(23)]);
+    assert_eq!(web.recorder.presented(), [ngterm_wpe_client::BufferId::from_raw(23)]);
     assert_eq!(web.recorder.take(), [Call::Choose(MenuToken::from_raw(24), None)]);
 }

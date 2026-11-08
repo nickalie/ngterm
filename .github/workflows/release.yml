@@ -173,7 +173,7 @@ jobs:
           LD_LIBRARY_PATH: ${{ env.NGTERM_RELEASE_WPE }}/lib
         run: |
           cargo test --locked -p ngterm-update
-          cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless
+          cargo build --locked --release -p ngterm-gpui -p ngterm-wpe -p ngterm-ctl -p ngterm-session -p ngterm-headless
           scripts/stage.sh "$RUNNER_TEMP/stage" --profile release
           cargo test --locked --release -p ngterm-wpe --test headless --no-run --message-format=json > "$RUNNER_TEMP/wpe-test.json"
           python3 - "$RUNNER_TEMP/wpe-test.json" >> "$GITHUB_ENV" <<'PY'

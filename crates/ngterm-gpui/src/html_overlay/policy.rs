@@ -529,11 +529,11 @@ pub fn theme_change(current: &HtmlOverlayTheme, next: &HtmlOverlayTheme, themed:
 /// A failed load as the tracker reads it (upstream's `reportFailure`, the GTK build's `failure_event`): a cancel
 /// superseded by the next load, a policy interruption, or a failure.
 #[must_use]
-pub fn failure_event(error: &ngterm_wpe::LoadError) -> LoadEvent {
+pub fn failure_event(error: &ngterm_wpe_client::LoadError) -> LoadEvent {
     match error.kind {
-        ngterm_wpe::LoadErrorKind::Cancelled => LoadEvent::Cancelled,
-        ngterm_wpe::LoadErrorKind::Interrupted => LoadEvent::Interrupted(error.message.clone()),
-        ngterm_wpe::LoadErrorKind::Failed => LoadEvent::Failed(error.message.clone()),
+        ngterm_wpe_client::LoadErrorKind::Cancelled => LoadEvent::Cancelled,
+        ngterm_wpe_client::LoadErrorKind::Interrupted => LoadEvent::Interrupted(error.message.clone()),
+        ngterm_wpe_client::LoadErrorKind::Failed => LoadEvent::Failed(error.message.clone()),
     }
 }
 
@@ -541,15 +541,15 @@ pub fn failure_event(error: &ngterm_wpe::LoadError) -> LoadEvent {
 /// The answer to a read of `uri` through [`GRANT_SCHEME`] by a page whose grant is `root` (a real path): the file when
 /// it sits inside the grant, else the refusal (the GTK build's scheme handler).
 #[must_use]
-pub fn serve_granted(root: Option<&GrantRoot>, uri: &str) -> ngterm_wpe::SchemeResponse {
+pub fn serve_granted(root: Option<&GrantRoot>, uri: &str) -> ngterm_wpe_client::SchemeResponse {
     let requested = Url::parse(&app_uri(uri)).ok().and_then(|url| url.to_file_path().ok());
     match granted_file(root, requested.as_deref()) {
-        Ok(path) => ngterm_wpe::SchemeResponse::File(path),
-        Err(message) => ngterm_wpe::SchemeResponse::Error {
+        Ok(path) => ngterm_wpe_client::SchemeResponse::File(path),
+        Err(message) => ngterm_wpe_client::SchemeResponse::Error {
             kind: if message == NOT_A_FILE {
-                ngterm_wpe::SchemeError::IsDirectory
+                ngterm_wpe_client::SchemeError::IsDirectory
             } else {
-                ngterm_wpe::SchemeError::PermissionDenied
+                ngterm_wpe_client::SchemeError::PermissionDenied
             },
             message: message.to_owned(),
         },
@@ -567,20 +567,20 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn a_load_error_reads_as_the_trackers_event() {
-        let error = |kind| ngterm_wpe::LoadError {
+        let error = |kind| ngterm_wpe_client::LoadError {
             kind,
             message: "why".to_owned(),
         };
         assert_eq!(
-            failure_event(&error(ngterm_wpe::LoadErrorKind::Cancelled)),
+            failure_event(&error(ngterm_wpe_client::LoadErrorKind::Cancelled)),
             LoadEvent::Cancelled
         );
         assert_eq!(
-            failure_event(&error(ngterm_wpe::LoadErrorKind::Interrupted)),
+            failure_event(&error(ngterm_wpe_client::LoadErrorKind::Interrupted)),
             LoadEvent::Interrupted("why".to_owned())
         );
         assert_eq!(
-            failure_event(&error(ngterm_wpe::LoadErrorKind::Failed)),
+            failure_event(&error(ngterm_wpe_client::LoadErrorKind::Failed)),
             LoadEvent::Failed("why".to_owned())
         );
     }
@@ -596,12 +596,12 @@ mod tests {
         let uri = |path: &Path| granted_uri(&path.to_string_lossy()).unwrap();
         assert_eq!(
             serve_granted(grant.as_ref(), &uri(&root.join("sub/page.html"))),
-            ngterm_wpe::SchemeResponse::File(root.join("sub/page.html"))
+            ngterm_wpe_client::SchemeResponse::File(root.join("sub/page.html"))
         );
         assert_eq!(
             serve_granted(grant.as_ref(), &uri(&root.join("sub"))),
-            ngterm_wpe::SchemeResponse::Error {
-                kind: ngterm_wpe::SchemeError::IsDirectory,
+            ngterm_wpe_client::SchemeResponse::Error {
+                kind: ngterm_wpe_client::SchemeError::IsDirectory,
                 message: NOT_A_FILE.to_owned()
             }
         );
@@ -611,18 +611,18 @@ mod tests {
         );
         assert_eq!(
             outside,
-            ngterm_wpe::SchemeResponse::Error {
-                kind: ngterm_wpe::SchemeError::PermissionDenied,
+            ngterm_wpe_client::SchemeResponse::Error {
+                kind: ngterm_wpe_client::SchemeError::PermissionDenied,
                 message: OUTSIDE_GRANT.to_owned()
             }
         );
         assert!(matches!(
             serve_granted(None, &uri(&root.join("sub/page.html"))),
-            ngterm_wpe::SchemeResponse::Error { .. }
+            ngterm_wpe_client::SchemeResponse::Error { .. }
         ));
         assert!(matches!(
             serve_granted(grant.as_ref(), "not a uri"),
-            ngterm_wpe::SchemeResponse::Error { .. }
+            ngterm_wpe_client::SchemeResponse::Error { .. }
         ));
     }
 

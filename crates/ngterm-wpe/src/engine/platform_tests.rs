@@ -169,7 +169,10 @@ fn page_view() -> (Display, View, async_channel::Receiver<Event>) {
     let display = shm_display();
     let view = view_of_display(&display);
     let (events, received) = async_channel::unbounded();
-    view.attach(Link { id: ViewId(7), events });
+    view.attach(Link {
+        id: ViewId::from_raw(7),
+        events,
+    });
     (display, view, received)
 }
 
@@ -295,7 +298,7 @@ fn a_page_s_shm_frame_carries_its_damaged_pixels_and_its_buffer_goes_back_at_onc
             ];
             render(&view, &buffer, &damage).unwrap();
             let shown = frame(&received);
-            assert_eq!((shown.view, shown.width, shown.height), (ViewId(7), 4, 2));
+            assert_eq!((shown.view, shown.width, shown.height), (ViewId::from_raw(7), 4, 2));
             assert_eq!(shown.damage, [rect(0, 0, 2, 1), rect(2, 1, 5, 1), rect(0, 0, 1, 1)]);
             let FrameContent::Shm(regions) = shown.content else {
                 panic!("an SHM frame")
@@ -320,7 +323,7 @@ fn a_page_s_shm_frame_carries_its_damaged_pixels_and_its_buffer_goes_back_at_onc
             );
             // copied out: the buffer goes back at once, and the frame counts as rendered once presented
             run_until(context, || heard.borrow().len() == 1);
-            view.presented(BufferId(u64::MAX));
+            view.presented(BufferId::from_raw(u64::MAX));
             while context.iteration(false) {}
             assert_eq!(heard.borrow().len(), 1, "an unknown buffer acknowledges nothing");
             view.presented(shown.buffer);
@@ -384,18 +387,18 @@ fn a_page_s_view_reports_buffers_leaving_its_set_its_cursor_and_on_closing_the_b
             change_buffers(&view, &[&second]);
             assert!(matches!(
                 received.try_recv(),
-                Ok(Event::BuffersRemoved { view: ViewId(7), buffers }) if buffers == [buffer_id(&first), third_id]
+                Ok(Event::BuffersRemoved { view, buffers }) if view == ViewId::from_raw(7) && buffers == [buffer_id(&first), third_id]
             ));
             set_cursor(&view, "pointer");
             assert!(matches!(
                 received.try_recv(),
-                Ok(Event::Cursor { view: ViewId(7), name }) if name == "pointer"
+                Ok(Event::Cursor { view, name }) if view == ViewId::from_raw(7) && name == "pointer"
             ));
             // the page closes: the buffers it still holds go, and nothing more is reported
             view.detach();
             assert!(matches!(
                 received.try_recv(),
-                Ok(Event::BuffersRemoved { view: ViewId(7), buffers }) if buffers == [buffer_id(&second)]
+                Ok(Event::BuffersRemoved { view, buffers }) if view == ViewId::from_raw(7) && buffers == [buffer_id(&second)]
             ));
             view.detach();
             set_cursor(&view, "text");
@@ -472,7 +475,10 @@ fn a_display_on_a_render_node_offers_the_consumer_s_formats() {
         );
         let view = view_of_display(&display);
         let (events, received) = async_channel::unbounded();
-        view.attach(Link { id: ViewId(2), events });
+        view.attach(Link {
+            id: ViewId::from_raw(2),
+            events,
+        });
         let buffer = dmabuf_buffer(
             &display,
             OwnedFd::from(tempfile::tempfile().unwrap()),

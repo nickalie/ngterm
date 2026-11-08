@@ -3,7 +3,7 @@
 //!
 //! `WebKit` runs its web process (and the D-Bus proxy beside it) inside bubblewrap, and when bubblewrap cannot set up
 //! its namespaces it ends the process the engine runs in (a `g_error`, which aborts): the engine's worker
-//! (`ngterm_wpe::worker`), and with it every page, with a reason no page reports. That is the case on Ubuntu 24.04
+//! (`ngterm_wpe_client::worker`), and with it every page, with a reason no page reports. That is the case on Ubuntu 24.04
 //! and later, whose `AppArmor` denies an unconfined program the capabilities of a user namespace
 //! (`kernel.apparmor_restrict_unprivileged_userns=1`), unless a profile grants it `userns`; `bwrap` then fails with `setting up uid map: Permission denied`. So the check `WebKit` itself runs inside
 //! a container (`WTF::isInsideUnsupportedContainer`, the same `bwrap` invocation) runs here once, and a failure

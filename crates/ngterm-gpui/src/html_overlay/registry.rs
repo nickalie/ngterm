@@ -2,10 +2,10 @@
 //! waiting on an answer (upstream's `HtmlOverlayRegistry`; port of the GTK build's `html_overlay/registry.rs`). It
 //! lives on GPUI's main thread; every borrow is short and never spans a call into a page, which may come back here.
 //!
-//! The engine (`ngterm_wpe::Host`, one per process) starts with the first page once a window has drawn: it renders on
+//! The engine (`ngterm_wpe_client::Host`, one per process) starts with the first page once a window has drawn: it renders on
 //! the GPU that window's renderer opened, with the formats that device imports (`crate::external_texture::negotiate`),
-//! which exist only from then on. The engine runs in a worker process (`ngterm_wpe::worker`) whatever the package, so
-//! the environment its web process gets is the worker's, never the app's (the audio fix `ngterm_wpe::worker` gives it
+//! which exist only from then on. The engine runs in a worker process (`ngterm_wpe_client::worker`) whatever the package, so
+//! the environment its web process gets is the worker's, never the app's (the audio fix `ngterm_wpe_client::worker` gives it
 //! reaches no terminal); the start runs on a thread of its own, so the main thread never waits on it and a quit
 //! meanwhile waits for nothing;
 //! a page mounted before it ends stays waiting and is realized once it does. Its events come back on one channel the
@@ -29,7 +29,7 @@ use ngterm_core::html::{
 use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::replica_page::{ContentFailures, PageResource};
 use ngterm_proto::Response;
-use ngterm_wpe::{
+use ngterm_wpe_client::{
     BufferFormat, DmaBufTarget, Event, FrameMode, HostConfig, ReplyToken, SchemeError, SchemeRequest, SchemeResponse,
     SchemeToken, SessionId, SessionSpec, ViewId,
 };
@@ -63,7 +63,7 @@ enum EngineState {
 }
 
 /// What the start thread hands the pump.
-type Started = Result<(ngterm_wpe::Host, async_channel::Receiver<Event>), ngterm_wpe::StartError>;
+type Started = Result<(ngterm_wpe_client::Host, async_channel::Receiver<Event>), ngterm_wpe_client::StartError>;
 
 struct Registry {
     pages: HashMap<Uuid, Rc<Page>>,
@@ -388,7 +388,7 @@ fn engine() -> Result<Rc<dyn Web>, String> {
         return failed("the web engine has no event pump (html_overlay::init was not called)".to_owned());
     };
     let spawned = std::thread::Builder::new().name("wpe-start".to_owned()).spawn(move || {
-        let _ = pump.send_blocking(ngterm_wpe::Host::start_worker(config));
+        let _ = pump.send_blocking(ngterm_wpe_client::Host::start_worker(&config));
     });
     match spawned {
         Ok(_) => {
@@ -406,7 +406,7 @@ fn started_engine(started: Started) -> Option<async_channel::Receiver<Event>> {
     let waited = with(|registry| matches!(registry.engine, EngineState::Starting));
     match started {
         Ok((host, events)) if waited => {
-            tracing::info!(backend = ?host.backend(), "the web engine started");
+            tracing::info!("the web engine worker started");
             run_on(Rc::new(Engine(Arc::new(host))));
             Some(events)
         }
@@ -831,7 +831,7 @@ fn to_element(view: ViewId, event: &Event, cx: &mut App) {
     }
 }
 
-fn option_menu_closed(token: ngterm_wpe::MenuToken, cx: &mut App) {
+fn option_menu_closed(token: ngterm_wpe_client::MenuToken, cx: &mut App) {
     let elements: Vec<Entity<PageView>> =
         with(|registry| registry.pages.values().filter_map(|page| page.element()).collect());
     for element in elements {

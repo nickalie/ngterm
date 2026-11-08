@@ -11,7 +11,7 @@ fn hello(socket: &OwnedFd) {
         panic!("hello")
     };
     assert_eq!(protocol, PROTOCOL);
-    assert_eq!(version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(version, ngterm_wpe_client::worker::build_identity());
     assert_eq!(pid, std::process::id());
 }
 
@@ -91,7 +91,7 @@ fn forward_commands(app: &OwnedFd, queue: &async_channel::Receiver<Outgoing>) {
     wire::send(
         app.as_fd(),
         &ToWorker::SchemeBytes {
-            token: crate::SchemeToken(99),
+            token: crate::SchemeToken::from_raw(99),
             mime: "text/plain".to_owned(),
         }
         .packet(None)
@@ -102,7 +102,7 @@ fn forward_commands(app: &OwnedFd, queue: &async_channel::Receiver<Outgoing>) {
         app.as_fd(),
         &ToWorker::Evaluate {
             id: 7,
-            view: crate::ViewId(99),
+            view: crate::ViewId::from_raw(99),
             script: "1".to_owned(),
             world: None,
         }
@@ -174,7 +174,7 @@ fn a_worker_forwards_engine_events_and_flushes_its_stop_before_returning() {
                 data_dir: home.path().join(std::ffi::OsString::from_vec(b"data-\xff".to_vec())),
                 cache_dir: home.path().join(std::ffi::OsString::from_vec(b"cache-\xfe".to_vec())),
             };
-            let session = crate::SessionId(1);
+            let session = crate::SessionId::from_raw(1);
             for command in [Command::CreateSession(session, spec), Command::ClearSession(session)] {
                 let (message, blob) = ToWorker::command(command);
                 wire::send(app.as_fd(), &message.packet(blob).unwrap()).unwrap();
@@ -232,7 +232,7 @@ fn a_worker_whose_app_stops_reading_its_events_ends() {
             let (app, serving) = started_worker();
             // the worker's next write fails (EPIPE) while the app's socket stays open: only that failure ends it
             rustix::net::shutdown(&app, rustix::net::Shutdown::Read).unwrap();
-            let session = crate::SessionId(1);
+            let session = crate::SessionId::from_raw(1);
             for command in [
                 Command::CreateSession(session, crate::SessionSpec::Ephemeral),
                 Command::ClearSession(session),

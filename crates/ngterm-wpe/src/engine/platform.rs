@@ -730,7 +730,7 @@ fn buffer_id(buffer: &WpeBuffer) -> BufferId {
         // SAFETY: the qdata points to a `BufferId` the buffer owns for its life.
         return unsafe { *id.as_ptr() };
     }
-    let id = BufferId(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    let id = BufferId::from_raw(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     // SAFETY: the quark's only type is `BufferId`.
     unsafe { buffer.set_qdata(quark, id) };
     id

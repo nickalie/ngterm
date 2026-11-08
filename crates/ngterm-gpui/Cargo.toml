@@ -13,10 +13,9 @@ path = "src/main.rs"
 
 [features]
 default = ["html"]
-# HTML overlays: on WPE WebKit on Linux (ngterm-wpe), which needs a WPE WebKit at build and run time (README > WPE
-# WebKit); on WebView2 on Windows (wry, webview2-com), whose runtime the app checks for at start. Without it the core
+# HTML overlays: through the separately linked ngterm-web worker on Linux (ngterm-wpe-client); on WebView2 on Windows (wry, webview2-com), whose runtime the app checks for at start. Without it the core
 # refuses every page; the Ubuntu CI jobs build that way.
-html = ["dep:ngterm-wpe", "dep:gio", "dep:wry", "dep:webview2-com", "dep:windows-core"]
+html = ["dep:ngterm-wpe-client", "dep:gio", "dep:wry", "dep:webview2-com", "dep:windows-core"]
 
 [dependencies]
 ngterm-app.workspace = true
@@ -66,9 +65,8 @@ wayland-protocols.workspace = true
 # screen spans; XKB: the keyboard-layout lock's groups on X11 (`input_source/linux/x11.rs`)
 x11rb = { workspace = true, features = ["randr", "xkb"] }
 zbus.workspace = true
-ngterm-wpe = { workspace = true, optional = true }
-# the default web browser a page hands off to, whatever the address's type (upstream's `SystemBrowser`): the gio the
-# WPE host already links
+ngterm-wpe-client = { workspace = true, optional = true }
+# GIO opens the default web browser a page hands off to, whatever the address's type (upstream's `SystemBrowser`)
 gio = { workspace = true, optional = true }
 gpui-pre-linux.workspace = true
 netlink-packet-core.workspace = true

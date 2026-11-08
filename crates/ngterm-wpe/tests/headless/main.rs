@@ -48,8 +48,12 @@ const QUIT_CASE: &str = "the_quit_ends_the_web_processes_of_open_pages_a_spinnin
 const CHILD_TIMEOUT: Duration = Duration::from_secs(300);
 
 fn main() -> ExitCode {
-    // SAFETY: first thing in main, while the process has one thread.
-    unsafe { ngterm_wpe::worker::serve_if_asked(|| {}) };
+    let worker = std::env::var_os("WPE_TEST_WORKER")
+        .map_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_ngterm-web")), PathBuf::from);
+    if let Err(error) = ngterm_wpe_client::worker::pin_worker_path(&worker) {
+        eprintln!("headless harness worker: {error}");
+        return ExitCode::FAILURE;
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--list") {
         for (name, _) in CASES {

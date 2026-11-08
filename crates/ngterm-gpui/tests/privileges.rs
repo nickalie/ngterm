@@ -1,6 +1,6 @@
 //! The GPUI build keeps the user's privileges while its HTML pages run. A vendored WPE `WebKit` runs only inside an
 //! overlay of `/usr/lib` (`bwrap`: a user namespace with `PR_SET_NO_NEW_PRIVS`), so its engine runs in a worker there
-//! (`ngterm_wpe::worker`) and nothing else may: the app itself, the live sessions' server (`ngterm-session`), a Live
+//! (`ngterm_wpe_client::worker`) and nothing else may: the app itself, the live sessions' server (`ngterm-session`), a Live
 //! pane's shell and what the shell starts keep `NoNewPrivs: 0`, this test's uid and gid maps and user namespace, and
 //! see root's files as root's (so `sudo` and every setuid program work in a pane), while a page loads, and again after
 //! the app quit, in a command the surviving session runs. Under the vendored package the worker is the one process
@@ -234,11 +234,18 @@ fn panes_and_their_sessions_keep_the_users_privileges_while_pages_run() -> TestR
         outside.no_new_privs, "0",
         "this test itself runs with no_new_privs: run it outside any sandbox"
     );
-    let vendored = matches!(
-        ngterm_wpe::launcher::provider(),
-        ngterm_wpe::launcher::Provider::Vendored { .. }
+    // The frontend no longer links the engine. This dev-only check queries the same pkg-config wrapper that
+    // built ngterm-web, preserving the expected namespace assertion for vendored builds.
+    let pkg_config = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/pkg-config.sh");
+    let libdir = std::process::Command::new(pkg_config)
+        .args(["--variable=libdir", "wpe-webkit-2.0"])
+        .output()?;
+    assert!(
+        libdir.status.success(),
+        "cannot identify the test worker's WPE provider"
     );
-    println!("WPE WebKit: {}", if vendored { "vendored" } else { "the system's" });
+    let libdir = String::from_utf8(libdir.stdout)?;
+    let vendored = Path::new(libdir.trim()).join("../share/ngterm/wpe-PINS").is_file();
     let (mut sandbox, primary, sessions) = start_live(&lavapipe, &executable, &resources)?;
     let app = sandbox.child(primary).id();
     let sid = live_session(&sandbox)?;
