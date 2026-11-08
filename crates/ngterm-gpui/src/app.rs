@@ -957,7 +957,7 @@ mod tests {
                 state.follow_link(
                     "https://example.com/app",
                     ngterm_core::link_policy::ClickOrigin::Quick,
-                    true,
+                    ngterm_core::link_policy::ClickIntent::Browser,
                 );
                 state.frontend_action(ngterm_core::app_actions::FrontendAction::ToggleFullscreen(id));
                 state.activation_requested(Activation::default());
