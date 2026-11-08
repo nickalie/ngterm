@@ -2410,6 +2410,7 @@ fn live_install_debug_names_the_endpoint_and_state_directory() {
 #[test]
 fn a_live_companion_copy_observes_the_daemon_shell_instead_of_the_attach_client() {
     let mut live = live();
+    live.probe.set_foreground_pid(Some(200));
     let table = FakeProcessTable::default();
     table.insert(
         ProcessStat {
@@ -2423,6 +2424,17 @@ fn a_live_companion_copy_observes_the_daemon_shell_instead_of_the_attach_client(
     table.set_terminal_foreground(100, 100);
     let directory = live.resources.path().display().to_string();
     table.set_working_directory(100, &directory);
+    let client_directory = tempfile::tempdir().unwrap();
+    table.insert(
+        ProcessStat {
+            pid: 200,
+            ppid: 1,
+            pgrp: 200,
+            session: 200,
+        },
+        Some(&["ngterm-session", "attach"]),
+    );
+    table.set_working_directory(200, client_directory.path().to_str().unwrap());
     live.fixture
         .core
         .set_process_table(Box::new(table), Some("sh".to_owned()));
