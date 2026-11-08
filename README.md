@@ -783,7 +783,11 @@ CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER="$PWD/scripts/ios-sim-runner.sh" \
   `swiftlint:disable:next` gives its reason; the compiler adds Swift 6 with complete concurrency checking and
   warnings as errors. A finding is fixed in the code: there are no baselines.
 - `test` runs on the pinned `ngterm-phone` and `ngterm-tablet` simulators, one after the other. The UI tests drive
-  the app on a fake core (Debug builds only; `archive` checks the Release build doesn't hold it).
+  the app on a fake core (Debug builds only; `archive` checks the Release build doesn't hold it). A UI test that fails
+  runs once more, for XCTest gives up on the app now and then on CI's virtual Macs ("Failed to terminate", "does not
+  have a process ID", "Timed out while evaluating UI query"). A test that passed on its retry is named after the run
+  with what failed it, red runs included: as a warning when its first attempt failed on those alone, and otherwise
+  as a flaky test that fails the run. CI keeps the result bundles and attachments of any run that retried a test.
 - The Unit plan measures line coverage of the app's own code: the app target and the packages' library targets
   (`Unit.xctestplan`'s code coverage targets), not the tests, the fake core or the generated bindings; the UI plan
   is not measured. `test` and `coverage` write its summary per target and per file, least covered first, beside the

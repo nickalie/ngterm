@@ -327,9 +327,11 @@ quiet_keyboard_introduction() {
   fi || die "couldn't set simulator $1's keyboard preferences"
 }
 
-# Run test plan $1 on the phone and tablet simulators, one after the other, into mobile/ios/build/$1.xcresult.
+# Run test plan $1 on the phone and tablet simulators, one after the other, into mobile/ios/build/$1.xcresult, with
+# xcodebuild's options $2... (the UI plan's retry); its status is xcodebuild's.
 run_test_plan() {
   local plan="$1" phone tablet
+  shift
   phone="$(simulator_udid "$IOS_SIM_PHONE_NAME")"
   tablet="$(simulator_udid "$IOS_SIM_TABLET_NAME")"
   [[ -n "$phone" && -n "$tablet" ]] ||
@@ -344,7 +346,7 @@ run_test_plan() {
   rm -rf "$BUILD_DIR/$plan.xcresult" "$DERIVED_DATA/Build/ProfileData"
   project_xcodebuild test -scheme NgTerm -configuration Debug -testPlan "$plan" \
     -destination "id=$phone" -destination "id=$tablet" -disable-concurrent-destination-testing \
-    -parallel-testing-enabled NO -resultBundlePath "$BUILD_DIR/$plan.xcresult" -quiet
+    -parallel-testing-enabled NO -resultBundlePath "$BUILD_DIR/$plan.xcresult" "$@" -quiet
 }
 
 # The Unit plan's coverage (scripts/ios-coverage.py): summarize reads the profiles the run left in the derived data
@@ -356,10 +358,15 @@ coverage_summarize() {
 }
 
 action_test() {
+  local status=0
   rm -rf "$BUILD_DIR/snapshot-failures"
+  rm -f "$BUILD_DIR/retried-tests.txt"
   run_test_plan Unit
   coverage_summarize
-  run_test_plan UI
+  # a UI test that fails runs once more; report_retried_tests then judges each that passed so, red runs included
+  run_test_plan UI -retry-tests-on-failure -test-iterations 2 || status=$?
+  report_retried_tests "$BUILD_DIR/UI.xcresult" "$BUILD_DIR/retried-tests.txt" || status=1
+  ((status == 0)) || return "$status"
   scripts/ios-coverage.py check
 }
 
@@ -369,6 +376,79 @@ action_coverage() {
   coverage_summarize
   scripts/ios-coverage.py check
 }
+
+# Judges each UI test of the result bundle $1 that failed and then passed on its retry, and lists them in the file $2
+# (CI keeps the result bundles and attachments of a run that has one). XCTest itself fails a UI test now and then on
+# CI's virtual Macs, the app and the test doing nothing wrong: it gives up terminating the app the previous test left
+# running ("Failed to terminate"), or launching the next ("does not have a process ID"), or evaluating a query ("Timed
+# out while evaluating UI query"), each after a minute. A retry that passed after one of those alone is named as a
+# warning; one whose first attempt failed for anything else is a flaky test, which fails the run (exit 1) as any
+# failure does.
+report_retried_tests() {
+  [[ -d "$1" ]] || return 0
+  local tests
+  tests="$(xcrun xcresulttool get test-results tests --path "$1" --compact)" ||
+    die "couldn't read the UI tests' results from $1"
+  RETRIED_TESTS_FILE="$2" python3 -c "$RETRIED_TESTS_PY" <<<"$tests"
+}
+
+# report_retried_tests' reading of `xcresulttool get test-results tests`: a test's attempts are its Repetition (or Test
+# Case Run) nodes, under its Test Case node, or under each of its Device nodes when the plan ran on several. Exit 1
+# when a retried test's first attempt failed for anything but XCTest's own lifecycle failures.
+RETRIED_TESTS_PY='
+import json
+import os
+import sys
+
+LIFECYCLE = ("Failed to terminate", "does not have a process ID", "Timed out while evaluating UI query")
+ATTEMPTS = ("Repetition", "Test Case Run")
+github = os.environ.get("GITHUB_ACTIONS") == "true"
+flaky = False
+retried = []
+
+
+def annotate(level, title, text):
+    if github:
+        # a workflow command ends at its first newline and decodes %-sequences
+        escaped = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print("::" + level + " title=" + title + "::" + escaped)
+    else:
+        print("build-ios.sh: " + title + ": " + text)
+
+
+def walk(nodes, test, device):
+    global flaky
+    for node in nodes:
+        kind = node.get("nodeType")
+        name = node.get("name", "")
+        here_test, here_device = test, device
+        if kind == "Test Suite":
+            here_test = name
+        elif kind == "Test Case":
+            here_test = test + "/" + name
+        elif kind == "Device":
+            here_device = name
+        children = node.get("children", [])
+        attempts = [child for child in children if child.get("nodeType") in ATTEMPTS]
+        failed = [attempt for attempt in attempts if attempt.get("result") == "Failed"]
+        if failed and attempts[-1].get("result") == "Passed":
+            texts = [m.get("name", "") for m in failed[0].get("children", []) if m.get("nodeType") == "Failure Message"]
+            where = here_test + (" on " + here_device if here_device else "")
+            lifecycle = bool(texts) and all(any(mark in text for mark in LIFECYCLE) for text in texts)
+            flaky = flaky or not lifecycle
+            retried.append(where)
+            verdict = "XCTest lifecycle failure, passed on its retry" if lifecycle else "flaky: passed only on its retry"
+            annotate("warning" if lifecycle else "error", "UI test retried",
+                     where + ": " + verdict + ": " + "; ".join(texts)[:2000])
+        walk(children, here_test, here_device)
+
+
+walk(json.load(sys.stdin).get("testNodes", []), "", "")
+if retried and os.environ.get("RETRIED_TESTS_FILE"):
+    with open(os.environ["RETRIED_TESTS_FILE"], "w", encoding="utf-8") as listing:
+        listing.write("\n".join(retried) + "\n")
+sys.exit(1 if flaky else 0)
+'
 
 # Fail when a binary (an app's executable or its dSYM's DWARF) holds a symbol or string of the fake core's module.
 check_no_fakes() {

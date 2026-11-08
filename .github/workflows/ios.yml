@@ -16,10 +16,13 @@
 #   when it fails;
 # - `test`: scripts/build-ios.sh test, the Unit and UI test plans on both simulators, and the Unit plan's line coverage
 #   checked against the floors of mobile/ios/coverage-floors.txt; the coverage summary (Unit.coverage.txt and .json)
-#   is kept as `ios-coverage` on every run that wrote it. When it fails (or runs out of time) the result bundles are
-#   kept as `ios-results`, and the failed snapshots' images (mobile/ios/build/snapshot-failures/) with the failed
-#   tests' attachments exported from the result bundles (each snapshot's reference, failure and difference images,
-#   the UI audits' screenshots) as `ios-failure-diffs`;
+#   is kept as `ios-coverage` on every run that wrote it. A UI test that fails runs once more, and each that passed on
+#   its retry is named with what failed it: a warning when XCTest gave up on the app, as it now and then does on these
+#   virtual Macs, and otherwise a flaky test that fails the job (build-ios.sh's report_retried_tests). When it fails
+#   (or runs out of time, or retried a test: mobile/ios/build/retried-tests.txt) the result bundles are kept as
+#   `ios-results`, and the failed snapshots' images (mobile/ios/build/snapshot-failures/) with the failed tests'
+#   attachments exported from the result bundles (each snapshot's reference, failure and difference images, the UI
+#   audits' screenshots) as `ios-failure-diffs`;
 # - `archive`: scripts/build-ios.sh archive, an unsigned Release archive for devices, checked to hold no
 #   NgtermCoreFakes symbol (the fake core is for Debug builds only), to answer the export compliance question, and to
 #   carry a privacy manifest that covers the required-reason APIs its binary uses (scripts/ios-privacy-check.sh). The
@@ -149,7 +152,7 @@ jobs:
           path: mobile/ios/build/Unit.coverage.*
           if-no-files-found: ignore
       - name: upload the result bundles
-        if: failure() || cancelled()
+        if: failure() || cancelled() || hashFiles('mobile/ios/build/retried-tests.txt') != ''
         uses: actions/upload-artifact@v7
         with:
           name: ios-results
@@ -160,7 +163,7 @@ jobs:
       # A passing test keeps none, so everything is exported: `--only-failures` would miss the snapshots' images,
       # which Swift Testing records beside the issue rather than on it
       - name: export the failed tests' attachments
-        if: failure() || cancelled()
+        if: failure() || cancelled() || hashFiles('mobile/ios/build/retried-tests.txt') != ''
         run: |
           eval "$(scripts/setup-ios.sh --check)"
           for bundle in mobile/ios/build/*.xcresult; do
@@ -169,7 +172,7 @@ jobs:
               --output-path "mobile/ios/build/failure-attachments/$(basename "$bundle" .xcresult)" || true
           done
       - name: upload the failed snapshots and attachments
-        if: failure() || cancelled()
+        if: failure() || cancelled() || hashFiles('mobile/ios/build/retried-tests.txt') != ''
         uses: actions/upload-artifact@v7
         with:
           name: ios-failure-diffs
