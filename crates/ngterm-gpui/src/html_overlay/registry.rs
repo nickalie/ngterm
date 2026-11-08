@@ -932,3 +932,7 @@ fn focused_element(window: &Window, cx: &App) -> Option<Entity<PageView>> {
         .into_iter()
         .find(|element| element.read(cx).focus().is_focused(window))
 }
+
+#[cfg(test)]
+#[path = "registry_tests.rs"]
+pub(super) mod tests;

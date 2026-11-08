@@ -1011,6 +1011,564 @@ mod tests {
             assert!(MEDIA_SCRIPT.contains(&format!("'{scheme}:'")), "{scheme} is missing");
         }
     }
+
+    use super::*;
+    use crate::html_overlay::registry::tests::{Model, Recorded, new_page, overlay, replies, url_overlay};
+    use crate::html_overlay::testing::Call;
+    use gpui_kit::TestAppContext;
+    use ngterm_wpe::{LoadError, LoadErrorKind, PolicyToken, ReplyToken, Termination};
+
+    fn realized(overlay: &HtmlOverlay) -> (Rc<Page>, Rc<Recorded>) {
+        let web = replies();
+        let page = new_page(overlay, Storage::Ephemeral);
+        let engine: Rc<dyn Web> = web.clone();
+        page.realize(&engine, Some(SessionId::from_raw(1)), 1.25);
+        web.recorder.take();
+        (page, web)
+    }
+
+    fn model_page(overlay: &HtmlOverlay) -> (Rc<Page>, Rc<Recorded>, Model) {
+        let web = replies();
+        let model = Model::new(overlay);
+        let page = Page::new(
+            overlay,
+            None,
+            PanelColors::resolve(&super::super::panel::TerminalColors::default(), None),
+            Storage::Ephemeral,
+            &model.poster(),
+        );
+        let engine: Rc<dyn Web> = web.clone();
+        page.realize(&engine, Some(SessionId::from_raw(1)), 1.0);
+        web.recorder.take();
+        (page, web, model)
+    }
+
+    fn progress(page: &Page, event: ngterm_wpe::LoadEvent, cx: &mut App) {
+        page.event(
+            &Event::Load {
+                view: page.view_id().unwrap(),
+                event,
+            },
+            cx,
+        );
+    }
+
+    #[gpui_kit::test]
+    fn commits_publish_the_shown_url_title_history_and_load_outcome(cx: &mut TestAppContext) {
+        let source = url_overlay();
+        let (page, _, mut model) = model_page(&source);
+        let view = page.view_id().unwrap();
+        let engine = EngineState {
+            uri: Some("https://example.invalid/next".to_owned()),
+            title: Some("Next".to_owned()),
+            can_go_back: true,
+            can_go_forward: false,
+        };
+        cx.update(|cx| {
+            progress(&page, ngterm_wpe::LoadEvent::Started, cx);
+            progress(&page, ngterm_wpe::LoadEvent::Redirected, cx);
+            page.event(
+                &Event::Page {
+                    view,
+                    page: engine.clone(),
+                },
+                cx,
+            );
+            progress(&page, ngterm_wpe::LoadEvent::Committed, cx);
+            progress(&page, ngterm_wpe::LoadEvent::Finished, cx);
+        });
+        model.drain();
+        assert_eq!(model.overlay().load_state, HtmlLoadState::Loaded);
+        assert_eq!(
+            model.overlay().current,
+            Some(HtmlPageInfo {
+                page: "https://example.invalid/next".to_owned(),
+                title: Some("Next".to_owned()),
+                can_go_back: true,
+                can_go_forward: false,
+            })
+        );
+        assert_eq!(page.browser_url().unwrap().as_str(), "https://example.invalid/next");
+        cx.update(|cx| page.event(&Event::Page { view, page: engine }, cx));
+        model.drain();
+        assert_eq!(model.overlay().current.as_ref().unwrap().title.as_deref(), Some("Next"));
+    }
+
+    #[gpui_kit::test]
+    fn failures_publish_the_engine_reason_and_a_new_load_clears_it(cx: &mut TestAppContext) {
+        let (page, _, mut model) = model_page(&url_overlay());
+        let view = page.view_id().unwrap();
+        cx.update(|cx| {
+            page.event(
+                &Event::LoadFailed {
+                    view,
+                    uri: "https://example.invalid/start".to_owned(),
+                    error: LoadError {
+                        kind: LoadErrorKind::Failed,
+                        message: "TLS certificate rejected".to_owned(),
+                    },
+                },
+                cx,
+            );
+        });
+        model.drain();
+        assert_eq!(model.overlay().load_state, HtmlLoadState::Failed);
+        assert_eq!(model.overlay().load_error.as_deref(), Some("TLS certificate rejected"));
+        cx.update(|cx| page.apply(model.overlay(), false, cx));
+        cx.update(|cx| progress(&page, ngterm_wpe::LoadEvent::Started, cx));
+        model.drain();
+        assert_eq!(model.overlay().load_state, HtmlLoadState::Loading);
+        assert_eq!(model.overlay().load_error, None);
+        cx.update(|cx| {
+            page.event(
+                &Event::WebProcessTerminated {
+                    view,
+                    reason: Termination::Crashed,
+                },
+                cx,
+            );
+        });
+        model.drain();
+        assert_eq!(model.overlay().load_state, HtmlLoadState::Failed);
+        assert!(model.overlay().load_error.is_some());
+    }
+
+    #[gpui_kit::test]
+    fn reload_current_uses_history_after_commit_and_original_reloads_the_source(cx: &mut TestAppContext) {
+        let mut source = url_overlay();
+        let (page, web) = realized(&source);
+        source.reload_revision += 1;
+        source.reload_target = HtmlReloadTarget::Current;
+        cx.update(|cx| page.apply(&source, true, cx));
+        assert!(
+            web.recorder
+                .take()
+                .contains(&Call::Load(Load::Uri("https://example.invalid/start".to_owned())))
+        );
+        cx.update(|cx| progress(&page, ngterm_wpe::LoadEvent::Committed, cx));
+        source.reload_revision += 1;
+        cx.update(|cx| page.apply(&source, true, cx));
+        assert_eq!(web.recorder.take(), [Call::Reload]);
+        source.reload_target = HtmlReloadTarget::Original;
+        source.reload_revision += 1;
+        cx.update(|cx| page.apply(&source, false, cx));
+        assert_eq!(
+            web.recorder.take(),
+            [
+                Call::Visible(false),
+                Call::Load(Load::Uri("https://example.invalid/start".to_owned()))
+            ]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn text_files_reload_from_disk_and_granted_files_use_the_private_scheme(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a b.html");
+        std::fs::write(&path, "<p>first</p>").unwrap();
+        let mut source = overlay(HtmlSource::File {
+            path: path.to_string_lossy().into_owned(),
+            grant_root: None,
+        });
+        let (page, web) = realized(&source);
+        std::fs::write(&path, "<p>second</p>").unwrap();
+        source.reload_revision += 1;
+        source.reload_target = HtmlReloadTarget::Current;
+        cx.update(|cx| page.apply(&source, false, cx));
+        assert_eq!(
+            web.recorder.take(),
+            [Call::Load(Load::Html {
+                html: "<p>second</p>".to_owned(),
+                base_uri: None
+            })]
+        );
+        let source = overlay(HtmlSource::File {
+            path: path.to_string_lossy().into_owned(),
+            grant_root: Some(dir.path().to_string_lossy().into_owned()),
+        });
+        let web = replies();
+        let page = new_page(&source, Storage::Ephemeral);
+        let engine: Rc<dyn Web> = web.clone();
+        page.realize(&engine, Some(SessionId::from_raw(1)), 1.0);
+        assert!(page.grant_root().is_some());
+        assert!(web.recorder.take().contains(&Call::Load(Load::Uri(
+            policy::granted_uri(&path.to_string_lossy()).unwrap()
+        ))));
+        assert_eq!(page.page_path(), Some(path));
+    }
+
+    #[gpui_kit::test]
+    fn an_unreadable_or_relative_file_fails_without_loading_anything(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.html");
+        let expected = std::fs::read_to_string(&path).unwrap_err().to_string();
+        for (source, expected) in [
+            (
+                HtmlSource::File {
+                    path: path.to_string_lossy().into_owned(),
+                    grant_root: None,
+                },
+                expected,
+            ),
+            (
+                HtmlSource::File {
+                    path: "relative.html".to_owned(),
+                    grant_root: Some(dir.path().to_string_lossy().into_owned()),
+                },
+                "not an absolute path: relative.html".to_owned(),
+            ),
+        ] {
+            let (page, web, mut model) = model_page(&overlay(source));
+            model.drain();
+            assert_eq!(model.overlay().load_state, HtmlLoadState::Failed);
+            assert_eq!(model.overlay().load_error.as_deref(), Some(expected.as_str()));
+            assert!(web.recorder.take().is_empty());
+            cx.update(|cx| page.close(cx));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_missing_store_fails_without_creating_a_view_and_never_uses_memory_instead(cx: &mut TestAppContext) {
+        let source = url_overlay();
+        let mut model = Model::new(&source);
+        let web = replies();
+        let page = Page::new(
+            &source,
+            None,
+            PanelColors::resolve(&super::super::panel::TerminalColors::default(), None),
+            Storage::Unavailable("store locked".to_owned()),
+            &model.poster(),
+        );
+        let engine: Rc<dyn Web> = web.clone();
+        page.realize(&engine, None, 1.0);
+        model.drain();
+        assert_eq!(page.view_id(), None);
+        assert!(web.recorder.specs.borrow().is_empty());
+        assert_eq!(model.overlay().load_error.as_deref(), Some("store locked"));
+        cx.update(|cx| page.close(cx));
+        page.realize(&engine, Some(SessionId::from_raw(1)), 1.0);
+        assert!(web.recorder.specs.borrow().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn history_navigation_and_file_handoffs_enforce_the_page_kind(cx: &mut TestAppContext) {
+        let (page, web) = realized(&url_overlay());
+        assert_eq!(
+            page.navigate(HtmlNavigation::Back),
+            Err("no page to go back to".to_owned())
+        );
+        assert_eq!(
+            page.navigate(HtmlNavigation::Forward),
+            Err("no page to go forward to".to_owned())
+        );
+        cx.update(|cx| {
+            page.event(
+                &Event::Page {
+                    view: page.view_id().unwrap(),
+                    page: EngineState {
+                        can_go_back: true,
+                        can_go_forward: true,
+                        ..Default::default()
+                    },
+                },
+                cx,
+            );
+        });
+        assert_eq!(page.navigate(HtmlNavigation::Back), Ok(()));
+        assert_eq!(page.navigate(HtmlNavigation::Forward), Ok(()));
+        assert_eq!(web.recorder.take(), [Call::GoBack, Call::GoForward]);
+        assert_eq!(
+            page.navigate(HtmlNavigation::Finder),
+            Err("show in Finder requires a file page".to_owned())
+        );
+        let (page, _) = realized(&overlay(HtmlSource::Markdown {
+            path: "/a.md".to_owned(),
+        }));
+        assert_eq!(
+            page.navigate(HtmlNavigation::Browser),
+            Err("a markdown page opens only in its overlay".to_owned())
+        );
+        let (page, _) = realized(&overlay(HtmlSource::Replica {
+            path: "/a.html".to_owned(),
+        }));
+        for nav in [HtmlNavigation::Browser, HtmlNavigation::Finder] {
+            assert_eq!(page.navigate(nav), Err("the page's file is on another Mac".to_owned()));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn response_policy_rejects_downloads_and_other_origins_and_allows_its_own(cx: &mut TestAppContext) {
+        let (page, web, mut model) = model_page(&url_overlay());
+        let view = page.view_id().unwrap();
+        let cases = [
+            ("https://example.invalid/a", true, true, true),
+            ("https://example.invalid/a", false, false, false),
+            ("https://other.invalid/", true, true, false),
+            ("not a URL", false, true, false),
+        ];
+        for (index, (uri, main_frame, mime_supported, allowed)) in cases.into_iter().enumerate() {
+            let token = PolicyToken::from_raw(u64::try_from(index).unwrap());
+            cx.update(|cx| {
+                page.event(
+                    &Event::Policy(PolicyRequest {
+                        token,
+                        view,
+                        kind: PolicyKind::Response {
+                            uri: uri.to_owned(),
+                            main_frame,
+                            mime_supported,
+                        },
+                    }),
+                    cx,
+                );
+            });
+            assert_eq!(web.policies.borrow().last(), Some(&(token, allowed)));
+        }
+        model.drain();
+        assert_eq!(model.overlay().load_state, HtmlLoadState::Failed);
+        assert!(model.overlay().load_error.as_deref().unwrap().contains("other.invalid"));
+        cx.update(|cx| page.close(cx));
+        cx.update(|cx| assert!(!page.decide_response("https://example.invalid/a", true, true, cx)));
+    }
+
+    #[gpui_kit::test]
+    fn navigation_policy_answers_once_and_never_allows_a_new_window(cx: &mut TestAppContext) {
+        let mut source = url_overlay();
+        source.flags.chromeless = true;
+        let (page, web) = realized(&source);
+        let cases = [
+            ("https://example.invalid/a", NavigationType::Other, false, true),
+            ("https://other.invalid/a", NavigationType::Other, false, false),
+            ("https://example.invalid/a", NavigationType::LinkClicked, true, false),
+        ];
+        for (index, (uri, navigation, new_window, allowed)) in cases.into_iter().enumerate() {
+            let token = PolicyToken::from_raw(u64::try_from(index).unwrap());
+            cx.update(|cx| {
+                page.event(
+                    &Event::Policy(PolicyRequest {
+                        token,
+                        view: page.view_id().unwrap(),
+                        kind: PolicyKind::Navigation {
+                            uri: uri.to_owned(),
+                            navigation,
+                            new_window,
+                        },
+                    }),
+                    cx,
+                );
+            });
+            assert_eq!(web.policies.borrow().last(), Some(&(token, allowed)));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn bridge_rejects_nonobjects_closed_pages_and_a_replica_without_its_link(cx: &mut TestAppContext) {
+        let (page, web) = realized(&overlay(HtmlSource::Replica {
+            path: "/a.html".to_owned(),
+        }));
+        let mut message = ScriptMessage {
+            token: ReplyToken::from_raw(1),
+            view: page.view_id().unwrap(),
+            handler: HANDLER_NAME.to_owned(),
+            body: None,
+        };
+        page.bridge_message(&message);
+        assert_eq!(
+            web.replies.borrow().last().unwrap().1,
+            Err("invalid request".to_owned())
+        );
+        message.body = Some("{\"action\":\"session.list\"}".to_owned());
+        page.bridge_message(&message);
+        assert_eq!(web.replies.borrow().last().unwrap().1, Err("page closed".to_owned()));
+        cx.update(|cx| page.close(cx));
+        page.bridge_message(&message);
+        assert_eq!(web.replies.borrow().len(), 3);
+        assert_eq!(web.replies.borrow().last().unwrap().1, Err("page closed".to_owned()));
+    }
+
+    #[gpui_kit::test]
+    fn themes_reinstall_scripts_and_reload_only_themed_documents(cx: &mut TestAppContext) {
+        let colors = super::super::panel::TerminalColors {
+            background: Some("#fafafa".to_owned()),
+            foreground: Some("#111111".to_owned()),
+            palette: Vec::new(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("page.html");
+        std::fs::write(&path, "<p>page</p>").unwrap();
+        for source in [
+            url_overlay().source,
+            HtmlSource::File {
+                path: path.to_string_lossy().into_owned(),
+                grant_root: None,
+            },
+        ] {
+            let themed = matches!(source, HtmlSource::File { .. });
+            let (page, web) = realized(&overlay(source));
+            cx.update(|cx| page.apply_theme(&colors, cx));
+            assert_eq!(page.colors().background, "#fafafa");
+            assert_eq!(web.scripts.borrow().len(), 1);
+            assert_eq!(!web.recorder.take().is_empty(), themed);
+            cx.update(|cx| page.apply_theme(&colors, cx));
+            assert_eq!(web.scripts.borrow().len(), 1);
+            assert!(web.recorder.take().is_empty());
+            cx.update(|cx| page.close(cx));
+            cx.update(|cx| page.apply_theme(&colors, cx));
+            assert_eq!(web.scripts.borrow().len(), 1);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_close_requested_by_the_engine_closes_the_model_and_late_loads_do_nothing(cx: &mut TestAppContext) {
+        let (page, web, mut model) = model_page(&url_overlay());
+        let view = page.view_id().unwrap();
+        cx.update(|cx| page.event(&Event::CloseRequested { view }, cx));
+        model.drain();
+        assert!(model.state.core.html_overlay_slot(page.id()).is_none());
+        cx.update(|cx| page.close(cx));
+        web.recorder.take();
+        cx.update(|cx| {
+            page.apply(&page.overlay(), true, cx);
+            page.event(
+                &Event::Load {
+                    view,
+                    event: ngterm_wpe::LoadEvent::Committed,
+                },
+                cx,
+            );
+            page.event(
+                &Event::Load {
+                    view,
+                    event: ngterm_wpe::LoadEvent::Finished,
+                },
+                cx,
+            );
+        });
+        page.user_input(true);
+        page.focused();
+        assert!(web.recorder.take().is_empty());
+    }
+
+    #[test]
+    fn bridge_requests_act_on_the_pages_current_slot_and_answer_rejections() {
+        let (page, web, mut model) = model_page(&url_overlay());
+        let mut message = ScriptMessage {
+            token: ReplyToken::from_raw(31),
+            view: page.view_id().unwrap(),
+            handler: HANDLER_NAME.to_owned(),
+            body: Some("{\"cmd\":\"session.overlay.reload\"}".to_owned()),
+        };
+        page.bridge_message(&message);
+        model.drain();
+        assert_eq!(model.overlay().reload_revision, 1);
+        assert_eq!(model.overlay().reload_target, HtmlReloadTarget::Current);
+        let answer = web.replies.borrow().last().unwrap().1.clone().unwrap();
+        let answer: serde_json::Value = serde_json::from_str(&answer).unwrap();
+        assert_eq!(answer["id"], ngterm_core::pane_env::uuid_string(model.session));
+        message.token = ReplyToken::from_raw(32);
+        message.body = Some("{\"cmd\":\"live.reset\"}".to_owned());
+        page.bridge_message(&message);
+        model.drain();
+        assert_eq!(
+            web.replies.borrow().last().unwrap().1,
+            Err("live.reset cannot be sent from a page".to_owned())
+        );
+        message.token = ReplyToken::from_raw(33);
+        message.body = Some("{\"cmd\":\"session.overlay.reload\"}".to_owned());
+        page.bridge_message(&message);
+        assert!(model.state.core.close_html_overlay(page.id()));
+        model.drain();
+        assert_eq!(web.replies.borrow().last().unwrap().1, Err("page closed".to_owned()));
+    }
+
+    #[test]
+    fn show_in_files_emits_the_file_path_for_the_frontend() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a b.html");
+        std::fs::write(&path, "<p>file</p>").unwrap();
+        let (page, _, mut model) = model_page(&overlay(HtmlSource::File {
+            path: path.to_string_lossy().into_owned(),
+            grant_root: None,
+        }));
+        assert_eq!(page.navigate(HtmlNavigation::Finder), Ok(()));
+        model.drain();
+        assert_eq!(model.state.take_frontend_work().reveals, [path]);
+    }
+
+    #[test]
+    fn clicking_or_focusing_a_pane_page_moves_the_models_split_focus() {
+        let source = url_overlay();
+        let (page, _, mut model) = model_page(&source);
+        let session = model.session;
+        {
+            let store = model.state.core.library_mut().store_mut(model.window).unwrap();
+            store.close_overlay(session);
+            store.set_split_visibility(session, true, None);
+            store
+                .open_html_overlay(
+                    session,
+                    Some(ngterm_core::model::OverlayPane::Right),
+                    source,
+                    None,
+                    None,
+                )
+                .unwrap();
+            store.set_split_focus(session, false);
+        }
+        page.user_input(true);
+        model.drain();
+        assert!(
+            model
+                .state
+                .core
+                .library()
+                .store(model.window)
+                .unwrap()
+                .session(session)
+                .unwrap()
+                .focuses_split()
+        );
+        model
+            .state
+            .core
+            .library_mut()
+            .store_mut(model.window)
+            .unwrap()
+            .set_split_focus(session, false);
+        page.focused();
+        model.drain();
+        assert!(
+            model
+                .state
+                .core
+                .library()
+                .store(model.window)
+                .unwrap()
+                .session(session)
+                .unwrap()
+                .focuses_split()
+        );
+        model.state.core.close_html_overlay(page.id());
+        page.user_input(false);
+        model.drain();
+        assert!(model.state.core.html_overlay_slot(page.id()).is_none());
+    }
+
+    #[gpui_kit::test]
+    fn a_document_read_failure_is_reported_and_a_released_page_ignores_it(cx: &mut TestAppContext) {
+        let source = overlay(HtmlSource::Image {
+            path: "/not-read.png".to_owned(),
+        });
+        let (page, _, mut model) = model_page(&source);
+        page.document_loaded(1, Err("image data is corrupt".to_owned()));
+        model.drain();
+        assert_eq!(model.overlay().load_state, HtmlLoadState::Failed);
+        assert_eq!(model.overlay().load_error.as_deref(), Some("image data is corrupt"));
+        cx.update(|cx| page.close(cx));
+        page.document_loaded(1, Err("late".to_owned()));
+        model.drain();
+        assert_eq!(model.overlay().load_error.as_deref(), Some("image data is corrupt"));
+    }
 }
 
 #[cfg(test)]

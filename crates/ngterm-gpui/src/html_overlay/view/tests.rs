@@ -960,3 +960,336 @@ fn the_undo_close_chord_goes_to_a_focused_page_and_undoes_the_close_otherwise(cx
         .collect();
     assert_eq!(keys, [true, false], "the page's engine gets the chord and its release");
 }
+
+#[gpui_kit::test]
+fn composition_ranges_use_utf16_and_the_candidate_window_follows_the_engine_caret(cx: &mut TestAppContext) {
+    use gpui_kit::{Bounds, EntityInputHandler as _};
+    let (harness, cx) = harness(cx);
+    harness.web.take();
+    let view = harness.view(cx);
+    Harness::dispatch(
+        &Event::ImeCursorArea {
+            view,
+            area: Area {
+                x: 7,
+                y: 9,
+                width: 0,
+                height: 18,
+            },
+        },
+        cx,
+    );
+    cx.update(|window, cx| {
+        harness.element.update(cx, |element, cx| {
+            let bounds = Bounds::new(point(px(100.), px(200.)), size(px(300.), px(400.)));
+            assert_eq!(element.selected_text_range(false, window, cx).unwrap().range, 0..0);
+            assert_eq!(element.marked_text_range(window, cx), None);
+            element.replace_and_mark_text_in_range(None, "a😀", None, window, cx);
+            assert_eq!(element.selected_text_range(false, window, cx).unwrap().range, 3..3);
+            assert_eq!(element.marked_text_range(window, cx), Some(0..3));
+            assert_eq!(element.text_for_range(0..3, &mut None, window, cx), None);
+            assert_eq!(
+                element.character_index_for_point(point(px(0.), px(0.)), window, cx),
+                None
+            );
+            assert_eq!(
+                element.bounds_for_range(0..3, bounds, window, cx),
+                Some(Bounds::new(point(px(107.), px(209.)), size(px(1.), px(18.))))
+            );
+            element.unmark_text(window, cx);
+            element.unmark_text(window, cx);
+            assert_eq!(element.marked_text_range(window, cx), None);
+            element.replace_text_in_range(None, "typed", window, cx);
+        });
+    });
+    assert_eq!(
+        harness.web.take(),
+        [
+            Call::Preedit("a😀".to_owned()),
+            Call::Commit("a😀".to_owned()),
+            Call::Commit("typed".to_owned())
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn focus_loss_cancels_preedit_and_a_missing_caret_has_no_candidate_bounds(cx: &mut TestAppContext) {
+    use gpui_kit::{Bounds, EntityInputHandler as _};
+    let (harness, cx) = harness(cx);
+    harness.focus_page(cx);
+    harness.web.take();
+    cx.update(|window, cx| {
+        harness.element.update(cx, |element, cx| {
+            assert_eq!(element.bounds_for_range(0..0, Bounds::default(), window, cx), None);
+            element.replace_and_mark_text_in_range(None, "かな", None, window, cx);
+            element.focus_changed(false, cx);
+            assert_eq!(element.marked_text_range(window, cx), None);
+            element.replace_and_mark_text_in_range(None, "", None, window, cx);
+            assert_eq!(element.marked_text_range(window, cx), None);
+        });
+    });
+    assert_eq!(
+        harness.web.take(),
+        [
+            Call::Preedit("かな".to_owned()),
+            Call::Focused(false),
+            Call::Preedit(String::new()),
+            Call::Preedit(String::new())
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn text_input_commits_directly_and_composing_native_keys_are_left_to_the_input_method(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    harness.web.take();
+    let mut key = gpui_kit::Keystroke::parse("a").unwrap();
+    key.key_char = Some("a".to_owned());
+    let source = crate::terminal::input::Source::Text;
+    let mut native = crate::terminal::input::KeyStroke::new(&key, &source, false);
+    harness.element.update(cx, |element, cx| {
+        assert!(element.key_down(&key, &native, &source, cx));
+        native.composing = true;
+        assert!(!element.key_down(&key, &native, &crate::terminal::input::Source::Keystroke, cx));
+        let unknown = gpui_kit::Keystroke {
+            key: "unknown-key".to_owned(),
+            key_char: None,
+            ..key.clone()
+        };
+        native.composing = false;
+        assert!(element.key_down(&unknown, &native, &crate::terminal::input::Source::Keystroke, cx));
+        assert!(!element.key_released(&unknown, &native));
+        element.release(cx);
+        assert!(!element.key_down(&key, &native, &source, cx));
+    });
+    assert_eq!(harness.web.take(), [Call::Commit("a".to_owned())]);
+}
+
+#[gpui_kit::test]
+fn modifier_changes_emit_only_the_keys_that_changed(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    harness.web.take();
+    let all = Modifiers {
+        shift: true,
+        control: true,
+        alt: true,
+        platform: true,
+        ..Default::default()
+    };
+    cx.update(|window, cx| {
+        harness.element.update(cx, |element, cx| {
+            for modifiers in [all, all, Modifiers::none()] {
+                element.modifiers_changed(
+                    &gpui_kit::ModifiersChangedEvent {
+                        modifiers,
+                        ..Default::default()
+                    },
+                    window,
+                    cx,
+                );
+            }
+        });
+    });
+    let calls = harness.web.take();
+    let keys: Vec<_> = calls
+        .iter()
+        .filter_map(|call| match call {
+            Call::Input(Input::Key(key)) => Some((key.pressed, key.keyval, key.modifiers)),
+            _ => None,
+        })
+        .collect();
+    let held = super::input::modifiers(all);
+    assert_eq!(
+        keys,
+        [
+            (true, 0xffe1, held),
+            (true, 0xffe3, held),
+            (true, 0xffe9, held),
+            (true, 0xffeb, held),
+            (false, 0xffe1, ngterm_wpe::Modifiers::empty()),
+            (false, 0xffe3, ngterm_wpe::Modifiers::empty()),
+            (false, 0xffe9, ngterm_wpe::Modifiers::empty()),
+            (false, 0xffeb, ngterm_wpe::Modifiers::empty()),
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn wheel_events_keep_local_coordinates_precision_and_the_end_phase(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    harness.web.take();
+    harness.element.update(cx, |element, _| {
+        element.scroll(&gpui_kit::ScrollWheelEvent {
+            position: point(px(30.), px(TOP + STRIP + 20.)),
+            delta: gpui_kit::ScrollDelta::Pixels(point(px(2.5), px(-3.5))),
+            touch_phase: gpui_kit::TouchPhase::Ended,
+            ..Default::default()
+        });
+    });
+    let calls = harness.web.take();
+    assert!(matches!(&calls[..], [Call::Input(Input::Scroll(scroll))]
+        if (scroll.x - 30.).abs() < 1e-9 && (scroll.y - 20.).abs() < 1e-9 && scroll.precise && scroll.stop
+        && (scroll.delta_x - 2.5).abs() < 1e-9 && (scroll.delta_y + 3.5).abs() < 1e-9));
+}
+
+fn select_menu(view: ViewId, token: u64) -> Event {
+    Event::OptionMenu(OptionMenu {
+        view,
+        token: MenuToken::from_raw(token),
+        area: Area {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 20,
+        },
+        items: ["one", "two"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, label)| OptionItem {
+                label: label.to_owned(),
+                enabled: true,
+                selected: index == 0,
+                kind: OptionKind::Option,
+                ..Default::default()
+            })
+            .collect(),
+    })
+}
+
+#[gpui_kit::test]
+fn a_selects_keyboard_moves_and_picks_and_engine_close_does_not_answer_again(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    harness.focus_page(cx);
+    let view = harness.view(cx);
+    Harness::dispatch(&select_menu(view, 10), cx);
+    harness.web.take();
+    harness.element.update(cx, |element, cx| {
+        for key in ["down", "up", "down", "enter"] {
+            assert!(element.menu_key(&gpui_kit::Keystroke::parse(key).unwrap(), cx));
+        }
+        assert!(!element.menu_key(&gpui_kit::Keystroke::parse("down").unwrap(), cx));
+    });
+    assert_eq!(harness.web.take(), [Call::Choose(MenuToken::from_raw(10), Some(1))]);
+    Harness::dispatch(&select_menu(view, 11), cx);
+    Harness::dispatch(
+        &Event::OptionMenuClosed {
+            token: MenuToken::from_raw(12),
+        },
+        cx,
+    );
+    assert!(harness.element.read_with(cx, |element, _| element.menu.is_some()));
+    Harness::dispatch(
+        &Event::OptionMenuClosed {
+            token: MenuToken::from_raw(11),
+        },
+        cx,
+    );
+    assert!(harness.element.read_with(cx, |element, _| element.menu.is_none()));
+    assert!(harness.web.take().is_empty());
+}
+
+#[gpui_kit::test]
+fn context_history_actions_go_to_the_engine_and_empty_paste_clears_its_clipboard(cx: &mut TestAppContext) {
+    use super::menus::Action;
+    let (harness, cx) = harness(cx);
+    harness.web.take();
+    harness.element.update(cx, |element, cx| {
+        for action in [
+            Action::Back,
+            Action::Forward,
+            Action::Reload,
+            Action::Editing(EditingCommand::PasteAsPlainText),
+        ] {
+            element.run(action, cx);
+        }
+        element.pick(999, cx);
+    });
+    assert_eq!(
+        harness.web.take(),
+        [
+            Call::GoBack,
+            Call::GoForward,
+            Call::Reload,
+            Call::Clipboard(String::new()),
+            Call::Editing(EditingCommand::PasteAsPlainText)
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn middle_click_hands_the_primary_selection_to_the_engine_before_paste(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("primary".to_owned())));
+    harness.web.take();
+    let at = point(px(20.), px(150.));
+    cx.update(|window, cx| {
+        harness.element.update(cx, |element, cx| {
+            element.mouse_down(
+                &gpui_kit::MouseDownEvent {
+                    button: MouseButton::Middle,
+                    position: at,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    let calls = harness.web.take();
+    assert!(
+        matches!(&calls[..], [Call::Clipboard(text), Call::Input(Input::Pointer(pointer)), Call::Editing(EditingCommand::Paste), ..]
+        if text == "primary" && pointer.kind == PointerKind::Down(ngterm_wpe::Button::Middle)),
+        "{calls:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_released_element_draws_nothing_and_ignores_late_engine_events(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    let view = harness.view(cx);
+    harness.element.update(cx, PageView::release);
+    Harness::dispatch(&shm_frame(view, 73), cx);
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        harness
+            .element
+            .read_with(cx, |element, _| element.shown_surface().is_none())
+    );
+    assert_eq!(harness.element.read_with(cx, |element, _| element.frame_stats().shm), 0);
+}
+
+fn external_link(view: ViewId) -> Event {
+    Event::Policy(ngterm_wpe::PolicyRequest {
+        view,
+        token: ngterm_wpe::PolicyToken::from_raw(90),
+        kind: ngterm_wpe::PolicyKind::Navigation {
+            uri: "https://outside.invalid/path".to_owned(),
+            navigation: ngterm_wpe::NavigationType::LinkClicked,
+            new_window: true,
+        },
+    })
+}
+
+#[gpui_kit::test]
+fn an_external_link_asks_once_and_cancellation_silences_it_until_real_input(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    let view = harness.view(cx);
+    Harness::dispatch(&external_link(view), cx);
+    let first = cx
+        .update(|window, cx| crate::modal::front_alert(window.window_handle(), cx))
+        .unwrap();
+    Harness::dispatch(&external_link(view), cx);
+    let second = cx
+        .update(|window, cx| crate::modal::front_alert(window.window_handle(), cx))
+        .unwrap();
+    assert_eq!(first, second, "a second link cannot stack another prompt");
+    cx.update(|window, cx| assert!(crate::modal::answer_front_alert(window, "Cancel", cx)));
+    Harness::dispatch(&external_link(view), cx);
+    assert!(!cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
+    let page = harness.element.read_with(cx, |element, _| element.page.clone());
+    page.user_input(false);
+    Harness::dispatch(&external_link(view), cx);
+    assert!(cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
+    cx.update(|window, cx| assert!(crate::modal::answer_front_alert(window, "Cancel", cx)));
+}
