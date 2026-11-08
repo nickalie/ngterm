@@ -14,11 +14,14 @@ fn consumer_ids_keep_all_bits_including_zero() {
 }
 
 /// Runs a native `WebKit` case alone: its globals belong to one thread for the process's lifetime.
+///
+/// The child passes with its own exit code: a `name` that selects no test exits 0 without running anything.
 pub(crate) fn isolated(name: &str, run: impl FnOnce()) {
     const CHILD: &str = "WPE_UNIT_CHILD";
+    const PASSED: i32 = 77;
     if std::env::var(CHILD).as_deref() == Ok(name) {
         let passed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).is_ok();
-        crate::exit_process(if passed { 0 } else { 101 });
+        crate::exit_process(if passed { PASSED } else { 101 });
     }
     let home = tempfile::tempdir().unwrap();
     let mut command = crate::launcher::command(&std::env::current_exe().unwrap());
@@ -40,7 +43,7 @@ pub(crate) fn isolated(name: &str, run: impl FnOnce()) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
-            assert!(status.success(), "{name}: {status}");
+            assert_eq!(status.code(), Some(PASSED), "{name} did not run and pass: {status}");
             break;
         }
         if std::time::Instant::now() >= deadline {
@@ -48,6 +51,6 @@ pub(crate) fn isolated(name: &str, run: impl FnOnce()) {
             child.wait().unwrap();
             panic!("{name} exceeded its deadline");
         }
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }

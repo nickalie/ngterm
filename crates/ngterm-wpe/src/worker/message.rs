@@ -721,7 +721,13 @@ mod tests {
             }
         }
     }
-    /// A kernel dmabuf over one page, as the external-texture tests use; no GPU is needed.
+    /// The kernel's page size: a udmabuf's size must be a multiple of it.
+    fn page_size() -> usize {
+        // SAFETY: `sysconf` reads a constant of the system.
+        usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).unwrap()
+    }
+
+    /// A kernel dmabuf over one page ([`page_size`]), as the external-texture tests use; no GPU is needed.
     fn exported_page() -> Option<OwnedFd> {
         #[repr(C)]
         struct Create {
@@ -749,13 +755,14 @@ mod tests {
             rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
         )
         .unwrap();
-        rustix::fs::ftruncate(&memfd, 4096).unwrap();
+        let size = u64::try_from(page_size()).unwrap();
+        rustix::fs::ftruncate(&memfd, size).unwrap();
         rustix::fs::fcntl_add_seals(&memfd, rustix::fs::SealFlags::SHRINK).unwrap();
         let create = Create {
             memfd: u32::try_from(memfd.as_raw_fd()).unwrap(),
             flags: 1,
             offset: 0,
-            size: 4096,
+            size,
         };
         // SAFETY: _IOW('u', 0x42, struct udmabuf_create), with the kernel's C layout and a sealed memfd.
         let fd = unsafe { libc::ioctl(device.as_raw_fd(), 0x4018_7542, &raw const create) };
@@ -767,6 +774,7 @@ mod tests {
     #[test]
     fn real_dmabuf_planes_are_bounded_and_a_repeated_buffer_keeps_its_shared_content() {
         let Some(fd) = exported_page() else { return };
+        let page = page_size();
         let frame = || header(4, 4, Vec::new());
         let mut no_stride = dmabuf(4, 4, 1);
         no_stride.planes[0].1 = 0;
@@ -775,13 +783,13 @@ mod tests {
             "a dmabuf's main plane with no stride"
         );
         let mut too_long = dmabuf(4, 4, 1);
-        too_long.planes[0].1 = 2048;
+        too_long.planes[0].1 = u32::try_from(page / 2).unwrap();
         assert_eq!(
             refused(dmabuf_frame(frame(), too_long, vec![fd.try_clone().unwrap()], None)),
-            "plane 0 reaches byte 8192 of a 4096-byte dmabuf"
+            format!("plane 0 reaches byte {} of a {page}-byte dmabuf", page * 2)
         );
         let mut auxiliary = dmabuf(4, 4, 2);
-        auxiliary.planes[1] = (4097, 0);
+        auxiliary.planes[1] = (u32::try_from(page + 1).unwrap(), 0);
         assert_eq!(
             refused(dmabuf_frame(
                 frame(),
@@ -789,7 +797,7 @@ mod tests {
                 vec![fd.try_clone().unwrap(), fd.try_clone().unwrap()],
                 None
             )),
-            "plane 1 reaches byte 4097 of a 4096-byte dmabuf"
+            format!("plane 1 reaches byte {} of a {page}-byte dmabuf", page + 1)
         );
         let first = dmabuf_frame(frame(), dmabuf(4, 4, 1), vec![fd.try_clone().unwrap()], None).unwrap();
         let FrameContent::DmaBuf(known) = first.content else {
