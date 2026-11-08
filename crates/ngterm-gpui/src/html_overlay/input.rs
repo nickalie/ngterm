@@ -229,4 +229,58 @@ mod tests {
         assert!(!pastes(&stroke("v")));
         assert!(!pastes(&stroke("ctrl-alt-v")));
     }
+    #[test]
+    fn unsupported_keys_and_multicharacter_text_do_not_become_keysyms() {
+        for name in ["", "f0", "f25", "unknown"] {
+            let mut key = stroke("a");
+            key.key = name.to_owned();
+            key.key_char = Some("two".to_owned());
+            assert_eq!(keysym(&key), None, "{name:?}");
+        }
+        assert_eq!(modifiers(gpui_kit::Modifiers::default()), Modifiers::empty());
+    }
+
+    #[test]
+    fn all_mouse_buttons_and_directional_cursors_reach_the_engine() {
+        use gpui_kit::NavigationDirection::{Back, Forward};
+        for (mouse, engine, bit) in [
+            (MouseButton::Left, Button::Primary, Modifiers::BUTTON1),
+            (MouseButton::Middle, Button::Middle, Modifiers::BUTTON2),
+            (MouseButton::Right, Button::Secondary, Modifiers::BUTTON3),
+            (MouseButton::Navigate(Back), Button::Back, Modifiers::BUTTON4),
+            (MouseButton::Navigate(Forward), Button::Forward, Modifiers::BUTTON5),
+        ] {
+            assert_eq!(button(mouse), engine);
+            assert_eq!(button_bit(engine), bit);
+        }
+        for (name, expected) in [
+            ("vertical-text", CursorStyle::IBeamCursorForVerticalLayout),
+            ("crosshair", CursorStyle::Crosshair),
+            ("grab", CursorStyle::OpenHand),
+            ("grabbing", CursorStyle::ClosedHand),
+            ("move", CursorStyle::ClosedHand),
+            ("all-scroll", CursorStyle::ClosedHand),
+            ("not-allowed", CursorStyle::OperationNotAllowed),
+            ("no-drop", CursorStyle::OperationNotAllowed),
+            ("alias", CursorStyle::DragLink),
+            ("copy", CursorStyle::DragCopy),
+            ("context-menu", CursorStyle::ContextualMenu),
+            ("ew-resize", CursorStyle::ResizeLeftRight),
+            ("ns-resize", CursorStyle::ResizeUpDown),
+            ("col-resize", CursorStyle::ResizeColumn),
+            ("row-resize", CursorStyle::ResizeRow),
+            ("e-resize", CursorStyle::ResizeRight),
+            ("w-resize", CursorStyle::ResizeLeft),
+            ("n-resize", CursorStyle::ResizeUp),
+            ("s-resize", CursorStyle::ResizeDown),
+            ("nwse-resize", CursorStyle::ResizeUpLeftDownRight),
+            ("nw-resize", CursorStyle::ResizeUpLeftDownRight),
+            ("se-resize", CursorStyle::ResizeUpLeftDownRight),
+            ("nesw-resize", CursorStyle::ResizeUpRightDownLeft),
+            ("ne-resize", CursorStyle::ResizeUpRightDownLeft),
+            ("sw-resize", CursorStyle::ResizeUpRightDownLeft),
+        ] {
+            assert_eq!(cursor(name), expected, "{name}");
+        }
+    }
 }

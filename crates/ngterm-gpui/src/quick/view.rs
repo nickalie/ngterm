@@ -214,3 +214,7 @@ impl Render for QuickView {
             )
     }
 }
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod edge_tests;

@@ -193,4 +193,63 @@ mod tests {
         );
         assert!(check(&switch("0"), false, refused).is_some(), "0 keeps the sandbox on");
     }
+    #[test]
+    fn bubblewrap_results_report_the_first_error_line_or_the_exit_status() {
+        const CASE: &str = "GPUI_COVERAGE_BWRAP_CASE";
+        if let Ok(case) = std::env::var(CASE) {
+            match case.as_str() {
+                "ok" => assert_eq!(probe(), Ok(())),
+                "stderr" => assert_eq!(probe(), Err("bwrap: refused".to_owned())),
+                "empty" => assert_eq!(probe(), Err("bwrap: exit status: 7".to_owned())),
+                "missing" => assert!(probe().unwrap_err().starts_with("bwrap: ")),
+                _ => panic!("unexpected case"),
+            }
+            let expected = check(&Environment::current(), apparmor_restricts_userns(), probe);
+            assert_eq!(failure(), expected);
+            assert_eq!(failure(), expected, "the cached answer stays the same");
+            return;
+        }
+        for (case, body) in [
+            ("ok", "exit 0"),
+            ("stderr", "printf '\\n  bwrap: refused  \\nignored\\n' >&2; exit 7"),
+            ("empty", "exit 7"),
+            ("missing", ""),
+        ] {
+            run_probe_child(case, body, CASE);
+        }
+    }
+
+    fn run_probe_child(case: &str, body: &str, variable: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        if !body.is_empty() {
+            let executable = dir.path().join("bwrap");
+            std::fs::write(&executable, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("NGTERM_") {
+                command.env_remove(key);
+            }
+        }
+        let output = command
+            .args([
+                "--exact",
+                "html_overlay::sandbox::tests::bubblewrap_results_report_the_first_error_line_or_the_exit_status",
+                "--nocapture",
+            ])
+            .env(variable, case)
+            .env("PATH", dir.path())
+            .env("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "0")
+            .env_remove("SNAP")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{case}: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

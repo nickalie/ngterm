@@ -500,3 +500,7 @@ pub fn repeated(texture: &image::RgbaImage) -> (image::RgbaImage, (u32, u32)) {
     }
     (out, (across, down))
 }
+
+#[cfg(test)]
+#[path = "load_tests.rs"]
+mod tests;

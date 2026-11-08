@@ -218,4 +218,34 @@ mod tests {
         assert_eq!(dragged_sessions(&context, first), [first]);
         assert!(context.row_click_expands && context.close_grace && !context.confirm_close);
     }
+    #[test]
+    fn the_chooser_starts_only_in_an_existing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut context = SidebarContext::default();
+        assert_eq!(context.chooser_folder(), None);
+        context.active_cwd = Some(dir.path().to_str().unwrap().to_owned());
+        assert_eq!(context.chooser_folder(), context.active_cwd.as_deref());
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"a file is not a folder").unwrap();
+        context.active_cwd = Some(file.to_str().unwrap().to_owned());
+        assert_eq!(context.chooser_folder(), None);
+        context.active_cwd = Some(dir.path().join("missing").to_str().unwrap().to_owned());
+        assert_eq!(context.chooser_folder(), None);
+    }
+    #[test]
+    fn flagged_layout_selects_the_corresponding_drop_rules() {
+        let mut library = WindowLibrary::seeded("/home/u");
+        let window = library.active_window_id().unwrap();
+        let store = library.store_mut(window).unwrap();
+        store.set_sidebar_mode(SidebarMode::Flagged);
+        for (layout, expected) in [("tree", DropView::FlaggedTree), ("flat", DropView::FlaggedList)] {
+            let settings = AppSettings {
+                flagged_view_layout: Some(layout.into()),
+                ..AppSettings::default()
+            };
+            let context = SidebarContext::take(store, &settings);
+            assert_eq!(context.drop.view, expected);
+            assert!(context.empty_flagged && context.footer.flagged_mode);
+        }
+    }
 }

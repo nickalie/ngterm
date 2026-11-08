@@ -245,3 +245,7 @@ pub use unavailable::{
 /// A build without page support has no display-scale registry.
 #[cfg(not(all(feature = "html", any(target_os = "linux", target_os = "macos", windows))))]
 pub fn set_window_scale(_: uuid::Uuid, _: f64) {}
+
+#[cfg(test)]
+#[path = "html_overlay_tests.rs"]
+mod edge_tests;

@@ -357,3 +357,91 @@ fn a_key_on_a_lead_covered_pane_is_not_a_keystroke() {
     // a cover hides only the takeover key: the pane's other events still report
     assert_eq!(report(&exited(false), shell, "box", 12.0, true), [Report::Exited]);
 }
+
+use ngterm_core::{Core, CoreConfig, CoreState};
+use ngterm_host::{MainLoop, MainLoopClosed, MainTask};
+use std::sync::Mutex;
+use std::time::Duration;
+
+#[derive(Default)]
+struct Posted(Mutex<Vec<MainTask<AppState>>>);
+
+impl MainLoop<AppState> for Posted {
+    fn post(&self, task: MainTask<AppState>) -> Result<(), MainLoopClosed> {
+        self.0.lock().unwrap().push(task);
+        Ok(())
+    }
+    fn post_after(&self, _: Duration, task: MainTask<AppState>) -> Result<(), MainLoopClosed> {
+        self.post(task)
+    }
+}
+
+#[test]
+fn search_selection_and_notifications_keep_their_report_payloads() {
+    let event = TerminalEvent::Pane(PaneEvent::SearchSelected(Some(2)));
+    assert_eq!(
+        report(&event, Ran::default(), "host", 12., false),
+        [Report::Search(SearchReport::Selected(Some(2)))]
+    );
+    let event = TerminalEvent::Pane(PaneEvent::Notification {
+        title: "Title".into(),
+        body: "Body".into(),
+    });
+    assert_eq!(
+        report(&event, Ran::default(), "host", 12., false),
+        [Report::Notification {
+            title: "Title".into(),
+            body: "Body".into()
+        }]
+    );
+}
+
+#[test]
+fn queued_font_and_search_reports_update_the_addressed_pane() {
+    let (mut library, window, ids) = three_sessions();
+    let id = ids[0];
+    let token = "font-report-pane";
+    library
+        .store_mut(window)
+        .unwrap()
+        .session_mut(id)
+        .unwrap()
+        .surface
+        .replace(Box::new(ngterm_host::fakes::FakeSurface::new(token)));
+    let mut state = AppState::new(Core::new(
+        CoreConfig {
+            app: ngterm_proto::AppIdentity::from_recorded("1.2.3", None),
+            capabilities: Vec::new(),
+        },
+        CoreState {
+            library,
+            ..CoreState::default()
+        },
+    ));
+    let queue = Arc::new(Posted::default());
+    let main_loop: Arc<dyn MainLoop<AppState>> = queue.clone();
+    let poster = Arc::downgrade(&main_loop);
+    for report in [
+        Report::FontSize(17.5),
+        Report::Search(SearchReport::Started(Some("needle".into()))),
+        Report::Search(SearchReport::Total(Some(4))),
+        Report::Search(SearchReport::Selected(Some(2))),
+    ] {
+        post_report(
+            &poster,
+            id,
+            token,
+            report,
+            crate::state::NotifyFocus::default(),
+            &ExitClaim::default(),
+        );
+    }
+    for task in std::mem::take(&mut *queue.0.lock().unwrap()) {
+        task(&mut state);
+    }
+    let session = state.core.library().store(window).unwrap().session(id).unwrap();
+    assert_eq!(session.font_size, Some(17.5));
+    assert!(session.search.active);
+    assert_eq!(session.search.total, Some(4));
+    assert_eq!(session.search.selected, Some(2));
+}

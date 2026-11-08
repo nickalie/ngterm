@@ -133,3 +133,7 @@ fn quadrants(m: &CellMetrics, canvas: &mut Canvas, quads: Quads) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "block_tests.rs"]
+mod tests;
