@@ -302,6 +302,8 @@ internal class HeldChords {
     ): Boolean {
         val code = event.keyCode
         val held = code in keys
+        // An action installed mid-hold must not claim a stroke whose initial press went elsewhere.
+        if (!held && event.repeatCount != 0) return false
         val run =
             KeyMapping
                 .shortcut(code, KeyMapping.mods(event.metaState), text)
