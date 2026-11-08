@@ -171,7 +171,251 @@ impl InputHandler for GuardedInput {
 
 #[cfg(test)]
 mod tests {
-    use super::byte_offset;
+    use gpui_kit::{
+        App, Bounds, ClipboardEntry, ClipboardItem, ElementInputHandler, Image, ImageFormat, InputHandler,
+        TestAppContext, VisualTestContext, Window, point, px, size,
+    };
+    use ngterm_core::chrome::Rgb;
+    use ngterm_core::model::{AskAlignment, AskInputForm, AskInputMode, AskStyle, PendingAsk};
+    use uuid::Uuid;
+
+    use super::{Editor, GuardedInput, byte_offset};
+    use crate::ask_dialog::{AskDialog, AskOpening, AskOwner, Look};
+
+    /// An editor of `mode` holding `text` in a test window, made by a dialog that does not listen to it, so nothing
+    /// but the guard stands between an edit and the editor.
+    fn editor<'a>(cx: &'a mut TestAppContext, mode: AskInputMode, text: &str) -> (Editor, &'a mut VisualTestContext) {
+        cx.update(gpui_kit::init);
+        let pending = PendingAsk {
+            id: "A1".to_owned(),
+            title: "Name?".to_owned(),
+            message: None,
+            buttons: Vec::new(),
+            default_id: None,
+            destructive_id: None,
+            style: AskStyle::Gui,
+            align: AskAlignment::Right,
+            width: None,
+            anchor: None,
+            form: None,
+            cancel_id: None,
+        };
+        let opening = AskOpening {
+            ask: &pending,
+            draft: None,
+            owner: AskOwner::Session(Uuid::new_v4()),
+            look: Look {
+                family: None,
+                size: 13.0,
+                foreground: Rgb::WHITE,
+                background: Rgb::BLACK,
+            },
+            poster: crate::state::detached_poster(),
+        };
+        let (dialog, cx) = cx.add_window_view(|window, cx| AskDialog::new(opening, window, cx));
+        let editor = dialog.update_in(cx, |_, window, cx| Editor::new(mode, text, None, window, cx));
+        (editor, cx)
+    }
+
+    fn bounds() -> Bounds<gpui_kit::Pixels> {
+        Bounds::new(point(px(0.), px(0.)), size(px(400.), px(40.)))
+    }
+
+    /// The editor's own handler, unguarded.
+    fn own(editor: &Editor) -> Box<dyn InputHandler> {
+        match editor {
+            Editor::Line(state) => Box::new(ElementInputHandler::new(bounds(), state.clone())),
+            Editor::Lines(state) => Box::new(ElementInputHandler::new(bounds(), state.clone())),
+        }
+    }
+
+    #[gpui_kit::test]
+    fn typed_text_within_the_rules_reaches_the_editor_and_a_forbidden_control_is_dropped(cx: &mut TestAppContext) {
+        for mode in [AskInputMode::Line, AskInputMode::Multiline] {
+            let (editor, cx) = editor(cx, mode, "ab");
+            cx.update(|window, cx| {
+                let mut guard = GuardedInput::new(&editor, mode, bounds());
+                guard.replace_text_in_range(Some(2..2), "\u{1}", window, cx);
+                assert_eq!(editor.text(cx), "ab", "{mode:?}: no control character in any mode");
+                guard.replace_text_in_range(Some(2..2), "c", window, cx);
+                assert_eq!(editor.text(cx), "abc", "{mode:?}");
+                guard.replace_text_in_range(Some(0..0), "\t", window, cx);
+                let tab = if mode == AskInputMode::Line { "abc" } else { "\tabc" };
+                assert_eq!(editor.text(cx), tab, "{mode:?}: a tab only where the mode takes one");
+            });
+        }
+    }
+
+    #[gpui_kit::test]
+    fn the_cap_counts_the_replaced_utf16_range_and_the_selection_in_bytes(cx: &mut TestAppContext) {
+        let cap = AskInputForm::MAX_TEXT_BYTES;
+        // two bytes but one UTF-16 unit each, so the cap is full
+        let full = "\u{e9}".repeat(cap / 2);
+        let (editor, cx) = editor(cx, AskInputMode::Multiline, &full);
+        cx.update(|window, cx| {
+            let mut guard = GuardedInput::new(&editor, AskInputMode::Multiline, bounds());
+            guard.replace_text_in_range(Some(0..0), "x", window, cx);
+            assert!(editor.holds(&full, cx), "an insertion past the cap is dropped");
+            // one UTF-16 unit is the first two bytes: two bytes in their place stay within the cap
+            guard.replace_text_in_range(Some(0..1), "xy", window, cx);
+            let rest = "\u{e9}".repeat(cap / 2 - 1);
+            assert!(
+                editor.holds(&format!("xy{rest}"), cx),
+                "a replacement within the cap goes in"
+            );
+            // with no range the selection (in bytes) is what is replaced
+            editor.restore(&format!("xy{rest}"), 0..2, window, cx);
+            guard.replace_text_in_range(None, "abc", window, cx);
+            assert!(
+                editor.holds(&format!("xy{rest}"), cx),
+                "three bytes over a two-byte selection pass the cap"
+            );
+            guard.replace_text_in_range(None, "ab", window, cx);
+            assert!(editor.holds(&format!("ab{rest}"), cx), "two bytes over it fill the cap");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_composition_is_checked_as_it_is_marked_and_as_it_is_committed(cx: &mut TestAppContext) {
+        let cap = AskInputForm::MAX_TEXT_BYTES;
+        let start = "a".repeat(cap - 3);
+        let (editor, cx) = editor(cx, AskInputMode::Line, &start);
+        cx.update(|window, cx| {
+            let mut guard = GuardedInput::new(&editor, AskInputMode::Line, bounds());
+            let end = cap - 3;
+            editor.restore(&start, end..end, window, cx);
+            guard.replace_and_mark_text_in_range(None, "\u{304b}", None, window, cx);
+            assert!(
+                editor.holds(&format!("{start}\u{304b}"), cx),
+                "the composition fills the cap"
+            );
+            assert_eq!(guard.marked_text_range(window, cx), Some(end..end + 1));
+            // the marked text is what a further composition or the commit replaces
+            guard.replace_and_mark_text_in_range(None, "\u{304b}\u{306a}", None, window, cx);
+            assert!(
+                editor.holds(&format!("{start}\u{304b}"), cx),
+                "a longer composition past the cap is dropped whole"
+            );
+            assert_eq!(
+                guard.marked_text_range(window, cx),
+                Some(end..end + 1),
+                "still composing"
+            );
+            guard.replace_and_mark_text_in_range(None, "\n", None, window, cx);
+            assert!(
+                editor.holds(&format!("{start}\u{304b}"), cx),
+                "a line composes no newline"
+            );
+            guard.replace_text_in_range(None, "\u{706b}", window, cx);
+            assert!(
+                editor.holds(&format!("{start}\u{706b}"), cx),
+                "the commit replaces the marked text"
+            );
+            guard.unmark_text(window, cx);
+            assert_eq!(guard.marked_text_range(window, cx), None);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_paste_is_checked_on_its_text_and_one_without_text_goes_to_the_editor(cx: &mut TestAppContext) {
+        for mode in [AskInputMode::Line, AskInputMode::Multiline] {
+            let (editor, cx) = editor(cx, mode, "ab");
+            cx.update(|window, cx| {
+                let mut guard = GuardedInput::new(&editor, mode, bounds());
+                editor.restore("ab", 2..2, window, cx);
+                guard.paste(ClipboardItem::new_string("c\nd".to_owned()), window, cx);
+                let newline = if mode == AskInputMode::Line { "ab" } else { "abc\nd" };
+                assert_eq!(
+                    editor.text(cx),
+                    newline,
+                    "{mode:?}: a newline only where the mode takes one"
+                );
+                guard.paste(ClipboardItem::new_string("\u{7f}".to_owned()), window, cx);
+                assert_eq!(editor.text(cx), newline, "{mode:?}: no control character");
+                let picture = ClipboardItem {
+                    entries: vec![ClipboardEntry::Image(Image::from_bytes(ImageFormat::Png, Vec::new()))],
+                };
+                guard.paste(picture, window, cx);
+                assert_eq!(editor.text(cx), newline, "{mode:?}: a picture brings no text");
+            });
+        }
+        let (editor, cx) = editor(cx, AskInputMode::Line, "ab");
+        cx.update(|window, cx| {
+            let mut guard = GuardedInput::new(&editor, AskInputMode::Line, bounds());
+            editor.restore("ab", 2..2, window, cx);
+            guard.paste(ClipboardItem::new_string("cd".to_owned()), window, cx);
+            assert_eq!(editor.text(cx), "abcd");
+        });
+    }
+
+    /// Asserts that `guard` answers every platform query (no edit) as `own` does.
+    fn answers_alike(guard: &mut dyn InputHandler, own: &mut dyn InputHandler, window: &mut Window, cx: &mut App) {
+        let selection = |handler: &mut dyn InputHandler, window: &mut Window, cx: &mut App| {
+            handler
+                .selected_text_range(false, window, cx)
+                .map(|selection| (selection.range, selection.reversed))
+        };
+        assert_eq!(selection(guard, window, cx), selection(own, window, cx));
+        let (mut guarded, mut owned) = (None, None);
+        assert_eq!(
+            guard.text_for_range(1..4, &mut guarded, window, cx),
+            own.text_for_range(1..4, &mut owned, window, cx)
+        );
+        assert_eq!(guarded, owned);
+        assert_eq!(guard.marked_text_range(window, cx), own.marked_text_range(window, cx));
+        assert_eq!(
+            guard.bounds_for_range(0..1, window, cx),
+            own.bounds_for_range(0..1, window, cx)
+        );
+        let inside = point(px(4.), px(4.));
+        assert_eq!(
+            guard.character_index_for_point(inside, window, cx),
+            own.character_index_for_point(inside, window, cx)
+        );
+        assert_eq!(guard.element_bounds(window, cx), own.element_bounds(window, cx));
+        assert_eq!(guard.text_length_utf16(window, cx), own.text_length_utf16(window, cx));
+        assert_eq!(guard.apple_press_and_hold_enabled(), own.apple_press_and_hold_enabled());
+        assert_eq!(guard.accepts_text_input(window, cx), own.accepts_text_input(window, cx));
+        assert_eq!(
+            guard.text_input_editable_range(window, cx),
+            own.text_input_editable_range(window, cx)
+        );
+        assert_eq!(
+            guard.prefers_ime_for_printable_keys(window, cx),
+            own.prefers_ime_for_printable_keys(window, cx)
+        );
+        assert_eq!(
+            guard.text_input_configuration(window, cx),
+            own.text_input_configuration(window, cx)
+        );
+    }
+
+    #[gpui_kit::test]
+    fn every_query_is_answered_as_the_editors_own_handler_answers_it(cx: &mut TestAppContext) {
+        for mode in [AskInputMode::Line, AskInputMode::Multiline] {
+            let (editor, cx) = editor(cx, mode, "hello");
+            cx.update(|window, cx| {
+                let mut guard = GuardedInput::new(&editor, mode, bounds());
+                let mut own = own(&editor);
+                editor.restore("hello", 1..3, window, cx);
+                let selected = guard
+                    .selected_text_range(false, window, cx)
+                    .map(|selection| selection.range);
+                assert_eq!(selected, Some(1..3), "{mode:?}");
+                let mut adjusted = None;
+                assert_eq!(
+                    guard.text_for_range(1..4, &mut adjusted, window, cx).as_deref(),
+                    Some("ell")
+                );
+                answers_alike(&mut guard, own.as_mut(), window, cx);
+                // the platform's selection goes to the editor, which sets it as its own handler would
+                guard.set_selected_text_range(0..5, window, cx);
+                let guarded = editor.selection(cx);
+                own.set_selected_text_range(0..5, window, cx);
+                assert_eq!(guarded, editor.selection(cx), "{mode:?}");
+            });
+        }
+    }
 
     #[test]
     fn utf16_offsets_map_to_bytes() {

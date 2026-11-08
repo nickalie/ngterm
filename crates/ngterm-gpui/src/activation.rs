@@ -320,6 +320,82 @@ mod x11 {
 mod tests {
     use super::*;
 
+    /// A window's root view that draws nothing.
+    #[cfg(target_os = "linux")]
+    struct Blank;
+
+    #[cfg(target_os = "linux")]
+    impl gpui_kit::Render for Blank {
+        fn render(&mut self, _: &mut Window, _: &mut gpui_kit::Context<Self>) -> impl gpui_kit::IntoElement {
+            gpui_kit::div()
+        }
+    }
+
+    /// A test window, not yet active. The test platform names no display server and its windows have no raw handles.
+    #[cfg(target_os = "linux")]
+    fn window(cx: &mut gpui_kit::TestAppContext) -> &mut gpui_kit::VisualTestContext {
+        cx.add_window_view(|_, _| Blank).1
+    }
+
+    #[cfg(target_os = "linux")]
+    fn active(cx: &mut gpui_kit::VisualTestContext) -> bool {
+        cx.run_until_parked();
+        cx.update(|window, cx| cx.active_window() == Some(Window::window_handle(window)))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn refused(_: &Window, handed: &str) -> Result<(), Failure> {
+        Err(format!("refused {handed}").into())
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn without_a_display_server_no_window_is_raised(cx: &mut gpui_kit::TestAppContext) {
+        let cx = window(cx);
+        let handed = Activation {
+            token: Some("token".to_owned()),
+            startup_id: Some("launcher_TIME5".to_owned()),
+        };
+        cx.update(|window, cx| {
+            assert_eq!(cx.compositor_name(), "", "the test platform's");
+            activate(window, cx, &handed);
+            launched(window, cx, &handed);
+            launched(window, cx, &Activation::default());
+        });
+        assert!(!active(cx), "headless, nothing is raised");
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn a_raise_uses_what_the_launch_handed_over_else_gpuis_own_request(cx: &mut gpui_kit::TestAppContext) {
+        let cx = window(cx);
+        let outcome = cx.update(|window, _| raise(window, Some("launcher_TIME5"), refused));
+        assert_eq!(
+            outcome.map_err(|error| error.to_string()),
+            Err("refused launcher_TIME5".to_owned()),
+            "the server's own raise gets the handed value and its outcome is the raise's"
+        );
+        assert!(!active(cx), "GPUI's own request is not made besides");
+        let outcome = cx.update(|window, _| raise(window, None, refused));
+        assert!(outcome.is_ok());
+        assert!(active(cx), "without a value GPUI's own request raises the window");
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn a_window_without_the_servers_handles_is_refused(cx: &mut gpui_kit::TestAppContext) {
+        let cx = window(cx);
+        cx.update(|window, _| {
+            assert!(wayland::activate(window, "token").is_err(), "no Wayland surface");
+            assert!(x11::activate(window, "launcher_TIME5").is_err(), "no X11 window");
+            assert!(
+                x11::complete_startup(window, "launcher_TIME5").is_err(),
+                "no X11 window"
+            );
+        });
+        assert!(!active(cx));
+    }
+
     #[test]
     fn the_startup_time_is_the_last_time_suffix() {
         assert_eq!(startup_time("launcher-1-host_TIME12345"), Some(12345));
