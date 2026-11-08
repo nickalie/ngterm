@@ -104,12 +104,19 @@ impl InputMethod {
         }
     }
 
-    /// `text` was committed: the composition ends and the text goes into the field.
+    /// `text` was committed: the composition ends with it and the text goes into the field.
+    ///
+    /// `committed` comes before the preedit's end: `WebKit`'s input method filter confirms the composition with the
+    /// committed text and forgets its preedit, so the empty preedit after it changes nothing. Ending the preedit first
+    /// would cancel the composition (an empty `compositionend`) and insert the text outside it.
     pub(crate) fn commit(&self, text: &str) {
-        if !self.imp().preedit.borrow().is_empty() {
-            self.preedit("", 0);
-        }
+        let composing = !self.imp().preedit.take().is_empty();
+        self.imp().cursor.set(0);
         self.emit_by_name::<()>("committed", &[&text]);
+        if composing {
+            self.emit_by_name::<()>("preedit-changed", &[]);
+            self.emit_by_name::<()>("preedit-finished", &[]);
+        }
     }
 }
 

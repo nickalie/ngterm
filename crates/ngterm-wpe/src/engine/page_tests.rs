@@ -137,7 +137,7 @@ fn wait_event<T>(
                     return found;
                 }
             }
-            Err(async_channel::TryRecvError::Empty) => std::thread::yield_now(),
+            Err(async_channel::TryRecvError::Empty) => std::thread::sleep(std::time::Duration::from_millis(20)),
             Err(error) => panic!("engine events ended: {error}"),
         }
         assert!(std::time::Instant::now() < deadline, "page event timed out");

@@ -57,6 +57,42 @@ fn preedit_reports_character_positions_and_reset_discards_the_composition() {
 }
 
 #[test]
+fn a_commit_during_a_composition_emits_the_text_before_the_preedit_ends() {
+    let method = method();
+    let signals = Rc::new(RefCell::new(Vec::new()));
+    for signal in ["preedit-started", "preedit-changed", "preedit-finished"] {
+        let signals = Rc::clone(&signals);
+        method.connect_local(signal, false, move |_| {
+            signals.borrow_mut().push(signal.to_owned());
+            None
+        });
+    }
+    let seen = Rc::clone(&signals);
+    method.connect_local("committed", false, move |values| {
+        let context = values[0].get::<InputMethod>().unwrap();
+        seen.borrow_mut().push(format!(
+            "committed {} over {:?}",
+            values[1].get::<String>().unwrap(),
+            preedit(&context)
+        ));
+        None
+    });
+    method.preedit("にほ", 2);
+    method.commit("日本");
+    assert_eq!(preedit(&method), (String::new(), 0));
+    assert_eq!(
+        *signals.borrow(),
+        [
+            "preedit-started",
+            "preedit-changed",
+            "committed 日本 over (\"\", 0)",
+            "preedit-changed",
+            "preedit-finished"
+        ]
+    );
+}
+
+#[test]
 fn a_commit_without_preedit_emits_the_text_and_optional_outputs_can_be_omitted() {
     let method = method();
     let commits = Rc::new(RefCell::new(Vec::new()));

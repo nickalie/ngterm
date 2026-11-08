@@ -1849,15 +1849,16 @@ mod tests {
             panic!("evaluation")
         };
         assert_eq!(world.as_deref(), Some("world"));
-        for (id, result) in [
-            (two, Ok(Some("2".to_owned()))),
-            (two, Err("late".to_owned())),
-            (one, Err("exception".to_owned())),
-        ] {
+        let answer = |id, result| {
             wire::send(theirs.as_fd(), &FromWorker::Evaluation { id, result }.packet().unwrap()).unwrap();
-        }
-        assert_eq!(first.recv_blocking().unwrap(), Err("exception".to_owned()));
+        };
+        answer(two, Ok(Some("2".to_owned())));
         assert_eq!(second.recv_blocking().unwrap(), Ok(Some("2".to_owned())));
+        answer(two, Err("late".to_owned()));
+        answer(one, Err("exception".to_owned()));
+        assert_eq!(first.recv_blocking().unwrap(), Err("exception".to_owned()));
+        // the late answer was read before the first's: an answered waiter is gone, its channel closed
+        assert_eq!(second.try_recv(), Err(async_channel::TryRecvError::Closed));
         wire::send(theirs.as_fd(), &FromWorker::Stopped.packet().unwrap()).unwrap();
         drop(theirs);
         client.shutdown();
