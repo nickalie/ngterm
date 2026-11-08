@@ -831,4 +831,65 @@ mod tests {
             }
         );
     }
+
+    #[gpui_kit::test]
+    fn requests_reach_their_window_and_missing_windows_leave_the_others_alone(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(crate::status_glyph::Motion::default());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let [first, work, _] = saved_set(dir.path());
+        let restored = ngterm_core::persist::LibraryPersistence::new(dir.path()).bootstrap("/home/u");
+        let mut state = AppState::new(core_over(restored));
+        let mut windows = registry(dir.path(), crate::state::detached_poster());
+        cx.update(|cx| {
+            windows.sync(&mut state, cx);
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            windows.apply(
+                WindowRequest::Resize {
+                    window: work,
+                    size: ngterm_core::WindowSize {
+                        width: 1050,
+                        height: 720,
+                    },
+                },
+                0,
+                cx,
+            );
+            windows.apply(WindowRequest::ToggleFullscreen(work), 0, cx);
+        });
+        let handle = windows.get(work).unwrap().handle;
+        cx.simulate_window_resize(handle.into(), gpui_kit::size(gpui_kit::px(1050.), gpui_kit::px(720.)));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            handle
+                .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+                .unwrap();
+            windows.report_states(&mut state.core, cx);
+            assert!(state.core.window_state(work).unwrap().fullscreen);
+            assert!(!state.core.window_state(first).unwrap().fullscreen);
+            let bounds = windows
+                .get(work)
+                .unwrap()
+                .handle
+                .update(cx, |_, window, _| window.bounds())
+                .unwrap();
+            assert_eq!(bounds.size, gpui_kit::size(gpui_kit::px(1050.), gpui_kit::px(720.)));
+            windows.apply(WindowRequest::Raise(Uuid::new_v4()), 0, cx);
+            windows.present_settings(Opening::of(&state, cx), Uuid::new_v4(), None, cx);
+            assert_eq!(windows.settings_host(cx), None);
+            assert_eq!(windows.iter().count(), 2);
+            let handle = windows.get(work).unwrap().handle;
+            handle.update(cx, |_, window, _| window.remove_window()).unwrap();
+            windows.apply(WindowRequest::Raise(work), 0, cx);
+            state.close_confirmed(work);
+            windows.sync(&mut state, cx);
+            assert!(windows.get(work).is_none());
+            assert!(windows.get(first).is_some());
+            windows.teardown_all(cx);
+        });
+    }
 }

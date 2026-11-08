@@ -1847,6 +1847,65 @@ fn a_control_gone_with_its_page_leaves_the_keyboard_on_the_settings_popup(cx: &m
 
 mod overlay_visibility;
 
+#[gpui_kit::test]
+fn window_commands_resize_toggle_fullscreen_and_restore_keyboard_focus(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    let id = s.window;
+    let view = s.view.clone();
+    assert_eq!(view.read_with(s.cx, |view, _| view.id()), id);
+    view.update_in(s.cx, |view, window, cx| {
+        view.apply(
+            WindowRequest::Resize {
+                window: id,
+                size: WindowSize {
+                    width: 940,
+                    height: 660,
+                },
+            },
+            0,
+            window,
+            cx,
+        );
+    });
+    assert_eq!(s.cx.update(|window, _| window.bounds().size), size(px(940.), px(660.)));
+    view.update_in(s.cx, |view, window, cx| {
+        view.apply(WindowRequest::ToggleFullscreen(id), 0, window, cx);
+    });
+    assert!(s.cx.update(|window, _| window.is_fullscreen()));
+    view.update_in(s.cx, |view, window, cx| {
+        view.apply(WindowRequest::ToggleFullscreen(id), 0, window, cx);
+    });
+    assert!(!s.cx.update(|window, _| window.is_fullscreen()));
+    s.cx.deactivate_window();
+    view.update_in(s.cx, |view, window, cx| {
+        view.apply(
+            WindowRequest::Minimize {
+                window: id,
+                minimized: false,
+            },
+            0,
+            window,
+            cx,
+        );
+    });
+    s.cx.run_until_parked();
+    assert!(s.cx.update(|window, _| window.is_window_active()));
+    assert!(s.terminal_focused());
+}
+
+#[gpui_kit::test]
+fn the_window_managers_close_request_is_confirmed_then_the_model_closes_the_window(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    assert!(!s.cx.simulate_close(), "a live poster sends the close to the model");
+    s.settle();
+    let work = s.state.take_frontend_work();
+    assert_eq!(work.window_closes.len(), 1);
+    assert_eq!(work.window_closes[0].window, s.window);
+    let view = s.view.clone();
+    view.update_in(s.cx, |view, window, cx| view.close(window, cx));
+    assert!(s.cx.cx.update(|cx| cx.windows().is_empty()));
+}
+
 /// The buttons are one kind everywhere (`chrome::button`): the sidebar footer's and the app menu's show their hover
 /// text as the bar's own do, and take the same hover wash, see-through over the sidebar or the bar under them.
 #[gpui_kit::test]
