@@ -113,8 +113,6 @@ tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv3---on must l
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv4---tint-on requires --tint]
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv5-message5]
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv6---tint-on must list icon and/or name, comma-separated]
-tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv7-message7]
-tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv8-message8]
 tests/cli/test_cli_output.py::test_tree_lists_workspaces_and_tagged_sessions
 tests/cli/test_cli_output.py::test_version
 tests/cli/test_cli_output.py::test_version_prints_the_installed_build_when_it_differs
@@ -691,7 +689,6 @@ tests/protocol/test_session.py::test_new_carries_a_creation_tint
 tests/protocol/test_session.py::test_new_into_a_workspace_by_id
 tests/protocol/test_session.py::test_new_into_a_workspace_by_name
 tests/protocol/test_session.py::test_new_places_next_to_an_anchor
-tests/protocol/test_session.py::test_new_refuses_a_bad_creation_tint_before_creating[long-hex]
 tests/protocol/test_session.py::test_new_refuses_a_bad_creation_tint_before_creating[placement-without-color]
 tests/protocol/test_session.py::test_new_refuses_a_bad_creation_tint_before_creating[unknown-color]
 tests/protocol/test_session.py::test_new_refuses_a_bad_creation_tint_before_creating[unknown-part]
@@ -730,11 +727,9 @@ tests/protocol/test_session.py::test_status_shape
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[clear-with-color]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[clear-with-placement]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[color-without-mode]
-tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[double-hash-hex]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[no-mode]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[no-part]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[set-without-color]
-tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[short-hex]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[unknown-color]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[unknown-part]
 tests/protocol/test_session.py::test_tint_set_recolor_place_and_clear

@@ -66,7 +66,8 @@ vocabulary) is in [docs/rust-build.md](docs/rust-build.md).
 
 ## Markers
 
-- `since("0.41.1")`: skipped as `not-yet-at-level` when the build's parity level is lower.
+- `since("0.41.1")`: skipped as `not-yet-at-level` when the build's parity level is lower. A `pytest.param`, test,
+  class or module may each carry one; the latest of an item's levels gates it.
 - `requires("capability", reason=...)`: skipped as `unsupported` when the build lacks it.
   `requires("a", "b", any=True)` is skipped only when the build lacks both (Live sessions in the login shell, from
   upstream's `live-sessions` or the Rust build's `live-any-shell`); `--must-pass` on either counts it.
