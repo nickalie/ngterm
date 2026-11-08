@@ -196,6 +196,11 @@ def test_plain():
     [
         ("pass", (), pytest.ExitCode.OK),
         ("pytest.skip('unsupported: no zsh')", (), pytest.ExitCode.TESTS_FAILED),
+        ("pytest.skip('unsupported: rust lacks live-sessions on this host: bash')", (), pytest.ExitCode.TESTS_FAILED),
+        ("pytest.skip('unsupported: rust lacks posix-shell and live-sessions')", (), pytest.ExitCode.TESTS_FAILED),
+        # lacking only another capability the test requires: excused
+        ("pytest.skip('unsupported: swift-macos lacks pages-survive (upstream ends it)')", (), pytest.ExitCode.OK),
+        ("pytest.skip('unsupported: swift-macos lacks no-such-capability')", (), pytest.ExitCode.TESTS_FAILED),
         ("assert False", (), pytest.ExitCode.TESTS_FAILED),
         ("pass", ("-k", "not two"), pytest.ExitCode.TESTS_FAILED),
     ],

@@ -25,6 +25,7 @@ import pytest
 from agterm_conformance.client import NoResponse
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session, session_ids
 from agterm_conformance.plugin import Ctl
+from agterm_conformance.vocabulary import foundation_resolved
 from agterm_conformance.wait import wait_frame, wait_until
 
 UNKNOWN = "zzz"
@@ -432,7 +433,13 @@ def _ctrl_c_leaves_a_prompt(live, sid, daemon):
 def test_restart_command_interrupted_by_ctrl_c_leaves_a_prompt(live):
     sid = _live_session(live)
     daemon = _entries(live, sid)["left"]["daemon"]
-    assert_ok(live.request("session.restart", sid, paneID=_pane_id(live, sid), command="sleep 600"))
+    marker = f"ZMARK{next(_markers)}"
+    line = f"printf '%s%s\\n' {marker[:5]} {marker[5:]}; sleep 600"
+    assert_ok(live.request("session.restart", sid, paneID=_pane_id(live, sid), command=line))
+    # The reply comes once the daemon runs the new shell, before the pane's own client has attached to it: until the
+    # marker shows, the pane's terminal is not yet the client's raw one, and a Ctrl+C there ends the client and the
+    # pane with it (upstream's session host hands a daemon it created over to the pane's client afterwards).
+    live.wait_text(sid, rf"(?m)^{marker}$")
     _ctrl_c_leaves_a_prompt(live, sid, daemon)
 
 
@@ -1165,11 +1172,13 @@ def _content_files(tmp_path):
 @pytest.mark.covers("session.overlay.open", "field:tree.session.remoteOverlays", "field:tree.session.htmlOverlays")
 def test_content_pages_go_only_to_a_presenter_listing_page_content(live, tmp_path):
     _, picture, readme, source = _content_files(tmp_path)
+    # the origin sends each path standardized as upstream's Foundation does: macOS's /private/var/... as /var/...
+    sent_picture, sent_readme, sent_source = (foundation_resolved(str(path)) for path in (picture, readme, source))
     opens = [
-        ({"image": str(picture)}, {"image": {"path": str(picture), "width": 1, "height": 1}}),
-        ({"markdownFile": str(readme)}, {"markdown": {"path": str(readme)}}),
-        ({"textFile": str(source), "line": 1}, {"text": {"path": str(source), "line": 1}}),
-        ({"textFile": str(source)}, {"text": {"path": str(source)}}),
+        ({"image": str(picture)}, {"image": {"path": sent_picture, "width": 1, "height": 1}}),
+        ({"markdownFile": str(readme)}, {"markdown": {"path": sent_readme}}),
+        ({"textFile": str(source), "line": 1}, {"text": {"path": sent_source, "line": 1}}),
+        ({"textFile": str(source)}, {"text": {"path": sent_source}}),
     ]
     # an older presenter keeps the refusal, and nothing is reserved for it
     with _page_presenter(live) as (sid, _, _):
@@ -1228,8 +1237,11 @@ def test_page_serve_serves_a_content_pages_files_under_its_rules(live, tmp_path)
             # a content page runs no control request
             helper.send({"kind": "bridge", "id": 9, "request": json.dumps({"cmd": "tree"})})
             assert helper.read() == {"kind": "failure", "id": 9, "error": "this page has no bridge"}
-        assert_ok(live.request("session.overlay.close", sid))
-        wait_frame(presenter.read, "page.close", presenter.send)
+            # closed while its helper is still connected: upstream ends a page whose helper goes (see
+            # test_losing_the_page_helper_takes_only_the_page_off_its_presenter), and the close ends the helper's channel
+            assert_ok(live.request("session.overlay.close", sid))
+            wait_frame(presenter.read, "page.close", presenter.send)
+            _until_closed(helper)
 
 
 @LIVE

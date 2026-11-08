@@ -2,10 +2,12 @@
 
 import base64
 import os
+import sys
 import uuid
 
 import pytest
 from agterm_conformance.match import assert_ok, find_session
+from agterm_conformance.vocabulary import foundation_resolved
 
 pytestmark = pytest.mark.since("0.40.0")
 
@@ -82,7 +84,10 @@ def test_cli_text_source_is_taken_literally(cli, ctl):
         assert "htmlOverlays" not in find_session(ctl.tree(), sid)
         # a relative FILE is resolved against the working directory and standardized before it is sent
         result = cli("session", "overlay", "open", "--text", f"{folder.name}/nested/../absent.go", "--target", sid)
-        absent = os.fspath(folder / "absent.go")
+        # joined to the working directory as getcwd() names it (macOS's /tmp as /private/tmp), which Foundation's
+        # standardizing shortens only to a path that exists
+        cwd = os.path.realpath(folder) if sys.platform == "darwin" else os.fspath(folder)
+        absent = foundation_resolved(os.path.join(cwd, "absent.go"))
         assert (result.returncode, result.stdout, result.stderr) == (
             1, "", f"error: session.overlay.open: unreadable text file: {absent}\n"), result
         result = cli("session", "overlay", "open", "--text", f"{folder.name}/a.go", "--line", "7", "--target", sid)

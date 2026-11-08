@@ -1547,14 +1547,14 @@ def test_live_pane_commands(cli, live):
     cli = cli.on(live.instance)
     vocabulary = live.vocabulary
     sid = _live_session(live)
-    # Upstream's count drops to 0 for a moment while a pane's client attaches: render a settled list.
-    live.wait_response(
-        vocabulary.command("live.list"),
-        None,
-        lambda r: all(row.get("clients", 0) >= 1 for row in assert_ok(r)[vocabulary.result_key]["entries"]),
-    )
-    listing = assert_ok(live.request(vocabulary.command("live.list")))
-    _rendered(cli(*vocabulary.cli("live", "list")), listing, vocabulary=vocabulary)
+    # Upstream's count drops to 0 for a moment while a pane's client attaches, even after it read 1 (its session host's
+    # own client lets go before the pane's attaches): render a settled list, one the CLI's own read agrees with.
+    def settled(response):
+        listing = assert_ok(response)
+        assert all(row.get("clients", 0) >= 1 for row in listing[vocabulary.result_key]["entries"]), listing
+        return _rendered(cli(*vocabulary.cli("live", "list")), listing, vocabulary=vocabulary) is not None
+
+    live.wait_response(vocabulary.command("live.list"), None, settled)
     daemon = _live_rows(live, sid)["left"]["daemon"]
     marker = f"LIVE{uuid.uuid4().hex[:8].upper()}"
     assert_ok(live.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:4]} {marker[4:]}\n"))
@@ -1717,6 +1717,8 @@ def test_session_info_sets_and_clears(cli, ctl):
         _usage(cli("session", "info", "--clear", "--markdown"), "--clear takes no --markdown or --hide-after")
         _usage(cli("session", "info", "--clear", "--hide-after", "0"), "--clear takes no --markdown or --hide-after")
         _usage(cli("session", "info"), "provide exactly one of a TEXT or --clear")
-        _usage(cli("session", "info", "x", "--hide-after", "-1"), "hide-after must be 0...86400 seconds")
+        # `=`: a separate `-1` reads as an option to upstream's argument parser, which then misses the value
+        _usage(cli("session", "info", "x", "--hide-after=-1"), "hide-after must be 0...86400 seconds")
+        _usage(cli("session", "info", "x", "--hide-after", "86401"), "hide-after must be 0...86400 seconds")
     finally:
         assert_ok(ctl.request("session.close", sid))

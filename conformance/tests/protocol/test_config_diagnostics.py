@@ -144,12 +144,13 @@ CASES = [
     ),
     (
         "theme",
+        # parse-time refusals only: a theme Ghostty refuses when it loads it (`sub/dir`, a path separator) never loads
+        # on the reference, whose fresh install seeds a theme of its own that its settings conf sets over this file
         [
             ("theme = light:Only", 1),
             ('theme = light:"\\q",dark:x', 1),
             ("theme = light:a\\qb,dark:x", 1),
             ('theme = light:"\\x5",dark:x', 1),
-            ("theme = sub/dir", 1),
         ],
     ),
     (

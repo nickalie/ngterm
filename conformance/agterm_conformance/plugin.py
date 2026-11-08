@@ -275,7 +275,11 @@ def gate_paths(config: pytest.Config, options: ImplOptions) -> tuple[Path, Path]
 
 
 class MustPass:
-    """`--must-pass`: a skip, a failure or a deselection of a test requiring one of `capabilities` fails the run."""
+    """`--must-pass`: a skip, a failure or a deselection of a test requiring one of `capabilities` fails the run.
+
+    Except a skip for lacking only other capabilities the test also requires: the build's recorded divergence there
+    (`requires`), not a gap in the must-pass ones. The reference skips the Rust-only `pages-survive` tests that need
+    Live sessions too."""
 
     def __init__(self, capabilities: frozenset[str]) -> None:
         self.capabilities = capabilities
@@ -283,6 +287,7 @@ class MustPass:
         self.uncollected: set[str] = set(capabilities)
         self.passed: set[str] = set()
         self.spoiled: set[str] = set()
+        self.excused: set[str] = set()
         self.problems: list[str] = []
 
     @pytest.hookimpl(tryfirst=True)
@@ -299,13 +304,17 @@ class MustPass:
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         if report.when == "call" and report.passed:
             self.passed.add(report.nodeid)
+        elif report.skipped and (lacking := _lacking(report)) and lacking.isdisjoint(self.capabilities):
+            self.excused.add(report.nodeid)
         elif not report.passed:
             self.spoiled.add(report.nodeid)
 
     @pytest.hookimpl(tryfirst=True)
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
         self.problems = [f"no collected test requires {capability}" for capability in sorted(self.uncollected)]
-        self.problems += [nodeid for nodeid in self.required if nodeid not in self.passed - self.spoiled]
+        self.problems += [
+            nodeid for nodeid in self.required if nodeid not in self.passed - self.spoiled and nodeid not in self.excused
+        ]
         if self.problems and session.exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
@@ -646,6 +655,19 @@ def _skip_message(report: Any) -> str:
     longrepr = report.longrepr
     message = longrepr[2] if isinstance(longrepr, tuple) and len(longrepr) == 3 else str(longrepr)
     return message.removeprefix("Skipped: ")
+
+
+# `skip_reason`'s unsupported skip for capabilities the build lacks: `lacks a`, or `lacks a and b` for an `any`.
+_LACKS = re.compile(rf"^{UNSUPPORTED}: \S+ lacks ([\w-]+(?: and [\w-]+)*)")
+
+
+def _lacking(report: Any) -> set[str]:
+    """The capabilities a skipped test's build lacks, as `skip_reason` named them; empty for any other skip."""
+    from agterm_conformance.impls.base import CAPABILITIES
+
+    found = _LACKS.match(_skip_message(report))
+    names = set(found.group(1).split(" and ")) if found else set()
+    return names if names <= CAPABILITIES.keys() else set()
 
 
 def _skip_category(report: Any) -> str:

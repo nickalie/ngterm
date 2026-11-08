@@ -48,10 +48,15 @@ def _bound(ctl, binds):
 
 @contextlib.contextmanager
 def _cat(ctl):
-    """A selected session running `cat`, closed afterwards."""
+    """A selected session running `cat`, closed afterwards: yielded once `cat` reads. The pane mounts before its
+    program starts, and a line typed then is echoed ahead of whatever the pane prints first (the reference's
+    `Last login` line, from `login` before it runs the command), with only `cat`'s copy after it; so a line typed
+    until `cat` has printed it back is a readiness probe, not part of a test's text."""
     sid = assert_ok(ctl.request("session.new", command="cat"))["id"]
     ctl.wait_mounted(sid, "left")
     try:
+        assert_ok(ctl.request("session.type", sid, text="cat-reads\n"))
+        ctl.wait_text(sid, r"cat-reads[\s\S]*cat-reads", all=True)
         yield sid
     finally:
         ctl.request("session.close", sid)
