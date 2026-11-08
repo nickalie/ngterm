@@ -33,8 +33,9 @@ The Windows VM and the emulators are off by default and cost the host CPU and me
    installs and its shutdown would collide with yours). `-read-only` lets several instances of one AVD run at once:
    `SDK=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}`, then
    `"$SDK/emulator/emulator" -avd ngterm-phone -read-only -port <even port 5554-5682 no serial in adb devices uses>
-   -no-window -no-audio -no-boot-anim` in the background (`ngterm-tablet` for a tablet layout), then
-   `adb -s <serial> wait-for-device shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 2; done'`.
+   -no-window -no-audio -no-boot-anim` in the background (`ngterm-tablet` for a tablet layout), then, in the
+   foreground, `timeout 300 adb -s <serial> wait-for-device shell 'while [ "$(getprop sys.boot_completed)" != 1 ];
+   do sleep 2; done'`. A timeout there is a failed boot: kill your emulator, then report it or retry once.
    Its serial is `emulator-<port>`. Export `ANDROID_SERIAL=<serial>` for every `adb`, Gradle and
    `scripts/build-android.sh` command: Gradle's install and instrumented-test tasks act on every attached device
    unless it is set, the user's phone or emulator included.
@@ -94,7 +95,12 @@ run that dies has to show up as a failure, never as a wait that goes on.
 ## Quirks
 
 - Windows: OpenSSH keeps an ssh session open until every process started in it exits, so a background watcher (a
-  `sleep` timer, a server) holds the call open. A long run starts detached from the ssh call and is waited on as
+  `sleep` timer, a server) holds the call open. A long run starts outside the session through WMI:
+  `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='powershell -NoProfile
+  -ExecutionPolicy Bypass -File <worktree>\run.ps1'; CurrentDirectory='<worktree>'}` returns at once, its
+  `ReturnValue` is 0 when the process started and its `ProcessId` is the run's process id, and the process outlives
+  the ssh session (`Get-Process -Id <pid>` checks it from a later call). Without `-ExecutionPolicy Bypass` the script
+  is refused and the process exits at once, with no log or marker. The run is then waited on as
   [Waiting on a remote run](#waiting-on-a-remote-run) says. One cargo build at a time in the VM. Its GUI runs need a
   console logon; ask the user if you lack it.
 - Mac: no `timeout` (`perl -e 'alarm N; exec @ARGV' cmd` does it); wrap long work in `caffeinate -is`. Over ssh there

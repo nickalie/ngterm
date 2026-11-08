@@ -51,10 +51,10 @@ plan in English and drop sections that would stay empty.
 - Machines (`.claude/skills/libghostty-sync/references/machines.md`): Windows work (builds, clippy, tests, debugging,
   GUI runs) runs in the Windows VM, macOS and iOS work on the Mac over ssh, Android work on the emulator; the VM and
   the emulator start on demand and stop when the task's work on them is done.
-- The plan-exec run's orchestrator keeps a watchdog that wakes it when every agent transcript and review has been quiet
-  for more than 20 minutes, and on each "agent waiting on its background work" notice checks the agent's latest
-  command against the real host and remote processes, killing any wait loop (`references/machines.md` > Waiting on a
-  remote run).
+- The plan-exec run's orchestrator keeps a watchdog that wakes it when any running agent's transcript, or a running
+  review, has been quiet for more than 20 minutes, whatever the others are doing, and on that wake-up and on each
+  "agent waiting on its background work" notice checks the agent's latest command against the real host and remote
+  processes, killing any wait loop (`references/machines.md` > Waiting on a remote run).
 
 ## Implementation Steps
 
