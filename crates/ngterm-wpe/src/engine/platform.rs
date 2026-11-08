@@ -868,3 +868,7 @@ unsafe extern "C" fn view_set_cursor(view: *mut platform::WPEView, name: *const 
         view.set_cursor(name);
     }
 }
+
+#[cfg(test)]
+#[path = "platform_tests.rs"]
+mod tests;

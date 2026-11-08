@@ -692,7 +692,12 @@ mod tests {
             damage: Vec::new(),
             content: FrameContent::Shm(Vec::new()),
         });
-        assert!(serde_json::to_vec(&FromWorker::Event(frame)).is_err());
+        assert!(serde_json::to_vec(&FromWorker::Event(frame.clone())).is_err());
+        let error = FromWorker::Event(frame).packet().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "a broken packet: not serializable: the enum variant Event::Frame cannot be serialized"
+        );
     }
     #[test]
     fn start_failures_preserve_the_public_error_and_its_category_on_the_wire() {
