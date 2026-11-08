@@ -18,6 +18,7 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
+use interprocess::ConnectWaitMode;
 use interprocess::os::windows::named_pipe::{DuplexPipeStream, PipeListener, PipeListenerOptions, pipe_mode::Bytes};
 use interprocess::os::windows::security_descriptor::SecurityDescriptor;
 use widestring::U16CString;
@@ -159,8 +160,18 @@ pub struct Remote {
 }
 
 impl Remote {
+    /// Connects without waiting: a pipe with no free instance fails with `ERROR_PIPE_BUSY` at once, left to
+    /// [`register`]'s bounded retries (interprocess's own wait would block until the primary frees one).
     fn connect(path: &str) -> io::Result<Self> {
-        let pipe = Pipe::connect_by_path(path)?;
+        let pipe =
+            Pipe::connect_by_path_with_wait_mode(path, ConnectWaitMode::Timeout(Duration::ZERO)).map_err(|error| {
+                // interprocess reports a busy pipe it did not wait for as a bare timeout
+                if error.kind() == io::ErrorKind::TimedOut && error.raw_os_error().is_none() {
+                    io::Error::from_raw_os_error(ERROR_PIPE_BUSY.cast_signed())
+                } else {
+                    error
+                }
+            })?;
         let server_pid = pipe.server_process_id()?;
         ngterm_core::pipe_security::check_server_user(&path, server_pid)?;
         Ok(Self { pipe, server_pid })

@@ -136,23 +136,32 @@ fn a_press_toggles_the_quick_terminal_until_the_quit_save() {
     assert!(!state.core.quick_visible(), "a press while quitting shows nothing");
 }
 
-/// The warnings logged while it is the thread's default subscriber.
-#[cfg(target_os = "linux")]
-#[derive(Default)]
-struct Warnings(std::sync::Mutex<Vec<String>>);
+/// The messages logged at `level` or above while it is the thread's (or a child process's global) default subscriber.
+#[cfg(any(target_os = "linux", windows))]
+struct Logged {
+    level: tracing::Level,
+    seen: std::sync::Mutex<Vec<String>>,
+}
 
-#[cfg(target_os = "linux")]
-impl Warnings {
+#[cfg(any(target_os = "linux", windows))]
+impl Logged {
+    fn at(level: tracing::Level) -> Self {
+        Self {
+            level,
+            seen: std::sync::Mutex::default(),
+        }
+    }
+
     fn seen(&self) -> Vec<String> {
-        self.0.lock().unwrap().clone()
+        self.seen.lock().unwrap().clone()
     }
 }
 
 /// An event's message.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 struct Message(String);
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 impl tracing::field::Visit for Message {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
@@ -161,10 +170,10 @@ impl tracing::field::Visit for Message {
     }
 }
 
-#[cfg(target_os = "linux")]
-impl tracing::Subscriber for Warnings {
+#[cfg(any(target_os = "linux", windows))]
+impl tracing::Subscriber for Logged {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        *metadata.level() <= tracing::Level::WARN
+        *metadata.level() <= self.level
     }
 
     fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
@@ -178,7 +187,7 @@ impl tracing::Subscriber for Warnings {
     fn event(&self, event: &tracing::Event<'_>) {
         let mut message = Message(String::new());
         event.record(&mut message);
-        self.0.lock().unwrap().push(message.0);
+        self.seen.lock().unwrap().push(message.0);
     }
 
     fn enter(&self, _: &tracing::span::Id) {}
@@ -191,7 +200,7 @@ impl tracing::Subscriber for Warnings {
 #[cfg(target_os = "linux")]
 #[gpui_kit::test]
 fn a_display_without_a_global_hotkey_says_so_once(cx: &mut gpui_kit::TestAppContext) {
-    let warnings = std::sync::Arc::new(Warnings::default());
+    let warnings = std::sync::Arc::new(Logged::at(tracing::Level::WARN));
     let poster = crate::state::detached_poster();
     let mut hotkey = GlobalHotkey::default();
     tracing::subscriber::with_default(std::sync::Arc::clone(&warnings), || {
@@ -237,6 +246,9 @@ fn windows_registration_child(cx: &mut gpui_kit::TestAppContext) {
         }
         registered
     };
+    // the hotkey's thread says what it registered; this child process has no other subscriber to keep
+    let logged = std::sync::Arc::new(Logged::at(tracing::Level::INFO));
+    tracing::subscriber::set_global_default(std::sync::Arc::clone(&logged)).unwrap();
     assert!(probe(), "the test chord must initially be available");
     let poster = crate::state::detached_poster();
     let mut hotkey = GlobalHotkey::default();
@@ -244,11 +256,21 @@ fn windows_registration_child(cx: &mut gpui_kit::TestAppContext) {
     assert!(probe(), "an empty keymap reserves no chord");
     let wanted = chord("ctrl+alt+shift+f20");
     cx.update(|cx| hotkey.sync(Some(&wanted), &poster, cx));
+    // no probe while the thread may be registering: one held at that moment would make it refuse the chord for good
     let deadline = Instant::now() + Duration::from_secs(5);
-    while probe() {
-        assert!(Instant::now() < deadline, "keymap sync did not reserve its chord");
+    while !logged
+        .seen()
+        .iter()
+        .any(|message| message == "global hotkey: registered")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "keymap sync did not register its chord: {:?}",
+            logged.seen()
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
+    assert!(!probe(), "keymap sync reserved its chord");
     cx.update(|cx| hotkey.sync(Some(&wanted), &poster, cx));
     cx.update(|cx| hotkey.sync(None, &poster, cx));
     let deadline = Instant::now() + Duration::from_secs(5);

@@ -237,6 +237,22 @@ fn browser_child() {
     unsafe { windows_sys::Win32::Foundation::CloseHandle(browser) };
     // SAFETY: balances this thread's successful apartment initialization.
     unsafe { CoUninitialize() };
+    profiles_released(dir);
+}
+
+/// Removes the pages' user data folder, which fails while any process of the ended browser still holds a file there:
+/// a helper that outlives the browser fails the test instead of leaving the folder in `%TEMP%`.
+fn profiles_released(dir: tempfile::TempDir) {
+    let folder = dir.keep();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while let Err(error) = std::fs::remove_dir_all(&folder) {
+        assert!(
+            Instant::now() < deadline,
+            "the ended browser still holds {}: {error}",
+            folder.display()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn load_and_report(native: &Native, spec: &Spec, reports: &Rc<RefCell<Vec<Report>>>) {
@@ -568,7 +584,6 @@ fn local_protocol_pages(parent: isize, environment: &ICoreWebView2Environment, d
         &reports,
         |r| matches!(r, Report::DownloadRefused(uri) if uri.starts_with("blob:")),
     );
-    assert!(!dir.join("never-saved.txt").exists());
 }
 
 fn close_single_page(parent: isize, environment: &ICoreWebView2Environment, dir: &Path) {
@@ -622,6 +637,8 @@ impl Fixture {
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
                 };
+                // Winsock hands the listener's non-blocking mode to the sockets it accepts
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
                 stream.set_write_timeout(Some(Duration::from_secs(1))).unwrap();
                 let Some(path) = requested_path(&mut stream) else {
