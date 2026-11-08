@@ -601,6 +601,44 @@ mod tests {
     }
 
     #[test]
+    fn a_queue_whose_thread_is_gone_drops_its_jobs_without_failing_the_caller() {
+        let queue = queue::Queue::new("status-sound-test");
+        queue.run(|| panic!("a job that ends the queue's thread"));
+        let ran = |queue: &queue::Queue| {
+            let (sender, ran) = mpsc::channel::<()>();
+            queue.run(move || {
+                let _ = sender.send(());
+            });
+            ran.recv_timeout(Duration::from_secs(5))
+        };
+        assert_eq!(
+            ran(&queue),
+            Err(mpsc::RecvTimeoutError::Disconnected),
+            "a job queued behind it goes with the thread"
+        );
+        assert_eq!(
+            ran(&queue),
+            Err(mpsc::RecvTimeoutError::Disconnected),
+            "a later one is dropped at once"
+        );
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn the_bell_is_not_rung_for_a_window_without_a_wayland_surface(cx: &mut gpui_kit::TestAppContext) {
+        struct Blank;
+        impl gpui_kit::Render for Blank {
+            fn render(&mut self, _: &mut Window, _: &mut gpui_kit::Context<Self>) -> impl gpui_kit::IntoElement {
+                gpui_kit::div()
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, _| Blank);
+        cx.update(|window, _| {
+            assert!(wayland::ring(window).is_err(), "the test window has no Wayland surface");
+        });
+    }
+
+    #[test]
     #[cfg(not(any(target_os = "macos", windows)))]
     fn a_burst_rings_the_bell_once() {
         let mut rung = 0;

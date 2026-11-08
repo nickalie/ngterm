@@ -489,4 +489,355 @@ mod tests {
             assert_eq!(cx.global::<Updater>().display_status(), Status::Ready("0.2.0".into()));
         });
     }
+
+    // What follows never reaches a real installation: these builds are not release installations, so every check is
+    // refused before the network. An answer to an "Update needs attention" alert removes the update error file under
+    // the user's real state directory (`error_file`, with no seam), so those alerts are shown and never answered.
+
+    use crate::modal::tests::host;
+    use crate::modal::{AlertSpec, answer_front_alert, front_alert};
+    use gpui_kit::{Context, IntoElement, Render, VisualTestContext, div};
+
+    /// `Installation::detect`'s refusal for a build without the release marker, as every test binary is.
+    const SOURCE_BUILD: &str = "Automatic updates are available for official release archives, AppImages, macOS app bundles and Windows installers. Update package-manager installations with your package manager; rebuild development installations from source.";
+
+    fn app_state(cx: &mut App) -> Entity<AppState> {
+        cx.new(|_| {
+            AppState::new(Core::new(
+                CoreConfig {
+                    app: AppIdentity::from_recorded("0.1.0", None),
+                    capabilities: Vec::new(),
+                },
+                CoreState::default(),
+            ))
+        })
+    }
+
+    /// An updater over `state` that cannot update (a source build), showing `status` with nothing running.
+    fn source_build(state: &Entity<AppState>, status: Status) -> Updater {
+        Updater {
+            state: state.downgrade(),
+            notice: None,
+            installation: Err(SOURCE_BUILD.into()),
+            status,
+            prepared: None,
+            job: None,
+            origin: Origin::Automatic,
+            cancelled: None,
+            polling: None,
+            restart: false,
+            poster: crate::state::detached_poster(),
+        }
+    }
+
+    fn pending(cx: &mut App) -> Task<()> {
+        cx.spawn(async |_| futures_lite::future::pending::<()>().await)
+    }
+
+    fn front(cx: &mut VisualTestContext) -> Option<AlertSpec> {
+        cx.update(|window, cx| front_alert(window.window_handle(), cx).map(|alert| alert.read(cx).spec().clone()))
+    }
+
+    fn labels(spec: &AlertSpec) -> Vec<&str> {
+        spec.buttons.iter().map(|button| button.label.as_ref()).collect()
+    }
+
+    /// Answers the front alert with `label`.
+    fn press(cx: &mut VisualTestContext, label: &str) {
+        assert!(
+            cx.update(|window, cx| answer_front_alert(window, label, cx)),
+            "no {label}"
+        );
+        cx.run_until_parked();
+    }
+
+    /// Shows the status alert for `status` with `notice` from an earlier run, as the titlebar button does.
+    fn status_alert(cx: &mut VisualTestContext, status: Status, notice: Option<&str>) -> AlertSpec {
+        cx.update(|window, cx| {
+            let updater = cx.global_mut::<Updater>();
+            updater.status = status;
+            updater.notice = notice.map(str::to_owned);
+            show_status(window, cx);
+        });
+        cx.run_until_parked();
+        front(cx).expect("the status alert is up")
+    }
+
+    #[gpui_kit::test]
+    fn a_development_build_installs_an_updater_that_refuses_and_never_polls(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let state = app_state(cx);
+            assert_eq!(
+                state.read(cx).core.settings().auto_update,
+                None,
+                "automatic checks default on"
+            );
+            init(&state, crate::state::detached_poster(), cx);
+            let updater = cx.global::<Updater>();
+            assert_eq!(
+                updater.installation.as_ref().err().map(String::as_str),
+                Some(SOURCE_BUILD)
+            );
+            assert_eq!(updater.status, Status::Idle);
+            assert!(updater.polling.is_none(), "nothing to poll for");
+            assert!(updater.job.is_none());
+            assert_eq!(current_installation(cx).err().as_deref(), Some(SOURCE_BUILD));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn automatic_checks_start_only_for_an_installation_that_can_update(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            set_automatic(true, cx);
+            set_automatic(false, cx);
+            assert!(
+                cx.try_global::<Updater>().is_none(),
+                "no updater, nothing to start or stop"
+            );
+            let state = app_state(cx);
+            cx.set_global(source_build(&state, Status::Idle));
+            set_automatic(true, cx);
+            assert!(cx.global::<Updater>().polling.is_none(), "a source build polls nothing");
+            let polling = pending(cx);
+            cx.global_mut::<Updater>().polling = Some(polling);
+            set_automatic(true, cx);
+            assert!(cx.global::<Updater>().polling.is_some(), "polling already runs");
+            set_automatic(false, cx);
+            assert!(cx.global::<Updater>().polling.is_none(), "opting out stops it");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_check_for_an_installation_that_cannot_update_never_starts(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let state = app_state(cx);
+            cx.set_global(source_build(&state, Status::Current));
+            start_check(None, cx);
+            let updater = cx.global::<Updater>();
+            assert_eq!(updater.status, Status::Current, "not Checking");
+            assert!(updater.job.is_none() && updater.cancelled.is_none());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn the_protected_directories_need_the_app_state(cx: &mut TestAppContext) {
+        let state = cx.update(|cx| {
+            let state = app_state(cx);
+            cx.set_global(source_build(&state, Status::Idle));
+            assert_eq!(protected_directories(cx).unwrap()[1], *state.read(cx).core.config_dir());
+            state
+        });
+        drop(state);
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(
+                protected_directories(cx).err().as_deref(),
+                Some("Application state is unavailable.")
+            );
+            assert_eq!(
+                current_installation(cx).err().as_deref(),
+                Some(SOURCE_BUILD),
+                "the installation's own refusal comes first"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn check_for_updates_says_why_this_installation_cannot_update(cx: &mut TestAppContext) {
+        let cx = host(cx);
+        cx.update(check);
+        cx.run_until_parked();
+        assert_eq!(front(cx), None, "no updater, no alert");
+        let state = cx.update(|_, cx| app_state(cx));
+        cx.update(|_, cx| cx.set_global(source_build(&state, Status::Idle)));
+        cx.update(check);
+        cx.run_until_parked();
+        let alert = front(cx).expect("the refusal is shown");
+        assert_eq!((alert.heading.as_str(), alert.body.as_str()), ("Updates", SOURCE_BUILD));
+        assert_eq!(labels(&alert), ["OK"]);
+        assert_eq!(cx.update(|_, cx| cx.global::<Updater>().status.clone()), Status::Idle);
+        assert!(
+            cx.update(|_, cx| cx.global::<Updater>().job.is_none()),
+            "no check started"
+        );
+        press(cx, "OK");
+        assert_eq!(front(cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn the_status_alert_says_where_the_update_stands(cx: &mut TestAppContext) {
+        let cx = host(cx);
+        let state = cx.update(|_, cx| app_state(cx));
+        cx.update(|_, cx| cx.set_global(source_build(&state, Status::Idle)));
+        let version = env!("CARGO_PKG_VERSION");
+        for (status, heading, body) in [
+            (
+                Status::Idle,
+                "Updates",
+                "Choose Check for Updates from the Help menu.".to_owned(),
+            ),
+            (Status::Checking, "Updates", "Checking for updates…".to_owned()),
+            (
+                Status::Downloading("0.2.0".into()),
+                "Updates",
+                "Downloading and verifying ngterm 0.2.0…".to_owned(),
+            ),
+            (
+                Status::Current,
+                "Up to date",
+                format!("No newer stable release is available for this installation. Running ngterm {version}."),
+            ),
+        ] {
+            let alert = status_alert(cx, status.clone(), None);
+            assert_eq!((alert.heading.as_str(), alert.body.as_str()), (heading, body.as_str()));
+            assert_eq!(labels(&alert), ["OK"], "{status:?}");
+            press(cx, "OK");
+            assert_eq!(
+                cx.update(|_, cx| cx.global::<Updater>().status.clone()),
+                status,
+                "OK changes nothing"
+            );
+        }
+
+        let ready = Status::Ready("0.2.0".into());
+        let alert = status_alert(cx, ready.clone(), None);
+        assert_eq!(alert.heading, "Update ready");
+        assert_eq!(
+            alert.body,
+            "ngterm 0.2.0 has been downloaded and verified. Restart to install it. Live sessions reconnect after restarting; other shells close and restore according to your session settings."
+        );
+        assert_eq!(labels(&alert), ["Later", "Restart to Update", "Release Notes"]);
+        assert_eq!(alert.default_button(), Some(0), "Later is the default");
+        press(cx, "Later");
+        assert_eq!(cx.opened_url(), None, "Later opens nothing");
+        assert_eq!(
+            cx.update(|_, cx| cx.global::<Updater>().status.clone()),
+            ready,
+            "the update still waits"
+        );
+        status_alert(cx, ready.clone(), None);
+        press(cx, "Release Notes");
+        assert_eq!(cx.opened_url().as_deref(), Some(RELEASES_URL));
+        assert_eq!(cx.update(|_, cx| cx.global::<Updater>().status.clone()), ready);
+
+        // last: answering it would remove the user's real update error file
+        let alert = status_alert(
+            cx,
+            Status::Failed("The release has an invalid version tag.".into()),
+            None,
+        );
+        assert_eq!(
+            (alert.heading.as_str(), alert.body.as_str()),
+            ("Update needs attention", "The release has an invalid version tag.")
+        );
+        assert_eq!(labels(&alert), ["OK", "Release Downloads"]);
+    }
+
+    #[gpui_kit::test]
+    fn an_earlier_failure_shows_until_a_result_replaces_it(cx: &mut TestAppContext) {
+        let cx = host(cx);
+        let state = cx.update(|_, cx| app_state(cx));
+        cx.update(|_, cx| cx.set_global(source_build(&state, Status::Idle)));
+        let alert = status_alert(cx, Status::Current, Some("could not start the installer"));
+        assert_eq!(alert.heading, "Up to date", "a fresh result hides the old failure");
+        press(cx, "OK");
+        let ready = status_alert(cx, Status::Ready("0.2.0".into()), Some("could not start the installer"));
+        assert_eq!(
+            ready.heading, "Update ready",
+            "and so does an update waiting to restart"
+        );
+        press(cx, "Later");
+        // last: answering it would remove the user's real update error file
+        let alert = status_alert(cx, Status::Checking, Some("could not start the installer"));
+        assert_eq!(
+            (alert.heading.as_str(), alert.body.as_str()),
+            ("Update needs attention", "could not start the installer"),
+            "while checking, the earlier failure stays up"
+        );
+    }
+
+    /// A titlebar with the updater's button, over the window's alerts.
+    struct Titlebar;
+
+    impl Render for Titlebar {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .children(button(crate::chrome::default_colors(), cx))
+                .children(crate::modal::alert_layer(window.window_handle(), cx))
+        }
+    }
+
+    /// Draws a frame and says whether the titlebar shows the updater's button.
+    fn button_shown(cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        cx.debug_bounds("update-status").is_some()
+    }
+
+    #[gpui_kit::test]
+    fn the_titlebar_button_shows_only_while_an_update_needs_the_user(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _| Titlebar);
+        assert!(!button_shown(cx), "no updater, no button");
+        let state = cx.update(|_, cx| app_state(cx));
+        cx.update(|_, cx| cx.set_global(source_build(&state, Status::Idle)));
+        for (status, shown) in [
+            (Status::Idle, false),
+            (Status::Checking, false),
+            (Status::Current, false),
+            (Status::Downloading("0.2.0".into()), true),
+            (Status::Ready("0.2.0".into()), true),
+            (Status::Failed("offline".into()), true),
+        ] {
+            cx.update(|_, cx| cx.global_mut::<Updater>().status = status.clone());
+            assert_eq!(button_shown(cx), shown, "{status:?}");
+        }
+        cx.update(|_, cx| {
+            let updater = cx.global_mut::<Updater>();
+            updater.status = Status::Idle;
+            updater.notice = Some("could not start the installer".into());
+        });
+        assert!(button_shown(cx), "an earlier failure needs the user too");
+
+        cx.update(|_, cx| {
+            let updater = cx.global_mut::<Updater>();
+            updater.status = Status::Downloading("0.2.0".into());
+            updater.notice = None;
+        });
+        assert!(button_shown(cx));
+        let center = cx
+            .debug_bounds("update-status")
+            .expect("the button is laid out")
+            .center();
+        cx.simulate_click(center, gpui_kit::Modifiers::none());
+        cx.run_until_parked();
+        let alert = front(cx).expect("a click shows the status");
+        assert_eq!(alert.body, "Downloading and verifying ngterm 0.2.0…");
+        press(cx, "OK");
+    }
+
+    #[gpui_kit::test]
+    fn quitting_stops_every_check_and_installs_nothing_without_an_update(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            on_quit(false, cx);
+            assert!(cx.try_global::<Updater>().is_none(), "no updater, nothing to stop");
+            let state = app_state(cx);
+            for live_reset in [false, true] {
+                let cancelled = Arc::new(AtomicBool::new(false));
+                let (job, polling) = (pending(cx), pending(cx));
+                cx.set_global(Updater {
+                    job: Some(job),
+                    polling: Some(polling),
+                    cancelled: Some(Arc::clone(&cancelled)),
+                    ..source_build(&state, Status::Downloading("0.2.0".into()))
+                });
+                on_quit(live_reset, cx);
+                let updater = cx.global::<Updater>();
+                assert!(cancelled.load(Ordering::Acquire), "the download is told to stop");
+                assert!(updater.job.is_none() && updater.polling.is_none() && updater.cancelled.is_none());
+                assert!(!updater.restart, "nothing restarts");
+            }
+        });
+    }
 }
