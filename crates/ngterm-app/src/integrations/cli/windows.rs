@@ -366,6 +366,208 @@ mod tests {
         );
     }
 
+    /// `reg query`'s view of `HKCU\<key>\<value>`: its data and type, `None` when absent.
+    fn reg_query(key: &str, value: &str) -> Option<(String, String)> {
+        let output = Command::new("reg")
+            .args(["query", &format!(r"HKCU\{key}"), "/v", value])
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        // `    <name>    <type>    <data>`
+        let line = stdout
+            .lines()
+            .find(|line| {
+                line.trim_start()
+                    .to_lowercase()
+                    .starts_with(&format!("{} ", value.to_lowercase()))
+            })
+            .unwrap_or_else(|| panic!("no {value} in {stdout}"));
+        let mut fields = line.trim().splitn(3, "    ").skip(1);
+        let kind = fields.next().unwrap().to_owned();
+        Some((fields.next().unwrap_or("").to_owned(), kind))
+    }
+
+    #[test]
+    fn the_environment_store_reads_the_users_own_path_value() {
+        let read = UserPath::environment().read().unwrap();
+        let kind_name = |kind: REG_VALUE_TYPE| {
+            if kind == REG_EXPAND_SZ {
+                "REG_EXPAND_SZ"
+            } else {
+                "REG_SZ"
+            }
+        };
+        assert_eq!(
+            read.map(|(text, kind)| (text, kind_name(kind).to_owned())),
+            reg_query("Environment", "Path")
+        );
+    }
+
+    #[test]
+    fn a_path_value_that_is_not_a_string_is_refused_and_left_alone() {
+        let key = TestKey::new();
+        let made = Command::new("reg")
+            .args([
+                "add",
+                &format!(r"HKCU\{}", key.0),
+                "/v",
+                "Path",
+                "/t",
+                "REG_DWORD",
+                "/d",
+                "1",
+                "/f",
+            ])
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        let store = UserPath::at(&key.0, "Path");
+        let error = store.read().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(error.to_string(), "the PATH value is not a string");
+        assert_eq!(
+            add_to_path(Path::new(r"C:\ngterm\bin"), false, &store),
+            CliResult::Failed(r"Could not add C:\ngterm\bin to your PATH: the PATH value is not a string".to_owned())
+        );
+        assert_eq!(
+            reg_query(&key.0, "Path"),
+            Some(("0x1".to_owned(), "REG_DWORD".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_value_that_cannot_be_written_fails_the_install() {
+        let key = TestKey::new();
+        // the key stays readable, and its owner can still delete it
+        let deny = format!(
+            "$key = 'HKCU:\\{}'; $acl = Get-Acl $key; $user = [Security.Principal.WindowsIdentity]::GetCurrent().User; \
+             $acl.AddAccessRule([Security.AccessControl.RegistryAccessRule]::new($user, 'SetValue', 'Deny')); \
+             Set-Acl $key $acl",
+            key.0
+        );
+        let denied = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &deny])
+            .output()
+            .unwrap();
+        assert!(denied.status.success(), "{denied:?}");
+        let store = UserPath::at(&key.0, "Path");
+        let directory = Path::new(r"C:\ngterm\bin");
+        assert_eq!(
+            add_to_path(directory, false, &store),
+            CliResult::Failed(format!(
+                r"Could not add C:\ngterm\bin to your PATH: {}",
+                io::Error::from_raw_os_error(5)
+            ))
+        );
+        assert_eq!(store.read().unwrap(), None, "nothing written");
+    }
+
+    #[test]
+    fn a_tool_with_no_folder_cannot_be_put_on_the_path() {
+        assert_eq!(
+            super::super::plan(&env(Path::new(r"C:\"), r"C:\Windows")),
+            CliPlan::Failed(r"C:\ has no folder.".to_owned())
+        );
+    }
+
+    /// The `lParam` texts of the `WM_SETTINGCHANGE` messages [`settings_window`]'s window received.
+    static SETTING_CHANGES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "system" fn record_setting_change(
+        window: windows_sys::Win32::Foundation::HWND,
+        message: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{DefWindowProcW, PostQuitMessage, WM_DESTROY};
+        if message == WM_SETTINGCHANGE && lparam != 0 {
+            let text = lparam as *const u16;
+            let mut length = 0;
+            // SAFETY: a `WM_SETTINGCHANGE` `lParam`, when not null, is a NUL-terminated string the sender keeps alive
+            // for the call: read up to its NUL.
+            while unsafe { *text.wrapping_add(length) } != 0 {
+                length += 1;
+            }
+            // SAFETY: the `length` units before that NUL.
+            let text = unsafe { std::slice::from_raw_parts(text, length) };
+            SETTING_CHANGES.lock().unwrap().push(String::from_utf16_lossy(text));
+        }
+        if message == WM_DESTROY {
+            // SAFETY: a plain call on the window's own thread.
+            unsafe { PostQuitMessage(0) };
+        }
+        // SAFETY: the message as it came.
+        unsafe { DefWindowProcW(window, message, wparam, lparam) }
+    }
+
+    /// A hidden top-level window, which a broadcast reaches, recording the setting changes on a thread of its own; it
+    /// ends when the window is sent `WM_CLOSE`.
+    fn settings_window() -> (usize, std::thread::JoinHandle<()>) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DispatchMessageW, GWLP_WNDPROC, GetMessageW, MSG, SetWindowLongPtrW, WS_POPUP,
+        };
+        let (made, window) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let class = wide("STATIC");
+            // SAFETY: a system class by NUL-terminated name, no parent, menu or creation data.
+            let window = unsafe {
+                CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    WS_POPUP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                )
+            };
+            assert!(!window.is_null(), "{}", io::Error::last_os_error());
+            // SAFETY: the window this thread made, given a procedure with the window procedure's signature.
+            unsafe { SetWindowLongPtrW(window, GWLP_WNDPROC, record_setting_change as *const () as isize as _) };
+            made.send(window as usize).unwrap();
+            // SAFETY: an all-zero `MSG` is valid.
+            let mut message: MSG = unsafe { std::mem::zeroed() };
+            // SAFETY: `message` is a live out-parameter; sent messages are dispatched inside the call.
+            while unsafe { GetMessageW(&raw mut message, std::ptr::null_mut(), 0, 0) } > 0 {
+                // SAFETY: the message GetMessageW filled.
+                unsafe { DispatchMessageW(&raw const message) };
+            }
+        });
+        (window.recv().unwrap(), thread)
+    }
+
+    #[test]
+    fn a_write_to_the_environment_tells_every_window_and_a_tests_key_tells_none() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+        let key = TestKey::new();
+        let (window, thread) = settings_window();
+        let told = || SETTING_CHANGES.lock().unwrap().iter().any(|area| area == "Environment");
+
+        UserPath::at(&key.0, "Path").write(r"C:\a", REG_SZ).unwrap();
+        assert!(!told(), "a test's key announced its write");
+        // the real environment's store, over the test's key
+        let announcing = UserPath {
+            announce: true,
+            ..UserPath::at(&key.0, "Path")
+        };
+        announcing.write(r"C:\a;C:\b", REG_SZ).unwrap();
+        // the broadcast is sent: it returned once every window handled it
+        assert!(told(), "{:?}", SETTING_CHANGES.lock().unwrap());
+        assert_eq!(announcing.read().unwrap(), Some((r"C:\a;C:\b".to_owned(), REG_SZ)));
+
+        // SAFETY: the window `settings_window` made; its thread ends once it is destroyed.
+        assert_ne!(unsafe { PostMessageW(window as _, WM_CLOSE, 0, 0) }, 0);
+        thread.join().unwrap();
+    }
+
     #[test]
     fn a_missing_key_fails_the_install() {
         let store = UserPath::at(format!(r"Software\ngterm-test-absent-{}", uuid::Uuid::new_v4()), "Path");

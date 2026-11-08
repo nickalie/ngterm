@@ -122,4 +122,45 @@ mod tests {
         let gone = check_server_user(&pipe, u32::MAX - 2).unwrap_err();
         assert_ne!(gone.kind(), io::ErrorKind::PermissionDenied, "{gone}");
     }
+
+    /// A system process that lives as long as the system and runs as SYSTEM or a service's account, whose user this
+    /// process can read: the first `tasklist` lists.
+    fn process_of_another_user() -> Option<u32> {
+        const LONG_LIVED: [&str; 4] = ["winlogon.exe", "services.exe", "lsass.exe", "svchost.exe"];
+        let listed = std::process::Command::new("tasklist")
+            .args(["/FO", "CSV", "/NH"])
+            .output()
+            .unwrap();
+        assert!(listed.status.success(), "{listed:?}");
+        String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            // `"<image>","<pid>",...`
+            .filter_map(|line| {
+                let mut fields = line.split(',');
+                let image = fields.next()?.trim_matches('"').to_lowercase();
+                LONG_LIVED.contains(&image.as_str()).then_some(())?;
+                fields.next()?.trim_matches('"').parse::<u32>().ok()
+            })
+            .find(|&pid| matches!(runs_as_current_user(pid), Ok(false)))
+    }
+
+    #[test]
+    fn a_pipe_served_by_a_process_of_another_user_is_refused() {
+        let Some(pid) = process_of_another_user() else {
+            // an unelevated process reads no other user's token; an elevated one reads SYSTEM's processes'
+            assert!(
+                owner_only_pipe_sddl().unwrap().ends_with(";ME)"),
+                "an elevated process found no process of another user"
+            );
+            eprintln!("skipped: no other user's process is readable unelevated");
+            return;
+        };
+        let pipe = r"\\.\pipe\ngterm-test";
+        let error = check_server_user(&pipe, pid).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            error.to_string(),
+            format!(r"the pipe at \\.\pipe\ngterm-test belongs to a process of another user (pid {pid})")
+        );
+    }
 }

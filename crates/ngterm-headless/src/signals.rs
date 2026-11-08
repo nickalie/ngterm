@@ -144,3 +144,8 @@ pub fn quit_on_termination(poster: Poster) -> io::Result<()> {
 #[cfg(all(test, unix))]
 #[path = "signals_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[cfg(windows)]
+#[path = "signals_windows_tests.rs"]
+mod windows_tests;
