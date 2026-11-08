@@ -87,12 +87,15 @@
 Four desktop Linux VMs on the host, created for this plan (2026-11-08), check the packages on real distros. Each has a
 GNOME desktop, the operator's user with sudo and the host's ssh key; none starts on its own.
 
-| placeholder | distro | expected engine path (Task 1 confirms) |
+| placeholder | distro | engine path (Task 1, 2026-11-08) |
 |---|---|---|
-| `<ubuntu-ssh>` | Ubuntu 26.10 desktop | deb: system WPE if 26.10 ships 2.54+, else download |
-| `<debian-ssh>` | Debian 13 (trixie), GNOME | deb: download |
-| `<fedora-ssh>` | Fedora 45 Workstation | rpm: system WPE if Fedora ships 2.54+, else download |
-| `<opensuse-ssh>` | openSUSE Leap 16.1, GNOME | rpm: download |
+| `<ubuntu-ssh>` | Ubuntu 26.10 desktop | deb: download (no WPE WebKit package) |
+| `<debian-ssh>` | Debian 13 (trixie), GNOME | deb: download (2.48.3, no WPEPlatform) |
+| `<fedora-ssh>` | Fedora 45 Workstation | rpm: download (no WPE WebKit package) |
+| `<opensuse-ssh>` | openSUSE Leap 16.1, GNOME | rpm: download (2.46.6) |
+
+- None of them takes the system path: the deb's and rpm's system path is checked in Debian testing and openSUSE
+  Tumbleweed containers (Task 9), Arch's on the host.
 
 - The values (ssh aliases, VM names, state, start, stop and snapshot commands, the password variable) are in the
   git-ignored `.claude/skills/agterm-upstream-sync/references/machines.local.md`, section "Linux distro VMs". Never
@@ -135,11 +138,12 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
      private), complete;
   3. otherwise the runtime is downloaded, verified against the size and hash compiled into the app, unpacked, and the
      waiting pages go on loading.
-- **What the packages ask for**: the Arch package depends on `wpewebkit` (Arch always has a current one). The deb and
-  rpm *recommend* the versioned WPE library package only (its own recommendations bring the GStreamer plugins); apt
-  and dnf skip a recommendation they cannot satisfy, so the same package installs on Ubuntu 24.04 (and downloads) and
-  on newer distros (and uses the system's). The host libraries the runtime needs stay hard dependencies. The tarball
-  and AppImage ask for nothing and download.
+- **What the packages ask for**: the Arch package depends on `wpewebkit` (Arch always has a current one) and the
+  GStreamer plugin packages. The deb and rpm *recommend* the versioned WPE library package and the playback plugin
+  packages (no distro's WPE package recommends them itself: Task 1); apt and zypper skip a recommendation they cannot
+  satisfy, so the same package installs on Ubuntu 24.04 (and downloads) and on newer distros (and uses the system's).
+  The host libraries the runtime needs stay hard dependencies. The tarball and AppImage ask for nothing and download.
+  Names: Technical Details > Distro survey.
 - **The engine runtime** is one archive per architecture: the release WPE prefix, the GStreamer plugins WPE 2.54
   creates elements from, their library closure once (no duplicates), GIO modules, the plugin scanner. Its key hashes
   everything that defines it, so it changes with the engine, its packaging scripts, or a security update of a copied
@@ -147,6 +151,75 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
 
 ## Technical Details
 
+- **Distro survey** (Task 1, 2026-11-08; containers and the test VMs, x86_64). WPEPlatform is an object library inside
+  `libWPEWebKit-2.0.so.1` (soname 1, libtool 12:4:11 at 2.54), checked by `nm -D` for `wpe_display_get_default`,
+  `wpe_display_headless_new_for_device`, `wpe_view_new` and `webkit_web_view_get_wpe_view`:
+
+  | distro | package with `libWPEWebKit-2.0.so.1` | version | WPEPlatform | its recommends | engine path |
+  |---|---|---|---|---|---|
+  | Debian 13 trixie (stable) | `libwpewebkit-2.0-1` | 2.48.3-1 | no | none (suggests libwpe's fdo backend) | download |
+  | Debian testing (forky) | `libwpewebkit-2.0-1` | 2.54.2-1 | yes | none (the same suggests) | system |
+  | Ubuntu 24.04 | none | - | - | - | download |
+  | Ubuntu 26.04 LTS, 26.10 | none | - | - | - | download |
+  | Fedora 44, 45 (and 46 rawhide) | none | - | - | - | download |
+  | openSUSE Tumbleweed | `libWPEWebKit-2_0-1` | 2.54.2-1.1 | yes | none | system |
+  | openSUSE Leap 16.1 | `libWPEWebKit-2_0-1` | 2.46.6 | not checked (below the pin) | - | download |
+  | Arch | `wpewebkit` | 2.54.2-1 | yes | optdepends `gst-plugins-good`, `gst-plugins-bad`, `gst-libav` | system |
+
+  - Every one of these WPE packages hard-depends on the GStreamer *libraries*, `bubblewrap` and `xdg-dbus-proxy`
+    (Tumbleweed also on `wpewebkit-2_0-injected-bundles`), but none brings the *plugins* playback needs, so ngterm's
+    packages ask for them themselves.
+  - **Names for Task 7**: deb `Recommends: libwpewebkit-2.0-1 (>= 2.54), gstreamer1.0-plugins-base,
+    gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, gstreamer1.0-gl, gstreamer1.0-alsa,
+    gstreamer1.0-pulseaudio`; rpm `Recommends: libWPEWebKit-2_0-1 >= 2.54, gstreamer-plugins-base,
+    gstreamer-plugins-good, gstreamer-plugins-bad, gstreamer-plugins-libav` (openSUSE names: Fedora has no WPE, so its
+    rpm installs always download and need no plugin packages; a recommendation nothing provides is skipped); Arch
+    `depends=(wpewebkit gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav)` (pacman has no recommends;
+    `gst-plugins-base-libs` holds `playback`, `opengl`, `gio`, `encoding` and comes with `wpewebkit`). The version bound
+    goes on the package name: rpm's soname capability `libWPEWebKit-2.0.so.1()(64bit)` carries no version.
+- **ABI** (the probe's lower bound only): WPE WebKit's release policy (<https://wpewebkit.org/release/schedule/>) keeps
+  API and ABI backward compatible within a major version: patch releases are guaranteed to, minor releases add API only
+  and "actively avoid breaking" the ABI; the soname has stayed `libWPEWebKit-2.0.so.1`. So a binary built against the
+  2.54 headers runs on later 2.x with that soname. WPEPlatform's headers at 2.54 carry no unstable-API guard and no
+  deprecations; its last breaking renames (`WPEMonitor` to `WPEScreen`, 2.47.1) predate the pin, and 2.54 is the release
+  where it becomes the default, documented platform API (NEWS 2.54.0: libwpe migration guide). A 2.54+ library built
+  without WPEPlatform (`ENABLE_WPE_PLATFORM=OFF`) lacks the symbols, and `ngterm-web` is linked with `BIND_NOW` (Rust's
+  full RELRO), so the loader refuses it: the probe's "loader failure" case, not a later crash.
+- **Plugin allowlist** (Task 4's `packaging/linux/gstreamer-plugins.txt`): 71 of the 255 plugin files v0.1.1 ships.
+  Derived from WPE 2.54.1's sources under `gstreamer` paths, minus what this build turns off (WebRTC, EME, Thunder) and
+  the vendor quirks (Rialto, Westeros, Broadcom, Amlogic, Realtek, Qualcomm, i.MX): every element WebKit creates by name
+  (`makeGStreamerElement`, `gst_element_factory_make`/`_find`, `isGStreamerPluginAvailable`), plus the decoders,
+  demuxers and parsers at rank marginal or above (audio parsers at any rank, as `GStreamerRegistryScanner` lists them)
+  whose sink caps match a media type the scanner checks, the encoders and muxers for its encoding types (WebCodecs,
+  MediaRecorder: AAC, MP3, Opus, Vorbis, FLAC, A-law, mu-law, AV1, VP8, VP9, H.264, H.265; WebM, Ogg, MP4), the tag
+  demuxers decodebin autoplugs, the audio sinks `autoaudiosink` picks (`pulsesink`, `alsasink`), and the typefinders.
+  Mapped to files in an Ubuntu 24.04 container with the release's GStreamer packages plus `gstreamer1.0-gl` and
+  `gstreamer1.0-alsa`:
+  - `libgstreamer1.0-0`: `coreelements`
+  - `gstreamer1.0-plugins-base`: `app audioconvert audiomixer audiorate audioresample encoding gio ogg opus playback
+    rawparse subparse theora typefindfunctions videoconvertscale videorate volume vorbis`
+  - `gstreamer1.0-gl`: `opengl`; `gstreamer1.0-alsa`: `alsa`
+  - `gstreamer1.0-plugins-good`: `alaw apetag audiofx audioparsers autodetect avi flac flv icydemux id3demux
+    interleave isomp4 lame matroska mpg123 mulaw pulseaudio speex videofilter vpx wavpack wavparse`
+  - `gstreamer1.0-plugins-bad`: `aiff aom autoconvert closedcaption codecalpha de265 debugutilsbad dtsdec faad inter
+    midi mpegpsdemux mpegtsdemux nvcodec openh264 opusparse sbc soundtouch subenc svtav1 transcode v4l2codecs va
+    videoparsersbad voaacenc wildmidi x265`
+  - `gstreamer1.0-libav`: `libav`
+  - By hand, beyond the mechanical match: `va`, `nvcodec` and `v4l2codecs` register their decoders per device, so a
+    GPU-less build host shows none (WebKit prefers the stateless VA decoders); `videofilter` (`videoflip`, inside
+    `autovideoflip`) and `audiorate` (inside `encodebin`) are used by bins WebKit creates.
+  - Left out on purpose: `adaptivedemux2` (WebKit demotes `dashdemux2`/`hlsdemux2`/`mssdemux2` to rank none), `hls`
+    and `dash` (demoted unless `WEBKIT_GST_ENABLE_HLS_SUPPORT`/`_DASH_SUPPORT`, which ngterm never sets), `vulkan`
+    (its decoders have rank none), capture sources and device providers for cameras and microphones (`v4l2`, `jack`,
+    `oss`: ngterm denies every permission request, getUserMedia included), RTP, `webrtc`, `dtmf` (WebRTC is off), and
+    image decoders (WebKit decodes images itself).
+  - Checked against it: `opengl` in (`glupload`/`glcolorconvert`/`gldownload`: the GL video sink and the frame
+    converter), `encoding` in (`encodebin` under `uritranscodebin`, MediaRecorder), `gio` in (`giostreamsrc`, Web
+    Audio's file reader), `alsa` in (`autoaudiosink`'s fallback without a sound server), `libav` in (H.264, AAC, MP3 and
+    most other decoders). v0.1.1 ships neither `opengl` nor `alsa`: `release-linux-deps.sh` does not install
+    `gstreamer1.0-gl` or `gstreamer1.0-alsa`, so its WebKit falls back to the non-GL video sink. Task 4 installs both.
+  - GIO modules the runtime keeps (v0.1.1's set): `libgiognutls` (TLS), `libgiolibproxy`, `libgiognomeproxy`,
+    `libdconfsettings`.
 - **Runtime archive**: `ngterm-web-engine-<key>-linux-<arch>.tar.zst` (zstd level 19, `--long=27`), layout `lib/`,
   `lib/gstreamer-1.0/`, `lib/gio/modules/`, `lib/wpe-webkit-2.0/`, `libexec/gstreamer-1.0/gst-plugin-scanner`,
   `share/doc/` (licenses), `MANIFEST` (key, arch, WPE version). Every ELF in it gets an `$ORIGIN` RUNPATH into the
@@ -195,16 +268,16 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
 **Files:**
 - Modify: `docs/plans/20261108-linux-web-engine-on-demand.md`
 
-- [ ] list, for Debian (stable, testing), Ubuntu (24.04, the latest release), Fedora (current two) and openSUSE
+- [x] list, for Debian (stable, testing), Ubuntu (24.04, the latest release), Fedora (current two) and openSUSE
       Tumbleweed: the package that ships `libWPEWebKit-2.0.so.1`, its version, whether it has the WPEPlatform API,
       and whether it recommends the GStreamer plugins playback needs; for the four test machines' distros, check it
       there too (`apt-cache policy`, `dnf info`, `zypper info`)
-- [ ] confirm from WebKit's API/ABI policy that a binary built against the 2.54 headers runs on later 2.x releases
+- [x] confirm from WebKit's API/ABI policy that a binary built against the 2.54 headers runs on later 2.x releases
       with the same soname (the probe's lower bound only), and note any WPEPlatform API marked unstable
-- [ ] derive the plugin allowlist from the elements WPE 2.54 creates (`makeGStreamerElement`,
+- [x] derive the plugin allowlist from the elements WPE 2.54 creates (`makeGStreamerElement`,
       `gst_element_factory_make` in its sources), mapped to plugin files; check at least `opengl`, `encoding`, `gio`,
       `alsa` and `libav` against it
-- [ ] record the results in Technical Details (package names for Task 7, the allowlist for Task 4)
+- [x] record the results in Technical Details (package names for Task 7, the allowlist for Task 4)
 
 ### Task 2: The engine worker as its own binary
 
@@ -349,6 +422,8 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
       for it (system engine and no download, or the download through `NGTERM_WEB_ENGINE_URL`); the tarball and the
       AppImage download on at least one of them
 - [ ] Arch: the package pulls `wpewebkit`, the probe picks the system engine, nothing is downloaded
+- [ ] ➕ the deb in a Debian testing container and the rpm in an openSUSE Tumbleweed container (both ship WPE 2.54.2
+      with WPEPlatform; no test VM does, Task 1): the system engine, nothing downloaded
 - [ ] offline: `--install-web-engine` from a file; a tampered archive is refused
 - [ ] an older app and a newer one sharing the data dir: neither deletes the other's runtime while it runs
 - [ ] scoped clippy and the touched crates' tests green
