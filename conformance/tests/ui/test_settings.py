@@ -13,7 +13,7 @@ STATUSES = ("active", "blocked", "completed")
 INTERFACE_ELEMENTS = (
     "sidebarToggle", "workspaceName", "sessionName", "windowName", "remoteHost", "sessionContext", "recentSessions",
     "scratch", "split", "dashboard", "quickTerminal", "customCommands", "newWorkspace", "newSession", "flaggedView",
-    "focusFilter", "workspaceAddSession",
+    "focusFilter", "workspaceAddSession", "workspaceChevrons",
 )  # fmt: skip
 
 
@@ -147,6 +147,7 @@ def test_appearance_tab(seeded, ui_for):
             "settings-ignore-reduce-transparency": "checkbox",
             "settings-sidebar-shift": "slider",
             "settings-sidebar-font-size": None,
+            "settings-sidebar-density": "popup",
             "settings-interface-font-size": None,
             "settings-inactive-pane-mute": "slider",
         },
@@ -334,3 +335,45 @@ def test_row_icons_hide_independently(seeded, ui_for):
         wait_until(lambda: element not in _settings(seeded).get("hiddenInterfaceElements", []))
         ui.find(icon)
         ui.find(other)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("ui:settings-interface-{element}", "ui:workspace-row", "ui:session-row")
+def test_hidden_workspace_chevrons_persist(seeded, ui_for):
+    """The Workspace chevrons toggle hides the workspace disclosure and persists as `workspaceChevrons` in
+    `hiddenInterfaceElements`; the rows stay (#909)."""
+    ui = ui_for(seeded)
+    _open(ui, "Interface")
+    toggle = ui.ui_ids.expand("settings-interface-{element}", element="workspaceChevrons")
+    assert "workspaceChevrons" not in _settings(seeded).get("hiddenInterfaceElements", [])
+    ui.click(ui.find(toggle, role="checkbox", value=1))
+    try:
+        wait_until(lambda: "workspaceChevrons" in _settings(seeded).get("hiddenInterfaceElements", []))
+        ui.find(toggle, role="checkbox", value=0)
+        assert ui.all("workspace-row") and ui.all("session-row")
+    finally:
+        ui.click(ui.find(toggle, role="checkbox", value=0))
+    wait_until(lambda: "workspaceChevrons" not in _settings(seeded).get("hiddenInterfaceElements", []))
+    ui.find(toggle, role="checkbox", value=1)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("ui:settings-sidebar-density")
+def test_sidebar_density_picker_persists(seeded, ui_for, adapter):
+    def value(text):
+        return {"value": text} if adapter.has("ui-string-values") else {}
+
+    ui = ui_for(seeded)
+    _open(ui, "Appearance")
+    picker = ui.find("settings-sidebar-density", role="popup", **value("Default"))
+    ui.click(picker)
+    ui.click(ui.menu_item("Compact"))
+    try:
+        wait_until(lambda: _settings(seeded).get("sidebarDensity") == "compact")
+        ui.find("settings-sidebar-density", role="popup", **value("Compact"))
+        assert seeded.tree()["tree"]["sidebarDensity"] == "compact"
+    finally:
+        ui.click(ui.find("settings-sidebar-density", role="popup"))
+        ui.click(ui.menu_item("Default"))
+    # the default density is stored as no key at all
+    wait_until(lambda: "sidebarDensity" not in _settings(seeded))

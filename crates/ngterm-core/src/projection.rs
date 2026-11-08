@@ -10,11 +10,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ngterm_proto::AppIdentity;
 use ngterm_proto::tree::{
     ControlHtmlOverlayNode, ControlHudNode, ControlRemoteOverlayNode, ControlSessionAsk, ControlSessionNode,
-    ControlSurfaceNode, ControlTree, ControlWorkspaceNode,
+    ControlSurfaceNode, ControlTextChangesNode, ControlTextOverlayNode, ControlTextSearchNode, ControlTree,
+    ControlWorkspaceNode,
 };
 use uuid::Uuid;
 
-use crate::html::{HtmlOverlay, HtmlSource};
+use crate::html::{HtmlOverlay, HtmlSource, ReplicaContent};
 use crate::hud::HudSpinner;
 use crate::model::{
     AgentStatus, AppStore, OverlayPane, RemotePresentationState, Session, SessionContent, StatusPane, SurfaceSlot,
@@ -33,6 +34,8 @@ pub struct TreeContext<'a> {
     pub settings: &'a AppSettings,
     /// The last `windows.json` write failed.
     pub index_unsaved: bool,
+    /// The last snapshot save of the tree's window failed (per window, unlike `index_unsaved`).
+    pub snapshot_unsaved: bool,
     /// Whether the quick terminal is shown, app-wide.
     pub quick_visible: bool,
 }
@@ -71,6 +74,7 @@ pub fn control_tree(store: &AppStore, context: &TreeContext<'_>) -> ControlTree 
         sidebar_visible: Some(sidebar.visible),
         sidebar_mode: Some(sidebar.mode.wire_name().to_owned()),
         sidebar_flagged_layout: Some(settings.effective_flagged_view_layout().raw().to_owned()),
+        sidebar_density: Some(settings.effective_sidebar_density().raw().to_owned()),
         flagged_order: store.flagged_order_readback(),
         link_open_mode: Some(settings.effective_link_open_mode().raw().to_owned()),
         sidebar_width: Some(sidebar.width),
@@ -78,6 +82,7 @@ pub fn control_tree(store: &AppStore, context: &TreeContext<'_>) -> ControlTree 
         quick_visible: Some(context.quick_visible),
         app: Some(context.app.clone()),
         index_unsaved: context.index_unsaved.then_some(true),
+        snapshot_unsaved: context.snapshot_unsaved.then_some(true),
         ..ControlTree::default()
     }
 }
@@ -96,7 +101,7 @@ fn workspace_node(
         active: current == Some(id),
         focused: store.focus().ids().contains(&id).then_some(true),
         collapsed: (!workspace.is_expanded).then_some(true),
-        tint: workspace.tint.map(|tint| tint.color().wire_name().to_owned()),
+        tint: workspace.tint.map(|tint| tint.color().wire()),
         tint_on: workspace.tint.map(|tint| tint.parts().wire_names()),
         sessions: workspace
             .sessions
@@ -161,7 +166,7 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
         .flatten();
     node.status_changed_at = session.status_changed_at.map(epoch_seconds);
     node.last_selected_at = session.last_selected_at.map(epoch_seconds);
-    node.tint = session.tint.map(|tint| tint.color().wire_name().to_owned());
+    node.tint = session.tint.map(|tint| tint.color().wire());
     node.tint_on = session.tint.map(|tint| tint.parts().wire_names());
     node.parent = session.parent_id().map(uuid_string);
     node.content = (session.content() == SessionContent::Page).then(|| "page".to_owned());
@@ -243,12 +248,43 @@ fn html_overlay_nodes(session: &Session) -> Option<Vec<ControlHtmlOverlayNode>> 
 /// that opened it, with no grant), the load state, what the web view shows once it reported, and the flags; the zoom
 /// is the app's, set by the tree.
 fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverlayNode {
+    // a replica reports the kind its origin opened, beside `replica` (upstream's `.replica(_, kind)` arms)
     let (file, cwd, url, image, markdown) = match &page.source {
         HtmlSource::File { path, grant_root } => (Some(path.clone()), grant_root.clone(), None, None, None),
         HtmlSource::Url(address) => (None, None, Some(address.as_str().to_owned()), None, None),
-        HtmlSource::Replica { path } => (Some(path.clone()), None, None, None, None),
-        HtmlSource::Image { path } => (None, None, None, Some(path.clone()), None),
-        HtmlSource::Markdown { path } => (None, None, None, None, Some(path.clone())),
+        HtmlSource::Replica {
+            path,
+            content: ReplicaContent::Html,
+        } => (Some(path.clone()), None, None, None, None),
+        HtmlSource::Image { path }
+        | HtmlSource::Replica {
+            path,
+            content: ReplicaContent::Image { .. },
+        } => (None, None, None, Some(path.clone()), None),
+        HtmlSource::Markdown { path }
+        | HtmlSource::Replica {
+            path,
+            content: ReplicaContent::Markdown,
+        } => (None, None, None, None, Some(path.clone())),
+        HtmlSource::Text { .. } | HtmlSource::Document { .. } | HtmlSource::Replica { .. } => {
+            (None, None, None, None, None)
+        }
+    };
+    let document = match &page.source {
+        HtmlSource::Document { path }
+        | HtmlSource::Replica {
+            path,
+            content: ReplicaContent::Document,
+        } => Some(path.clone()),
+        _ => None,
+    };
+    let text = match &page.source {
+        HtmlSource::Text { path, line }
+        | HtmlSource::Replica {
+            path,
+            content: ReplicaContent::Text { line },
+        } => Some(text_node(path, *line, page)),
+        _ => None,
     };
     let current = page.current.as_ref();
     ControlHtmlOverlayNode {
@@ -258,6 +294,8 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
         url,
         image,
         markdown,
+        document,
+        text,
         state: page.load_state.wire_name().to_owned(),
         error: page.load_error.clone(),
         page: current.map(|current| current.page.clone()),
@@ -274,7 +312,36 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
         hidden: None,
         remote: None,
         replica: page.replica_of.map(|_| true),
+        clicked: page.clicked.then_some(true),
         parked: None,
+    }
+}
+
+/// A text page's node (upstream's `ControlTextOverlayNode`): the language its name maps to, even past the highlight
+/// cap, and the line it was opened at, not the one in view; a log page adds its line limit and its live state, and a
+/// page with a query its search, and a diff page its changes once reported.
+fn text_node(path: &str, line: Option<i64>, page: &HtmlOverlay) -> ControlTextOverlayNode {
+    let wire = |count: usize| i64::try_from(count).unwrap_or(i64::MAX);
+    let log = page.log_state;
+    ControlTextOverlayNode {
+        file: path.to_owned(),
+        language: crate::html::text_page::language(path).map(str::to_owned),
+        line,
+        tail: page.text_log.map(|log| wire(log.tail)),
+        following: log.map(|log| log.following),
+        lines: log.map(|log| wire(log.report.lines)),
+        clipped: log.map(|log| log.report.clipped),
+        waiting: log.map(|log| log.report.waiting),
+        unreadable: log.map(|log| log.report.unreadable),
+        search: page.text_search.as_ref().map(|search| ControlTextSearchNode {
+            query: search.query.clone(),
+            matches: wire(search.matches),
+            current: wire(search.current),
+        }),
+        changes: page.text_changes.map(|changes| ControlTextChangesNode {
+            count: wire(changes.count),
+            current: wire(changes.current),
+        }),
     }
 }
 
@@ -430,6 +497,7 @@ mod tests {
             app: &app,
             settings,
             index_unsaved,
+            snapshot_unsaved: false,
             quick_visible: false,
         };
         serde_json::to_value(control_tree(store, &context)).unwrap()
@@ -459,8 +527,8 @@ mod tests {
                 "realized": false,
             }]}],
             "attentionIncludesActive": false, "attentionNavigationAcrossWindows": false,
-            "sidebarVisible": true, "sidebarMode": "tree", "sidebarFlaggedLayout": "flat", "linkOpenMode": "browser",
-            "sidebarWidth": 220.0, "workspaceFilter": false, "quickVisible": false,
+            "sidebarVisible": true, "sidebarMode": "tree", "sidebarFlaggedLayout": "flat", "sidebarDensity": "default",
+            "linkOpenMode": "browser", "sidebarWidth": 220.0, "workspaceFilter": false, "quickVisible": false,
             "app": {"version": "0.1.0", "commit": "abc1234"},
         });
         assert_eq!(tree_json(store, &AppSettings::default(), false), expected);
@@ -655,12 +723,14 @@ mod tests {
         session.restore.command = Some(String::new());
         let settings = AppSettings {
             flagged_view_layout: Some("tree".to_owned()),
+            sidebar_density: Some("compact".to_owned()),
             link_open_mode: Some("overlay".to_owned()),
             auto_follow_attention: Some("s30".to_owned()),
             ..AppSettings::default()
         };
         let tree = tree_json(store, &settings, true);
         assert_eq!(tree["sidebarFlaggedLayout"], "tree");
+        assert_eq!(tree["sidebarDensity"], "compact");
         assert_eq!(tree["linkOpenMode"], "overlay");
         assert_eq!(tree["autoFollowMs"], 30_000);
         assert_eq!(tree["indexUnsaved"], true);
@@ -733,6 +803,26 @@ mod tests {
         assert!(!nodes[2].as_object().unwrap().contains_key("lastSelectedAt"));
     }
 
+    /// Upstream's `controlTreeSnapshotUnsavedRoundTripsAndOmitsWhenNil`, on the projection.
+    #[test]
+    fn the_tree_reports_a_failed_snapshot_save_apart_from_the_index() {
+        let store = AppStore::new();
+        let settings = AppSettings::default();
+        let app = app();
+        let context = TreeContext {
+            app: &app,
+            settings: &settings,
+            index_unsaved: false,
+            snapshot_unsaved: true,
+            quick_visible: false,
+        };
+        let tree = serde_json::to_value(control_tree(&store, &context)).unwrap();
+        assert_eq!(tree["snapshotUnsaved"], true);
+        assert!(!tree.as_object().unwrap().contains_key("indexUnsaved"));
+        let saved = tree_json(&store, &settings, true);
+        assert!(!saved.as_object().unwrap().contains_key("snapshotUnsaved"));
+    }
+
     /// Upstream's `controlTreeReportsTheSavedFlaggedOrderAndOmitsItWhenNothingIsFlagged`.
     #[test]
     fn the_tree_reports_the_saved_flagged_order_and_omits_it_when_nothing_is_flagged() {
@@ -754,6 +844,11 @@ mod tests {
         );
         let keys: Vec<&String> = tree.as_object().unwrap().keys().collect();
         let at = |key: &str| keys.iter().position(|candidate| *candidate == key).unwrap();
-        assert_eq!(at("flaggedOrder"), at("sidebarFlaggedLayout") + 1);
+        // upstream's order: `sidebarFlaggedLayout`, `sidebarDensity`, `flaggedOrder`
+        let between: Vec<&str> = keys[at("sidebarFlaggedLayout") + 1..at("flaggedOrder")]
+            .iter()
+            .map(|key| key.as_str())
+            .collect();
+        assert_eq!(between, ["sidebarDensity"]);
     }
 }

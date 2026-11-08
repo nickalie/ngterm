@@ -23,8 +23,11 @@ use gpui_kit::{AnyWindowHandle, App, AppContext as _, AsyncApp, ClipboardItem, E
 use ngterm_core::Core;
 use ngterm_core::html::bridge;
 use ngterm_core::html::profile::{self, BrowserProfile};
-use ngterm_core::html::{ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, StoreClear, errors};
-use ngterm_core::remote::replica_page::PageResource;
+use ngterm_core::html::{
+    ChangesAnswer, ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlPageKind, HtmlSource, ReplicaContent,
+    SearchAnswer, SearchStep, StoreClear, errors,
+};
+use ngterm_core::remote::replica_page::{ContentFailures, PageResource};
 use ngterm_proto::Response;
 use raw_window_handle::RawWindowHandle;
 use uuid::Uuid;
@@ -123,6 +126,14 @@ fn page(id: Uuid) -> Option<Rc<Page>> {
     with(|registry| registry.pages.get(&id).cloned())
 }
 
+/// Find over text replica `id` (`crate::html_overlay::focus_page_search`): the keyboard goes into its renderer's own
+/// field, which no bridge reaches.
+pub fn focus_replica_search(id: Uuid) {
+    if let Some(page) = page(id) {
+        super::super::text_page::focus_replica_search(&page.overlay(), &*page);
+    }
+}
+
 fn send(job: Job) {
     if let Some(jobs) = with(|registry| registry.jobs.clone()) {
         let _ = jobs.try_send(job);
@@ -144,6 +155,13 @@ impl HtmlHost for PageHost {
     fn check_markdown(&self, path: &str) -> Result<(), String> {
         ngterm_app::documents::check_markdown(std::path::Path::new(path))
     }
+    fn check_text(&self, path: &str) -> Result<(), String> {
+        ngterm_app::documents::check_text(std::path::Path::new(path))
+    }
+
+    fn check_log(&self, path: &str, tail: usize) -> Result<(), String> {
+        ngterm_app::documents::check_log(std::path::Path::new(path), tail)
+    }
 
     fn page_zoom(&self) -> f64 {
         with(|registry| registry.zoom.unwrap_or(1.0))
@@ -159,6 +177,14 @@ impl HtmlHost for PageHost {
 
     fn navigate(&self, id: Uuid, navigation: HtmlNavigation) -> Result<(), String> {
         navigate(id, navigation)
+    }
+
+    fn step_text_search(&self, page: Uuid, step: SearchStep) -> Option<SearchAnswer> {
+        crate::html_overlay::step_text_search(page, &step)
+    }
+
+    fn step_text_changes(&self, page: Uuid, forward: bool) -> Option<ChangesAnswer> {
+        crate::html_overlay::step_text_changes(page, forward)
     }
 
     fn clear_saved_store(&self) -> Result<StoreClear, String> {
@@ -203,6 +229,7 @@ pub fn install(core: &mut Core, state_dir: PathBuf, poster: Poster) {
 
 /// Spawns the pump (module docs).
 pub fn init(cx: &mut App) {
+    super::super::text_page::init(cx);
     let (jobs, queue) = async_channel::unbounded::<Job>();
     with(|registry| registry.jobs = Some(jobs));
     cx.spawn(async move |cx| {
@@ -332,6 +359,31 @@ pub(super) fn read_document(id: Uuid, generation: u64, source: HtmlSource) {
     });
 }
 
+/// Builds content replica `id`'s document on a worker (`documents::build_replica`), its origin's files read through the
+/// core's page channel on the main loop, each read waited for there; the document lands as a local page's does.
+pub(super) fn read_replica_document(id: Uuid, generation: u64, path: String, content: ReplicaContent) {
+    let (Some(jobs), Some(poster)) = with(|registry| (registry.jobs.clone(), registry.poster.clone())) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let mut read = |file: &str, limit: usize, failures: ContentFailures| {
+            let unreadable = failures.unreadable.clone();
+            let (answer, answered) = std::sync::mpsc::channel();
+            let file = file.to_owned();
+            post(&poster, move |state: &mut AppState| {
+                let answer = Box::new(move |result| {
+                    let _ = answer.send(result);
+                });
+                state.core.replica_read(id, &file, limit, failures, answer);
+                state.settle();
+            });
+            answered.recv().unwrap_or(Err(unreadable))
+        };
+        let result = super::super::documents::build_replica(&path, content, &mut read);
+        let _ = jobs.try_send(Job::DocumentLoaded(id, generation, result));
+    });
+}
+
 pub(super) fn document_loaded(id: Uuid, generation: u64, result: Result<String, String>) {
     if let Some(page) = page(id) {
         page.document_loaded(generation, result);
@@ -402,7 +454,15 @@ fn spec(page: &Rc<Page>) -> Result<Spec, String> {
     let id = page.id();
     let weak = Rc::downgrade(page);
     let reports = jobs.clone();
-    let replica = matches!(overlay.source, HtmlSource::Replica { .. }).then(|| {
+    // a replica built here from its fetched bytes loads nothing through the replica protocol
+    let html_replica = matches!(
+        overlay.source,
+        HtmlSource::Replica {
+            content: ReplicaContent::Html,
+            ..
+        }
+    );
+    let replica = html_replica.then(|| {
         let jobs = jobs.clone();
         Arc::new(move |uri: String, reply: RequestAsyncResponder| {
             let _ = jobs.try_send(Job::ReplicaRead { page: id, uri, reply });
@@ -424,14 +484,15 @@ fn spec(page: &Rc<Page>) -> Result<Spec, String> {
         bounds: placement.bounds,
         visible: false,
         // an image wears no theme, and an empty script would fail the page (`Spec::theme`)
-        theme: (!matches!(overlay.source, HtmlSource::Image { .. }))
+        theme: (overlay.source.kind() != HtmlPageKind::Image)
             .then(|| super::bridge::theme_script(&page.theme().script(overlay.themed()))),
         scripts: page.scripts(),
-        trusted_document_script: matches!(overlay.source, HtmlSource::Markdown { .. })
-            .then(super::super::documents::document_start_script),
+        trusted_document_script: super::super::documents::document_start_script(&overlay.source),
+        text_channel: matches!(overlay.source, HtmlSource::Text { .. }),
         grant: granted.then(|| page.grant().clone()),
         replica,
         text: overlay.text_loaded().then(|| Arc::clone(page.text())),
+        block_network: overlay.blocks_network(),
         decide: Rc::new(move |navigation| weak.upgrade().is_some_and(|page| page.allows(navigation))),
         post: Rc::new(move |report| {
             let _ = reports.try_send(Job::Report(id, report));
@@ -722,9 +783,15 @@ pub fn relay(page: Uuid, body: String, reply: u64) {
 /// or from a page that is no replica, fails without reaching that machine.
 fn replica_read(page_id: Uuid, uri: &str, reply: RequestAsyncResponder) {
     let path = page(page_id).and_then(|page| {
-        matches!(page.overlay().source, HtmlSource::Replica { .. })
-            .then(|| policy::replica_read(uri, page_id))
-            .flatten()
+        matches!(
+            page.overlay().source,
+            HtmlSource::Replica {
+                content: ReplicaContent::Html,
+                ..
+            }
+        )
+        .then(|| policy::replica_read(uri, page_id))
+        .flatten()
     });
     let poster = with(|registry| registry.poster.clone());
     let (Some(path), Some(poster)) = (path, poster) else {
@@ -787,12 +854,23 @@ pub fn key_down(
     true
 }
 
-/// Whether a page's element holds `window`'s keyboard (upstream's `htmlPageOwnsKeys` with no session), never a page
-/// that merely covers the session while the terminal, the sidebar or the chrome has it. A key pressed in the web view
-/// itself never reaches the window's interceptor: `keys::app_key` decides those.
+/// Whether a page holds `window`'s keyboard (upstream's `htmlPageOwnsKeys` with no session): its element has the
+/// window's focus, or its web view itself, a field inside the page included, has the native keyboard (upstream's
+/// first responder inside an `HtmlOverlayWebView`); never a page that merely covers the session while the terminal,
+/// the sidebar or the chrome has it. A key pressed in the web view itself never reaches the window's interceptor:
+/// `keys::app_key` decides those.
 #[must_use]
 pub fn page_holds_keyboard(window: &Window, cx: &App) -> bool {
-    focused_page(window, cx).is_some()
+    focused_page(window, cx).is_some() || natively_focused_page(window)
+}
+
+/// Whether a mounted page of `window` has its web view holding the native keyboard.
+fn natively_focused_page(window: &Window) -> bool {
+    let handle = window.window_handle();
+    let pages: Vec<Rc<Page>> = with(|registry| registry.pages.values().cloned().collect());
+    pages
+        .into_iter()
+        .any(|page| page.holds_native_keyboard() && page.element_window() == Some(handle) && page.element().is_some())
 }
 
 /// The page whose element holds `window`'s keyboard.

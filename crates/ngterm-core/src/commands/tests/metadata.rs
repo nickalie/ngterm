@@ -11,7 +11,7 @@ use super::{Fixture, UNKNOWN, answered_id, args, failure, wire};
 use crate::model::{AgentStatus, StatusPane, StatusShape};
 use crate::persist::AppSettings;
 
-const SHAPES: &str = "circle|square|triangle|diamond|capsule|star";
+const SHAPES: &str = "circle|square|triangle|triangle-down|play|diamond|capsule|seal|star|bolt|bell";
 
 fn status_args(status: &str, edit: impl FnOnce(&mut Args)) -> Args {
     args(|a| {

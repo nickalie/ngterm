@@ -3,7 +3,7 @@
 //! live pane's foreground is read through, and the launch reap that runs before any window mounts.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ngterm_host::{ProcessTable, SessionHost};
 use uuid::Uuid;
@@ -48,6 +48,18 @@ impl LeaderCache {
         }
     }
 
+    /// Lists afresh within `timeout`, however recent the last refresh (the quit capture's one listing, upstream's
+    /// `freshSnapshot(timeout:)`); a failed listing keeps the cached leaders, as a failed reconcile does, so a slow
+    /// listing at quit costs no pane its command (upstream #915). Either counts as a refresh.
+    pub(crate) fn refresh_within(&mut self, host: &dyn SessionHost, timeout: Duration) {
+        self.gate.note_lifecycle_change();
+        let _ = self.gate.should_refresh(Instant::now());
+        match host.list_within(timeout) {
+            Ok(records) => self.leaders = leaders(&records),
+            Err(error) => tracing::debug!(%error, "kept the cached live-session leaders"),
+        }
+    }
+
     /// The leader of daemon `name`, as last listed.
     pub(crate) fn leader(&self, name: &str) -> Option<i32> {
         self.leaders.get(name).copied()
@@ -55,13 +67,23 @@ impl LeaderCache {
 }
 
 /// The foreground process group of the live pane carrying `token`: its daemon's shell's terminal foreground (upstream's
-/// `ZmxForegroundResolver.foregroundPID`). A leader the table no longer holds is evicted and the cache invalidated.
+/// `ZmxForegroundResolver.foregroundPID`), the leaders listed again first when the cache asks for it.
 pub(crate) fn live_foreground_group(runtime: &LiveRuntime, table: &dyn ProcessTable, token: &str) -> Option<i32> {
+    if let Some(host) = runtime.host() {
+        runtime
+            .leaders
+            .borrow_mut()
+            .refresh_if_needed(host.as_ref(), Instant::now());
+    }
+    cached_foreground_group(runtime, table, token)
+}
+
+/// [`live_foreground_group`] through the leaders as last listed, with no listing of its own: the quit capture listed
+/// once within its budget, and a listing per pane could outrun it. A leader the table no longer holds is evicted and
+/// the cache invalidated.
+pub(crate) fn cached_foreground_group(runtime: &LiveRuntime, table: &dyn ProcessTable, token: &str) -> Option<i32> {
     let name = daemon_name(Uuid::parse_str(token).ok()?);
     let mut cache = runtime.leaders.borrow_mut();
-    if let Some(host) = runtime.host() {
-        cache.refresh_if_needed(host.as_ref(), Instant::now());
-    }
     let Some(leader) = cache.leader(&name) else {
         cache.note_lifecycle_change();
         return None;

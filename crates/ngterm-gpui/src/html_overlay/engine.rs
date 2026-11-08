@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use ngterm_wpe::{
-    BufferId, EditingCommand, Geometry, Host, Input, Load, MenuToken, PolicyToken, ReplyToken, SchemeResponse,
-    SchemeToken, SessionId, SessionSpec, UserScript, ViewId, ViewSpec,
+    BufferId, EditingCommand, Evaluation, Geometry, Host, Input, Load, MenuToken, PolicyToken, ReplyToken,
+    SchemeResponse, SchemeToken, SessionId, SessionSpec, UserScript, ViewId, ViewSpec,
 };
 
 /// Tells the engine a page's frame is on screen; called from the renderer's threads.
@@ -24,6 +24,8 @@ pub trait Web {
     fn go_back(&self, view: ViewId);
     fn go_forward(&self, view: ViewId);
     fn set_zoom(&self, view: ViewId, zoom: f64);
+    /// Runs `script` in the page's main frame, in `world`; its answer arrives on the channel.
+    fn evaluate(&self, view: ViewId, script: String, world: Option<String>) -> async_channel::Receiver<Evaluation>;
     fn set_scripts(&self, view: ViewId, scripts: Vec<UserScript>);
     fn set_geometry(&self, view: ViewId, geometry: Geometry);
     fn set_visible(&self, view: ViewId, visible: bool);
@@ -86,6 +88,10 @@ impl Web for Engine {
 
     fn set_zoom(&self, view: ViewId, zoom: f64) {
         self.0.set_zoom(view, zoom);
+    }
+
+    fn evaluate(&self, view: ViewId, script: String, world: Option<String>) -> async_channel::Receiver<Evaluation> {
+        self.0.evaluate(view, script, world)
     }
 
     fn set_scripts(&self, view: ViewId, scripts: Vec<UserScript>) {

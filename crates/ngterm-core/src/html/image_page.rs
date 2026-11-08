@@ -11,6 +11,24 @@ pub const MINIMUM_POINTS: f64 = 240.0;
 pub const MAX_BYTES: usize = 64 << 20;
 pub const MAX_PIXELS: u64 = 100_000_000;
 
+/// A picture's size in pixels with its EXIF orientation applied, so a rotated photo reports the axes it is drawn with
+/// (upstream's `ImagePixels`): what an image page handed to another machine travels with, sized for that machine's
+/// screen there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImagePixels {
+    pub width: i64,
+    pub height: i64,
+}
+
+impl ImagePixels {
+    /// The picture's drawn size in points on a display of `scale`, its orientation already applied.
+    #[must_use]
+    pub fn natural(self, scale: f64) -> (f64, f64) {
+        let axis = |pixels: i64| u32::try_from(pixels.max(0)).unwrap_or(u32::MAX);
+        natural(axis(self.width), axis(self.height), 1, scale)
+    }
+}
+
 /// The exact bytes that were sniffed and probed, with the first frame's header metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageData {
@@ -35,6 +53,20 @@ impl ImageData {
     #[must_use]
     pub fn data_uri(&self) -> String {
         data_uri(&self.bytes, &self.mime_type)
+    }
+
+    /// The oriented pixel size (upstream's `probe.natural(scale: 1)`).
+    #[must_use]
+    pub fn pixels(&self) -> ImagePixels {
+        let (width, height) = if (5..=8).contains(&self.orientation) {
+            (self.height, self.width)
+        } else {
+            (self.width, self.height)
+        };
+        ImagePixels {
+            width: i64::from(width),
+            height: i64::from(height),
+        }
     }
 }
 

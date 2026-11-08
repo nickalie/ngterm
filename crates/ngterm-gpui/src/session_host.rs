@@ -6,10 +6,12 @@
 //! - **Live sessions** (upstream's `restoredRuntime` zmx wiring in `agtermApp.swift`): [`install`] hands a running
 //!   server of an older build over to the staged one (the update handoff, recorded for the outdated cutoff), gives the
 //!   core the server's `SessionHost` and this host's wrap inputs before any window mounts, then runs the launch reap
-//!   and a pending Live sessions reset; [`live_capabilities`] claims `live-sessions` (a zsh or fish login shell, as
-//!   upstream) and `live-any-shell` (zsh, bash, fish or PowerShell) where `ngterm-session` and the shell's
-//!   integration are staged. A live pane attaches to its session in process (`ngterm-term`'s live panes), as the
-//!   session's reply owner.
+//!   and a pending Live sessions reset; [`claims`] claims `live-sessions` (a zsh or fish pane shell, as upstream) and
+//!   `live-any-shell` (zsh, bash, fish or PowerShell) where `ngterm-session` and the shell's integration are staged.
+//!   The pane shell is the login shell, or the one the ghostty config's `command` names when Live can run it
+//!   (upstream's #895): the launch captures it once ([`Runtime::capture`]) and hands that capture to the restore
+//!   decision, the claims and the wrap, so a config reload never changes it. A live pane attaches to its session in
+//!   process (`ngterm-term`'s live panes), as the session's reply owner.
 //! - **Config**: [`AppConfig::load`] loads the ghostty config as libghostty did for the GTK build (defaults, the
 //!   user's files, their includes; the theme under them), on the side of a dual theme the desktop's appearance picks
 //!   (`appearance.rs`); its diagnostic count is what `config.reload` answers.
@@ -40,18 +42,18 @@ use ngterm_term::{Host, Launch, Pane};
 use crate::pane::Launcher;
 use crate::terminal::{Spawn, TerminalConfig};
 
-/// The capability a host claims when its panes can run in live sessions in a zsh or fish login shell, upstream's two
+/// The capability a host claims when its panes can run in live sessions in a zsh or fish shell, upstream's two
 /// (`conformance/docs/rust-build.md`).
 pub const LIVE_SESSIONS: &str = "live-sessions";
-/// The Rust-only capability a host claims when its panes can run in live sessions in its login shell, zsh, bash, fish
-/// or PowerShell.
+/// The Rust-only capability a host claims when its panes can run in live sessions in their shell, zsh, bash, fish or
+/// PowerShell.
 pub const LIVE_ANY_SHELL: &str = "live-any-shell";
 
 /// The core's session host over the staged `ngterm-session` and the wrap inputs of this host, installed before the
 /// first terminal, once a running server of an older build handed its sessions over ([`update`]); then the launch
-/// reap and a pending Live sessions reset run. Call it once the restore decision and the process table are in.
-pub fn install(core: &mut Core, env: &dyn Env) {
-    let runtime = Runtime::capture(env);
+/// reap and a pending Live sessions reset run. Call it once the restore decision and the process table are in, with the
+/// launch's capture that decision was taken over.
+pub fn install(core: &mut Core, runtime: &Runtime) {
     let directory = ngterm_core::live::socket_directory(&runtime.state_dir);
     let endpoint = ControlLiveEndpoint {
         executable: runtime.executable.to_string_lossy().into_owned(),
@@ -61,9 +63,9 @@ pub fn install(core: &mut Core, env: &dyn Env) {
     // when one is set), as the host's own calls and each pane's attach expect it
     let options = StartOptions::new(&runtime.executable);
     let bundled = options.build.clone();
-    update(&runtime, &directory, &options);
+    update(runtime, &directory, &options);
     let outdated_before = launch_cutoff(bundled.as_deref(), &runtime.state_dir, SystemTime::now());
-    let wrap = wrap_inputs(&runtime);
+    let wrap = wrap_inputs(runtime);
     core.install_live_sessions(LiveInstall {
         host: Arc::new(ServerHost::new(runtime.executable.clone(), directory)),
         endpoint,
@@ -110,6 +112,7 @@ pub fn wrap_inputs(runtime: &Runtime) -> Inputs {
     Inputs {
         executable: runtime.executable.clone(),
         login_shell: runtime.login_shell.clone(),
+        command_shell: runtime.command_shell.clone(),
         resources_dir: runtime.resources_dir.clone(),
         own_resources_dir: runtime.own_resources_dir.clone(),
         state_dir: runtime.state_dir.clone(),
@@ -118,24 +121,17 @@ pub fn wrap_inputs(runtime: &Runtime) -> Inputs {
     }
 }
 
-/// The live capabilities this host claims: none unless it can wrap panes in live sessions (`ngterm-session` staged
-/// beside the app, a zsh, bash, fish or PowerShell login shell and that shell's bundled integration); then
-/// `live-sessions` for a zsh or fish login shell, as upstream, and `live-any-shell` for any of them.
-#[must_use]
-pub fn live_capabilities(env: &dyn Env) -> Vec<&'static str> {
-    claims(&Runtime::capture(env), env)
-}
-
-/// [`live_capabilities`] of `runtime`.
+/// The live capabilities the launch's capture `runtime` claims: none unless it can wrap panes in live sessions
+/// (`ngterm-session` staged beside the app, a zsh, bash, fish or PowerShell pane shell, ghostty `command`'s or the
+/// login shell, and that shell's bundled integration); then `live-sessions` for an effective zsh or fish, as upstream,
+/// and `live-any-shell` for any of them.
 #[must_use]
 pub fn claims(runtime: &Runtime, env: &dyn Env) -> Vec<&'static str> {
     if runtime.live_probe(env).rejection().is_some() {
         return Vec::new();
     }
-    let upstreams = matches!(
-        runtime.login_shell.as_deref().and_then(LoginShell::of),
-        Some(LoginShell::Zsh | LoginShell::Fish)
-    );
+    let shell = runtime.command_shell.as_deref().or(runtime.login_shell.as_deref());
+    let upstreams = matches!(shell.and_then(LoginShell::of), Some(LoginShell::Zsh | LoginShell::Fish));
     upstreams
         .then_some(LIVE_SESSIONS)
         .into_iter()
@@ -238,9 +234,8 @@ fn command_of(loaded: &LoadedConfig) -> Option<String> {
 /// The host a pane launches under for `app`: the config's `command` for a pane without one, else the login shell;
 /// the terminal identity from `resources`.
 #[must_use]
-pub fn launch_host(app: &AppConfig, resources: Option<PathBuf>, env: &dyn Env) -> Host {
-    let runtime = Runtime::capture(env);
-    let shell = app.command.clone().or(runtime.login_shell);
+pub fn launch_host(app: &AppConfig, resources: Option<PathBuf>) -> Host {
+    let shell = app.command.clone().or_else(ngterm_session::launch::login_shell);
     let bin_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
@@ -299,7 +294,7 @@ mod tests {
             dark: false,
         };
         let env = MapEnv::new().with("HOME", "/home/u");
-        let host = launch_host(&app, None, &env);
+        let host = launch_host(&app, None);
         assert_eq!(host.shell, "/bin/sh");
         let prepared = host.prepare(&Launch::default(), &env);
         // run through `sh -c` on Unix, as the program itself on Windows
@@ -321,7 +316,7 @@ mod tests {
             dark: false,
         };
         let env = MapEnv::new().with("HOME", "/home/u");
-        let prepared = launch_host(&app, None, &env).prepare(&Launch::default(), &env);
+        let prepared = launch_host(&app, None).prepare(&Launch::default(), &env);
         assert!(
             prepared
                 .command
@@ -346,6 +341,7 @@ mod tests {
         let runtime = Runtime {
             executable: PathBuf::from("/nonexistent/ngterm-session"),
             login_shell: Some("/bin/zsh".to_owned()),
+            command_shell: None,
             resources_dir: None,
             own_resources_dir: None,
             state_dir: PathBuf::from("/tmp/ngterm-state"),
@@ -354,10 +350,11 @@ mod tests {
         assert!(claims(&runtime, &MapEnv::new()).is_empty());
     }
 
-    /// `live-sessions` for upstream's login shells, zsh and fish (#761); `live-any-shell` for every wrapped one.
+    /// `live-sessions` for upstream's shells, zsh and fish (#761), the one ghostty `command` names winning over the
+    /// login shell (#895); `live-any-shell` for every wrapped one.
     #[cfg(unix)]
     #[test]
-    fn live_sessions_are_claimed_for_a_zsh_or_fish_login_shell_and_live_any_shell_for_all() {
+    fn live_sessions_are_claimed_for_an_effective_zsh_or_fish_and_live_any_shell_for_all() {
         let root = tempfile::tempdir().unwrap();
         let executable = root.path().join("ngterm-session");
         ngterm_host::fakes::write_executable(&executable, "#!/bin/sh\n").unwrap();
@@ -371,10 +368,11 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, "").unwrap();
         }
-        let claimed = |shell: &str| {
+        let claimed_with = |shell: &str, command: Option<&str>| {
             let runtime = Runtime {
                 executable: executable.clone(),
                 login_shell: Some(shell.to_owned()),
+                command_shell: command.map(str::to_owned),
                 resources_dir: Some(resources.clone()),
                 own_resources_dir: None,
                 state_dir: PathBuf::from("/tmp/ngterm-state"),
@@ -382,9 +380,15 @@ mod tests {
             };
             claims(&runtime, &MapEnv::new())
         };
+        let claimed = |shell: &str| claimed_with(shell, None);
         assert_eq!(claimed("/bin/zsh"), [LIVE_SESSIONS, LIVE_ANY_SHELL]);
         assert_eq!(claimed("/usr/bin/fish"), [LIVE_SESSIONS, LIVE_ANY_SHELL]);
         assert_eq!(claimed("/bin/bash"), [LIVE_ANY_SHELL]);
         assert!(claimed("/bin/tcsh").is_empty());
+        assert_eq!(
+            claimed_with("/bin/tcsh", Some("/opt/homebrew/bin/fish")),
+            [LIVE_SESSIONS, LIVE_ANY_SHELL]
+        );
+        assert_eq!(claimed_with("/bin/zsh", Some("/bin/bash")), [LIVE_ANY_SHELL]);
     }
 }

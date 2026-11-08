@@ -9,6 +9,9 @@
 //! login shell after it runs (`session restart --command`), and the pane's own creation command, which the pane ends
 //! with as it does outside Live (`session new --command`, `session split --command`). A replayable captured argv wins
 //! over either and always returns to the shell.
+//!
+//! The shell a wrapped pane runs is the login shell, or the one ghostty `command` names when Live can run that one
+//! instead ([`command_shell`], upstream's #895), latched with the launch's restore decision.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -27,13 +30,13 @@ use crate::pane_env::uuid_string;
 use crate::persist::RestoreMode;
 use crate::restore::mode::LiveRejection;
 
-/// What the host offers a wrap: the `ngterm-session` executable, the login shell and its bundled integration, all
+/// What the host offers a wrap: the `ngterm-session` executable, the pane shell and its bundled integration, all
 /// checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Eligible {
     /// The `ngterm-session` executable, standardized.
     pub executable: PathBuf,
-    /// The password-database login shell.
+    /// The shell a wrapped pane runs ([`Inputs::shell`]): ghostty `command`'s, else the password-database login shell.
     pub shell: String,
     /// Which shell it is.
     pub kind: LoginShell,
@@ -43,16 +46,17 @@ pub struct Eligible {
 }
 
 /// The first reason this host cannot wrap a pane, in upstream's order, or what a wrap runs with: a relative executable
-/// path, an executable path that is not an executable file, a login shell other than zsh, bash, fish or PowerShell
-/// (`$SHELL` cannot override the password database), a resources directory without that shell's integration: Ghostty's
-/// `resources_dir`, or for PowerShell, which Ghostty does not integrate, ngterm's own `own_resources_dir`.
+/// path, an executable path that is not an executable file, a pane `shell` ([`Inputs::shell`]) other than zsh, bash,
+/// fish or PowerShell (`$SHELL` cannot override the password database), a resources directory without that shell's
+/// integration: Ghostty's `resources_dir`, or for PowerShell, which Ghostty does not integrate, ngterm's own
+/// `own_resources_dir`.
 ///
 /// # Errors
 ///
 /// The first [`LiveRejection`] that applies.
 pub fn eligibility(
     executable: &Path,
-    login_shell: Option<&str>,
+    shell: Option<&str>,
     resources_dir: Option<&Path>,
     own_resources_dir: Option<&Path>,
 ) -> Result<Eligible, LiveRejection> {
@@ -63,7 +67,7 @@ pub fn eligibility(
     if !is_executable_file(&executable) {
         return Err(LiveRejection::ExecutableUnavailable);
     }
-    let (shell, kind) = login_shell
+    let (shell, kind) = shell
         .and_then(|shell| LoginShell::of(shell).map(|kind| (shell, kind)))
         .ok_or(LiveRejection::UnsupportedLoginShell)?;
     let resources = if kind.is_ngterms() {
@@ -119,12 +123,89 @@ pub fn has_windows_executable_extension(path: &Path) -> bool {
         })
 }
 
+/// The flags a zsh, bash or fish `command` may carry for Live to take its shell: the login and interactive ones a live
+/// shell starts with anyway (upstream's `liveShellFlags`).
+const LIVE_SHELL_FLAGS: [&str; 6] = ["-l", "--login", "-i", "--interactive", "-il", "-li"];
+/// PowerShell's counterpart of [`LIVE_SHELL_FLAGS`], in any case as PowerShell reads its parameters: the login, banner,
+/// stay-open and interactive switches (and their documented short forms) a live PowerShell starts with anyway, or that
+/// change nothing about an interactive shell (`-Login` is Unix-only, and dropped on Windows with the rest).
+const LIVE_PWSH_FLAGS: [&str; 8] = [
+    "-login",
+    "-l",
+    "-nologo",
+    "-nol",
+    "-noexit",
+    "-noe",
+    "-interactive",
+    "-i",
+];
+
+/// The shell a ghostty `command` value names when a Live pane can run it in place of the login shell (upstream's
+/// `ZmxSupport.commandShell(fromCommand:)`, #895): after an optional `direct:` or `shell:` prefix (one, as Ghostty
+/// reads one), an absolute path to a shell this build wraps, followed only by flags Live applies anyway
+/// ([`LIVE_SHELL_FLAGS`], PowerShell's [`LIVE_PWSH_FLAGS`]); `None` for anything else, since Live starts the shell
+/// itself and cannot honor another program or other arguments (`fish --login`, `/usr/bin/env fish`,
+/// `/opt/homebrew/bin/fish -C 'echo hi'`, `tmux new`).
+///
+/// - Unix: zsh, bash, fish or PowerShell, by the basename [`LoginShell::of`] reads. Upstream takes zsh and fish only,
+///   so its `/bin/bash -l` is `None` there and bash here (capability `live-any-shell`).
+/// - Windows: `pwsh.exe` or `powershell.exe` only, the shells a Windows live pane runs; the absolute path is a drive's
+///   or a UNC one. A whole value that names an existing file is one path (`C:\Program Files\PowerShell\7\pwsh.exe`, as
+///   `ngterm-term` runs the login shell), anything else is split on whitespace.
+#[must_use]
+pub fn command_shell(command: &str) -> Option<String> {
+    command_shell_on(command, cfg!(windows), &|path| Path::new(path).is_file())
+}
+
+/// [`command_shell`] by `windows`' rules, `is_file` telling an existing file; defined on every OS, so both rule sets are
+/// tested everywhere.
+fn command_shell_on(command: &str, windows: bool, is_file: &dyn Fn(&str) -> bool) -> Option<String> {
+    let value = command.trim();
+    let value = value
+        .strip_prefix("direct:")
+        .or_else(|| value.strip_prefix("shell:"))
+        .unwrap_or(value)
+        .trim();
+    let (shell, flags) = if windows && is_file(value) {
+        (value, Vec::new())
+    } else {
+        let mut words = value.split_whitespace();
+        (words.next()?, words.collect())
+    };
+    let kind = LoginShell::of(shell)?;
+    let absolute = if windows {
+        is_windows_absolute(shell)
+    } else {
+        shell.starts_with('/')
+    };
+    let wrapped = !windows || kind == LoginShell::Pwsh;
+    let live_flags = if kind == LoginShell::Pwsh {
+        flags
+            .iter()
+            .all(|flag| LIVE_PWSH_FLAGS.iter().any(|known| flag.eq_ignore_ascii_case(known)))
+    } else {
+        flags.iter().all(|flag| LIVE_SHELL_FLAGS.contains(flag))
+    };
+    (absolute && wrapped && live_flags).then(|| shell.to_owned())
+}
+
+/// Whether `path` is absolute as Windows reads it: a drive's (`C:\`, `C:/`) or a UNC one (`\\server\share`).
+fn is_windows_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    path.starts_with(r"\\")
+        || (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/'))
+}
+
 /// Everything a pane's wrap configuration is built from (upstream's `ZmxSupport.Inputs`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Inputs {
     pub executable: PathBuf,
     /// The login shell the password database names.
     pub login_shell: Option<String>,
+    /// The shell ghostty `command` names in its place ([`command_shell`]), latched at launch with the restore decision:
+    /// a pane whose daemon runs keeps the shell it started with until a Live sessions reset, so a reload switching it
+    /// would mislabel those panes.
+    pub command_shell: Option<String>,
     /// The Ghostty resources directory holding `shell-integration/<shell>`.
     pub resources_dir: Option<PathBuf>,
     /// ngterm's own resources directory, holding the integrations Ghostty has none of (`shell-integration/pwsh`).
@@ -139,6 +220,14 @@ pub struct Inputs {
     pub session_host_executable: Option<PathBuf>,
     /// `None` leaves the attach unmanaged: the client neither claims nor reports a lead.
     pub lead: Option<LeadAttachment>,
+}
+
+impl Inputs {
+    /// The shell a wrapped pane runs: the one ghostty `command` names, else the login shell.
+    #[must_use]
+    pub fn shell(&self) -> Option<&str> {
+        self.command_shell.as_deref().or(self.login_shell.as_deref())
+    }
 }
 
 /// How a wrapped pane attaches to its daemon (upstream's `ZmxSupport.Configuration`).
@@ -170,7 +259,7 @@ impl Configuration {
 pub fn configuration(inputs: &Inputs) -> Result<Configuration, LiveRejection> {
     let eligible = eligibility(
         &inputs.executable,
-        inputs.login_shell.as_deref(),
+        inputs.shell(),
         inputs.resources_dir.as_deref(),
         inputs.own_resources_dir.as_deref(),
     )?;
@@ -970,6 +1059,100 @@ mod tests {
         assert_eq!(LoginShell::Bash.ending_flags(), ["--posix", "-lic"]);
         assert!(LoginShell::Pwsh.script_flags().contains(&"-NoExit"));
         assert_eq!(LoginShell::Pwsh.ending_flags().last(), Some(&"-Command"));
+    }
+
+    /// Upstream's `commandShellAcceptsOnlyAnAbsoluteZshOrFishWithLiveFlags` table, with the shells this build wraps
+    /// besides (bash and PowerShell) and Windows' rules.
+    #[test]
+    fn a_command_shell_is_an_absolute_wrapped_shell_with_only_live_flags() {
+        let no_file = |_: &str| false;
+        let unix: [(&str, Option<&str>); 20] = [
+            ("/opt/homebrew/bin/fish --login", Some("/opt/homebrew/bin/fish")),
+            ("/bin/zsh", Some("/bin/zsh")),
+            ("direct:/bin/zsh -l", Some("/bin/zsh")),
+            ("shell:/usr/local/bin/fish -il", Some("/usr/local/bin/fish")),
+            ("/bin/zsh --login --interactive", Some("/bin/zsh")),
+            ("  /bin/zsh\t-li  ", Some("/bin/zsh")),
+            ("fish --login", None),
+            ("/opt/homebrew/bin/fish -C 'echo hi'", None),
+            ("/usr/bin/env fish", None),
+            ("/opt/homebrew/bin/tmux new", None),
+            ("", None),
+            // upstream refuses bash (`nil`); this build wraps it
+            ("/bin/bash -l", Some("/bin/bash")),
+            ("/bin/bash --posix", None),
+            ("/usr/bin/pwsh -Login -NoLogo", Some("/usr/bin/pwsh")),
+            ("/usr/bin/pwsh -nologo -NOEXIT -i", Some("/usr/bin/pwsh")),
+            ("/usr/bin/pwsh -NoProfile", None),
+            ("/bin/sh", None),
+            ("/bin/tcsh -l", None),
+            ("direct:shell:/bin/zsh", None),
+            (r"C:\Program Files\PowerShell\7\pwsh.exe", None),
+        ];
+        for (command, expected) in unix {
+            assert_eq!(
+                command_shell_on(command, false, &no_file).as_deref(),
+                expected,
+                "{command:?}"
+            );
+        }
+        let pwsh = r"C:\Program Files\PowerShell\7\pwsh.exe";
+        let is_file = |path: &str| path == pwsh;
+        let direct = format!("direct:{pwsh}");
+        let windows: [(&str, Option<&str>); 10] = [
+            // a whole value naming a file is one path, spaces and all
+            (pwsh, Some(pwsh)),
+            (&direct, Some(pwsh)),
+            (
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo",
+                Some(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
+            ),
+            ("C:/Tools/pwsh.exe -NoExit", Some("C:/Tools/pwsh.exe")),
+            (r"\\server\tools\pwsh.exe", Some(r"\\server\tools\pwsh.exe")),
+            // otherwise split on whitespace: a spaced path that is no file breaks at its first space
+            (r"C:\Program Files\PowerShell\6\pwsh.exe", None),
+            ("pwsh.exe", None),
+            (r"C:\Tools\pwsh.exe -Command ls", None),
+            // Windows runs PowerShell only
+            (r"C:\msys64\usr\bin\zsh -l", None),
+            ("/bin/zsh", None),
+        ];
+        for (command, expected) in windows {
+            assert_eq!(
+                command_shell_on(command, true, &is_file).as_deref(),
+                expected,
+                "{command:?}"
+            );
+        }
+    }
+
+    /// Upstream's `commandShellReplacesAnUnsupportedPasswordDatabaseShell` and
+    /// `loginShellConfigurationCarriesNoCommandShell`: the command shell takes `SHELL`, the integration and the
+    /// creation argv; without one the login shell keeps them.
+    #[test]
+    fn a_command_shell_replaces_the_login_shell_in_the_configuration() {
+        let bundle = bundled("fish/vendor_conf.d/ghostty-shell-integration.fish", "");
+        let mut fish = shell_inputs(bundle.path(), "/bin/tcsh");
+        assert_eq!(configuration(&fish), Err(LiveRejection::UnsupportedLoginShell));
+        fish.command_shell = Some("/opt/homebrew/bin/fish".to_owned());
+        assert_eq!(fish.shell(), Some("/opt/homebrew/bin/fish"));
+        let wrapped = configuration(&fish).unwrap();
+        assert_eq!(
+            wrapped.environment.get("SHELL").map(String::as_str),
+            Some("/opt/homebrew/bin/fish")
+        );
+        assert!(
+            wrapped
+                .environment
+                .contains_key(shell_integration::FISH_INTEGRATION_VARIABLE)
+        );
+        let attach = live_attach(&wrapped, None, Some(Creation::ReturningToShell("ls")), &NO_DENYLIST);
+        assert_eq!(attach.argv.first().map(String::as_str), Some("/opt/homebrew/bin/fish"));
+        let zsh = resources(true);
+        let login = inputs(zsh.path());
+        assert_eq!(login.shell(), Some("/bin/zsh"));
+        let wrapped = configuration(&login).unwrap();
+        assert_eq!(wrapped.environment.get("SHELL").map(String::as_str), Some("/bin/zsh"));
     }
 
     /// A resources directory bundling the integration file `loader` (under `shell-integration`) with `contents`.

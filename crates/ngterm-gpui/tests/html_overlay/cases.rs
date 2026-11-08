@@ -15,10 +15,11 @@ use gpui_kit::{
     AppContext as _, Context, Entity, HeadlessAppContext, InputEvent as _, IntoElement, NoopTextSystem,
     ParentElement as _, Render, Styled as _, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
 };
-use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
-use ngterm_core::remote::replica_page::PageResource;
+use ngterm_core::html::text_page::TextSearch;
+use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource, SearchCount, SearchStep};
+use ngterm_core::remote::replica_page::{ContentFailures, PageResource};
 use ngterm_gpui::external_texture::{FrameSource, negotiate};
-use ngterm_gpui::html_overlay::{self, FrameStats, PageView, ReplicaLink};
+use ngterm_gpui::html_overlay::{self, FrameStats, PageView, ReadAnswer, ReplicaLink};
 use uuid::Uuid;
 
 /// What a case runs with.
@@ -28,7 +29,7 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 27] = [
+pub const CASES: [(&str, Case); 31] = [
     (
         "an_image_document_renders_and_current_reload_rereads_the_source",
         image_document,
@@ -36,6 +37,10 @@ pub const CASES: [(&str, Case); 27] = [
     (
         "a_markdown_document_renders_inert_markup_and_embedded_pictures",
         markdown_document,
+    ),
+    (
+        "a_text_page_starts_with_the_models_search_and_steps_through_its_renderer",
+        text_search,
     ),
     ("the_engine_renders_on_the_renderers_gpu_in_its_mode", mode),
     ("a_page_loads_and_its_frames_reach_the_screen", loads),
@@ -47,6 +52,15 @@ pub const CASES: [(&str, Case); 27] = [
     (
         "a_file_replica_loads_its_page_and_an_asset_through_its_channel",
         replica_loads,
+    ),
+    (
+        "an_image_replica_shows_the_fetched_picture_and_rereads_it_on_reload",
+        replica_image,
+    ),
+    ("a_markdown_replica_renders_with_its_fetched_picture", replica_markdown),
+    (
+        "a_windows_origins_markdown_replica_renders_its_picture",
+        replica_markdown_windows,
     ),
     ("a_replica_reads_nothing_of_another_page", replica_other_page),
     ("a_slow_replica_read_blocks_no_other", replica_slow),
@@ -262,6 +276,7 @@ impl Fixture {
         let mut overlay = HtmlOverlay::new(
             HtmlSource::Replica {
                 path: "/docs/index.html".to_owned(),
+                content: ngterm_core::html::ReplicaContent::Html,
             },
             HtmlPageFlags {
                 chromeless: true,
@@ -534,6 +549,8 @@ fn animation(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
 /// files from a map, every bridge request answered with one reply, and every request recorded.
 pub struct FakeOrigin {
     files: HashMap<&'static str, (&'static str, Vec<u8>)>,
+    /// What a content replica's reads get, which a case may change between loads.
+    content: RefCell<HashMap<&'static str, Vec<u8>>>,
     reply: &'static str,
     requested: RefCell<Vec<String>>,
     bridged: RefCell<Vec<String>>,
@@ -551,6 +568,7 @@ impl FakeOrigin {
                 .iter()
                 .map(|(path, mime, body)| (*path, (*mime, body.clone().into_bytes())))
                 .collect(),
+            content: RefCell::default(),
             reply: r#"{"ok":true,"result":{"extra":{"nested":"kept"},"text":"done"}}"#,
             requested: RefCell::default(),
             bridged: RefCell::default(),
@@ -585,6 +603,119 @@ impl ReplicaLink for FakeOrigin {
         self.bridged.borrow_mut().push(body);
         html_overlay::answer_value(reply, ngterm_core::html::bridge::shape_raw_reply(self.reply));
     }
+
+    fn read(&self, _: Uuid, path: String, limit: usize, failures: ContentFailures, answer: ReadAnswer) {
+        let body = self.content.borrow().get(path.as_str()).cloned();
+        self.requested.borrow_mut().push(path);
+        answer(match body {
+            Some(body) if body.len() <= limit => Ok(body),
+            Some(_) => Err(failures.too_large),
+            None => Err(failures.unreadable),
+        });
+    }
+}
+
+/// A `width` x `height` picture of one color, as PNG bytes.
+fn png(width: u32, height: u32, rgba: [u8; 4]) -> Result<Vec<u8>, String> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(width, height, image::Rgba(rgba))
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .map_err(|error| error.to_string())?;
+    Ok(bytes.into_inner())
+}
+
+/// A page the origin opened as `content` at `path`, shown here, whose bytes come from `origin`'s reads.
+fn content_replica(origin: &Rc<FakeOrigin>, path: &str, content: ngterm_core::html::ReplicaContent) -> HtmlOverlay {
+    html_overlay::set_replica_link(Rc::clone(origin) as Rc<dyn ReplicaLink>);
+    let mut overlay = HtmlOverlay::new(
+        HtmlSource::Replica {
+            path: path.to_owned(),
+            content,
+        },
+        HtmlPageFlags::default(),
+    );
+    overlay.replica_of = Some(Uuid::new_v4());
+    overlay
+}
+
+/// Upstream's `testAnImageReplicaShowsTheFetchedPictureUnthemedOnAClearCanvas`: the picture its origin's read brings is
+/// on screen, and a reload reads it again.
+fn replica_image(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let origin = FakeOrigin::new(&[]);
+    origin
+        .content
+        .borrow_mut()
+        .insert("/shots/shot.png", png(320, 240, RED)?);
+    let content = ngterm_core::html::ReplicaContent::Image {
+        width: 320,
+        height: 240,
+    };
+    let mut overlay = content_replica(&origin, "/shots/shot.png", content);
+    let element = fixture.mount(&overlay, 320.0, 240.0)?;
+    fixture.until("the fetched picture", &element, |_, width, pixels| {
+        close(pixel(pixels, width, 160, 130), RED)
+    })?;
+    let blue = [0x30, 0x30, 0xc0, 0xff];
+    origin
+        .content
+        .borrow_mut()
+        .insert("/shots/shot.png", png(320, 240, blue)?);
+    overlay.reload_revision += 1;
+    overlay.reload_target = ngterm_core::html::HtmlReloadTarget::Current;
+    fixture.cx.update(|cx| html_overlay::apply(&overlay, true, cx));
+    fixture.until("the picture read again", &element, |_, width, pixels| {
+        close(pixel(pixels, width, 160, 130), blue)
+    })?;
+    let requested = origin.requested.borrow().clone();
+    check(requested == ["/shots/shot.png", "/shots/shot.png"], || {
+        format!("the origin was asked for {requested:?}")
+    })
+}
+
+/// Upstream's `testAMarkdownReplicaRendersWithItsFetchedPictureAndNoBridge`: the Markdown renderer draws the file its
+/// origin's read brings with the picture beside it fetched too; a reference leaving the folder is never asked for.
+fn replica_markdown(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let origin = FakeOrigin::new(&[]);
+    let markdown = b"![shot](shot.png) ![out](../outside.png)\n".to_vec();
+    origin.content.borrow_mut().insert("/docs/doc.md", markdown);
+    origin
+        .content
+        .borrow_mut()
+        .insert("/docs/shot.png", png(300, 180, RED)?);
+    let overlay = content_replica(&origin, "/docs/doc.md", ngterm_core::html::ReplicaContent::Markdown);
+    let element = fixture.mount(&overlay, 320.0, 300.0)?;
+    fixture.until(
+        "the fetched picture in the rendered page",
+        &element,
+        |_, width, pixels| close(pixel(pixels, width, 160, 130), RED),
+    )?;
+    let requested = origin.requested.borrow().clone();
+    check(requested == ["/docs/doc.md", "/docs/shot.png"], || {
+        format!("the origin was asked for {requested:?}")
+    })
+}
+
+/// A Markdown replica of a Windows origin's file, shown on this POSIX host: its picture is asked for as that machine
+/// spells it, so it is drawn.
+fn replica_markdown_windows(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let origin = FakeOrigin::new(&[]);
+    let markdown = b"![shot](img/shot.png)\n".to_vec();
+    origin.content.borrow_mut().insert(r"C:\docs\doc.md", markdown);
+    origin
+        .content
+        .borrow_mut()
+        .insert(r"C:\docs\img\shot.png", png(300, 180, RED)?);
+    let overlay = content_replica(&origin, r"C:\docs\doc.md", ngterm_core::html::ReplicaContent::Markdown);
+    let element = fixture.mount(&overlay, 320.0, 300.0)?;
+    fixture.until(
+        "the fetched picture in the rendered page",
+        &element,
+        |_, width, pixels| close(pixel(pixels, width, 160, 130), RED),
+    )?;
+    let requested = origin.requested.borrow().clone();
+    check(requested == [r"C:\docs\doc.md", r"C:\docs\img\shot.png"], || {
+        format!("the origin was asked for {requested:?}")
+    })
 }
 
 /// A file replica's page and its stylesheet both come over its channel: the stylesheet's color on screen
@@ -1583,4 +1714,52 @@ fn markdown_document(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
         &element,
         |_, width, pixels| close(pixel(pixels, width, 160, 130), RED),
     )
+}
+
+/// A text page's renderer (`text.js` in its world) starts with the model's query from its document and counts it; a
+/// step goes to it once it reported ready and answers the match it reached, applying a newer revision's query first.
+fn text_search(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let path = fixture.scratch.path().join("notes.txt");
+    std::fs::write(&path, "alpha one\nbeta\nalpha two\n").map_err(|error| error.to_string())?;
+    let mut overlay = HtmlOverlay::new(
+        HtmlSource::Text {
+            path: path.to_string_lossy().into_owned(),
+            line: None,
+        },
+        HtmlPageFlags::default(),
+    );
+    overlay.search_revision = 1;
+    overlay.text_search = Some(TextSearch::new("alpha"));
+    fixture.mount(&overlay, 320.0, 240.0)?;
+    let step = |fixture: &mut Fixture, forward: bool, query: &str, revision: u64| {
+        let step = SearchStep {
+            forward,
+            query: query.to_owned(),
+            revision,
+        };
+        let mut answer = None;
+        fixture.wait("the renderer to take a step", || {
+            answer = html_overlay::step_text_search(overlay.id, &step);
+            answer.is_some()
+        })?;
+        let answer = answer.ok_or("no answer")?;
+        let mut count = None;
+        fixture.wait("the step's count", || {
+            count = answer.try_recv().ok();
+            count.is_some()
+        })?;
+        count.ok_or_else(|| "no count".to_owned())
+    };
+    let first = step(fixture, true, "alpha", 1)?;
+    check(first == SearchCount { matches: 2, current: 2 }, || {
+        format!("the document's query, counted and stepped: {first:?}")
+    })?;
+    let wrapped = step(fixture, true, "alpha", 1)?;
+    check(wrapped == SearchCount { matches: 2, current: 1 }, || {
+        format!("a step past the last match wraps: {wrapped:?}")
+    })?;
+    let newer = step(fixture, false, "beta", 2)?;
+    check(newer == SearchCount { matches: 1, current: 1 }, || {
+        format!("a newer revision's query applies before the step: {newer:?}")
+    })
 }

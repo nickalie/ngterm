@@ -18,7 +18,7 @@ use crate::model::{AgentStatus, StatusReset, StatusShape};
 use crate::persist::RestoreMode;
 use crate::persist::settings::{
     AppSettings, AutoFollowAttention, CursorStyle, DockBounce, FlaggedViewLayout, InterfaceElement, LinkOpenMode,
-    NewSessionDirectory, NewSessionPlacementSetting, SessionInfoDisplay, ToolbarMode,
+    NewSessionDirectory, NewSessionPlacementSetting, SessionInfoDisplay, SidebarDensity, ToolbarMode,
 };
 use crate::quick_metrics::SIZE_PERCENT_CHOICES;
 use crate::theme::DEFAULT_LIGHT_THEME;
@@ -111,6 +111,7 @@ pub enum AppearanceChange {
     IgnoreReduceTransparency(bool),
     SidebarBackgroundShift(i64),
     SidebarFontSize(f64),
+    SidebarDensity(SidebarDensity),
     InterfaceFontSize(f64),
     InactivePaneMute(i64),
 }
@@ -315,6 +316,10 @@ impl AppearanceChange {
                 if let Some(size) = stepped(size, &SIDEBAR_FONT_SIZE_RANGE) {
                     settings.sidebar_font_size = unless_default(size, DEFAULT_SIDEBAR_FONT_SIZE);
                 }
+            }
+            Self::SidebarDensity(density) => {
+                settings.sidebar_density =
+                    unless_default(density, SidebarDensity::Default).map(|density| density.raw().to_owned());
             }
             Self::InterfaceFontSize(size) => {
                 if let Some(size) = stepped(size, &INTERFACE_FONT_SIZE_RANGE) {
@@ -622,6 +627,7 @@ impl InterfaceElement {
                 | Self::WorkspaceAddSession
                 | Self::WorkspaceIcons
                 | Self::SessionIcons
+                | Self::WorkspaceChevrons
         )
     }
 
@@ -676,6 +682,7 @@ impl InterfaceElement {
             Self::WorkspaceAddSession => "Workspace add-session",
             Self::WorkspaceIcons => "Workspace icons",
             Self::SessionIcons => "Session icons",
+            Self::WorkspaceChevrons => "Workspace chevrons",
         }
     }
 }

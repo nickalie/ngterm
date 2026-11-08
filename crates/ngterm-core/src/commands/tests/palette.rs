@@ -10,7 +10,9 @@ use super::keymap::Host;
 use super::{Fixture, args, wire};
 use crate::app_actions::{ActionEffect, ActionOrigin};
 use crate::keymap::BuiltinAction;
-use crate::model::{AgentIndicator, AgentStatus, SidebarMode, SidebarTint, TintColor, TintParts};
+use crate::model::{
+    AgentIndicator, AgentStatus, CompanionOptions, SidebarMode, SidebarTint, TintColor, TintParts, Workspace,
+};
 use crate::palette::{PaletteAction, PaletteEntry, PaletteMode, PaletteShortcut, filter_entries};
 use crate::palette_catalog::PaletteCommand;
 use crate::persist::{AppSettings, LibraryPersistence, SettingsStore};
@@ -232,7 +234,7 @@ fn the_action_palette_lists_commands_windows_and_moves() {
     );
     assert_eq!(
         entry(&entries, "Move Session to ops").action,
-        PaletteAction::MoveSession(workspace)
+        PaletteAction::MoveSession { workspace }
     );
     assert!(
         !titles
@@ -486,8 +488,117 @@ fn picking_a_session_selects_it_and_moving_one_moves_it() {
 
     let (ops, _) = fixture.add_workspace("ops", 0);
     fixture.core.toggle_palette(window, PaletteMode::Actions);
-    fixture.core.run_palette_entry(window, &PaletteAction::MoveSession(ops));
+    fixture
+        .core
+        .run_palette_entry(window, &PaletteAction::MoveSession { workspace: ops });
     assert_eq!(fixture.order(ops), [first]);
+}
+
+/// The action palette's Move Session row to `target`, listed while the current selection lives elsewhere.
+fn move_row(fixture: &Fixture, target: Uuid) -> PaletteAction {
+    let entries = fixture.core.palette_entries(PaletteMode::Actions);
+    let id = format!("move-{}", wire(target));
+    let row = entries
+        .iter()
+        .find(|entry| entry.id == id)
+        .unwrap_or_else(|| panic!("no row {id}: {:?}", ids(&entries)));
+    row.action.clone()
+}
+
+/// `testMoveRowsMoveTheSessionSelectedWhenTheyRun`: a row built while one session was selected moves the one selected
+/// when it runs.
+#[test]
+fn the_move_rows_move_the_session_selected_when_they_run() {
+    let mut fixture = Fixture::new(1);
+    let (window, owner) = (fixture.window, fixture.workspace);
+    let [first, second] = [fixture.sessions[0], fixture.sessions[1]];
+    let (target, _) = fixture.add_workspace("target", 0);
+    fixture.store_mut().unwrap().select_session(Some(first));
+    let row = move_row(&fixture, target);
+
+    fixture.store_mut().unwrap().select_session(Some(second));
+    fixture.core.toggle_palette(window, PaletteMode::Actions);
+    assert!(fixture.core.palette_entry_enabled(window, &row));
+    assert_eq!(fixture.core.run_palette_entry(window, &row), Some(ActionEffect::Done));
+
+    assert_eq!(
+        fixture.store().workspace_for_session(first).map(Workspace::id),
+        Some(owner)
+    );
+    assert_eq!(fixture.order(target), [second]);
+}
+
+/// `testAMoveRowGoesInertWhenTheSessionSelectedUnderItAlreadyLivesInItsTarget`: a selection moved into the row's target,
+/// or cleared, leaves the row inert, and running it moves nothing.
+#[test]
+fn a_move_row_goes_inert_when_the_session_selected_under_it_already_lives_in_its_target() {
+    let mut fixture = Fixture::new(0);
+    let (window, owner) = (fixture.window, fixture.workspace);
+    let first = fixture.sessions[0];
+    let (target, residents) = fixture.add_workspace("target", 1);
+    let resident = residents[0];
+    fixture.store_mut().unwrap().select_session(Some(first));
+    let row = move_row(&fixture, target);
+
+    fixture.store_mut().unwrap().select_session(Some(resident));
+    assert!(!fixture.core.palette_entry_enabled(window, &row));
+    fixture.store_mut().unwrap().select_session(None);
+    assert!(!fixture.core.palette_entry_enabled(window, &row));
+    fixture.core.toggle_palette(window, PaletteMode::Actions);
+    assert_eq!(fixture.core.run_palette_entry(window, &row), None);
+
+    assert_eq!(
+        fixture.core.palette_mode(),
+        Some(PaletteMode::Actions),
+        "an inert row keeps the palette open"
+    );
+    assert_eq!(
+        fixture.store().workspace_for_session(first).map(Workspace::id),
+        Some(owner)
+    );
+    assert_eq!(fixture.order(target), [resident]);
+}
+
+/// `testMoveRowsAreListedButInertForACompanion`: a selected companion lists the rows, but the move would refuse, so
+/// they stay inert.
+#[test]
+fn the_move_rows_are_listed_but_inert_for_a_companion() {
+    let mut fixture = Fixture::new(0);
+    let (window, owner) = (fixture.window, fixture.workspace);
+    let parent = fixture.sessions[0];
+    let child = fixture
+        .store_mut()
+        .unwrap()
+        .add_companion(parent, CompanionOptions::default(), "/home/u")
+        .unwrap();
+    let (target, _) = fixture.add_workspace("target", 0);
+    fixture.store_mut().unwrap().select_session(Some(child));
+    let row = move_row(&fixture, target);
+
+    assert!(!fixture.core.palette_entry_enabled(window, &row));
+    fixture.core.toggle_palette(window, PaletteMode::Actions);
+    assert_eq!(fixture.core.run_palette_entry(window, &row), None);
+    assert_eq!(
+        fixture.store().workspace_for_session(child).map(Workspace::id),
+        Some(owner)
+    );
+}
+
+/// `testAMoveRowGoesInertWhenItsTargetIsRemovedUnderIt`.
+#[test]
+fn a_move_row_goes_inert_when_its_target_is_removed_under_it() {
+    let mut fixture = Fixture::new(0);
+    let window = fixture.window;
+    let session = fixture.sessions[0];
+    let (target, _) = fixture.add_workspace("target", 0);
+    fixture.store_mut().unwrap().select_session(Some(session));
+    let row = move_row(&fixture, target);
+
+    fixture.store_mut().unwrap().remove_workspace(target);
+
+    assert!(!fixture.core.palette_entry_enabled(window, &row));
+    fixture.core.toggle_palette(window, PaletteMode::Actions);
+    assert_eq!(fixture.core.run_palette_entry(window, &row), None);
 }
 
 /// `testTintRowsTintTheSessionSelectedWhenTheyRun`: the rows follow the moves, one per color then None, and each reads
@@ -513,6 +624,11 @@ fn the_tint_rows_tint_the_session_selected_when_they_run() {
             "Tint Session: Blue",
             "Tint Session: Purple",
             "Tint Session: Gray",
+            "Tint Session: Teal",
+            "Tint Session: Pink",
+            "Tint Session: Brown",
+            "Tint Session: Indigo",
+            "Tint Session: Mint",
             "Tint Session: None"
         ]
     );

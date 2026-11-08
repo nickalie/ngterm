@@ -1,7 +1,8 @@
 //! `ngtermctl session overlay ...` (`agtermctlKit/SessionCommands.swift` `Session.Overlay`): the ephemeral overlay
 //! over a session or one of its split panes. This module holds the group and its program side (`open`, `close`,
 //! `resize`, `result`, `copy`, `text`); [`crate::overlay_page`] holds the HTML page side (`reload`, `submit`,
-//! `navigate`, the page `--block` and `result --page`), and [`crate::overlay_job`] the `run-job` helper.
+//! `navigate`, the page `--block` and `result --page`), [`crate::overlay_text`] the text and log page side (`follow`,
+//! `search`, `changes`), and [`crate::overlay_job`] the `run-job` helper.
 //!
 //! `open --block` on a program opens it, then polls `session.overlay.result` by the id the open returned until the
 //! program ends, and exits with its status, printing nothing of its own (the server's line under `--json`).
@@ -10,6 +11,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use ngterm_core::html;
+use ngterm_core::html::text_page;
 use ngterm_core::model::is_valid_color_hex;
 use ngterm_core::paths::Env;
 use ngterm_proto::command::SessionCmd;
@@ -18,6 +20,7 @@ use ngterm_proto::{Args, Command, Request};
 use crate::client::Reply;
 use crate::modal::{LiveIo, ModalIo};
 use crate::overlay_page::{self, PageRunner, control_result};
+use crate::overlay_text;
 use crate::session::{flag, session_request, validate_size_percent};
 use crate::session_hud::validate_overlay_pane;
 use crate::{BasicOptions, ClientOptions, Failure, RequestCommand, TargetOptions, output};
@@ -61,6 +64,9 @@ impl Overlay {
             OverlayCommand::Hide(command) => command,
             OverlayCommand::Show(command) => command,
             OverlayCommand::Toggle(command) => command,
+            OverlayCommand::Follow(command) => command,
+            OverlayCommand::Search(command) => command,
+            OverlayCommand::Changes(command) => command,
             OverlayCommand::Resize(command) => command,
             OverlayCommand::Reload(command) => command,
             OverlayCommand::Navigate(command) => command,
@@ -84,6 +90,9 @@ enum OverlayCommand {
     Hide(Hide),
     Show(Show),
     Toggle(Toggle),
+    Follow(overlay_text::Follow),
+    Search(overlay_text::Search),
+    Changes(overlay_text::Changes),
     Resize(Resize),
     Reload(overlay_page::Reload),
     Navigate(overlay_page::Navigate),
@@ -103,19 +112,21 @@ fn exit_byte(code: i64) -> u8 {
 
 // MARK: - open
 
-/// `ngtermctl session overlay open [<command>]`: a program, HTML/URL page, raster image or Markdown document;
+/// `ngtermctl session overlay open [<command>]`: a program, HTML/URL page, raster image, Markdown document or text file;
 /// `--background-color` rides
 /// the wire as `color`.
 #[derive(Debug, clap::Args)]
 #[command(
-    about = "Open an overlay running COMMAND (it closes when COMMAND exits), or showing a page with --html, --url, --image or --markdown."
+    about = "Open an overlay running COMMAND (it closes when COMMAND exits), or showing a page with --html, --url, --image, --markdown or --text."
 )]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "the flags are upstream's, one field each, in the order its help lists them"
 )]
 pub struct Open {
-    #[arg(help = "Program to run in the overlay (e.g. revdiff); omit with --html, --url, --image or --markdown.")]
+    #[arg(
+        help = "Program to run in the overlay (e.g. revdiff); omit with --html, --url, --image, --markdown or --text."
+    )]
     command: Option<String>,
 
     #[arg(long, help = "Show this local HTML file instead of running COMMAND.")]
@@ -141,6 +152,30 @@ pub struct Open {
         pictures in its own folder are shown, and a web link opens in the browser after a confirmation."
     )]
     markdown: Option<String>,
+
+    #[arg(
+        long,
+        help = "Show this source, config, text or log file read-only with the terminal theme instead of running \
+        COMMAND, highlighted when its language is known; FILE is taken literally, never as path:line."
+    )]
+    text: Option<String>,
+
+    #[arg(long, help = "With --text, open scrolled to line N (from 1) and mark it.")]
+    line: Option<i64>,
+
+    #[arg(
+        long,
+        help = "With --text, show only the file's last N lines (1...100000), read from its end so a log of any size \
+                opens."
+    )]
+    tail: Option<i64>,
+
+    #[arg(
+        long,
+        help = "With --text, follow the file's end as it grows, with the last 5000 lines unless --tail says otherwise. \
+                Not --follow, which selects the session."
+    )]
+    follow_file: bool,
 
     #[arg(
         long,
@@ -234,7 +269,8 @@ fn names_another_host(url: &str) -> bool {
 }
 
 impl Open {
-    /// Exactly one of COMMAND, `--html`, `--url`, `--image` or `--markdown`, and that source's allowed options.
+    /// Exactly one of COMMAND, `--html`, `--url`, `--image`, `--markdown` or `--text`, `--line` with a `--text` only,
+    /// and that source's allowed options.
     fn validate_content(&self) -> Result<(), &'static str> {
         let program = self.command.is_some();
         let sources = [
@@ -243,27 +279,42 @@ impl Open {
             self.url.is_some(),
             self.image.is_some(),
             self.markdown.is_some(),
+            self.text.is_some(),
         ];
         if sources.iter().filter(|given| **given).count() != 1 {
-            return Err("provide exactly one of COMMAND, --html, --url, --image or --markdown");
+            return Err("provide exactly one of COMMAND, --html, --url, --image, --markdown or --text");
         }
-        for (kind, given) in [("image", self.image.is_some()), ("markdown", self.markdown.is_some())] {
-            if given
-                && (self.companion
-                    || self.block
-                    || self.wait
-                    || self.navigation
-                    || self.javascript
-                    || self.chromeless
-                    || self.persistent
-                    || self.browse
-                    || self.cwd.is_some())
-            {
-                return Err(if kind == "image" {
-                    "--image takes no --companion, --block, --wait, --navigation, --js, --chromeless, --persistent, --browse or --cwd"
-                } else {
-                    "--markdown takes no --companion, --block, --wait, --navigation, --js, --chromeless, --persistent, --browse or --cwd"
-                });
+        if self.line.is_some() && self.text.is_none() {
+            return Err("--line requires --text");
+        }
+        if self.line.is_some_and(|line| line < 1) {
+            return Err("--line must be 1 or more");
+        }
+        self.validate_log()?;
+        let page_options = self.companion
+            || self.block
+            || self.wait
+            || self.navigation
+            || self.javascript
+            || self.chromeless
+            || self.persistent
+            || self.browse
+            || self.cwd.is_some();
+        if page_options {
+            if self.image.is_some() {
+                return Err(
+                    "--image takes no --companion, --block, --wait, --navigation, --js, --chromeless, --persistent, --browse or --cwd",
+                );
+            }
+            if self.markdown.is_some() {
+                return Err(
+                    "--markdown takes no --companion, --block, --wait, --navigation, --js, --chromeless, --persistent, --browse or --cwd",
+                );
+            }
+            if self.text.is_some() {
+                return Err(
+                    "--text takes no --companion, --block, --wait, --navigation, --js, --chromeless, --persistent, --browse or --cwd",
+                );
             }
         }
         if !program && (self.wait || (self.url.is_some() && self.block)) {
@@ -277,6 +328,24 @@ impl Open {
             return self.validate_page_options();
         };
         Err(refusal)
+    }
+
+    /// A log page's options (upstream's `validateLog`): a text page with no line, and a tail in range.
+    fn validate_log(&self) -> Result<(), &'static str> {
+        if self.tail.is_none() && !self.follow_file {
+            return Ok(());
+        }
+        if self.text.is_none() {
+            return Err("--tail and --follow-file require --text");
+        }
+        if self.line.is_some() {
+            return Err("--tail and --follow-file cannot be combined with --line");
+        }
+        let in_range = |tail: i64| usize::try_from(tail).is_ok_and(|tail| (1..=text_page::MAX_TAIL).contains(&tail));
+        if self.tail.is_some_and(|tail| !in_range(tail)) {
+            return Err("--tail must be 1...100000");
+        }
+        Ok(())
     }
 
     /// The options of one kind of page only.
@@ -435,6 +504,10 @@ impl RequestCommand for Open {
             html: self.html.as_deref().map(absolute),
             image: self.image.as_deref().map(absolute),
             markdown_file: self.markdown.as_deref().map(absolute),
+            text_file: self.text.as_deref().map(absolute),
+            line: self.line,
+            tail: self.tail,
+            follow_file: flag(self.follow_file),
             navigation: flag(self.navigation),
             url: self.url.clone(),
             javascript: flag(self.javascript),
@@ -1242,10 +1315,136 @@ mod tests {
         assert_eq!(serde_json::to_value(request).unwrap(), value);
     }
 
+    /// Upstream's `textOpenSendsTheResolvedPathLiterallyAndItsLine`: `FILE` is made absolute and never read as
+    /// `path:line`.
+    #[test]
+    fn text_open_sends_the_resolved_path_literally_and_its_line() {
+        let value = request(&["open", "--text", "src/../src/a.go:12", "--line", "40"]);
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(value["cmd"], "session.overlay.open");
+        assert_eq!(
+            value["args"],
+            json!({"textFile": cwd.join("src").join("a.go:12").to_string_lossy(), "line": 40})
+        );
+        let bare = args(&["open", "--text", "/tmp/notes.txt"]);
+        assert_eq!(bare, json!({"textFile": native("/tmp/notes.txt")}));
+        let request: Request = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), value);
+    }
+
+    #[test]
+    fn text_refusals_name_what_is_wrong_in_upstreams_order() {
+        let cases: [(&[&str], &str); 7] = [
+            (
+                &["open", "revdiff", "--text", "/tmp/a.go"],
+                "provide exactly one of COMMAND, --html, --url, --image, --markdown or --text",
+            ),
+            (
+                &["open", "--markdown", "/tmp/r.md", "--text", "/tmp/a.go"],
+                "provide exactly one of COMMAND, --html, --url, --image, --markdown or --text",
+            ),
+            (&["open", "revdiff", "--line", "3"], "--line requires --text"),
+            (
+                &["open", "--line", "3", "--markdown", "/tmp/r.md"],
+                "--line requires --text",
+            ),
+            (
+                &["open", "--text", "/tmp/a.go", "--line", "0"],
+                "--line must be 1 or more",
+            ),
+            (
+                &["open", "--text", "/tmp/a.go", "--line", "0", "--cwd", "/tmp"],
+                "--line must be 1 or more",
+            ),
+            (
+                &["open", "--text", "/tmp/a.go", "--line", "3", "--block"],
+                "--text takes no --companion, --block, --wait, --navigation, --js, --chromeless, --persistent, --browse or --cwd",
+            ),
+        ];
+        for (argv, message) in cases {
+            assert_eq!(refusal(argv), message, "{argv:?}");
+        }
+    }
+
+    /// Upstream's `textOpenSendsTheTailAndFollowFile`: `--follow-file` is its own flag, never `--follow`.
+    #[test]
+    fn text_open_sends_the_tail_and_follow_file() {
+        assert_eq!(
+            args(&["open", "--text", "/tmp/app.log", "--tail", "200", "--follow-file"]),
+            json!({"textFile": native("/tmp/app.log"), "tail": 200, "followFile": true})
+        );
+        assert_eq!(
+            args(&["open", "--text", "/tmp/app.log"]),
+            json!({"textFile": native("/tmp/app.log")})
+        );
+    }
+
+    /// Upstream's `validateLog`, in its order: a text page first, then no line, then the range.
+    #[test]
+    fn log_options_are_refused_before_any_connection() {
+        let cases: [(&[&str], &str); 7] = [
+            (
+                &["open", "--markdown", "/tmp/r.md", "--tail", "10"],
+                "--tail and --follow-file require --text",
+            ),
+            (
+                &["open", "revdiff", "--follow-file"],
+                "--tail and --follow-file require --text",
+            ),
+            (
+                &["open", "--text", "/tmp/a.log", "--line", "3", "--tail", "10"],
+                "--tail and --follow-file cannot be combined with --line",
+            ),
+            (
+                &["open", "--text", "/tmp/a.log", "--line", "3", "--follow-file"],
+                "--tail and --follow-file cannot be combined with --line",
+            ),
+            (
+                &["open", "--text", "/tmp/a.log", "--tail", "0"],
+                "--tail must be 1...100000",
+            ),
+            (
+                &["open", "--text", "/tmp/a.log", "--tail", "100001"],
+                "--tail must be 1...100000",
+            ),
+            // the line's own refusals come first
+            (
+                &["open", "--markdown", "/tmp/r.md", "--line", "3", "--tail", "10"],
+                "--line requires --text",
+            ),
+        ];
+        for (argv, message) in cases {
+            assert_eq!(refusal(argv), message, "{argv:?}");
+        }
+        assert_eq!(
+            args(&["open", "--text", "/tmp/a.log", "--tail", "100000"])["tail"],
+            json!(text_page::MAX_TAIL)
+        );
+    }
+
+    /// Upstream's `openHelpTellsFollowFileFromFollow`, with the limits the help names.
+    #[test]
+    fn open_help_tells_follow_file_from_follow() {
+        let mut command = <Ngtermctl as clap::CommandFactory>::command();
+        let open = command
+            .find_subcommand_mut("session")
+            .and_then(|session| session.find_subcommand_mut("overlay"))
+            .and_then(|overlay| overlay.find_subcommand_mut("open"))
+            .unwrap();
+        let help = open.render_long_help().to_string();
+        assert!(help.contains("--follow-file"), "{help}");
+        assert!(help.contains("Not --follow, which selects the session."), "{help}");
+        assert!(help.contains(&format!("(1...{})", text_page::MAX_TAIL)), "{help}");
+        assert!(
+            help.contains(&format!("the last {} lines", text_page::DEFAULT_TAIL)),
+            "{help}"
+        );
+    }
+
     #[test]
     fn document_sources_refuse_conflicts_and_incompatible_page_options() {
-        for source in ["--image", "--markdown"] {
-            for other in ["--html", "--url", "--image", "--markdown"] {
+        for source in ["--image", "--markdown", "--text"] {
+            for other in ["--html", "--url", "--image", "--markdown", "--text"] {
                 if other == source {
                     continue;
                 }
@@ -1278,7 +1477,7 @@ mod tests {
 
     #[test]
     fn open_refuses_a_missing_or_conflicting_content() {
-        let cases: [&[&str]; 22] = [
+        let cases: [&[&str]; 37] = [
             &["open"],
             &["open", "revdiff", "--html", "/tmp/r.html"],
             &["open", "--html", "/tmp/r.html", "--wait"],
@@ -1307,6 +1506,21 @@ mod tests {
             &["open", "--url", "http://localhost:5173/", "--block"],
             &["open", "--url", "http://localhost:5173/", "--cwd", "/tmp"],
             &["open", "cmd", "--background-color", "purple"],
+            &["open", "revdiff", "--text", "/tmp/a.go"],
+            &["open", "--html", "/tmp/r.html", "--text", "/tmp/a.go"],
+            &["open", "--markdown", "/tmp/r.md", "--text", "/tmp/a.go"],
+            &["open", "--text", "/tmp/a.go", "--companion"],
+            &["open", "--text", "/tmp/a.go", "--block"],
+            &["open", "--text", "/tmp/a.go", "--wait"],
+            &["open", "--text", "/tmp/a.go", "--navigation"],
+            &["open", "--text", "/tmp/a.go", "--js"],
+            &["open", "--text", "/tmp/a.go", "--chromeless"],
+            &["open", "--text", "/tmp/a.go", "--persistent"],
+            &["open", "--text", "/tmp/a.go", "--browse"],
+            &["open", "--text", "/tmp/a.go", "--cwd", "/tmp"],
+            &["open", "--text", "/tmp/a.go", "--line", "0"],
+            &["open", "--line", "3", "--markdown", "/tmp/r.md"],
+            &["open", "revdiff", "--line", "3"],
         ];
         for argv in cases {
             assert!(rejects(argv), "{argv:?}");
@@ -1356,7 +1570,7 @@ mod tests {
             ),
             (
                 &["open"],
-                "provide exactly one of COMMAND, --html, --url, --image or --markdown",
+                "provide exactly one of COMMAND, --html, --url, --image, --markdown or --text",
             ),
             (
                 &["open", "--url", "http://x/", "--block"],

@@ -153,7 +153,7 @@ in `packaging/release/pins.env`; update the WPE source checksum and relocation p
 
 ## Parity
 
-The build claims upstream v0.40.0 behavior, reported by `version` as `conformance.parityLevel`
+The build claims upstream v0.41.1 behavior, reported by `version` as `conformance.parityLevel`
 ([rust-build.md](conformance/docs/rust-build.md) defines the claim). What upstream brought from v0.37.0 up to that release,
 and how this build does it where the OS matters:
 
@@ -177,11 +177,11 @@ and how this build does it where the OS matters:
   (`crates/ngterm-core/src/remote/page_tunnel.rs`); `ask` forms show and status sounds play on the
   presenting machine too. A status sound on Linux, which has none of macOS's named sounds, rings the display's bell
   (Wayland's `xdg_system_bell_v1`, X11's core bell).
-- Settings ▸ Key Mapping ▸ "Lock in terminals" selects a keyboard layout while a terminal has the keyboard and
-  restores the previous one when it leaves: macOS Text Input Source Services, Windows' keyboard layouts, and on Linux
-  XKB's group lock on X11 or, on Wayland, the compositor's own control (sway, Hyprland, niri, KDE Plasma); on GNOME,
-  weston and any other compositor the setting is disabled with the reason shown
-  (`crates/ngterm-gpui/src/input_source.rs`).
+- Settings ▸ Key Mapping ▸ "Lock in terminals" selects a keyboard layout while a terminal or an HTML overlay page (its
+  fields included) has the keyboard and restores the previous one when the keyboard goes to another app or to an ngterm
+  text field outside the page: macOS Text Input Source Services, Windows' keyboard layouts, and on Linux XKB's group
+  lock on X11 or, on Wayland, the compositor's own control (sway, Hyprland, niri, KDE Plasma); on GNOME, weston and any
+  other compositor the setting is disabled with the reason shown (`crates/ngterm-gpui/src/input_source.rs`).
 - `notify` banners get a notification slot of their own per session, replaced and cleared as upstream's
   (freedesktop `replaces_id` and `CloseNotification` on Linux, a toast's group and tag on Windows).
 - Live sessions: a fish login shell claims `live-sessions` as zsh does, with the shell integration's root merged into
@@ -244,6 +244,44 @@ and how this build does it where the OS matters:
 - Managed Live attach exit (v0.40) preserves the final screen and scrollback while resetting terminal input modes,
   styles and colors. A completed creation command is not restarted as a replacement login shell; `--wait` keeps
   its output visible.
+- Text pages (v0.41): Ctrl-clicking a source, config, text or log file, or a `path:line` location, opens a read-only
+  highlighted page at that line on Linux and Windows (⌘-click on macOS; `session overlay open --text FILE [--line
+  N]`, tree `htmlOverlays[].text`). A path that ends a sentence (`/tmp/review.md.`) opens without the punctuation; on
+  Windows, which drops a name's trailing dots on open, the dotted spelling is not tried when the undotted one exists.
+  Revealing a path in the file manager moved to a chord of its own: Ctrl+Alt-click or Super+Alt-click on Linux and
+  Windows (a Linux desktop may take one of the two for its window moves; AltGr counts as Ctrl+Alt on Windows
+  layouts), ⌘⌥-click on macOS, with Shift added under mouse capture. A click over a hidden page an earlier click
+  opened replaces it (`htmlOverlays[].clicked`).
+- Clicked HTML files (v0.41.1) open as a document page with no script, no bridge and no network
+  (`htmlOverlays[].document`). Each engine blocks every network load before the page's first one: WPE's user content
+  filter, WebView2's request filter, WKWebView's content rule list. WebView2 has no per-page switch for link hints,
+  so on Windows every `<link>` of the page is made inert and DNS prefetch is off, and no preconnect leaves it.
+- Log pages (v0.41): a clicked `.log` or `.out` file, or `session overlay open --text FILE --tail N
+  [--follow-file]`, shows the file's last lines and follows its appends, rotation and truncation (`session overlay
+  follow on|off|toggle`; scrolling up pauses it). Each read compares the file's stamp: the device and inode, size and
+  nanosecond modification time (`fstat`) on Linux and macOS; the volume serial number, file index, size and last-write
+  time (`GetFileInformationByHandle`) on Windows, where the file is opened with the default sharing so its writer can
+  still rotate it.
+- Search in text pages (v0.41): `session overlay search TEXT|--next|--prev|--close`, and Find (Ctrl+Shift+F on Linux
+  and Windows, ⌘F on macOS) goes to what is on top of the focused pane: over a text page it focuses the page's own
+  search field, otherwise the terminal's Find bar. The chord reaches the app while a page has the keyboard: WPE's host
+  routes the keymap's chords ahead of the page's on Linux, and WebView2's view hands it to the window on Windows.
+- Diff pages (v0.41.1) step between changes (`session overlay changes --next|--prev`, tree `text.changes`) and color
+  each file's code by its language over the row bands.
+- On a session presented on another machine (v0.41), image, Markdown and text pages open on the presenter, its
+  viewer listing `page.content`; a log page stays a local one.
+- Status shapes (v0.41): triangle-down, play, seal, bolt and bell, drawn as outlines traced after SF Symbols on Linux,
+  Windows and Android; a viewer that does not list `status.shapes` gets only the six shapes it decodes.
+- Row tints (v0.41): teal, pink, brown, indigo and mint, and `#rrggbb` hex tints from the CLI, with a "Custom
+  #rrggbb" entry on the Tint menu of a hex-tinted row; a new tint starts on the last Show On pick.
+- Sidebar (v0.41): a compact density (`sidebar density default|compact|toggle`, tree `sidebarDensity`, Settings ▸
+  Appearance ▸ Sidebar density); a Workspace chevrons setting, with Collapse/Expand Workspace on the workspace row menu;
+  the palette's Move Session rows act on the live selection.
+- Live panes (v0.41) start the shell the ghostty config's `command` names in place of the login shell: zsh and fish
+  as upstream, bash and PowerShell too (`pwsh.exe` or `powershell.exe` on Windows). The quit-time capture of what Live
+  panes run gives a slow session server 300 ms.
+- `tree.snapshotUnsaved` (v0.41) reports a window whose state saves keep failing. A pane admits one queued title at a
+  time, and the OS window title changes at most twice a second (v0.41.1).
 - Selecting text stays off the system clipboard ([The selection clipboard](#the-selection-clipboard)).
 
 ## Prerequisites
@@ -1074,5 +1112,5 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   each goes).
 - `docs/plans/`: implementation plans.
 - `.upstream/agterm`, `.upstream/herdr`: read-only reference clones, git-ignored through `.git/info/exclude`. When
-  missing: `git clone --depth 1 --branch v0.40.0 https://github.com/umputun/agterm .upstream/agterm` (the parity tag;
+  missing: `git clone --depth 1 --branch v0.41.1 https://github.com/umputun/agterm .upstream/agterm` (the parity tag;
   the sync skill moves it), and `HERDR_REPO` checked out at `HERDR_REV` from `build/pins.env`.

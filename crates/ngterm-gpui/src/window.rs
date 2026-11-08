@@ -41,6 +41,7 @@ use gpui_kit::{
     Styled as _, Subscription, Window, div, px, size,
 };
 use ngterm_core::model::{AppStore, Session, WindowLibrary};
+use ngterm_core::title_throttle::{TITLE_WRITE_INTERVAL, TitleStep, TitleThrottle};
 use ngterm_core::titlebar::UNTITLED;
 use ngterm_core::{Core, WindowRequest, WindowSize, WindowState};
 use uuid::Uuid;
@@ -230,7 +231,9 @@ pub struct WindowView {
     /// Whether an alert was up at the last sync: the GUI ask it covered takes the keyboard back once it goes.
     alert_up: bool,
     layers: Vec<(Layer, AnyView)>,
-    title: String,
+    /// The OS window title's writes, coalesced so an animated title lands at most twice a second (upstream's
+    /// `WindowAccessor.setTitle`, #817); a due trailing write is a timer on the window.
+    title: TitleThrottle,
     /// Set once the model closed the window, so its close request goes through.
     closing: Rc<Cell<bool>>,
     /// The user's close is being confirmed: a second close meanwhile asks nothing (upstream's `sheetOpen`).
@@ -347,7 +350,7 @@ impl WindowView {
             switcher,
             alert_up: false,
             layers,
-            title: UNTITLED.to_owned(),
+            title: TitleThrottle::new(TITLE_WRITE_INTERVAL, UNTITLED),
             closing,
             close_asked: Rc::new(Cell::new(false)),
             appearance: Cell::new(gpui_kit::WindowBackgroundAppearance::Opaque),
@@ -755,10 +758,10 @@ impl WindowView {
         &self.sidebar
     }
 
-    /// The title set last.
+    /// The OS window title written last.
     #[must_use]
     pub fn title(&self) -> &str {
-        &self.title
+        self.title.written()
     }
 
     /// Attaches `view` to modal layer `layer` (`None` takes it down).
@@ -952,10 +955,25 @@ impl WindowView {
         let colors = crate::chrome::current(cx);
         self.titlebar
             .update(cx, |bar, cx| bar.sync(core, cover, dialog, colors, cx));
-        if title != self.title {
-            window.set_window_title(&title);
-            self.title = title;
+        match self.title.offer(&title, Instant::now()) {
+            TitleStep::Write(title) => window.set_window_title(&title),
+            TitleStep::Wait(due) => Self::write_title_at(due, window, cx),
+            TitleStep::Idle => {}
         }
+    }
+
+    /// Writes the latest title at `due`, the end of the write interval, unless the window already shows it.
+    fn write_title_at(due: Instant, window: &Window, cx: &Context<Self>) {
+        let wait = due.saturating_duration_since(Instant::now());
+        cx.spawn_in(window, async move |view, cx| {
+            cx.background_executor().timer(wait).await;
+            let _ = view.update_in(cx, |view, window, _| {
+                if let Some(title) = view.title.due(Instant::now()) {
+                    window.set_window_title(&title);
+                }
+            });
+        })
+        .detach();
     }
 
     /// Applies a window command's request (upstream's `WindowRegistry` actions), the core's frontmost takes standing at

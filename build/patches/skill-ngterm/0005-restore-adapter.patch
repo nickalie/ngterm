@@ -4,10 +4,10 @@ hand-write that hook for Claude Code (a second hook pinning the same pane fights
 hand-written recipe for other agents and lines. Applied after 0004-ngterm-identity.patch.
 
 diff --git a/SKILL.md b/SKILL.md
-index 864d91c..1c6e135 100644
+index e702603..c4be03e 100644
 --- a/SKILL.md
 +++ b/SKILL.md
-@@ -489,7 +489,8 @@ omitted when expanded).
+@@ -493,7 +493,8 @@ omitted when expanded).
    `claude --resume … --fork-session` (which mints a new session on every restart), a Claude Code
    `SessionStart` hook rewrites the override to the live id on every start so the next restart reattaches
    instead of forking. The pinned value is shell code stored in the state file and readable via `tree`, so

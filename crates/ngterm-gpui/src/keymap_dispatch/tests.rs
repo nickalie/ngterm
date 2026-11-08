@@ -265,3 +265,23 @@ fn a_web_view_keeps_the_undo_close_chord() {
     assert!(super::takes(&stroke("ctrl-tab")));
     assert!(!super::takes(&stroke("a")));
 }
+
+/// Find's chord reaches the app action while a page holds the keyboard (upstream's 082278b: what is on top owns
+/// Find, and a text page focuses its own field): the router fires it from a page, as WPE's host routes the keymap's
+/// chords ahead of the page's.
+#[test]
+fn the_find_chord_fires_while_a_page_holds_the_keyboard() {
+    let now = Instant::now();
+    let mut router = router("");
+    assert!(press_in(&mut router, "ctrl-shift-f", now, true));
+    assert_eq!(names(&router), ["toggle_search"]);
+}
+
+/// Find's chord pressed in a page's native web view (Windows) goes to the window.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn a_web_view_hands_the_find_chord_to_the_window() {
+    let (keymap, _) = parse_keymap("", &linux_defaults());
+    super::load_keymap(&keymap);
+    assert!(super::takes(&stroke("ctrl-shift-f")));
+}

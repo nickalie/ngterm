@@ -457,6 +457,26 @@ def test_workspace_tint_colors_only_its_row(ctl):
     assert_ok(ctl.request("workspace.delete", wid))
 
 
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("workspace.tint", "workspace.new", "field:tree.workspace.tint", "field:tree.workspace.tintOn")
+def test_workspace_tint_takes_a_hex(ctl):
+    """A workspace row takes a hex like a session row: lowercase on read-back, its sessions untouched
+    (`AppStoreTintTests.controlTreeProjectsTints`)."""
+    wid, (sid,) = _new_workspace(ctl, sessions=1, tint="3A7BD5", tintOn=["name"])
+    node = _node(ctl.tree(), wid)
+    assert (node["tint"], node["tintOn"]) == ("#3a7bd5", ["name"])
+    assert_absent(node["sessions"][0], "tint", "tintOn")
+    assert_ok(ctl.request("workspace.tint", wid, mode="set", tint="#ABCDEF"))
+    assert (_node(ctl.tree(), wid)["tint"], _node(ctl.tree(), wid)["tintOn"]) == ("#abcdef", ["name"])
+    assert_error(
+        ctl.request("workspace.tint", wid, mode="set", tint="#3a7bdz"),
+        "invalid tint: #3a7bdz (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)",
+    )
+    assert _node(ctl.tree(), wid)["tint"] == "#abcdef"
+    assert [session["id"] for session in _node(ctl.tree(), wid)["sessions"]] == [sid]
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
 @pytest.mark.covers(
     "workspace.select",
     "workspace.rename",

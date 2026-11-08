@@ -8,6 +8,7 @@ Every test leaves the shared instance's workspaces, sidebar and selection as it 
 import time
 
 import pytest
+from agterm_conformance.drivers.base import DriverError
 from agterm_conformance.match import assert_ok, find_session, sessions, workspaces
 from agterm_conformance.wait import WaitTimeout, wait_until
 
@@ -30,6 +31,16 @@ ABOVE_ROW = (0.5, 0.05)
 def _row(ui, ui_id, name):
     """The `ui_id` row whose text is `name`: rows share their id, the text tells them apart."""
     return wait_until(lambda: next((row for row in ui.all(ui_id) if ui.text(row) == name), None), timeout=ui.timeout)
+
+
+def _open_submenu(ui, name):
+    """Opens the open menu's `name` submenu: pressed where its item takes a press (AppKit's), else under the pointer,
+    as a GPUI submenu opens on hover and its item has no press action."""
+    item = ui.menu_item(name)
+    try:
+        ui.click(item)
+    except DriverError:
+        ui.hover(item)
 
 
 def _workspace(ctl, name):
@@ -210,5 +221,48 @@ def test_a_workspace_row_context_menu_opens_a_session_in_it(ctl, ui):
         ui.mouse_click(_row(ui, "workspace-row", "ui-menu-workspace"), button="right")
         ui.click(ui.menu_item("New Session"))
         ctl.wait_tree(lambda tree: len(sessions(tree, wid)) == 1)
+    finally:
+        ctl.request("workspace.delete", wid)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("ui:workspace-row", "field:tree.workspace.collapsed", "behavior:sidebar.row-context-menu")
+def test_the_workspace_row_menu_collapses_and_expands_it(ctl, ui):
+    """The workspace row menu's Collapse Workspace folds the clicked workspace, not the others, and persists it; Expand
+    Workspace opens it again (#909, `SidebarWorkspaceExpansionMenuTests`)."""
+    wid = _workspace(ctl, "ui-menu-fold")
+    try:
+        _named_sessions(ctl, wid, ["ui-fold-row"])
+        others = [node["id"] for node in workspaces(ctl.tree()) if node["id"] != wid and not node.get("collapsed")]
+
+        def collapsed(tree):
+            return {node["id"]: node.get("collapsed", False) for node in workspaces(tree)}
+
+        ui.mouse_click(_row(ui, "workspace-row", "ui-menu-fold"), button="right")
+        ui.click(ui.menu_item("Collapse Workspace"))
+        ctl.wait_tree(lambda tree: collapsed(tree)[wid] is True)
+        assert not any(collapsed(ctl.tree())[other] for other in others), "only the clicked workspace folds"
+        ui.mouse_click(_row(ui, "workspace-row", "ui-menu-fold"), button="right")
+        ui.click(ui.menu_item("Expand Workspace"))
+        ctl.wait_tree(lambda tree: collapsed(tree)[wid] is False)
+    finally:
+        ctl.request("workspace.delete", wid)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("ui:session-row", "session.tint", "behavior:sidebar.row-context-menu")
+def test_a_hex_tinted_rows_menu_lists_its_custom_entry(ctl, ui):
+    """A hex tint shows in the row's Tint submenu as "Custom #3a7bd5", and a palette name picked there replaces it,
+    keeping the placement (`WorkspaceSidebarTintMenuTests.testAHexTintShowsACheckedCustomEntryThatANameReplaces`)."""
+    wid = _workspace(ctl, "ui-menu-hex")
+    try:
+        sid = _named_sessions(ctl, wid, ["ui-hex-row"])["ui-hex-row"]
+        assert_ok(ctl.request("session.tint", sid, mode="set", tint="#3A7BD5", tintOn=["name"]))
+        ui.mouse_click(_row(ui, "session-row", "ui-hex-row"), button="right")
+        _open_submenu(ui, "Tint")
+        ui.menu_item("Custom #3a7bd5")
+        ui.click(ui.menu_item("Mint"))
+        ctl.wait_tree(lambda tree: (find_session(tree, sid).get("tint"), find_session(tree, sid).get("tintOn"))
+                      == ("mint", ["name"]))
     finally:
         ctl.request("workspace.delete", wid)

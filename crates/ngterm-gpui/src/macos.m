@@ -228,6 +228,7 @@ void ngterm_withdraw(const char *identity) {
 #import <objc/message.h>
 #import <objc/runtime.h>
 @interface NGWebDelegate : NSObject <WKNavigationDelegate, WKUIDelegate,
+                                     WKScriptMessageHandler,
                                      WKScriptMessageHandlerWithReply>
 @property(nonatomic, weak) WKWebView *view;
 @property(nonatomic) void *context;
@@ -244,6 +245,9 @@ void ngterm_withdraw(const char *identity) {
 @property(nonatomic, strong) NSMutableSet<NSNumber *> *interrupted;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, id> *replies;
 @property(nonatomic, strong) NSTimer *focusTimer;
+// a text page's renderer handler, registered in the renderer's world alone
+@property(nonatomic, copy) NSString *textName;
+@property(nonatomic, copy) NSString *textWorld;
 @property(nonatomic) BOOL focused;
 @end
 @implementation NGWebDelegate
@@ -419,6 +423,24 @@ void ngterm_withdraw(const char *identity) {
   self.replies[identifier] = [reply copy];
   [self emit:@{@"kind" : @"message", @"body" : message.body}];
 }
+// a text page's renderer reports (upstream's TextPageBridge.PageHandler): its
+// main frame's objects only, passed on as JSON
+- (void)userContentController:(WKUserContentController *)controller
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+  if (!message.frameInfo.isMainFrame ||
+      ![message.body isKindOfClass:NSDictionary.class])
+    return;
+  NSData *json = [NSJSONSerialization dataWithJSONObject:message.body
+                                                 options:0
+                                                   error:nil];
+  if (!json)
+    return;
+  [self emit:@{
+    @"kind" : @"text",
+    @"body" : [[NSString alloc] initWithData:json
+                                    encoding:NSUTF8StringEncoding]
+  }];
+}
 - (void)webView:(WKWebView *)view
     runJavaScriptAlertPanelWithMessage:(NSString *)message
                       initiatedByFrame:(WKFrameInfo *)frame
@@ -548,6 +570,12 @@ void ngterm_web_detach(void *pointer) {
   [view.configuration.userContentController
       removeScriptMessageHandlerForName:@"ngtermBridge"
                            contentWorld:WKContentWorld.pageWorld];
+  if (delegate.textName)
+    [view.configuration.userContentController
+        removeScriptMessageHandlerForName:delegate.textName
+                             contentWorld:[WKContentWorld
+                                              worldWithName:delegate
+                                                                .textWorld]];
   for (void (^reply)(id, NSString *) in delegate.replies.allValues)
     reply(nil, @"page closed");
   [delegate.replies removeAllObjects];
@@ -597,6 +625,49 @@ void ngterm_web_document_script(void *pointer, const char *script,
   [controller addUserScript:renderer];
 }
 
+// A text page's renderer handler, in its world alone.
+void ngterm_web_text_channel(void *pointer, const char *name,
+                             const char *world) {
+  NGWebDelegate *delegate = (__bridge NGWebDelegate *)pointer;
+  delegate.textName = @(name);
+  delegate.textWorld = @(world);
+  [delegate.view.configuration.userContentController
+      addScriptMessageHandler:delegate
+                 contentWorld:[WKContentWorld worldWithName:@(world)]
+                         name:delegate.textName];
+}
+// Runs a function body in a named world, answering its value as JSON (null for
+// none) or the error, once.
+void ngterm_web_world_call(void *pointer, const char *script, const char *world,
+                           void *context,
+                           void (*done)(void *, const char *, const char *)) {
+  [(__bridge WKWebView *)pointer
+      callAsyncJavaScript:@(script)
+                arguments:@{}
+                  inFrame:nil
+           inContentWorld:[WKContentWorld worldWithName:@(world)]
+        completionHandler:^(id result, NSError *error) {
+          if (error) {
+            done(context, NULL,
+                 error.localizedDescription.UTF8String ?: "script failed");
+            return;
+          }
+          NSData *json =
+              result && result != NSNull.null
+                  ? [NSJSONSerialization
+                        dataWithJSONObject:result
+                                   options:NSJSONWritingFragmentsAllowed
+                                     error:nil]
+                  : nil;
+          done(context,
+               json ? [[NSString alloc] initWithData:json
+                                            encoding:NSUTF8StringEncoding]
+                          .UTF8String
+                    : NULL,
+               NULL);
+        }];
+}
+
 void ngterm_web_theme(void *pointer, const char *script) {
   WKUserContentController *controller =
       [(__bridge WKWebView *)pointer configuration].userContentController;
@@ -617,6 +688,48 @@ void ngterm_web_theme(void *pointer, const char *script) {
   }
   if (!replaced)
     [controller addUserScript:theme];
+}
+
+// The rule list a clicked HTML document loads behind: it blocks every network
+// load, which the page's CSP cannot do alone, since WebKit checks preconnect
+// and DNS-prefetch hints against rule lists only (upstream's DocumentRules).
+// Content-blocker patterns have no alternation, so each scheme gets its own
+// rule. Compiled once; a failed compile is tried again for the next page.
+static WKContentRuleList *ngterm_network_rules;
+void ngterm_web_block_network(void *pointer, void *context,
+                              void (*done)(void *, bool, const char *)) {
+  WKUserContentController *controller =
+      [(__bridge WKWebView *)pointer configuration].userContentController;
+  void (^install)(void) = ^{
+    // only a document page carries a rule list, so replacing them keeps a
+    // rebuilt page from stacking them
+    [controller removeAllContentRuleLists];
+    [controller addContentRuleList:ngterm_network_rules];
+    done(context, true, NULL);
+  };
+  if (ngterm_network_rules) {
+    install();
+    return;
+  }
+  NSString *source =
+      @"[{\"trigger\":{\"url-filter\":\"^https?://\"},\"action\":{\"type\":"
+      @"\"block\"}},{\"trigger\":{\"url-filter\":\"^wss?://\"},\"action\":{"
+      @"\"type\":\"block\"}},{\"trigger\":{\"url-filter\":\"^ftps?://\"},"
+      @"\"action\":{\"type\":\"block\"}}]";
+  [WKContentRuleListStore.defaultStore
+      compileContentRuleListForIdentifier:@"ngterm.document"
+                   encodedContentRuleList:source
+                        completionHandler:^(WKContentRuleList *list,
+                                            NSError *error) {
+                          if (list && !ngterm_network_rules)
+                            ngterm_network_rules = list;
+                          if (ngterm_network_rules) {
+                            install();
+                          } else {
+                            done(context, false,
+                                 error.localizedDescription.UTF8String);
+                          }
+                        }];
 }
 
 void ngterm_clipboard_html(const char *text, const char *html) {

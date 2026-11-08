@@ -5,29 +5,33 @@ import androidx.annotation.StringRes
 import com.nickalie.ngterm.android.R
 
 /**
- * The glyphs a status is drawn with. The first six are upstream's status shapes, as an origin names them (`circle`,
- * `square`, ...: ngterm-core's `StatusShape`); [Ring] and [Slash] are the app's own, for a connection on its way and
- * one out of reach.
+ * The glyphs a status is drawn with. The first eleven are upstream's status shapes, in its order, by the name an
+ * origin gives them (`circle`, `square`, `triangle-down`, ...: ngterm-core's `StatusShape`); [Ring] and [Slash] are
+ * the app's own, for a connection on its way and one out of reach, and have no wire name.
  */
 enum class StatusShape(
     @param:DrawableRes val drawable: Int,
+    private val wire: String? = null,
 ) {
-    Circle(R.drawable.ic_status_circle),
-    Square(R.drawable.ic_status_square),
-    Triangle(R.drawable.ic_status_triangle),
-    Diamond(R.drawable.ic_status_diamond),
-    Capsule(R.drawable.ic_status_capsule),
-    Star(R.drawable.ic_status_star),
+    Circle(R.drawable.ic_status_circle, "circle"),
+    Square(R.drawable.ic_status_square, "square"),
+    Triangle(R.drawable.ic_status_triangle, "triangle"),
+    TriangleDown(R.drawable.ic_status_triangle_down, "triangle-down"),
+    Play(R.drawable.ic_status_play, "play"),
+    Diamond(R.drawable.ic_status_diamond, "diamond"),
+    Capsule(R.drawable.ic_status_capsule, "capsule"),
+    Seal(R.drawable.ic_status_seal, "seal"),
+    Star(R.drawable.ic_status_star, "star"),
+    Bolt(R.drawable.ic_status_bolt, "bolt"),
+    Bell(R.drawable.ic_status_bell, "bell"),
     Ring(R.drawable.ic_status_ring),
     Slash(R.drawable.ic_status_slash),
     ;
 
     companion object {
-        private val wire = listOf(Circle, Square, Triangle, Diamond, Capsule, Star)
-
         /** The shape an origin names (its wire spelling), the circle for none or one this build doesn't know. */
         fun fromWire(name: String?): StatusShape =
-            wire.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: Circle
+            name?.let { spelled -> entries.firstOrNull { it.wire.equals(spelled, ignoreCase = true) } } ?: Circle
     }
 }
 

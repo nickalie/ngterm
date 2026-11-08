@@ -95,6 +95,13 @@ pub enum Report {
     Key(gpui_kit::Keystroke),
     /// A replaced theme script is in place: later loads wear it.
     ThemeInstalled,
+    /// The network filter of a page that blocks the network ([`Spec::block_network`]) is in place: its document may
+    /// load.
+    NetworkFilterInstalled,
+    /// That filter could not be installed: the page loads nothing.
+    NetworkFilterFailed(String),
+    /// A text page's renderer reported (its JSON object), through its handler in the renderer's world.
+    TextPage(String),
 }
 
 /// Decides a navigation at once.
@@ -133,6 +140,10 @@ pub struct Store {
 }
 
 /// What a page's web view is built from.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a native page's independent settings, each read once where the page is built"
+)]
 pub struct Spec {
     pub parent: isize,
     pub store: Store,
@@ -148,9 +159,14 @@ pub struct Spec {
     pub scripts: Vec<String>,
     /// App-owned document renderer, installed in its own content world with authored scripts still disabled.
     pub trusted_document_script: Option<String>,
+    /// The renderer is a text page's, whose reports and calls go through the renderer's channel (`text_page`).
+    pub text_channel: bool,
     pub grant: Option<Grant>,
     pub replica: Option<ReplicaRead>,
     pub text: Option<Text>,
+    /// The page loads nothing from the network ([`ngterm_core::html::HtmlOverlay::blocks_network`]): a content rule
+    /// list blocking every network scheme goes on it, reported once in place.
+    pub block_network: bool,
     pub decide: Decide,
     pub post: Post,
     pub take_key: TakeKey,
@@ -183,6 +199,33 @@ unsafe extern "C" {
     fn ngterm_web_reply(view: *mut c_void, json: *const c_char);
     fn ngterm_web_theme(view: *mut c_void, script: *const c_char);
     fn ngterm_web_document_script(view: *mut c_void, script: *const c_char, world: *const c_char);
+    fn ngterm_web_text_channel(delegate: *mut c_void, name: *const c_char, world: *const c_char);
+    fn ngterm_web_world_call(
+        view: *mut c_void,
+        script: *const c_char,
+        world: *const c_char,
+        context: *mut c_void,
+        done: extern "C" fn(*mut c_void, *const c_char, *const c_char),
+    );
+    fn ngterm_web_block_network(
+        view: *mut c_void,
+        context: *mut c_void,
+        done: extern "C" fn(*mut c_void, bool, *const c_char),
+    );
+}
+/// The rule list's answer: the page's post, given back once.
+extern "C" fn network_blocked(context: *mut c_void, installed: bool, message: *const c_char) {
+    // SAFETY: the Box leaked for this install, which the adapter answers exactly once on the main thread.
+    let post = unsafe { Box::from_raw(context.cast::<Post>()) };
+    let report = if installed {
+        Report::NetworkFilterInstalled
+    } else if message.is_null() {
+        Report::NetworkFilterFailed("the content rule list did not compile".to_owned())
+    } else {
+        // SAFETY: the adapter passes a live NUL-terminated message for this call.
+        Report::NetworkFilterFailed(unsafe { CStr::from_ptr(message) }.to_string_lossy().into_owned())
+    };
+    post(report);
 }
 extern "C" fn decide(
     context: *mut c_void,
@@ -231,6 +274,7 @@ extern "C" fn report(context: *mut c_void, json: *const c_char) {
             reason: text("reason"),
         },
         "message" => Report::Message(text("body")),
+        "text" => Report::TextPage(text("body")),
         "download" => Report::DownloadRefused(text("url")),
         "focus" => Report::Focus(value["focused"].as_bool().unwrap_or(false)),
         "commit" => Report::Committed,
@@ -272,6 +316,19 @@ extern "C" fn take_key(context: *mut c_void, code: u32) -> bool {
         false
     }
 }
+/// A renderer call's answer: the sender leaked for it, given back once with the value's JSON or the error.
+extern "C" fn called(context: *mut c_void, json: *const c_char, error: *const c_char) {
+    // SAFETY: the Box leaked for this call, which the adapter answers exactly once on the main thread.
+    let sender = unsafe { Box::from_raw(context.cast::<async_channel::Sender<super::super::text_page::Answer>>()) };
+    let answer = if error.is_null() {
+        // SAFETY: the adapter passes null or a live NUL-terminated JSON string for this call.
+        Ok((!json.is_null()).then(|| unsafe { CStr::from_ptr(json) }.to_string_lossy().into_owned()))
+    } else {
+        // SAFETY: the adapter passes a live NUL-terminated message for this call.
+        Err(unsafe { CStr::from_ptr(error) }.to_string_lossy().into_owned())
+    };
+    let _ = sender.try_send(answer);
+}
 pub struct Native {
     view: WebView,
     delegate: *mut c_void,
@@ -299,6 +356,17 @@ impl Native {
                 );
             }
         }
+        if spec.block_network {
+            let context = Box::into_raw(Box::new(spec.post.clone())).cast();
+            // SAFETY: a main-thread web view; the completion takes the context back once.
+            unsafe {
+                ngterm_web_block_network(
+                    objc2::rc::Retained::as_ptr(&view.webview()).cast_mut().cast::<c_void>(),
+                    context,
+                    network_blocked,
+                );
+            }
+        }
         let mut callbacks = Box::new(Callbacks {
             decide: spec.decide.clone(),
             post: spec.post.clone(),
@@ -314,6 +382,12 @@ impl Native {
                 take_key,
             )
         };
+        if spec.text_channel {
+            let name = CString::new(super::super::text_page::HANDLER).map_err(|error| error.to_string())?;
+            let world = CString::new(super::super::documents::WORLD).map_err(|error| error.to_string())?;
+            // SAFETY: the live delegate registers itself as the handler in that world, removed again at its detach.
+            unsafe { ngterm_web_text_channel(delegate, name.as_ptr(), world.as_ptr()) };
+        }
         Ok(Self {
             view,
             delegate,
@@ -383,6 +457,29 @@ impl Native {
                 parent as *mut c_void,
             );
         };
+    }
+    /// Evaluates `expression` in the renderer's world (`callAsyncJavaScript`, so a promise is awaited); its answer
+    /// arrives on the returned channel.
+    pub fn call_renderer(&self, expression: &str) -> async_channel::Receiver<super::super::text_page::Answer> {
+        let (sender, answer) = async_channel::bounded(1);
+        let (Ok(script), Ok(world)) = (
+            CString::new(format!("return ({expression});")),
+            CString::new(super::super::documents::WORLD),
+        ) else {
+            return answer;
+        };
+        let context = Box::into_raw(Box::new(sender)).cast();
+        // SAFETY: a main-thread web view; the adapter copies both strings and answers the context once.
+        unsafe {
+            ngterm_web_world_call(
+                objc2::rc::Retained::as_ptr(&self.view.webview()).cast_mut().cast(),
+                script.as_ptr(),
+                world.as_ptr(),
+                context,
+                called,
+            );
+        };
+        answer
     }
     pub fn post_json(&self, json: &str) {
         if let Ok(json) = CString::new(json) {

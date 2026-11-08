@@ -559,6 +559,40 @@ fn only_a_page_companion_is_handed_out_and_a_loopback_page_is_not() {
     );
 }
 
+/// Upstream's `attachCompanionPage` refusal of a page the other machine would build (#891, #917): a page companion
+/// whose page is Markdown, text or a clicked document is not handed out; an image, which travels only with its probed
+/// size, is not a page companion's at all.
+#[test]
+fn a_content_page_companion_is_not_handed_out() {
+    use crate::html::HtmlSource;
+    let docs = Docs::new();
+    let (mut fixture, _, page) = served(&docs);
+    let path = docs.index();
+    for (source, error) in [
+        (
+            HtmlSource::Markdown { path: path.clone() },
+            "a markdown, text or document page companion cannot be shown on another Mac",
+        ),
+        (
+            HtmlSource::Text {
+                path: path.clone(),
+                line: None,
+            },
+            "a markdown, text or document page companion cannot be shown on another Mac",
+        ),
+        (
+            HtmlSource::Document { path: path.clone() },
+            "a markdown, text or document page companion cannot be shown on another Mac",
+        ),
+        (HtmlSource::Image { path: path.clone() }, "not a page companion"),
+    ] {
+        let row = fixture.store_mut().unwrap().session_mut(page).unwrap();
+        row.overlay.html.as_mut().unwrap().source = source;
+        let response = fixture.session(SessionCmd::CompanionPageAttach, Some(&wire(page)), Args::default());
+        assert_eq!(response, failure(error));
+    }
+}
+
 /// Upstream's `testEachViewerClaimsItsOwnAttachmentAndOneLeavingEndsNeitherThePageNorTheOther`.
 #[test]
 fn each_viewer_claims_its_own_attachment_and_one_leaving_ends_neither_the_page_nor_the_other() {

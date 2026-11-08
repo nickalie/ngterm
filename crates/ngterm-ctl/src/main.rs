@@ -22,6 +22,7 @@ mod notify;
 mod output;
 mod overlay_job;
 mod overlay_page;
+mod overlay_text;
 mod pick;
 mod quick;
 mod read_wake;

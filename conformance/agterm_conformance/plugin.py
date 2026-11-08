@@ -544,16 +544,23 @@ def _coverage_gate_item(session: pytest.Session, items: list[pytest.Item], optio
     return CoverageGate.from_parent(session, name="coverage-gate", report=report, catalog=catalog_path)
 
 
+def highest_since(item: pytest.Item) -> str | None:
+    """The latest of an item's levels: a param's `since` holds even under an older one on its function or module."""
+    from agterm_conformance.impls.base import version_tuple
+
+    return max((marker.args[0] for marker in item.iter_markers("since")), key=version_tuple, default=None)
+
+
 def skip_reason(item: pytest.Item, adapter: Adapter) -> str | None:
     """Level first: a build below a test's level is not judged on that test's capabilities."""
-    since = item.get_closest_marker("since")
+    since = highest_since(item)
     if not adapter.available:
         return f"{NOT_YET_AT_LEVEL}: {adapter.name} has no binary"
     profile = adapter.profile
     if profile.parity_level is None:
         return f"{NOT_YET_AT_LEVEL}: {adapter.name} reports no parity level"
-    if since is not None and not profile.at_level(since.args[0]):
-        return f"{NOT_YET_AT_LEVEL}: since {since.args[0]}, {adapter.name} is at {profile.parity_level}"
+    if since is not None and not profile.at_level(since):
+        return f"{NOT_YET_AT_LEVEL}: since {since}, {adapter.name} is at {profile.parity_level}"
     for marker in item.iter_markers("requires"):
         missing = [capability for capability in marker.args if capability not in profile.capabilities]
         if not missing or (marker.kwargs.get("any") and len(missing) < len(marker.args)):

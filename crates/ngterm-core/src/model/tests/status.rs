@@ -114,9 +114,13 @@ fn wire_vocabularies_round_trip() {
         assert_eq!(StatusShape::from_wire(shape.wire_name()), Some(shape));
     }
     assert_eq!(StatusShape::from_wire("hexagon"), None);
+    assert_eq!(StatusShape::from_wire("triangle-down"), Some(StatusShape::TriangleDown));
+    assert_eq!(StatusShape::from_wire("arrowtriangle.down"), None);
+    assert_eq!(StatusShape::from_wire("Circle"), None, "case-sensitive");
+    assert_eq!(StatusShape::from_wire(""), None);
     assert_eq!(
         StatusShape::valid_names_list(),
-        "circle|square|triangle|diamond|capsule|star"
+        "circle|square|triangle|triangle-down|play|diamond|capsule|seal|star|bolt|bell"
     );
     assert!(
         indicator(Blocked, None)
@@ -126,6 +130,54 @@ fn wire_vocabularies_round_trip() {
             },
         "the shape takes part in equality, so a shape-only change emits"
     );
+}
+
+#[test]
+fn status_shapes_keep_upstreams_order_names_and_original_set() {
+    use StatusShape::{Bell, Bolt, Capsule, Circle, Diamond, Play, Seal, Square, Star, Triangle, TriangleDown};
+    assert_eq!(
+        StatusShape::ALL,
+        [
+            Circle,
+            Square,
+            Triangle,
+            TriangleDown,
+            Play,
+            Diamond,
+            Capsule,
+            Seal,
+            Star,
+            Bolt,
+            Bell
+        ]
+    );
+    let names: Vec<&str> = StatusShape::ALL.map(StatusShape::display_name).to_vec();
+    assert_eq!(
+        names,
+        [
+            "Circle",
+            "Square",
+            "Triangle",
+            "Down Triangle",
+            "Play",
+            "Diamond",
+            "Capsule",
+            "Seal",
+            "Star",
+            "Bolt",
+            "Bell"
+        ]
+    );
+    // v0.40.0's six, which an older viewer decodes: not the first six of the new order
+    assert_eq!(
+        StatusShape::ORIGINAL,
+        [Circle, Square, Triangle, Diamond, Capsule, Star]
+    );
+    for shape in StatusShape::ALL {
+        assert_eq!(shape.is_original(), StatusShape::ORIGINAL.contains(&shape), "{shape:?}");
+    }
+    assert!(!TriangleDown.is_original() && !Play.is_original() && !Seal.is_original());
+    assert!(!Bolt.is_original() && !Bell.is_original());
 }
 
 #[test]

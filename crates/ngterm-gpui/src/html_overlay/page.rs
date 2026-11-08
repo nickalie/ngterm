@@ -14,8 +14,8 @@ use std::rc::{Rc, Weak};
 use gpui_kit::{AnyWindowHandle, App, Entity, WeakEntity};
 use ngterm_core::html::bridge::{ADAPTER_SCRIPT, HANDLER_NAME, HELPER_SCRIPT, RELAY_SCRIPT, WORLD};
 use ngterm_core::html::{
-    HtmlLoadState, HtmlNavigation, HtmlNavigationDecision, HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo,
-    HtmlReloadTarget, HtmlSource, decide, errors,
+    HtmlLoadState, HtmlNavigation, HtmlNavigationDecision, HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlPageKind,
+    HtmlReloadTarget, HtmlSource, ReplicaContent, decide, errors,
 };
 use ngterm_wpe::{
     Event, Geometry, InjectionTime, Load, MessageHandler, NavigationType, PageState as EngineState, PolicyKind,
@@ -28,6 +28,7 @@ use super::engine::Web;
 use super::panel::PanelColors;
 use super::policy::{self, DecisionTarget, LoadEvent, LoadOutcome, LoadTracker, ThemeChange};
 use super::registry;
+use super::text_page::{self, PageChannel, TextPage};
 use super::view::PageView;
 use crate::modal::{Alert, AlertButton, AlertSpec};
 use crate::state::{AppState, Poster, post};
@@ -129,6 +130,8 @@ pub(super) struct Page {
     /// began.
     preedit: RefCell<Option<(String, u32)>>,
     document_generation: super::documents::Generation,
+    /// A text page's bridge: the renderer's reports and a log page's follower.
+    text_bridge: Option<Rc<TextPage>>,
     me: Weak<Page>,
 }
 
@@ -176,6 +179,7 @@ impl Page {
             focused: Cell::new(false),
             preedit: RefCell::new(None),
             document_generation: super::documents::Generation::default(),
+            text_bridge: TextPage::new(overlay, me.clone() as Weak<dyn PageChannel>, poster),
             me: me.clone(),
         })
     }
@@ -343,14 +347,21 @@ impl Page {
                     name: HANDLER_NAME.to_owned(),
                     world: Some(WORLD.to_owned()),
                 }]
+            } else if self.text_bridge.is_some() {
+                // the renderer's reports, in its world alone
+                vec![MessageHandler {
+                    name: text_page::HANDLER.to_owned(),
+                    world: Some(super::documents::WORLD.to_owned()),
+                }]
             } else {
                 Vec::new()
             },
             zoom,
             // a file page's unstyled canvas shows the themed panel behind it while authored backgrounds still paint;
             // a URL page keeps the browser's opaque canvas, which a web app styled against it relies on
-            background: (themed || matches!(overlay.source, HtmlSource::Image { .. })).then_some(Rgba::TRANSPARENT),
+            background: (themed || overlay.source.kind() == HtmlPageKind::Image).then_some(Rgba::TRANSPARENT),
             geometry: self.geometry.get().unwrap_or(FIRST_GEOMETRY),
+            block_network: overlay.blocks_network(),
         };
         let view = web.create_view(spec);
         self.view.set(Some(view));
@@ -366,9 +377,10 @@ impl Page {
         self.load_original();
     }
 
-    /// The theme, and on a file page the bridge's scripts (upstream's `installScripts`).
+    /// The theme, and on a file page the bridge's scripts (upstream's `installScripts`); a picture wears none, a
+    /// replica of one included.
     fn scripts(&self, overlay: &HtmlOverlay) -> Vec<UserScript> {
-        if matches!(overlay.source, HtmlSource::Image { .. }) {
+        if overlay.source.kind() == HtmlPageKind::Image {
             return Vec::new();
         }
         let themed = overlay.themed();
@@ -382,12 +394,8 @@ impl Page {
             InjectionTime::Start,
             Some(THEME_WORLD),
         )];
-        if matches!(overlay.source, HtmlSource::Markdown { .. }) {
-            scripts.push(script(
-                &super::documents::script(),
-                InjectionTime::End,
-                Some(super::documents::WORLD),
-            ));
+        if let Some(renderer) = super::documents::renderer(&overlay.source) {
+            scripts.push(script(&renderer, InjectionTime::End, Some(super::documents::WORLD)));
             return scripts;
         }
         if !overlay.bridged() {
@@ -414,7 +422,7 @@ impl Page {
         let colors = PanelColors::resolve(terminal, self.background.as_deref());
         self.colors.replace(colors.clone());
         self.refresh(cx);
-        if matches!(overlay.source, HtmlSource::Image { .. }) {
+        if overlay.source.kind() == HtmlPageKind::Image {
             return;
         }
         let next = colors.theme();
@@ -427,7 +435,19 @@ impl Page {
             web.set_scripts(view, self.scripts(&overlay));
         }
         if change == ThemeChange::ReinstallAndReload {
-            self.reload_shown();
+            self.rebuild_shown();
+        }
+    }
+
+    /// Wears a changed theme: a text page rebuilds from what it shows (its text, a log's snapshot and paused offset,
+    /// upstream's `loadDocument(fresh: false)`), any other page reloads.
+    fn rebuild_shown(&self) {
+        match &self.text_bridge {
+            Some(text) => {
+                self.state.borrow_mut().load.begin();
+                text.load_document(false);
+            }
+            None => self.reload_shown(),
         }
     }
 
@@ -463,6 +483,10 @@ impl Page {
                 tracing::warn!(page = %self.id, message, "the web engine could not build the page");
                 self.fail(message.clone());
             }
+            Event::NetworkFilterFailed { message, .. } => {
+                tracing::warn!(page = %self.id, message, "the page's network filter could not be compiled");
+                self.fail(errors::NETWORK_FILTER_UNAVAILABLE.to_owned());
+            }
             _ => {}
         }
     }
@@ -473,6 +497,13 @@ impl Page {
     /// page where it sits when the task runs, so a page that left its slot is refused before anything runs.
     fn bridge_message(&self, message: &ScriptMessage) {
         let Some(web) = self.web() else { return };
+        if message.handler == text_page::HANDLER {
+            web.reply_script_message(message.token, Ok("null".to_owned()));
+            if let (Some(page), Some(body), true) = (&self.text_bridge, &message.body, self.active()) {
+                page.message(body);
+            }
+            return;
+        }
         if !self.active() {
             web.reply_script_message(message.token, Err("page closed".to_owned()));
             return;
@@ -634,6 +665,9 @@ impl Page {
             // a page out of sight renders nothing
             web.set_visible(view, on_screen);
         }
+        if let Some(page) = &self.text_bridge {
+            page.apply(overlay, on_screen);
+        }
         self.refresh(cx);
         if !on_screen {
             self.end_prompt(cx);
@@ -676,8 +710,16 @@ impl Page {
             state.load.begin();
             state.overlay.source.clone()
         };
+        // a text page's documents are its bridge's, read off the main thread with the model's search
+        if let Some(text) = &self.text_bridge {
+            text.load_document(true);
+            return;
+        }
         let load = match source {
-            source @ (HtmlSource::Image { .. } | HtmlSource::Markdown { .. }) => {
+            source @ (HtmlSource::Image { .. }
+            | HtmlSource::Markdown { .. }
+            | HtmlSource::Text { .. }
+            | HtmlSource::Document { .. }) => {
                 registry::read_document(self.id, generation, source);
                 return;
             }
@@ -696,11 +738,19 @@ impl Page {
                 Ok(html) => Load::Html { html, base_uri: None },
                 Err(error) => return self.fail(error.to_string()),
             },
-            // a replica's files come from the machine that opened it, read through the replica scheme
-            HtmlSource::Replica { path } => match policy::replica_uri(self.id, &path) {
+            // a replica's files come from the machine that opened it: an HTML file read through the replica scheme,
+            // any other page built here from its fetched bytes
+            HtmlSource::Replica {
+                path,
+                content: ReplicaContent::Html,
+            } => match policy::replica_uri(self.id, &path) {
                 Some(uri) => Load::Uri(uri),
                 None => return self.fail(errors::REMOTE_FILE.to_owned()),
             },
+            HtmlSource::Replica { path, content } => {
+                registry::read_replica_document(self.id, generation, path, content);
+                return;
+            }
         };
         if let (Some(web), Some(view)) = (self.web(), self.view.get()) {
             web.load(view, load);
@@ -752,8 +802,8 @@ impl Page {
                 web.go_forward(view);
             }
             HtmlNavigation::Browser => {
-                if matches!(self.overlay().source, HtmlSource::Markdown { .. }) {
-                    return Err(errors::MARKDOWN_IN_OVERLAY.to_owned());
+                if let Some(refusal) = super::documents::browser_refusal(&self.overlay().source) {
+                    return Err(refusal.to_owned());
                 }
                 let opened = self
                     .browser_url()
@@ -1004,12 +1054,42 @@ impl Page {
         self.end_prompt(cx);
         self.state.borrow_mut().life = Life::Released;
         self.document_generation.next();
+        if let Some(page) = &self.text_bridge {
+            page.stop();
+        }
         if let (Some(web), Some(view)) = (self.web(), self.view.take()) {
             web.close_view(view);
         }
         if let Some(element) = self.element() {
             element.update(cx, PageView::release);
         }
+    }
+}
+
+/// A text page's way to its engine page: documents load as the source's do, and calls run in the renderer's world.
+impl PageChannel for Page {
+    fn holds_slot(&self) -> bool {
+        self.active()
+    }
+
+    fn show_document(&self, html: String) {
+        if !self.active() {
+            return;
+        }
+        if let (Some(web), Some(view)) = (self.web(), self.view.get()) {
+            web.load(view, Load::Html { html, base_uri: None });
+        }
+    }
+
+    fn fail(&self, message: String) {
+        if self.active() {
+            Page::fail(self, message);
+        }
+    }
+
+    fn call(&self, expression: String) -> Option<async_channel::Receiver<text_page::Answer>> {
+        let (web, view) = (self.web()?, self.view.get()?);
+        Some(web.evaluate(view, expression, Some(super::documents::WORLD.to_owned())))
     }
 }
 
@@ -1304,6 +1384,7 @@ mod tests {
         );
         let (page, _) = realized(&overlay(HtmlSource::Replica {
             path: "/a.html".to_owned(),
+            content: ngterm_core::html::ReplicaContent::Html,
         }));
         for nav in [HtmlNavigation::Browser, HtmlNavigation::Finder] {
             assert_eq!(page.navigate(nav), Err("the page's file is on another Mac".to_owned()));
@@ -1379,6 +1460,7 @@ mod tests {
     fn bridge_rejects_nonobjects_closed_pages_and_a_replica_without_its_link(cx: &mut TestAppContext) {
         let (page, web) = realized(&overlay(HtmlSource::Replica {
             path: "/a.html".to_owned(),
+            content: ngterm_core::html::ReplicaContent::Html,
         }));
         let mut message = ScriptMessage {
             token: ReplyToken::from_raw(1),
@@ -1607,14 +1689,14 @@ mod tests {
 
 #[cfg(test)]
 mod document_tests {
-    use super::{Life, Page, Storage};
+    use super::{Life, Page, Storage, THEME_WORLD};
     use crate::html_overlay::{
         engine::Web,
         panel::{PanelColors, TerminalColors},
         testing::{Call, Recorder},
     };
     use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
-    use ngterm_wpe::{Load, SessionId, Settings};
+    use ngterm_wpe::{Load, Rgba, SessionId, Settings};
     use std::rc::Rc;
 
     fn page(source: HtmlSource) -> Rc<Page> {
@@ -1649,6 +1731,310 @@ mod document_tests {
             Some(crate::html_overlay::documents::WORLD)
         );
         assert_eq!(spec.scripts[1].time, ngterm_wpe::InjectionTime::End);
+    }
+
+    /// Upstream's `testTheRendererRunsIsolatedWithPageScriptOffNoBridgeAndNoBaseURL`: a text page runs highlight.js and
+    /// `text.js` in the renderer's world, with no Markdown parser, page script, bridge or file access.
+    #[test]
+    fn text_renderer_is_isolated_without_authored_scripts_bridge_or_file_access() {
+        let page = page(HtmlSource::Text {
+            path: "/not-read.go".to_owned(),
+            line: Some(3),
+        });
+        let recorder = Rc::new(Recorder::default());
+        let web: Rc<dyn Web> = recorder.clone();
+        page.realize(&web, Some(SessionId::from_raw(1)), 1.0);
+        let specs = recorder.specs.borrow();
+        let spec = &specs[0];
+        assert!(!spec.settings.intersects(
+            Settings::JAVASCRIPT_MARKUP
+                | Settings::FILE_ACCESS_FROM_FILE_URLS
+                | Settings::UNIVERSAL_ACCESS_FROM_FILE_URLS
+        ));
+        // the renderer's own reports, heard in its world alone (upstream's `TextPageBridge.handlerName`)
+        assert_eq!(
+            spec.message_handlers,
+            [ngterm_wpe::MessageHandler {
+                name: "ngtermTextPage".to_owned(),
+                world: Some(crate::html_overlay::documents::WORLD.to_owned()),
+            }]
+        );
+        assert_eq!(spec.scripts.len(), 2);
+        let renderer = &spec.scripts[1];
+        assert_eq!(renderer.world.as_deref(), Some(crate::html_overlay::documents::WORLD));
+        assert_eq!(renderer.time, ngterm_wpe::InjectionTime::End);
+        assert_eq!(renderer.source, crate::html_overlay::documents::text_script());
+        assert!(!renderer.source.contains("markdownit"));
+    }
+
+    /// A text page is built by the app: the browser would get the raw file, and the file manager reveals file pages
+    /// only (upstream's `testATextPageStaysInItsOverlay`).
+    #[test]
+    fn a_text_page_stays_in_its_overlay() {
+        let page = page(HtmlSource::Text {
+            path: "/not-read.go".to_owned(),
+            line: None,
+        });
+        assert_eq!(
+            page.navigate(ngterm_core::html::HtmlNavigation::Browser),
+            Err(ngterm_core::html::errors::TEXT_IN_OVERLAY.to_owned())
+        );
+        assert_eq!(
+            page.navigate(ngterm_core::html::HtmlNavigation::Finder),
+            Err(ngterm_core::html::errors::FINDER_REQUIRES_FILE.to_owned())
+        );
+    }
+
+    /// A clicked HTML file (upstream's `testAClickedDocumentRunsNoTaggedControlAndNoScript`'s spec half and
+    /// `testAClickedDocumentStaysInItsOverlay`): its scripts off, no bridge, no renderer, only the theme, behind the
+    /// engine's network filter, and it stays in its overlay.
+    #[test]
+    fn a_clicked_document_runs_no_script_or_bridge_and_loads_behind_the_network_filter() {
+        let page = page(HtmlSource::Document {
+            path: "/not-read.html".to_owned(),
+        });
+        let recorder = Rc::new(Recorder::default());
+        let web: Rc<dyn Web> = recorder.clone();
+        page.realize(&web, Some(SessionId::from_raw(1)), 1.0);
+        {
+            let specs = recorder.specs.borrow();
+            let spec = &specs[0];
+            assert!(spec.block_network);
+            assert!(!spec.settings.intersects(
+                Settings::JAVASCRIPT_MARKUP
+                    | Settings::FILE_ACCESS_FROM_FILE_URLS
+                    | Settings::UNIVERSAL_ACCESS_FROM_FILE_URLS
+            ));
+            assert!(spec.message_handlers.is_empty());
+            assert_eq!(spec.scripts.len(), 1, "the theme alone");
+            assert_eq!(spec.scripts[0].world.as_deref(), Some(THEME_WORLD));
+            assert_eq!(spec.background, Some(Rgba::TRANSPARENT), "themed like a file page");
+        }
+        assert_eq!(
+            page.navigate(ngterm_core::html::HtmlNavigation::Browser),
+            Err(ngterm_core::html::errors::DOCUMENT_IN_OVERLAY.to_owned())
+        );
+        assert_eq!(
+            page.navigate(ngterm_core::html::HtmlNavigation::Finder),
+            Err(ngterm_core::html::errors::FINDER_REQUIRES_FILE.to_owned())
+        );
+    }
+
+    /// Every other page loads with no filter to wait for.
+    #[test]
+    fn only_a_clicked_document_blocks_the_network() {
+        for source in [
+            HtmlSource::Markdown {
+                path: "/not-read.md".to_owned(),
+            },
+            HtmlSource::File {
+                path: "/not-read.html".to_owned(),
+                grant_root: None,
+            },
+        ] {
+            let page = page(source);
+            let recorder = Rc::new(Recorder::default());
+            let web: Rc<dyn Web> = recorder.clone();
+            page.realize(&web, Some(SessionId::from_raw(1)), 1.0);
+            assert!(!recorder.specs.borrow()[0].block_network);
+        }
+    }
+
+    /// A log page over `path` following its file, realized on a fresh recorder.
+    fn log_page(path: &std::path::Path) -> (HtmlOverlay, Rc<Page>, Rc<Recorder>) {
+        let log = ngterm_core::html::text_page::TextLog { tail: 50, follow: true };
+        let overlay = HtmlOverlay::new(
+            HtmlSource::Text {
+                path: path.to_string_lossy().into_owned(),
+                line: None,
+            },
+            HtmlPageFlags::default(),
+        )
+        .with_text_log(Some(log));
+        let page = Page::new(
+            &overlay,
+            None,
+            PanelColors::resolve(&TerminalColors::default(), None),
+            Storage::Ephemeral,
+            &crate::state::detached_poster(),
+        );
+        let recorder = Rc::new(Recorder::default());
+        let web: Rc<dyn Web> = recorder.clone();
+        page.realize(&web, Some(SessionId::from_raw(1)), 1.0);
+        (overlay, page, recorder)
+    }
+
+    /// A report `page`'s renderer posts.
+    fn renderer_message(page: &Page, body: &str) -> ngterm_wpe::Event {
+        ngterm_wpe::Event::ScriptMessage(ngterm_wpe::ScriptMessage {
+            token: ngterm_wpe::ReplyToken::from_raw(1),
+            view: page.view_id().unwrap(),
+            handler: "ngtermTextPage".to_owned(),
+            body: Some(body.to_owned()),
+        })
+    }
+
+    /// The ready report the renderer of `built`, a log page's document, posts: `text.js`'s wrapper names its build.
+    fn ready(built: &str) -> String {
+        let (_, rest) = built
+            .split_once(" data-load=\"")
+            .expect("a log document names its build");
+        format!(r#"{{"ready":true,"load":{}}}"#, rest.split_once('"').unwrap().0)
+    }
+
+    /// The document `calls` loaded last.
+    fn loaded(calls: Vec<Call>) -> Option<String> {
+        calls.into_iter().rev().find_map(|call| match call {
+            Call::Load(Load::Html { html, .. }) => Some(html),
+            _ => None,
+        })
+    }
+
+    /// The scripts evaluated among `calls`, with their worlds.
+    fn evaluated(calls: Vec<Call>) -> Vec<(String, Option<String>)> {
+        calls
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::Evaluate { script, world } => Some((script, world)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `overlay` as the model has it with the page following or not.
+    fn following(overlay: &HtmlOverlay, following: bool) -> HtmlOverlay {
+        let mut overlay = overlay.clone();
+        overlay.log_state = Some(ngterm_core::html::text_page::TextLogState {
+            following,
+            report: ngterm_core::html::text_page::TextLogReport::default(),
+        });
+        overlay
+    }
+
+    /// A log page's document is its follower's (no gutter, its state in place of a line); the renderer's ready report
+    /// hands it the latest text and the model's search in its world, and a scroll that pauses it goes to the follower before the model. The
+    /// model's pause reaches the renderer's bar.
+    #[gpui_kit::test]
+    fn a_log_page_builds_from_its_follower_and_hears_its_renderer(cx: &mut gpui_kit::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, "first\nsecond\n").unwrap();
+        let (overlay, page, recorder) = log_page(&path);
+        let built = loaded(recorder.take()).expect("the follower's document");
+        assert!(
+            built.contains("data-log data-following=\"true\"") && built.contains(">first\nsecond\n</div>"),
+            "{built}"
+        );
+        let world = Some(crate::html_overlay::documents::WORLD.to_owned());
+        let (paused, resumed) = (following(&overlay, false), following(&overlay, true));
+        cx.update(|cx| {
+            page.event(&renderer_message(&page, r#"{"ready":true}"#), cx);
+            assert!(
+                evaluated(recorder.take()).is_empty(),
+                "`text.js`'s own report names no build"
+            );
+            page.event(&renderer_message(&page, &ready(&built)), cx);
+            let calls = evaluated(recorder.take());
+            assert_eq!(calls.len(), 3, "{calls:?}");
+            assert!(
+                calls[0].0.starts_with("ngtermTextUpdate(\"first\\nsecond\\n\""),
+                "{calls:?}"
+            );
+            assert_eq!(calls[1], ("ngtermTextSetFollowing(true)".to_owned(), world.clone()));
+            // the model's search goes with them, none here
+            assert_eq!(
+                calls[2],
+                (r#"ngtermTextSearchSet("",0,false)"#.to_owned(), world.clone())
+            );
+            page.event(&renderer_message(&page, r#"{"following":false,"top":12}"#), cx);
+            assert!(evaluated(recorder.take()).is_empty(), "the page made the change");
+            // an apply ahead of the posted pause carries the model's older value, which keeps the pause
+            page.apply(&resumed, true, cx);
+            assert!(evaluated(recorder.take()).is_empty());
+            page.apply(&paused, true, cx);
+            assert!(
+                evaluated(recorder.take()).is_empty(),
+                "the pause is back from the model"
+            );
+            page.apply(&resumed, true, cx);
+            let resume = ("ngtermTextSetFollowing(true)".to_owned(), world.clone());
+            assert_eq!(evaluated(recorder.take()), [resume]);
+            page.apply(&paused, true, cx);
+            let pause = ("ngtermTextSetFollowing(false)".to_owned(), world);
+            assert_eq!(evaluated(recorder.take()), [pause]);
+            page.close(cx);
+        });
+    }
+
+    /// The updates among `calls` that carry `text`.
+    fn updates_with(calls: Vec<Call>, text: &str) -> usize {
+        let text = serde_json::json!(text).to_string();
+        evaluated(calls)
+            .iter()
+            .filter(|(script, _)| script.starts_with(&format!("ngtermTextUpdate({text},")))
+            .count()
+    }
+
+    /// Upstream's `testOffScreenStopsTheTicksAndComingBackReadsAtOnce` and `testStopEndsTheTicks`, on the app's timer:
+    /// a following page on screen reads its file every interval; off screen its ticks end and it reads nothing, and
+    /// coming back reads at once; the page's close ends them.
+    #[gpui_kit::test]
+    fn a_log_pages_ticks_run_on_screen_and_end_off_screen_and_at_close(cx: &mut gpui_kit::TestAppContext) {
+        use std::io::Write as _;
+        cx.update(|cx| super::text_page::init(cx));
+        let interval = ngterm_app::log_follower::INTERVAL;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, "first\n").unwrap();
+        let append = |text: &str| {
+            let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(text.as_bytes()).unwrap();
+        };
+        let (overlay, page, recorder) = log_page(&path);
+        cx.run_until_parked();
+        let built = loaded(recorder.take()).expect("the follower's document");
+        assert!(built.contains(">first\n</div>"), "{built}");
+        let shown = following(&overlay, true);
+        let ticking = || page.text_bridge.as_ref().unwrap().ticking();
+
+        cx.update(|cx| {
+            page.event(&renderer_message(&page, &ready(&built)), cx);
+            page.apply(&shown, true, cx);
+        });
+        assert!(ticking());
+        cx.run_until_parked();
+        recorder.take();
+        append("second\n");
+        cx.executor().advance_clock(interval);
+        cx.run_until_parked();
+        assert_eq!(
+            updates_with(recorder.take(), "first\nsecond\n"),
+            1,
+            "a tick read the append"
+        );
+
+        cx.update(|cx| page.apply(&shown, false, cx));
+        assert!(!ticking(), "off screen ends the ticks");
+        append("third\n");
+        cx.executor().advance_clock(interval * 5);
+        cx.run_until_parked();
+        assert!(evaluated(recorder.take()).is_empty(), "nothing is read off screen");
+
+        cx.update(|cx| page.apply(&shown, true, cx));
+        assert!(ticking());
+        cx.run_until_parked();
+        assert_eq!(
+            updates_with(recorder.take(), "first\nsecond\nthird\n"),
+            1,
+            "coming back reads at once"
+        );
+
+        cx.update(|cx| page.close(cx));
+        assert!(!ticking(), "the close ends the ticks");
+        append("fourth\n");
+        cx.executor().advance_clock(interval * 5);
+        cx.run_until_parked();
+        assert!(evaluated(recorder.take()).is_empty());
     }
 
     #[test]

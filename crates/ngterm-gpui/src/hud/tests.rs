@@ -231,13 +231,55 @@ fn the_config_pins_the_padding_and_paints_the_background() {
     );
 }
 
+/// Upstream's `HudLinkClick` test: ⌘ and the ⌘⌥ reveal chord click a link, ⌥ alone, ⌘⇧, ⌘⌥⇧ and ⌘⌃ do not (Ctrl or
+/// Super standing for ⌘).
 #[test]
-fn only_ctrl_alone_is_the_link_modifier() {
+fn ctrl_or_super_and_the_reveal_chord_are_the_link_modifiers() {
     assert!(is_link_modifier(&Modifiers::control()));
+    assert!(is_link_modifier(&Modifiers {
+        control: true,
+        alt: true,
+        ..Modifiers::default()
+    }));
+    assert!(is_link_modifier(&Modifiers {
+        platform: true,
+        ..Modifiers::default()
+    }));
+    assert!(is_link_modifier(&Modifiers {
+        platform: true,
+        alt: true,
+        ..Modifiers::default()
+    }));
+    assert!(!is_link_modifier(&Modifiers {
+        platform: true,
+        shift: true,
+        ..Modifiers::default()
+    }));
+    assert!(!is_link_modifier(&Modifiers {
+        platform: true,
+        alt: true,
+        shift: true,
+        ..Modifiers::default()
+    }));
+    assert!(!is_link_modifier(&Modifiers {
+        control: true,
+        function: true,
+        ..Modifiers::default()
+    }));
     assert!(!is_link_modifier(&Modifiers::control_shift()));
     assert!(!is_link_modifier(&Modifiers {
         control: true,
         alt: true,
+        shift: true,
+        ..Modifiers::default()
+    }));
+    assert!(!is_link_modifier(&Modifiers {
+        alt: true,
+        ..Modifiers::default()
+    }));
+    assert!(!is_link_modifier(&Modifiers {
+        control: true,
+        platform: true,
         ..Modifiers::default()
     }));
     assert!(!is_link_modifier(&Modifiers::default()));

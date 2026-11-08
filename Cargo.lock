@@ -5302,6 +5302,7 @@ dependencies = [
  "base64 0.23.1",
  "bitflags 2.13.2",
  "idna",
+ "libc",
  "mime_guess",
  "ngterm-host",
  "ngterm-proto",

@@ -413,7 +413,7 @@ fn info_snapshot_and_deltas_project_without_viewer_timers_and_clear_on_disconnec
     assert!(viewer.fixture.core.take_info_timers().is_empty());
     viewer.frame(json!({"kind":"info","info":{"source":"next","markdown":false,"hideAfter":0}}));
     assert_eq!(viewer.node()["info"], "next");
-    viewer.frame(json!({"kind":"info","info":{"source":"^[a](color: \"pink\")","markdown":true,"hideAfter":0}}));
+    viewer.frame(json!({"kind":"info","info":{"source":"^[a](color: \"maroon\")","markdown":true,"hideAfter":0}}));
     for field in ["info", "infoMarkdown", "infoHideAfter"] {
         assert!(viewer.node().get(field).is_none());
     }

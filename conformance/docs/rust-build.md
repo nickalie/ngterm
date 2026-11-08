@@ -9,7 +9,7 @@ Rust build reports, and no other key (`assert_version_result` in `agterm_conform
 ```json
 {"app": {"version": "0.1.0", "commit": "abc1234"},
  "installed": {"version": "0.1.0", "commit": "abc1234"},
- "conformance": {"parityLevel": "0.40.0", "capabilities": ["posix-shell", "live-sessions"]}}
+ "conformance": {"parityLevel": "0.41.1", "capabilities": ["posix-shell", "live-sessions"]}}
 ```
 
 - `app.version`: a non-empty string; `app.commit` is optional, and the CLI's `version` prints `version (commit)`.
@@ -22,9 +22,9 @@ Rust build reports, and no other key (`assert_version_result` in `agterm_conform
 - `conformance.parityLevel`: the upstream version whose behavior the build claims, a dotted version with an optional
   `v` (no suffix such as `-beta`).
   A test marked `since(V)` above it skips as `not-yet-at-level`.
-  The Rust build claims `0.40.0` (`PARITY_LEVEL` in `ngterm-proto`), raised after the release's feature ports.
+  The Rust build claims `0.41.1` (`PARITY_LEVEL` in `ngterm-proto`), raised after the release's feature ports.
   The catalog independently names the reference release: a mechanical catalog bump does not raise the Rust claim.
-  Tests through v0.40.0 are eligible at this level; capabilities and host requirements still govern execution.
+  Tests through v0.41.1 are eligible at this level; capabilities and host requirements still govern execution.
 - `conformance.capabilities`: names from the vocabulary below; a test whose `requires` names one missing skips as
   `unsupported`.
   Names outside the vocabulary match nothing.
@@ -113,7 +113,7 @@ share is asserted directly, with no capability.
 |---|---|---|
 | `posix-shell` | yes | panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic |
 | `live-sessions` | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's per-session daemons; the Rust build's one session server per instance, ngterm-session) |
-| `live-any-shell` |  | Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and ngterm-session is staged |
+| `live-any-shell` |  | Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the pane shell (the password-database login shell, or the one ghostty `command` names in its place) is one of them and ngterm-session is staged |
 | `agent-chat` |  | Rust-only: the agent record behind the Android chat view: `ngtermctl agent hook` keeps a pane's Claude Code or Codex conversation from its hook payload, `agent.get` reads it back, `ngtermctl agent chat` streams its transcript as chat events, `ngtermctl agent commands` lists the agent's slash commands and `ngtermctl agent upload` stores a file the chat attaches |
 | `pages-survive` |  | Rust-only: an HTML page lives until it is closed: a page handed to the viewer presenting a session is parked, its slot reserved and its outcome pending, when that presenter or its page helper goes, and handed again to the next presenter that speaks pages |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
@@ -141,9 +141,12 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `windows-shells`: on Windows, where a pane's shell may be PowerShell or `cmd.exe` and a rerun restore types its
   replay quoted for that shell (`ngterm-core`'s `shell_dialect`; the harness picks the shell with
   `launch(pane_shell=...)`), where upstream types a POSIX line into any shell;
-- `live-sessions`: by host, where the login shell is zsh or fish (upstream's two) and `ngterm-session` is staged;
-- `live-any-shell`: by host, live sessions for bash and PowerShell login shells too, a Rust-only extension
-  (below): claimed together with `live-sessions` for a zsh or fish login shell, alone for the others;
+- `live-sessions`: by host, where the pane shell is zsh or fish (upstream's two) and `ngterm-session` is staged. The
+  pane shell is the login shell, or the one the ghostty config's last `command` names when that is an absolute
+  path to a shell Live wraps with only login or interactive flags (upstream's #895; `live::support::command_shell`),
+  read once at launch. The suite's `command = /bin/sh` names none, so its hosts claim by the login shell;
+- `live-any-shell`: by host, live sessions for bash and PowerShell pane shells too, a Rust-only extension
+  (below): claimed together with `live-sessions` for a zsh or fish pane shell, alone for the others;
 - `agent-chat`: on every OS, the `agent.*` group and `ngtermctl agent` behind the Android chat view, a Rust-only
   extension (below);
 - `pages-survive`: on every OS, a page handed to a presenter parked on its presenter's loss and handed to the next, a
@@ -192,11 +195,11 @@ ghostty config sets `copy-on-select = false`.
 A Rust-only extension is a capability the reference does not claim, so its tests (`requires` on it) skip as
 `unsupported` on the reference and the reference discipline holds them to nothing there: the Rust CI validates them
 instead, with `--must-pass` on the capability in every job whose host can claim it.
-Today there are three. `live-any-shell`: a Live pane runs the password database's login shell in its live session, zsh
-and fish as upstream, bash and PowerShell as well, each started with its shell integration the way libghostty starts a
-shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in POSIX mode for bash, `XDG_DATA_DIRS` for fish, the integration's
-root merged in front of the pane's own value as upstream; ngterm's own script for PowerShell, which Ghostty does not
-integrate).
+Today there are three. `live-any-shell`: a Live pane runs its shell in its live session (the password database's login
+shell, or the one ghostty `command` names in its place), zsh and fish as upstream, bash and PowerShell as well, each
+started with its shell integration the way libghostty starts a shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in
+POSIX mode for bash, `XDG_DATA_DIRS` for fish, the integration's root merged in front of the pane's own value as
+upstream; ngterm's own script for PowerShell, which Ghostty does not integrate).
 Its tests are in `tests/protocol/test_live_any_shell.py`; the upstream Live tests that type no line of a particular
 shell (`LIVE_IN_ANY_SHELL`: the inventory, lead, kill, presentation and tree reads) require either capability
 (`requires(..., any=True)`), so they hold for bash and PowerShell too; a test that branches on Live being active
@@ -296,6 +299,43 @@ The [README parity notes](../../README.md#parity) describe the user-facing addit
 - Managed attach cleanup preserves screen and scrollback, resetting reports, SGR and colors; a creation command
   that has ended is never replaced by a new login shell. Linux runtime conformance covers the held output; Windows
   ConPTY and native macOS rendering remain platform checks.
+
+## Release behavior at v0.41.1
+
+The claim covers v0.41.0 and v0.41.1; the [README parity notes](../../README.md#parity) describe the user-facing
+additions and how each OS does them. Their observable contracts are:
+
+- Text pages: `session.overlay.open` takes `textFile` (with an optional `line`) and tree `htmlOverlays[].text` names
+  the source; a log page adds `tail` and `followFile`, refused without a text file, with a line or out of `1...100000`,
+  and reports its tail and follow state; `session.overlay.follow` sets `on|off|toggle` and answers the state it left.
+  `session.overlay.search` sets, steps and closes a text page's search, a step pausing a following log page;
+  `session.overlay.changes` steps a diff page between changes (`text.changes`). A step the renderer does not answer
+  is refused `page not loaded`. Clicked pages carry `clicked`, clicked HTML files `document`; a socket page is never
+  marked clicked.
+- Presented sessions: image, Markdown and text pages go only to a presenter whose viewer lists `page.content`; the
+  page serve channel serves a content page's files under the page's own rules. Status shapes go to a viewer as the
+  original six unless it lists `status.shapes`.
+- `tree.sidebarDensity` (`default` or `compact`, set app-wide by `sidebar.density`, which echoes it) is always
+  reported; `tree.snapshotUnsaved` is `true` while a window's state file cannot be written and absent otherwise.
+- Tints take the five new names and `#rrggbb`, read back lowercase; info markup takes the new names but no hex.
+
+Recorded divergences, each a platform adaptation of upstream's macOS mechanism rather than a capability:
+
+- Live command shells: upstream starts the zsh or fish a ghostty `command` names; this build also starts bash and
+  PowerShell (`pwsh`/`powershell` on Windows, a drive or UNC absolute path), the shells it wraps under
+  `live-any-shell`. A bare `bash -l` is a shell here where upstream ignores it, PowerShell's login and interactive
+  flags count in any case, and only one `direct:`/`shell:` prefix is stripped, as Ghostty reads one. Upstream's
+  `SHELL` re-export in the attach line works around macOS's `login -flp`, which this build does not run.
+- Windows preconnect: WebView2 has no per-page switch for link hints, so a clicked HTML page on Windows renames
+  every `<link>` start tag to an inert element and turns DNS prefetch off on top of the request filter; under the
+  page's CSP no link could load anything anyway. On WPE a clicked link may still open a TCP connection without a
+  request, the caveat upstream documents for WKWebView, and the tests assert no request rather than no connection.
+- Density metrics: compact takes upstream's deltas off this build's own default geometry (row padding 13 to 8, the
+  nesting indent 20 to 16, the info line's lift and bottom padding 6 to 4, the pill's vertical inset 1.5 to 0.5, the
+  name lifted 1 point), so compact rows are 5 points shorter at every font size as upstream's, starting from rows 2
+  points shorter than upstream's. With workspace chevrons hidden, nested rows shift by the strip less a disclosure
+  width, since session icons sit under their workspace's here. To fit the new picker, Settings ▸ Appearance pairs its
+  Terminal fields in two columns and the popup takes upstream's 540x710.
 
 ## Pane messaging identity
 

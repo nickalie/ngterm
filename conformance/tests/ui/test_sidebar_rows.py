@@ -2,7 +2,15 @@
 Every test leaves the shared instance's flags, focus set and sidebar mode as it found them."""
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_ok, find_session, session_ids, sessions, workspace_ids
+from agterm_conformance.match import (
+    assert_absent,
+    assert_error,
+    assert_ok,
+    find_session,
+    session_ids,
+    sessions,
+    workspace_ids,
+)
 from agterm_conformance.wait import wait_until
 
 
@@ -230,3 +238,25 @@ def test_session_info_renders_visible_text_below_its_row(ctl, ui):
         assert "info" not in find_session(ctl.tree(), sid)
     finally:
         assert_ok(ctl.request("session.close", sid))
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("sidebar.density", "field:tree.sidebarDensity")
+def test_density_command_resizes_the_rendered_rows(ctl, ui):
+    def pitch():
+        # rows sit edge to edge, so a session row's offset under its workspace row is the row height
+        workspace, session = ui.frame(ui.find("workspace-row"))[1], ui.frame(ui.find("session-row"))[1]
+        assert session > workspace, (workspace, session)
+        return session - workspace
+
+    assert ctl.tree()["tree"]["sidebarDensity"] == "default"
+    standard = pitch()
+    try:
+        assert assert_ok(ctl.request("sidebar.density", mode="compact")) == {"text": "compact"}
+        wait_until(lambda: pitch() < standard)
+        assert ctl.tree()["tree"]["sidebarDensity"] == "compact"
+        assert assert_ok(ctl.request("sidebar.density")) == {"text": "default"}
+        wait_until(lambda: abs(pitch() - standard) < 0.5)
+        assert_error(ctl.request("sidebar.density", mode="dense"), "invalid sidebar density: dense")
+    finally:
+        ctl.request("sidebar.density", mode="default")

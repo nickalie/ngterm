@@ -176,31 +176,79 @@ fn star_points_alternate_outer_and_inner_and_center_vertically() {
     );
 }
 
+/// Every shape's coverage at 2x scale (32 pixels to the 16-point slot), in [`StatusShape::ALL`]'s order.
+fn rendered() -> Vec<Vec<u8>> {
+    StatusShape::ALL.iter().map(|&shape| rasterize(shape, 32)).collect()
+}
+
+/// `shape`'s coverage among [`rendered`]'s.
+fn of(rendered: &[Vec<u8>], shape: StatusShape) -> &[u8] {
+    &rendered[StatusShape::ALL.iter().position(|&each| each == shape).unwrap()]
+}
+
+/// Whether pixel `index` of a 32-pixel canvas lies in the slot's outer 1.5 points, outside the 13-point extent.
+fn in_the_margin(index: usize) -> bool {
+    let inside = 2..=29;
+    !inside.contains(&(index / 32)) || !inside.contains(&(index % 32))
+}
+
 #[test]
 fn every_shape_fills_its_own_silhouette_inside_the_slot() {
-    let shapes = [
-        StatusShape::Circle,
-        StatusShape::Square,
-        StatusShape::Capsule,
-        StatusShape::Diamond,
-        StatusShape::Triangle,
-        StatusShape::Star,
-    ];
-    let rendered: Vec<Vec<u8>> = shapes.iter().map(|&shape| rasterize(shape, 32)).collect();
-    for (shape, alpha) in shapes.iter().zip(&rendered) {
-        // 2x scale: the slot's center is inside every silhouette, its corner outside all
+    let rendered = rendered();
+    for (shape, alpha) in StatusShape::ALL.iter().zip(&rendered) {
+        // the slot's center is inside every silhouette, its corners and margin outside all
         assert_eq!(alpha[16 * 32 + 16], 255, "{shape:?} is filled at its center");
-        assert_eq!(alpha[0], 0, "{shape:?} leaves the corner empty");
+        let inked_outside = (0..32 * 32).filter(|&index| alpha[index] > 0 && in_the_margin(index));
+        assert_eq!(inked_outside.count(), 0, "{shape:?} stays inside its extent");
     }
     for (i, first) in rendered.iter().enumerate() {
         for second in rendered.iter().skip(i + 1) {
-            assert_ne!(first, second, "{:?} looks like another shape", shapes[i]);
+            assert_ne!(first, second, "{:?} looks like another shape", StatusShape::ALL[i]);
         }
     }
+}
+
+#[test]
+fn each_silhouette_has_its_own_outline() {
+    let rendered = rendered();
     // the capsule is wide and flat: design (8, 3) is outside it, (2, 8) inside
-    let capsule = &rendered[2];
-    assert_eq!(capsule[6 * 32 + 16], 0);
-    assert_eq!(capsule[16 * 32 + 4], 255);
+    let capsule = of(&rendered, StatusShape::Capsule);
+    assert_eq!((capsule[6 * 32 + 16], capsule[16 * 32 + 4]), (0, 255));
+    // play points right: its right tip is inked at mid-height, not above it, and its left side is flat
+    let play = of(&rendered, StatusShape::Play);
+    assert!(play[16 * 32 + 26] > 0 && play[6 * 32 + 26] == 0);
+    assert_eq!(play[8 * 32 + 8], 255);
+    // the bell's clapper hangs below its rim, apart from it at the sides
+    let bell = of(&rendered, StatusShape::Bell);
+    assert_eq!((bell[27 * 32 + 16], bell[27 * 32 + 8]), (255, 0));
+    // the bolt's two strokes leave its upper left and lower right empty
+    let bolt = of(&rendered, StatusShape::Bolt);
+    assert_eq!((bolt[6 * 32 + 6], bolt[26 * 32 + 26]), (0, 0));
+}
+
+#[test]
+fn the_down_triangle_is_the_triangle_upside_down() {
+    let rendered = rendered();
+    let (up, down) = (
+        of(&rendered, StatusShape::Triangle),
+        of(&rendered, StatusShape::TriangleDown),
+    );
+    for (index, &a) in up.iter().enumerate() {
+        let (row, column) = (index / 32, index % 32);
+        let b = down[(31 - row) * 32 + column];
+        assert!(a.abs_diff(b) <= 1, "row {row}, column {column}: {a} against {b}");
+    }
+}
+
+#[test]
+fn the_seal_scallops_its_rim_and_stays_round() {
+    let points = seal_points(6.5);
+    let radii: Vec<f64> = points.iter().map(|(x, y)| x.hypot(*y)).collect();
+    let (low, high) = radii.iter().fold((f64::INFINITY, 0.0_f64), |(low, high), &radius| {
+        (low.min(radius), high.max(radius))
+    });
+    assert!((high - 6.5).abs() < 1e-9, "outer {high}");
+    assert!(low > 5.5 && low < 6.3, "inner {low}");
 }
 
 /// A view showing one glyph.

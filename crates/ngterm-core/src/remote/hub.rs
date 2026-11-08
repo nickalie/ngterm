@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::frames::{
-    self, Body, PresentationFrame, PresentationHello, PresentationLayout, PresentationSnapshot, negotiated_version,
+    self, Body, PresentationFrame, PresentationHello, PresentationLayout, PresentationSnapshot, PresentationStatus,
+    negotiated_version,
 };
 
 /// Where the hub hands a subscriber's frames. The bounded queue and the socket live behind it; the hub only learns
@@ -79,6 +80,32 @@ struct Subscriber {
     held: Option<Vec<Body>>,
 }
 
+impl Subscriber {
+    /// `body` as this viewer decodes it (upstream's `Subscriber.decodable`): without [`STATUS_SHAPES_KIND`] a status,
+    /// alone or in a snapshot, loses a shape outside [`ORIGINAL`](crate::model::StatusShape::ORIGINAL).
+    fn decodable(&self, body: Body) -> Body {
+        if self.kinds.iter().any(|kind| kind == STATUS_SHAPES_KIND) {
+            return body;
+        }
+        match body {
+            Body::Status(status) => Body::Status(status.map(with_original_shape)),
+            Body::Snapshot(mut snapshot) => {
+                snapshot.status = snapshot.status.map(with_original_shape);
+                Body::Snapshot(snapshot)
+            }
+            body => body,
+        }
+    }
+}
+
+/// `status` with its shape cleared when a viewer without [`STATUS_SHAPES_KIND`] could not decode it.
+fn with_original_shape(mut status: PresentationStatus) -> PresentationStatus {
+    if status.shape.is_some_and(|shape| !shape.is_original()) {
+        status.shape = None;
+    }
+    status
+}
+
 /// Decides which viewer connection is a session's sole presenter (upstream's `PresenterGrant`). The first acquire wins
 /// and keeps the role until its connection goes; nothing preempts it and nothing hands it back early. Every change of
 /// holder bumps the session's generation, which later work owned by a presenter is bound to.
@@ -127,6 +154,20 @@ impl PresenterGrant {
 /// A presenter accepts optional overlay width and height axes (upstream's `overlayPointsKind`).
 pub const OVERLAY_POINTS_KIND: &str = "overlay.points";
 
+/// A presenter builds image, Markdown and text pages from the bytes it fetches (upstream's `pageContentKind`): the
+/// [`super::frames::PresentationPageSource`] content cases go only to one listing it. It names no frame body.
+pub const PAGE_CONTENT_KIND: &str = "page.content";
+
+/// A presenter shows a clicked HTML file as a document page (upstream's `pageDocumentKind`), besides
+/// [`PAGE_CONTENT_KIND`]. It names no frame body.
+pub const PAGE_DOCUMENT_KIND: &str = "page.document";
+
+/// A viewer draws every [`StatusShape`](crate::model::StatusShape) (upstream's `statusShapesKind`). One that does not
+/// list it predates the shapes beyond [`ORIGINAL`](crate::model::StatusShape::ORIGINAL) and decodes a status shape
+/// strictly, so the hub clears any other shape from what it sends that viewer, which draws its own settings shape
+/// instead. It names no frame body.
+pub const STATUS_SHAPES_KIND: &str = "status.shapes";
+
 /// A presenter attaches the page companions a headless origin creates under the session it presents
 /// ([`super::frames::Body::CompanionPage`]). This build's addition, listed with the page kinds.
 pub const COMPANION_PAGE_KIND: &str = "companion.page";
@@ -140,7 +181,7 @@ pub const PAGE_DETACHED_KIND: &str = "page.detached";
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's; this build's [`OPT_IN_KINDS`] are the exception.
-pub const SUPPORTED_KINDS: [&str; 19] = [
+pub const SUPPORTED_KINDS: [&str; 22] = [
     "status",
     "hud",
     "notify",
@@ -151,6 +192,9 @@ pub const SUPPORTED_KINDS: [&str; 19] = [
     ASK_FORM_KIND,
     ASK_OTHER_KIND,
     OVERLAY_POINTS_KIND,
+    PAGE_CONTENT_KIND,
+    PAGE_DOCUMENT_KIND,
+    STATUS_SHAPES_KIND,
     super::page_tunnel::TUNNEL_KIND,
     COMPANION_PAGE_KIND,
     PAGE_DETACHED_KIND,
@@ -475,7 +519,7 @@ impl PresentationHub {
         let frame = PresentationFrame {
             generation: id.0,
             rev: subscriber.revision,
-            body,
+            body: subscriber.decodable(body),
         };
         if !subscriber.sink.offer(&frame) {
             self.drop_subscriber(id, CloseReason::Stalled);
@@ -513,8 +557,8 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::model::AgentStatus;
-    use crate::remote::frames::{PresentationMode, PresentationStatus};
+    use crate::model::{AgentStatus, StatusShape};
+    use crate::remote::frames::PresentationMode;
 
     /// What a test sink saw, shared with the test.
     #[derive(Default)]
@@ -787,6 +831,102 @@ mod tests {
         );
     }
 
+    fn shapes_hello() -> PresentationHello {
+        let mut hello = hello(PresentationMode::Mirror);
+        hello.kinds.push(STATUS_SHAPES_KIND.to_owned());
+        hello
+    }
+
+    fn shaped(shape: Option<StatusShape>) -> PresentationStatus {
+        PresentationStatus {
+            blink: true,
+            color: Some("#ff8800".to_owned()),
+            shape,
+            pane: Some(frames::PresentationPane::Scratch),
+            changed_at: Some(42.0),
+            ..blocked()
+        }
+    }
+
+    /// Upstream's `oneStatusReachesAViewerWithoutTheShapesKindWithOnlyAShapeItDecodes`, over every shape.
+    #[test]
+    fn one_status_reaches_a_viewer_without_the_shapes_kind_with_only_a_shape_it_decodes() {
+        for shape in StatusShape::ALL {
+            let (mut hub, _) = hub();
+            let session = Uuid::new_v4();
+            let (legacy, older) = sink();
+            let (capable, newer) = sink();
+            hub.subscribe(session, &hello(PresentationMode::Mirror), legacy, |_| {
+                PresentationSnapshot::default()
+            })
+            .unwrap();
+            hub.subscribe(session, &shapes_hello(), capable, |_| PresentationSnapshot::default())
+                .unwrap();
+            hub.publish(&Body::Status(Some(shaped(Some(shape)))), session);
+
+            let decodable = shape.is_original().then_some(shape);
+            assert_eq!(bodies(&newer).last(), Some(&Body::Status(Some(shaped(Some(shape))))));
+            assert_eq!(bodies(&older).last(), Some(&Body::Status(Some(shaped(decodable)))));
+            let line = frames::encode(older.borrow().frames.last().unwrap()).unwrap();
+            let line = String::from_utf8(line).unwrap();
+            assert_eq!(
+                line.contains(&format!("\"{}\"", shape.wire_name())),
+                shape.is_original(),
+                "{line}"
+            );
+        }
+    }
+
+    /// Upstream's `aViewerWithoutTheShapesKindGetsTheSnapshotAndAHeldDeltaWithoutANewShape`.
+    #[test]
+    fn a_viewer_without_the_shapes_kind_gets_the_snapshot_and_a_held_delta_without_a_new_shape() {
+        let (mut hub, _) = hub();
+        let session = Uuid::new_v4();
+        let (sink, seen) = sink();
+        let snapshot = PresentationSnapshot {
+            status: Some(shaped(Some(StatusShape::Bolt))),
+            context: Some("build".to_owned()),
+            ..PresentationSnapshot::default()
+        };
+        hub.subscribe(session, &hello(PresentationMode::Mirror), sink, |hub| {
+            hub.publish(&Body::Status(Some(shaped(Some(StatusShape::Seal)))), session);
+            snapshot
+        })
+        .unwrap();
+        let expected = PresentationSnapshot {
+            status: Some(shaped(None)),
+            context: Some("build".to_owned()),
+            ..PresentationSnapshot::default()
+        };
+        assert_eq!(
+            bodies(&seen),
+            vec![
+                Body::Hello(hello(PresentationMode::Mirror)),
+                Body::Snapshot(expected),
+                Body::Status(Some(shaped(None)))
+            ]
+        );
+    }
+
+    /// Upstream's `aViewerAdvertisingTheShapesKindGetsTheSnapshotUnchanged`.
+    #[test]
+    fn a_viewer_advertising_the_shapes_kind_gets_the_snapshot_unchanged() {
+        let (mut hub, _) = hub();
+        let (sink, seen) = sink();
+        let snapshot = PresentationSnapshot {
+            status: Some(shaped(Some(StatusShape::TriangleDown))),
+            ..PresentationSnapshot::default()
+        };
+        let state = snapshot.clone();
+        hub.subscribe(Uuid::new_v4(), &shapes_hello(), sink, move |_| state)
+            .unwrap();
+        assert_eq!(
+            bodies(&seen),
+            vec![Body::Hello(shapes_hello()), Body::Snapshot(snapshot)]
+        );
+        assert!(SUPPORTED_KINDS.contains(&STATUS_SHAPES_KIND));
+    }
+
     /// Upstream's `aNegotiatedKindReachesOnlyAPresenterThatAdvertisedIt`.
     #[test]
     fn a_negotiated_kind_reaches_only_a_presenter_that_advertised_it() {
@@ -898,6 +1038,9 @@ mod tests {
                 "ask.form",
                 "ask.other",
                 "overlay.points",
+                "page.content",
+                "page.document",
+                "status.shapes",
                 "page.tunnel",
                 "companion.page",
                 "page.detached",

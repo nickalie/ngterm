@@ -2,71 +2,10 @@
 //! backend, switches a manual change back, drops an override the system refused, releases a layout no longer enabled,
 //! restores on stop, re-evaluates when a window closes, coalesces refresh requests, and offers the picker a backend's layouts or its reason.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use gpui_kit::TestAppContext;
 
+use super::fake::{RU, US, installed};
 use super::*;
-
-const US: &str = "English (US)";
-const RU: &str = "Russian";
-
-/// What the fake system holds and what was asked of it.
-#[derive(Default)]
-struct System {
-    enabled: Vec<String>,
-    current: String,
-    selected: Vec<String>,
-    refuse: bool,
-    probes: usize,
-    reads: usize,
-}
-
-struct Fake(Rc<RefCell<System>>);
-
-impl Backend for Fake {
-    fn layouts(&mut self) -> Result<Vec<KeyboardLayout>, Failure> {
-        let mut system = self.0.borrow_mut();
-        system.reads += 1;
-        Ok(system.enabled.iter().cloned().map(KeyboardLayout::named).collect())
-    }
-
-    fn current(&mut self) -> Result<String, Failure> {
-        Ok(self.0.borrow().current.clone())
-    }
-
-    fn select(&mut self, id: &str) -> Result<(), Failure> {
-        let mut system = self.0.borrow_mut();
-        if system.refuse {
-            return Err("refused".into());
-        }
-        system.selected.push(id.to_owned());
-        system.current = id.to_owned();
-        Ok(())
-    }
-}
-
-/// The performer over a fake system on `current`, with US and Russian enabled.
-fn installed(cx: &mut TestAppContext, current: &str) -> Rc<RefCell<System>> {
-    let system = Rc::new(RefCell::new(System {
-        enabled: vec![US.to_owned(), RU.to_owned()],
-        current: current.to_owned(),
-        ..System::default()
-    }));
-    let probed = Rc::clone(&system);
-    cx.update(|cx| {
-        install(
-            Box::new(move || {
-                probed.borrow_mut().probes += 1;
-                Ok(Box::new(Fake(probed)) as Box<dyn Backend>)
-            }),
-            None,
-            cx,
-        );
-    });
-    system
-}
 
 /// Re-evaluates with a terminal holding the keyboard or not.
 fn reconcile(cx: &mut TestAppContext, held: bool) {

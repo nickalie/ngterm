@@ -5,20 +5,22 @@ reapplies both to upstream's plugins/agterm/skills/agterm after every sync, and 
 `agtermctl` calls is renamed here the same way.
 
 diff --git a/SKILL.md b/SKILL.md
-index 3051511..f58a97c 100644
+index 37c6a18..06e31e2 100644
 --- a/SKILL.md
 +++ b/SKILL.md
-@@ -1,7 +1,8 @@
+@@ -1,8 +1,9 @@
  ---
 -name: agterm
 +name: ngterm
  description: >
 -  Drive agterm, a native macOS terminal, via agtermctl. Use in an agterm session:
+-  manage sessions, companions and workspaces; split panes; toggle the scratch; run, hide or show overlays;
 +  Drive ngterm (agterm in Rust, a GPUI terminal; this skill calls it agterm throughout) via the ngtermctl CLI.
 +  Use in an ngterm or agterm session:
-   manage sessions, companions and workspaces; split panes; toggle the scratch pane; run, hide or show overlays;
++  manage sessions, companions and workspaces; split panes; toggle the scratch pane; run, hide or show overlays;
    read exit status; show HTML pages, interactive too, URLs or dev servers in an overlay with saved logins;
-   post a HUD/caption/notification/sidebar activity line; message panes; show a picker, question or input dialog; show images/markdown; type
+   post a HUD/caption/notification/sidebar activity line; message panes; show a picker, question or input dialog; show images/markdown/code; type
+   into or restart a pane by id, copy its selection, set the clipboard, search its scrollback; manage windows, font size and
 @@ -13,21 +14,21 @@ description: >
    attaching sessions and companions from another Mac, cookbook recipes, running/installed version, upgrades, diagnosing
    problems, filing a bug or feature request.
@@ -28,7 +30,7 @@ index 3051511..f58a97c 100644
 +  Trigger on: ngterm, ngtermctl, agterm, AGTERM_SESSION_ID, and, from inside a session, plain requests such as
 +  split the pane, close the overlay, hide the overlay for a moment, show a message over the session, show a question dialog, ngtermctl ask,
    ask the user to type a value or a message, let the user pick one or several items from a list,
-   show an image inline, show this markdown file rendered, show this HTML page or artifact, make an HTML page or explainer for this and show
+   show an image inline, show this markdown file rendered, show this source file or log at a line, show me the diff of a file or the changes as links, tail or follow this log file, search the log or text page in the overlay, show this HTML page or artifact, make an HTML page or explainer for this and show
    it, make a page that switches sessions or returns a choice, preview the report you generated, show this URL or the running dev server, keep me logged in to a page shown in an overlay, search the scrollback, flag every session in a workspace, tint a session or workspace row a color, show status or activity under a session in the sidebar, make a companion session, keep a related program next to a session, duplicate this session with its programs as a companion, open a sub-session under this one, fold a session's companions, show a page as a companion of this session, run my custom command, send a message to the other pane or another agent, read my messages, wait for a message, tell me when the selected session changes, wait until that worker session finishes, bring back the session I just closed, attach a session from another Mac, attach a remote session with all its companions, copy this to the clipboard, was agterm upgraded under the running app, upgrade agterm without losing sessions, what recipes are there,
    the keymap editor will not open.
 -allowed-tools: Bash(agtermctl *)
@@ -85,7 +87,7 @@ index 3051511..f58a97c 100644
  `id`, `name`, `cwd`, `splitCwd`, `title`, `active`, `split`, `overlay`, `hud`, `ask`, `scratch`, `status`, `background`, `surfaces`). `title` is the raw OSC
  terminal title (e.g. a remote host over SSH), omitted when none was reported — read it when a
  session's local `cwd` is stale because it's connected to a remote. `splitCwd` is the split pane's last
-@@ -125,9 +126,9 @@ saved order — the read side of `session flag move`, omitted when nothing is fl
+@@ -126,9 +127,9 @@ saved order — the read side of `session flag move`, omitted when nothing is fl
  points — the read side of `sidebar width`, on `tree` only), `workspaceFilter`, `quickVisible` (whether the
  quick terminal is shown — the read side of the write-only `quick` command; app-level, so every window
  reports the same value), `zoomedSurface`, the four `dashboard*` fields, `pickPending`, `askPending` (GUI asks only), and `app` (the
@@ -97,8 +99,8 @@ index 3051511..f58a97c 100644
  (the live frame `{x, y, width, height, display}` in the units `window move`/`window resize` take — the
  read side, so record it then restore the exact frame), and `fullscreen`/`zoomed`/`minimized` (the read side
  of `window fullscreen`/`window zoom`/`window minimize`, so a script can act idempotently) — all omitted for
-@@ -164,7 +165,7 @@ you open overlays / type into whatever the user has selected, not your own sessi
-   zsh or fish as the macOS login shell. Scratch, overlay, and quick terminals stay temporary.
+@@ -167,7 +168,7 @@ you open overlays / type into whatever the user has selected, not your own sessi
+   Live panes. Scratch, overlay, and quick terminals stay temporary.
 
  Upgrading: with Live sessions already active, install the new version, quit agterm and open it again. Local
 -primary and split panes reattach to the same processes and no reset is needed. `agtermctl version` adds an
@@ -106,7 +108,7 @@ index 3051511..f58a97c 100644
  `installed:` line when the installed version or recorded commit differs from the running app. When switching
  from Fresh shells or Re-run commands to Live sessions, the current shells end at the first clean quit. The
  first Live launch starts captured foreground commands again where possible; shell state is lost.
-@@ -190,7 +191,7 @@ after reattach behaves normally.
+@@ -193,7 +194,7 @@ after reattach behaves normally.
  process, so no shell line is involved:
 
  ```bash
@@ -115,7 +117,7 @@ index 3051511..f58a97c 100644
    --command "zsh -lc 'claude \"\$(cat ~/brief.md)\"'"   # GUI PATH: wrap a non-default binary
  ```
 
-@@ -210,7 +211,7 @@ rule.) After `--command`, confirm in `tree --json` that the new node's `foregrou
+@@ -213,7 +214,7 @@ rule.) After `--command`, confirm in `tree --json` that the new node's `foregrou
 
  ## Command summary
 
@@ -124,7 +126,7 @@ index 3051511..f58a97c 100644
  examples in **examples.md**; installable community workflows in **cookbook.md**.
 
  **tree** — print the workspace/session tree (`--json` for structured). Each session node carries
-@@ -367,7 +368,7 @@ omitted when expanded).
+@@ -370,7 +371,7 @@ omitted when expanded).
  - `session new --parent SID [--cwd DIR] [--command CMD [--wait]] [--name NAME] [--no-select]` - create a
    companion session: an ordinary session pinned for life to SID, listed right after it in its workspace and
    indented under it in the sidebar tree (a companion SID means its parent). Use it to keep a related program
@@ -133,7 +135,7 @@ index 3051511..f58a97c 100644
    (`--wait` keeps its output after it exits). `--cwd` defaults to the parent's focused directory; it refuses
    `--workspace`/`--workspace-name`/`--create-workspace`/`--after`/`--before`. Closing the parent closes its
    companions, and one undo restores the group. `session collapse`/`session expand` fold or unfold a parent's
-@@ -443,7 +444,7 @@ omitted when expanded).
+@@ -446,7 +447,7 @@ omitted when expanded).
    aliases select the same two live terminals; readback remains `left`/`right`.
  - `session resize --split-ratio R | --grow-left D | --grow-right D | --grow-primary D | --grow-split D | --grow-top D | --grow-bottom D` - move the split divider (the GUI only drags
    it, or double-clicks it for an even split; bind any other fraction via a
@@ -142,7 +144,7 @@ index 3051511..f58a97c 100644
    the absolute primary-pane fraction of the area below the titlebar (left or top; 0..1, clamped to
    0.05..0.95). The grow options are
    aliases for growing the primary or split pane. Prints the applied fraction.
-@@ -765,11 +766,11 @@ existing pane does for session-wide placement. Mixed, unknown or unowned roles s
+@@ -771,11 +772,11 @@ existing pane does for session-wide placement. Mixed, unknown or unowned roles s
  open stays where it is when the lead changes. The overlay's program still runs once on the origin, and a remote
  `overlay close` replies when the cancel is requested
  ([details](reference.md#restore)). Both run ssh non-interactively, so key-based auth must already work, and
@@ -157,7 +159,7 @@ index 3051511..f58a97c 100644
  Text that starts with `-` (a flag, a list item, a diff line) is read as an option: pipe it on stdin, or put
  `--` before it.
  Use it whenever the user asks to copy something to the clipboard: `pbcopy` fills the clipboard of the Mac
-@@ -789,7 +790,7 @@ through; other connection settings belong in `~/.ssh/config` under a host alias,
+@@ -795,7 +796,7 @@ through; other connection settings belong in `~/.ssh/config` under a host alias,
  settings (no pty, stdin kept, plain session, no fork, no `RemoteCommand`) are the installer's and win
  over the config. The remote needs `tic` (ncurses) and says so when it is missing.
 
@@ -166,7 +168,7 @@ index 3051511..f58a97c 100644
  `commit` when the build recorded one), and the bundle on disk as `result.installed`, which differs from
  `app` once the app was replaced under the running one (a background `brew upgrade`) and is omitted when
  unknown. App-global: no target, no `--window`, no window need be open, so it
-@@ -803,7 +804,7 @@ resolves the DEFAULT socket, which may be another app. The same identity is on t
+@@ -809,7 +810,7 @@ resolves the DEFAULT socket, which may be another app. The same identity is on t
  Render a `.md` or `.markdown` file as a themed page with `--markdown`, at 95% here:
 
  ```bash
@@ -175,7 +177,47 @@ index 3051511..f58a97c 100644
  ```
 
  Pictures kept in the file's own folder show; other pictures show their alt text, raw HTML stays text, and a web
-@@ -816,7 +817,7 @@ Show a png, jpg, gif or webp picture with `--image`; the panel takes the picture
+@@ -825,7 +826,7 @@ files and no network loads, read back as `document`. A page that needs its scrip
+ Show a source, config, text or log file read-only with `--text`, scrolled to and marking `--line`:
+
+ ```bash
+-agtermctl session overlay open --text /path/to/main.go --line 42 --size-percent 95 --target "$AGTERM_SESSION_ID"
++ngtermctl session overlay open --text /path/to/main.go --line 42 --size-percent 95 --target "$AGTERM_SESSION_ID"
+ ```
+
+ It is highlighted when its name maps to a known language, up to 256 KB, and plain above; a file over 4 MB is
+@@ -838,8 +839,8 @@ file in Finder with ⌘⌥-click; for a user watching from another Mac, open it
+ To watch a log, open its end and follow it as it grows:
+
+ ```bash
+-agtermctl session overlay open --text /path/to/app.log --follow-file --size-percent 95 --target "$AGTERM_SESSION_ID"
+-agtermctl session overlay follow off --target "$AGTERM_SESSION_ID"   # pause; on resumes, toggle flips
++ngtermctl session overlay open --text /path/to/app.log --follow-file --size-percent 95 --target "$AGTERM_SESSION_ID"
++ngtermctl session overlay follow off --target "$AGTERM_SESSION_ID"   # pause; on resumes, toggle flips
+ ```
+
+ `--follow-file` shows the last 5,000 lines, read from the end so a log of any size opens; `--tail N` sets the count
+@@ -851,8 +852,8 @@ line. The user pauses by scrolling up and resumes at the bottom or with Resume.
+ Search a text or log page, not the terminal under it:
+
+ ```bash
+-agtermctl session overlay search ERROR --target "$AGTERM_SESSION_ID"   # highlights every match
+-agtermctl session overlay search --next --target "$AGTERM_SESSION_ID"  # prints "2 of 7"; --prev, --close
++ngtermctl session overlay search ERROR --target "$AGTERM_SESSION_ID"   # highlights every match
++ngtermctl session overlay search --next --target "$AGTERM_SESSION_ID"  # prints "2 of 7"; --prev, --close
+ ```
+
+ Matching is case-insensitive plain text. A step pauses a following log page, so the match stays in view; setting the
+@@ -869,7 +870,7 @@ git diff --no-color HEAD~3 HEAD -- src/app.go > /tmp/src_app.go.diff
+
+ Then print `[src/app.go diff](/tmp/src_app.go.diff)`, one link per file, since a multi-file patch shows as one stream
+ with no file list. Use absolute, space-free output paths so the printed paths are clickable without OSC 8.
+-The page steps between changes with `]`/`[` or `agtermctl session overlay changes --next|--prev`, which prints
++The page steps between changes with `]`/`[` or `ngtermctl session overlay changes --next|--prev`, which prints
+ `N of M`; read back `text.changes` (`{count, current}`).
+
+ ## Displaying an image inline
+@@ -878,7 +879,7 @@ Show a png, jpg, gif or webp picture with `--image`; the panel takes the picture
  80% of the session:
 
  ```bash
@@ -183,8 +225,8 @@ index 3051511..f58a97c 100644
 +ngtermctl session overlay open --image /tmp/shot.png --target "$AGTERM_SESSION_ID"
  ```
 
- The user can open the same view by ⌘-clicking a picture's path in the terminal, so printing the absolute
-@@ -831,7 +832,7 @@ default 60):
+ The user can open the same view by ⌘-clicking a picture's path in a local pane, so printing the absolute
+@@ -895,7 +896,7 @@ default 60):
  The script sits next to this file, so resolve `scripts/show-image.sh` against the directory this
  `SKILL.md` was loaded from — not against your working directory. That one form is correct wherever
  the skill came from: a plugin install (`~/.claude/plugins/cache/…`, `~/.codex/plugins/cache/…`) or the
@@ -193,7 +235,7 @@ index 3051511..f58a97c 100644
 
  ```bash
  bash <this-skill-directory>/scripts/show-image.sh <image> [size-percent]
-@@ -852,8 +853,8 @@ It renders in a web view with the page's own JavaScript off, so write the artifa
+@@ -916,8 +917,8 @@ It renders in a web view with the page's own JavaScript off, so write the artifa
  inline SVG. Pass `--js` only when the requested interaction or web app requires JavaScript. Images load, and a clicked http(s) link opens in the default browser once the user confirms it.
 
  ```bash
@@ -204,7 +246,7 @@ index 3051511..f58a97c 100644
  ```
 
  - Target your own session's id; `--follow` switches the user to it, so pass it only to show the page
-@@ -885,7 +886,7 @@ To show a docs page or a web app you are running, open it by URL instead; a scri
+@@ -949,7 +950,7 @@ To show a docs page or a web app you are running, open it by URL instead; a scri
  `--js`:
 
  ```bash
@@ -213,7 +255,7 @@ index 3051511..f58a97c 100644
  ```
 
  - The server must already be running and reachable from the Mac running agterm; `localhost` means that
-@@ -899,7 +900,7 @@ agtermctl session overlay open --url http://localhost:5173/ --js --target "$AGTE
+@@ -963,7 +964,7 @@ agtermctl session overlay open --url http://localhost:5173/ --js --target "$AGTE
    only while it is open.
  - Pass `--persistent` to keep them: the page then uses one saved store shared by every `--persistent`
    page, so a login survives closing the overlay and restarting agterm, subject to the cookie's own lifetime. `tree` reports `persistent` for each
@@ -222,7 +264,7 @@ index 3051511..f58a97c 100644
    A login that sends the page to another site (OAuth, SSO, a popup) still fails: the page stays on its
    origin. Apps on `localhost` with different ports share cookies in the store.
  - Pass `--browse` to let the page leave its first site: links, redirects and scripts can then take it to
-@@ -929,7 +930,7 @@ Outside agterm (see [Am I inside agterm?](#am-i-inside-agterm)) `open <file>` is
+@@ -993,7 +994,7 @@ Outside agterm (see [Am I inside agterm?](#am-i-inside-agterm)) `open <file>` is
  ## Interactive pages
 
  A file page can drive agterm itself: switch sessions, rename, set a status, or hand a choice back to you,
@@ -231,7 +273,7 @@ index 3051511..f58a97c 100644
  command name; it works with the page's JavaScript off. `data-agterm-target` is the target,
  `data-agterm-args` a JSON object of fixed arguments, a form's named inputs add fields (number inputs send
  numbers, checkboxes true/false), and `data-agterm-into="#id"` shows the reply or the error in that element.
-@@ -956,7 +957,7 @@ A button outside a form needs `type="button"`.
+@@ -1020,7 +1021,7 @@ A button outside a form needs `type="button"`.
  - To get a choice back, open with `--block` and give the page `session.overlay.submit` controls:
 
  ```bash
@@ -240,7 +282,7 @@ index 3051511..f58a97c 100644
  # exit 0: {"pageID":"…","outcome":"submitted","value":"main"}; exit 2: dismissed; 1: error
  ```
 
-@@ -970,8 +971,8 @@ choice=$(agtermctl session overlay open --html /tmp/branches.html --block --targ
+@@ -1034,8 +1035,8 @@ choice=$(agtermctl session overlay open --html /tmp/branches.html --block --targ
  ## Troubleshooting and reporting
 
  When the user hits a problem (a keymap editor that will not open, a custom action that does nothing,
@@ -251,7 +293,7 @@ index 3051511..f58a97c 100644
  subsystem `com.umputun.agterm`. If it turns out to be a bug, offer to help file it.
 
  **Filing is opt-in and draft-first.** Never run a `gh` command without the user's explicit approval.
-@@ -989,7 +990,7 @@ Full detail, templates, and the exact `gh` commands are in **troubleshooting.md*
+@@ -1054,7 +1055,7 @@ Full detail, templates, and the exact `gh` commands are in **troubleshooting.md*
    (`result.id`/`text`/`exitCode`/`count`/`affected`/`tree`/`windows`/`app`/`restore`/`live`/`remote`), error strings, the scratch/overlay/split
    lifecycle, and the keymap.conf format (`map` / `command`, chords, leaders, `--repeat`, `|` alternatives,
    `{AGT_X}` tokens).
@@ -1291,7 +1333,7 @@ index 20e45cb..5d3dc23 100644
    --pane "$AGTERM_PANE" --pane-id "$AGTERM_PANE_ID" --target "$AGTERM_SESSION_ID"
  ```
 
-@@ -1078,7 +1077,7 @@ Read it back from the session node, and note the panel does NOT set `overlay`
+@@ -1078,7 +1077,7 @@ Read it back from the session node, and note the panel does NOT set `overlay` 
  occupant holds it is the one that reports:
 
  ```bash
@@ -1491,7 +1533,7 @@ index 20e45cb..5d3dc23 100644
 +ngtermctl keymap list --json | jq -r '.result.keymap.diagnostics[] | "line \(.line): \(.message)"'
  ```
 diff --git a/reference.md b/reference.md
-index 77ad1f0..2b4d2c3 100644
+index 34c14a6..84fe077 100644
 --- a/reference.md
 +++ b/reference.md
 @@ -1,13 +1,13 @@
@@ -1575,16 +1617,16 @@ index 77ad1f0..2b4d2c3 100644
  `(not realized)`),
  `backedByLive` (true only when every existing primary/split pane is currently live-backed; older servers omit
  it),
-@@ -348,7 +349,7 @@ the mode is `untouched`), and `dashboardFontMode` (`auto` for `--auto-size`, `fi
+@@ -350,7 +351,7 @@ the mode is `untouched`), and `dashboardFontMode` (`auto` for `--auto-size`, `fi
  `untouched`), plus `pickPending` (the id of the native picker currently awaiting an answer in this
  window, omitted when none is pending), `askPending` (the pending GUI question's id, omitted when absent),
  and `app` (which agterm is serving this socket: `version`, plus
 -`commit` when the build recorded one — the same value `agtermctl version` returns, so an agent already
 +`commit` when the build recorded one — the same value `ngtermctl version` returns, so an agent already
  reading the tree gets its version floor without a second round-trip; it is not duplicated onto
- `window.list`, where a caller uses `version` instead), and `indexUnsaved` (true while the last write of
- the window index failed, omitted otherwise; app-wide, and it clears on the next index write that lands).
-@@ -492,7 +493,7 @@ buys nothing. A caller with no tree uses `version`.
+ `window.list`, where a caller uses `version` instead), `indexUnsaved` (true while the last write of
+ the window index failed, omitted otherwise; app-wide, and it clears on the next index write that lands),
+@@ -496,7 +497,7 @@ buys nothing. A caller with no tree uses `version`.
    session address — id / unique prefix / `active`). The anchor CARRIES ITS OWN WORKSPACE (resolved
    across all workspaces), so it names the destination workspace itself — `--after`/`--before` are
    therefore mutually exclusive with each other and with `--workspace`/`--workspace-name` (the anchor
@@ -1593,7 +1635,7 @@ index 77ad1f0..2b4d2c3 100644
    right after the current session in one round-trip. Without either flag it appends, whatever the user's
    Settings placement for New Session. `--no-select` creates the session in the BACKGROUND:
    it is added to the sidebar but NOT selected or focused, so the current selection and focus are left
-@@ -517,9 +518,9 @@ buys nothing. A caller with no tree uses `version`.
+@@ -521,9 +522,9 @@ buys nothing. A caller with no tree uses `version`.
    On a parent attached from another Mac, that Mac's agterm creates the companion under its own session, and
    it is attached here under the row once its panes run; closing it here only detaches it. Errors: `the agterm
    on HOST is too old for companions`, the origin's own refusal, or `created companion ID on HOST but could not
@@ -1605,7 +1647,7 @@ index 77ad1f0..2b4d2c3 100644
    its output after it exits.
    A companion reorders only among its siblings (drag or `session move`), and moving the parent carries its
    companions. Other session commands (status, notify, type, split, rename, flag, close) act on a companion
-@@ -745,7 +746,7 @@ error keeps those names for compatibility.
+@@ -749,7 +750,7 @@ error keeps those names for compatibility.
  - `session resize (--split-ratio R | --grow-left D | --grow-right D | --grow-primary D | --grow-split D | --grow-top D | --grow-bottom D) [--target] [--window W]` - move the
    split DIVIDER (the divider is otherwise mouse-only: drag it, or double-click it for an even split. No
    GUI/menu/keymap action reaches any other fraction, so bind a key by mapping a
@@ -1614,7 +1656,7 @@ index 77ad1f0..2b4d2c3 100644
    `--split-ratio` sets the absolute primary-pane fraction of the area below the titlebar (`0..1`, left
    or top). The grow options are
    equivalent role/position aliases: primary/left/top versus split/right/bottom. The result is clamped to
-@@ -870,9 +871,9 @@ error keeps those names for compatibility.
+@@ -876,9 +877,9 @@ error keeps those names for compatibility.
      shown emits `tree.changed`.
 
    ```bash
@@ -1625,8 +1667,8 @@ index 77ad1f0..2b4d2c3 100644
 +  ngtermctl session info --clear --target "$AGTERM_SESSION_ID"
    ```
  - `session tint <COLOR|clear> [--on PARTS] [--target] [--window W]` - color the session's sidebar row so it
-   stands out at a glance (red for production, green for dev). COLOR is `red|orange|yellow|green|blue|purple|gray`,
-@@ -974,7 +975,7 @@ error keeps those names for compatibility.
+   stands out at a glance (red for production, green for dev). COLOR is
+@@ -983,7 +984,7 @@ error keeps those names for compatibility.
    active); use it when you want the user pulled to the overlay, omit it to open quietly. `--background-color #rrggbb` gives the overlay pane its own solid
    background color, independent of the session's own `session background color` (nil = the default theme
    background); it honors the Settings window translucency, captured when the overlay opens. `--wait` keeps the overlay open after the command exits (press a key
@@ -1635,7 +1677,7 @@ index 77ad1f0..2b4d2c3 100644
    (cannot combine with `--wait`); the program renders normally — capture its OUTPUT via the program's
    own output file, not the control channel. Returns the overlay's session id. `--target` defaults to
    `active`, so an automated caller should pass `--target "$AGTERM_SESSION_ID"` — otherwise a (usually
-@@ -1306,7 +1307,7 @@ error keeps those names for compatibility.
+@@ -1363,7 +1364,7 @@ error keeps those names for compatibility.
    all-empty table rows and an all-empty header row are not shown, the latter leaving no header rule.
    A markdown message that renders nothing visible is refused like an empty one.
    `--file FILE` reads the message from a UTF-8 file instead of the argument, exactly one of the two, once per
@@ -1644,7 +1686,7 @@ index 77ad1f0..2b4d2c3 100644
    fails there with `cannot read --file <path>: <reason>` or `--file <path> is not valid UTF-8`; passing both or
    neither fails with `MESSAGE and --file are mutually exclusive` or `provide MESSAGE or --file`, and every cap
    still applies to what is sent. `--font-size PT` (6–72) sets the
-@@ -1349,7 +1350,7 @@ agterm's engine — draws natively. No kitty binary and no external image viewer
+@@ -1406,7 +1407,7 @@ agterm's engine — draws natively. No kitty binary and no external image viewer
  is plain `base64` + `printf`. Run it as `bash <skill-dir>/scripts/show-image.sh <image> [size-percent]`,
  resolving `<skill-dir>` as the directory `SKILL.md` was loaded from rather than a fixed path — the skill
  ships both as a plugin (`~/.claude/plugins/cache/…`, `~/.codex/plugins/cache/…`) and as the app's own
@@ -1653,7 +1695,7 @@ index 77ad1f0..2b4d2c3 100644
  every one of them.
  The image is scaled to fit the overlay and centered in it (uniform, aspect preserved, up or down): the
  script asks the terminal for its pixel and cell geometry over `/dev/tty`, reads the image dimensions
-@@ -1423,10 +1424,10 @@ shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage
+@@ -1480,10 +1481,10 @@ shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage
 
  ## surface
 
@@ -1666,7 +1708,7 @@ index 77ad1f0..2b4d2c3 100644
  `surface:<session-id>:right` for the split pane or `surface:<session-id>:overlay-right` for a pane
  overlay covering it. Omit `--target` (or pass `active`) to act on the active surface in the
  frontmost or `--window` window. `quick` is the one target that is not a window surface: it grows the
-@@ -1449,9 +1450,9 @@ opens on the zoomed session still spawn their shells behind the zoom layer. A no
+@@ -1506,9 +1507,9 @@ opens on the zoomed session still spawn their shells behind the zoom layer. A no
  click exits zoom before revealing its session. Use `surface zoom` when the user/agent needs a pane
  fullscreen inside agterm; use `window zoom` only to maximize the whole window on screen.
 
@@ -1678,7 +1720,7 @@ index 77ad1f0..2b4d2c3 100644
  vocabulary and its refusals are `surface zoom`'s, so an explicit `SURFACE_ID` reads a hidden pane or a
  background session as readily as the visible one. It is a pure read: it neither selects nor realizes the
  target, and it reports no field in `tree`, so poll it when you need it. With `--pane-id` the target is a
-@@ -1466,9 +1467,9 @@ over text that is still there. Never read "column equals the prompt" as "the com
+@@ -1523,9 +1524,9 @@ over text that is still there. Never read "column equals the prompt" as "the com
 
  ## dashboard
 
@@ -1691,7 +1733,7 @@ index 77ad1f0..2b4d2c3 100644
  --close [--window W]` closes the open one. The cell unit is a session+pane: a non-split session is ONE
  cell, and a SPLIT session shows as TWO cells — its left/primary pane and its right/split pane. The
  positional ids are session addresses (id / unique prefix / `active`), each of which may carry a
-@@ -1530,9 +1531,9 @@ Invalid invocations error (rejected at the CLI and re-checked server-side): `--f
+@@ -1587,9 +1588,9 @@ Invalid invocations error (rejected at the CLI and re-checked server-side): `--f
 
  ## pick
 
@@ -1703,7 +1745,7 @@ index 77ad1f0..2b4d2c3 100644
  no items needs `< /dev/null` or it blocks.
 
  The first non-whitespace input byte selects the format. `[` starts a JSON array of objects with required
-@@ -1575,9 +1576,9 @@ Picked and custom results exit 0. Cancellation exits 2. Protocol, validation, tr
+@@ -1632,9 +1633,9 @@ Picked and custom results exit 0. Cancellation exits 2. Protocol, validation, tr
  failures exit 1. The blocking client polls every 100 ms for the first second, then every 500 ms.
 
  `--no-block` returns immediately with `{"id":"<pick-id>"}`. Use
@@ -1715,7 +1757,7 @@ index 77ad1f0..2b4d2c3 100644
  id. Without `--window`, the globally unique id keeps result/cancel pinned to its owning window even if
  the frontmost window changes. With `--window`, a live or close-retained result must belong to that
  window. A wrong id returns `unknown pick: <id>`.
-@@ -1592,7 +1593,7 @@ it waited for. Results age out oldest-first: the 8 most recent per open window,
+@@ -1649,7 +1650,7 @@ it waited for. Results age out oldest-first: the 8 most recent per open window,
 
  ## ask
 
@@ -1724,7 +1766,7 @@ index 77ad1f0..2b4d2c3 100644
  reading stdin. Use explicit `ask open` when the title is `open`, `result`, or `cancel`.
 
  `--style terminal` is the default and uses the window's selected session, with one pending ask per
-@@ -1629,9 +1630,9 @@ button highlight, Return answers a one-line field, Command-Return a multiline on
+@@ -1686,9 +1687,9 @@ button highlight, Return answers a one-line field, Command-Return a multiline on
  input method composes, and `--hotkey` is refused with a field; in a list Up/Down move and Space toggles.
 
  ```bash
@@ -1737,7 +1779,7 @@ index 77ad1f0..2b4d2c3 100644
  ```
 
  The blocking call prints one bare result:
-@@ -1666,7 +1667,7 @@ hiding under covers, and cancellation rules.
+@@ -1723,7 +1724,7 @@ hiding under covers, and cancellation rules.
 
  ## quick
 
@@ -1746,7 +1788,7 @@ index 77ad1f0..2b4d2c3 100644
  floating panel at 90% of the focused screen up to 1100x700 unless Settings > Interface sets a share of its
  own, not in the tree and owned by no window; its
  shell stays alive across hides). Errors with `no open window` when none is open, and with `pick pending`
-@@ -1676,7 +1677,7 @@ because the user had summoned it by hotkey — so a following `quick type` / `qu
+@@ -1733,7 +1734,7 @@ because the user had summoned it by hotkey — so a following `quick type` / `qu
  `surface zoom --target quick` still finds it. A window's terminal zoom is not a term either way: the panel
  floats above every window, so `show` is never refused for it.
 
@@ -1755,7 +1797,7 @@ index 77ad1f0..2b4d2c3 100644
  window's quick terminal, the quick-terminal twin of `session type`. There is no `--target`/`--window`
  (always the frontmost window's quick terminal) and no `--pane` (a single surface). It polls briefly for
  the surface to come up, so `quick show; quick type` back-to-back is reliable (the overlay mounts a beat
-@@ -1684,7 +1685,7 @@ after `quick show` flips visibility). Errors with `quick terminal not open` when
+@@ -1741,7 +1742,7 @@ after `quick show` flips visibility). Errors with `quick terminal not open` when
  been shown, `quick terminal not realized` if a shown surface never comes up in time, `no open window`
  when none is open. Typing into a shown-then-hidden quick terminal still works (its shell stays alive).
 
@@ -1764,7 +1806,7 @@ index 77ad1f0..2b4d2c3 100644
  plain text (the read-back for `quick type`; does not touch the system clipboard). `--all` reads the
  full screen + scrollback, `--lines N` keeps only the last N (mutually exclusive). Polls for the surface
  like `quick type`. Errors with `quick terminal not open` (never shown), `failed to read surface buffer`
-@@ -1692,12 +1693,12 @@ like `quick type`. Errors with `quick terminal not open` (never shown), `failed
+@@ -1749,12 +1750,12 @@ like `quick type`. Errors with `quick terminal not open` (never shown), `failed
 
  ## sidebar
 
@@ -1779,7 +1821,7 @@ index 77ad1f0..2b4d2c3 100644
  workspace tree and the flagged working set (the durable per-session `flag`; in the default flat layout
  each flagged row is labeled `session : workspace`, even across workspaces). `toggle` is the default; idempotent
  (delta-computed); an unknown mode is an error, and `no open window` when none is open. Persisted
-@@ -1706,7 +1707,7 @@ to the flagged sessions only; back in `tree` it spans the marked workspaces' ses
+@@ -1763,7 +1764,7 @@ to the flagged sessions only; back in `tree` it spans the marked workspaces' ses
  filter is applied) or all sessions. The GUI half is the bottom-bar flag button, View ▸ Show Flagged / Show All, and the
  ⌃⇧P palette. Use with `session flag` to build and view a cross-workspace working set.
 
@@ -1788,16 +1830,23 @@ index 77ad1f0..2b4d2c3 100644
  `flat` is one list labeled `session : workspace`; `plain` is the same list labeled by session name alone;
  `tree` nests the flagged sessions under their workspace rows and leaves out workspaces holding none.
  `toggle` is the default, leaving `tree` for `flat` and either flat form for `tree`; an unknown layout is an error.
-@@ -1716,7 +1717,7 @@ moves the selection. Returns the resulting layout in `result.text`; read back as
+@@ -1773,13 +1774,13 @@ moves the selection. Returns the resulting layout in `result.text`; read back as
  `sidebarFlaggedLayout`, reported under the ordinary tree too. The tree layout shares each workspace's
  collapse state with the ordinary tree, ignores the focus filter, and keeps `workspace go` unavailable.
+
+-`agtermctl sidebar density [default|compact|toggle]` — pick the sidebar row spacing. `compact` shortens rows
++`ngtermctl sidebar density [default|compact|toggle]` — pick the sidebar row spacing. `compact` shortens rows
+ and their indent; `default` restores the standard spacing. `toggle` is the default; an unknown density is an
+ error. APP-WIDE, the same setting as Settings ▸ Appearance ▸ Sidebar density: no `--window`, no open window
+ needed, and every window's sidebar follows at once. Returns the resulting density in `result.text`; read back
+ as the tree's top-level `sidebarDensity`.
 
 -`agtermctl sidebar expand [--window W]` — expand every workspace row in a window's sidebar tree.
 +`ngtermctl sidebar expand [--window W]` — expand every workspace row in a window's sidebar tree.
  Defaults to the frontmost window; `--window` (id / prefix / `active`) targets any OPEN window, so a
  script can expand a background window's tree. Idempotent (a clean no-op when all are already expanded);
  a graceful no-op under the flat flagged list (no workspace rows). In either tree layout it applies to
-@@ -1724,13 +1725,13 @@ all workspaces, including those the view omits. A named-but-closed window errors
+@@ -1787,13 +1788,13 @@ all workspaces, including those the view omits. A named-but-closed window errors
  window` when none is open. The GUI half (frontmost only) is View ▸ Expand Workspaces and the ⌃⇧P palette
  "Expand Workspaces".
 
@@ -1813,7 +1862,7 @@ index 77ad1f0..2b4d2c3 100644
  thing the divider drag does that had no command. Clamped server-side to the same 160...560pt range the
  drag enforces, persisted through the window snapshot, and ECHOED: the command prints the STORED width,
  so an out-of-range request reads back as the bound it landed on rather than as what was asked for. The
-@@ -1747,7 +1748,7 @@ expect points to convert to columns without one.
+@@ -1810,7 +1811,7 @@ expect points to convert to columns without one.
 
  ## notify
 
@@ -1822,7 +1871,7 @@ index 77ad1f0..2b4d2c3 100644
  attributed to a session (default: the active session of the frontmost window). `--title` defaults to
  the session name. Clicking the banner reveals that session. A session keeps one such banner: a newer
  `notify` replaces it, the session's OSC 9/777 banners do not, and focusing the session removes it.
-@@ -1776,7 +1777,7 @@ Per-pane mailboxes: a program leaves a message for another pane's program instea
+@@ -1839,7 +1840,7 @@ Per-pane mailboxes: a program leaves a message for another pane's program instea
  terminal, and the receiver reads it when it chooses. Mailboxes live in the running app's memory; nothing
  is drawn on screen.
 
@@ -1831,7 +1880,7 @@ index 77ad1f0..2b4d2c3 100644
    (`msg.send`). PANE is a pane id (`surfaces[].paneID` from `tree --json`) or `left` (alias `primary`, `top`), `right`
    (`split`, `bottom`) or `scratch`, resolved once at send time; a bare session is an error. Aliases of one pane are delivered
    once. `--all` reaches every live pane in every open window except the sender and remote rows;
-@@ -1785,7 +1786,7 @@ is drawn on screen.
+@@ -1848,7 +1849,7 @@ is drawn on screen.
    addresses) and `rejected` (`{address, reason}`, reason `mailbox full` or `unknown pane`). The CLI
    prints the id, one stderr line per rejection, and exits 1 when anything was rejected; the delivered
    copies stay queued.
@@ -1840,7 +1889,7 @@ index 77ad1f0..2b4d2c3 100644
    oldest messages, up to 32, as `messages` (`{id, from?, to, ts, body}`) plus `remaining`, the pending messages not in this
    batch, and removes
    nothing; reading again returns the same prefix. Human output is `ID from SENDER` (or
-@@ -1794,7 +1795,7 @@ is drawn on screen.
+@@ -1857,7 +1858,7 @@ is drawn on screen.
    and fails unless `acked` names exactly the returned messages. This is at most once: a reply lost on
    the way is not redelivered. `--wait` repeats the same read every 250 ms until a message arrives;
    `--timeout` exits 124.
@@ -1849,7 +1898,7 @@ index 77ad1f0..2b4d2c3 100644
    answers `acked` with those actually removed; unknown or already removed ids are not an error.
 
  Identity is always `SESSION:PANE-ID`, never a role, so a swap cannot re-point it. The CLI builds it from
-@@ -1813,7 +1814,7 @@ on `message` reacts to new mail without polling.
+@@ -1876,7 +1877,7 @@ on `message` reacts to new mail without polling.
 
  ## font
 
@@ -1858,7 +1907,7 @@ index 77ad1f0..2b4d2c3 100644
  reset the font size of a session pane. `--pane` picks which surface's font to change, like `session type`
  and `session text`: omitted or `left` is the main pane, `right` the split pane (errors with `session has
  no split pane` when the session has no split), `scratch` the session's scratch terminal (settable even
-@@ -1827,10 +1828,10 @@ instead of the terminal: one page zoom shared by every HTML overlay, kept across
+@@ -1890,10 +1891,10 @@ instead of the terminal: one page zoom shared by every HTML overlay, kept across
 
  ## keymap
 
@@ -1871,7 +1920,7 @@ index 77ad1f0..2b4d2c3 100644
  exact name, as `keymap list` prints it. It runs as it does from the command palette, with the target
  session's focused pane, primary or split and never its scratch or an overlay, supplying the working
  directory, the selection and the `AGT_*` context; the default target is the active session, and from an
-@@ -1838,7 +1839,7 @@ HTML page the page's own session. `result.id` is that session. Ok means the proc
+@@ -1901,7 +1902,7 @@ HTML page the page's own session. `result.id` is that session. Ok means the proc
  command is detached, so its exit status and output are not reported, though a command with `--error-hud`
  still shows its panel. An unknown name answers `no custom command named NAME`.
 
@@ -1880,7 +1929,7 @@ index 77ad1f0..2b4d2c3 100644
  `result.keymap`:
 
  - `path` — the `keymap.conf` this came from.
-@@ -1880,7 +1881,7 @@ line can express — such an item is AppKit's own and never matches an action.
+@@ -1943,7 +1944,7 @@ line can express — such an item is AppKit's own and never matches an action.
 
  ### keymap.conf format
 
@@ -1889,7 +1938,7 @@ index 77ad1f0..2b4d2c3 100644
  Key Mapping). Three verbs, line-based; blank lines and `#` comments ignored:
 
  - `map <chord> [--repeat] <action>` — rebind a built-in menu action.
-@@ -1956,7 +1957,9 @@ for untrusted content). A remote host can set the session title (OSC) and workin
+@@ -2019,7 +2020,9 @@ for untrusted content). A remote host can set the session title (OSC) and workin
  so `{AGT_SESSION_NAME}` and `{AGT_SESSION_PWD}` are as untrusted as `{AGT_SELECTION}`; use the quoted
  `$AGT_*` form for any of them:
 
@@ -1900,7 +1949,7 @@ index 77ad1f0..2b4d2c3 100644
  - `{AGT_SESSION_PWD}` / `$AGT_SESSION_PWD` — the working directory of the pane the command fired from;
    the scratch terminal reports the main pane's, since it tracks no cwd of its own. For a session opened
    by `live attach` the path can be remote: the session starts with local HOME and follows subsequent cwd
-@@ -1986,7 +1989,7 @@ Built-in action names for `map` include: `new_window`, `new_workspace`, `new_ses
+@@ -2049,7 +2052,7 @@ Built-in action names for `map` include: `new_window`, `new_workspace`, `new_ses
  `session_palette`, `command_palette`, `custom_command_palette`, `dashboard`, and the navigation actions (`previous_session`, `next_session`,
  `first_session`, `last_session`, `previous_attention_session`, `next_attention_session`,
  `previous_window`, `next_window`, `focus_left_pane`, `focus_right_pane`, `select_theme`). Editing the keymap from a terminal: open
@@ -1909,7 +1958,7 @@ index 77ad1f0..2b4d2c3 100644
 
  ## hooks
 
-@@ -1997,7 +2000,7 @@ diagnostic. The script gets the event as one JSON object on stdin (the `events -
+@@ -2060,7 +2063,7 @@ diagnostic. The script gets the event as one JSON object on stdin (the `events -
  by a newline and EOF, plus `AGT_EVENT_KIND`, `AGT_EVENT_STATUS`, `AGT_EVENT_HOST`, `AGT_SESSION_ID`,
  `AGT_WORKSPACE_ID`, `AGT_WINDOW_ID` and `AGT_SOCKET`, each set explicitly and empty when the event lacks the field. It runs
  detached in the app's working directory with the widened `PATH` a custom command gets; pass
@@ -1918,7 +1967,7 @@ index 77ad1f0..2b4d2c3 100644
  in order up to 256, then the oldest is dropped and counted. No timeout. A non-zero exit, a failed spawn
  or an event that could not be handed to a running script banners once per hook until its next success
  or a reload; a script that ignores stdin is fine, only its exit status counts. A hook whose command
-@@ -2008,11 +2011,11 @@ kind again, so open only when `tree` shows no HUD and use `session hud update` o
+@@ -2071,11 +2074,11 @@ kind again, so open only when `tree` shows no HUD and use `session hud update` o
  restore, such as the pages it keeps in overlays; a hook added by a later reload does not get that
  launch's event.
 
@@ -1932,7 +1981,7 @@ index 77ad1f0..2b4d2c3 100644
 
  - `path` — the `hooks.conf` this came from.
  - `diagnostics[]` — `line` + `message` per parse problem.
-@@ -2025,7 +2028,7 @@ Both are app-global and refuse a target or `--window`.
+@@ -2088,7 +2091,7 @@ Both are app-global and refuse a target or `--window`.
 
  ## browser
 
@@ -1941,7 +1990,7 @@ index 77ad1f0..2b4d2c3 100644
  `--persistent` URL overlays. The reply comes after the removal finished. Errors
  `browser.clear: N persistent page(s) still open` while such a page is open, including one in a
  just-closed session that can still be restored, and `browser.clear: browser storage is being cleared` when it reaches the app
-@@ -2033,7 +2036,7 @@ before another clear's removal has finished. A socket request queues behind a so
+@@ -2096,7 +2099,7 @@ before another clear's removal has finished. A socket request queues behind a so
  socket serves one request at a time. With nothing ever saved it answers ok. Clearing local data does not sign you out on the server.
  App-global; refuses a target or `--window`. There is no read-back beyond the reply.
 
@@ -1950,7 +1999,7 @@ index 77ad1f0..2b4d2c3 100644
  opens, or with no mode print the current one. `browser` (default) hands the link to the system browser.
  `overlay` opens it in a full session web overlay as `session overlay open --url URL --browse --js
  --navigation --persistent` would, without selecting the session; `overlay95`, `overlay75` and `overlay50` add
-@@ -2048,7 +2051,7 @@ unaffected. The setting is the one in Settings > General > Open links in. App-gl
+@@ -2115,7 +2118,7 @@ unaffected. The setting is the one in Settings > General > Open links in. App-gl
 
  ## config
 
@@ -1959,7 +2008,7 @@ index 77ad1f0..2b4d2c3 100644
  config-diagnostic count (0 = clean), counted across ALL config sources, not just the agterm-scoped
  `ghostty.conf` (libghostty diagnostics do not record which file they came from), so do not read a
  non-zero count as proof `ghostty.conf` is the culprit. App-global (no `--window`). It runs the same path
-@@ -2056,7 +2059,7 @@ as the GUI's File ▸ Reload Config menu/palette item, which posts a warning ban
+@@ -2123,7 +2126,7 @@ as the GUI's File ▸ Reload Config menu/palette item, which posts a warning ban
 
  ### ghostty.conf
 
@@ -1968,7 +2017,7 @@ index 77ad1f0..2b4d2c3 100644
  ghostty config and the place to put agterm overrides/customizations. It is ALWAYS loaded. The app builds
  its terminal config in order, each source overriding the one before: ghostty's bundled defaults, then
  your global `~/.config/ghostty/config` (OFF by default — opt in with Settings ▸ General ▸ Use my global
-@@ -2066,21 +2069,21 @@ https://agterm.com/docs#ghostty. The scoped file is
+@@ -2133,21 +2136,21 @@ https://agterm.com/docs#ghostty. The scoped file is
  agterm-only; the standalone Ghostty.app never reads it. agterm is self-contained by default, so a config
  written for Ghostty.app does not silently change agterm — put agterm overrides in `ghostty.conf` (e.g.
  `macos-option-as-alt = true`); the full reference is at https://ghostty.org/docs/config. Editing it from
@@ -1993,7 +2042,7 @@ index 77ad1f0..2b4d2c3 100644
  ▸ Appearance), per slot:
  - `theme set <name>` sets the light/single theme; a dark theme, if set, is KEPT (syncing stays on).
    Omit the name for ghostty's built-in default ("default ghostty") — with a dark theme set, that
-@@ -2124,7 +2127,7 @@ after reattach behaves normally.
+@@ -2191,7 +2194,7 @@ after reattach behaves normally.
 
  ## restore
 
@@ -2002,7 +2051,7 @@ index 77ad1f0..2b4d2c3 100644
  quit-time capture fills, and persist it. For the exit that never reaches `applicationWillTerminate`: a force
  quit, a crash, a hard reset, a power loss, all of which today leave every pane restoring a plain shell. (A
  shutdown, restart or logout is not one of them: that path quits the app normally and captures by itself.)
-@@ -2136,11 +2139,11 @@ modes return `restore.capture requires rerun mode; configured restore mode is MO
+@@ -2203,11 +2206,11 @@ modes return `restore.capture requires rerun mode; configured restore mode is MO
  fresh as its last run: a pager or a build that has finished since still re-runs after a crash, which
  `restore clear` drops wholesale and `restore-denylist.conf` prevents per program. Typed at a prompt the
  command records ITSELF, since while it runs it is that pane's foreground process and the pane comes back
@@ -2016,7 +2065,7 @@ index 77ad1f0..2b4d2c3 100644
  next restart restores plain shells for those panes (not whatever each pane was running). It does NOT clear
  a `session.new --command` session's own command (`initialCommand`, the durable creation identity), which
  still re-runs in `rerun` mode. This command works in every mode. `rerun` captures each pane's foreground
-@@ -2149,7 +2152,7 @@ command at a clean quit and starts it again on relaunch; `restore clear` wipes t
+@@ -2216,7 +2219,7 @@ command at a clean quit and starts it again on relaunch; `restore clear` wipes t
  it acknowledges only a save that landed: if any window's write fails it reports that at least one window
  failed to save, since those captures are still on disk and nothing reads those slots back.
 
@@ -2025,7 +2074,7 @@ index 77ad1f0..2b4d2c3 100644
  Bare, it reports five things: `configured` (what settings hold, so what the next launch asks for),
  `requestedAtLaunch` and `active` (what THIS launch asked for and what it got), `restartRequired`, and
  `unavailableReason` when live was requested and refused. The two requested values differ once the mode has
-@@ -2159,7 +2162,7 @@ Setting it changes nothing in the running app, and no flag makes it: a pane is w
+@@ -2226,7 +2229,7 @@ Setting it changes nothing in the running app, and no flag makes it: a pane is w
  not at the moment it is created, so a running shell cannot be retrofitted either way. A failed write is
  reported as a failure rather than acknowledged.
 
@@ -2034,7 +2083,7 @@ index 77ad1f0..2b4d2c3 100644
  header. `state` is `claimed`, `orphan`, `unknown`, `conflicted`, `pendingClose` or `foreign`;
  `observation` is `running`, `unreadable` or `absent`, separate from the client count because a daemon that
  is gone and one the session host could not read are different answers. A CLOSED window's panes are `claimed` with zero
-@@ -2169,7 +2172,7 @@ The header also carries `endpoint.executable` and `endpoint.socketDirectory`, wh
+@@ -2236,7 +2239,7 @@ The header also carries `endpoint.executable` and `endpoint.socketDirectory`, wh
  needs to reach these daemons; a server older than remote sessions omits the key. A row whose daemon was
  created before the recorded first launch with this session host build carries `outdated: true` (omitted otherwise).
 
@@ -2043,7 +2092,7 @@ index 77ad1f0..2b4d2c3 100644
  daemon name `live list` prints, not a session id, so it reaches a pane whose window is closed;
  `session text` resolves only open-window sessions. The default is the daemon's current screen at the size its
  last leader gave it; it has no scroll position of its own, so this is not the pane's viewport.
-@@ -2177,23 +2180,23 @@ last leader gave it; it has no scroll position of its own, so this is not the pa
+@@ -2244,23 +2247,23 @@ last leader gave it; it has no scroll position of its own, so this is not the pa
  that; pass one or the other. The read
  attaches nothing, opens no window and changes no pane's size. A name with no readable daemon is an error.
 
@@ -2071,7 +2120,7 @@ index 77ad1f0..2b4d2c3 100644
  before the session host existed keeps its own macOS permission identity, so every new version of a tool in
  it asks for the microphone again; the reset ends those sessions' processes at the next launch and recreates
  them under the host, starting their captured commands again where possible. It also covers every session
-@@ -2212,7 +2215,7 @@ Omit it to search every window, closed and unindexed ones included; `active` is
+@@ -2279,7 +2282,7 @@ Omit it to search every window, closed and unindexed ones included; `active` is
  is it for `--target`. Without it an ambiguous prefix reports `no left pane daemon for session ID`, the
  same answer a target that does not exist gets.
 
@@ -2080,7 +2129,7 @@ index 77ad1f0..2b4d2c3 100644
  Mac over ssh; with none it reports this app's own, which is exactly the form the remote call runs on the
  far side, so it is also how to see what another machine would answer without sshing anywhere.
  `result.remote` carries `endpoint` (the session host `executable` and `socketDirectory`), `host` when one was given,
-@@ -2233,10 +2236,11 @@ rather than offered half. A page companion has no daemon and is listed with empt
+@@ -2300,10 +2303,11 @@ rather than offered half. A page companion has no daemon and is listed with empt
  listed; it attaches only under a row already attached from its parent. An empty list is a successful answer and does NOT diagnose the restore mode —
  `live list` does that. The far side must be running in `live` mode, which is what puts a daemon behind each
  pane, and be new enough to answer `live tree` at all; an older one is refused by name rather than
@@ -2095,7 +2144,7 @@ index 77ad1f0..2b4d2c3 100644
  the destination window's current workspace, selected, with the remote session's split when it has one.
  `--window` takes a local open window ID, unique prefix, or `active`; omitted, it uses the frontmost window
  after discovery. An invalid or closed destination fails without creating a session. Targeting a background
-@@ -2253,7 +2257,7 @@ pane's ssh joins an existing `ControlMaster` connection, that master's settings
+@@ -2320,7 +2324,7 @@ pane's ssh joins an existing `ControlMaster` connection, that master's settings
 
  A terminal companion attached on its own opens under the one row in the destination window attached from
  its parent, in that row's workspace (`result.parent` names it); with no such row, or more than one, it opens on its own.
@@ -2104,7 +2153,7 @@ index 77ad1f0..2b4d2c3 100644
  each of its companions under it from one read, in the origin's companion order when reported and in the
  order of its listed rows from an older origin; a companion's id is refused. The
  reply's `id` is the parent here and `remoteGroup` carries `membershipKnown` plus one `{origin, id?, error?}`
-@@ -2273,7 +2277,7 @@ A program in an attached session runs on the origin and talks to the origin's ag
+@@ -2340,7 +2344,7 @@ A program in an attached session runs on the origin and talks to the origin's ag
  agterm to draw would show there only. Every attach therefore also opens a presentation stream, and this
  Mac mirrors the origin session's status, its `session context`, its `session info` line, its `notify` notifications, its HUD and
  the layout of panes already attached.
@@ -2113,7 +2162,7 @@ index 77ad1f0..2b4d2c3 100644
 
  - The origin's context shows in this Mac's title bar and as the row's `context` in `tree`. A
    `session context` set on this Mac's row wins over it, and `--clear` here removes only that local value,
-@@ -2317,14 +2321,14 @@ Nothing has to be set up beyond the `agtermctl` PATH precondition above. What to
+@@ -2384,14 +2388,14 @@ Nothing has to be set up beyond the `agtermctl` PATH precondition above. What to
    screen), or one whose stream drops, goes back to the origin and waits there like a local one. If the
    origin cannot place it, it ends `{"result":"cancelled","reason":"presentation-lost"}`.
  - A handed-over overlay runs its program ONCE, on the origin, under an ssh terminal the presenting Mac
@@ -2130,7 +2179,7 @@ index 77ad1f0..2b4d2c3 100644
    plumbing not meant to be typed), so commands act on the origin's session and `overlay submit` answers the
    caller there; `result --page` and `--html --block` work unchanged on the origin. A loopback `--url` is
    refused (it names a server on the origin), as is any page for a presenting Mac too old for pages
-@@ -2342,7 +2346,7 @@ Nothing has to be set up beyond the `agtermctl` PATH precondition above. What to
+@@ -2415,7 +2419,7 @@ Nothing has to be set up beyond the `agtermctl` PATH precondition above. What to
  - While the stream is not up the row's indicator says so and names the host. It retries on its own, at
    once when the Mac wakes or the network changes; close and reattach the session to retry by hand.
 
@@ -2139,7 +2188,7 @@ index 77ad1f0..2b4d2c3 100644
  bridges it to stdio as newline-delimited JSON. agterm runs it over ssh on the origin; it is not meant to
  be typed.
 
-@@ -2362,8 +2366,8 @@ variables; an existing local path is not checked to be the same repository as th
+@@ -2435,8 +2439,8 @@ variables; an existing local path is not checked to be the same repository as th
  Each pane has ONE leading Mac, whose window size the program inside sees. `live attach` takes the lead in
  every pane at once; the same panes on the Mac the session runs on are covered ("in use from another Mac").
  Each pane's `lead` in `tree` reads `leader`, `follower` or `unowned`. It is absent when the pane has no
@@ -2150,7 +2199,7 @@ index 77ad1f0..2b4d2c3 100644
  for this Mac, as pressing a key on the cover does.
 
  On the Mac the session RUNS on, a covered pane stays fully drivable: `session type`, `session text` and
-@@ -2397,13 +2401,13 @@ here is app-global and touches only the captured commands, not those overrides.
+@@ -2470,13 +2474,13 @@ here is app-global and touches only the captured commands, not those overrides.
  The File ▸ Open Recent list: sessions and workspaces closed recently, newest first, capped at 20 with
  the oldest dropped silently.
 
@@ -2166,7 +2215,7 @@ index 77ad1f0..2b4d2c3 100644
  with no id. The session returns under its original id. It goes to `--window` or the frontmost window,
  unless another window already holds its session or workspace; the window is not raised. Returns
  `result.recentOpen`: `item` (the entry, as `list` shows it), `window` (where it went) and `complete`,
-@@ -2413,13 +2417,13 @@ A lone companion comes back under its parent, reopening the parent's entry (or t
+@@ -2486,13 +2490,13 @@ A lone companion comes back under its parent, reopening the parent's entry (or t
  holding the parent) first when the parent is not open; when the parent is neither open nor in Recent
  Closed it errors `parent session is not open or in Recent Closed`.
 
@@ -2182,7 +2231,7 @@ index 77ad1f0..2b4d2c3 100644
  command runs in. Local-only: it never opens the control socket and takes no `--socket`, `--window`,
  `--target` or `--json`. It prints an OSC 52 clipboard write into the pane's own output through the pane's
  live-session daemon, so the write travels with the terminal bytes: a session attached from another Mac gets the
-@@ -2427,7 +2431,7 @@ text on the Mac showing it, and on the Mac it runs on as well.
+@@ -2500,7 +2504,7 @@ text on the Mac showing it, and on the Mac it runs on as well.
 
  - `TEXT` — the text to copy; read from standard input when omitted, byte for byte, a trailing newline
    included. Text that starts with `-` is read as an option, and `-h` or `--help` prints help and exits 0
@@ -2191,7 +2240,7 @@ index 77ad1f0..2b4d2c3 100644
  - Needs no terminal, so an agent's shell tool can run it. It does need the pane's own environment:
    `ZMX_SESSION` and `ZMX_DIR`, which a main or split pane started under Live sessions carries. A scratch,
    quick or overlay terminal, and a pane started in another restore mode, is refused with `this pane has
-@@ -2436,17 +2440,17 @@ text on the Mac showing it, and on the Mac it runs on as well.
+@@ -2509,17 +2513,17 @@ text on the Mac showing it, and on the Mac it runs on as well.
  - Each receiving terminal applies its own `clipboard-write` setting: `ask` prompts, `deny` drops the copy.
  - Exit 0 means the session host's print exited zero. It reads no reply, so that confirms neither that the session
    received the text nor that a terminal applied it. Other failures exit 1:
@@ -2212,7 +2261,7 @@ index 77ad1f0..2b4d2c3 100644
  from the environment outside a bundle), then runs the remote `tic -x -o "$HOME/.terminfo" -` over one
  ssh connection with the source on stdin. Nothing is cached; run it once per host and account.
 
-@@ -2461,7 +2465,7 @@ ssh connection with the source on stdin. Nothing is cached; run it once per host
+@@ -2534,7 +2538,7 @@ ssh connection with the source on stdin. Nothing is cached; run it once per host
  Human output on success is `installed xterm-ghostty on DESTINATION`. It exits with ssh's status (128 plus
  the signal when ssh was killed), and 64 for a usage error. Failures before the connection open none:
 
@@ -2221,7 +2270,7 @@ index 77ad1f0..2b4d2c3 100644
  - `infocmp exited N: <stderr>` — the local dump failed.
  - `could not start ssh: <call> failed with <reason>` — the spawn failed.
  - `agterm: tic is not installed on this host, install ncurses first` — printed by the remote and followed
-@@ -2471,7 +2475,7 @@ the signal when ssh was killed), and 64 for a usage error. Failures before the c
+@@ -2544,7 +2548,7 @@ the signal when ssh was killed), and 64 for a usage error. Failures before the c
 
  ## version
 
@@ -2230,7 +2279,7 @@ index 77ad1f0..2b4d2c3 100644
  window need be open, so it works as a preflight from a keymap-launched script. Returns `result.app`:
 
  - `version` — the app's version, the number a cookbook recipe's minimum is compared against.
-@@ -2483,7 +2487,7 @@ The two differ once the bundle is replaced under a running app, by `brew upgrade
+@@ -2556,7 +2560,7 @@ The two differ once the bundle is replaced under a running app, by `brew upgrade
  different until the app is restarted:
 
  ```sh
@@ -2239,7 +2288,7 @@ index 77ad1f0..2b4d2c3 100644
    echo "the installed agterm differs from the running one"
  ```
 
-@@ -2493,11 +2497,11 @@ never as a match.
+@@ -2566,11 +2570,11 @@ never as a match.
 
  Human output is `version` alone, or `version (commit)`, then an `installed:` line only when the bundle on
  disk differs, followed by a `client:` line naming the resolved
@@ -2253,7 +2302,7 @@ index 77ad1f0..2b4d2c3 100644
  `AGTERM_SOCKET`, so a bare call resolves the default path and may report a different instance. Use
  `--socket "$AGTERM_SOCKET"` from a session shell and `--socket "$AGT_SOCKET"` from a keymap- or
  palette-launched child.
-@@ -2533,7 +2537,7 @@ a terminal surface's.
+@@ -2606,7 +2610,7 @@ a terminal surface's.
  `session.hud.open: --size-percent must be 1...100` /
  `hud helper is not bundled in this build` / `could not write the hud message` /
  `invalid position: <value> (top-left|top-center|top-right|center-left|center|center-right|bottom-left|bottom-center|bottom-right|top|bottom)`
@@ -2262,7 +2311,7 @@ index 77ad1f0..2b4d2c3 100644
  `position must be one of: top-left, top-center, top-right, center-left, center, center-right, bottom-left, bottom-center, bottom-right, top, bottom`),
  `invalid text color: <value> (#rrggbb)` (session hud; the CLI rejects it locally with
  `text-color must be a #rrggbb hex value`),
-@@ -2543,7 +2547,7 @@ a terminal surface's.
+@@ -2616,7 +2620,7 @@ a terminal surface's.
  `invalid fit` / `invalid position` / `invalid opacity` / `invalid color` / `text too long` /
  `unsupported image (PNG or JPEG only)` / `no such image file` / `image path must not contain control characters` / `invalid background mode` (session background),
  `invalid sidebar mode` (sidebar),
@@ -2271,13 +2320,13 @@ index 77ad1f0..2b4d2c3 100644
  CLI rejects the same value locally with `mode must be one of: on, off, toggle, add`),
  `invalid workspace filter mode: <value>` (workspace filter over the raw socket; the CLI rejects it
  locally with `mode must be on, off, or toggle`),
-@@ -2561,11 +2565,11 @@ restore; a `session restore --pane right` on a session with no split also return
+@@ -2634,11 +2638,11 @@ restore; a `session restore --pane right` on a session with no split also return
  (resize/move/`--window`), `unknown theme: <name>` (theme set), `unknown sound: <name>` (session status --sound),
  `invalid color (expected #rrggbb)` (session status --color),
- `invalid shape: <value> (circle|square|triangle|diamond|capsule|star)` (session status --shape over the
+ `invalid shape: <value> (circle|square|triangle|triangle-down|play|diamond|capsule|seal|star|bolt|bell)` (session status --shape over the
 -raw socket; the `agtermctl` CLI rejects the same value locally with
 +raw socket; the `ngtermctl` CLI rejects the same value locally with
- `shape must be one of: circle, square, triangle, diamond, capsule, star`),
+ `shape must be one of: circle, square, triangle, triangle-down, play, diamond, capsule, seal, star, bolt, bell`),
  `--pane must be left, right, or scratch` (the `--pane` value check; the message intentionally lists the
  canonical read-back names while the role and position aliases documented above are accepted. The
 -`agtermctl` CLI rejects a bad pane with this for session status/type/text/paste, and over the raw socket
@@ -2314,7 +2363,7 @@ index 0fec581..0854415 100755
 -agtermctl session overlay open "/bin/bash $(sq "$self") --emit $(sq "$abs")" --size-percent "$size"
 +ngtermctl session overlay open "/bin/bash $(sq "$self") --emit $(sq "$abs")" --size-percent "$size"
 diff --git a/troubleshooting.md b/troubleshooting.md
-index 5c69f10..de37dda 100644
+index 1d2136b..fed0a4a 100644
 --- a/troubleshooting.md
 +++ b/troubleshooting.md
 @@ -11,17 +11,17 @@ The full user-facing version of the diagnostics below is the repo's `docs/troubl
@@ -2385,7 +2434,7 @@ index 5c69f10..de37dda 100644
 
  ### "My live session came back as a fresh shell"
 
-@@ -120,7 +120,7 @@ Check these in order:
+@@ -121,7 +121,7 @@ Check these in order:
    indicator.
  - **Confirm the pane is in scope.** Primary and split panes can survive. Scratch, overlay, and quick terminals
    are temporary by design.
@@ -2394,7 +2443,7 @@ index 5c69f10..de37dda 100644
    restore mode as a header. `claimed` with zero clients is a CLOSED window's resting state, not a leak;
    `orphan` is what `live prune` takes. `unknown` means the pane inventory was incomplete, so nothing
    can be pruned until that is resolved.
-@@ -128,19 +128,19 @@ Check these in order:
+@@ -129,19 +129,19 @@ Check these in order:
    to attach, so agterm creates one under the saved name and replays the command that pane was running at the
    last clean quit. A fresh shell instead means no capture applied: the window was closed before the quit, the
    machine lost power or was force-quit, the process exited before quitting, SIGTERM was used, or the command
@@ -2419,7 +2468,7 @@ index 5c69f10..de37dda 100644
    session host, with the same cost as any reset: running work stops and agent conversations need resuming.
  - **Switching modes ends detached live processes.** Selecting Fresh shells or Re-run commands and restarting
    reaps the live daemons in this state directory. An unavailable launch that still requests Live sessions
-@@ -247,7 +247,7 @@ file it.
+@@ -254,7 +254,7 @@ it without a restart; see the [screenshot read diagnosis](https://github.com/ump
 
  ### "agterm would like to access data from other apps, over and over"
 
@@ -2428,7 +2477,7 @@ index 5c69f10..de37dda 100644
  [tree field definitions](reference.md#tree). The [App Data diagnosis](https://github.com/umputun/agterm/blob/master/docs/troubleshooting.md#agterm-would-like-to-access-data-from-other-apps-keeps-coming-back)
  covers the permission guidance: which panes keep agterm's attribution after a relaunch, and Full Disk
  Access for `orphaned` and `app` panes. Needing the consent grant is macOS policy: do not file the consent
-@@ -266,10 +266,9 @@ The selected directory must already exist. An empty `OPENCODE_CONFIG_DIR` skips
+@@ -273,10 +273,9 @@ The selected directory must already exist. An empty `OPENCODE_CONFIG_DIR` skips
  Re-run it after switching major versions: v2 removes the marked v1 plugin in its selected directory; v1 leaves the v2 directory alone.
  User-owned or unreadable v1 files are preserved and reported in the install result.
  The v2 CLI plugin follows the selected session and its descendants, excluding background tabs and headless runs.
@@ -2442,7 +2491,7 @@ index 5c69f10..de37dda 100644
  Help ▸ Install Command Line Tool….
 
  ### "The agent-status glyph updates the wrong session"
-@@ -341,8 +340,8 @@ anthropics/claude-code#72188 (mouse-click variant #72273). Workaround: answer be
+@@ -348,8 +347,8 @@ anthropics/claude-code#72188 (mouse-click variant #72273). Workaround: answer be
  Detection, not rendering. agterm identifies as `TERM_PROGRAM=agterm` (see the env list in SKILL.md) and
  Claude Code's hyperlink allowlist lacks that name, so it prints the URL. agterm renders OSC 8 links fine.
  Workaround: `FORCE_HYPERLINK=1 claude` (Claude Code reads it before any terminal check), or
@@ -2453,7 +2502,7 @@ index 5c69f10..de37dda 100644
  redirected output. `env = TERM_PROGRAM=ghostty` there does nothing: agterm applies its identity after the
  config file. Do not file an agterm issue for it; the fix belongs upstream (Claude Code recognizing `agterm`
  or `TERM=xterm-ghostty`).
-@@ -354,7 +353,7 @@ by Ghostty's shell integration, which is injected into the shell agterm spawns a
+@@ -361,7 +360,7 @@ by Ghostty's shell integration, which is injected into the shell agterm spawns a
  shell replacing itself. A `.zshrc` that `exec`s a wrapper (Amazon Q CLI, Kiro CLI, Fig) replaces it before
  the first prompt, so `currentCwd` is never written and every cwd consumer falls back to the creation
  directory: restore, the directory under the session name, `session reveal`, and `{AGT_SESSION_PWD}`.
@@ -2462,7 +2511,7 @@ index 5c69f10..de37dda 100644
  `.zshrc`, below the block that replaced the shell:
  `[[ -n "$GHOSTTY_RESOURCES_DIR" ]] && builtin source "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"`
  (a no-op where it already loaded; bash, fish and nushell have their own files in that directory).
-@@ -381,7 +380,7 @@ and only inside that program. Ghostty.app behaves the same. It is per-program, n
+@@ -388,7 +387,7 @@ and only inside that program. Ghostty.app behaves the same. It is per-program, n
  `tmux` with `mouse on` and stock `vim` (`defaults.vim` sets `mouse=a`) suppress it, while an agent CLI
  that never enables mouse reporting keeps links working. Workaround: hold shift too (⌘⇧-hover, ⌘⇧-click).
  A program can claim shift via `XTSHIFTESCAPE`, so `mouse-shift-capture = never` in
@@ -2471,7 +2520,7 @@ index 5c69f10..de37dda 100644
  off for every program, trading in-program mouse support for always-on selection. Links still need ⌘⇧
  there: link detection follows the program's mouse request, not that setting.
 
-@@ -406,7 +405,7 @@ there: link detection follows the program's mouse request, not that setting.
+@@ -417,7 +416,7 @@ there: link detection follows the program's mouse request, not that setting.
     hostnames/IPs, usernames embedded in absolute paths (replace with `~` or `<user>`), private repo
     names, and the contents of a selection / `session.copy` / clipboard. When unsure, ask.
  5. **Gather the repro facts yourself** where you can: agterm version (the user reads it from

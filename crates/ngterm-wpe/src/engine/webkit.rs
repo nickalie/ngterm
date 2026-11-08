@@ -41,6 +41,23 @@ glib::wrapper! {
 }
 
 glib::wrapper! {
+    pub(crate) struct UserContentFilterStore(
+        Object<webkit::WebKitUserContentFilterStore, webkit::WebKitUserContentFilterStoreClass>
+    );
+    match fn { type_ => || webkit::webkit_user_content_filter_store_get_type(), }
+}
+
+glib::wrapper! {
+    /// A compiled content filter (`WebKitUserContentFilter`), shared by every page that adds it.
+    pub(crate) struct UserContentFilter(Shared<webkit::WebKitUserContentFilter>);
+    match fn {
+        ref => |ptr| webkit::webkit_user_content_filter_ref(ptr),
+        unref => |ptr| webkit::webkit_user_content_filter_unref(ptr),
+        type_ => || webkit::webkit_user_content_filter_get_type(),
+    }
+}
+
+glib::wrapper! {
     pub(crate) struct WebContext(Object<webkit::WebKitWebContext, webkit::WebKitWebContextClass>);
     match fn { type_ => || webkit::webkit_web_context_get_type(), }
 }
@@ -430,6 +447,76 @@ impl UserContentManager {
                 self.raw(),
                 name.as_ptr(),
                 as_ptr(world.as_ref()),
+            );
+        };
+    }
+}
+
+impl UserContentManager {
+    /// Adds `filter`, which the manager references, to every load from now on.
+    pub(crate) fn add_filter(&self, filter: &UserContentFilter) {
+        // SAFETY: a live manager and a live filter, which the call references.
+        unsafe { webkit::webkit_user_content_manager_add_filter(self.raw(), filter.to_glib_none().0) };
+    }
+}
+
+// MARK: - content filters
+
+impl UserContentFilterStore {
+    /// A store keeping its compiled filters in `directory`.
+    pub(crate) fn new(directory: &std::path::Path) -> Self {
+        let path = c_string(&directory.to_string_lossy());
+        // SAFETY: a NUL-terminated path the call copies; a new reference, which we take over.
+        let raw = unsafe { webkit::webkit_user_content_filter_store_new(path.as_ptr()) };
+        // SAFETY: `raw` comes straight from that call, owned as its documentation says.
+        unsafe { from_glib_full(raw) }
+    }
+
+    /// Compiles the content-blocker JSON `source` under `identifier`, handing `done` the filter or why it failed.
+    pub(crate) fn save(
+        &self,
+        identifier: &str,
+        source: &str,
+        done: impl FnOnce(Result<UserContentFilter, glib::Error>) + 'static,
+    ) {
+        type Done = Box<dyn FnOnce(Result<UserContentFilter, glib::Error>)>;
+        unsafe extern "C" fn finished(
+            source: *mut glib::gobject_ffi::GObject,
+            result: *mut gio::ffi::GAsyncResult,
+            data: glib::ffi::gpointer,
+        ) {
+            // SAFETY: `data` is the box leaked below, given back exactly once here.
+            let done = unsafe { Box::from_raw(data.cast::<Done>()) };
+            let mut error = ptr::null_mut();
+            // SAFETY: `source` is the store the call ran on and `result` its result.
+            let filter =
+                unsafe { webkit::webkit_user_content_filter_store_save_finish(source.cast(), result, &raw mut error) };
+            if filter.is_null() {
+                let error = if error.is_null() {
+                    glib::Error::new(gio::IOErrorEnum::Failed, "the content filter did not compile")
+                } else {
+                    // SAFETY: the call set `error`, which we take over.
+                    unsafe { from_glib_full(error) }
+                };
+                (done)(Err(error));
+            } else {
+                // SAFETY: a new reference to the compiled filter, which we take over.
+                (done)(Ok(unsafe { from_glib_full(filter) }));
+            }
+        }
+        let identifier = c_string(identifier);
+        let bytes = glib::Bytes::from(source.as_bytes());
+        let done: Box<Done> = Box::new(Box::new(done));
+        // SAFETY: a live store, a NUL-terminated identifier and bytes the call references, no cancellable, and a
+        // callback that takes the box back.
+        unsafe {
+            webkit::webkit_user_content_filter_store_save(
+                self.to_glib_none().0,
+                identifier.as_ptr(),
+                bytes.to_glib_none().0,
+                ptr::null_mut(),
+                Some(finished),
+                Box::into_raw(done).cast(),
             );
         };
     }

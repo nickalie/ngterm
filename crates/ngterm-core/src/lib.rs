@@ -14,6 +14,7 @@
 pub mod agent_chat;
 pub mod app_actions;
 pub mod auto_follow;
+pub mod bounded_file;
 pub mod chrome;
 pub mod clipboard_policy;
 pub mod command_restore;
@@ -66,6 +67,8 @@ pub mod sidebar_drop;
 pub mod sound_throttle;
 pub mod state_lock;
 pub mod theme;
+pub mod title_admission;
+pub mod title_throttle;
 pub mod titlebar;
 pub mod watermark;
 pub mod window_geometry;
@@ -85,7 +88,7 @@ pub use commands::notify::{
 pub use commands::overlay::LineChannel;
 pub use commands::process::{CorePoster, CoreTask, ProcessHost, widened_path};
 pub use commands::recent::NO_RECENT_ITEMS;
-pub use commands::relaunch::{EXIT_CAPTURE_BUDGET, PaneSpawn};
+pub use commands::relaunch::{EXIT_CAPTURE_BUDGET, EXIT_LISTING_TIMEOUT, PaneSpawn};
 pub use commands::surface::POLL_INTERVAL;
 pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request};
 pub use error::{ControlError, Noun};

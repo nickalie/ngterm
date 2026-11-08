@@ -1,6 +1,7 @@
 """The `agtermctl` subcommands with no socket command of their own: `clipboard set` and `terminfo install`, which
 never open the socket, and `session wait`, which composes existing reads (`events.read`, `window.list`, `tree`); and
-the usage errors `session overlay open --companion` gives before any connection.
+the usage errors `session overlay open --companion`, `follow`, `search`, `changes` and a log page's options give before
+any connection.
 
 The first two run through `cli.local`, without `--socket` (they refuse it) and in the instance's env, whose state
 directory variable (`AGTERM_STATE_DIR`, the Rust build's `NGTERM_STATE_DIR`) is under the temp root. `clipboard set`
@@ -433,3 +434,66 @@ def test_overlay_open_companion_validation(cli, args, message):
 def test_duplicate_no_select_needs_companion(cli):
     """A plain duplicate always selects its copy: `--no-select` belongs to Duplicate as Companion."""
     _usage(cli("session", "duplicate", "--no-select"), "--no-select needs --companion")
+
+
+# -- session overlay follow, search and changes, and the log options of open
+
+TAIL_NEEDS_TEXT = "--tail and --follow-file require --text"
+TAIL_WITH_LINE = "--tail and --follow-file cannot be combined with --line"
+TAIL_RANGE = "--tail must be 1...100000"
+PANE = "--pane must be left or right"
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("cli:session overlay follow", "cli:session overlay open")
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        pytest.param(["follow", "maybe"], "mode must be on, off or toggle", id="follow-mode"),
+        pytest.param(["follow"], None, id="follow-needs-a-mode"),
+        pytest.param(["follow", "on", "--pane", "scratch"], PANE, id="follow-pane"),
+        pytest.param(["open", "--markdown", "/tmp/r.md", "--tail", "10"], TAIL_NEEDS_TEXT, id="tail-without-text"),
+        pytest.param(["open", "--markdown", "/tmp/r.md", "--follow-file"], TAIL_NEEDS_TEXT, id="follow-file-without-text"),
+        pytest.param(["open", "--text", "/tmp/a.log", "--line", "3", "--tail", "10"], TAIL_WITH_LINE, id="tail-with-line"),
+        pytest.param(["open", "--text", "/tmp/a.log", "--line", "3", "--follow-file"], TAIL_WITH_LINE,
+                     id="follow-file-with-line"),
+        pytest.param(["open", "--text", "/tmp/a.log", "--tail", "0"], TAIL_RANGE, id="tail-zero"),
+        pytest.param(["open", "--text", "/tmp/a.log", "--tail", "100001"], TAIL_RANGE, id="tail-over"),
+    ],
+)
+def test_overlay_follow_and_tail_validation(cli, args, message):
+    """`follow` needs its mode, and a log page's options need a text page with no line, before any connection."""
+    _usage(cli("session", "overlay", *args), message)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("cli:session overlay search")
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        pytest.param([], "give text, --next, --prev or --close", id="nothing"),
+        pytest.param([""], None, id="empty-text"),
+        pytest.param(["a", "--next"], "text cannot be combined with --next, --prev or --close", id="text-and-step"),
+        pytest.param(["--next", "--prev"], "--next, --prev and --close are mutually exclusive", id="two-steps"),
+        pytest.param(["--prev", "--close"], "--next, --prev and --close are mutually exclusive", id="step-and-close"),
+        pytest.param(["a", "--pane", "scratch"], PANE, id="pane"),
+    ],
+)
+def test_overlay_search_validation(cli, args, message):
+    """`search` takes exactly one of a query and a step, before any connection."""
+    _usage(cli("session", "overlay", "search", *args), message)
+
+
+@pytest.mark.since("0.41.1")
+@pytest.mark.covers("cli:session overlay changes")
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        pytest.param([], "give exactly one of --next or --prev", id="no-step"),
+        pytest.param(["--next", "--prev"], "give exactly one of --next or --prev", id="both-steps"),
+        pytest.param(["--next", "--pane", "scratch"], PANE, id="pane"),
+    ],
+)
+def test_overlay_changes_validation(cli, args, message):
+    """`changes` takes exactly one step, before any connection."""
+    _usage(cli("session", "overlay", "changes", *args), message)

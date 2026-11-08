@@ -6,7 +6,7 @@
 //!
 //! Upstream's Settings scene is a window of its own; here, at the user's request, it is a modal popup inside the ngterm
 //! window it was opened from (a separate window drifts off to a tiling compositor's next column): the window
-//! (`crate::window`) draws it centered over a dimmed layer that takes every click, sized like upstream's 540x680 window
+//! (`crate::window`) draws it centered over a dimmed layer that takes every click, sized like upstream's 540x710 window
 //! and shrinking to fit a smaller one ([`panel_size`]). It holds the window's keyboard while it is up (the key monitor
 //! leaves its [`KEY_CONTEXT`] alone, as it does an alert's); Escape, its close button and a click outside it close it,
 //! and the keyboard goes back to the window's terminal. There is one at a time in the app, as there is one Settings
@@ -54,8 +54,8 @@ use ngterm_core::settings_model::SettingsChange;
 pub use self::form::{Action, Control, Item, Picker, Run, Section, SliderKey};
 use crate::state::{self, AppState, Poster};
 
-/// The popup's size (upstream's Settings window, `.frame(width: 540, height: 680)`).
-pub const PANEL_SIZE: (f32, f32) = (540.0, 680.0);
+/// The popup's size (upstream's Settings window, `.frame(width: 540, height: 710)` since #865).
+pub const PANEL_SIZE: (f32, f32) = (540.0, 710.0);
 /// The clearance the popup keeps from its window's edges (the palettes' `InterfaceMetrics.panelMargin`).
 pub const PANEL_MARGIN: f32 = 16.0;
 /// The popup's title.

@@ -14,8 +14,8 @@ def test_info_set_reject_and_clear(ctl):
         assert_absent(find_session(ctl.tree(), sid), "info", "infoMarkdown", "infoHideAfter")
         assert_ok(ctl.request("session.info", sid, mode="set", text=source, markdown=True, hideAfter=600))
         assert_subset(find_session(ctl.tree(), sid), {"info": source, "infoMarkdown": True, "infoHideAfter": 600})
-        assert_error(ctl.request("session.info", sid, mode="set", text='^[x](color: "pink")', markdown=True),
-                     "session.info: unknown info color: pink (red|orange|yellow|green|blue|purple|gray)")
+        assert_error(ctl.request("session.info", sid, mode="set", text='^[x](color: "maroon")', markdown=True),
+                     "session.info: unknown info color: maroon (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint)")
         assert find_session(ctl.tree(), sid)["info"] == source
         assert_ok(ctl.request("session.info", sid, mode="set", text="literal **stars**"))
         node = find_session(ctl.tree(), sid)
@@ -122,5 +122,21 @@ def test_info_tree_changed(ctl):
         assert items == []
         assert_ok(ctl.request("session.info", sid, mode="clear"))
         ctl.wait_event(cursor, "tree.changed")
+    finally:
+        assert_ok(ctl.request("session.close", sid))
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.info")
+def test_info_markup_takes_the_new_names_but_no_hex(ctl):
+    """Markup colors are the palette's twelve names: a hex the row tints take is refused (`SessionInfoMarkupTests`)."""
+    sid = assert_ok(ctl.request("session.new"))["id"]
+    try:
+        source = '^[ok](color: "pink")'
+        assert_ok(ctl.request("session.info", sid, mode="set", text=source, markdown=True))
+        assert find_session(ctl.tree(), sid)["info"] == source
+        assert_error(ctl.request("session.info", sid, mode="set", text='^[x](color: "#3a7bd5")', markdown=True),
+                     "session.info: unknown info color: #3a7bd5 (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint)")
+        assert find_session(ctl.tree(), sid)["info"] == source
     finally:
         assert_ok(ctl.request("session.close", sid))

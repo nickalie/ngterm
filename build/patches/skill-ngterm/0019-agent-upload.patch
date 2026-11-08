@@ -2,10 +2,10 @@ Document `agent upload`: a file the Android app's chat composer attaches, stored
 `uploads/` with its path printed for the prompt. Applied after 0018-agent-group.patch.
 
 diff --git a/SKILL.md b/SKILL.md
-index 1c8798c8..81a819c5 100644
+index 55016b9..24e3386 100644
 --- a/SKILL.md
 +++ b/SKILL.md
-@@ -781,7 +781,9 @@ pane runs and where its transcript is, so never call it yourself. `agent chat [-
+@@ -786,7 +786,9 @@ pane runs and where its transcript is, so never call it yourself. `agent chat [-
  prints that pane's conversation as NDJSON chat events and follows it until stdin closes; `agent commands
  [--target S] [--pane left|right]` prints the agent's slash commands and skills as one JSON array. Both fail with
  `no agent in this pane` until the hooks from this build are installed and a new agent process has started
@@ -17,10 +17,10 @@ index 1c8798c8..81a819c5 100644
  **clipboard** — `clipboard set [TEXT]` — copy text to the clipboard of every terminal showing the pane
  the command runs in; the text is the argument, or stdin when omitted (`git diff | ngtermctl clipboard set`).
 diff --git a/reference.md b/reference.md
-index 0230cafb..43afac80 100644
+index 158837c..3f62dbc 100644
 --- a/reference.md
 +++ b/reference.md
-@@ -2078,6 +2078,13 @@ Codex mentions it, `$name`.
+@@ -2140,6 +2140,13 @@ Codex mentions it, `$name`.
 
  Both read the record through `agent.get` and fail with `no agent in this pane` when it has none.
 

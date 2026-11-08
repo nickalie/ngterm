@@ -162,7 +162,7 @@ const SESSION_TARGETED: [Command; 5] = [
 ];
 /// The page's own overlay commands, which also get its pane. Resize is one, so a pane page's own request meets the pane
 /// refusal instead of resizing the session's overlay.
-const OWN_OVERLAY: [Command; 8] = [
+const OWN_OVERLAY: [Command; 11] = [
     Command::Session(SessionCmd::OverlayClose),
     Command::Session(SessionCmd::OverlayReload),
     Command::Session(SessionCmd::OverlayResize),
@@ -171,6 +171,9 @@ const OWN_OVERLAY: [Command; 8] = [
     Command::Session(SessionCmd::OverlayHide),
     Command::Session(SessionCmd::OverlayShow),
     Command::Session(SessionCmd::OverlayToggle),
+    Command::Session(SessionCmd::OverlayFollow),
+    Command::Session(SessionCmd::OverlaySearch),
+    Command::Session(SessionCmd::OverlayChanges),
 ];
 /// These take their window as `target`, not as `args.window`.
 const WINDOW_TARGETED: [Command; 9] = [
@@ -375,6 +378,7 @@ mod tests {
         }
         let source = super::super::HtmlSource::Replica {
             path: "/srv/r.html".to_owned(),
+            content: crate::html::ReplicaContent::Html,
         };
         let mut page = super::super::HtmlOverlay::new(source, super::super::HtmlPageFlags::default());
         assert!(
@@ -638,6 +642,9 @@ mod tests {
             "session.overlay.hide",
             "session.overlay.show",
             "session.overlay.toggle",
+            "session.overlay.follow",
+            "session.overlay.search",
+            "session.overlay.changes",
             "session.overlay.resize",
         ] {
             let built = fixture.request(&format!(r#"{{"cmd":"{cmd}"}}"#));

@@ -12,6 +12,7 @@ tests/behaviors/test_relaunch.py::test_a_live_session_with_a_hidden_split_stays_
 tests/behaviors/test_relaunch.py::test_a_page_companion_is_not_restored_after_relaunch
 tests/behaviors/test_relaunch.py::test_flagged_order_survives_relaunch
 tests/behaviors/test_relaunch.py::test_fresh_shells_do_not_run_the_pin
+tests/behaviors/test_relaunch.py::test_hex_tints_survive_a_relaunch
 tests/behaviors/test_relaunch.py::test_last_selected_at_survives_a_relaunch
 tests/behaviors/test_relaunch.py::test_live_session_survives_the_relaunch
 tests/behaviors/test_relaunch.py::test_relaunch_forgets_what_is_not_persisted
@@ -50,10 +51,28 @@ tests/cli/test_cli_only.py::test_clipboard_set_checks_the_text_before_the_pane
 tests/cli/test_cli_only.py::test_clipboard_set_reaches_every_terminal_attached_to_the_pane
 tests/cli/test_cli_only.py::test_clipboard_set_refuses_outside_a_live_pane
 tests/cli/test_cli_only.py::test_duplicate_no_select_needs_companion
+tests/cli/test_cli_only.py::test_overlay_changes_validation[both-steps]
+tests/cli/test_cli_only.py::test_overlay_changes_validation[no-step]
+tests/cli/test_cli_only.py::test_overlay_changes_validation[pane]
+tests/cli/test_cli_only.py::test_overlay_follow_and_tail_validation[follow-file-with-line]
+tests/cli/test_cli_only.py::test_overlay_follow_and_tail_validation[follow-file-without-text]
+tests/cli/test_cli_only.py::test_overlay_follow_and_tail_validation[follow-mode]
+tests/cli/test_cli_only.py::test_overlay_follow_and_tail_validation[follow-needs-a-mode]
+tests/cli/test_cli_only.py::test_overlay_follow_and_tail_validation[follow-pane]
+tests/cli/test_cli_only.py::test_overlay_follow_and_tail_validation[tail-over]
+tests/cli/test_cli_only.py::test_overlay_follow_and_tail_validation[tail-with-line]
+tests/cli/test_cli_only.py::test_overlay_follow_and_tail_validation[tail-without-text]
+tests/cli/test_cli_only.py::test_overlay_follow_and_tail_validation[tail-zero]
 tests/cli/test_cli_only.py::test_overlay_open_companion_validation[pane]
 tests/cli/test_cli_only.py::test_overlay_open_companion_validation[program]
 tests/cli/test_cli_only.py::test_overlay_open_companion_validation[size]
 tests/cli/test_cli_only.py::test_overlay_open_companion_validation[width]
+tests/cli/test_cli_only.py::test_overlay_search_validation[empty-text]
+tests/cli/test_cli_only.py::test_overlay_search_validation[nothing]
+tests/cli/test_cli_only.py::test_overlay_search_validation[pane]
+tests/cli/test_cli_only.py::test_overlay_search_validation[step-and-close]
+tests/cli/test_cli_only.py::test_overlay_search_validation[text-and-step]
+tests/cli/test_cli_only.py::test_overlay_search_validation[two-steps]
 tests/cli/test_cli_only.py::test_session_wait_exits_2_when_the_session_closes
 tests/cli/test_cli_only.py::test_session_wait_refuses_bad_arguments[infinite]
 tests/cli/test_cli_only.py::test_session_wait_refuses_bad_arguments[negative]
@@ -122,16 +141,20 @@ tests/cli/test_cli_output.py::test_session_restore_prints_the_note_or_ok
 tests/cli/test_cli_output.py::test_session_status_carries_its_overrides
 tests/cli/test_cli_output.py::test_session_type_text_search_and_copy
 tests/cli/test_cli_output.py::test_sidebar
+tests/cli/test_cli_output.py::test_sidebar_density
 tests/cli/test_cli_output.py::test_surface_and_dashboard
 tests/cli/test_cli_output.py::test_theme
 tests/cli/test_cli_output.py::test_tint_commands
-tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv0-tint must be one of: red|orange|yellow|green|blue|purple|gray, or clear]
+tests/cli/test_cli_output.py::test_tint_commands_take_a_hex
+tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv0-message0]
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv1---on does not apply to clear]
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv2---on must list icon and/or name, comma-separated]
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv3---on must list icon and/or name, comma-separated]
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv4---tint-on requires --tint]
-tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv5---tint must be one of: red|orange|yellow|green|blue|purple|gray]
+tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv5-message5]
 tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv6---tint-on must list icon and/or name, comma-separated]
+tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv7-message7]
+tests/cli/test_cli_output.py::test_tint_refusals_at_parse_time[argv8-message8]
 tests/cli/test_cli_output.py::test_tree_lists_workspaces_and_tagged_sessions
 tests/cli/test_cli_output.py::test_version
 tests/cli/test_cli_output.py::test_version_prints_the_installed_build_when_it_differs
@@ -142,8 +165,10 @@ tests/cli/test_cli_output.py::test_workspace_go_and_move
 tests/cli/test_cli_output.py::test_workspace_lifecycle
 tests/cli/test_document_pages_cli.py::test_cli_document_sources_reject_incompatible_flags_before_connecting[--image]
 tests/cli/test_document_pages_cli.py::test_cli_document_sources_reject_incompatible_flags_before_connecting[--markdown]
+tests/cli/test_document_pages_cli.py::test_cli_document_sources_reject_incompatible_flags_before_connecting[--text]
 tests/cli/test_document_pages_cli.py::test_cli_document_sources_resolve_relative_paths[image]
 tests/cli/test_document_pages_cli.py::test_cli_document_sources_resolve_relative_paths[markdown]
+tests/cli/test_document_pages_cli.py::test_cli_text_source_is_taken_literally
 tests/cli/test_socket_resolution.py::test_agterm_socket_variable_is_not_read
 tests/cli/test_socket_resolution.py::test_default_socket_without_a_state_dir
 tests/cli/test_socket_resolution.py::test_socket_option_wins_over_the_state_dir
@@ -313,9 +338,12 @@ tests/protocol/test_dashboard_quick.py::test_quick_type_then_read_the_marker_bac
 tests/protocol/test_dashboard_quick.py::test_quick_zoom_ends_with_the_panel
 tests/protocol/test_document_pages.py::test_document_open_refusals[image]
 tests/protocol/test_document_pages.py::test_document_open_refusals[markdownFile]
+tests/protocol/test_document_pages.py::test_document_open_refusals[textFile]
 tests/protocol/test_document_pages.py::test_image_page_reads_back_its_source
 tests/protocol/test_document_pages.py::test_local_document_pages_are_not_remote_pages
 tests/protocol/test_document_pages.py::test_markdown_page_reads_back_its_source
+tests/protocol/test_document_pages.py::test_text_open_line_and_file_refusals
+tests/protocol/test_document_pages.py::test_text_page_reads_back_its_source
 tests/protocol/test_events.py::test_cursor_expires_past_the_ring_capacity
 tests/protocol/test_events.py::test_cursor_failure_carries_the_anchor[ahead]
 tests/protocol/test_events.py::test_cursor_failure_carries_the_anchor[other-run]
@@ -455,10 +483,13 @@ tests/protocol/test_live_sessions.py::test_a_loopback_url_bound_for_the_presente
 tests/protocol/test_live_sessions.py::test_a_page_closed_while_parked_is_not_handed_on
 tests/protocol/test_live_sessions.py::test_a_page_goes_to_the_presenter_and_its_reports_reach_the_tree
 tests/protocol/test_live_sessions.py::test_a_page_whose_presenter_goes_waits_parked_for_the_next_one
+tests/protocol/test_live_sessions.py::test_a_point_resize_of_an_auto_sized_image_merges_on_the_presenter
 tests/protocol/test_live_sessions.py::test_a_presenter_without_page_kinds_keeps_the_page_refusal
 tests/protocol/test_live_sessions.py::test_a_respawned_live_parent_publishes_its_respawn_to_a_presenter
+tests/protocol/test_live_sessions.py::test_a_viewer_without_status_shapes_gets_only_shapes_it_decodes
 tests/protocol/test_live_sessions.py::test_a_wait_command_keeps_scrollback_after_attached_exit
 tests/protocol/test_live_sessions.py::test_closing_or_rejecting_a_remote_page_ends_it_dismissed
+tests/protocol/test_live_sessions.py::test_content_pages_go_only_to_a_presenter_listing_page_content
 tests/protocol/test_live_sessions.py::test_group_attach_validates_before_remote_discovery
 tests/protocol/test_live_sessions.py::test_job_run_serves_an_overlay_a_presenter_shows
 tests/protocol/test_live_sessions.py::test_kill_ends_the_daemon_and_closes_its_pane
@@ -480,6 +511,7 @@ tests/protocol/test_live_sessions.py::test_losing_the_page_helper_takes_only_the
 tests/protocol/test_live_sessions.py::test_older_presenter_gets_percent_without_points[page]
 tests/protocol/test_live_sessions.py::test_older_presenter_gets_percent_without_points[program]
 tests/protocol/test_live_sessions.py::test_origin_commands_on_a_remote_page_reach_the_presenter
+tests/protocol/test_live_sessions.py::test_page_serve_serves_a_content_pages_files_under_its_rules
 tests/protocol/test_live_sessions.py::test_page_serve_serves_a_page_a_presenter_shows
 tests/protocol/test_live_sessions.py::test_points_are_refused_for_an_overlay_a_presenter_shows
 tests/protocol/test_live_sessions.py::test_present_mirrors_a_live_session
@@ -541,6 +573,7 @@ tests/protocol/test_overlay.py::test_a_pane_overlay_opened_over_a_session_overla
 tests/protocol/test_overlay.py::test_a_pane_overlay_opened_over_a_session_overlay_draws_above_it[program-program]
 tests/protocol/test_overlay.py::test_a_script_page_closing_its_window_is_dismissed
 tests/protocol/test_overlay.py::test_a_session_page_under_a_pane_opener_reads_back_hidden
+tests/protocol/test_overlay.py::test_a_socket_page_is_never_marked_clicked
 tests/protocol/test_overlay.py::test_chromeless_loopback_url_page_opens[127.0.0.1]
 tests/protocol/test_overlay.py::test_chromeless_loopback_url_page_opens[[::1]]
 tests/protocol/test_overlay.py::test_chromeless_loopback_url_page_opens[localhost]
@@ -586,10 +619,13 @@ tests/protocol/test_overlay.py::test_opening_into_a_hidden_slot_is_refused
 tests/protocol/test_overlay.py::test_overlay_open_size_outside_its_range[0]
 tests/protocol/test_overlay.py::test_overlay_open_size_outside_its_range[101]
 tests/protocol/test_overlay.py::test_overlay_opens_in_the_background_unless_it_follows
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.changes-args10]
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.close-args0]
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.follow-args8]
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.hide-args5]
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.reload-args3]
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.result-args1]
+tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.search-args9]
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.show-args6]
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.submit-args4]
 tests/protocol/test_overlay.py::test_overlay_pane_selector_refusals[session.overlay.text-args2]
@@ -623,12 +659,15 @@ tests/protocol/test_overlay.py::test_reload_and_navigate_a_page
 tests/protocol/test_overlay.py::test_submit_answers_the_page_and_closes_it[empty]
 tests/protocol/test_overlay.py::test_submit_answers_the_page_and_closes_it[value]
 tests/protocol/test_overlay.py::test_submit_refusals
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.changes-args12]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.close-args1]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.follow-args10]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.hide-args7]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.open-args0]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.reload-args6]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.resize-args2]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.result-args3]
+tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.search-args11]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.show-args8]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.submit-args5]
 tests/protocol/test_overlay.py::test_unknown_session_target[session.overlay.text-args4]
@@ -708,6 +747,7 @@ tests/protocol/test_session.py::test_new_carries_a_creation_tint
 tests/protocol/test_session.py::test_new_into_a_workspace_by_id
 tests/protocol/test_session.py::test_new_into_a_workspace_by_name
 tests/protocol/test_session.py::test_new_places_next_to_an_anchor
+tests/protocol/test_session.py::test_new_refuses_a_bad_creation_tint_before_creating[long-hex]
 tests/protocol/test_session.py::test_new_refuses_a_bad_creation_tint_before_creating[placement-without-color]
 tests/protocol/test_session.py::test_new_refuses_a_bad_creation_tint_before_creating[unknown-color]
 tests/protocol/test_session.py::test_new_refuses_a_bad_creation_tint_before_creating[unknown-part]
@@ -746,12 +786,16 @@ tests/protocol/test_session.py::test_status_shape
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[clear-with-color]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[clear-with-placement]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[color-without-mode]
+tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[double-hash-hex]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[no-mode]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[no-part]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[set-without-color]
+tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[short-hex]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[unknown-color]
 tests/protocol/test_session.py::test_tint_rejects_and_keeps_the_previous_tint[unknown-part]
 tests/protocol/test_session.py::test_tint_set_recolor_place_and_clear
+tests/protocol/test_session.py::test_tint_takes_a_hex_and_reads_it_back_lowercase
+tests/protocol/test_session.py::test_tint_takes_the_new_palette_names
 tests/protocol/test_session.py::test_unknown_session_target[session.close-args0]
 tests/protocol/test_session.py::test_unknown_session_target[session.context-args8]
 tests/protocol/test_session.py::test_unknown_session_target[session.duplicate-args4]
@@ -763,6 +807,7 @@ tests/protocol/test_session.py::test_unknown_session_target[session.seen-args6]
 tests/protocol/test_session.py::test_unknown_session_target[session.select-args1]
 tests/protocol/test_session.py::test_unknown_session_target[session.status-args7]
 tests/protocol/test_session_info.py::test_info_expiry_refresh_and_cancel
+tests/protocol/test_session_info.py::test_info_markup_takes_the_new_names_but_no_hex
 tests/protocol/test_session_info.py::test_info_not_persisted_or_duplicated
 tests/protocol/test_session_info.py::test_info_set_reject_and_clear
 tests/protocol/test_session_info.py::test_info_soft_close_undo
@@ -804,11 +849,14 @@ tests/protocol/test_session_text.py::test_unknown_session_target[session.text-ar
 tests/protocol/test_session_text.py::test_unknown_session_target[session.type-args0]
 tests/protocol/test_sidebar.py::test_collapse_is_a_no_op_under_the_flat_flagged_list
 tests/protocol/test_sidebar.py::test_collapse_keeps_the_current_workspace_open_and_expand_opens_all
+tests/protocol/test_sidebar.py::test_density_echoes_the_density_it_set
+tests/protocol/test_sidebar.py::test_density_is_app_wide
 tests/protocol/test_sidebar.py::test_flagged_layout_echoes_the_layout_it_set
 tests/protocol/test_sidebar.py::test_flagged_layout_is_app_wide
 tests/protocol/test_sidebar.py::test_mode_switches_between_the_tree_and_the_flagged_view
 tests/protocol/test_sidebar.py::test_sidebar_shows_hides_and_toggles
 tests/protocol/test_sidebar.py::test_unknown_mode_is_refused[sidebar-sidebarVisible-invalid sidebar mode: sideways]
+tests/protocol/test_sidebar.py::test_unknown_mode_is_refused[sidebar.density-sidebarDensity-invalid sidebar density: sideways]
 tests/protocol/test_sidebar.py::test_unknown_mode_is_refused[sidebar.flagged-layout-sidebarFlaggedLayout-invalid flagged layout: sideways]
 tests/protocol/test_sidebar.py::test_unknown_mode_is_refused[sidebar.mode-sidebarMode-invalid sidebar mode: sideways]
 tests/protocol/test_sidebar.py::test_unknown_window_is_refused[sidebar.collapse-args2]
@@ -888,6 +936,18 @@ tests/protocol/test_surface.py::test_selection_commands_refuse_an_unknown_sessio
 tests/protocol/test_surface.py::test_selection_commands_refuse_an_unknown_session[session.paste]
 tests/protocol/test_surface.py::test_selection_commands_refuse_an_unknown_session[session.selectall]
 tests/protocol/test_surface.py::test_selection_commands_without_a_target_use_the_active_session
+tests/protocol/test_text_pages.py::test_a_log_reads_only_its_tail
+tests/protocol/test_text_pages.py::test_a_paused_log_page_reads_nothing_until_resumed
+tests/protocol/test_text_pages.py::test_a_search_step_pauses_a_following_log_page
+tests/protocol/test_text_pages.py::test_diff_page_steps_between_changes
+tests/protocol/test_text_pages.py::test_follow_answers_the_state_it_left
+tests/protocol/test_text_pages.py::test_follow_refusals
+tests/protocol/test_text_pages.py::test_log_open_refusals
+tests/protocol/test_text_pages.py::test_log_page_follows_appends_rotation_and_truncation
+tests/protocol/test_text_pages.py::test_log_page_reads_back_its_tail_and_follow_state
+tests/protocol/test_text_pages.py::test_overlay_changes_refusals
+tests/protocol/test_text_pages.py::test_overlay_search_refusals
+tests/protocol/test_text_pages.py::test_text_page_search_sets_steps_and_closes
 tests/protocol/test_tree.py::test_attention_across_windows_reaches_every_window
 tests/protocol/test_tree.py::test_attention_includes_active_reads_back_from_settings
 tests/protocol/test_tree.py::test_auto_follow_timeout_reads_back_from_settings
@@ -899,6 +959,7 @@ tests/protocol/test_tree.py::test_fresh_workspace_node
 tests/protocol/test_tree.py::test_idle_ms_stays_off_for_control_input
 tests/protocol/test_tree.py::test_index_unsaved_while_windows_json_cannot_be_written
 tests/protocol/test_tree.py::test_last_selected_at_stamps_the_session_entered_and_left
+tests/protocol/test_tree.py::test_snapshot_unsaved_while_a_windows_file_cannot_be_written
 tests/protocol/test_version.py::test_installed_follows_the_file_on_disk
 tests/protocol/test_version.py::test_tree_app_is_the_version_identity
 tests/protocol/test_version.py::test_version_reports_the_app_version
@@ -972,6 +1033,7 @@ tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.move-a
 tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.rename-args1]
 tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.select-args0]
 tests/protocol/test_workspace.py::test_workspace_tint_colors_only_its_row
+tests/protocol/test_workspace.py::test_workspace_tint_takes_a_hex
 tests/ui/test_dialogs.py::test_ask_button_answers_the_ask
 tests/ui/test_dialogs.py::test_ask_form_fields_answer_with_their_input
 tests/ui/test_dialogs.py::test_command_palette_opens_from_the_menu_and_escape_closes_it
@@ -979,12 +1041,16 @@ tests/ui/test_dialogs.py::test_pick_palette_returns_the_chosen_row
 tests/ui/test_dialogs.py::test_the_view_menu_opens_each_membership_editor_with_its_hint
 tests/ui/test_html_overlay.py::test_a_markdown_file_renders_and_the_tree_names_its_source
 tests/ui/test_html_overlay.py::test_a_page_that_fails_to_load_is_covered
+tests/ui/test_html_overlay.py::test_a_text_file_renders_at_its_line_and_the_tree_names_its_source
 tests/ui/test_html_overlay.py::test_file_page_strip_names_the_page_and_closes_it
+tests/ui/test_html_overlay.py::test_find_over_a_text_page_searches_the_page
+tests/ui/test_html_overlay.py::test_find_with_a_page_over_the_other_pane_searches_the_terminal
 tests/ui/test_html_overlay.py::test_page_strip_hide_hides_its_own_pane
 tests/ui/test_html_overlay.py::test_the_page_strip_offers_hide_only_while_the_overlays_button_is_on
 tests/ui/test_html_overlay.py::test_url_page_offers_to_copy_its_link
 tests/ui/test_live.py::test_a_pane_another_client_leads_is_covered
 tests/ui/test_pane_input.py::test_typed_text_reaches_the_selected_pane_and_moves_its_cursor
+tests/ui/test_pointer.py::test_a_hex_tinted_rows_menu_lists_its_custom_entry
 tests/ui/test_pointer.py::test_a_session_row_context_menu_flags_the_row
 tests/ui/test_pointer.py::test_a_workspace_row_context_menu_opens_a_session_in_it
 tests/ui/test_pointer.py::test_double_clicking_the_divider_restores_the_even_split
@@ -992,18 +1058,22 @@ tests/ui/test_pointer.py::test_dragging_a_session_row_onto_another_reorders_its_
 tests/ui/test_pointer.py::test_dragging_a_workspace_row_above_another_reorders_the_workspaces
 tests/ui/test_pointer.py::test_dragging_the_divider_moves_the_split_ratio
 tests/ui/test_pointer.py::test_the_wheel_scrolls_an_overflowing_sidebar
+tests/ui/test_pointer.py::test_the_workspace_row_menu_collapses_and_expands_it
 tests/ui/test_settings.py::test_agent_status_tab
 tests/ui/test_settings.py::test_appearance_tab
 tests/ui/test_settings.py::test_general_tab
+tests/ui/test_settings.py::test_hidden_workspace_chevrons_persist
 tests/ui/test_settings.py::test_ignore_reduce_transparency_toggle_persists
 tests/ui/test_settings.py::test_interface_tab_toggles_title_bar_buttons
 tests/ui/test_settings.py::test_key_mapping_tab_reports_a_keymap_error_after_reload
 tests/ui/test_settings.py::test_notifications_tab_reads_the_seeded_toggles
 tests/ui/test_settings.py::test_row_icons_hide_independently
 tests/ui/test_settings.py::test_session_info_display_picker_persists
+tests/ui/test_settings.py::test_sidebar_density_picker_persists
 tests/ui/test_sidebar_rows.py::test_add_session_menu_opens_a_session
 tests/ui/test_sidebar_rows.py::test_agent_status_glyph_reads_the_session_status
 tests/ui/test_sidebar_rows.py::test_companion_rows_nest_fold_and_mark_attention
+tests/ui/test_sidebar_rows.py::test_density_command_resizes_the_rendered_rows
 tests/ui/test_sidebar_rows.py::test_flagged_view_toggle_switches_the_sidebar_mode
 tests/ui/test_sidebar_rows.py::test_focus_filter_toggle_applies_the_focus_set
 tests/ui/test_sidebar_rows.py::test_idle_ms_starts_with_a_gui_keystroke

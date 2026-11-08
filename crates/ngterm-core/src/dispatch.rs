@@ -185,6 +185,8 @@ pub struct Core {
     pub(crate) remote: crate::remote::PresentationRuntime,
     /// Every pane's agent record ([`commands::agent`]).
     pub(crate) agents: commands::agent::AgentRecords,
+    /// The Tint submenu's last Show On pick ([`Core::tint_placement`]).
+    pub(crate) tint_placement: crate::model::TintParts,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -269,6 +271,7 @@ impl Core {
             live: commands::live::LiveRuntime::default(),
             remote: crate::remote::PresentationRuntime::default(),
             agents: commands::agent::AgentRecords::default(),
+            tint_placement: crate::model::TintParts::ICON,
         };
         core.sync_session_naming();
         core.sync_flagged_layout();
@@ -775,6 +778,9 @@ impl Core {
             app: &self.app,
             settings: &self.settings,
             index_unsaved: self.persistence.as_ref().is_some_and(LibraryPersistence::index_unsaved),
+            snapshot_unsaved: scoped
+                .zip(self.persistence.as_ref())
+                .is_some_and(|(id, persistence)| self.library.is_open(id) && persistence.snapshot_unsaved(id)),
             quick_visible: commands::quick::visible(self),
         };
         let mut tree = control_tree(store, &context);
@@ -843,6 +849,9 @@ impl Core {
                 | SessionCmd::OverlayHide
                 | SessionCmd::OverlayShow
                 | SessionCmd::OverlayToggle
+                | SessionCmd::OverlayFollow
+                | SessionCmd::OverlaySearch
+                | SessionCmd::OverlayChanges
                 | SessionCmd::OverlayJobRun
                 | SessionCmd::OverlayPageServe),
             ) => result_of(&commands::overlay::dispatch(self, cmd, request)?),
@@ -912,6 +921,7 @@ mod tests {
         Command::Workspace(WorkspaceCmd::New),
         // app-wide: they need no window (a bare `theme.set` returns to ghostty's built-in colors)
         Command::Sidebar(SidebarCmd::FlaggedLayout),
+        Command::Sidebar(SidebarCmd::Density),
         Command::Theme(ThemeCmd::Set),
         Command::Theme(ThemeCmd::List),
         Command::Keymap(KeymapCmd::Reload),
@@ -936,7 +946,7 @@ mod tests {
             serde_json::to_value(response).unwrap(),
             json!({"ok": true, "result": {
                 "app": {"version": "0.1.0", "commit": "abc1234"},
-                "conformance": {"parityLevel": "0.40.0", "capabilities": ["posix-shell"]}
+                "conformance": {"parityLevel": "0.41.1", "capabilities": ["posix-shell"]}
             }})
         );
     }

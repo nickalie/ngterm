@@ -37,6 +37,9 @@ pub struct ControlTree {
     /// `flat`, `plain` or `tree`; app-wide.
     #[serde(default)]
     pub sidebar_flagged_layout: Option<String>,
+    /// `default` or `compact` (the read side of `sidebar.density`); app-wide.
+    #[serde(default)]
+    pub sidebar_density: Option<String>,
     /// The window's saved flagged order as session ids (the read side of `session.flag move`); absent when nothing
     /// is flagged.
     #[serde(default)]
@@ -75,6 +78,9 @@ pub struct ControlTree {
     /// True while the last `windows.json` write failed.
     #[serde(default)]
     pub index_unsaved: Option<bool>,
+    /// True while this window's last `windows/<id>.json` write failed; per window, unlike `index_unsaved`.
+    #[serde(default)]
+    pub snapshot_unsaved: Option<bool>,
 }
 
 /// A workspace and its sessions.
@@ -404,6 +410,53 @@ pub struct ControlSessionAsk {
     pub replica: Option<bool>,
 }
 
+/// A text page's query with the page's last count of matches and the current one, 0 for none (upstream's
+/// `ControlTextSearchNode`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlTextSearchNode {
+    pub query: String,
+    pub matches: i64,
+    pub current: i64,
+}
+
+/// A diff page's count of changes and the one it last stepped to, 0 before any step (upstream's
+/// `ControlTextChangesNode`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlTextChangesNode {
+    pub count: i64,
+    pub current: i64,
+}
+
+/// A text page's source (upstream's `ControlTextOverlayNode`): the file, the highlight.js language its name maps to
+/// (omitted when unmapped, and still reported for a file too large to highlight), and the line it was opened at, not
+/// the line in view. A log page adds its line limit (`tail`) and its live state, all omitted on a plain text page; a
+/// page's search is omitted with no query, and a diff page's changes until the page reports them.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlTextOverlayNode {
+    pub file: String,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub line: Option<i64>,
+    #[serde(default)]
+    pub tail: Option<i64>,
+    #[serde(default)]
+    pub following: Option<bool>,
+    #[serde(default)]
+    pub lines: Option<i64>,
+    #[serde(default)]
+    pub clipped: Option<bool>,
+    #[serde(default)]
+    pub waiting: Option<bool>,
+    #[serde(default)]
+    pub unreadable: Option<bool>,
+    #[serde(default)]
+    pub search: Option<ControlTextSearchNode>,
+    #[serde(default)]
+    pub changes: Option<ControlTextChangesNode>,
+}
+
 /// One HTML page in an overlay slot.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -425,6 +478,13 @@ pub struct ControlHtmlOverlayNode {
     pub image: Option<String>,
     #[serde(default)]
     pub markdown: Option<String>,
+    /// An HTML file a terminal click opened, shown with no file grant, bridge or page JavaScript (upstream's
+    /// `document`).
+    #[serde(default)]
+    pub document: Option<String>,
+    /// A text page's source (upstream's `ControlTextOverlayNode`).
+    #[serde(default)]
+    pub text: Option<ControlTextOverlayNode>,
     /// `loading`, `loaded` or `failed`.
     pub state: String,
     #[serde(default)]
@@ -459,6 +519,10 @@ pub struct ControlHtmlOverlayNode {
     /// `true` for a page shown here for the machine that opened it; absent otherwise.
     #[serde(default)]
     pub replica: Option<bool>,
+    /// `true` for a page a terminal click opened; absent otherwise. It names the origin only: whether a click replaces
+    /// the page is the core's call, and `hidden` also covers states it leaves alone.
+    #[serde(default)]
+    pub clicked: Option<bool>,
     /// `true` for a `remote` page no presenter shows now, kept for the next one (this build's addition); absent
     /// otherwise.
     #[serde(default)]
@@ -689,6 +753,7 @@ mod tests {
             sidebar_visible: Some(true),
             sidebar_mode: Some("tree".to_owned()),
             sidebar_flagged_layout: Some("flat".to_owned()),
+            sidebar_density: Some("compact".to_owned()),
             flagged_order: Some(vec!["S".to_owned()]),
             link_open_mode: Some("browser".to_owned()),
             sidebar_width: Some(220.0),
@@ -704,6 +769,7 @@ mod tests {
             app: Some(AppIdentity::from_recorded("1", None)),
             live_reset: Some(json!({})),
             index_unsaved: Some(true),
+            snapshot_unsaved: Some(true),
         };
         let value = serde_json::to_value(&tree).unwrap();
         assert_eq!(
@@ -717,6 +783,7 @@ mod tests {
                 "sidebarVisible",
                 "sidebarMode",
                 "sidebarFlaggedLayout",
+                "sidebarDensity",
                 "flaggedOrder",
                 "linkOpenMode",
                 "sidebarWidth",
@@ -732,6 +799,7 @@ mod tests {
                 "app",
                 "liveReset",
                 "indexUnsaved",
+                "snapshotUnsaved",
             ]
         );
         assert_eq!(
@@ -909,6 +977,8 @@ mod tests {
             serde_json::from_value(json!({"state": "loaded", "javascript": true})).unwrap();
         assert!(page.javascript && !page.chromeless && !page.persistent && !page.browse);
         assert_eq!(page.hidden, None, "an older server sends no hidden flag");
+        // upstream's `aPageNodeFromAnOlderServerDecodesAsNotBrowsing`
+        assert_eq!(page.clicked, None, "an older server sends no clicked flag");
         // upstream's `aSessionNodeFromAnOlderServerDecodesWithNoHiddenOverlays`
         let session: ControlSessionNode = serde_json::from_value(json!({"id": "x", "name": "n", "cwd": "/",
             "active": true, "split": false, "overlay": true, "scratch": false, "flagged": false}))

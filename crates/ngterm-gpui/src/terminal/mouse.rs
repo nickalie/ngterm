@@ -16,10 +16,12 @@
 //!   follows `right-click-action` (`paste`, `copy`, `copy-or-paste`, `ignore`, or `context-menu`: the word or link
 //!   under it selected and copied per `copy-on-select`, with no menu to show).
 //! - Links ([`super::links`]) are refreshed on every move and modifier change, opened on a click; while the program
-//!   has the mouse, Shift is not counted (Ghostty's `mouseModsWithCapture`). In an overlay link-open mode with no
-//!   mouse capture, Ctrl+Shift or Super+Shift exactly (upstream's ⌘⇧) on a session's terminal is the browser chord
-//!   ([`links::wants_browser`]): Shift is not counted then either, so the link lights and a click opens it in the
-//!   browser (and Shift alone still extends the selection).
+//!   has the mouse, Shift is not counted (Ghostty's `mouseModsWithCapture`). A chord ([`links::click_intent`]) lights
+//!   the link as Ctrl or Super alone does, its extra keys not counted: in an overlay link-open mode with no mouse
+//!   capture, Ctrl+Shift or Super+Shift exactly (upstream's ⌘⇧) on a session's terminal is the browser chord, whose
+//!   click opens the link in the browser (Shift alone still extends the selection); Ctrl+Alt or Super+Alt exactly
+//!   (upstream's ⌘⌥, plus Shift under capture) is the reveal chord, whose click reveals the link's file in the file
+//!   manager, while a drag with it still draws a block selection.
 //! - The wheel goes to `Pane::wheel` (alternate scroll, a report, or the viewport) in whole steps: precise deltas
 //!   accumulate per cell height, `mouse-scroll-multiplier` (default `precision:1,discrete:3`) applies.
 //! - The pointer's shape is the program's (OSC 22; the I-beam by default), a hand over a live link. Hiding it while
@@ -36,7 +38,7 @@ use gpui_kit::{
 use ngterm_core::ghostty_config::binds::{Action, CopyFormat, Mods};
 use ngterm_core::ghostty_config::{MiddleClickAction, MouseShiftCapture, RightClickAction};
 use ngterm_core::keymap::SurfaceOwner;
-use ngterm_core::link_policy::ClickOrigin;
+use ngterm_core::link_policy::{ClickIntent, ClickOrigin};
 use ngterm_term::{
     Autoscroll, ClipboardLocation, GestureEvent, GridPoint, MouseAction, MouseButton as PaneButton, MouseInput,
     MouseShape, Pane, PasteSource, WheelInput,
@@ -232,21 +234,23 @@ impl TerminalView {
         }
     }
 
-    /// Whether `mods` are the browser chord here now ([`links::wants_browser`]).
-    fn wants_browser(&self, pane: &Pane, mods: Mods, cx: &App) -> bool {
-        links::wants_browser(mods, self.link_origin(), self.tracking(pane), cx)
+    /// What a click with `mods` asks for here now ([`links::click_intent`]).
+    fn click_intent(&self, pane: &Pane, mods: Mods, cx: &App) -> ClickIntent {
+        links::click_intent(mods, self.link_origin(), self.tracking(pane), cx)
     }
 
-    /// `mods` with the browser chord's Shift dropped (upstream's `linkMods`), so the chord acts as Ctrl or Super alone.
+    /// `mods` with a chord's extra keys dropped (upstream's `linkMods`), so it acts as Ctrl or Super alone: the browser
+    /// chord's Shift, the reveal chord's Alt (and its Shift under capture). Only the link lookup, the press and an
+    /// undragged release read these; a drag reads the live keys, so Ctrl+Alt still draws a block selection.
     fn chord_mods(&self, pane: &Pane, mods: Mods, cx: &App) -> Mods {
-        if self.wants_browser(pane, mods, cx) {
-            mods - Mods::SHIFT
-        } else {
-            mods
+        match self.click_intent(pane, mods, cx) {
+            ClickIntent::Browser => mods - Mods::SHIFT,
+            ClickIntent::Reveal => mods - Mods::ALT - Mods::SHIFT,
+            ClickIntent::Normal => mods,
         }
     }
 
-    /// The modifiers links are looked up with: the browser chord's Shift dropped ([`Self::chord_mods`]), and Shift
+    /// The modifiers links are looked up with: a chord's extra keys dropped ([`Self::chord_mods`]), and Shift
     /// dropped while the program has the mouse and may not capture Shift (Ghostty's `mouseModsWithCapture`), since
     /// Shift then only takes the mouse back.
     fn link_mods(&self, pane: &Pane, mods: Mods, cx: &App) -> Mods {
@@ -515,11 +519,11 @@ impl TerminalView {
         if !u16::try_from(at.y).is_ok_and(|row| link.covers(at.x, row)) {
             return false;
         }
-        let browser = self.wants_browser(pane, self.pointer.mods, cx);
+        let intent = self.click_intent(pane, self.pointer.mods, cx);
         self.terminal.update(cx, |_, cx| {
             cx.emit(TerminalEvent::OpenUrl {
                 url: link.url,
-                browser,
+                intent,
                 kind: link.kind,
             });
         });
@@ -748,23 +752,43 @@ impl TerminalView {
     }
 }
 
+/// The keys a passive view's link is looked up with, and what its click asks for: the reveal chord's Alt dropped, so it
+/// lights the link as Ctrl or Super alone does; every other chord is looked up as held. A HUD has no owning session
+/// and no mouse capture, so the browser chord never applies.
+fn passive_link_mods(held: Mods) -> (Mods, ClickIntent) {
+    let intent = ngterm_core::link_policy::click_intent(
+        super::input::key_modifiers(held),
+        ngterm_core::persist::settings::LinkOpenMode::Browser,
+        ClickOrigin::Hud,
+        false,
+    );
+    match intent {
+        ClickIntent::Reveal => (held - Mods::ALT, intent),
+        _ => (held, ClickIntent::Normal),
+    }
+}
+
 /// A passive view's links (the HUD's panel, upstream's `HudLinkClick`): looked up under a pointer the view never
 /// receives itself.
 impl TerminalView {
-    /// The live link at `position` (window coordinates) over the view laid out in `bounds`, with `modifiers` held.
+    /// The live link at `position` (window coordinates) over the view laid out in `bounds`, with `modifiers` held, and
+    /// what the click asks for: Ctrl or Super alone opens it, Ctrl/Super+Alt reveals it (upstream's `HudLinkClick`,
+    /// which takes ⌘ and ⌘⌥ and refuses ⌥ alone, ⌘⇧, ⌘⌥⇧ and ⌘⌃).
     fn link_under(
         &self,
         position: Point<Pixels>,
         bounds: Bounds<Pixels>,
         modifiers: gpui_kit::Modifiers,
-    ) -> Option<Link> {
+    ) -> Option<(Link, ClickIntent)> {
         let pane = self.live_pane()?;
         if !bounds.contains(&position) {
             return None;
         }
         let (x, y) = self.surface_position(position, bounds);
         let frame = self.painted.as_ref()?;
-        links::link_at(&pane, frame, pane.cell_at(x, y), mods(&modifiers), self.link_url())
+        let (held, intent) = passive_link_mods(mods(&modifiers));
+        let link = links::link_at(&pane, frame, pane.cell_at(x, y), held, self.link_url())?;
+        Some((link, intent))
     }
 
     /// A press with the link modifier at `position`: the link there opens (the frontend routes it as the HUD's).
@@ -775,11 +799,11 @@ impl TerminalView {
         modifiers: gpui_kit::Modifiers,
         cx: &mut Context<Self>,
     ) {
-        if let Some(link) = self.link_under(position, bounds, modifiers) {
+        if let Some((link, intent)) = self.link_under(position, bounds, modifiers) {
             self.terminal.update(cx, |_, cx| {
                 cx.emit(TerminalEvent::OpenUrl {
                     url: link.url,
-                    browser: false,
+                    intent,
                     kind: link.kind,
                 });
             });
@@ -795,7 +819,9 @@ impl TerminalView {
         modifiers: gpui_kit::Modifiers,
         cx: &mut Context<Self>,
     ) -> bool {
-        let link = position.and_then(|position| self.link_under(position, bounds, modifiers));
+        let link = position
+            .and_then(|position| self.link_under(position, bounds, modifiers))
+            .map(|(link, _)| link);
         if link != self.pointer.link {
             let cells = link.as_ref().map(|link| link.cells.clone()).unwrap_or_default();
             self.pointer.link = link;

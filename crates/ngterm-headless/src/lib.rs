@@ -91,13 +91,14 @@ pub fn identity() -> AppIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refused(pub String);
 
-/// The restore decision of a headless launch: `live`, refused with the probe's reason when this host cannot run it.
+/// The restore decision of a headless launch over its capture `runtime` (which the wrap reads too, the shell ghostty
+/// `command` names among it): `live`, refused with the probe's reason when this host cannot run it.
 ///
 /// # Errors
 ///
 /// The live probe's reason.
-pub fn live_decision(env: &dyn Env) -> Result<RestoreLaunchDecision, Refused> {
-    let probe = Runtime::capture(env).live_probe(env);
+pub fn live_decision(runtime: &Runtime, env: &dyn Env) -> Result<RestoreLaunchDecision, Refused> {
+    let probe = runtime.live_probe(env);
     let decision = RestoreLaunchDecision::new(RestoreMode::Live, probe.unavailable_reason());
     match decision.live_unavailable_reason.clone() {
         Some(reason) if decision.active != RestoreMode::Live => {
@@ -154,8 +155,7 @@ fn terminal_config(env: &dyn Env, resources: Option<&Path>) -> GhosttyConfig {
 
 /// The live-session host (the GPUI frontend's `session_host::install`): a server of an older build hands its sessions
 /// over to this one first, then the core takes the host, and the launch reap runs.
-fn install_live(core: &mut Core, env: &dyn Env) {
-    let runtime = Runtime::capture(env);
+fn install_live(core: &mut Core, runtime: &Runtime) {
     let directory = ngterm_core::live::socket_directory(&runtime.state_dir);
     let endpoint = ControlLiveEndpoint {
         executable: runtime.executable.to_string_lossy().into_owned(),
@@ -185,6 +185,7 @@ fn install_live(core: &mut Core, env: &dyn Env) {
         wrap: Inputs {
             executable: runtime.executable.clone(),
             login_shell: runtime.login_shell.clone(),
+            command_shell: runtime.command_shell.clone(),
             resources_dir: runtime.resources_dir.clone(),
             own_resources_dir: runtime.own_resources_dir.clone(),
             state_dir: runtime.state_dir.clone(),
@@ -214,9 +215,38 @@ fn process_host(poster: &Poster, socket: String) -> ngterm_core::ProcessHost {
     }
 }
 
+/// How a headless origin reads a page's file before handing the page to the presenting machine: it renders none
+/// itself, but a missing, oversized or binary file is refused before anything is reserved there, and a picture travels
+/// with its probed size (the GPUI frontend's web views read them the same way).
+struct PageFiles;
+
+impl ngterm_core::html::PageProbe for PageFiles {
+    fn probe_image(&self, path: &str) -> Result<ngterm_core::html::image_page::ImageData, String> {
+        ngterm_app::documents::probe_image(Path::new(path))
+    }
+
+    fn check_markdown(&self, path: &str) -> Result<(), String> {
+        ngterm_app::documents::check_markdown(Path::new(path))
+    }
+
+    fn check_text(&self, path: &str) -> Result<(), String> {
+        ngterm_app::documents::check_text(Path::new(path))
+    }
+
+    fn check_log(&self, path: &str, tail: usize) -> Result<(), String> {
+        ngterm_app::documents::check_log(Path::new(path), tail)
+    }
+}
+
 /// The core over the state the last run left, with what it reaches the host through (the GPUI frontend's
 /// `launch_core` and `install_launch_hosts`, less the window's hosts).
-fn launch_core(decision: RestoreLaunchDecision, resources: Option<&Path>, poster: &Poster, socket: String) -> Core {
+fn launch_core(
+    decision: RestoreLaunchDecision,
+    runtime: &Runtime,
+    resources: Option<&Path>,
+    poster: &Poster,
+    socket: String,
+) -> Core {
     let env = &ProcessEnv;
     let mut core = Core::new(
         CoreConfig {
@@ -226,6 +256,7 @@ fn launch_core(decision: RestoreLaunchDecision, resources: Option<&Path>, poster
         load_state(env),
     );
     core.set_page_presenter_only();
+    core.set_page_probe(Box::new(PageFiles));
     core.set_theme_paths(
         resources.map(|dir| dir.join("themes")),
         Some(paths::ghostty_settings_config_path(env)),
@@ -248,7 +279,7 @@ fn launch_core(decision: RestoreLaunchDecision, resources: Option<&Path>, poster
     core.set_process_host(process_host(poster, socket));
     // `session.hud.open` writes its body here; nothing paints it, an attached viewer shows it
     core.set_hud_body_dir(paths::hud_body_dir(env));
-    install_live(&mut core, env);
+    install_live(&mut core, runtime);
     core.load_keymap_at_launch();
     core.load_hooks_at_launch();
     core.load_remotes_at_launch();
@@ -262,7 +293,9 @@ pub fn run(options: &Options) -> i32 {
     #[cfg(target_os = "macos")]
     ngterm_session::limits::raise_open_files();
     let env = &ProcessEnv;
-    let decision = match live_decision(env) {
+    // captured once: the decision and the wrap read the same shell, which no config reload replaces
+    let runtime = Runtime::capture(env);
+    let decision = match live_decision(&runtime, env) {
         Ok(decision) => decision,
         Err(Refused(reason)) => {
             tracing::error!("{reason}");
@@ -279,9 +312,9 @@ pub fn run(options: &Options) -> i32 {
     let mut server = ControlServer::new(paths::app_socket_path(env));
     let socket = server.advertised_path().to_string_lossy().into_owned();
     let resources = resources();
-    let core = launch_core(decision, resources.as_deref(), &poster, socket.clone());
+    let core = launch_core(decision, &runtime, resources.as_deref(), &poster, socket.clone());
     let config = terminal_config(env, resources.as_deref());
-    let host = Host::new(&config, Runtime::capture(env).login_shell, resources, bin_dir());
+    let host = Host::new(&config, runtime.login_shell.clone(), resources, bin_dir());
     let environment = PaneEnvironment {
         socket,
         program_version: identity().version,

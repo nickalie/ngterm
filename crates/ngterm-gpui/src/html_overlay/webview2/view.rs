@@ -2,7 +2,8 @@
 //! page's own native window, which `WebView2` draws and takes the pointer and keys in. The element lays the content
 //! area out and tells the page where it is ([`Page::place`]), blocks the pointer from what lies under it, and follows
 //! the keyboard: the element taking it (the deck, a click into the page) gives the web view the keyboard, losing it
-//! hands the keyboard back to the window (`Page::sync_native`).
+//! hands the keyboard back to the window (`Page::sync_native`). The keyboard-layout lock (`crate::input_source`)
+//! re-evaluates when the element takes or loses the keyboard and when its window's activation changes.
 
 use std::rc::Rc;
 
@@ -29,16 +30,17 @@ impl PageView {
     /// The element of `page` in `window`, whose native handle is `parent`.
     pub fn new(page: Rc<Page>, parent: isize, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        let focused = cx.on_focus(&focus, window, |view, _, _| view.focus_changed(true));
-        let blurred = cx.on_blur(&focus, window, |view, _, _| view.focus_changed(false));
+        let focused = cx.on_focus(&focus, window, |view, _, cx| view.focus_changed(true, cx));
+        let blurred = cx.on_blur(&focus, window, |view, _, cx| view.focus_changed(false, cx));
         let hide_shown = panel::observe_hide_shown(cx);
+        let activation = cx.observe_window_activation(window, |_, _, cx| crate::input_source::request_refresh(cx));
         page.set_element(cx.entity().downgrade(), window.window_handle(), parent);
         Self {
             page,
             focus,
             released: false,
             error: None,
-            _subscriptions: vec![focused, blurred, hide_shown],
+            _subscriptions: vec![focused, blurred, hide_shown, activation],
         }
     }
 
@@ -54,7 +56,8 @@ impl PageView {
         &self.focus
     }
 
-    fn focus_changed(&mut self, focused: bool) {
+    fn focus_changed(&mut self, focused: bool, cx: &mut App) {
+        crate::input_source::request_refresh(cx);
         if self.released {
             return;
         }

@@ -8,7 +8,7 @@ import pytest
 from agterm_conformance.drivers.base import ElementNotFound
 from agterm_conformance.loopback import serve
 from agterm_conformance.match import assert_ok, find_session
-from agterm_conformance.wait import wait_until
+from agterm_conformance.wait import WaitTimeout, wait_until
 
 
 def _open_settings(ui):
@@ -198,4 +198,90 @@ def test_a_markdown_file_renders_and_the_tree_names_its_source(ctl, ui):
         ui.click(ui.find("htmlOverlay.close", role="button"))
         _closed(ctl, sid)
     finally:
+        ctl.request("session.close", sid)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("ui:htmlOverlay.page", "field:tree.session.htmlOverlays")
+def test_a_text_file_renders_at_its_line_and_the_tree_names_its_source(ctl, ui):
+    sid = _new(ctl)
+    source = ctl.instance.root / "main.go"
+    source.write_text("package main\n\n// Rendered Text Line\n", encoding="utf-8")
+    try:
+        assert_ok(ctl.request("session.overlay.open", sid, textFile=str(source), line=3))
+        _state(ctl, sid, "loaded")
+        page, = find_session(ctl.tree(), sid)["htmlOverlays"]
+        assert page["text"] == {"file": str(source), "language": "go", "line": 3}, page
+        assert "file" not in page and "markdown" not in page and page["javascript"] is False
+        ui.find("htmlOverlay.page")
+        # a text page is named by its file, never by the generated page's title
+        assert ui.text("htmlOverlay.identity") == "main.go"
+        ui.click(ui.find("htmlOverlay.close", role="button"))
+        _closed(ctl, sid)
+    finally:
+        ctl.request("session.close", sid)
+
+
+def _search_query(ctl, sid, query, timeout=2.0):
+    """Waits for the session-wide text page's search to read back `query`."""
+
+    def searched(tree):
+        (page,) = find_session(tree, sid)["htmlOverlays"]
+        assert page.get("text", {}).get("search", {}).get("query") == query, page
+        return True
+
+    ctl.wait_tree(searched, timeout)
+
+
+def _typed_into_the_page(ctl, ui, sid, letter):
+    """Types `letter`, taken back until it reaches the page's field: the keyboard moves to the page a frame after Find,
+    which a key sent at once can beat."""
+    ui.press(letter)
+    try:
+        _search_query(ctl, sid, letter)
+        return True
+    except WaitTimeout:
+        ui.press("delete")
+        return False
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("ui:search-field", "ui:htmlOverlay.close", "field:tree.session.htmlOverlays")
+def test_find_over_a_text_page_searches_the_page(ctl, ui):
+    # What is on top owns Find (upstream's testCommandFOverAFloatingTextPageSearchesThePageAndLeavesTheTerminalSearch):
+    # over a floating text page it focuses the page's own field, and the terminal search behind stays as it was.
+    sid = _new(ctl)
+    notes = ctl.instance.root / "notes.txt"
+    notes.write_text("alpha\nbeta\n", encoding="utf-8")
+    try:
+        ui.menu("View", "Find…")
+        ui.find("search-field", role="text-field")
+        assert_ok(ctl.request("session.overlay.open", sid, textFile=str(notes), sizePercent=60))
+        _state(ctl, sid, "loaded")
+        ui.menu("View", "Find…")
+        wait_until(lambda: _typed_into_the_page(ctl, ui, sid, "b"), 20)
+        ui.find("search-field", role="text-field")
+        ui.click(ui.find("htmlOverlay.close", role="button"))
+        _closed(ctl, sid)
+    finally:
+        ctl.request("session.close", sid)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("ui:search-field")
+def test_find_with_a_page_over_the_other_pane_searches_the_terminal(ctl, ui):
+    # A page over the other pane of a split covers nothing the user types into, so Find opens the focused terminal's
+    # search (upstream's testCommandFWithAPageOverTheOtherPaneSearchesTheFocusedTerminal).
+    sid = _new(ctl)
+    assert_ok(ctl.request("session.split", sid, mode="on"))
+    ctl.wait_mounted(sid, "right")
+    notes = ctl.instance.root / "notes.txt"
+    notes.write_text("alpha\n", encoding="utf-8")
+    try:
+        assert_ok(ctl.request("session.overlay.open", sid, textFile=str(notes), pane="left"))
+        assert_ok(ctl.request("session.focus", sid, pane="right"))
+        ui.menu("View", "Find…")
+        ui.find("search-field", role="text-field")
+    finally:
+        ctl.request("session.overlay.close", sid, pane="left")
         ctl.request("session.close", sid)

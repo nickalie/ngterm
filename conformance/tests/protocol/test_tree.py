@@ -24,6 +24,7 @@ from agterm_conformance.wait import wait_until
     "field:tree.sidebarVisible",
     "field:tree.sidebarMode",
     "field:tree.sidebarFlaggedLayout",
+    "field:tree.sidebarDensity",
     "field:tree.linkOpenMode",
     "field:tree.workspaceFilter",
     "field:tree.quickVisible",
@@ -36,6 +37,7 @@ def test_fresh_tree_top_level(ctl):
             "sidebarVisible": True,
             "sidebarMode": "tree",
             "sidebarFlaggedLayout": "flat",
+            "sidebarDensity": "default",
             "linkOpenMode": "browser",
             "workspaceFilter": False,
             "quickVisible": False,
@@ -59,6 +61,7 @@ def test_fresh_tree_omits_unset_top_level_fields(ctl):
         "askPending",
         "liveReset",
         "indexUnsaved",
+        "snapshotUnsaved",
     )
 
 
@@ -239,6 +242,38 @@ def test_index_unsaved_while_windows_json_cannot_be_written(app, ctl):
     assert_ok(ctl.request("window.rename", window["id"], name="saved"))
     assert_absent(ctl.tree()["tree"], "indexUnsaved")
     wait_until(index.is_file)
+
+
+def _window_file(app, window_id):
+    """`windows/<id>.json` of `window_id` once it is on disk; the id is matched without regard to case."""
+
+    def found():
+        files = (app.state_dir / "windows").glob("*.json")
+        return next((path for path in files if path.stem.lower() == window_id.lower()), None)
+
+    return wait_until(found)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.rename", "field:tree.snapshotUnsaved")
+def test_snapshot_unsaved_while_a_windows_file_cannot_be_written(app, ctl):
+    (window,) = assert_ok(ctl.request("window.list"))["windows"]
+    (sid,) = session_ids(ctl.tree())
+    assert_ok(ctl.request("session.rename", sid, name="saved"))
+    snapshot = _window_file(app, window["id"])
+    assert_absent(ctl.tree()["tree"], "snapshotUnsaved")
+    snapshot.unlink()
+    # A directory in its place makes the window's saves fail until it is gone.
+    snapshot.mkdir()
+    (snapshot / "blocker").write_text("")
+    assert_ok(ctl.request("session.rename", sid, name="unsaved"))
+    tree = ctl.wait_tree(lambda result: result["tree"].get("snapshotUnsaved") is True)["tree"]
+    # per window, apart from the index
+    assert_absent(tree, "indexUnsaved")
+    shutil.rmtree(snapshot)
+    assert_ok(ctl.request("session.rename", sid, name="saved again"))
+    ctl.wait_tree(lambda result: "snapshotUnsaved" not in result["tree"])
+    wait_until(snapshot.is_file)
 
 
 @pytest.mark.since("0.39.1")

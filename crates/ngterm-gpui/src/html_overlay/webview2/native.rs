@@ -12,7 +12,7 @@
 //! a web view pumps the window's messages until `WebView2` answers, so it never runs inside one of GPUI's callbacks
 //! or tasks (`registry`'s pump hands it to the main loop, `outside`).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::num::NonZeroIsize;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -23,20 +23,21 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR, COREWEBVIEW2_KEY_EVENT_KIND,
     COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN, COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
-    COREWEBVIEW2_WEB_ERROR_STATUS, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
-    COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT, ICoreWebView2, ICoreWebView2_11, ICoreWebView2_13,
-    ICoreWebView2_22, ICoreWebView2ContextMenuItem, ICoreWebView2ContextMenuItemCollection, ICoreWebView2Controller,
-    ICoreWebView2Environment, ICoreWebView2NavigationCompletedEventArgs, ICoreWebView2NavigationCompletedEventArgs2,
+    COREWEBVIEW2_WEB_ERROR_STATUS, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
+    COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL, COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT,
+    ICoreWebView2, ICoreWebView2_11, ICoreWebView2_13, ICoreWebView2_22, ICoreWebView2ContextMenuItem,
+    ICoreWebView2ContextMenuItemCollection, ICoreWebView2Controller, ICoreWebView2Environment,
+    ICoreWebView2NavigationCompletedEventArgs, ICoreWebView2NavigationCompletedEventArgs2,
     ICoreWebView2NavigationStartingEventArgs, ICoreWebView2Profile2,
 };
 use webview2_com::{
     AcceleratorKeyPressedEventHandler, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
     CallDevToolsProtocolMethodCompletedHandler, ClearBrowsingDataCompletedHandler, ContentLoadingEventHandler,
-    ContextMenuRequestedEventHandler, DocumentTitleChangedEventHandler, FocusChangedEventHandler,
-    HistoryChangedEventHandler, NavigationCompletedEventHandler, NavigationStartingEventHandler,
-    NewWindowRequestedEventHandler, ProcessFailedEventHandler, ScriptDialogOpeningEventHandler,
-    SourceChangedEventHandler, WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
-    WindowCloseRequestedEventHandler, take_pwstr,
+    ContextMenuRequestedEventHandler, DevToolsProtocolEventReceivedEventHandler, DocumentTitleChangedEventHandler,
+    FocusChangedEventHandler, HistoryChangedEventHandler, NavigationCompletedEventHandler,
+    NavigationStartingEventHandler, NewWindowRequestedEventHandler, ProcessFailedEventHandler,
+    ScriptDialogOpeningEventHandler, SourceChangedEventHandler, WebMessageReceivedEventHandler,
+    WebResourceRequestedEventHandler, WindowCloseRequestedEventHandler, take_pwstr,
 };
 use windows::core::{BOOL, HSTRING, Interface as _, PWSTR, Result as ComResult};
 use wry::dpi::{LogicalPosition, LogicalSize};
@@ -124,6 +125,13 @@ pub enum Report {
     Key(gpui_kit::Keystroke),
     /// A replaced theme script is in place: later loads wear it.
     ThemeInstalled,
+    /// The network filter of a page that blocks the network ([`Spec::block_network`]) is in place: its document may
+    /// load.
+    NetworkFilterInstalled,
+    /// That filter could not be installed: the page loads nothing.
+    NetworkFilterFailed(String),
+    /// A text page's renderer reported (its JSON object), through its binding in the renderer's world.
+    TextPage(String),
 }
 
 /// Decides a navigation at once.
@@ -159,6 +167,10 @@ pub struct Store {
 }
 
 /// What a page's web view is built from.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a native page's independent settings, each read once where the page is built"
+)]
 pub struct Spec {
     pub parent: isize,
     pub store: Store,
@@ -174,9 +186,13 @@ pub struct Spec {
     pub scripts: Vec<String>,
     /// App-owned document renderer, installed in its own content world with authored scripts still disabled.
     pub trusted_document_script: Option<String>,
+    /// The renderer is a text page's, whose reports and calls go through the renderer's channel (`text_page`).
+    pub text_channel: bool,
     pub grant: Option<Grant>,
     pub replica: Option<ReplicaRead>,
     pub text: Option<Text>,
+    /// The page loads nothing from the network ([`ngterm_core::html::HtmlOverlay::blocks_network`]).
+    pub block_network: bool,
     pub decide: Decide,
     pub post: Post,
     pub take_key: TakeKey,
@@ -199,6 +215,8 @@ pub struct Native {
     view: WebView,
     /// The theme script's id once `WebView2` added it.
     theme: Rc<RefCell<Option<String>>>,
+    /// The renderer's execution context, from its binding's last report: where a call into its world runs.
+    renderer: Rc<Cell<Option<i64>>>,
     post: Post,
 }
 
@@ -210,6 +228,7 @@ impl Native {
         let native = Self {
             view,
             theme: Rc::default(),
+            renderer: Rc::default(),
             post: Rc::clone(&spec.post),
         };
         let webview = native.webview();
@@ -217,6 +236,12 @@ impl Native {
         wire_navigation(&webview, &spec.decide, &spec.post, &main_document).map_err(|err| err.to_string())?;
         wire_frame_requests(&webview, &native.environment(), &spec.decide, main_document)
             .map_err(|err| err.to_string())?;
+        if spec.block_network {
+            (spec.post)(match wire_network_block(&webview, &native.environment()) {
+                Ok(()) => Report::NetworkFilterInstalled,
+                Err(err) => Report::NetworkFilterFailed(err.to_string()),
+            });
+        }
         wire_page(&webview, &spec.post).map_err(|err| err.to_string())?;
         wire_refusals(&webview).map_err(|err| err.to_string())?;
         wire_focus(&native.view.controller(), &spec.post).map_err(|err| err.to_string())?;
@@ -230,6 +255,9 @@ impl Native {
             native.add_script_now(script)?;
         }
         if let Some(script) = &spec.trusted_document_script {
+            if spec.text_channel {
+                native.wire_renderer_channel(&spec.post)?;
+            }
             native.add_isolated_document_script(script)?;
         }
         hold_profile(&spec.store, &native);
@@ -237,31 +265,100 @@ impl Native {
     }
 
     /// CDP's named world isolates the trusted Markdown renderer from the document's global objects.
-    /// Registration finishes before any document load, and does not enable authored JavaScript.
+    /// Registration finishes before any document load, and does not enable authored JavaScript. The page domain is
+    /// enabled first: without it the renderer side keeps the script but never runs it, so no world is created.
     fn add_isolated_document_script(&self, script: &str) -> Result<(), String> {
+        self.devtools_now("Page.enable", &serde_json::json!({}))
+            .map_err(|error| format!("the isolated document renderer was not added: {error}"))?;
+        let parameters = serde_json::json!({
+            "source": script,
+            "worldName": super::super::documents::WORLD,
+        });
+        self.devtools_now("Page.addScriptToEvaluateOnNewDocument", &parameters)
+            .map_err(|error| format!("the isolated document renderer was not added: {error}"))
+    }
+
+    /// Runs CDP's `method` with `parameters` and waits until `WebView2` did (pumping the window's messages).
+    fn devtools_now(&self, method: &str, parameters: &serde_json::Value) -> Result<(), String> {
         let webview = self.webview();
-        let parameters = HSTRING::from(
-            serde_json::json!({
-                "source": script,
-                "worldName": super::super::documents::WORLD,
-            })
-            .to_string(),
-        );
+        let (method, parameters) = (HSTRING::from(method), HSTRING::from(parameters.to_string()));
         CallDevToolsProtocolMethodCompletedHandler::wait_for_async_operation(
             Box::new(move |handler| {
                 // SAFETY: the web view's COM object is called on its owning thread.
-                unsafe {
-                    webview.CallDevToolsProtocolMethod(
-                        &HSTRING::from("Page.addScriptToEvaluateOnNewDocument"),
-                        &parameters,
-                        &handler,
-                    )
-                }
-                .map_err(Into::into)
+                unsafe { webview.CallDevToolsProtocolMethod(&method, &parameters, &handler) }.map_err(Into::into)
             }),
             Box::new(|result, _| result),
         )
-        .map_err(|error| format!("the isolated document renderer was not added: {error}"))
+        .map_err(|error| error.to_string())
+    }
+
+    /// The renderer's reports and the app's calls into its world (`text_page`): `WebView2` has no message handler in a
+    /// named world, so CDP's binding stands in, added to the renderer's world alone (`window.webkit.messageHandlers`
+    /// there is `documents::renderer_channel`'s shim over it); each report names the context it came from, which the
+    /// calls run in.
+    fn wire_renderer_channel(&self, post: &Post) -> Result<(), String> {
+        let failed = |error: String| format!("the renderer's channel was not added: {error}");
+        self.devtools_now("Runtime.enable", &serde_json::json!({}))
+            .map_err(failed)?;
+        let binding = serde_json::json!({
+            "name": super::super::documents::RENDERER_BINDING,
+            "executionContextName": super::super::documents::WORLD,
+        });
+        self.devtools_now("Runtime.addBinding", &binding).map_err(failed)?;
+        let webview = self.webview();
+        // SAFETY: a COM call on the web view's own thread.
+        let receiver = unsafe { webview.GetDevToolsProtocolEventReceiver(&HSTRING::from("Runtime.bindingCalled")) }
+            .map_err(|error| failed(error.to_string()))?;
+        let (sent, renderer) = (Rc::clone(post), Rc::clone(&self.renderer));
+        let handler = DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let event = string(|out| {
+                // SAFETY: the event's own arguments, read on its thread.
+                unsafe { args.ParameterObjectAsJson(out) }
+            })?;
+            if let Some((context, body)) = binding_called(&event) {
+                renderer.set(Some(context));
+                sent(Report::TextPage(body));
+            }
+            Ok(())
+        }));
+        let mut token = 0i64;
+        // SAFETY: a COM registration on the web view's own thread; the handler lives as long as the web view.
+        unsafe { receiver.add_DevToolsProtocolEventReceived(&handler, &raw mut token) }
+            .map_err(|error| failed(error.to_string()))
+    }
+
+    /// Evaluates `expression` in the renderer's world (CDP's `Runtime.evaluate` in its context, a promise awaited);
+    /// its answer arrives on the returned channel. Before the renderer's first report there is no context to run in.
+    pub fn call_renderer(&self, expression: &str) -> async_channel::Receiver<super::super::text_page::Answer> {
+        let (sender, answer) = async_channel::bounded(1);
+        let Some(context) = self.renderer.get() else {
+            let _ = sender.try_send(Err("the renderer has not reported".to_owned()));
+            return answer;
+        };
+        let parameters = serde_json::json!({
+            "expression": expression,
+            "contextId": context,
+            "returnByValue": true,
+            "awaitPromise": true,
+        });
+        let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
+            let _ = sender.try_send(evaluation(result.map(|()| json).map_err(|error| error.to_string())));
+            Ok(())
+        }));
+        let webview = self.webview();
+        // SAFETY: a COM call on the web view's own thread; the handler answers once.
+        let called = unsafe {
+            webview.CallDevToolsProtocolMethod(
+                &HSTRING::from("Runtime.evaluate"),
+                &HSTRING::from(parameters.to_string()),
+                &handler,
+            )
+        };
+        if let Err(err) = called {
+            tracing::debug!(%err, "a call into the renderer did not start");
+        }
+        answer
     }
 
     /// Adds `script` for later documents and waits until `WebView2` did (pumping the window's messages); its id.
@@ -456,6 +553,36 @@ fn string(read: impl FnOnce(*mut PWSTR) -> ComResult<()>) -> ComResult<String> {
     Ok(take_pwstr(value))
 }
 
+/// A `Runtime.bindingCalled` event of the renderer's binding: its context and its payload.
+fn binding_called(event: &str) -> Option<(i64, String)> {
+    let event: serde_json::Value = serde_json::from_str(event).ok()?;
+    if event["name"] != super::super::documents::RENDERER_BINDING {
+        return None;
+    }
+    Some((
+        event["executionContextId"].as_i64()?,
+        event["payload"].as_str()?.to_owned(),
+    ))
+}
+
+/// What a `Runtime.evaluate` answered (`answer`, its JSON): the value as JSON (`None` for `undefined`), or the exception's
+/// text.
+fn evaluation(answer: Result<String, String>) -> super::super::text_page::Answer {
+    let answer: serde_json::Value = serde_json::from_str(&answer?).map_err(|error| error.to_string())?;
+    if let Some(exception) = answer.get("exceptionDetails") {
+        let text = exception["exception"]["description"]
+            .as_str()
+            .or_else(|| exception["text"].as_str())
+            .unwrap_or("the script failed");
+        return Err(text.to_owned());
+    }
+    let result = &answer["result"];
+    if result["type"] == "undefined" {
+        return Ok(None);
+    }
+    Ok(result.get("value").map(serde_json::Value::to_string))
+}
+
 /// The flag a COM getter writes.
 fn flag(read: impl FnOnce(*mut BOOL) -> ComResult<()>) -> ComResult<bool> {
     let mut value = BOOL::default();
@@ -634,6 +761,52 @@ fn wire_frame_requests(
             return Ok(());
         }
         tracing::debug!(uri = navigation.uri, "a page's frame request refused");
+        // SAFETY: a COM call on the web view's own thread, answering the event's own arguments.
+        let refusal =
+            unsafe { environment.CreateWebResourceResponse(None, 403, &HSTRING::from("Forbidden"), &HSTRING::new()) }?;
+        // SAFETY: as above.
+        unsafe { args.SetResponse(&refusal) }
+    }));
+    let mut token = 0i64;
+    // SAFETY: a COM registration on the web view's own thread; the handler lives as long as the web view.
+    unsafe { webview.add_WebResourceRequested(&handler, &raw mut token) }
+}
+
+/// A page that blocks the network (a clicked HTML document) answers every HTTP(S) request but its app protocols' with
+/// a 403, whatever asks for it, before its first load: its CSP keeps subresources off the network already, and this
+/// keeps anything the CSP misses off it too. A main-frame link the user clicks is the navigation policy's, which
+/// cancels it before any request. `WebView2` shows this filter no WebSocket (the CSP refuses one, and the page runs no
+/// script) and no link hint: Chromium preconnects and resolves names for those past both the CSP and this filter, so
+/// the page's markup has no live `<link>` and its DNS prefetch is off (`document_page::chromium_page`).
+fn wire_network_block(webview: &ICoreWebView2, environment: &ICoreWebView2Environment) -> ComResult<()> {
+    let filter = HSTRING::from("*");
+    // workers' and frames' requests reach the event only through the newer filter
+    if let Ok(newer) = webview.cast::<ICoreWebView2_22>() {
+        // SAFETY: a COM call on the web view's own thread.
+        unsafe {
+            newer.AddWebResourceRequestedFilterWithRequestSourceKinds(
+                &filter,
+                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+                COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
+            )
+        }?;
+    } else {
+        // SAFETY: as above.
+        unsafe { webview.AddWebResourceRequestedFilter(&filter, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL) }?;
+    }
+    let environment = environment.clone();
+    let handler = WebResourceRequestedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else { return Ok(()) };
+        // SAFETY: the event's own arguments, read on its thread.
+        let request = unsafe { args.Request() }?;
+        let uri = string(|out| {
+            // SAFETY: as above.
+            unsafe { request.Uri(out) }
+        })?;
+        if !scheme::is_network(&uri) {
+            return Ok(());
+        }
+        tracing::debug!(uri, "a network request of a page that blocks the network refused");
         // SAFETY: a COM call on the web view's own thread, answering the event's own arguments.
         let refusal =
             unsafe { environment.CreateWebResourceResponse(None, 403, &HSTRING::from("Forbidden"), &HSTRING::new()) }?;
@@ -1148,6 +1321,35 @@ mod tests {
         ] {
             assert!(!keeps_menu_item(refused), "{refused}");
         }
+    }
+
+    #[test]
+    fn the_renderer_channel_reads_its_reports_and_answers() {
+        let event = serde_json::json!({
+            "name": super::super::super::documents::RENDERER_BINDING,
+            "payload": "{\"ready\":true}",
+            "executionContextId": 7,
+        });
+        assert_eq!(
+            binding_called(&event.to_string()),
+            Some((7, r#"{"ready":true}"#.to_owned()))
+        );
+        assert_eq!(
+            binding_called(r#"{"name":"other","payload":"{}","executionContextId":7}"#),
+            None
+        );
+        let value = r#"{"result":{"type":"object","value":{"matches":3,"current":1}}}"#;
+        assert_eq!(
+            evaluation(Ok(value.to_owned())),
+            Ok(Some(r#"{"matches":3,"current":1}"#.to_owned()))
+        );
+        assert_eq!(
+            evaluation(Ok(r#"{"result":{"type":"undefined"}}"#.to_owned())),
+            Ok(None)
+        );
+        let thrown = r#"{"result":{"type":"object"},"exceptionDetails":{"text":"Uncaught","exception":{"description":"ReferenceError: x"}}}"#;
+        assert_eq!(evaluation(Ok(thrown.to_owned())), Err("ReferenceError: x".to_owned()));
+        assert_eq!(evaluation(Err("gone".to_owned())), Err("gone".to_owned()));
     }
 
     #[test]

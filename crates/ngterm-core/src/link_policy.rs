@@ -8,7 +8,10 @@
 //! not this machine is ignored, as are network/device paths and automount roots, where even looking at the path can
 //! mount a network share. [`route`] adds the link-open setting on top: a
 //! web link clicked in a pane or the scratch terminal may go to a session overlay (full size, 95%, 75% or 50%)
-//! instead of the browser, and [`wants_browser`] says when a Ctrl/Super+Shift click overrides that for one link.
+//! instead of the browser, and [`click_intent`] reads a click's chord: Ctrl/Super+Shift overrides that for one link,
+//! Ctrl/Super+Alt reveals the file a local route names. A local source, config, text or log file becomes a read-only
+//! text page ([`crate::html::text_page`]); a link ending in `:line[:column]`, or a relative one, names candidates
+//! ([`locations`]) only the file system can choose between, which the frontend stats off its main thread.
 //!
 //! Host-free: the local host names are injected (the `*_for_hosts` variants), and the frontend only carries out the
 //! route. Absolute and `~/` bare paths retain spaces, `%`, `?` and `#` literally; relative bare paths and control
@@ -23,8 +26,13 @@ use std::sync::OnceLock;
 
 use uuid::Uuid;
 
-use crate::interrupt::KeyModifiers;
 use crate::persist::settings::LinkOpenMode;
+
+mod locations;
+
+pub use locations::{
+    ClickIntent, LinkLocation, click_intent, locations, locations_for_hosts_and_home, route_for_location,
+};
 
 /// The schemes safe to hand to the desktop's opener: web and mail only, none that hands off to a local executable or
 /// handler.
@@ -62,6 +70,15 @@ pub enum LinkDisposition {
     Image(PathBuf),
     /// A local Markdown path, checked before it can occupy a document overlay.
     Markdown(PathBuf),
+    /// A local HTML file ([`crate::html::document_page::EXTENSIONS`]), read and checked before it can occupy a document
+    /// overlay, where it shows with no file grant, bridge or page JavaScript.
+    Document(PathBuf),
+    /// A local file a text page shows ([`crate::html::text_page::is_eligible`]), at `line` when a `:line` suffix gave
+    /// one, checked before it can occupy a document overlay.
+    Text {
+        path: PathBuf,
+        line: Option<i64>,
+    },
     Ignore,
 }
 
@@ -100,8 +117,44 @@ pub enum Route {
         session: Uuid,
         size_percent: Option<i64>,
     },
+    /// A local HTML document, sized as a Markdown document; a refused open reveals the file.
+    Document {
+        path: PathBuf,
+        session: Uuid,
+        size_percent: Option<i64>,
+    },
+    /// A local text page marked at `line`, sized as a Markdown document; a refused open reveals the file.
+    Text {
+        path: PathBuf,
+        line: Option<i64>,
+        session: Uuid,
+        size_percent: Option<i64>,
+    },
     Reveal(PathBuf),
     Ignore,
+}
+
+impl Route {
+    /// The file a local route names, which the reveal chord selects in the file manager instead; `None` for a web
+    /// route and an ignored link (upstream's `localFile`).
+    #[must_use]
+    pub fn local_file(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::Image { path, .. }
+            | Self::Markdown { path, .. }
+            | Self::Document { path, .. }
+            | Self::Text { path, .. }
+            | Self::Reveal(path) => Some(path),
+            Self::Browser(_) | Self::Overlay { .. } | Self::Ignore => None,
+        }
+    }
+
+    /// Whether the click opens a log page following the file (upstream's `TextLink.opensAsLog`): a plain click on a
+    /// `.log` or `.out` text page; a `path:line` click opens the static page at its line.
+    #[must_use]
+    pub fn opens_as_log(&self) -> bool {
+        matches!(self, Self::Text { path, line: None, .. } if crate::html::text_page::is_log(&path.to_string_lossy()))
+    }
 }
 
 /// The lowercased host names counting as this machine for a `file://` link: `localhost` and the kernel's host name
@@ -180,7 +233,7 @@ pub fn disposition_for_hosts_and_home<S: BuildHasher>(
         let expanded = raw
             .strip_prefix("~/")
             .map_or_else(|| raw.to_owned(), |rest| format!("{home}/{rest}"));
-        return local_path(&expanded);
+        return local_path(&expanded, None);
     }
     let Some(link) = Link::parse(raw) else {
         return LinkDisposition::Ignore;
@@ -191,14 +244,18 @@ pub fn disposition_for_hosts_and_home<S: BuildHasher>(
     if link.scheme != "file" {
         return LinkDisposition::Ignore;
     }
+    local_file_path(&link, local_hosts).map_or(LinkDisposition::Ignore, |path| local_path(&path, None))
+}
+
+/// The decoded local path a `file://` link names, `None` for a host that is not this machine or a path that does not
+/// decode.
+fn local_file_path<S: BuildHasher>(link: &Link<'_>, local_hosts: &HashSet<String, S>) -> Option<String> {
     let host = normalized_host(link.host.as_deref().unwrap_or_default());
     if !host.is_empty() && !local_hosts.contains(&host) {
-        return LinkDisposition::Ignore;
+        return None;
     }
     // decoded first, so an encoded slash or dot segment is seen for what it is
-    let Some(path) = percent_decode(link.path) else {
-        return LinkDisposition::Ignore;
-    };
+    let path = percent_decode(link.path)?;
     // A Windows drive in a file URL is preceded by URL's root slash; the native path is C:/…, not \C:….
     #[cfg(windows)]
     let path = if path.as_bytes().get(2) == Some(&b':')
@@ -209,7 +266,7 @@ pub fn disposition_for_hosts_and_home<S: BuildHasher>(
     } else {
         path
     };
-    local_path(&path)
+    Some(path)
 }
 
 /// Bare paths detected in terminal output; remote panes never resolve them locally.
@@ -218,22 +275,32 @@ pub fn is_bare_path(raw: &str) -> bool {
     crate::html::is_absolute(raw) || raw.starts_with("~/")
 }
 
-fn local_path(path: &str) -> LinkDisposition {
+/// `path` lexically normalized, `None` for a relative, network, device or automount path, or one holding a control
+/// character: a decoded `%00` would make the open read the name before it (upstream's `guardedLocalPath`). Nothing
+/// here touches the file system.
+fn guarded_local_path(path: &str) -> Option<String> {
     if !(crate::html::is_absolute(path) || path.starts_with('/'))
         || network_or_device_path(path)
         || path.contains('\0')
         || path.chars().any(char::is_control)
     {
-        return LinkDisposition::Ignore;
+        return None;
     }
     let normalized = if cfg!(windows) {
         crate::html::normalize_path(path)
     } else {
         lexically_normalized_absolute_path(path)
     };
-    if is_automount_path(&normalized.replace('\\', "/")) {
+    (!is_automount_path(&normalized.replace('\\', "/"))).then_some(normalized)
+}
+
+/// Classifies a decoded local path (upstream's `localPath`): an image, a Markdown document, an HTML document, a text
+/// page at `line`, or a reveal; ignored when [`guarded_local_path`] refuses it. HTML goes ahead of the text check.
+fn local_path(path: &str, line: Option<i64>) -> LinkDisposition {
+    let Some(normalized) = guarded_local_path(path) else {
         return LinkDisposition::Ignore;
-    }
+    };
+    let text = crate::html::text_page::is_eligible(&normalized);
     let path = PathBuf::from(normalized);
     let extension = path
         .extension()
@@ -244,6 +311,10 @@ fn local_path(path: &str) -> LinkDisposition {
         LinkDisposition::Image(path)
     } else if MARKDOWN_EXTENSIONS.contains(&extension.as_str()) {
         LinkDisposition::Markdown(path)
+    } else if crate::html::document_page::EXTENSIONS.contains(&extension.as_str()) {
+        LinkDisposition::Document(path)
+    } else if text {
+        LinkDisposition::Text { path, line }
     } else {
         LinkDisposition::Reveal(path)
     }
@@ -269,22 +340,6 @@ pub fn route(raw: &str, mode: LinkOpenMode, origin: ClickOrigin) -> Route {
     route_for_hosts(raw, mode, origin, local_host_names())
 }
 
-/// Whether a Ctrl+Shift or Super+Shift link click (upstream's ⌘⇧, exactly that chord) overrides an overlay mode and
-/// sends the link to the browser: only from a pane or the scratch terminal, and not while the program captures the
-/// mouse (`mouse_captured`), where the chord is the only link click and so follows the setting.
-#[must_use]
-pub fn wants_browser(modifiers: KeyModifiers, mode: LinkOpenMode, origin: ClickOrigin, mouse_captured: bool) -> bool {
-    let chord = modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT)
-        || modifiers == (KeyModifiers::COMMAND | KeyModifiers::SHIFT);
-    if !chord || mode == LinkOpenMode::Browser || mouse_captured {
-        return false;
-    }
-    match origin {
-        ClickOrigin::Pane(_) | ClickOrigin::RemotePane(_) | ClickOrigin::Scratch(_) => true,
-        ClickOrigin::Hud | ClickOrigin::ProgramOverlay | ClickOrigin::Quick => false,
-    }
-}
-
 /// The route of a raw link: [`disposition_for_hosts`] decides open, reveal or ignore, then a web link an overlay can
 /// show, clicked in a pane or the scratch terminal, goes to that session's overlay at the mode's size under any mode
 /// but [`LinkOpenMode::Browser`]. Whether the overlay is free right now is the caller's check.
@@ -298,7 +353,19 @@ pub fn route_for_hosts<S: BuildHasher>(
     if matches!(origin, ClickOrigin::RemotePane(_)) && is_bare_path(raw) {
         return Route::Ignore;
     }
-    match disposition_for_hosts(raw, local_hosts) {
+    route_disposition(disposition_for_hosts(raw, local_hosts), mode, origin)
+}
+
+/// A disposition's route by the origin rules [`route_for_hosts`] describes; a local document or text page shows over
+/// the clicking pane's or scratch terminal's session at the mode's size (95% in browser mode, where a browser would
+/// get the raw file), and every other origin reveals it.
+fn route_disposition(disposition: LinkDisposition, mode: LinkOpenMode, origin: ClickOrigin) -> Route {
+    let page_size = if mode == LinkOpenMode::Browser {
+        Some(95)
+    } else {
+        mode.overlay_size_percent()
+    };
+    match disposition {
         LinkDisposition::Ignore => Route::Ignore,
         LinkDisposition::Reveal(path) => Route::Reveal(path),
         LinkDisposition::Image(path) => match origin {
@@ -309,11 +376,24 @@ pub fn route_for_hosts<S: BuildHasher>(
             ClickOrigin::Pane(session) | ClickOrigin::Scratch(session) => Route::Markdown {
                 path,
                 session,
-                size_percent: if mode == LinkOpenMode::Browser {
-                    Some(95)
-                } else {
-                    mode.overlay_size_percent()
-                },
+                size_percent: page_size,
+            },
+            _ => Route::Reveal(path),
+        },
+        LinkDisposition::Document(path) => match origin {
+            ClickOrigin::Pane(session) | ClickOrigin::Scratch(session) => Route::Document {
+                path,
+                session,
+                size_percent: page_size,
+            },
+            _ => Route::Reveal(path),
+        },
+        LinkDisposition::Text { path, line } => match origin {
+            ClickOrigin::Pane(session) | ClickOrigin::Scratch(session) => Route::Text {
+                path,
+                line,
+                session,
+                size_percent: page_size,
             },
             _ => Route::Reveal(path),
         },
@@ -490,6 +570,7 @@ pub(crate) fn percent_decode(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interrupt::KeyModifiers;
 
     /// A fixed set, so host matching does not depend on the machine.
     fn hosts() -> HashSet<String> {
@@ -502,6 +583,28 @@ mod tests {
 
     fn reveal(path: &str) -> LinkDisposition {
         LinkDisposition::Reveal(PathBuf::from(path))
+    }
+
+    /// Upstream's `onlyAPlainClickOnALogOpensAsALogPage`: a `.log` or `.out` file in any case, with no line.
+    #[test]
+    fn only_a_plain_click_on_a_log_opens_as_a_log_page() {
+        let session = uuid::Uuid::nil();
+        for (path, line, expected) in [
+            ("/x/app.log", None, true),
+            ("/x/run.OUT", None, true),
+            ("/x/app.log", Some(42), false),
+            ("/x/notes.txt", None, false),
+            ("/x/a.go", None, false),
+        ] {
+            let route = Route::Text {
+                path: PathBuf::from(path),
+                line,
+                session,
+                size_percent: None,
+            };
+            assert_eq!(route.opens_as_log(), expected, "{path} {line:?}");
+        }
+        assert!(!Route::Reveal(PathBuf::from("/x/app.log")).opens_as_log());
     }
 
     // disposition (open / reveal / ignore)
@@ -532,25 +635,25 @@ mod tests {
         }
     }
 
-    /// A local `file://` reveals the host-stripped, dot-normalized path, so every host form of `/tmp/x.txt` resolves
+    /// A local `file://` reveals the host-stripped, dot-normalized path, so every host form of `/tmp/x.bin` resolves
     /// to the same plain path.
     #[test]
     fn local_file_links_reveal() {
         for (raw, expected) in [
-            ("file:///tmp/x.txt", "/tmp/x.txt"),
-            ("file:/tmp/x.txt", "/tmp/x.txt"),
-            ("file://localhost/tmp/x.txt", "/tmp/x.txt"),
-            ("file://myhost/tmp/x.txt", "/tmp/x.txt"),
-            ("file://MYHOST/tmp/x.txt", "/tmp/x.txt"),
-            ("file://myhost./tmp/x.txt", "/tmp/x.txt"),
-            ("FILE:///tmp/x.txt", "/tmp/x.txt"),
-            ("file:///tmp/../tmp/x.txt", "/tmp/x.txt"),
-            ("file://myhost/tmp/a%20b.txt", "/tmp/a b.txt"),
+            ("file:///tmp/x.bin", "/tmp/x.bin"),
+            ("file:/tmp/x.bin", "/tmp/x.bin"),
+            ("file://localhost/tmp/x.bin", "/tmp/x.bin"),
+            ("file://myhost/tmp/x.bin", "/tmp/x.bin"),
+            ("file://MYHOST/tmp/x.bin", "/tmp/x.bin"),
+            ("file://myhost./tmp/x.bin", "/tmp/x.bin"),
+            ("FILE:///tmp/x.bin", "/tmp/x.bin"),
+            ("file:///tmp/../tmp/x.bin", "/tmp/x.bin"),
+            ("file://myhost/tmp/a%20b.bin", "/tmp/a b.bin"),
             (
                 "file:///usr/share/applications/x.desktop",
                 "/usr/share/applications/x.desktop",
             ),
-            ("file://user@myhost:22/tmp/x.txt", "/tmp/x.txt"),
+            ("file://user@myhost:22/tmp/x.bin", "/tmp/x.bin"),
         ] {
             assert_eq!(disposition_of(raw), reveal(expected), "{raw}");
         }
@@ -559,7 +662,7 @@ mod tests {
     #[test]
     fn automount_paths_are_ignored() {
         for raw in [
-            "file:///net/server/share/x.txt",
+            "file:///net/server/share/x.bin",
             "file:///misc/cd/x",
             "file://localhost/net/server/share",
             "file:///tmp/../net/server/share",
@@ -574,10 +677,10 @@ mod tests {
     /// Siblings merely starting with an automount root reveal; `/home` is a real home root off macOS.
     #[test]
     fn automount_lookalikes_and_homes_still_reveal() {
-        for path in ["/networkx/x.txt", "/nettools/x.txt", "/miscellany/x.txt"] {
+        for path in ["/networkx/x.bin", "/nettools/x.bin", "/miscellany/x.bin"] {
             assert_eq!(disposition_of(&format!("file://{path}")), reveal(path), "{path}");
         }
-        for path in ["/home/someone/x.txt", "/home"] {
+        for path in ["/home/someone/x.bin", "/home"] {
             let expected = if cfg!(target_os = "macos") {
                 LinkDisposition::Ignore
             } else {
@@ -603,7 +706,7 @@ mod tests {
                 "{path}"
             );
         }
-        for path in ["/Networkx/a.txt", "/System/Volumes/Data/homework/a.txt"] {
+        for path in ["/Networkx/a.bin", "/System/Volumes/Data/homework/a.bin"] {
             assert_eq!(disposition_of(&format!("file://{path}")), reveal(path), "{path}");
         }
     }
@@ -617,9 +720,9 @@ mod tests {
         let target = base.path().join("target");
         std::fs::create_dir_all(&target)?;
         // the leaf must exist, else a symlink-resolving regression would return the link's path too
-        std::fs::write(target.join("x.txt"), b"")?;
+        std::fs::write(target.join("x.bin"), b"")?;
         std::os::unix::fs::symlink(&target, base.path().join("link"))?;
-        let leaf = base.path().join("link").join("x.txt");
+        let leaf = base.path().join("link").join("x.bin");
         let raw = format!("file://{}", leaf.display());
         assert_eq!(disposition_of(&raw), LinkDisposition::Reveal(leaf));
         Ok(())
@@ -635,7 +738,7 @@ mod tests {
 
     #[test]
     fn non_local_file_links_are_ignored() {
-        for raw in ["file://otherhost/tmp/x.txt", "file://remote.example.com/share/x.txt"] {
+        for raw in ["file://otherhost/tmp/x.bin", "file://remote.example.com/share/x.bin"] {
             assert_eq!(disposition_of(raw), LinkDisposition::Ignore, "{raw}");
         }
     }
@@ -660,8 +763,8 @@ mod tests {
     #[test]
     fn unc_paths_are_ignored() {
         for raw in [
-            "file:////server/share/x.txt",
-            "file://localhost//server/share/x.txt",
+            "file:////server/share/x.bin",
+            "file://localhost//server/share/x.bin",
             "file://localhost/%2Fserver/share",
         ] {
             assert_eq!(disposition_of(raw), LinkDisposition::Ignore, "{raw}");
@@ -680,7 +783,7 @@ mod tests {
             r"\/server/share/a.txt",
         ] {
             assert!(network_or_device_path(path), "{path}");
-            assert_eq!(local_path(path), LinkDisposition::Ignore, "{path}");
+            assert_eq!(local_path(path, None), LinkDisposition::Ignore, "{path}");
             assert_eq!(disposition_of(path), LinkDisposition::Ignore, "{path}");
         }
         for raw in [
@@ -696,7 +799,11 @@ mod tests {
     fn windows_local_disk_and_verbatim_disk_paths_still_open_documents() {
         for path in [r"C:\local\a.png", r"\\?\C:\local\a.png"] {
             assert!(!network_or_device_path(path), "{path}");
-            assert_eq!(local_path(path), LinkDisposition::Image(PathBuf::from(path)), "{path}");
+            assert_eq!(
+                local_path(path, None),
+                LinkDisposition::Image(PathBuf::from(path)),
+                "{path}"
+            );
         }
     }
 
@@ -726,8 +833,8 @@ mod tests {
     /// The default host set reveals an empty-host or localhost file link.
     #[test]
     fn default_local_hosts_reveal_local_files() {
-        for raw in ["file:///tmp/x.txt", "file://localhost/tmp/x.txt"] {
-            assert_eq!(disposition(raw), reveal("/tmp/x.txt"), "{raw}");
+        for raw in ["file:///tmp/x.bin", "file://localhost/tmp/x.bin"] {
+            assert_eq!(disposition(raw), reveal("/tmp/x.bin"), "{raw}");
         }
     }
 
@@ -865,16 +972,21 @@ mod tests {
         for mode in LinkOpenMode::ALL {
             for origin in origins(Uuid::new_v4()) {
                 assert_eq!(
-                    route_of("file:///tmp/x.txt", *mode, origin),
-                    Route::Reveal(PathBuf::from("/tmp/x.txt"))
+                    route_of("file:///tmp/x.bin", *mode, origin),
+                    Route::Reveal(PathBuf::from("/tmp/x.bin"))
                 );
                 assert_eq!(route_of("x-custom://run", *mode, origin), Route::Ignore);
-                assert_eq!(route_of("file://elsewhere/tmp/x.txt", *mode, origin), Route::Ignore);
+                assert_eq!(route_of("file://elsewhere/tmp/x.bin", *mode, origin), Route::Ignore);
             }
         }
     }
 
-    // wants_browser (the Ctrl/Super+Shift override)
+    // the browser chord (the Ctrl/Super+Shift override)
+
+    /// Whether `click_intent` sends the click to the browser.
+    fn wants_browser(modifiers: KeyModifiers, mode: LinkOpenMode, origin: ClickOrigin, mouse_captured: bool) -> bool {
+        click_intent(modifiers, mode, origin, mouse_captured) == ClickIntent::Browser
+    }
 
     const OVERLAY_MODES: [LinkOpenMode; 4] = [
         LinkOpenMode::Overlay,
@@ -1046,6 +1158,84 @@ mod tests {
             }
             assert_eq!(route_of(&image, *mode, ClickOrigin::RemotePane(session)), Route::Ignore);
         }
+    }
+
+    /// Upstream's `localHtmlPathsOpenAsDocuments`: a bare, `~/` or `file://` path to an `.html` or `.htm` file, in any
+    /// case, is a document, ahead of the text check.
+    #[test]
+    fn local_html_paths_open_as_documents() {
+        let home = crate::html::os_path("/Users/me");
+        for (raw, path) in [
+            (
+                crate::html::os_path("/tmp/agdoc/pr.html"),
+                crate::html::os_path("/tmp/agdoc/pr.html"),
+            ),
+            (
+                crate::html::os_path("/tmp/INDEX.HTM"),
+                crate::html::os_path("/tmp/INDEX.HTM"),
+            ),
+            ("~/page.html".to_owned(), crate::html::os_path("/Users/me/page.html")),
+        ] {
+            assert_eq!(
+                disposition_for_hosts_and_home(&raw, &hosts(), &home),
+                LinkDisposition::Document(PathBuf::from(path)),
+                "{raw}"
+            );
+        }
+        let spaced = PathBuf::from(crate::html::os_path("/tmp/a b.html"));
+        let url = url::Url::from_file_path(&spaced).unwrap();
+        assert!(url.as_str().ends_with("/tmp/a%20b.html"));
+        assert_eq!(disposition_of(url.as_str()), LinkDisposition::Document(spaced));
+    }
+
+    /// Upstream's `documentOpensOnTheOwningSessionAtItsModeSize`, `sessionlessOriginsRevealDocuments` and the remote
+    /// pane's HTML rows: a pane or the scratch terminal shows the file over its session at the mode's size, 95 in
+    /// browser mode; every other origin reveals a `file://` link, and a remote pane ignores a bare path.
+    #[test]
+    fn a_document_opens_on_the_owning_session_at_its_mode_size() {
+        let session = Uuid::new_v4();
+        let path = PathBuf::from(crate::html::os_path("/tmp/pr.html"));
+        let bare = crate::html::os_path("/tmp/pr.html");
+        let file = url::Url::from_file_path(&path).unwrap().to_string();
+        for mode in LinkOpenMode::ALL {
+            let percent = if *mode == LinkOpenMode::Browser {
+                Some(95)
+            } else {
+                mode.overlay_size_percent()
+            };
+            for origin in [ClickOrigin::Pane(session), ClickOrigin::Scratch(session)] {
+                for raw in [&bare, &file] {
+                    assert_eq!(
+                        route_of(raw, *mode, origin),
+                        Route::Document {
+                            path: path.clone(),
+                            session,
+                            size_percent: percent
+                        },
+                        "{raw} {mode:?} {origin:?}"
+                    );
+                }
+            }
+            for origin in [
+                ClickOrigin::Hud,
+                ClickOrigin::ProgramOverlay,
+                ClickOrigin::Quick,
+                ClickOrigin::RemotePane(session),
+            ] {
+                assert_eq!(
+                    route_of(&file, *mode, origin),
+                    Route::Reveal(path.clone()),
+                    "{origin:?}"
+                );
+            }
+            assert_eq!(route_of(&bare, *mode, ClickOrigin::RemotePane(session)), Route::Ignore);
+        }
+        let route = Route::Document {
+            path: path.clone(),
+            session,
+            size_percent: Some(95),
+        };
+        assert_eq!(route.local_file(), Some(path.as_path()));
     }
 
     #[test]

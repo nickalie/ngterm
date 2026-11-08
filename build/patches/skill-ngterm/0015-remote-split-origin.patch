@@ -2,10 +2,10 @@ Viewer splits are created on their origin and attached here, rather than opening
 Applied after 0014-remote-rows-relaunch.patch.
 
 diff --git a/reference.md b/reference.md
-index d4850ee..8458a79 100644
+index 94b6dfb..7c3a832 100644
 --- a/reference.md
 +++ b/reference.md
-@@ -2311,12 +2311,13 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
+@@ -2379,12 +2379,13 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
    `--clear` here reveals the origin's again. Origin expiry clears the mirrored line; a line set on this
    Mac remains until cleared or its own expiry.
 
@@ -24,7 +24,7 @@ index d4850ee..8458a79 100644
    or reconnecting per the attach section above.
  - `presentation.state` in `tree` reports the stream. `connected` means mirroring works; it is not a claim
    about the panes' ssh connections. An origin too old for it reads `unsupported` and the attach still works.
-@@ -2395,11 +2396,14 @@ The pane reports the far side's working directory, and the local launches that w
+@@ -2469,11 +2470,14 @@ The pane reports the far side's working directory, and the local launches that w
  their start directory by one rule: the reported path when it exists here as a directory, else local
  HOME. Those launches are a custom command (its `$AGT_SESSION_PWD` keeps the reported path and
  `$AGT_SESSION_HOST` names the destination), the scratch terminal, an overlay opened without `--cwd`,

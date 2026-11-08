@@ -135,7 +135,8 @@ fn open_refusals_carry_upstreams_strings() {
 
 const BAD_STATUS: &str = "invalid pick item status (idle|active|completed|blocked)";
 const BAD_COLOR: &str = "invalid pick item color (expected #rrggbb)";
-const BAD_SHAPE: &str = "invalid pick item shape (circle|square|triangle|diamond|capsule|star)";
+const BAD_SHAPE: &str =
+    "invalid pick item shape (circle|square|triangle|triangle-down|play|diamond|capsule|seal|star|bolt|bell)";
 
 /// Upstream's `openRejectsAnInvalidItemStatusWithoutCallingHost`: a bad status, color or shape is refused with a
 /// message that never echoes the value, and no picker opens.

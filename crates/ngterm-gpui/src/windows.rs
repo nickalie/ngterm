@@ -390,8 +390,7 @@ impl Windows {
         let config = self.config.as_ref()?;
         config.dark.set(dark);
         let app = AppConfig::load(&ngterm_core::paths::ProcessEnv, config.resources.as_deref(), dark);
-        *config.host.borrow_mut() =
-            crate::session_host::launch_host(&app, config.resources.clone(), &ngterm_core::paths::ProcessEnv);
+        *config.host.borrow_mut() = crate::session_host::launch_host(&app, config.resources.clone());
         self.set_config(&app.terminal(), keep_zoom, cx);
         Some(app.diagnostics)
     }

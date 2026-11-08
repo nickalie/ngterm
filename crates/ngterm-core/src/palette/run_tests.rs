@@ -46,7 +46,7 @@ fn a_move_row_transfers_its_session_to_the_chosen_workspace() {
     let source = store.current_workspace_id().unwrap();
     let destination = store.add_workspace("destination");
     core.open_palette(window, PaletteMode::Sessions);
-    let action = PaletteAction::MoveSession(destination);
+    let action = PaletteAction::MoveSession { workspace: destination };
     assert_eq!(core.run_palette_entry(window, &action), Some(ActionEffect::Done));
     let store = core.library().store(window).unwrap();
     assert!(store.workspace(source).unwrap().sessions.is_empty());
@@ -81,7 +81,7 @@ fn a_covered_window_refuses_dynamic_rows_without_moving_the_session() {
         }),
     });
     assert!(response.ok, "{response:?}");
-    core.run_palette_entry(window, &PaletteAction::MoveSession(destination));
+    core.run_palette_entry(window, &PaletteAction::MoveSession { workspace: destination });
     assert_eq!(
         core.library()
             .store(window)

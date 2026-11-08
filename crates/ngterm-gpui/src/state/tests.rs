@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use ngterm_core::PaneRole;
 use ngterm_core::events::{EventCursor, ReadOptions};
+use ngterm_core::link_policy::{ClickIntent, ClickOrigin};
 use ngterm_core::model::{NewSession, WindowLibrary};
 use ngterm_core::persist::{LibraryPersistence, SAVE_DEBOUNCE};
 use ngterm_core::{CoreConfig, CoreState};
@@ -1019,15 +1020,33 @@ fn a_notify_lands_its_banner_and_its_sound_with_the_frontend() {
     assert_eq!(state.take_frontend_work(), FrontendWork::default(), "landed once");
 }
 
+/// Runs the link lookups and document reads a click started, then the tasks they posted.
+fn finish_links(state: &mut AppState, main_loop: &RecordingLoop<AppState>) {
+    // a found location's document read posts after the lookup's task runs
+    for _ in 0..3 {
+        state.join_link_work();
+        for (_, task) in main_loop.take() {
+            task(state);
+        }
+    }
+}
+
+/// A pane click on `raw` with no chord, its lookups finished.
+fn click(state: &mut AppState, main_loop: &RecordingLoop<AppState>, raw: &str, session: Uuid, token: &str) {
+    state.follow_pane_link(raw, session, token, ClickIntent::Normal, crate::terminal::LinkKind::Url);
+    finish_links(state, main_loop);
+}
+
 #[test]
 fn pane_relative_links_use_their_own_reported_local_directory() {
     let (mut state, _, session) = state_with_terminal();
+    let (main_loop, _held) = record(&mut state);
     let directory = tempfile::tempdir().unwrap();
     // Windows does not allow `?` in a filename; its other literal path characters are still exercised.
     let name = if cfg!(windows) {
-        "name%20# with spaces.txt"
+        "name%20# with spaces.bin"
     } else {
-        "name%20?# with spaces.txt"
+        "name%20?# with spaces.bin"
     };
     let path = directory.path().join(name);
     std::fs::write(&path, "local file").unwrap();
@@ -1036,15 +1055,9 @@ fn pane_relative_links_use_their_own_reported_local_directory() {
         "T",
         &PaneReport::Pwd(directory.path().to_string_lossy().into_owned()),
     );
-    state.follow_pane_link(
-        &format!("./{name}"),
-        session,
-        "T",
-        false,
-        crate::terminal::LinkKind::Url,
-    );
+    click(&mut state, &main_loop, &format!("./{name}"), session, "T");
     assert_eq!(state.frontend.reveals, vec![path]);
-    state.follow_pane_link("./stale.txt", session, "gone", false, crate::terminal::LinkKind::Url);
+    click(&mut state, &main_loop, "./stale.bin", session, "gone");
     assert_eq!(state.frontend.reveals.len(), 1, "a replaced pane cannot route a link");
 }
 
@@ -1066,29 +1079,24 @@ fn remote_primary_paths_stay_remote_while_scratch_paths_stay_local() {
     found.surface.replace(Box::new(FakeSurface::new("R")));
     found.scratch_surface.replace(Box::new(FakeSurface::new("S")));
     let mut state = AppState::new(core(library, None));
+    let (main_loop, _held) = record(&mut state);
     let remote_path = std::env::temp_dir().join("remote-origin").join("a.png");
-    state.follow_pane_link(
-        &remote_path.to_string_lossy(),
-        session,
-        "R",
-        false,
-        crate::terminal::LinkKind::Url,
-    );
-    state.follow_pane_link("relative.txt", session, "R", false, crate::terminal::LinkKind::Url);
+    click(&mut state, &main_loop, &remote_path.to_string_lossy(), session, "R");
+    click(&mut state, &main_loop, "relative.bin", session, "R");
     assert!(state.frontend.reveals.is_empty());
     let local = std::env::temp_dir().join("remote.png");
     let file_url = url::Url::from_file_path(&local).unwrap();
-    state.follow_pane_link(file_url.as_str(), session, "R", false, crate::terminal::LinkKind::Url);
+    click(&mut state, &main_loop, file_url.as_str(), session, "R");
     assert_eq!(state.frontend.reveals, vec![local]);
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("local.txt");
+    let path = directory.path().join("local.bin");
     std::fs::write(&path, "scratch file").unwrap();
     state.report_pane(
         session,
         "S",
         &PaneReport::Pwd(directory.path().to_string_lossy().into_owned()),
     );
-    state.follow_pane_link("./local.txt", session, "S", false, crate::terminal::LinkKind::Url);
+    click(&mut state, &main_loop, "./local.bin", session, "S");
     assert_eq!(state.frontend.reveals.last(), Some(&path));
     let _ = state
         .core
@@ -1106,8 +1114,9 @@ fn remote_primary_paths_stay_remote_while_scratch_paths_stay_local() {
 #[test]
 fn only_detected_existing_relative_links_with_an_osc7_directory_resolve() {
     let (mut state, _, session) = state_with_terminal();
+    let (main_loop, _held) = record(&mut state);
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("notes.txt");
+    let path = directory.path().join("notes.bin");
     std::fs::write(&path, "notes").unwrap();
     state
         .core
@@ -1118,7 +1127,7 @@ fn only_detected_existing_relative_links_with_an_osc7_directory_resolve() {
         .unwrap()
         .set_current_cwd(&directory.path().to_string_lossy());
     // Even an existing model cwd is not an OSC 7 report and cannot authorize relative resolution.
-    state.follow_pane_link("notes.txt", session, "T", false, crate::terminal::LinkKind::Url);
+    click(&mut state, &main_loop, "notes.bin", session, "T");
     assert!(state.frontend.reveals.is_empty());
     state.report_pane(
         session,
@@ -1126,26 +1135,44 @@ fn only_detected_existing_relative_links_with_an_osc7_directory_resolve() {
         &PaneReport::Pwd(directory.path().to_string_lossy().into_owned()),
     );
     // OSC 8 links stay literal, even when their relative spelling names an existing local file.
-    state.follow_pane_link("notes.txt", session, "T", false, crate::terminal::LinkKind::Osc8);
-    state.follow_pane_link("missing.txt", session, "T", false, crate::terminal::LinkKind::Url);
+    state.follow_pane_link(
+        "notes.bin",
+        session,
+        "T",
+        ClickIntent::Normal,
+        crate::terminal::LinkKind::Osc8,
+    );
+    finish_links(&mut state, &main_loop);
+    click(&mut state, &main_loop, "missing.bin", session, "T");
     assert!(state.frontend.reveals.is_empty());
-    state.follow_pane_link("notes.txt", session, "T", false, crate::terminal::LinkKind::Url);
+    click(&mut state, &main_loop, "notes.bin", session, "T");
     assert_eq!(state.frontend.reveals, [path]);
 }
 
 #[test]
-fn detected_relative_resolution_refuses_network_and_automount_targets_before_existence_checks() {
+fn relative_lookups_refuse_network_and_automount_targets_before_existence_checks() {
+    let session = Uuid::new_v4();
     for cwd in ["/net/server", "/misc/share"] {
-        assert_eq!(detected_relative_path("notes.md", cwd), None);
+        assert!(ngterm_core::link_policy::locations("notes.md", ClickOrigin::Pane(session), Some(cwd)).is_empty());
     }
-    for raw in [
-        r"\\server\share\notes.md",
-        r"\\?\UNC\server\share\notes.md",
-        "/\\server/share/notes.md",
-    ] {
-        assert_eq!(
-            detected_relative_path(raw, &std::env::temp_dir().to_string_lossy()),
-            None
+    // a Windows share or device path is refused before the directory is joined; on Unix a backslash is a name's. Each
+    // carries a `:line`, which makes an allowed absolute path a candidate, so only the guard can empty the result.
+    let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+    let local = if cfg!(windows) { r"C:\notes.md:3" } else { "/notes.md:3" };
+    assert!(!ngterm_core::link_policy::locations(local, ClickOrigin::Pane(session), Some(&cwd)).is_empty());
+    let refused: &[&str] = if cfg!(windows) {
+        &[
+            r"\\server\share\notes.md:3",
+            r"\\?\UNC\server\share\notes.md:3",
+            "/\\server/share/notes.md:3",
+        ]
+    } else {
+        &["/\\server/share/notes.md:3", "//server/share/notes.md:3"]
+    };
+    for raw in refused {
+        assert!(
+            ngterm_core::link_policy::locations(raw, ClickOrigin::Pane(session), Some(&cwd)).is_empty(),
+            "{raw}"
         );
     }
 }
@@ -1392,15 +1419,23 @@ fn builtin_frontend_actions_keep_their_window_and_soft_close_setting() {
 fn malformed_or_unavailable_links_leave_only_allowed_desktop_work() {
     let (mut state, _, session) = state_with_terminal();
     for raw in ["", "javascript:alert(1)", "https://example.com/\n"] {
-        state.follow_link(raw, ClickOrigin::Pane(session), false);
+        state.follow_link(raw, ClickOrigin::Pane(session), ClickIntent::Normal);
     }
     assert!(state.take_frontend_work().open_urls.is_empty());
-    state.follow_link("https://example.com/docs", ClickOrigin::Pane(Uuid::new_v4()), false);
+    state.follow_link(
+        "https://example.com/docs",
+        ClickOrigin::Pane(Uuid::new_v4()),
+        ClickIntent::Normal,
+    );
     assert_eq!(state.take_frontend_work().open_urls, ["https://example.com/docs"]);
-    state.follow_link("https://example.com/browser", ClickOrigin::Pane(session), true);
+    state.follow_link(
+        "https://example.com/browser",
+        ClickOrigin::Pane(session),
+        ClickIntent::Browser,
+    );
     assert_eq!(state.take_frontend_work().open_urls, ["https://example.com/browser"]);
     let path = std::env::temp_dir().join("missing-document.md");
-    state.open_document_link(path.clone(), Uuid::new_v4(), None, false);
+    state.open_document_link(path.clone(), Uuid::new_v4(), None, links::Document::Markdown);
     assert_eq!(state.take_frontend_work().reveals, [path]);
 }
 
@@ -2075,7 +2110,16 @@ fn document_probes_open_supported_documents_and_reveal_failed_probes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(name);
         std::fs::write(&path, bytes).unwrap();
-        state.open_document_link(path.clone(), session, Some(60), image);
+        state.open_document_link(
+            path.clone(),
+            session,
+            Some(60),
+            if image {
+                links::Document::Image
+            } else {
+                links::Document::Markdown
+            },
+        );
         run_until(&mut state, &main_loop, |state| {
             !state.frontend.reveals.is_empty()
                 || state
@@ -2099,15 +2143,21 @@ fn document_probes_open_supported_documents_and_reveal_failed_probes() {
 fn web_links_open_overlays_and_quit_discards_an_inflight_document_probe() {
     let (mut state, _, session) = state_with_terminal();
     state.core.set_html_host(Box::new(HtmlEngine));
-    state.follow_link("https://example.com", ClickOrigin::Pane(session), false);
+    state.follow_link("https://example.com", ClickOrigin::Pane(session), ClickIntent::Normal);
     // Browser is the default.
     assert_eq!(state.take_frontend_work().open_urls, ["https://example.com"]);
     state
         .core
         .change_settings(ngterm_core::settings_model::SettingsChange::General(
-            ngterm_core::settings_model::GeneralChange::LinkOpenMode(LinkOpenMode::Overlay),
+            ngterm_core::settings_model::GeneralChange::LinkOpenMode(
+                ngterm_core::persist::settings::LinkOpenMode::Overlay,
+            ),
         ));
-    state.follow_link("https://example.com/overlay", ClickOrigin::Pane(session), false);
+    state.follow_link(
+        "https://example.com/overlay",
+        ClickOrigin::Pane(session),
+        ClickIntent::Normal,
+    );
     assert!(
         state
             .core
@@ -2123,7 +2173,7 @@ fn web_links_open_overlays_and_quit_discards_an_inflight_document_probe() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("notes.md");
     std::fs::write(&path, "# Notes").unwrap();
-    state.open_document_link(path, session, None, false);
+    state.open_document_link(path, session, None, links::Document::Markdown);
     state.save_on_quit();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -2519,4 +2569,344 @@ fn hud_frame_reports_update_the_live_hud_but_quit_keeps_the_last_geometry() {
     };
     state.report_hud_frames(session, &changed);
     assert_eq!(state.core.library().held_session(session).unwrap().hud_frames, frames);
+}
+
+/// A text page the tests open: `main.go` in a fresh directory the pane reports as its own.
+fn text_fixture() -> (AppState, Recorded, Uuid, tempfile::TempDir) {
+    let (mut state, _, session) = state_with_terminal();
+    let recorded = record(&mut state);
+    state.core.set_html_host(Box::new(TextHost));
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("main.go"), "package main\n\nfunc main() {}\n").unwrap();
+    state.report_pane(
+        session,
+        "T",
+        &PaneReport::Pwd(directory.path().to_string_lossy().into_owned()),
+    );
+    (state, recorded, session, directory)
+}
+
+/// A page host that takes every page.
+struct TextHost;
+
+impl ngterm_core::html::HtmlHost for TextHost {
+    fn persistent_store_failure(&self) -> Option<String> {
+        None
+    }
+    fn navigate(&self, _: Uuid, _: ngterm_core::html::HtmlNavigation) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// The text page open over `session`, as the tree reads it back.
+fn text_page(state: &AppState, session: Uuid) -> Option<(String, Option<i64>)> {
+    let found = state.core.library().store_for_session(session)?.session(session)?;
+    found
+        .html_overlays()
+        .into_iter()
+        .find_map(|(_, page)| match &page.source {
+            ngterm_core::html::HtmlSource::Text { path, line } => Some((path.clone(), *line)),
+            _ => None,
+        })
+}
+
+// regression (upstream #874): `./main.go:42:7` read as a URL scheme and was ignored
+#[test]
+fn a_relative_location_opens_its_file_as_a_text_page_at_the_line() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    click(&mut state, &main_loop, "./main.go:2:7", session, "T");
+    let file = directory.path().join("main.go").to_string_lossy().into_owned();
+    assert_eq!(text_page(&state, session), Some((file, Some(2))));
+    assert!(state.frontend.reveals.is_empty());
+}
+
+#[test]
+fn a_literal_colon_named_file_wins_over_the_line_suffix() {
+    if cfg!(windows) {
+        // Windows does not allow `:` in a file name
+        return;
+    }
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let literal = directory.path().join("main.go:2");
+    std::fs::write(&literal, "named with a colon").unwrap();
+    click(&mut state, &main_loop, "./main.go:2", session, "T");
+    // `main.go:2` is no text page's name, so the literal file is revealed rather than `main.go` opened at line 2
+    assert_eq!(state.frontend.reveals, [literal]);
+    assert_eq!(text_page(&state, session), None);
+}
+
+#[test]
+fn a_missing_location_keeps_the_route_it_had_as_typed() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let absent = directory.path().join("absent.go:3");
+    click(&mut state, &main_loop, &absent.to_string_lossy(), session, "T");
+    // as typed, `absent.go:3` is no text page: it is revealed, as before
+    assert_eq!(state.frontend.reveals, [absent]);
+    click(&mut state, &main_loop, "./gone.go:3", session, "T");
+    assert_eq!(
+        state.frontend.reveals.len(),
+        1,
+        "a relative link with nothing on disk is ignored"
+    );
+    assert_eq!(text_page(&state, session), None);
+}
+
+/// The Markdown page open over `session`, by its file.
+fn markdown_page(state: &AppState, session: Uuid) -> Option<String> {
+    let found = state.core.library().store_for_session(session)?.session(session)?;
+    found
+        .html_overlays()
+        .into_iter()
+        .find_map(|(_, page)| match &page.source {
+            ngterm_core::html::HtmlSource::Markdown { path } => Some(path.clone()),
+            _ => None,
+        })
+}
+
+// regression (upstream #881): a path printed at the end of a sentence kept the period and never opened
+#[test]
+fn a_markdown_path_ending_a_sentence_opens_the_file_without_the_period() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let file = directory.path().join("review.md");
+    std::fs::write(&file, "# Review\n").unwrap();
+    let file = file.to_string_lossy().into_owned();
+    let raw = format!("{file}.");
+    // the worker stats the literal spelling, then the one without the period (on Windows, which drops a name's
+    // trailing dots on open, only the latter)
+    let spellings: Vec<String> = ngterm_core::link_policy::locations(&raw, ClickOrigin::Pane(session), None)
+        .into_iter()
+        .map(|location| location.path)
+        .collect();
+    let expected = if cfg!(windows) {
+        vec![file.clone()]
+    } else {
+        vec![raw.clone(), file.clone()]
+    };
+    assert_eq!(spellings, expected);
+    click(&mut state, &main_loop, &raw, session, "T");
+    assert_eq!(markdown_page(&state, session), Some(file));
+    assert!(state.frontend.reveals.is_empty());
+
+    let gone = directory.path().join("gone.md.");
+    click(&mut state, &main_loop, &gone.to_string_lossy(), session, "T");
+    assert_eq!(
+        state.frontend.reveals,
+        [gone],
+        "no spelling on disk keeps the typed route"
+    );
+}
+
+/// The clicked HTML page open over `session`, by its file, with whether its page JavaScript is on.
+fn document_page(state: &AppState, session: Uuid) -> Option<(String, bool)> {
+    let found = state.core.library().store_for_session(session)?.session(session)?;
+    found
+        .html_overlays()
+        .into_iter()
+        .find_map(|(_, page)| match &page.source {
+            ngterm_core::html::HtmlSource::Document { path } => Some((path.clone(), page.flags.javascript)),
+            _ => None,
+        })
+}
+
+/// Upstream's `testAClickedHtmlFileOpensAsADocumentAndAnUnreadableOneOpensNothing` and
+/// `testAPaneHtmlPathOpensAtItsModeSizeAndRevealsWhenItCannot`: a missing or binary HTML file opens nothing and is
+/// revealed; a readable one opens as a document page with its scripts off.
+#[test]
+fn a_clicked_html_file_opens_as_a_document_and_an_unreadable_one_is_revealed() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let missing = directory.path().join("missing.html");
+    click(&mut state, &main_loop, &missing.to_string_lossy(), session, "T");
+    let binary = directory.path().join("blob.html");
+    std::fs::write(&binary, [0x3C, 0x00]).unwrap();
+    click(&mut state, &main_loop, &binary.to_string_lossy(), session, "T");
+    assert_eq!(state.frontend.reveals, [missing, binary]);
+    assert_eq!(document_page(&state, session), None);
+
+    let page = directory.path().join("pr.html");
+    std::fs::write(&page, "<title>pr</title><script>document.title = 'ran'</script>").unwrap();
+    click(&mut state, &main_loop, "./pr.html", session, "T");
+    let file = page.to_string_lossy().into_owned();
+    assert_eq!(document_page(&state, session), Some((file, false)));
+    assert_eq!(state.frontend.reveals.len(), 2);
+}
+
+#[test]
+fn the_reveal_chord_reveals_and_never_opens() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    state.follow_pane_link(
+        "./main.go:2",
+        session,
+        "T",
+        ClickIntent::Reveal,
+        crate::terminal::LinkKind::Url,
+    );
+    finish_links(&mut state, &main_loop);
+    assert_eq!(state.frontend.reveals, [directory.path().join("main.go")]);
+    assert_eq!(text_page(&state, session), None);
+    // a web link keeps its web route
+    state.follow_link("https://example.com/", ClickOrigin::Hud, ClickIntent::Reveal);
+    assert_eq!(state.frontend.open_urls, ["https://example.com/"]);
+    // and a HUD's local file is revealed, as every origin's is
+    let file = directory.path().join("main.go");
+    state.follow_link(&file.to_string_lossy(), ClickOrigin::Hud, ClickIntent::Reveal);
+    finish_links(&mut state, &main_loop);
+    assert_eq!(state.frontend.reveals.last(), Some(&file));
+}
+
+#[test]
+fn a_binary_text_file_is_revealed_instead_of_opened() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let binary = directory.path().join("blob.log");
+    std::fs::write(&binary, b"a\0b").unwrap();
+    click(&mut state, &main_loop, "./blob.log", session, "T");
+    assert_eq!(state.frontend.reveals, [binary]);
+    assert_eq!(text_page(&state, session), None);
+}
+
+/// The log request of the page open over `session`.
+fn text_log(state: &AppState, session: Uuid) -> Option<ngterm_core::html::text_page::TextLog> {
+    let found = state.core.library().store_for_session(session)?.session(session)?;
+    found.overlay.page()?.text_log
+}
+
+/// Upstream's `testAClickedLog*`: a plain click on a log opens a log page following its file at the default tail, read
+/// only for its tail (a log over the whole-file cap opens); a `path:line` click opens the static page at its line.
+#[test]
+fn a_clicked_log_follows_its_file_and_a_located_one_opens_at_its_line() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let log = directory.path().join("App.LOG");
+    let line = "x".repeat(1023);
+    std::fs::write(&log, format!("{line}\n").repeat(5 << 10)).unwrap();
+    click(&mut state, &main_loop, "./App.LOG", session, "T");
+    let file = log.to_string_lossy().into_owned();
+    assert_eq!(text_page(&state, session), Some((file.clone(), None)));
+    assert_eq!(
+        text_log(&state, session),
+        Some(ngterm_core::html::text_page::TextLog {
+            tail: ngterm_core::html::text_page::DEFAULT_TAIL,
+            follow: true
+        })
+    );
+    assert!(state.frontend.reveals.is_empty());
+    let store = state.core.library_mut().store_for_session_mut(session).unwrap();
+    assert!(store.close_overlay(session));
+    std::fs::write(&log, "one\ntwo\n").unwrap();
+    click(&mut state, &main_loop, "./App.LOG:2", session, "T");
+    assert_eq!(text_page(&state, session), Some((file, Some(2))));
+    assert_eq!(text_log(&state, session), None);
+}
+
+#[test]
+fn shell_metacharacters_in_the_directory_stay_data() {
+    if cfg!(windows) {
+        // Windows does not allow `|`, `<` or `>` in a file name
+        return;
+    }
+    let (mut state, (main_loop, _held), session, _directory) = text_fixture();
+    let directory = tempfile::tempdir().unwrap();
+    let odd = directory.path().join("$(touch pwned); `id` | <x>");
+    std::fs::create_dir(&odd).unwrap();
+    std::fs::write(odd.join("main.go"), "package main\n").unwrap();
+    state.report_pane(session, "T", &PaneReport::Pwd(odd.to_string_lossy().into_owned()));
+    click(&mut state, &main_loop, "./main.go:1", session, "T");
+    let file = odd.join("main.go").to_string_lossy().into_owned();
+    assert_eq!(text_page(&state, session), Some((file, Some(1))));
+    assert!(!directory.path().join("pwned").exists());
+}
+
+/// The page in `session`'s session-wide slot, with whether a click opened it and whether its slot is hidden.
+fn session_page(state: &AppState, session: Uuid) -> Option<(ngterm_core::html::HtmlSource, bool, bool)> {
+    let found = state.core.library().store_for_session(session)?.session(session)?;
+    let page = found.overlay.page()?;
+    Some((page.source.clone(), page.clicked, found.overlay_hidden(None)))
+}
+
+/// What the Hide key does to the session-wide page.
+fn hide_session_page(state: &mut AppState, session: Uuid) {
+    state
+        .core
+        .library_mut()
+        .store_for_session_mut(session)
+        .unwrap()
+        .set_overlays_hidden(session, None, true)
+        .unwrap();
+}
+
+/// Upstream's `testEachClickedFileKindReplacesAHiddenClickedPage`, the clicked HTML document beside them: each click
+/// replaces the hidden page the click before it opened and shows its own.
+#[test]
+fn each_clicked_file_kind_replaces_a_hidden_clicked_page() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    let dir = directory.path();
+    std::fs::write(dir.join("doc.md"), "# Doc\n").unwrap();
+    std::fs::write(dir.join("pr.html"), "<title>pr</title>").unwrap();
+    image::RgbaImage::from_pixel(4, 2, image::Rgba([200, 40, 40, 255]))
+        .save(dir.join("shot.png"))
+        .unwrap();
+    let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    click(&mut state, &main_loop, "./doc.md", session, "T");
+    let opened = session_page(&state, session).unwrap();
+    assert_eq!((opened.1, opened.2), (true, false), "a click marks its page");
+    let kinds = [
+        (
+            "./main.go:3",
+            ngterm_core::html::HtmlSource::Text {
+                path: path("main.go"),
+                line: Some(3),
+            },
+        ),
+        (
+            "./shot.png",
+            ngterm_core::html::HtmlSource::Image { path: path("shot.png") },
+        ),
+        (
+            "./pr.html",
+            ngterm_core::html::HtmlSource::Document { path: path("pr.html") },
+        ),
+        (
+            "./doc.md",
+            ngterm_core::html::HtmlSource::Markdown { path: path("doc.md") },
+        ),
+    ];
+    for (raw, source) in kinds {
+        hide_session_page(&mut state, session);
+        click(&mut state, &main_loop, raw, session, "T");
+        assert_eq!(session_page(&state, session), Some((source, true, false)), "{raw}");
+    }
+    assert!(state.frontend.reveals.is_empty());
+}
+
+/// Upstream's `testAClickedFileThatCannotOpenLeavesTheHiddenClickedPage`: a missing or binary file is revealed, and the
+/// hidden page stays hidden in its slot.
+#[test]
+fn a_clicked_file_that_cannot_open_leaves_the_hidden_clicked_page() {
+    let (mut state, (main_loop, _held), session, directory) = text_fixture();
+    click(&mut state, &main_loop, "./main.go", session, "T");
+    let kept = state
+        .core
+        .library()
+        .store_for_session(session)
+        .unwrap()
+        .session(session)
+        .unwrap()
+        .overlay
+        .page()
+        .unwrap()
+        .id;
+    hide_session_page(&mut state, session);
+    let missing = directory.path().join("missing.md");
+    click(&mut state, &main_loop, &missing.to_string_lossy(), session, "T");
+    let binary = directory.path().join("blob.txt");
+    std::fs::write(&binary, [0x00, 0x01]).unwrap();
+    click(&mut state, &main_loop, "./blob.txt", session, "T");
+    assert_eq!(state.frontend.reveals, [missing, binary]);
+    let found = state
+        .core
+        .library()
+        .store_for_session(session)
+        .unwrap()
+        .session(session)
+        .unwrap();
+    assert_eq!(found.overlay.page().map(|page| page.id), Some(kept));
+    assert!(found.overlay_hidden(None));
 }

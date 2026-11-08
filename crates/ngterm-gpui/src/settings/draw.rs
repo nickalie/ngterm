@@ -184,8 +184,9 @@ fn glyph(name: IconName, ink: Hsla, size: Pixels) -> impl IntoElement {
 /// The shown page, scrolling.
 fn page(view: &SettingsView, look: &Look) -> Stateful<Div> {
     let sections = view.sections();
-    // The Interface grid adds a fourth Sidebar pair. Keep its controls and Size visible in the fixed panel.
-    let (padding, gap) = if view.tab() == Tab::Interface {
+    // The Interface grid adds a fourth Sidebar pair, and Appearance holds the most rows: keep their last controls visible
+    // in the fixed panel.
+    let (padding, gap) = if matches!(view.tab(), Tab::Interface | Tab::Appearance) {
         (8., 10.)
     } else {
         (16., 18.)
@@ -218,24 +219,10 @@ fn render_section(section: Section, view: &SettingsView, look: &Look) -> AnyElem
         fill,
     } = section;
     let rows: Vec<AnyElement> = if columns > 1 {
-        let mut rows = paired(items, fill, view, look);
-        for item in trailing {
-            let line = !rows.is_empty();
-            rows.push(separated(line, row(item, view, look), look));
-        }
-        rows
+        let rows = paired(items, fill, view, look);
+        singles(trailing, rows, view, look)
     } else {
-        items
-            .into_iter()
-            .enumerate()
-            .map(|(index, item)| {
-                separated(
-                    index > 0 && !matches!(item.control, Control::Hint),
-                    row(item, view, look),
-                    look,
-                )
-            })
-            .collect()
+        singles(items, Vec::new(), view, look)
     };
     div()
         .flex()
@@ -263,6 +250,15 @@ fn separated(line: bool, row: AnyElement, look: &Look) -> AnyElement {
         .when(line, |row| row.border_t_1().border_color(look.ink(0.08)))
         .child(row)
         .into_any_element()
+}
+
+/// `items` one per row after `rows`, a hairline above each but a caption and the box's first row.
+fn singles(items: Vec<Item>, mut rows: Vec<AnyElement>, view: &SettingsView, look: &Look) -> Vec<AnyElement> {
+    for item in items {
+        let line = !rows.is_empty() && !matches!(item.control, Control::Hint);
+        rows.push(separated(line, row(item, view, look), look));
+    }
+    rows
 }
 
 /// Two controls per row around a divider; an odd last item pairs with the optional fill (upstream's `twoColumnSection`).
@@ -299,9 +295,11 @@ fn row(item: Item, view: &SettingsView, look: &Look) -> AnyElement {
         enabled,
         leading,
     } = item;
+    // a picker's shown value gives way before its label does: in a paired half a long font or theme name truncates
+    let picker = matches!(control, Control::Picker(_));
     let label = div()
-        .flex_1()
-        .min_w(px(0.))
+        .when(picker, gpui_kit::Styled::flex_none)
+        .when(!picker, |label| label.flex_1().min_w(px(0.)))
         .when(!enabled, |label| label.text_color(look.ink(DIM)))
         .when_some(leading, |label, slot| {
             label
@@ -323,7 +321,13 @@ fn row(item: Item, view: &SettingsView, look: &Look) -> AnyElement {
         }
         Control::Button(action) => return frame(div().child(push_button(action, look))),
         Control::Toggle { on, set } => toggle(&id, &title, on, enabled, set, look).into_any_element(),
-        Control::Picker(picker) => picker_button(&id, &title, picker, look).into_any_element(),
+        Control::Picker(picker) => div()
+            .flex_1()
+            .min_w(px(0.))
+            .flex()
+            .justify_end()
+            .child(picker_button(&id, &title, picker, look))
+            .into_any_element(),
         Control::Stepper { value, range, set } => stepper((&id, &title), value, &range, enabled, &set, look),
         Control::Slider { key, value, readout } => slider(view, (key, value), &title, readout, enabled, look),
         Control::Glyph { status, shape, .. } => glyph_controls(view, status, &id, shape, look),
@@ -427,6 +431,10 @@ fn picker_button(id: &str, title: &str, picker: Picker, look: &Look) -> Button {
     let face = match picker.shapes {
         Some(tint) => shape_face(&picker, tint).into_any_element(),
         None => div()
+            .min_w(px(0.))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
             .text_color(ink)
             .child(picker.label().to_owned())
             .into_any_element(),
@@ -436,6 +444,7 @@ fn picker_button(id: &str, title: &str, picker: Picker, look: &Look) -> Button {
         // a picker of one value from a list: upstream's popup button
         .role(Role::ComboBox)
         .aria_label(SharedString::from(title.to_owned()))
+        .min_w(px(0.))
         .h(px(24.))
         .px(px(8.))
         .rounded(px(6.))

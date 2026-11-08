@@ -3,8 +3,10 @@
 //!
 //! After `session.overlay.page.serve` admits the helper's claim, its connection carries newline-delimited JSON frames
 //! that multiplex the page's resource transfers and its bridge calls by request id. A resource is read here off the
-//! main loop, from the page's own file or from inside its grant, in chunks of at most [`MAX_CHUNK_BYTES`]; a bridge
-//! request runs here against the page's place at that moment, as a local page's request would. The helper's
+//! main loop, from a file page's own file or from inside its grant, or for an image, Markdown, text or document page
+//! the files its kind may read under its kind's cap ([`content`]), in chunks of at most [`MAX_CHUNK_BYTES`]; a file
+//! page's bridge request runs here against the page's place at that moment, as a local page's request would, and a
+//! content page has no bridge. The helper's
 //! connection closing parks the page for the next presenter (an extension beyond upstream, which ends it), and sending
 //! what a helper never sends ends the page; either way the presenter stays.
 //!
@@ -16,7 +18,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -57,6 +59,14 @@ pub const CANCELLED: &str = "cancelled";
 pub const CONTROL_UNAVAILABLE: &str = "control is unavailable";
 const OUTSIDE_FOLDER: &str = "file is outside the page's folder";
 const UNREADABLE: &str = "file cannot be read";
+/// A content page's file over its kind's cap (upstream's `contentBody`).
+const TOO_LARGE: &str = "file is too large for the page";
+/// A content page's picture whose bytes carry no picture signature.
+const NOT_A_PICTURE: &str = "not a png, jpg, gif or webp image";
+/// A content page runs no control request.
+const NO_BRIDGE: &str = "this page has no bridge";
+/// What a content page's text files are served as.
+const TEXT_MIME: &str = "text/plain; charset=utf-8";
 const PAGE_CLOSED: &str = "page closed";
 /// A URL page companion loads on the other machine with no file of this one's, and its bridge is not served.
 const URL_NO_BRIDGE: &str = "a URL page has no bridge";
@@ -258,55 +268,68 @@ pub fn resolve(requested: &str, source: &HtmlSource) -> Option<PathBuf> {
         return None;
     }
     let named = Path::new(grant_root.as_deref().unwrap_or(path));
-    let real_named = real(named);
-    let requested_volume = html::volume(requested);
-    if requested_volume != html::volume(named) && requested_volume != html::volume(&real_named) {
+    if !same_volume(requested, named) {
         return None;
     }
-    let file = real(requested);
+    let real_named = html::real_path(named);
+    let file = html::real_path(requested);
     match grant_root {
         None => (file == real_named).then_some(file),
         Some(_) => html::strictly_inside(&file, &real_named).then_some(file),
     }
 }
 
-/// `path` standardized (`.` dropped, `..` taking the previous name off, as Foundation's `standardizedFileURL`), then
-/// with the symlinks of its longest existing ancestor resolved, as `resolvingSymlinksInPath` leaves a path that does
-/// not exist yet. Both sides of [`resolve`]'s comparison go through it, so a Windows path's `\\?\` prefix, which
-/// `canonicalize` adds, is on both or neither.
-fn real(path: &Path) -> PathBuf {
-    let standard = standardized(path);
-    let mut existing = standard.as_path();
-    let mut missing = Vec::new();
-    loop {
-        if let Ok(mut resolved) = std::fs::canonicalize(existing) {
-            resolved.extend(missing.iter().rev());
-            return resolved;
-        }
-        match (existing.parent(), existing.file_name()) {
-            (Some(parent), Some(name)) => {
-                missing.push(name.to_owned());
-                existing = parent;
-            }
-            _ => return standard,
-        }
-    }
+/// One file a content page may read (upstream's `RemotePageResources.ContentResource`): the file on this machine, the
+/// cap it is read under, and whether its bytes must carry a picture signature before any of them is sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentResource {
+    pub path: PathBuf,
+    pub max_bytes: usize,
+    pub picture: bool,
 }
 
-fn standardized(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => out.push(component),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
-                    out.pop();
-                }
-            }
-        }
+/// The file a content page's channel may serve for `requested`, `None` when it may not (upstream's
+/// `RemotePageResources.content`): an image, text or document page reads only its own file; a Markdown page its own file
+/// and the pictures inside its folder, symlinks resolved on this machine, served only as pictures whatever their names.
+/// A file or URL page is never served through here ([`resolve`] serves a file page), and a request on another volume is
+/// refused before the file system is asked, as there.
+#[must_use]
+pub fn content(requested: &str, source: &HtmlSource) -> Option<ContentResource> {
+    let requested = Path::new(requested);
+    let (own, max_bytes, picture) = match source {
+        HtmlSource::Image { path } => (path, html::image_page::MAX_BYTES, true),
+        HtmlSource::Text { path, .. } => (path, html::text_page::MAX_BYTES, false),
+        HtmlSource::Document { path } => (path, html::document_page::MAX_BYTES, false),
+        HtmlSource::Markdown { path } => (path, html::markdown_page::MAX_BYTES, false),
+        HtmlSource::File { .. } | HtmlSource::Url(_) | HtmlSource::Replica { .. } => return None,
+    };
+    let own = Path::new(own);
+    if !requested.is_absolute() || !same_volume(requested, own) {
+        return None;
     }
-    out
+    let file = html::real_path(requested);
+    if file == html::real_path(own) {
+        return Some(ContentResource {
+            path: file,
+            max_bytes,
+            picture,
+        });
+    }
+    let HtmlSource::Markdown { .. } = source else {
+        return None;
+    };
+    let folder = own.parent()?;
+    html::markdown_page::local_path(&requested.to_string_lossy(), folder).map(|path| ContentResource {
+        path,
+        max_bytes: html::markdown_page::MAX_IMAGE_BYTES,
+        picture: true,
+    })
+}
+
+/// Whether `requested` is on the volume `named` names, as it is spelled or as it resolves.
+fn same_volume(requested: &Path, named: &Path) -> bool {
+    let volume = html::volume(requested);
+    volume == html::volume(named) || volume == html::volume(&html::real_path(named))
 }
 
 /// The MIME type of `path` by its extension, as upstream's `UTType` lookup (also the type a `WebView2` page's granted
@@ -646,6 +669,10 @@ impl PageServeStream {
             self.send_waiting(&failure(id, CANCELLED));
             return;
         }
+        if let Some(resource) = content(path, &self.source) {
+            self.transfer_content(id, &resource);
+            return;
+        }
         let Some(file) = resolve(path, &self.source) else {
             self.send_waiting(&failure(id, OUTSIDE_FOLDER));
             return;
@@ -681,6 +708,52 @@ impl PageServeStream {
             }
         }
         self.send_waiting(&failure(id, CANCELLED));
+    }
+
+    /// Serves a content page's file (upstream's `contentBody`): read whole under its kind's cap through one checked
+    /// descriptor, and a picture sent only when its bytes carry a picture signature, so no other file in a Markdown
+    /// page's folder crosses.
+    fn transfer_content(&self, id: i64, resource: &ContentResource) {
+        let body = match crate::bounded_file::read(&resource.path, resource.max_bytes) {
+            Ok(body) => body,
+            Err(crate::bounded_file::Failure::TooLarge) => {
+                self.send_waiting(&failure(id, TOO_LARGE));
+                return;
+            }
+            Err(crate::bounded_file::Failure::Unreadable) => {
+                self.send_waiting(&failure(id, UNREADABLE));
+                return;
+            }
+        };
+        let mime_type = if resource.picture {
+            let Some(mime_type) = html::image_page::mime_type(&body) else {
+                self.send_waiting(&failure(id, NOT_A_PICTURE));
+                return;
+            };
+            mime_type
+        } else {
+            TEXT_MIME
+        };
+        let head = PageServeFrame::Head {
+            id,
+            mime_type: mime_type.to_owned(),
+        };
+        if !self.send_waiting(&head) {
+            return;
+        }
+        for chunk in body.chunks(MAX_CHUNK_BYTES) {
+            if self.cancelled(id) {
+                self.send_waiting(&failure(id, CANCELLED));
+                return;
+            }
+            if !self.send_waiting(&PageServeFrame::Chunk {
+                id,
+                data: chunk.to_vec(),
+            }) {
+                return;
+            }
+        }
+        self.send_waiting(&PageServeFrame::End { id });
     }
 
     /// Sends `frame`, waiting for room; false once the channel is closing. A frame too large for one line goes back as
@@ -797,6 +870,10 @@ impl Core {
     fn page_serve_bridge(&mut self, stream: Arc<PageServeStream>, id: i64, request: &str) -> Option<PageServeCall> {
         if stream.companion.is_some() && matches!(stream.source, HtmlSource::Url(_)) {
             stream.reply(failure(id, URL_NO_BRIDGE));
+            return None;
+        }
+        if !matches!(stream.source, HtmlSource::File { .. } | HtmlSource::Url(_)) {
+            stream.reply(failure(id, NO_BRIDGE));
             return None;
         }
         let place = match &stream.companion {

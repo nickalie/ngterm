@@ -31,8 +31,7 @@ use uuid::Uuid;
 use super::drag::{DragPayload, DropView, Highlight};
 use super::look::{
     BADGE_FONT_SIZE, BADGE_GAP, BADGE_HEIGHT, BADGE_RED, BADGE_TEXT_ROOM, CONTENT_INSET, DISCLOSURE, DIVIDER_HANDLE,
-    FOOTER_BUTTON, FOOTER_GAP, FOOTER_PADDING, GAP, Look, NESTED_INDENT, PILL_INSET_X, PILL_INSET_Y, PILL_RADIUS,
-    color,
+    FOOTER_BUTTON, FOOTER_GAP, FOOTER_PADDING, GAP, Look, PILL_INSET_X, PILL_RADIUS, color,
 };
 use super::rows::badge_text;
 use super::{
@@ -154,7 +153,7 @@ impl Sidebar {
         let selected = matches!(row.kind, RowKind::Session { selected: true, .. });
         let workspace = row.is_workspace();
         #[expect(clippy::cast_possible_truncation, reason = "sidebar width is at most 560 points")]
-        let info_width = self.width() as f32 - 2. * CONTENT_INSET - row_lead(row) - icon_width(row);
+        let info_width = self.width() as f32 - 2. * CONTENT_INSET - row_lead(row, &look) - icon_width(row);
         let mut element = div()
             .id(ElementId::Uuid(id))
             .debug_selector(|| format!("row:{}", row.label))
@@ -169,14 +168,14 @@ impl Sidebar {
                 }))
             .px(px(CONTENT_INSET))
             .text_color(look.text(selected))
-            .when(selected, |element| element.child(pill(look.pill(key))))
+            .when(selected, |element| element.child(pill(look.pill(key), &look)))
             .child(self.row_content(row, selected, window, cx))
             .when(!row.info.is_empty(), |element| {
                 element.child(
                     div()
                         .absolute()
-                        .top(px(look.row_height() - 6.))
-                        .left(px(CONTENT_INSET + row_lead(row) + icon_width(row)))
+                        .top(px(look.row_height() - look.metrics().info_spacing))
+                        .left(px(CONTENT_INSET + row_lead(row, &look) + icon_width(row)))
                         .right(px(CONTENT_INSET))
                         .child(info::element(&row.info, look, selected, info_width, window)),
                 )
@@ -239,7 +238,7 @@ impl Sidebar {
         let shows_add = workspace && self.hovered == Some(row.id) && self.context.row_add_session;
         let status = row.status.as_ref();
         let trailing = trailing_width(window, row, status.is_some(), shows_add);
-        let lead = row_lead(row);
+        let lead = row_lead(row, &look);
         #[expect(clippy::cast_possible_truncation, reason = "a sidebar width is a few hundred points")]
         let available = self.width() as f32 - 2.0 * CONTENT_INSET - lead - icon_width(row) - trailing;
         let content = div()
@@ -250,9 +249,11 @@ impl Sidebar {
             .h(px(look.row_height()))
             .min_w(px(0.));
         let content = match (row.kind, row.group()) {
+            // hidden chevrons take the disclosure and its strip with them (#909)
+            (RowKind::Workspace { .. }, _) if !look.chevrons => content,
             (RowKind::Workspace { expanded }, _) => content
                 .child(Self::disclosure(row.id, expanded, &look, selected, cx))
-                .child(div().flex_none().w(px(NESTED_INDENT - DISCLOSURE))),
+                .child(div().flex_none().w(px(look.metrics().nested_indent - DISCLOSURE))),
             // a parent's disclosure takes the last of its indent, right before its glyph
             (_, RowGroup::Parent { expanded }) => content
                 .child(div().flex_none().w(px(lead - DISCLOSURE)))
@@ -329,9 +330,15 @@ impl Sidebar {
                     .aria_value(label.clone())
                     .debug_selector(|| "companion-row".to_owned())
             })
-            .when(!companion, |name| name.aria_label(label.clone()))
+            .when(!companion, |name| {
+                let selector = format!("name:{label}");
+                name.aria_label(label.clone()).debug_selector(move || selector)
+            })
             .flex_1()
             .min_w(px(0.))
+            // the compact density lifts the name off the row's center (upstream's `titleLift`)
+            .relative()
+            .top(px(-self.look.metrics().name_lift))
             .overflow_hidden()
             .whitespace_nowrap()
             .text_ellipsis()
@@ -389,8 +396,8 @@ impl Sidebar {
                 .absolute()
                 .left(px(PILL_INSET_X))
                 .right(px(PILL_INSET_X))
-                .top(px(PILL_INSET_Y))
-                .bottom(px(PILL_INSET_Y))
+                .top(px(self.look.metrics().pill_inset_y))
+                .bottom(px(self.look.metrics().pill_inset_y))
                 .rounded(px(PILL_RADIUS))
                 .border(px(DROP_LINE))
                 .border_color(accent),
@@ -591,14 +598,16 @@ fn footer_button(id: &'static str, glyph: Glyph, hint: &'static str, look: &Look
         .child(row_icon::icon(glyph, look.text(false)))
 }
 
-/// The selection pill behind a selected row.
-fn pill(fill: Hsla) -> impl IntoElement {
+/// The selection pill behind a selected row, inset by the density's.
+fn pill(fill: Hsla, look: &Look) -> impl IntoElement {
+    let inset_y = look.metrics().pill_inset_y;
     div()
+        .debug_selector(|| "selection-pill".to_owned())
         .absolute()
         .left(px(PILL_INSET_X))
         .right(px(PILL_INSET_X))
-        .top(px(PILL_INSET_Y))
-        .bottom(px(PILL_INSET_Y))
+        .top(px(inset_y))
+        .bottom(px(inset_y))
         .rounded(px(PILL_RADIUS))
         .bg(fill)
 }
@@ -618,7 +627,7 @@ fn leading_icon(row: &SidebarRow, color: Hsla) -> impl IntoElement {
         .role(gpui_kit::Role::Image)
         .aria_label(tooltip.clone().unwrap_or(SharedString::from(name)))
         .when_some(row.tint, |icon, tint| {
-            let value = format!("{} tint", tint.color().wire_name());
+            let value = format!("{} tint", tint.color().wire());
             icon.debug_selector({
                 let value = value.clone();
                 move || format!("{id}:{value}")
@@ -633,14 +642,20 @@ fn leading_icon(row: &SidebarRow, color: Hsla) -> impl IntoElement {
         })
 }
 
-/// How far a row's content is indented: a level per nesting, the workspace row's disclosure taking its first.
-fn row_lead(row: &SidebarRow) -> f32 {
+/// How far a row's content is indented: a level per nesting (the density's step), the workspace row's disclosure
+/// taking its first. With the workspace chevrons hidden (upstream's `reservesDisclosureColumn` false, #909) the
+/// workspace row drops that strip and starts at the edge, and the nested rows shift left by it, stopping short of a
+/// disclosure's width so a companion parent's still fits whole ahead of its glyph at either density.
+pub(super) fn row_lead(row: &SidebarRow, look: &Look) -> f32 {
+    let indent = look.metrics().nested_indent;
+    let shift = if look.chevrons { 0.0 } else { indent - DISCLOSURE };
     match row.kind {
-        RowKind::Workspace { .. } => NESTED_INDENT,
+        RowKind::Workspace { .. } if !look.chevrons => 0.0,
+        RowKind::Workspace { .. } => indent,
         RowKind::Session { .. } => match row.depth() {
             0 => 0.0,
-            1 => NESTED_INDENT,
-            _ => 2.0 * NESTED_INDENT,
+            1 => indent - shift,
+            _ => 2.0 * indent - shift,
         },
     }
 }

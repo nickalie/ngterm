@@ -72,6 +72,7 @@ fn spec() -> ViewSpec {
             height: 20,
             scale: 1.0,
         },
+        block_network: false,
     }
 }
 

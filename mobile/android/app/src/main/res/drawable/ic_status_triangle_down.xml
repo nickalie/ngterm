@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- status glyph, a filled triangle pointing down (upstream's triangle-down) (16dp; StatusGlyph tints it) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16">
+  <path
+      android:pathData="M1.5,2.5h13l-6.5,12z"
+      android:fillColor="#FF000000" />
+</vector>

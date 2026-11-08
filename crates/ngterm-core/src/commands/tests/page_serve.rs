@@ -782,3 +782,150 @@ fn a_page_closed_here_shuts_its_channel_once() {
     assert_eq!(channel.fake.shutdowns(), 1);
     assert_eq!(served.page_closes().len(), 1);
 }
+
+// MARK: - content pages (#891, #917)
+
+impl Served {
+    /// A presented session whose origin reads content files, with the folder's index beside them.
+    fn content() -> Self {
+        let mut served = Self::new();
+        served.origin = super::content_pages::content_origin(&crate::remote::hub::SUPPORTED_KINDS);
+        served
+    }
+
+    /// Opens `--image`, `--markdown` or `--text` `name` of the folder; its page id.
+    fn open_content(&mut self, flag: &str, name: &str) -> String {
+        let path = self.path(name);
+        let response = super::content_pages::open_content(&mut self.origin, flag, &path, |_| {});
+        assert!(response.ok, "{response:?}");
+        response.result.unwrap()["pageID"].as_str().unwrap().to_owned()
+    }
+
+    /// Asks channel `channel` for each of `names` in turn: the frames answering each.
+    fn serve(&mut self, channel: &Channel, names: &[&str]) -> Vec<(Option<String>, Vec<u8>, Option<String>)> {
+        names
+            .iter()
+            .zip(1..)
+            .map(|(name, id)| {
+                let path = self.path(name);
+                self.send(channel, &resource(id, &path));
+                channel.fake.body(id)
+            })
+            .collect()
+    }
+}
+
+const PICTURE: &[u8] = super::content_pages::PNG;
+
+/// Upstream's `testContentPagesServeTheirFilesUnderTheirCaps`: an image page serves its own picture by its signature, a
+/// text page its own file as text and nothing beside it.
+#[test]
+fn content_pages_serve_their_own_files_under_their_caps() {
+    let mut served = Served::content();
+    std::fs::write(served.docs.join("shot.png"), PICTURE).unwrap();
+    std::fs::write(served.docs.join("notes.go"), "package main\n").unwrap();
+    let image = served.open_content("image", "shot.png");
+    let channel = served.channel(&image);
+    assert_eq!(
+        served.serve(&channel, &["shot.png", "index.html"]),
+        [
+            (Some("image/png".to_owned()), PICTURE.to_vec(), None),
+            (None, Vec::new(), Some("file is outside the page's folder".to_owned())),
+        ]
+    );
+    assert!(served.origin.overlay(SessionCmd::OverlayClose, |_| {}).ok);
+    served.origin.fixture().core.commit();
+    let text = served.open_content("text", "notes.go");
+    let channel = served.channel(&text);
+    assert_eq!(
+        served.serve(&channel, &["notes.go", "shot.png"]),
+        [
+            (
+                Some("text/plain; charset=utf-8".to_owned()),
+                b"package main\n".to_vec(),
+                None
+            ),
+            (None, Vec::new(), Some("file is outside the page's folder".to_owned())),
+        ]
+    );
+}
+
+/// Upstream's `testAMarkdownPageServesOnlyPicturesFromItsFolder`: its own file, and any file of its folder only when its
+/// bytes are a picture, whatever its name; nothing outside the folder.
+#[test]
+fn a_markdown_page_serves_only_pictures_from_its_folder() {
+    let mut served = Served::content();
+    std::fs::write(served.docs.join("README.md"), "# notes\n").unwrap();
+    std::fs::write(served.docs.join("plot"), PICTURE).unwrap();
+    std::fs::write(served.docs.join("notes.txt"), "secret").unwrap();
+    std::fs::write(served.docs.join("fake.png"), "<svg/>").unwrap();
+    std::fs::write(served.docs.parent().unwrap().join("outside.png"), PICTURE).unwrap();
+    let page = served.open_content("markdown", "README.md");
+    let channel = served.channel(&page);
+    let not_a_picture = Some("not a png, jpg, gif or webp image".to_owned());
+    assert_eq!(
+        served.serve(
+            &channel,
+            &["README.md", "plot", "notes.txt", "fake.png", "../outside.png"]
+        ),
+        [
+            (
+                Some("text/plain; charset=utf-8".to_owned()),
+                b"# notes\n".to_vec(),
+                None
+            ),
+            (Some("image/png".to_owned()), PICTURE.to_vec(), None),
+            (None, Vec::new(), not_a_picture.clone()),
+            (None, Vec::new(), not_a_picture),
+            (None, Vec::new(), Some("file is outside the page's folder".to_owned())),
+        ]
+    );
+}
+
+/// Upstream's `testAContentFileGrownPastItsCapOrReplacedByAFifoIsRefused`: the file is judged when it is served, not
+/// when the page opened.
+#[test]
+fn a_content_file_grown_past_its_cap_or_replaced_by_a_fifo_is_refused() {
+    let mut served = Served::content();
+    std::fs::write(served.docs.join("notes.go"), "x").unwrap();
+    let page = served.open_content("text", "notes.go");
+    let channel = served.channel(&page);
+    std::fs::write(
+        served.docs.join("notes.go"),
+        vec![b'x'; crate::html::text_page::MAX_BYTES + 1],
+    )
+    .unwrap();
+    assert_eq!(
+        served.serve(&channel, &["notes.go"])[0].2.as_deref(),
+        Some("file is too large for the page")
+    );
+    #[cfg(unix)]
+    {
+        let fifo = served.docs.join("notes.go");
+        std::fs::remove_file(&fifo).unwrap();
+        let name = std::ffi::CString::new(text(&fifo)).unwrap();
+        // SAFETY: a valid NUL-terminated path and mode.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert_eq!(
+            served.serve(&channel, &["notes.go"])[0].2.as_deref(),
+            Some("file cannot be read")
+        );
+    }
+}
+
+/// Upstream's `testAContentPageHasNoBridge`.
+#[test]
+fn a_content_page_has_no_bridge() {
+    let mut served = Served::content();
+    std::fs::write(served.docs.join("README.md"), "# notes\n").unwrap();
+    let page = served.open_content("markdown", "README.md");
+    let channel = served.channel(&page);
+    served.send(&channel, &bridge(4, r#"{"cmd":"tree"}"#));
+    assert_eq!(
+        channel.fake.frame(),
+        Some(PageServeFrame::Failure {
+            id: 4,
+            error: "this page has no bridge".to_owned()
+        })
+    );
+}

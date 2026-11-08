@@ -28,6 +28,8 @@ use crate::pane_env::uuid_string;
 const NOT_A_PAGE_COMPANION: &str = "not a page companion";
 /// Upstream's refusal of a page on this machine's loopback, which the other machine would never reach.
 const LOOPBACK_PAGE: &str = "a page on this Mac's loopback cannot be shown on another Mac";
+/// Upstream's refusal of a page companion the other machine would build from fetched bytes.
+const CONTENT_PAGE: &str = "a markdown, text or document page companion cannot be shown on another Mac";
 
 /// One attachment of a page companion handed out and not claimed yet (upstream's `CompanionPageToken`).
 #[derive(Debug, Clone, Copy)]
@@ -67,7 +69,8 @@ impl Core {
     ///
     /// # Errors
     ///
-    /// The refusal: `session` is not a page companion, or its page is on this machine's loopback.
+    /// The refusal: `session` is not a page companion, its page is one the other machine would build (Markdown, text or
+    /// a clicked document), or its page is on this machine's loopback.
     pub(crate) fn attach_companion_page(
         &mut self,
         session: Uuid,
@@ -81,7 +84,11 @@ impl Core {
         let (overlay, background) = found
             .and_then(|row| Some((row.overlay.page()?.clone(), row.overlay.background_color.clone())))
             .ok_or(NOT_A_PAGE_COMPANION)?;
-        let source = presentation_source(&overlay.source).ok_or(NOT_A_PAGE_COMPANION)?;
+        // an image travels only with its probed size, which a page companion never has
+        let source = presentation_source(&overlay.source, None).ok_or(NOT_A_PAGE_COMPANION)?;
+        if source.is_content() {
+            return Err(CONTENT_PAGE);
+        }
         if let HtmlSource::Url(url) = &overlay.source
             && html::is_loopback(url.as_str())
         {

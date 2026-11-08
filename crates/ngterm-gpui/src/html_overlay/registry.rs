@@ -23,10 +23,11 @@ use ngterm_core::Core;
 use ngterm_core::html::bridge;
 use ngterm_core::html::profile::{self, BrowserProfile};
 use ngterm_core::html::{
-    ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, REPLICA_SCHEME, StoreClear, errors,
+    ChangesAnswer, ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, REPLICA_SCHEME, ReplicaContent,
+    SearchAnswer, SearchStep, StoreClear, errors,
 };
 use ngterm_core::pane_env::uuid_string;
-use ngterm_core::remote::replica_page::PageResource;
+use ngterm_core::remote::replica_page::{ContentFailures, PageResource};
 use ngterm_proto::Response;
 use ngterm_wpe::{
     BufferFormat, DmaBufTarget, Event, FrameMode, HostConfig, ReplyToken, SchemeError, SchemeRequest, SchemeResponse,
@@ -91,6 +92,8 @@ struct Registry {
     /// Where the engine's start goes from its thread: the pump [`init`] spawned.
     pump: Option<async_channel::Sender<Started>>,
     documents: Option<async_channel::Sender<DocumentLoad>>,
+    /// Where a content replica's worker asks for a file of its origin's: the pump [`init`] spawned.
+    replica_reads: Option<async_channel::Sender<ReplicaRead>>,
     /// How the pages shown here for another machine reach it: the core's page channels, or a test's stand-in.
     replica: Option<Rc<dyn ReplicaLink>>,
 }
@@ -115,6 +118,7 @@ impl Default for Registry {
             poster: None,
             pump: None,
             documents: None,
+            replica_reads: None,
             replica: None,
         }
     }
@@ -139,7 +143,25 @@ fn page(id: Uuid) -> Option<Rc<Page>> {
     with(|registry| registry.pages.get(&id).cloned())
 }
 
+/// Find over text replica `id` (`crate::html_overlay::focus_page_search`): the keyboard goes into its renderer's own
+/// field, which no bridge reaches.
+pub(super) fn focus_replica_search(id: Uuid) {
+    if let Some(page) = page(id) {
+        super::text_page::focus_replica_search(&page.overlay(), &*page);
+    }
+}
+
 type DocumentLoad = (Uuid, u64, Result<String, String>);
+
+/// A bounded read a content replica's worker asks the main thread for: the page, the file's path on its origin, the
+/// read's cap and failures, and where the answer goes back to the worker.
+type ReplicaRead = (
+    Uuid,
+    String,
+    usize,
+    ContentFailures,
+    std::sync::mpsc::Sender<Result<Vec<u8>, String>>,
+);
 
 pub(super) fn read_document(id: Uuid, generation: u64, source: HtmlSource) {
     let Some(sender) = with(|registry| registry.documents.clone()) else {
@@ -149,6 +171,47 @@ pub(super) fn read_document(id: Uuid, generation: u64, source: HtmlSource) {
         let result = super::documents::read(&source);
         let _ = sender.send_blocking((id, generation, result));
     });
+}
+
+/// Builds content replica `id`'s document on a worker (`documents::build_replica`), its origin's files read through the
+/// replica link on the main thread, each read waited for there; the document lands as a local page's does.
+pub(super) fn read_replica_document(id: Uuid, generation: u64, path: String, content: ReplicaContent) {
+    let (Some(documents), Some(reads)) = with(|registry| (registry.documents.clone(), registry.replica_reads.clone()))
+    else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let mut read = |file: &str, limit: usize, failures: ContentFailures| {
+            let unreadable = failures.unreadable.clone();
+            let (answer, answered) = std::sync::mpsc::channel();
+            if reads
+                .send_blocking((id, file.to_owned(), limit, failures, answer))
+                .is_err()
+            {
+                return Err(unreadable);
+            }
+            answered.recv().unwrap_or(Err(unreadable))
+        };
+        let result = super::documents::build_replica(&path, content, &mut read);
+        let _ = documents.send_blocking((id, generation, result));
+    });
+}
+
+/// Hands a content replica's read to its link; without one it fails as unreadable.
+fn replica_read((page, path, limit, failures, answer): ReplicaRead) {
+    let Some(link) = replica_link() else {
+        let _ = answer.send(Err(failures.unreadable));
+        return;
+    };
+    link.read(
+        page,
+        path,
+        limit,
+        failures,
+        Box::new(move |result| {
+            let _ = answer.send(result);
+        }),
+    );
 }
 
 pub(super) fn document_loaded(id: Uuid, generation: u64, result: Result<String, String>) {
@@ -179,6 +242,13 @@ impl HtmlHost for PageHost {
     fn check_markdown(&self, path: &str) -> Result<(), String> {
         ngterm_app::documents::check_markdown(std::path::Path::new(path))
     }
+    fn check_text(&self, path: &str) -> Result<(), String> {
+        ngterm_app::documents::check_text(std::path::Path::new(path))
+    }
+
+    fn check_log(&self, path: &str, tail: usize) -> Result<(), String> {
+        ngterm_app::documents::check_log(std::path::Path::new(path), tail)
+    }
 
     fn page_zoom(&self) -> f64 {
         with(|registry| registry.zoom.unwrap_or(1.0))
@@ -194,6 +264,14 @@ impl HtmlHost for PageHost {
 
     fn navigate(&self, id: Uuid, navigation: HtmlNavigation) -> Result<(), String> {
         navigate(id, navigation)
+    }
+
+    fn step_text_search(&self, page: Uuid, step: SearchStep) -> Option<SearchAnswer> {
+        crate::html_overlay::step_text_search(page, &step)
+    }
+
+    fn step_text_changes(&self, page: Uuid, forward: bool) -> Option<ChangesAnswer> {
+        crate::html_overlay::step_text_changes(page, forward)
     }
 
     fn clear_saved_store(&self) -> Result<StoreClear, String> {
@@ -235,11 +313,20 @@ pub fn install(core: &mut Core, state_dir: PathBuf, poster: Poster) {
 /// Spawns the pump: it takes the engine's start from the start thread ([`engine`]), then dispatches the engine's events
 /// on the main thread, and fails every page when the engine ends while the app runs.
 pub fn init(cx: &mut App) {
+    super::text_page::init(cx);
     let (documents, queue) = async_channel::unbounded::<DocumentLoad>();
     with(|registry| registry.documents = Some(documents));
     cx.spawn(async move |cx| {
         while let Ok((id, generation, result)) = queue.recv().await {
             cx.update(|_| document_loaded(id, generation, result));
+        }
+    })
+    .detach();
+    let (reads, asked) = async_channel::unbounded::<ReplicaRead>();
+    with(|registry| registry.replica_reads = Some(reads));
+    cx.spawn(async move |cx| {
+        while let Ok(read) = asked.recv().await {
+            cx.update(|_| replica_read(read));
         }
     })
     .detach();
@@ -679,7 +766,8 @@ pub(super) fn dispatch(event: &Event, cx: &mut App) {
         | Event::WebProcessTerminated { view, .. }
         | Event::Page { view, .. }
         | Event::CloseRequested { view }
-        | Event::ViewFailed { view, .. } => to_page(*view, event, cx),
+        | Event::ViewFailed { view, .. }
+        | Event::NetworkFilterFailed { view, .. } => to_page(*view, event, cx),
         Event::Policy(request) => match page_of_view(request.view) {
             Some(page) => page.event(event, cx),
             None => answer_with(|web| web.decide_policy(request.token, false)),
@@ -815,7 +903,14 @@ pub trait ReplicaLink {
 
     /// Relays the request replica `page`'s script sent, as the JSON it sent; answered with [`answer_value`] by `reply`.
     fn bridge(&self, page: Uuid, body: String, reply: u64);
+
+    /// Reads `path`, the file's path on the other machine, for content replica `page` under `limit` bytes, its failures
+    /// worded as `failures` says ([`ngterm_core::Core::replica_read`]); `answer` runs once.
+    fn read(&self, page: Uuid, path: String, limit: usize, failures: ContentFailures, answer: ReadAnswer);
 }
+
+/// Where a content replica's read is answered, on the main thread.
+pub type ReadAnswer = Box<dyn FnOnce(Result<Vec<u8>, String>) + Send>;
 
 /// The app's link: each call is a main-loop task on the core.
 struct CoreLink(Poster);
@@ -835,6 +930,13 @@ impl ReplicaLink for CoreLink {
             state
                 .core
                 .replica_bridge(page, &body, Box::new(move |result| answer_value(reply, result)));
+            state.settle();
+        });
+    }
+
+    fn read(&self, page: Uuid, path: String, limit: usize, failures: ContentFailures, answer: ReadAnswer) {
+        post(&self.0, move |state: &mut AppState| {
+            state.core.replica_read(page, &path, limit, failures, answer);
             state.settle();
         });
     }
@@ -871,9 +973,16 @@ fn serve_replica(request: &SchemeRequest) {
     let page = request.view.and_then(page_of_view);
     let path = page.as_ref().and_then(|page| {
         let overlay = page.overlay();
-        matches!(overlay.source, HtmlSource::Replica { .. })
-            .then(|| policy::replica_read(&request.uri, page.id()))
-            .flatten()
+        // a replica built here from its fetched bytes loads nothing through the scheme
+        matches!(
+            overlay.source,
+            HtmlSource::Replica {
+                content: ReplicaContent::Html,
+                ..
+            }
+        )
+        .then(|| policy::replica_read(&request.uri, page.id()))
+        .flatten()
     });
     match (page, path, replica_link()) {
         (Some(page), Some(path), Some(link)) => link.fetch(page.id(), path, request.token),

@@ -21,7 +21,7 @@ use std::sync::PoisonError;
 use gpui_kit::{AnyWindowHandle, App, Entity, WeakEntity};
 use ngterm_core::html::{
     HtmlLoadState, HtmlNavigation, HtmlNavigationAction, HtmlNavigationDecision, HtmlNavigationTarget, HtmlOverlay,
-    HtmlOverlayTheme, HtmlPageInfo, HtmlReloadTarget, HtmlSource, decide, errors,
+    HtmlOverlayTheme, HtmlPageInfo, HtmlPageKind, HtmlReloadTarget, HtmlSource, ReplicaContent, decide, errors,
 };
 use url::Url;
 use uuid::Uuid;
@@ -30,6 +30,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_WEB_ERROR_STATUS
 
 use super::super::panel::{PanelColors, TerminalColors};
 use super::super::policy::{self, LoadEvent, LoadOutcome, LoadTracker, ThemeChange};
+use super::super::text_page::{self, PageChannel, TextPage};
 use super::native::{Bounds, Grant, Native, Navigation, Report, Text};
 use super::view::PageView;
 use super::{bridge, registry, scheme};
@@ -88,6 +89,46 @@ struct PageState {
     refused: Option<u64>,
     /// A text load the app started is the next main-frame navigation, at the text's address.
     text_pending: bool,
+    network: NetworkGate,
+}
+
+/// Where a page that blocks the network ([`HtmlOverlay::blocks_network`]) stands with its web view's network filter,
+/// which the web view reports once in place (`Report::NetworkFilterInstalled`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NetworkGate {
+    /// No filter is needed, or it is in place: the page loads at once.
+    Open,
+    /// The filter is being installed; a document read meanwhile (`pending`) loads once it is.
+    Waiting { pending: bool },
+    /// The filter could not be installed: the page loads nothing.
+    Failed,
+}
+
+impl NetworkGate {
+    fn initial(overlay: &HtmlOverlay) -> Self {
+        if overlay.blocks_network() {
+            Self::Waiting { pending: false }
+        } else {
+            Self::Open
+        }
+    }
+
+    /// A document was read: the gate as it stands, a waiting one now holding the read for the filter's report.
+    fn document_read(&mut self) -> Self {
+        if let Self::Waiting { pending } = self {
+            *pending = true;
+        }
+        *self
+    }
+
+    /// The filter is in place: the gate opens, and says whether a document read meanwhile loads now.
+    fn installed(&mut self) -> bool {
+        let pending = matches!(self, Self::Waiting { pending: true });
+        if matches!(self, Self::Waiting { .. }) {
+            *self = Self::Open;
+        }
+        pending
+    }
 }
 
 impl PageState {
@@ -148,6 +189,8 @@ pub struct Page {
     /// A file page reloads once its replaced theme script is in place.
     reload_after_theme: Cell<bool>,
     document_generation: super::super::documents::Generation,
+    /// A text page's bridge: the renderer's reports and a log page's follower.
+    text_bridge: Option<Rc<TextPage>>,
     me: Weak<Page>,
 }
 
@@ -189,6 +232,7 @@ impl Page {
                 reported: None,
                 refused: None,
                 text_pending: false,
+                network: NetworkGate::initial(overlay),
             }),
             native: RefCell::new(None),
             building: Cell::new(false),
@@ -200,6 +244,7 @@ impl Page {
             native_focused: Cell::new(false),
             reload_after_theme: Cell::new(false),
             document_generation: super::super::documents::Generation::default(),
+            text_bridge: TextPage::new(overlay, me.clone() as Weak<dyn PageChannel>, poster),
             me: me.clone(),
         })
     }
@@ -414,6 +459,8 @@ impl Page {
             parent,
             ..Placement::default()
         });
+        // the network gate is kept as it stands: it was set when the page was made, and the web view's filter may
+        // have reported already, while `Native::create` pumped messages (`outside`); a page makes one web view
         self.native.replace(Some(Rc::new(native)));
         self.placement_changed();
         self.load_original();
@@ -451,7 +498,7 @@ impl Page {
         let colors = PanelColors::resolve(terminal, self.background.as_deref());
         self.colors.replace(colors.clone());
         self.refresh(cx);
-        if matches!(self.overlay().source, HtmlSource::Image { .. }) {
+        if self.overlay().source.kind() == HtmlPageKind::Image {
             return;
         }
         let next = colors.theme();
@@ -470,7 +517,19 @@ impl Page {
                 native.set_background(canvas);
             }
         } else if reload {
-            self.reload_shown();
+            self.rebuild_shown();
+        }
+    }
+
+    /// Wears a changed theme: a text page rebuilds from what it shows (its text, a log's snapshot and paused offset,
+    /// upstream's `loadDocument(fresh: false)`), any other page reloads.
+    fn rebuild_shown(&self) {
+        match &self.text_bridge {
+            Some(text) if self.native().is_some() => {
+                self.state.borrow_mut().load.begin();
+                text.load_document(false);
+            }
+            _ => self.reload_shown(),
         }
     }
 
@@ -573,8 +632,19 @@ impl Page {
             Report::Key(keystroke) => self.app_key(&keystroke, cx),
             Report::ThemeInstalled => {
                 if self.reload_after_theme.take() {
-                    self.reload_shown();
+                    self.rebuild_shown();
                 }
+            }
+            Report::TextPage(body) => {
+                if let (Some(page), true) = (&self.text_bridge, self.active()) {
+                    page.message(&body);
+                }
+            }
+            Report::NetworkFilterInstalled => self.network_filter_installed(),
+            Report::NetworkFilterFailed(message) => {
+                tracing::warn!(page = %self.id, message, "the page's network filter could not be installed");
+                self.state.borrow_mut().network = NetworkGate::Failed;
+                self.fail(errors::NETWORK_FILTER_UNAVAILABLE.to_owned());
             }
         }
     }
@@ -709,9 +779,11 @@ impl Page {
         self.report_page();
     }
 
-    /// The web view took or lost the keyboard: a click into the page gives its element the window's keyboard too.
+    /// The web view took or lost the keyboard: a click into the page gives its element the window's keyboard too, and
+    /// the keyboard-layout lock re-evaluates (a field inside the page holds it, the palette or an ask dialog does not).
     fn native_focus(&self, focused: bool, cx: &mut App) {
         self.native_focused.set(focused);
+        crate::input_source::request_refresh(cx);
         if !focused {
             return;
         }
@@ -917,6 +989,9 @@ impl Page {
             moved.then_some(overlay.reload_target)
         };
         self.placement_changed();
+        if let Some(page) = &self.text_bridge {
+            page.apply(overlay, on_screen);
+        }
         self.refresh(cx);
         if !on_screen {
             self.end_prompt(cx);
@@ -961,8 +1036,16 @@ impl Page {
             state.overlay.source.clone()
         };
         let Some(native) = self.native() else { return };
+        // a text page's documents are its bridge's, read off the main thread with the model's search
+        if let Some(text) = &self.text_bridge {
+            text.load_document(true);
+            return;
+        }
         let address = match source {
-            source @ (HtmlSource::Image { .. } | HtmlSource::Markdown { .. }) => {
+            source @ (HtmlSource::Image { .. }
+            | HtmlSource::Markdown { .. }
+            | HtmlSource::Text { .. }
+            | HtmlSource::Document { .. }) => {
                 registry::read_document(self.id, generation, source);
                 return;
             }
@@ -979,10 +1062,19 @@ impl Page {
                 }
             }
             HtmlSource::File { path, grant_root: None } => return self.load_text(&native, &path),
-            HtmlSource::Replica { path } => match scheme::replica_address(self.id, &path) {
+            // a replica's files come from the machine that opened it: an HTML file read through its own protocol, any
+            // other page built here from its fetched bytes
+            HtmlSource::Replica {
+                path,
+                content: ReplicaContent::Html,
+            } => match scheme::replica_address(self.id, &path) {
                 Some(address) => address,
                 None => return self.fail(errors::REMOTE_FILE.to_owned()),
             },
+            HtmlSource::Replica { path, content } => {
+                registry::read_replica_document(self.id, generation, path, content);
+                return;
+            }
         };
         native.load_url(&address);
     }
@@ -1004,14 +1096,32 @@ impl Page {
             return;
         }
         match result {
-            Ok(html) => {
-                if let Some(native) = self.native() {
-                    self.text.lock().unwrap_or_else(PoisonError::into_inner).replace(html);
-                    self.state.borrow_mut().text_pending = true;
-                    native.load_url(&scheme::text_address(self.id));
-                }
-            }
+            Ok(html) => self.show(html),
             Err(failure) => self.fail(failure),
+        }
+    }
+
+    /// Loads a built document through the text protocol, once the network filter it waits for is in place.
+    fn show(&self, html: String) {
+        let Some(native) = self.native() else { return };
+        self.text.lock().unwrap_or_else(PoisonError::into_inner).replace(html);
+        let gate = {
+            let mut state = self.state.borrow_mut();
+            state.text_pending = true;
+            state.network.document_read()
+        };
+        match gate {
+            NetworkGate::Open => native.load_url(&scheme::text_address(self.id)),
+            NetworkGate::Waiting { .. } => {}
+            NetworkGate::Failed => self.fail(errors::NETWORK_FILTER_UNAVAILABLE.to_owned()),
+        }
+    }
+
+    /// The web view's network filter is in place: the document read while it was installed loads now.
+    fn network_filter_installed(&self) {
+        let pending = self.state.borrow_mut().network.installed();
+        if pending && let Some(native) = self.native() {
+            native.load_url(&scheme::text_address(self.id));
         }
     }
 
@@ -1046,8 +1156,8 @@ impl Page {
                 native.go_forward();
             }
             HtmlNavigation::Browser => {
-                if matches!(self.overlay().source, HtmlSource::Markdown { .. }) {
-                    return Err(errors::MARKDOWN_IN_OVERLAY.to_owned());
+                if let Some(refusal) = super::super::documents::browser_refusal(&self.overlay().source) {
+                    return Err(refusal.to_owned());
                 }
                 let opened = self.browser_url().is_some_and(|url| super::browser::open(url.as_str()));
                 if !opened {
@@ -1177,12 +1287,38 @@ impl Page {
         self.end_prompt(cx);
         self.state.borrow_mut().life = Life::Released;
         self.document_generation.next();
+        if let Some(page) = &self.text_bridge {
+            page.stop();
+        }
         if let Some(native) = self.native.take() {
             registry::bury(native, self.private_folder());
         }
         if let Some(element) = self.element() {
             element.update(cx, PageView::release);
         }
+    }
+}
+
+/// A text page's way to its web view: documents load as the source's do, and calls run in the renderer's world.
+impl PageChannel for Page {
+    fn holds_slot(&self) -> bool {
+        self.active()
+    }
+
+    fn show_document(&self, html: String) {
+        if self.active() {
+            self.show(html);
+        }
+    }
+
+    fn fail(&self, message: String) {
+        if self.active() {
+            Page::fail(self, message);
+        }
+    }
+
+    fn call(&self, expression: String) -> Option<async_channel::Receiver<text_page::Answer>> {
+        Some(self.native()?.call_renderer(&expression))
     }
 }
 
@@ -1310,5 +1446,31 @@ mod tests {
         cx.run_until_parked();
         assert!(alert_open(cx), "no withdrawal silenced the page");
         cx.update(|window, cx| assert!(crate::modal::answer_front_alert(window, "Cancel", cx)));
+    }
+
+    /// The filter can report while the web view is still being made: a document read after that loads at once.
+    #[test]
+    fn a_filter_in_place_before_the_read_lets_it_load_at_once() {
+        let mut gate = NetworkGate::Waiting { pending: false };
+        assert!(!gate.installed());
+        assert_eq!(gate, NetworkGate::Open);
+        assert_eq!(gate.document_read(), NetworkGate::Open);
+    }
+
+    #[test]
+    fn a_read_ahead_of_the_filter_loads_once_it_is_in_place() {
+        let mut gate = NetworkGate::Waiting { pending: false };
+        assert_eq!(gate.document_read(), NetworkGate::Waiting { pending: true });
+        assert!(gate.installed());
+        assert_eq!(gate, NetworkGate::Open);
+        assert!(!gate.installed());
+    }
+
+    #[test]
+    fn a_failed_filter_keeps_the_page_from_loading() {
+        let mut gate = NetworkGate::Failed;
+        assert_eq!(gate.document_read(), NetworkGate::Failed);
+        assert!(!gate.installed());
+        assert_eq!(gate, NetworkGate::Failed);
     }
 }

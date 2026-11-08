@@ -23,7 +23,8 @@ use gio::prelude::*;
 use self::page::Page;
 use self::platform::Display;
 use self::webkit::{
-    Download, JscContext, NetworkSession, PolicyDecision, ScriptReply, UriSchemeRequest, WebContext, WebView,
+    Download, JscContext, NetworkSession, PolicyDecision, ScriptReply, UriSchemeRequest, UserContentFilter,
+    UserContentFilterStore, WebContext, WebView,
 };
 use crate::config::{FrameMode, HostConfig};
 use crate::event::{
@@ -49,7 +50,35 @@ struct Engine {
     schemes: HashMap<SchemeToken, (Option<ViewId>, UriSchemeRequest)>,
     /// The `<select>` popups shown, until answered or closed.
     menus: HashMap<MenuToken, interaction::OptionMenuObject>,
+    network_filter: NetworkFilter,
     next_token: u64,
+}
+
+/// The content filter pages that block the network load behind ([`ViewSpec::block_network`]), compiled once, on first
+/// use, into a private directory of its own; one that fails is compiled again for the next page that asks.
+#[derive(Default)]
+enum NetworkFilter {
+    #[default]
+    Unbuilt,
+    /// Being compiled, for these pages.
+    Compiling(Vec<ViewId>),
+    Ready {
+        filter: UserContentFilter,
+        directory: std::path::PathBuf,
+    },
+}
+
+/// The filter's identifier in its store.
+const NETWORK_FILTER_ID: &str = "ngterm.document";
+
+/// Blocks every network load (upstream's `DocumentRules.source`): content-blocker patterns have no alternation, so
+/// each scheme gets its own rule.
+fn network_filter_source() -> String {
+    let rules: Vec<String> = ["^https?://", "^wss?://", "^ftps?://"]
+        .iter()
+        .map(|pattern| format!(r#"{{"trigger":{{"url-filter":"{pattern}"}},"action":{{"type":"block"}}}}"#))
+        .collect();
+    format!("[{}]", rules.join(","))
 }
 
 thread_local! {
@@ -104,6 +133,7 @@ pub(crate) fn run(
                 replies: HashMap::new(),
                 schemes: HashMap::new(),
                 menus: HashMap::new(),
+                network_filter: NetworkFilter::Unbuilt,
                 next_token: 0,
             }));
         });
@@ -177,6 +207,13 @@ fn stop() {
     }
     spares::end();
     let engine = ENGINE.with(RefCell::take);
+    if let Some(Engine {
+        network_filter: NetworkFilter::Ready { directory, .. },
+        ..
+    }) = &engine
+    {
+        let _ = std::fs::remove_dir_all(directory);
+    }
     drop(engine);
 }
 
@@ -254,12 +291,101 @@ fn create_view(id: ViewId, spec: &ViewSpec) {
         .and_then(|session| Page::new(id, spec, &display, &session, &events));
     match built {
         Ok(page) => {
+            let waits = page.awaits_network_filter();
             with(|engine| engine.pages.insert(id, page));
+            if waits {
+                request_network_filter(id);
+            }
         }
         Err(message) => {
             tracing::warn!(?id, message, "a WPE page could not be built");
             send(&events, Event::ViewFailed { view: id, message });
         }
+    }
+}
+
+/// Puts the network filter on page `id` once it is compiled, compiling it first when no page asked yet.
+fn request_network_filter(id: ViewId) {
+    enum Next {
+        Ready(UserContentFilter),
+        Wait,
+        Compile,
+    }
+    let Some(next) = with(|engine| match &mut engine.network_filter {
+        NetworkFilter::Ready { filter, .. } => Next::Ready(filter.clone()),
+        NetworkFilter::Compiling(waiting) => {
+            waiting.push(id);
+            Next::Wait
+        }
+        NetworkFilter::Unbuilt => {
+            engine.network_filter = NetworkFilter::Compiling(vec![id]);
+            Next::Compile
+        }
+    }) else {
+        return;
+    };
+    match next {
+        Next::Ready(filter) => {
+            if let Some(page) = with(|engine| engine.pages.get(&id).cloned()).flatten() {
+                page.network_filter(Ok(&filter));
+            }
+        }
+        Next::Wait => {}
+        Next::Compile => compile_network_filter(),
+    }
+}
+
+/// Compiles the network filter into a private directory and hands it, or why it failed, to every page waiting.
+fn compile_network_filter() {
+    let template = std::env::temp_dir().join("ngterm-wpe-filters-XXXXXX");
+    let Some(directory) = glib::mkdtemp(&template) else {
+        network_filter_compiled(Err(format!(
+            "no private directory for the network filter in {}",
+            template.display()
+        )));
+        return;
+    };
+    let store = UserContentFilterStore::new(&directory);
+    store.save(
+        NETWORK_FILTER_ID,
+        &network_filter_source(),
+        move |compiled| match compiled {
+            Ok(filter) => network_filter_compiled(Ok((filter, directory))),
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(&directory);
+                network_filter_compiled(Err(error.message().to_owned()));
+            }
+        },
+    );
+}
+
+fn network_filter_compiled(compiled: Result<(UserContentFilter, std::path::PathBuf), String>) {
+    let (filter, directory) = match compiled {
+        Ok((filter, directory)) => (Ok(filter), Some(directory)),
+        Err(message) => (Err(message), None),
+    };
+    let ready = filter.as_ref().ok().cloned().zip(directory.clone());
+    let Some(waiting) = with(|engine| {
+        let waiting = match std::mem::take(&mut engine.network_filter) {
+            NetworkFilter::Compiling(waiting) => waiting,
+            _ => Vec::new(),
+        };
+        if let Some((filter, directory)) = ready {
+            engine.network_filter = NetworkFilter::Ready { filter, directory };
+        }
+        waiting
+            .into_iter()
+            .filter_map(|id| engine.pages.get(&id).cloned())
+            .collect::<Vec<_>>()
+    }) else {
+        // the engine stopped meanwhile: nothing keeps the directory
+        if let Some(directory) = directory {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        return;
+    };
+    for page in waiting {
+        page.network_filter(filter.as_ref().map_err(String::as_str));
     }
 }
 

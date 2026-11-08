@@ -1562,7 +1562,9 @@ fn take_screen_file(cx: &mut VisualTestContext) -> (String, String) {
 fn opened(events: &Events) -> Option<std::path::PathBuf> {
     events.borrow().iter().find_map(|event| match event {
         TerminalEvent::OpenUrl {
-            url, browser: false, ..
+            url,
+            intent: ngterm_core::link_policy::ClickIntent::Normal,
+            ..
         } => Some(std::path::PathBuf::from(url)),
         _ => None,
     })
@@ -1771,4 +1773,35 @@ fn a_broken_os2_strikeout_falls_back_to_ghosttys_estimates() {
     assert_eq!(metrics::strikethrough(320.0, 48.0, scaled), (Some(5.0), Some(0.75)));
     assert_eq!(metrics::strikethrough(0.0, 0.0, scaled), (None, None));
     assert_eq!(metrics::strikethrough(320.0, 0.0, scaled), (Some(5.0), None));
+}
+
+/// Upstream's `testLiveSurfaceHoldsTheLockUntilTornDown` and `testTextFieldsAndChromeReleaseTheLock`: the
+/// keyboard-layout lock's predicate holds while an owner terminal is focused in its active window, and not while a
+/// field outside it has the keyboard or the window is inactive.
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn the_layout_lock_holds_while_the_terminal_has_the_keyboard_of_an_active_window(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let terminal = terminal(cx, "printf 'held'; exec sleep 5", dir.path());
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
+    wait_painted(&view, cx, "held");
+    let held = |cx: &mut VisualTestContext| cx.cx.update(crate::input_source::keyboard_held);
+    let field = cx.update(|_, cx| cx.focus_handle());
+    let focus = view.read_with(cx, |view, _| view.focus.clone());
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert!(!held(cx), "an unfocused terminal holds nothing");
+
+    cx.update(|window, cx| window.focus(&focus, cx));
+    cx.run_until_parked();
+    assert!(held(cx), "the focused terminal holds the lock");
+    cx.update(|window, cx| window.focus(&field, cx));
+    cx.run_until_parked();
+    assert!(!held(cx), "a field outside the terminal releases it");
+    cx.update(|window, cx| window.focus(&focus, cx));
+    cx.run_until_parked();
+    assert!(held(cx));
+    cx.deactivate_window();
+    cx.run_until_parked();
+    assert!(!held(cx), "an inactive window's terminal holds nothing");
 }

@@ -22,9 +22,11 @@
 
 mod cases;
 mod dmabuf;
+mod document;
 mod interaction;
 mod markdown;
 mod support;
+mod text;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};

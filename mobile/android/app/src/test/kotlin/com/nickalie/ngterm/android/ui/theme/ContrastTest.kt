@@ -140,6 +140,22 @@ class ContrastTest {
         assertEquals(StatusShape.Circle, StatusShape.fromWire("hexagon"))
         // the app's own glyphs are not wire names
         assertEquals(StatusShape.Circle, StatusShape.fromWire("ring"))
+        assertEquals(StatusShape.Circle, StatusShape.fromWire("slash"))
+        // the shapes upstream added in v0.41.0, triangle-down by its public name
+        assertEquals(StatusShape.TriangleDown, StatusShape.fromWire("triangle-down"))
+        assertEquals(StatusShape.Circle, StatusShape.fromWire("triangledown"))
+        assertEquals(StatusShape.Play, StatusShape.fromWire("play"))
+        assertEquals(StatusShape.Seal, StatusShape.fromWire("seal"))
+        assertEquals(StatusShape.Bolt, StatusShape.fromWire("bolt"))
+        assertEquals(StatusShape.Bell, StatusShape.fromWire("Bell"))
+    }
+
+    @Test
+    fun everyWireShapeHasItsOwnGlyph() {
+        val names = "circle square triangle triangle-down play diamond capsule seal star bolt bell"
+        val wire = names.split(" ").map { StatusShape.fromWire(it) }
+        assertEquals("each of upstream's eleven shapes reads as its own", wire.size, wire.toSet().size)
+        assertEquals("and draws its own drawable", wire.size, wire.map { it.drawable }.toSet().size)
     }
 
     @Test

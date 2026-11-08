@@ -379,6 +379,147 @@ fn the_look_paints_the_chromes_colors_in_the_font_setting() {
     }
 }
 
+/// Upstream's `sidebarDensityMetrics`, `sidebarRowHeightFollowsDensity` and
+/// `testCompactRowsAreShorterThanDefaultAtEveryFontBound`, over this build's default geometry: compact takes upstream's
+/// trims off it, its rows are 5 points shorter at every font bound, and the row icon still fits the tighter pill.
+#[test]
+fn compact_trims_upstreams_deltas_and_its_rows_still_fit_the_icon() {
+    use look::Metrics;
+    use ngterm_core::persist::settings::SidebarDensity;
+    assert_eq!(
+        Metrics::of(SidebarDensity::Default),
+        Metrics {
+            row_padding: 13.0,
+            nested_indent: 20.0,
+            info_spacing: 6.0,
+            name_lift: 0.0,
+            pill_inset_y: 1.5,
+        }
+    );
+    assert_eq!(
+        Metrics::of(SidebarDensity::Compact),
+        Metrics {
+            row_padding: 8.0,
+            nested_indent: 16.0,
+            info_spacing: 4.0,
+            name_lift: 1.0,
+            pill_inset_y: 0.5,
+        }
+    );
+    for size in [9.0, 13.0, 20.0] {
+        let look = |density: Option<&str>| {
+            let settings = AppSettings {
+                sidebar_font_size: Some(size),
+                sidebar_density: density.map(str::to_owned),
+                ..AppSettings::default()
+            };
+            Look::of(crate::chrome::default_colors(), &settings)
+        };
+        let (standard, compact) = (look(None), look(Some("compact")));
+        assert_eq!(
+            (standard.density, compact.density),
+            (SidebarDensity::Default, SidebarDensity::Compact)
+        );
+        assert!(
+            (standard.row_height() - compact.row_height() - 5.0).abs() < f32::EPSILON,
+            "font {size}"
+        );
+        assert!(
+            compact.row_height() - 2.0 * compact.metrics().pill_inset_y >= crate::row_icon::SLOT,
+            "font {size}: the row icon fits the pill"
+        );
+        assert_eq!(
+            look(Some("dense")).density,
+            SidebarDensity::Default,
+            "an unknown density"
+        );
+    }
+}
+
+/// `a` and `b` within a hundredth of a point.
+fn near(a: Pixels, b: Pixels) -> bool {
+    (f32::from(a) - f32::from(b)).abs() < 0.01
+}
+
+/// Checks the mounted rows against `density`'s metrics: the plain row's height, the info row's title band, info line
+/// and indent, the selection pill's inset and the name's lift. `info_line` is the info line's height, which no density
+/// changes.
+fn assert_row_metrics(
+    h: &Harness,
+    cx: &mut VisualTestContext,
+    density: ngterm_core::persist::settings::SidebarDensity,
+    info_line: Pixels,
+) {
+    let look = h.view.read_with(cx, |sidebar, _| sidebar.look);
+    assert_eq!(look.density, density);
+    let metrics = look::Metrics::of(density);
+    let band = px(look.font_size + metrics.row_padding);
+    let (srv, u) = (h.id_of("srv", cx), h.id_of("u", cx));
+    let plain = row_bounds(h, srv, cx);
+    assert!(near(plain.size.height, band), "{density:?} plain row {plain:?}");
+    let info = row_bounds(h, u, cx);
+    assert!(
+        near(info.size.height, band + info_line),
+        "{density:?} info row {info:?}"
+    );
+    let line = bounds(cx, "session-info");
+    assert!(
+        near(line.origin.y, info.origin.y + band - px(metrics.info_spacing)),
+        "{density:?} info line {line:?} in {info:?}"
+    );
+    let lead = look::CONTENT_INSET + metrics.nested_indent + crate::row_icon::SLOT + look::GAP;
+    assert!(
+        near(line.origin.x - info.origin.x, px(lead)),
+        "{density:?} indent: {line:?} in {info:?}"
+    );
+    let pill = bounds(cx, "selection-pill");
+    assert!(
+        near(pill.origin.y, plain.origin.y + px(metrics.pill_inset_y))
+            && near(pill.size.height, band - px(2.0 * metrics.pill_inset_y)),
+        "{density:?} pill {pill:?} in {plain:?}"
+    );
+    let name = bounds(cx, "name:srv");
+    assert!(
+        near(name.center().y, plain.origin.y + band / 2.0 - px(metrics.name_lift)),
+        "{density:?} name {name:?} in {plain:?}"
+    );
+}
+
+/// Upstream's `testSwitchingDensityOnAMountedSidebarReappliesEveryMetricBothWays`: `sidebar.density` and the Settings
+/// picker's change reshape the mounted rows, and back.
+#[gpui_kit::test]
+fn switching_the_density_on_a_mounted_sidebar_reapplies_every_metric_both_ways(cx: &mut TestAppContext) {
+    use ngterm_core::persist::settings::SidebarDensity;
+    use ngterm_core::settings_model::{AppearanceChange, SettingsChange};
+    let (mut h, cx) = harness(cx, library().0, AppSettings::default());
+    let (srv, u) = (h.id_of("srv", cx), h.id_of("u", cx));
+    put_info(&mut h, u, Some("3 agents"));
+    h.settle(cx);
+    let info_line = row_bounds(&h, u, cx).size.height - row_bounds(&h, srv, cx).size.height;
+    assert!(info_line > px(0.));
+    assert_row_metrics(&h, cx, SidebarDensity::Default, info_line);
+
+    let response = h.state.core.dispatch(&ngterm_proto::Request {
+        cmd: ngterm_proto::Command::Sidebar(ngterm_proto::command::SidebarCmd::Density),
+        target: None,
+        args: Some(ngterm_proto::Args {
+            mode: Some("compact".to_owned()),
+            ..ngterm_proto::Args::default()
+        }),
+    });
+    assert!(response.ok, "{response:?}");
+    h.settle(cx);
+    assert_row_metrics(&h, cx, SidebarDensity::Compact, info_line);
+
+    h.state
+        .core
+        .change_settings(SettingsChange::Appearance(AppearanceChange::SidebarDensity(
+            SidebarDensity::Default,
+        )));
+    h.settle(cx);
+    assert_row_metrics(&h, cx, SidebarDensity::Default, info_line);
+}
+
 #[gpui_kit::test]
 fn the_sidebar_paints_the_chrome_the_window_shows(cx: &mut TestAppContext) {
     let (mut h, cx) = harness(cx, library().0, AppSettings::default());
@@ -930,6 +1071,19 @@ fn a_tint_takes_the_system_color_of_the_chromes_side() {
     assert_eq!(look::tint_rgb(TintColor::Red, false), Rgb::new(0xFF, 0x3B, 0x30));
     assert_eq!(look::tint_rgb(TintColor::Red, true), Rgb::new(0xFF, 0x45, 0x3A));
     assert_eq!(look::tint_rgb(TintColor::Gray, true), Rgb::new(0x98, 0x98, 0x9D));
+    // the five v0.41.0 colors, as macOS 27 draws them
+    assert_eq!(look::tint_rgb(TintColor::Teal, false), Rgb::new(0x00, 0xC3, 0xD0));
+    assert_eq!(look::tint_rgb(TintColor::Indigo, true), Rgb::new(0x6D, 0x7C, 0xFF));
+    assert_eq!(look::tint_rgb(TintColor::Mint, false), Rgb::new(0x00, 0xC8, 0xB3));
+    // a hex is fixed sRGB on either side; a name follows the side
+    let hex = ngterm_core::model::TintValue::Hex([0x3a, 0x7b, 0xd5]);
+    for dark in [false, true] {
+        assert_eq!(look::tint_value_rgb(hex, dark), Rgb::new(0x3a, 0x7b, 0xd5));
+        assert_eq!(
+            look::tint_value_rgb(TintColor::Pink.into(), dark),
+            look::tint_rgb(TintColor::Pink, dark)
+        );
+    }
     let mut colors = crate::chrome::default_colors();
     colors.sidebar = Rgb::new(0x10, 0x10, 0x10);
     assert!(
@@ -950,10 +1104,10 @@ fn a_tint_takes_the_system_color_of_the_chromes_side() {
 }
 
 /// `testTintColorsTheIconOrNameAndSurvivesSelection`: the row's glyph or name takes the tint, selected or not, its
-/// glyph names the tint, and a clear gives the theme's colors back; the row menu's choices land in the model.
+/// glyph names the tint, and a clear gives the theme's colors back.
 #[gpui_kit::test]
 fn a_tint_colors_the_icon_or_the_name_and_survives_selection(cx: &mut TestAppContext) {
-    use ngterm_core::model::{SidebarTint, TintChoice, TintColor, TintParts};
+    use ngterm_core::model::{SidebarTint, TintColor, TintParts};
     let (library, _) = library();
     let (mut h, cx) = harness(cx, library, AppSettings::default());
     let srv = h.id_of("srv", cx);
@@ -984,12 +1138,29 @@ fn a_tint_colors_the_icon_or_the_name_and_survives_selection(cx: &mut TestAppCon
     assert_eq!(name, look::tint(TintColor::Green, look.dark()));
     assert_eq!(glyph, plain.1);
 
+    // a hex colors the glyph its fixed sRGB and names itself by the hex
+    let hex = ngterm_core::model::TintValue::Hex([0x3a, 0x7b, 0xd5]);
+    h.store_mut().set_session_tint(Some(SidebarTint::on_icon(hex)), srv);
+    h.settle(cx);
+    let row = h.view.read_with(cx, |sidebar, _| sidebar.rows()[2].clone());
+    assert_eq!(look.row_inks(row.tint, false).1, look::tint_value(hex, look.dark()));
+    assert!(cx.debug_bounds("session-icon:#3a7bd5 tint").is_some());
+
     h.store_mut().set_session_tint(None, srv);
     h.settle(cx);
+    assert!(cx.debug_bounds("session-icon:#3a7bd5 tint").is_none());
     assert!(cx.debug_bounds("session-icon:red tint").is_none());
     assert!(cx.debug_bounds("session-icon:green tint").is_none());
+}
 
-    // the row menu's choices
+/// The row menu's Tint choices land in the model, and a Show On pick reaches the next sync's menus, whose untinted
+/// rows check it, while a color from there starts the row on it (`testLastPlacementPickStartsTheNextUntintedRow`).
+#[gpui_kit::test]
+fn the_row_menus_tint_choices_land_in_the_model(cx: &mut TestAppContext) {
+    use ngterm_core::model::{SidebarTint, TintChoice, TintColor, TintParts};
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let srv = h.id_of("srv", cx);
     let one = h.store().workspaces()[0].id();
     let perform = |h: &mut Harness, cx: &mut VisualTestContext, action: menu::MenuAction| {
         cx.update(|window, cx| h.view.update(cx, |sidebar, cx| sidebar.perform(action, window, cx)));
@@ -1000,7 +1171,7 @@ fn a_tint_colors_the_icon_or_the_name_and_survives_selection(cx: &mut TestAppCon
         cx,
         menu::MenuAction::Tint {
             sessions: vec![srv],
-            choice: TintChoice::Color(Some(TintColor::Blue)),
+            choice: TintChoice::Color(Some(TintColor::Blue.into())),
         },
     );
     assert_eq!(
@@ -1012,7 +1183,7 @@ fn a_tint_colors_the_icon_or_the_name_and_survives_selection(cx: &mut TestAppCon
         cx,
         menu::MenuAction::TintWorkspace {
             workspace: one,
-            choice: TintChoice::Color(Some(TintColor::Purple)),
+            choice: TintChoice::Color(Some(TintColor::Purple.into())),
         },
     );
     assert_eq!(
@@ -1020,6 +1191,30 @@ fn a_tint_colors_the_icon_or_the_name_and_survives_selection(cx: &mut TestAppCon
         Some(SidebarTint::on_icon(TintColor::Purple))
     );
     assert!(cx.debug_bounds("workspace-icon:purple tint").is_some());
+
+    perform(
+        &mut h,
+        cx,
+        menu::MenuAction::Tint {
+            sessions: vec![srv],
+            choice: TintChoice::Parts(TintParts::NAME),
+        },
+    );
+    let var = h.id_of("var", cx);
+    let context = h.view.read_with(cx, |sidebar, _| sidebar.context.menu.clone());
+    assert_eq!(context.tint_placement, TintParts::NAME);
+    perform(
+        &mut h,
+        cx,
+        menu::MenuAction::Tint {
+            sessions: vec![var],
+            choice: TintChoice::Color(Some(TintColor::Teal.into())),
+        },
+    );
+    assert_eq!(
+        h.store().session(var).unwrap().tint,
+        Some(SidebarTint::new(TintColor::Teal, TintParts::NAME))
+    );
 }
 
 // MARK: - companions (upstream's `WorkspaceSidebarCompanionsTests`, `SidebarRowIndentTests`)
@@ -1842,4 +2037,188 @@ fn a_hover_that_moves_on_before_the_delay_opens_nothing(cx: &mut TestAppContext)
     cx.simulate_mouse_move(point(px(630.), px(470.)), MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(point(px(630.), px(470.)), MouseButton::Left, Modifiers::default());
     h.settle(cx);
+}
+
+// MARK: - workspace chevrons (#909: upstream's `SidebarRowIndentTests`, `SidebarWorkspaceExpansionMenuTests`)
+
+fn chevrons_hidden(hidden: bool) -> ngterm_core::settings_model::SettingsChange {
+    use ngterm_core::persist::settings::InterfaceElement;
+    use ngterm_core::settings_model::{InterfaceChange, SettingsChange};
+    SettingsChange::Interface(InterfaceChange::ElementVisible {
+        element: InterfaceElement::WorkspaceChevrons,
+        visible: !hidden,
+    })
+}
+
+/// Upstream's `testHiddenChevronsStartWorkspaceRowsAtTheEdgeOnEveryVersion` and
+/// `testHiddenChevronsKeepACompanionParentsTriangleWholeAheadOfItsContent`, on the leads: a workspace row starts at the
+/// edge, the nested rows shift left by its strip short of a disclosure, so a parent's disclosure fits whole ahead of
+/// its glyph and a companion still indents one level past its parent, at both densities.
+#[test]
+fn hidden_chevrons_start_workspace_rows_at_the_edge_and_keep_a_parents_disclosure_whole() {
+    use ngterm_core::persist::settings::SidebarDensity;
+    use view::row_lead;
+    let session = |group| {
+        let mut row = session_row(Uuid::new_v4(), false);
+        if let RowKind::Session { group: slot, .. } = &mut row.kind {
+            *slot = group;
+        }
+        row
+    };
+    let mut workspace = session_row(Uuid::new_v4(), false);
+    workspace.kind = RowKind::Workspace { expanded: true };
+    let plain = session(RowGroup::Plain);
+    let parent = session(RowGroup::Parent { expanded: true });
+    let companion = session(RowGroup::Companion { nested: true });
+    let mut flat = session(RowGroup::Plain);
+    flat.kind = RowKind::Session {
+        workspace: Uuid::nil(),
+        nested: false,
+        selected: false,
+        group: RowGroup::Plain,
+    };
+    for density in [SidebarDensity::Default, SidebarDensity::Compact] {
+        let shown = Look {
+            density,
+            ..Look::default()
+        };
+        let hidden = Look {
+            chevrons: false,
+            ..shown
+        };
+        // compared as points: clippy's float_cmp holds raw f32s to an epsilon, and these are exact sums
+        let lead_of = |row: &SidebarRow, look: &Look| px(row_lead(row, look));
+        let indent = px(shown.metrics().nested_indent);
+        let edge = px(0.0);
+        assert_eq!(
+            lead_of(&workspace, &shown),
+            indent,
+            "{density:?}: the disclosure's strip"
+        );
+        assert_eq!(lead_of(&workspace, &hidden), edge, "{density:?}: at the edge");
+        assert_eq!(
+            lead_of(&flat, &hidden),
+            edge,
+            "{density:?}: a flat row never had the strip"
+        );
+        let lead = lead_of(&parent, &hidden);
+        assert_eq!(lead, lead_of(&plain, &hidden), "{density:?}: siblings line up");
+        assert!(
+            lead >= px(look::DISCLOSURE),
+            "{density:?}: the parent's disclosure fits whole"
+        );
+        assert!(lead <= lead_of(&parent, &shown), "{density:?}: never further in");
+        assert_eq!(
+            lead_of(&companion, &hidden) - lead,
+            indent,
+            "{density:?}: one level past its parent"
+        );
+        // the shift is the same for every nested row, so the tree's own indent survives it
+        assert_eq!(
+            lead_of(&companion, &shown) - lead_of(&companion, &hidden),
+            lead_of(&plain, &shown) - lead
+        );
+    }
+    let settings = AppSettings {
+        hidden_interface_elements: Some(vec!["workspaceChevrons".to_owned()]),
+        ..AppSettings::default()
+    };
+    assert!(!Look::of(crate::chrome::default_colors(), &settings).chevrons);
+    assert!(Look::default().chevrons);
+}
+
+/// Upstream's `testTogglingChevronsOnAMountedSidebarReappliesTheLayoutBothWays`: hiding the chevrons drops every
+/// workspace disclosure and moves the rows left, a parent's disclosure staying ahead of its glyph, and showing them
+/// again restores the layout exactly; the row still folds by a click while the chevrons are hidden.
+#[gpui_kit::test]
+fn toggling_the_chevrons_on_a_mounted_sidebar_relays_the_rows_out_both_ways(cx: &mut TestAppContext) {
+    let (library, srv, _) = library_with_companions(&["log"]);
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let two = h.id_of("two", cx);
+    let workspace_disclosure: &'static str = Box::leak(format!("disclosure:{two}").into_boxed_str());
+    let parent_disclosure: &'static str = Box::leak(format!("disclosure:{srv}").into_boxed_str());
+    let layout = |cx: &mut VisualTestContext| {
+        ["name:two", "name:var", "name:srv", "companion-row"].map(|selector| bounds(cx, selector).origin.x)
+    };
+    let shown = layout(cx);
+    assert!(cx.debug_bounds(workspace_disclosure).is_some());
+
+    h.state.core.change_settings(chevrons_hidden(true));
+    h.settle(cx);
+    assert!(cx.debug_bounds(workspace_disclosure).is_none(), "no workspace chevron");
+    let hidden = layout(cx);
+    let strip = px(look::Metrics::of(ngterm_core::persist::settings::SidebarDensity::Default).nested_indent);
+    assert_eq!(shown[0] - hidden[0], strip, "the workspace row takes the strip");
+    assert!(
+        hidden[1] < shown[1] && hidden[1] > hidden[0],
+        "a session moves left and stays nested"
+    );
+    let disclosure = bounds(cx, parent_disclosure);
+    assert!(disclosure.right() <= bounds(cx, "name:srv").left());
+    assert!(
+        disclosure.left() >= bounds(cx, "row:srv").left() + px(look::CONTENT_INSET),
+        "inside the row"
+    );
+    assert_eq!(
+        hidden[3] - hidden[2],
+        shown[3] - shown[2],
+        "the companion keeps its level"
+    );
+
+    // a row click still folds it: the chevron and the row click are separate settings
+    let at = bounds(cx, "row:two").center();
+    cx.simulate_click(at, Modifiers::default());
+    cx.executor().advance_clock(DOUBLE_CLICK);
+    h.settle(cx);
+    assert!(!h.store().workspace(two).unwrap().is_expanded);
+    h.store_mut().set_workspace_expanded(two, true);
+    h.settle(cx);
+
+    h.state.core.change_settings(chevrons_hidden(false));
+    h.settle(cx);
+    assert_eq!(layout(cx), shown, "showing them restores the layout");
+    assert!(cx.debug_bounds(workspace_disclosure).is_some());
+}
+
+/// Upstream's `SidebarWorkspaceExpansionMenuTests` and `testHiddenChevronsWithRowClickOffFoldThroughTheRowMenu`: the
+/// row menu's Collapse Workspace folds the clicked workspace (not the active one) and persists, and Expand Workspace
+/// opens it again, with the chevrons hidden and the whole-row click off.
+#[gpui_kit::test]
+fn the_workspace_row_menu_folds_the_clicked_workspace_with_chevrons_hidden_and_row_click_off(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let settings = AppSettings {
+        hidden_interface_elements: Some(vec!["workspaceChevrons".to_owned()]),
+        workspace_row_click_expands: Some(false),
+        ..AppSettings::default()
+    };
+    let (mut h, cx) = harness(cx, library, settings);
+    let one = h.store().workspaces()[0].id();
+    let two = h.id_of("two", cx);
+    assert_eq!(
+        h.store().current_workspace_id(),
+        Some(one),
+        "the active workspace is the other one"
+    );
+    // Rename, Copy Name, New Session, Open Directory…, then the fold
+    let fold = "down down down down down enter";
+    right_click(cx, "row:two");
+    cx.simulate_keystrokes(fold);
+    h.settle(cx);
+    assert_eq!(h.names(cx), ["w:workspace 1", "s:u", "s:srv*", "w:two"]);
+    assert!(!h.store().workspace(two).unwrap().is_expanded, "the fold persists");
+    assert!(h.store().workspace(one).unwrap().is_expanded);
+    let menu = h.view.read_with(cx, |sidebar, _| sidebar.menu_entries(two));
+    assert!(menu.contains(&menu::MenuEntry::Item(menu::MenuItem {
+        label: "Expand Workspace".to_owned(),
+        action: menu::MenuAction::ToggleExpansion(two),
+        enabled: true,
+        checked: false,
+        swatch: None,
+    })));
+
+    right_click(cx, "row:two");
+    cx.simulate_keystrokes(fold);
+    h.settle(cx);
+    assert_eq!(h.names(cx).len(), 5);
+    assert!(h.store().workspace(two).unwrap().is_expanded);
 }

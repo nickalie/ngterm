@@ -159,6 +159,7 @@ fn every_upstream_control_id_names_a_row() {
         "settings-bg-blur",
         "settings-sidebar-shift",
         "settings-sidebar-font-size",
+        "settings-sidebar-density",
         "settings-interface-font-size",
         "settings-inactive-pane-mute",
         "settings-auto-hide-inactive-sidebars",
@@ -221,23 +222,25 @@ fn path_rows_offer_the_upstream_choose_and_default_buttons() {
 }
 
 #[test]
-fn every_page_but_interface_lays_its_rows_one_per_row() {
+fn only_interface_and_appearance_pair_their_rows() {
     let shown = snapshot(AppSettings::default());
     let catalogs = catalogs();
     for tab in Tab::ALL {
         for section in tab.sections(&shown, &catalogs) {
-            let expected = if tab == Tab::Interface && matches!(section.title, Some("Title Bar" | "Sidebar")) {
-                2
-            } else {
-                1
+            let paired = match tab {
+                Tab::Interface => matches!(section.title, Some("Title Bar" | "Sidebar")),
+                Tab::Appearance => section.title == Some("Terminal"),
+                _ => false,
             };
+            let expected = if paired { 2 } else { 1 };
             assert_eq!(section.columns, expected, "{tab:?} {:?}", section.title);
         }
     }
 }
 
 /// Upstream's `testInterfaceTabFitsWithTheOverlaysToggle`: the overlays button is off until opted in, and the
-/// multi-window toggle is the Sidebar section's last row rather than a section of its own.
+/// multi-window toggle shares the Sidebar section's last row with the info picker rather than taking a section of its
+/// own.
 #[test]
 fn the_interface_tab_offers_the_overlays_button_off_and_ends_the_sidebar_with_multiple_windows() {
     let shown = snapshot(AppSettings::default());
@@ -259,31 +262,24 @@ fn the_interface_tab_offers_the_overlays_button_off_and_ends_the_sidebar_with_mu
         matches!(toggle.control, Control::Toggle { on: false, .. }),
         "off by default"
     );
+    // #909: the eight element toggles fill the grid, and the info picker and the multi-window toggle share its last row
     let sidebar = &sections[1];
-    assert!(
-        sidebar
-            .items
-            .iter()
-            .all(|item| item.id.starts_with("settings-interface-"))
-    );
+    let ids: Vec<&str> = sidebar.rows().map(|item| item.id.as_str()).collect();
+    assert_eq!(ids.len(), 10);
+    assert!(ids[..8].iter().all(|id| id.starts_with("settings-interface-")));
+    assert_eq!(ids[7], "settings-interface-workspaceChevrons");
     assert_eq!(
-        sidebar.items.len(),
-        7,
-        "the final half is available for the info picker"
-    );
-    assert_eq!(
-        sidebar.fill.as_ref().map(|item| item.id.as_str()),
-        Some("settings-session-info-display")
-    );
-    let trailing: Vec<&str> = sidebar.trailing.iter().map(|item| item.id.as_str()).collect();
-    assert_eq!(
-        trailing,
-        ["settings-auto-hide-inactive-sidebars"],
+        ids[8..],
+        ["settings-session-info-display", "settings-auto-hide-inactive-sidebars"],
         "the section's last row"
     );
+    assert!(sidebar.fill.is_none() && sidebar.trailing.is_empty());
+    let multi_window = sidebar.rows().last().unwrap();
+    assert_eq!(multi_window.title, "Active window only");
     assert_eq!(
-        sidebar.rows().last().map(|item| item.title.as_str()),
-        Some("Show sidebar only in the active window")
+        multi_window.leading,
+        Some(super::form::GlyphSlot(None)),
+        "its label lines up with the glyph rows'"
     );
 
     let opted_in = snapshot(AppSettings {
@@ -319,7 +315,11 @@ fn interface_toggles_lead_with_their_controls_glyph_text_only_first() {
         ]
     );
     for section in &sections[..2] {
-        for item in &section.items {
+        for item in section
+            .items
+            .iter()
+            .filter(|item| item.id.starts_with("settings-interface-"))
+        {
             let element = InterfaceElement::ALL
                 .iter()
                 .copied()
@@ -338,7 +338,11 @@ fn interface_toggles_lead_with_their_controls_glyph_text_only_first() {
         .into_iter()
         .filter(|(_, item)| !item.id.starts_with("settings-interface-"));
     for (tab, item) in others {
-        let expected = (item.id == "settings-session-info-display").then_some(GlyphSlot(None));
+        let expected = matches!(
+            item.id.as_str(),
+            "settings-session-info-display" | "settings-auto-hide-inactive-sidebars"
+        )
+        .then_some(GlyphSlot(None));
         assert_eq!(item.leading, expected, "{tab:?} {}", item.id);
     }
 }
@@ -588,6 +592,37 @@ fn sliders_read_their_setting_and_move_it_in_whole_steps() {
         SettingsChange::Appearance(AppearanceChange::BackgroundBlur(5))
     );
     assert_eq!(form::whole(9.5), 10);
+}
+
+/// Upstream's `testAgentStatusShapePickerRowLayoutAndOptions`: every shape's display name, and nothing else; a new
+/// shape stored in the settings shows as the picker's choice.
+#[test]
+fn each_status_shape_picker_offers_the_eleven_shapes_by_display_name() {
+    let shapes = [
+        "Circle",
+        "Square",
+        "Triangle",
+        "Down Triangle",
+        "Play",
+        "Diamond",
+        "Capsule",
+        "Seal",
+        "Star",
+        "Bolt",
+        "Bell",
+    ];
+    let items = every_item(&snapshot(AppSettings {
+        completed_status_shape: Some("triangle-down".to_owned()),
+        blocked_status_shape: Some("bell".to_owned()),
+        ..AppSettings::default()
+    }));
+    for status in [AgentStatus::Active, AgentStatus::Blocked, AgentStatus::Completed] {
+        let picker = picker_of(item(&items, &format!("settings-status-shape-{}", status.wire_name())));
+        assert_eq!(picker.options, shapes, "{status:?}");
+    }
+    let completed = picker_of(item(&items, "settings-status-shape-completed"));
+    assert_eq!(completed.label(), "Down Triangle");
+    assert_eq!(picker_of(item(&items, "settings-status-shape-blocked")).label(), "Bell");
 }
 
 #[test]
@@ -1274,7 +1309,7 @@ fn the_popup_takes_upstreams_window_size_and_shrinks_to_fit_a_small_window() {
         let panel = panel_size(size(px(width), px(height)));
         (f32::from(panel.width), f32::from(panel.height))
     };
-    assert_eq!(fits(1280., 800.), PANEL_SIZE, "upstream's 540x680");
+    assert_eq!(fits(1280., 800.), PANEL_SIZE, "upstream's 540x710");
     assert_eq!(fits(800., 500.), (540., 468.), "the margin kept under and over it");
     assert_eq!(fits(400., 300.), (368., 268.), "and beside it");
     assert_eq!(fits(20., 10.), (0., 0.), "never negative");
@@ -1394,7 +1429,104 @@ fn the_paths_and_diagnostics_are_selectable_text(cx: &mut TestAppContext) {
     );
 }
 
-/// The upstream Interface layout keeps both new icon toggles, the info picker and Size on screen.
+/// The Appearance tab's last control sits inside the page and a scroll leaves it in place.
+fn assert_appearance_fits(h: &mut Harness, cx: &mut VisualTestContext, case: &str) {
+    let page = bounds(cx, "settings-page");
+    let last = bounds(cx, "settings-inactive-pane-mute");
+    assert!(
+        last.origin.y >= page.origin.y && last.bottom() <= page.bottom(),
+        "{case}: the last control fits: {last:?} in {page:?}"
+    );
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: last.center(),
+        delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0., -12.)),
+        ..gpui_kit::ScrollWheelEvent::default()
+    });
+    h.settle(cx);
+    assert_eq!(
+        bounds(cx, "settings-inactive-pane-mute"),
+        last,
+        "{case}: Appearance fits without scrolling"
+    );
+}
+
+/// Upstream's `testSidebarDensityPickerPersistsAndTheAppearanceTabFits`: the picker sits under Sidebar font size,
+/// picks Compact into `settings.json` and Default out of it again, and the Appearance tab shows its last control
+/// without scrolling whether or not the theme follows the system (which adds the other side's picker and its hint).
+#[gpui_kit::test]
+fn the_sidebar_density_picker_persists_and_the_appearance_tab_fits(cx: &mut TestAppContext) {
+    let following = AppSettings {
+        follow_system_appearance: Some(true),
+        ..AppSettings::default()
+    };
+    let (mut h, cx) = harness(cx, following);
+    h.tab(cx, Tab::Appearance);
+    bounds(cx, "settings-theme-dark-hint");
+    assert_appearance_fits(&mut h, cx, "following");
+    let font_size = bounds(cx, "settings-sidebar-font-size");
+    let picker = bounds(cx, "settings-sidebar-density");
+    let palette = bounds(cx, "settings-interface-font-size");
+    assert!(
+        font_size.bottom() <= picker.origin.y && picker.bottom() <= palette.origin.y,
+        "under Sidebar font size"
+    );
+    assert_eq!(h.item(cx, "settings-sidebar-density"), Some(Shown::Row(Some(0))));
+
+    // the menu opens with no row under the keyboard: Down lands on Default, the second on Compact
+    click(cx, "settings-sidebar-density");
+    h.settle(cx);
+    cx.simulate_keystrokes("down down enter");
+    h.settle(cx);
+    assert_eq!(h.stored().sidebar_density.as_deref(), Some("compact"));
+    assert_eq!(h.item(cx, "settings-sidebar-density"), Some(Shown::Row(Some(1))));
+
+    click(cx, "settings-sidebar-density");
+    h.settle(cx);
+    cx.simulate_keystrokes("down enter");
+    h.settle(cx);
+    assert_eq!(h.stored().sidebar_density, None, "the default is stored as no key");
+    assert_eq!(h.item(cx, "settings-sidebar-density"), Some(Shown::Row(Some(0))));
+
+    h.state
+        .core
+        .change_settings(SettingsChange::Appearance(AppearanceChange::FollowSystemAppearance {
+            on: false,
+            dark: false,
+        }));
+    h.settle(cx);
+    assert!(cx.debug_bounds("settings-theme-dark-hint").is_none());
+    assert_appearance_fits(&mut h, cx, "not following");
+}
+
+/// A long font or theme name truncates in its paired half: the row's label stays whole and the picker stays inside
+/// its half, short of the divider.
+#[gpui_kit::test]
+fn a_long_picker_value_truncates_inside_its_half(cx: &mut TestAppContext) {
+    let long = "An Unusually Long Monospaced Family Name Indeed";
+    let settings = AppSettings {
+        font_family: Some(long.to_owned()),
+        theme: Some(format!("{long} Theme")),
+        ..AppSettings::default()
+    };
+    let (mut h, cx) = harness(cx, settings);
+    h.tab(cx, Tab::Appearance);
+    let page = bounds(cx, "settings-page");
+    let half = page.origin.x + page.size.width / 2.0;
+    for id in ["settings-font-family", "settings-theme"] {
+        let picker = bounds(cx, id);
+        assert!(
+            picker.right() < half,
+            "{id} stays in its half: {picker:?}, page {page:?}"
+        );
+        assert!(picker.size.width > px(40.), "{id} still shows a value: {picker:?}");
+    }
+    let font_size = bounds(cx, "settings-font-size");
+    assert_eq!(bounds(cx, "settings-font-family").center().y, font_size.center().y);
+    assert_appearance_fits(&mut h, cx, "long names");
+}
+
+/// The upstream Interface layout keeps the row toggles, the info picker, the multi-window toggle and Size on screen
+/// (upstream's `testInterfaceTabFits…`, the chevrons toggle hittable), the picker and the toggle sharing the last row.
 #[gpui_kit::test]
 fn the_interface_grid_keeps_the_info_picker_and_quick_terminal_size_visible(cx: &mut TestAppContext) {
     let (mut h, cx) = harness(cx, AppSettings::default());
@@ -1403,7 +1535,9 @@ fn the_interface_grid_keeps_the_info_picker_and_quick_terminal_size_visible(cx: 
     for id in [
         "settings-interface-workspaceIcons",
         "settings-interface-sessionIcons",
+        "settings-interface-workspaceChevrons",
         "settings-session-info-display",
+        "settings-auto-hide-inactive-sidebars",
         "settings-quick-terminal-size",
     ] {
         let control = bounds(cx, id);
@@ -1424,10 +1558,18 @@ fn the_interface_grid_keeps_the_info_picker_and_quick_terminal_size_visible(cx: 
         size_before_scroll,
         "Interface fits without scrolling"
     );
-    let icons = bounds(cx, "settings-interface-sessionIcons");
+    let chevrons = bounds(cx, "settings-interface-workspaceChevrons");
     let picker = bounds(cx, "settings-session-info-display");
-    assert_eq!(icons.center().y, picker.center().y, "picker fills the odd grid half");
-    assert!(picker.origin.x > icons.origin.x);
+    let multi_window = bounds(cx, "settings-auto-hide-inactive-sidebars");
+    assert!(
+        picker.center().y > chevrons.center().y,
+        "the picker opens the row after the grid"
+    );
+    assert!(
+        (picker.center().y - multi_window.center().y).abs() < px(1.),
+        "one row: {picker:?} {multi_window:?}"
+    );
+    assert!(multi_window.origin.x > picker.origin.x);
     click(cx, "settings-session-info-display");
     h.settle(cx);
     cx.simulate_keystrokes("down down enter");

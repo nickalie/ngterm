@@ -6,7 +6,7 @@
 //! registered window ([`crate::keymap_dispatch::register_window`]); the window close and Settings… go to the model;
 //! the session close confirmation, the session and workspace renames, Delete Workspace and Open Directory… go to the
 //! window's sidebar ([`WindowView::sidebar`]); Rename Window and Delete Window are alerts over their window
-//! ([`crate::modal`]).
+//! ([`crate::modal`]). Find over a text page puts the keyboard in the page's own search field.
 
 use gpui_kit::App;
 use ngterm_core::app_actions::FrontendAction;
@@ -63,6 +63,9 @@ pub fn perform(poster: &Poster, action: FrontendAction, close_grace: bool, cx: &
                 let _ = handle.update(cx, |_, window, cx| crate::status_sound::alert(window, cx));
             }
         }
+        // the deck gives the page's element the keyboard (the core asked for the pane focus); its renderer focuses the
+        // field
+        FrontendAction::FocusPageSearch { page, .. } => crate::html_overlay::focus_page_search(page),
     }
 }
 

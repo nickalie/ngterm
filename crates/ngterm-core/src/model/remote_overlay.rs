@@ -37,6 +37,9 @@ pub struct RemoteOverlaySlot {
     pub ended: bool,
     /// What the slot holds instead of a program; `job` is then the page's id.
     pub page: Option<RemotePage>,
+    /// A picture the presenter fitted itself, whose points only it knows (upstream's `presenterSized`): a point resize
+    /// sends only its own axes to merge into them, until a resize replaces the size whole.
+    pub presenter_sized: bool,
 }
 
 /// A visibility sent to the presenter and not yet echoed back.
@@ -63,6 +66,8 @@ pub struct RemotePage {
     /// No presenter shows the page: it waits, its slot reserved and its outcome pending, for the next presenter that
     /// speaks pages.
     pub parked: bool,
+    /// An image page's probed size, which it travels with: sent again when it is handed to a later presenter.
+    pub image_pixels: Option<crate::html::image_page::ImagePixels>,
     requested: Option<VisibilityRequest>,
     last_seq: i64,
 }
@@ -78,6 +83,7 @@ impl RemotePage {
             hidden: false,
             background_color: None,
             parked: false,
+            image_pixels: None,
             requested: None,
             last_seq: 0,
         }
@@ -205,6 +211,12 @@ impl RemoteOverlays {
         self.failures[failure_index(pane)].as_deref()
     }
 
+    /// The slots, to change what a test needs changed in one.
+    #[cfg(test)]
+    pub(crate) fn slots_mut(&mut self) -> &mut [RemoteOverlaySlot] {
+        &mut self.slots
+    }
+
     pub(crate) fn reserve(&mut self, slot: RemoteOverlaySlot) {
         self.failures[failure_index(slot.pane)] = None;
         self.slots.push(slot);
@@ -234,10 +246,18 @@ impl RemoteOverlays {
         }
     }
 
-    pub(crate) fn resize(&mut self, job: &str, size_percent: Option<i64>, points: OverlayPointSize) {
+    /// Records a resize; `presenter_sized` keeps the presenter's own fit, which only a point resize does.
+    pub(crate) fn resize(
+        &mut self,
+        job: &str,
+        size_percent: Option<i64>,
+        points: OverlayPointSize,
+        presenter_sized: bool,
+    ) {
         if let Some(slot) = self.slots.iter_mut().find(|slot| slot.job == job) {
             slot.size_percent = size_percent;
             slot.points = points;
+            slot.presenter_sized = presenter_sized;
         }
     }
 
@@ -480,6 +500,7 @@ impl AppStore {
                 seq,
                 action,
                 size_percent: None,
+                merge: None,
             };
             self.remote_overlay_changes
                 .push(RemoteOverlayChange::PageCommand { session, command });
@@ -493,9 +514,10 @@ impl AppStore {
         job: &str,
         size_percent: Option<i64>,
         points: OverlayPointSize,
+        presenter_sized: bool,
     ) {
         if let Some(found) = self.session_mut(session) {
-            found.remote_overlays.resize(job, size_percent, points);
+            found.remote_overlays.resize(job, size_percent, points, presenter_sized);
         }
     }
 
@@ -668,6 +690,7 @@ mod tests {
             wait,
             ended: false,
             page: None,
+            presenter_sized: false,
         }
     }
 

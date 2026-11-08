@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use ngterm_core::model::{AgentStatus, AppStore, MoveTree, Session, SidebarMode};
+use ngterm_core::model::{AgentStatus, AppStore, MoveTree, Session, SidebarMode, TintParts};
 use ngterm_core::persist::AppSettings;
 use ngterm_core::persist::settings::InterfaceElement;
 use ngterm_core::sidebar_drop::FlaggedTree;
@@ -60,14 +60,14 @@ pub struct SidebarContext {
 }
 
 impl SidebarContext {
-    /// Takes the snapshot of `store` under `settings`.
+    /// Takes the snapshot of `store` under `settings`, with the Tint submenu's last Show On pick.
     #[must_use]
-    pub fn take(store: &AppStore, settings: &AppSettings) -> Self {
+    pub fn take(store: &AppStore, settings: &AppSettings, tint_placement: TintParts) -> Self {
         let shows = |element| !settings.is_interface_element_hidden(element);
         let flagged_mode = store.sidebar().mode == SidebarMode::Flagged;
         let has_flagged = store.sessions().any(|session| session.flagged);
         Self {
-            menu: menu_context(store),
+            menu: menu_context(store, tint_placement),
             drop: drop_context(store, settings),
             footer: FooterState {
                 new_workspace: shows(InterfaceElement::NewWorkspace),
@@ -96,7 +96,7 @@ impl SidebarContext {
     }
 }
 
-fn menu_context(store: &AppStore) -> MenuContext {
+fn menu_context(store: &AppStore, tint_placement: TintParts) -> MenuContext {
     let mut sessions = HashMap::new();
     let mut workspaces = Vec::new();
     for workspace in store.workspaces() {
@@ -133,6 +133,7 @@ fn menu_context(store: &AppStore) -> MenuContext {
         workspaces,
         can_remove_workspace: store.can_remove_workspace(),
         moves: MoveTree::of(store),
+        tint_placement,
     }
 }
 
@@ -198,7 +199,7 @@ mod tests {
             hidden_interface_elements: Some(vec!["newWorkspace".into()]),
             ..AppSettings::default()
         };
-        let context = SidebarContext::take(store, &settings);
+        let context = SidebarContext::take(store, &settings, TintParts::ICON);
         assert!(!context.footer.new_workspace && context.footer.new_session);
         assert!(context.footer.has_members && !context.footer.filter_on);
         assert!(context.footer.has_flagged && !context.empty_flagged);
@@ -209,7 +210,7 @@ mod tests {
             "one of its two sessions is flagged"
         );
         store.set_flag(true, first);
-        let context = SidebarContext::take(store, &settings);
+        let context = SidebarContext::take(store, &settings, TintParts::ICON);
         assert!(context.menu.workspaces[0].all_flagged);
         assert!(!context.menu.can_remove_workspace);
         assert_eq!(context.drop.locations[&second].index, 1);

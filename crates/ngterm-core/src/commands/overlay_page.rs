@@ -25,9 +25,11 @@ use crate::Core;
 use crate::app_actions::{ActionEffect, FrontendAction};
 use crate::error::ControlError;
 use crate::html::bridge::{self, HtmlBridgePage};
+use crate::html::image_page::{ImageData, ImagePixels};
+use crate::html::text_page::{self, TextLog};
 use crate::html::{
     HtmlHost, HtmlLoadState, HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlPageInfo, HtmlPageOutcomes,
-    HtmlReloadTarget, HtmlSource, errors, zoom,
+    HtmlReloadTarget, HtmlSource, PageProbe, errors, zoom,
 };
 use crate::model::{HtmlOverlayOpenFailure, HtmlPageSlot, OverlayPane, OverlayPointSize, OverlaySize, StatusPane};
 use crate::pane_env::uuid_string;
@@ -47,6 +49,8 @@ const ALREADY_OPEN: &str = "overlay already open";
 const PANE_ALREADY_OPEN: &str = "pane overlay already open";
 /// Upstream's `OverlayHtmlError.presenter`.
 const PRESENTER: &str = "a viewer presents this session: an html overlay would open where nobody sees it";
+/// Upstream's `OverlayHtmlError.logRemote`.
+const LOG_REMOTE: &str = "session.overlay.open: a log page is not shown on another Mac";
 /// The bridge's refusals of a page that left its slot (upstream's `handleBridgeRequest`).
 const PAGE_CLOSED: &str = "page closed";
 
@@ -66,6 +70,8 @@ pub(crate) struct PageRuntime {
     /// Pages that left every slot since the frontend last took them.
     released: Vec<Uuid>,
     host: Option<Box<dyn HtmlHost>>,
+    /// How an origin with no web views reads a page's file before handing it over.
+    probe: Option<Box<dyn PageProbe>>,
     /// A headless origin has no local page surface, even when its terminal holds the lead.
     presenter_only: bool,
 }
@@ -79,6 +85,7 @@ impl fmt::Debug for PageRuntime {
             .field("persisted", &self.persisted)
             .field("released", &self.released)
             .field("host", &self.host.is_some())
+            .field("probe", &self.probe.is_some())
             .field("presenter_only", &self.presenter_only)
             .finish()
     }
@@ -94,6 +101,13 @@ pub(crate) struct PageOpening {
     pub points: OverlayPointSize,
     pub background_color: Option<String>,
     pub follow: bool,
+    /// A terminal click opens the page ([`HtmlOverlay::clicked`]); the dispatcher never sets it.
+    pub clicked: bool,
+    /// Makes a text page a log page ([`HtmlOverlay::text_log`]).
+    pub text_log: Option<TextLog>,
+    /// An image page's probed size, which it travels with when the presenting machine shows it (upstream's
+    /// `imagePixels`): set from the probe, never by the dispatcher; an image page without it is never handed over.
+    pub image_pixels: Option<ImagePixels>,
 }
 
 impl PageOpening {
@@ -105,6 +119,12 @@ impl PageOpening {
         points: OverlayPointSize,
     ) -> Self {
         let set = |flag: Option<bool>| flag == Some(true);
+        // only a text page takes a log's options; the dispatcher refused them on any other source
+        let text_log = if matches!(source, HtmlSource::Text { .. }) {
+            super::overlay::text_log(args)
+        } else {
+            None
+        };
         Self {
             source,
             flags: HtmlPageFlags {
@@ -119,6 +139,9 @@ impl PageOpening {
             points,
             background_color: args.color.clone(),
             follow: set(args.follow),
+            clicked: false,
+            text_log,
+            image_pixels: None,
         }
     }
 }
@@ -126,8 +149,10 @@ impl PageOpening {
 /// `session.overlay.open --html|--url|--image|--markdown` once validated (upstream's `openHtmlOverlay`): a local
 /// document's descriptor is probed and an image's natural size resolved before the page takes its slot. It follows
 /// a program's slot rules and answers with its id, the one `session.overlay.result --page` reads. A page the
-/// placement rule hands to the presenting machine is reserved for it before any local check: nothing renders here,
-/// so neither the web views, the saved store nor `--follow` are this machine's concern.
+/// placement rule hands to the presenting machine has its file read here first (an image's probe, a Markdown or text
+/// file's check, through the web views or the headless probe: [`read_for_hand_over`]), so a missing, oversized or binary
+/// file or a log page is refused before any slot is reserved; it is then reserved for that machine. Nothing renders
+/// here, so neither the saved store nor `--follow` are this machine's concern.
 pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, opening: PageOpening) -> Outcome {
     open_checked(core, target, window, opening, None, false)
 }
@@ -137,8 +162,8 @@ fn open_checked(
     target: Option<&str>,
     window: Option<&str>,
     mut opening: PageOpening,
-    image: Option<crate::html::image_page::ImageData>,
-    checked: bool,
+    mut image: Option<ImageData>,
+    mut checked: bool,
 ) -> Outcome {
     let resolved = crate::resolve::Resolver::new(core.library()).session(target, window)?;
     super::overlay::refuse_hidden_slot(core, resolved.window, resolved.session, opening.pane)?;
@@ -147,7 +172,15 @@ fn open_checked(
     } else {
         PANE_ALREADY_OPEN
     };
-    let page = HtmlOverlay::new(opening.source.clone(), opening.flags);
+    if core.page_belongs_remote(resolved.session, opening.pane) {
+        image = read_for_hand_over(core, &mut opening, image, checked)?;
+        checked = true;
+    }
+    let page = HtmlOverlay {
+        clicked: opening.clicked,
+        ..HtmlOverlay::new(opening.source.clone(), opening.flags)
+    }
+    .with_text_log(opening.text_log);
     let page_id = page.id;
     let refusal = match crate::remote::open_remote_page(core, resolved.window, resolved.session, &page, &opening) {
         RemotePageOpen::Local => None,
@@ -213,13 +246,93 @@ fn open_checked(
     })
 }
 
+/// What reads a page's file before it takes its slot: the frontend's web views, or the probe of an origin that has none
+/// ([`Core::set_page_probe`]).
+#[derive(Clone, Copy)]
+enum Probes<'a> {
+    Host(&'a dyn HtmlHost),
+    Probe(&'a dyn PageProbe),
+}
+
+impl Probes<'_> {
+    fn probe_image(self, path: &str) -> Result<ImageData, String> {
+        match self {
+            Self::Host(host) => host.probe_image(path),
+            Self::Probe(probe) => probe.probe_image(path),
+        }
+    }
+
+    fn check_markdown(self, path: &str) -> Result<(), String> {
+        match self {
+            Self::Host(host) => host.check_markdown(path),
+            Self::Probe(probe) => probe.check_markdown(path),
+        }
+    }
+
+    fn check_text(self, path: &str, log: Option<TextLog>) -> Result<(), String> {
+        match (self, log) {
+            (Self::Host(host), None) => host.check_text(path),
+            (Self::Host(host), Some(log)) => host.check_log(path, log.tail),
+            (Self::Probe(probe), None) => probe.check_text(path),
+            (Self::Probe(probe), Some(log)) => probe.check_log(path, log.tail),
+        }
+    }
+}
+
+/// Readies a page the presenting machine is handed, as upstream's control path does before the hand-over: its file is
+/// read here first unless a click `checked` it ([`probe_before_hand_over`]), so a missing, oversized or binary file is
+/// refused before anything is reserved, and a picture travels with the pixels its probe read. A log page is refused
+/// then: a presenter would get the text page without its log state (upstream's `textLogRefusal`).
+fn read_for_hand_over(
+    core: &Core,
+    opening: &mut PageOpening,
+    image: Option<ImageData>,
+    checked: bool,
+) -> Result<Option<ImageData>, ControlError> {
+    let image = if checked {
+        image
+    } else {
+        probe_before_hand_over(core, opening)?.or(image)
+    };
+    opening.image_pixels = image.as_ref().map(ImageData::pixels);
+    if opening.text_log.is_some() {
+        return Err(ControlError::rejected(LOG_REMOTE));
+    }
+    Ok(image)
+}
+
+/// Reads the file of a page the presenting machine is handed, as `session.overlay.open` reads it there before anything
+/// is reserved (upstream's `openSessionOverlay`): an image's probe, which it travels with, or a Markdown or text file's
+/// check, a log's of its last lines (a log page is refused after it, `textLogRefusal`). A file or URL page reads
+/// nothing.
+///
+/// # Errors
+///
+/// The probe's refusal, or [`PAGES_UNAVAILABLE`] for a content page on a build that can read none.
+fn probe_before_hand_over(core: &Core, opening: &PageOpening) -> Result<Option<ImageData>, ControlError> {
+    let refused = |error: String| ControlError::rejected(format!("session.overlay.open: {error}"));
+    let probes = || {
+        core.page_probes()
+            .ok_or_else(|| ControlError::rejected(PAGES_UNAVAILABLE))
+    };
+    match &opening.source {
+        HtmlSource::Image { path } => probes()?.probe_image(path).map(Some).map_err(refused),
+        HtmlSource::Markdown { path } => probes()?.check_markdown(path).map(|()| None).map_err(refused),
+        HtmlSource::Text { path, .. } => probes()?
+            .check_text(path, opening.text_log)
+            .map(|()| None)
+            .map_err(refused),
+        _ => Ok(None),
+    }
+}
+
 /// Checks the local descriptor and resolves a natural image size before the slot is taken.
 fn prepare_document(
     core: &Core,
     host: &dyn HtmlHost,
     target: crate::resolve::SessionTarget,
     opening: &mut PageOpening,
-    image: Option<crate::html::image_page::ImageData>,
+    image: Option<ImageData>,
     checked: bool,
 ) -> Result<(), ControlError> {
     match &opening.source {
@@ -244,6 +357,12 @@ fn prepare_document(
         HtmlSource::Markdown { path } if !checked => host
             .check_markdown(path)
             .map_err(|error| ControlError::rejected(format!("session.overlay.open: {error}")))?,
+        HtmlSource::Text { path, .. } if !checked => match opening.text_log {
+            // a log reads only its end, so its size is never refused
+            Some(log) => host.check_log(path, log.tail),
+            None => host.check_text(path),
+        }
+        .map_err(|error| ControlError::rejected(format!("session.overlay.open: {error}")))?,
         _ => {}
     }
     Ok(())
@@ -346,8 +465,13 @@ pub(crate) fn navigate(
     if let Some(refusal) = crate::remote::replica_page::replica_navigation_refusal(shown, navigation) {
         return Err(ControlError::rejected(refusal));
     }
-    if matches!(shown.source, HtmlSource::Markdown { .. }) && navigation == HtmlNavigation::Browser {
-        return Err(ControlError::rejected(errors::MARKDOWN_IN_OVERLAY));
+    if navigation == HtmlNavigation::Browser {
+        match shown.source {
+            HtmlSource::Markdown { .. } => return Err(ControlError::rejected(errors::MARKDOWN_IN_OVERLAY)),
+            HtmlSource::Text { .. } => return Err(ControlError::rejected(errors::TEXT_IN_OVERLAY)),
+            HtmlSource::Document { .. } => return Err(ControlError::rejected(errors::DOCUMENT_IN_OVERLAY)),
+            _ => {}
+        }
     }
     let page_id = shown.id;
     let host = core
@@ -404,6 +528,26 @@ impl Core {
     /// The frontend's web views, if it installed them.
     pub(crate) fn html_host(&self) -> Option<&dyn HtmlHost> {
         self.pages.host.as_deref()
+    }
+
+    /// Installs how an origin with no web views (headless) reads a page's file before handing the page to the
+    /// presenting machine; the frontend's web views read it otherwise.
+    pub fn set_page_probe(&mut self, probe: Box<dyn PageProbe>) {
+        self.pages.probe = Some(probe);
+    }
+
+    /// What reads a page's file before it takes its slot: the web views, else the installed probe.
+    fn page_probes(&self) -> Option<Probes<'_>> {
+        self.pages
+            .host
+            .as_deref()
+            .map(Probes::Host)
+            .or_else(|| self.pages.probe.as_deref().map(Probes::Probe))
+    }
+
+    /// The oriented pixel size of the picture at `path`, read as a page hand-over reads it; `None` when it cannot be.
+    pub(crate) fn probe_image_pixels(&self, path: &str) -> Option<ImagePixels> {
+        self.page_probes()?.probe_image(path).ok().map(|image| image.pixels())
     }
 
     /// Settles the pages that left every slot: each is dismissed (a no-op for one already answered) and queued for
@@ -659,7 +803,64 @@ impl Core {
         true
     }
 
-    /// Opens a local document after an off-main probe; slot eligibility is checked again here.
+    /// Closes the session-wide page a terminal click opened while it is hidden by hand (upstream's
+    /// `releaseHiddenClickedPage`), so the next click page can take the slot; the page is dismissed. Any other occupant,
+    /// a shown page, one only out of sight under a newer pane overlay, and a slot the placement rule hands to the
+    /// presenting machine are left alone, and the answer is false. A click path calls it after every check that could
+    /// still refuse its own open, so a refused click never costs the old page.
+    pub fn release_hidden_clicked_page(&mut self, session: Uuid) -> bool {
+        let Some(page) = self
+            .library()
+            .store_for_session(session)
+            .and_then(|store| store.session(session))
+            .filter(|found| found.overlay_hidden(None))
+            .and_then(|found| found.overlay.page())
+            .filter(|page| page.clicked)
+            .map(|page| page.id)
+        else {
+            return false;
+        };
+        if self.page_belongs_remote(session, None) {
+            return false;
+        }
+        let closed = self
+            .library_mut()
+            .store_for_session_mut(session)
+            .is_some_and(|store| store.close_overlay(session));
+        if closed {
+            self.pages.outcomes.dismiss(page);
+        }
+        closed
+    }
+
+    /// Releases a hidden clicked page for the click page about to open in `session` (upstream's
+    /// `ControlServer.releaseHiddenClickedPage`), only once nothing this machine checks could still refuse that open:
+    /// web views that can run, for a `persistent` page a usable saved store, and for a picture a probe that read it,
+    /// which `image` then carries on to the open.
+    fn release_for_click(
+        &mut self,
+        session: Uuid,
+        persistent: bool,
+        source: &HtmlSource,
+        image: &mut Option<crate::html::image_page::ImageData>,
+    ) {
+        let Some(host) = self.pages.host.as_ref() else {
+            return;
+        };
+        if host.web_views_unavailable().is_some() || (persistent && host.persistent_store_failure().is_some()) {
+            return;
+        }
+        if let (HtmlSource::Image { path }, None) = (source, image.as_ref()) {
+            let Ok(probe) = host.probe_image(path) else {
+                return;
+            };
+            *image = Some(probe);
+        }
+        self.release_hidden_clicked_page(session);
+    }
+
+    /// Opens a local document a terminal click named after an off-main probe; slot eligibility is checked again here.
+    /// The page is marked clicked, and replaces a hidden page an earlier click opened once nothing else can refuse it.
     pub fn open_document_link(
         &mut self,
         source: HtmlSource,
@@ -667,9 +868,32 @@ impl Core {
         size_percent: Option<i64>,
         image: Option<crate::html::image_page::ImageData>,
     ) -> bool {
+        self.open_clicked_document(source, session, size_percent, image, None)
+    }
+
+    /// Opens a clicked log as a log page following its file's end (upstream's `openTextLink` with `opensAsLog`), after
+    /// the off-main read of its last [`text_page::DEFAULT_TAIL`] lines; as [`Self::open_document_link`] otherwise.
+    pub fn open_log_link(&mut self, path: String, session: Uuid, size_percent: Option<i64>) -> bool {
+        let log = text_page::TextLog {
+            tail: text_page::DEFAULT_TAIL,
+            follow: true,
+        };
+        let source = HtmlSource::Text { path, line: None };
+        self.open_clicked_document(source, session, size_percent, None, Some(log))
+    }
+
+    fn open_clicked_document(
+        &mut self,
+        source: HtmlSource,
+        session: Uuid,
+        size_percent: Option<i64>,
+        mut image: Option<ImageData>,
+        text_log: Option<text_page::TextLog>,
+    ) -> bool {
         if !self.can_show_link_overlay(session) {
             return false;
         }
+        self.release_for_click(session, false, &source, &mut image);
         let opening = PageOpening {
             source,
             flags: HtmlPageFlags::default(),
@@ -678,17 +902,60 @@ impl Core {
             points: OverlayPointSize::default(),
             background_color: None,
             follow: false,
+            clicked: true,
+            text_log,
+            image_pixels: None,
         };
         open_checked(self, Some(&uuid_string(session)), None, opening, image, true).is_ok()
     }
 
-    /// Opens a clicked web link as a browsing overlay without selecting its session; false uses the browser.
+    /// Whether a click in `session` opens its log page here: the placement rule hands no session-wide page to a
+    /// presenting machine, which gets the static text page instead (upstream's `pageBelongsRemote` check in
+    /// `openTextLink`).
+    #[must_use]
+    pub fn click_opens_log_here(&self, session: Uuid) -> bool {
+        !self.page_belongs_remote(session, None)
+    }
+
+    /// The app's last read of log page `id` (upstream's `setTextLogReport`): recorded only, emitting nothing.
+    pub fn set_text_log_report(&mut self, id: Uuid, report: text_page::TextLogReport) {
+        self.library_mut().set_text_log_report(id, report);
+    }
+
+    /// Log page `id` paused or resumed by the user's scroll (upstream's `setTextLogFollowing(_:following:)`); whether
+    /// it changed, which emits `tree.changed`. Settle afterwards.
+    pub fn set_text_log_following_from_page(&mut self, id: Uuid, following: bool) -> bool {
+        self.library_mut().set_text_log_following(id, following)
+    }
+
+    /// A query typed into text page `id`'s own field, an empty one closing the search (upstream's `setTextSearch` from
+    /// `TextPageBridge.typed`): the revision it made, `None` for no change. Settle afterwards.
+    pub fn set_text_search_from_page(&mut self, id: Uuid, query: &str) -> Option<u64> {
+        self.library_mut().set_text_search(id, query)
+    }
+
+    /// Text page `id`'s count for `query` at `revision` (upstream's `setTextSearchReport`): recorded only while both are
+    /// the model's, emitting nothing.
+    pub fn set_text_search_report(&mut self, id: Uuid, revision: u64, query: &str, count: crate::html::SearchCount) {
+        self.library_mut().set_text_search_report(id, revision, query, count);
+    }
+
+    /// Diff page `id`'s count and current change as its renderer reported them, `None` clearing them while a fresh read
+    /// is under way (upstream's `setTextChangesReport`): emitting nothing.
+    pub fn set_text_changes_report(&mut self, id: Uuid, changes: Option<crate::html::text_page::TextChanges>) {
+        self.library_mut().set_text_changes_report(id, changes);
+    }
+
+    /// Opens a clicked web link as a browsing overlay without selecting its session; false uses the browser. The page
+    /// is marked clicked, and replaces a hidden page an earlier click opened once the saved store is known usable.
     pub fn open_link_overlay(&mut self, url: Url, session: Uuid, size_percent: Option<i64>) -> bool {
         if !self.can_show_link_overlay(session) {
             return false;
         }
+        let source = HtmlSource::Url(url);
+        self.release_for_click(session, true, &source, &mut None);
         let opening = PageOpening {
-            source: HtmlSource::Url(url),
+            source,
             flags: HtmlPageFlags {
                 navigation: true,
                 javascript: true,
@@ -701,6 +968,9 @@ impl Core {
             points: OverlayPointSize::default(),
             background_color: None,
             follow: false,
+            clicked: true,
+            text_log: None,
+            image_pixels: None,
         };
         open(self, Some(&uuid_string(session)), None, opening).is_ok()
     }

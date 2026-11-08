@@ -32,27 +32,61 @@ pub struct ImageReference {
     pub path: PathBuf,
 }
 
+/// A decoded image reference of a Markdown file on another machine and its lexically-contained candidate path there,
+/// spelled as that machine spells paths; that machine still resolves it before it serves a picture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteImageReference {
+    pub reference: String,
+    pub path: String,
+}
+
+/// The picture references of `markdown` lexically inside `folder`, in document order, each decoded reference once
+/// (upstream's `imageReferences` without its symlink half). No filesystem access: the local page's reader resolves
+/// each candidate before it reads it.
 #[must_use]
 pub fn image_references(markdown: &str, folder: &Path) -> Vec<ImageReference> {
-    let mut seen = HashSet::new();
-    Parser::new_ext(markdown, Options::all())
-        .filter_map(|event| match event {
-            Event::Start(Tag::Image { dest_url, .. }) => {
-                let reference = crate::link_policy::percent_decode(&dest_url).unwrap_or_else(|| dest_url.into_string());
-                if !seen.insert(reference.clone()) {
-                    return None;
-                }
-                let path = local_path(&reference, folder)?;
-                Some(ImageReference { reference, path })
-            }
-            _ => None,
+    decoded_references(markdown)
+        .filter_map(|reference| {
+            let path = lexical_path(&reference, folder)?;
+            Some(ImageReference { reference, path })
         })
         .collect()
 }
 
-/// Lexical containment is checked before any canonicalization or filesystem probe can occur.
+/// The picture references of the Markdown file `markdown` that another machine holds at `file`, lexically inside its
+/// folder there, in document order, each decoded reference once (upstream's `remoteImageReferences`). They are listed
+/// by that machine's path rules, read from `file`'s own shape (`origin_path`), not by this OS's, so a viewer on Windows
+/// lists a POSIX machine's pictures and the other way round; none for a `file` that is absolute on no machine. That
+/// machine's page channel resolves symlinks before it serves a picture.
 #[must_use]
-pub fn local_path(reference: &str, folder: &Path) -> Option<PathBuf> {
+pub fn remote_image_references(markdown: &str, file: &str) -> Vec<RemoteImageReference> {
+    let Some(folder) = super::origin_path::OriginFolder::of_file(file) else {
+        return Vec::new();
+    };
+    decoded_references(markdown)
+        .filter_map(|reference| {
+            let path = folder.lexical_path(&reference)?;
+            Some(RemoteImageReference { reference, path })
+        })
+        .collect()
+}
+
+/// The decoded picture references of `markdown`, in document order, each once.
+fn decoded_references(markdown: &str) -> impl Iterator<Item = String> + '_ {
+    let mut seen = HashSet::new();
+    Parser::new_ext(markdown, Options::all()).filter_map(move |event| match event {
+        Event::Start(Tag::Image { dest_url, .. }) => {
+            let reference = crate::link_policy::percent_decode(&dest_url).unwrap_or_else(|| dest_url.into_string());
+            seen.insert(reference.clone()).then_some(reference)
+        }
+        _ => None,
+    })
+}
+
+/// One decoded reference joined to `folder` and normalized without reading the filesystem (upstream's `lexicalPath`):
+/// `None` unless the result lies strictly inside the folder, so no `~`, no scheme and no `..` escape.
+#[must_use]
+pub fn lexical_path(reference: &str, folder: &Path) -> Option<PathBuf> {
     if !folder.is_absolute() || reference.is_empty() || reference.starts_with('~') {
         return None;
     }
@@ -65,7 +99,18 @@ pub fn local_path(reference: &str, folder: &Path) -> Option<PathBuf> {
     (candidate != root && super::contains(&root.to_string_lossy(), &candidate.to_string_lossy())).then_some(candidate)
 }
 
-fn has_scheme(reference: &str) -> bool {
+/// One decoded reference resolved against `folder` (upstream's `localPath`): `None` unless it names a file inside it
+/// once the symlinks on both sides are resolved. The lexical check runs first, so a reference outside the folder is
+/// refused without touching the filesystem.
+#[must_use]
+pub fn local_path(reference: &str, folder: &Path) -> Option<PathBuf> {
+    let lexical = lexical_path(reference, folder)?;
+    let root = super::real_path(&normalized(folder));
+    let file = super::real_path(&lexical);
+    super::strictly_inside(&file, &root).then_some(file)
+}
+
+pub(super) fn has_scheme(reference: &str) -> bool {
     let Some((scheme, _)) = reference.split_once(':') else {
         return false;
     };
@@ -105,14 +150,15 @@ pub fn escaped(text: &str) -> String {
     out
 }
 
-/// Authored text and the sorted picture index are data, never scripts or authored HTML.
+/// Authored text and the sorted picture index are data, never scripts or authored HTML. The holder is a `div`: the
+/// HTML parser drops a newline right after `<pre>`, which would move a `---` up to the first line (frontmatter).
 #[must_use]
 pub fn html(markdown: &str, images: &Embedded, style: &str) -> String {
     let map = serde_json::to_string(images).unwrap_or_else(|_| "{}".to_owned());
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" \
          content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'\"><style>{style}</style></head><body>\
-         <pre id=\"ngterm-markdown\" hidden data-images=\"{}\">{}</pre>\
+         <div id=\"ngterm-markdown\" hidden data-images=\"{}\">{}</div>\
          <main id=\"ngterm-page\"></main></body></html>",
         escaped(&map),
         escaped(markdown)

@@ -970,6 +970,7 @@ mod tests {
                     height: 4,
                     scale: 1.0,
                 },
+                block_network: false,
             }),
         )
     }

@@ -17,7 +17,9 @@ fn script() -> String {
     .join(";\n")
 }
 
-fn escaped(text: &str) -> String {
+const STYLE: &str = include_str!("../../../../resources/markdown/page.css");
+
+pub fn escaped(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -29,7 +31,7 @@ fn document(markdown: &str) -> Load {
     let images = serde_json::json!({"uris": [PNG], "references": {"pixel.png": 0}});
     Load::Html {
         html: format!(
-            "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'\"><pre id=\"ngterm-markdown\" hidden data-images=\"{}\">{}</pre><main id=\"ngterm-page\"></main>",
+            "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'\"><style>{STYLE}</style><div id=\"ngterm-markdown\" hidden data-images=\"{}\">{}</div><main id=\"ngterm-page\"></main>",
             escaped(&images.to_string()),
             escaped(markdown),
         ),
@@ -54,6 +56,7 @@ fn view(h: &Harness) -> ngterm_wpe::ViewId {
             height: 240,
             scale: 1.0,
         },
+        block_network: false,
     })
 }
 
@@ -116,6 +119,50 @@ pub fn limits(h: &Harness, _: &Context) -> Outcome {
         && document.querySelectorAll('h1')[2000].id === 'żółć'", None)?;
     ensure(checked.as_deref() == Some("true"), || {
         format!("image/heading bounds: {checked:?}")
+    })?;
+    h.host.close_view(view);
+    Ok(())
+}
+
+/// Evaluates `joined`, a script that joins its readings with `|`, and returns that string.
+fn reading(h: &Harness, view: ngterm_wpe::ViewId, joined: &str) -> Result<String, String> {
+    let encoded = h.evaluate(view, joined, None)?.ok_or("no DOM report")?;
+    serde_json::from_str(&encoded).map_err(|error| error.to_string())
+}
+
+/// Upstream #897: a leading `---` block is a wrapping YAML code block, not a rule over a setext heading.
+pub fn frontmatter(h: &Harness, _: &Context) -> Outcome {
+    let view = view(h);
+    h.load(
+        view,
+        document("---\nname: chat\ndescription: 'a <b> peer''s chat'\n---\n# Chat\n\nbody\n\n---\n\nafter\n\n```\ncode\n```\n"),
+    )?;
+    let rendered = reading(
+        h,
+        view,
+        r"[document.querySelector('h1')?.textContent, document.querySelectorAll('h2').length,
+        document.querySelectorAll('hr').length,
+        document.querySelector('#ngterm-page > :first-child').matches('pre.ngterm-frontmatter'),
+        document.querySelector('pre.ngterm-frontmatter code.language-yaml').textContent,
+        document.querySelectorAll('pre.ngterm-frontmatter .hljs-attr').length > 0,
+        document.querySelectorAll('b').length,
+        getComputedStyle(document.querySelector('pre.ngterm-frontmatter')).whiteSpace,
+        getComputedStyle(document.querySelector('pre:not(.ngterm-frontmatter)')).whiteSpace].join('|')",
+    )?;
+    ensure(
+        rendered == "Chat|0|1|true|name: chat\ndescription: 'a <b> peer''s chat'|true|0|pre-wrap|pre",
+        || format!("frontmatter DOM: {rendered:?}"),
+    )?;
+    // regression: with a `<pre>` holder the parser dropped the leading newline, so the rule read as frontmatter
+    h.load(view, document("\n---\n## Heading\n\nbody\n---\n"))?;
+    let rendered = reading(
+        h,
+        view,
+        r"[document.querySelectorAll('pre.ngterm-frontmatter').length, document.querySelectorAll('hr').length,
+        [...document.querySelectorAll('h2')].map(h => h.textContent).join(',')].join('|')",
+    )?;
+    ensure(rendered == "0|1|Heading,body", || {
+        format!("a rule after a leading blank line: {rendered:?}")
     })?;
     h.host.close_view(view);
     Ok(())

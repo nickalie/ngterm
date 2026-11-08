@@ -79,7 +79,8 @@ pub(crate) fn page(core: &mut Core, target: Option<&str>, args: &Args) -> Outcom
 fn validated_source(args: &Args, home: Option<&str>) -> Result<HtmlSource, ControlError> {
     let command = args.command.as_deref().unwrap_or_default();
     let source = match overlay_content(command, args, home)? {
-        OverlayContent::Program | OverlayContent::Page(HtmlSource::Image { .. } | HtmlSource::Markdown { .. }) => {
+        OverlayContent::Program
+        | OverlayContent::Page(HtmlSource::Image { .. } | HtmlSource::Markdown { .. } | HtmlSource::Text { .. }) => {
             return Err(ControlError::rejected(NEEDS_PAGE));
         }
         OverlayContent::Page(source) => source,

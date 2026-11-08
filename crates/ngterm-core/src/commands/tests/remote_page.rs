@@ -1171,6 +1171,7 @@ fn a_reservation_whose_stream_is_gone_refuses_without_reopening() {
         wait: false,
         ended: false,
         page: Some(RemotePage::new(page, "t".to_owned(), Instant::now())),
+        presenter_sized: false,
     };
     assert!(
         origin
@@ -1247,6 +1248,7 @@ fn a_local_page_omits_the_remote_fields_and_a_replica_reports_its_origin_path() 
     let mut replica = HtmlOverlay::new(
         HtmlSource::Replica {
             path: "/origin/docs/index.html".to_owned(),
+            content: crate::html::ReplicaContent::Html,
         },
         HtmlPageFlags::default(),
     );

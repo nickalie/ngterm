@@ -1045,6 +1045,163 @@ fn a_failed_index_write_is_retried_by_the_next_snapshot_save_that_lands() {
     assert_eq!(WindowsIndex::load(&index).unwrap().windows[0].name, "renamed");
 }
 
+/// Puts a non-empty directory where `path` is written, so every write of it fails until it is gone (upstream's
+/// `blockWrites`).
+fn block_writes(path: &Path) -> io::Result<()> {
+    let _ = fs::remove_file(path);
+    fs::create_dir_all(path)?;
+    fs::write(path.join("occupied"), b"")
+}
+
+#[test]
+fn a_failed_snapshot_save_shows_until_a_save_lands() {
+    let (dir, mut persistence) = fresh().unwrap();
+    let mut library = persistence.bootstrap(HOME);
+    let window = library.windows()[0].id;
+    let session = library.store(window).unwrap().workspaces()[0].sessions[0].id();
+    assert!(!persistence.snapshot_unsaved(window));
+    let file = persistence.window_path(window);
+    block_writes(&file).unwrap();
+
+    // an immediate save
+    library.store_mut(window).unwrap().rename_session(session, "unsaved");
+    persistence.commit(&mut library);
+    assert!(persistence.snapshot_unsaved(window));
+    assert!(!persistence.index_unsaved(), "the index is apart");
+    // a debounced one that fails keeps the mark
+    library.store_mut(window).unwrap().set_font_size(session, 20.0);
+    let debounced = persistence.commit(&mut library).debounced;
+    assert!(!persistence.fire_debounced(&library, debounced[0]));
+    assert!(persistence.snapshot_unsaved(window));
+
+    fs::remove_dir_all(&file).unwrap();
+    assert!(persistence.save_window(&library, window));
+    assert!(!persistence.snapshot_unsaved(window));
+
+    // a debounced save that lands clears it too
+    block_writes(&file).unwrap();
+    assert!(!persistence.save_window(&library, window));
+    assert!(persistence.snapshot_unsaved(window));
+    fs::remove_dir_all(&file).unwrap();
+    library.store_mut(window).unwrap().set_font_size(session, 22.0);
+    let debounced = persistence.commit(&mut library).debounced;
+    assert!(persistence.fire_debounced(&library, debounced[0]));
+    assert!(!persistence.snapshot_unsaved(window));
+    assert_eq!(
+        window_store(dir.path(), window).load().workspaces[0].sessions[0].font_size,
+        Some(22.0)
+    );
+}
+
+#[test]
+fn a_failed_snapshot_save_marks_only_its_own_window() {
+    let (_dir, mut persistence) = fresh().unwrap();
+    let mut library = persistence.bootstrap(HOME);
+    let failing = library.windows()[0].id;
+    let healthy = library.new_window(Some("healthy"));
+    persistence.commit(&mut library);
+    block_writes(&persistence.window_path(failing)).unwrap();
+
+    assert!(!persistence.save_window(&library, failing));
+    assert!(persistence.save_window(&library, healthy));
+    assert!(persistence.snapshot_unsaved(failing));
+    assert!(!persistence.snapshot_unsaved(healthy));
+}
+
+#[test]
+fn a_closed_or_removed_window_forgets_its_failed_save() {
+    let (_dir, mut persistence) = fresh().unwrap();
+    let mut library = persistence.bootstrap(HOME);
+    let closing = library.new_window(Some("closing"));
+    let removing = library.new_window(Some("removing"));
+    persistence.commit(&mut library);
+    for window in [closing, removing] {
+        block_writes(&persistence.window_path(window)).unwrap();
+        assert!(!persistence.save_window(&library, window));
+    }
+
+    persistence.close_window(&mut library, closing);
+    persistence.remove_window(&mut library, removing);
+    persistence.commit(&mut library);
+    assert!(
+        !persistence.snapshot_unsaved(closing),
+        "its close save failed too, but the window is gone"
+    );
+    assert!(!persistence.snapshot_unsaved(removing));
+    assert!(persistence.load_window(&mut library, closing));
+    assert!(
+        !persistence.snapshot_unsaved(closing),
+        "a reopened window starts unmarked"
+    );
+}
+
+/// Upstream only disarms when the launch strip fails and writes nothing, so the rewrite ngterm adds marks nothing.
+#[test]
+fn a_failed_rewrite_after_a_failed_strip_leaves_the_window_unmarked() {
+    let (dir, _) = fresh().unwrap();
+    let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
+    one_open_window(dir.path(), window, captured(session)).unwrap();
+    // the strip fails, so the launch asks for a write of the disarmed window, which fails as well
+    let guard = ReadOnly::new(&dir.path().join("windows")).unwrap();
+    let (mut persistence, library) = launch(dir.path());
+    assert!(!persistence.snapshot_unsaved(window), "upstream makes no such write");
+    assert!(!persistence.save_window(&library, window));
+    assert!(persistence.snapshot_unsaved(window), "a save after launch marks it");
+    drop(guard);
+}
+
+#[test]
+fn a_recovery_whose_strip_fails_leaves_the_window_unmarked() {
+    let (dir, _) = fresh().unwrap();
+    let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
+    write_window(
+        dir.path(),
+        window,
+        &tree(vec![workspace("work", vec![captured(session)])]),
+    )
+    .unwrap();
+    let guard = ReadOnly::new(&dir.path().join("windows")).unwrap();
+    let (persistence, library) = launch(dir.path());
+    drop(guard);
+    assert_eq!(library.open_ids(), [window], "recovered");
+    assert!(!persistence.snapshot_unsaved(window), "upstream makes no such write");
+}
+
+/// A state dir whose `windows` is a file, so no window file can be written there on any OS.
+fn windows_unwritable(dir: &Path) -> io::Result<()> {
+    fs::write(dir.join("windows"), b"")
+}
+
+#[test]
+fn a_failed_migration_write_marks_the_window() {
+    let (dir, _) = fresh().unwrap();
+    PersistenceStore::new(dir.path().join("workspaces.json"))
+        .save(&tree(vec![workspace("legacy", Vec::new())]))
+        .unwrap();
+    windows_unwritable(dir.path()).unwrap();
+    let (persistence, library) = launch(dir.path());
+    let window = library.windows()[0].id;
+    assert_eq!(workspace_names(&library, window), ["legacy"], "migrated");
+    assert!(!persistence.window_path(window).exists());
+    assert!(
+        persistence.snapshot_unsaved(window),
+        "upstream's migration saves through `store.save()`"
+    );
+}
+
+#[test]
+fn a_failed_seed_write_marks_the_window() {
+    let (dir, _) = fresh().unwrap();
+    windows_unwritable(dir.path()).unwrap();
+    let (persistence, library) = launch(dir.path());
+    let window = library.windows()[0].id;
+    assert_eq!(workspace_names(&library, window), ["workspace 1"], "seeded");
+    assert!(
+        persistence.snapshot_unsaved(window),
+        "upstream's seed saves through `store.save()`"
+    );
+}
+
 // MARK: - Open Recent
 
 #[test]

@@ -690,9 +690,21 @@ def test_tint_set_recolor_place_and_clear(ctl):
         pytest.param({"tint": "red"}, "invalid tint mode:  (set|clear)", id="color-without-mode"),
         pytest.param({"mode": "set"}, "session.tint set requires a color", id="set-without-color"),
         pytest.param(
-            {"mode": "set", "tint": "teal"},
-            "invalid tint: teal (red|orange|yellow|green|blue|purple|gray)",
+            {"mode": "set", "tint": "maroon"},
+            "invalid tint: maroon (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)",
             id="unknown-color",
+        ),
+        pytest.param(
+            {"mode": "set", "tint": "#3a7bd"},
+            "invalid tint: #3a7bd (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)",
+            id="short-hex",
+            marks=pytest.mark.since("0.41.0"),
+        ),
+        pytest.param(
+            {"mode": "set", "tint": "##3a7bd5"},
+            "invalid tint: ##3a7bd5 (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)",
+            id="double-hash-hex",
+            marks=pytest.mark.since("0.41.0"),
         ),
         pytest.param(
             {"mode": "set", "tint": "red", "tintOn": ["strip"]},
@@ -719,6 +731,32 @@ def test_tint_rejects_and_keeps_the_previous_tint(ctl, args, error):
     assert _tint(_node(ctl, sid)) == ("orange", ["name"])
     # Checked before the target resolves.
     assert_error(ctl.request("session.tint", UNKNOWN, **args), error)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.tint", "session.new", "field:tree.session.tint", "field:tree.session.tintOn")
+def test_tint_takes_a_hex_and_reads_it_back_lowercase(ctl):
+    """A `#rrggbb` hex, the `#` optional, is stored and read back lowercase; a recolor keeps the placement either way
+    (`ControlServerTintTests.testSessionTintTakesAHexAndReadsItBack`, `tintSetAndCreationTakeANormalizedHex`)."""
+    sid = _new(ctl)
+    assert assert_ok(ctl.request("session.tint", sid, mode="set", tint="#3A7BD5", tintOn=["name"]))["id"] == sid
+    assert _tint(_node(ctl, sid)) == ("#3a7bd5", ["name"])
+    assert_ok(ctl.request("session.tint", sid, mode="set", tint="112233"))
+    assert _tint(_node(ctl, sid)) == ("#112233", ["name"])
+    assert_ok(ctl.request("session.tint", sid, mode="set", tint="Mint"))
+    assert _tint(_node(ctl, sid)) == ("mint", ["name"])
+    created = _new(ctl, tint="3A7BD5")
+    assert _tint(_node(ctl, created)) == ("#3a7bd5", ["icon"])
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.tint", "field:tree.session.tint")
+def test_tint_takes_the_new_palette_names(ctl):
+    """teal, pink, brown, indigo and mint join the palette, in any case (`SidebarTintTests`)."""
+    sid = _new(ctl)
+    for name in ("Teal", "pink", "BROWN", "indigo", "mint"):
+        assert_ok(ctl.request("session.tint", sid, mode="set", tint=name))
+        assert _tint(_node(ctl, sid)) == (name.lower(), ["icon"])
 
 
 @pytest.mark.since("0.39.1")
@@ -748,8 +786,12 @@ def test_new_carries_a_creation_tint(ctl):
     ("args", "error"),
     [
         pytest.param({"tintOn": ["icon"]}, "--tint-on requires --tint", id="placement-without-color"),
+        pytest.param({"tint": "maroon"}, "invalid tint: maroon (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)", id="unknown-color"),
         pytest.param(
-            {"tint": "teal"}, "invalid tint: teal (red|orange|yellow|green|blue|purple|gray)", id="unknown-color"
+            {"tint": "#3a7bd5ff"},
+            "invalid tint: #3a7bd5ff (red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint|#rrggbb)",
+            id="long-hex",
+            marks=pytest.mark.since("0.41.0"),
         ),
         pytest.param(
             {"tint": "red", "tintOn": ["both"]}, "invalid tint placement: both (icon,name)", id="unknown-part"
@@ -817,7 +859,7 @@ def test_status_shape(ctl):
     sid = _new(ctl)
     assert_ok(ctl.request("session.status", sid, status="active", shape="star"))
     rejected = ctl.request("session.status", sid, status="blocked", shape="hexagon")
-    assert_error(rejected, "invalid shape: hexagon (circle|square|triangle|diamond|capsule|star)")
+    assert_error(rejected, "invalid shape: hexagon (circle|square|triangle|triangle-down|play|diamond|capsule|seal|star|bolt|bell)")
     assert_subset(_node(ctl, sid), {"status": "active", "statusShape": "star"})
 
 

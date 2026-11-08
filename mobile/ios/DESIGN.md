@@ -83,7 +83,7 @@ Promises:
 ### Status
 
 `StatusShape`, `StatusTone`, `AgentState`, `AgentStatusLook`. A status is a glyph, a color and a word, and the three
-always go out together. The eight glyphs are Android's: upstream's six status shapes plus a ring and a slash.
+always go out together. The thirteen glyphs are Android's: upstream's eleven status shapes plus a ring and a slash.
 
 | Tone | Glyph (SF Symbol) | Word | Color |
 |---|---|---|---|
@@ -96,9 +96,11 @@ always go out together. The eight glyphs are Android's: upstream's six status sh
 
 - No two tones share a glyph (`StatusTests`).
 - A badge may say more than the word ("Retrying in 4 s"); the glyph and color stay the tone's.
-- An agent's status comes from its origin as its wire name, with a hex color and one of upstream's six shapes (circle,
-  square, triangle, diamond, capsule, star) only when the agent overrode them. What the origin leaves unset comes from
-  the app's defaults, its own tones in desktop's roles:
+- An agent's status comes from its origin as its wire name, with a hex color and one of upstream's eleven shapes
+  (circle, square, triangle, triangle-down, play, diamond, capsule, seal, star, bolt, bell) only when the agent
+  overrode them, each drawn by its `.fill` SF Symbol (`arrowtriangle.down.fill` for triangle-down). The app's hello
+  lists `status.shapes`, so an origin sends it all eleven; a name this build doesn't know draws the circle. What the
+  origin leaves unset comes from the app's defaults, its own tones in desktop's roles:
 
   | Wire name | Word | Glyph | Color |
   |---|---|---|---|

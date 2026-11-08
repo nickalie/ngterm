@@ -328,7 +328,7 @@ impl Actions<'_> {
             WriteAction::Copy => self.queue(Effect::Copy(path, ClipboardLocation::Standard)),
             WriteAction::Open => self.queue(Effect::Emit(TerminalEvent::OpenUrl {
                 url: path,
-                browser: false,
+                intent: ngterm_core::link_policy::ClickIntent::Normal,
                 kind: super::links::LinkKind::Url,
             })),
             WriteAction::Paste => {

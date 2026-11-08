@@ -367,10 +367,63 @@ pub fn rasterize(shape: StatusShape, side: u32) -> Vec<u8> {
             trace.polygon(&[at((0.0, -half)), at((half, 0.0)), at((0.0, half)), at((-half, 0.0))]);
         }
         StatusShape::Triangle => trace.polygon(&[at((0.0, -5.6)), at((half, 5.6)), at((-half, 5.6))]),
+        StatusShape::TriangleDown => trace.polygon(&[at((0.0, 5.6)), at((-half, -5.6)), at((half, -5.6))]),
+        StatusShape::Play => trace.polygon(&[at((-4.6, -half + 0.5)), at((5.8, 0.0)), at((-4.6, half - 0.5))]),
+        StatusShape::Seal => trace.polygon(&seal_points(half).map(at)),
         StatusShape::Star => trace.polygon(&star_points(half).map(at)),
+        StatusShape::Bolt => trace.polygon(&BOLT.map(at)),
+        StatusShape::Bell => trace_bell(&mut trace, at),
     }
     ink.fill(trace);
     ink.coverage()
+}
+
+/// A lightning bolt (SF Symbols' `bolt.fill`): a flat-topped stroke down to the left, a step across the middle, and a
+/// stroke tapering to the lower left point.
+const BOLT: [(f64, f64); 7] = [
+    (1.0, -6.5),
+    (4.0, -6.5),
+    (1.0, -1.0),
+    (4.6, -1.0),
+    (-2.6, 6.5),
+    (-0.6, 1.2),
+    (-4.6, 1.2),
+];
+
+/// The scallops round a seal (SF Symbols' `seal.fill`).
+const SEAL_SCALLOPS: f64 = 12.0;
+/// The points a seal's outline is traced through, enough that its scallops read as curves.
+const SEAL_SAMPLES: f64 = 96.0;
+
+/// A seal of outer radius `outer`: a circle whose rim waves in [`SEAL_SCALLOPS`] shallow scallops, so it reads as a
+/// badge beside the plain circle.
+fn seal_points(outer: f64) -> [(f64, f64); 96] {
+    let depth = 0.9;
+    let mut points = [(0.0, 0.0); 96];
+    for (index, point) in (0_u8..).zip(points.iter_mut()) {
+        let angle = TAU * f64::from(index) / SEAL_SAMPLES;
+        let radius = outer - depth / 2.0 + depth / 2.0 * (SEAL_SCALLOPS * angle).cos();
+        *point = (radius * angle.cos(), radius * angle.sin());
+    }
+    points
+}
+
+/// A bell (SF Symbols' `bell.fill`): a domed body flaring to its rim, a knob above it and a clapper below, each
+/// traced the same way round so the nonzero fill joins them.
+fn trace_bell(trace: &mut Trace, at: impl Fn((f64, f64)) -> (f64, f64)) {
+    trace.move_to(at((6.0, 4.2)));
+    trace.line_to(at((-6.0, 4.2)));
+    trace.curve_to(at((-6.0, 3.2)), at((-4.6, 2.6)), at((-4.6, 0.5)));
+    trace.curve_to(at((-4.6, -3.0)), at((-2.8, -5.0)), at((0.0, -5.0)));
+    trace.curve_to(at((2.8, -5.0)), at((4.6, -3.0)), at((4.6, 0.5)));
+    trace.curve_to(at((4.6, 2.6)), at((6.0, 3.2)), at((6.0, 4.2)));
+    trace.close();
+    for (x, y, radius) in [(0.0, -5.5, 1.0), (0.0, 5.3, 1.2)] {
+        let (x, y) = at((x, y));
+        trace.new_sub_path();
+        trace.arc((x, y, radius), 0.0, TAU);
+        trace.close();
+    }
 }
 
 /// A five-point star of outer radius `outer`, point up, nudged down so its points' extent centers on the origin.

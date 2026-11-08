@@ -178,6 +178,7 @@ fn real_engine_child() {
             }],
             zoom: 1.0,
             background: None,
+            block_network: false,
         };
         let view = fixture.engine.create_view(spec.clone());
         history_and_scripts(&fixture, view);

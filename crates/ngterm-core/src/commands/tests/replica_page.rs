@@ -278,7 +278,8 @@ fn a_file_page_is_shown_session_wide_under_its_own_id() {
     assert_eq!(
         shown.source,
         HtmlSource::Replica {
-            path: "/docs/index.html".to_owned()
+            path: "/docs/index.html".to_owned(),
+            content: crate::html::ReplicaContent::Html,
         }
     );
     assert_eq!(shown.replica_of.map(wire).as_deref(), Some(ORIGIN));
@@ -307,7 +308,8 @@ fn a_page_without_a_grant_is_shown_as_a_replica_of_its_file() {
     assert_eq!(
         replica.session().overlay.page().map(|page| page.source.clone()),
         Some(HtmlSource::Replica {
-            path: "/docs/index.html".to_owned()
+            path: "/docs/index.html".to_owned(),
+            content: crate::html::ReplicaContent::Html,
         })
     );
 }
@@ -1774,4 +1776,216 @@ fn a_url_replica_has_no_channel_to_read_through() {
     let answer = fetch(&mut replica, local, "/a.css");
 
     assert_eq!(answer.borrow_mut().take(), Some(Err(REMOTE_FILE.to_owned())));
+}
+
+// MARK: - content pages (#891, #917)
+
+/// Upstream's `aContentPageIsShownAsAReplicaOfItsKind`, a clicked document's too: each fetches over a channel of its
+/// own, and none is linked to a bridge.
+#[test]
+fn a_content_page_is_shown_as_a_replica_of_its_kind() {
+    use crate::html::ReplicaContent;
+    for (source, content) in [
+        (
+            json!({"image": {"path": "/shots/a.png", "width": 800, "height": 600}}),
+            ReplicaContent::Image {
+                width: 800,
+                height: 600,
+            },
+        ),
+        (
+            json!({"markdown": {"path": "/docs/README.md"}}),
+            ReplicaContent::Markdown,
+        ),
+        (
+            json!({"text": {"path": "/src/main.go", "line": 12}}),
+            ReplicaContent::Text { line: Some(12) },
+        ),
+        (json!({"document": {"path": "/docs/pr.html"}}), ReplicaContent::Document),
+    ] {
+        let mut replica = Replica::new();
+        replica.request(Replica::page(source.clone()));
+        assert!(replica.rejections().is_empty(), "{source}: {:?}", replica.rejections());
+        let shown = replica.session().overlay.page().unwrap();
+        assert!(
+            matches!(&shown.source, HtmlSource::Replica { content: kind, .. } if *kind == content),
+            "{source}: {:?}",
+            shown.source
+        );
+        assert_eq!(shown.replica_of.map(wire).as_deref(), Some(ORIGIN));
+        assert!(!shown.bridged(), "{source}");
+        let remote = replica.launch(0).argv.last().unwrap().clone();
+        assert!(remote.contains("page-serve"), "{source}: {remote}");
+    }
+}
+
+/// Upstream's `theTreeReportsAContentReplicaByItsKind`.
+#[test]
+fn the_tree_reports_a_content_replica_by_its_kind() {
+    let mut replica = Replica::new();
+    replica.request(Replica::page(json!({"text": {"path": "/src/main.go", "line": 12}})));
+    let id = replica.id();
+    let node = super::remote::node(&mut replica.viewer.fixture, id);
+    let page = &node["htmlOverlays"][0];
+    assert_eq!(page["text"]["file"], "/src/main.go");
+    assert_eq!(page["text"]["language"], "go");
+    assert_eq!(page["text"]["line"], 12);
+    assert_eq!(page["replica"], true);
+    assert!(page.get("file").is_none(), "{page}");
+    for (source, key) in [
+        (json!({"image": {"path": "/a.png", "width": 2, "height": 2}}), "image"),
+        (json!({"markdown": {"path": "/a.md"}}), "markdown"),
+        (json!({"document": {"path": "/a.html"}}), "document"),
+    ] {
+        let mut replica = Replica::new();
+        replica.request(Replica::page(source));
+        let id = replica.id();
+        let node = super::remote::node(&mut replica.viewer.fixture, id);
+        assert!(node["htmlOverlays"][0][key].is_string(), "{key}: {node}");
+        assert!(node["htmlOverlays"][0].get("file").is_none());
+    }
+}
+
+/// Upstream's `testAnUnsizedImageHandedToTheViewerIsSizedThere…` at the core: a session-wide picture the origin gave
+/// no size is fitted here, a floating panel at the base percent sized from its pixels for this screen; a sized one, or
+/// one on a pane, is placed as asked.
+#[test]
+fn an_unsized_picture_is_sized_for_this_screen() {
+    use crate::html::image_page::BASE_PERCENT;
+    use crate::model::OverlayPointSize;
+    let mut replica = Replica::new();
+    replica.request(Replica::page(
+        json!({"image": {"path": "/shots/a.png", "width": 800, "height": 600}}),
+    ));
+    assert_eq!(replica.session().overlay.size_percent, Some(BASE_PERCENT));
+    assert_eq!(
+        replica.session().overlay.points,
+        OverlayPointSize {
+            width: Some(800),
+            height: Some(600)
+        }
+    );
+    let mut sized = Replica::new();
+    let mut page = Replica::page(json!({"image": {"path": "/shots/a.png", "width": 800, "height": 600}}));
+    page["sizePercent"] = json!(40);
+    sized.request(page);
+    assert_eq!(sized.session().overlay.size_percent, Some(40));
+    assert!(sized.session().overlay.points.is_empty());
+}
+
+/// Upstream's `aMergingResizeKeepsTheAxisItDoesNotNameAndAPlainOneReplacesIt`.
+#[test]
+fn a_merging_resize_keeps_the_axis_it_does_not_name_and_a_plain_one_replaces_it() {
+    use crate::model::OverlayPointSize;
+    let mut replica = Replica::new();
+    let mut page = Replica::page(Replica::url("https://example.com/"));
+    page["sizePercent"] = json!(95);
+    page["width"] = json!(400);
+    page["height"] = json!(300);
+    replica.request(page);
+    replica.origin_frame(
+        "page.command",
+        json!({"page": ORIGIN, "seq": 1, "action": "resize", "sizePercent": 95, "width": 600, "merge": true}),
+    );
+    assert_eq!(
+        replica.session().overlay.points,
+        OverlayPointSize {
+            width: Some(600),
+            height: Some(300)
+        }
+    );
+    replica.origin_frame(
+        "page.command",
+        json!({"page": ORIGIN, "seq": 2, "action": "resize", "sizePercent": 95, "width": 500}),
+    );
+    assert_eq!(
+        replica.session().overlay.points,
+        OverlayPointSize {
+            width: Some(500),
+            height: None
+        }
+    );
+}
+
+type Read = Rc<RefCell<Option<Result<Vec<u8>, String>>>>;
+
+/// Reads `path` of content replica `page` under `limit` bytes; the answer lands in the cell.
+fn read(replica: &mut Replica, page: Uuid, path: &str, limit: usize) -> Read {
+    let cell: Read = Rc::default();
+    let into = Rc::clone(&cell);
+    let failures = crate::remote::replica_page::ContentFailures {
+        too_large: format!("text file too large (over 4 MB): {path}"),
+        unreadable: format!("unreadable text file: {path}"),
+    };
+    replica.viewer.fixture.core.replica_read(
+        page,
+        path,
+        limit,
+        failures,
+        Box::new(move |result| *into.borrow_mut() = Some(result)),
+    );
+    cell
+}
+
+/// Upstream's `fetchReplica`: a read stops once its bytes pass its cap, failing as too large and withdrawn on the origin;
+/// the origin's refusal keeps its reason, with the path; a page with no channel reads nothing.
+#[test]
+fn a_content_replicas_read_stops_past_its_cap_and_keeps_the_origins_refusal() {
+    let mut replica = Replica::new();
+    replica.request(Replica::page(json!({"text": {"path": "/src/main.go"}})));
+    let local = replica.local();
+    let whole = read(&mut replica, local, "/src/main.go", 8);
+    replica.helper_line(
+        0,
+        &PageServeFrame::Head {
+            id: 1,
+            mime_type: "text/plain; charset=utf-8".to_owned(),
+        },
+    );
+    replica.helper_line(
+        0,
+        &PageServeFrame::Chunk {
+            id: 1,
+            data: b"package".to_vec(),
+        },
+    );
+    replica.helper_line(0, &PageServeFrame::End { id: 1 });
+    assert_eq!(whole.borrow_mut().take(), Some(Ok(b"package".to_vec())));
+
+    let grown = read(&mut replica, local, "/src/main.go", 8);
+    replica.helper_line(
+        0,
+        &PageServeFrame::Chunk {
+            id: 2,
+            data: b"package main".to_vec(),
+        },
+    );
+    assert_eq!(
+        grown.borrow_mut().take(),
+        Some(Err("text file too large (over 4 MB): /src/main.go".to_owned()))
+    );
+    assert_eq!(
+        replica.helper_sent(0).last(),
+        Some(&PageServeFrame::Cancel { id: 2 }),
+        "the origin stops sending"
+    );
+
+    let refused = read(&mut replica, local, "/src/other.go", 8);
+    replica.helper_line(
+        0,
+        &PageServeFrame::Failure {
+            id: 3,
+            error: "file is outside the page's folder".to_owned(),
+        },
+    );
+    assert_eq!(
+        refused.borrow_mut().take(),
+        Some(Err("file is outside the page's folder: /src/other.go".to_owned()))
+    );
+
+    let unlinked = read(&mut replica, Uuid::new_v4(), "/src/main.go", 8);
+    assert_eq!(
+        unlinked.borrow_mut().take(),
+        Some(Err("unreadable text file: /src/main.go".to_owned()))
+    );
 }

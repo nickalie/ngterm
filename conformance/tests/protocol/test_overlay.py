@@ -1025,6 +1025,9 @@ def test_open_refusals(ctl, args, error):
     "session.overlay.hide",
     "session.overlay.show",
     "session.overlay.toggle",
+    "session.overlay.follow",
+    "session.overlay.search",
+    "session.overlay.changes",
 )
 @pytest.mark.parametrize(
     ("cmd", "args"),
@@ -1037,6 +1040,9 @@ def test_open_refusals(ctl, args, error):
         ("session.overlay.hide", {"pane": "scratch"}),
         ("session.overlay.show", {"pane": "scratch"}),
         ("session.overlay.toggle", {"pane": "scratch"}),
+        pytest.param("session.overlay.follow", {"pane": "scratch"}, marks=pytest.mark.since("0.41.0")),
+        pytest.param("session.overlay.search", {"pane": "scratch", "text": "a"}, marks=pytest.mark.since("0.41.0")),
+        pytest.param("session.overlay.changes", {"pane": "scratch", "to": "next"}, marks=pytest.mark.since("0.41.1")),
     ],
 )
 def test_overlay_pane_selector_refusals(ctl, cmd, args):
@@ -1054,6 +1060,9 @@ def test_overlay_pane_selector_refusals(ctl, cmd, args):
     "session.overlay.hide",
     "session.overlay.show",
     "session.overlay.toggle",
+    "session.overlay.follow",
+    "session.overlay.search",
+    "session.overlay.changes",
 )
 @pytest.mark.parametrize(
     ("cmd", "args"),
@@ -1069,6 +1078,9 @@ def test_overlay_pane_selector_refusals(ctl, cmd, args):
         ("session.overlay.hide", {}),
         ("session.overlay.show", {}),
         ("session.overlay.toggle", {}),
+        pytest.param("session.overlay.follow", {"mode": "on"}, marks=pytest.mark.since("0.41.0")),
+        pytest.param("session.overlay.search", {"text": "a"}, marks=pytest.mark.since("0.41.0")),
+        pytest.param("session.overlay.changes", {"to": "next"}, marks=pytest.mark.since("0.41.1")),
     ],
 )
 def test_unknown_session_target(ctl, cmd, args):
@@ -1184,6 +1196,26 @@ def test_a_hidden_page_reads_back_hidden(ctl):
     (page,) = _node(ctl, sid)["htmlOverlays"]
     assert page["id"] == page_id
     assert_absent(page, "hidden")
+    _closed(ctl, sid)
+
+
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.overlay.open", "session.overlay.hide", "field:tree.session.htmlOverlays")
+def test_a_socket_page_is_never_marked_clicked(ctl):
+    """Only a terminal click marks its page `clicked`; a page the socket opened never reads back the marker, hidden or
+    shown, and a hidden one keeps its slot against the next socket open."""
+    sid = _new(ctl)
+    _, title, page_id = _open_page(ctl, sid)
+    (page,) = _loaded(ctl, sid, title)["htmlOverlays"]
+    assert_absent(page, "clicked")
+    _left(ctl, "session.overlay.hide", sid, "hidden")
+    (page,) = _node(ctl, sid)["htmlOverlays"]
+    assert page["hidden"] is True and page["id"] == page_id
+    assert_absent(page, "clicked")
+    other, _ = _page(ctl)
+    assert_error(ctl.request("session.overlay.open", sid, html=str(other)), "overlay hidden")
+    (page,) = _node(ctl, sid)["htmlOverlays"]
+    assert page["id"] == page_id and page["hidden"] is True
     _closed(ctl, sid)
 
 

@@ -23,8 +23,8 @@ use crate::error::ControlError;
 use crate::live::lead::LeadRole;
 use crate::modal::AskOwner;
 use crate::model::{
-    AskAnchor, AskStyle, EndedAsk, OverlayPane, OverlayPointSize, OverlayProgram, PendingAsk, RemoteOverlayChange,
-    RemoteOverlayOutcome, RemoteOverlaySlot, Session, StatusPane,
+    AskAnchor, AskStyle, EndedAsk, OverlayPane, OverlayPointSize, OverlayProgram, OverlaySize, PendingAsk,
+    RemoteOverlayChange, RemoteOverlayOutcome, RemoteOverlaySlot, Session, StatusPane,
 };
 use crate::overlay_capture::OverlayLaunchContext;
 use crate::overlay_jobs::{OverlayJobFrame, OverlayJobOutcome, OverlayJobState};
@@ -301,15 +301,28 @@ impl Core {
             };
             (Some(percent), slot.points.merging(points))
         };
+        // a picture the presenter fitted keeps its fitted axes there: a point resize sends only its own axes to merge,
+        // and any other resize replaces the size whole and ends that (upstream's `resizeRemoteOverlay`)
+        let merge = slot.presenter_sized && size_percent.is_none() && !points.is_empty();
         if let Some(store) = self.library_mut().store_for_session_mut(session) {
-            store.resize_remote_overlay(session, &slot.job, size, merged);
+            store.resize_remote_overlay(session, &slot.job, size, merged, merge);
         }
         if parked {
             return Some(RemoteOverlayResize::Sent);
         }
-        let sent = self.presentable_points(session, merged);
+        let sent = self.presentable_points(session, if merge { points } else { merged });
         let delivered = if slot.page.is_some() {
-            self.send_remote_page_command(session, None, PresentationPageAction::Resize, size, sent)
+            let size = OverlaySize {
+                percent: size,
+                points: sent,
+            };
+            self.send_remote_page_command(
+                session,
+                None,
+                PresentationPageAction::Resize,
+                size,
+                merge.then_some(true),
+            )
         } else {
             self.remote.hub.send_to_presenter(
                 Body::OverlayResize(PresentationOverlayChange {
@@ -463,11 +476,9 @@ pub(crate) fn open_remote_overlay(
     }
     let job = core.jobs.jobs.register(session, pane, owner, context);
     core.arm_job_launch_expiry();
-    let size = if pane.is_none() {
-        request.program.size_percent.map(|percent| percent.clamp(1, 100))
-    } else {
-        None
-    };
+    let size = (request.program.size_percent)
+        .filter(|_| pane.is_none())
+        .map(|percent| percent.clamp(1, 100));
     let points = if size.is_some() {
         request.program.points
     } else {
@@ -485,6 +496,7 @@ pub(crate) fn open_remote_overlay(
                 wait: request.program.wait,
                 ended: false,
                 page: None,
+                presenter_sized: false,
             },
         );
     }

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- status glyph, a filled lightning bolt (upstream's bolt) (16dp; StatusGlyph tints it) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16">
+  <path
+      android:pathData="M9,1.5h3l-3,5.5h3.6l-7.2,7.5l2,-5.3h-4z"
+      android:fillColor="#FF000000" />
+</vector>

@@ -325,7 +325,7 @@ fn a_pane_events_report_what_the_gtk_build_routed() {
         report(
             &TerminalEvent::OpenUrl {
                 url: "https://x.dev".to_owned(),
-                browser: true,
+                intent: ngterm_core::link_policy::ClickIntent::Browser,
                 kind: LinkKind::Osc8
             },
             shell,
@@ -335,7 +335,7 @@ fn a_pane_events_report_what_the_gtk_build_routed() {
         ),
         [Report::OpenUrl {
             url: "https://x.dev".to_owned(),
-            browser: true,
+            intent: ngterm_core::link_policy::ClickIntent::Browser,
             kind: LinkKind::Osc8
         }]
     );

@@ -762,6 +762,48 @@ fn the_window_lifecycle_lands_in_the_index_and_the_window_files() {
 }
 
 #[test]
+fn the_tree_of_a_window_whose_save_failed_reports_it_until_a_save_lands() {
+    let dir = super::short_tempdir();
+    let mut core = persisted(dir.path());
+    let first = active(&core).unwrap();
+    let second = answered_id(&window(
+        &mut core,
+        WindowCmd::New,
+        None,
+        args(|a| a.name = Some("second".to_owned())),
+    ))
+    .unwrap();
+    let _ = core.commit();
+    let file = dir.path().join("windows").join(format!("{}.json", wire(first)));
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    std::fs::write(file.join("blocker"), b"").unwrap();
+    let marked = |core: &Core, id: Uuid| {
+        let tree = serde_json::to_value(core.tree(Some(&wire(id))).unwrap()).unwrap();
+        assert!(!tree.as_object().unwrap().contains_key("indexUnsaved"));
+        tree.get("snapshotUnsaved").cloned()
+    };
+
+    let renamed = args(|a| {
+        a.name = Some("renamed".to_owned());
+        a.window = Some(wire(first));
+    });
+    assert!(send(&mut core, Command::Workspace(WorkspaceCmd::New), None, renamed).ok);
+    let _ = core.commit();
+    assert_eq!(marked(&core, first), Some(json!(true)));
+    assert_eq!(marked(&core, second), None, "per window");
+
+    std::fs::remove_dir_all(&file).unwrap();
+    let again = args(|a| {
+        a.name = Some("again".to_owned());
+        a.window = Some(wire(first));
+    });
+    assert!(send(&mut core, Command::Workspace(WorkspaceCmd::New), None, again).ok);
+    let _ = core.commit();
+    assert_eq!(marked(&core, first), None);
+}
+
+#[test]
 fn closing_the_last_open_window_pins_it_frontmost_in_the_index() {
     let dir = super::short_tempdir();
     let mut core = persisted(dir.path());

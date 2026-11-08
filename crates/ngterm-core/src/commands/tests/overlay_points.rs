@@ -283,6 +283,7 @@ fn a_page_shown_here_for_another_machine_takes_no_point_sizes() {
     let mut replica = crate::html::HtmlOverlay::new(
         crate::html::HtmlSource::Replica {
             path: "/tmp/a/page.html".to_owned(),
+            content: crate::html::ReplicaContent::Html,
         },
         crate::html::HtmlPageFlags::default(),
     );

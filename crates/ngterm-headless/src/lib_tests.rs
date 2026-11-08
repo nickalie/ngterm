@@ -98,9 +98,10 @@ fn config_reads_a_private_file_and_reports_invalid_values_without_losing_valid_o
 fn a_missing_session_executable_refuses_live_with_the_probe_reason() {
     let dir = tempfile::tempdir().unwrap();
     let env = env(dir.path()).with("NGTERM_SESSION_PATH", dir.path().join("absent"));
-    let reason = Runtime::capture(&env).live_probe(&env).unavailable_reason().unwrap();
+    let runtime = Runtime::capture(&env);
+    let reason = runtime.live_probe(&env).unavailable_reason().unwrap();
     assert_eq!(
-        live_decision(&env),
+        live_decision(&runtime, &env),
         Err(Refused(format!("live sessions are unavailable here: {reason}")))
     );
 }
@@ -240,7 +241,7 @@ fn a_staged_session_build_is_installed_without_starting_an_absent_server() {
         },
         CoreState::default(),
     );
-    install_live(&mut core, &env);
+    install_live(&mut core, &Runtime::capture(&env));
     let response = core.dispatch(&ngterm_proto::Request::new(ngterm_proto::Command::Live(
         ngterm_proto::command::LiveCmd::Tree,
     )));

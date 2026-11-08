@@ -13,6 +13,8 @@ round-trips (the page asks for the tree, renames its session with the answer's w
 it: the session's new name and the page's title read back from the tree); a persistent URL page on a loopback server
 signs in (a cookie the server sets), the app quits on Ctrl+C (its orderly quit) and a second launch's persistent page is
 still signed in (the cookie sent back, the page's title and the server's log), while an in-memory page there is not.
+With the keyboard-layout lock on Russian (`LoadKeyboardLayout`, unloaded at the end), the US keys typed into a page's
+field after a click into it type the Russian letters: the lock holds while the page has the keyboard, as in a terminal.
 Screenshots of each page are saved. The app and the server are stopped by their own process ids at the end, whatever
 happened. Every step is logged to <StateDir>\pages.log; the exit status is 0 when every step passed.
 
@@ -149,6 +151,48 @@ public static class PagesWindows {
     static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")]
     static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+    [StructLayout(LayoutKind.Sequential)]
+    struct Rect { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")]
+    static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll")]
+    static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")]
+    static extern void mouse_event(uint flags, int x, int y, uint data, UIntPtr extra);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr LoadKeyboardLayoutW(string klid, uint flags);
+    [DllImport("user32.dll")]
+    static extern bool UnloadKeyboardLayout(IntPtr layout);
+    [DllImport("user32.dll")]
+    static extern int GetKeyboardLayoutList(int count, IntPtr[] list);
+    [DllImport("user32.dll")]
+    public static extern bool SetProcessDPIAware();
+    // a left click at the center of the first visible GPUI window of `pid` (class `Zed::Window`), where the shown
+    // session's page lies; false when it has none
+    public static bool ClickCenter(uint pid) {
+        IntPtr window = IntPtr.Zero;
+        while ((window = FindWindowEx(IntPtr.Zero, window, "Zed::Window", null)) != IntPtr.Zero) {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            Rect rect;
+            if (owner == pid && IsWindowVisible(window) && GetWindowRect(window, out rect)) {
+                SetCursorPos((rect.Left + rect.Right) / 2, (rect.Top + rect.Bottom) / 2);
+                mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
+                mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+                return true;
+            }
+        }
+        return false;
+    }
+    // loads a keyboard layout for the session; IntPtr.Zero when it was loaded already (so it is not unloaded after)
+    public static IntPtr LoadLayout(string klid) {
+        int count = GetKeyboardLayoutList(0, null);
+        IntPtr[] before = new IntPtr[count];
+        GetKeyboardLayoutList(count, before);
+        IntPtr layout = LoadKeyboardLayoutW(klid, 0x80);
+        return Array.IndexOf(before, layout) >= 0 ? IntPtr.Zero : layout;
+    }
+    public static void UnloadLayout(IntPtr layout) { if (layout != IntPtr.Zero) { UnloadKeyboardLayout(layout); } }
     // brings the first visible top-level window of `pid` to the front (an Alt press first: Windows lets the process
     // that sent the last input set the foreground window)
     public static bool Raise(uint pid) {
@@ -166,6 +210,8 @@ public static class PagesWindows {
     }
 }
 '@
+# clicks in the screen's own pixels
+[PagesWindows]::SetProcessDPIAware() | Out-Null
 
 # The first run's welcome sheet covers the window (and hides its pages): Escape dismisses it.
 function Dismiss-Welcome($process) {
@@ -195,6 +241,15 @@ ngterm.request('tree').then((tree) => {
   document.title = 'bridge error';
 });
 </script></body></html>
+'@
+# the lock page: a field over the whole page that titles the page with the code points typed into it (ASCII, so the
+# tree read back needs no console encoding)
+Set-Content -Encoding utf8 -Path (Join-Path $site 'lock.html') -Value @'
+<!doctype html>
+<html><head><meta charset="utf-8"><title>lock ready</title></head>
+<body style="margin:0"><textarea id="field" style="position:fixed;inset:0;width:100%;height:100%;font:32px sans-serif"
+oninput="document.title = 'typed ' + Array.from(this.value, (c) => c.codePointAt(0).toString(16)).join('-')"></textarea>
+</body></html>
 '@
 Set-Content -Encoding utf8 -Path (Join-Path $site 'style.css') -Value 'body { font: 28px sans-serif; color: var(--ngterm-foreground); } h1 { color: #4caf50; }'
 
@@ -279,6 +334,36 @@ try {
     $served = Get-Content -Path $serverLog -Raw
     Log "server log:`n$served"
     Check (($served -split "`n" | Where-Object { $_ -match '^/ cookie=.*session=signed-in' }).Count -ge 2) 'the saved cookie came back before and after the restart'
+
+    # the keyboard-layout lock holds while a page has the keyboard: with it on Russian, the US keys Q, W, E typed into
+    # the page's field (after a click into it) type the Russian letters (U+0439, U+0446, U+0443)
+    Stop-ById $app 'app'
+    $russian = [PagesWindows]::LoadLayout('00000419')
+    try {
+        $settingsFile = Join-Path $state 'settings.json'
+        $settings = if (Test-Path $settingsFile) { Get-Content -Raw -Path $settingsFile | ConvertFrom-Json } else { [pscustomobject]@{} }
+        $settings | Add-Member -NotePropertyName terminalInputSource -NotePropertyValue '00000419' -Force
+        [System.IO.File]::WriteAllText($settingsFile, ($settings | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding $false))
+        $app = Start-Process -FilePath $Exe -WorkingDirectory $homeDir -PassThru
+        Log "relaunched pid $($app.Id) with the layout lock on 00000419"
+        Check (Wait-Socket) 'the relaunched app answers'
+        Dismiss-Welcome $app
+        Ctl @('session', 'overlay', 'close', '--socket', $socket) | Out-Null
+        Ctl @('session', 'overlay', 'open', '--socket', $socket, '--html', (Join-Path $site 'lock.html'), '--cwd', $site, '--js') | Out-Null
+        Check ($null -ne (Wait-Tree { param($t) $t -match '"title":"lock ready"' })) 'the lock page loads'
+        Check ([PagesWindows]::Raise([uint32]$app.Id)) 'the app window comes to the front'
+        Start-Sleep -Milliseconds 500
+        Check ([PagesWindows]::ClickCenter([uint32]$app.Id)) 'a click into the page'
+        Start-Sleep -Seconds 1
+        [System.Windows.Forms.SendKeys]::SendWait('qwe')
+        $tree = Wait-Tree { param($t) $t -match '"title":"typed [0-9a-f-]+"' }
+        Save-Screen 'layout-lock-page.png'
+        Check ($tree -match '"title":"typed 439-446-443"') 'the US keys Q, W, E type the Russian letters in the page'
+    } finally {
+        Stop-ById $app 'app'
+        $app = $null
+        [PagesWindows]::UnloadLayout($russian)
+    }
 } catch {
     Log "FAIL the check stopped: $_"
     $failures++

@@ -77,8 +77,7 @@ pub(crate) use self::handoff::{
 use self::hub::{CloseReason, HubEvent, PresentationHub, PresentationSink, SubscriberId};
 pub use self::page::PAGE_CLAIM_WINDOW;
 pub(crate) use self::page::{
-    REMOTE_LOOPBACK, REMOTE_TOO_LARGE, RemotePageCommand, RemotePageOpen, VIEWER_GONE, open_remote_page,
-    presentation_source,
+    REMOTE_LOOPBACK, REMOTE_TOO_LARGE, RemotePageCommand, RemotePageOpen, VIEWER_GONE, open_remote_page, travels,
 };
 use self::tree::{ProcessRemoteRunner, RemoteCommandResult, RemoteCommandRunner, RemoteWindowProjection};
 pub(crate) use self::viewer::row_changes;

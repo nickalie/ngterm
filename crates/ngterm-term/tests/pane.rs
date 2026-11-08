@@ -70,6 +70,41 @@ fn osc_sequences_and_bel_become_events_in_stream_order() {
     );
 }
 
+/// 5,000 copies of one title, then a different one (upstream's #911 title flood).
+const TITLE_FLOOD: &str = "awk 'BEGIN { for (i = 0; i < 5000; i++) printf \"\\033]2;spam\\007\"; \
+                           printf \"\\033]2;last\\007done\" }'; exec sleep 5";
+
+fn titles(events: &[PaneEvent]) -> Vec<&str> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            PaneEvent::Title(title) => Some(title.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_repeated_title_is_queued_once_while_it_waits() {
+    let fixture = spawn(TITLE_FLOOD).unwrap();
+    // nothing drains the events while the flood runs: one copy waits, the rest are dropped as they come
+    wait_text(&fixture.pane, "done");
+    assert_eq!(titles(&fixture.pane.take_events()), ["spam", "last"]);
+}
+
+#[test]
+fn a_title_flood_drained_as_it_runs_gives_a_few_events_and_the_last_title() {
+    let fixture = spawn(TITLE_FLOOD).unwrap();
+    let events = wait_events(&fixture.pane, |events| titles(events).last() == Some(&"last"));
+    let titles = titles(&events);
+    assert!(
+        titles.len() < 500,
+        "a drained queue readmits the title, never each write: {} events",
+        titles.len()
+    );
+    assert!(titles[..titles.len() - 1].iter().all(|title| *title == "spam"));
+}
+
 #[test]
 fn a_color_change_is_reported_once() {
     let fixture = spawn("printf '\\033]11;rgb:12/34/56\\007'; printf '\\033]11;rgb:12/34/56\\007'").unwrap();

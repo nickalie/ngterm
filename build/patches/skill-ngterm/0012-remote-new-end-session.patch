@@ -2,10 +2,10 @@ The viewer's Attach All, New Session and End Session in File > Attach Remote and
 viewer leaves to the other machine. Applied after 0011-codex-own-process.patch.
 
 diff --git a/reference.md b/reference.md
-index 49e5d12..af3d6e5 100644
+index b42d87b..ec8cc05 100644
 --- a/reference.md
 +++ b/reference.md
-@@ -2281,10 +2281,21 @@ Companions created on the origin later are not followed.
+@@ -2349,10 +2349,21 @@ Companions created on the origin later are not followed.
 
  File ▸ Attach Remote… is the same flow in the GUI and has no command of its own: it offers the machines in
  `<config dir>/remotes.conf` (one `destination [label]` per line, `#` comments), asks which in the picker
@@ -30,7 +30,7 @@ index 49e5d12..af3d6e5 100644
 
  A program in an attached session runs on the origin and talks to the origin's ngterm, so what it asks
  ngterm to draw would show there only. Every attach therefore also opens a presentation stream, and this
-@@ -2363,8 +2374,8 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
+@@ -2437,8 +2448,8 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
  bridges it to stdio as newline-delimited JSON. ngterm runs it over ssh on the origin; it is not meant to
  be typed.
 

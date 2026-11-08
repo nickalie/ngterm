@@ -39,6 +39,7 @@ impl Web for Recorded {
         create_view(spec: ViewSpec) -> ViewId;
         close_view(view: ViewId);
         load(view: ViewId, load: Load);
+        evaluate(view: ViewId, script: String, world: Option<String>) -> async_channel::Receiver<ngterm_wpe::Evaluation>;
         reload(view: ViewId);
         go_back(view: ViewId);
         go_forward(view: ViewId);
@@ -337,6 +338,7 @@ fn events_for_closed_pages_are_refused_and_resources_preserve_bytes(cx: &mut Tes
 struct Link {
     reads: RefCell<Vec<(Uuid, String, SchemeToken)>>,
     bridges: RefCell<Vec<(Uuid, String, u64)>>,
+    content_reads: RefCell<Vec<(Uuid, String)>>,
 }
 
 impl ReplicaLink for Link {
@@ -346,6 +348,10 @@ impl ReplicaLink for Link {
     fn bridge(&self, page: Uuid, body: String, reply: u64) {
         self.bridges.borrow_mut().push((page, body, reply));
     }
+    /// An HTML replica fetches its files: a content read never comes here.
+    fn read(&self, page: Uuid, path: String, _: usize, _: ContentFailures, _: ReadAnswer) {
+        self.content_reads.borrow_mut().push((page, path));
+    }
 }
 
 #[test]
@@ -353,6 +359,7 @@ fn replicas_read_only_their_own_origin_and_relay_the_body_unchanged() {
     let web = replies();
     let source = overlay(HtmlSource::Replica {
         path: "/docs/a b.html".to_owned(),
+        content: ngterm_core::html::ReplicaContent::Html,
     });
     let page = register(&source, Storage::Ephemeral);
     realize_waiting();
@@ -379,6 +386,7 @@ fn replicas_read_only_their_own_origin_and_relay_the_body_unchanged() {
     );
     assert!(relay(page.id(), "{\"extra\":true}".to_owned(), 7));
     assert_eq!(*link.bridges.borrow(), [(page.id(), "{\"extra\":true}".to_owned(), 7)]);
+    assert!(link.content_reads.borrow().is_empty());
     assert_eq!(web.resources.borrow().len(), 3);
     assert!(web.resources.borrow().iter().all(|(_, result)| *result
         == SchemeResponse::Error {

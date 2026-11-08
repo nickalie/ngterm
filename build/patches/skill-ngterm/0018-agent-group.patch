@@ -3,13 +3,13 @@ agent-status hooks fill through `ngtermctl agent hook`, and `agent chat` and `ag
 the origin. Applied after 0017-headless-page-companions.patch.
 
 diff --git a/SKILL.md b/SKILL.md
-index 3d9dceb1..6581c40a 100644
+index b38cdb9..55016b9 100644
 --- a/SKILL.md
 +++ b/SKILL.md
-@@ -773,6 +773,15 @@ open stays where it is when the lead changes. The overlay's program still runs o
+@@ -779,6 +779,15 @@ open stays where it is when the lead changes. The overlay's program still runs o
  the far side needs `ngtermctl` installed by the Help action: the remote call runs it on the ssh `PATH` plus
  `~/.local/bin` and `/usr/local/bin`. A machine merely running ngterm has no CLI an ssh command can find. Every `live` command needs a running ngterm.
- 
+
 +**agent** - this build's own, with no upstream counterpart: the record behind the Android app's chat view of
 +a pane running Claude Code or Codex. Nothing in it drives the app. `agent hook claude|codex EVENT` is what the
 +installed agent-status hooks run, the hook's payload on stdin; it tells ngterm, in memory only, which agent the
@@ -23,13 +23,13 @@ index 3d9dceb1..6581c40a 100644
  the command runs in; the text is the argument, or stdin when omitted (`git diff | ngtermctl clipboard set`).
  Text that starts with `-` (a flag, a list item, a diff line) is read as an option: pipe it on stdin, or put
 diff --git a/reference.md b/reference.md
-index bf46ab7a..0038fac6 100644
+index 2f6cd30..158837c 100644
 --- a/reference.md
 +++ b/reference.md
-@@ -2042,6 +2042,40 @@ counters, comments and reordering included; a removed line drops its queue and f
- 
+@@ -2106,6 +2106,40 @@ counters, comments and reordering included; a removed line drops its queue and f
+
  Both are app-global and refuse a target or `--window`.
- 
+
 +## agent
 +
 +This build's own group, with no upstream counterpart: what the Android app's chat view reads about a pane
@@ -65,5 +65,5 @@ index bf46ab7a..0038fac6 100644
 +Both read the record through `agent.get` and fail with `no agent in this pane` when it has none.
 +
  ## browser
- 
+
  `ngtermctl browser clear` - remove every cookie and all site data held by the saved store of

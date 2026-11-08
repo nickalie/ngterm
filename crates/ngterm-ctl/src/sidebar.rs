@@ -1,7 +1,7 @@
-//! `ngtermctl sidebar` (`agtermctlKit/MiscCommands.swift` `Sidebar`): the sidebar's visibility, view mode and flagged
-//! layout, expanding and collapsing its tree, and its width. `visibility` is the group's default subcommand
+//! `ngtermctl sidebar` (`agtermctlKit/MiscCommands.swift` `Sidebar`): the sidebar's visibility, view mode, flagged
+//! layout and density, expanding and collapsing its tree, and its width. `visibility` is the group's default subcommand
 //! ([`crate::usage::name_default_subcommands`]), so a bare `sidebar [show|hide|toggle]` keeps working. Visibility,
-//! mode and flagged layout take no `--window`: they act on the frontmost window, or app-wide.
+//! mode, flagged layout and density take no `--window`: they act on the frontmost window, or app-wide.
 
 use ngterm_core::paths::Env;
 use ngterm_proto::command::SidebarCmd;
@@ -27,6 +27,7 @@ enum SidebarCommand {
     Visibility(Visibility),
     Mode(Mode),
     FlaggedLayout(FlaggedLayout),
+    Density(Density),
     Expand(Expand),
     Collapse(Collapse),
     Width(Width),
@@ -39,6 +40,7 @@ impl Sidebar {
             SidebarCommand::Visibility(command) => command,
             SidebarCommand::Mode(command) => command,
             SidebarCommand::FlaggedLayout(command) => command,
+            SidebarCommand::Density(command) => command,
             SidebarCommand::Expand(command) => command,
             SidebarCommand::Collapse(command) => command,
             SidebarCommand::Width(command) => command,
@@ -156,6 +158,36 @@ impl RequestCommand for FlaggedLayout {
 
     fn make_request(&self) -> Request {
         mode_request(SidebarCmd::FlaggedLayout, &self.layout)
+    }
+}
+
+/// `ngtermctl sidebar density [default|compact|toggle]`: every window's sidebar row spacing; app-wide, so no
+/// `--window`. The reply echoes the applied density as `text`.
+#[derive(Debug, clap::Args)]
+#[command(about = "Sidebar density (default|compact|toggle).")]
+pub struct Density {
+    #[arg(default_value = "toggle", help = "Density: default, compact, or toggle (default).")]
+    density: String,
+
+    #[command(flatten)]
+    options: BasicOptions,
+}
+
+impl RequestCommand for Density {
+    fn options(&self) -> &BasicOptions {
+        &self.options
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if ["default", "compact", "toggle"].contains(&self.density.as_str()) {
+            Ok(())
+        } else {
+            Err("density must be default, compact, or toggle".to_owned())
+        }
+    }
+
+    fn make_request(&self) -> Request {
+        mode_request(SidebarCmd::Density, &self.density)
     }
 }
 
@@ -312,6 +344,25 @@ mod tests {
         );
     }
 
+    /// Upstream's `sidebarDensity*` cases.
+    #[test]
+    fn density_sends_its_density_as_the_mode() {
+        assert_eq!(
+            request(&["density"]),
+            json!({"cmd": "sidebar.density", "args": {"mode": "toggle"}})
+        );
+        for density in ["default", "compact"] {
+            assert_eq!(
+                request(&["density", density]),
+                json!({"cmd": "sidebar.density", "args": {"mode": density}})
+            );
+        }
+        assert_eq!(
+            outcome(&["density", "dense"]),
+            Err("density must be default, compact, or toggle".to_owned())
+        );
+    }
+
     #[test]
     fn only_expand_collapse_and_width_take_a_window() {
         assert_eq!(request(&["expand"]), json!({"cmd": "sidebar.expand"}));
@@ -329,6 +380,7 @@ mod tests {
             &["show", "--window", "w"],
             &["mode", "tree", "--window", "w"],
             &["flagged-layout", "tree", "--window", "w"],
+            &["density", "compact", "--window", "w"],
         ] {
             assert!(outcome(argv).is_err(), "{argv:?}");
         }

@@ -191,6 +191,7 @@ fn a_slot_reserved_for_a_viewer_is_shown_on_another_mac() {
         wait: false,
         ended: false,
         page: None,
+        presenter_sized: false,
     };
     assert!(fixture.store_mut().unwrap().reserve_remote_overlay(id, slot));
     assert_eq!(

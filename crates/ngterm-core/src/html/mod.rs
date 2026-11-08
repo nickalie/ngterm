@@ -6,11 +6,15 @@
 //! of their own.
 
 pub mod bridge;
+pub mod document_page;
 pub mod image_page;
+pub mod log_tail;
 pub mod markdown_page;
 pub mod navigation;
+mod origin_path;
 pub mod outcomes;
 pub mod profile;
+pub mod text_page;
 pub mod theme;
 mod volume;
 
@@ -62,6 +66,47 @@ pub fn grant_error(file: &str, grant_root: Option<&str>, home: &str) -> Option<&
 #[must_use]
 pub fn contains(root: &str, path: &str) -> bool {
     components(path).starts_with(&components(root))
+}
+
+/// `path` standardized (`.` dropped, `..` taking the previous name off, as Foundation's `standardizedFileURL`), then
+/// with the symlinks of its longest existing ancestor resolved, as `resolvingSymlinksInPath` leaves a path that does
+/// not exist yet. Both sides of a page channel's containment checks (`crate::remote::page_serve::resolve`) go through
+/// it, so a Windows path's `\\?\` prefix, which `canonicalize` adds, is on both or neither.
+#[must_use]
+pub fn real_path(path: &std::path::Path) -> std::path::PathBuf {
+    let standard = standardized(path);
+    let mut existing = standard.as_path();
+    let mut missing = Vec::new();
+    loop {
+        if let Ok(mut resolved) = std::fs::canonicalize(existing) {
+            resolved.extend(missing.iter().rev());
+            return resolved;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name.to_owned());
+                existing = parent;
+            }
+            _ => return standard,
+        }
+    }
+}
+
+fn standardized(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => out.push(component),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Whether `path` is absolute on this OS: `/`-rooted on Unix; on Windows rooted on a drive or a share (a `\`-rooted
@@ -225,9 +270,41 @@ pub enum HtmlSource {
     Image { path: String },
     /// A bounded local Markdown document, rendered by the trusted helper without authored scripts.
     Markdown { path: String },
-    /// A file page another machine opened, shown here from `ngterm-page://<page id>/` (upstream's `.replica`): `path`
-    /// is its path on that machine, whose own grant decides what else may be fetched.
-    Replica { path: String },
+    /// A source, config, text or log file shown read-only, scrolled to `line` when one is set: no file grant, bridge,
+    /// link or navigation, but themed (upstream's `.text`).
+    Text { path: String, line: Option<i64> },
+    /// An HTML file a terminal click named, so untrusted (upstream's `.document`): the app reads its text and loads it
+    /// with no file grant, bridge or page JavaScript, behind a policy and a network filter that load nothing from the
+    /// network, themed like a file page. Never a CLI page.
+    Document { path: String },
+    /// A page another machine opened, shown here from what its page channel serves (upstream's `.replica`): `path` is
+    /// its path on that machine, whose own rules decide what else may be fetched, and `content` what kind of page it
+    /// is. An HTML file loads from `ngterm-page://<page id>/`; a picture, Markdown, text or clicked HTML file is built
+    /// here from the fetched bytes. It is never a path on this machine, so nothing reads it from the local disk.
+    Replica { path: String, content: ReplicaContent },
+}
+
+/// The kind of page a replica's origin opened (upstream's `ReplicaContent`): an HTML file it loads as is, or a picture,
+/// Markdown, text or clicked HTML file this machine builds a page from. An image carries its oriented pixel size, which
+/// this machine sizes the panel from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplicaContent {
+    Html,
+    Image { width: i64, height: i64 },
+    Markdown,
+    Text { line: Option<i64> },
+    Document,
+}
+
+/// What a page shows, whichever machine read its file (upstream's `HtmlPageKind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HtmlPageKind {
+    File,
+    Url,
+    Image,
+    Markdown,
+    Text,
+    Document,
 }
 
 /// The URL scheme a replica page loads from (upstream's `HtmlSource.replicaScheme`, `agterm-page` there; the build's
@@ -275,13 +352,49 @@ impl HtmlSource {
         HtmlOrigin::new(url).map(|origin| origin.display())
     }
 
+    /// What the page shows, a replica counted as the kind its origin opened (upstream's `HtmlSource.kind`).
+    #[must_use]
+    pub fn kind(&self) -> HtmlPageKind {
+        match self {
+            Self::File { .. }
+            | Self::Replica {
+                content: ReplicaContent::Html,
+                ..
+            } => HtmlPageKind::File,
+            Self::Url(_) => HtmlPageKind::Url,
+            Self::Image { .. }
+            | Self::Replica {
+                content: ReplicaContent::Image { .. },
+                ..
+            } => HtmlPageKind::Image,
+            Self::Markdown { .. }
+            | Self::Replica {
+                content: ReplicaContent::Markdown,
+                ..
+            } => HtmlPageKind::Markdown,
+            Self::Text { .. }
+            | Self::Replica {
+                content: ReplicaContent::Text { .. },
+                ..
+            } => HtmlPageKind::Text,
+            Self::Document { .. }
+            | Self::Replica {
+                content: ReplicaContent::Document,
+                ..
+            } => HtmlPageKind::Document,
+        }
+    }
+
     /// What the source names, as the read-back and the strip's tooltip spell it.
     #[must_use]
     pub fn text(&self) -> String {
         match self {
-            Self::File { path, .. } | Self::Replica { path } | Self::Image { path } | Self::Markdown { path } => {
-                path.clone()
-            }
+            Self::File { path, .. }
+            | Self::Replica { path, .. }
+            | Self::Image { path }
+            | Self::Markdown { path }
+            | Self::Document { path }
+            | Self::Text { path, .. } => path.clone(),
             Self::Url(url) => url.as_str().to_owned(),
         }
     }
@@ -408,6 +521,22 @@ pub struct HtmlOverlay {
     /// The page is a page companion's row (upstream's `content == .page`): it never hides, so its strip offers no
     /// Hide, and its Close closes the row.
     pub row: bool,
+    /// A terminal click opened the page (upstream's `clicked`), which [`crate::Core::release_hidden_clicked_page`]
+    /// lets a later click replace while it is hidden. Local: presentation frames do not carry it, and a snapshot does
+    /// not write it.
+    pub clicked: bool,
+    /// Makes a text page a log page (upstream's `textLog`, `--tail` and `--follow-file`); a snapshot writes this request.
+    pub text_log: Option<text_page::TextLog>,
+    /// A log page's live state (upstream's `logState`), set exactly when `text_log` is; a snapshot never writes it.
+    pub log_state: Option<text_page::TextLogState>,
+    /// A text page's search, `None` with none (upstream's `textSearch`); a snapshot never writes it.
+    pub text_search: Option<text_page::TextSearch>,
+    /// Moves with every query set or closed (upstream's `searchRevision`): a page report naming another revision is
+    /// dropped.
+    pub search_revision: u64,
+    /// A diff page's last report on its changes (upstream's `textChanges`), `None` until it reports and on any other
+    /// page; never emitted, and a snapshot never writes it.
+    pub text_changes: Option<text_page::TextChanges>,
 }
 
 impl HtmlOverlay {
@@ -440,7 +569,21 @@ impl HtmlOverlay {
             reload_revision: 0,
             reload_target: HtmlReloadTarget::Original,
             row: false,
+            clicked: false,
+            text_log: None,
+            log_state: None,
+            text_search: None,
+            search_revision: 0,
+            text_changes: None,
         }
+    }
+
+    /// This page as a log page for `log`, following as it asks; `None` leaves a plain page.
+    #[must_use]
+    pub fn with_text_log(mut self, log: Option<text_page::TextLog>) -> Self {
+        self.text_log = log;
+        self.log_state = log.map(text_page::TextLogState::new);
+        self
     }
 
     /// Whether the session's snapshot writes the page: one this machine opened in an overlay slot. A replica belongs
@@ -450,34 +593,61 @@ impl HtmlOverlay {
         self.replica_of.is_none() && !self.row && !matches!(self.source, HtmlSource::Replica { .. })
     }
 
-    /// Whether ngterm themes the page: a file page, replica or Markdown document (upstream's `themed`).
+    /// Whether ngterm themes the page: a file page, replica, Markdown, text or clicked HTML document (upstream's
+    /// `themed`); a clicked HTML file takes a file page's theme, so it looks the same clicked or opened with `--html`.
     #[must_use]
     pub fn themed(&self) -> bool {
-        matches!(
-            self.source,
-            HtmlSource::File { .. } | HtmlSource::Replica { .. } | HtmlSource::Markdown { .. }
-        )
+        !matches!(self.source.kind(), HtmlPageKind::Url | HtmlPageKind::Image)
     }
 
-    /// Whether the source receives the control bridge; document renderers never do.
+    /// Whether the source receives the control bridge: a file page, or a replica of one; document renderers never do,
+    /// a replica's included (upstream's `bridged`).
     #[must_use]
     pub fn bridged(&self) -> bool {
-        matches!(self.source, HtmlSource::File { .. } | HtmlSource::Replica { .. })
-    }
-
-    /// Whether this is a local document with no browser/file access.
-    #[must_use]
-    pub fn document(&self) -> bool {
-        matches!(self.source, HtmlSource::Image { .. } | HtmlSource::Markdown { .. })
-    }
-
-    /// Whether a page is loaded from generated or file text without a file grant (upstream's `textLoaded`).
-    #[must_use]
-    pub fn text_loaded(&self) -> bool {
         matches!(
             self.source,
-            HtmlSource::File { grant_root: None, .. } | HtmlSource::Image { .. } | HtmlSource::Markdown { .. }
+            HtmlSource::File { .. }
+                | HtmlSource::Replica {
+                    content: ReplicaContent::Html,
+                    ..
+                }
         )
+    }
+
+    /// Whether this is a local content page the app reads and builds, with no browser or file access: an image,
+    /// Markdown, text or clicked HTML document (upstream's `isContent`).
+    #[must_use]
+    pub fn content(&self) -> bool {
+        matches!(
+            self.source,
+            HtmlSource::Image { .. }
+                | HtmlSource::Markdown { .. }
+                | HtmlSource::Text { .. }
+                | HtmlSource::Document { .. }
+        )
+    }
+
+    /// Whether the page loads only once the frontend's network filter is in place, failing with
+    /// [`errors::NETWORK_FILTER_UNAVAILABLE`] when it cannot be: a clicked HTML document, whose link hints (preconnect,
+    /// DNS prefetch) no CSP covers (upstream's `DocumentRules`).
+    #[must_use]
+    pub fn blocks_network(&self) -> bool {
+        self.source.kind() == HtmlPageKind::Document
+    }
+
+    /// Whether a page is loaded from generated or file text without a file grant (upstream's `textLoaded`): a replica
+    /// this machine builds from fetched bytes included.
+    #[must_use]
+    pub fn text_loaded(&self) -> bool {
+        match &self.source {
+            HtmlSource::File { grant_root, .. } => grant_root.is_none(),
+            HtmlSource::Replica { content, .. } => *content != ReplicaContent::Html,
+            HtmlSource::Url(_) => false,
+            HtmlSource::Image { .. }
+            | HtmlSource::Markdown { .. }
+            | HtmlSource::Text { .. }
+            | HtmlSource::Document { .. } => true,
+        }
     }
 
     /// What the panel names the page by, from what the app loaded and never from the page's title, which the page
@@ -486,8 +656,13 @@ impl HtmlOverlay {
     #[must_use]
     pub fn identity(&self) -> String {
         match &self.source {
-            HtmlSource::Image { path } | HtmlSource::Markdown { path } => last_path_component(path),
-            HtmlSource::File { path, .. } | HtmlSource::Replica { path } => {
+            HtmlSource::Image { path }
+            | HtmlSource::Markdown { path }
+            | HtmlSource::Text { path, .. }
+            | HtmlSource::Document { path } => last_path_component(path),
+            // a replica the app builds sits at about:blank: its file is what it shows
+            HtmlSource::Replica { path, content } if *content != ReplicaContent::Html => last_path_component(path),
+            HtmlSource::File { path, .. } | HtmlSource::Replica { path, .. } => {
                 let shown = self
                     .current
                     .as_ref()
@@ -527,7 +702,7 @@ pub(crate) fn os_path(unix: &str) -> String {
 
 /// The last component of a path as Foundation's `lastPathComponent` gives it: trailing slashes ignored, `/` for the
 /// root.
-fn last_path_component(path: &str) -> String {
+pub(crate) fn last_path_component(path: &str) -> String {
     // Windows paths separate by either slash
     let separators: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
     let trimmed = path.trim_end_matches(separators);
@@ -535,6 +710,36 @@ fn last_path_component(path: &str) -> String {
         return if path.is_empty() { String::new() } else { "/".to_owned() };
     }
     trimmed.rsplit(separators).next().unwrap_or(trimmed).to_owned()
+}
+
+/// Reads a page's file before the page takes its slot, on an origin with no web views of its own (a headless one,
+/// [`crate::Core::set_page_probe`]): its pages go to the presenting machine, and the control path refuses a missing,
+/// oversized or binary file before anything is reserved there, as a frontend's [`HtmlHost`] does.
+pub trait PageProbe {
+    /// Reads a bounded raster image (upstream's `ImageProbe.load`).
+    ///
+    /// # Errors
+    /// The upstream image probe failure.
+    fn probe_image(&self, path: &str) -> Result<image_page::ImageData, String>;
+
+    /// Checks a Markdown file's descriptor (upstream's `markdownFileRefusal`).
+    ///
+    /// # Errors
+    /// The upstream Markdown probe failure.
+    fn check_markdown(&self, path: &str) -> Result<(), String>;
+
+    /// Reads and validates a text page's file (upstream's `TextProbe.check`).
+    ///
+    /// # Errors
+    /// The upstream text probe failure.
+    fn check_text(&self, path: &str) -> Result<(), String>;
+
+    /// Reads a log page's last `tail` lines (upstream's `TextProbe.checkLog`), before the log page is refused for the
+    /// presenting machine as a frontend reads it before that refusal.
+    ///
+    /// # Errors
+    /// The upstream text probe failure.
+    fn check_log(&self, path: &str, tail: usize) -> Result<(), String>;
 }
 
 /// The frontend's web views, as the dispatcher reaches them (upstream's `HtmlOverlayRegistry` calls in
@@ -546,6 +751,25 @@ pub trait HtmlHost {
     /// The upstream image probe failure when the path cannot be read safely.
     fn probe_image(&self, _path: &str) -> Result<image_page::ImageData, String> {
         Err("could not read image".to_owned())
+    }
+
+    /// Reads and validates a text page's file before taking a slot (upstream's `textFileRefusal`); rendering reads it
+    /// afresh.
+    ///
+    /// # Errors
+    /// The upstream text probe failure (`unreadable text file: P`, `text file too large (over 4 MB): P`, `not a UTF-8
+    /// text file: P`).
+    fn check_text(&self, path: &str) -> Result<(), String> {
+        Err(format!("unreadable text file: {path}"))
+    }
+
+    /// Reads a log page's last `tail` lines the way its page will, before taking a slot (upstream's `textFileRefusal`
+    /// for a log): only the file's end is read, so its size is never refused, and a binary end is.
+    ///
+    /// # Errors
+    /// The upstream text probe failure (`unreadable text file: P`, `not a UTF-8 text file: P`).
+    fn check_log(&self, path: &str, _tail: usize) -> Result<(), String> {
+        Err(format!("unreadable text file: {path}"))
     }
 
     /// Checks a Markdown source descriptor before taking a slot; rendering reads it afresh.
@@ -599,7 +823,43 @@ pub trait HtmlHost {
     fn saved_store_clear(&self) -> ClearProgress {
         ClearProgress::Done
     }
+
+    /// Steps text page `page`'s search once (upstream's `TextPageBridge.step`): its renderer applies `step`'s query
+    /// first when it holds an older revision, moves to the next or previous match and answers the count, once, on the
+    /// channel handed back. `None`, as a channel that closes unanswered, when the page's renderer is not up to take it.
+    fn step_text_search(&self, _page: uuid::Uuid, _step: SearchStep) -> Option<SearchAnswer> {
+        None
+    }
+
+    /// Steps diff page `page` to its next (`forward`) or previous change once (upstream's `TextPageBridge.stepChange`):
+    /// its renderer moves and answers its count and the change it reached, once, on the channel handed back. `None`, as
+    /// a channel that closes unanswered, when the page's renderer is not up to take it.
+    fn step_text_changes(&self, _page: uuid::Uuid, _forward: bool) -> Option<ChangesAnswer> {
+        None
+    }
 }
+
+/// One step of a text page's search: the direction, and the model's query and its revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchStep {
+    pub forward: bool,
+    pub query: String,
+    pub revision: u64,
+}
+
+/// What a text page's renderer counted: its matches and the one it reached, from 1 and 0 for none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchCount {
+    pub matches: usize,
+    pub current: usize,
+}
+
+/// The renderer's answer to a [`SearchStep`], once; a channel that closes unanswered means the page could not take it.
+pub type SearchAnswer = std::sync::mpsc::Receiver<SearchCount>;
+
+/// A diff page renderer's answer to a change step, once; a channel that closes unanswered means the page could not
+/// take it.
+pub type ChangesAnswer = std::sync::mpsc::Receiver<text_page::TextChanges>;
 
 /// How a clear of the saved browser store is going.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -630,6 +890,14 @@ pub mod errors {
     pub const NOT_REALIZED: &str = "html overlay not realized";
     pub const NO_BROWSER: &str = "no default web browser to open the page in";
     pub const MARKDOWN_IN_OVERLAY: &str = "a markdown page opens only in its overlay";
+    /// A text page is built by the app, so a browser would get the raw file instead (upstream's `textInOverlay`).
+    pub const TEXT_IN_OVERLAY: &str = "a text page opens only in its overlay";
+    /// A clicked HTML file came from terminal output, and a browser would run its scripts (upstream's
+    /// `documentInOverlay`).
+    pub const DOCUMENT_IN_OVERLAY: &str = "a clicked html page opens only in its overlay";
+    /// A clicked HTML document loads only behind its network filter, which the web engine refused (upstream's
+    /// `DocumentRules.unavailable`).
+    pub const NETWORK_FILTER_UNAVAILABLE: &str = "the network filter for a clicked html page could not be installed";
     pub const FINDER_REQUIRES_FILE: &str = "show in Finder requires a file page";
     pub const PERSISTENT_UNAVAILABLE: &str = "persistent browser storage is not available";
     /// The saved store is being emptied: neither a second clear nor a persistent page may use it (upstream's

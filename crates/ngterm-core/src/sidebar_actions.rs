@@ -13,7 +13,7 @@ use crate::Core;
 use crate::commands::ToggleMode;
 use crate::model::{
     AgentIndicator, AppStore, CompanionOptions, FlaggedOrderPlacement, NewSession, NewSessionPlacement, SidebarMode,
-    TintChoice,
+    TintChoice, TintParts,
 };
 use crate::persist::settings::NewSessionPlacementSetting;
 use crate::remote::companions::RemoteCompanionRequest;
@@ -185,11 +185,41 @@ impl Core {
             SidebarAction::EndRemoteSession(session) => self.begin_end_remote_session(window, session),
             other => {
                 let grace = self.settings().close_grace_undo_enabled.unwrap_or(true);
-                self.library_mut()
+                let before = self.tint_placement;
+                let tint_start = self.note_tint_placement(&other);
+                let changed = self
+                    .library_mut()
                     .store_mut(window)
-                    .is_some_and(|store| store_action(store, other, grace))
+                    .is_some_and(|store| store_action(store, other, grace, tint_start));
+                // a new Show On pick is news for every window's menu even when no row moved
+                changed || tint_start != before
             }
         }
+    }
+
+    /// Records a Tint submenu's Show On pick as the last one (upstream's `Coordinator.tintPlacement`), before the pick
+    /// itself runs; returns the parts a menu color starts an untinted row on.
+    fn note_tint_placement(&mut self, action: &SidebarAction) -> TintParts {
+        if let SidebarAction::TintSessions {
+            choice: TintChoice::Parts(parts),
+            ..
+        }
+        | SidebarAction::TintWorkspace {
+            choice: TintChoice::Parts(parts),
+            ..
+        } = action
+        {
+            self.tint_placement = *parts;
+        }
+        self.tint_placement
+    }
+
+    /// The last Show On pick of any window's Tint submenu: app-wide, in memory for the app run and never persisted,
+    /// the icon until one is made. An untinted row's menu shows it checked, and a menu color starts the row on it; the
+    /// palette and `session.tint` keep the icon.
+    #[must_use]
+    pub fn tint_placement(&self) -> TintParts {
+        self.tint_placement
     }
 
     /// A row click: selects as user activity, then lands on the pane a blocked or completed status tagged.
@@ -300,8 +330,9 @@ impl Core {
     }
 }
 
-/// The actions that touch the window's store alone; `grace` is the close-grace undo setting.
-fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool) -> bool {
+/// The actions that touch the window's store alone; `grace` is the close-grace undo setting, `tint_start` the parts a
+/// Tint submenu color starts an untinted row on.
+fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool, tint_start: TintParts) -> bool {
     match action {
         SidebarAction::SetSelection(ids) => store.set_sidebar_selection(ids),
         SidebarAction::SetWorkspaceExpanded { workspace, expanded } => {
@@ -328,10 +359,12 @@ fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool) -> boo
         SidebarAction::DropWorkspace { workspace, destination } => store.move_workspace(workspace, destination),
         SidebarAction::ToggleFlags(ids) => return toggle_flags(store, ids),
         SidebarAction::ToggleWorkspaceFlags(id) => return toggle_workspace_flags(store, id),
-        SidebarAction::TintSessions { sessions, choice } => return store.apply_session_tints(choice, &sessions),
+        SidebarAction::TintSessions { sessions, choice } => {
+            return store.apply_session_tints(choice, &sessions, tint_start);
+        }
         SidebarAction::TintWorkspace { workspace, choice } => {
             let current = store.workspace(workspace).and_then(|workspace| workspace.tint);
-            return store.set_workspace_tint(choice.applied(current), workspace);
+            return store.set_workspace_tint(choice.applied(current, tint_start), workspace);
         }
         SidebarAction::ClearStatus(ids) => {
             for id in ids {
@@ -586,7 +619,7 @@ mod tests {
         let tints = |f: &Fixture| f.sessions.map(|id| f.store().session(id).unwrap().tint);
         assert!(f.act(SidebarAction::TintSessions {
             sessions: vec![first, second],
-            choice: TintChoice::Color(Some(TintColor::Blue)),
+            choice: TintChoice::Color(Some(TintColor::Blue.into())),
         }));
         let blue_named = SidebarTint::new(TintColor::Blue, TintParts::NAME);
         let blue = SidebarTint::on_icon(TintColor::Blue);
@@ -609,17 +642,82 @@ mod tests {
 
         assert!(f.act(SidebarAction::TintWorkspace {
             workspace: one,
-            choice: TintChoice::Color(Some(TintColor::Purple)),
+            choice: TintChoice::Color(Some(TintColor::Purple.into())),
         }));
         assert_eq!(
             f.store().workspace(one).unwrap().tint,
-            Some(SidebarTint::on_icon(TintColor::Purple))
+            Some(SidebarTint::new(TintColor::Purple, TintParts::BOTH)),
+            "the untinted row starts on the last Show On pick"
         );
         assert_eq!(tints(&f), [None, Some(both), None], "its sessions keep their own");
         assert!(!f.act(SidebarAction::TintWorkspace {
             workspace: one,
-            choice: TintChoice::Color(Some(TintColor::Purple)),
+            choice: TintChoice::Color(Some(TintColor::Purple.into())),
         }));
+    }
+
+    /// `testLastPlacementPickStartsTheNextUntintedRow`: a Show On pick is remembered app-wide, a menu color starts an
+    /// untinted session or workspace row on it while a tinted row keeps its own; the palette keeps the icon start.
+    #[test]
+    fn the_last_show_on_pick_starts_the_next_untinted_row() {
+        use crate::model::{SidebarTint, TintColor, TintParts};
+        use crate::palette::{PaletteAction, PaletteMode};
+        let mut f = fixture(AppSettings::default());
+        let [one, two] = f.workspaces;
+        let [first, second, third] = f.sessions;
+        assert_eq!(f.core.tint_placement(), TintParts::ICON, "the icon until a pick");
+        f.store_mut()
+            .set_session_tint(Some(SidebarTint::on_icon(TintColor::Red)), first);
+        let color = |color: TintColor| TintChoice::Color(Some(color.into()));
+        let tint = |f: &Fixture, id: Uuid| f.store().session(id).unwrap().tint;
+
+        assert!(f.act(SidebarAction::TintSessions {
+            sessions: vec![first],
+            choice: TintChoice::Parts(TintParts::NAME),
+        }));
+        assert_eq!(f.core.tint_placement(), TintParts::NAME);
+        assert!(f.act(SidebarAction::TintSessions {
+            sessions: vec![second],
+            choice: color(TintColor::Blue),
+        }));
+        assert_eq!(
+            tint(&f, second),
+            Some(SidebarTint::new(TintColor::Blue, TintParts::NAME))
+        );
+        assert!(f.act(SidebarAction::TintWorkspace {
+            workspace: one,
+            choice: color(TintColor::Green),
+        }));
+        assert_eq!(
+            f.store().workspace(one).unwrap().tint,
+            Some(SidebarTint::new(TintColor::Green, TintParts::NAME))
+        );
+        assert!(f.act(SidebarAction::TintSessions {
+            sessions: vec![first],
+            choice: color(TintColor::Yellow),
+        }));
+        assert_eq!(
+            tint(&f, first),
+            Some(SidebarTint::new(TintColor::Yellow, TintParts::NAME))
+        );
+
+        // a pick that moves no row is still remembered, and None leaves the memory alone
+        assert!(f.act(SidebarAction::TintWorkspace {
+            workspace: two,
+            choice: TintChoice::Parts(TintParts::BOTH),
+        }));
+        assert_eq!(f.core.tint_placement(), TintParts::BOTH);
+        f.act(SidebarAction::TintSessions {
+            sessions: vec![second],
+            choice: TintChoice::Color(None),
+        });
+        assert_eq!(f.core.tint_placement(), TintParts::BOTH);
+
+        // the palette's Tint Session rows start the selected (untinted) row on the icon whatever the memory
+        f.core.toggle_palette(f.window, PaletteMode::Actions);
+        f.core
+            .run_palette_entry(f.window, &PaletteAction::TintSession(Some(TintColor::Mint)));
+        assert_eq!(tint(&f, third), Some(SidebarTint::on_icon(TintColor::Mint)));
     }
 
     #[test]

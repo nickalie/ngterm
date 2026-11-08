@@ -22,7 +22,8 @@
 //! 0.39.1's API has `SaveAsUIShowing`, the page's own Save As, and `PermissionRequested`'s `FILE_READ_WRITE`, which
 //! comes after a File System Access picker, not before), and no setting that turns them off. The guard runs in the
 //! page world to replace the APIs authored code calls; an isolated context would see no more of a page's events.
-//! Markdown alone uses the separate CDP named-world renderer (`native::add_isolated_document_script`), with no bridge.
+//! Markdown and text pages alone use the separate CDP named-world renderer (`native::add_isolated_document_script`),
+//! with no bridge.
 //! The guard is defence in depth in the page's own world, not a boundary: it takes what it calls before any page
 //! script runs, but a page can still open a chooser through a realm it did not run in (a same-origin frame
 //! `WebView2` injects no script into, such as a fresh `about:blank` one, whose own `HTMLElement.prototype.click`

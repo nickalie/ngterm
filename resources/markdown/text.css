@@ -1,0 +1,76 @@
+#ngterm-page { display: flex; position: relative; max-width: none; min-width: max-content; margin: 0; padding: 0; }
+.ngterm-gutter, #ngterm-page pre {
+  margin: 0; padding: 12px 16px; font: 13px/20px var(--mono); white-space: pre; border-radius: 0; background: none;
+}
+.ngterm-gutter { text-align: right; color: var(--muted); border-right: 1px solid var(--rule); user-select: none; }
+#ngterm-page pre { flex: 1; overflow: visible; }
+.ngterm-band {
+  position: absolute; left: 0; right: 0; height: 20px; pointer-events: none;
+  background: color-mix(in srgb, var(--ngterm-color-11, #d9b45a) 22%, transparent);
+}
+/* fixed: a sticky bar as wide as body scrolls away sideways, and 100vw runs under a layout scroll bar */
+body { padding-top: 35px; }
+.ngterm-bar {
+  position: fixed; top: 0; left: 0; right: 0; height: 35px; z-index: 1; display: flex; gap: 12px; align-items: center;
+  box-sizing: border-box; padding: 4px 6px 4px 16px; font: 12px/20px var(--mono); color: var(--muted);
+  background: var(--ngterm-background, Canvas); border-bottom: 1px solid var(--rule);
+  white-space: nowrap; overflow: hidden;
+}
+/* one line at any width: a wrapping bar changes the page height as it scrolls sideways, which moves the view */
+.ngterm-logbar, .ngterm-search { display: flex; gap: 8px; align-items: center; }
+.ngterm-logbar { gap: 12px; flex: 0 1 auto; }
+.ngterm-logbar span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ngterm-bar button { flex: none; }
+.ngterm-logbar button {
+  font: inherit; color: var(--fg); background: var(--tint); border: 1px solid var(--rule); border-radius: 4px;
+  padding: 0 8px; cursor: pointer;
+}
+.ngterm-logbar button.ngterm-paused { color: var(--ngterm-color-11, #d9b45a); }
+/* matches TerminalSearchBar: change the two together */
+.ngterm-search {
+  margin-left: auto; min-width: 0; flex: 0 1 auto; padding: 3px 6px 3px 10px; border-radius: 8px;
+  background: var(--ngterm-background, Canvas); border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+  font: 13px/18px -apple-system, system-ui, sans-serif; color: var(--fg);
+}
+.ngterm-search svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.ngterm-magnifier { flex: none; color: color-mix(in srgb, var(--fg) 70%, transparent); }
+.ngterm-search input {
+  flex: 0 1 120px; width: 120px; min-width: 2.5em; padding: 0; font: inherit; color: var(--fg);
+  background: none; border: none; outline: none;
+}
+.ngterm-search input::placeholder { color: color-mix(in srgb, var(--fg) 45%, transparent); }
+/* a fixed slot, so the box keeps its width as the count appears and changes */
+.ngterm-count {
+  flex: 0 1 76px; width: 76px; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; font-size: 11px;
+  color: color-mix(in srgb, var(--fg) 70%, transparent);
+}
+.ngterm-search button {
+  flex: none; display: flex; padding: 0; color: color-mix(in srgb, var(--fg) 80%, transparent); background: none;
+  border: none; cursor: pointer;
+}
+.ngterm-search button:disabled { opacity: 0.4; cursor: default; }
+::highlight(ngterm-match) { background-color: color-mix(in srgb, var(--ngterm-color-11, #d9b45a) 35%, transparent); }
+::highlight(ngterm-current) {
+  background-color: var(--ngterm-color-11, #d9b45a); color: var(--ngterm-background, #000);
+}
+/* a light tint: a stronger one washes out the diff's own colors */
+.ngterm-change {
+  position: absolute; left: 0; right: 0; pointer-events: none;
+  background: color-mix(in srgb, var(--ngterm-color-12, #6ca0dc) 4%, transparent);
+  box-shadow: inset 4px 0 0 var(--ngterm-color-12, #6ca0dc);
+}
+/* positioned, so the row bands drawn before them in the page paint under the text */
+.ngterm-diff > pre, .ngterm-diff > .ngterm-gutter { position: relative; }
+/* zero width rather than removed, so search, copy and change stepping still read the file as written; an inherited
+   line height on the empty box would grow every row past the 20px the bands assume */
+.ngterm-marker { font-size: 0; line-height: 0; }
+.ngterm-added, .ngterm-removed { position: absolute; left: 0; right: 0; pointer-events: none; }
+.ngterm-added { background: color-mix(in srgb, var(--ngterm-color-2, #5fb36a) 16%, transparent); }
+.ngterm-removed { background: color-mix(in srgb, var(--ngterm-color-1, #c8463c) 16%, transparent); }
+.ngterm-changes { display: flex; gap: 6px; align-items: center; flex: none; }
+.ngterm-changes button {
+  display: flex; padding: 2px 4px; color: var(--fg); background: var(--tint); border: 1px solid var(--rule);
+  border-radius: 4px; cursor: pointer;
+}
+.ngterm-changes svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.ngterm-changes span { margin-left: 4px; }

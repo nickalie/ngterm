@@ -57,6 +57,8 @@ mod registry;
 mod sandbox;
 #[cfg(all(test, feature = "html", target_os = "linux"))]
 pub(crate) mod testing;
+#[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
+mod text_page;
 #[cfg(all(feature = "html", target_os = "linux"))]
 mod view;
 #[cfg(all(feature = "html", windows))]
@@ -66,11 +68,11 @@ mod webview2;
 pub use panel::{TerminalColors, sync_hide_shown as sync_strip_hide};
 #[cfg(all(feature = "html", target_os = "linux"))]
 pub use registry::{
-    ReplicaLink, answer, answer_resource, answer_value, apply, init, install, key_down, mount, page_holds_keyboard,
-    refresh_themes, reject, set_replica_link, set_window_scale, settle, shutdown,
+    ReadAnswer, ReplicaLink, answer, answer_resource, answer_value, apply, init, install, key_down, mount,
+    page_holds_keyboard, refresh_themes, reject, set_replica_link, set_window_scale, settle, shutdown,
 };
 #[cfg(all(feature = "html", target_os = "linux"))]
-use registry::{copy_link, navigate};
+use registry::{copy_link, focus_replica_search, navigate};
 #[cfg(all(feature = "html", target_os = "linux"))]
 pub use view::{FrameStats, PageView};
 #[cfg(all(feature = "html", windows))]
@@ -79,7 +81,7 @@ pub use webview2::{
     set_covered, set_window_scale, settle, shutdown,
 };
 #[cfg(all(feature = "html", windows))]
-use webview2::{copy_link, navigate};
+use webview2::{copy_link, focus_replica_search, navigate};
 
 #[cfg(all(feature = "html", target_os = "macos"))]
 mod wkwebview;
@@ -89,7 +91,7 @@ pub use wkwebview::{
     set_covered, set_window_scale, settle, shutdown,
 };
 #[cfg(all(feature = "html", target_os = "macos"))]
-use wkwebview::{copy_link, navigate};
+use wkwebview::{copy_link, focus_replica_search, navigate};
 
 /// The terminal's colors of `config`, which the pages are drawn in.
 #[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
@@ -111,6 +113,38 @@ pub fn hide(element: &gpui_kit::Entity<PageView>, cx: &mut gpui_kit::App) {
     let page = std::rc::Rc::clone(element.read(cx).page());
     let overlay = page.overlay();
     page.apply(&overlay, false, cx);
+}
+
+/// Steps text page `page`'s search once through its renderer (the core's `HtmlHost::step_text_search`, which each
+/// backend's page host answers with this); `None` while the renderer is not up to take it.
+#[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
+#[must_use]
+pub fn step_text_search(
+    page: uuid::Uuid,
+    step: &ngterm_core::html::SearchStep,
+) -> Option<ngterm_core::html::SearchAnswer> {
+    text_page::step(page, step)
+}
+
+/// Steps diff page `page` to its next or previous change once through its renderer (the core's
+/// `HtmlHost::step_text_changes`, which each backend's page host answers with this); `None` while the renderer is not up
+/// to take it.
+#[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
+#[must_use]
+pub fn step_text_changes(page: uuid::Uuid, forward: bool) -> Option<ngterm_core::html::ChangesAnswer> {
+    text_page::step_changes(page, forward)
+}
+
+/// Find over a text page on top: the keyboard goes into that page's own search field (upstream's `focusSearch`), a
+/// local page's through its bridge and a replica's straight into its renderer; the deck gives the page's element the
+/// keyboard.
+pub fn focus_page_search(page: uuid::Uuid) {
+    #[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
+    if !text_page::focus_search(page) {
+        focus_replica_search(page);
+    }
+    #[cfg(not(all(feature = "html", any(target_os = "linux", target_os = "macos", windows))))]
+    let _ = page;
 }
 
 /// Whether a layer the app draws over `window`'s content (a dialog, the palette, a popover, an alert) is up: native

@@ -275,7 +275,7 @@ fn the_origin_creates_the_companion_which_attaches_under_the_row_once_its_panes_
     let found = remote.fixture.store().session(companion).unwrap();
     assert_eq!(found.parent_id(), Some(remote.row));
     assert_eq!(found.remote_host(), Some("buildbox"));
-    assert_eq!(found.tint.map(SidebarTint::color), Some(TintColor::Red));
+    assert_eq!(found.tint.map(SidebarTint::color), Some(TintColor::Red.into()));
     assert_ne!(remote.fixture.selected(), Some(companion));
     assert_eq!(
         remote.runner.calls().len(),

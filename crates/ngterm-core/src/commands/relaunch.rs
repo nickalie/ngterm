@@ -30,7 +30,7 @@ use crate::command_restore::{DENYLIST_FILE, DENYLIST_STARTER, parse_denylist};
 use ngterm_proto::ControlTree;
 
 use crate::command_restore::PaneForeground;
-use crate::commands::live::launch::{live_foreground_group, pane_seed};
+use crate::commands::live::launch::{cached_foreground_group, live_foreground_group, pane_seed};
 use crate::model::{AppStore, Session, StatusPane, SurfaceSlot, WindowLibrary};
 use crate::persist::RestoreMode;
 use crate::restore::capture::{CaptureKind, ForegroundReader, capture_foreground_commands};
@@ -39,7 +39,18 @@ use crate::restore::spawn_plan::{LaunchSeed, LaunchSeedPolicy};
 
 /// How long an exit capture may read processes before the rest of the panes keep what they had (upstream's
 /// `exitCaptureBudget`).
+///
+/// It stays at 500 ms where upstream's #918 raised its own to 700 ms. Upstream's raise is for its listing: `zmx list`
+/// probes the daemons one at a time, so its cost grows with their count and load, and the 100 ms it had timed out
+/// with many busy daemons, leaving every live pane without its command. The session server answers a listing from
+/// its own table in one api call, whatever the daemon count, so the 150 ms upstream left for the panes' kernel reads
+/// plus a listing bounded by [`EXIT_LISTING_TIMEOUT`] fit in 500 ms.
 pub const EXIT_CAPTURE_BUDGET: Duration = Duration::from_millis(500);
+
+/// How long the exit capture's one listing of the live daemons' leaders may take (upstream's
+/// `captureInvocationTimeout`): the client's own call timeout is 3 s, which would outrun [`EXIT_CAPTURE_BUDGET`].
+/// What it leaves of the budget is for the panes' process reads.
+pub const EXIT_LISTING_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// A pane the core now lets spawn, with its seed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -417,8 +428,30 @@ impl Core {
             return;
         }
         let deadline = Instant::now() + EXIT_CAPTURE_BUDGET;
+        self.list_leaders_for_exit(ids);
         let count = self.capture_windows(ids, CaptureKind::Exit, &|| Instant::now() < deadline);
         tracing::debug!(count, "exit capture");
+    }
+
+    /// The exit capture's one listing of the live daemons' leaders, within [`EXIT_LISTING_TIMEOUT`], when a pane of
+    /// windows `ids` is live (upstream's `freshSnapshot` behind `hasWrappedPane`); the capture's reads then list
+    /// nothing more, so the budget holds however the server answers.
+    fn list_leaders_for_exit(&self, ids: &[Uuid]) {
+        let Some(host) = self.live.host() else {
+            return;
+        };
+        let live = |slot: &SurfaceSlot| slot.get().is_some_and(ngterm_host::Surface::is_live_session);
+        let wrapped = ids
+            .iter()
+            .filter_map(|id| self.library.store(*id))
+            .flat_map(AppStore::sessions)
+            .any(|session| live(&session.surface) || live(&session.split_surface));
+        if wrapped {
+            self.live
+                .leaders
+                .borrow_mut()
+                .refresh_within(host.as_ref(), EXIT_LISTING_TIMEOUT);
+        }
     }
 
     /// Captures every pane of windows `ids` into its slot (see [`capture_foreground_commands`]), a live pane through
@@ -433,7 +466,12 @@ impl Core {
         let Some(table) = restore.table() else {
             return 0;
         };
-        let live = |token: &str| live_foreground_group(runtime, table, token);
+        // an exit capture listed the leaders once, within its budget, before it began
+        let read_group = match kind {
+            CaptureKind::Exit => cached_foreground_group,
+            CaptureKind::OnDemand => live_foreground_group,
+        };
+        let live = |token: &str| read_group(runtime, table, token);
         let reader = reader_with_live(table, restore.shell(), &live);
         let mut captured = 0;
         for id in ids {

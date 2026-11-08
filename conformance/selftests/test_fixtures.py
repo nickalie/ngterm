@@ -271,6 +271,37 @@ def test_level_is_checked_before_capabilities(pytester: pytest.Pytester, roots: 
     assert roots == []
 
 
+def test_the_latest_since_gates_a_param_under_an_older_function(
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path
+) -> None:
+    """pytest finds the function's own mark before a param's, so the closest `since` would let a newer param run."""
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.since("0.36.0")
+        @pytest.mark.parametrize("case", ["old", pytest.param("new", marks=pytest.mark.since("0.37.0"))])
+        def test_cases(ctl, case):
+            assert case == "old", "must not run"
+
+        @pytest.mark.since("0.37.0")
+        class TestNewer:
+            @pytest.mark.since("0.36.0")
+            def test_inner(self, ctl):
+                raise AssertionError("must not run")
+        """
+    )
+    result = run_suite(pytester, *upstream(fake_bin))
+    result.assert_outcomes(passed=1, skipped=2)
+    result.stdout.fnmatch_lines_random(
+        [
+            "SKIPPED [[]1[]] *: not-yet-at-level: since 0.37.0, upstream is at 0.36.0",
+            "SKIPPED [[]1[]] *: not-yet-at-level: since 0.37.0, upstream is at 0.36.0",
+            "*1 pass, 0 fail, 0 skip(unsupported), 2 skip(not-yet-at-level)*",
+        ]
+    )
+
+
 def test_rust_without_a_binary_skips_everything_as_not_yet_at_level(
     pytester: pytest.Pytester, roots: list[Path]
 ) -> None:

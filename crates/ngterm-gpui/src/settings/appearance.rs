@@ -1,7 +1,7 @@
-//! Appearance: Terminal (font, size, cursor, the theme pickers) and Window (toolbar, translucency, the sidebar's tint
-//! and text size, the palette's text size, the inactive-pane mute) (upstream's `AppearanceSettingsView`).
+//! Appearance: Terminal (font, size, cursor, the theme pickers) and Window (toolbar, translucency, the sidebar's tint,
+//! text size and density, the palette's text size, the inactive-pane mute) (upstream's `AppearanceSettingsView`).
 
-use ngterm_core::persist::settings::{CursorStyle, ToolbarMode};
+use ngterm_core::persist::settings::{CursorStyle, SidebarDensity, ToolbarMode};
 use ngterm_core::settings_model::{
     AppearanceChange, DEFAULT_FONT_SIZE, FONT_SIZE_RANGE, INTERFACE_FONT_SIZE_RANGE, SIDEBAR_FONT_SIZE_RANGE,
     SettingsChange,
@@ -17,15 +17,23 @@ fn change(change: AppearanceChange) -> SettingsChange {
 /// The page's sections.
 #[must_use]
 pub fn sections(snapshot: &Snapshot, catalogs: &Catalogs) -> Vec<Section> {
-    vec![
-        Section::new("Terminal", terminal(snapshot, catalogs)),
-        Section::new("Window", window(snapshot)),
-    ]
+    // upstream's two pairs (font name | size, cursor shape | blink), then theme | follow and, while following, the
+    // other side's theme beside its hint: the panel's rows run taller than upstream's, and pairing them keeps the tab
+    // from scrolling
+    let (theme, other_theme) = themes(snapshot, catalogs);
+    let mut terminal = terminal(snapshot, catalogs);
+    terminal.extend(theme);
+    let mut section = Section::new("Terminal", terminal).two_columns();
+    if let Some((picker, hint)) = other_theme {
+        section.items.push(picker);
+        section = section.fill(hint);
+    }
+    vec![section, Section::new("Window", window(snapshot))]
 }
 
 fn terminal(snapshot: &Snapshot, catalogs: &Catalogs) -> Vec<Item> {
     let settings = &snapshot.settings;
-    let mut items = vec![
+    vec![
         Item::new(
             "settings-font-family",
             "Font name",
@@ -63,9 +71,7 @@ fn terminal(snapshot: &Snapshot, catalogs: &Catalogs) -> Vec<Item> {
             &settings.cursor_blink,
             |blink| change(AppearanceChange::CursorBlink(blink)),
         ),
-    ];
-    items.extend(themes(snapshot, catalogs));
-    items
+    ]
 }
 
 /// The font picker's rows: Default, the monospaced families, and a configured family the system does not list.
@@ -80,13 +86,14 @@ pub fn font_options(fonts: &[String], configured: Option<&str>) -> Vec<(String, 
 }
 
 /// The theme pickers (upstream's two `Picker`s and the follow toggle): the first is the theme on screen, with ghostty's
-/// built-in offered only while not following; the second, while following, the other appearance's theme.
-fn themes(snapshot: &Snapshot, catalogs: &Catalogs) -> Vec<Item> {
+/// built-in offered only while not following, beside the toggle; the second, while following, the other appearance's
+/// theme with its hint.
+fn themes(snapshot: &Snapshot, catalogs: &Catalogs) -> (Vec<Item>, Option<(Item, Item)>) {
     let settings = &snapshot.settings;
     let dark = snapshot.dark;
     let following = settings.follows_system_appearance();
     let active = settings.active_theme(dark).map(str::to_owned);
-    let mut items = vec![
+    let items = vec![
         Item::new(
             "settings-theme",
             "Theme",
@@ -103,14 +110,14 @@ fn themes(snapshot: &Snapshot, catalogs: &Catalogs) -> Vec<Item> {
             move |on| change(AppearanceChange::FollowSystemAppearance { on, dark }),
         ),
     ];
-    if following {
+    let other_side = following.then(|| {
         let other = settings.alternate_theme(dark).map(str::to_owned);
         let (title, side) = if dark {
             ("Light theme", "light")
         } else {
             ("Dark theme", "dark")
         };
-        items.push(Item::new(
+        let picker = Item::new(
             "settings-theme-dark",
             title,
             Control::Picker(Picker::new(
@@ -118,13 +125,14 @@ fn themes(snapshot: &Snapshot, catalogs: &Catalogs) -> Vec<Item> {
                 &other,
                 move |theme| change(AppearanceChange::AlternateTheme { theme, dark }),
             )),
-        ));
-        items.push(Item::hint(
+        );
+        let hint = Item::hint(
             "settings-theme-dark-hint",
             format!("Used when the desktop is in {side} mode."),
-        ));
-    }
-    items
+        );
+        (picker, hint)
+    });
+    (items, other_side)
 }
 
 /// A theme picker's rows: ghostty's built-in when `builtin`, the bundled themes, and a set theme not among them.
@@ -189,6 +197,16 @@ fn window(snapshot: &Snapshot) -> Vec<Item> {
             settings.effective_sidebar_font_size(),
             SIDEBAR_FONT_SIZE_RANGE,
             |size| change(AppearanceChange::SidebarFontSize(size)),
+        ),
+        picker(
+            "settings-sidebar-density",
+            "Sidebar density",
+            &SidebarDensity::ALL
+                .iter()
+                .map(|density| (density.display_name(), *density))
+                .collect::<Vec<_>>(),
+            &settings.effective_sidebar_density(),
+            |density| change(AppearanceChange::SidebarDensity(density)),
         ),
         stepper(
             "settings-interface-font-size",

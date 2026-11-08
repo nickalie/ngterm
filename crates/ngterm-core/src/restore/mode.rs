@@ -80,11 +80,13 @@ pub fn captures_on_exit(configured: RestoreMode) -> bool {
     matches!(configured, RestoreMode::Rerun | RestoreMode::Live)
 }
 
-/// [`LiveRejection::UnsupportedLoginShell`]'s reason on this OS.
+/// [`LiveRejection::UnsupportedLoginShell`]'s reason on this OS: neither the login shell nor ghostty `command` names a
+/// shell Live can run ([`crate::live::support::command_shell`]).
 pub const UNSUPPORTED_LOGIN_SHELL: &str = if cfg!(windows) {
-    "neither pwsh.exe nor powershell.exe is available"
+    "neither pwsh.exe nor powershell.exe is available, and the ghostty command setting names neither"
 } else {
-    "the password-database login shell is not zsh, bash, fish or PowerShell"
+    "the password-database login shell is not zsh, bash, fish or PowerShell, and the ghostty command setting names \
+     none of them"
 };
 
 /// Why this host cannot wrap a pane in a live-session daemon (upstream's `ZmxSupport.Rejection`).
@@ -101,7 +103,7 @@ pub enum LiveRejection {
 
 impl LiveRejection {
     /// The reason `restore.mode` reports, upstream's wording; the shell names widen with the bash and PowerShell
-    /// extension. Windows has no password database: its shell is the PowerShell found on the host
+    /// extension, and the unsupported shell's names the ghostty `command` setting too, as upstream's does since #895. Windows has no password database: its shell is the PowerShell found on the host
     /// (`ngterm-session::launch`), so there the unsupported shell is a missing PowerShell.
     #[must_use]
     pub fn message(self) -> &'static str {
@@ -129,6 +131,8 @@ pub struct LiveProbe {
     pub executable: PathBuf,
     /// The login shell in the password database.
     pub login_shell: Option<String>,
+    /// The shell ghostty `command` names in its place ([`crate::live::support::Inputs::command_shell`]).
+    pub command_shell: Option<String>,
     /// The bundled resources directory holding `shell-integration/<shell>`.
     pub resources_dir: Option<PathBuf>,
     /// ngterm's own resources directory, holding `shell-integration/pwsh`.
@@ -148,7 +152,7 @@ impl LiveProbe {
         }
         eligibility(
             &self.executable,
-            self.login_shell.as_deref(),
+            self.command_shell.as_deref().or(self.login_shell.as_deref()),
             self.resources_dir.as_deref(),
             self.own_resources_dir.as_deref(),
         )
@@ -221,6 +225,7 @@ mod tests {
             ui_test_opt_in: false,
             executable: PathBuf::from("ngterm-session"),
             login_shell: Some("/bin/tcsh".to_owned()),
+            command_shell: None,
             resources_dir: Some(resources.clone()),
             own_resources_dir: Some(own.clone()),
         };
@@ -300,6 +305,7 @@ mod tests {
             ui_test_opt_in: false,
             executable: crate::live::test_executable(dir.path(), "sh"),
             login_shell: Some("/usr/bin/pwsh".to_owned()),
+            command_shell: None,
             resources_dir: Some(resources.clone()),
             own_resources_dir: Some(own.clone()),
         };
@@ -316,12 +322,46 @@ mod tests {
         );
     }
 
+    /// Upstream's `testBashLoginShellIsEligibleWithAFishCommandShell`, over a login shell no build wraps: the shell
+    /// ghostty `command` names is probed in its place, for its own integration.
+    #[test]
+    fn a_command_shell_makes_an_unsupported_login_shell_eligible() {
+        let dir = tempfile::tempdir().unwrap();
+        let resources = dir.path().join("share");
+        let mut probe = LiveProbe {
+            executable: crate::live::test_executable(dir.path(), "sh"),
+            login_shell: Some("/bin/tcsh".to_owned()),
+            resources_dir: Some(resources.clone()),
+            ..LiveProbe::default()
+        };
+        assert_eq!(probe.rejection(), Some(LiveRejection::UnsupportedLoginShell));
+        probe.command_shell = Some("/opt/homebrew/bin/fish".to_owned());
+        assert_eq!(
+            probe.rejection(),
+            Some(LiveRejection::MissingShellIntegration(LoginShell::Fish))
+        );
+        let fish = resources.join("shell-integration/fish/vendor_conf.d");
+        fs::create_dir_all(&fish).unwrap();
+        fs::write(fish.join("ghostty-shell-integration.fish"), "").unwrap();
+        assert_eq!(probe.rejection(), None);
+        // it wins over a supported login shell too: a zsh integration alone does not make a fish command eligible
+        probe.login_shell = Some("/bin/zsh".to_owned());
+        fs::remove_file(fish.join("ghostty-shell-integration.fish")).unwrap();
+        fs::create_dir_all(resources.join("shell-integration/zsh")).unwrap();
+        fs::write(resources.join("shell-integration/zsh/.zshenv"), "").unwrap();
+        assert_eq!(
+            probe.rejection(),
+            Some(LiveRejection::MissingShellIntegration(LoginShell::Fish))
+        );
+    }
+
     #[test]
     fn the_unsupported_shell_reason_names_what_this_os_runs() {
         let expected = if cfg!(windows) {
-            "neither pwsh.exe nor powershell.exe is available"
+            "neither pwsh.exe nor powershell.exe is available, and the ghostty command setting names neither"
         } else {
-            "the password-database login shell is not zsh, bash, fish or PowerShell"
+            "the password-database login shell is not zsh, bash, fish or PowerShell, and the ghostty command setting \
+             names none of them"
         };
         assert_eq!(LiveRejection::UnsupportedLoginShell.message(), expected);
     }

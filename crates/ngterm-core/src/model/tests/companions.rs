@@ -492,6 +492,7 @@ pub(super) fn tree_context() -> crate::projection::TreeContext<'static> {
         app: &APP,
         settings: &SETTINGS,
         index_unsaved: false,
+        snapshot_unsaved: false,
         quick_visible: false,
     }
 }

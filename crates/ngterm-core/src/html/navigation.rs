@@ -5,7 +5,7 @@
 
 use url::Url;
 
-use super::{HtmlOverlay, HtmlSource, contains};
+use super::{HtmlOverlay, HtmlSource, ReplicaContent, contains};
 
 /// A web page's origin: lowercase scheme and host plus the effective port, so an omitted port equals the scheme's
 /// default (upstream's `HtmlOrigin`).
@@ -89,6 +89,15 @@ pub enum HtmlNavigationDecision {
 #[must_use]
 pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavigationDecision {
     use HtmlNavigationDecision::{Allow, Cancel, OpenExternal};
+    // ahead of the shared exits: a text page shows only the document the app built, so not even a user-activated web
+    // link or another about: address leaves it
+    if overlay.source.kind() == super::HtmlPageKind::Text {
+        return if action.target == HtmlNavigationTarget::MainFrame && action.url.as_str() == "about:blank" {
+            Allow
+        } else {
+            Cancel
+        };
+    }
     let scheme = action.url.scheme().to_ascii_lowercase();
     let web = scheme == "http" || scheme == "https";
     let offer = if action.user_activated { OpenExternal } else { Cancel };
@@ -99,8 +108,19 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
         return Allow;
     }
     match &overlay.source {
-        HtmlSource::Image { .. } => Cancel,
-        HtmlSource::Markdown { .. } => {
+        HtmlSource::Image { .. }
+        | HtmlSource::Text { .. }
+        | HtmlSource::Replica {
+            content: ReplicaContent::Image { .. } | ReplicaContent::Text { .. },
+            ..
+        } => Cancel,
+        // a clicked HTML file shares the Markdown arm: a user-activated web link is offered, nothing else leaves it
+        HtmlSource::Markdown { .. }
+        | HtmlSource::Document { .. }
+        | HtmlSource::Replica {
+            content: ReplicaContent::Markdown | ReplicaContent::Document,
+            ..
+        } => {
             if web {
                 offer
             } else {
@@ -121,7 +141,10 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
             }
         }
         // a replica loads only from its own page's origin; the machine that opened it serves what its grant allows
-        HtmlSource::Replica { .. } => {
+        HtmlSource::Replica {
+            content: ReplicaContent::Html,
+            ..
+        } => {
             if web {
                 return offer;
             }
@@ -307,12 +330,110 @@ mod tests {
         }
     }
 
+    /// Upstream's `HtmlOverlayTests.textPagePolicyAllowsOnlyItsOwnBlankDocument`: a text page leaves its own blank
+    /// document for nothing, not even a user-activated web link.
+    #[test]
+    fn a_text_page_allows_only_its_own_blank_document() {
+        let page = HtmlOverlay::new(
+            HtmlSource::Text {
+                path: "/tmp/src/main.go".to_owned(),
+                line: Some(4),
+            },
+            HtmlPageFlags::default(),
+        );
+        for (url, target, user, decision) in [
+            ("about:blank", MainFrame, false, Allow),
+            ("about:blank", MainFrame, true, Allow),
+            ("about:blank", Subframe, false, Cancel),
+            ("about:blank", NewWindow, true, Cancel),
+            ("about:srcdoc", MainFrame, false, Cancel),
+            ("about:blank#x", MainFrame, true, Cancel),
+            ("https://example.com/", MainFrame, true, Cancel),
+            ("http://example.com/a", NewWindow, true, Cancel),
+            ("file:///tmp/src/main.go", MainFrame, true, Cancel),
+            ("javascript:alert(1)", MainFrame, true, Cancel),
+            ("data:text/html,x", MainFrame, true, Cancel),
+        ] {
+            let decided = decide(&action(url, target, user), &page);
+            assert_eq!(decided, decision, "{url} {target:?} {user}");
+        }
+    }
+
+    /// Upstream's `HtmlOverlayTests.aTextPageIsNamedByItsFileNeverTheTitle`.
+    #[test]
+    fn a_text_page_is_named_by_its_file_never_the_title() {
+        let mut page = HtmlOverlay::new(
+            HtmlSource::Text {
+                path: "/tmp/src/main.go".to_owned(),
+                line: Some(4),
+            },
+            HtmlPageFlags::default(),
+        );
+        page.current = Some(crate::html::HtmlPageInfo {
+            page: "/tmp/src/main.go".to_owned(),
+            title: Some("enter your password".to_owned()),
+            can_go_back: false,
+            can_go_forward: false,
+        });
+        assert_eq!(page.identity(), "main.go");
+        assert_eq!(page.source.text(), "/tmp/src/main.go");
+        assert!(page.themed() && page.text_loaded() && page.content() && !page.bridged());
+    }
+
+    /// Upstream's `HtmlOverlayTests.documentPagePolicyHandsWebLinksOutAndKeepsEverythingElse`: a clicked HTML page
+    /// offers a user-activated web link to the browser and keeps everything else in its blank document.
+    #[test]
+    fn a_document_page_hands_web_links_out_and_keeps_everything_else() {
+        let page = HtmlOverlay::new(
+            HtmlSource::Document {
+                path: "/tmp/agdoc/pr.html".to_owned(),
+            },
+            HtmlPageFlags::default(),
+        );
+        for (url, target, user, decision) in [
+            ("https://example.com/", MainFrame, true, OpenExternal),
+            ("https://example.com/", MainFrame, false, Cancel),
+            ("https://example.com/", Subframe, false, Cancel),
+            ("about:blank", MainFrame, false, Allow),
+            ("file:///tmp/agdoc/other.html", MainFrame, true, Cancel),
+            ("file:///etc/passwd", Subframe, false, Cancel),
+            ("javascript:alert(1)", MainFrame, true, Cancel),
+            ("data:text/html,x", MainFrame, true, Cancel),
+        ] {
+            let decided = decide(&action(url, target, user), &page);
+            assert_eq!(decided, decision, "{url} {target:?} {user}");
+        }
+    }
+
+    /// Upstream's `HtmlOverlayTests.aDocumentPageIsNamedByItsFileNeverTheTitle`: and it is themed, loaded from text,
+    /// unbridged, and loads behind the network filter.
+    #[test]
+    fn a_document_page_is_named_by_its_file_never_the_title() {
+        let mut page = HtmlOverlay::new(
+            HtmlSource::Document {
+                path: "/tmp/agdoc/pr.html".to_owned(),
+            },
+            HtmlPageFlags::default(),
+        );
+        page.current = Some(crate::html::HtmlPageInfo {
+            page: "/tmp/agdoc/pr.html".to_owned(),
+            title: Some("enter your password".to_owned()),
+            can_go_back: false,
+            can_go_forward: false,
+        });
+        assert_eq!(page.identity(), "pr.html");
+        assert_eq!(page.source.text(), "/tmp/agdoc/pr.html");
+        assert!(page.themed() && page.text_loaded() && page.content() && !page.bridged());
+        assert!(page.blocks_network() && !page.flags.javascript);
+    }
+
     /// Upstream's `HtmlOverlayTests.replicaPolicyAllowsOnlyItsOwnSchemeOrigin`, on the build's `ngterm-page` scheme.
     #[test]
     fn a_replica_loads_only_from_its_own_scheme_origin() {
         let mut page = HtmlOverlay::new(
             HtmlSource::Replica {
                 path: "/origin/docs/index.html".to_owned(),
+                content: ReplicaContent::Html,
             },
             HtmlPageFlags::default(),
         );
@@ -339,6 +460,44 @@ mod tests {
         }
         assert_eq!(page.identity(), "index.html");
         assert!(page.themed() && !page.text_loaded());
+    }
+
+    /// A replica the app builds from fetched bytes goes by the kind its origin opened (upstream's `.replica(_, kind)`
+    /// arms): a picture and a text page stay put, Markdown and a clicked document offer a user-activated web link, none
+    /// loads from the replica scheme or receives the bridge, and only a picture goes unthemed.
+    #[test]
+    fn a_content_replica_navigates_as_its_kind() {
+        use super::super::HtmlPageKind;
+        for (content, kind, offers) in [
+            (
+                ReplicaContent::Image { width: 3, height: 2 },
+                HtmlPageKind::Image,
+                false,
+            ),
+            (ReplicaContent::Markdown, HtmlPageKind::Markdown, true),
+            (ReplicaContent::Text { line: Some(4) }, HtmlPageKind::Text, false),
+            (ReplicaContent::Document, HtmlPageKind::Document, true),
+        ] {
+            let mut page = HtmlOverlay::new(
+                HtmlSource::Replica {
+                    path: "/origin/docs/notes.md".to_owned(),
+                    content,
+                },
+                HtmlPageFlags::default(),
+            );
+            page.replica_of = Some(uuid::Uuid::new_v4());
+            assert_eq!(page.source.kind(), kind);
+            let own = format!("ngterm-page://{}/notes.md", crate::pane_env::uuid_string(page.id));
+            assert_eq!(decide(&action(&own, MainFrame, false), &page), Cancel, "{kind:?}");
+            let link = decide(&action("https://example.com/", MainFrame, true), &page);
+            assert_eq!(link, if offers { OpenExternal } else { Cancel }, "{kind:?}");
+            let blank = decide(&action("about:blank", MainFrame, false), &page);
+            assert_eq!(blank, Allow, "{kind:?}");
+            assert_eq!(page.identity(), "notes.md");
+            assert!(page.text_loaded() && !page.bridged() && !page.content() && !page.persisted());
+            assert_eq!(page.themed(), kind != HtmlPageKind::Image, "{kind:?}");
+            assert_eq!(page.blocks_network(), kind == HtmlPageKind::Document, "{kind:?}");
+        }
     }
 
     /// Upstream's `HtmlOverlayTests.chromelessPagePolicyKeepsFramesOnItsOrigin`: a chromeless loopback page keeps

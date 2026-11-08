@@ -129,6 +129,12 @@ pub struct ViewSpec {
     /// Drawn where the page draws nothing; `None` keeps the engine's opaque white.
     pub background: Option<Rgba>,
     pub geometry: Geometry,
+    /// The page loads nothing from the network: a content filter blocking every `http`, `https`, `ws`, `wss`, `ftp`
+    /// and `ftps` load goes on it before its first load, which waits for it. `WebKit` checks link hints (preconnect,
+    /// DNS prefetch) against content filters, never against the page's CSP. A filter that cannot be compiled fails
+    /// every load ([`crate::Event::NetworkFilterFailed`]).
+    #[serde(default)]
+    pub block_network: bool,
 }
 
 #[cfg(test)]

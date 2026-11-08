@@ -220,12 +220,12 @@ pub enum TerminalEvent {
     /// An `end_search` binding ended the search.
     EndSearch,
     /// A link was clicked, or `write_*_file:open` asked for its file: the frontend opens it through the link
-    /// policy ([`follow_link`] is the default route), as libghostty's `OPEN_URL` asked. `browser`: the click was the
-    /// Ctrl/Super+Shift chord that sends this one link to the browser over an overlay link-open setting
-    /// ([`ngterm_core::link_policy::wants_browser`]).
+    /// policy ([`follow_link`] is the default route), as libghostty's `OPEN_URL` asked. `intent`: what the click's
+    /// chord asked for, snapshotted at the release ([`links::click_intent`]): the browser over an overlay link-open
+    /// setting, or a reveal of the file a local route names.
     OpenUrl {
         url: String,
-        browser: bool,
+        intent: ngterm_core::link_policy::ClickIntent,
         /// OSC 8 URIs stay verbatim; only detected paths may resolve against the terminal's reported cwd.
         kind: LinkKind,
     },

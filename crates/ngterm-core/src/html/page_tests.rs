@@ -177,7 +177,10 @@ fn source_text_and_chrome_follow_the_source_and_flags() {
             path: path.clone(),
             grant_root: None,
         },
-        HtmlSource::Replica { path: path.clone() },
+        HtmlSource::Replica {
+            path: path.clone(),
+            content: ReplicaContent::Html,
+        },
         HtmlSource::Image { path: path.clone() },
         HtmlSource::Markdown { path: path.clone() },
     ];

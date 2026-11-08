@@ -1,19 +1,22 @@
-//! The keyboard-layout lock's performer (upstream's `TerminalInputSource.swift`): while a terminal holds the keyboard
-//! it selects the layout Settings ▸ Key Mapping ▸ "Lock in terminals" names and switches back any change made there;
-//! the layout selected before comes back when the keyboard goes to a web overlay, a text field, another application or
-//! no ngterm window, when the setting goes off, and on quit. [`InputSourceLock`] decides; this is the only code that
-//! selects a layout.
+//! The keyboard-layout lock's performer (upstream's `TerminalInputSource.swift`): while a terminal or an HTML overlay
+//! page (its fields included) holds the keyboard of an active ngterm window ([`keyboard_held`]) it selects the layout
+//! Settings ▸ Key Mapping ▸ "Lock in terminals" names and switches back any change made there; the layout selected
+//! before comes back when the keyboard goes to an ngterm text field outside a page (Settings, the palette, an ask
+//! dialog, the sidebar), another application or no ngterm window, when the setting goes off, and on quit.
+//! [`InputSourceLock`] decides; this is the only code that selects a layout.
 //!
-//! It re-evaluates on the next main-loop turn after a terminal gains or loses its window's keyboard or its window's
-//! activation (`crate::terminal`'s focus listeners: main, split, scratch, overlay and quick terminals alike), after any
-//! ngterm window closes (a main window or the quick terminal's: a removed window reports neither a blur nor a
-//! deactivation to the terminals it held), after GPUI's `on_keyboard_layout_change` (on Linux a group change that
-//! changes the effective XKB layout's name, and every new keymap, X11's `XkbNewKeyboardNotify` and `XkbMapNotify` or
-//! Wayland's `wl_keyboard.keymap`, the way a changed layout list arrives, reported even when the effective layout keeps
-//! its name by `gpui-pre-linux`'s patch 0004; on macOS a change of the selected input source; on Windows
-//! `WM_INPUTLANGCHANGE`), and at once when the setting changes. The selectable layouts are read at each evaluation, so
-//! a layout no longer enabled releases the lock, and re-read for the picker when Settings opens and when an ngterm
-//! window is activated (enabling one is a trip to the system's settings and back).
+//! It re-evaluates on the next main-loop turn after a terminal or a page gains or loses its window's keyboard or its
+//! window's activation (`crate::terminal`'s focus listeners: main, split, scratch, overlay and quick terminals alike;
+//! the page element's; on Windows and macOS also the web view's own focus reports, `WebView2`'s `GotFocus` and
+//! `LostFocus` and the `WKWebView` delegate's first-responder watch), after any ngterm window closes (a main window or
+//! the quick terminal's: a removed window reports neither a blur nor a deactivation to the terminals it held), after
+//! GPUI's `on_keyboard_layout_change` (on Linux a group change that changes the effective XKB layout's name, and every
+//! new keymap, X11's `XkbNewKeyboardNotify` and `XkbMapNotify` or Wayland's `wl_keyboard.keymap`, the way a changed
+//! layout list arrives, reported even when the effective layout keeps its name by `gpui-pre-linux`'s patch 0004; on
+//! macOS a change of the selected input source; on Windows `WM_INPUTLANGCHANGE`), and at once when the setting changes.
+//! The selectable layouts are read at each evaluation, so a layout no longer enabled releases the lock, and re-read for
+//! the picker when Settings opens and when an ngterm window is activated (enabling one is a trip to the system's
+//! settings and back).
 //!
 //! Selection is the platform's, so its restore is what keeps other applications on the user's own layout; a crash
 //! runs none and leaves the locked layout selected, and the baseline is never persisted (it would overwrite a choice
@@ -160,7 +163,7 @@ impl Performer {
         changed
     }
 
-    /// Brings the selection in line with the lock, a terminal holding the keyboard or not (`held`).
+    /// Brings the selection in line with the lock, a terminal or a page holding the keyboard or not (`held`).
     fn reconcile(&mut self, held: bool) {
         if self.stopped || (self.target.is_none() && self.lock.baseline().is_none()) {
             return;
@@ -287,10 +290,29 @@ fn refresh(cx: &mut App) {
         return;
     };
     let idle = performer.target.is_none() && performer.lock.baseline().is_none();
-    let held = !idle && crate::terminal::terminal_holds_keyboard(cx);
+    let held = !idle && keyboard_held(cx);
     let performer = cx.global_mut::<Performer>();
     performer.scheduled = false;
     performer.reconcile(held);
+}
+
+/// Whether the lock holds (upstream's `holdsLock` over the key window's first responder): a terminal (a main, split,
+/// scratch, overlay or quick one) or an HTML overlay page, the fields inside it included, holds the keyboard of an
+/// active ngterm window. Reads the windows, so it runs outside any window's update.
+pub(crate) fn keyboard_held(cx: &mut App) -> bool {
+    crate::terminal::terminal_holds_keyboard(cx) || page_holds_keyboard(cx)
+}
+
+/// Whether an HTML overlay page holds the keyboard of an active ngterm window (`crate::html_overlay`'s
+/// `page_holds_keyboard`: the page's element, or on Windows and macOS its web view itself).
+fn page_holds_keyboard(cx: &mut App) -> bool {
+    cx.windows().into_iter().any(|handle| {
+        handle
+            .update(cx, |_, window, cx| {
+                window.is_window_active() && crate::html_overlay::page_holds_keyboard(window, cx)
+            })
+            .unwrap_or(false)
+    })
 }
 
 /// The setting's layout, `None` for off: applied to the keyboard's holder at once when it changed.
@@ -348,5 +370,7 @@ pub fn window_activated(cx: &mut App) {
     .detach();
 }
 
+#[cfg(test)]
+pub(crate) mod fake;
 #[cfg(test)]
 mod tests;

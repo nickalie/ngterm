@@ -10,32 +10,81 @@ follows that setting (`crates/ngterm-gpui/src/terminal/mouse.rs`), so the text k
 Applied after 0008-show-image-windows.patch.
 
 diff --git a/SKILL.md b/SKILL.md
-index 2b46b86..0812083 100644
+index fa7b5d4..c4c3a22 100644
 --- a/SKILL.md
 +++ b/SKILL.md
-@@ -810,7 +810,7 @@ ngtermctl session overlay open --markdown /path/to/plan.md --size-percent 95 --t
+@@ -816,11 +816,11 @@ ngtermctl session overlay open --markdown /path/to/plan.md --size-percent 95 --t
  ```
 
  Pictures kept in the file's own folder show; other pictures show their alt text, raw HTML stays text, and a web
--link opens in the browser after the user confirms. The user gets the same view by ⌘-clicking the file's path, so
-+link opens in the browser after the user confirms. The user gets the same view by ⌘-clicking (ctrl-clicking on Linux and Windows) the file's path, so
- printing the absolute path of a plan or report you wrote is often enough. Read back `markdown` in `htmlOverlays`.
+-link opens in the browser after the user confirms. The user gets the same view by ⌘-clicking the file's path in a
++link opens in the browser after the user confirms. The user gets the same view by ⌘-clicking (ctrl-clicking on Linux and Windows) the file's path in a
+ local pane, so printing the absolute path of a plan or report you wrote is often enough there; for a user watching
+ from another Mac, open it with `--markdown`. Read back `markdown` in `htmlOverlays`.
 
- ## Displaying an image inline
-@@ -822,7 +822,7 @@ Show a png, jpg, gif or webp picture with `--image`; the panel takes the picture
+-A ⌘-clicked `.html` or `.htm` path shows as a page with scripts off, no tagged controls, no access to other
++A ⌘-clicked (ctrl-clicked on Linux and Windows) `.html` or `.htm` path shows as a page with scripts off, no tagged controls, no access to other
+ files and no network loads, read back as `document`. A page that needs its scripts, its controls or files beside it opens with `--html`.
+
+ ## Showing a source file or log at a line
+@@ -834,8 +834,8 @@ ngtermctl session overlay open --text /path/to/main.go --line 42 --size-percent
+ It is highlighted when its name maps to a known language, up to 256 KB, and plain above; a file over 4 MB is
+ refused. FILE is taken literally,
+ never as `path:line`. The page runs nothing, loads nothing and has no links. Markdown, HTML and SVG are not text
+-pages. The user gets the same view by ⌘-clicking a path or a `path:line` location in a local pane, and reveals any
+-file in Finder with ⌘⌥-click; for a user watching from another Mac, open it with `--text`. Read back `text`
++pages. The user gets the same view by ⌘-clicking (ctrl-clicking on Linux and Windows) a path or a `path:line` location in a
++local pane, and reveals any file in Finder (the file manager on Linux and Windows) with ⌘⌥-click (ctrl+alt-click on Linux and Windows); for a user watching from another Mac, open it with `--text`. Read back `text`
+ (`{file, language?, line?}`) in `htmlOverlays`.
+
+ To watch a log, open its end and follow it as it grows:
+@@ -847,7 +847,7 @@ ngtermctl session overlay follow off --target "$NGTERM_SESSION_ID"   # pause; on
+
+ `--follow-file` shows the last 5,000 lines, read from the end so a log of any size opens; `--tail N` sets the count
+ (1 to 100,000) and alone shows them once without following. It is not `--follow`, which selects the session. A
+-⌘-click on a `.log` or `.out` path opens the same following page; `app.log:120` still opens the plain page at that
++⌘-click (ctrl-click on Linux and Windows) on a `.log` or `.out` path opens the same following page; `app.log:120` still opens the plain page at that
+ line. The user pauses by scrolling up and resumes at the bottom or with Resume. Read back `text.tail`, `following`,
+ `lines`, `clipped`, `waiting` (file missing) and `unreadable`. A log page is refused on a session another Mac presents.
+
+@@ -860,11 +860,11 @@ ngtermctl session overlay search --next --target "$NGTERM_SESSION_ID"  # prints
+
+ Matching is case-insensitive plain text. A step pauses a following log page, so the match stays in view; setting the
+ query does not. Read back `text.search` (`{query, matches, current}`). The user has the same search in the page's
+-bar: `/` or ⌘F focuses it, `n`/`N` step, Esc clears; on a log page `F` toggles follow, `G`/End goes to the bottom and
++bar: `/` or ⌘F (ctrl+shift+F on Linux and Windows) focuses it, `n`/`N` step, Esc clears; on a log page `F` toggles follow, `G`/End goes to the bottom and
+ follows, `g`/Home to the top. A step before the page loads is refused `page not loaded`.
+
+-To show the user changes, write each changed file's diff to its own `.diff` file and list them as links; a ⌘-click
+-opens it as a read-only text page:
++To show the user changes, write each changed file's diff to its own `.diff` file and list them as links; a ⌘-click (ctrl-click
++on Linux and Windows) opens it as a read-only text page:
+
+ ```bash
+ git diff --no-color HEAD~3 HEAD -- src/app.go > /tmp/src_app.go.diff
+@@ -884,7 +884,7 @@ Show a png, jpg, gif or webp picture with `--image`; the panel takes the picture
  ngtermctl session overlay open --image /tmp/shot.png --target "$NGTERM_SESSION_ID"
  ```
 
--The user can open the same view by ⌘-clicking a picture's path in the terminal, so printing the absolute
-+The user can open the same view by ⌘-clicking (ctrl-clicking on Linux and Windows) a picture's path in the terminal, so printing the absolute
- path of an image you produced is often enough. When `--image` is rejected, by an older CLI as an unknown
- option or by an older app, fall back to the script below.
-
+-The user can open the same view by ⌘-clicking a picture's path in a local pane, so printing the absolute
++The user can open the same view by ⌘-clicking (ctrl-clicking on Linux and Windows) a picture's path in a local pane, so printing the absolute
+ path of an image you produced is often enough there. When the user watches your session from another Mac,
+ a click on a printed path does nothing; open it with `--image`, which shows it on that Mac, as `--markdown`
+ and `--text` pages do. When `--image` is rejected, by an older CLI as an unknown option, by an older app, or
 diff --git a/reference.md b/reference.md
-index c0b0ec7..0349209 100644
+index 25737f1..85bc403 100644
 --- a/reference.md
 +++ b/reference.md
-@@ -533,7 +533,7 @@ buys nothing. A caller with no tree uses `version`.
+@@ -205,7 +205,7 @@ session not laid out yet),
+ `paneOverlays` (the panes covered by their own pane-scoped overlay — `["left"]`, `["right"]` or
+ `["left","right"]`, omitted when neither is; the read side of `session overlay open --pane`, reported
+ independently of the session-wide `overlay` flag, which a pane overlay never sets),
+-`htmlOverlays` (the pages in the overlay slots, see `session overlay open --html`, `--url`, `--image`, `--markdown` and `--text`, plus `document` for a ⌘-clicked `.html` file; `overlay` and
++`htmlOverlays` (the pages in the overlay slots, see `session overlay open --html`, `--url`, `--image`, `--markdown` and `--text`, plus `document` for a ⌘-clicked (ctrl-clicked on Linux and Windows) `.html` file; `overlay` and
+ `paneOverlays` count them as covers too),
+ `hud` (the message panel occupying the session-wide overlay slot — the read side of `session hud`; omitted
+ when none is up. A
+@@ -537,7 +537,7 @@ buys nothing. A caller with no tree uses `version`.
    `--command` comes back as a plain shell); a shell that exits within 2 seconds of such a restart closes the group
    instead, so a broken shell cannot restart forever. A parent without companions closes on exit as before. A row attached
    from another Mac whose parent respawned there attaches to the new shell instead of stopping at its exit line. The GUI
@@ -44,7 +93,7 @@ index c0b0ec7..0349209 100644
    the keyless `new_companion` keymap action. Read back from the tree session node's `parent` field.
    A page companion shows an HTML page instead of a terminal and never starts a shell; it is created with
    `session overlay open --html FILE --companion` or `--url URL --companion` (see that entry).
-@@ -555,7 +555,7 @@ buys nothing. A caller with no tree uses `version`.
+@@ -559,7 +559,7 @@ buys nothing. A caller with no tree uses `version`.
    own session under its own policy, and the copy attaches here as for `session new --parent`.
    `--no-select` (with `--companion`) creates it without selecting it. A pipeline or shell job is copied as its foreground process only; name, status,
    flag, overlays, scratch and background are not copied. Wire command `session.companion.duplicate`; returns
@@ -53,17 +102,16 @@ index c0b0ec7..0349209 100644
    menu, a palette row, and the keyless `duplicate_companion` action.
  - `session duplicate [--target] [--window W]` — create a fresh session in the SAME workspace as the
    target, inserted directly AFTER it, rooted at the target's focused-pane working directory (the live
-@@ -880,7 +880,8 @@ error keeps those names for compatibility.
-   ```
+@@ -887,7 +887,7 @@ error keeps those names for compatibility.
  - `session tint <COLOR|clear> [--on PARTS] [--target] [--window W]` - color the session's sidebar row so it
-   stands out at a glance (red for production, green for dev). COLOR is `red|orange|yellow|green|blue|purple|gray`,
--  macOS system colors that follow light and dark. `--on` is `icon`, `name` or `icon,name`; omitted, a recolor keeps
-+  macOS system colors that follow light and dark (the same colors on Linux and Windows, in their dark variant on a
-+  dark sidebar). `--on` is `icon`, `name` or `icon,name`; omitted, a recolor keeps
+   stands out at a glance (red for production, green for dev). COLOR is
+   `red|orange|yellow|green|blue|purple|gray|teal|pink|brown|indigo|mint`, macOS system colors that follow light and
+-  dark, or a `#rrggbb` hex (the `#` optional) for any other color, fixed in both modes and read back as lowercase
++  dark (the same colors on Linux and Windows, in their dark variant on a dark sidebar), or a `#rrggbb` hex (the `#` optional) for any other color, fixed in both modes and read back as lowercase
+   `#rrggbb`; the row menu shows a hex tint as a checked "Custom #rrggbb" entry. `session info` markup colors take
+   the names only. `--on` is `icon`, `name` or `icon,name`; omitted, a recolor keeps
    the row's placement and an untinted row starts on the icon. `clear` removes the tint and refuses `--on`; the
-   socket form (`mode` `set|clear`, `tint`, `tintOn` array) refuses a clear carrying either. Returns the session
-   id. Persisted across a relaunch; a duplicated session starts untinted. Local to this Mac: an attached row does
-@@ -1121,7 +1122,7 @@ error keeps those names for compatibility.
+@@ -1130,7 +1130,7 @@ error keeps those names for compatibility.
    `session overlay close`, or, with `--js`, its own `window.close()` where the web view accepts it.
    A loopback port can forward another machine's content, so open only a server you trust.
  - `session overlay open --image FILE [--size-percent N [--width PT] [--height PT]] [--background-color #rrggbb] [--follow] [--pane left|right] [--target] [--window W]`
@@ -72,9 +120,9 @@ index c0b0ec7..0349209 100644
    Without a size the panel takes the picture's shape: its natural size on this display, scaled up to 240
    points wide when narrower and down to fit 80% of the session when larger, the picture filling it. The page
    embeds the file: no script, no other file access, no bridge. Refuses a COMMAND, `--html`, `--url`, the page
-@@ -1132,12 +1133,12 @@ error keeps those names for compatibility.
-   storage stalls the app until it is read. An image page is local-only: when placement would send the page to the Mac presenting
-   the session, the open is refused. Read back `image` in `htmlOverlays`.
+@@ -1141,31 +1141,33 @@ error keeps those names for compatibility.
+   storage stalls the app until it is read. On a session another Mac presents it opens there (Remote
+   sessions). Read back `image` in `htmlOverlays`.
  - `session overlay open --markdown FILE [--size-percent N [--width PT] [--height PT]] [--background-color #rrggbb] [--follow] [--pane left|right] [--target] [--window W]`
 -  - render a `.md` or `.markdown` file as a page in the terminal theme, the view a user's ⌘-click on its path opens
 +  - render a `.md` or `.markdown` file as a page in the terminal theme, the view a user's ⌘-click (ctrl-click on Linux and Windows) on its path opens
@@ -87,16 +135,66 @@ index c0b0ec7..0349209 100644
    `--url`, `--image`, the page flags, `--cwd`, `--wait`, `--block` and `--companion`; a relative FILE resolves
    against the caller's directory. Refused: a path that is not a regular readable file (`unreadable markdown
    file`) and a file over 4 MB (`markdown file too large`). The wire field is `markdownFile`, apart from the
-@@ -2050,7 +2051,7 @@ opens, or with no mode print the current one. `browser` (default) hands the link
+   HUD's `markdown` flag. Opens on a presenting Mac like an image page. Read back `markdown` in `htmlOverlays`.
+ - `session overlay open --text FILE [--line N | --tail N [--follow-file] | --follow-file] [--size-percent N [--width PT] [--height PT]] [--background-color #rrggbb] [--follow] [--pane left|right] [--target] [--window W]`
+-  - show a source, config, text or log file read-only in the terminal theme, the view a user's ⌘-click on its
+-  path opens (at the link-open size, 95% when links open in the browser), with line numbers. Highlighted when the
++  - show a source, config, text or log file read-only in the terminal theme, the view a user's ⌘-click (ctrl-click on Linux and
++  Windows) on its path opens (at the link-open size, 95% when links open in the browser), with line numbers. Highlighted when the
+   file's extension or exact name maps to a bundled language, up to 256 KB; a larger file shows plain. `--line N`
+   (from 1) opens it scrolled to that line and marks it; a line past the end marks nothing. FILE is taken literally,
+   never parsed as `path:line`; a relative FILE resolves against the caller's directory. The page runs none of the
+-  text, loads nothing and has no links; no bridge, and Open in Browser and Show in Finder are refused. Refuses a
++  text, loads nothing and has no links; no bridge, and Open in Browser and revealing the file in the file manager are refused. Refuses a
+   COMMAND, `--html`, `--url`, `--image`, `--markdown`, the page flags, `--cwd`, `--wait`, `--block` and
+   `--companion`, and `--line` without `--text` or below 1. Refused: a file that is not a source, config, text or
+   log file (markdown, HTML and SVG included), a path that is not a regular readable file (`unreadable text file`),
+   a file over 4 MB (`text file too large`) and one that is not UTF-8 or holds a NUL byte (`not a UTF-8 text file`).
+   Wire fields `textFile` and `line`. Opens on a presenting Mac like an image page. Read back `text` in `htmlOverlays`:
+   `{file, language?, line?}`, the language its name maps to and the line it was opened at, not the line in view.
+-  The user's ⌘-click opens the same page on a path or a `path:line[:column]` location, a relative one looked up in
+-  the pane's directory, and ⌘⌥-click (⌘⌥⇧ under mouse capture) reveals any local path in Finder.
++  The user's ⌘-click (ctrl-click on Linux and Windows) opens the same page on a path or a `path:line[:column]`
++  location, a relative one looked up in the pane's directory, and ⌘⌥-click (⌘⌥⇧ under mouse capture; ctrl+alt-click,
++  ctrl+alt+shift under mouse capture, on Linux and Windows) reveals any local path in Finder (the file manager on
++  Linux and Windows).
+   `--tail N` (1 to 100,000) makes it a log page: the file's last N lines, read from its end within 2 MB, so no file is
+   refused for size. `--follow-file` follows the end as it grows, with 5,000 lines unless `--tail` says otherwise; it is
+   not `--follow`, which selects the session. The page has a bar with follow and search and no line numbers; a user scroll up pauses,
+@@ -1173,7 +1175,7 @@ error keeps those names for compatibility.
+   one shows waiting, and binary data keeps the last text marked unreadable. Both refuse `--line` and need `--text`.
+   A log page is refused on a session another Mac presents (`a log page is not shown on another Mac`). Wire fields
+   `tail` and `followFile`; `text` adds `tail`, `following`, `lines`, `clipped` (the first line is the end of one longer
+-  than 2 MB), `waiting` and `unreadable`, omitted on a plain page. A ⌘-click on a `.log` or `.out` path opens it
++  than 2 MB), `waiting` and `unreadable`, omitted on a plain page. A ⌘-click (ctrl-click on Linux and Windows) on a `.log` or `.out` path opens it
+   following, and a `path:line` location the plain page.
+ - `session overlay follow on|off|toggle [--pane left|right] [--target] [--window W]`
+   - follow a log page's end, pause it, or toggle, as its bar does; refuses every other overlay, a plain text page
+@@ -1188,8 +1190,8 @@ error keeps those names for compatibility.
+   any other page, one shown for another Mac included, `no text page`, and a slot handed to the presenting Mac
+   `remote page: search it on the Mac that shows it`.
+   Wire `text` and `to` (`next`, `prev`, `close`). Read back `htmlOverlays[].text.search`: `{query, matches,
+-  current}`, current from 1 and 0 with no match, omitted with no query. The page's own field (`/` or ⌘F, `n`/`N`,
+-  Esc) sets the same query.
++  current}`, current from 1 and 0 with no match, omitted with no query. The page's own field (`/` or ⌘F, ctrl+shift+F on Linux and
++  Windows; `n`/`N`, Esc) sets the same query.
+ - `session overlay changes --next | --prev [--pane left|right] [--target] [--window W]`
+   - step the `.diff` or `.patch` page in the addressed slot to its next or previous change, a change being one run of
+   removed and added lines inside a hunk; it wraps, and after the user scrolled away it goes on from the view. Returns
+@@ -2113,10 +2115,10 @@ opens, or with no mode print the current one. `browser` (default) hands the link
  `overlay` opens it in a full session web overlay as `session overlay open --url URL --browse --js
  --navigation --persistent` would, without selecting the session; `overlay95`, `overlay75` and `overlay50` add
  `--size-percent 95`, `75` or `50`. The link still goes to the browser when
 -it was ⌘⇧-clicked in a program that does not capture the mouse, when it was clicked in a HUD, a program overlay or the quick terminal, when a HUD is up on the session, when the
 +it was ⌘⇧-clicked (ctrl+shift-clicked on Linux and Windows) in a program that does not capture the mouse, when it was clicked in a HUD, a program overlay or the quick terminal, when a HUD is up on the session, when the
  session's window has a zoomed terminal, when the session-wide overlay slot is taken, when the saved
- browser store cannot be used, or when the overlay cannot be opened. A plain `http` link uses the overlay
- only for a host the page could load: an unqualified name such as `localhost`, a `.local` name, or an IP
-@@ -2247,7 +2248,9 @@ listed; it attaches only under a row already attached from its parent. An empty
+ browser store cannot be used, or when the overlay cannot be opened. The exception is a slot holding a page an earlier
+-click opened (`clicked` in `htmlOverlays`) that was hidden on this Mac with ⇧⌘J or `session overlay hide`: the click
++click opened (`clicked` in `htmlOverlays`) that was hidden on this Mac with ⇧⌘J (`ctrl+alt+shift+j` on Linux and Windows) or `session overlay hide`: the click
+ replaces it and shows the new page, and a clicked picture, markdown, HTML or text file does the same. A page that is only out
+ of sight under a newer pane overlay, or one the presenting Mac shows, is not replaced.
+ A plain `http` link uses the overlay
+@@ -2314,7 +2316,9 @@ listed; it attaches only under a row already attached from its parent. An empty
  pane, and be new enough to answer `live tree` at all; an older one is refused by name rather than
  half-attached. It also needs `ngtermctl` installed by the Help action: the remote call runs it on the ssh `PATH` plus
  `~/.local/bin` and `/usr/local/bin`. A machine merely running ngterm has no CLI an ssh command can find, and the read
@@ -108,10 +206,10 @@ index c0b0ec7..0349209 100644
  `ngtermctl live attach HOST SESSION [--window W]` opens one of those sessions here, marked remote, in
  the destination window's current workspace, selected, with the remote session's split when it has one.
 diff --git a/troubleshooting.md b/troubleshooting.md
-index 8ae4400..1a17f3c 100644
+index f52ca86..29a9151 100644
 --- a/troubleshooting.md
 +++ b/troubleshooting.md
-@@ -383,8 +383,8 @@ and only inside that program. Ghostty.app behaves the same. It is per-program, n
+@@ -391,8 +391,8 @@ and only inside that program. Ghostty.app behaves the same. It is per-program, n
  that never enables mouse reporting keeps links working. Workaround: hold shift too (⌘⇧-hover, ⌘⇧-click).
  A program can claim shift via `XTSHIFTESCAPE`, so `mouse-shift-capture = never` in
  `~/.config/ngterm/ghostty.conf` makes shift always win; `mouse-reporting = false` there turns reporting
