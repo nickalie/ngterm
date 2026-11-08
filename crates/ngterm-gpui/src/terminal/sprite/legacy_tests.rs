@@ -1,8 +1,10 @@
 use super::super::super::metrics::FaceMetrics;
 use super::*;
 
+/// Not a legacy character, unassigned (U+1FB93, U+1FBFF), or assigned but left to the font as Ghostty's sprite set
+/// leaves it (U+1FBB0, U+1FBBC).
 #[test]
-fn unassigned_legacy_characters_draw_no_pixels() {
+fn code_points_outside_the_sprite_set_draw_no_pixels() {
     let m = CellMetrics::calc(&FaceMetrics {
         cell_width: 8.,
         ascent: 16.,

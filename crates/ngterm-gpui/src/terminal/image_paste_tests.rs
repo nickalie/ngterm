@@ -35,7 +35,7 @@ fn text_and_empty_clipboard_items_stay_on_the_ordinary_paste_path(cx: &mut gpui_
 }
 
 #[gpui_kit::test]
-#[cfg(unix)]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn upload_errors_are_presented_over_the_requesting_terminal(cx: &mut gpui_kit::TestAppContext) {
     use super::super::surface::tests::{ECHO, Fixture};
     let f = Fixture::new(cx, ECHO, "");
@@ -55,7 +55,7 @@ fn upload_errors_are_presented_over_the_requesting_terminal(cx: &mut gpui_kit::T
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_filename_paste_reports_when_the_program_has_closed_its_pty() {
     use ngterm_term::{GridSize, Pane, PaneCommand, PaneConfig, PaneEvent};
     use std::time::{Duration, Instant};

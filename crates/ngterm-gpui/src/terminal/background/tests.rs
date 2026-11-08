@@ -640,7 +640,7 @@ fn nonfinite_opacity_defaults_and_transparent_background_keeps_excess_opacity() 
 }
 
 #[gpui_kit::test]
-#[cfg(unix)]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_translucent_image_is_baked_and_drawn_at_the_surfaces_alpha(cx: &mut TestAppContext) {
     use crate::terminal::surface::tests::{ECHO, Fixture};
     let dir = tempfile::tempdir().unwrap();

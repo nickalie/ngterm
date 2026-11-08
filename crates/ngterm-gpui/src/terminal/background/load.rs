@@ -305,7 +305,10 @@ impl Shared {
                 }
             };
         }
-        let file = loader.file.clone()?;
+        // a file that cannot be looked at keeps the image on screen
+        let Some(file) = loader.file.clone() else {
+            return loader.current();
+        };
         let decoded = loader.source.as_ref().is_some_and(|(source, _)| *source == file);
         let failed = loader.failed.as_ref() == Some(&file);
         if !decoded && !failed && loader.pending_source.as_ref() != Some(&file) {

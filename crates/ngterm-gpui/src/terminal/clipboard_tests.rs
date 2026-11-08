@@ -79,7 +79,7 @@ fn writes_keep_the_clipboard_on_refusal_or_nontext_and_accept_text_parameters(cx
 }
 
 #[gpui_kit::test]
-#[cfg(unix)]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn allowed_reads_answer_the_program_without_prompting(cx: &mut gpui_kit::TestAppContext) {
     use super::super::surface::tests::Fixture;
     let script = "stty raw -echo; printf 'ready'; dd bs=1 count=1 >/dev/null 2>&1; printf '\\033]52;c;?\\007'; dd bs=1 count=12 2>/dev/null | od -An -tx1; printf done; exec cat";
@@ -122,7 +122,7 @@ fn one_prompt_answers_queued_requests_and_a_session_allow_applies_to_other_termi
 }
 
 #[gpui_kit::test]
-#[cfg(unix)]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn denied_reads_release_the_pane_without_pasting_clipboard_data(cx: &mut gpui_kit::TestAppContext) {
     use super::super::surface::tests::Fixture;
     let script =
@@ -131,7 +131,15 @@ fn denied_reads_release_the_pane_without_pasting_clipboard_data(cx: &mut gpui_ki
     f.cx.write_to_clipboard(ClipboardItem::new_string("secret".into()));
     f.pane().write(b"x").unwrap();
     f.wait("done");
-    assert!(!f.text().contains("c2VjcmV0"));
+    // a reply goes to the pane's input before anything written after the read was answered, so `cat` echoes it
+    // ahead of the sentinel
+    f.pane().write(b"END").unwrap();
+    f.wait("END");
+    assert!(
+        !f.text().contains("c2VjcmV0"),
+        "no clipboard data in the pane: {}",
+        f.text()
+    );
     assert!(
         !f.cx
             .update(|window, cx| crate::modal::alert_open(window.window_handle(), cx))
