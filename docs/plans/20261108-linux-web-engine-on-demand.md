@@ -356,16 +356,16 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
 - Modify: `crates/ngterm-update/Cargo.toml` (`zstd`), `crates/ngterm-update/build.rs`,
   `crates/ngterm-update/src/download.rs`, `crates/ngterm-gpui/src/main.rs` (`--install-web-engine`)
 
-- [ ] the pins (URL, size, SHA-256, key) from build-time env, the `NGTERM_WEB_ENGINE_URL` override; without pins,
+- [x] the pins (URL, size, SHA-256, key) from build-time env, the `NGTERM_WEB_ENGINE_URL` override; without pins,
       downloading is unavailable
-- [ ] download with progress callbacks and `Range` resume, no global timeout, body capped at the pinned size; verify;
+- [x] download with progress callbacks and `Range` resume, no global timeout, body capped at the pinned size; verify;
       unpack with the entry rules from Technical Details into `<key>.partial/`; rename into place; lock installers
-- [ ] the shared in-use lock taken by the worker launch, and cleanup of other keys only under an exclusive lock
-- [ ] `ngterm --install-web-engine <archive>` through the same checks
-- [ ] write tests (local HTTP fake): success; resume after a cut; hash mismatch; oversize body; truncated body; a
+- [x] the shared in-use lock taken by the worker launch, and cleanup of other keys only under an exclusive lock
+- [x] `ngterm --install-web-engine <archive>` through the same checks
+- [x] write tests (local HTTP fake): success; resume after a cut; hash mismatch; oversize body; truncated body; a
       traversal entry, an absolute path, a symlink out of the tree, a setuid bit; `ENOSPC`; a crash leaving
       `.partial`; two concurrent installers; cleanup skips a runtime in use
-- [ ] run `cargo test -p ngterm-update` - must pass before Task 6
+- [x] run `cargo test -p ngterm-update` - must pass before Task 6
 
 ### Task 6: The waiting page shows the download
 

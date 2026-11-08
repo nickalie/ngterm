@@ -1,6 +1,8 @@
 //! Release updates are opt-in at packaging time. Developer and package-manager builds have no marker.
 //! Downloads are verified before extraction; installation replaces a complete tree with rollback on failure.
-//! Releases come from GitHub alone ([`Source::github`]); [`fakes`] (feature `fakes`) serves tests a local one.
+//! App releases come from GitHub alone ([`Source::github`]); [`fakes`] (feature `fakes`) serves tests a local one.
+//! [`web_engine`] holds the pinned, verified Linux engine runtime download and per-user cache, with a URL-only
+//! mirror override and atomic runtime publication.
 
 mod download;
 #[cfg(any(test, feature = "fakes"))]

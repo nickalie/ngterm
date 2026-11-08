@@ -1,6 +1,8 @@
 //! Compile the runtime key and the source probe's minimum API version into the app.
 fn main() {
-    println!("cargo::rerun-if-env-changed=NGTERM_WEB_ENGINE_KEY");
+    for name in ["KEY", "URL", "SIZE", "SHA256"] {
+        println!("cargo::rerun-if-env-changed=NGTERM_WEB_ENGINE_{name}");
+    }
     println!("cargo::rerun-if-changed=../../build/pins.env");
     let pins = include_str!("../../build/pins.env");
     let Some(api) = pins.lines().find_map(|line| {

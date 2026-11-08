@@ -1,4 +1,16 @@
-//! Engine source resolution. Installation and download are added independently of the system probe.
+//! Engine source resolution and verified, per-user Linux runtime installation.
+
+#[cfg(target_os = "linux")]
+mod archive;
+#[cfg(target_os = "linux")]
+mod cache;
+#[cfg(target_os = "linux")]
+mod transfer;
+#[cfg(target_os = "linux")]
+pub use cache::{Pins, Progress, cleanup};
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod install_tests;
 
 use std::path::{Component, Path, PathBuf};
 

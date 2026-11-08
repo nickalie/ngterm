@@ -77,9 +77,37 @@ pub unsafe fn serve_if_asked(setup: impl FnOnce()) {
     }
     // SAFETY: the descriptor is open (checked), inherited for this process alone, and owned by nothing else here.
     let socket = unsafe { OwnedFd::from_raw_fd(fd) };
+    // Retain the shared flock in this process, with no writable handle or inheritance into WebKit children.
+    let lock_fd = std::env::var(ngterm_wpe_client::RUNTIME_LOCK_ENV).ok();
+    // SAFETY: the caller guarantees single-threaded startup.
+    unsafe { std::env::remove_var(ngterm_wpe_client::RUNTIME_LOCK_ENV) };
+    let _runtime_lock = match lock_fd.map(|value| value.parse::<i32>().ok().and_then(|fd| retain_runtime_lock(fd).ok()))
+    {
+        Some(Some(lock)) => Some(lock),
+        None => None,
+        Some(None) => {
+            eprintln!("ngterm: invalid inherited web engine runtime lock");
+            crate::exit_process(2);
+        }
+    };
     setup();
     let code = serve::serve(socket);
     crate::exit_process(code)
+}
+
+/// Adopt the inherited, read-only runtime lock and stop it at the worker's next exec boundary.
+fn retain_runtime_lock(fd: i32) -> std::io::Result<OwnedFd> {
+    // SAFETY: fcntl inspects the provided descriptor; invalid descriptors fail with EBADF.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || flags & libc::O_ACCMODE != libc::O_RDONLY {
+        return Err(std::io::Error::other("runtime lock must be open read-only"));
+    }
+    // SAFETY: changes only this process's descriptor flags, before WebKit or its threads start.
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: the descriptor was inherited for the worker alone and validated above.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
 /// Whether descriptor `fd` is an open socket.
@@ -124,8 +152,75 @@ mod tests {
                 crate::exit_process(77);
             }
             // SAFETY: the ELF initializer runs before main, while this process still has one thread.
-            unsafe { super::serve_if_asked(|| eprintln!("worker setup ran")) };
+            unsafe {
+                super::serve_if_asked(|| {
+                    if std::env::var("WPE_WORKER_ENTRY_PROBE").as_deref() == Ok("lock") {
+                        assert_runtime_lock();
+                        crate::exit_process(77);
+                    }
+                    eprintln!("worker setup ran");
+                });
+            };
         }
+    }
+
+    fn assert_runtime_lock() {
+        let fd: i32 = std::env::var("WPE_EXPECT_LOCK_FD").unwrap().parse().unwrap();
+        assert!(std::env::var_os(ngterm_wpe_client::RUNTIME_LOCK_ENV).is_none());
+        // SAFETY: only inspect this child's inherited descriptor flags.
+        let descriptor_flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert_eq!(descriptor_flags & libc::FD_CLOEXEC, libc::FD_CLOEXEC);
+        // SAFETY: as above.
+        let status_flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        assert_eq!(status_flags & libc::O_ACCMODE, libc::O_RDONLY);
+        let lock = std::fs::File::open(std::env::var_os("WPE_LOCK_PATH").unwrap()).unwrap();
+        assert!(lock.try_lock().is_err(), "the worker must retain its shared flock");
+        let status = Command::new("/bin/sh")
+            .args(["-c", &format!("test ! -e /proc/self/fd/{fd}")])
+            .status()
+            .unwrap();
+        assert!(status.success(), "worker children must not inherit the lock descriptor");
+    }
+
+    #[test]
+    fn runtime_lock_is_read_only_and_stops_at_the_workers_exec_boundary() {
+        use std::os::unix::process::CommandExt as _;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(".in-use");
+        std::fs::File::create_new(&path).unwrap();
+        let lock = std::fs::File::open(&path).unwrap();
+        lock.lock_shared().unwrap();
+        let fd = lock.as_raw_fd();
+        let (socket, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let socket_fd = socket.as_raw_fd();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("NGTERM_") {
+                command.env_remove(key);
+            }
+        }
+        command
+            .env("WPE_WORKER_ENTRY_PROBE", "lock")
+            .env("WPE_EXPECT_LOCK_FD", fd.to_string())
+            .env("WPE_LOCK_PATH", &path)
+            .env(ngterm_wpe_client::RUNTIME_LOCK_ENV, fd.to_string())
+            .env(super::WORKER_FD_ENV, socket_fd.to_string());
+        let inherit = move || {
+            for fd in [fd, socket_fd] {
+                // SAFETY: only changes the child's flags on descriptors it inherited.
+                if unsafe { libc::fcntl(fd, libc::F_SETFD, 0) } < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        };
+        // SAFETY: only async-signal-safe fcntl runs between fork and exec.
+        unsafe { command.pre_exec(inherit) };
+        let mut child = command.spawn().unwrap();
+        drop(lock);
+        drop(command);
+        assert_eq!(child.wait().unwrap().code(), Some(77));
+        assert!(std::fs::File::open(path).unwrap().try_lock().is_ok());
     }
 
     fn assert_prepared_environment(runtime: bool) {

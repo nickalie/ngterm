@@ -36,6 +36,10 @@ fn main() -> ExitCode {
         print!("{}", app::build_identity_text());
         return ExitCode::SUCCESS;
     }
+    #[cfg(target_os = "linux")]
+    if let Some(status) = install_web_engine(std::env::args_os().skip(1)) {
+        return status;
+    }
     // the Live sessions reset's relauncher on Windows (`live_runtime.rs`): it waits for the app and reopens it, and
     // touches nothing else of the app
     #[cfg(windows)]
@@ -75,6 +79,8 @@ fn main() -> ExitCode {
         Ok(lock) => lock,
         Err(status) => return status,
     };
+    #[cfg(target_os = "linux")]
+    cleanup_web_engine_cache();
     // the toasts' app id, before any window opens (`notifications/windows.rs`)
     #[cfg(windows)]
     ngterm_gpui::notifications::register_app_id(&app_id, &paths::state_dir(&ProcessEnv));
@@ -91,6 +97,55 @@ fn main() -> ExitCode {
         activation,
     });
     exit_now(status)
+}
+
+/// Revisit old runtimes after their workers exit, without waiting for another instance's installer at startup.
+#[cfg(target_os = "linux")]
+fn cleanup_web_engine_cache() {
+    let Some(key) = ngterm_update::web_engine::KEY else {
+        return;
+    };
+    let state_dir = paths::state_dir(&ProcessEnv);
+    if let Err(error) = std::thread::Builder::new()
+        .name("web-engine-cleanup".into())
+        .spawn(move || {
+            if let Err(error) = ngterm_update::web_engine::cleanup(&state_dir, key) {
+                tracing::warn!(%error, "web engine cache cleanup failed");
+            }
+        })
+    {
+        tracing::warn!(%error, "cannot start web engine cache cleanup");
+    }
+}
+
+/// Offline installation exits before single-instance forwarding, logging or the GUI starts.
+#[cfg(target_os = "linux")]
+fn install_web_engine(mut args: impl Iterator<Item = OsString>) -> Option<ExitCode> {
+    if args.next().as_deref() != Some(std::ffi::OsStr::new("--install-web-engine")) {
+        return None;
+    }
+    let archive = args.next();
+    let result = (|| {
+        let archive = archive
+            .filter(|_| args.next().is_none())
+            .ok_or_else(|| ngterm_update::Error::Message("Usage: ngterm --install-web-engine <archive>".into()))?;
+        let pins = ngterm_update::web_engine::Pins::compiled()?.ok_or_else(|| {
+            ngterm_update::Error::Message(
+                "This build has no trusted web engine pins; install the distro's WPE WebKit package.".into(),
+            )
+        })?;
+        pins.install(&paths::state_dir(&ProcessEnv), Path::new(&archive))
+    })();
+    Some(match result {
+        Ok(directory) => {
+            println!("Web engine installed in {}", directory.display());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("ngterm: {error}");
+            ExitCode::FAILURE
+        }
+    })
 }
 
 /// Takes ownership of the state directory before anything reads or writes it (the log aside, see the module docs), or

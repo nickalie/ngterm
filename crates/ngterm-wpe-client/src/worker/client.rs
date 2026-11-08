@@ -529,6 +529,15 @@ fn worker_command(image: i32, source: &crate::EngineSource) -> Command {
     command
 }
 
+/// Prepare every source-dependent part of a launch, including the lock that protects a cached runtime.
+fn locked_worker_command(image: i32, source: &crate::EngineSource) -> Result<Command, StartError> {
+    let mut command = worker_command(image, source);
+    source
+        .lock_runtime(&mut command)
+        .map_err(|error| StartError::Worker(format!("cannot lock the web engine runtime: {error}")))?;
+    Ok(command)
+}
+
 /// The variable libpulse adds to a client's properties (`key=value` pairs separated by spaces), which `WebKit`'s web
 /// process inherits from the worker as the rest of its environment (`ProcessLauncherGLib.cpp` at WPE `WebKit` 2.54).
 const PULSE_PROP: &str = "PULSE_PROP";
@@ -564,7 +573,8 @@ impl Client {
             .get()
             .and_then(|image| image.as_ref().ok())
             .ok_or_else(|| StartError::Worker("the worker image is unavailable".to_owned()))?;
-        let (child, socket) = spawn(worker_command(image.as_raw_fd(), source), Some(image.as_raw_fd()))?;
+        let command = locked_worker_command(image.as_raw_fd(), source)?;
+        let (child, socket) = spawn(command, Some(image.as_raw_fd()))?;
         let worker = Arc::new(Worker {
             group: i32::try_from(child.id()).unwrap_or(i32::MAX),
             child: Mutex::new(Some(child)),
@@ -1006,6 +1016,25 @@ fn keep_buffer(page: &mut PageFrames, frame: &Frame) -> Option<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_worker_launch_holds_the_shared_lock_until_the_child_exits() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(".in-use");
+        std::fs::File::create_new(&path).unwrap();
+        let image = open_worker(std::path::Path::new("/bin/sleep")).unwrap();
+        let mut command =
+            locked_worker_command(image.as_raw_fd(), &crate::EngineSource::Runtime(root.path().to_owned())).unwrap();
+        command.arg("30");
+        let (mut child, socket) = spawn(command, Some(image.as_raw_fd())).unwrap();
+        let other = std::fs::File::open(path).unwrap();
+        let busy = other.try_lock().is_err();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        drop(socket);
+        assert!(busy, "the command used by Client::start must lock the runtime");
+        assert!(other.try_lock().is_ok());
+    }
 
     #[test]
     fn a_system_probe_treats_loader_or_process_failure_as_absent() {

@@ -35,6 +35,8 @@ sha2 = "0.11"
 minisign-verify = "0.3"
 flate2 = "1"
 tar = "0.4"
+# The standard zstd binding, for the verified Linux web-engine runtime (streamed with a bounded window).
+zstd = "0.14.3"
 # Resolve launcher symlinks while keeping Windows paths usable by native installer tools.
 dunce = "1.0.5"
 async-channel = "2"
