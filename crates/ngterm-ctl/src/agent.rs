@@ -354,10 +354,11 @@ mod tests {
         assert_eq!(crate::local::stdin_probe::command_stdout(&output), "");
         let error = stderr(output);
         assert!(error.contains("error: no such session: S\n"), "{error}");
-        assert!(error.contains("PROBE_RESULT:Err(Exit("), "{error}");
+        let expected = Err::<(), _>(Failure::Exit(std::process::ExitCode::FAILURE));
+        assert!(error.contains(&format!("PROBE_RESULT:{expected:?}")), "{error}");
     }
 
-    /// A payload past the cap is refused once the cap is passed, rather than read to its end, and nothing is sent.
+    /// A payload past the cap is refused and nothing is sent.
     #[cfg(unix)]
     #[test]
     fn a_payload_over_the_cap_is_refused_and_nothing_is_sent() {

@@ -239,10 +239,10 @@ fn is_executable_file(path: &Path) -> bool {
 #[cfg(unix)]
 fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
-    let Ok(metadata) = path.metadata() else {
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
         return false;
     };
-    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+    let Ok(metadata) = path.metadata() else {
         return false;
     };
     // SAFETY: `c_path` is a valid NUL-terminated string that outlives the call; `access` only reads it.
@@ -703,11 +703,15 @@ mod tests {
     #[test]
     fn set_refuses_a_terminal_on_standard_input() {
         let (_controller, terminal) = crate::local::stdin_probe::terminal();
-        let output = crate::local::stdin_probe::run(&["clipboard", "set"], terminal.into());
-        let error = String::from_utf8(output.stderr).unwrap();
-        assert!(
-            error.contains(r#"PROBE_RESULT:Err(Usage("give the text as an argument or pipe it on standard input"))"#),
-            "{error}"
+        crate::local::stdin_probe::run_local(
+            "clipboard::tests::set_refuses_a_terminal_on_standard_input",
+            terminal.into(),
+            || {
+                let Err(Failure::Usage(message)) = (Set { text: None }).run() else {
+                    panic!("a terminal was not refused as a usage error");
+                };
+                assert_eq!(message, "give the text as an argument or pipe it on standard input");
+            },
         );
     }
 
@@ -717,17 +721,24 @@ mod tests {
     fn set_reports_a_standard_input_it_cannot_read() {
         let directory = tempfile::tempdir().unwrap();
         let unreadable = fs::File::open(directory.path()).unwrap();
-        let output = crate::local::stdin_probe::run(&["clipboard", "set"], unreadable.into());
-        let error = String::from_utf8(output.stderr).unwrap();
-        assert!(
-            error.contains(r#"PROBE_RESULT:Err(Local("could not read standard input: "#),
-            "{error}"
+        crate::local::stdin_probe::run_local(
+            "clipboard::tests::set_reports_a_standard_input_it_cannot_read",
+            unreadable.into(),
+            || {
+                let Err(Failure::Local(message)) = (Set { text: None }).run() else {
+                    panic!("unreadable standard input was not a local failure");
+                };
+                assert!(message.starts_with("could not read standard input: "), "{message}");
+                #[cfg(target_os = "linux")]
+                assert_eq!(message, "could not read standard input: Is a directory");
+            },
         );
-        #[cfg(target_os = "linux")]
-        assert!(
-            error.contains("could not read standard input: Is a directory"),
-            "{error}"
-        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_with_an_interior_nul_is_not_executable() {
+        assert!(!is_executable_file(Path::new("/bin/sh\0")));
     }
 
     #[test]

@@ -802,8 +802,8 @@ mod tests {
         assert_eq!(fake.sleeps, [POLL_DELAY]);
     }
 
-    /// Over a real socket: the composite reads, sleeps after an empty page, and reports the session's close with exit 2
-    /// and `session closed` on stderr, printing nothing on stdout.
+    /// Over a real socket: the composite polls and reports the session's close with exit 2 and `session closed` on
+    /// stderr, printing nothing on stdout.
     #[cfg(unix)]
     #[test]
     fn a_live_wait_polls_the_socket_and_reports_the_sessions_close() {
@@ -831,7 +831,8 @@ mod tests {
         assert_eq!(crate::local::stdin_probe::command_stdout(&output), "");
         let error = String::from_utf8(output.stderr).unwrap();
         assert!(error.contains("session closed\n"), "{error}");
-        assert!(error.contains("PROBE_RESULT:Err(Exit("), "{error}");
+        let expected = Err::<(), _>(Failure::Exit(ExitCode::from(2)));
+        assert!(error.contains(&format!("PROBE_RESULT:{expected:?}")), "{error}");
     }
 
     #[test]

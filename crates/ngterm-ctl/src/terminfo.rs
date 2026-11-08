@@ -312,7 +312,7 @@ pub fn run(
         });
     };
     let source = dump(&directory)?;
-    install(&argv, &source, environment)
+    install(ssh, &argv[1..], &source, environment)
 }
 
 /// The entry's source with its extended capabilities (the ones worth installing it for), as upstream's `infocmp -x`
@@ -335,14 +335,11 @@ fn dump(directory: &Path) -> Result<Vec<u8>, InstallFailure> {
 /// groups of this kind, ssh gets the standard three handles and whatever handles its caller made inheritable, as
 /// any Windows child does; the CLI opens none of its own inheritable.
 fn install(
-    argv: &[String],
+    program: &str,
+    arguments: &[String],
     source: &[u8],
     environment: &HashMap<OsString, OsString>,
 ) -> Result<Outcome, InstallFailure> {
-    let (program, arguments) = argv.split_first().ok_or_else(|| InstallFailure::SpawnFailed {
-        operation: "posix_spawnp".to_owned(),
-        reason: "no program".to_owned(),
-    })?;
     let mut command = Command::new(program);
     command
         .args(arguments)
