@@ -1649,8 +1649,8 @@ fn clicks_on_the_row_being_renamed_or_on_no_row_change_nothing(cx: &mut TestAppC
         .update_in(cx, |sidebar, window, cx| sidebar.begin_rename(u, window, cx));
     h.settle(cx);
     h.view.update_in(cx, |sidebar, window, cx| {
-        // a double-click on the field's own row starts no second rename, a second rename waits for the first
-        sidebar.row_clicked(u, 2, Modifiers::default(), window, cx);
+        // a click inside the field selects nothing; a second rename waits for the first
+        sidebar.row_clicked(u, 1, Modifiers::default(), window, cx);
         sidebar.begin_rename(srv, window, cx);
         sidebar.row_clicked(Uuid::new_v4(), 1, Modifiers::default(), window, cx);
         // a plain session row has nothing to fold
