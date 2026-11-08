@@ -406,7 +406,15 @@ fn a_refused_attach_writes_why_and_ends_the_pane_with_the_clis_status() {
     let status = wait_exit(&pane, &mut Vec::new());
     assert_eq!(status.code, u32::from(EXIT_FAILED));
     assert_eq!(status.signal, None);
-    let lines = pane.frame().frame.lines();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let lines = loop {
+        let snapshot = pane.frame();
+        if !snapshot.stale {
+            break snapshot.frame.lines();
+        }
+        assert!(std::time::Instant::now() < deadline, "complaint frame stayed stale");
+        std::thread::yield_now();
+    };
     assert!(
         lines
             .iter()
