@@ -229,6 +229,20 @@ class SessionsDestinationTest : SessionViewFixture() {
     }
 
     @Test
+    @Config(qualifiers = "+qwerty")
+    fun aSessionChordWithNoOtherAttachedSessionReachesTheProgram() {
+        compose.activity.resources.configuration.hardKeyboardHidden = Configuration.HARDKEYBOARDHIDDEN_NO
+        openSession()
+        terminal(0).performClick()
+        compose.waitForIdle()
+        panes.getValue("P1").inputs.clear()
+        // docs-site is the only attached session: the chords have nowhere to go, so they are the program's
+        chord(Key.DirectionUp)
+        chord(Key.DirectionDown)
+        waitFor { pressed("P1").containsAll(listOf("arrow_up", "arrow_down")) }
+    }
+
+    @Test
     fun aPaneAloneSurvivesSavedStateRestorationAndItsTabBringsTheSplitBack() {
         val restoration = StateRestorationTester(compose)
         openSession(restoration = restoration)

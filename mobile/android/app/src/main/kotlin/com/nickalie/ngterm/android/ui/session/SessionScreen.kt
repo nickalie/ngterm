@@ -102,7 +102,8 @@ fun SessionScreen(
     val selected = focused?.let { PaneRef(key.machineId, key.sessionId, it) }
     // the keys type into the selected pane's terminal, not into a chat
     val typed = selected?.takeIf { views[it.paneId] != PaneView.Chat }
-    SessionKeyboard(keyboard, typed?.let(panes::get), move, actions)
+    // with one pane the pane chords have nowhere to go: they are the program's
+    SessionKeyboard(keyboard, typed?.let(panes::get), move.takeIf { ids.size > 1 }, actions)
     val onTab = tabTap(splittable, alone, focused, { actions.onAlone(key, it) }, focus)
     val chatsOnly = chatsOnly(visiblePanes(ids, focused, splittable && !alone), views)
     BoxWithConstraints(
@@ -255,21 +256,22 @@ private fun OnePane(
 private fun SessionKeyboard(
     keyboard: TerminalKeyboard,
     target: TerminalState?,
-    move: (Boolean) -> Unit,
+    move: ((Boolean) -> Unit)?,
     actions: SessionViewActions,
 ) {
     val moveNow by rememberUpdatedState(move)
+    val moves = move != null
     // the selection sets the target, not a pane taking the focus; a selected pane with no state yet (on its way, or
     // it couldn't be shown) takes the keys too: they go nowhere
     SideEffect {
         keyboard.selectsOnFocus = false
         keyboard.target = target
     }
-    LaunchedEffect(keyboard, actions) {
+    LaunchedEffect(keyboard, actions, moves) {
         keyboard.shortcuts =
             TerminalShortcuts(
-                nextPane = { moveNow(true) },
-                previousPane = { moveNow(false) },
+                nextPane = if (moves) ({ moveNow?.invoke(true) }) else null,
+                previousPane = if (moves) ({ moveNow?.invoke(false) }) else null,
                 nextSession = actions.onNextSession,
                 previousSession = actions.onPreviousSession,
             )
