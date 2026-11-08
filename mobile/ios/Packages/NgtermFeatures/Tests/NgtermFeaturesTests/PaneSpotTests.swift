@@ -1,4 +1,5 @@
 import NgtermCore
+import NgtermCoreFakes
 import NgtermPlatform
 import NgtermTerminal
 import Testing
@@ -12,8 +13,13 @@ import Testing
 internal struct PaneSpotTests {
     private static let ref = PaneRef(machineId: "m1", sessionId: "s1", paneId: "P2")
 
-    private static func spot(live: PaneLive?, failure: String?, isChatView: Bool) -> PaneSpot {
-        PaneSpot(ref: ref, shown: nil, live: live, failure: failure, isChatView: isChatView)
+    private static func spot(
+        live: PaneLive?,
+        failure: String?,
+        isChatView: Bool,
+        shown: ShownPane? = nil
+    ) -> PaneSpot {
+        PaneSpot(ref: ref, shown: shown, live: live, failure: failure, isChatView: isChatView)
     }
 
     @Test("a pane is named by its id in the session")
@@ -32,10 +38,17 @@ internal struct PaneSpotTests {
     @Test("a chat is covered only by a failed show: reading a chat never takes control")
     internal func chatCover() {
         #expect(Self.spot(live: nil, failure: nil, isChatView: true).cover == nil, "no terminal is needed")
+        let shown = ShownPane(client: FakePane())
         let follower = PaneLive(role: .follower, isCovered: true)
-        #expect(Self.spot(live: follower, failure: nil, isChatView: true).cover == nil)
-        let exited = PaneLive(end: .exited(code: 1, signal: nil))
-        #expect(Self.spot(live: exited, failure: nil, isChatView: true).cover == nil)
+        let covers: [(live: PaneLive, cover: PaneCover)] = [
+            (follower, .follower),
+            (PaneLive(end: .exited(code: 1, signal: nil)), .exited(code: 1, signal: nil)),
+            (PaneLive(end: .lost(reason: "eof")), .reconnecting),
+        ]
+        for (live, cover) in covers {
+            #expect(Self.spot(live: live, failure: nil, isChatView: false, shown: shown).cover == cover)
+            #expect(Self.spot(live: live, failure: nil, isChatView: true, shown: shown).cover == nil)
+        }
         #expect(Self.spot(live: follower, failure: "busy", isChatView: true).cover == .failed(reason: "busy"))
     }
 
