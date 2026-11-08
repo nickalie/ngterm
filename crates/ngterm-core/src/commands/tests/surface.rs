@@ -607,16 +607,24 @@ fn a_session_closed_mid_search_is_reported_gone() {
     }
 }
 
-/// The search bar's steps and close reach nothing while no search is open.
+/// The search bar's needle, steps and close reach nothing while no search is open, the session's search state
+/// included.
 #[test]
 fn the_search_bar_does_nothing_without_an_open_search() {
     let (mut fixture, id, probe) = fixture_with_terminal();
     let window = fixture.window;
     fixture.store_mut().unwrap().select_session(Some(id));
+    fixture.core.search_bar_needle(window, "x");
     fixture.core.search_bar_step(window, true);
     fixture.core.search_bar_close(window);
     fixture.core.search_bar_needle(Uuid::from_u128(9), "x");
     assert!(probe.actions().is_empty());
+    let search = &fixture.store().session(id).unwrap().search;
+    assert_eq!(
+        *search,
+        crate::model::SearchState::default(),
+        "the needle is kept only while a search is open"
+    );
 }
 
 // MARK: - the search bar
