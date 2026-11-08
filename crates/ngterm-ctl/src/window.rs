@@ -551,4 +551,41 @@ mod tests {
             assert_eq!(parsed(argv).unwrap().command().echoes_result_id(), echoes, "{argv:?}");
         }
     }
+    #[cfg(unix)]
+    #[test]
+    fn targeted_window_commands_use_their_private_socket() {
+        for (argv, expected) in [
+            (&["select", "W"][..], json!({"cmd":"window.select","target":"W"})),
+            (&["close", "W"][..], json!({"cmd":"window.close","target":"W"})),
+            (&["delete", "W"][..], json!({"cmd":"window.delete","target":"W"})),
+            (&["zoom", "W"][..], json!({"cmd":"window.zoom","target":"W"})),
+            (
+                &["fullscreen", "W"][..],
+                json!({"cmd":"window.fullscreen","target":"W"}),
+            ),
+            (
+                &["go", "--to", "next"][..],
+                json!({"cmd":"window.go","args":{"to":"next"}}),
+            ),
+            (
+                &["rename", "W", "Work"][..],
+                json!({"cmd":"window.rename","target":"W","args":{"name":"Work"}}),
+            ),
+        ] {
+            let argv = [&["window"][..], argv, &["--json"]].concat();
+            let (output, requests) =
+                crate::messages::tests::run_command(&argv, b"", &[], &[r#"{"ok":false,"error":"window not found"}"#]);
+            assert_eq!(requests, [expected]);
+            assert!(
+                String::from_utf8(output.stdout)
+                    .unwrap()
+                    .contains(r#"{"ok":false,"error":"window not found"}"#)
+            );
+            assert!(
+                String::from_utf8(output.stderr)
+                    .unwrap()
+                    .contains("PROBE_RESULT:Err(Exit(")
+            );
+        }
+    }
 }

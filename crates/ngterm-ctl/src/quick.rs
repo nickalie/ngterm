@@ -288,4 +288,35 @@ mod tests {
             Err("--lines must be greater than 0".to_owned())
         );
     }
+    #[cfg(unix)]
+    #[test]
+    fn stdin_keystrokes_reach_the_quick_terminal_verbatim() {
+        let (output, requests) = crate::messages::tests::run_command(
+            &["quick", "type", "--stdin", "--json"],
+            "héllo\n".as_bytes(),
+            &[],
+            &[r#"{"ok":true}"#],
+        );
+        assert_eq!(requests, [json!({"cmd":"quick.type","args":{"text":"héllo\n"}})]);
+        assert!(String::from_utf8(output.stdout).unwrap().contains(r#"{"ok":true}"#));
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("PROBE_RESULT:Ok(())")
+        );
+    }
+
+    #[test]
+    fn a_literal_type_request_preserves_empty_text() {
+        let crate::Command::Quick(group) = Ngtermctl::try_parse_from(["ngtermctl", "quick", "type", ""])
+            .unwrap()
+            .command
+        else {
+            panic!("not quick")
+        };
+        assert_eq!(
+            serde_json::to_value(group.command().make_request()).unwrap(),
+            json!({"cmd":"quick.type","args":{"text":""}})
+        );
+    }
 }

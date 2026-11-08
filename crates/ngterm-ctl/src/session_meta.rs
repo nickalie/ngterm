@@ -557,4 +557,27 @@ mod tests {
             );
         }
     }
+    #[cfg(unix)]
+    #[test]
+    fn metadata_commands_send_their_window_and_target_and_report_refusals() {
+        for (argv, expected_args) in [
+            (&["flag", "on"][..], json!({"mode":"on","window":"W"})),
+            (
+                &["info", "building"][..],
+                json!({"text":"building","mode":"set","window":"W"}),
+            ),
+            (&["seen"][..], json!({"window":"W"})),
+        ] {
+            let argv = [&["session"][..], argv, &["--target", "S", "--window", "W"]].concat();
+            let (output, requests) =
+                crate::messages::tests::run_command(&argv, b"", &[], &[r#"{"ok":false,"error":"session not found"}"#]);
+            assert_eq!(
+                requests,
+                [json!({"cmd":format!("session.{}", argv[1]),"target":"S","args":expected_args})]
+            );
+            let error = String::from_utf8(output.stderr).unwrap();
+            assert!(error.contains("error: session not found\n"), "{error}");
+            assert!(error.contains("PROBE_RESULT:Err(Exit("), "{error}");
+        }
+    }
 }

@@ -80,4 +80,47 @@ mod tests {
             assert_eq!((parsed.name.as_str(), parsed.size), ("-notes.txt", 3), "{argv:?}");
         }
     }
+    #[test]
+    fn upload_sizes_include_zero_and_the_cap_but_refuse_larger_inputs() {
+        for size in [0, UPLOAD_CAP] {
+            assert_eq!(
+                Upload {
+                    name: "x".to_owned(),
+                    size
+                }
+                .validate(),
+                Ok(())
+            );
+        }
+        assert_eq!(
+            Upload {
+                name: "x".to_owned(),
+                size: UPLOAD_CAP + 1
+            }
+            .validate(),
+            Err(format!("--size is over the {UPLOAD_CAP}-byte cap"))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_path_write_failure_keeps_the_stored_file_and_reports_the_error() {
+        super::super::commands::tests::with_full_stdout(
+            "agent::upload::tests::a_path_write_failure_keeps_the_stored_file_and_reports_the_error",
+            || {
+                let directory = tempfile::tempdir().unwrap();
+                let env = ngterm_core::paths::MapEnv::default().with("NGTERM_STATE_DIR", directory.path());
+                let upload = Upload {
+                    name: "empty.txt".to_owned(),
+                    size: 0,
+                };
+                assert!(matches!(upload.run(&env), Err(Failure::Local(message))
+                    if message == "could not write the path: No space left on device"));
+                let uploads = uploads_dir(directory.path());
+                let stored: Vec<_> = std::fs::read_dir(uploads).unwrap().map(Result::unwrap).collect();
+                assert_eq!(stored.len(), 1);
+                assert_eq!(std::fs::read(stored[0].path().join("empty.txt")).unwrap(), b"");
+            },
+        );
+    }
 }
