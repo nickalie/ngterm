@@ -466,4 +466,33 @@ mod tests {
             "a broken packet: its descriptors were cut off"
         );
     }
+
+    #[test]
+    fn receiving_from_a_regular_file_reports_the_os_socket_error() {
+        let file = tempfile::tempfile().unwrap();
+        let WireError::Io(error) = recv(file.as_fd(), Limits::FROM_APP).unwrap_err() else {
+            panic!("an OS socket error");
+        };
+        assert_eq!(error.raw_os_error(), Some(libc::ENOTSOCK));
+    }
+
+    #[test]
+    fn a_memfd_packet_larger_than_the_receivers_limit_is_refused() {
+        for (body, blob) in [(3, NO_BLOB), (0, 3)] {
+            let (ours, theirs) = pair();
+            let fd = sealed_memfd(b"abc").unwrap();
+            let fds = [fd.as_fd()];
+            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+            let mut control = SendAncillaryBuffer::new(&mut space);
+            assert!(control.push(SendAncillaryMessage::ScmRights(&fds)));
+            let kind = if body == 0 { INLINE } else { IN_MEMFD };
+            let bytes = header(kind, body, blob, 0);
+            rustix::net::sendmsg(&ours, &[IoSlice::new(&bytes)], &mut control, SendFlags::NOSIGNAL).unwrap();
+            let error = recv(theirs.as_fd(), Limits { body: 2, blob: 2 }).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "a broken packet: a memfd of 3 bytes, more than the 2 this side reads"
+            );
+        }
+    }
 }

@@ -100,7 +100,77 @@ fn is_socket(fd: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::{OsStr, OsString};
     use std::os::fd::AsRawFd as _;
+    use std::os::unix::ffi::OsStringExt as _;
+    use std::process::{Command, Stdio};
+
+    // A subprocess entrypoint before libtest starts its threads: serve_if_asked changes the environment and
+    // must not run in a test thread. The probe marker is private to the child commands below.
+    #[used]
+    #[unsafe(link_section = ".init_array")]
+    static WORKER_ENTRY: extern "C" fn() = worker_entry;
+
+    extern "C" fn worker_entry() {
+        if std::env::var_os("WPE_WORKER_ENTRY_PROBE").is_some() {
+            #[cfg(coverage)]
+            {
+                unsafe extern "C" {
+                    fn __llvm_profile_initialize_file();
+                }
+                // SAFETY: initializes the profile filename before this early entrypoint can exit; LLVM's own
+                // initializer can run later than ours, whereas an ordinary main runs after both.
+                unsafe { __llvm_profile_initialize_file() };
+            }
+            // SAFETY: the ELF initializer runs before main, while this process still has one thread.
+            unsafe { super::serve_if_asked(|| eprintln!("worker setup ran")) };
+        }
+    }
+
+    fn refused_worker(value: &OsStr) -> std::process::Output {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("NGTERM_") {
+                command.env_remove(key);
+            }
+        }
+        command
+            .args(["--exact", "worker_entry_must_exit_before_libtest"])
+            .env("WPE_WORKER_ENTRY_PROBE", "1")
+            .env(super::WORKER_FD_ENV, value)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_worker_with_a_malformed_descriptor_exits_before_setup() {
+        for value in [OsString::from("not-a-number"), OsString::from_vec(vec![0xff])] {
+            let output = refused_worker(&value);
+            assert_eq!(output.status.code(), Some(2));
+            assert!(output.stdout.is_empty());
+            assert_eq!(
+                String::from_utf8(output.stderr).unwrap(),
+                format!(
+                    "ngterm: NGTERM_WPE_WORKER_FD is not a descriptor number: {}\n",
+                    value.display()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn a_worker_without_an_inherited_socket_exits_before_setup() {
+        for value in ["-1", "0"] {
+            let output = refused_worker(OsStr::new(value));
+            assert_eq!(output.status.code(), Some(2));
+            assert!(output.stdout.is_empty());
+            assert_eq!(
+                String::from_utf8(output.stderr).unwrap(),
+                format!("ngterm: NGTERM_WPE_WORKER_FD={value} names no socket this process inherited\n")
+            );
+        }
+    }
 
     #[test]
     fn only_open_sockets_qualify_as_worker_transports() {

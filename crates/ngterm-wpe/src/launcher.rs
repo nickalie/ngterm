@@ -154,9 +154,14 @@ mod tests {
         bundle_environment(&mut command, &executable);
         let env: Vec<_> = command.get_envs().collect();
         assert_eq!(env.len(), 4);
-        for (name, value) in env {
-            let value = Path::new(value.unwrap());
-            assert!(value.starts_with(root.path().join("usr")), "{name:?}: {value:?}");
+        for (name, relative) in [
+            ("GIO_EXTRA_MODULES", "lib/gio/modules"),
+            ("GST_PLUGIN_SYSTEM_PATH_1_0", "lib/gstreamer-1.0"),
+            ("GST_PLUGIN_SCANNER", "libexec/gstreamer-1.0/gst-plugin-scanner"),
+            ("WEBKIT_INJECTED_BUNDLE_PATH", "lib/wpe-webkit-2.0/injected-bundle"),
+        ] {
+            let (_, value) = env.iter().find(|(key, _)| *key == name).unwrap();
+            assert_eq!(Path::new(value.unwrap()), root.path().join("usr").join(relative));
         }
         assert_eq!(
             names.map(std::env::var_os),
@@ -172,6 +177,10 @@ mod tests {
         std::fs::create_dir_all(&libdir).unwrap();
         assert_eq!(provider_for(&libdir), Provider::System);
         std::fs::create_dir_all(prefix.path().join("share/ngterm")).unwrap();
+        let manifest = prefix.path().join("share/ngterm/wpe-PINS");
+        std::fs::create_dir(&manifest).unwrap();
+        assert_eq!(provider_for(&libdir), Provider::System, "a directory is no manifest");
+        std::fs::remove_dir(&manifest).unwrap();
         std::fs::write(prefix.path().join("share/ngterm/wpe-PINS"), "WPE_VERSION=2.54.1\n").unwrap();
         assert_eq!(provider_for(&libdir), Provider::Vendored { libdir });
         assert_eq!(provider_for(Path::new("/usr/lib")), Provider::System);
@@ -231,5 +240,63 @@ mod tests {
         let mut command = Command::new("engine");
         bundle_environment(&mut command, Path::new("engine"));
         assert_eq!(command.get_envs().count(), 0);
+    }
+
+    #[test]
+    fn a_private_namespace_exercises_the_vendored_launcher_and_missing_helpers() {
+        const CHILD: &str = "WPE_LAUNCHER_NAMESPACE_PROBE";
+        const NAME: &str = "launcher::tests::a_private_namespace_exercises_the_vendored_launcher_and_missing_helpers";
+        if let Ok(mode) = std::env::var(CHILD) {
+            assert_eq!(provider(), Provider::Vendored { libdir: LIBDIR.into() });
+            assert_eq!(helpers_reachable(), mode == "present");
+            if mode == "present" {
+                // Only the marker is emulated here: /usr/lib cannot actually be overlaid on itself.
+                let launch = command(Path::new("/bin/printf"));
+                assert_eq!(launch.get_program(), "bwrap");
+                assert_eq!(launch.get_args().last().unwrap(), "/bin/printf");
+                assert!(launch.get_args().any(|arg| arg == "--die-with-parent"));
+                let args: Vec<_> = launch.get_args().collect();
+                let chdir = args.iter().position(|arg| *arg == "--chdir").unwrap();
+                assert_eq!(Path::new(args[chdir + 1]), std::env::current_dir().unwrap());
+            }
+            crate::exit_process(77);
+        }
+        if LIBDIR != SYSTEM_LIBDIR {
+            eprintln!("the private system-provider namespace fixture needs LIBDIR=/usr/lib");
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let manifest = root.path().join("wpe-PINS");
+        std::fs::write(&manifest, "WPE_VERSION=test\n").unwrap();
+        let empty_helpers = root.path().join("empty-helpers");
+        std::fs::create_dir(&empty_helpers).unwrap();
+        for mode in ["present", "missing"] {
+            let mut probe = Command::new("bwrap");
+            probe.args(["--dev-bind", "/", "/", "--tmpfs", "/usr/share", "--ro-bind"]);
+            probe.arg(&manifest).arg("/usr/share/ngterm/wpe-PINS");
+            if mode == "missing" {
+                probe
+                    .arg("--ro-bind")
+                    .arg(&empty_helpers)
+                    .arg("/usr/lib/wpe-webkit-2.0");
+            }
+            probe
+                .arg("--")
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--nocapture"]);
+            for (key, _) in std::env::vars_os() {
+                if key.to_string_lossy().starts_with("NGTERM_") {
+                    probe.env_remove(key);
+                }
+            }
+            let output = probe.env(CHILD, mode).output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(77),
+                "{mode}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }
