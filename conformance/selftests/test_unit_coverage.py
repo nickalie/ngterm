@@ -33,6 +33,9 @@ PYTHON = '''
 import json, os, sys
 with open(os.environ["TOOL_LOG"], "a") as log:
     log.write(json.dumps([os.path.basename(sys.argv[0]), *sys.argv[1:]]) + "\\n")
+if os.path.basename(sys.argv[0]) in os.environ.get("WITHOUT_TOMLLIB", "").split():
+    if sys.argv[1] == "-m" or "tomllib" in sys.argv[2]:
+        raise ModuleNotFoundError("No module named 'tomllib'")
 if sys.argv[1] == "-c":
     exec(sys.argv[2])
 else:
@@ -67,7 +70,7 @@ class Checkout:
         )
         self.tool("uname", 'printf "%s\\n" "$TEST_OS"\n', shell=True)
         self.tool("cargo", CARGO)
-        for name in ("python3", "python"):
+        for name in ("python3", "python", "python3.13", "python3.12", "python3.11"):
             self.tool(name, PYTHON)
 
     def tool(self, name: str, body: str, shell: bool = False) -> Path:
@@ -134,6 +137,35 @@ def test_python_override_is_used_for_both_calls(checkout: Checkout) -> None:
     assert result.returncode == 0, result.stderr
     assert any(call[:1] == ["-c"] for call in checkout.calls(override.name))
     assert any(call[:1] == ["-m"] for call in checkout.calls(override.name))
+
+
+@pytest.mark.parametrize("fallback", ["python", "python3.13", "python3.12", "python3.11"])
+def test_python_without_tomllib_uses_the_first_capable_fallback(checkout: Checkout, fallback: str) -> None:
+    candidates = ["python3", "python", "python3.13", "python3.12", "python3.11"]
+    rejected = candidates[:candidates.index(fallback)]
+    result = checkout.run("-p", "ngterm-proto", TEST_OS="Darwin", WITHOUT_TOMLLIB=" ".join(rejected))
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    calls = list(map(json.loads, checkout.log.read_text().splitlines()))
+    probes = [[name, "-c", "import tomllib"] for name in [*rejected, fallback]]
+    assert calls[:len(probes)] == probes
+    assert any("target_directory" in call[1] for call in checkout.calls(fallback) if call[0] == "-c")
+    assert checkout.calls(fallback)[-1][:2] == ["-m", "agterm_conformance.code_coverage"]
+
+
+def test_python_override_without_tomllib_falls_back(checkout: Checkout) -> None:
+    override = checkout.tool("old-python", PYTHON)
+    result = checkout.run("-p", "ngterm-proto", PYTHON=str(override), WITHOUT_TOMLLIB=override.name)
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert checkout.calls(override.name) == [["-c", "import tomllib"]]
+    assert checkout.calls("python3")[-1][:2] == ["-m", "agterm_conformance.code_coverage"]
+
+
+def test_no_python_with_tomllib_fails_before_cargo(checkout: Checkout) -> None:
+    result = checkout.run(WITHOUT_TOMLLIB="python3 python python3.13 python3.12 python3.11")
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr == "unit-coverage: Python 3.11+ with tomllib is required (set PYTHON)\n"
+    assert checkout.calls("cargo") == []
 
 
 def test_harness_arguments_go_only_to_the_test_run(checkout: Checkout) -> None:
