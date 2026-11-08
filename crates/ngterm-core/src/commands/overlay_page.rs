@@ -830,6 +830,12 @@ impl Core {
         self.library_mut().set_text_search_report(id, revision, query, count);
     }
 
+    /// Diff page `id`'s count and current change as its renderer reported them, `None` clearing them while a fresh read
+    /// is under way (upstream's `setTextChangesReport`): emitting nothing.
+    pub fn set_text_changes_report(&mut self, id: Uuid, changes: Option<crate::html::text_page::TextChanges>) {
+        self.library_mut().set_text_changes_report(id, changes);
+    }
+
     /// Opens a clicked web link as a browsing overlay without selecting its session; false uses the browser. The page
     /// is marked clicked, and replaces a hidden page an earlier click opened once the saved store is known usable.
     pub fn open_link_overlay(&mut self, url: Url, session: Uuid, size_percent: Option<i64>) -> bool {

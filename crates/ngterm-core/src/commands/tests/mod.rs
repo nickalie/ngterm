@@ -57,6 +57,7 @@ mod session;
 mod session_info;
 mod sidebar;
 mod surface;
+mod text_changes;
 mod text_pages;
 mod text_search;
 mod theme;

@@ -126,6 +126,15 @@ pub fn step_text_search(
     text_page::step(page, step)
 }
 
+/// Steps diff page `page` to its next or previous change once through its renderer (the core's
+/// `HtmlHost::step_text_changes`, which each backend's page host answers with this); `None` while the renderer is not up
+/// to take it.
+#[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
+#[must_use]
+pub fn step_text_changes(page: uuid::Uuid, forward: bool) -> Option<ngterm_core::html::ChangesAnswer> {
+    text_page::step_changes(page, forward)
+}
+
 /// Find over a text page on top: the keyboard goes into that page's own search field (upstream's `focusSearch`); the
 /// deck gives the page's element the keyboard.
 pub fn focus_page_search(page: uuid::Uuid) {

@@ -19,7 +19,7 @@ use super::pane_overlay::PaneOverlay;
 use super::session::Session;
 use super::store::AppStore;
 use super::window_library::WindowLibrary;
-use crate::html::text_page::{TextLogReport, TextSearch};
+use crate::html::text_page::{TextChanges, TextLogReport, TextSearch};
 use crate::html::{HtmlLoadState, HtmlOverlay, HtmlPageInfo, HtmlReloadTarget, HtmlSource, SearchCount, errors};
 use crate::persist::PageSnapshot;
 
@@ -98,6 +98,34 @@ impl TextSearchFailure {
             Self::Remote => "remote page: search it on the Mac that shows it",
             Self::NotLoaded => "page not loaded",
             Self::NoQuery => "no search query: set one first",
+        }
+    }
+}
+
+/// Why a `session.overlay.changes` step was refused (upstream's `TextChangesFailure`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextChangesFailure {
+    Page(HtmlOverlayCommandFailure),
+    /// The slot holds a page that is not a plain local diff page.
+    NotDiff,
+    /// The slot is the presenting machine's, which alone shows the page.
+    Remote,
+    /// The page's renderer is not up to take a step.
+    NotLoaded,
+    /// The page has no change to step to.
+    NoChanges,
+}
+
+impl TextChangesFailure {
+    /// The control error for this refusal (upstream's `message`).
+    #[must_use]
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Page(failure) => failure.message(),
+            Self::NotDiff => "no diff page",
+            Self::Remote => "remote page: step it on the Mac that shows it",
+            Self::NotLoaded => "page not loaded",
+            Self::NoChanges => "no changes",
         }
     }
 }
@@ -566,6 +594,16 @@ impl WindowLibrary {
             if let Some(search) = page.text_search.as_mut().filter(|search| search.query == query) {
                 search.matches = count.matches;
                 search.current = count.current;
+            }
+        });
+    }
+
+    /// Records diff page `id`'s count and current change, `None` clearing it while a fresh read is under way (upstream's
+    /// `setTextChangesReport`). Only a text page takes it; never emitted, like [`WindowLibrary::set_text_search_report`].
+    pub fn set_text_changes_report(&mut self, id: Uuid, changes: Option<TextChanges>) {
+        self.update_html_overlay(id, |page| {
+            if matches!(page.source, HtmlSource::Text { .. }) {
+                page.text_changes = changes;
             }
         });
     }

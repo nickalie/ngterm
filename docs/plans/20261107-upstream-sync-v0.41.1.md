@@ -500,22 +500,25 @@ control-api.md diff bullet.
 **Conformance:** new in `test_text_pages.py`: `test_diff_page_steps_between_changes`, `test_overlay_changes_refusals`;
 pane-selector and unknown-target rows; `test_cli_only.py::test_overlay_changes_validation` (all `since("0.41.1")`).
 
-- [ ] `is_diff` (`.diff`/`.patch`); `diff_languages` from `---`/`+++` paths (up to a tab, quotes stripped, known
+- [x] `is_diff` (`.diff`/`.patch`); `diff_languages` from `---`/`+++` paths (up to a tab, quotes stripped, known
   languages only); html for a non-log diff: `data-diff` always, `data-change` when > 0, sorted-key `data-files`
   under the highlight cap only.
-- [ ] `TextChanges {count, current}`: stored on change, never emitted, cleared during a fresh read.
-- [ ] Dispatch: "session.overlay.changes requires to next or prev", "invalid overlay changes direction: X"; then
+- [x] `TextChanges {count, current}`: stored on change, never emitted, cleared during a fresh read.
+- [x] Dispatch: "session.overlay.changes requires to next or prev", "invalid overlay changes direction: X"; then
   pane, session; a presenter's slot -> "remote page: step it on the Mac that shows it"; not a plain diff page ->
   "no diff page"; before load "page not loaded"; no hunks "no changes"; answers `{id, text: "N of M"}`. Tree
   `text.changes` after `search`, omitted until reported. Bridge own-overlay += changes.
-- [ ] ngtermctl `session overlay changes --next|--prev`, "give exactly one of --next or --prev".
-- [ ] text.js/css (vendored verbatim, never re-implemented): a change is one contiguous run of `-`/`+` rows inside a
+- [x] ngtermctl `session overlay changes --next|--prev`, "give exactly one of --next or --prev". (Task 1 landed it
+  with its tests; nothing to change.)
+- [x] text.js/css (vendored verbatim, never re-implemented): a change is one contiguous run of `-`/`+` rows inside a
   hunk, and the hunk headers' line counts decide which rows are inside a hunk (so `---`/`+++` within one never
   count; one `@@` hunk can hold several changes, `testADiffPageCountsItsChangesAndStepsWrapBothWays`); each file's sides highlighted in its language over row bands;
   past the cap bands and stepping only; the bar's "Previous change ([)"/"Next change (])" and "change N of M"; `]`/`[`;
-  a theme rebuild keeps the change, a reload starts before the first.
-- [ ] write tests: is_diff/diff_languages (CRLF, quoted paths, unknown language); html marking; model; dispatcher;
-  projection; CLI parse; the conformance tests (diffs that fit on screen in the headless window).
+  a theme rebuild keeps the change, a reload starts before the first. (Already in the resources Task 2 synced; the
+  app side keeps the reported change for a rebuild and resets it after a fresh read.)
+- [x] write tests: is_diff/diff_languages (CRLF, quoted paths, unknown language); html marking; model; dispatcher;
+  projection; CLI parse; the conformance tests (diffs that fit on screen in the headless window). (Plus the
+  pane-selector and unknown-target rows, and the GPUI bridge over a fake channel: the reopened change and a step.)
 
 ### Task 11: Image, Markdown, text and document pages on a presenter (#891, #917 remote part)
 

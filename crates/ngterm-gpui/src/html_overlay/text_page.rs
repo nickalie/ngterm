@@ -10,7 +10,8 @@
 //! The renderer (`text.js`) posts `{ready}` once a new document can take updates, and its wrapper
 //! (`documents::text_script`) then `{ready, load}` naming the build the document came from, which releases the pushes
 //! held during that build: the search, and a log page's follow state. `text.js` posts `{following, top}` after a user
-//! scroll of a log page, `{search}` for a query typed into its field and `{report}` for the matches it counted. The
+//! scroll of a log page, `{search}` for a query typed into its field, `{report}` for the matches it counted and, on a
+//! diff page, `{changes}` with its count and current change, which a rebuild from the same text reopens on. The
 //! model's follow state reaches the follower on every apply ([`TextPage::apply`]), where a pause drops the reads in
 //! flight and a resume ticks at once; a moved search revision is pushed to the renderer, marked typed when the page's
 //! own field made it, so the echo never overwrites later typing.
@@ -27,8 +28,8 @@ use std::rc::{Rc, Weak};
 
 use gpui_kit::{App, AppContext as _, AsyncApp, Task};
 use ngterm_app::log_follower::{LogFollower, LogRead, LogSink, ReadResult, Update};
-use ngterm_core::html::text_page::{self as core_text, PageState, SearchState, TextLogReport};
-use ngterm_core::html::{HtmlOverlay, HtmlSource, SearchAnswer, SearchCount, SearchStep};
+use ngterm_core::html::text_page::{self as core_text, PageState, SearchState, TextChanges, TextLogReport};
+use ngterm_core::html::{ChangesAnswer, HtmlOverlay, HtmlSource, SearchAnswer, SearchCount, SearchStep};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -71,6 +72,8 @@ pub(super) enum Message {
         query: String,
         count: SearchCount,
     },
+    /// A diff page's count of changes and the one it is on.
+    Changes(TextChanges),
 }
 
 impl Message {
@@ -87,6 +90,9 @@ impl Message {
         }
         if let Some(report) = body.get("report") {
             return Self::report(report);
+        }
+        if let Some(changes) = body.get("changes") {
+            return changes_of(changes).map(Self::Changes);
         }
         let following = body.get("following")?.as_bool()?;
         Some(Self::Following {
@@ -163,6 +169,25 @@ fn step_count(answer: &str) -> Option<SearchCount> {
     })
 }
 
+/// The renderer's change step (upstream's `agtermTextChangeStep`), which answers the count and the change it reached.
+fn change_step_call(forward: bool) -> String {
+    call_of("ngtermTextChangeStep", &[json!(forward)])
+}
+
+/// A diff page's `{count, current}`.
+fn changes_of(value: &Value) -> Option<TextChanges> {
+    let number = |name: &str| {
+        value
+            .get(name)
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+    };
+    Some(TextChanges {
+        count: number("count")?,
+        current: number("current")?,
+    })
+}
+
 /// `function(arguments…)`, each argument as JSON, so a text stays data.
 fn call_of(function: &str, arguments: &[Value]) -> String {
     let arguments: Vec<String> = arguments.iter().map(Value::to_string).collect();
@@ -208,6 +233,12 @@ pub(super) fn step(page: Uuid, step: &SearchStep) -> Option<SearchAnswer> {
     bridge(page)?.step(step)
 }
 
+/// Steps diff page `page` to its next or previous change once (the core's `HtmlHost::step_text_changes`); `None` while
+/// its renderer is not up to take it.
+pub(super) fn step_changes(page: Uuid, forward: bool) -> Option<ChangesAnswer> {
+    bridge(page)?.step_changes(forward)
+}
+
 /// Moves the keyboard into text page `page`'s own search field (upstream's `focusSearch`); the deck gives the page's
 /// element the keyboard.
 pub(crate) fn focus_search(page: Uuid) {
@@ -225,6 +256,9 @@ struct Static {
     load: Cell<u64>,
     /// From a build until its renderer reports ready; the ready report delivers the latest search.
     pending: Cell<bool>,
+    /// A diff page's current change as it last reported it, from 1 and 0 for none: a rebuild from the same text reopens
+    /// on it, and a fresh read starts over.
+    change: Cell<usize>,
 }
 
 /// One text page's bridge.
@@ -310,6 +344,14 @@ impl TextPage {
         self.page.pending.set(true);
         let shown = self.page.text.borrow().is_some();
         let read = (fresh || !shown).then(|| self.path.clone());
+        if read.is_some() {
+            // the file may now hold other changes; the old page can still step during the read, so the change the new
+            // one opens on resets only after it
+            let id = self.id;
+            post(&self.poster, move |state: &mut AppState| {
+                state.core.set_text_changes_report(id, None);
+            });
+        }
         let Some(app) = app() else {
             // the unit tests: in place, with no offset to keep
             let read = read.map(|path| ngterm_app::documents::load_text(std::path::Path::new(&path)));
@@ -348,6 +390,7 @@ impl TextPage {
             Some(Err(failure)) => return channel.fail(failure),
             Some(Ok(text)) => {
                 self.page.text.replace(Some(text));
+                self.page.change.set(0);
             }
             None => {}
         }
@@ -358,6 +401,7 @@ impl TextPage {
             anchor,
             load: Some(load),
             search: Some(&search),
+            change: Some(self.page.change.get()),
             ..PageState::default()
         };
         let style = super::documents::text_style();
@@ -418,6 +462,7 @@ impl TextPage {
                     state.core.set_text_search_report(id, revision, &query, count);
                 });
             }
+            Some(Message::Changes(changes)) => self.changes(changes),
             // `text.js`'s own ready report names no build: the wrapper's next one does
             Some(Message::Ready { load: None }) | None => {}
         }
@@ -504,6 +549,37 @@ impl TextPage {
         })
         .detach();
         Some(counted)
+    }
+
+    /// A diff page's report: the change a rebuild reopens on, and the model's read-back.
+    fn changes(&self, changes: TextChanges) {
+        self.page.change.set(changes.current);
+        let id = self.id;
+        post(&self.poster, move |state: &mut AppState| {
+            state.core.set_text_changes_report(id, Some(changes));
+        });
+    }
+
+    /// Steps a diff page to its next or previous change (upstream's `stepChange`): the renderer answers its count and
+    /// the change it reached; `None` while a document build waits for its renderer.
+    fn step_changes(&self, forward: bool) -> Option<ChangesAnswer> {
+        if self.document_pending() {
+            return None;
+        }
+        let answer = self.channel.upgrade()?.call(change_step_call(forward))?;
+        let app = app()?;
+        let (sender, stepped) = std::sync::mpsc::channel();
+        app.spawn(async move |_: &mut AsyncApp| {
+            let value = answer.recv().await.ok().and_then(Result::ok).flatten();
+            let changes = value
+                .and_then(|value| serde_json::from_str::<Value>(&value).ok())
+                .and_then(|value| changes_of(&value));
+            if let Some(changes) = changes {
+                let _ = sender.send(changes);
+            }
+        })
+        .detach();
+        Some(stepped)
     }
 
     /// Ends the ticks and drops every read and build in flight (the page closed).
@@ -694,9 +770,14 @@ mod tests {
                 count: SearchCount { matches: 3, current: 2 },
             })
         );
+        assert_eq!(
+            Message::parse(r#"{"changes":{"count":2,"current":1}}"#),
+            Some(Message::Changes(TextChanges { count: 2, current: 1 }))
+        );
         for other in [
             r#"{"ready":false}"#,
             r#"{"search":1}"#,
+            r#"{"changes":{"count":2}}"#,
             r#"{"report":{"revision":4,"matches":3,"current":2}}"#,
             "[]",
             "not json",
@@ -744,6 +825,7 @@ mod tests {
             revision: 2,
         };
         assert_eq!(step_call(&step), r#"ngtermTextSearchStep(false,"b",2)"#);
+        assert_eq!(change_step_call(true), "ngtermTextChangeStep(true)");
     }
 
     /// A step answers the renderer's `{matches, current}`; anything else is no count.
@@ -939,5 +1021,61 @@ mod tests {
         assert!(channel.failures.borrow().is_empty(), "the kept text, not a read");
         focus_search(overlay.id);
         assert_eq!(channel.take_calls(), ["ngtermTextFocusSearch()"]);
+    }
+
+    // MARK: - a diff page's changes
+
+    const DIFF: &str = "--- a/x.go\n+++ b/x.go\n@@ -1 +1 @@\n-a\n+b\n";
+
+    /// Upstream's `TextPageBridge.changesReport` and `loadDocument`: a diff page is marked with its files' languages; a
+    /// rebuild from the same text reopens on the change the page last reported, and a fresh read starts over.
+    #[test]
+    fn a_diff_page_reopens_on_its_change_until_a_fresh_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("change.diff");
+        std::fs::write(&path, DIFF).unwrap();
+        let (_, channel, page) = static_page(&path, "", 0);
+        page.load_document(true);
+        let built = channel.last_document();
+        assert!(
+            built.contains(
+                " hidden data-diff data-files=\"{&quot;a/x.go&quot;:&quot;go&quot;,&quot;b/x.go&quot;:&quot;go&quot;}\""
+            ),
+            "{built}"
+        );
+        assert!(!built.contains("data-change"), "{built}");
+        page.message(r#"{"changes":{"count":1,"current":1}}"#);
+        page.load_document(false);
+        assert!(channel.last_document().contains(" data-diff data-change=\"1\""));
+        page.load_document(true);
+        assert!(!channel.last_document().contains("data-change"));
+    }
+
+    /// Upstream's `stepChange`, on the app's executor: refused while a build waits; once the renderer is up, a step
+    /// answers its count and the change it reached.
+    #[gpui_kit::test]
+    fn a_change_step_answers_the_renderers_count(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| init(cx));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("change.patch");
+        std::fs::write(&path, DIFF).unwrap();
+        let (overlay, channel, page) = static_page(&path, "", 0);
+        page.load_document(true);
+        cx.run_until_parked();
+        assert!(
+            step_changes(overlay.id, true).is_none(),
+            "the build waits for its renderer"
+        );
+        page.message(&ready(&channel.last_document()));
+        channel.take_calls();
+        channel.answer.replace(Some(r#"{"count":2,"current":2}"#.to_owned()));
+        let answer = step_changes(overlay.id, false).expect("a ready renderer takes the step");
+        cx.run_until_parked();
+        assert_eq!(answer.try_recv(), Ok(TextChanges { count: 2, current: 2 }));
+        assert_eq!(channel.take_calls(), ["ngtermTextChangeStep(false)"]);
+        channel.answer.replace(Some("null".to_owned()));
+        let unanswered = step_changes(overlay.id, true).expect("taken");
+        cx.run_until_parked();
+        assert!(unanswered.try_recv().is_err(), "no count, no answer");
     }
 }

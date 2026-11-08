@@ -318,3 +318,100 @@ fn a_closed_search_carries_only_its_revision() {
     assert!(html("a", None, None, "", &state).contains("<div id=\"ngterm-text\" hidden data-revision=\"5\">"));
     assert!(!html("a", None, None, "", &PageState::default()).contains("data-revision"));
 }
+
+fn with_change(change: usize) -> PageState<'static> {
+    PageState {
+        change: Some(change),
+        ..PageState::default()
+    }
+}
+
+/// Upstream's `aDiffIsMarkedPastTheHighlightCapWithTheChangeItReopensOn`.
+#[test]
+fn a_diff_is_marked_past_the_highlight_cap_with_the_change_it_reopens_on() {
+    let over_cap = "a".repeat(MAX_HIGHLIGHT_BYTES + 1);
+    let built = html(&over_cap, Some("diff"), None, "", &with_change(4));
+    assert!(built.contains("hidden data-diff data-change=\"4\">"));
+    assert!(!built.contains("data-language"));
+    assert!(!html("x", Some("diff"), None, "", &with_change(0)).contains("data-change"));
+}
+
+/// Upstream's `onlyAPlainDiffPageIsMarked`.
+#[test]
+fn only_a_plain_diff_page_is_marked() {
+    let log = TextLogState {
+        following: true,
+        ..TextLogState::default()
+    };
+    let state = PageState {
+        log: Some(&log),
+        ..with_change(2)
+    };
+    let built = html("x", Some("diff"), None, "", &state);
+    assert!(!built.contains("data-diff"));
+    assert!(!built.contains("data-change"));
+    assert!(!html("x", Some("go"), None, "", &with_change(2)).contains("data-diff"));
+}
+
+/// Upstream's `isDiffFollowsTheExtension`.
+#[test]
+fn is_diff_follows_the_extension() {
+    for (path, expected) in [
+        ("a.diff", true),
+        ("/x/b.PATCH", true),
+        ("a.txt", false),
+        ("a.go", false),
+        ("diff", false),
+    ] {
+        assert_eq!(is_diff(path), expected, "{path}");
+    }
+}
+
+fn languages(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(path, language)| ((*path).to_owned(), (*language).to_owned()))
+        .collect()
+}
+
+/// Upstream's `aDiffMapsEachHeaderPathToItsLanguage`: up to a tab, a quoted path looked up bare, an unknown language
+/// and `/dev/null` left out.
+#[test]
+fn a_diff_maps_each_header_path_to_its_language() {
+    let text = "diff --git a/main.go b/main.go\n--- a/main.go\n+++ b/main.go\n--- /dev/null\n\
+                +++ \"b/odd name.py\"\n--- old.sql\t2026-11-06 10:00:00\n+++ notes.unknown";
+    assert_eq!(
+        diff_languages(text),
+        languages(&[
+            ("a/main.go", "go"),
+            ("b/main.go", "go"),
+            ("\"b/odd name.py\"", "python"),
+            ("old.sql", "sql"),
+        ])
+    );
+}
+
+/// Upstream's `aCRLFDiffMapsItsHeaderPaths`.
+#[test]
+fn a_crlf_diff_maps_its_header_paths() {
+    assert_eq!(
+        diff_languages("diff --git a/x.go b/x.go\r\n--- a/x.go\r\n+++ b/x.go\r\n"),
+        languages(&[("a/x.go", "go"), ("b/x.go", "go")])
+    );
+}
+
+/// Upstream's `aDiffUnderTheHighlightCapCarriesItsFileLanguages`: sorted keys, escaped; not past the cap, on another
+/// language or with no header.
+#[test]
+fn a_diff_under_the_highlight_cap_carries_its_file_languages() {
+    let text = "--- a/x.go\n+++ b/x.go\n@@ -1 +1 @@\n-a\n+b\n";
+    let over_cap = format!("{text}{}", " x\n".repeat(MAX_HIGHLIGHT_BYTES / 3 + 1));
+    let none = PageState::default();
+    assert!(
+        html(text, Some("diff"), None, "", &none)
+            .contains("data-files=\"{&quot;a/x.go&quot;:&quot;go&quot;,&quot;b/x.go&quot;:&quot;go&quot;}\"")
+    );
+    assert!(!html(&over_cap, Some("diff"), None, "", &none).contains("data-files"));
+    assert!(!html(text, Some("go"), None, "", &none).contains("data-files"));
+    assert!(!html("-a\n+b\n", Some("diff"), None, "", &none).contains("data-files"));
+}

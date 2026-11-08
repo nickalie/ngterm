@@ -75,6 +75,7 @@ pub(crate) fn deferred(core: &mut Core, request: &Request) -> Option<Dispatched>
         Command::Session(SessionCmd::Type) => Some(super::typing::begin(core, request)),
         Command::Session(SessionCmd::Search) => Some(super::search::begin(core, request)),
         Command::Session(SessionCmd::OverlaySearch) => Some(super::overlay_text::begin_search(core, request)),
+        Command::Session(SessionCmd::OverlayChanges) => Some(super::overlay_text::begin_changes(core, request)),
         Command::Session(SessionCmd::Swap) => Some(super::panes::begin_swap(core, request)),
         Command::Session(SessionCmd::Restart) => Some(super::restart::begin(core, request)),
         Command::Quick(QuickCmd::Type | QuickCmd::Text) => Some(super::quick::begin(core, request)),

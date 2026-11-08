@@ -24,7 +24,8 @@ use ngterm_core::Core;
 use ngterm_core::html::bridge;
 use ngterm_core::html::profile::{self, BrowserProfile};
 use ngterm_core::html::{
-    ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, SearchAnswer, SearchStep, StoreClear, errors,
+    ChangesAnswer, ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, SearchAnswer, SearchStep,
+    StoreClear, errors,
 };
 use ngterm_core::remote::replica_page::PageResource;
 use ngterm_proto::Response;
@@ -172,6 +173,10 @@ impl HtmlHost for PageHost {
 
     fn step_text_search(&self, page: Uuid, step: SearchStep) -> Option<SearchAnswer> {
         crate::html_overlay::step_text_search(page, &step)
+    }
+
+    fn step_text_changes(&self, page: Uuid, forward: bool) -> Option<ChangesAnswer> {
+        crate::html_overlay::step_text_changes(page, forward)
     }
 
     fn clear_saved_store(&self) -> Result<StoreClear, String> {

@@ -4,6 +4,7 @@
 //! the marked line from it. A log page is a text page that shows only its file's last lines ([`TextLog`]), following
 //! the end as it grows; its live state is [`TextLogState`].
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::markdown_page::escaped;
@@ -22,6 +23,8 @@ pub const MAX_TAIL_BYTES: usize = 2 << 20;
 
 /// Lowercased extensions a plain click opens as a log page, following its end.
 const LOG_EXTENSIONS: &[&str] = &["log", "out"];
+/// The language a patch maps to, whose plain page steps between its changes.
+const DIFF_LANGUAGE: &str = "diff";
 
 /// A text page's request to show only a log's last `tail` lines, following its end when `follow` is set (upstream's
 /// `TextLog`).
@@ -79,6 +82,14 @@ impl TextSearch {
     }
 }
 
+/// A diff page's count of changes, a change being one run of removed and added lines, and the one it last stepped to,
+/// from 1 and 0 before any step (upstream's `TextChanges`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextChanges {
+    pub count: usize,
+    pub current: usize,
+}
+
 /// The search a built page starts with (upstream's `TextPage.SearchState`): the model's query (empty with none) and its
 /// revision, and the match the page showed last, from 1 and 0 for none.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -93,12 +104,14 @@ pub struct SearchState {
 /// the page's search, which a rebuild keeps (upstream's `search`).
 /// `load` is the document's build generation, which the renderer echoes in its ready report, so a ready report from an
 /// older document cannot release a newer one's build (a fix over upstream, whose ready report names no document).
+/// `change` is the change a rebuilt diff page reopens on, from 1 (upstream's `change`).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PageState<'a> {
     pub log: Option<&'a TextLogState>,
     pub anchor: Option<f64>,
     pub load: Option<u64>,
     pub search: Option<&'a SearchState>,
+    pub change: Option<usize>,
 }
 
 /// Lowercased extensions and the bundled highlight.js language each maps to.
@@ -146,8 +159,8 @@ const LANGUAGES: &[(&str, &str)] = &[
     ("conf", "ini"),
     ("xml", "xml"),
     ("plist", "xml"),
-    ("diff", "diff"),
-    ("patch", "diff"),
+    ("diff", DIFF_LANGUAGE),
+    ("patch", DIFF_LANGUAGE),
     ("mk", "makefile"),
     ("vb", "vbnet"),
 ];
@@ -213,6 +226,34 @@ pub fn is_eligible(path: &str) -> bool {
         || PLAIN_BASENAMES.contains(&name.as_str())
 }
 
+/// Whether `path` names a patch, whose plain page steps between its changes (upstream's `isDiff`).
+#[must_use]
+pub fn is_diff(path: &str) -> bool {
+    language(path) == Some(DIFF_LANGUAGE)
+}
+
+/// Maps each path a patch's `--- ` or `+++ ` row names, as the row spells it up to a tab, to the file's language, a
+/// quoted path looked up without its quotes; a file with no known language is left out (upstream's `diffLanguages`).
+/// A changed row can look like a header, so the renderer looks up only rows outside hunks. Rows split at every newline
+/// Swift's `isNewline` knows, so a CRLF patch maps its paths too.
+#[must_use]
+pub fn diff_languages(text: &str) -> BTreeMap<String, String> {
+    let mut found = BTreeMap::new();
+    let rows = text.split(['\n', '\r', '\u{0B}', '\u{0C}', '\u{85}', '\u{2028}', '\u{2029}']);
+    for row in rows.filter(|row| row.starts_with("--- ") || row.starts_with("+++ ")) {
+        let path = row[4..].split('\t').next().unwrap_or_default();
+        let file = if path.chars().count() > 1 && path.starts_with('"') && path.ends_with('"') {
+            &path[1..path.len() - 1]
+        } else {
+            path
+        };
+        if let Some(language) = language(file) {
+            found.insert(path.to_owned(), language.to_owned());
+        }
+    }
+    found
+}
+
 /// Whether a plain click on `path` opens it as a log page, following its end (upstream's `isLog`): a `.log` or `.out`
 /// file, in any case.
 #[must_use]
@@ -236,9 +277,29 @@ pub fn validate(data: Vec<u8>) -> Option<String> {
 /// set) carries its follow state and report flags instead of a line, and the renderer draws no gutter; a finite
 /// `state.anchor` is the scroll offset the rebuilt page reopens at, and `state.load` the build generation the renderer's
 /// ready report echoes. A search carries its revision, and with a query the escaped query and the match shown.
+/// A plain page of a diff is marked `data-diff` whatever its size, so change navigation outlives the highlighting
+/// limit, with `state.change` as the change it reopens on; under the limit it also carries [`diff_languages`] as JSON
+/// (`data-files`), so each file's lines are highlighted in that file's language.
 #[must_use]
 pub fn html(text: &str, language: Option<&str>, line: Option<i64>, style: &str, state: &PageState) -> String {
     let mut attributes = String::new();
+    let highlighted = text.len() <= MAX_HIGHLIGHT_BYTES;
+    if state.log.is_none() && language == Some(DIFF_LANGUAGE) {
+        attributes.push_str(" data-diff");
+        if let Some(change) = state.change.filter(|change| *change > 0) {
+            let _ = write!(attributes, " data-change=\"{change}\"");
+        }
+        let files = if highlighted {
+            diff_languages(text)
+        } else {
+            BTreeMap::new()
+        };
+        if !files.is_empty()
+            && let Ok(json) = serde_json::to_string(&files)
+        {
+            let _ = write!(attributes, " data-files=\"{}\"", escaped(&json));
+        }
+    }
     if let Some(search) = state.search {
         let _ = write!(attributes, " data-revision=\"{}\"", search.revision);
         if !search.query.is_empty() {
@@ -250,7 +311,7 @@ pub fn html(text: &str, language: Option<&str>, line: Option<i64>, style: &str, 
             );
         }
     }
-    if let Some(language) = language.filter(|_| text.len() <= MAX_HIGHLIGHT_BYTES) {
+    if let Some(language) = language.filter(|_| highlighted) {
         let _ = write!(attributes, " data-language=\"{}\"", escaped(language));
     }
     if let Some(log) = state.log {

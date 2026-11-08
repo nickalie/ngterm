@@ -10,7 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ngterm_proto::AppIdentity;
 use ngterm_proto::tree::{
     ControlHtmlOverlayNode, ControlHudNode, ControlRemoteOverlayNode, ControlSessionAsk, ControlSessionNode,
-    ControlSurfaceNode, ControlTextOverlayNode, ControlTextSearchNode, ControlTree, ControlWorkspaceNode,
+    ControlSurfaceNode, ControlTextChangesNode, ControlTextOverlayNode, ControlTextSearchNode, ControlTree,
+    ControlWorkspaceNode,
 };
 use uuid::Uuid;
 
@@ -292,7 +293,7 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
 
 /// A text page's node (upstream's `ControlTextOverlayNode`): the language its name maps to, even past the highlight
 /// cap, and the line it was opened at, not the one in view; a log page adds its line limit and its live state, and a
-/// page with a query its search.
+/// page with a query its search, and a diff page its changes once reported.
 fn text_node(path: &str, line: Option<i64>, page: &HtmlOverlay) -> ControlTextOverlayNode {
     let wire = |count: usize| i64::try_from(count).unwrap_or(i64::MAX);
     let log = page.log_state;
@@ -310,6 +311,10 @@ fn text_node(path: &str, line: Option<i64>, page: &HtmlOverlay) -> ControlTextOv
             query: search.query.clone(),
             matches: wire(search.matches),
             current: wire(search.current),
+        }),
+        changes: page.text_changes.map(|changes| ControlTextChangesNode {
+            count: wire(changes.count),
+            current: wire(changes.current),
         }),
     }
 }

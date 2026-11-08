@@ -432,6 +432,8 @@ impl LogFollower {
             anchor: if self.following { None } else { self.anchor },
             load: Some(self.document_load),
             search: Some(&self.search),
+            // a log page steps no changes
+            change: None,
         };
         let html = text_page::html(&shown.text, text_page::language(&self.path), None, &self.style, &state);
         self.page_snapshot.clone_from(&self.snapshot);

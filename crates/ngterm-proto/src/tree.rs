@@ -414,10 +414,18 @@ pub struct ControlTextSearchNode {
     pub current: i64,
 }
 
+/// A diff page's count of changes and the one it last stepped to, 0 before any step (upstream's
+/// `ControlTextChangesNode`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlTextChangesNode {
+    pub count: i64,
+    pub current: i64,
+}
+
 /// A text page's source (upstream's `ControlTextOverlayNode`): the file, the highlight.js language its name maps to
 /// (omitted when unmapped, and still reported for a file too large to highlight), and the line it was opened at, not
 /// the line in view. A log page adds its line limit (`tail`) and its live state, all omitted on a plain text page; a
-/// page's search is omitted with no query.
+/// page's search is omitted with no query, and a diff page's changes until the page reports them.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlTextOverlayNode {
@@ -440,6 +448,8 @@ pub struct ControlTextOverlayNode {
     pub unreadable: Option<bool>,
     #[serde(default)]
     pub search: Option<ControlTextSearchNode>,
+    #[serde(default)]
+    pub changes: Option<ControlTextChangesNode>,
 }
 
 /// One HTML page in an overlay slot.

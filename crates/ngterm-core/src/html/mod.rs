@@ -434,6 +434,9 @@ pub struct HtmlOverlay {
     /// Moves with every query set or closed (upstream's `searchRevision`): a page report naming another revision is
     /// dropped.
     pub search_revision: u64,
+    /// A diff page's last report on its changes (upstream's `textChanges`), `None` until it reports and on any other
+    /// page; never emitted, and a snapshot never writes it.
+    pub text_changes: Option<text_page::TextChanges>,
 }
 
 impl HtmlOverlay {
@@ -471,6 +474,7 @@ impl HtmlOverlay {
             log_state: None,
             text_search: None,
             search_revision: 0,
+            text_changes: None,
         }
     }
 
@@ -691,6 +695,13 @@ pub trait HtmlHost {
     fn step_text_search(&self, _page: uuid::Uuid, _step: SearchStep) -> Option<SearchAnswer> {
         None
     }
+
+    /// Steps diff page `page` to its next (`forward`) or previous change once (upstream's `TextPageBridge.stepChange`):
+    /// its renderer moves and answers its count and the change it reached, once, on the channel handed back. `None`, as
+    /// a channel that closes unanswered, when the page's renderer is not up to take it.
+    fn step_text_changes(&self, _page: uuid::Uuid, _forward: bool) -> Option<ChangesAnswer> {
+        None
+    }
 }
 
 /// One step of a text page's search: the direction, and the model's query and its revision.
@@ -710,6 +721,10 @@ pub struct SearchCount {
 
 /// The renderer's answer to a [`SearchStep`], once; a channel that closes unanswered means the page could not take it.
 pub type SearchAnswer = std::sync::mpsc::Receiver<SearchCount>;
+
+/// A diff page renderer's answer to a change step, once; a channel that closes unanswered means the page could not
+/// take it.
+pub type ChangesAnswer = std::sync::mpsc::Receiver<text_page::TextChanges>;
 
 /// How a clear of the saved browser store is going.
 #[derive(Debug, Clone, PartialEq, Eq)]

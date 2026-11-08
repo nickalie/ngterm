@@ -1,10 +1,13 @@
 //! `session.overlay.search`: a text page's search, set, stepped or closed (upstream's `dispatchSessionOverlaySearch` in
-//! `ControlDispatcher+Overlay.swift`, then `searchSessionOverlay` in `agterm/Control/ControlServer+TextPage.swift`).
+//! `ControlDispatcher+Overlay.swift`, then `searchSessionOverlay` in `agterm/Control/ControlServer+TextPage.swift`);
+//! `session.overlay.changes`: a diff page stepped to its next or previous change (upstream's
+//! `dispatchSessionOverlayChanges`, then `stepSessionOverlayChanges`).
 //!
 //! The query lives in the model ([`crate::model::WindowLibrary::set_text_search`]), which reaches the page whenever its
-//! renderer runs, so a query set before the page loads applies when it does. A step is a one-shot request to the
-//! page's renderer through the frontend ([`crate::html::HtmlHost::step_text_search`]), which answers the count once;
-//! the command waits for it a main-loop hop at a time.
+//! renderer runs, so a query set before the page loads applies when it does. A step, of a search or between a diff's
+//! changes, is a one-shot request to the page's renderer through the frontend
+//! ([`crate::html::HtmlHost::step_text_search`], [`crate::html::HtmlHost::step_text_changes`]), which answers the count
+//! once; the command waits for it a main-loop hop at a time.
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
@@ -18,8 +21,9 @@ use super::{args_of, with_id};
 use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
+use crate::html::text_page::{self, TextChanges};
 use crate::html::{HtmlOverlay, HtmlSource, SearchCount, SearchStep};
-use crate::model::{OverlayPane, TextSearchFailure};
+use crate::model::{OverlayPane, TextChangesFailure, TextSearchFailure};
 use crate::resolve::Resolver;
 
 /// Upstream's `OverlayHtmlError.searchRequest`.
@@ -27,6 +31,8 @@ const SEARCH_REQUEST: &str = "session.overlay.search needs text, --next, --prev 
 /// Upstream's `OverlayHtmlError.searchTextWithStep`.
 const SEARCH_TEXT_WITH_STEP: &str = "session.overlay.search: text cannot be combined with --next, --prev or --close";
 const SEARCH_EMPTY: &str = "session.overlay.search: text must not be empty";
+/// Upstream's dispatcher refusal of a `session.overlay.changes` with no `to`.
+const CHANGES_REQUEST: &str = "session.overlay.changes requires to next or prev";
 
 /// How long a step waits for the page's renderer before it counts the page as not loaded: upstream's call into the
 /// web view fails when the page goes, where a renderer here may never answer.
@@ -63,8 +69,18 @@ fn parse(args: &Args) -> Result<SearchRequest, ControlError> {
 pub(crate) fn begin_search(core: &mut Core, request: &Request) -> Dispatched {
     match start(core, request) {
         Ok(Started::Done(result)) => Dispatched::done(Ok(*result)),
-        Ok(Started::Step { session, answer }) => wait(session, answer, 0),
+        Ok(Started::Step { session, answer }) => {
+            wait(session, answer, |session, count| Ok(searched(session, count)), 0)
+        }
         Err(error) => Dispatched::done(Err(error)),
+    }
+}
+
+/// A search step's answer: `N of M` for the match it reached.
+fn searched(session: Uuid, count: SearchCount) -> ControlResult {
+    ControlResult {
+        text: Some(format!("{} of {}", count.current, count.matches)),
+        ..with_id(session)
     }
 }
 
@@ -138,19 +154,92 @@ fn refused(failure: TextSearchFailure) -> ControlError {
     ControlError::rejected(failure.message())
 }
 
-/// Answers the step once the page's renderer counted, `page not loaded` when it never does.
-fn wait(session: Uuid, answer: Receiver<SearchCount>, attempt: u32) -> Dispatched {
+/// Answers the step through `answered` once the page's renderer counted, `page not loaded` when it never does.
+fn wait<T: Send + 'static>(
+    session: Uuid,
+    answer: Receiver<T>,
+    answered: fn(Uuid, T) -> Result<ControlResult, ControlError>,
+    attempt: u32,
+) -> Dispatched {
     match answer.try_recv() {
-        Ok(count) => Dispatched::done(Ok(ControlResult {
-            text: Some(format!("{} of {}", count.current, count.matches)),
-            ..with_id(session)
-        })),
+        Ok(count) => Dispatched::done(answered(session, count)),
         Err(TryRecvError::Empty) if POLL_INTERVAL * attempt < STEP_WAIT => Dispatched::Pending {
             after: POLL_INTERVAL,
-            resume: Box::new(move |_: &mut Core| wait(session, answer, attempt + 1)),
+            resume: Box::new(move |_: &mut Core| wait(session, answer, answered, attempt + 1)),
         },
+        // both failures say the same
         Err(_) => Dispatched::done(Err(refused(TextSearchFailure::NotLoaded))),
     }
+}
+
+/// `session.overlay.changes` (upstream's `dispatchSessionOverlayChanges`, then `stepSessionOverlayChanges`): the step,
+/// then the pane, before the session resolves; then the local plain diff page in the addressed slot, whose renderer
+/// steps and answers `N of M`.
+pub(crate) fn begin_changes(core: &mut Core, request: &Request) -> Dispatched {
+    match start_changes(core, request) {
+        Ok((session, answer)) => wait(session, answer, stepped, 0),
+        Err(error) => Dispatched::done(Err(error)),
+    }
+}
+
+/// A change step's answer: `N of M` for the change it reached, `no changes` when the page has none.
+fn stepped(session: Uuid, changes: TextChanges) -> Result<ControlResult, ControlError> {
+    if changes.count == 0 {
+        return Err(changes_refused(TextChangesFailure::NoChanges));
+    }
+    Ok(ControlResult {
+        text: Some(format!("{} of {}", changes.current, changes.count)),
+        ..with_id(session)
+    })
+}
+
+/// The step's direction: `true` for next.
+fn parse_changes(args: &Args) -> Result<bool, ControlError> {
+    match args.to.as_deref() {
+        Some("next") => Ok(true),
+        Some("prev") => Ok(false),
+        None => Err(ControlError::rejected(CHANGES_REQUEST)),
+        Some(other) => Err(ControlError::rejected(format!(
+            "invalid overlay changes direction: {other}"
+        ))),
+    }
+}
+
+fn start_changes(core: &mut Core, request: &Request) -> Result<(Uuid, Receiver<TextChanges>), ControlError> {
+    let args = args_of(request);
+    let forward = parse_changes(args)?;
+    let pane = parse_overlay_pane(args.pane.as_deref())?;
+    let session = Resolver::new(core.library())
+        .session(request.target.as_deref(), args.window.as_deref())?
+        .session;
+    let id = text_changes_page(core, session, pane).map_err(changes_refused)?.id;
+    let answer = core
+        .html_host()
+        .and_then(|host| host.step_text_changes(id, forward))
+        .ok_or_else(|| changes_refused(TextChangesFailure::NotLoaded))?;
+    Ok((session, answer))
+}
+
+/// The local plain diff page in the slot `pane` of `session` addresses (upstream's `textChangesPage`), with the slot
+/// refusals of [`text_search_page`]; a log page of a patch is not one.
+fn text_changes_page(
+    core: &Core,
+    session: Uuid,
+    pane: Option<OverlayPane>,
+) -> Result<&HtmlOverlay, TextChangesFailure> {
+    let found = text_search_page(core, session, pane).map_err(|failure| match failure {
+        TextSearchFailure::Page(failure) => TextChangesFailure::Page(failure),
+        TextSearchFailure::Remote => TextChangesFailure::Remote,
+        _ => TextChangesFailure::NotDiff,
+    })?;
+    match &found.source {
+        HtmlSource::Text { path, .. } if found.text_log.is_none() && text_page::is_diff(path) => Ok(found),
+        _ => Err(TextChangesFailure::NotDiff),
+    }
+}
+
+fn changes_refused(failure: TextChangesFailure) -> ControlError {
+    ControlError::rejected(failure.message())
 }
 
 #[cfg(test)]
@@ -188,5 +277,21 @@ mod tests {
         ] {
             assert_eq!(parse(&args(text, to)), Err(ControlError::rejected(error)));
         }
+    }
+
+    /// Upstream's `overlayChangesRoutesItsDirectionAndPane` and `overlayChangesRejectsBadInputBeforeCallingActions`,
+    /// the request half.
+    #[test]
+    fn a_changes_step_takes_next_or_prev() {
+        assert_eq!(parse_changes(&args(None, Some("next"))), Ok(true));
+        assert_eq!(parse_changes(&args(None, Some("prev"))), Ok(false));
+        assert_eq!(
+            parse_changes(&args(None, None)),
+            Err(ControlError::rejected(CHANGES_REQUEST))
+        );
+        assert_eq!(
+            parse_changes(&args(None, Some("close"))),
+            Err(ControlError::rejected("invalid overlay changes direction: close"))
+        );
     }
 }
