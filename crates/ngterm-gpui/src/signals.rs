@@ -11,9 +11,9 @@
 #[cfg(unix)]
 use std::io;
 #[cfg(unix)]
-use std::sync::Arc;
-#[cfg(unix)]
 use std::sync::atomic::AtomicBool;
+#[cfg(unix)]
+use std::sync::{Arc, mpsc};
 #[cfg(unix)]
 use std::thread;
 
@@ -31,6 +31,9 @@ use crate::state::{AppState, Poster, post};
 mod windows;
 #[cfg(windows)]
 pub use self::windows::quit_on_termination;
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests;
 
 /// Quits through the main loop behind `poster` when the system asks the app to end (see the module docs).
 ///
@@ -50,19 +53,25 @@ pub fn quit_on_termination(poster: Poster) -> io::Result<()> {
 /// keeps its default action.
 #[cfg(unix)]
 pub fn quit_on_sigterm(poster: Poster) -> io::Result<()> {
-    let mut signals = Signals::new([SIGTERM])?;
-    let flags = second_sigterm_terminates()?;
-    let spawned = thread::Builder::new().name("ngterm-sigterm".to_owned()).spawn(move || {
-        if signals.forever().next().is_some() {
-            tracing::info!("SIGTERM: quitting");
-            post(&poster, AppState::request_quit);
-        }
-    });
-    if let Err(error) = spawned {
-        // the closure, and with it the iterator's registration, was dropped with the failed spawn
-        unregister(&flags);
-        return Err(error);
-    }
+    // The thread starts first and is handed the iterator once it is registered: a registration cannot be undone,
+    // since signal-hook keeps its handler once installed and, with no action left, ignores SIGTERM. The iterator's
+    // registration installs that handler or fails with nothing installed, and the flags' then only add to it.
+    let (hand, handed) = mpsc::channel::<Signals>();
+    thread::Builder::new()
+        .name("ngterm-sigterm".to_owned())
+        .spawn(move || {
+            let Ok(mut signals) = handed.recv() else {
+                return;
+            };
+            if signals.forever().next().is_some() {
+                tracing::info!("SIGTERM: quitting");
+                post(&poster, AppState::request_quit);
+            }
+        })?;
+    let signals = Signals::new([SIGTERM])?;
+    second_sigterm_terminates()?;
+    // the thread waits on its receiver until it has the iterator
+    let _ = hand.send(signals);
     Ok(())
 }
 
