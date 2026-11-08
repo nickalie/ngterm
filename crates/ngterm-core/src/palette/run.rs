@@ -20,9 +20,9 @@ use crate::windows::WindowRequest;
 impl Core {
     /// Whether `action`, a row of the palette window `window` draws, can run now. The static rows read the menu's
     /// predicate; an attention row asks its own window's modal gate (upstream's `canSelectAttention`); a Tint Session
-    /// row needs that gate and a selected session (the `isEnabled` of upstream's `tintItems`); a membership editor's row
-    /// needs the gate and its session or workspace still in the window, so a gone row goes inert; the rest are gated
-    /// when they run.
+    /// row needs that gate and a selected session (the `isEnabled` of upstream's `tintItems`); a Move Session row needs
+    /// the gate and a selection it can move ([`Self::movable_session`]); a membership editor's row needs the gate and
+    /// its session or workspace still in the window, so a gone row goes inert; the rest are gated when they run.
     #[must_use]
     pub fn palette_entry_enabled(&self, window: Uuid, action: &PaletteAction) -> bool {
         match action {
@@ -35,6 +35,9 @@ impl Core {
                         .store(window)
                         .and_then(AppStore::selected_session_id)
                         .is_some()
+            }
+            PaletteAction::MoveSession(workspace) => {
+                self.ui_actions_enabled(window) && self.movable_session(window, *workspace).is_some()
             }
             PaletteAction::ToggleFlag(session) => {
                 self.ui_actions_enabled(window) && window_holds(self.library(), window, *session)
@@ -121,9 +124,11 @@ impl Core {
                     Args::default(),
                 );
             }
-            PaletteAction::MoveSession { session, workspace } => {
-                if let Some(store) = self.library_mut().store_mut(window) {
-                    store.move_session(*session, *workspace, None);
+            PaletteAction::MoveSession(workspace) => {
+                if let Some(session) = self.movable_session(window, *workspace)
+                    && let Some(store) = self.library_mut().store_mut(window)
+                {
+                    store.move_session(session, *workspace, None);
                 }
             }
             PaletteAction::Custom(id) => self.run_palette_custom_command(window, *id),
@@ -139,6 +144,16 @@ impl Core {
             }
             _ => {}
         }
+    }
+
+    /// The session a Move Session row for workspace `target` moves now (upstream's `movable` in `moveItems`): the
+    /// window's selection, when it lives outside `target` and the move accepts it (a companion only reorders inside its
+    /// group, a removed target takes nothing).
+    fn movable_session(&self, window: Uuid, target: Uuid) -> Option<Uuid> {
+        let store = self.library().store(window)?;
+        let session = store.selected_session_id()?;
+        let owner = store.workspace_for_session(session)?.id();
+        (owner != target && store.can_move_sessions(&[session], target, None)).then_some(session)
     }
 
     /// A membership editor's row (upstream's editor `run` closures): a session's flag or a workspace's focus

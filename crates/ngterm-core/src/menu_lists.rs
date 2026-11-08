@@ -348,12 +348,19 @@ mod tests {
     }
 
     #[test]
-    fn reveal_a_missing_directory_leaves_the_session_selected() {
+    fn reveal_a_missing_directory_never_reaches_the_frontend() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
         let library = WindowLibrary::seeded("/no/such/ngterm/dir");
         let window = library.active_window_id().unwrap();
         let session = library.store(window).unwrap().selected_session_id();
         let mut core = core(library);
+        let paths = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&paths);
+        core.set_reveal_handler(Box::new(move |path| sink.borrow_mut().push(path.to_owned())));
         core.perform_menu_list(window, MenuListAction::RevealSession);
+        assert!(paths.borrow().is_empty());
         assert_eq!(core.library().store(window).unwrap().selected_session_id(), session);
         assert!(core.take_window_requests().is_empty());
     }
