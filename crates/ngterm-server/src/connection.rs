@@ -139,7 +139,13 @@ fn read_line(reader: &mut BufReader<Connection>, deadlines: &ConnectionDeadlines
     let mut line = Vec::new();
     loop {
         let wait = next_wait(deadline, deadlines.read_timeout).ok_or_else(deadline_passed)?;
-        reader.get_ref().set_read_timeout(Some(wait))?;
+        // macOS refuses socket options (EINVAL) once the peer has closed, even with its request still buffered:
+        // the read cannot wait, so let it take those bytes and then EOF
+        if let Err(error) = reader.get_ref().set_read_timeout(Some(wait))
+            && error.kind() != io::ErrorKind::InvalidInput
+        {
+            return Err(error);
+        }
         let chunk = match reader.fill_buf() {
             Ok(chunk) => chunk,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -228,7 +234,12 @@ fn write_all_by(stream: &mut Connection, mut bytes: &[u8], deadlines: &Connectio
     let deadline = Instant::now() + deadlines.write_deadline;
     while !bytes.is_empty() {
         let wait = next_wait(deadline, deadlines.write_timeout).ok_or_else(deadline_passed)?;
-        stream.set_write_timeout(Some(wait))?;
+        // As on the read side, macOS refuses the option after a hangup: the write itself reports the broken pipe.
+        if let Err(error) = stream.set_write_timeout(Some(wait))
+            && error.kind() != io::ErrorKind::InvalidInput
+        {
+            return Err(error);
+        }
         let chunk = bytes.get(..WRITE_CHUNK_BYTES).unwrap_or(bytes);
         match stream.write(chunk) {
             Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
@@ -239,3 +250,7 @@ fn write_all_by(stream: &mut Connection, mut bytes: &[u8], deadlines: &Connectio
     }
     Ok(())
 }
+
+#[cfg(all(test, unix))]
+#[path = "connection_tests.rs"]
+mod tests;
