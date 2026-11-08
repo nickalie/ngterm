@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The store of release.yml's portable WPE WebKit prefix: one OCI artifact per runner image and build key in the private
+# The store of release.yml's portable WPE WebKit prefix: one OCI artifact per runner image and build key in the public
 # GHCR package ghcr.io/<owner>/ngterm-release-wpe, tagged `<runner os label>-<build-release-wpe.sh --print-key>`.
 # release-wpe-cache.yml builds and publishes it on main; release.yml's `linux` job pulls it.
 #

@@ -37,7 +37,8 @@ fetch_tool() (
   if [[ ! -x "$dir/$name" ]]; then
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
-    github_download "$url" "$work/archive"
+    # errexit is off here when fetch_tool runs in a command substitution, so a failed download stops explicitly
+    github_download "$url" "$work/archive" || die "$name $version: the download failed: $url"
     echo "$sum  $work/archive" | sha256sum --check --quiet || die "$name $version: the archive's sha256 does not match"
     mkdir -p "$work/unpacked" "$root"
     tar -xf "$work/archive" -C "$work/unpacked" "$member"
