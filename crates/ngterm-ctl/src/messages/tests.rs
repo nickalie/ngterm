@@ -366,6 +366,7 @@ pub(crate) fn run_command(
     use std::io::{BufRead as _, Write as _};
     use std::os::unix::net::UnixListener;
     use std::process::Stdio;
+    use std::sync::mpsc::{self, RecvTimeoutError};
     use std::thread;
 
     let directory = tempfile::tempdir().unwrap();
@@ -373,19 +374,33 @@ pub(crate) fn run_command(
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
     let replies: Vec<String> = replies.iter().map(|reply| format!("{reply}\n")).collect();
+    let (child_running, child_exited) = mpsc::channel::<()>();
     let server = thread::spawn(move || {
         let mut requests = Vec::new();
-        for reply in replies {
+        // A following command may poll again before it notices stdin's EOF. Keep the final state available until
+        // the subprocess exits, regardless of how many rechecks scheduling lets it make.
+        for reply in replies.iter().chain(replies.last().into_iter().cycle()) {
             let deadline = Instant::now() + Duration::from_secs(10);
             let (mut stream, _) = loop {
                 match listener.accept() {
                     Ok(pair) => break pair,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline, "command never connected");
-                        thread::yield_now();
-                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
                     Err(error) => panic!("accept: {error}"),
                 }
+                if !matches!(
+                    child_exited.recv_timeout(Duration::from_millis(10)),
+                    Err(RecvTimeoutError::Timeout)
+                ) {
+                    assert!(
+                        requests.len() >= replies.len(),
+                        "command did not consume its scripted replies"
+                    );
+                    return requests;
+                }
+                assert!(
+                    requests.len() >= replies.len() || Instant::now() < deadline,
+                    "command never connected"
+                );
             };
             // On macOS an accepted socket inherits the listener's non-blocking mode; the request is read blocking.
             stream.set_nonblocking(false).unwrap();
@@ -418,6 +433,7 @@ pub(crate) fn run_command(
         .unwrap();
     child.stdin.take().unwrap().write_all(input).unwrap();
     let output = child.wait_with_output().unwrap();
+    drop(child_running);
     let requests = server.join().unwrap();
     assert!(output.status.success(), "{output:?}");
     (output, requests)
