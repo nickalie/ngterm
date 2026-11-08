@@ -110,19 +110,29 @@ mod tests {
         assert!(!descends_from(99, 10, &table));
     }
 
+    /// A stand-in is killed and reaped even when its case unwinds.
+    struct StandIn(Child);
+
+    impl Drop for StandIn {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
     /// `sleep` run under the web process's name. A child writes the copy (`fakes::copy_executable`): a copy written
     /// here would leave its write descriptor, for as long as it takes to exec, in a child another test forks
     /// meanwhile, and starting the copy would then fail with ETXTBSY.
-    fn stand_in(dir: &std::path::Path, name: &str) -> Child {
+    fn stand_in(dir: &std::path::Path, name: &str) -> StandIn {
         let program = dir.join(name);
         ngterm_host::fakes::copy_executable(std::path::Path::new("/bin/sleep"), &program).unwrap();
-        Command::new(&program).arg("30").spawn().unwrap()
+        StandIn(Command::new(&program).arg("30").spawn().unwrap())
     }
 
-    fn ended(child: &mut Child) -> bool {
+    fn ended(child: &mut StandIn) -> bool {
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            if child.try_wait().unwrap().is_some() {
+            if child.0.try_wait().unwrap().is_some() {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -134,20 +144,19 @@ mod tests {
     /// page tests running meanwhile (each an [`isolated`](crate::tests::isolated) child of the binary).
     #[test]
     fn the_web_processes_under_this_process_end_and_nothing_else() {
-        // a web process of another test running meanwhile: under the test binary, not under the case (in the case's
-        // own process this makes one more stand-in, which the case ends with its own)
-        let neighbours = tempfile::tempdir().unwrap();
-        let mut neighbour = stand_in(neighbours.path(), WEB_PROCESS);
-        crate::tests::isolated(
-            "engine::spares::tests::the_web_processes_under_this_process_end_and_nothing_else",
-            web_processes_end,
-        );
+        const CASE: &str = "engine::spares::tests::the_web_processes_under_this_process_end_and_nothing_else";
+        // `isolated` re-runs this test with WPE_UNIT_CHILD set to CASE, then exits without dropping its callers.
+        // Only the supervising parent owns the neighbour: a web process outside the isolated case's descendants.
+        let neighbour = (std::env::var("WPE_UNIT_CHILD").as_deref() != Ok(CASE)).then(|| {
+            let dir = tempfile::tempdir().unwrap();
+            (stand_in(dir.path(), WEB_PROCESS), dir)
+        });
+        crate::tests::isolated(CASE, web_processes_end);
+        let (mut neighbour, _dir) = neighbour.unwrap();
         assert!(
-            neighbour.try_wait().unwrap().is_none(),
+            neighbour.0.try_wait().unwrap().is_none(),
             "a web process of another test was ended too"
         );
-        neighbour.kill().unwrap();
-        neighbour.wait().unwrap();
     }
 
     fn web_processes_end() {
@@ -156,14 +165,12 @@ mod tests {
         let mut other = stand_in(dir.path(), "WPENetworkProcess");
         // the name shows once the child has run its program
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !web_processes_under(std::process::id()).contains(&web.id()) {
+        while !web_processes_under(std::process::id()).contains(&web.0.id()) {
             assert!(Instant::now() < deadline, "the stand-in never showed under its name");
             std::thread::sleep(Duration::from_millis(10));
         }
         end();
         assert!(ended(&mut web), "the web process stand-in still runs");
-        assert!(other.try_wait().unwrap().is_none(), "another child was ended too");
-        other.kill().unwrap();
-        other.wait().unwrap();
+        assert!(other.0.try_wait().unwrap().is_none(), "another child was ended too");
     }
 }
