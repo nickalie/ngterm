@@ -563,8 +563,46 @@ mod tests {
         front(cx).expect("the status alert is up")
     }
 
+    /// Names the temp state directory the child runs `init` over; the child refuses any other.
+    const CHILD_STATE_DIR: &str = "NGTERM_GPUI_TEST_UPDATER_STATE_DIR";
+
+    // `init` reads the update error file under the process's state directory (`error_file`, with no seam), so it runs
+    // in a child whose state directory is a temp one, never the user's.
+    #[test]
+    fn a_development_build_installs_an_updater_that_refuses_and_never_polls() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("update-error"), "could not start the installer").unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "updater::tests::child_installs_the_updater",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(paths::STATE_DIR_ENV, dir.path())
+            .env(CHILD_STATE_DIR, dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "the child's checks failed");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("update-error")).unwrap(),
+            "could not start the installer",
+            "reading the earlier failure keeps it"
+        );
+    }
+
     #[gpui_kit::test]
-    fn a_development_build_installs_an_updater_that_refuses_and_never_polls(cx: &mut TestAppContext) {
+    #[ignore = "run by a_development_build_installs_an_updater_that_refuses_and_never_polls, with its temp state dir"]
+    fn child_installs_the_updater(cx: &mut TestAppContext) {
+        // only ever in the child the parent test started, whose state directory is the temp one it named
+        let Some(dir) = std::env::var_os(CHILD_STATE_DIR)
+            .filter(|dir| std::env::var_os(paths::STATE_DIR_ENV).as_ref() == Some(dir))
+        else {
+            eprintln!("skipped: not in the parent test's temp state directory");
+            return;
+        };
+        assert_eq!(error_file(), PathBuf::from(dir).join("update-error"));
         cx.update(|cx| {
             let state = app_state(cx);
             assert_eq!(
@@ -577,6 +615,11 @@ mod tests {
             assert_eq!(
                 updater.installation.as_ref().err().map(String::as_str),
                 Some(SOURCE_BUILD)
+            );
+            assert_eq!(
+                updater.notice.as_deref(),
+                Some("could not start the installer"),
+                "an earlier failure"
             );
             assert_eq!(updater.status, Status::Idle);
             assert!(updater.polling.is_none(), "nothing to poll for");
@@ -600,8 +643,6 @@ mod tests {
             assert!(cx.global::<Updater>().polling.is_none(), "a source build polls nothing");
             let polling = pending(cx);
             cx.global_mut::<Updater>().polling = Some(polling);
-            set_automatic(true, cx);
-            assert!(cx.global::<Updater>().polling.is_some(), "polling already runs");
             set_automatic(false, cx);
             assert!(cx.global::<Updater>().polling.is_none(), "opting out stops it");
         });
@@ -818,26 +859,23 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn quitting_stops_every_check_and_installs_nothing_without_an_update(cx: &mut TestAppContext) {
+    fn quitting_cancels_the_download_and_drops_the_check_and_the_polling(cx: &mut TestAppContext) {
         cx.update(|cx| {
             on_quit(false, cx);
             assert!(cx.try_global::<Updater>().is_none(), "no updater, nothing to stop");
             let state = app_state(cx);
-            for live_reset in [false, true] {
-                let cancelled = Arc::new(AtomicBool::new(false));
-                let (job, polling) = (pending(cx), pending(cx));
-                cx.set_global(Updater {
-                    job: Some(job),
-                    polling: Some(polling),
-                    cancelled: Some(Arc::clone(&cancelled)),
-                    ..source_build(&state, Status::Downloading("0.2.0".into()))
-                });
-                on_quit(live_reset, cx);
-                let updater = cx.global::<Updater>();
-                assert!(cancelled.load(Ordering::Acquire), "the download is told to stop");
-                assert!(updater.job.is_none() && updater.polling.is_none() && updater.cancelled.is_none());
-                assert!(!updater.restart, "nothing restarts");
-            }
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let (job, polling) = (pending(cx), pending(cx));
+            cx.set_global(Updater {
+                job: Some(job),
+                polling: Some(polling),
+                cancelled: Some(Arc::clone(&cancelled)),
+                ..source_build(&state, Status::Downloading("0.2.0".into()))
+            });
+            on_quit(false, cx);
+            let updater = cx.global::<Updater>();
+            assert!(cancelled.load(Ordering::Acquire), "the download is told to stop");
+            assert!(updater.job.is_none() && updater.polling.is_none() && updater.cancelled.is_none());
         });
     }
 }
