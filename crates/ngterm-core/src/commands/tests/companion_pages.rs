@@ -188,6 +188,118 @@ fn a_page_companion_needs_web_views_and_a_local_parent() {
     assert_eq!(elsewhere, failure("the remote session is not attached"));
 }
 
+/// The local create's own guard behind the remote route (`begin_remote` hands a remote row to its origin first): a
+/// remote parent is refused here too, a loopback page with its own reason.
+#[test]
+fn the_local_create_refuses_a_remote_parent_on_its_own() {
+    let (mut fixture, _) = fixture_with_host(0);
+    let workspace = fixture.workspace;
+    let remote = fixture
+        .store_mut()
+        .and_then(|store| {
+            let spec = NewSession {
+                remote_host: Some("buildbox".into()),
+                ..NewSession::at_cwd("/tmp")
+            };
+            store.add_session(workspace, spec)
+        })
+        .unwrap();
+    let target = wire(remote);
+    let mut create = |url: &str| {
+        let args = args(|a| a.url = Some(url.to_owned()));
+        crate::commands::companion_page::page(&mut fixture.core, Some(&target), &args)
+            .map_or_else(Response::from, |_| Response::success())
+    };
+    assert_eq!(
+        create("http://127.0.0.1:8000/"),
+        failure("a loopback page cannot be a companion of a remote session")
+    );
+    assert_eq!(
+        create("https://example.com/"),
+        failure("companions of a remote session are not supported yet")
+    );
+    let rows = fixture.store().workspace(workspace).unwrap().sessions.len();
+    assert_eq!(rows, 2, "no row was added");
+}
+
+/// A remote row's page loads here, so this machine's web views and saved store must be able to show it before its
+/// origin is asked (a Rust-only refusal, under this command's name); a file page's path is the origin's to check.
+#[test]
+fn a_remote_row_s_page_needs_web_views_here_before_the_origin_is_asked() {
+    let remote_row = |fixture: &mut Fixture| {
+        let workspace = fixture.workspace;
+        fixture
+            .store_mut()
+            .and_then(|store| {
+                let spec = NewSession {
+                    remote_host: Some("buildbox".into()),
+                    ..NewSession::at_cwd("/srv")
+                };
+                store.add_session(workspace, spec)
+            })
+            .unwrap()
+    };
+    let url = |a: &mut Args| a.url = Some("https://example.com/".into());
+    let mut bare = Fixture::new(0);
+    let remote = remote_row(&mut bare);
+    // the page's own checks come first
+    let sized = companion_page(&mut bare, remote, |a| {
+        url(a);
+        a.size_percent = Some(50);
+    });
+    assert_eq!(sized, failure(FULL_SIZE));
+    assert_eq!(
+        companion_page(&mut bare, remote, url),
+        failure("session.companion.page: html overlays are not available in this build")
+    );
+    let (mut fixture, log) = fixture_with_host(0);
+    let remote = remote_row(&mut fixture);
+    log.borrow_mut().unavailable = Some("no GPU".to_owned());
+    assert_eq!(
+        companion_page(&mut fixture, remote, url),
+        failure("session.companion.page: html overlays are not available here: no GPU")
+    );
+    log.borrow_mut().unavailable = None;
+    log.borrow_mut().store_failure = Some("the saved store is locked".to_owned());
+    let persistent = companion_page(&mut fixture, remote, |a| {
+        url(a);
+        a.persistent = Some(true);
+    });
+    assert_eq!(persistent, failure("session.companion.page: the saved store is locked"));
+    let file = companion_page(&mut fixture, remote, |a| {
+        a.html = Some(crate::html::os_path("/srv/site/r.html"));
+        a.cwd = Some(crate::html::os_path("/srv/site"));
+    });
+    assert_eq!(file, failure("the remote session is not attached"));
+    assert_eq!(fixture.order(fixture.workspace).len(), 2, "no row was added");
+}
+
+/// A valid page for a target that does not resolve meets the target's refusal.
+#[test]
+fn a_page_companion_of_an_unknown_session_is_refused() {
+    let (mut fixture, _) = fixture_with_host(0);
+    let response = fixture.session(
+        SessionCmd::CompanionPage,
+        Some("zzz"),
+        args(|a| a.url = Some("https://example.com/".into())),
+    );
+    assert_eq!(response, failure("no such session: zzz"));
+}
+
+/// A target that does not resolve is let through, to answer as it would otherwise.
+#[test]
+fn a_refused_command_on_an_unknown_target_is_let_through() {
+    let (mut fixture, _) = fixture_with_host(0);
+    let typed = request(Command::Session(SessionCmd::Type), Some("zzz"), |a| {
+        a.text = Some("ls".into());
+    });
+    assert!(refusal(&fixture.core, &typed).is_none());
+    assert_eq!(
+        fixture.core.dispatch(&typed).error.as_deref(),
+        Some("no such session: zzz")
+    );
+}
+
 #[test]
 fn closing_the_page_closes_its_row_and_dismisses_the_page() {
     let (mut fixture, _) = fixture_with_host(0);

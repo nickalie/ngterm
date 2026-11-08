@@ -14,7 +14,7 @@ use uuid::Uuid;
 use super::{Fixture, answered_id, args, failure, wire};
 use crate::dashboard::DashboardCover;
 use crate::html::{HtmlHost, HtmlLoadState, HtmlNavigation, HtmlPageInfo, HtmlReloadTarget, errors};
-use crate::model::OverlayPane;
+use crate::model::{OverlayPane, StatusPane};
 
 /// What a fake host was asked, and what it answers.
 #[derive(Default)]
@@ -808,5 +808,129 @@ fn a_browsing_page_cover_names_the_site_shown() {
             identity: "https://login.example".into(),
             title: None
         })
+    );
+}
+
+/// The frontend's per-page entry points find a page wherever it sits and answer false once it left its slot.
+#[test]
+fn the_strip_s_reload_hide_and_close_act_on_the_page_where_it_sits() {
+    let (mut fixture, _) = fixture_with_host(1);
+    let id = fixture.sessions[0];
+    let page = page_id(&open_page(&mut fixture, id, |_| {}));
+    assert!(fixture.core.reload_html_overlay(page, HtmlReloadTarget::Original));
+    let shown = slot_page(&fixture, id).unwrap();
+    assert_eq!(
+        (shown.reload_revision, shown.reload_target, shown.load_state),
+        (1, HtmlReloadTarget::Original, HtmlLoadState::Loading)
+    );
+    assert!(fixture.core.hide_html_overlay(page));
+    assert_eq!(node(&mut fixture, id)["htmlOverlays"][0]["hidden"], json!(true));
+    // a page that is no companion row leaves its slot as the strip's close has it
+    assert_eq!(
+        fixture.core.close_html_overlay_from_strip(page),
+        Some(crate::app_actions::ActionEffect::Done)
+    );
+    assert_eq!(outcome_state(&mut fixture, page).as_deref(), Some("dismissed"));
+    assert!(fixture.store().session(id).is_some(), "the session stays");
+    assert_eq!(fixture.core.close_html_overlay_from_strip(page), None);
+    assert!(!fixture.core.reload_html_overlay(page, HtmlReloadTarget::Current));
+    assert!(!fixture.core.hide_html_overlay(page));
+}
+
+/// Upstream's `htmlHidesTerminal`: a shown session-wide page covers every terminal of its session, a pane page only its
+/// own pane's.
+#[test]
+fn a_page_hides_the_terminal_it_covers() {
+    let (mut fixture, _) = fixture_with_host(1);
+    let id = fixture.sessions[0];
+    assert!(!fixture.core.html_hides_terminal(id, None));
+    assert!(
+        !fixture.core.html_hides_terminal(Uuid::from_u128(9), None),
+        "no such session"
+    );
+    split(&mut fixture, id);
+    let pane = page_id(&open_page(&mut fixture, id, |a| a.pane = Some("right".into())));
+    assert!(fixture.core.html_hides_terminal(id, Some(StatusPane::Right)));
+    assert!(!fixture.core.html_hides_terminal(id, Some(StatusPane::Left)));
+    assert!(fixture.core.close_html_overlay(pane));
+    open_page(&mut fixture, id, |_| {});
+    assert!(fixture.core.html_hides_terminal(id, Some(StatusPane::Left)));
+    assert!(fixture.core.html_hides_terminal(id, Some(StatusPane::Right)));
+}
+
+/// Upstream's `onFocus` and `onClick`: only a pane page moves the split's focus when focused, and only a session-wide
+/// page with a pane ask beside it when clicked, toward the pane the ask leaves uncovered.
+#[test]
+fn a_focused_or_clicked_page_moves_the_split_focus_only_in_its_own_case() {
+    let (mut fixture, _) = fixture_with_host(1);
+    let id = fixture.sessions[0];
+    split(&mut fixture, id);
+    let wide = page_id(&open_page(&mut fixture, id, |_| {}));
+    assert!(
+        !fixture.core.html_page_focused(wide),
+        "a session-wide page covers no one pane"
+    );
+    assert!(!fixture.core.html_page_clicked(wide), "no ask is up");
+    assert!(!fixture.core.html_page_clicked(Uuid::from_u128(9)), "no such page");
+    let ask = fixture.send(
+        Command::Ask(ngterm_proto::command::AskCmd::Open),
+        Some(&wire(id)),
+        args(|a| {
+            a.title = Some("Proceed?".into());
+            a.buttons = Some(vec![ngterm_proto::AskButton {
+                id: "yes".into(),
+                label: "Yes".into(),
+                hotkey: None,
+            }]);
+            a.pane = Some("right".into());
+        }),
+    );
+    assert!(ask.ok, "{ask:?}");
+    fixture.store_mut().unwrap().set_split_focus(id, true);
+    assert!(fixture.core.html_page_clicked(wide));
+    assert!(
+        !fixture.store().session(id).unwrap().split.focused,
+        "the focus moves to the pane the ask leaves uncovered"
+    );
+    assert!(fixture.core.close_html_overlay(wide));
+    let pane = page_id(&open_page(&mut fixture, id, |a| a.pane = Some("left".into())));
+    assert!(
+        !fixture.core.html_page_clicked(pane),
+        "a pane page is not clicked through"
+    );
+}
+
+/// A page a snapshot brought back where no web views run has nothing to navigate.
+#[test]
+fn navigating_a_page_with_no_web_views_is_refused_as_not_realized() {
+    let mut fixture = Fixture::new(0);
+    let id = fixture.sessions[0];
+    let url = url::Url::parse("https://example.com/").unwrap();
+    let page = crate::html::HtmlOverlay::new(crate::html::HtmlSource::Url(url), crate::html::HtmlPageFlags::default());
+    assert!(
+        fixture
+            .store_mut()
+            .unwrap()
+            .open_html_overlay(id, None, page, None, None)
+            .is_ok()
+    );
+    assert_eq!(
+        overlay(&mut fixture, SessionCmd::OverlayNavigate, id, |a| a.to =
+            Some("back".into())),
+        failure("html overlay not realized")
+    );
+}
+
+/// The runtime's debug view names whether web views are installed, never the host itself.
+#[test]
+fn the_page_runtime_debug_view_says_whether_web_views_are_installed() {
+    let bare = Fixture::new(0);
+    let (fixture, _) = fixture_with_host(0);
+    assert!(format!("{:?}", bare.core.pages).contains("host: false"));
+    let shown = format!("{:?}", fixture.core.pages);
+    assert!(shown.starts_with("PageRuntime {"), "{shown}");
+    assert!(
+        shown.contains("host: true") && shown.contains("presenter_only: false"),
+        "{shown}"
     );
 }

@@ -487,6 +487,138 @@ fn search_refuses_as_upstream() {
     assert_eq!(search(&mut fixture, &target, "next"), failure("terminal zoom active"));
 }
 
+/// Drives `dispatched` to its answer, calling `between` before each pending step; the number of steps it took.
+fn settle(
+    core: &mut crate::Core,
+    mut dispatched: Dispatched,
+    mut between: impl FnMut(&mut crate::Core),
+) -> (Response, usize) {
+    let mut steps = 0;
+    loop {
+        match dispatched {
+            Dispatched::Done(response) => return (response, steps),
+            Dispatched::Pending { resume, .. } => {
+                between(core);
+                steps += 1;
+                dispatched = resume(core);
+            }
+        }
+    }
+}
+
+/// Opens search on session `id` with `needle` and lands libghostty's count of `total`.
+fn searched(fixture: &mut Fixture, id: Uuid, needle: &str, total: usize) {
+    let request = request(Command::Session(SessionCmd::Search), Some(&wire(id)), |a| {
+        a.text = Some(needle.into());
+    });
+    let pending = fixture.core.begin(&request);
+    fixture.core.report_search(id, TOKEN, SearchReport::Started(None));
+    let (response, _) = settle(&mut fixture.core, pending, |core| {
+        core.report_search(id, TOKEN, SearchReport::Total(Some(total)));
+    });
+    assert!(response.ok, "{response:?}");
+}
+
+/// `--to` alone steps the open search and answers with the count it holds.
+#[test]
+fn a_step_without_a_needle_moves_the_selection_and_reads_the_count() {
+    let (mut fixture, id, probe) = fixture_with_terminal();
+    searched(&mut fixture, id, "needle", 4);
+    let response = fixture.send(
+        Command::Session(SessionCmd::Search),
+        Some(&wire(id)),
+        args(|a| a.to = Some("prev".into())),
+    );
+    assert_eq!(result(&response), json!({"text": "4 matches", "count": 4}));
+    assert_eq!(probe.actions().last().map(String::as_str), Some("navigate_search:next"));
+}
+
+/// An empty needle clears the query and answers at once: libghostty reports no count for it.
+#[test]
+fn an_empty_needle_clears_the_count_and_answers_with_the_session() {
+    let (mut fixture, id, probe) = fixture_with_terminal();
+    searched(&mut fixture, id, "needle", 2);
+    let request = request(Command::Session(SessionCmd::Search), Some(&wire(id)), |a| {
+        a.text = Some(String::new());
+    });
+    let pending = fixture.core.begin(&request);
+    let (response, steps) = settle(&mut fixture.core, pending, |_| {});
+    assert_eq!(result(&response), json!({"id": wire(id)}));
+    assert_eq!(steps, 1, "only the beat for the older count");
+    assert_eq!(probe.actions().last().map(String::as_str), Some("search:"));
+    let search = &fixture.store().session(id).unwrap().search;
+    assert_eq!((search.needle.as_str(), search.total), ("", None));
+}
+
+/// Upstream's 16 probes: a count that never comes answers without one, and the counter is left out.
+#[test]
+fn a_count_that_never_arrives_answers_after_the_last_probe() {
+    let (mut fixture, id, _probe) = fixture_with_terminal();
+    let request = request(Command::Session(SessionCmd::Search), Some(&wire(id)), |a| {
+        a.text = Some("needle".into());
+    });
+    let pending = fixture.core.begin(&request);
+    let (response, steps) = settle(&mut fixture.core, pending, |_| {});
+    assert!(response.ok, "{response:?}");
+    assert_eq!(result(&response), json!({}));
+    assert_eq!(steps, 1 + 16, "the needle's beat, then sixteen probes");
+}
+
+/// A count landing on a later probe is the one answered.
+#[test]
+fn a_late_count_is_awaited() {
+    let (mut fixture, id, _probe) = fixture_with_terminal();
+    let request = request(Command::Session(SessionCmd::Search), Some(&wire(id)), |a| {
+        a.text = Some("needle".into());
+    });
+    let pending = fixture.core.begin(&request);
+    let mut probes = 0;
+    let (response, _) = settle(&mut fixture.core, pending, |core| {
+        probes += 1;
+        if probes == 5 {
+            core.report_search(id, TOKEN, SearchReport::Started(None));
+            core.report_search(id, TOKEN, SearchReport::Total(Some(0)));
+        }
+    });
+    assert_eq!(result(&response), json!({"text": "no matches", "count": 0}));
+    assert_eq!(probes, 5);
+}
+
+/// A session closed while a search waits on it ends the search with the session's absence, whatever it waited for.
+#[test]
+fn a_session_closed_mid_search_is_reported_gone() {
+    // the wait it closes in: the terminal's coming up, the older count's beat, the count
+    for (close_at, realized) in [(0, false), (0, true), (1, true)] {
+        let (mut fixture, id, probe) = fixture_with_terminal();
+        probe.set_realized(realized);
+        let request = request(Command::Session(SessionCmd::Search), Some(&wire(id)), |a| {
+            a.text = Some("needle".into());
+        });
+        let pending = fixture.core.begin(&request);
+        let window = fixture.window;
+        let mut step = 0;
+        let (response, _) = settle(&mut fixture.core, pending, |core| {
+            if step == close_at {
+                core.library_mut().store_mut(window).unwrap().close_session(id);
+            }
+            step += 1;
+        });
+        assert_eq!(response, failure("no such session"), "closed at step {close_at}");
+    }
+}
+
+/// The search bar's steps and close reach nothing while no search is open.
+#[test]
+fn the_search_bar_does_nothing_without_an_open_search() {
+    let (mut fixture, id, probe) = fixture_with_terminal();
+    let window = fixture.window;
+    fixture.store_mut().unwrap().select_session(Some(id));
+    fixture.core.search_bar_step(window, true);
+    fixture.core.search_bar_close(window);
+    fixture.core.search_bar_needle(Uuid::from_u128(9), "x");
+    assert!(probe.actions().is_empty());
+}
+
 // MARK: - the search bar
 
 #[test]
@@ -623,6 +755,68 @@ fn cursor_refuses_as_upstream() {
     );
 }
 
+/// `--pane-id` names any pane of the session by its terminal's token, the split's and the scratch's included.
+#[test]
+fn cursor_by_pane_id_reaches_the_split_and_the_scratch() {
+    let (mut fixture, id, _probe) = fixture_with_terminal();
+    let store = fixture.store_mut().unwrap();
+    store.set_split_visibility(id, true, None);
+    let session = store.session_mut(id).unwrap();
+    let right = FakeSurface::new("TOKEN-R");
+    right.probe().set_cursor_column(Some(7));
+    session.split_surface.replace(Box::new(right));
+    let scratch = FakeSurface::new("TOKEN-S");
+    scratch.probe().set_cursor_column(Some(3));
+    session.scratch_surface.replace(Box::new(scratch));
+    let sid = wire(id);
+    for (token, kind, column) in [("TOKEN-R", "right", 7), ("TOKEN-S", "scratch", 3)] {
+        let response = fixture.send(
+            Command::Surface(SurfaceCmd::Cursor),
+            Some(&sid),
+            args(|a| a.pane_id = Some(token.into())),
+        );
+        assert_eq!(
+            result(&response),
+            json!({"id": surface_id(id, kind), "cursor": {"column": column}}),
+            "{token}"
+        );
+    }
+}
+
+/// Upstream's `resolveSurfaceOwner`: a `--window` must hold the surface's session.
+#[test]
+fn a_surface_with_a_window_must_belong_to_it() {
+    let (mut fixture, id, probe) = fixture_with_terminal();
+    probe.set_cursor_column(Some(4));
+    let left = surface_id(id, "left");
+    let here = wire(fixture.window);
+    let cursor = |fixture: &mut Fixture, window: &str| {
+        fixture.send(
+            Command::Surface(SurfaceCmd::Cursor),
+            Some(&left),
+            args(|a| a.window = Some(window.to_owned())),
+        )
+    };
+    assert_eq!(
+        result(&cursor(&mut fixture, &here)),
+        json!({"id": left, "cursor": {"column": 4}})
+    );
+    let zoom = fixture.send(
+        Command::Surface(SurfaceCmd::Zoom),
+        Some(&left),
+        args(|a| {
+            a.window = Some(here.clone());
+            a.mode = Some("show".into());
+        }),
+    );
+    assert_eq!(result(&zoom), json!({"id": left}));
+    let other = wire(fixture.core.library_mut().new_window(None));
+    assert_eq!(
+        cursor(&mut fixture, &other),
+        failure(&format!("no such surface: {left}"))
+    );
+}
+
 // MARK: - surface.zoom
 
 fn zoomed(fixture: &mut Fixture) -> Option<String> {
@@ -685,4 +879,24 @@ fn zoom_refuses_as_upstream() {
     );
     // hide never checks availability
     assert!(zoom(&mut fixture, &right, "hide").ok);
+}
+
+/// With a zoom up the `active` form acts on the zoomed surface, wherever the selection is.
+#[test]
+fn the_active_zoom_toggles_the_zoomed_surface() {
+    let (mut fixture, id, _probe) = fixture_with_terminal();
+    let left = surface_id(id, "left");
+    let zoom = |fixture: &mut Fixture, target: Option<&str>, mode: Option<&str>| {
+        fixture.send(
+            Command::Surface(SurfaceCmd::Zoom),
+            target,
+            args(|a| a.mode = mode.map(str::to_owned)),
+        )
+    };
+    assert!(zoom(&mut fixture, Some(&left), Some("show")).ok);
+    assert_ne!(fixture.selected(), Some(id), "another session is selected");
+    assert_eq!(result(&zoom(&mut fixture, None, Some("show"))), json!({"id": left}));
+    assert_eq!(zoomed(&mut fixture), Some(left.clone()));
+    assert_eq!(result(&zoom(&mut fixture, Some("active"), None)), json!({"id": left}));
+    assert_eq!(zoomed(&mut fixture), None);
 }

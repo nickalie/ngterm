@@ -1293,6 +1293,219 @@ fn a_dropped_restart_poll_releases_the_pane_for_another_restart() {
     assert!(live.core().live.restarting.lock().unwrap().is_empty());
 }
 
+/// A host that misbehaves in one way a real process table or kill worker can.
+#[derive(Clone, Copy, Default)]
+struct Quirks {
+    /// The process table cannot be read.
+    unreadable_table: bool,
+    /// The kill worker dies before it answers.
+    dying_kill: bool,
+    /// The old program outlives its hangup and its kill.
+    stubborn_job: bool,
+}
+
+struct QuirkyHost {
+    inner: Arc<FakeSessionHost>,
+    quirks: Quirks,
+}
+
+impl SessionHost for QuirkyHost {
+    fn is_available(&self) -> bool {
+        self.inner.is_available()
+    }
+
+    fn list(&self) -> Result<Vec<LiveSessionRecord>, HostError> {
+        self.inner.list()
+    }
+
+    fn kill(&self, name: &str, force: bool) -> KillOutcome {
+        assert!(!self.quirks.dying_kill, "the kill worker dies");
+        self.inner.kill(name, force)
+    }
+
+    fn screen(&self, name: &str, all: bool) -> Result<LiveScreen, HostError> {
+        self.inner.screen(name, all)
+    }
+
+    fn type_input(&self, name: &str, bytes: &[u8]) -> Result<(), HostError> {
+        self.inner.type_input(name, bytes)
+    }
+
+    fn foreground_job(&self, shell: i32) -> Option<Vec<ProcessRecord>> {
+        if self.quirks.unreadable_table {
+            return None;
+        }
+        self.inner.foreground_job(shell)
+    }
+
+    fn job_running(&self, job: &[ProcessRecord]) -> bool {
+        self.inner.job_running(job)
+    }
+
+    fn end_job(&self, job: &[ProcessRecord]) {
+        if !self.quirks.stubborn_job {
+            self.inner.end_job(job);
+        }
+    }
+}
+
+/// [`live`] whose session host has `quirks`, the old shell listed as pid 100.
+fn quirky_live(quirks: Quirks) -> Live {
+    let mut live = live();
+    let host = Arc::new(QuirkyHost {
+        inner: Arc::clone(&live.host),
+        quirks,
+    });
+    install(&mut live.fixture.core, &host, live.resources.path(), RestoreMode::Live);
+    live.host.set_record(&daemon_name(live.left), Some(1), Some(100), None);
+    live
+}
+
+/// Runs a restart of the main pane with `exit` to its answer, `between` before each pending step.
+fn run_restart(live: &mut Live, mut between: impl FnMut(&mut Core, usize)) -> Response {
+    let request = Request {
+        cmd: Command::Session(SessionCmd::Restart),
+        target: Some(wire(live.session)),
+        args: Some(args(|a| {
+            (a.pane, a.command) = (Some("left".to_owned()), Some("exit".to_owned()));
+        })),
+    };
+    let dispatched = live.core().begin(&request);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    drive(live.core(), dispatched, |core, step| {
+        assert!(std::time::Instant::now() < deadline, "restart did not settle");
+        between(core, step);
+        std::thread::yield_now();
+    })
+}
+
+/// Upstream's restart refuses a pane whose live wrap cannot be built before it touches anything.
+#[test]
+fn a_restart_without_a_usable_wrap_is_refused_before_anything_ends() {
+    let mut live = live();
+    live.host.set_record(&daemon_name(live.left), Some(1), Some(100), None);
+    std::fs::remove_file(live.resources.path().join("shell-integration/zsh/.zshenv")).unwrap();
+    let response = run_restart(&mut live, |_, _| {});
+    assert_eq!(response, failure("live sessions are unavailable for this pane"));
+    assert!(live.host.kills().is_empty());
+}
+
+/// A pane that moved while the restart waited for its old shell is left alone.
+#[test]
+fn a_pane_that_moved_before_its_old_shell_showed_up_is_not_restarted() {
+    let mut live = live();
+    live.split();
+    let daemon = daemon_name(live.left);
+    let host = Arc::clone(&live.host);
+    let session = live.session;
+    let response = run_restart(&mut live, |core, step| {
+        if step == 0 {
+            let swapped = core.dispatch(&Request {
+                cmd: Command::Session(SessionCmd::Swap),
+                target: Some(wire(session)),
+                args: None,
+            });
+            assert!(swapped.ok, "{swapped:?}");
+            host.set_record(&daemon, Some(1), Some(100), None);
+        }
+    });
+    assert_eq!(
+        response,
+        failure("the pane changed before the restart; nothing was started")
+    );
+    assert!(live.host.kills().is_empty());
+    assert!(live.core().live.restarting.lock().unwrap().is_empty());
+}
+
+/// Without the process table the old program could not be awaited, so nothing is ended.
+#[test]
+fn a_restart_that_cannot_read_the_process_table_ends_nothing() {
+    let mut live = quirky_live(Quirks {
+        unreadable_table: true,
+        ..Quirks::default()
+    });
+    let response = run_restart(&mut live, |_, _| {});
+    assert_eq!(
+        response,
+        failure("the process table cannot be read, so the old program could not be tracked; nothing was changed")
+    );
+    assert!(live.host.kills().is_empty());
+    assert_restart_idle(live.core());
+}
+
+/// A kill worker that dies without an answer is a failed kill: the claim is released and nothing starts.
+#[test]
+fn a_kill_worker_that_dies_fails_the_restart_and_releases_the_pane() {
+    let mut live = quirky_live(Quirks {
+        dying_kill: true,
+        ..Quirks::default()
+    });
+    let response = run_restart(&mut live, |_, _| {});
+    assert_eq!(
+        response,
+        failure("could not end the pane's shell: the session host kill worker ended; nothing was started")
+    );
+    assert!(live.core().take_pane_replacements().is_empty());
+    assert_restart_idle(live.core());
+}
+
+/// An old program that survives its hangup and its kill leaves a pane with no shell, which the restart closes.
+#[test]
+fn an_old_program_that_will_not_die_closes_the_pane() {
+    let mut live = quirky_live(Quirks {
+        stubborn_job: true,
+        ..Quirks::default()
+    });
+    let job = ProcessRecord {
+        pid: 101,
+        started: 7,
+        group: 101,
+        foreground: 101,
+    };
+    live.host.set_job(100, vec![job]);
+    let response = run_restart(&mut live, |_, _| {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    });
+    assert_eq!(
+        response,
+        failure(
+            "the old shell ended (pid 100) but its program is still running; nothing was started and the pane was \
+             closed"
+        )
+    );
+    assert!(live.core().take_pane_replacements().is_empty());
+    assert_restart_idle(live.core());
+    let session = live.session;
+    assert!(
+        live.fixture.store().session(session).is_none(),
+        "the pane's session closed"
+    );
+}
+
+/// A wrap that breaks while the old program ends leaves the pane unbuildable: it is closed rather than left dead.
+#[test]
+fn a_pane_that_cannot_be_rebuilt_after_the_kill_is_closed() {
+    let mut live = live();
+    live.host.set_record(&daemon_name(live.left), Some(1), Some(100), None);
+    let integration = live.resources.path().join("shell-integration/zsh/.zshenv");
+    let response = run_restart(&mut live, |_, step| {
+        if step == 0 {
+            std::fs::remove_file(&integration).unwrap();
+        }
+    });
+    assert_eq!(
+        response,
+        failure("the old shell ended (pid 100) and the pane could not be rebuilt; it was closed")
+    );
+    assert_eq!(live.host.kills(), [(daemon_name(live.left), true)]);
+    assert!(live.core().take_pane_replacements().is_empty());
+    let session = live.session;
+    assert!(
+        live.fixture.store().session(session).is_none(),
+        "the pane's session closed"
+    );
+}
+
 /// The frontend installs each replacement and its new leader, while pending worker results arrive independently.
 fn finish_restart_as(live: &mut Live, dispatched: Dispatched, leader: i32) -> Response {
     let host = Arc::clone(&live.host);
@@ -1957,4 +2170,83 @@ fn a_leader_outliving_the_reset_suppresses_its_pane_s_payloads() {
     // its pane attaches with neither a replay nor its durable command
     let policy = live.core().seed_policy();
     assert!(policy.suppressed_daemons.contains(&daemon_name(live.left)));
+}
+
+// MARK: - reads and searches of a pane in a lead
+
+/// A pane that took part in leadership reads its cursor from its daemon's grid, and an attached pane covered by
+/// another machine's lead is refused, as its daemon is out of reach.
+#[test]
+fn a_leading_pane_s_cursor_is_its_daemon_s() {
+    use ngterm_proto::command::SurfaceCmd;
+    let mut live = live();
+    let token = uuid_string(live.left);
+    let nonce = spawn_live(&mut live);
+    assert!(report(&mut live, &token, &nonce, "leader", 1));
+    live.probe.set_cursor_column(Some(5));
+    let left = format!("surface:{}:left", wire(live.session));
+    let cursor = |live: &mut Live| {
+        live.fixture
+            .send(Command::Surface(SurfaceCmd::Cursor), Some(&left), Args::default())
+    };
+    assert_eq!(
+        cursor(&mut live),
+        failure("failed to read cursor position"),
+        "no daemon to read"
+    );
+    live.host.insert(daemon_name(live.left), "prompt");
+    assert_eq!(
+        result(&cursor(&mut live)),
+        json!({"id": left, "cursor": {"column": 0}}),
+        "the daemon's column, not the surface's"
+    );
+    assert!(report(&mut live, &token, &nonce, "follower", 2));
+    let session = live.session;
+    let attached = FakeSurface::new(token.clone());
+    attached.probe().set_cursor_column(Some(5));
+    live.fixture
+        .store_mut()
+        .and_then(|store| store.session_mut(session))
+        .unwrap()
+        .pane_slot_mut(StatusPane::Left)
+        .replace(Box::new(attached));
+    assert_eq!(
+        cursor(&mut live),
+        failure("pane is in use on the Mac it runs on; take the lead to drive it from here")
+    );
+}
+
+/// A search refuses a pane that another machine's lead covers at whichever wait it learns of the cover: before the
+/// search opens, before the needle goes out, and before the count is answered.
+#[test]
+fn a_search_refuses_a_pane_covered_while_it_waits() {
+    const COVERED: &str = "pane is covered while another Mac leads it; take the lead first (session lead)";
+    // the pending step before which the cover lands, and whether the terminal is up at the start
+    for (covered_at, realized) in [(0, false), (0, true), (1, true)] {
+        let mut live = live();
+        let token = uuid_string(live.left);
+        let nonce = spawn_live(&mut live);
+        live.probe.set_realized(realized);
+        let request = Request {
+            cmd: Command::Session(SessionCmd::Search),
+            target: Some(wire(live.session)),
+            args: Some(args(|a| a.text = Some("needle".to_owned()))),
+        };
+        let dispatched = live.core().begin(&request);
+        let session = live.session;
+        let probe = live.probe.clone();
+        let title = format!("ngterm-live-role;{nonce}:follower:1");
+        let response = drive(live.core(), dispatched, |core, step| {
+            if step == covered_at {
+                assert!(core.report_pane(session, &token, &crate::PaneReport::Title(title.clone())));
+                probe.set_realized(true);
+                core.report_search(session, &token, crate::model::SearchReport::Total(Some(1)));
+            }
+        });
+        assert_eq!(
+            response,
+            failure(COVERED),
+            "covered at {covered_at}, realized {realized}"
+        );
+    }
 }

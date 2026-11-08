@@ -227,6 +227,31 @@ fn explicit_image_size_and_markdown_source_stay_explicit() {
     }
 }
 
+/// A Markdown page renders only in its overlay, so handing it to the browser is refused; its history still moves.
+#[test]
+fn a_markdown_page_is_not_handed_to_the_browser() {
+    let (mut f, _) = fixture();
+    let id = f.sessions[0];
+    let opened = f.session(
+        SessionCmd::OverlayOpen,
+        Some(&wire(id)),
+        args(|a| a.markdown_file = Some(path("doc.md"))),
+    );
+    assert!(opened.ok, "{opened:?}");
+    let navigate = |f: &mut Fixture, to: &str| {
+        f.session(
+            SessionCmd::OverlayNavigate,
+            Some(&wire(id)),
+            args(|a| a.to = Some(to.to_owned())),
+        )
+    };
+    assert_eq!(
+        navigate(&mut f, "browser"),
+        failure("a markdown page opens only in its overlay")
+    );
+    assert!(navigate(&mut f, "back").ok);
+}
+
 #[test]
 fn failed_document_probe_opens_nothing_and_keeps_selection() {
     for markdown in [false, true] {

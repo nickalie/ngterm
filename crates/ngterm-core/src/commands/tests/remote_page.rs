@@ -422,6 +422,49 @@ fn a_taken_slot_and_a_missing_pane_are_refused() {
     );
 }
 
+/// A parked page keeps its slot: with no presenter the next open stays on this machine, which finds the slot taken.
+#[test]
+fn a_parked_page_keeps_its_slot_from_a_local_open() {
+    let mut origin = Origin::pages();
+    let page = origin.opened(FILE, |_| {});
+    origin.lose_presenter();
+    assert_eq!(origin.open(FILE, |_| {}), failure("overlay already open"));
+    assert_eq!(origin.slot_jobs().len(), 1);
+    assert_eq!(origin.node()["remoteOverlays"][0]["pageID"], json!(page));
+}
+
+/// Web views that check every Markdown document as readable.
+struct MarkdownHost;
+
+impl HtmlHost for MarkdownHost {
+    fn persistent_store_failure(&self) -> Option<String> {
+        None
+    }
+
+    fn navigate(&self, _: Uuid, _: HtmlNavigation) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn check_markdown(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// A document no presenter can be handed stays local by the placement rule, and the store's own guard then refuses it
+/// on a pane that follows the presenter, as upstream's `openHtmlOverlay` does.
+#[test]
+fn a_document_page_over_a_following_pane_meets_the_presenter_refusal() {
+    let mut origin = Origin::build(false, &SUPPORTED_KINDS, false);
+    origin.fixture().core.set_html_host(Box::new(MarkdownHost));
+    let opened = origin.overlay(SessionCmd::OverlayOpen, |a| {
+        a.markdown_file = Some(crate::html::os_path("/tmp/docs/notes.md"));
+    });
+    assert_eq!(opened, failure(PRESENTER));
+    assert!(origin.slot_jobs().is_empty());
+    assert!(origin.presenter.last("page.request").is_none());
+    assert!(origin.node().get("htmlOverlays").is_none());
+}
+
 /// Upstream's `testARemoteOpenSkipsTheLocalPageFollowAndStore`: no web view, saved store or selection is this
 /// machine's concern, so a persistent page goes even where no web view could run.
 #[test]
