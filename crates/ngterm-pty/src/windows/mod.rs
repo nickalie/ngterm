@@ -406,3 +406,6 @@ pub(crate) fn spawn(builder: CommandBuilder, size: Size) -> io::Result<Spawned> 
         },
     })
 }
+
+#[cfg(test)]
+mod tests;

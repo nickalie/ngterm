@@ -582,9 +582,26 @@ fn write_loop(shared: &Shared, input: &File) {
     }
 }
 
+/// The actor over real pseudoconsoles with no child: over the console's own pipes, or over pipes of the test's in
+/// their place (what the writer wrote is read from one, what the reader reads is written into the other, and a pipe
+/// nobody reads holds the writer back), or over an output it cannot read.
 #[cfg(test)]
 mod tests {
+    use std::io::{PipeReader, PipeWriter};
+    use std::sync::mpsc::{self, Receiver};
+
+    use portable_pty::PtySystem;
+    use portable_pty::win::conpty::ConPtySystem;
+
     use super::*;
+    use crate::{Actor, WriteError};
+
+    /// How long a test waits for the actor's threads (a CI runner can be slow to start a console host).
+    const PATIENCE: Duration = Duration::from_secs(60);
+    /// More than a pipe's buffer holds: a write of it blocks until the other end reads.
+    const BIG: usize = 4 * 1024 * 1024;
+    /// What a stopped actor's calls fail with.
+    const STOPPED: &str = "the PTY actor stopped";
 
     #[test]
     fn the_pipe_ending_names_the_reason_of_the_mode() {
@@ -593,5 +610,403 @@ mod tests {
         assert_eq!(ended(Mode::Released), ExitReason::Released);
         assert_eq!(ended(Mode::Discarding), ExitReason::Shutdown);
         assert_eq!(ended(Mode::Stopped), ExitReason::Shutdown);
+    }
+
+    /// A pseudoconsole with no child.
+    fn console() -> ConPtyMasterPty {
+        let pair = ConPtySystem::default()
+            .openpty(Size::cells(24, 80).pty())
+            .expect("a pseudoconsole");
+        drop(pair.slave);
+        let master: Box<dyn MasterPty> = pair.master;
+        let conpty = master
+            .downcast::<ConPtyMasterPty>()
+            .map_err(|_| "another kind of master");
+        *conpty.expect("a ConPTY master")
+    }
+
+    /// A master over a pseudoconsole and its own pipes.
+    fn console_master() -> Master {
+        Master::new(Box::new(console())).expect("the console's pipes")
+    }
+
+    /// The test's ends of the pipes a [`piped_master`] holds in place of the console's.
+    struct Pipes {
+        /// What the actor's writer wrote.
+        input: PipeReader,
+        /// What the actor's reader reads.
+        output: PipeWriter,
+    }
+
+    impl Pipes {
+        /// Write `bytes` as the console's output.
+        fn feed(&self, bytes: &[u8]) {
+            (&self.output).write_all(bytes).expect("the output pipe takes it");
+        }
+
+        /// The next `len` bytes the actor wrote as the console's input.
+        fn written(&self, len: usize) -> Vec<u8> {
+            let mut input = self.input.try_clone().expect("a clone of the input pipe");
+            let (sends, read) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut bytes = vec![0; len];
+                let _ = sends.send(input.read_exact(&mut bytes).map(|()| bytes));
+            });
+            read.recv_timeout(PATIENCE)
+                .expect("the input never came")
+                .expect("the input pipe broke")
+        }
+    }
+
+    /// A master over a pseudoconsole whose pipes are the test's (the console's own stay inside it, unused).
+    fn piped_master() -> (Master, Pipes) {
+        let (input, writer) = std::io::pipe().expect("an input pipe");
+        let (reader, output) = std::io::pipe().expect("an output pipe");
+        let master = Master {
+            conpty: Box::new(console()),
+            input: File::from(OwnedHandle::from(writer)),
+            output: File::from(OwnedHandle::from(reader)),
+        };
+        (master, Pipes { input, output })
+    }
+
+    /// A master whose output is a file opened for writing only, so its every read fails, with the test's end of its
+    /// input pipe.
+    fn unreadable_master(dir: &tempfile::TempDir) -> (Master, PipeReader) {
+        let (input, writer) = std::io::pipe().expect("an input pipe");
+        let master = Master {
+            conpty: Box::new(console()),
+            input: File::from(OwnedHandle::from(writer)),
+            output: File::create(dir.path().join("output")).expect("a write-only output"),
+        };
+        (master, input)
+    }
+
+    /// A started actor: what it delivered to its read callback, and why it stopped.
+    struct Started {
+        handle: ActorHandle,
+        delivered: Receiver<Vec<u8>>,
+        exit: Receiver<ExitReason>,
+    }
+
+    impl Started {
+        /// What the actor delivered, in order, until `len` bytes came.
+        fn received(&self, len: usize) -> Vec<u8> {
+            let deadline = Instant::now() + PATIENCE;
+            let mut got = Vec::new();
+            while got.len() < len {
+                let left = deadline.saturating_duration_since(Instant::now());
+                let read = self.delivered.recv_timeout(left);
+                got.extend(read.unwrap_or_else(|_| panic!("only {got:?} was delivered")));
+            }
+            got
+        }
+
+        fn stopped(&self) -> ExitReason {
+            self.exit.recv_timeout(PATIENCE).expect("the actor never stopped")
+        }
+    }
+
+    /// Start an actor over `master`, its config changed by `tune`; its read callback answers the cursor query a
+    /// pseudoconsole starts with.
+    fn start(master: Master, tune: impl FnOnce(&mut ActorConfig)) -> Started {
+        let (reads, delivered) = mpsc::channel();
+        let (exits, exit) = mpsc::channel();
+        let on_read = Box::new(move |bytes: &[u8]| {
+            let _ = reads.send(bytes.to_vec());
+            if bytes.windows(4).any(|window| window == b"\x1b[6n") {
+                vec![b"\x1b[1;1R".to_vec()]
+            } else {
+                Vec::new()
+            }
+        });
+        let mut config = ActorConfig::new("test", master, on_read);
+        config.on_exit = Some(Box::new(move |reason| {
+            let _ = exits.send(reason);
+        }));
+        tune(&mut config);
+        Started {
+            handle: Actor::spawn(config).expect("an actor"),
+            delivered,
+            exit,
+        }
+    }
+
+    fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + PATIENCE;
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting until {what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn assert_error<T>(result: io::Result<T>, kind: io::ErrorKind, message: &str) {
+        match result {
+            Ok(_) => panic!("succeeded where {message:?} was expected"),
+            Err(err) => assert_eq!((err.kind(), err.to_string().as_str()), (kind, message)),
+        }
+    }
+
+    /// Quiesce the actor as a handoff does while its reader is inside a read, but without cancelling that read: the
+    /// race a handoff's quiesce can lose, its read completing before the cancel reaches it, made certain.
+    fn quiesce_mid_read(handle: &ActorHandle) {
+        let inner = handle.inner();
+        // nothing is in the pipe, so the reader stays in its read until the test writes some
+        wait_until("the reader reads", || inner.reader().reading);
+        handle.shared().outbox().gate = Gate::Paused;
+        inner.reader().mode = Mode::Quiesced;
+    }
+
+    /// Wait for the reader to hold `len` bytes it read while quiesced, and to park.
+    fn wait_for_held(handle: &ActorHandle, len: usize) {
+        wait_until("the read is held", || {
+            let state = handle.inner().reader();
+            state.parked && state.held.len() == len
+        });
+    }
+
+    #[test]
+    fn a_second_handoff_is_refused_while_one_is_in_progress() {
+        let actor = start(console_master(), |_| {});
+        actor
+            .handle
+            .begin_handoff(PATIENCE)
+            .expect("the first handoff quiesces");
+        assert_error(
+            actor.handle.begin_handoff(PATIENCE),
+            io::ErrorKind::WouldBlock,
+            "a PTY handoff is already in progress",
+        );
+        actor.handle.rollback_handoff().expect("the first handoff rolls back");
+        assert_eq!(actor.handle.write_input(b"x"), Ok(()), "running again");
+    }
+
+    #[test]
+    fn an_actor_started_quiesced_takes_a_handoff_only_once_rolled_back() {
+        let actor = start(console_master(), |config| config.initially_quiesced = true);
+        assert_error(
+            actor.handle.begin_handoff(PATIENCE),
+            io::ErrorKind::WouldBlock,
+            "a PTY handoff is already in progress",
+        );
+        actor
+            .handle
+            .rollback_handoff()
+            .expect("the rollback makes it the owner");
+        actor.handle.begin_handoff(PATIENCE).expect("the owner quiesces");
+        actor.handle.rollback_handoff().expect("and rolls back");
+    }
+
+    #[test]
+    fn a_stopped_actor_refuses_every_handoff_step() {
+        let actor = start(console_master(), |_| {});
+        actor.handle.shutdown();
+        assert_eq!(actor.stopped(), ExitReason::Shutdown);
+        assert_error(actor.handle.begin_handoff(PATIENCE), io::ErrorKind::BrokenPipe, STOPPED);
+        assert_error(actor.handle.rollback_handoff(), io::ErrorKind::BrokenPipe, STOPPED);
+        assert_error(
+            actor.handle.release_after_commit(),
+            io::ErrorKind::Other,
+            "the PTY actor must be quiesced before its release",
+        );
+        assert_error(
+            // SAFETY: refused before any console handle is read.
+            unsafe { actor.handle.duplicate_for_handoff() },
+            io::ErrorKind::Other,
+            "the PTY actor must be quiesced before its handoff duplicate",
+        );
+        assert_eq!(actor.handle.write_input(b"x"), Err(WriteError::Closed));
+    }
+
+    #[test]
+    fn a_closed_console_takes_no_resize() {
+        let actor = start(console_master(), |_| {});
+        actor.handle.child_exited();
+        assert_eq!(actor.stopped(), ExitReason::Eof);
+        assert_error(
+            actor.handle.try_resize(Size::cells(30, 100)),
+            io::ErrorKind::BrokenPipe,
+            STOPPED,
+        );
+        // the same failure, only logged
+        actor.handle.resize(Size::cells(30, 100));
+    }
+
+    /// A size past what the console takes (beyond `i16`) is refused, with `ResizePseudoConsole`'s `E_INVALIDARG`.
+    #[test]
+    fn a_resize_the_console_refuses_is_reported() {
+        let actor = start(console_master(), |_| {});
+        let err = actor
+            .handle
+            .try_resize(Size::cells(40_000, 40_000))
+            .expect_err("the console took a size past i16");
+        let shown = err.to_string();
+        assert!(
+            shown.starts_with("failed to resize console to ") && shown.ends_with("HRESULT: -2147024809"),
+            "{shown}"
+        );
+        actor
+            .handle
+            .try_resize(Size::cells(30, 100))
+            .expect("a size the console takes");
+    }
+
+    #[test]
+    fn handoff_steps_out_of_order_are_refused_and_leave_the_actor_running() {
+        let (master, pipes) = piped_master();
+        let actor = start(master, |_| {});
+        assert_error(
+            actor.handle.release_after_commit(),
+            io::ErrorKind::Other,
+            "the PTY actor must be quiesced before its release",
+        );
+        assert_error(
+            // SAFETY: refused before any console handle is read.
+            unsafe { actor.handle.duplicate_for_handoff() },
+            io::ErrorKind::Other,
+            "the PTY actor must be quiesced before its handoff duplicate",
+        );
+        // nothing is held while running
+        actor.handle.deliver_held();
+        pipes.feed(b"still read");
+        assert_eq!(actor.received(10), b"still read");
+        actor.handle.write_input(b"still written").expect("input is taken");
+        assert_eq!(pipes.written(13), b"still written");
+    }
+
+    /// A deadline that passes before the reader parks fails the handoff, which rolls back: input is taken and output
+    /// delivered again.
+    #[test]
+    fn a_reader_not_parked_in_time_fails_the_handoff_and_rolls_it_back() {
+        let (master, pipes) = piped_master();
+        let actor = start(master, |_| {});
+        assert_error(
+            actor.handle.begin_handoff(Duration::ZERO),
+            io::ErrorKind::TimedOut,
+            "timed out waiting for the PTY actor to park its reader",
+        );
+        actor.handle.write_input(b"in").expect("input is taken again");
+        assert_eq!(pipes.written(2), b"in");
+        pipes.feed(b"out");
+        assert_eq!(actor.received(3), b"out");
+    }
+
+    /// Input the console does not read holds the writer back past the deadline: the handoff fails and rolls back, and
+    /// what was queued is written in order with what comes after.
+    #[test]
+    fn a_queue_not_written_in_time_fails_the_handoff_and_rolls_it_back() {
+        let (master, pipes) = piped_master();
+        let actor = start(master, |config| config.input_limit = 2 * BIG);
+        actor.handle.write_input(&vec![b'q'; BIG]).expect("the queue takes it");
+        assert_error(
+            actor.handle.begin_handoff(Duration::from_secs(1)),
+            io::ErrorKind::TimedOut,
+            "timed out waiting for the PTY actor to write its queue",
+        );
+        actor.handle.write_input(b"after").expect("input is taken again");
+        let written = pipes.written(BIG + 5);
+        assert!(
+            written[..BIG].iter().all(|&byte| byte == b'q'),
+            "the queue was not written whole"
+        );
+        assert_eq!(&written[BIG..], b"after");
+    }
+
+    /// The console's input pipe breaking under the writer while the queue drains fails the handoff: the actor takes
+    /// no input any more, and what was queued is dropped.
+    #[test]
+    fn a_write_failing_while_the_queue_drains_fails_the_handoff() {
+        let (master, Pipes { input, output }) = piped_master();
+        let actor = start(master, |config| config.input_limit = 2 * BIG);
+        actor.handle.write_input(&vec![b'q'; BIG]).expect("the queue takes it");
+        // still queued behind the blocked write when it fails
+        actor.handle.write_input(b"next").expect("the queue takes it");
+        let handle = actor.handle.clone();
+        let handoff = std::thread::spawn(move || handle.begin_handoff(PATIENCE));
+        wait_until("the handoff refuses input", || {
+            actor.handle.write_input(b"") == Err(WriteError::Closed)
+        });
+        drop(input);
+        let result = handoff.join().expect("the handoff thread");
+        assert_error(result, io::ErrorKind::BrokenPipe, STOPPED);
+        assert_eq!(actor.handle.queued(), 0, "the queue was kept");
+        assert_eq!(actor.handle.write_input(b"x"), Err(WriteError::Closed));
+        drop(output);
+    }
+
+    /// A read that completes while the actor quiesces is held back, not delivered; `deliver_held` hands it on and the
+    /// actor stays quiesced, with nothing left for its release.
+    #[test]
+    fn a_read_completed_while_quiescing_is_held_until_delivered() {
+        let (master, pipes) = piped_master();
+        let actor = start(master, |_| {});
+        quiesce_mid_read(&actor.handle);
+        pipes.feed(b"held back");
+        wait_for_held(&actor.handle, 9);
+        assert!(actor.delivered.try_recv().is_err(), "delivered while quiesced");
+        actor.handle.deliver_held();
+        assert_eq!(actor.received(9), b"held back");
+        assert_eq!(
+            actor.handle.write_input(b"x"),
+            Err(WriteError::Closed),
+            "still quiesced"
+        );
+        let released = actor.handle.release_after_commit().expect("the release");
+        assert_eq!(released.pending_output, b"", "the delivered read is pending again");
+        assert_eq!(actor.stopped(), ExitReason::Released);
+    }
+
+    #[test]
+    fn a_rollback_delivers_the_held_read_before_it_reads_again() {
+        let (master, pipes) = piped_master();
+        let actor = start(master, |_| {});
+        quiesce_mid_read(&actor.handle);
+        pipes.feed(b"first");
+        wait_for_held(&actor.handle, 5);
+        actor.handle.rollback_handoff().expect("the rollback");
+        pipes.feed(b"second");
+        assert_eq!(actor.received(11), b"firstsecond");
+        actor.handle.write_input(b"in").expect("input is taken again");
+        assert_eq!(pipes.written(2), b"in");
+    }
+
+    #[test]
+    fn a_release_hands_the_held_read_on() {
+        let (master, pipes) = piped_master();
+        let actor = start(master, |_| {});
+        quiesce_mid_read(&actor.handle);
+        pipes.feed(b"pending");
+        wait_for_held(&actor.handle, 7);
+        let released = actor.handle.release_after_commit().expect("the release");
+        assert_eq!(released.pending_output, b"pending");
+        assert_eq!(actor.stopped(), ExitReason::Released);
+        assert!(actor.delivered.try_recv().is_err(), "the held read was delivered too");
+    }
+
+    #[test]
+    fn a_failed_read_stops_the_actor_as_failed() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let (master, _input) = unreadable_master(&dir);
+        let actor = start(master, |_| {});
+        assert_eq!(actor.stopped(), ExitReason::Failed);
+        assert_eq!(actor.handle.write_input(b"x"), Err(WriteError::Closed));
+        assert_error(actor.handle.begin_handoff(PATIENCE), io::ErrorKind::BrokenPipe, STOPPED);
+    }
+
+    /// A shutdown reads despite a read pause, so the console's close never waits on its pipe; a read failing then is
+    /// part of the shutdown, not a failure.
+    #[test]
+    fn a_read_failing_while_it_shuts_down_stops_the_actor_as_shut_down() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let (master, _input) = unreadable_master(&dir);
+        let pause = ReadPause::new();
+        pause.pause();
+        let actor = start(master, |config| config.read_pause = pause.clone());
+        assert!(
+            actor.exit.recv_timeout(Duration::from_millis(300)).is_err(),
+            "read while paused"
+        );
+        actor.handle.shutdown();
+        assert_eq!(actor.stopped(), ExitReason::Shutdown);
     }
 }
