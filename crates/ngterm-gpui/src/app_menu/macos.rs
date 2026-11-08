@@ -7,7 +7,11 @@ use crate::{
 use gpui_kit::App;
 use ngterm_core::Core;
 use serde_json::{Value, json};
-use std::{cell::RefCell, ffi::CString, sync::OnceLock};
+use std::{
+    cell::RefCell,
+    ffi::{CStr, CString},
+    sync::OnceLock,
+};
 use uuid::Uuid;
 
 #[derive(Default)]
@@ -78,6 +82,14 @@ fn entries(items: &[Entry], id: Uuid, actions: &mut Vec<(Uuid, MenuAction)>) -> 
 }
 /// Refresh only when model titles, checks or availability change.
 pub fn sync(core: &Core) {
+    sync_with(core, |json| {
+        // SAFETY: main thread, native code copies JSON and retains only a static callback.
+        unsafe { ngterm_menus_set(json.as_ptr(), clicked) };
+    });
+}
+/// Hands the menu's JSON to `set` when the model changed. `set` is a parameter because `AppKit`'s menu bar needs the
+/// main thread, which a unit test does not run on.
+fn sync_with(core: &Core, set: impl FnOnce(&CStr)) {
     let id = core.library().active_window_id().unwrap_or_default();
     let model = AppMenu::of(core, id);
     REGISTRY.with(|registry| {
@@ -99,10 +111,11 @@ pub fn sync(core: &Core) {
         let Ok(value) = CString::new(json!({"app":app,"menus":menus}).to_string()) else {
             return;
         };
-        // SAFETY: main thread, native code copies JSON and retains only a static callback.
-        unsafe {
-            ngterm_menus_set(value.as_ptr(), clicked);
-        }
+        set(&value);
         registry.model = Some((id, model));
     });
 }
+
+#[cfg(test)]
+#[path = "macos_tests.rs"]
+mod tests;
