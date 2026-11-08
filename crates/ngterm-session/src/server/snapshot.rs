@@ -7,9 +7,9 @@
 //! unfinished sequence after the snapshot); the continuation is required, never left out (a snapshot without one is
 //! unavailable, [`SnapshotError::Unavailable`]), except in a session's last snapshot ([`Kind::Last`]); the palette the
 //! program set is carried too; a client that was already sent some of the session's output is fully reset first
-//! ([`RESYNC_RESET`]), rather than reset only for what a short burst of output before a first attach leaves;
-//! OSC 133 prompt marks are left as the program wrote them (zmx's `redraw=0` rewrite is for an outer terminal, the
-//! attach CLI's to make).
+//! ([`RESYNC_RESET`]), rather than reset only for what a short burst of output before a first attach leaves; the
+//! visible rows' soft wraps are joined, where zmx writes each row as laid out (item 4); OSC 133 prompt marks are left
+//! as the program wrote them (zmx's `redraw=0` rewrite is for an outer terminal, the attach CLI's to make).
 //!
 //! # The bytes
 //!
@@ -25,12 +25,14 @@
 //!    scrollback row scrolls into the client's scrollback and the visible rows start from a blank, homed screen (zmx's
 //!    two phases; zmx clears with `ESC [2J` instead, which a Ghostty client erases rather than scrolls away, losing
 //!    the scrollback's last screenful);
-//! 4. the visible rows, soft wraps joined so the client wraps them again, with the terminal state that restores them
-//!    ([`FormatExtras::RESTORE`]: the modes, the scrolling region, the keyboard modes, the cursor with its style,
-//!    hyperlink, protection, Kitty keyboard flags and
-//!    charsets; and [`FormatExtras::TABSTOPS`], which zmx leaves out because the formatter it pins set them after the
-//!    cursor, while the pinned one writes them ahead of the cells), synchronized output (DECSET 2026) left out:
-//!    replayed, it would hold off a new client's rendering until its own timeout;
+//! 4. the visible rows, soft wraps joined so the client wraps them again (written with autowrap on), unless the joined
+//!    rows would not come back as the session's: then as laid out, as zmx writes them; with the terminal state that
+//!    restores them ([`FormatExtras::RESTORE`]: the modes, the scrolling region, the keyboard modes, the cursor with
+//!    its style, hyperlink, protection, Kitty keyboard flags and charsets; and [`FormatExtras::TABSTOPS`], which zmx
+//!    leaves out because the formatter it pins set them after the cursor, while the pinned one writes them ahead of
+//!    the cells), synchronized output (DECSET 2026) left out: replayed, it would hold off a new client's rendering
+//!    until its own timeout; then, when the program turned autowrap off, DECRST 7 after the restored cursor, so the
+//!    rows ahead of it still wrap on the client;
 //! 5. the working directory (OSC 7) and the title (OSC 2), which the formatter does not write; after the reset the
 //!    title is written even when empty;
 //! 6. the stream continuation: the unfinished escape sequence or UTF-8 character the session's parser stands in, so
@@ -214,7 +216,9 @@ fn scroll_away(history: usize, cells: &[u8], rows: u16) -> Vec<u8> {
 }
 
 /// The visible rows with the state that restores them, the tab stops included: the formatter writes those ahead of the
-/// cells, and the cursor goes back where it was after them.
+/// cells, and the cursor goes back where it was after them. The rows are written with autowrap on, so joined soft
+/// wraps wrap again on the client; autowrap the program turned off goes off (`CSI ?7l`) only after the formatter's
+/// bytes, the restored cursor included.
 fn visible(terminal: &mut Terminal, out: &mut Vec<u8>) -> Result<(), SnapshotError> {
     let region = Region::Range {
         start: Point::new(PointTag::Active, 0, 0),
@@ -231,7 +235,7 @@ fn visible(terminal: &mut Terminal, out: &mut Vec<u8>) -> Result<(), SnapshotErr
     if !wrapping {
         set_mode(terminal, Mode::dec(7), true)?;
     }
-    let cells = format(terminal, region, FormatExtras::RESTORE | FormatExtras::TABSTOPS, true);
+    let cells = joined_or_laid_out(terminal, region, FormatExtras::RESTORE | FormatExtras::TABSTOPS);
     if !wrapping {
         set_mode(terminal, Mode::dec(7), false)?;
     }
@@ -242,7 +246,24 @@ fn visible(terminal: &mut Terminal, out: &mut Vec<u8>) -> Result<(), SnapshotErr
     Ok(())
 }
 
-/// `region` in VT, trailing whitespace trimmed. Joined soft wraps rewrap on the client's grid; the scrollback's
+/// `region` in VT with `extras`, soft wraps joined, when a terminal of the session's grid that takes them shows the
+/// session's cells; the rows as laid out otherwise. The formatter writes no line break for a wrapped row whose
+/// continuation row holds no text (erased since: Ghostty leaves the wrap on), which would move every row below it
+/// up one, and a blank where a wrapped row ends in a spacer head whose wide character was erased since.
+fn joined_or_laid_out(terminal: &mut Terminal, region: Region, extras: FormatExtras) -> Result<Vec<u8>, SnapshotError> {
+    let joined = format(terminal, region, extras, true)?;
+    let mut replayed =
+        Terminal::new(terminal.cols(), terminal.rows()).map_err(|err| SnapshotError::Format(err.to_string()))?;
+    replayed.vt_write(&joined);
+    let cells = |terminal: &mut Terminal| format(terminal, region, FormatExtras::empty(), false);
+    if cells(&mut replayed)? == cells(terminal)? {
+        Ok(joined)
+    } else {
+        format(terminal, region, extras, false)
+    }
+}
+
+/// `region` in VT, trailing whitespace trimmed, soft wraps joined (`unwrap`) or each row as laid out: the scrollback's
 /// separate pass needs physical rows for its padding.
 fn format(
     terminal: &mut Terminal,
@@ -391,6 +412,90 @@ mod tests {
         // its exit leaves it, to a primary screen the snapshot did not carry (zmx's limit too)
         client.vt_write(b"\x1b[?1049l");
         assert!(!client.alternate_screen());
+    }
+
+    /// Whether each row of the active area soft-wraps.
+    fn wraps(terminal: &Terminal) -> Vec<bool> {
+        (0..ROWS).map(|y| terminal.active_row(y).unwrap().wrapped).collect()
+    }
+
+    /// A session that wrote `content` on the screen given, autowrap then left on or turned off; a client restored
+    /// from its snapshot shows its rows as the session lays them out, keeps the program's autowrap and continues as
+    /// the session does. The session's soft wraps, when `wrapped` says the client keeps them.
+    fn assert_rows_come_back(content: &str, alternate: bool, wrapping: bool, wrapped: bool) {
+        let case = format!("{content:?}, alternate {alternate}, autowrap {wrapping}");
+        let mut session = tracked();
+        if alternate {
+            session.vt_write(b"\x1b[?1049h");
+        }
+        session.vt_write(content.as_bytes());
+        if !wrapping {
+            session.vt_write(b"\x1b[?7l");
+        }
+        let bytes = snapshot(&mut session);
+        let mut client = client(&bytes);
+        assert_eq!(state(&mut client), state(&mut session), "{case}");
+        assert_eq!(
+            plain(&mut client, Region::Screen),
+            plain(&mut session, Region::Screen),
+            "{case}"
+        );
+        if wrapped {
+            assert!(wraps(&session).contains(&true), "{case}");
+            assert_eq!(wraps(&client), wraps(&session), "{case}");
+        }
+        assert_eq!(client.mode(Mode::dec(7)), wrapping, "{case}");
+        assert_eq!(
+            session.mode(Mode::dec(7)),
+            wrapping,
+            "{case}: the session's own mode is untouched"
+        );
+        session.vt_write("!\r\nnext界".as_bytes());
+        client.vt_write("!\r\nnext界".as_bytes());
+        assert_eq!(state(&mut client), state(&mut session), "continued: {case}");
+        assert_eq!(
+            plain(&mut client, Region::Screen),
+            plain(&mut session, Region::Screen),
+            "continued: {case}"
+        );
+    }
+
+    const SCREENS_AND_AUTOWRAP: [(bool, bool); 4] = [(false, false), (false, true), (true, false), (true, true)];
+
+    #[test]
+    fn a_reattach_keeps_soft_wrapped_lines_wrapped() {
+        let cols = usize::from(COLS);
+        let contents = [
+            "wrapped".repeat(12),
+            format!("{}\r\n{}", "w".repeat(cols), "x".repeat(cols + 3)),
+            "wide界 ".repeat(12),
+            // the wide character does not fit in the last column: a spacer head stands there
+            format!("{}界界", "w".repeat(cols - 1)),
+            // the wrapped row ends in spaces: they keep the continuation in place
+            format!("ends{}in spaces", " ".repeat(cols - 4)),
+        ];
+        for (alternate, wrapping) in SCREENS_AND_AUTOWRAP {
+            for content in &contents {
+                assert_rows_come_back(content, alternate, wrapping, true);
+            }
+        }
+    }
+
+    #[test]
+    fn a_wrapped_row_whose_continuation_was_erased_keeps_its_rows() {
+        let cols = usize::from(COLS);
+        let contents = [
+            // the continuation row erased (Ghostty leaves the wrap on), a line printed below it
+            format!("{}\x08\x1b[K\r\nbelow", "a".repeat(cols + 1)),
+            format!("{}\x1b[2;1H\x1b[2K\x1b[4;1Hlater", "b".repeat(cols * 2 + 1)),
+            // the wide character wrapped past a spacer head erased, text after it
+            format!("{}界\x1b[2;1H\x1b[2X\x1b[2;3Hxyz", "w".repeat(cols - 1)),
+        ];
+        for (alternate, wrapping) in SCREENS_AND_AUTOWRAP {
+            for content in &contents {
+                assert_rows_come_back(content, alternate, wrapping, false);
+            }
+        }
     }
 
     #[test]
