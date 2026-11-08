@@ -196,6 +196,12 @@ fn decode(bytes: &[u8], fds: Vec<OwnedFd>, limits: Limits) -> Result<Packet, Wir
         let fd = fds.next().ok_or_else(|| broken("no body memfd"))?;
         read_memfd(fd, body_len, limits.body)?
     } else {
+        if body_len > limits.body {
+            return Err(broken(format!(
+                "an inline body of {body_len} bytes, more than the {} this side reads",
+                limits.body
+            )));
+        }
         if inline.len() as u64 != body_len {
             return Err(broken(format!(
                 "{} body bytes where the header names {body_len}",
@@ -429,6 +435,19 @@ mod tests {
         duplicate.extend_from_slice(b"abc");
         let error = decode(&duplicate, vec![sealed_memfd(b"abc").unwrap()], Limits::FROM_APP).unwrap_err();
         assert_eq!(error.to_string(), "a broken packet: a body both inline and in a memfd");
+    }
+
+    #[test]
+    fn an_inline_body_larger_than_the_receivers_limit_is_refused() {
+        let mut bytes = header(INLINE, 3, NO_BLOB, 0);
+        bytes.extend_from_slice(b"abc");
+        let error = decode(&bytes, Vec::new(), Limits { body: 2, blob: 2 }).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "a broken packet: an inline body of 3 bytes, more than the 2 this side reads"
+        );
+        let packet = decode(&bytes, Vec::new(), Limits { body: 3, blob: 0 }).unwrap();
+        assert_eq!(packet.body, b"abc", "a body at the limit is read");
     }
 
     #[test]
