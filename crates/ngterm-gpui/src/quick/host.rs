@@ -206,3 +206,7 @@ fn window_host_options(base: WindowOptions, fit: Fit, display: Option<&Target>) 
 fn pixels(extent: i32) -> Pixels {
     px(u16::try_from(extent.max(0)).map_or(f32::from(u16::MAX), f32::from))
 }
+
+#[cfg(all(test, not(target_os = "linux")))]
+#[path = "host_tests.rs"]
+mod tests;

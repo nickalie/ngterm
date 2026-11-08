@@ -266,3 +266,7 @@ fn forget(shown: &Shown, identity: &str, toast: Option<&ToastNotification>) {
         shown.remove(identity);
     }
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;
