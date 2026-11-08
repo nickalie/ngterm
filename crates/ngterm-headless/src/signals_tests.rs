@@ -119,10 +119,13 @@ fn signal_child() {
 }
 
 /// Names the child that installs the handlers with no thread to spare.
+#[cfg(target_os = "linux")]
 const INSTALL_CHILD: &str = "HEADLESS_SIGNAL_INSTALL_CHILD";
 
 /// Handlers that could not be installed leave SIGTERM its default action: the install fails in a child that may start
 /// no thread, and the child's SIGTERM ends it.
+// RLIMIT_NPROC limits thread creation on Linux; on macOS and the BSDs it only limits processes.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_failed_install_leaves_sigterm_its_default_action() {
     use std::os::unix::process::ExitStatusExt as _;
@@ -152,6 +155,7 @@ fn a_failed_install_leaves_sigterm_its_default_action() {
     assert_eq!(status.signal(), Some(libc::SIGTERM), "{status:?}");
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn signal_install_child() {
     if std::env::var_os(INSTALL_CHILD).is_none() {
