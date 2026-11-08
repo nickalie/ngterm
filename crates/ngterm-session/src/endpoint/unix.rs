@@ -289,4 +289,96 @@ mod tests {
         let error = check_socket_path_length(Path::new(&one_more)).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
+
+    #[test]
+    fn a_namespace_directory_is_made_private_but_files_and_links_are_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("namespace");
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+        make_directory_private(&directory).unwrap();
+        assert_eq!(fs::metadata(&directory).unwrap().mode() & 0o777, DIRECTORY_MODE);
+        let file = root.path().join("file");
+        fs::write(&file, b"keep").unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&directory, &link).unwrap();
+        for path in [&file, &link] {
+            let error = make_directory_private(path).unwrap_err();
+            let user = rustix::process::geteuid().as_raw();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "the namespace directory {} is not a directory of this user's (owner {user}, this user {user})",
+                    path.display()
+                )
+            );
+        }
+        assert_eq!(fs::read(&file).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn a_live_socket_is_refused_without_removing_it() {
+        let root = tempfile::Builder::new().prefix("ngep-").tempdir_in("/tmp").unwrap();
+        let endpoint = Endpoint::new(root.path());
+        let _listener = endpoint.bind().unwrap();
+        let error = prepare_socket_path(endpoint.socket_path()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AddrInUse);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "ngterm-session server is already running (socket busy at {})",
+                endpoint.socket_path().display()
+            )
+        );
+        assert!(endpoint.connect().is_ok());
+    }
+
+    #[test]
+    fn socket_cleanup_reports_a_non_directory_parent_and_does_not_remove_replacements() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("file");
+        fs::write(&file, b"keep").unwrap();
+        let identity = socket_file_identity(&file).unwrap();
+        let error = remove_socket_file_if_owned(&file.join("socket"), &identity).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+        let replacement = root.path().join("replacement");
+        fs::write(&replacement, b"new").unwrap();
+        fs::rename(&replacement, &file).unwrap();
+        remove_socket_file_if_owned(&file, &identity).unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"new");
+    }
+
+    #[test]
+    fn a_socket_path_that_is_a_directory_is_not_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let identity = socket_file_identity(root.path()).unwrap();
+        let error = remove_socket_file_if_owned(root.path(), &identity).unwrap_err();
+        assert!(root.path().is_dir());
+        assert_eq!(error.kind(), io::ErrorKind::IsADirectory);
+    }
+
+    #[test]
+    fn preparing_a_socket_path_reports_errors_instead_of_deleting_a_directory() {
+        let root = tempfile::Builder::new().prefix("ngep-").tempdir_in("/tmp").unwrap();
+        let directory = root.path().join("socket");
+        fs::create_dir(&directory).unwrap();
+        assert_eq!(
+            prepare_socket_path(&directory).unwrap_err().kind(),
+            io::ErrorKind::IsADirectory
+        );
+        assert!(directory.is_dir());
+    }
+
+    #[test]
+    fn a_socket_that_cannot_be_reached_is_preserved() {
+        let root = tempfile::Builder::new().prefix("ngep-").tempdir_in("/tmp").unwrap();
+        let endpoint = Endpoint::new(root.path().join("private"));
+        let _listener = endpoint.bind().unwrap();
+        fs::set_permissions(endpoint.socket_path(), fs::Permissions::from_mode(0o0)).unwrap();
+        let result = prepare_socket_path(endpoint.socket_path());
+        fs::set_permissions(endpoint.socket_path(), fs::Permissions::from_mode(SOCKET_MODE)).unwrap();
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert!(endpoint.connect().is_ok());
+    }
 }
