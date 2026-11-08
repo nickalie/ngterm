@@ -74,6 +74,9 @@ struct Router {
     released: HashSet<u32>,
     /// The fired `--repeat` tail still held down.
     held_repeat: Option<u32>,
+    /// The tail whose release opened the repeat window, while that window is the one open: an autorepeat of that key
+    /// says the release was a web view's stand-in and it is held after all ([`Router::resume_held`]).
+    released_tail: Option<u32>,
     /// When the armed leader or the open repeat window lapses.
     deadline: Option<Instant>,
     poster: Option<Poster>,
@@ -171,9 +174,11 @@ pub fn menu_action(stroke: &KeyStroke) -> Option<BuiltinAction> {
 }
 
 /// Whether the keymap or the window's own keys take `stroke` now: a key pressed in an HTML page's native web view
-/// (macOS and Windows, `html_overlay::webview2::keys`) goes to the window only then. The matcher does not advance, but
-/// a fresh press forgets that physical key's old ownership, even when the page keeps it and the monitor never hears
-/// it. The window's own keys there are Ctrl+Tab's switcher.
+/// (macOS and Windows, `html_overlay::webview2::keys`) goes to the window only then. A key taken does not advance the
+/// matcher here: its dispatch reaches the monitor, which does. A key the page keeps never reaches the monitor, so this
+/// does what upstream's monitor does with it: a fresh press forgets that physical key's old ownership, and unless it
+/// is a bare modifier it ends a half-typed leader or an open repeat window. Esc is the keymap's only to cancel a
+/// leader. The window's own keys there are Ctrl+Tab's switcher.
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 #[must_use]
 pub fn takes(stroke: &KeyStroke) -> bool {
@@ -182,18 +187,20 @@ pub fn takes(stroke: &KeyStroke) -> bool {
         if stroke.action == KeyAction::Repeat {
             return router.owns(stroke.identity);
         }
-        if stroke.action == KeyAction::Press {
-            router.released.remove(&stroke.identity);
-            router.consumed.remove(&stroke.identity);
-        }
+        router.released.remove(&stroke.identity);
+        router.consumed.remove(&stroke.identity);
+        // a bare modifier is the next chord being typed: the leader keeps waiting
         let Some(chord) = input::chord(stroke) else {
             return false;
         };
         if chord.key == "tab" && chord.mods.contains(ngterm_core::keymap::Modifiers::CONTROL) {
             return true;
         }
-        // the key was pressed in the web view, so the page holds the keyboard
-        router.menu.get(&chord).is_some_and(|action| !page_keeps(*action)) || router.sequence_takes(&chord)
+        let taken = router.page_press_taken(stroke, &chord);
+        if !taken {
+            router.reset_if_live();
+        }
+        taken
     })
 }
 
@@ -360,13 +367,16 @@ impl Router {
 
     /// Forgets `stroke`'s key's release, as it is pressed again. An autorepeat says the key never went up, so that
     /// release was the one a macOS web view's dispatch reports at once ([`release_dispatched`]): the press's ownership
-    /// stands. Only the live repeat tail suspends its window, which counts from the real release (upstream's).
+    /// stands. Only the live repeat tail's key suspends its window, which counts from the real release (upstream's
+    /// `heldRepeatKeyCode`), whatever its modifiers are now; a window another key closed since is left as it is.
     fn resume_held(&mut self, stroke: &KeyStroke) {
         if self.released.remove(&stroke.identity) && stroke.action == KeyAction::Repeat {
             self.consumed.insert(stroke.identity);
-            if self.engine.as_ref().is_some_and(|engine| {
-                engine.is_repeating() && input::chord(stroke).is_some_and(|chord| engine.is_repeat_tail(&chord))
-            }) {
+            if self.released_tail == Some(stroke.identity)
+                && self.engine.as_ref().is_some_and(CustomCommandEngine::is_repeating)
+            {
+                self.released_tail = None;
+                self.held_repeat = Some(stroke.identity);
                 self.deadline = None;
             }
         }
@@ -378,11 +388,26 @@ impl Router {
         self.consumed.contains(&identity) || self.released.contains(&identity)
     }
 
-    /// Whether the matcher would take `chord` now, a lapsed leader or repeat window counting as gone (the next press
-    /// lapses it for real).
+    /// Whether a fresh press of `stroke`, spelled `chord`, in a page's web view is the keymap's: `press` decides the
+    /// same way, the page holding the keyboard.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn page_press_taken(&self, stroke: &KeyStroke, chord: &Chord) -> bool {
+        if stroke.is_escape() {
+            return !self.lapsed() && self.engine.as_ref().is_some_and(CustomCommandEngine::is_armed);
+        }
+        self.menu.get(chord).is_some_and(|action| !page_keeps(*action)) || self.sequence_takes(chord)
+    }
+
+    /// Whether the leader or repeat window has run out (the next press lapses it for real).
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn lapsed(&self) -> bool {
+        self.deadline.is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    /// Whether the matcher would take `chord` now, a lapsed leader or repeat window counting as gone.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn sequence_takes(&self, chord: &Chord) -> bool {
-        let lapsed = self.deadline.is_some_and(|deadline| Instant::now() >= deadline);
+        let lapsed = self.lapsed();
         self.engine.as_ref().is_some_and(|engine| {
             let mut engine = engine.clone();
             if lapsed {
@@ -490,6 +515,7 @@ impl Router {
             self.held_repeat = None;
             if self.engine.as_ref().is_some_and(CustomCommandEngine::is_repeating) {
                 self.deadline = Some(now + REPEAT_TIMEOUT);
+                self.released_tail = Some(identity);
             }
         }
         if self.consumed.remove(&identity) {
@@ -501,6 +527,7 @@ impl Router {
 
     fn hold_repeat_or_cancel(&mut self, identity: u32) {
         self.deadline = None;
+        self.released_tail = None;
         let repeating = self.engine.as_ref().is_some_and(CustomCommandEngine::is_repeating);
         self.held_repeat = repeating.then_some(identity);
     }
