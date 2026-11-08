@@ -2,6 +2,7 @@
 
 use std::fs;
 
+use super::super::store::write_starter;
 use super::*;
 
 fn upstream() -> ShippedDefaults {
@@ -107,4 +108,71 @@ fn a_dangling_link_is_replaced_by_the_starter() {
     assert!(fs::symlink_metadata(&path).unwrap().file_type().is_file());
     assert_eq!(fs::read_to_string(&path).unwrap(), starter_keymap_conf(&upstream()));
     assert!(!target.exists());
+}
+
+#[test]
+fn a_file_created_after_the_existence_check_is_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keymap.conf");
+    write_starter(&path, || {
+        fs::write(&path, "map ctrl+shift+y toggle_split\n").unwrap();
+        starter_keymap_conf(&upstream())
+    })
+    .unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "map ctrl+shift+y toggle_split\n");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_replacing_a_dangling_link_during_starter_creation_is_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keymap.conf");
+    let target = dir.path().join("missing.conf");
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    write_starter(&path, || {
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, "map ctrl+shift+y toggle_split\n").unwrap();
+        starter_keymap_conf(&upstream())
+    })
+    .unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "map ctrl+shift+y toggle_split\n");
+    assert!(!target.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_link_whose_target_appears_during_starter_creation_is_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keymap.conf");
+    let target = dir.path().join("missing.conf");
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    write_starter(&path, || {
+        fs::write(&target, "map ctrl+shift+y toggle_split\n").unwrap();
+        starter_keymap_conf(&upstream())
+    })
+    .unwrap();
+    assert_eq!(fs::read_link(&path).unwrap(), target);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "map ctrl+shift+y toggle_split\n");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_different_dangling_link_created_during_starter_creation_is_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keymap.conf");
+    let target = dir.path().join("missing.conf");
+    let replacement = dir.path().join("other.conf");
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    write_starter(&path, || {
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&replacement, &path).unwrap();
+        starter_keymap_conf(&upstream())
+    })
+    .unwrap();
+    assert_eq!(fs::read_link(&path).unwrap(), replacement);
+    assert!(!target.exists());
+    assert!(!replacement.exists());
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
 }
