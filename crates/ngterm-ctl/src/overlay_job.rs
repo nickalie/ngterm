@@ -1076,4 +1076,66 @@ mod tests {
         assert!(gone(read_pid(&pid_file)), "the descendant outlived the cancel");
         assert_eq!(origin.frames(), [OverlayJobFrame::Started, OverlayJobFrame::Canceled]);
     }
+
+    #[test]
+    fn malformed_and_unexplained_claim_refusals_launch_nothing() {
+        for (reply, expected) in [
+            (
+                "{",
+                "could not decode the reply: EOF while parsing an object at line 1 column 1",
+            ),
+            (r#"{"ok":false}"#, "the app refused the stream"),
+        ] {
+            let (helper, origin) = FakeOrigin::serve(reply, None, true);
+            let runner = runner(helper, DEFAULT_GRACE);
+            assert_eq!(runner.claim("job").unwrap_err(), expected);
+            drop(runner);
+            assert!(origin.frames().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_closed_origin_cannot_receive_a_claim() {
+        let (origin, helper) = ngterm_server::endpoint::pair().unwrap();
+        drop(origin);
+        assert_eq!(
+            runner(helper, DEFAULT_GRACE).claim("job").unwrap_err(),
+            "could not send the request"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_job_invocation_claims_and_propagates_the_programs_exit_status() {
+        use crate::messages::tests::run_command;
+        for code in [0, 7] {
+            let launch = OverlayJobFrame::Context {
+                context: context(&format!("exit {code}")),
+            };
+            let reply = format!("{OK_REPLY}\n{}", String::from_utf8(launch.line().unwrap()).unwrap());
+            let (output, requests) = run_command(&["session", "overlay", "run-job", "job"], b"", &[], &[&reply]);
+            assert_eq!(
+                requests,
+                [serde_json::json!({"cmd":"session.overlay.job.run","target":"job"})]
+            );
+            let error = String::from_utf8(output.stderr).unwrap();
+            let result = if code == 0 {
+                Ok(())
+            } else {
+                Err(Failure::Exit(ExitCode::from(code)))
+            };
+            assert!(error.contains(&format!("PROBE_RESULT:{result:?}")), "{error}");
+        }
+        let (output, _) = run_command(
+            &["session", "overlay", "run-job", "job"],
+            b"",
+            &[],
+            &[r#"{"ok":false,"error":"job not claimable"}"#],
+        );
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("error: job not claimable\n")
+        );
+    }
 }

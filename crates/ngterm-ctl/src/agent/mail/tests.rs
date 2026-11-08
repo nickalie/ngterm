@@ -305,3 +305,161 @@ fn the_newest_claim_supersedes_the_last_and_only_its_owner_releases_it() {
     second.release();
     assert!(!second.path.exists());
 }
+
+#[test]
+fn a_claim_cannot_be_taken_under_a_file_and_a_removed_claim_is_not_held() {
+    let directory = tempfile::tempdir().unwrap();
+    let blocked = directory.path().join("blocked");
+    fs::write(&blocked, b"file").unwrap();
+    assert!(Claim::take(&blocked.join("ctl.sock"), "S:P").is_none());
+    let claim = Claim::take(&directory.path().join("ctl.sock"), "S:P").unwrap();
+    fs::remove_file(&claim.path).unwrap();
+    assert!(!claim.held());
+    claim.release();
+}
+
+#[test]
+fn a_live_waiter_stops_when_its_parent_or_claim_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("ctl.sock");
+    let claim = Claim::take(&socket, "S:P").unwrap();
+    let mut waiter = LiveWaiting {
+        socket,
+        request: read_request("S:P".to_owned()),
+        claim: Some(&claim),
+        parent: parent_pid(),
+    };
+    assert!(waiter.current());
+    fs::write(&claim.path, "another waiter").unwrap();
+    assert!(!waiter.current());
+    waiter.claim = None;
+    assert!(waiter.current());
+    #[cfg(unix)]
+    {
+        waiter.parent = None;
+        assert!(!waiter.current());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn synchronous_mail_reads_and_acks_only_supported_events_for_the_interactive_agent() {
+    use crate::messages::tests::run_command;
+    let environment = [("CLAUDE_CODE_ENTRYPOINT", "cli")];
+    for event in ["Stop", "PostToolUse", "UserPromptSubmit"] {
+        let payload = json!({"hook_event_name":event}).to_string();
+        let (output, requests) = run_command(
+            &["agent", "mail", "claude", "--as", "S:P"],
+            payload.as_bytes(),
+            &environment,
+            &[r#"{"ok":true,"result":{"messages":[{"id":"m","to":"S:P","ts":1,"body":"hello"}],"acked":["m"]}}"#],
+        );
+        assert_eq!(
+            requests,
+            [json!({"cmd":"msg.read","args":{"identity":"S:P","ack":true}})]
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains("hello"), "{stdout}");
+        assert!(
+            stdout.contains(if event == "Stop" {
+                "\"decision\":\"block\""
+            } else {
+                "\"additionalContext\":"
+            }),
+            "{stdout}"
+        );
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("PROBE_RESULT:Ok(())")
+        );
+    }
+    for (payload, env) in [
+        (json!({}), environment.to_vec()),
+        (json!({"hook_event_name":"SessionStart"}), environment.to_vec()),
+        (
+            json!({"hook_event_name":"Stop","agent_id":"child"}),
+            environment.to_vec(),
+        ),
+        (
+            json!({"hook_event_name":"Stop"}),
+            vec![("CLAUDE_CODE_ENTRYPOINT", "sdk-cli")],
+        ),
+    ] {
+        let (output, requests) = run_command(
+            &["agent", "mail", "claude", "--as", "S:P"],
+            payload.to_string().as_bytes(),
+            &env,
+            &[],
+        );
+        assert!(requests.is_empty());
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("PROBE_RESULT:Ok(())")
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn mail_outside_a_pane_and_empty_mail_are_quiet_and_bad_payloads_fail() {
+    use crate::messages::tests::run_command;
+    let environment = [("CLAUDE_CODE_ENTRYPOINT", "cli")];
+    let (output, _) = run_command(
+        &["agent", "mail", "claude"],
+        br#"{"hook_event_name":"Stop"}"#,
+        &environment,
+        &[],
+    );
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("PROBE_RESULT:Ok(())")
+    );
+    let (output, _) = run_command(
+        &["agent", "mail", "claude", "--as", "S:P"],
+        br#"{"hook_event_name":"Stop"}"#,
+        &environment,
+        &[r#"{"ok":true,"result":{"messages":[],"acked":[]}}"#],
+    );
+    assert!(!String::from_utf8(output.stdout).unwrap().contains("ngterm mail:"));
+    let (output, _) = run_command(&["agent", "mail", "claude"], b"not json", &environment, &[]);
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("the hook payload is not JSON:")
+    );
+    let (output, _) = run_command(&["agent", "mail", "gemini"], b"", &environment, &[]);
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("unknown agent: gemini (claude|codex)")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_waiting_hook_wakes_with_mail_even_if_posting_active_status_is_refused() {
+    let (output, requests) = crate::messages::tests::run_command(
+        &["agent", "mail", "claude", "--wait", "--as", "S:P"],
+        b"{}",
+        &[("CLAUDE_CODE_ENTRYPOINT", "cli"), ("NGTERM_SESSION_ID", "S")],
+        &[
+            r#"{"ok":true,"result":{"messages":[{"id":"m","to":"S:P","ts":1,"body":"wake up"}],"acked":["m"]}}"#,
+            r#"{"ok":false,"error":"status unavailable"}"#,
+        ],
+    );
+    assert_eq!(
+        requests[1],
+        json!({"cmd":"session.status","target":"S","args":{"status":"active","blink":true}})
+    );
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        error.contains("Message 1 of 1, from outside ngterm:\nwake up\n"),
+        "{error}"
+    );
+    assert!(error.contains("PROBE_RESULT:Err(Exit("), "{error}");
+    let expected = format!("PROBE_RESULT:{:?}", Err::<(), _>(Failure::Exit(ExitCode::from(2))));
+    assert!(error.contains(&expected), "{error}");
+}
