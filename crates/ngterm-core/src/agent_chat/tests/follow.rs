@@ -145,15 +145,20 @@ fn transcript(dir: &TempDir) -> PathBuf {
     dir.path().join("transcript.jsonl")
 }
 
+fn assert_not_regular_file(error: &io::Error) {
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(error.to_string(), "transcript is not a regular file");
+}
+
 #[test]
 fn an_empty_directory_is_not_a_transcript() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("projects/work/empty.jsonl");
     fs::create_dir_all(&path).unwrap();
     let mut follower = Follower::new(AgentKind::Claude, &path);
-    assert!(follower.page(10, 10).is_err());
-    assert!(follower.backlog(10).is_err());
-    assert!(follower.after(0).is_err());
+    assert_not_regular_file(&follower.page(10, 10).unwrap_err());
+    assert_not_regular_file(&follower.backlog(10).unwrap_err());
+    assert_not_regular_file(&follower.after(0).unwrap_err());
 }
 
 #[test]
@@ -165,7 +170,7 @@ fn a_transcript_replaced_by_an_empty_directory_is_a_read_error() {
     follower.backlog(10).unwrap();
     fs::remove_file(&path).unwrap();
     fs::create_dir(&path).unwrap();
-    assert!(follower.poll().is_err());
+    assert_not_regular_file(&follower.poll().unwrap_err());
 }
 
 #[test]
