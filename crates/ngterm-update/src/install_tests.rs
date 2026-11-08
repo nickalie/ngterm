@@ -571,7 +571,8 @@ fn bundle_validation_reports_identity_format_and_each_missing_program() {
 
 #[test]
 #[cfg(target_os = "macos")]
-fn a_missing_image_has_no_stamp() {
+fn image_stamp_reports_a_failing_stat() {
+    // BSD stat refuses -c for any path; a missing path also fails with GNU stat on PATH.
     let fixture = tempfile::tempdir().unwrap();
     assert_eq!(
         image_stamp(&fixture.path().join("missing")).unwrap_err().to_string(),
