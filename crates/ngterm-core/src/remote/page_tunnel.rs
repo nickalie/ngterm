@@ -22,7 +22,9 @@
 //!   page.
 //! - The forward ending ends the page, as a file page's helper ending does.
 
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
+#[cfg(windows)]
+use std::net::Ipv6Addr;
+use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 
 use socket2::{Domain, Protocol, Socket, Type};
 use url::Url;
@@ -102,14 +104,24 @@ pub fn forward_port(target_port: u16, held: impl IntoIterator<Item = u16>) -> st
 /// Whether no server of this machine's listens on `port` where a connection to 127.0.0.1 would reach it. Binding
 /// 127.0.0.1 alone does not tell: macOS lets it sit beside a wildcard listener under the `SO_REUSEADDR` std and ssh
 /// set, and Windows beside one even without, so ssh would bind it too and take that server's loopback traffic. A bind
-/// of the wildcard itself collides with such a listener everywhere: `0.0.0.0`, and `[::]` in dual mode, which a
-/// dual-stack server holds (Windows' default is IPv6 alone, which never answers 127.0.0.1). The probes bind and never
-/// listen, so no firewall asks about a wildcard listener. A machine without IPv6 has no dual-stack server.
+/// of the wildcard itself collides with such a listener: `0.0.0.0` everywhere, which on Linux and macOS a dual-stack
+/// `[::]` server holds too, and on Windows `[::]` in dual mode ([`dual_stack_free`]). A server holding `[::]` alone
+/// (`IPV6_V6ONLY`, Windows' default) never answers 127.0.0.1 and leaves the port free. The probes bind and never
+/// listen, so no firewall asks about a wildcard listener.
 fn port_free(port: u16) -> bool {
     let v4 = [Ipv4Addr::LOCALHOST, Ipv4Addr::UNSPECIFIED]
         .into_iter()
         .all(|address| bind_alone(SocketAddr::from((address, port))).is_ok());
-    v4 && match bind_alone(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port))) {
+    v4 && dual_stack_free(port)
+}
+
+/// Whether no dual-stack server holds `[::]:port` on Windows, which binds `0.0.0.0` beside one: a dual-mode `[::]`
+/// collides with it there but binds beside an IPv6-only one. On Linux and macOS that probe collides with an IPv6-only
+/// server too, and the `0.0.0.0` one already finds a dual-stack server. A machine without IPv6 has no dual-stack
+/// server.
+#[cfg(windows)]
+fn dual_stack_free(port: u16) -> bool {
+    match bind_alone(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port))) {
         Ok(()) => true,
         Err(error) => !matches!(
             error.kind(),
@@ -118,12 +130,18 @@ fn port_free(port: u16) -> bool {
     }
 }
 
-/// Binds a TCP socket to `address` without listening, an IPv6 one in dual mode, with the `SO_REUSEADDR` std sets on
-/// Unix, so a connection a closed forward left in `TIME_WAIT` does not hold its port.
+#[cfg(not(windows))]
+const fn dual_stack_free(_port: u16) -> bool {
+    true
+}
+
+/// Binds a TCP socket to `address` without listening, an IPv6 one (Windows' probe) in dual mode, with the
+/// `SO_REUSEADDR` std sets on Unix, so a connection a closed forward left in `TIME_WAIT` does not hold its port.
 fn bind_alone(address: SocketAddr) -> std::io::Result<()> {
     let socket = Socket::new(Domain::for_address(address), Type::STREAM, Some(Protocol::TCP))?;
     #[cfg(unix)]
     socket.set_reuse_address(true)?;
+    #[cfg(windows)]
     if address.is_ipv6() {
         socket.set_only_v6(false)?;
     }
@@ -132,6 +150,8 @@ fn bind_alone(address: SocketAddr) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv6Addr;
+
     use super::*;
 
     #[test]
@@ -270,24 +290,35 @@ mod tests {
         }
     }
 
-    /// An IPv6-only holder of `[::]` fails the dual-mode probe, though it never answers 127.0.0.1; whether the port
-    /// comes back the origin's own or another is not pinned, only that the forward can bind it. Bound and never
-    /// listening, so nothing accepts connections on a wildcard while the test runs.
+    /// A server holding `[::]` with `IPV6_V6ONLY`, as Windows opens one by default, never answers 127.0.0.1, so the
+    /// forward listens on the origin's own port beside it; a dual-stack one beside it keeps its port.
     #[test]
-    fn a_port_an_ipv6_only_socket_holds_still_gets_a_bindable_forward() {
-        let Ok(socket) = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP)) else {
+    fn an_ipv6_only_server_leaves_its_port_to_the_forward() {
+        let Some((only_v6, port)) = ipv6_server(true) else {
             return; // IPv6 is optional on the host.
         };
-        socket.set_only_v6(true).unwrap();
-        if socket
-            .bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)).into())
-            .is_err()
-        {
-            return;
-        }
-        let port = socket.local_addr().unwrap().as_socket().unwrap().port();
-        let forward = forward_port(port, []).unwrap();
-        assert_ne!(forward, 0);
-        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, forward)).is_ok());
+        assert_eq!(
+            forward_port(port, []).unwrap(),
+            port,
+            "an IPv6-only [::] never answers 127.0.0.1"
+        );
+        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok());
+        drop(only_v6);
+        let (_dual, port) = ipv6_server(false).unwrap();
+        assert_ne!(
+            forward_port(port, []).unwrap(),
+            port,
+            "a dual-stack [::] answers 127.0.0.1"
+        );
+    }
+
+    /// A server listening on `[::]`, IPv6-only or dual-stack; `None` on a machine without IPv6.
+    fn ipv6_server(only_v6: bool) -> Option<(Socket, u16)> {
+        let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP)).ok()?;
+        socket.set_only_v6(only_v6).ok()?;
+        socket.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)).into()).ok()?;
+        socket.listen(1).ok()?;
+        let port = socket.local_addr().ok()?.as_socket()?.port();
+        Some((socket, port))
     }
 }
