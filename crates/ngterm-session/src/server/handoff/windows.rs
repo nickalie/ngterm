@@ -424,7 +424,15 @@ pub(super) fn take_endpoint(endpoint: &Endpoint, (): ()) -> io::Result<Listener>
 
 #[cfg(test)]
 mod tests {
+    use std::os::windows::io::AsHandle as _;
+    use std::process::{Command, Stdio};
+    use std::thread;
+
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE};
+
     use super::*;
+    use crate::protocol::GridSize;
+    use crate::server::handoff::{STEP_TIMEOUT, VtEncoding};
 
     fn implementation(module: &str, build: u16) -> Implementation {
         Implementation {
@@ -464,5 +472,190 @@ mod tests {
         assert!(implementation.module.is_absolute(), "{implementation:?}");
         // kernel32's file version reads 6.2 or 10.0 by the module, but its build is the system's
         assert!(implementation.version[2] >= 17_763, "{implementation:?}");
+    }
+
+    #[test]
+    fn a_module_or_a_file_without_a_version_names_no_conpty() {
+        // no module is loaded at this address
+        assert!(module_path(std::ptr::without_provenance_mut(0x10)).is_err());
+        let directory = tempfile::tempdir().unwrap();
+        let missing = file_version(&directory.path().join("missing.dll")).unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+        let text = directory.path().join("plain.txt");
+        std::fs::write(&text, "no version resource").unwrap();
+        assert!(file_version(&text).unwrap_err().raw_os_error().is_some());
+    }
+
+    fn file() -> OwnedHandle {
+        OwnedHandle::from(tempfile::tempfile().unwrap())
+    }
+
+    /// One end of a fresh anonymous pipe (the other end closed).
+    fn pipe() -> OwnedHandle {
+        OwnedHandle::from(io::pipe().unwrap().0)
+    }
+
+    /// A child that runs until it is killed.
+    fn running_child() -> std::process::Child {
+        Command::new("ping.exe")
+            .args(["-n", "600", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn process_handle(child: &std::process::Child) -> OwnedHandle {
+        child.as_handle().try_clone_to_owned().unwrap()
+    }
+
+    /// A console whose signal is `signal` and whose console host is `conhost`, its other handles pipes.
+    fn console(signal: OwnedHandle, conhost: OwnedHandle) -> ConPtyHandoff {
+        ConPtyHandoff {
+            input: pipe(),
+            output: pipe(),
+            console: [signal, pipe(), conhost],
+        }
+    }
+
+    fn refusal(console: &ConPtyHandoff) -> String {
+        check_console(console).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn a_console_whose_handles_are_not_a_pseudoconsoles_is_refused() {
+        let mut live = running_child();
+        // a value far past any handle this process holds
+        // SAFETY: the value names no handle; the check only queries it, and it is never closed (forgotten below).
+        let never_opened = unsafe { OwnedHandle::from_raw_handle(std::ptr::without_provenance_mut(0x00ff_fff0)) };
+        let unopened = console(never_opened, process_handle(&live));
+        assert_eq!(refusal(&unopened), "a pseudoconsole handle is not open");
+        let ConPtyHandoff {
+            console: [never_opened, ..],
+            ..
+        } = unopened;
+        std::mem::forget(never_opened);
+        assert_eq!(
+            refusal(&console(file(), process_handle(&live))),
+            "the pseudoconsole's signal handle is not a pipe"
+        );
+        let host = refusal(&console(pipe(), process_handle(&live)));
+        let ping = system_directory().unwrap().join("PING.EXE");
+        assert!(
+            host.eq_ignore_ascii_case(&format!(
+                "the pseudoconsole's console host is {}, not conhost.exe",
+                ping.display()
+            )),
+            "{host}"
+        );
+        assert_eq!(
+            refusal(&console(pipe(), pipe())),
+            "the pseudoconsole's console host is not a live process"
+        );
+        live.kill().unwrap();
+        live.wait().unwrap();
+        assert_eq!(
+            refusal(&console(pipe(), process_handle(&live))),
+            "the pseudoconsole's console host is not a live process"
+        );
+        // the System process runs, but has no image whose name could be read
+        // SAFETY: OpenProcess takes no pointers; the result is checked before it is owned.
+        let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE, 0, 4) };
+        assert!(!raw.is_null(), "{}", io::Error::last_os_error());
+        // SAFETY: a fresh handle nothing else owns.
+        let system = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let unnamed = check_console(&console(pipe(), system)).unwrap_err();
+        assert!(unnamed.raw_os_error().is_some(), "{unnamed}");
+    }
+
+    #[test]
+    fn a_handle_goes_only_into_a_process_open_for_it() {
+        let own = std::process::id();
+        // SAFETY: OpenProcess takes no pointers; the result is checked before it is owned.
+        let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, own) };
+        assert!(!raw.is_null());
+        // SAFETY: a fresh handle nothing else owns.
+        let synchronize_only = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let error = duplicate_into(file().as_raw_handle(), synchronize_only.as_handle()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    /// A connected pair over an endpoint in a temporary directory: the importer's end and the exporter's.
+    fn pair() -> (tempfile::TempDir, Arc<Stream>, Stream) {
+        let directory = tempfile::tempdir().unwrap();
+        let endpoint = Endpoint::new(directory.path().join("channel"));
+        let listener = endpoint.bind().unwrap();
+        let accepting = thread::spawn(move || listener.accept().unwrap());
+        let client = endpoint.connect().unwrap();
+        let server = accepting.join().unwrap();
+        (directory, Arc::new(server), client)
+    }
+
+    fn pane() -> PaneState {
+        PaneState {
+            name: "s".to_owned(),
+            pid: 42,
+            created_at: 1_700_000_000,
+            tracked_env: Vec::new(),
+            term: None,
+            size: GridSize { cols: 80, rows: 24 },
+            offset: 0,
+            revision: 0,
+            vt: VtEncoding::Binary,
+            vt_len: 0,
+            replies_len: 0,
+        }
+    }
+
+    fn receive_refusal(line: &str, panes: &[PaneState]) -> String {
+        let (_directory, importer, exporter) = pair();
+        write_line(&exporter, line).unwrap();
+        match receive_handles(&importer, panes, STEP_TIMEOUT) {
+            Ok(_) => panic!("{line} was taken"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    #[test]
+    fn handles_for_another_pane_count_null_or_of_no_pseudoconsole_are_refused() {
+        assert_eq!(
+            receive_refusal(r#"{"panes":[]}"#, &[pane()]),
+            "the handoff sent the handles of 0 panes for 1"
+        );
+        let null = PaneHandles {
+            input: 0,
+            output: 0,
+            signal: 0,
+            reference: 0,
+            conhost: 0,
+            process: 0,
+            job: 0,
+        };
+        let line = serde_json::to_string(&HandlesLine { panes: vec![null] }).unwrap();
+        assert_eq!(receive_refusal(&line, &[pane()]), "the handoff sent a null handle");
+        // real handles, duplicated into this process as the exporter would, whose signal is a file: taken, then
+        // refused
+        // SAFETY: GetCurrentProcess takes no arguments.
+        let current = unsafe { GetCurrentProcess() };
+        // SAFETY: the current process's pseudo-handle is valid for the whole process's life.
+        let this = unsafe { BorrowedHandle::borrow_raw(current) };
+        let mut child = running_child();
+        let duplicate = |handle: OwnedHandle| duplicate_into(handle.as_raw_handle(), this).unwrap();
+        let handles = PaneHandles {
+            input: duplicate(pipe()),
+            output: duplicate(pipe()),
+            signal: duplicate(file()),
+            reference: duplicate(pipe()),
+            conhost: duplicate(process_handle(&child)),
+            process: duplicate(process_handle(&child)),
+            job: duplicate(pipe()),
+        };
+        let line = serde_json::to_string(&HandlesLine { panes: vec![handles] }).unwrap();
+        assert_eq!(
+            receive_refusal(&line, &[pane()]),
+            "the pseudoconsole's signal handle is not a pipe"
+        );
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 }

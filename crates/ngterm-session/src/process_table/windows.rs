@@ -703,4 +703,76 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&logs);
     }
+
+    #[test]
+    fn a_process_that_is_not_there_has_no_group() {
+        assert_eq!(ProcTable::new().group(-1), Vec::new());
+    }
+
+    #[test]
+    fn the_system_process_keeps_its_details_to_itself() {
+        // pid 4, the System process: no user process may read its memory
+        let table = ProcTable::new();
+        assert_eq!(table.argv(4), None);
+        assert_eq!(table.working_directory(4), None);
+        assert_eq!(table.search_path(4), None);
+        assert_eq!(table.executable_path(4), None);
+    }
+
+    #[test]
+    fn an_ended_process_has_nothing_left_to_read() {
+        let mut child = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "exit 3"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        // the child's handle keeps the ended process, and its pid, until it drops
+        child.wait().unwrap();
+        let pid = i32::try_from(child.id()).unwrap();
+        let table = ProcTable::new();
+        assert_eq!(table.argv(pid), None);
+        assert_eq!(table.working_directory(pid), None);
+        assert_eq!(table.search_path(pid), None);
+    }
+
+    /// A 32-bit process keeps its working directory and its environment in its own 32-bit block.
+    #[test]
+    fn a_32_bit_process_is_read_through_its_own_blocks() {
+        let root = std::env::var_os("SystemRoot").unwrap();
+        let cmd = std::path::Path::new(&root).join(r"SysWOW64\cmd.exe");
+        let directory = tempfile::tempdir().unwrap();
+        let path = r"C:\ngterm-test\wow64;C:\ngterm-test\bin";
+        let mut child = std::process::Command::new(&cmd)
+            .args(["/D", "/Q", "/K"])
+            .current_dir(directory.path())
+            .env_clear()
+            .env("SystemRoot", &root)
+            .env("Path", path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = i32::try_from(child.id()).unwrap();
+        let table = ProcTable::new();
+        // the 32-bit block is filled in once the process starts running
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let cwd = loop {
+            if let Some(cwd) = table.working_directory(pid) {
+                break cwd;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the working directory was never read"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let expected = directory.path().to_str().unwrap().trim_end_matches('\\');
+        assert!(cwd.eq_ignore_ascii_case(expected), "{cwd} {expected}");
+        assert_eq!(table.search_path(pid).as_deref(), Some(path));
+        let image = table.executable_path(pid).unwrap();
+        assert!(image.eq_ignore_ascii_case(cmd.to_str().unwrap()), "{image}");
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
 }
