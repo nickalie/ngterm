@@ -314,13 +314,22 @@ fn a_claim_taken_between_a_release_check_and_its_removal_survives() {
     std::thread::scope(|scope| {
         let mut taker = None;
         first.release_checked(|| {
-            let handle = scope.spawn(|| Claim::take(&socket, "S:P").unwrap());
-            // without a lock the new claim lands before the removal; with one it waits for the release to end
-            let started = std::time::Instant::now();
-            while !handle.is_finished() && started.elapsed() < Duration::from_millis(200) {
-                std::thread::sleep(Duration::from_millis(1));
-            }
+            let (observed, observation) = std::sync::mpsc::sync_channel(0);
+            let lock_path = &first.lock;
+            let socket = &socket;
+            let handle = scope.spawn(move || {
+                let lock = fs::OpenOptions::new().read(true).write(true).open(lock_path).unwrap();
+                let blocked = matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock));
+                drop(lock);
+                observed.send(blocked).unwrap();
+                Claim::take(socket, "S:P").unwrap()
+            });
             taker = Some(handle);
+            // the release cannot continue until the competing attempt has observed its lock
+            assert!(
+                observation.recv().unwrap(),
+                "the claims lock was not held between the ownership check and the removal"
+            );
         });
         let second = taker.expect("the release never checked").join().unwrap();
         assert!(

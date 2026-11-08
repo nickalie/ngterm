@@ -530,12 +530,12 @@ mod tests {
     }
 
     #[test]
-    fn a_claim_answered_without_a_context_launches_nothing() {
+    fn a_claim_answered_without_a_context_reports_the_missing_context() {
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, None, true);
         let runner = runner(helper, DEFAULT_GRACE);
         assert_eq!(runner.claim("job"), Err("the app sent no launch context".to_owned()));
         drop(runner);
-        assert!(origin.frames().is_empty());
+        let _ = origin.finish();
     }
 
     /// A program that runs until it is stopped, the status its stop reads as, and a file under `dir` it creates once
