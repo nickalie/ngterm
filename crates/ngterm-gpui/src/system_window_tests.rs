@@ -7,21 +7,32 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowExW, GetWindowThread
 
 use super::*;
 
-/// Serializes synthetic power and session messages, whose subscribers live for the whole test process.
+/// Serializes synthetic power, session and setting messages within one child process, whose subscribers live as long as it.
 pub(crate) static EVENTS: Mutex<()> = Mutex::new(());
 
 /// Sends to this process's hidden window once its thread has created it.
 pub(crate) fn send(message: u32, wparam: usize, lparam: isize) -> isize {
     start().unwrap();
+    let window = opened_window();
+    // SAFETY: the live window; callers keep any message payload alive until this synchronous call returns.
+    unsafe { SendMessageW(window, message, wparam, lparam) }
+}
+
+/// The number of `WM_SETTINGCHANGE` handlers installed in this process.
+pub(crate) fn setting_handlers() -> usize {
+    SETTING_CHANGES.lock().unwrap_or_else(PoisonError::into_inner).len()
+}
+
+/// This process's hidden window, waited for until its thread has created it.
+fn opened_window() -> HWND {
     let class: Vec<u16> = CLASS.encode_utf16().chain([0]).collect();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let window = own_window(&class);
         if !window.is_null() {
-            // SAFETY: the live window; callers keep any message payload alive until this synchronous call returns.
-            return unsafe { SendMessageW(window, message, wparam, lparam) };
+            return window;
         }
-        assert!(Instant::now() < deadline, "the hidden window did not start");
+        assert!(Instant::now() < deadline, "the hidden window did not open");
         thread::sleep(Duration::from_millis(10));
     }
 }
@@ -141,7 +152,16 @@ fn broadcasts_reach_every_subscriber_and_a_cancelled_session_does_not_end() {
 }
 
 #[test]
+fn power_broadcasts_are_delivered_in_an_isolated_process() {
+    run_child("system_window::tests::power_broadcasts_report_resume_and_the_full_display_dword");
+}
+
+#[test]
+#[ignore = "run by power_broadcasts_are_delivered_in_an_isolated_process"]
 fn power_broadcasts_report_resume_and_the_full_display_dword() {
+    if !is_child("system_window::tests::power_broadcasts_report_resume_and_the_full_display_dword") {
+        return;
+    }
     let _events = EVENTS.lock().unwrap();
     let (power, received) = mpsc::channel();
     on_power(move |event| {
@@ -193,29 +213,7 @@ fn parsed(wparam: usize, setting: Option<&DisplaySetting>) -> Option<Power> {
 
 #[test]
 fn the_hidden_window_pump_ends_when_its_thread_receives_quit() {
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("NGTERM_") {
-            child.env_remove(key);
-        }
-    }
-    let output = child
-        .args([
-            "--exact",
-            "system_window::tests::hidden_window_child",
-            "--ignored",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("W_GPUI_WINDOW_CHILD", "1")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    run_child("system_window::tests::hidden_window_child");
 }
 
 #[test]
@@ -223,20 +221,11 @@ fn the_hidden_window_pump_ends_when_its_thread_receives_quit() {
 fn hidden_window_child() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, PostThreadMessageW, WM_QUIT};
 
-    if std::env::var_os("W_GPUI_WINDOW_CHILD").is_none() {
+    if !is_child("system_window::tests::hidden_window_child") {
         return;
     }
     let pump = thread::spawn(run);
-    let class: Vec<u16> = CLASS.encode_utf16().chain([0]).collect();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let window = loop {
-        let window = own_window(&class);
-        if !window.is_null() {
-            break window;
-        }
-        assert!(Instant::now() < deadline, "the hidden window did not open");
-        thread::sleep(Duration::from_millis(10));
-    };
+    let window = opened_window();
     // SAFETY: the live window and a message with no payload, queued for the pump to dispatch.
     assert_ne!(unsafe { PostMessageW(window, WM_NULL, 0, 0) }, 0);
     // SAFETY: the live window; a null output pointer asks only for its owning thread.

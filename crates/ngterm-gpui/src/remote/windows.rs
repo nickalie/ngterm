@@ -187,11 +187,24 @@ mod tests {
     }
 
     #[test]
+    fn live_sources_are_followed_in_an_isolated_process() {
+        crate::system_window::tests::run_child(
+            "remote::windows::tests::live_sources_report_network_changes_once_and_resume_after_display_wake",
+        );
+    }
+
+    #[test]
+    #[ignore = "run by live_sources_are_followed_in_an_isolated_process"]
     fn live_sources_report_network_changes_once_and_resume_after_display_wake() {
         use std::sync::{Arc, mpsc};
         use std::time::Duration;
         use windows_sys::Win32::UI::WindowsAndMessaging::{PBT_APMRESUMEAUTOMATIC, WM_POWERBROADCAST};
 
+        if !crate::system_window::tests::is_child(
+            "remote::windows::tests::live_sources_report_network_changes_once_and_resume_after_display_wake",
+        ) {
+            return;
+        }
         let _events = crate::system_window::tests::EVENTS.lock().unwrap();
         let (sender, received) = mpsc::channel();
         let report: Report = Arc::new(move |event| {
