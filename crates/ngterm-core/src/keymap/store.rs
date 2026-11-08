@@ -1,6 +1,6 @@
 //! Reading `keymap.conf` from disk (upstream's `KeymapStore.load`) and seeding the starter file when there is none.
 
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, Write as _};
 use std::path::Path;
 
@@ -31,25 +31,38 @@ pub fn load_keymap(path: &Path, defaults: &ShippedDefaults) -> (Keymap, Vec<Keym
 /// by the starter, its target left uncreated (upstream's `fileExists` check and atomic write). Failures are logged,
 /// not returned, since a missing starter only costs the user the commented reference.
 pub fn ensure_starter_keymap(path: &Path, defaults: &ShippedDefaults) {
-    if let Err(error) = write_starter(path, defaults) {
+    if let Err(error) = write_starter(path, || starter_keymap_conf(defaults)) {
         tracing::warn!(path = %path.display(), %error, "could not write the starter keymap.conf");
     }
 }
 
-fn write_starter(path: &Path, defaults: &ShippedDefaults) -> io::Result<()> {
+pub(super) fn write_starter(path: &Path, starter: impl FnOnce() -> String) -> io::Result<()> {
     if path.try_exists()? {
         return Ok(());
     }
-    if fs::symlink_metadata(path).is_ok() {
-        fs::remove_file(path)?;
-    }
+    let dangling_link = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Some(fs::read_link(path)?),
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
     if let Some(directory) = path.parent() {
         fs::create_dir_all(directory)?;
     }
-    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    file.write_all(starter_keymap_conf(defaults).as_bytes())
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut file = tempfile::NamedTempFile::new_in(directory)?;
+    file.write_all(starter().as_bytes())?;
+    file.as_file().sync_all()?;
+    if let Some(target) = dangling_link {
+        // a changed or unreadable entry is left alone, including a link whose target now exists.
+        if !matches!(fs::read_link(path), Ok(current) if current == target) || path.try_exists()? {
+            return Ok(());
+        }
+        return file.persist(path).map(|_| ()).map_err(|error| error.error);
+    }
+    match file.persist_noclobber(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error.error),
+    }
 }
