@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use ngterm_host::{MainLoop, MainLoopClosed, MainTask};
-// The window and process-creation APIs come from the windows-sys build ngterm-app enables them in.
 use windows_sys::Win32::Foundation::{FALSE, TRUE};
 use windows_sys::Win32::System::Console::{
     CTRL_BREAK_EVENT, CTRL_C_EVENT, GenerateConsoleCtrlEvent, GetConsoleWindow, SetConsoleCtrlHandler,
