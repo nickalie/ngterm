@@ -445,10 +445,7 @@ class FakeMobileCore(
         return "/state/uploads/1/$name"
     }
 
-    /**
-     * The iOS app's [uploadFile] with a cancel token: the Android app cancels an upload by its coroutine and never
-     * calls this, so it is [uploadFile].
-     */
+    /** The token form iOS uses; Android cancels by dropping the coroutine, so the fake uploads as [uploadFile] does. */
     override suspend fun uploadFileCancellable(
         machineId: String,
         name: String,
