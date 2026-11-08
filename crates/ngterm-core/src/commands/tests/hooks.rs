@@ -235,3 +235,100 @@ fn a_broken_file_reports_the_error() {
             .starts_with("could not read hooks.conf: ")
     );
 }
+
+#[test]
+fn a_single_diagnostic_is_available_to_settings_and_uses_a_singular_banner() {
+    let mut host = Host::new(0);
+    host.write("hooks.conf", "on notify\n");
+    assert_eq!(reload(&mut host), json!({"count": 1}));
+    assert_eq!(host.fixture.core.hooks_diagnostics().len(), 1);
+    let banners = host.fixture.core.take_notifications();
+    assert!(banners.iter().any(|effect| matches!(effect,
+        NotificationEffect::App { body, .. } if body == "1 issue — see Settings ▸ Key Mapping"
+    )));
+}
+
+#[test]
+fn hook_stdin_delivery_failure_reaches_the_listing_and_banner() {
+    let mut host = Host::new(0);
+    host.write("hooks.conf", "on session.created cat\n");
+    reload(&mut host);
+    new_session(&mut host);
+    let _ = host.fixture.core.take_notifications();
+    let pid = host.launcher.running()[0];
+    assert!(host.launcher.finish(
+        pid,
+        ProcessExit {
+            stdin_failure: Some("broken pipe".to_owned()),
+            ..ProcessExit::default()
+        }
+    ));
+    host.drain();
+    assert_eq!(
+        listing(&mut host)["hooks"][0]["lastFailure"],
+        "delivery failed: broken pipe"
+    );
+    let banners = host.fixture.core.take_notifications();
+    assert!(banners.iter().any(|effect| matches!(effect,
+        NotificationEffect::App { body, .. } if body == "on session.created cat (delivery failed: broken pipe)"
+    )));
+}
+
+#[test]
+fn a_hook_without_a_process_host_reports_its_launch_failure() {
+    let mut host = Host::new(0);
+    host.write("hooks.conf", "on session.created cat\n");
+    reload(&mut host);
+    host.fixture.core.processes.host = None;
+    let _ = host.fixture.core.take_notifications();
+    new_session(&mut host);
+    assert_eq!(
+        listing(&mut host)["hooks"][0]["lastFailure"],
+        "spawn failed: no process launcher"
+    );
+    let banners = host.fixture.core.take_notifications();
+    assert!(banners.iter().any(|effect| matches!(effect,
+        NotificationEffect::App { body, .. } if body == "on session.created cat (spawn failed: no process launcher)"
+    )));
+    assert!(host.launcher.launches().is_empty());
+}
+
+#[test]
+fn hook_runtime_debug_includes_its_load_diagnostics() {
+    let mut host = Host::new(0);
+    host.write("hooks.conf", "on notify\n");
+    reload(&mut host);
+    let diagnostic = &host.fixture.core.hooks_diagnostics()[0];
+    let message = diagnostic.message.clone();
+    assert!(format!("{:?}", host.fixture.core.hooks).contains(&message));
+}
+
+#[test]
+fn launch_writes_the_starter_hooks_once_and_keeps_an_existing_file() {
+    let mut host = Host::new(0);
+    host.fixture.core.load_hooks_at_launch();
+    assert!(host.fixture.core.hooks_diagnostics().is_empty());
+    assert!(host.config("hooks.conf").is_file());
+    host.write("hooks.conf", "on session.created cat\n");
+    host.fixture.core.load_hooks_at_launch();
+    assert_eq!(listing(&mut host)["hooks"][0]["command"], "cat");
+    assert_eq!(
+        std::fs::read_to_string(host.config("hooks.conf")).unwrap(),
+        "on session.created cat\n"
+    );
+}
+
+#[test]
+fn a_process_launch_error_is_reported_by_the_hook() {
+    let mut host = Host::new(0);
+    host.write("hooks.conf", "on session.created cat\n");
+    reload(&mut host);
+    host.launcher.fail_with(Some(std::io::ErrorKind::PermissionDenied));
+    new_session(&mut host);
+    let expected = format!(
+        "spawn failed: fake launch of {} failed",
+        ngterm_host::ShellCommand::new("").program.display()
+    );
+    assert_eq!(listing(&mut host)["hooks"][0]["lastFailure"], expected);
+    assert!(host.launcher.running().is_empty());
+}

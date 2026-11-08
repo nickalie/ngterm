@@ -121,4 +121,32 @@ mod tests {
         assert!(!store.set_restore_command(Some("x".to_owned()), StatusPane::Left, Uuid::new_v4()));
         assert_eq!(store.take_outbox().save, SaveRequest::None);
     }
+
+    #[test]
+    fn restore_slots_are_consumed_per_pane_and_never_for_scratch() {
+        let (mut store, id) = store_with_session();
+        let session = store.session_mut(id).unwrap();
+        session.launch.command = Some("left launch".to_owned());
+        session.split_launch.command = Some("right launch".to_owned());
+        session.restore.pending_command = Some("left".to_owned());
+        session.split_restore.pending_command = Some("right".to_owned());
+        session.restore.pending_foreground = Some(vec!["vim".to_owned()]);
+        session.split_restore.pending_foreground = Some(vec!["top".to_owned()]);
+        assert!(session.pane_restore(StatusPane::Scratch).is_none());
+        assert!(session.pane_launch(StatusPane::Scratch).is_none());
+        assert_eq!(session.pane_launch(StatusPane::Left), Some(&session.launch));
+        assert_eq!(session.pane_launch(StatusPane::Right), Some(&session.split_launch));
+        assert_eq!(session.take_pending_foreground(StatusPane::Scratch), None);
+        assert_eq!(session.take_pending_restore_override(StatusPane::Scratch), None);
+        for (pane, command, program) in [(StatusPane::Left, "left", "vim"), (StatusPane::Right, "right", "top")] {
+            assert_eq!(
+                session.pane_restore(pane).unwrap().pending_command.as_deref(),
+                Some(command)
+            );
+            assert_eq!(session.take_pending_restore_override(pane).as_deref(), Some(command));
+            assert_eq!(session.take_pending_restore_override(pane), None);
+            assert_eq!(session.take_pending_foreground(pane), Some(vec![program.to_owned()]));
+            assert_eq!(session.take_pending_foreground(pane), None);
+        }
+    }
 }

@@ -326,4 +326,31 @@ mod tests {
             Err(format!("browser profile cannot be read: {}", profile.file().display()))
         );
     }
+
+    #[test]
+    fn a_failed_atomic_rename_removes_the_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = BrowserProfile::new(dir.path());
+        fs::create_dir(profile.file()).unwrap();
+        assert!(profile.write(Uuid::new_v4()).is_err());
+        assert!(profile.file().is_dir());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_profile_that_cannot_be_created_reports_the_write_failure() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let profile = BrowserProfile::new(dir.path());
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o500)).unwrap();
+        let result = profile.identifier();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let Err(ProfileFailure::Unwritable(detail)) = result else {
+            panic!("a read-only directory must refuse creation: {result:?}");
+        };
+        assert!(!detail.is_empty());
+        assert_eq!(ProfileFailure::Unwritable(detail.clone()).to_string(), detail);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
 }

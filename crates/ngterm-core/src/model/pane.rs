@@ -226,4 +226,27 @@ mod tests {
         assert!(!slot.is_present());
         assert_eq!(probe.teardowns(), 1);
     }
+
+    #[test]
+    fn replacing_and_moving_a_surface_leaves_teardown_to_its_owner() {
+        let first = FakeSurface::new("first");
+        let first_probe = first.probe();
+        let second = FakeSurface::new("second");
+        let second_probe = second.probe();
+        let mut slot = SurfaceSlot::default();
+        assert_eq!(format!("{slot:?}"), "SurfaceSlot(empty)");
+        slot.replace(Box::new(first));
+        let previous = slot.replace(Box::new(second)).unwrap();
+        assert_eq!(previous.pane_token(), "first");
+        assert_eq!(first_probe.teardowns(), 0);
+        assert!(format!("{slot:?}").contains("second"));
+        let moved = slot.take().unwrap();
+        assert!(!slot.is_present());
+        slot.teardown();
+        assert_eq!(second_probe.teardowns(), 0);
+        previous.teardown();
+        moved.teardown();
+        assert_eq!(first_probe.teardowns(), 1);
+        assert_eq!(second_probe.teardowns(), 1);
+    }
 }

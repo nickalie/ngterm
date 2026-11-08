@@ -196,4 +196,31 @@ mod tests {
         drop(lock);
         assert_eq!(fs::read_to_string(tmp.path().join(LOCK_FILE_NAME)).unwrap(), "kept");
     }
+
+    #[test]
+    fn a_directory_in_place_of_the_lock_file_cannot_be_claimed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(LOCK_FILE_NAME);
+        fs::create_dir(&path).unwrap();
+        let Outcome::Unavailable(detail) = StateDirectoryLock::acquire(tmp.path()) else {
+            panic!("a directory cannot be opened as the lock file");
+        };
+        assert!(detail.starts_with(&format!("cannot open {}: ", path.display())));
+        assert!(path.is_dir());
+        assert_eq!(
+            Outcome::Unavailable(detail.clone()).claim(tmp.path()).unwrap_err(),
+            format!("cannot claim the state directory: {detail}")
+        );
+    }
+
+    #[test]
+    fn claiming_an_owned_directory_keeps_its_lock_alive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lock = StateDirectoryLock::acquire(tmp.path()).claim(tmp.path()).unwrap();
+        assert!(matches!(
+            StateDirectoryLock::acquire(tmp.path()),
+            Outcome::HeldByAnother
+        ));
+        drop(lock);
+    }
 }
