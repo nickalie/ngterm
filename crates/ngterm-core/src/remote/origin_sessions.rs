@@ -397,3 +397,7 @@ impl Core {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "origin_sessions_tests.rs"]
+mod tests;

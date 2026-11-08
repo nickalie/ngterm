@@ -2259,4 +2259,124 @@ mod tests {
             Body::Snapshot(PresentationSnapshot::default())
         );
     }
+
+    #[test]
+    fn malformed_envelopes_report_the_exact_field_error() {
+        for (wire, reason) in [
+            (json!([]), "a frame is a JSON object"),
+            (
+                json!({"gen": null, "rev": 1, "kind": "ping"}),
+                "gen: expected an integer",
+            ),
+            (json!({"gen": 1, "kind": "ping"}), "missing rev"),
+            (
+                json!({"gen": 1, "rev": 1.5, "kind": "ping"}),
+                "rev: expected an integer",
+            ),
+            (json!({"gen": 1, "rev": 1, "kind": false}), "kind: expected a string"),
+            (json!({"gen": 1, "rev": 1}), "missing kind"),
+            (json!({"gen": 1, "rev": 1, "kind": "hello"}), "missing hello"),
+        ] {
+            let error = decode(&serde_json::to_vec(&wire).unwrap()).unwrap_err();
+            assert_eq!(error, FrameError::Malformed(reason.to_owned()));
+            assert_eq!(error.to_string(), format!("malformed frame: {reason}"));
+        }
+        assert_eq!(
+            FrameError::Oversize(300_000).to_string(),
+            "frame of 300000 bytes is over the limit"
+        );
+    }
+
+    #[test]
+    fn invalid_status_and_hud_values_are_refused_with_their_reason() {
+        for (kind, key, payload, reason) in [
+            (
+                "status",
+                "status",
+                json!({"status":"future", "blink":false}),
+                "unknown status: future",
+            ),
+            (
+                "status",
+                "status",
+                json!({"status":"blocked", "blink":false, "shape":"future"}),
+                "unknown shape: future",
+            ),
+            (
+                "status",
+                "status",
+                json!({"status":"blocked", "blink":false, "pane":"left"}),
+                "pane is neither scratch nor a uuid",
+            ),
+            (
+                "hud",
+                "hud",
+                json!({"spec":{"message":"hi", "spinner":"future"}}),
+                "unknown spinner: future",
+            ),
+            (
+                "hud",
+                "hud",
+                json!({"spec":{"message":"hi", "position":"future"}}),
+                "unknown hud position: future",
+            ),
+        ] {
+            let wire = json!({"kind":kind, "gen":1, "rev":1, key:payload});
+            assert_eq!(
+                decode(&serde_json::to_vec(&wire).unwrap()),
+                Err(FrameError::Malformed(format!("{key}: {reason}")))
+            );
+        }
+    }
+
+    #[test]
+    fn an_older_hud_gets_default_position_and_frame() {
+        let wire = br#"{"kind":"hud","gen":1,"rev":2,"hud":{"spec":{"message":"hello"},"generation":1}}"#;
+        let Body::Hud(Some(hud)) = decode(wire).unwrap().body else {
+            panic!("missing HUD")
+        };
+        assert_eq!(hud.spec.message, "hello");
+        assert_eq!(hud.spec.position, HudPosition::DEFAULT);
+        assert!(hud.spec.frame);
+        assert_eq!(hud.spec.spinner, None);
+    }
+
+    #[test]
+    fn invalid_ask_enum_values_are_refused_and_right_alignment_round_trips() {
+        let mut request = PresentationAsk::new(&ask(), None, 1);
+        request.align = AskAlignment::Right;
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["align"], "right");
+        assert_eq!(
+            serde_json::from_value::<PresentationAsk>(value.clone()).unwrap(),
+            request
+        );
+        for (field, reason) in [("style", "unknown style: future"), ("align", "unknown align: future")] {
+            let mut broken = value.clone();
+            broken[field] = json!("future");
+            assert_eq!(
+                serde_json::from_value::<PresentationAsk>(broken)
+                    .unwrap_err()
+                    .to_string(),
+                reason
+            );
+        }
+    }
+
+    #[test]
+    fn a_null_shape_round_trips_as_absent_and_scratch_is_a_wire_pane() {
+        let mut value = serde_json::to_value(status()).unwrap();
+        value["shape"] = Value::Null;
+        let status: PresentationStatus = serde_json::from_value(value).unwrap();
+        assert_eq!(status.shape, None);
+        assert!(serde_json::to_value(&status).unwrap().get("shape").is_none());
+        assert_eq!(
+            serde_json::to_string(&PresentationPane::Scratch).unwrap(),
+            "\"scratch\""
+        );
+        assert_eq!(
+            serde_json::from_str::<PresentationPane>("\"scratch\"").unwrap(),
+            PresentationPane::Scratch
+        );
+    }
 }
