@@ -377,3 +377,16 @@ fn the_editor_command_works_under_fish() {
     ));
     assert_eq!(fs::read_to_string(got).unwrap(), path);
 }
+
+#[test]
+fn the_starter_names_unspellable_default_chords_without_emitting_invalid_config() {
+    let defaults = ShippedDefaults::from_table([(A::NewSession, chord(CMD, "+"))], Vec::new());
+    let starter = starter_keymap_conf(&defaults);
+    let row = starter
+        .lines()
+        .find(|line| line.starts_with("#   new_session "))
+        .unwrap();
+    assert!(row.ends_with("(not expressible)"), "{row}");
+    let (_, diagnostics) = parse_keymap(&starter, &defaults);
+    assert!(diagnostics.is_empty());
+}

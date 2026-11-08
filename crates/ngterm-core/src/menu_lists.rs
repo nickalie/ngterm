@@ -281,4 +281,96 @@ mod tests {
             .current_cwd = Some("/no/such/ngterm/dir".to_owned());
         assert!(!core(library).can_reveal_active_session(window));
     }
+
+    #[test]
+    fn recent_choice_reopens_the_session_and_focuses_its_owner() {
+        let mut library = WindowLibrary::seeded("/tmp");
+        let window = library.active_window_id().unwrap();
+        let session = library.store(window).unwrap().selected_session_id().unwrap();
+        library.store_mut(window).unwrap().close_session(session);
+        let recent = library.recent_closed_items()[0].id;
+        let mut core = core(library);
+        core.perform_menu_list(window, MenuListAction::OpenRecent(recent));
+        assert!(core.library().store(window).unwrap().session(session).is_some());
+        assert_eq!(core.library().active_window_id(), Some(window));
+        assert!(core.take_window_requests().contains(&WindowRequest::Raise(window)));
+        assert!(core.recent_entries().is_empty());
+        core.perform_menu_list(window, MenuListAction::OpenRecent(recent));
+        assert!(core.take_window_requests().is_empty(), "a stale recent id is inert");
+    }
+
+    #[test]
+    fn a_modal_blocks_window_and_recent_choices_until_dismissed() {
+        use ngterm_proto::AskButton;
+        use ngterm_proto::command::AskCmd;
+
+        let mut library = WindowLibrary::seeded("/tmp");
+        let window = library.active_window_id().unwrap();
+        let session = library.store(window).unwrap().selected_session_id().unwrap();
+        library.store_mut(window).unwrap().close_session(session);
+        let recent = library.recent_closed_items()[0].id;
+        let other = library.new_window(Some("other"));
+        library.close_window(other);
+        let mut core = core(library);
+        let response = core.dispatch(&Request {
+            cmd: Command::Ask(AskCmd::Open),
+            target: None,
+            args: Some(Args {
+                window: Some(uuid_string(window)),
+                title: Some("Continue?".to_owned()),
+                style: Some("gui".to_owned()),
+                buttons: Some(vec![AskButton {
+                    id: "ok".to_owned(),
+                    label: "OK".to_owned(),
+                    hotkey: None,
+                }]),
+                ..Args::default()
+            }),
+        });
+        assert!(response.ok, "{response:?}");
+        core.perform_menu_list(window, MenuListAction::OpenRecent(recent));
+        core.perform_menu_list(window, MenuListAction::OpenWindow(other));
+        assert!(!core.library().is_open(other));
+        assert!(core.library().store(window).unwrap().session(session).is_none());
+        assert_eq!(core.recent_entries().sessions.len(), 1);
+    }
+
+    #[test]
+    fn missing_window_and_session_menu_targets_are_inert() {
+        let library = WindowLibrary::seeded("/tmp");
+        let window = library.active_window_id().unwrap();
+        let mut core = core(library);
+        let unknown = Uuid::new_v4();
+        core.perform_menu_list(window, MenuListAction::OpenWindow(unknown));
+        core.perform_menu_list(unknown, MenuListAction::RevealSession);
+        assert!(!core.can_reveal_active_session(unknown));
+        assert!(core.take_window_requests().is_empty());
+    }
+
+    #[test]
+    fn reveal_a_missing_directory_leaves_the_session_selected() {
+        let library = WindowLibrary::seeded("/no/such/ngterm/dir");
+        let window = library.active_window_id().unwrap();
+        let session = library.store(window).unwrap().selected_session_id();
+        let mut core = core(library);
+        core.perform_menu_list(window, MenuListAction::RevealSession);
+        assert_eq!(core.library().store(window).unwrap().selected_session_id(), session);
+        assert!(core.take_window_requests().is_empty());
+    }
+
+    #[test]
+    fn reveal_passes_the_selected_sessions_directory_to_the_frontend() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let library = WindowLibrary::seeded(dir.path().to_str().unwrap());
+        let window = library.active_window_id().unwrap();
+        let mut core = core(library);
+        let paths = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&paths);
+        core.set_reveal_handler(Box::new(move |path| sink.borrow_mut().push(path.to_owned())));
+        core.perform_menu_list(window, MenuListAction::RevealSession);
+        assert_eq!(*paths.borrow(), [dir.path().to_path_buf()]);
+    }
 }
