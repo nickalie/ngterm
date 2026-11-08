@@ -243,7 +243,7 @@ mod tests {
                 flagged_view_layout: Some(layout.into()),
                 ..AppSettings::default()
             };
-            let context = SidebarContext::take(store, &settings);
+            let context = SidebarContext::take(store, &settings, TintParts::ICON);
             assert_eq!(context.drop.view, expected);
             assert!(context.empty_flagged && context.footer.flagged_mode);
         }
