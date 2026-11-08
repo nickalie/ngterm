@@ -405,4 +405,65 @@ mod tests {
         );
         assert_eq!(read_memfd(sealed, 3, MEMFD_MAX).unwrap(), b"abc");
     }
+    fn header(kind: u8, body: u64, blob: u64, descriptors: u32) -> Vec<u8> {
+        let mut bytes = vec![kind];
+        bytes.extend_from_slice(&body.to_le_bytes());
+        bytes.extend_from_slice(&blob.to_le_bytes());
+        bytes.extend_from_slice(&descriptors.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn malformed_packet_headers_are_refused_with_the_reason() {
+        let cases = [
+            (vec![0; HEADER - 1], "20 bytes, shorter than its header"),
+            (header(7, 0, NO_BLOB, 0), "an unknown body kind 7"),
+            (header(INLINE, 2, NO_BLOB, 0), "0 body bytes where the header names 2"),
+            (header(INLINE, 0, NO_BLOB, 5), "0 descriptors where the header names 5"),
+        ];
+        for (bytes, message) in cases {
+            let error = decode(&bytes, Vec::new(), Limits::FROM_APP).unwrap_err();
+            assert_eq!(error.to_string(), format!("a broken packet: {message}"));
+        }
+        let mut duplicate = header(IN_MEMFD, 3, NO_BLOB, 0);
+        duplicate.extend_from_slice(b"abc");
+        let error = decode(&duplicate, vec![sealed_memfd(b"abc").unwrap()], Limits::FROM_APP).unwrap_err();
+        assert_eq!(error.to_string(), "a broken packet: a body both inline and in a memfd");
+    }
+
+    #[test]
+    fn sending_excess_descriptors_and_using_a_closed_peer_return_errors() {
+        let (ours, theirs) = pair();
+        let packet = Packet {
+            fds: (0..=MAX_BODY_FDS)
+                .map(|_| OwnedFd::from(tempfile::tempfile().unwrap()))
+                .collect(),
+            ..Packet::default()
+        };
+        assert_eq!(
+            send(ours.as_fd(), &packet).unwrap_err().to_string(),
+            "a broken packet: 5 descriptors in one body"
+        );
+        drop(theirs);
+        let WireError::Io(error) = send(ours.as_fd(), &Packet::default()).unwrap_err() else {
+            panic!("socket error")
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn excess_ancillary_descriptors_are_refused() {
+        let (ours, theirs) = pair();
+        let files: Vec<_> = (0..12).map(|_| tempfile::tempfile().unwrap()).collect();
+        let fds: Vec<_> = files.iter().map(AsFd::as_fd).collect();
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(12))];
+        let mut control = SendAncillaryBuffer::new(&mut space);
+        assert!(control.push(SendAncillaryMessage::ScmRights(&fds)));
+        let bytes = header(INLINE, 0, NO_BLOB, 0);
+        rustix::net::sendmsg(&ours, &[IoSlice::new(&bytes)], &mut control, SendFlags::NOSIGNAL).unwrap();
+        assert_eq!(
+            recv(theirs.as_fd(), Limits::FROM_APP).unwrap_err().to_string(),
+            "a broken packet: its descriptors were cut off"
+        );
+    }
 }

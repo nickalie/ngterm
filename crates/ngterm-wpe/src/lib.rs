@@ -85,3 +85,7 @@ pub use input::{Button, Input, Key, Modifiers, Pointer, PointerKind, Scroll};
 pub use spec::{
     Geometry, InjectionTime, MessageHandler, Rgba, SessionId, SessionSpec, Settings, UserScript, ViewId, ViewSpec,
 };
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;
