@@ -3,9 +3,9 @@
 use gpui_kit::{TestAppContext, size};
 use ngterm_core::html::{HtmlLoadState, HtmlOverlay, HtmlPageFlags, HtmlSource};
 
+use super::super::page::Storage;
 use super::*;
 use crate::html_overlay::panel::{PanelColors, TerminalColors};
-use crate::html_overlay::webview2::page::Storage;
 
 fn page() -> Rc<Page> {
     let overlay = HtmlOverlay::new(
