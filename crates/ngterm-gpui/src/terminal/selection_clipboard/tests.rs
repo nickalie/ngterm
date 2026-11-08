@@ -42,6 +42,32 @@ fn seed_selection(value: &str, cx: &mut App) {
     cx.write_to_primary(ClipboardItem::new_string(value.to_owned()));
 }
 
+/// The test thread's own selection pasteboard, released when the thread ends.
+#[cfg(target_os = "macos")]
+struct OwnPasteboard(String);
+
+#[cfg(target_os = "macos")]
+impl Drop for OwnPasteboard {
+    fn drop(&mut self) {
+        let pasteboard =
+            objc2_app_kit::NSPasteboard::pasteboardWithName(&objc2_foundation::NSString::from_str(&self.0));
+        // SAFETY: a live `NSPasteboard`, and this message's signature; no one else knows this name.
+        let () = unsafe { objc2::msg_send![&*pasteboard, releaseGlobally] };
+    }
+}
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    static OWN_PASTEBOARD: OwnPasteboard =
+        OwnPasteboard(format!("com.nickalie.ngterm.test.{}", uuid::Uuid::new_v4()));
+}
+
+/// The name the selection store reads and writes under test.
+#[cfg(target_os = "macos")]
+pub(super) fn store_pasteboard() -> String {
+    OWN_PASTEBOARD.with(|pasteboard| pasteboard.0.clone())
+}
+
 #[cfg(target_os = "macos")]
 fn selection(cx: &App) -> Option<String> {
     text(super::read_selection(cx))
@@ -136,6 +162,31 @@ fn the_selection_pasteboard_is_named_for_this_app() {
         super::selection_pasteboard_name(),
         NSPasteboard::generalPasteboard().name().to_string()
     );
+}
+
+/// The named pasteboard is real on macOS: before any selection it holds nothing, so a middle-click finds nothing.
+#[cfg(target_os = "macos")]
+#[gpui_kit::test]
+fn the_selection_pasteboard_starts_empty(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        seed_system("system clipboard", cx);
+        assert_eq!(text(read(ClipboardLocation::Selection, cx)), None);
+    });
+}
+
+/// The selection holds text alone, as the terminal's other copies do: an image leaves what it held.
+#[cfg(target_os = "macos")]
+#[gpui_kit::test]
+fn a_selection_write_without_text_keeps_the_selection(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        seed_selection("kept", cx);
+        write(
+            ClipboardLocation::Selection,
+            ClipboardItem::new_image(&gpui_kit::Image::empty()),
+            cx,
+        );
+        assert_eq!(selection(cx).as_deref(), Some("kept"));
+    });
 }
 
 /// Windows has no selection clipboard: before any selection, a middle-click finds nothing to paste.
