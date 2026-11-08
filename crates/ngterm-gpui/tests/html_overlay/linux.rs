@@ -16,6 +16,8 @@ use gpus::{Gpu, mesa_egl_vendor, mesa_gpu, pci_device};
 
 const GPU_ENV: &str = "NGTERM_HTML_TEST_GPU";
 const REQUIRE_ENV: &str = "NGTERM_REQUIRE_DISPLAY_TESTS";
+/// A data home the children share instead of a private one: the release smoke's, where a runtime is installed.
+const DATA_HOME_ENV: &str = "NGTERM_HTML_TEST_DATA_HOME";
 /// How long one GPU's child may run.
 const CHILD_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -122,6 +124,9 @@ fn run_child(exe: &Path, gpu: &Gpu, args: &[String]) -> Result<(), String> {
         let path: PathBuf = home.path().join(dir);
         std::fs::create_dir_all(&path).map_err(|err| err.to_string())?;
         command.env(name, path);
+    }
+    if let Some(data_home) = std::env::var_os(DATA_HOME_ENV) {
+        command.env("XDG_DATA_HOME", data_home);
     }
     command
         .env(GPU_ENV, gpu.name)

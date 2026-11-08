@@ -16,6 +16,12 @@
 #
 # A signed run is publishing or a rehearsal: only a signed run reaches the `release` environment.
 #
+# Linux packages carry no web engine: the app downloads a pinned runtime the first time a page needs it. The `linux`
+# job reuses the runtime published for its key, or builds it, and compiles its URL, size and SHA-256 into the app. The
+# runtime stays in that job's artifact on any run, and its SHA-256 joins SHA256SUMS. Only publishing puts it on its own
+# `web-engine-<key>` release (a prerelease, never "latest", so `releases/latest` keeps naming the app), before the app
+# release leaves draft. The key covers the architecture, so each architecture has its own release.
+#
 # The jobs, in order: build (no secrets, caches allowed), sign (no cache, and it executes nothing a build produced),
 # verify (runs the signed output), `checksums`, then `publish`. Files pass between them as artifacts, checked by
 # digest at every step (scripts/release-artifacts.py): each job that uploads reports the artifact's id, its files'
@@ -163,6 +169,26 @@ jobs:
         run: scripts/release-wpe-store.sh pull "$OS"
       - name: Portable WPE WebKit
         run: scripts/build-release-wpe.sh
+      # The published runtime for this key when there is one (a shipped app pins it, so it is never rebuilt), else this
+      # run's. Either way it lands in dist/ and its pins reach the app's build.
+      - name: Web engine runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          key="$(scripts/package-web-engine.sh --arch "$ARCH" --print-key)"
+          choice="$(python3 scripts/release-artifacts.py web-engine-fetch "$key" "$ARCH" dist)"
+          echo "web-engine-$key ($ARCH): $choice"
+          [[ "$choice" != upload ]] || scripts/package-web-engine.sh --arch "$ARCH" dist
+          name="ngterm-web-engine-$key-linux-$ARCH.tar.zst"
+          {
+            echo "NGTERM_WEB_ENGINE_KEY=$key"
+            echo "NGTERM_WEB_ENGINE_URL=https://github.com/$GH_REPO/releases/download/web-engine-$key/$name"
+            echo "NGTERM_WEB_ENGINE_SIZE=$(stat -c %s "dist/$name")"
+            echo "NGTERM_WEB_ENGINE_SHA256=$(sha256sum "dist/$name" | cut -d' ' -f1)"
+            echo "WEB_ENGINE_ARCHIVE=$name"
+          } >> "$GITHUB_ENV"
       - name: libghostty-vt and embedded fonts
         run: |
           scripts/build-ghostty-vt.sh
@@ -175,24 +201,49 @@ jobs:
           cargo test --locked -p ngterm-update
           cargo build --locked --release -p ngterm-gpui -p ngterm-wpe -p ngterm-ctl -p ngterm-session -p ngterm-headless
           scripts/stage.sh "$RUNNER_TEMP/stage" --profile release
-          cargo test --locked --release -p ngterm-wpe --test headless --no-run --message-format=json > "$RUNNER_TEMP/wpe-test.json"
-          python3 - "$RUNNER_TEMP/wpe-test.json" >> "$GITHUB_ENV" <<'PY'
+          cargo test --locked --release -p ngterm-gpui --test html_overlay --no-run --message-format=json > "$RUNNER_TEMP/html-test.json"
+          python3 - "$RUNNER_TEMP/html-test.json" >> "$GITHUB_ENV" <<'PY'
           import json
           import sys
 
           with open(sys.argv[1]) as source:
               artifacts = [json.loads(line) for line in source]
           binaries = [a["executable"] for a in artifacts if a.get("reason") == "compiler-artifact"
-                      and a["target"]["name"] == "headless" and a.get("executable")]
+                      and a["target"]["name"] == "html_overlay" and a.get("executable")]
           if len(binaries) != 1:
-              raise SystemExit("expected one WPE headless test executable")
-          print(f"NGTERM_WPE_SMOKE_BINARY={binaries[0]}")
+              raise SystemExit("expected one html_overlay test executable")
+          print(f"WEB_ENGINE_SMOKE_BINARY={binaries[0]}")
           PY
       - name: Linux archive, native packages and AppImage
         env:
           # the packaging tools' API fallback (scripts/lib/fetch-tool.sh): unauthenticated calls hit the shared limit
           GH_TOKEN: ${{ github.token }}
         run: scripts/package-release.sh "$RUNNER_TEMP/stage" "${{ needs.version.outputs.version }}" dist
+      # The packaged worker on the runtime an install gets, through the real `--install-web-engine` and the pins, with
+      # the build's WPE prefix out of reach so nothing falls back to it. The harness runs the worker beside its own
+      # target directory and takes its private data home from the variable. The profile is what lets WebKit's sandbox
+      # start here, as ngterm-release does for an install.
+      - name: Packaged worker on the runtime
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          sudo apt-get install -y --no-install-recommends libegl-mesa0 libgl1-mesa-dri
+          work="$RUNNER_TEMP/smoke"
+          mkdir -p "$work/deps" "$work/data"
+          tar -xzf "dist/ngterm-$VERSION-linux-$ARCH.tar.gz" -C "$work"
+          cp "$work/ngterm/usr/bin/ngterm-web" "$work/ngterm-web"
+          cp "$WEB_ENGINE_SMOKE_BINARY" "$work/deps/html_overlay"
+          scripts/install-apparmor-profile.sh "$work/deps/html_overlay"
+          XDG_DATA_HOME="$work/data" "$work/ngterm/usr/bin/ngterm" --install-web-engine "dist/$WEB_ENGINE_ARCHIVE"
+          manifest="$(find "$work/data" -path '*/web-engine/*/MANIFEST' -print -quit)"
+          grep -qx "key=$NGTERM_WEB_ENGINE_KEY" "$manifest"
+          grep -qx "arch=$ARCH" "$manifest"
+          mv "$NGTERM_RELEASE_WPE" "$work/hidden-wpe"
+          for filter in audio video; do
+            NGTERM_HTML_TEST_DATA_HOME="$work/data" NGTERM_REQUIRE_DISPLAY_TESTS=1 \
+              timeout 600 "$work/deps/html_overlay" "$filter"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: upload
         with:
@@ -205,7 +256,7 @@ jobs:
           ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
           ARCH: ${{ matrix.arch }}
         run: |
-          manifest="$(python3 scripts/release-artifacts.py manifest dist "$ARTIFACT_ID")"
+          manifest="$(python3 scripts/release-artifacts.py manifest dist "$ARTIFACT_ID" --web-engine "$WEB_ENGINE_ARCHIVE")"
           echo "manifest_$ARCH=$manifest" >> "$GITHUB_OUTPUT"
 
   windows-build:
@@ -923,7 +974,7 @@ jobs:
           artifact-ids: ${{ steps.ids.outputs.ids }}
           path: ${{ runner.temp }}/in
           merge-multiple: true
-      - name: SHA256SUMS over the release assets
+      - name: SHA256SUMS over the release assets and web engine runtimes
         run: |
           mkdir sums
           python3 scripts/release-artifacts.py sums "$RUNNER_TEMP/in" "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS" \
@@ -1040,7 +1091,7 @@ jobs:
           fi
           sudo apt-get update -q && sudo apt-get install -yq minisign
           scripts/sign-sums.sh "$RUNNER_TEMP/dist/SHA256SUMS" "$VERSION"
-      # Every release asset (the lines of SHA256SUMS, checked above), SHA256SUMS and its signature
+      # Every release asset and web engine runtime (the lines of SHA256SUMS, checked above), SHA256SUMS and its signature
       - name: Attestation subjects
         if: needs.version.outputs.publishing == 'true'
         run: |
@@ -1053,6 +1104,14 @@ jobs:
         if: needs.version.outputs.publishing == 'true'
         with:
           subject-checksums: ${{ runner.temp }}/attested
+      # Before the app release leaves draft: nothing published may pin a runtime that is not there yet
+      - name: Web engine releases
+        if: needs.version.outputs.publishing == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_COMMIT: ${{ needs.version.outputs.commit }}
+        run: python3 scripts/release-artifacts.py web-engine-publish "$RUNNER_TEMP/dist" "$RELEASE_COMMIT" "$LINUX_X86_64" "$LINUX_AARCH64"
       - name: GitHub Release
         if: needs.version.outputs.publishing == 'true'
         env:

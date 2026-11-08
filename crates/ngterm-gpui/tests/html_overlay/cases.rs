@@ -29,7 +29,7 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 31] = [
+pub const CASES: [(&str, Case); 32] = [
     (
         "an_image_document_renders_and_current_reload_rereads_the_source",
         image_document,
@@ -74,24 +74,25 @@ pub const CASES: [(&str, Case); 31] = [
         file_chooser_guard,
     ),
     ("a_granted_file_pages_audio_loads_from_beside_it", granted_audio),
+    ("a_granted_file_pages_video_decodes_and_plays", granted_video),
     (
         "a_play_of_a_granted_file_pages_audio_waits_for_its_rescue",
         granted_play,
     ),
     (
-        "a_source_replaced_during_a_slow_read_loads_and_the_late_failure_stays_silent",
+        "an_audio_source_replaced_during_a_slow_read_loads_and_the_late_failure_stays_silent",
         replica_audio_replaced,
     ),
     (
-        "a_rescued_source_given_another_file_plays_the_new_one",
+        "a_rescued_audio_source_given_another_file_plays_the_new_one",
         granted_source_switched,
     ),
     (
-        "a_play_of_an_unreadable_file_rejects_without_another_error",
+        "an_audio_play_of_an_unreadable_file_rejects_without_another_error",
         granted_unreadable_play,
     ),
     (
-        "a_play_survives_rescues_that_rerun_the_selection_twice",
+        "an_audio_play_survives_rescues_that_rerun_the_selection_twice",
         replica_play_reruns,
     ),
     (
@@ -107,27 +108,27 @@ pub const CASES: [(&str, Case); 31] = [
         replica_pause_before_rescue_autoplay,
     ),
     (
-        "a_pause_as_the_rescued_blob_is_swapped_in_still_aborts_the_play",
+        "an_audio_pause_as_the_rescued_blob_is_swapped_in_still_aborts_the_play",
         replica_pause_on_blob_swap,
     ),
     (
-        "a_later_sources_failure_stays_silent_while_an_earlier_one_is_rescued",
+        "a_later_audio_sources_failure_stays_silent_while_an_earlier_one_is_rescued",
         granted_later_source_silent,
     ),
     (
-        "a_later_sources_held_failure_is_told_once_the_earlier_one_is_removed",
+        "a_later_audio_sources_held_failure_is_told_once_the_earlier_one_is_removed",
         replica_held_failure_told_on_removal,
     ),
     (
-        "a_source_moved_to_another_element_during_its_read_plays_there",
+        "an_audio_source_moved_to_another_element_during_its_read_plays_there",
         replica_source_moved,
     ),
     (
-        "a_moved_sources_failed_read_is_told_once_in_its_new_element",
+        "a_moved_audio_sources_failed_read_is_told_once_in_its_new_element",
         replica_moved_source_fails,
     ),
     (
-        "a_play_after_a_reload_of_a_file_that_appeared_waits_for_a_fresh_rescue",
+        "an_audio_play_after_a_reload_of_a_file_that_appeared_waits_for_a_fresh_rescue",
         granted_unreadable_reloaded,
     ),
 ];
@@ -968,6 +969,46 @@ fn granted_audio(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     })?;
     check(close(seen, RED), || {
         "the page saw its audio fail to load (GStreamer's base and good plugins installed?)".to_owned()
+    })
+}
+
+/// A red 64x48 two-second VP8 clip: `ffmpeg -f lavfi -i color=c=0xc03030:s=64x48:d=2:r=10 -c:v libvpx -b:v 64k -an`.
+const RED_WEBM: &[u8] = include_bytes!("red.webm");
+
+/// A video beside a granted file page goes through demuxer, decoder and sink: its metadata carries the clip's size, a
+/// muted `play()` advances its clock, and a frame drawn onto a canvas is the clip's red. Red once all held, yellow on
+/// an error, and on the wrong pixels.
+fn granted_video(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    const YELLOW: [u8; 4] = [0xc0, 0xc0, 0x30, 0xff];
+    let overlay = fixture.granted_page(
+        "index.html",
+        "<body style='margin:0;background:#3030c0'>\
+         <video id=v src='red.webm' muted playsinline preload=auto></video>\
+         <script>
+           const v = document.getElementById('v');
+           const fail = () => { document.body.style.background = '#c0c030'; };
+           v.addEventListener('error', fail);
+           v.addEventListener('loadeddata', () => { v.play().catch(fail); });
+           v.addEventListener('timeupdate', () => {
+             if (v.currentTime < 0.4 || v.videoWidth !== 64 || v.videoHeight !== 48) return;
+             const canvas = document.createElement('canvas');
+             canvas.width = canvas.height = 1;
+             const context = canvas.getContext('2d');
+             context.drawImage(v, 0, 0, 1, 1);
+             const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
+             document.body.style.background = r > 150 && g < 90 && b < 90 ? '#c03030' : '#c0c030';
+           });
+         </script></body>",
+        &[("red.webm", RED_WEBM)],
+    )?;
+    let element = fixture.mount(&overlay, 320., 240.)?;
+    let mut seen = [0; 4];
+    fixture.until("the video's playing frame or an error", &element, |_, width, pixels| {
+        seen = pixel(pixels, width, width / 2, 200);
+        close(seen, RED) || close(seen, YELLOW)
+    })?;
+    check(close(seen, RED), || {
+        "the page saw its video fail to play or decode (GStreamer's vpx and matroska plugins installed?)".to_owned()
     })
 }
 

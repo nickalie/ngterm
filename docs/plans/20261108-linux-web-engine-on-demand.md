@@ -414,17 +414,30 @@ features; `scripts/lint.sh` with the repository virtualenv on PATH; `cargo fmt -
 **Files:**
 - Modify: `.github/workflows/release.yml`, `scripts/release-artifacts.py`, `conformance/selftests/` (its tests)
 
-- [ ] in job `linux`: compute the key by `--print-key`; when release `web-engine-<key>` lacks this arch's asset, build
+- [x] in job `linux`: compute the key by `--print-key`; when release `web-engine-<key>` lacks this arch's asset, build
       the runtime and hand it to publishing, otherwise download the published one for the smoke test
-- [ ] pass the runtime URL, size, SHA-256 and key to the app's cargo build
-- [ ] publishing creates or updates `web-engine-<key>` as a prerelease with `--latest=false`, before the app release
+- [x] pass the runtime URL, size, SHA-256 and key to the app's cargo build
+- [x] publishing creates or updates `web-engine-<key>` as a prerelease with `--latest=false`, before the app release
       leaves draft; dry runs keep the runtime as a workflow artifact; the runtime's SHA-256 joins the app's
       `SHA256SUMS`
-- [ ] the release smoke test runs the packaged `ngterm-web` against the extracted runtime with the build prefix
+- [x] the release smoke test runs the packaged `ngterm-web` against the extracted runtime with the build prefix
       hidden: the audio cases of `cases.rs` and a video case
-- [ ] write tests: `release-artifacts.py` chooses reuse versus upload per arch, and its engine release carries the
+- [x] write tests: `release-artifacts.py` chooses reuse versus upload per arch, and its engine release carries the
       prerelease and not-latest flags
-- [ ] run the selftests, `scripts/lint.sh` and a release dry run - must pass before Task 9
+- [x] run the selftests, `scripts/lint.sh` and a release dry run - must pass before Task 9
+
+Implementation notes: the runtime's key covers the architecture, so each architecture has its own `web-engine-<key>`
+release holding one asset. The runtime travels in the job's `release-linux-<arch>` artifact on every run, marked
+`web_engine` in its manifest: in `SHA256SUMS`, never an app release asset. `web-engine-publish` never replaces a
+published archive (a shipped app pins it) and fails when one under the same key differs. The smoke test runs the
+`ngterm-gpui` `html_overlay` harness, gaining a VP8 video case and `NGTERM_HTML_TEST_DATA_HOME`, against a runtime
+installed by the packaged `ngterm --install-web-engine`.
+
+Validation: `conformance/selftests` for the release scripts (44 passed), `scripts/lint.sh`, the video and audio cases
+headless on the dev box, `cargo test -p ngterm-update` with pins set, strict clippy for `ngterm-gpui`; release dry run
+42532459444 (`platforms=linux`) green on x86_64 and aarch64: runtime 122.2 MB and 115.3 MB, five audio cases and the
+video case on the packaged worker with the build prefix hidden, nothing published. That run came from a scratch `ci/`
+branch that only added an `actions/cache` step around the WPE prefix.
 
 ### Task 9: Verify acceptance criteria
 
@@ -457,7 +470,7 @@ features; `scripts/lint.sh` with the repository virtualenv on PATH; `cargo fmt -
 *Items requiring manual intervention or external systems - no checkboxes, informational only*
 
 **Manual verification**
-- The first real release: `web-engine-<key>` exists with both architectures and is not "latest"; the app downloads it
+- The first real release: a `web-engine-<key>` release exists for each architecture and neither is "latest"; the app downloads it
   on a clean Ubuntu 24.04 and a clean Fedora; auto-update from v0.1.1 lands on a package without the engine and then
   downloads the runtime on the first page.
 - AppArmor on Ubuntu 24.04: WebKit's sandbox starts from `ngterm-web` under the inherited profile.

@@ -14,12 +14,14 @@ text, so a line can't slip from one job to another:
 - permissions: read-only at the workflow level; only `publish` widens them (and `windows-sign` and `play-upload`,
   which other plans add), and `linux` adds package and attestation reads (its WPE prefix from GHCR, provenance-checked),
   each to exactly its listed scopes;
-- publishing only: a step that writes a GitHub release (`gh release`, `gh api .../releases`, a release action) or
-  attests, and every channel or store job (`aur`, `homebrew`, `winget`, `play-upload`), has `publishing == 'true'`
+- publishing only: a step that writes a GitHub release (`gh release`, `gh api .../releases`, a release action,
+  `release-artifacts.py web-engine-publish`) or attests, and every channel or store job (`aur`, `homebrew`, `winget`, `play-upload`), has `publishing == 'true'`
   as a top-level conjunct of its own condition or its job's, so no `||` lets a rehearsal or a dry run through;
 - the release: `publish` passes every platform's manifest (Linux both arches, Windows, macOS, iOS, Android) and
   `SHA256SUMS` to its download ids and digest check, every platform's to its asset list, and its `gh release upload`
-  sends the assets, `SHA256SUMS` and the signature.
+  sends the assets, `SHA256SUMS` and the signature. Linux marks its runtime with `--web-engine` in the manifest.
+  Both Linux manifests go to the `web-engine-publish` step, which comes before the step that takes the app release
+  out of draft, so no published app pins a runtime not yet hosted.
 
 What it guards against: an honest edit that breaks one of these, caught by the lint CI. It doesn't parse the shell a
 job runs, so that a signing job never starts a program it downloaded is left to review (user, 2026-11-07); and
@@ -139,6 +141,7 @@ def writes_release(step):
     return (
         bool(re.search(r"\bgh\b[^\n;|&]*\srelease\b", command))
         or bool(re.search(r"\bgh\b[^\n;|&]*\sapi\b[^\n]*/releases", command))
+        or "release-artifacts.py web-engine-publish" in command
         or step.get("uses", "").startswith(RELEASE_ACTIONS)
     )
 
@@ -208,7 +211,34 @@ def check_publish(publish):
             problems.append("publish: the upload doesn't send SHA256SUMS")
         if '"${signature[@]}"' not in arguments and "SHA256SUMS.minisig" not in arguments:
             problems.append("publish: the upload doesn't send SHA256SUMS.minisig")
+    problems += check_web_engine_step(publish)
     return problems
+
+
+def check_web_engine_step(publish):
+    """The runtimes go up from both Linux manifests, before the app release leaves draft."""
+    order = [step.get("run", "") for step in steps(publish)]
+    engine = next((i for i, run in enumerate(order) if "release-artifacts.py web-engine-publish" in run), None)
+    if engine is None:
+        return ["publish: no `release-artifacts.py web-engine-publish` step"]
+    problems = []
+    missing = [m for m in ("LINUX_X86_64", "LINUX_AARCH64") if f"${m}" not in order[engine]]
+    if missing:
+        problems.append(f"publish: `web-engine-publish` leaves out {', '.join(missing)}")
+    undraft = next((i for i, run in enumerate(order) if "--draft=false" in run), None)
+    if undraft is None:
+        problems.append("publish: no step takes the app release out of draft")
+    elif undraft < engine:
+        problems.append("publish: the app release leaves draft before `web-engine-publish`")
+    return problems
+
+
+def check_linux_web_engine(linux):
+    """The Linux manifest distinguishes the runtime from the app's release assets."""
+    manifest = next((line for line in runs(linux).splitlines() if "release-artifacts.py manifest" in line), "")
+    if '--web-engine "$WEB_ENGINE_ARCHIVE"' not in manifest:
+        return ['linux: the manifest must mark its runtime with --web-engine "$WEB_ENGINE_ARCHIVE"']
+    return []
 
 
 def check(workflow):
@@ -221,6 +251,7 @@ def check(workflow):
     jobs = workflow.get("jobs") or {}
     for name, job in jobs.items():
         problems += check_job(name, job)
+    problems += check_linux_web_engine(jobs.get("linux", {}))
     if "publish" in jobs:
         problems += check_publish(jobs["publish"])
     else:
@@ -325,6 +356,8 @@ def self_test():
            lambda j, w: add_run(j["checksums"], 'gh -R "$GH_REPO" release edit "$RELEASE_TAG" --draft=false'))
     caught("writes the release or attests",
            lambda j, w: add_run(j["checksums"], 'gh --repo o/r api -X PATCH /repos/o/r/releases/1'))
+    caught("writes the release or attests", lambda j, w: add_run(
+        j["checksums"], 'python3 scripts/release-artifacts.py web-engine-publish dist "$COMMIT" "$LINUX_X86_64"'))
     # the release
     caught("publish: missing", lambda j, w: j.pop("publish"))
     caught("no IOS manifest", lambda j, w: j["publish"]["env"].pop("IOS"))
@@ -340,6 +373,26 @@ def self_test():
            lambda j, w: edit_run(j["publish"], "gh release upload", " SHA256SUMS ", " "))
     caught("doesn't send the release assets",
            lambda j, w: edit_run(j["publish"], "gh release upload", ' "${assets[@]}"', ""))
+    # the web engine runtimes
+    caught("no `release-artifacts.py web-engine-publish` step", lambda j, w: j["publish"]["steps"].__setitem__(
+        slice(None), [s for s in j["publish"]["steps"] if "web-engine-publish" not in s.get("run", "")]))
+    caught("`web-engine-publish` leaves out LINUX_AARCH64",
+           lambda j, w: edit_run(j["publish"], "web-engine-publish", ' "$LINUX_AARCH64"', ""))
+    caught("no step takes the app release out of draft",
+           lambda j, w: edit_run(j["publish"], "gh release edit", '--draft=false', ''))
+    caught("no step takes the app release out of draft", lambda j, w: edit_run(
+        j["publish"], "gh release edit", 'gh release edit "$RELEASE_TAG" --draft=false',
+        'gh api -X PATCH repos/o/r/releases/1 -F draft=false'))
+    caught("linux: the manifest must mark its runtime",
+           lambda j, w: edit_run(j["linux"], "release-artifacts.py manifest",
+                                 ' --web-engine "$WEB_ENGINE_ARCHIVE"', ""))
+
+    def undraft_first(j, w):
+        job_steps = j["publish"]["steps"]
+        engine = next(s for s in job_steps if "web-engine-publish" in s.get("run", ""))
+        job_steps.remove(engine)
+        job_steps.append(engine)
+    caught("leaves draft before", undraft_first)
     print("check-release-workflow self-test: ok")
 
 
