@@ -550,9 +550,19 @@ fn hovering_a_hud_link_marks_it_and_leaving_or_adding_a_modifier_clears_it(cx: &
     assert!(view.read_with(h.cx, |view, _| view.hovered_link().is_none()));
     h.cx.simulate_mouse_move(at, None, Modifiers::control());
     h.turn();
-    h.cx.simulate_mouse_move(gpui_kit::point(px(0.), px(0.)), None, Modifiers::default());
+    assert!(view.read_with(h.cx, |view, _| view.hovered_link().is_some()));
+    // Control still held: only leaving the panel clears it
+    h.cx.simulate_mouse_move(gpui_kit::point(px(0.), px(0.)), None, Modifiers::control());
     h.turn();
     assert!(view.read_with(h.cx, |view, _| view.hovered_link().is_none()));
+    // an app config change: the panel takes it under its own overlay (its padding) again
+    let padding =
+        |cx: &gpui_kit::VisualTestContext| terminal.read_with(cx, |terminal, _| terminal.shared().config().padding);
+    let own = padding(h.cx);
+    terminal.update(h.cx, |terminal, cx| {
+        terminal.set_config(crate::terminal::TerminalConfig::default(), cx);
+    });
+    assert_ne!(padding(h.cx), own, "the default config has no panel padding");
     h.deck.update(h.cx, |deck, cx| {
         deck.page(h.session)
             .unwrap()
@@ -561,5 +571,6 @@ fn hovering_a_hud_link_marks_it_and_leaving_or_adding_a_modifier_clears_it(cx: &
             .unwrap()
             .apply_config(deck.env(), cx);
     });
+    assert_eq!(padding(h.cx), own);
     terminal.read_with(h.cx, |terminal, _| terminal.shared().teardown());
 }

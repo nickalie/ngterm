@@ -387,7 +387,8 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
         }
         shell.windows.borrow_mut().sync(state, cx)
     });
-    #[cfg(target_os = "macos")]
+    // the native menu is AppKit's, built on the main thread: tests (on libtest's threads) keep off it
+    #[cfg(all(target_os = "macos", not(test)))]
     crate::app_menu::macos::sync(&state.read(cx).core);
     // the setting as the core holds it now: applied at once when it changed (the launch's load, a Settings edit)
     let locked = state.read(cx).core.settings().terminal_input_source.clone();
@@ -827,15 +828,18 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn prompts_for_gone_windows_are_dropped_and_a_quit_without_a_window_proceeds(cx: &mut gpui_kit::TestAppContext) {
+    fn prompts_for_gone_windows_are_dropped_and_leave_the_live_window_alone(cx: &mut gpui_kit::TestAppContext) {
         let dir = tempfile::Builder::new()
             .prefix("ngt")
             .tempdir_in(std::env::temp_dir())
             .unwrap();
         let shell = cx.update(|cx| test_shell(dir.path(), cx));
+        cx.update(|cx| land(&shell, &shell.state, cx));
+        cx.run_until_parked();
         cx.update(|cx| {
-            let id = uuid::Uuid::new_v4();
-            let work = crate::state::FrontendWork {
+            let live = shell.state.read(cx).core.library().active_window_id().unwrap();
+            let gone = uuid::Uuid::new_v4();
+            let prompts = |id: uuid::Uuid| crate::state::FrontendWork {
                 window_closes: vec![crate::state::WindowClose {
                     window: id,
                     name: "gone".to_owned(),
@@ -845,7 +849,22 @@ mod tests {
                 clear_flags: Some((id, 1)),
                 ..crate::state::FrontendWork::default()
             };
-            land_window_prompts(&shell, &work, cx);
+            land_window_prompts(&shell, &prompts(gone), cx);
+            assert_eq!(alert_heading(&shell, cx), None, "no prompt lands over the live window");
+            land_window_prompts(&shell, &prompts(live), cx);
+            assert!(alert_heading(&shell, cx).is_some(), "while its own prompts do");
+            shut_down(&shell, cx);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_reset_or_quit_without_a_window_proceeds(cx: &mut gpui_kit::TestAppContext) {
+        let dir = tempfile::Builder::new()
+            .prefix("ngt")
+            .tempdir_in(std::env::temp_dir())
+            .unwrap();
+        let shell = cx.update(|cx| test_shell(dir.path(), cx));
+        cx.update(|cx| {
             land_live_reset(
                 &shell,
                 &shell.state,
@@ -914,7 +933,6 @@ mod tests {
         cx.run_until_parked();
         cx.update(|cx| {
             let work = crate::state::FrontendWork {
-                sounds: vec!["beep".to_owned()],
                 welcome: true,
                 banners: vec![ngterm_core::NotificationEffect::App {
                     identity: "update".to_owned(),
