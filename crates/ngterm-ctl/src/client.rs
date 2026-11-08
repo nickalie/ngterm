@@ -284,7 +284,13 @@ impl Read for Bounded<'_> {
         if left.is_zero() {
             return Err(ErrorKind::TimedOut.into());
         }
-        self.stream.set_read_timeout(Some(left.max(MIN_WAIT)))?;
+        // macOS refuses a socket option (EINVAL) once the peer has closed, even with its reply still buffered: such
+        // a socket's read cannot wait, so it goes ahead unbounded
+        if let Err(error) = self.stream.set_read_timeout(Some(left.max(MIN_WAIT)))
+            && error.kind() != ErrorKind::InvalidInput
+        {
+            return Err(error);
+        }
         (&*self.stream).read(buf)
     }
 }
@@ -608,6 +614,21 @@ mod tests {
         assert!(!error.message.contains("os error"), "{error}");
         assert_eq!(error.connect_error, None);
         server.join().unwrap();
+    }
+
+    /// A peer that replied and hung up before the read was bounded still has its reply read: macOS refuses a socket
+    /// option (EINVAL) on a connection whose peer has closed, with the reply still buffered.
+    #[cfg(unix)]
+    #[test]
+    fn a_bounded_read_takes_the_reply_of_a_peer_that_already_hung_up() {
+        let (ours, theirs) = ngterm_server::endpoint::pair().unwrap();
+        send_all(&theirs, b"ok\n").unwrap();
+        drop(theirs);
+        let line = read_line(&mut Bounded {
+            stream: &ours,
+            deadline: Instant::now() + Duration::from_secs(5),
+        });
+        assert_eq!(line, Some(b"ok".to_vec()));
     }
 
     #[test]
