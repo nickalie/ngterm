@@ -4,11 +4,10 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::{ExitStatus, GridSize, Pane, PaneConfig, PaneEvent};
+use crate::{ExitStatus, FrameSnapshot, GridSize, Pane, PaneConfig, PaneEvent};
 
 const SIZE: GridSize = GridSize {
     cols: 20,
@@ -16,7 +15,7 @@ const SIZE: GridSize = GridSize {
     cell_width: 8,
     cell_height: 16,
 };
-/// How long one wake may take before the test fails, not a pacing delay.
+/// How long a screen or wake may take before the test fails, not a pacing delay.
 const WAKE_LIMIT: Duration = Duration::from_secs(20);
 
 /// A painted pane over `file`, and the wakes it sends.
@@ -40,19 +39,38 @@ fn write_body(file: &Path, body: &str) {
 /// Waits for wakes until the screen's lines are `expected`, collecting the events on the way. A stale frame (a lock
 /// was busy) is read again at once, as a frontend asks for another: the wake for what it missed may have come before.
 fn until_screen(pane: &Pane, wakes: &Receiver<()>, expected: &[&str], events: &mut Vec<PaneEvent>) {
+    until_screen_with(pane, wakes, expected, events, Instant::now() + WAKE_LIMIT, || {
+        pane.frame()
+    });
+}
+
+/// The same wait with a frame reader and deadline supplied so tests can force a stale read and a timeout.
+fn until_screen_with(
+    pane: &Pane,
+    wakes: &Receiver<()>,
+    expected: &[&str],
+    events: &mut Vec<PaneEvent>,
+    deadline: Instant,
+    mut read: impl FnMut() -> FrameSnapshot,
+) {
     loop {
-        let snapshot = pane.frame();
+        let snapshot = read();
         let lines = snapshot.frame.lines();
         events.extend(pane.take_events());
         if lines.iter().map(|line| line.trim_end()).eq(expected.iter().copied()) {
             return;
         }
+        assert!(
+            Instant::now() < deadline,
+            "screen stayed {lines:?} (stale: {}), waiting for {expected:?}",
+            snapshot.stale
+        );
         if snapshot.stale {
             std::thread::yield_now();
             continue;
         }
         wakes
-            .recv_timeout(WAKE_LIMIT)
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .unwrap_or_else(|_| panic!("no wake while the screen shows {lines:?}, waiting for {expected:?}"));
     }
 }
@@ -114,30 +132,44 @@ fn a_painted_pane_without_its_file_ends_at_once_and_one_dropped_stops_painting()
     assert!(file.exists(), "the pane never removes the body");
 }
 
-/// Sets its flag when dropped, a panic's unwinding included.
-struct SetOnDrop<'a>(&'a AtomicBool);
-
-impl Drop for SetOnDrop<'_> {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::Release);
-    }
+#[test]
+fn a_stale_frame_is_read_again_without_another_wake() {
+    let (pane, _feed, _out) = Pane::stream(&PaneConfig::new(SIZE)).unwrap();
+    let (_woke, wakes) = mpsc::channel();
+    let mut stale_read = false;
+    until_screen_with(
+        &pane,
+        &wakes,
+        &["kept", "", "", ""],
+        &mut Vec::new(),
+        Instant::now() + WAKE_LIMIT,
+        || {
+            if stale_read {
+                pane.frame()
+            } else {
+                // the terminal has changed, but the busy lock makes this read return the old published frame
+                let mut vt = crate::pane::lock(&pane.shared().vt);
+                vt.terminal.vt_write(b"kept");
+                let snapshot = pane.frame();
+                assert!(snapshot.stale);
+                assert!(!snapshot.frame.lines().iter().any(|line| line.contains("kept")));
+                stale_read = true;
+                // releasing the lock sends no wake: only another read can see the new frame
+                snapshot
+            }
+        },
+    );
+    assert!(stale_read, "the wait read a stale, mismatching frame");
+    assert!(wakes.try_recv().is_err(), "no wake was sent");
 }
 
 #[test]
-fn a_painted_pane_shows_its_body_while_another_view_paints_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("body.txt");
-    write_body(&file, "20 4 0 0 0.05 - 0\nkept\n");
-    let (pane, wakes) = painted(&file);
-    let done = AtomicBool::new(false);
-    std::thread::scope(|scope| {
-        // a second view painting the same pane: a frame read while it captures is the previous one, marked stale
-        scope.spawn(|| {
-            while !done.load(Ordering::Acquire) {
-                let _ = pane.frame();
-            }
-        });
-        let _stop = SetOnDrop(&done);
-        until_screen(&pane, &wakes, &["", "        kept", "", ""], &mut Vec::new());
+#[should_panic(expected = "screen stayed")]
+fn a_screen_wait_fails_at_its_deadline_even_when_every_frame_is_stale() {
+    let (pane, _feed, _out) = Pane::stream(&PaneConfig::new(SIZE)).unwrap();
+    let (_woke, wakes) = mpsc::channel();
+    let _vt = crate::pane::lock(&pane.shared().vt);
+    until_screen_with(&pane, &wakes, &["never"], &mut Vec::new(), Instant::now(), || {
+        pane.frame()
     });
 }
