@@ -740,4 +740,102 @@ mod tests {
             "{error}"
         );
     }
+
+    #[test]
+    fn a_string_with_a_nul_is_refused() {
+        let error = wide(OsStr::new("a\0b")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(error.to_string(), "a\0b holds a NUL");
+        assert_eq!(wide(OsStr::new("ab")).unwrap(), [u16::from(b'a'), u16::from(b'b'), 0]);
+    }
+
+    #[test]
+    fn a_command_that_is_not_valid_unicode_is_refused() {
+        use std::os::windows::ffi::OsStringExt as _;
+
+        let unpaired = OsString::from_wide(&[u16::from(b'a'), 0xd800]);
+        let command = ServerCommand {
+            executable: PathBuf::from(r"C:\ngterm\ngterm-session.exe"),
+            args: vec![unpaired],
+            env: Vec::new(),
+            cwd: None,
+        };
+        let error = command_line(&command).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            error.to_string(),
+            "an argument of the server's command is not valid Unicode"
+        );
+    }
+
+    #[test]
+    fn an_exchange_that_panics_fails_as_such() {
+        let (_root, _listener, client, _server) = connected_pair();
+        let error = exchange_within(client, Duration::from_secs(30), |_| -> Result<(), FramingError> {
+            panic!("the exchange panics")
+        })
+        .unwrap_err();
+        assert!(
+            matches!(&error, FramingError::Io(error) if error.to_string() == "the handshake thread panicked"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_exchange_done_once_its_timeout_ran_out_but_before_the_cancel_still_counts() {
+        let (_root, _listener, client, _server) = connected_pair();
+        // no pipe operation for the cancel to end: the exchange finishes on its own, within the cancel's wait
+        let (_stream, value) = exchange_within(client, Duration::from_millis(50), |_| {
+            thread::sleep(Duration::from_millis(300));
+            Ok(7)
+        })
+        .unwrap();
+        assert_eq!(value, 7);
+    }
+
+    #[test]
+    fn an_exchange_that_holds_on_past_the_cancels_wait_is_left_behind() {
+        let (_root, _listener, client, _server) = connected_pair();
+        let timeout = Duration::from_millis(50);
+        let started = Instant::now();
+        let error = exchange_within(client, timeout, |_| {
+            thread::sleep(CANCEL_TIMEOUT * 3);
+            Ok(())
+        })
+        .unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(
+            matches!(&error, FramingError::Io(error) if error.kind() == io::ErrorKind::TimedOut),
+            "{error}"
+        );
+        assert_eq!(error.to_string(), "I/O error: the peer did not answer within 0.05s");
+        assert!(
+            elapsed >= timeout + CANCEL_TIMEOUT && elapsed < CANCEL_TIMEOUT * 3,
+            "{elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn an_ended_process_whose_status_cannot_be_read_ended_unknown() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "--list"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        child.wait().unwrap();
+        // the child's own handle keeps the process; this one may wait for it but not read its status
+        // SAFETY: OpenProcess takes no pointers; the result is checked before it is owned.
+        let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, child.id()) };
+        assert!(!raw.is_null(), "{}", io::Error::last_os_error());
+        // SAFETY: a fresh handle nothing else owns.
+        let mut process = Process(Some(unsafe { OwnedHandle::from_raw_handle(raw) }));
+        assert_eq!(process.try_exit(), Some(Exit::Unknown));
+    }
+
+    #[test]
+    fn a_wmi_start_that_cannot_be_opened_fails() {
+        // the System process, which no user process may terminate
+        let error = track(4).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    }
 }

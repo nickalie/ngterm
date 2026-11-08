@@ -231,3 +231,7 @@ fn check_server_user(stream: &Stream, endpoint: &Endpoint) -> io::Result<()> {
         .ok_or_else(|| io::Error::other("the pipe's server process id is unknown"))?;
     ngterm_core::pipe_security::check_server_user(endpoint, server_pid)
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;

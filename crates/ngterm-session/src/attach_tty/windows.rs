@@ -313,7 +313,17 @@ pub(super) fn write_out(bytes: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use windows_sys::Win32::System::Console::SHIFT_PRESSED;
+    use std::fs::OpenOptions;
+    use std::os::windows::process::CommandExt as _;
+    use std::process::{Command, Output, Stdio};
+    use std::sync::mpsc;
+    use std::time::Instant;
+
+    use windows_sys::Win32::System::Console::{
+        FOCUS_EVENT, FOCUS_EVENT_RECORD, KEY_EVENT_RECORD_0, SHIFT_PRESSED, SMALL_RECT, STD_HANDLE,
+        SetConsoleWindowInfo, SetStdHandle, WriteConsoleInputW,
+    };
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
     use super::*;
 
@@ -342,5 +352,277 @@ mod tests {
         decoder.push(pair[1], &mut out);
         decoder.push(0x1b, &mut out);
         assert_eq!(out, "a€😀\x1b".as_bytes());
+    }
+
+    #[test]
+    fn a_nul_unit_decodes_to_nothing() {
+        let mut out = Vec::new();
+        Utf16Decoder::default().push(0, &mut out);
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn a_handle_that_is_no_console_has_no_mode_to_read_or_set() {
+        let file = tempfile::tempfile().unwrap();
+        let handle = file.as_raw_handle();
+        assert_eq!(
+            console_mode(handle).unwrap_err().raw_os_error(),
+            Some(6),
+            "ERROR_INVALID_HANDLE"
+        );
+        assert_eq!(
+            set_console_mode(handle, ENABLE_WINDOW_INPUT)
+                .unwrap_err()
+                .raw_os_error(),
+            Some(6)
+        );
+    }
+
+    #[test]
+    fn console_input_that_cannot_be_read_ends_at_once() {
+        let file = tempfile::tempfile().unwrap();
+        let (send, receive) = mpsc::channel::<TtyEvent>();
+        read_console(&ConsoleInput(file.as_raw_handle()), &send);
+        drop(send);
+        assert_eq!(receive.iter().collect::<Vec<_>>(), [TtyEvent::InputEnd]);
+    }
+
+    /// Set in the child a test starts (this test binary again, running only that test): which test's child it is.
+    const CHILD: &str = "ATTACH_TTY_TEST_CHILD";
+    /// What a child writes to its standard error once its checks passed.
+    const CHILD_DONE: &str = "attach-tty child done";
+
+    /// Whether this process is the child of test `name`.
+    fn is_child(name: &str) -> bool {
+        std::env::var_os(CHILD).is_some_and(|child| child == name)
+    }
+
+    /// This test binary run again as the child of test `name` (running that test alone) on `stdin`, with `input`
+    /// written to it when it is piped, in a console of its own without a window; it passed once it reported
+    /// [`CHILD_DONE`]. Ended after a minute.
+    fn run_child(name: &str, stdin: Stdio, input: Option<&[u8]>) {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("attach_tty::windows::tests::{name}"), "--nocapture"])
+            .env(CHILD, name)
+            .stdin(stdin)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .unwrap();
+        // held open until the child ends: its input ends only when the child stops reading
+        let mut writer = child.stdin.take();
+        if let (Some(writer), Some(input)) = (writer.as_mut(), input) {
+            writer.write_all(input).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let Output { status, stderr, .. } = child.wait_with_output().unwrap();
+        drop(writer);
+        let stderr = String::from_utf8_lossy(&stderr);
+        assert!(status.success() && stderr.contains(CHILD_DONE), "{status}: {stderr}");
+    }
+
+    /// The child's console: its input and its output buffer.
+    fn console() -> (File, File) {
+        let open = |name| OpenOptions::new().read(true).write(true).open(name).unwrap();
+        (open("CONIN$"), open("CONOUT$"))
+    }
+
+    fn set_std(which: STD_HANDLE, handle: &File) {
+        // SAFETY: an open handle this process keeps for the rest of the child's run.
+        assert_ne!(unsafe { SetStdHandle(which, handle.as_raw_handle()) }, 0);
+    }
+
+    fn key(unit: u16, down: bool) -> INPUT_RECORD {
+        let mut record = INPUT_RECORD {
+            EventType: u16::try_from(KEY_EVENT).unwrap(),
+            ..INPUT_RECORD::default()
+        };
+        record.Event.KeyEvent = KEY_EVENT_RECORD {
+            bKeyDown: down.into(),
+            wRepeatCount: 1,
+            uChar: KEY_EVENT_RECORD_0 { UnicodeChar: unit },
+            ..KEY_EVENT_RECORD::default()
+        };
+        record
+    }
+
+    fn write_input(console: &File, records: &[INPUT_RECORD]) {
+        let mut written = 0_u32;
+        let length = u32::try_from(records.len()).unwrap();
+        // SAFETY: a console input handle, `length` records and a valid out-pointer.
+        let ok = unsafe { WriteConsoleInputW(console.as_raw_handle(), records.as_ptr(), length, &raw mut written) };
+        assert_ne!(ok, 0, "{}", io::Error::last_os_error());
+        assert_eq!(written, length);
+    }
+
+    /// The console in raw mode reads key presses as their characters and a window-size record as a size change,
+    /// ignores the records it has no use for (focus), stops once nobody takes its events, and is restored on drop.
+    #[test]
+    fn a_console_reads_keys_and_size_changes_until_nobody_listens() {
+        if !is_child("a_console_reads_keys_and_size_changes_until_nobody_listens") {
+            run_child(
+                "a_console_reads_keys_and_size_changes_until_nobody_listens",
+                Stdio::null(),
+                None,
+            );
+            return;
+        }
+        let (input, output) = console();
+        set_std(STD_INPUT_HANDLE, &input);
+        set_std(STD_OUTPUT_HANDLE, &output);
+        let before = console_mode(input.as_raw_handle()).unwrap();
+        let raw = RawMode::enter().unwrap();
+        assert_eq!(
+            console_mode(input.as_raw_handle()).unwrap(),
+            ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT | ENABLE_EXTENDED_FLAGS
+        );
+        let mut focus = INPUT_RECORD {
+            EventType: u16::try_from(FOCUS_EVENT).unwrap(),
+            ..INPUT_RECORD::default()
+        };
+        focus.Event.FocusEvent = FOCUS_EVENT_RECORD { bSetFocus: 1 };
+        // its size is not read: the size is the window's
+        let resize = INPUT_RECORD {
+            EventType: u16::try_from(WINDOW_BUFFER_SIZE_EVENT).unwrap(),
+            ..INPUT_RECORD::default()
+        };
+        write_input(
+            &input,
+            &[focus, key(u16::from(b'a'), true), key(u16::from(b'a'), false), resize],
+        );
+        let (send, receive) = mpsc::channel::<TtyEvent>();
+        let console_input = ConsoleInput(input.as_raw_handle());
+        let reader = thread::spawn(move || read_console(&console_input, &send));
+        let timeout = Duration::from_secs(10);
+        assert_eq!(receive.recv_timeout(timeout), Ok(TtyEvent::Input(b"a".to_vec())));
+        assert_eq!(receive.recv_timeout(timeout), Ok(TtyEvent::Resize));
+        drop(receive);
+        write_input(&input, &[key(u16::from(b'b'), true)]);
+        reader.join().unwrap();
+        drop(raw);
+        assert_eq!(console_mode(input.as_raw_handle()).unwrap(), before);
+        eprintln!("{CHILD_DONE}");
+    }
+
+    /// A console that refuses a mode fails raw mode, and leaves both handles as they were.
+    #[test]
+    fn a_console_refusing_raw_mode_is_left_as_it_was() {
+        if !is_child("a_console_refusing_raw_mode_is_left_as_it_was") {
+            run_child("a_console_refusing_raw_mode_is_left_as_it_was", Stdio::null(), None);
+            return;
+        }
+        let (input, output) = console();
+        // an output buffer for the input: it takes no input mode
+        set_std(STD_INPUT_HANDLE, &output);
+        set_std(STD_OUTPUT_HANDLE, &output);
+        let before = console_mode(output.as_raw_handle()).unwrap();
+        assert!(RawMode::enter().unwrap_err().raw_os_error().is_some());
+        assert_eq!(console_mode(output.as_raw_handle()).unwrap(), before);
+        // the input for the output too, which then would echo without line input: the console refuses that
+        let second = input.try_clone().unwrap();
+        set_console_mode(input.as_raw_handle(), ENABLE_EXTENDED_FLAGS).unwrap();
+        set_std(STD_INPUT_HANDLE, &input);
+        set_std(STD_OUTPUT_HANDLE, &second);
+        assert!(RawMode::enter().unwrap_err().raw_os_error().is_some());
+        assert_eq!(console_mode(input.as_raw_handle()).unwrap(), ENABLE_EXTENDED_FLAGS);
+        eprintln!("{CHILD_DONE}");
+    }
+
+    /// The window's width set to `cols`, its height kept.
+    fn set_window_width(output: &File, cols: i16) {
+        let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
+        // SAFETY: a console output handle and a valid out-pointer.
+        let read = unsafe { GetConsoleScreenBufferInfo(output.as_raw_handle(), &raw mut info) };
+        assert_ne!(read, 0);
+        let window = SMALL_RECT {
+            Left: 0,
+            Top: info.srWindow.Top,
+            Right: cols - 1,
+            Bottom: info.srWindow.Bottom,
+        };
+        // SAFETY: a console output handle and a rectangle that lives across the call.
+        let ok = unsafe { SetConsoleWindowInfo(output.as_raw_handle(), 1, &raw const window) };
+        assert_ne!(ok, 0, "{}", io::Error::last_os_error());
+        assert_eq!(size().map(|size| size.grid.cols), u16::try_from(cols).ok());
+    }
+
+    /// The watcher reports a change of the window's size, and stops at the first change once nobody listens.
+    #[test]
+    fn the_size_watcher_reports_changes_until_nobody_listens() {
+        if !is_child("the_size_watcher_reports_changes_until_nobody_listens") {
+            run_child(
+                "the_size_watcher_reports_changes_until_nobody_listens",
+                Stdio::null(),
+                None,
+            );
+            return;
+        }
+        let (_input, output) = console();
+        set_std(STD_OUTPUT_HANDLE, &output);
+        let (send, receive) = mpsc::channel::<TtyEvent>();
+        let (ended, watcher_ended) = mpsc::channel();
+        thread::spawn(move || {
+            watch_size(&send);
+            let _ = ended.send(());
+        });
+        // until the watcher has taken the first size and seen it change
+        let mut widths = [40, 30].into_iter().cycle();
+        let reported = (0..20).any(|_| {
+            set_window_width(&output, widths.next().unwrap());
+            receive.recv_timeout(SIZE_POLL * 2) == Ok(TtyEvent::Resize)
+        });
+        assert!(reported, "no size change was reported");
+        drop(receive);
+        let stopped = (0..20).any(|_| {
+            set_window_width(&output, widths.next().unwrap());
+            watcher_ended.recv_timeout(SIZE_POLL * 2).is_ok()
+        });
+        assert!(stopped, "the watcher outlived its listener");
+        eprintln!("{CHILD_DONE}");
+    }
+
+    /// A piped input's reader stops at its first read once nobody takes its events, though the input stays open.
+    #[test]
+    fn a_piped_input_with_nobody_listening_ends_its_reader() {
+        if !is_child("a_piped_input_with_nobody_listening_ends_its_reader") {
+            run_child(
+                "a_piped_input_with_nobody_listening_ends_its_reader",
+                Stdio::piped(),
+                Some(b"typed"),
+            );
+            return;
+        }
+        let (send, receive) = mpsc::channel::<TtyEvent>();
+        drop(receive);
+        read_piped(&send);
+        eprintln!("{CHILD_DONE}");
+    }
+
+    /// An input that fails to read (a file open for writing only) ends at once.
+    #[test]
+    fn an_input_that_fails_to_read_ends_at_once() {
+        if !is_child("an_input_that_fails_to_read_ends_at_once") {
+            let directory = tempfile::tempdir().unwrap();
+            let write_only = File::create(directory.path().join("input")).unwrap();
+            run_child(
+                "an_input_that_fails_to_read_ends_at_once",
+                Stdio::from(write_only),
+                None,
+            );
+            return;
+        }
+        let (send, receive) = mpsc::channel::<TtyEvent>();
+        read_piped(&send);
+        drop(send);
+        assert_eq!(receive.iter().collect::<Vec<_>>(), [TtyEvent::InputEnd]);
+        eprintln!("{CHILD_DONE}");
     }
 }
