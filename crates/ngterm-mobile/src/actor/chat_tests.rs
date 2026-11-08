@@ -24,7 +24,7 @@ use crate::chat::{
     AgentCommand, AgentCommandKind, ChatBody, ChatEvent, ChatState, Cursor, NOT_OPEN, NOT_SHOWN, OLDER_PAGE, Side,
     chat_tail, commands_tail, page_tail,
 };
-use crate::pane::PaneRef;
+use crate::pane::{PaneRef, UNKNOWN_PANE};
 use crate::transport::fake::{Opened, Script};
 use crate::transport::{ChannelEnd, ChannelInput, ChannelPeer};
 
@@ -1025,5 +1025,86 @@ fn a_chat_failing_after_a_resume_is_reported_reconnecting() {
         chat.end(FAILED).await;
         settle().await;
         assert_eq!(fixture.reported().1, [ChatState::Reconnecting]);
+    });
+}
+
+const OUTSIDE: &str = "00000000-0000-0000-0000-0000000000C1";
+
+#[test]
+fn a_pane_the_sessions_layout_does_not_hold_has_no_chat_and_no_catalog() {
+    local(async {
+        let mut fixture = Fixture::start().await;
+        let unknown = MobileError::Remote {
+            reason: UNKNOWN_PANE.to_owned(),
+        };
+        assert_eq!(fixture.commands(OUTSIDE).await, Err(unknown.clone()));
+        assert_eq!(
+            fixture.open("scratch").await,
+            Err(unknown.clone()),
+            "a pane id that is not an identity"
+        );
+        assert_eq!(fixture.commands("scratch").await, Err(unknown.clone()));
+
+        // the right pane, still listed and shown, leaves the layout
+        fixture.show(RIGHT).await;
+        fixture
+            .send(Body::Layout(PresentationLayout {
+                panes: vec![uuid(LEFT)],
+                primary: uuid(LEFT),
+                axis: None,
+                shown: false,
+            }))
+            .await;
+        assert_eq!(fixture.open(RIGHT).await, Err(unknown.clone()));
+        assert_eq!(fixture.commands(RIGHT).await, Err(unknown));
+        assert!(fixture.chats().is_empty(), "nothing is run for them");
+    });
+}
+
+#[test]
+fn a_catalog_read_that_fails_with_no_words_says_how_it_exited() {
+    local(async {
+        let fixture = Fixture::start().await;
+        fixture
+            .actor
+            .transport
+            .script(&commands_tail(SESSION, Side::Left), Script::failing(2, " \n"));
+        assert_eq!(
+            fixture.commands(LEFT).await,
+            Err(MobileError::Remote {
+                reason: "exit 2".to_owned()
+            })
+        );
+    });
+}
+
+#[test]
+fn while_the_machine_stays_down_the_chat_opens_no_channel_and_its_older_pages_wait_for_it() {
+    local(async {
+        let mut fixture = Fixture::start().await;
+        fixture.open(LEFT).await.unwrap();
+        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        feed(
+            &chat,
+            &[conversation("c1", 0), assistant("line-100", 100, "b"), live(150)],
+        )
+        .await;
+        fixture.reported();
+
+        fixture.actor.transport.refuse("box", "connection refused");
+        fixture.actor.transport.drop_connections("m1");
+        settle().await;
+        assert_eq!(fixture.reported().1, [ChatState::Reconnecting]);
+        // past the chat's own retry: with no connection it opens nothing and waits for the machine
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        settle().await;
+        assert!(fixture.chats().is_empty(), "no channel while the machine is down");
+        assert_eq!(
+            fixture.older(LEFT).await,
+            Err(MobileError::NotConnected {
+                machine_id: "m1".to_owned()
+            })
+        );
+        assert_eq!(fixture.reported(), (Vec::new(), Vec::new()));
     });
 }

@@ -27,6 +27,10 @@ use crate::chat::input::{Action, AgentInputOutcome, QuestionAnswer};
 use crate::chat::{ChatApproval, ChatQuestion};
 use crate::pane::PaneRef;
 
+#[cfg(test)]
+#[path = "pane_tests.rs"]
+mod tests;
+
 /// A pane's grid: cells and the pixel size of one cell (`ngterm-term`'s `GridSize`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct PaneSize {
