@@ -474,13 +474,7 @@ fn checksum_requires_one_exact_filename_and_a_valid_hash() {
 
 #[cfg(target_os = "linux")]
 pub(super) fn tree(root: &Path, version: &str) {
-    fs::create_dir_all(root.join("usr/bin")).unwrap();
-    fs::create_dir_all(root.join("usr/share/ngterm")).unwrap();
-    fs::write(root.join("usr/share/ngterm/app-BUILD"), format!("{version}\ncommit\n")).unwrap();
-    fs::write(root.join("usr").join(MARKER), "linux-archive\n").unwrap();
-    for name in ["ngterm", "ngtermctl", "ngterm-session", "ngterm-headless"] {
-        fs::write(root.join("usr/bin").join(name), "binary").unwrap();
-    }
+    crate::fakes::tree(root, version).unwrap();
 }
 
 #[test]
@@ -706,6 +700,7 @@ fn transport_rejects_wrong_hash_and_truncated_downloads_before_extracting() {
             size,
         };
         let agent = ureq::Agent::config_builder()
+            .proxy(None)
             .timeout_global(Some(std::time::Duration::from_secs(3)))
             .build()
             .into();
