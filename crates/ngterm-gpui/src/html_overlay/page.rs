@@ -922,11 +922,14 @@ impl Page {
         }
     }
 
-    /// Withdraws the page's prompt, unanswered.
+    /// Withdraws the page's prompt, unanswered. The alert goes once the current effects end: the deck hides pages
+    /// while it updates their window, which GPUI cannot update again inside that.
     fn end_prompt(&self, cx: &mut App) {
         let prompt = self.state.borrow_mut().prompt.take();
         if let (Some(alert), Some(window)) = (prompt, self.window.get()) {
-            let _ = window.update(cx, |_, window, cx| crate::modal::withdraw_alert(&alert, window, cx));
+            cx.defer(move |cx| {
+                let _ = window.update(cx, |_, window, cx| crate::modal::withdraw_alert(&alert, window, cx));
+            });
         }
     }
 
@@ -1426,6 +1429,7 @@ mod tests {
         model.drain();
         assert!(model.state.core.html_overlay_slot(page.id()).is_none());
         cx.update(|cx| page.close(cx));
+        model.drain();
         web.recorder.take();
         cx.update(|cx| {
             page.apply(&page.overlay(), true, cx);
@@ -1447,6 +1451,7 @@ mod tests {
         page.user_input(true);
         page.focused();
         assert!(web.recorder.take().is_empty());
+        assert_eq!(model.pending(), 0, "a released page reports nothing to the model");
     }
 
     #[test]
@@ -1548,10 +1553,28 @@ mod tests {
                 .unwrap()
                 .focuses_split()
         );
+        // a click on a page whose slot closed moves no focus
         model.state.core.close_html_overlay(page.id());
-        page.user_input(false);
+        model
+            .state
+            .core
+            .library_mut()
+            .store_mut(model.window)
+            .unwrap()
+            .set_split_focus(session, false);
+        page.user_input(true);
         model.drain();
-        assert!(model.state.core.html_overlay_slot(page.id()).is_none());
+        assert!(
+            !model
+                .state
+                .core
+                .library()
+                .store(model.window)
+                .unwrap()
+                .session(session)
+                .unwrap()
+                .focuses_split()
+        );
     }
 
     #[gpui_kit::test]

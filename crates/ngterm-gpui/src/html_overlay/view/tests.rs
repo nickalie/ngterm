@@ -1293,3 +1293,20 @@ fn an_external_link_asks_once_and_cancellation_silences_it_until_real_input(cx: 
     assert!(cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
     cx.update(|window, cx| assert!(crate::modal::answer_front_alert(window, "Cancel", cx)));
 }
+
+#[gpui_kit::test]
+fn hiding_a_page_withdraws_its_external_link_prompt(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    let view = harness.view(cx);
+    Harness::dispatch(&external_link(view), cx);
+    assert!(cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
+    // the deck applies visibility while its window is being updated
+    cx.update(|_, cx| registry::apply(&harness.overlay, false, cx));
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
+    // the withdrawal was no answer: the page asks again once shown
+    cx.update(|_, cx| registry::apply(&harness.overlay, true, cx));
+    Harness::dispatch(&external_link(view), cx);
+    assert!(cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx)));
+    cx.update(|window, cx| assert!(crate::modal::answer_front_alert(window, "Cancel", cx)));
+}
