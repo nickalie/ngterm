@@ -1,25 +1,12 @@
 //! Profile removal against a real Windows file handle that temporarily refuses deletion.
 //!
-//! `remove_later` tries every 2 s, 10 times; with its schedule fixed, the child paces itself by the clock from the
-//! moment it handed the folders over, a second clear of each try it times.
+//! The tests own `remove_retrying`'s pause: it counts the tries and closes the handle between two of them, so the
+//! tries are observed rather than timed. Only the last test runs `remove_later` itself, on its real schedule.
 
 use std::os::windows::fs::OpenOptionsExt as _;
 use std::time::{Duration, Instant};
 
 use super::*;
-
-#[test]
-fn closed_profiles_are_retried_and_missing_profiles_are_harmless() {
-    crate::system_window::tests::run_child("html_overlay::webview2::store::removal_tests::removal_child");
-}
-
-fn wait_removed(folder: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(6);
-    while folder.exists() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(!folder.exists(), "{} was not removed", folder.display());
-}
 
 /// A profile folder `name` under `dir` with a file a browser still holds: no try can remove it until it is dropped.
 fn held_profile(dir: &Path, name: &str) -> (PathBuf, std::fs::File) {
@@ -34,44 +21,68 @@ fn held_profile(dir: &Path, name: &str) -> (PathBuf, std::fs::File) {
     (folder, held)
 }
 
-fn sleep_until(began: Instant, elapsed: Duration) {
-    std::thread::sleep(elapsed.saturating_sub(began.elapsed()));
+/// Removes `folder` with no real pause, closing `held` just before try number `release_before`: the tries it took.
+fn tries_releasing_before(folder: &Path, held: std::fs::File, release_before: u32) -> u32 {
+    let mut held = Some(held);
+    let mut tries = 0;
+    remove_retrying(folder, || {
+        tries += 1;
+        if tries == release_before {
+            drop(held.take());
+        }
+    });
+    tries
 }
 
 #[test]
-#[ignore = "run by closed_profiles_are_retried_and_missing_profiles_are_harmless"]
-fn removal_child() {
-    if !crate::system_window::tests::is_child("html_overlay::webview2::store::removal_tests::removal_child") {
-        return;
-    }
+fn a_profile_still_held_is_retried_and_goes_on_the_try_after_its_handle_closes() {
     let dir = tempfile::tempdir().unwrap();
-    let (last_try, released_late) = held_profile(dir.path(), "last-try");
-    let (exhausted, retained) = held_profile(dir.path(), "still-open");
+    let (folder, held) = held_profile(dir.path(), "locked");
+    assert_eq!(tries_releasing_before(&folder, held, 2), 2);
+    assert!(!folder.exists(), "the second try removes the released folder");
+}
+
+#[test]
+fn a_profile_released_just_before_the_tenth_try_is_still_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (folder, held) = held_profile(dir.path(), "last-try");
+    assert_eq!(tries_releasing_before(&folder, held, 10), 10);
+    assert!(!folder.exists(), "the tenth try removes the released folder");
+}
+
+#[test]
+fn a_profile_still_held_after_ten_tries_is_left_for_the_next_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let (folder, held) = held_profile(dir.path(), "still-open");
+    // an eleventh try never comes, so the handle outlives all of them
+    assert_eq!(tries_releasing_before(&folder, held, 11), 10);
+    assert!(folder.join("held").exists(), "the folder stays for the next start");
+}
+
+#[test]
+fn a_missing_profile_ends_the_tries_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut tries = 0;
+    remove_retrying(&dir.path().join("missing"), || tries += 1);
+    assert_eq!(tries, 1);
+}
+
+#[test]
+fn remove_later_gives_the_browser_its_pause_and_then_removes_the_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("closed");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("data"), "profile").unwrap();
     let began = Instant::now();
-    remove_later(last_try.clone());
-    remove_later(exhausted.clone());
-    let immediate = dir.path().join("closed");
-    std::fs::create_dir(&immediate).unwrap();
-    std::fs::write(immediate.join("data"), "profile").unwrap();
-    remove_later(immediate.clone());
-    wait_removed(&immediate);
-    let (locked, file) = held_profile(dir.path(), "locked");
-    remove_later(locked.clone());
-    std::thread::sleep(Duration::from_millis(2300));
-    drop(file);
-    wait_removed(&locked);
-    remove_later(dir.path().join("missing"));
-    // between the ninth try (18 s) and the tenth (20 s)
-    sleep_until(began, Duration::from_secs(19));
-    drop(released_late);
-    wait_removed(&last_try);
-    // past the tenth try: a remover still trying would take the folder at 22 s
-    sleep_until(began, Duration::from_secs(21));
-    drop(retained);
-    sleep_until(began, Duration::from_millis(23_500));
+    remove_later(folder.clone());
+    let deadline = began + Duration::from_secs(60);
+    while folder.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!folder.exists(), "{} was not removed", folder.display());
+    // a lower bound only, with room for a Windows timer tick: a slow machine can't fail it
     assert!(
-        exhausted.join("held").exists(),
-        "a profile still busy after ten tries is left for the next start"
+        began.elapsed() >= Duration::from_millis(1900),
+        "the first try waits out the 2 s pause"
     );
-    std::fs::remove_dir_all(&exhausted).unwrap();
 }
