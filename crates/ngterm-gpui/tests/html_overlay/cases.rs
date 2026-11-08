@@ -17,9 +17,9 @@ use gpui_kit::{
 };
 use ngterm_core::html::text_page::TextSearch;
 use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource, SearchCount, SearchStep};
-use ngterm_core::remote::replica_page::PageResource;
+use ngterm_core::remote::replica_page::{ContentFailures, PageResource};
 use ngterm_gpui::external_texture::{FrameSource, negotiate};
-use ngterm_gpui::html_overlay::{self, FrameStats, PageView, ReplicaLink};
+use ngterm_gpui::html_overlay::{self, FrameStats, PageView, ReadAnswer, ReplicaLink};
 use uuid::Uuid;
 
 /// What a case runs with.
@@ -29,7 +29,7 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 28] = [
+pub const CASES: [(&str, Case); 30] = [
     (
         "an_image_document_renders_and_current_reload_rereads_the_source",
         image_document,
@@ -53,6 +53,11 @@ pub const CASES: [(&str, Case); 28] = [
         "a_file_replica_loads_its_page_and_an_asset_through_its_channel",
         replica_loads,
     ),
+    (
+        "an_image_replica_shows_the_fetched_picture_and_rereads_it_on_reload",
+        replica_image,
+    ),
+    ("a_markdown_replica_renders_with_its_fetched_picture", replica_markdown),
     ("a_replica_reads_nothing_of_another_page", replica_other_page),
     ("a_slow_replica_read_blocks_no_other", replica_slow),
     ("a_replicas_bridge_reply_keeps_unknown_fields", replica_bridge),
@@ -267,6 +272,7 @@ impl Fixture {
         let mut overlay = HtmlOverlay::new(
             HtmlSource::Replica {
                 path: "/docs/index.html".to_owned(),
+                content: ngterm_core::html::ReplicaContent::Html,
             },
             HtmlPageFlags {
                 chromeless: true,
@@ -539,6 +545,8 @@ fn animation(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
 /// files from a map, every bridge request answered with one reply, and every request recorded.
 pub struct FakeOrigin {
     files: HashMap<&'static str, (&'static str, Vec<u8>)>,
+    /// What a content replica's reads get, which a case may change between loads.
+    content: RefCell<HashMap<&'static str, Vec<u8>>>,
     reply: &'static str,
     requested: RefCell<Vec<String>>,
     bridged: RefCell<Vec<String>>,
@@ -556,6 +564,7 @@ impl FakeOrigin {
                 .iter()
                 .map(|(path, mime, body)| (*path, (*mime, body.clone().into_bytes())))
                 .collect(),
+            content: RefCell::default(),
             reply: r#"{"ok":true,"result":{"extra":{"nested":"kept"},"text":"done"}}"#,
             requested: RefCell::default(),
             bridged: RefCell::default(),
@@ -590,6 +599,96 @@ impl ReplicaLink for FakeOrigin {
         self.bridged.borrow_mut().push(body);
         html_overlay::answer_value(reply, ngterm_core::html::bridge::shape_raw_reply(self.reply));
     }
+
+    fn read(&self, _: Uuid, path: String, limit: usize, failures: ContentFailures, answer: ReadAnswer) {
+        let body = self.content.borrow().get(path.as_str()).cloned();
+        self.requested.borrow_mut().push(path);
+        answer(match body {
+            Some(body) if body.len() <= limit => Ok(body),
+            Some(_) => Err(failures.too_large),
+            None => Err(failures.unreadable),
+        });
+    }
+}
+
+/// A `width` x `height` picture of one color, as PNG bytes.
+fn png(width: u32, height: u32, rgba: [u8; 4]) -> Result<Vec<u8>, String> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(width, height, image::Rgba(rgba))
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .map_err(|error| error.to_string())?;
+    Ok(bytes.into_inner())
+}
+
+/// A page the origin opened as `content` at `path`, shown here, whose bytes come from `origin`'s reads.
+fn content_replica(origin: &Rc<FakeOrigin>, path: &str, content: ngterm_core::html::ReplicaContent) -> HtmlOverlay {
+    html_overlay::set_replica_link(Rc::clone(origin) as Rc<dyn ReplicaLink>);
+    let mut overlay = HtmlOverlay::new(
+        HtmlSource::Replica {
+            path: path.to_owned(),
+            content,
+        },
+        HtmlPageFlags::default(),
+    );
+    overlay.replica_of = Some(Uuid::new_v4());
+    overlay
+}
+
+/// Upstream's `testAnImageReplicaShowsTheFetchedPictureUnthemedOnAClearCanvas`: the picture its origin's read brings is
+/// on screen, and a reload reads it again.
+fn replica_image(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let origin = FakeOrigin::new(&[]);
+    origin
+        .content
+        .borrow_mut()
+        .insert("/shots/shot.png", png(320, 240, RED)?);
+    let content = ngterm_core::html::ReplicaContent::Image {
+        width: 320,
+        height: 240,
+    };
+    let mut overlay = content_replica(&origin, "/shots/shot.png", content);
+    let element = fixture.mount(&overlay, 320.0, 240.0)?;
+    fixture.until("the fetched picture", &element, |_, width, pixels| {
+        close(pixel(pixels, width, 160, 130), RED)
+    })?;
+    let blue = [0x30, 0x30, 0xc0, 0xff];
+    origin
+        .content
+        .borrow_mut()
+        .insert("/shots/shot.png", png(320, 240, blue)?);
+    overlay.reload_revision += 1;
+    overlay.reload_target = ngterm_core::html::HtmlReloadTarget::Current;
+    fixture.cx.update(|cx| html_overlay::apply(&overlay, true, cx));
+    fixture.until("the picture read again", &element, |_, width, pixels| {
+        close(pixel(pixels, width, 160, 130), blue)
+    })?;
+    let requested = origin.requested.borrow().clone();
+    check(requested == ["/shots/shot.png", "/shots/shot.png"], || {
+        format!("the origin was asked for {requested:?}")
+    })
+}
+
+/// Upstream's `testAMarkdownReplicaRendersWithItsFetchedPictureAndNoBridge`: the Markdown renderer draws the file its
+/// origin's read brings with the picture beside it fetched too; a reference leaving the folder is never asked for.
+fn replica_markdown(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let origin = FakeOrigin::new(&[]);
+    let markdown = b"![shot](shot.png) ![out](../outside.png)\n".to_vec();
+    origin.content.borrow_mut().insert("/docs/doc.md", markdown);
+    origin
+        .content
+        .borrow_mut()
+        .insert("/docs/shot.png", png(300, 180, RED)?);
+    let overlay = content_replica(&origin, "/docs/doc.md", ngterm_core::html::ReplicaContent::Markdown);
+    let element = fixture.mount(&overlay, 320.0, 300.0)?;
+    fixture.until(
+        "the fetched picture in the rendered page",
+        &element,
+        |_, width, pixels| close(pixel(pixels, width, 160, 130), RED),
+    )?;
+    let requested = origin.requested.borrow().clone();
+    check(requested == ["/docs/doc.md", "/docs/shot.png"], || {
+        format!("the origin was asked for {requested:?}")
+    })
 }
 
 /// A file replica's page and its stylesheet both come over its channel: the stylesheet's color on screen

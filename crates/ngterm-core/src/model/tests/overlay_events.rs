@@ -92,6 +92,7 @@ fn slot(job: &str, pane: Option<OverlayPane>, wait: bool) -> RemoteOverlaySlot {
         wait,
         ended: false,
         page: None,
+        presenter_sized: false,
     }
 }
 
@@ -268,7 +269,8 @@ fn a_remote_overlay_invalidates_the_tree_when_its_slot_is_taken_and_freed() {
             id,
             "j",
             Some(40),
-            crate::model::OverlayPointSize::default()
+            crate::model::OverlayPointSize::default(),
+            false
         )),
         0
     );

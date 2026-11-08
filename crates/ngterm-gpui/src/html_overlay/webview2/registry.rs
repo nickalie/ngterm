@@ -24,10 +24,10 @@ use ngterm_core::Core;
 use ngterm_core::html::bridge;
 use ngterm_core::html::profile::{self, BrowserProfile};
 use ngterm_core::html::{
-    ChangesAnswer, ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, SearchAnswer, SearchStep,
-    StoreClear, errors,
+    ChangesAnswer, ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlPageKind, HtmlSource, ReplicaContent,
+    SearchAnswer, SearchStep, StoreClear, errors,
 };
-use ngterm_core::remote::replica_page::PageResource;
+use ngterm_core::remote::replica_page::{ContentFailures, PageResource};
 use ngterm_proto::Response;
 use raw_window_handle::RawWindowHandle;
 use uuid::Uuid;
@@ -351,6 +351,31 @@ pub(super) fn read_document(id: Uuid, generation: u64, source: HtmlSource) {
     });
 }
 
+/// Builds content replica `id`'s document on a worker (`documents::build_replica`), its origin's files read through the
+/// core's page channel on the main loop, each read waited for there; the document lands as a local page's does.
+pub(super) fn read_replica_document(id: Uuid, generation: u64, path: String, content: ReplicaContent) {
+    let (Some(jobs), Some(poster)) = with(|registry| (registry.jobs.clone(), registry.poster.clone())) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let mut read = |file: &str, limit: usize, failures: ContentFailures| {
+            let unreadable = failures.unreadable.clone();
+            let (answer, answered) = std::sync::mpsc::channel();
+            let file = file.to_owned();
+            post(&poster, move |state: &mut AppState| {
+                let answer = Box::new(move |result| {
+                    let _ = answer.send(result);
+                });
+                state.core.replica_read(id, &file, limit, failures, answer);
+                state.settle();
+            });
+            answered.recv().unwrap_or(Err(unreadable))
+        };
+        let result = super::super::documents::build_replica(&path, content, &mut read);
+        let _ = jobs.try_send(Job::DocumentLoaded(id, generation, result));
+    });
+}
+
 pub(super) fn document_loaded(id: Uuid, generation: u64, result: Result<String, String>) {
     if let Some(page) = page(id) {
         page.document_loaded(generation, result);
@@ -421,7 +446,15 @@ fn spec(page: &Rc<Page>) -> Result<Spec, String> {
     let id = page.id();
     let weak = Rc::downgrade(page);
     let reports = jobs.clone();
-    let replica = matches!(overlay.source, HtmlSource::Replica { .. }).then(|| {
+    // a replica built here from its fetched bytes loads nothing through the replica protocol
+    let html_replica = matches!(
+        overlay.source,
+        HtmlSource::Replica {
+            content: ReplicaContent::Html,
+            ..
+        }
+    );
+    let replica = html_replica.then(|| {
         let jobs = jobs.clone();
         Arc::new(move |uri: String, reply: RequestAsyncResponder| {
             let _ = jobs.try_send(Job::ReplicaRead { page: id, uri, reply });
@@ -443,7 +476,7 @@ fn spec(page: &Rc<Page>) -> Result<Spec, String> {
         bounds: placement.bounds,
         visible: false,
         // an image wears no theme, and an empty script would fail the page (`Spec::theme`)
-        theme: (!matches!(overlay.source, HtmlSource::Image { .. }))
+        theme: (overlay.source.kind() != HtmlPageKind::Image)
             .then(|| super::bridge::theme_script(&page.theme().script(overlay.themed()))),
         scripts: page.scripts(),
         trusted_document_script: super::super::documents::document_start_script(&overlay.source),
@@ -742,9 +775,15 @@ pub fn relay(page: Uuid, body: String, reply: u64) {
 /// or from a page that is no replica, fails without reaching that machine.
 fn replica_read(page_id: Uuid, uri: &str, reply: RequestAsyncResponder) {
     let path = page(page_id).and_then(|page| {
-        matches!(page.overlay().source, HtmlSource::Replica { .. })
-            .then(|| policy::replica_read(uri, page_id))
-            .flatten()
+        matches!(
+            page.overlay().source,
+            HtmlSource::Replica {
+                content: ReplicaContent::Html,
+                ..
+            }
+        )
+        .then(|| policy::replica_read(uri, page_id))
+        .flatten()
     });
     let poster = with(|registry| registry.poster.clone());
     let (Some(path), Some(poster)) = (path, poster) else {

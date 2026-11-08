@@ -57,11 +57,56 @@ fn lexical_escape_and_schemes_are_rejected_before_probing() {
         "img/missing/../../..",
         "file:///tmp/a.png",
     ] {
+        assert!(lexical_path(reference, folder.path()).is_none(), "{reference}");
         assert!(local_path(reference, folder.path()).is_none(), "{reference}");
     }
     let inside = folder.path().join("img/shot.png");
-    assert_eq!(local_path(&inside.to_string_lossy(), folder.path()), Some(inside));
+    assert_eq!(lexical_path(&inside.to_string_lossy(), folder.path()), Some(inside));
     assert_eq!(MAX_IMAGE_PIXELS, super::super::image_page::MAX_PIXELS);
     assert_eq!(MAX_BYTES, 4 << 20);
     assert_eq!(MAX_IMAGE_BYTES, 32 << 20);
+}
+
+/// Upstream's `lexicalPathJoinsAndNormalizesInsideTheFolder` and `lexicalPathRefusesWhatLeavesTheFolder`.
+#[test]
+fn lexical_path_joins_and_normalizes_inside_the_folder_and_refuses_what_leaves_it() {
+    let folder = PathBuf::from(super::super::os_path("/f"));
+    for (reference, expected) in [("a.png", "/f/a.png"), ("img/../b.png", "/f/b.png")] {
+        let expected = PathBuf::from(super::super::os_path(expected));
+        assert_eq!(lexical_path(reference, &folder), Some(expected), "{reference}");
+    }
+    let absolute = super::super::os_path("/f/c.png");
+    assert_eq!(lexical_path(&absolute, &folder), Some(PathBuf::from(&absolute)));
+    for reference in ["../a.png", "~/a.png", "https://x.io/a.png", "", "."] {
+        assert_eq!(lexical_path(reference, &folder), None, "{reference}");
+    }
+    assert_eq!(lexical_path(&super::super::os_path("/etc/hosts"), &folder), None);
+}
+
+/// Upstream's `remoteReferencesIgnoreSymlinksOnThisMac`: the listing a viewer makes of another machine's file is
+/// lexical, so a link here neither drops nor moves a reference; the symlink-resolving [`local_path`] the origin serves
+/// pictures by refuses one that leaves the folder.
+#[cfg(unix)]
+#[test]
+fn listed_references_ignore_symlinks_here_and_local_paths_resolve_them() {
+    let outside = tempfile::tempdir().unwrap();
+    let shot = outside.path().join("out.png");
+    std::fs::write(&shot, "x").unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path();
+    std::os::unix::fs::symlink(&shot, root.join("out.png")).unwrap();
+    std::fs::write(root.join("in.png"), "x").unwrap();
+
+    let found = image_references("![o](out.png) ![m](img/missing.png) ![e](../up.png)", root);
+    let paths: Vec<_> = found.iter().map(|image| image.path.clone()).collect();
+    assert_eq!(paths, [root.join("out.png"), root.join("img/missing.png")]);
+
+    assert_eq!(local_path("out.png", root), None);
+    let real_root = root.canonicalize().unwrap();
+    assert_eq!(local_path("in.png", root), Some(real_root.join("in.png")));
+    assert_eq!(
+        local_path("img/missing.png", root),
+        Some(real_root.join("img/missing.png"))
+    );
+    assert_eq!(local_path(".", root), None);
 }

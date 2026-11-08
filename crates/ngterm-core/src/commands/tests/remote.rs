@@ -1064,6 +1064,7 @@ fn a_point_resize_after_the_program_presenter_changed_preserves_the_slot() {
             wait: false,
             ended: false,
             page: None,
+            presenter_sized: false,
         },
     );
     live.fixture.core.commit();

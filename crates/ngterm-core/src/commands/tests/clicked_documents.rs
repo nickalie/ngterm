@@ -100,9 +100,3 @@ fn a_document_page_refuses_the_browser() {
     );
     assert_eq!(browser, failure(errors::DOCUMENT_IN_OVERLAY));
 }
-
-/// Until a presenter can build one (Task 11), no presenter is handed a document page.
-#[test]
-fn no_presenter_shows_a_document_page() {
-    assert!(crate::remote::presentation_source(&document()).is_none());
-}

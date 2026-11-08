@@ -214,6 +214,29 @@ fn process_host(poster: &Poster, socket: String) -> ngterm_core::ProcessHost {
     }
 }
 
+/// How a headless origin reads a page's file before handing the page to the presenting machine: it renders none
+/// itself, but a missing, oversized or binary file is refused before anything is reserved there, and a picture travels
+/// with its probed size (the GPUI frontend's web views read them the same way).
+struct PageFiles;
+
+impl ngterm_core::html::PageProbe for PageFiles {
+    fn probe_image(&self, path: &str) -> Result<ngterm_core::html::image_page::ImageData, String> {
+        ngterm_app::documents::probe_image(Path::new(path))
+    }
+
+    fn check_markdown(&self, path: &str) -> Result<(), String> {
+        ngterm_app::documents::check_markdown(Path::new(path))
+    }
+
+    fn check_text(&self, path: &str) -> Result<(), String> {
+        ngterm_app::documents::check_text(Path::new(path))
+    }
+
+    fn check_log(&self, path: &str, tail: usize) -> Result<(), String> {
+        ngterm_app::documents::check_log(Path::new(path), tail)
+    }
+}
+
 /// The core over the state the last run left, with what it reaches the host through (the GPUI frontend's
 /// `launch_core` and `install_launch_hosts`, less the window's hosts).
 fn launch_core(decision: RestoreLaunchDecision, resources: Option<&Path>, poster: &Poster, socket: String) -> Core {
@@ -226,6 +249,7 @@ fn launch_core(decision: RestoreLaunchDecision, resources: Option<&Path>, poster
         load_state(env),
     );
     core.set_page_presenter_only();
+    core.set_page_probe(Box::new(PageFiles));
     core.set_theme_paths(
         resources.map(|dir| dir.join("themes")),
         Some(paths::ghostty_settings_config_path(env)),

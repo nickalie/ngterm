@@ -16,6 +16,7 @@ mod companion_lists;
 mod companion_pages;
 mod companions;
 mod config_browser;
+mod content_pages;
 mod dashboard;
 mod document_pages;
 mod events;

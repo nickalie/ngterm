@@ -32,6 +32,10 @@ pub struct ImageReference {
     pub path: PathBuf,
 }
 
+/// The picture references of `markdown` lexically inside `folder`, in document order, each decoded reference once
+/// (upstream's `imageReferences` without its symlink half, and its `remoteImageReferences`). No filesystem access:
+/// the local page's reader resolves each candidate before it reads it, and a viewer lists a markdown file on another
+/// machine this way, `folder` being its folder there, whose page channel resolves symlinks before it serves a picture.
 #[must_use]
 pub fn image_references(markdown: &str, folder: &Path) -> Vec<ImageReference> {
     let mut seen = HashSet::new();
@@ -42,7 +46,7 @@ pub fn image_references(markdown: &str, folder: &Path) -> Vec<ImageReference> {
                 if !seen.insert(reference.clone()) {
                     return None;
                 }
-                let path = local_path(&reference, folder)?;
+                let path = lexical_path(&reference, folder)?;
                 Some(ImageReference { reference, path })
             }
             _ => None,
@@ -50,9 +54,10 @@ pub fn image_references(markdown: &str, folder: &Path) -> Vec<ImageReference> {
         .collect()
 }
 
-/// Lexical containment is checked before any canonicalization or filesystem probe can occur.
+/// One decoded reference joined to `folder` and normalized without reading the filesystem (upstream's `lexicalPath`):
+/// `None` unless the result lies strictly inside the folder, so no `~`, no scheme and no `..` escape.
 #[must_use]
-pub fn local_path(reference: &str, folder: &Path) -> Option<PathBuf> {
+pub fn lexical_path(reference: &str, folder: &Path) -> Option<PathBuf> {
     if !folder.is_absolute() || reference.is_empty() || reference.starts_with('~') {
         return None;
     }
@@ -63,6 +68,17 @@ pub fn local_path(reference: &str, folder: &Path) -> Option<PathBuf> {
     let root = normalized(folder);
     let candidate = normalized(&folder.join(reference_path));
     (candidate != root && super::contains(&root.to_string_lossy(), &candidate.to_string_lossy())).then_some(candidate)
+}
+
+/// One decoded reference resolved against `folder` (upstream's `localPath`): `None` unless it names a file inside it
+/// once the symlinks on both sides are resolved. The lexical check runs first, so a reference outside the folder is
+/// refused without touching the filesystem.
+#[must_use]
+pub fn local_path(reference: &str, folder: &Path) -> Option<PathBuf> {
+    let lexical = lexical_path(reference, folder)?;
+    let root = super::real_path(&normalized(folder));
+    let file = super::real_path(&lexical);
+    super::strictly_inside(&file, &root).then_some(file)
 }
 
 fn has_scheme(reference: &str) -> bool {

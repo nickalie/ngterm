@@ -7,7 +7,10 @@
 //!   `ngterm-page://<local id>/<origin path>` ([`crate::html::REPLICA_SCHEME`]): the frontend's scheme handler asks
 //!   [`Core::replica_fetch`] for each file, and the page's bridge relays through [`Core::replica_bridge`], both over the
 //!   page's channel ([`super::page_channel`]) to the origin, carried by a helper (`ssh … ngtermctl session overlay
-//!   page-serve TOKEN`) the frontend's [`PageHelperLauncher`] starts.
+//!   page-serve TOKEN`) the frontend's [`PageHelperLauncher`] starts. An image, Markdown, text or clicked HTML page
+//!   (#891, #917) is a replica of its kind ([`crate::html::ReplicaContent`]) that the frontend builds from the bytes
+//!   [`Core::replica_read`] fetches over its own channel, each read under its kind's cap; it is never bridged, a text
+//!   page is the static one, and a session-wide picture the origin gave no size is fitted to this machine's screen.
 //! - The origin's commands act on the page here (hide and show its slot only, reload, history, browser, resize), and
 //!   what the page shows goes back as `page.state` with the last command's sequence number, once per commit at most.
 //! - Every way a replica leaves its slot closes its channel, and the origin hears of it once. A close of the page (here,
@@ -39,10 +42,11 @@ use super::frames::{
     PresentationPageSource, PresentationPageState,
 };
 use super::hub::PAGE_DETACHED_KIND;
-use super::page_channel::{ChannelEvent, ChannelLink, Permits, Pull, ReplicaChannel, RequestId};
+use super::page_channel::{ChannelEvent, ChannelFailure, ChannelLink, Permits, Pull, ReplicaChannel, RequestId};
 use super::page_tunnel::{READY_LINE, TunnelPlan, forward_port};
 use crate::Core;
-use crate::html::{HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlReloadTarget, HtmlSource, errors};
+use crate::html::image_page::{self, ImagePixels};
+use crate::html::{HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlReloadTarget, HtmlSource, ReplicaContent, errors};
 use crate::model::{HtmlPageSlot, OverlayPane};
 use crate::pane_env::uuid_string;
 
@@ -60,11 +64,26 @@ const ROW_LEFT: &str = "the session's row on the presenting machine closed";
 const OCTET_STREAM: &str = "application/octet-stream";
 
 /// How a page another machine opened is shown here (upstream's `replicaSource`): a file page from its replica scheme,
-/// a URL page directly; `None` for an address that is no web URL.
+/// an image, Markdown, text or document page as a replica of its kind built from its fetched bytes, a URL page
+/// directly; `None` for an address that is no web URL.
 pub(crate) fn replica_source(source: &PresentationPageSource) -> Option<HtmlSource> {
+    let replica = |path: &str, content: ReplicaContent| HtmlSource::Replica {
+        path: path.to_owned(),
+        content,
+    };
     match source {
-        PresentationPageSource::File { path, .. } => Some(HtmlSource::Replica { path: path.clone() }),
+        PresentationPageSource::File { path, .. } => Some(replica(path, ReplicaContent::Html)),
         PresentationPageSource::Url { address } => crate::html::web_url(address).map(HtmlSource::Url),
+        PresentationPageSource::Image { path, width, height } => Some(replica(
+            path,
+            ReplicaContent::Image {
+                width: *width,
+                height: *height,
+            },
+        )),
+        PresentationPageSource::Markdown { path } => Some(replica(path, ReplicaContent::Markdown)),
+        PresentationPageSource::Text { path, line } => Some(replica(path, ReplicaContent::Text { line: *line })),
+        PresentationPageSource::Document { path } => Some(replica(path, ReplicaContent::Document)),
     }
 }
 
@@ -96,6 +115,51 @@ pub struct PageResource {
 
 /// Where a replica's file read is answered: called once, on the main loop.
 pub type FetchAnswer = Box<dyn FnOnce(Result<PageResource, String>)>;
+/// Where a content replica's bounded read is answered: the bytes, or the failure worded for the page.
+pub type ContentAnswer = Box<dyn FnOnce(Result<Vec<u8>, String>)>;
+
+/// How a content replica's bounded read words its failures as the local probe of its kind would (upstream's
+/// `fetchReplica`'s `local`); an origin's refusal keeps the origin's own reason instead, with the path.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ContentFailures {
+    pub too_large: String,
+    pub unreadable: String,
+}
+
+/// A bounded read: its cap and how its failures are worded.
+struct Bounded {
+    limit: usize,
+    path: String,
+    failures: ContentFailures,
+}
+
+/// Who a read in flight answers.
+enum Reply {
+    Whole(FetchAnswer),
+    Bounded(Bounded, ContentAnswer),
+}
+
+impl Reply {
+    /// Answers with what the read got: the whole body, or the failure, worded for a bounded read.
+    fn answer(self, result: Result<PageResource, ChannelFailure>) {
+        match self {
+            Self::Whole(answer) => answer(result.map_err(|failure| failure.to_string())),
+            Self::Bounded(bounded, answer) => answer(match result {
+                Ok(resource) => Ok(resource.body),
+                Err(ChannelFailure::Refused(reason)) => Err(format!("{reason}: {}", bounded.path)),
+                Err(ChannelFailure::TooLarge) => Err(bounded.failures.too_large),
+                Err(_) => Err(bounded.failures.unreadable),
+            }),
+        }
+    }
+
+    fn limit(&self) -> Option<usize> {
+        match self {
+            Self::Whole(_) => None,
+            Self::Bounded(bounded, _) => Some(bounded.limit),
+        }
+    }
+}
 /// Where a replica's bridge request is answered: the result the page's promise resolves with, or its rejection.
 pub type BridgeAnswer = Box<dyn FnOnce(Result<serde_json::Value, String>)>;
 
@@ -103,7 +167,7 @@ pub type BridgeAnswer = Box<dyn FnOnce(Result<serde_json::Value, String>)>;
 struct Fetch {
     mime_type: Option<String>,
     body: Vec<u8>,
-    answer: FetchAnswer,
+    reply: Reply,
 }
 
 /// A file page's channel and the calls waiting on it.
@@ -197,18 +261,20 @@ impl fmt::Debug for ReplicaPages {
     }
 }
 
-/// What a channel's events leave to do once the record is let go: the answers to call and whether the page closes.
+/// What a channel's events leave to do once the record is let go: the answers to call, the reads past their cap to
+/// withdraw, and whether the page closes.
 #[derive(Default)]
 struct Settled {
-    fetches: Vec<(FetchAnswer, Result<PageResource, String>)>,
+    fetches: Vec<(Reply, Result<PageResource, ChannelFailure>)>,
     bridges: Vec<(BridgeAnswer, Result<serde_json::Value, String>)>,
+    overgrown: Vec<RequestId>,
     closed: bool,
 }
 
 impl Settled {
     fn run(self) {
-        for (answer, result) in self.fetches {
-            answer(result);
+        for (reply, result) in self.fetches {
+            reply.answer(result);
         }
         for (answer, result) in self.bridges {
             answer(result);
@@ -227,9 +293,7 @@ impl PageLink {
                     }
                 }
                 ChannelEvent::Data { id } => self.drain(id, settled),
-                ChannelEvent::Finished { id, result } => {
-                    self.finish(id, result.map_err(|error| error.to_string()), settled);
-                }
+                ChannelEvent::Finished { id, result } => self.finish(id, result, settled),
                 ChannelEvent::Reply { id, result } => {
                     if let Some(answer) = self.bridges.remove(&id) {
                         let result = result
@@ -243,17 +307,24 @@ impl PageLink {
         }
     }
 
-    /// Takes every chunk of read `id` that waits: the page consumes them at once into the answer it builds.
+    /// Takes every chunk of read `id` that waits: the page consumes them at once into the answer it builds. A bounded
+    /// read stops once its bytes pass the cap: it fails as too large, and the read is withdrawn on the origin.
     fn drain(&mut self, id: RequestId, settled: &mut Settled) {
         loop {
             match self.channel.pull(id) {
                 Pull::Chunk(chunk) => {
-                    if let Some(fetch) = self.fetches.get_mut(&id) {
-                        fetch.body.extend(chunk);
+                    let Some(fetch) = self.fetches.get_mut(&id) else {
+                        continue;
+                    };
+                    fetch.body.extend(chunk);
+                    if fetch.reply.limit().is_some_and(|limit| fetch.body.len() > limit) {
+                        self.finish(id, Err(ChannelFailure::TooLarge), settled);
+                        settled.overgrown.push(id);
+                        return;
                     }
                 }
                 Pull::Done(result) => {
-                    self.finish(id, result.map_err(|error| error.to_string()), settled);
+                    self.finish(id, result, settled);
                     return;
                 }
                 Pull::Wait => return,
@@ -261,7 +332,7 @@ impl PageLink {
         }
     }
 
-    fn finish(&mut self, id: RequestId, result: Result<(), String>, settled: &mut Settled) {
+    fn finish(&mut self, id: RequestId, result: Result<(), ChannelFailure>, settled: &mut Settled) {
         let Some(fetch) = self.fetches.remove(&id) else {
             return;
         };
@@ -269,7 +340,7 @@ impl PageLink {
             mime_type: fetch.mime_type.unwrap_or_else(|| OCTET_STREAM.to_owned()),
             body: fetch.body,
         });
-        settled.fetches.push((fetch.answer, result));
+        settled.fetches.push((fetch.reply, result));
     }
 }
 
@@ -298,12 +369,6 @@ impl Core {
         };
         let found = self.presented_session(session).ok_or(NO_SESSION)?;
         let argv = match &page.source {
-            PresentationPageSource::File { .. } => Some(
-                found
-                    .remote_host()
-                    .and_then(|host| super::ssh::page_serve_command(host, &page.token).ok())
-                    .ok_or(ORIGIN_UNREACHABLE)?,
-            ),
             PresentationPageSource::Url { address } => {
                 // a forwarded page loads in a store of its own, so the persistent store is never asked for
                 if crate::html::is_loopback(address) {
@@ -317,12 +382,47 @@ impl Core {
                 }
                 None
             }
+            // every other page fetches its files over a channel of its own
+            _ => Some(
+                found
+                    .remote_host()
+                    .and_then(|host| super::ssh::page_serve_command(host, &page.token).ok())
+                    .ok_or(ORIGIN_UNREACHABLE)?,
+            ),
         };
-        let local = self.place_replica_page(page, session)?;
+        let sized = self.size_replica_picture(page, session);
+        let local = self.place_replica_page(sized.as_ref().unwrap_or(page), session)?;
         if let Some(argv) = argv {
             self.start_page_helper(local, &argv);
         }
         Ok(())
+    }
+
+    /// `page` sized for this machine's screen when it is a session-wide picture the origin gave no size (upstream's
+    /// `showReplicaPage`): a floating panel at the base percent, its points fitted to the picture's pixels at the
+    /// density of the screen the session's window is on and to its detail area, as the origin sizes its own pictures.
+    /// `None` leaves `page` as it came.
+    fn size_replica_picture(&self, page: &PresentationPage, session: Uuid) -> Option<PresentationPage> {
+        let PresentationPageSource::Image { width, height, .. } = page.source else {
+            return None;
+        };
+        if page.pane.is_some() || page.size_percent.is_some() || !page.points().is_empty() {
+            return None;
+        }
+        let host = self.html_host()?;
+        let window = self.library().window_id_for_session(session);
+        let scale = window.map_or(1.0, |window| host.display_scale(window));
+        let bounds = self
+            .presented_session(session)
+            .and_then(|found| found.hud_frames.detail);
+        let natural = ImagePixels { width, height }.natural(scale);
+        let points = image_page::points(natural, host.page_zoom(), bounds);
+        Some(PresentationPage {
+            size_percent: Some(image_page::BASE_PERCENT),
+            width: points.width,
+            height: points.height,
+            ..page.clone()
+        })
     }
 
     /// Places `page` and follows it; its local id.
@@ -741,11 +841,16 @@ impl Core {
             PresentationPageAction::Forward => self.navigate_replica(local, HtmlNavigation::Forward).err(),
             PresentationPageAction::Browser => self.navigate_replica(local, HtmlNavigation::Browser).err(),
             PresentationPageAction::Resize => {
-                // a pane page is always full-pane
+                // a pane page is always full-pane; a merging resize keeps the axis it does not name, the one this
+                // machine fitted a picture to (upstream's `resizeReplicaPage`)
                 if pane.is_none()
                     && let Some(store) = self.library_mut().store_for_session_mut(session)
                 {
-                    store.resize_overlay_with_points(session, command.size_percent, command.points());
+                    let points = match (command.merge, store.session(session)) {
+                        (Some(true), Some(found)) => found.overlay.points.merging(command.points()),
+                        _ => command.points(),
+                    };
+                    store.resize_overlay_with_points(session, command.size_percent, points);
                 }
                 None
             }
@@ -955,9 +1060,38 @@ impl Core {
     /// Asks the origin of replica `id` for its file at `path` (its scheme URL's path, which is the origin path);
     /// `answer` runs once with the file or the failure, on the main loop.
     pub fn replica_fetch(&mut self, id: Uuid, path: &str, answer: FetchAnswer) {
+        self.fetch_replica(id, path, Reply::Whole(answer));
+    }
+
+    /// Asks the origin of content replica `id` for its file at `path` under `limit` bytes (upstream's `fetchReplica`):
+    /// reading stops once the bytes pass it, which fails the read as `failures.too_large` and withdraws it on the
+    /// origin. The origin's refusal answers as its reason with the path, every other failure as
+    /// `failures.unreadable`. `answer` runs once, on the main loop.
+    pub fn replica_read(
+        &mut self,
+        id: Uuid,
+        path: &str,
+        limit: usize,
+        failures: ContentFailures,
+        answer: ContentAnswer,
+    ) {
+        let bounded = Bounded {
+            limit,
+            path: path.to_owned(),
+            failures,
+        };
+        self.fetch_replica(id, path, Reply::Bounded(bounded, answer));
+    }
+
+    fn fetch_replica(&mut self, id: Uuid, path: &str, reply: Reply) {
         let revision = self.replica_page_slot(id).map_or(0, |(_, page)| page.reload_revision);
         let Some(link) = self.page_link(id) else {
-            answer(Err(errors::REMOTE_FILE.to_owned()));
+            // a page with no channel reads nothing: a whole read says so, a bounded one is unreadable
+            let failure = match reply {
+                Reply::Whole(_) => ChannelFailure::Refused(errors::REMOTE_FILE.to_owned()),
+                Reply::Bounded(..) => ChannelFailure::Closed,
+            };
+            reply.answer(Err(failure));
             return;
         };
         match link.channel.fetch(path, revision) {
@@ -967,12 +1101,12 @@ impl Core {
                     Fetch {
                         mime_type: None,
                         body: Vec::new(),
-                        answer,
+                        reply,
                     },
                 );
                 self.settle_channel(id, events);
             }
-            Err(failure) => answer(Err(failure.to_string())),
+            Err(failure) => reply.answer(Err(failure)),
         }
     }
 
@@ -1031,11 +1165,20 @@ impl Core {
             return;
         }
         let mut settled = Settled::default();
+        let mut closing = Vec::new();
         if let Some(link) = self.page_link(id) {
             link.settle(events, &mut settled);
+            for overgrown in std::mem::take(&mut settled.overgrown) {
+                closing.extend(link.channel.cancel(overgrown));
+            }
         }
         let closed = settled.closed;
         settled.run();
+        // a cancel the helper refused closes the channel, which settles as any close does
+        if !closing.is_empty() {
+            self.settle_channel(id, closing);
+            return;
+        }
         if !closed {
             return;
         }

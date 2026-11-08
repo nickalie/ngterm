@@ -248,13 +248,3 @@ fn a_text_click_opens_without_selecting_its_session() {
     assert_eq!(f.store().selected_session_id(), selected);
     assert_eq!(page(&mut f, id).unwrap()["text"]["line"], 4);
 }
-
-/// Upstream's `presentationSource(.text) == nil`: no presenter shows a text page.
-#[test]
-fn no_presenter_shows_a_text_page() {
-    let source = HtmlSource::Text {
-        path: path("a.go"),
-        line: Some(3),
-    };
-    assert!(crate::remote::presentation_source(&source).is_none());
-}

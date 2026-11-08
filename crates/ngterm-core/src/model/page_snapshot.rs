@@ -260,6 +260,7 @@ fn park_page(session: &mut Session, overlay: HtmlOverlay, parked: ParkedPage) {
         wait: false,
         ended: false,
         page: Some(page),
+        presenter_sized: false,
     });
 }
 
@@ -268,11 +269,11 @@ fn park_page(session: &mut Session, overlay: HtmlOverlay, parked: ParkedPage) {
 pub(crate) struct LocalPagesSwept {
     /// The pages parked for the next presenter.
     pub(crate) parked: Vec<Uuid>,
-    /// Whether a page no presenter can show (an image, Markdown, text or log page) was closed.
+    /// Whether a page no presenter can show (a log page) was closed.
     pub(crate) dropped: bool,
 }
 
-/// Parks every page open in `session`'s own slots that a presenter can show (a file or URL page), in the slot it held
+/// Parks every page open in `session`'s own slots that a presenter can show (any but a log page), in the slot it held
 /// with its size, background and visibility: what a presenter-only origin, which renders no page itself, does with
 /// the pages a restore opened (a log page is never one: a presenter would show it without its log state). They are parked in the order they were drawn, a pane page under the session-wide one
 /// before it and one holding it after, so the next presenter stacks them the same way. A page no presenter can show is
@@ -285,8 +286,10 @@ pub(crate) fn park_local_pages(session: &mut Session) -> LocalPagesSwept {
         if !page.persisted() {
             continue;
         }
-        // a log page is never handed to a presenter, even once its text page could be
-        if crate::remote::presentation_source(&page.source).is_none() || page.text_log.is_some() {
+        // every page this machine opened can be handed over now, a picture probed once a presenter takes it and a
+        // content page waiting for one that builds it; a log page never is, as a presenter would show it without its
+        // log state
+        if !crate::remote::travels(&page.source) || page.text_log.is_some() {
             unpresentable.push(pane);
         } else if let Some(snapshot) = page_snapshot(session, pane, page) {
             local.push((pane, snapshot, page.clone()));

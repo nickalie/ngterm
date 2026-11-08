@@ -14,8 +14,8 @@ use std::rc::{Rc, Weak};
 use gpui_kit::{AnyWindowHandle, App, Entity, WeakEntity};
 use ngterm_core::html::bridge::{ADAPTER_SCRIPT, HANDLER_NAME, HELPER_SCRIPT, RELAY_SCRIPT, WORLD};
 use ngterm_core::html::{
-    HtmlLoadState, HtmlNavigation, HtmlNavigationDecision, HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo,
-    HtmlReloadTarget, HtmlSource, decide, errors,
+    HtmlLoadState, HtmlNavigation, HtmlNavigationDecision, HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlPageKind,
+    HtmlReloadTarget, HtmlSource, ReplicaContent, decide, errors,
 };
 use ngterm_wpe::{
     Event, Geometry, InjectionTime, Load, MessageHandler, NavigationType, PageState as EngineState, PolicyKind,
@@ -355,7 +355,7 @@ impl Page {
             zoom,
             // a file page's unstyled canvas shows the themed panel behind it while authored backgrounds still paint;
             // a URL page keeps the browser's opaque canvas, which a web app styled against it relies on
-            background: (themed || matches!(overlay.source, HtmlSource::Image { .. })).then_some(Rgba::TRANSPARENT),
+            background: (themed || overlay.source.kind() == HtmlPageKind::Image).then_some(Rgba::TRANSPARENT),
             geometry: self.geometry.get().unwrap_or(FIRST_GEOMETRY),
             block_network: overlay.blocks_network(),
         };
@@ -373,9 +373,10 @@ impl Page {
         self.load_original();
     }
 
-    /// The theme, and on a file page the bridge's scripts (upstream's `installScripts`).
+    /// The theme, and on a file page the bridge's scripts (upstream's `installScripts`); a picture wears none, a
+    /// replica of one included.
     fn scripts(&self, overlay: &HtmlOverlay) -> Vec<UserScript> {
-        if matches!(overlay.source, HtmlSource::Image { .. }) {
+        if overlay.source.kind() == HtmlPageKind::Image {
             return Vec::new();
         }
         let themed = overlay.themed();
@@ -417,7 +418,7 @@ impl Page {
         let colors = PanelColors::resolve(terminal, self.background.as_deref());
         self.colors.replace(colors.clone());
         self.refresh(cx);
-        if matches!(overlay.source, HtmlSource::Image { .. }) {
+        if overlay.source.kind() == HtmlPageKind::Image {
             return;
         }
         let next = colors.theme();
@@ -733,11 +734,19 @@ impl Page {
                 Ok(html) => Load::Html { html, base_uri: None },
                 Err(error) => return self.fail(error.to_string()),
             },
-            // a replica's files come from the machine that opened it, read through the replica scheme
-            HtmlSource::Replica { path } => match policy::replica_uri(self.id, &path) {
+            // a replica's files come from the machine that opened it: an HTML file read through the replica scheme,
+            // any other page built here from its fetched bytes
+            HtmlSource::Replica {
+                path,
+                content: ReplicaContent::Html,
+            } => match policy::replica_uri(self.id, &path) {
                 Some(uri) => Load::Uri(uri),
                 None => return self.fail(errors::REMOTE_FILE.to_owned()),
             },
+            HtmlSource::Replica { path, content } => {
+                registry::read_replica_document(self.id, generation, path, content);
+                return;
+            }
         };
         if let (Some(web), Some(view)) = (self.web(), self.view.get()) {
             web.load(view, load);

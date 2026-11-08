@@ -1095,6 +1095,123 @@ def test_page_serve_serves_a_page_a_presenter_shows(live, tmp_path):
         assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "submitted", "value": "done"}
 
 
+# -- image, Markdown and text pages handed to a presenter (#891)
+
+# A presenter that builds image, Markdown and text pages from the bytes it fetches lists `page.content`.
+CONTENT_PRESENTER_KINDS = [*PAGE_PRESENTER_KINDS, "page.content"]
+# A 1x1 picture.
+PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+TEXT_MIME = "text/plain; charset=utf-8"
+NOT_A_PICTURE = "not a png, jpg, gif or webp image"
+
+
+def _content_files(tmp_path):
+    """A folder with a picture, a Markdown file showing it and a source file: `(folder, picture, readme, source)`."""
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    picture, readme, source = folder / "shot.png", folder / "README.md", folder / "main.go"
+    picture.write_bytes(PNG)
+    readme.write_text("# notes\n\n![s](shot.png)\n")
+    source.write_text("package main\n")
+    return folder, picture, readme, source
+
+
+@LIVE
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.overlay.open", "field:tree.session.remoteOverlays", "field:tree.session.htmlOverlays")
+def test_content_pages_go_only_to_a_presenter_listing_page_content(live, tmp_path):
+    _, picture, readme, source = _content_files(tmp_path)
+    opens = [
+        ({"image": str(picture)}, {"image": {"path": str(picture), "width": 1, "height": 1}}),
+        ({"markdownFile": str(readme)}, {"markdown": {"path": str(readme)}}),
+        ({"textFile": str(source), "line": 1}, {"text": {"path": str(source), "line": 1}}),
+        ({"textFile": str(source)}, {"text": {"path": str(source)}}),
+    ]
+    # an older presenter keeps the refusal, and nothing is reserved for it
+    with _page_presenter(live) as (sid, _, _):
+        for args, _ in opens:
+            assert_error(live.request("session.overlay.open", sid, **args), NO_PAGES)
+        node = find_session(live.tree(), sid)
+        assert "remoteOverlays" not in node and node["overlay"] is False
+    with _page_presenter(live, CONTENT_PRESENTER_KINDS) as (sid, presenter, _):
+        for args, sent in opens:
+            page_id, request = _handed_over(live, sid, presenter, **args)
+            assert request["source"] == sent, args
+            # the presenter sizes a picture for its own screen: the origin sends no size
+            assert_absent(request, "sizePercent", "width", "height")
+            reserved = {"pageID": page_id, **({"sizePercent": 95} if "image" in args else {})}
+            live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == [reserved])
+            node = find_session(live.tree(), sid)
+            assert node["overlay"] is False, "nothing covers the session here"
+            [shown] = node["htmlOverlays"]
+            assert_subset(shown, {"id": page_id, "remote": True})
+            assert_ok(live.request("session.overlay.close", sid))
+            wait_frame(presenter.read, "page.close", presenter.send)
+        # the file is read before anything is reserved
+        missing = str(tmp_path / "notes" / "missing.png")
+        assert_error(
+            live.request("session.overlay.open", sid, image=missing),
+            f"session.overlay.open: unreadable image: {missing}",
+        )
+        assert "remoteOverlays" not in find_session(live.tree(), sid)
+
+
+@LIVE
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("session.overlay.page.serve", streams=("session.overlay.page.serve",))
+def test_page_serve_serves_a_content_pages_files_under_its_rules(live, tmp_path):
+    folder, picture, readme, _ = _content_files(tmp_path)
+    (folder / "plot").write_bytes(PNG)
+    (folder / "notes.txt").write_text("secret")
+    (folder / "fake.png").write_text("<svg/>")
+    (tmp_path / "outside.png").write_bytes(PNG)
+    with _page_presenter(live, CONTENT_PRESENTER_KINDS) as (sid, presenter, _):
+        page_id, request = _handed_over(live, sid, presenter, markdownFile=str(readme))
+        with live.stream("session.overlay.page.serve", request["token"]) as helper:
+            assert helper.reply.ok, helper.reply.raw
+            assert helper.reply.result == {"id": page_id}
+            # its own file as text, and a file of its folder only as a picture, whatever its name
+            for request_id, (path, expected) in enumerate([
+                (readme, (TEXT_MIME, readme.read_bytes(), None)),
+                (picture, ("image/png", PNG, None)),
+                (folder / "plot", ("image/png", PNG, None)),
+                (folder / "notes.txt", (None, b"", NOT_A_PICTURE)),
+                (folder / "fake.png", (None, b"", NOT_A_PICTURE)),
+                (tmp_path / "outside.png", (None, b"", "file is outside the page's folder")),
+            ], start=1):
+                helper.send({"kind": "resource", "id": request_id, "path": str(path)})
+                assert _transfer(helper, request_id) == expected, path
+            # a content page runs no control request
+            helper.send({"kind": "bridge", "id": 9, "request": json.dumps({"cmd": "tree"})})
+            assert helper.read() == {"kind": "failure", "id": 9, "error": "this page has no bridge"}
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "page.close", presenter.send)
+
+
+@LIVE
+@pytest.mark.since("0.41.0")
+@pytest.mark.covers("live.present", "session.overlay.open", "session.overlay.resize", streams=("live.present",))
+def test_a_point_resize_of_an_auto_sized_image_merges_on_the_presenter(live, tmp_path):
+    _, picture, _, _ = _content_files(tmp_path)
+    with _page_presenter(live, [*CONTENT_PRESENTER_KINDS, "overlay.points"]) as (sid, presenter, _):
+        page_id, request = _handed_over(live, sid, presenter, image=str(picture))
+        assert_absent(request, "sizePercent", "width", "height")
+        # a point resize of the picture the presenter fitted sends only its axes, to merge into that fit; a resize
+        # that replaces the size ends it
+        for seq, (args, expected, omitted) in enumerate([
+            ({"width": 600}, {"sizePercent": 95, "width": 600, "merge": True}, ("height",)),
+            ({"height": 300}, {"sizePercent": 95, "height": 300, "merge": True}, ("width",)),
+            ({"sizePercent": 60, "width": 500}, {"sizePercent": 60, "width": 500}, ("height", "merge")),
+            ({"height": 200}, {"sizePercent": 60, "width": 500, "height": 200}, ("merge",)),
+        ], start=1):
+            assert_ok(live.request("session.overlay.resize", sid, **args))
+            changed = wait_frame(presenter.read, "page.command", presenter.send)["page"]
+            assert_subset(changed, {"page": page_id, "seq": seq, "action": "resize", **expected})
+            assert_absent(changed, *omitted)
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "page.close", presenter.send)
+
+
 @LIVE
 @pytest.mark.covers("session.overlay.page.serve", streams=("session.overlay.page.serve",))
 def test_losing_the_page_helper_takes_only_the_page_off_its_presenter(live, adapter, tmp_path):

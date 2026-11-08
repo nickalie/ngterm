@@ -607,6 +607,11 @@ impl PresentationOverlayChange {
 /// A handed-over page's full source on the origin (upstream's `PresentationPageSource`): a file the presenter fetches
 /// over the page channel, with the grant bounding which files it may ask for, or a complete URL it loads itself. The
 /// wire is Swift's synthesized enum coding: `{"file": {"path", "grantRoot"?}}` or `{"url": {"_0": <address>}}`.
+///
+/// The image, Markdown, text and document cases are pages the presenter builds itself from bytes it fetches over the
+/// channel (`{"image": {"path", "width", "height"}}`, `{"markdown": {"path"}}`, `{"text": {"path", "line"?}}`,
+/// `{"document": {"path"}}`). They go only to a presenter listing [`super::hub::PAGE_CONTENT_KIND`] (a document also
+/// [`super::hub::PAGE_DOCUMENT_KIND`]), since an older one fails the whole stream on a case it cannot decode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PresentationPageSource {
@@ -619,6 +624,43 @@ pub enum PresentationPageSource {
         #[serde(rename = "_0")]
         address: String,
     },
+    /// A picture with its oriented pixel size, which the presenter turns into points for its own screen.
+    Image {
+        path: String,
+        width: i64,
+        height: i64,
+    },
+    Markdown {
+        path: String,
+    },
+    Text {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line: Option<i64>,
+    },
+    /// An HTML file a terminal click opened, which the presenter shows with no grant, bridge or script.
+    Document {
+        path: String,
+    },
+}
+
+impl PresentationPageSource {
+    /// Whether the presenter fetches this page over a page channel, which a single-use claim opens (upstream's
+    /// `usesChannel`): every page but a URL page.
+    #[must_use]
+    pub fn uses_channel(&self) -> bool {
+        !matches!(self, Self::Url { .. })
+    }
+
+    /// Whether the presenter builds this page from fetched bytes rather than loading it as HTML (upstream's
+    /// `isContent`).
+    #[must_use]
+    pub fn is_content(&self) -> bool {
+        matches!(
+            self,
+            Self::Image { .. } | Self::Markdown { .. } | Self::Text { .. } | Self::Document { .. }
+        )
+    }
 }
 
 /// Asks the presenter to show a page the origin opened (upstream's `PresentationPage`). `page` is the origin's page id,
@@ -712,6 +754,10 @@ pub struct PresentationPageCommand {
     pub width: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<i64>,
+    /// Asks a resize to keep the axes it does not name, for a picture the presenter sized itself (upstream's `merge`);
+    /// `None`, and left out of the frame, for every other command, which replaces the size whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge: Option<bool>,
 }
 
 impl PresentationPageCommand {
@@ -1496,7 +1542,23 @@ mod tests {
         PresentationPageState::new("p1", shown, hidden, 8)
     }
 
-    /// Upstream's page frames in `PresentationFramesTests.frames`.
+    fn image_source() -> PresentationPageSource {
+        PresentationPageSource::Image {
+            path: "/tmp/shot.png".to_owned(),
+            width: 1600,
+            height: 900,
+        }
+    }
+
+    fn text_source(line: Option<i64>) -> PresentationPageSource {
+        PresentationPageSource::Text {
+            path: "/tmp/src/main.go".to_owned(),
+            line,
+        }
+    }
+
+    /// Upstream's page frames in `PresentationFramesTests.frames`, the content sources (#891, #917) and a merging
+    /// resize with them.
     fn page_bodies() -> Vec<Body> {
         let url = PresentationPageSource::Url {
             address: "https://example.com/review/42?token=abc&x=1#top".to_owned(),
@@ -1517,6 +1579,7 @@ mod tests {
                 seq,
                 action,
                 size_percent,
+                merge: None,
             })
         };
         vec![
@@ -1532,6 +1595,32 @@ mod tests {
             Body::PageDetached(PresentationPageChange::page("p1")),
             command(7, PresentationPageAction::Resize, Some(50)),
             command(8, PresentationPageAction::ReloadCurrent, None),
+            Body::PageCommand(PresentationPageCommand {
+                width: None,
+                height: Some(300),
+                page: "p1".to_owned(),
+                seq: 9,
+                action: PresentationPageAction::Resize,
+                size_percent: Some(95),
+                merge: Some(true),
+            }),
+            Body::PageRequest(page_request("p5", image_source(), None)),
+            Body::PageRequest(page_request(
+                "p6",
+                PresentationPageSource::Markdown {
+                    path: "/tmp/notes/README.md".to_owned(),
+                },
+                Some(pane()),
+            )),
+            Body::PageRequest(page_request("p7", text_source(Some(42)), None)),
+            Body::PageRequest(page_request("p8", text_source(None), None)),
+            Body::PageRequest(page_request(
+                "p9",
+                PresentationPageSource::Document {
+                    path: "/tmp/pr.html".to_owned(),
+                },
+                None,
+            )),
             Body::PageState(page_state(true)),
             Body::PageState(PresentationPageState::new("p1", PageShown::default(), false, 0)),
         ]
@@ -1751,6 +1840,7 @@ mod tests {
             seq: 3,
             action: PresentationPageAction::ReloadOriginal,
             size_percent: None,
+            merge: None,
         }));
         assert_eq!(
             command["page"],
@@ -1764,6 +1854,66 @@ mod tests {
         );
         let rejected = encoded(Body::PageRejected(PresentationPageChange::page("p1")));
         assert_eq!(rejected["page"], json!({"page": "p1"}));
+    }
+
+    /// The content sources in Swift's synthesized coding: labeled associated values under the case's name, an absent
+    /// line left out; a resize carries `merge` only when asked (upstream's `aResizeCarriesMergeOnlyWhenAsked`).
+    #[test]
+    fn content_sources_and_a_merging_resize_keep_swifts_wire_shape() {
+        let source = |source: PresentationPageSource| -> Value { serde_json::to_value(source).unwrap() };
+        assert_eq!(
+            source(image_source()),
+            json!({"image": {"path": "/tmp/shot.png", "width": 1600, "height": 900}})
+        );
+        let markdown = PresentationPageSource::Markdown {
+            path: "/tmp/a.md".to_owned(),
+        };
+        assert_eq!(source(markdown.clone()), json!({"markdown": {"path": "/tmp/a.md"}}));
+        assert_eq!(
+            source(text_source(Some(3))),
+            json!({"text": {"path": "/tmp/src/main.go", "line": 3}})
+        );
+        assert_eq!(source(text_source(None)), json!({"text": {"path": "/tmp/src/main.go"}}));
+        let document = PresentationPageSource::Document {
+            path: "/tmp/pr.html".to_owned(),
+        };
+        assert_eq!(source(document.clone()), json!({"document": {"path": "/tmp/pr.html"}}));
+        let url = PresentationPageSource::Url {
+            address: "https://x.io/".to_owned(),
+        };
+        let file = PresentationPageSource::File {
+            path: "/a.html".to_owned(),
+            grant_root: None,
+        };
+        for (source, channel, content) in [
+            (url, false, false),
+            (file, true, false),
+            (image_source(), true, true),
+            (markdown, true, true),
+            (text_source(None), true, true),
+            (document, true, true),
+        ] {
+            assert_eq!(source.uses_channel(), channel, "{source:?}");
+            assert_eq!(source.is_content(), content, "{source:?}");
+        }
+        let resize = |merge: Option<bool>| PresentationPageCommand {
+            page: "p1".to_owned(),
+            seq: 2,
+            action: PresentationPageAction::Resize,
+            size_percent: Some(95),
+            width: Some(600),
+            height: None,
+            merge,
+        };
+        let plain = serde_json::to_value(resize(None)).unwrap();
+        assert_eq!(
+            plain,
+            json!({"page": "p1", "seq": 2, "action": "resize", "sizePercent": 95, "width": 600})
+        );
+        let merged = serde_json::to_value(resize(Some(true))).unwrap();
+        assert_eq!(merged["merge"], json!(true));
+        let back: PresentationPageCommand = serde_json::from_value(merged).unwrap();
+        assert_eq!(back, resize(Some(true)));
     }
 
     /// The agent frame: the pane by identity, a pane running nothing as an explicit `null`.

@@ -339,7 +339,7 @@ fn file_url(path: &str) -> Option<Url> {
 fn source_url(source: &HtmlSource) -> Option<Url> {
     match source {
         HtmlSource::File { path, .. }
-        | HtmlSource::Replica { path }
+        | HtmlSource::Replica { path, .. }
         | HtmlSource::Image { path }
         | HtmlSource::Markdown { path }
         | HtmlSource::Text { path, .. }
@@ -1048,6 +1048,7 @@ mod tests {
         let mut replica = HtmlOverlay::new(
             HtmlSource::Replica {
                 path: "/origin/docs/index.html".to_owned(),
+                content: ngterm_core::html::ReplicaContent::Html,
             },
             navigation,
         );
@@ -1072,6 +1073,7 @@ mod tests {
         let mut replica = HtmlOverlay::new(
             HtmlSource::Replica {
                 path: "/origin/docs/index.html".to_owned(),
+                content: ngterm_core::html::ReplicaContent::Html,
             },
             navigation,
         );
@@ -1119,6 +1121,7 @@ mod tests {
         let mut replica = HtmlOverlay::new(
             HtmlSource::Replica {
                 path: "/origin/my docs/index.html".to_owned(),
+                content: ngterm_core::html::ReplicaContent::Html,
             },
             HtmlPageFlags::default(),
         );

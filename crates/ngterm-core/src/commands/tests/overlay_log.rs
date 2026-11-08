@@ -368,6 +368,7 @@ fn a_replica_log_page_is_followed_where_it_was_opened() {
         ..HtmlOverlay::new(
             HtmlSource::Replica {
                 path: "/tmp/app.log".to_owned(),
+                content: crate::html::ReplicaContent::Html,
             },
             HtmlPageFlags::default(),
         )
@@ -381,7 +382,7 @@ fn a_replica_log_page_is_followed_where_it_was_opened() {
 }
 
 /// Upstream's `textLogRefusal`: a log page the placement rule would hand to the presenter is refused, after its probe,
-/// where a plain text page meets the presenter refusal.
+/// where a plain text page goes to the presenter (#891).
 #[test]
 fn a_presented_session_refuses_a_log_page_after_its_probe() {
     let mut origin = Origin::build(false, &SUPPORTED_KINDS, false);
@@ -402,10 +403,9 @@ fn a_presented_session_refuses_a_log_page_after_its_probe() {
         failure(&format!("session.overlay.open: unreadable text file: {file}"))
     );
     host.borrow_mut().failure = None;
-    assert_eq!(
-        open(&mut origin, false),
-        failure("a viewer presents this session: an html overlay would open where nobody sees it")
-    );
+    assert!(open(&mut origin, false).ok);
+    let request = origin.presenter.last("page.request").unwrap();
+    assert_eq!(request["page"]["source"], json!({"text": {"path": file}}));
 }
 
 /// Upstream's `openTextLink` for a log (`ControlServerLinkOverlayTests.testAClickedLog*`): the click's off-main read

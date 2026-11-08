@@ -14,7 +14,7 @@ use ngterm_proto::{
 use uuid::Uuid;
 
 use crate::Core;
-use crate::html::HtmlSource;
+use crate::html::HtmlPageKind;
 use crate::keymap::BuiltinAction;
 use crate::model::{AgentIndicator, AppStore, Session, SessionNavigation, SidebarMode};
 use crate::palette::PaletteMode;
@@ -626,7 +626,8 @@ impl Core {
 
     /// What Find does when a cover on top owns it (upstream's `coverTakesSearch`), `None` when the terminal keeps it:
     /// the quick terminal holding the keys, or a shown page or program overlay over the focused pane, full or floating,
-    /// takes it. A text page's own field gets the keyboard; every other cover does nothing with it. A HUD is passive and
+    /// takes it. A text page's own field gets the keyboard, a replica's of one included; every other cover does nothing
+    /// with it. A HUD is passive and
     /// a pane overlay on the other pane of a split covers nothing the user types into, so neither takes it.
     fn cover_takes_search(&mut self, origin: ActionOrigin, session: Uuid) -> Option<ActionEffect> {
         if origin.quick {
@@ -636,7 +637,7 @@ impl Core {
         state.visible_cover()?;
         let page = state
             .topmost_html_overlay()
-            .filter(|page| matches!(page.source, HtmlSource::Text { .. }))
+            .filter(|page| page.source.kind() == HtmlPageKind::Text)
             .map(|page| page.id);
         let Some(page) = page else {
             return Some(ActionEffect::Done);

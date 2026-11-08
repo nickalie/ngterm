@@ -127,6 +127,14 @@ impl PresenterGrant {
 /// A presenter accepts optional overlay width and height axes (upstream's `overlayPointsKind`).
 pub const OVERLAY_POINTS_KIND: &str = "overlay.points";
 
+/// A presenter builds image, Markdown and text pages from the bytes it fetches (upstream's `pageContentKind`): the
+/// [`super::frames::PresentationPageSource`] content cases go only to one listing it. It names no frame body.
+pub const PAGE_CONTENT_KIND: &str = "page.content";
+
+/// A presenter shows a clicked HTML file as a document page (upstream's `pageDocumentKind`), besides
+/// [`PAGE_CONTENT_KIND`]. It names no frame body.
+pub const PAGE_DOCUMENT_KIND: &str = "page.document";
+
 /// A presenter attaches the page companions a headless origin creates under the session it presents
 /// ([`super::frames::Body::CompanionPage`]). This build's addition, listed with the page kinds.
 pub const COMPANION_PAGE_KIND: &str = "companion.page";
@@ -140,7 +148,7 @@ pub const PAGE_DETACHED_KIND: &str = "page.detached";
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's; this build's [`OPT_IN_KINDS`] are the exception.
-pub const SUPPORTED_KINDS: [&str; 19] = [
+pub const SUPPORTED_KINDS: [&str; 21] = [
     "status",
     "hud",
     "notify",
@@ -151,6 +159,8 @@ pub const SUPPORTED_KINDS: [&str; 19] = [
     ASK_FORM_KIND,
     ASK_OTHER_KIND,
     OVERLAY_POINTS_KIND,
+    PAGE_CONTENT_KIND,
+    PAGE_DOCUMENT_KIND,
     super::page_tunnel::TUNNEL_KIND,
     COMPANION_PAGE_KIND,
     PAGE_DETACHED_KIND,
@@ -898,6 +908,8 @@ mod tests {
                 "ask.form",
                 "ask.other",
                 "overlay.points",
+                "page.content",
+                "page.document",
                 "page.tunnel",
                 "companion.page",
                 "page.detached",

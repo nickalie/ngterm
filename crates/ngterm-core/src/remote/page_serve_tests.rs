@@ -229,6 +229,88 @@ fn a_relative_path_or_a_url_page_serves_nothing() {
     assert_eq!(resolve(&text(&docs.docs(&["index.html"])), &web), None);
 }
 
+/// Upstream's `anImageOrTextPageServesOnlyItsOwnFile`, a clicked document's too.
+#[test]
+fn an_image_text_or_document_page_serves_only_its_own_file() {
+    let docs = Docs::new();
+    let (index, picture) = (docs.docs(&["index.html"]), docs.docs(&["img", "a.png"]));
+    let own = |path: &Path, max_bytes: usize, picture: bool| {
+        Some(ContentResource {
+            path: canonical(path),
+            max_bytes,
+            picture,
+        })
+    };
+    let image = HtmlSource::Image { path: text(&picture) };
+    assert_eq!(
+        content(&text(&picture), &image),
+        own(&picture, html::image_page::MAX_BYTES, true)
+    );
+    assert_eq!(content(&text(&index), &image), None);
+    let page = HtmlSource::Text {
+        path: text(&index),
+        line: Some(4),
+    };
+    assert_eq!(
+        content(&text(&index), &page),
+        own(&index, html::text_page::MAX_BYTES, false)
+    );
+    assert_eq!(content(&text(&picture), &page), None);
+    let document = HtmlSource::Document { path: text(&index) };
+    assert_eq!(
+        content(&text(&index), &document),
+        own(&index, html::document_page::MAX_BYTES, false)
+    );
+    assert_eq!(content(&text(&picture), &document), None);
+}
+
+/// Upstream's `aMarkdownPageServesItsOwnFileAndPicturesInItsFolder` and `aMarkdownPageRefusesEscapes`.
+#[test]
+fn a_markdown_page_serves_its_own_file_and_pictures_in_its_folder_only() {
+    let docs = Docs::new();
+    let (index, picture) = (docs.docs(&["index.html"]), docs.docs(&["img", "a.png"]));
+    let markdown = HtmlSource::Markdown { path: text(&index) };
+    assert_eq!(
+        content(&text(&index), &markdown),
+        Some(ContentResource {
+            path: canonical(&index),
+            max_bytes: html::markdown_page::MAX_BYTES,
+            picture: false
+        })
+    );
+    assert_eq!(
+        content(&text(&picture), &markdown),
+        Some(ContentResource {
+            path: canonical(&picture),
+            max_bytes: html::markdown_page::MAX_IMAGE_BYTES,
+            picture: true
+        })
+    );
+    let mut escapes = vec![
+        docs.docs(&["..", "secret.txt"]),
+        docs.root().join("secret.txt"),
+        docs.docs(&[]),
+        docs.docs(&["img", "..", "..", "secret.txt"]),
+    ];
+    if cfg!(unix) {
+        escapes.push(docs.docs(&["out.txt"]));
+    }
+    for escape in escapes {
+        assert_eq!(content(&text(&escape), &markdown), None, "{escape:?}");
+    }
+    assert_eq!(content("docs/index.html", &markdown), None, "a relative path");
+}
+
+/// Upstream's `aFilePageIsNeverServedAsContentNorAContentPageAsAFile`.
+#[test]
+fn a_file_page_is_never_served_as_content_nor_a_content_page_as_a_file() {
+    let docs = Docs::new();
+    let index = text(&docs.docs(&["index.html"]));
+    assert_eq!(content(&index, &docs.file(true)), None);
+    let markdown = HtmlSource::Markdown { path: index.clone() };
+    assert_eq!(resolve(&index, &markdown), None);
+}
+
 /// A drive letter `subst` maps onto `target` for a test's span, removed on drop.
 #[cfg(windows)]
 struct SubstDrive(String);

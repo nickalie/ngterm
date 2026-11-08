@@ -677,3 +677,133 @@ fn a_log_check_reads_only_its_tail() {
     }
     check_log(&binary, 1).unwrap();
 }
+
+/// Upstream's `ImageProbeTests.testBytesInHandAreJudgedLikeAFile` and `TextProbeTests.testBytesInHandAreJudgedLikeAFile`:
+/// a picture or text fetched from another machine is judged as a file of this one's, named by its path there.
+#[test]
+fn bytes_in_hand_are_judged_like_a_file() {
+    let picture = image_from_bytes(header_sized_png(12, 7), "/o/a.png").unwrap();
+    assert_eq!(
+        (picture.width, picture.height, picture.mime_type.as_str()),
+        (12, 7, "image/png")
+    );
+    assert_eq!(
+        image_from_bytes(b"<svg/>".to_vec(), "/o/logo.png").unwrap_err(),
+        "not a png, jpg, gif or webp image: /o/logo.png"
+    );
+    assert_eq!(
+        image_from_bytes(header_sized_png(10_001, 10_000), "/o/bomb.png").unwrap_err(),
+        "image too large (over 100 megapixels): /o/bomb.png"
+    );
+    assert_eq!(
+        text_from_bytes(b"let x = 1\n".to_vec(), "/o/a.swift").unwrap(),
+        "let x = 1\n"
+    );
+    for bytes in [vec![0x61, 0x00, 0x62], vec![0xFF, 0xFE, 0x61]] {
+        assert_eq!(
+            text_from_bytes(bytes, "/o/nul.txt").unwrap_err(),
+            "not a UTF-8 text file: /o/nul.txt"
+        );
+    }
+    let page = document_from_bytes(b"<p>x</p>".to_vec(), "/o/pr.html", document_page::page).unwrap();
+    assert!(page.contains("<p>x</p>"), "{page}");
+    assert_eq!(
+        document_from_bytes(vec![0x61, 0x00], "/o/pr.html", document_page::page).unwrap_err(),
+        "not a UTF-8 html file: /o/pr.html"
+    );
+}
+
+/// Upstream's `MarkdownProbeTests.testAnEmbeddingFedFromAnyReaderKeepsOneCopyAndSpendsTheByteBudget`.
+#[test]
+fn an_embedding_fed_from_any_reader_keeps_one_copy_and_spends_the_byte_budget() {
+    let picture = image_from_bytes(png(), "/o/a.png").unwrap();
+    let size = picture.bytes.len();
+    let mut embedding = Embedding::default();
+    assert_eq!(
+        embedding.room("/o/a.png", "a.png"),
+        Some(markdown_page::MAX_IMAGE_BYTES)
+    );
+    embedding.add("/o/a.png".to_owned(), "a.png".to_owned(), Some(picture));
+    assert_eq!(
+        embedding.room("/o/a.png", "./a.png"),
+        None,
+        "an alias of a picture read"
+    );
+    assert_eq!(
+        embedding.room("/o/b.png", "b.png"),
+        Some(markdown_page::MAX_IMAGE_BYTES - size)
+    );
+    embedding.add("/o/b.png".to_owned(), "b.png".to_owned(), None);
+    assert_eq!(
+        embedding.room("/o/b.png", "b.png"),
+        None,
+        "a failed read is not read again"
+    );
+    let embedded = embedding.embedded();
+    assert_eq!(embedded.uris.len(), 1);
+    assert_eq!(
+        embedded.references,
+        std::collections::BTreeMap::from([("a.png".to_owned(), 0), ("./a.png".to_owned(), 0)])
+    );
+}
+
+/// A Markdown file fetched from another machine lists its pictures lexically against its folder there, reads each one
+/// once through the fetch under the shared budget and keeps a reference whose bytes are no picture as its alt text.
+#[test]
+fn a_fetched_markdown_file_embeds_the_pictures_its_fetch_brings() {
+    let folder = PathBuf::from(if cfg!(windows) { r"C:\o\docs" } else { "/o/docs" });
+    let path = folder.join("README.md").to_string_lossy().into_owned();
+    let shot = folder.join("shot.png").to_string_lossy().into_owned();
+    let mut asked = Vec::new();
+    let document = markdown_from_bytes(
+        "# Remote\n\n![s](shot.png) ![again](./shot.png) ![x](fake.png) ![out](../out.png)\n"
+            .as_bytes()
+            .to_vec(),
+        &path,
+        |requested, room| {
+            asked.push((requested.to_owned(), room));
+            (requested == shot).then(png).or_else(|| Some(b"<svg/>".to_vec()))
+        },
+    )
+    .unwrap();
+    let fake = folder.join("fake.png").to_string_lossy().into_owned();
+    assert_eq!(
+        asked,
+        [
+            (shot, markdown_page::MAX_IMAGE_BYTES),
+            (fake, markdown_page::MAX_IMAGE_BYTES - png().len())
+        ]
+    );
+    assert_eq!(document.images.uris.len(), 1);
+    assert_eq!(
+        document.images.references.keys().collect::<Vec<_>>(),
+        ["./shot.png", "shot.png"]
+    );
+    assert_eq!(
+        markdown_from_bytes(vec![0xFF], &path, |_, _| None).unwrap_err(),
+        format!("not a UTF-8 text file: {path}")
+    );
+}
+
+/// A content replica reads under its kind's cap and words its failures as that kind's local probe; an HTML replica
+/// loads through its scheme instead.
+#[test]
+fn a_replica_reads_under_its_kinds_cap_and_words_failures_as_its_probe() {
+    let read = |content| replica_read(content, "/o/a").unwrap();
+    let (limit, failures) = read(ReplicaContent::Image { width: 1, height: 1 });
+    assert_eq!(limit, image_page::MAX_BYTES);
+    assert_eq!(
+        (failures.too_large.as_str(), failures.unreadable.as_str()),
+        ("image too large (over 64 MB): /o/a", "unreadable image: /o/a")
+    );
+    let (limit, failures) = read(ReplicaContent::Markdown);
+    assert_eq!(limit, markdown_page::MAX_BYTES);
+    assert_eq!(failures.unreadable, "unreadable markdown file: /o/a");
+    let (limit, failures) = read(ReplicaContent::Text { line: None });
+    assert_eq!(limit, text_page::MAX_BYTES);
+    assert_eq!(failures.too_large, "text file too large (over 4 MB): /o/a");
+    let (limit, failures) = read(ReplicaContent::Document);
+    assert_eq!(limit, document_page::MAX_BYTES);
+    assert_eq!(failures.unreadable, "unreadable html file: /o/a");
+    assert!(replica_read(ReplicaContent::Html, "/o/a").is_none());
+}

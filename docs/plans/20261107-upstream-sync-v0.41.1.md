@@ -541,24 +541,24 @@ the presented-session paragraph in commands.html, control-api.md (`page.content`
 `::test_origin_commands_on_a_remote_page_reach_the_presenter`; new `::test_content_pages_go_only_to_a_presenter_listing_page_content`,
 `::test_page_serve_serves_a_content_pages_files_under_its_rules`, `::test_a_point_resize_of_an_auto_sized_image_merges_on_the_presenter`.
 
-- [ ] Frames: `PresentationPageSource::{Image{path,width,height}, Markdown{path}, Text{path,line?}, Document{path}}` in
+- [x] Frames: `PresentationPageSource::{Image{path,width,height}, Markdown{path}, Text{path,line?}, Document{path}}` in
   Swift's synthesized coding, `uses_channel`, `is_content`; `PresentationPageCommand.merge` (omitted when None).
   Hub kinds `page.content` (after `overlay.points`) and the document kind; `viewer_kinds(false)` drops them.
-- [ ] Origin: probe before reserving; an image travels only with its oriented pixels; without the presenter's kind ->
+- [x] Origin: probe before reserving; an image travels only with its oriented pixels; without the presenter's kind ->
   `Unsupported`. An auto-sized session-wide image reserves 95% with `presenter_sized`; a point-only resize sends its
   axes with `merge: true`; a percent or full resize ends it. Claim expiry, navigate refusals and the hand-on of
   parked pages treat every channel page alike; a parked content page goes only to a presenter listing the kind.
   Decide on purpose what the `page_snapshot.rs:276` unpresentable sweep does now that images and Markdown map.
-- [ ] page.serve: an image, text or document page serves only its own file; a Markdown page its own file plus
+- [x] page.serve: an image, text or document page serves only its own file; a Markdown page its own file plus
   pictures in its folder (symlinks resolved on the origin); each under its kind's cap; "file is too large for the
   page", "file cannot be read", "not a png, jpg, gif or webp image", "this page has no bridge".
-- [ ] Viewer: `HtmlSource::Replica { path, content }` (Html, Image{w,h}, Markdown, Text{line}, Document); the tree
+- [x] Viewer: `HtmlSource::Replica { path, content }` (Html, Image{w,h}, Markdown, Text{line}, Document); the tree
   reports image/markdown/text/document with `replica: true`; a merge resize keeps the axis it does not name.
   Markdown and text replicas themed, image replicas unthemed on a clear canvas, none bridged; a text replica stays
   static (no follow, no control search); a log page click on a presented session opens the static page there.
-- [ ] Companion attach refuses "a markdown, text or document page companion cannot be shown on another Mac".
-- [ ] `markdown_page::lexical_path` split out of `local_path`; the viewer lists references lexically.
-- [ ] write tests: every Swift case listed (frames, hand-over by capability per kind, presenter sizing and merge,
+- [x] Companion attach refuses "a markdown, text or document page companion cannot be shown on another Mac".
+- [x] `markdown_page::lexical_path` split out of `local_path`; the viewer lists references lexically.
+- [x] write tests: every Swift case listed (frames, hand-over by capability per kind, presenter sizing and merge,
   expiry, resolve rules and caps incl. FIFO and a grown file, lexical_path, replica_source and projection, byte
   probes); the conformance tests above, green on the reference first.
 

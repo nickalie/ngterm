@@ -363,6 +363,7 @@ fn a_replica_and_a_page_row_are_never_written_and_no_page_writes_no_key() {
     let mut replica = page(
         HtmlSource::Replica {
             path: "/remote/page.html".to_owned(),
+            content: crate::html::ReplicaContent::Html,
         },
         HtmlPageFlags::default(),
     );
@@ -567,6 +568,7 @@ fn hand_over(store: &mut AppStore, session: Uuid, pane: Option<OverlayPane>, han
         wait: false,
         ended: false,
         page: Some(handed),
+        presenter_sized: false,
     };
     assert!(store.reserve_remote_overlay(session, slot));
 }
@@ -722,7 +724,8 @@ fn a_viewer_entry_needs_a_free_slot() {
 }
 
 /// A presenter-only origin parks the pages a restore opened in its own slots, with their size, background and
-/// visibility; a page no presenter can show is closed, as nothing there would ever show it.
+/// visibility, a picture included now that a presenter builds one (#891); a page no presenter can show (a log page) is
+/// closed, as nothing there would ever show it.
 #[test]
 fn local_pages_park_for_a_presenter_only_origin() {
     let files = Files::new();
@@ -746,22 +749,39 @@ fn local_pages_park_for_a_presenter_only_origin() {
     let image = HtmlSource::Image {
         path: files.path("picture.png"),
     };
-    open_in(
+    let picture = open_in(
         &mut store,
         session,
         OverlayPane::Left,
-        page(image, HtmlPageFlags::default()),
+        page(image.clone(), HtmlPageFlags::default()),
     );
+    let log = HtmlSource::Text {
+        path: files.path("app.log"),
+        line: None,
+    };
+    let log = page(log, HtmlPageFlags::default()).with_text_log(Some(TextLog { tail: 10, follow: true }));
+    open_in(&mut store, session, OverlayPane::Right, log);
 
     let found = store.session_mut(session).unwrap();
     let swept = crate::model::page_snapshot::park_local_pages(found);
-    assert_eq!((swept.parked, swept.dropped), (vec![wide], true));
+    assert_eq!(
+        (swept.parked, swept.dropped),
+        (vec![wide, picture], true),
+        "in drawing order"
+    );
     let again = crate::model::page_snapshot::park_local_pages(found);
     assert!(again.parked.is_empty() && !again.dropped, "once");
     let found = store.session(session).unwrap();
     assert!(!found.overlay.active);
-    assert!(shown(found).is_empty(), "the image page is closed");
-    assert!(!found.local_overlay_holds(Some(OverlayPane::Left)), "its slot is free");
+    assert!(shown(found).is_empty(), "the log page is closed and the rest parked");
+    assert!(
+        !found.local_overlay_holds(Some(OverlayPane::Right)),
+        "the log page's slot is free"
+    );
+    let left = found.remote_overlays().slot(Some(OverlayPane::Left)).unwrap();
+    let parked_picture = left.page.as_ref().unwrap();
+    assert_eq!(parked_picture.overlay.source, image);
+    assert_eq!(parked_picture.image_pixels, None, "probed when a presenter takes it");
     let slot = found.remote_overlays().slot(None).unwrap();
     let parked = slot.page.as_ref().unwrap();
     assert_eq!((parked.overlay.id, &parked.overlay.source), (wide, &file));

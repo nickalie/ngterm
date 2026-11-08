@@ -8,7 +8,11 @@
 //! are mirrored into the read-back; hide, show, reload, history and resize are sequence-numbered `page.command`s; a
 //! close here, a rejection or close there and the session's removal end the page, keeping an answer already submitted.
 //!
-//! The presenter's loss, its page channel's helper going, an unclaimed file page's claim window passing and the
+//! An image, Markdown, text or clicked HTML page (#891, #917) goes only to a presenter whose hello lists the kind
+//! ([`super::hub::PAGE_CONTENT_KIND`], [`super::hub::PAGE_DOCUMENT_KIND`]), read here first as an open reads it, a
+//! picture with its probed pixels, which that presenter fits to its own screen (`presenter_sized`).
+//!
+//! The presenter's loss, its page channel's helper going, an unclaimed channel page's claim window passing and the
 //! presenter's `page.detached` (its own helper for the page ended) park the page instead (an extension beyond upstream,
 //! where they end it, the last one being a `page.closed` there): the slot stays reserved, the outcome pending, and the
 //! presenter, when it stays and still holds a replica, is told to drop it. The next presenter granted the session that speaks pages
@@ -25,20 +29,21 @@ use super::frames::{
     self, Body, PresentationFrame, PresentationPage, PresentationPageAction, PresentationPageChange,
     PresentationPageCommand, PresentationPageSource, PresentationPane,
 };
-use super::hub::PAGE_KINDS;
+use super::hub::{PAGE_CONTENT_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS};
 use crate::Core;
 use crate::commands::overlay_page::PageOpening;
+use crate::html::image_page::{BASE_PERCENT, ImagePixels};
 use crate::html::{self, HtmlNavigation, HtmlOverlay, HtmlSource, errors};
 use crate::model::{HandedOn, OverlayPane, OverlayPointSize, OverlaySize, RemoteOverlaySlot, RemotePage, Session};
 use crate::pane_env::uuid_string;
 
-/// How long a handed-over file page waits for its channel to be claimed (upstream's `pageClaimWindow`).
+/// How long a handed-over page that fetches over a channel waits for it to be claimed (upstream's `pageClaimWindow`).
 pub const PAGE_CLAIM_WINDOW: Duration = Duration::from_secs(30);
 /// How long after the claim window the expiry runs, so a claim made at its deadline is not raced (upstream's `+ 0.1`).
 const CLAIM_EXPIRY_SLACK: Duration = Duration::from_millis(100);
 
-/// Upstream's `OverlayHtmlError.remotePage`: the file manager and the browser are refused for a file page shown on the
-/// presenting machine.
+/// Upstream's `OverlayHtmlError.remotePage`: the file manager and the browser are refused for a page shown on the
+/// presenting machine that it fetches from here (every page but a URL page).
 pub(crate) const REMOTE_PAGE: &str = "page is shown on another Mac";
 /// Upstream's `OverlayHtmlError.remoteLoopback`.
 pub(crate) const REMOTE_LOOPBACK: &str =
@@ -57,7 +62,7 @@ pub(crate) enum RemotePageOpen {
     SlotTaken,
     /// The session has no pane in the requested role.
     PaneMissing,
-    /// The presenter cannot show pages, so the page is refused.
+    /// The presenter cannot show pages, or not this kind of page, so the page is refused.
     Unsupported,
     /// A URL on this machine's loopback names a server the presenter cannot reach.
     Loopback,
@@ -75,8 +80,12 @@ pub(crate) enum RemotePageCommand {
     Refused(&'static str),
 }
 
-/// A page's full source on the wire; a replica, itself shown for another machine, is never handed on.
-pub(crate) fn presentation_source(source: &HtmlSource) -> Option<PresentationPageSource> {
+/// A page's full source on the wire (upstream's `presentationSource`): a replica, itself shown for another machine, is
+/// never handed on, and an image only with its probed size, `image_pixels`.
+pub(crate) fn presentation_source(
+    source: &HtmlSource,
+    image_pixels: Option<ImagePixels>,
+) -> Option<PresentationPageSource> {
     match source {
         HtmlSource::File { path, grant_root } => Some(PresentationPageSource::File {
             path: path.clone(),
@@ -85,12 +94,36 @@ pub(crate) fn presentation_source(source: &HtmlSource) -> Option<PresentationPag
         HtmlSource::Url(url) => Some(PresentationPageSource::Url {
             address: url.as_str().to_owned(),
         }),
-        HtmlSource::Replica { .. }
-        | HtmlSource::Image { .. }
-        | HtmlSource::Markdown { .. }
-        | HtmlSource::Text { .. }
-        | HtmlSource::Document { .. } => None,
+        HtmlSource::Image { path } => image_pixels.map(|pixels| PresentationPageSource::Image {
+            path: path.clone(),
+            width: pixels.width,
+            height: pixels.height,
+        }),
+        HtmlSource::Markdown { path } => Some(PresentationPageSource::Markdown { path: path.clone() }),
+        HtmlSource::Text { path, line } => Some(PresentationPageSource::Text {
+            path: path.clone(),
+            line: *line,
+        }),
+        HtmlSource::Document { path } => Some(PresentationPageSource::Document { path: path.clone() }),
+        HtmlSource::Replica { .. } => None,
     }
+}
+
+/// Whether a page of `source` can be handed to a presenter at all: every page this machine opened, never a replica (an
+/// image once its size is probed).
+pub(crate) fn travels(source: &HtmlSource) -> bool {
+    !matches!(source, HtmlSource::Replica { .. })
+}
+
+/// Whether `session`'s presenter builds a page of `source`: a content page needs [`PAGE_CONTENT_KIND`] in its hello, a
+/// clicked document [`PAGE_DOCUMENT_KIND`] too, since an older presenter fails its whole stream on a source it cannot
+/// decode (upstream's guards in `openRemotePage`).
+fn presenter_builds(core: &Core, session: Uuid, source: &PresentationPageSource) -> bool {
+    let hub = &core.remote.hub;
+    if source.is_content() && !hub.presenter_supports(PAGE_CONTENT_KIND, session) {
+        return false;
+    }
+    !matches!(source, PresentationPageSource::Document { .. }) || hub.presenter_supports(PAGE_DOCUMENT_KIND, session)
 }
 
 /// The identity of the pane `pane` addresses, `None` for the session-wide slot.
@@ -164,7 +197,7 @@ pub(crate) fn open_remote_page(
     if !core.remote.hub.has_presenter(session) {
         return RemotePageOpen::Local;
     }
-    let Some(source) = presentation_source(&overlay.source) else {
+    let Some(source) = presentation_source(&overlay.source, opening.image_pixels) else {
         return RemotePageOpen::Local;
     };
     let Some(found) = core.library().store(window).and_then(|store| store.session(session)) else {
@@ -186,11 +219,23 @@ pub(crate) fn open_remote_page(
     {
         return RemotePageOpen::Unsupported;
     }
+    if !presenter_builds(core, session, &source) {
+        return RemotePageOpen::Unsupported;
+    }
     if unreachable_loopback(core, session, &overlay.source) {
         return RemotePageOpen::Loopback;
     }
     let token = uuid_string(Uuid::new_v4());
     let size = page_size(opening);
+    // the presenter sizes an unsized picture itself, as a floating panel at the base percent, so the slot records that
+    // percent: the tree then reads it floating and a point resize has a percent to keep
+    let presenter_sized = presenter_fits(&source, slot, size.percent);
+    let reserved_percent = if presenter_sized {
+        Some(BASE_PERCENT)
+    } else {
+        size.percent
+    };
+    let channel = source.uses_channel();
     let sent = OverlaySize {
         points: core.presentable_points(session, size.points),
         ..size
@@ -209,6 +254,7 @@ pub(crate) fn open_remote_page(
     }
     let mut reserved = RemotePage::new(overlay.clone(), token, Instant::now() + PAGE_CLAIM_WINDOW);
     reserved.background_color.clone_from(&opening.background_color);
+    reserved.image_pixels = opening.image_pixels;
     store.reserve_remote_overlay(
         session,
         RemoteOverlaySlot {
@@ -216,16 +262,22 @@ pub(crate) fn open_remote_page(
             job: uuid_string(overlay.id),
             pane: slot,
             owner,
-            size_percent: size.percent,
+            size_percent: reserved_percent,
             wait: false,
             ended: false,
             page: Some(reserved),
+            presenter_sized,
         },
     );
     core.register_viewer_page_outcome(overlay.id);
     core.remote.hub.send_to_presenter(request, session);
-    core.arm_page_claim_expiry(&overlay.source);
+    core.arm_page_claim_expiry(channel);
     RemotePageOpen::Opened
+}
+
+/// Whether the presenter fits a page of `source` in `slot` itself: a session-wide picture the caller gave no size.
+fn presenter_fits(source: &PresentationPageSource, slot: Option<OverlayPane>, percent: Option<i64>) -> bool {
+    matches!(source, PresentationPageSource::Image { .. }) && slot.is_none() && percent.is_none()
 }
 
 /// Whether `body` encodes into one presentation frame, at the largest generation and revision it could carry.
@@ -296,8 +348,8 @@ impl Core {
         session: Uuid,
         pane: Option<OverlayPane>,
         action: PresentationPageAction,
-        size_percent: Option<i64>,
-        points: OverlayPointSize,
+        size: OverlaySize,
+        merge: Option<bool>,
     ) -> bool {
         let owned = self
             .presented_session(session)
@@ -314,19 +366,21 @@ impl Core {
             return false;
         };
         let command = PresentationPageCommand {
-            width: points.width,
-            height: points.height,
+            width: size.points.width,
+            height: size.points.height,
             page: job,
             seq,
             action,
-            size_percent,
+            size_percent: size.percent,
+            merge,
         };
         self.remote.hub.send_to_presenter(Body::PageCommand(command), session)
     }
 
     /// Runs a toolbar navigation on the page in `pane`'s slot when the presenting machine shows it (upstream's
-    /// `navigateRemotePage`): history goes over; the browser only for a URL page; the file manager never, a URL page
-    /// keeping the answer it gets here.
+    /// `navigateRemotePage`): history goes over; the browser only for a URL page, every page it fetches from here (a
+    /// file or content page) being refused like a file page; the file manager never, a URL page keeping the answer it
+    /// gets here.
     pub(crate) fn navigate_remote_page(
         &mut self,
         session: Uuid,
@@ -336,7 +390,7 @@ impl Core {
         let Some(shown) = self.remote_page(session, pane) else {
             return RemotePageCommand::Local;
         };
-        let file = matches!(shown.overlay.source, HtmlSource::File { .. });
+        let file = !matches!(shown.overlay.source, HtmlSource::Url(_));
         match navigation {
             HtmlNavigation::Back => self.deliver_remote_page_command(session, pane, PresentationPageAction::Back),
             HtmlNavigation::Forward => self.deliver_remote_page_command(session, pane, PresentationPageAction::Forward),
@@ -371,7 +425,7 @@ impl Core {
         pane: Option<OverlayPane>,
         action: PresentationPageAction,
     ) -> RemotePageCommand {
-        if self.send_remote_page_command(session, pane, action, None, OverlayPointSize::default()) {
+        if self.send_remote_page_command(session, pane, action, OverlaySize::default(), None) {
             RemotePageCommand::Sent
         } else {
             RemotePageCommand::Refused(VIEWER_GONE)
@@ -530,10 +584,10 @@ impl Core {
         }
     }
 
-    /// Arms the claim expiry of a page handed over with `source`: a file page's channel has to be claimed in time, a URL
-    /// page loads with none.
-    fn arm_page_claim_expiry(&mut self, source: &HtmlSource) {
-        if matches!(source, HtmlSource::File { .. }) {
+    /// Arms the claim expiry of a page handed over: one that fetches over a `channel` (every page but a URL page) has
+    /// to claim it in time, a URL page loads with none.
+    fn arm_page_claim_expiry(&mut self, channel: bool) {
+        if channel {
             self.remote
                 .page_serve
                 .expiries
@@ -595,9 +649,18 @@ impl Core {
             return;
         };
         let overlay = &page.overlay;
-        let Some(source) = presentation_source(&overlay.source) else {
+        // a picture a restore parked again has no probed size: it is read now, as an open reads it
+        let pixels = page.image_pixels.or_else(|| match &overlay.source {
+            HtmlSource::Image { path } => self.probe_image_pixels(path),
+            _ => None,
+        });
+        let Some(source) = presentation_source(&overlay.source, pixels) else {
             return;
         };
+        // a content page waits for a presenter that builds it
+        if !presenter_builds(self, session, &source) {
+            return;
+        }
         let Some(identity) = self
             .presented_session(session)
             .and_then(|found| slot_identity(found, slot.pane).ok())
@@ -607,16 +670,19 @@ impl Core {
         if unreachable_loopback(self, session, &overlay.source) {
             return;
         }
+        // a picture the last presenter fitted itself is fitted again by the next one
+        let fitted = slot.presenter_sized;
         let opening = PageOpening {
             source: overlay.source.clone(),
             flags: overlay.flags,
             pane: slot.pane,
-            size_percent: slot.size_percent,
+            size_percent: slot.size_percent.filter(|_| !fitted),
             points: slot.points,
             background_color: page.background_color.clone(),
             follow: false,
             clicked: overlay.clicked,
             text_log: overlay.text_log,
+            image_pixels: pixels,
         };
         let size = page_size(&opening);
         let sent = OverlaySize {
@@ -624,6 +690,7 @@ impl Core {
             ..size
         };
         let token = uuid_string(Uuid::new_v4());
+        let channel = source.uses_channel();
         let request = Body::PageRequest(page_request(overlay, &opening, source, identity, token.clone(), sent));
         if !fits_one_frame(&request) {
             return;
@@ -646,10 +713,11 @@ impl Core {
                 seq,
                 action: PresentationPageAction::Hide,
                 size_percent: None,
+                merge: None,
             };
             self.remote.hub.send_to_presenter(Body::PageCommand(command), session);
         }
-        self.arm_page_claim_expiry(&overlay.source);
+        self.arm_page_claim_expiry(channel);
     }
 
     /// Admits the page channel `token` names (upstream's `claimRemotePage`): unclaimed, inside its deadline at `now`,
@@ -683,7 +751,7 @@ impl Core {
         Some((page, source))
     }
 
-    /// Parks every file page shown on a presenter whose channel was not claimed by `now` (upstream's
+    /// Parks every channel page shown on a presenter whose channel was not claimed by `now` (upstream's
     /// `expireRemotePageClaims`, which ends it); a URL page loads on the presenter with no channel and never expires.
     pub(crate) fn expire_remote_page_claims_at(&mut self, now: Instant) {
         let library = self.library();
@@ -698,7 +766,7 @@ impl Core {
                         let unclaimed = !page.claimed
                             && !page.parked
                             && now > page.claim_deadline
-                            && matches!(page.overlay.source, HtmlSource::File { .. });
+                            && !matches!(page.overlay.source, HtmlSource::Url(_));
                         unclaimed.then_some(page.overlay.id)
                     })
                 })
@@ -718,17 +786,65 @@ impl Core {
 #[cfg(test)]
 mod document_tests {
     use super::*;
+    use crate::html::ReplicaContent;
+
+    /// Upstream's `everyLocalPageKindTravelsToAnotherMacButAReplica` and `anImageWithoutItsProbedSizeDoesNotTravel`.
     #[test]
-    fn local_documents_have_no_remote_form() {
-        for source in [
-            HtmlSource::Image {
-                path: "/tmp/x.png".to_owned(),
-            },
-            HtmlSource::Markdown {
-                path: "/tmp/x.md".to_owned(),
-            },
+    fn every_local_page_kind_travels_but_a_replica_and_an_unprobed_image() {
+        let pixels = Some(ImagePixels {
+            width: 800,
+            height: 600,
+        });
+        let image = HtmlSource::Image {
+            path: "/a.png".to_owned(),
+        };
+        assert_eq!(
+            presentation_source(&image, pixels),
+            Some(PresentationPageSource::Image {
+                path: "/a.png".to_owned(),
+                width: 800,
+                height: 600
+            })
+        );
+        assert_eq!(presentation_source(&image, None), None);
+        assert!(travels(&image));
+        for (source, sent) in [
+            (
+                HtmlSource::Markdown {
+                    path: "/a.md".to_owned(),
+                },
+                PresentationPageSource::Markdown {
+                    path: "/a.md".to_owned(),
+                },
+            ),
+            (
+                HtmlSource::Text {
+                    path: "/a.go".to_owned(),
+                    line: Some(3),
+                },
+                PresentationPageSource::Text {
+                    path: "/a.go".to_owned(),
+                    line: Some(3),
+                },
+            ),
+            (
+                HtmlSource::Document {
+                    path: "/pr.html".to_owned(),
+                },
+                PresentationPageSource::Document {
+                    path: "/pr.html".to_owned(),
+                },
+            ),
         ] {
-            assert!(presentation_source(&source).is_none());
+            assert_eq!(presentation_source(&source, None), Some(sent));
+        }
+        for content in [ReplicaContent::Html, ReplicaContent::Image { width: 1, height: 1 }] {
+            let replica = HtmlSource::Replica {
+                path: "/a.html".to_owned(),
+                content,
+            };
+            assert_eq!(presentation_source(&replica, pixels), None);
+            assert!(!travels(&replica));
         }
     }
 }

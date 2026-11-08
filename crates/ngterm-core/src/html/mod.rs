@@ -67,6 +67,47 @@ pub fn contains(root: &str, path: &str) -> bool {
     components(path).starts_with(&components(root))
 }
 
+/// `path` standardized (`.` dropped, `..` taking the previous name off, as Foundation's `standardizedFileURL`), then
+/// with the symlinks of its longest existing ancestor resolved, as `resolvingSymlinksInPath` leaves a path that does
+/// not exist yet. Both sides of a page channel's containment checks (`crate::remote::page_serve::resolve`) go through
+/// it, so a Windows path's `\\?\` prefix, which `canonicalize` adds, is on both or neither.
+#[must_use]
+pub fn real_path(path: &std::path::Path) -> std::path::PathBuf {
+    let standard = standardized(path);
+    let mut existing = standard.as_path();
+    let mut missing = Vec::new();
+    loop {
+        if let Ok(mut resolved) = std::fs::canonicalize(existing) {
+            resolved.extend(missing.iter().rev());
+            return resolved;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name.to_owned());
+                existing = parent;
+            }
+            _ => return standard,
+        }
+    }
+}
+
+fn standardized(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => out.push(component),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Whether `path` is absolute on this OS: `/`-rooted on Unix; on Windows rooted on a drive or a share (a `\`-rooted
 /// path is relative to the current drive).
 #[must_use]
@@ -235,9 +276,34 @@ pub enum HtmlSource {
     /// with no file grant, bridge or page JavaScript, behind a policy and a network filter that load nothing from the
     /// network, themed like a file page. Never a CLI page.
     Document { path: String },
-    /// A file page another machine opened, shown here from `ngterm-page://<page id>/` (upstream's `.replica`): `path`
-    /// is its path on that machine, whose own grant decides what else may be fetched.
-    Replica { path: String },
+    /// A page another machine opened, shown here from what its page channel serves (upstream's `.replica`): `path` is
+    /// its path on that machine, whose own rules decide what else may be fetched, and `content` what kind of page it
+    /// is. An HTML file loads from `ngterm-page://<page id>/`; a picture, Markdown, text or clicked HTML file is built
+    /// here from the fetched bytes. It is never a path on this machine, so nothing reads it from the local disk.
+    Replica { path: String, content: ReplicaContent },
+}
+
+/// The kind of page a replica's origin opened (upstream's `ReplicaContent`): an HTML file it loads as is, or a picture,
+/// Markdown, text or clicked HTML file this machine builds a page from. An image carries its oriented pixel size, which
+/// this machine sizes the panel from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplicaContent {
+    Html,
+    Image { width: i64, height: i64 },
+    Markdown,
+    Text { line: Option<i64> },
+    Document,
+}
+
+/// What a page shows, whichever machine read its file (upstream's `HtmlPageKind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HtmlPageKind {
+    File,
+    Url,
+    Image,
+    Markdown,
+    Text,
+    Document,
 }
 
 /// The URL scheme a replica page loads from (upstream's `HtmlSource.replicaScheme`, `agterm-page` there; the build's
@@ -285,12 +351,45 @@ impl HtmlSource {
         HtmlOrigin::new(url).map(|origin| origin.display())
     }
 
+    /// What the page shows, a replica counted as the kind its origin opened (upstream's `HtmlSource.kind`).
+    #[must_use]
+    pub fn kind(&self) -> HtmlPageKind {
+        match self {
+            Self::File { .. }
+            | Self::Replica {
+                content: ReplicaContent::Html,
+                ..
+            } => HtmlPageKind::File,
+            Self::Url(_) => HtmlPageKind::Url,
+            Self::Image { .. }
+            | Self::Replica {
+                content: ReplicaContent::Image { .. },
+                ..
+            } => HtmlPageKind::Image,
+            Self::Markdown { .. }
+            | Self::Replica {
+                content: ReplicaContent::Markdown,
+                ..
+            } => HtmlPageKind::Markdown,
+            Self::Text { .. }
+            | Self::Replica {
+                content: ReplicaContent::Text { .. },
+                ..
+            } => HtmlPageKind::Text,
+            Self::Document { .. }
+            | Self::Replica {
+                content: ReplicaContent::Document,
+                ..
+            } => HtmlPageKind::Document,
+        }
+    }
+
     /// What the source names, as the read-back and the strip's tooltip spell it.
     #[must_use]
     pub fn text(&self) -> String {
         match self {
             Self::File { path, .. }
-            | Self::Replica { path }
+            | Self::Replica { path, .. }
             | Self::Image { path }
             | Self::Markdown { path }
             | Self::Document { path }
@@ -497,20 +596,21 @@ impl HtmlOverlay {
     /// `themed`); a clicked HTML file takes a file page's theme, so it looks the same clicked or opened with `--html`.
     #[must_use]
     pub fn themed(&self) -> bool {
+        !matches!(self.source.kind(), HtmlPageKind::Url | HtmlPageKind::Image)
+    }
+
+    /// Whether the source receives the control bridge: a file page, or a replica of one; document renderers never do,
+    /// a replica's included (upstream's `bridged`).
+    #[must_use]
+    pub fn bridged(&self) -> bool {
         matches!(
             self.source,
             HtmlSource::File { .. }
-                | HtmlSource::Replica { .. }
-                | HtmlSource::Markdown { .. }
-                | HtmlSource::Text { .. }
-                | HtmlSource::Document { .. }
+                | HtmlSource::Replica {
+                    content: ReplicaContent::Html,
+                    ..
+                }
         )
-    }
-
-    /// Whether the source receives the control bridge; document renderers never do.
-    #[must_use]
-    pub fn bridged(&self) -> bool {
-        matches!(self.source, HtmlSource::File { .. } | HtmlSource::Replica { .. })
     }
 
     /// Whether this is a local content page the app reads and builds, with no browser or file access: an image,
@@ -531,20 +631,22 @@ impl HtmlOverlay {
     /// DNS prefetch) no CSP covers (upstream's `DocumentRules`).
     #[must_use]
     pub fn blocks_network(&self) -> bool {
-        matches!(self.source, HtmlSource::Document { .. })
+        self.source.kind() == HtmlPageKind::Document
     }
 
-    /// Whether a page is loaded from generated or file text without a file grant (upstream's `textLoaded`).
+    /// Whether a page is loaded from generated or file text without a file grant (upstream's `textLoaded`): a replica
+    /// this machine builds from fetched bytes included.
     #[must_use]
     pub fn text_loaded(&self) -> bool {
-        matches!(
-            self.source,
-            HtmlSource::File { grant_root: None, .. }
-                | HtmlSource::Image { .. }
-                | HtmlSource::Markdown { .. }
-                | HtmlSource::Text { .. }
-                | HtmlSource::Document { .. }
-        )
+        match &self.source {
+            HtmlSource::File { grant_root, .. } => grant_root.is_none(),
+            HtmlSource::Replica { content, .. } => *content != ReplicaContent::Html,
+            HtmlSource::Url(_) => false,
+            HtmlSource::Image { .. }
+            | HtmlSource::Markdown { .. }
+            | HtmlSource::Text { .. }
+            | HtmlSource::Document { .. } => true,
+        }
     }
 
     /// What the panel names the page by, from what the app loaded and never from the page's title, which the page
@@ -557,7 +659,9 @@ impl HtmlOverlay {
             | HtmlSource::Markdown { path }
             | HtmlSource::Text { path, .. }
             | HtmlSource::Document { path } => last_path_component(path),
-            HtmlSource::File { path, .. } | HtmlSource::Replica { path } => {
+            // a replica the app builds sits at about:blank: its file is what it shows
+            HtmlSource::Replica { path, content } if *content != ReplicaContent::Html => last_path_component(path),
+            HtmlSource::File { path, .. } | HtmlSource::Replica { path, .. } => {
                 let shown = self
                     .current
                     .as_ref()
@@ -605,6 +709,36 @@ pub(crate) fn last_path_component(path: &str) -> String {
         return if path.is_empty() { String::new() } else { "/".to_owned() };
     }
     trimmed.rsplit(separators).next().unwrap_or(trimmed).to_owned()
+}
+
+/// Reads a page's file before the page takes its slot, on an origin with no web views of its own (a headless one,
+/// [`crate::Core::set_page_probe`]): its pages go to the presenting machine, and the control path refuses a missing,
+/// oversized or binary file before anything is reserved there, as a frontend's [`HtmlHost`] does.
+pub trait PageProbe {
+    /// Reads a bounded raster image (upstream's `ImageProbe.load`).
+    ///
+    /// # Errors
+    /// The upstream image probe failure.
+    fn probe_image(&self, path: &str) -> Result<image_page::ImageData, String>;
+
+    /// Checks a Markdown file's descriptor (upstream's `markdownFileRefusal`).
+    ///
+    /// # Errors
+    /// The upstream Markdown probe failure.
+    fn check_markdown(&self, path: &str) -> Result<(), String>;
+
+    /// Reads and validates a text page's file (upstream's `TextProbe.check`).
+    ///
+    /// # Errors
+    /// The upstream text probe failure.
+    fn check_text(&self, path: &str) -> Result<(), String>;
+
+    /// Reads a log page's last `tail` lines (upstream's `TextProbe.checkLog`), before the log page is refused for the
+    /// presenting machine as a frontend reads it before that refusal.
+    ///
+    /// # Errors
+    /// The upstream text probe failure.
+    fn check_log(&self, path: &str, tail: usize) -> Result<(), String>;
 }
 
 /// The frontend's web views, as the dispatcher reaches them (upstream's `HtmlOverlayRegistry` calls in

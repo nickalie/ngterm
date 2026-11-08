@@ -215,21 +215,28 @@ fn a_search_addresses_only_a_local_text_page() {
     assert_eq!(page(&f, id, None).text_search, None);
     assert!(f.store_mut().unwrap().close_overlay(id));
 
-    let replica = HtmlOverlay {
-        replica_of: Some(Uuid::new_v4()),
-        ..HtmlOverlay::new(
-            HtmlSource::Replica {
-                path: "/tmp/a.txt".to_owned(),
-            },
-            HtmlPageFlags::default(),
-        )
-    };
-    f.store_mut()
-        .unwrap()
-        .open_html_overlay(id, None, replica, None, None)
-        .unwrap();
-    assert_eq!(search(&mut f, &target, query("a")), failure("no text page"));
-    assert!(f.store_mut().unwrap().close_overlay(id));
+    // a text page shown for another machine is static there: no control search reaches it (#891)
+    for content in [
+        crate::html::ReplicaContent::Html,
+        crate::html::ReplicaContent::Text { line: None },
+    ] {
+        let replica = HtmlOverlay {
+            replica_of: Some(Uuid::new_v4()),
+            ..HtmlOverlay::new(
+                HtmlSource::Replica {
+                    path: "/tmp/a.txt".to_owned(),
+                    content,
+                },
+                HtmlPageFlags::default(),
+            )
+        };
+        f.store_mut()
+            .unwrap()
+            .open_html_overlay(id, None, replica, None, None)
+            .unwrap();
+        assert_eq!(search(&mut f, &target, query("a")), failure("no text page"));
+        assert!(f.store_mut().unwrap().close_overlay(id));
+    }
 
     assert!(f.store_mut().unwrap().open_overlay(
         id,
@@ -386,6 +393,36 @@ fn terminals(f: &mut Fixture, id: Uuid) -> (FakeSurfaceProbe, FakeSurfaceProbe) 
     session.surface.replace(Box::new(left));
     session.split_surface.replace(Box::new(right));
     probes
+}
+
+/// A floating text page shown for another machine takes Find into its own field too (upstream's `kind == .text`).
+#[test]
+fn a_text_replica_takes_find_into_its_own_field() {
+    let (mut f, _) = fixture();
+    let id = f.selected().unwrap();
+    terminals(&mut f, id);
+    let replica = HtmlOverlay {
+        replica_of: Some(Uuid::new_v4()),
+        ..HtmlOverlay::new(
+            HtmlSource::Replica {
+                path: "/tmp/a.txt".to_owned(),
+                content: crate::html::ReplicaContent::Text { line: None },
+            },
+            HtmlPageFlags::default(),
+        )
+    };
+    let shown = replica.id;
+    let store = f.store_mut().unwrap();
+    store.open_html_overlay(id, None, replica, None, None).unwrap();
+    assert!(store.resize_overlay_with_points(id, Some(60), crate::model::OverlayPointSize::default()));
+    assert_eq!(
+        find(&mut f, false),
+        ActionEffect::Frontend(FrontendAction::FocusPageSearch {
+            window: f.window,
+            page: shown
+        })
+    );
+    assert!(f.store_mut().unwrap().close_overlay(id));
 }
 
 /// Upstream's `testEveryShownCoverOverTheFocusedPaneTakesCommandF`: a floating text page takes Find into its own field,

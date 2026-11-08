@@ -93,6 +93,7 @@ mod tests {
     fn page() -> HtmlOverlay {
         let source = HtmlSource::Replica {
             path: "/srv/report.html".to_owned(),
+            content: crate::html::ReplicaContent::Html,
         };
         let mut overlay = HtmlOverlay::new(source, HtmlPageFlags::default());
         overlay.replica_of = Some(Uuid::new_v4());

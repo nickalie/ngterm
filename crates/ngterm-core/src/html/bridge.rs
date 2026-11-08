@@ -378,6 +378,7 @@ mod tests {
         }
         let source = super::super::HtmlSource::Replica {
             path: "/srv/r.html".to_owned(),
+            content: crate::html::ReplicaContent::Html,
         };
         let mut page = super::super::HtmlOverlay::new(source, super::super::HtmlPageFlags::default());
         assert!(

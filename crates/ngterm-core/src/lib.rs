@@ -14,6 +14,7 @@
 pub mod agent_chat;
 pub mod app_actions;
 pub mod auto_follow;
+pub mod bounded_file;
 pub mod chrome;
 pub mod clipboard_policy;
 pub mod command_restore;

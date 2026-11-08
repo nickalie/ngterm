@@ -68,8 +68,8 @@ mod webview2;
 pub use panel::{TerminalColors, sync_hide_shown as sync_strip_hide};
 #[cfg(all(feature = "html", target_os = "linux"))]
 pub use registry::{
-    ReplicaLink, answer, answer_resource, answer_value, apply, init, install, key_down, mount, page_holds_keyboard,
-    refresh_themes, reject, set_replica_link, set_window_scale, settle, shutdown,
+    ReadAnswer, ReplicaLink, answer, answer_resource, answer_value, apply, init, install, key_down, mount,
+    page_holds_keyboard, refresh_themes, reject, set_replica_link, set_window_scale, settle, shutdown,
 };
 #[cfg(all(feature = "html", target_os = "linux"))]
 use registry::{copy_link, navigate};

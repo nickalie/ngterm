@@ -198,6 +198,7 @@ fn reservation(pane: Option<OverlayPane>) -> RemoteOverlaySlot {
         wait: false,
         ended: false,
         page: None,
+        presenter_sized: false,
     }
 }
 

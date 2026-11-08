@@ -20,7 +20,10 @@ use super::frames::{
     PresentationOverlayChange, PresentationPage, PresentationPageChange, PresentationPageCommand, PresentationRespawns,
     PresentationSound, PresentationStatus,
 };
-use super::hub::{AGENT_KIND, COMPANION_PAGE_KIND, PAGE_DETACHED_KIND, PAGE_KINDS, SUPPORTED_KINDS};
+use super::hub::{
+    AGENT_KIND, COMPANION_PAGE_KIND, PAGE_CONTENT_KIND, PAGE_DETACHED_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS,
+    SUPPORTED_KINDS,
+};
 use super::reconnect::retry_delay;
 use crate::model::RemoteConnection;
 
@@ -31,9 +34,10 @@ pub const STALE_AFTER: Duration = Duration::from_secs(30);
 pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
 
 /// The kinds this viewer's hello lists: every kind the build speaks, the page kinds only when it can show a handed-over
-/// page (`pages`: the web views are built in and can run), and with them the loopback forward
-/// ([`super::page_tunnel::TUNNEL_KIND`]), a headless origin's page companions ([`COMPANION_PAGE_KIND`]) and the page
-/// detach ([`PAGE_DETACHED_KIND`]), extensions of this build. Upstream's hello lists them all; an origin a viewer
+/// page (`pages`: the web views are built in and can run), and with them the content and document pages
+/// ([`PAGE_CONTENT_KIND`], [`PAGE_DOCUMENT_KIND`]), the loopback forward ([`super::page_tunnel::TUNNEL_KIND`]), a
+/// headless origin's page companions ([`COMPANION_PAGE_KIND`]) and the page detach ([`PAGE_DETACHED_KIND`]), the last
+/// three extensions of this build. Upstream's hello lists them all; an origin a viewer
 /// leaves them out for hands it no page and keeps its own refusal, rather than handing over a page that is refused at
 /// once.
 #[must_use]
@@ -43,7 +47,14 @@ pub fn viewer_kinds(pages: bool) -> Vec<String> {
         .filter(|kind| {
             pages
                 || !(PAGE_KINDS.contains(kind)
-                    || [super::page_tunnel::TUNNEL_KIND, COMPANION_PAGE_KIND, PAGE_DETACHED_KIND].contains(kind))
+                    || [
+                        PAGE_CONTENT_KIND,
+                        PAGE_DOCUMENT_KIND,
+                        super::page_tunnel::TUNNEL_KIND,
+                        COMPANION_PAGE_KIND,
+                        PAGE_DETACHED_KIND,
+                    ]
+                    .contains(kind))
         })
         .map(|kind| (*kind).to_owned())
         .collect()
@@ -668,6 +679,13 @@ mod tests {
             viewer_kinds(false).iter().all(|kind| !kind.starts_with("page.")),
             "no page kind while this build shows no pages"
         );
+        let showing = viewer_kinds(true);
+        assert!(
+            [PAGE_CONTENT_KIND, PAGE_DOCUMENT_KIND]
+                .iter()
+                .all(|kind| showing.iter().any(|listed| listed == kind)),
+            "a viewer that shows pages builds content and document pages"
+        );
         // desktop Attach Remote shows no agent chat, so it never asks for the agent kind
         for pages in [false, true] {
             assert!(
@@ -779,6 +797,7 @@ mod tests {
             seq: 3,
             action: PresentationPageAction::Hide,
             size_percent: None,
+            merge: None,
         };
         let effects_before = harness.effects.len();
         harness.deliver(&line(Body::PageRequest(request.clone()), 7, 2));

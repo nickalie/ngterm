@@ -21,7 +21,7 @@ use std::sync::PoisonError;
 use gpui_kit::{AnyWindowHandle, App, Entity, WeakEntity};
 use ngterm_core::html::{
     HtmlLoadState, HtmlNavigation, HtmlNavigationAction, HtmlNavigationDecision, HtmlNavigationTarget, HtmlOverlay,
-    HtmlOverlayTheme, HtmlPageInfo, HtmlReloadTarget, HtmlSource, decide, errors,
+    HtmlOverlayTheme, HtmlPageInfo, HtmlPageKind, HtmlReloadTarget, HtmlSource, ReplicaContent, decide, errors,
 };
 use url::Url;
 use uuid::Uuid;
@@ -494,7 +494,7 @@ impl Page {
         let colors = PanelColors::resolve(terminal, self.background.as_deref());
         self.colors.replace(colors.clone());
         self.refresh(cx);
-        if matches!(self.overlay().source, HtmlSource::Image { .. }) {
+        if self.overlay().source.kind() == HtmlPageKind::Image {
             return;
         }
         let next = colors.theme();
@@ -1056,10 +1056,19 @@ impl Page {
                 }
             }
             HtmlSource::File { path, grant_root: None } => return self.load_text(&native, &path),
-            HtmlSource::Replica { path } => match scheme::replica_address(self.id, &path) {
+            // a replica's files come from the machine that opened it: an HTML file read through its own protocol, any
+            // other page built here from its fetched bytes
+            HtmlSource::Replica {
+                path,
+                content: ReplicaContent::Html,
+            } => match scheme::replica_address(self.id, &path) {
                 Some(address) => address,
                 None => return self.fail(errors::REMOTE_FILE.to_owned()),
             },
+            HtmlSource::Replica { path, content } => {
+                registry::read_replica_document(self.id, generation, path, content);
+                return;
+            }
         };
         native.load_url(&address);
     }

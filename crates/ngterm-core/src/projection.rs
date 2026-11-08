@@ -15,7 +15,7 @@ use ngterm_proto::tree::{
 };
 use uuid::Uuid;
 
-use crate::html::{HtmlOverlay, HtmlSource};
+use crate::html::{HtmlOverlay, HtmlSource, ReplicaContent};
 use crate::hud::HudSpinner;
 use crate::model::{
     AgentStatus, AppStore, OverlayPane, RemotePresentationState, Session, SessionContent, StatusPane, SurfaceSlot,
@@ -244,20 +244,42 @@ fn html_overlay_nodes(session: &Session) -> Option<Vec<ControlHtmlOverlayNode>> 
 /// that opened it, with no grant), the load state, what the web view shows once it reported, and the flags; the zoom
 /// is the app's, set by the tree.
 fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverlayNode {
+    // a replica reports the kind its origin opened, beside `replica` (upstream's `.replica(_, kind)` arms)
     let (file, cwd, url, image, markdown) = match &page.source {
         HtmlSource::File { path, grant_root } => (Some(path.clone()), grant_root.clone(), None, None, None),
         HtmlSource::Url(address) => (None, None, Some(address.as_str().to_owned()), None, None),
-        HtmlSource::Replica { path } => (Some(path.clone()), None, None, None, None),
-        HtmlSource::Image { path } => (None, None, None, Some(path.clone()), None),
-        HtmlSource::Markdown { path } => (None, None, None, None, Some(path.clone())),
-        HtmlSource::Text { .. } | HtmlSource::Document { .. } => (None, None, None, None, None),
+        HtmlSource::Replica {
+            path,
+            content: ReplicaContent::Html,
+        } => (Some(path.clone()), None, None, None, None),
+        HtmlSource::Image { path }
+        | HtmlSource::Replica {
+            path,
+            content: ReplicaContent::Image { .. },
+        } => (None, None, None, Some(path.clone()), None),
+        HtmlSource::Markdown { path }
+        | HtmlSource::Replica {
+            path,
+            content: ReplicaContent::Markdown,
+        } => (None, None, None, None, Some(path.clone())),
+        HtmlSource::Text { .. } | HtmlSource::Document { .. } | HtmlSource::Replica { .. } => {
+            (None, None, None, None, None)
+        }
     };
     let document = match &page.source {
-        HtmlSource::Document { path } => Some(path.clone()),
+        HtmlSource::Document { path }
+        | HtmlSource::Replica {
+            path,
+            content: ReplicaContent::Document,
+        } => Some(path.clone()),
         _ => None,
     };
     let text = match &page.source {
-        HtmlSource::Text { path, line } => Some(text_node(path, *line, page)),
+        HtmlSource::Text { path, line }
+        | HtmlSource::Replica {
+            path,
+            content: ReplicaContent::Text { line },
+        } => Some(text_node(path, *line, page)),
         _ => None,
     };
     let current = page.current.as_ref();
