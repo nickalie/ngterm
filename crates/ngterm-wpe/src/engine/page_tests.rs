@@ -90,7 +90,12 @@ fn native_page() {
     let display = Display::connect(None).unwrap();
     let session = NetworkSession::ephemeral();
     let (events, received) = async_channel::unbounded();
-    let page = Page::new(ViewId(5), &spec(), &display, &session, &events).unwrap();
+    let appearance = ViewSpec {
+        background: Some(Rgba::TRANSPARENT),
+        ..spec()
+    };
+    let page = Page::new(ViewId(5), &appearance, &display, &session, &events).unwrap();
+    native_appearance(&page);
     native_input(&page);
     page.apply(ViewCommand::Stop);
     page.apply(ViewCommand::GoForward);
@@ -120,6 +125,39 @@ fn native_page() {
     page.web_view.emit_by_name::<()>("close", &[]);
     assert!(received.is_empty());
     page.end_web_process();
+}
+
+fn native_appearance(page: &Rc<Page>) {
+    let background = || {
+        let mut color = webkit::WebKitColor {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        };
+        // SAFETY: a live web view and a writable color out-pointer.
+        unsafe { webkit::webkit_web_view_get_background_color(page.web_view.raw(), &raw mut color) };
+        [color.red, color.green, color.blue, color.alpha]
+    };
+    assert!(background().into_iter().all(|channel| channel.abs() < f64::EPSILON));
+    page.apply(ViewCommand::Background(None));
+    assert!(
+        background()
+            .into_iter()
+            .all(|channel| (channel - 1.0).abs() < f64::EPSILON)
+    );
+    page.apply(ViewCommand::Zoom(1.75));
+    // SAFETY: a live web view.
+    let zoom = unsafe { webkit::webkit_web_view_get_zoom_level(page.web_view.raw()) };
+    assert!((zoom - 1.75).abs() < f64::EPSILON);
+    page.apply(ViewCommand::Visible(false));
+    // SAFETY: a live WPE view.
+    let visible = unsafe { platform::wpe_view_get_visible(page.view.as_wpe()) };
+    assert_eq!(visible, glib::ffi::GFALSE);
+    page.apply(ViewCommand::Visible(true));
+    // SAFETY: as above.
+    let visible = unsafe { platform::wpe_view_get_visible(page.view.as_wpe()) };
+    assert_ne!(visible, glib::ffi::GFALSE);
 }
 
 fn wait_event<T>(
@@ -199,4 +237,116 @@ fn native_input(page: &Page) {
     assert_eq!((width, height), (1, i32::MAX));
     // SAFETY: a live toplevel.
     assert!((unsafe { platform::wpe_toplevel_get_scale(toplevel.as_wpe()) } - 1.0).abs() < f64::EPSILON);
+    // SAFETY: a live view; null detaches its toplevel, which we retain above.
+    unsafe { platform::wpe_view_set_toplevel(view, std::ptr::null_mut()) };
+    assert!(page.view.toplevel().is_none());
+    page.set_geometry(Geometry {
+        width: 10,
+        height: 10,
+        scale: 2.0,
+    });
+    // SAFETY: the retained toplevel and writable size out-pointers.
+    unsafe { platform::wpe_toplevel_get_size(toplevel.as_wpe(), &raw mut width, &raw mut height) };
+    assert_eq!((width, height), (1, i32::MAX), "a detached toplevel is not resized");
+    // SAFETY: the view and its retained toplevel are live.
+    unsafe { platform::wpe_view_set_toplevel(view, toplevel.as_wpe()) };
+    assert_eq!(page.view.toplevel(), Some(toplevel));
+}
+
+fn enum_value(type_: glib::types::Type, value: i32) -> glib::Value {
+    glib::EnumClass::with_type(type_).unwrap().to_value(value).unwrap()
+}
+
+#[test]
+fn native_load_failures_and_termination_signals_keep_their_payloads() {
+    crate::tests::isolated(
+        "engine::page::tests::native_load_failures_and_termination_signals_keep_their_payloads",
+        || {
+            let context = glib::MainContext::new();
+            context.with_thread_default(load_signals).unwrap();
+        },
+    );
+}
+
+fn load_signals() {
+    let display = Display::connect(None).unwrap();
+    let session = NetworkSession::ephemeral();
+    let (events, received) = async_channel::unbounded();
+    let page = Page::new(ViewId(8), &spec(), &display, &session, &events).unwrap();
+    // SAFETY: registers the native enum type.
+    let load_type = unsafe { webkit::webkit_load_event_get_type() };
+    // SAFETY: the type was registered above.
+    let load_type = unsafe { glib::translate::from_glib(load_type) };
+    // SAFETY: registers the native enum type.
+    let termination_type = unsafe { webkit::webkit_web_process_termination_reason_get_type() };
+    // SAFETY: the type was registered above.
+    let termination_type = unsafe { glib::translate::from_glib(termination_type) };
+    // SAFETY: a plain error-domain quark lookup.
+    let domain = unsafe { webkit::webkit_network_error_quark() };
+    // SAFETY: the quark was registered above.
+    let domain = unsafe { glib::translate::from_glib(domain) };
+    let error = glib::Error::with_domain(domain, webkit::WEBKIT_NETWORK_ERROR_TRANSPORT, "connection lost");
+    let load = enum_value(load_type, webkit::WEBKIT_LOAD_STARTED);
+    assert!(
+        page.web_view
+            .emit_by_name::<bool>("load-failed", &[&load, &None::<String>, &error],)
+    );
+    let Event::LoadFailed { view, uri, error } = received.try_recv().unwrap() else {
+        panic!("a load failure");
+    };
+    assert_eq!(view, ViewId(8));
+    assert_eq!(uri, "");
+    assert_eq!(error.kind, LoadErrorKind::Failed);
+    assert_eq!(error.message, "connection lost");
+    let reason = enum_value(termination_type, webkit::WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT);
+    page.web_view.emit_by_name::<()>("web-process-terminated", &[&reason]);
+    assert!(matches!(
+        received.try_recv().unwrap(),
+        Event::WebProcessTerminated {
+            view: ViewId(8),
+            reason: Termination::ExceededMemoryLimit
+        }
+    ));
+    page.close();
+    let web_view = page.web_view.clone();
+    drop(page);
+    web_view.emit_by_name::<()>("load-changed", &[&load]);
+    web_view.emit_by_name::<()>("web-process-terminated", &[&reason]);
+    web_view.notify("title");
+    assert!(
+        received.is_empty(),
+        "late native callbacks cannot report a dropped page"
+    );
+}
+
+#[test]
+fn a_geolocation_permission_is_denied_to_the_page() {
+    crate::tests::isolated(
+        "engine::page::tests::a_geolocation_permission_is_denied_to_the_page",
+        || {
+            let (host, events) = crate::Host::start(crate::HostConfig {
+                frames: crate::FrameMode::Shm,
+                schemes: Vec::new(),
+            })
+            .unwrap();
+            let session = host.create_session(crate::SessionSpec::Ephemeral);
+            let view = host.create_view(ViewSpec { session, ..spec() });
+            host.load(
+                view,
+                Load::Html {
+                    html: "<script>navigator.geolocation.getCurrentPosition(\
+                       () => document.title = 'allowed',\
+                       error => document.title = 'denied:' + error.code);</script>"
+                        .to_owned(),
+                    base_uri: Some("https://localhost/".to_owned()),
+                },
+            );
+            let title = wait_event(&host, &events, |event| match event {
+                Event::Page { view: id, page } if id == view => page.title,
+                _ => None,
+            });
+            assert_eq!(title, "denied:1");
+            host.shutdown();
+        },
+    );
 }
