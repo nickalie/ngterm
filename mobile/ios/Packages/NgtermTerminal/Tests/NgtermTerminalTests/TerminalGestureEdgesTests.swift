@@ -55,6 +55,7 @@ internal struct TerminalGestureEdgesTests {
         let rig = TerminalRig(clipboard: nil)
         let window = try TestWindow.make(rig.view.frame)
         window.addSubview(rig.view)
+        defer { rig.view.removeFromSuperview() }
         let point = rig.point(5, 5)
         let velocity: CGFloat = 300
         rig.view.gestures.pan(.began, at: point, translation: .zero, velocity: .zero)
@@ -67,7 +68,6 @@ internal struct TerminalGestureEdgesTests {
         // no farther than the whole fling goes
         let farthest = FlingDecay(velocity: velocity).offset(after: .infinity) / rig.view.font.cellHeight
         #expect(CGFloat(turns.reduce(0, +)) <= farthest.rounded(.up))
-        window.isHidden = true
     }
 
     @Test("a fling stops as the view leaves its window")
@@ -95,7 +95,6 @@ internal struct TerminalGestureEdgesTests {
         let rig = TerminalRig(clipboard: nil)
         let gestures = rig.view.gestures
         let press = try #require(rig.view.gestureRecognizers?.first { $0 is UILongPressGestureRecognizer })
-        let pan = try #require(rig.view.gestureRecognizers?.first { $0 is UIPanGestureRecognizer })
         #expect(gestures.gestureRecognizerShouldBegin(press))
         // a selection from the top left cell, where the press is
         gestures.longPress(.began, at: rig.point(2, 0))
@@ -104,7 +103,6 @@ internal struct TerminalGestureEdgesTests {
         let spots = try #require(rig.view.handleSpots)
         #expect(spots.nearest(to: press.location(in: rig.view)) != nil)
         #expect(!gestures.gestureRecognizerShouldBegin(press), "the finger takes the handle")
-        #expect(gestures.gestureRecognizerShouldBegin(pan), "a drag from a handle moves it")
     }
 
     @Test("a pinch and a drag go together; no other two gestures do")

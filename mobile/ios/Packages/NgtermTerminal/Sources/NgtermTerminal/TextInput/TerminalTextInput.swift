@@ -62,11 +62,22 @@ internal final class TerminalTextInput {
     /// Puts `text` in place of `range` of the composition, the caret after it.
     internal func replace(_ range: NSRange, with text: String) {
         let replaced = clamped(range)
-        guard let span = Range(replaced, in: composed) else {
-            return
+        // Expand a nonempty selection to whole characters; an insertion inside one goes before it.
+        let first = String.Index(utf16Offset: replaced.location, in: composed)
+        let start =
+            replaced.location == length
+            ? composed.endIndex
+            : composed.rangeOfComposedCharacterSequence(at: first).lowerBound
+        let end: String.Index
+        if replaced.length == 0 {
+            end = start
+        } else {
+            let last = String.Index(utf16Offset: NSMaxRange(replaced) - 1, in: composed)
+            end = composed.rangeOfComposedCharacterSequence(at: last).upperBound
         }
-        composed.replaceSubrange(span, with: text)
-        selection = NSRange(location: replaced.location + text.utf16.count, length: 0)
+        let location = start.utf16Offset(in: composed)
+        composed.replaceSubrange(start..<end, with: text)
+        selection = NSRange(location: location + text.utf16.count, length: 0)
     }
 
     /// Deletes the selection, or the character before the caret, from the composition; false when nothing is composed
@@ -79,10 +90,11 @@ internal final class TerminalTextInput {
         guard selection.location > 0 else {
             return false
         }
-        // the whole character before the caret, a surrogate pair or a cluster with it
-        let caret = String.Index(utf16Offset: selection.location, in: composed)
-        let start = composed.index(before: caret)
-        replace(NSRange(start..<caret, in: composed), with: "")
+        // UIKit can put its caret inside a surrogate pair or cluster: Foundation finds the whole character
+        // containing the preceding UTF-16 unit without stepping backward from an invalid character boundary.
+        let previous = String.Index(utf16Offset: selection.location - 1, in: composed)
+        let character = composed.rangeOfComposedCharacterSequence(at: previous)
+        replace(NSRange(character, in: composed), with: "")
         return true
     }
 

@@ -1,8 +1,9 @@
 import CoreText
 import NgtermCoreFakes
-import NgtermTerminal
 import Testing
 import UIKit
+
+@testable import NgtermTerminal
 
 /// The view's input at its edges against the fake pane: presses with no key, keys held as it lets the keyboard go,
 /// its chords as key commands, the extra keys as VoiceOver and a touch work them, and its font's faces.
@@ -39,6 +40,7 @@ internal struct TerminalViewInputTests {
     internal func keylessPresses() {
         let rig = Self.rig()
         let presses: Set<UIPress> = [UIPress()]
+        #expect(rig.view.untaken(presses) { _ in true } == presses)
         rig.view.pressesBegan(presses, with: nil)
         rig.view.pressesEnded(presses, with: nil)
         rig.view.pressesCancelled(presses, with: nil)

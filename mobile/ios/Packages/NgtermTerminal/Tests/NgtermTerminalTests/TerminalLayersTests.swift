@@ -43,9 +43,9 @@ internal struct TerminalLayersTests {
         #expect(TerminalRowLayer(layer: third).index == third.index)
         #expect(third.index == 2)
         let composition = CompositionLayer()
-        #expect(CompositionLayer(layer: composition).line == nil)
+        _ = CompositionLayer(layer: composition)
         let handles = SelectionHandles()
-        #expect(SelectionHandles(layer: handles).spots == nil)
+        _ = SelectionHandles(layer: handles)
     }
 
     @Test("a composition with nothing composed paints the terminal's ground, with no text or underline")

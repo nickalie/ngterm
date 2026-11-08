@@ -30,6 +30,10 @@ internal struct TerminalFeedTests {
         let window = try TestWindow.make(CGRect(x: 0, y: 0, width: 390, height: 200))
         window.rootViewController = host
         window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
         host.view.layoutIfNeeded()
         let view = try #require(Self.terminals(in: host.view).first)
         view.drawFrame()
@@ -42,6 +46,5 @@ internal struct TerminalFeedTests {
         #expect(view.framePending)
         view.drawFrame()
         #expect(pane.asked.suffix(3) == [0, 1, 0], "whole, then since the frame held, then whole again")
-        window.isHidden = true
     }
 }
