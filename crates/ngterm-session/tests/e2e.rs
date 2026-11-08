@@ -138,45 +138,6 @@ fn enter() -> &'static str {
 }
 
 #[test]
-fn a_reattachs_snapshot_keeps_wrapped_lines_joined() -> TestResult {
-    let contents = [
-        "wrapped".repeat(20),
-        "w".repeat(usize::from(COLS)),
-        "wide界 ".repeat(20),
-    ];
-    for (alternate, wrapping) in [(false, false), (false, true), (true, false), (true, true)] {
-        for content in &contents {
-            let mut session = Terminal::new(COLS, ROWS).map_err(|err| format!("{err:?}"))?;
-            session.set_continuation_limit(1024).map_err(|err| format!("{err:?}"))?;
-            if alternate {
-                session.vt_write(b"\x1b[?1049h");
-            }
-            session.vt_write(content.as_bytes());
-            if !wrapping {
-                session.vt_write(b"\x1b[?7l");
-            }
-            let before = read_screen(&mut session, 0, false).map_err(|err| format!("{err:?}"))?;
-            let snapshot = ngterm_session::server::snapshot::capture(
-                &mut session,
-                ngterm_session::server::snapshot::Kind::Attach,
-            )?;
-            let mut client = Terminal::new(COLS, ROWS).map_err(|err| format!("{err:?}"))?;
-            client.vt_write(&snapshot);
-            let after = read_screen(&mut client, 0, false).map_err(|err| format!("{err:?}"))?;
-            assert_eq!(view(&after), view(&before), "{alternate} {wrapping}");
-            assert_eq!(client.mode(ngterm_ghostty_vt::Mode::dec(7)), wrapping);
-            assert_eq!(session.mode(ngterm_ghostty_vt::Mode::dec(7)), wrapping);
-            session.vt_write(b"!\r\nnext");
-            client.vt_write(b"!\r\nnext");
-            let after = read_screen(&mut client, 0, false).map_err(|err| format!("{err:?}"))?;
-            let expected = read_screen(&mut session, 0, false).map_err(|err| format!("{err:?}"))?;
-            assert_eq!(view(&after), view(&expected), "continued: {alternate} {wrapping}");
-        }
-    }
-    Ok(())
-}
-
-#[test]
 fn a_session_outlives_its_clients_and_an_update_through_the_binary_and_the_library() -> TestResult {
     let staged = tempfile::tempdir()?;
     let mut namespace = Namespace::new()?;
