@@ -496,7 +496,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_request_that_cannot_be_sent_is_an_error() {
-        let Rig { bridge, .. } = rig();
+        // macOS needs the peer to stay connected until the shutdown.
+        let Rig { app: _app, bridge, .. } = rig();
         bridge.socket.shutdown(Shutdown::Write).unwrap();
         assert_eq!(bridge.open(&present()), Err("could not send the request".to_owned()));
     }
