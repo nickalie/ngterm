@@ -11,8 +11,11 @@ import UIKit
 @MainActor
 @Suite("a main window")
 internal struct RootViewTests {
-    private static func show(_ graph: AppGraph) throws -> (UIWindow, UIViewController) {
-        try AppWindow.show(RootView(graph: graph, coreVersion: "test", windows: SessionWindows()))
+    private static func show(
+        _ graph: AppGraph,
+        windows: SessionWindows = SessionWindows()
+    ) throws -> (UIWindow, UIViewController) {
+        try AppWindow.show(RootView(graph: graph, coreVersion: "test", windows: windows))
     }
 
     @Test("with no key, the first run covers the window")
@@ -66,8 +69,10 @@ internal struct RootViewTests {
         ]).graph
         let (window, host) = try Self.show(graph)
         defer { window.isHidden = true }
+        // The first read can present its sheet before the event stream delivers the second.
+        try await AppWindow.until { graph.clipboardReads.pending.count == 2 }
         try await AppWindow.until { host.presentedViewController != nil }
-        #expect(graph.clipboardReads.pending.count == 2, "the second waits for the first's answer")
+        #expect(graph.clipboardReads.pending.map(\.pane.sessionId) == ["docs-site", "notes"])
     }
 
     @Test("the question about notifying asks over the window as the first session is attached")
@@ -126,14 +131,27 @@ internal struct RootViewTests {
 
     @Test("a tap on a session gone from its machine leaves the machine showing")
     internal func tapSessionGone() async throws {
-        let (graph, _) = try AppWindow.sessionWorld()
+        let (graph, core) = try AppWindow.sessionWorld()
+        let windows = SessionWindows()
+        // Another main window still has this session's gone screen open. A rejected tap must not take it over:
+        // unlike a navigation title, this also detects opening the title-less gone screen by mistake.
+        let other = ScaffoldModel(windows: windows)
+        let gone = SessionWindowID(machineID: FakeSessionWorld.machineId, sessionID: "gone")
+        #expect(other.open(gone) == .here)
         graph.openRequests.request(OpenTarget(machineId: FakeSessionWorld.machineId, sessionId: "gone"))
-        let (window, _) = try Self.show(graph)
+        let (window, _) = try Self.show(graph, windows: windows)
         defer { window.isHidden = true }
         try await AppWindow.until { AppWindow.titles(in: window).contains(FakeSessionWorld.machineId) }
         try await AppWindow.until { graph.connections.trees[FakeSessionWorld.machineId] != nil }
-        #expect(graph.connections.attached[FakeSessionWorld.machineId] == nil, "nothing is attached")
-        #expect(!AppWindow.titles(in: window).contains("gone"))
+        // The listing wakes attachWhenListed's Observations asynchronously; allow its verdict and the resulting
+        // navigation/layout to run before checking that the window stayed on the machine.
+        for _ in 0..<10 {
+            try await Task.sleep(for: .milliseconds(20))
+            window.layoutIfNeeded()
+        }
+        #expect(!core.calls.contains { $0.method == "attachSession" }, "a missing session is never attached")
+        #expect(AppWindow.titles(in: window).contains(FakeSessionWorld.machineId))
+        #expect(other.shownSessionPlacement == .here, "the tap never opened the missing session")
     }
 
     @Test("the session let go elsewhere leaves the window on its machine's sessions")
