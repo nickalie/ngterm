@@ -454,10 +454,12 @@ mod tests {
         );
     }
 
-    /// The capture reads the shell from the config chain the terminals load, and a later edit reaches only a later
-    /// capture: the launch keeps the one it took.
+    /// A capture reads the shell the last `command` of the config chain the terminals load names, and a capture taken
+    /// after an edit reads the edited value. That a launch keeps its own capture is shown where it could regress: the
+    /// launch decision (`ngterm_app::restore_launch`) and the claims (`ngterm-gpui`'s `session_host`) decide over the
+    /// capture they are handed.
     #[test]
-    fn the_capture_latches_the_shell_the_configs_command_names() {
+    fn a_capture_reads_the_shell_the_configs_command_names() {
         let root = tempfile::tempdir().unwrap();
         let state = root.path().join("state");
         let config = state.join("config").join("ghostty.conf");
@@ -471,12 +473,13 @@ mod tests {
         let env = MapEnv::new()
             .with("NGTERM_STATE_DIR", &state)
             .with("HOME", root.path().join("home"));
-        let launch = Runtime::capture(&env);
-        let expected = Some(named.to_owned());
-        assert_eq!(launch.command_shell, expected);
+        assert_eq!(Runtime::capture(&env).command_shell.as_deref(), Some(named));
         fs::write(&config, "command = /usr/bin/tmux new\n").unwrap();
-        assert_eq!(launch.command_shell, expected, "the launch's capture stays");
-        assert_eq!(Runtime::capture(&env).command_shell, None);
+        assert_eq!(
+            Runtime::capture(&env).command_shell,
+            None,
+            "a later capture reads the edit"
+        );
     }
 
     #[test]

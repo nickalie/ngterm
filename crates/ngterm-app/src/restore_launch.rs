@@ -54,6 +54,52 @@ mod tests {
         );
     }
 
+    /// The decision is the handed capture's: a capture live only through the shell ghostty `command` names (#895) goes
+    /// live, while the env's config chain names no such shell and a capture of this test process would find no staged
+    /// session host beside it.
+    #[cfg(unix)]
+    #[test]
+    fn the_decision_is_taken_over_the_launchs_capture() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("ngterm-session");
+        ngterm_host::fakes::write_executable(&executable, "#!/bin/sh\n").unwrap();
+        let resources = root.path().join("ghostty");
+        let loader = resources.join("shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish");
+        std::fs::create_dir_all(loader.parent().unwrap()).unwrap();
+        std::fs::write(loader, "").unwrap();
+        let state = root.path().join("state");
+        let config = state.join("config").join("ghostty.conf");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(&config, "command = /usr/bin/tmux new\n").unwrap();
+        let env = MapEnv::new()
+            .with("NGTERM_STATE_DIR", &state)
+            .with("HOME", root.path().join("home"));
+        let mut capture = Runtime {
+            executable,
+            login_shell: Some("/bin/tcsh".to_owned()),
+            command_shell: Some("/opt/homebrew/bin/fish".to_owned()),
+            resources_dir: Some(resources),
+            state_dir: state,
+            ..Runtime::default()
+        };
+        let settings = AppSettings {
+            restore_mode: Some(RestoreMode::Live),
+            ..AppSettings::default()
+        };
+        let decision = launch_decision(&settings, &capture, &env);
+        assert_eq!(
+            (decision.active, decision.live_unavailable_reason),
+            (RestoreMode::Live, None)
+        );
+        capture.command_shell = None;
+        assert_eq!(
+            launch_decision(&settings, &capture, &env)
+                .live_unavailable_reason
+                .as_deref(),
+            Some(ngterm_core::restore::mode::UNSUPPORTED_LOGIN_SHELL)
+        );
+    }
+
     #[test]
     fn the_shell_basename_comes_from_shell() {
         assert_eq!(
