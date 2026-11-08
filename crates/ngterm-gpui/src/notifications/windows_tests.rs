@@ -1,4 +1,4 @@
-//! Unpackaged notification registration in disposable HKCU keys, and real `WinRT` toast identities.
+//! Disposable HKCU registrations and real `WinRT` toast objects, with a notifier handoff for synthetic events.
 
 use std::time::{Duration, Instant};
 
@@ -53,7 +53,11 @@ impl Drop for Registration {
         }
         let path = wide(&format!(r"{REGISTRATION_KEY}\{}", self.0));
         // SAFETY: only the UUID-named test key and its values are removed.
-        unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, path.as_ptr()) };
+        let deleted = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, path.as_ptr()) };
+        assert!(
+            deleted == ERROR_SUCCESS || deleted == 2,
+            "test registration cleanup: {deleted}"
+        );
     }
 }
 
@@ -97,22 +101,35 @@ fn registration_child() {
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state");
     register_app_id(&registration.0, &state);
+    assert_eq!(process_app_id(), registration.0);
     assert_eq!(std::fs::read(state.join(ICON_FILE)).unwrap(), crate::app_icon::PNG);
     assert_eq!(registration.read("DisplayName").as_deref(), Some(APP_NAME));
     assert_eq!(
         registration.read("IconUri"),
         Some(state.join(ICON_FILE).to_string_lossy().into_owned())
     );
+    std::fs::write(state.join(ICON_FILE), "old icon").unwrap();
+    register_app_id(&registration.0, &state);
+    assert_eq!(std::fs::read(state.join(ICON_FILE)).unwrap(), crate::app_icon::PNG);
     let no_icon = Registration::new();
     let blocked = dir.path().join("file");
     std::fs::write(&blocked, "not a directory").unwrap();
     register_app_id(&no_icon.0, &blocked);
     assert_eq!(no_icon.read("DisplayName").as_deref(), Some(APP_NAME));
     assert_eq!(no_icon.read("IconUri"), None);
+    let unwritable_icon = Registration::new();
+    let icon_directory = dir.path().join("icon-directory");
+    std::fs::create_dir_all(icon_directory.join(ICON_FILE)).unwrap();
+    register_app_id(&unwritable_icon.0, &icon_directory);
+    assert_eq!(unwritable_icon.read("DisplayName").as_deref(), Some(APP_NAME));
+    assert_eq!(unwritable_icon.read("IconUri"), None);
+    register_app_id(&no_icon.0, &blocked);
     registration_failures(&no_icon.0, dir.path());
     // SAFETY: this child owns its test thread's COM apartment until every toast object is dropped.
     assert!(unsafe { CoInitializeEx(std::ptr::null(), COINIT_MULTITHREADED.cast_unsigned()) } >= 0);
     toast_round_trip(&registration.0);
+    notifier_handoff(&registration.0);
+    drop(unwritable_icon);
     drop(no_icon);
     drop(registration);
     // SAFETY: balances the successful initialization above.
@@ -291,10 +308,10 @@ fn registration_failures(previous: &str, dir: &Path) {
         Some(APP_NAME),
         "the registration still succeeds"
     );
-    let invalid = Registration(format!("{}.{}", long.0, "x".repeat(100)));
-    register_app_id(&invalid.0, &state);
+    let invalid = format!("{}.{}", long.0, "x".repeat(100));
+    register_app_id(&invalid, &state);
     assert_eq!(std::fs::read(state.join(ICON_FILE)).unwrap(), crate::app_icon::PNG);
-    let path = wide(&format!(r"{REGISTRATION_KEY}\{}", invalid.0));
+    let path = wide(&format!(r"{REGISTRATION_KEY}\{invalid}"));
     let mut key = std::ptr::null_mut();
     // SAFETY: a NUL-terminated test-key path and an out-pointer, closed below if unexpectedly opened.
     let opened = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, KEY_READ, &raw mut key) };
@@ -306,4 +323,141 @@ fn registration_failures(previous: &str, dir: &Path) {
         opened, 0,
         "a registry component longer than 255 characters cannot be registered"
     );
+}
+
+fn notifier_handoff(app_id: &str) {
+    let cases: [fn(&Center); 4] = [
+        notifier_receives_real_xml_slots_and_activation_reveals_the_original_identity,
+        only_cancelling_the_current_toast_forgets_it_and_other_slots_survive,
+        refused_show_preserves_the_previous_toast_and_returns_the_notifier_error,
+        withdraw_removes_the_exact_slot_even_when_unknown_or_the_history_refuses_it,
+    ];
+    for case in cases {
+        let center = Center::open(app_id).unwrap();
+        case(&center);
+    }
+}
+
+/// What an interactive notifier receives, kept alive as Windows would keep its event subscriptions.
+struct Posted {
+    toast: ToastNotification,
+    activated: Activated,
+    dismissed: Dismissed,
+}
+
+fn post(center: &Center, identity: &str, clicked: &Clicked) -> Posted {
+    let mut posted = None;
+    center
+        .show_with(
+            identity,
+            "Title <通知>",
+            "Body & \"quoted\"",
+            clicked,
+            |toast, activated, dismissed| {
+                posted = Some(Posted {
+                    toast: toast.clone(),
+                    activated,
+                    dismissed,
+                });
+                Ok(())
+            },
+        )
+        .unwrap();
+    posted.unwrap()
+}
+
+fn notifier_receives_real_xml_slots_and_activation_reveals_the_original_identity(center: &Center) {
+    let (sender, clicks) = std::sync::mpsc::channel();
+    let clicked: Clicked = Arc::new(move |click| sender.send(click).unwrap());
+    let identity = "9caf35d8-1b14-44ca-a489-8a110c8d00f5:session:3";
+    let posted = post(center, identity, &clicked);
+    assert_eq!(posted.toast.Group().unwrap(), "9caf35d8-1b14-44ca-a489-8a110c8d00f5");
+    assert_eq!(posted.toast.Tag().unwrap(), "session:3");
+    let xml = posted.toast.Content().unwrap();
+    let texts = xml.GetElementsByTagName(&HSTRING::from("text")).unwrap();
+    assert_eq!(texts.Length().unwrap(), 2);
+    assert_eq!(texts.Item(0).unwrap().InnerText().unwrap(), "Title <通知>");
+    assert_eq!(texts.Item(1).unwrap().InnerText().unwrap(), "Body & \"quoted\"");
+    let audio = xml.SelectSingleNode(&HSTRING::from("/toast/audio/@silent")).unwrap();
+    assert_eq!(audio.InnerText().unwrap(), "true");
+    for _ in 0..2 {
+        (posted.activated)();
+        let click = clicks.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(click.identity, identity);
+        assert_eq!(click.token, None);
+    }
+}
+
+fn only_cancelling_the_current_toast_forgets_it_and_other_slots_survive(center: &Center) {
+    let clicked: Clicked = Arc::new(|_| panic!("no click was requested"));
+    let first = post(center, "note:replaced", &clicked);
+    let other = post(center, "note:other", &clicked);
+    let replacement = post(center, "note:replaced", &clicked);
+    assert_ne!(first.toast, replacement.toast);
+    assert_eq!(replacement.toast.Group().unwrap(), "ngterm");
+    assert_eq!(replacement.toast.Tag().unwrap(), "note:replaced");
+    for reason in [
+        None,
+        Some(ToastDismissalReason::TimedOut),
+        Some(ToastDismissalReason::ApplicationHidden),
+    ] {
+        (replacement.dismissed)(Some(&replacement.toast), reason);
+        assert_eq!(
+            center.shown.lock().unwrap().get("note:replaced"),
+            Some(&replacement.toast)
+        );
+    }
+    let canceled = Some(ToastDismissalReason::UserCanceled);
+    (first.dismissed)(Some(&first.toast), canceled);
+    (replacement.dismissed)(None, canceled);
+    (replacement.dismissed)(Some(&other.toast), canceled);
+    assert_eq!(
+        center.shown.lock().unwrap().get("note:replaced"),
+        Some(&replacement.toast)
+    );
+    (replacement.dismissed)(Some(&replacement.toast), canceled);
+    (replacement.dismissed)(Some(&replacement.toast), canceled);
+    let shown = center.shown.lock().unwrap();
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown.get("note:other"), Some(&other.toast));
+}
+
+fn refused_show_preserves_the_previous_toast_and_returns_the_notifier_error(center: &Center) {
+    let clicked: Clicked = Arc::new(|_| panic!("a refused toast cannot be clicked"));
+    let previous = post(center, "note:kept", &clicked);
+    for identity in ["note:kept", "note:new"] {
+        let error = center
+            .show_with(identity, "Replacement", "refused", &clicked, |_, _, _| {
+                Err(::windows::core::Error::from_hresult(::windows::core::HRESULT(
+                    0x8007_0005_u32.cast_signed(),
+                )))
+            })
+            .unwrap_err();
+        assert_eq!(error.code().0.cast_unsigned(), 0x8007_0005);
+    }
+    let shown = center.shown.lock().unwrap();
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown.get("note:kept"), Some(&previous.toast));
+}
+
+fn withdraw_removes_the_exact_slot_even_when_unknown_or_the_history_refuses_it(center: &Center) {
+    let clicked: Clicked = Arc::new(|_| panic!("no click was requested"));
+    let _posted = post(center, "note:withdrawn", &clicked);
+    let other = post(center, "note:other", &clicked);
+    for identity in ["note:withdrawn", "note:withdrawn", "note:from-an-earlier-run"] {
+        let mut removed = false;
+        center.withdraw_with(identity, |slot, app_id| {
+            assert_eq!(slot.group, "ngterm");
+            assert_eq!(slot.tag, identity);
+            assert_eq!(app_id, &center.app_id);
+            removed = true;
+            Err(::windows::core::Error::from_hresult(::windows::core::HRESULT(
+                0x8007_0005_u32.cast_signed(),
+            )))
+        });
+        assert!(removed, "history removal is attempted even without a retained object");
+        let shown = center.shown.lock().unwrap();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown.get("note:other"), Some(&other.toast));
+    }
 }

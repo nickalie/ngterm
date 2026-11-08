@@ -147,6 +147,9 @@ pub async fn run(
 
 type Clicked = Arc<dyn Fn(Click) + Send + Sync>;
 
+type Activated = Box<dyn Fn() + Send + Sync>;
+type Dismissed = Box<dyn Fn(Option<&ToastNotification>, Option<ToastDismissalReason>) + Send + Sync>;
+
 /// The toasts on screen or in the notification center, by identity: kept, since a toast's events reach the app only
 /// while its object lives.
 type Shown = Arc<Mutex<HashMap<String, ToastNotification>>>;
@@ -198,6 +201,32 @@ impl Center {
 
     /// Shows the toast of `identity` in its slot, replacing the one there.
     fn show(&self, identity: &str, title: &str, body: &str, clicked: &Clicked) -> ::windows::core::Result<()> {
+        self.show_with(identity, title, body, clicked, |toast, activated, dismissed| {
+            toast.Activated(&TypedEventHandler::<ToastNotification, IInspectable>::new(
+                move |_, _| {
+                    activated();
+                    Ok(())
+                },
+            ))?;
+            toast.Dismissed(&TypedEventHandler::<ToastNotification, ToastDismissedEventArgs>::new(
+                move |sender, args| {
+                    dismissed(sender.as_ref(), args.as_ref().and_then(|args| args.Reason().ok()));
+                    Ok(())
+                },
+            ))?;
+            self.notifier.Show(toast)
+        })
+    }
+
+    /// The notifier handoff, also used when a test has no interactive toast session.
+    fn show_with(
+        &self,
+        identity: &str,
+        title: &str,
+        body: &str,
+        clicked: &Clicked,
+        show: impl FnOnce(&ToastNotification, Activated, Dismissed) -> ::windows::core::Result<()>,
+    ) -> ::windows::core::Result<()> {
         let content = XmlDocument::new()?;
         content.LoadXml(&HSTRING::from(toast::xml(title, body)))?;
         let toast = ToastNotification::CreateToastNotification(&content)?;
@@ -206,30 +235,23 @@ impl Center {
         toast.SetTag(&HSTRING::from(tag))?;
         let click = Arc::clone(clicked);
         let clicked_identity = identity.to_owned();
-        toast.Activated(&TypedEventHandler::<ToastNotification, IInspectable>::new(
-            move |_, _| {
-                tracing::info!(identity = %clicked_identity, "notify: toast clicked");
-                click(Click {
-                    identity: clicked_identity.clone(),
-                    token: None,
-                });
-                Ok(())
-            },
-        ))?;
+        let activated: Activated = Box::new(move || {
+            tracing::info!(identity = %clicked_identity, "notify: toast clicked");
+            click(Click {
+                identity: clicked_identity.clone(),
+                token: None,
+            });
+        });
         let shown = Arc::clone(&self.shown);
         let dismissed_identity = identity.to_owned();
-        toast.Dismissed(&TypedEventHandler::<ToastNotification, ToastDismissedEventArgs>::new(
-            move |sender, args| {
-                let reason = args.as_ref().and_then(|args| args.Reason().ok());
-                tracing::debug!(identity = %dismissed_identity, ?reason, "notify: toast dismissed");
-                // one that timed out stays in the notification center, clickable
-                if reason == Some(ToastDismissalReason::UserCanceled) {
-                    forget(&shown, &dismissed_identity, sender.as_ref());
-                }
-                Ok(())
-            },
-        ))?;
-        self.notifier.Show(&toast)?;
+        let dismissed: Dismissed = Box::new(move |sender, reason| {
+            tracing::debug!(identity = %dismissed_identity, ?reason, "notify: toast dismissed");
+            // one that timed out stays in the notification center, clickable
+            if reason == Some(ToastDismissalReason::UserCanceled) {
+                forget(&shown, &dismissed_identity, sender);
+            }
+        });
+        show(&toast, activated, dismissed)?;
         self.shown
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -240,6 +262,13 @@ impl Center {
 
     /// Removes the toast of `identity`'s slot from the screen and the notification center, if one is there.
     fn withdraw(&self, identity: &str) {
+        self.withdraw_with(identity, |Slot { group, tag }, app_id| {
+            self.history
+                .RemoveGroupedTagWithId(&HSTRING::from(tag), &HSTRING::from(group), app_id)
+        });
+    }
+
+    fn withdraw_with(&self, identity: &str, remove: impl FnOnce(Slot, &HSTRING) -> ::windows::core::Result<()>) {
         let toast = self
             .shown
             .lock()
@@ -249,11 +278,7 @@ impl Center {
             // none shown by this run: its slot may still hold one an earlier run left
             tracing::trace!(identity, "notify: withdrawing a toast this run did not show");
         }
-        let Slot { group, tag } = toast::slot(identity);
-        if let Err(error) =
-            self.history
-                .RemoveGroupedTagWithId(&HSTRING::from(tag), &HSTRING::from(group), &self.app_id)
-        {
+        if let Err(error) = remove(toast::slot(identity), &self.app_id) {
             tracing::debug!(%error, identity, "notify: nothing to withdraw");
         }
     }
