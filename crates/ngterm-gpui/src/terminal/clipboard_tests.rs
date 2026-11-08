@@ -87,7 +87,12 @@ fn allowed_reads_answer_the_program_without_prompting(cx: &mut gpui_kit::TestApp
     f.cx.write_to_clipboard(ClipboardItem::new_string("hi".into()));
     f.pane().write(b"x").unwrap();
     f.wait("done");
-    assert!(f.text().contains("61 47 6b 3d"), "base64 hi in the reply: {}", f.text());
+    let text = f.text();
+    let bytes: Vec<_> = text.split_whitespace().collect();
+    assert!(
+        bytes.windows(4).any(|bytes| bytes == ["61", "47", "6b", "3d"]),
+        "base64 hi in the reply: {text}"
+    );
 }
 
 #[gpui_kit::test]
