@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
@@ -53,8 +54,8 @@ data class Removal(
 
 /**
  * The Machines home and its machine form: the list with each machine's link and sessions, adding, editing and removing
- * machines (with undo), and the host-key decisions. It connects every machine once when the list is first read, and
- * each machine it saves.
+ * machines (with undo), and the host-key decisions. It connects every machine once when the list is first read (by a
+ * Retry, when the first reads failed), and each machine it saves.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MachinesViewModel(
@@ -62,7 +63,6 @@ class MachinesViewModel(
 ) : ViewModel() {
     private val reads = MutableStateFlow(0)
     private val removal = MutableStateFlow<Removal?>(null)
-    private var connectedOnce = false
 
     /** The home's state. */
     val state: StateFlow<MachinesUiState> =
@@ -97,11 +97,9 @@ class MachinesViewModel(
 
     init {
         viewModelScope.launch {
-            val first = state.first { it !is MachinesUiState.Loading }
-            if (first is MachinesUiState.Ready && !connectedOnce) {
-                connectedOnce = true
-                first.items.filter { it.link == Link.Offline }.forEach { connect(it.machine) }
-            }
+            // the first list read, after any failed reads Retry got past
+            val first = state.filterIsInstance<MachinesUiState.Ready>().first()
+            first.items.filter { it.link == Link.Offline }.forEach { connect(it.machine) }
         }
     }
 
