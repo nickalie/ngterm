@@ -354,3 +354,91 @@ fn an_entry_that_cannot_be_moved_back_is_kept_aside_and_reported() {
     );
     assert_eq!(entries(dir.path()).len(), 2);
 }
+
+/// `path`'s read-only, hidden and temporary attributes, the ones a move back must leave as they were.
+#[cfg(windows)]
+fn kept_attributes(path: &Path) -> u32 {
+    use std::os::windows::fs::MetadataExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_TEMPORARY,
+    };
+
+    let attributes = fs::symlink_metadata(path).unwrap().file_attributes();
+    attributes & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_TEMPORARY)
+}
+
+/// Changes `path`'s attributes as `attrib` reads `flags` (`+r`, `-h` and so on).
+#[cfg(windows)]
+fn attrib(path: &Path, flags: &[&str]) {
+    let status = std::process::Command::new("attrib")
+        .args(flags)
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// Writes `text` at `path` in place of the link there, read-only and hidden.
+#[cfg(windows)]
+fn replace_with_read_only_hidden_file(path: &Path, text: &str) {
+    fs::remove_file(path).unwrap();
+    fs::write(path, text).unwrap();
+    attrib(path, &["+r", "+h"]);
+}
+
+#[cfg(windows)]
+#[test]
+fn an_entry_moved_back_keeps_its_attributes() {
+    use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keymap.conf");
+    let target = dir.path().join("missing.conf");
+    std::os::windows::fs::symlink_file(&target, &path).unwrap();
+    write_starter(
+        &path,
+        || {
+            replace_with_read_only_hidden_file(&path, "map ctrl+shift+y toggle_split\n");
+            starter_keymap_conf(&upstream())
+        },
+        |step| assert_eq!(step, StarterStep::MovedAside),
+    )
+    .unwrap();
+    assert_eq!(kept_attributes(&path), FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "map ctrl+shift+y toggle_split\n");
+    assert_eq!(entries(dir.path()), std::slice::from_ref(&path));
+    // read-only would keep the temporary directory from being removed.
+    attrib(&path, &["-r"]);
+}
+
+#[cfg(windows)]
+#[test]
+fn an_entry_that_cannot_be_moved_back_keeps_its_attributes() {
+    use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keymap.conf");
+    let target = dir.path().join("missing.conf");
+    std::os::windows::fs::symlink_file(&target, &path).unwrap();
+    let error = write_starter(
+        &path,
+        || {
+            replace_with_read_only_hidden_file(&path, "first\n");
+            starter_keymap_conf(&upstream())
+        },
+        |step| {
+            assert_eq!(step, StarterStep::MovedAside);
+            fs::write(&path, "second\n").unwrap();
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "second\n");
+    let aside: Vec<_> = entries(dir.path()).into_iter().filter(|entry| entry.is_dir()).collect();
+    assert_eq!(aside.len(), 1);
+    let kept = aside[0].join("keymap.conf");
+    // not marked temporary either, as tempfile's persist marks an entry it fails to move.
+    assert_eq!(kept_attributes(&kept), FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN);
+    assert_eq!(fs::read_to_string(&kept).unwrap(), "first\n");
+    attrib(&kept, &["-r"]);
+}
