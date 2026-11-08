@@ -165,11 +165,9 @@ fn the_chat_actions_of_a_handle_with_no_core_are_closed_after_their_own_checks()
     assert_eq!(block_on(pane.send_prompt("hi".to_owned())), Err(PaneInputError::Closed));
     assert_eq!(block_on(pane.interrupt()), Err(PaneInputError::Closed));
     assert_eq!(block_on(pane.approval_labels()), Err(PaneInputError::Closed));
-    assert!(
-        matches!(
-            block_on(pane.send_prompt(String::new())),
-            Err(PaneInputError::Refused { .. })
-        ),
+    assert_eq!(
+        block_on(pane.send_prompt(String::new())),
+        Err(refused("there is nothing to send")),
         "empty text is refused before anything is asked"
     );
 
@@ -400,7 +398,7 @@ fn a_point_outside_the_grid_is_refused_with_the_terminals_reason() {
 
 #[test]
 fn the_views_theme_is_what_the_terminal_reports_and_more_than_256_colors_are_refused() {
-    let (pane, slot, _sized) = empty();
+    let (pane, slot, sized) = empty();
     let theme = PaneColors {
         foreground: 0xFF11_2233,
         background: 0x00AA_BBCC,
@@ -411,12 +409,7 @@ fn the_views_theme_is_what_the_terminal_reports_and_more_than_256_colors_are_ref
     assert_eq!(pane.set_colors(theme.clone()), Ok(()));
     let (terminal, feed, out) = terminal(SIZE.into());
     slot.install(Arc::new(terminal), SIZE.into());
-    let shown = Shown {
-        pane,
-        feed,
-        out,
-        sized: Arc::new(AtomicUsize::new(0)),
-    };
+    let shown = Shown { pane, feed, out, sized };
     let reported = String::from_utf8(shown.feed(b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b]4;0;?\x1b\\")).unwrap();
     assert!(reported.contains("10;rgb:1111/2222/3333"), "{reported:?}");
     assert!(
