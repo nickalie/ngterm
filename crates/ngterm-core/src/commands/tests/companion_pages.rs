@@ -15,6 +15,7 @@ use super::page_serve::FakeChannel;
 use super::{Fixture, answered_id, args, failure, wire};
 use crate::app_actions::{ActionEffect, ActionOrigin, FrontendAction};
 use crate::commands::companion_page::refusal;
+use crate::html::HtmlSource;
 use crate::keymap::BuiltinAction;
 use crate::model::{NewSession, SessionContent};
 use crate::remote::page_serve::{MAX_PENDING_LINES, PageChannel, PageServeFrame, PageServeStream};
@@ -272,6 +273,30 @@ fn a_remote_row_s_page_needs_web_views_here_before_the_origin_is_asked() {
     });
     assert_eq!(file, failure("the remote session is not attached"));
     assert_eq!(fixture.order(fixture.workspace).len(), 2, "no row was added");
+}
+
+/// Off Windows a rooted path already names its file: the caller's drive (`callerDrive`, which `ngtermctl` sends from
+/// Windows) changes neither the page's path nor its grant.
+#[test]
+#[cfg(not(windows))]
+fn a_rooted_page_path_keeps_its_spelling_whatever_the_callers_drive() {
+    let docs = Docs::new();
+    let (mut fixture, _) = fixture_with_host(0);
+    let parent = fixture.sessions[0];
+    let response = companion_page(&mut fixture, parent, |a| {
+        a.html = Some(docs.index());
+        a.cwd = Some(docs.root.clone());
+        a.caller_drive = Some("D:".into());
+    });
+    let id = answered_id(&response).expect("a page companion");
+    let page = fixture.store().session(id).unwrap().overlay.page().unwrap();
+    assert_eq!(
+        page.source,
+        HtmlSource::File {
+            path: docs.index(),
+            grant_root: Some(docs.root.clone()),
+        }
+    );
 }
 
 /// A valid page for a target that does not resolve meets the target's refusal.
