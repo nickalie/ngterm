@@ -23,7 +23,7 @@
 //!   its web processes inherit, carries a request size for their `PulseAudio` streams that keeps Web Audio playing on
 //!   a Bluetooth sink (module `worker`). The separate `ngterm-web` executable serves the worker; the frontend uses `ngterm-wpe-client`
 //!   and never links these engine libraries.
-//!   Release bundles additionally scope their module and injected-bundle paths to that worker, preserving the
+//!   Downloaded runtimes additionally scope their module and injected-bundle paths to that worker, preserving the
 //!   environment of programs the consumer starts.
 //!
 //! - What `WebKitGTK` draws itself and an offscreen page cannot (module `engine::interaction`): the clipboard

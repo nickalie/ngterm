@@ -58,14 +58,17 @@ def host_allowed(allowed_file: Path) -> set[str]:
     return set(names(allowed_file)) | GLIBC
 
 
-def patch_and_check(root: Path, library: Path, allowed_file: Path) -> set[str]:
-    """Give every ELF a relative RUNPATH; reject undeclared host fallbacks.
+def patch_and_check(root: Path, library: Path, allowed_file: Path, *,
+                    exclude: tuple[Path, ...] = ()) -> set[str]:
+    """Give every ELF not in exclude a relative RUNPATH; reject undeclared host fallbacks.
 
+    exclude contains resolved paths skipped by both patching and the dependency
+    closure check, including the rejection of undeclared host libraries.
     Host packages bring their own dependency closure (Wayland's libffi, for
     example). Preserve the release packager's rule permitting those dependencies.
     """
     root, library = root.resolve(), library.resolve()
-    files = sorted(path for path in root.rglob("*") if elf(path))
+    files = sorted(path for path in root.rglob("*") if elf(path) and path not in exclude)
     for path in files:
         relative = os.path.relpath(library, path.parent)
         rpath = "$ORIGIN" if relative == "." else f"$ORIGIN:$ORIGIN/{relative}"

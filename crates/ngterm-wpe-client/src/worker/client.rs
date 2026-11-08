@@ -508,20 +508,6 @@ fn wait_for_probe(child: &mut Child, timeout: Duration) -> Result<(), String> {
     }
 }
 
-/// Temporary compatibility for packages that still carry the engine beside the worker.
-#[must_use]
-pub fn bundled_engine_available() -> bool {
-    let executable = IMAGE
-        .get()
-        .and_then(|image| image.as_ref().ok())
-        .and_then(|image| std::fs::read_link(format!("/proc/self/fd/{}", image.as_raw_fd())).ok());
-    executable
-        .as_deref()
-        .and_then(std::path::Path::parent)
-        .and_then(std::path::Path::parent)
-        .is_some_and(|prefix| prefix.join("share/ngterm/bundled-wpe").is_file())
-}
-
 fn worker_command(image: i32, source: &crate::EngineSource) -> Command {
     let mut command = Command::new(format!("/proc/self/fd/{image}"));
     source.configure(&mut command);

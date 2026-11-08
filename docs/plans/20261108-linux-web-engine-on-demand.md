@@ -384,20 +384,30 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
 ### Task 7: Packages without the engine
 
 **Files:**
-- Modify: `scripts/package-release.sh`, `packaging/linux/nfpm.yaml`, `packaging/linux/runtime-libraries.txt`,
-  `packaging/linux/AppRun`, `crates/ngterm-wpe-client/` (remove the `bundled-wpe` marker path)
-- Create: `conformance/selftests/test_package_release_checks.py`
+- Modify: `scripts/package-release.sh`, `packaging/linux/nfpm.yaml`, `packaging/linux/AppRun`,
+  `scripts/web-engine-closure.py`, `crates/ngterm-wpe-client/`, `crates/ngterm-wpe/`,
+  `crates/ngterm-gpui/src/html_overlay/registry.rs` (remove all `bundled-wpe` marker paths)
+- Create: `scripts/check-linux-package.py`, `conformance/selftests/test_package_release_checks.py`
 
-- [ ] the app tree holds the four app binaries and `ngterm-web`, no WPE, GStreamer or their libraries; linuxdeploy runs
+- [x] the app tree holds the four app binaries and `ngterm-web`, no WPE, GStreamer or their libraries; linuxdeploy runs
       over the four app binaries only; `ngterm-web` gets no RUNPATH (`patchelf --remove-rpath`); remove the
       `bundled-wpe` marker and its code
-- [ ] dependencies (Task 1's names): the Arch package depends on `wpewebkit`; the deb and rpm recommend the versioned
-      WPE library package only; the runtime's host libraries (Task 4's list), `bubblewrap` and `xdg-dbus-proxy` stay
+- [x] dependencies (Task 1's names): the Arch package depends on `wpewebkit`; the deb and rpm recommend the versioned
+      WPE library and playback plugin packages; the runtime's host libraries (Task 4's list), `bubblewrap` and `xdg-dbus-proxy` stay
       hard dependencies of every package
-- [ ] packaging checks: `ngterm` has none of `libWPEWebKit`, `libWPEPlatform`, `libgstreamer`, `libsoup`,
+- [x] packaging checks: `ngterm` has none of `libWPEWebKit`, `libWPEPlatform`, `libgstreamer`, `libsoup`,
       `libjavascriptcore` in its `NEEDED`; `ngterm-web` has no RUNPATH into `usr/lib`
-- [ ] write tests: the `NEEDED` and RUNPATH checks pass and fail on fixture ELFs
-- [ ] run the selftests and `scripts/lint.sh` - must pass before Task 8
+- [x] write tests: the `NEEDED` and RUNPATH checks pass and fail on fixture ELFs
+- [x] run the selftests and `scripts/lint.sh` - must pass before Task 8
+
+Implementation notes: the existing `packaging/linux/runtime-libraries.txt` policy and the native packages' hard
+host dependencies already match Task 4 and remain in place. `ngterm-web` is outside the AppDir while linuxdeploy
+collects libraries, then is restored without any RPATH/RUNPATH; only the other ELFs undergo closure checks. The old
+bundled-engine smoke setup is removed; Task 8 supplies the replacement against the extracted runtime.
+
+Validation: 34 packaging/runtime fixture selftests; 52 WPE and 67 client unit tests; 26 frontend registry tests under
+Xvfb and a private bus; strict clippy for the three affected crates (all targets/features), plus GPUI without default
+features; `scripts/lint.sh` with the repository virtualenv on PATH; `cargo fmt --all --check`; `git diff --check`.
 
 ### Task 8: Release workflow publishes the runtime and pins it
 

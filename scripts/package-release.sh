@@ -30,14 +30,10 @@ case "${1:-}" in
     ;;
   *) (($# == 3)) || usage ;;
 esac
-if [[ -n "${NGTERM_WPE_SMOKE_BINARY:-}" && "${RUNNER_ENVIRONMENT:-}" != github-hosted ]]; then
-  die "NGTERM_WPE_SMOKE_BINARY is reserved for disposable GitHub-hosted release jobs"
-fi
 version="$2"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "expected MAJOR.MINOR.PATCH"
 work="$(mktemp -d)"
-hidden_wpe=""
-trap 'if [[ -n "$hidden_wpe" && -d "$hidden_wpe" ]]; then mv "$hidden_wpe" "$wpe"; fi; rm -rf "$work"' EXIT
+trap 'rm -rf "$work"' EXIT
 
 # macos_bundle TREE COMMIT: the .app and the archive's loose tree from $stage
 macos_bundle() {
@@ -98,77 +94,36 @@ download() {
 
 case "$(host_os)" in
   linux)
-    wpe="${NGTERM_RELEASE_WPE:?set NGTERM_RELEASE_WPE}"
     root="$work/ngterm"
-    mkdir -p "$root/usr/lib/wpe-webkit-2.0" "$root/usr/lib/gstreamer-1.0" \
-      "$root/usr/lib/gio/modules" "$root/usr/libexec/gstreamer-1.0"
+    mkdir -p "$root/usr/lib"
     cp -R "$stage/bin" "$stage/share" "$root/usr/"
-    touch "$root/usr/share/ngterm/bundled-wpe"
-    cp -a "$wpe/lib/"*.so* "$root/usr/lib/"
-    cp -a "$wpe/lib/wpe-webkit-2.0/"* "$root/usr/lib/wpe-webkit-2.0/"
-    cp -R "$wpe/share/doc/wpewebkit" "$root/usr/share/doc/"
-    # Modules copied into the AppDir before linuxdeploy no longer have a dpkg
-    # owner there, so retain their original distro copyright notices explicitly.
-    for package in libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-      gstreamer1.0-plugins-bad gstreamer1.0-libav glib-networking dconf-gsettings-backend; do
-      if [[ -f "/usr/share/doc/$package/copyright" ]]; then
-        mkdir -p "$root/usr/share/doc/$package"
-        cp -L "/usr/share/doc/$package/copyright" "$root/usr/share/doc/$package/"
-      fi
-    done
     cp -R /usr/share/common-licenses "$root/usr/share/"
     cp "$NATIVE_ROOT/packaging/linux/apparmor/ngterm" "$root/usr/share/doc/ngterm/apparmor.profile.in"
-    if [[ -n "${NGTERM_WPE_SMOKE_BINARY:-}" ]]; then
-      install -m755 "$NGTERM_WPE_SMOKE_BINARY" "$root/usr/bin/wpe-release-smoke"
-    fi
     mkdir -p "$root/usr/share/icons"
     cp -R "$NATIVE_ROOT/resources/icons/hicolor" "$root/usr/share/icons/"
     mkdir -p "$root/usr/share/applications"
     cp "$NATIVE_ROOT/packaging/linux/com.nickalie.ngterm.desktop" "$root/usr/share/applications/"
-    multiarch="$(gcc -print-multiarch)"
-    cp -a /usr/lib/"$multiarch"/gstreamer-1.0/*.so "$root/usr/lib/gstreamer-1.0/"
-    cp -a /usr/lib/"$multiarch"/gio/modules/*.so "$root/usr/lib/gio/modules/"
-    cp /usr/lib/"$multiarch"/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner \
-      "$root/usr/libexec/gstreamer-1.0/"
     key="$(upper "$arch")"
     sha_var="LINUXDEPLOY_${key}_SHA256"
     download "https://github.com/linuxdeploy/linuxdeploy/releases/download/$LINUXDEPLOY_VERSION/linuxdeploy-$arch.AppImage" \
       "$work/linuxdeploy.AppImage" "${!sha_var}"
     chmod +x "$work/linuxdeploy.AppImage"
-    # Bundle dlopened modules and each helper's dependencies as well as the app's.
+    # Only the four app binaries bring libraries into the AppDir. The worker
+    # loads either the system's engine or a separately downloaded runtime.
     deploy=(--appdir "$root" --desktop-file "$root/usr/share/applications/com.nickalie.ngterm.desktop"
       --icon-file "$root/usr/share/icons/hicolor/256x256/apps/com.nickalie.ngterm.png")
-    while IFS= read -r -d '' file; do
-      if [[ "$file" == *.so* ]]; then deploy+=(--library "$file"); else deploy+=(--executable "$file"); fi
-    done < <(find "$root/usr/bin" "$root/usr/lib" "$root/usr/libexec" -type f -print0)
-    LD_LIBRARY_PATH="$root/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-      APPIMAGE_EXTRACT_AND_RUN=1 "$work/linuxdeploy.AppImage" "${deploy[@]}"
+    for binary in ngterm ngtermctl ngterm-session ngterm-headless; do
+      deploy+=(--executable "$root/usr/bin/$binary")
+    done
+    # linuxdeploy also scans an existing AppDir. Keep the worker outside it
+    # until dependency collection has finished.
+    mv "$root/usr/bin/ngterm-web" "$work/ngterm-web"
+    env -u LD_LIBRARY_PATH APPIMAGE_EXTRACT_AND_RUN=1 "$work/linuxdeploy.AppImage" "${deploy[@]}"
+    mv "$work/ngterm-web" "$root/usr/bin/ngterm-web"
     install -m755 "$NATIVE_ROOT/packaging/linux/AppRun" "$root/AppRun"
-    # linuxdeploy relocates copies into usr/bin and usr/lib. Fix every original
-    # nested ELF as well, including WebKit helpers and the GStreamer scanner.
-    python3 "$NATIVE_ROOT/scripts/web-engine-closure.py" check \
-      "$root" "$root/usr/lib" "$NATIVE_ROOT/packaging/linux/runtime-libraries.txt"
+    python3 "$NATIVE_ROOT/scripts/check-linux-package.py" --prepare "$root"
     "$root/usr/bin/ngterm" --build-identity
     "$root/usr/bin/ngtermctl" --help >/dev/null
-    if [[ -n "${NGTERM_WPE_SMOKE_BINARY:-}" ]]; then
-      # Load and evaluate a real page with the original build prefix unreachable,
-      # so helpers cannot silently fall back to their compile-time location.
-      "$NATIVE_ROOT/scripts/install-apparmor-profile.sh" "$root/usr/bin/wpe-release-smoke"
-      mkdir -p "$work/home" "$work/runtime"
-      chmod 700 "$work/runtime"
-      mv "$wpe" "$work/original-wpe-prefix"
-      hidden_wpe="$work/original-wpe-prefix"
-      status=0
-      dbus-run-session -- timeout 180s env HOME="$work/home" XDG_RUNTIME_DIR="$work/runtime" \
-        XDG_CONFIG_HOME="$work/home/config" XDG_DATA_HOME="$work/home/data" XDG_CACHE_HOME="$work/home/cache" \
-        WPE_TEST_MODE=shm WPE_TEST_BACKEND=worker WPE_TEST_WORKER="$root/usr/bin/ngterm-web" \
-        "$root/usr/bin/wpe-release-smoke" frames_arrive_in_the_configured_mode_and_follow_the_geometry || status=$?
-      mv "$hidden_wpe" "$wpe"
-      hidden_wpe=""
-      "$NATIVE_ROOT/scripts/install-apparmor-profile.sh" --uninstall
-      rm "$root/usr/bin/wpe-release-smoke"
-      ((status == 0)) || die "packaged WPE page smoke test failed ($status)"
-    fi
     echo linux-archive > "$root/usr/share/ngterm/update-format"
     tar -C "$work" -czf "$dist/ngterm-$version-linux-$arch.tar.gz" ngterm
     # Native package files remain owned exclusively by their package manager.

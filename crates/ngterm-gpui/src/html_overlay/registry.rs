@@ -470,8 +470,6 @@ fn engine_source(
     match web_engine::resolve(state_dir, web_engine::KEY, worker::probe_system) {
         Resolution::System => Ok(EngineSource::System),
         Resolution::Runtime(directory) => Ok(EngineSource::Runtime(directory)),
-        // Release packages keep their bundled engine until packaging switches to downloads.
-        Resolution::NeedsDownload if worker::bundled_engine_available() => Ok(EngineSource::System),
         Resolution::NeedsDownload => match Pins::compiled() {
             Ok(Some(pins)) => download_runtime(|progress| pins.download(state_dir, progress), report),
             Ok(None) => Err(Unavailable::not_installed(None)),

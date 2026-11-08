@@ -13,7 +13,7 @@
 //! `WebKit`'s web process inherits: its Web Audio stream otherwise stalls on a Bluetooth A2DP sink (`client.rs` has the
 //! measurements). Only the worker carries it, so an engine in the consumer's own process ([`crate::Host::start`] with
 //! the system's package) plays without it, and nothing else the consumer starts sees it.
-//! A marked release bundle also gives only the worker its bundled GIO, `GStreamer` and injected-bundle paths;
+//! A downloaded runtime gives only the worker its GIO, `GStreamer` and injected-bundle paths;
 //! these module settings never enter the app's terminal or session-server environment.
 //!
 //! - The `ngterm-web` binary calls [`serve_if_asked`] after preparing its worker environment.
@@ -144,11 +144,9 @@ mod tests {
                 unsafe { __llvm_profile_initialize_file() };
             }
             if std::env::var("WPE_WORKER_ENTRY_PROBE").as_deref() == Ok("prepare") {
-                // Keep the expectation across a vendored re-exec, which consumes the private runtime flag.
-                let runtime = std::env::var("WPE_WORKER_EXPECT_RUNTIME").as_deref() == Ok("1");
                 // SAFETY: the ELF initializer runs before main, while this process still has one thread.
                 unsafe { crate::launcher::prepare_worker() };
-                assert_prepared_environment(runtime);
+                assert_prepared_environment();
                 crate::exit_process(77);
             }
             // SAFETY: the ELF initializer runs before main, while this process still has one thread.
@@ -223,21 +221,18 @@ mod tests {
         assert!(std::fs::File::open(path).unwrap().try_lock().is_ok());
     }
 
-    fn assert_prepared_environment(runtime: bool) {
-        let executable = std::env::current_exe().unwrap();
-        let prefix = executable.parent().unwrap().parent().unwrap();
-        for (name, relative) in [
-            ("GIO_EXTRA_MODULES", "lib/gio/modules"),
-            ("GST_PLUGIN_SYSTEM_PATH_1_0", "lib/gstreamer-1.0"),
-            ("GST_PLUGIN_SCANNER", "libexec/gstreamer-1.0/gst-plugin-scanner"),
-            ("WEBKIT_INJECTED_BUNDLE_PATH", "lib/wpe-webkit-2.0/injected-bundle"),
+    fn assert_prepared_environment() {
+        for name in [
+            "GIO_EXTRA_MODULES",
+            "GST_PLUGIN_SYSTEM_PATH_1_0",
+            "GST_PLUGIN_SCANNER",
+            "WEBKIT_INJECTED_BUNDLE_PATH",
         ] {
-            let expected = if runtime {
-                OsString::from("runtime-sentinel")
-            } else {
-                prefix.join(relative).into_os_string()
-            };
-            assert_eq!(std::env::var_os(name), Some(expected), "{name}");
+            assert_eq!(
+                std::env::var_os(name),
+                Some(OsString::from("runtime-sentinel")),
+                "{name}"
+            );
         }
         assert!(std::env::var_os("LD_LIBRARY_PATH").is_none());
         assert!(std::env::var_os(ngterm_wpe_client::RUNTIME_ENV).is_none());
@@ -265,9 +260,6 @@ mod tests {
         let executable = root.path().join("usr/bin/ngterm-web");
         std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
         ngterm_host::fakes::copy_executable(&std::env::current_exe().unwrap(), &executable).unwrap();
-        let marker = root.path().join("usr/share/ngterm/bundled-wpe");
-        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
-        std::fs::write(marker, "").unwrap();
         let mut command = Command::new(executable);
         for name in [
             "GIO_EXTRA_MODULES",
@@ -286,7 +278,6 @@ mod tests {
             .env("WPE_WORKER_ENTRY_PROBE", "prepare")
             .env("LD_LIBRARY_PATH", "/no-such-loader-path");
         for runtime in [false, true] {
-            command.env("WPE_WORKER_EXPECT_RUNTIME", if runtime { "1" } else { "0" });
             if runtime {
                 command.env(ngterm_wpe_client::RUNTIME_ENV, "1");
             }

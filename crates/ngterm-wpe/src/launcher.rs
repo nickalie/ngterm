@@ -10,8 +10,7 @@
 //! the consumer never enters it itself.
 //! [`command`] builds the overlay's launch of a program for an engine-only test process.
 //!
-//! Release bundles use the system-provider launch with a patched, relocatable WPE library. Their marker enables
-//! module paths on the engine worker's command only; the app and its terminal processes keep their environment.
+//! Downloaded runtimes supply their worker-only module paths through `ngterm-wpe-client`.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -23,13 +22,11 @@ const LIBDIR: &str = env!("NGTERM_WPE_LIBDIR");
 const SYSTEM_LIBDIR: &str = "/usr/lib";
 /// The manifest `scripts/fetch-wpe.sh` leaves in a vendored prefix, relative to its `lib/`.
 const VENDORED_MANIFEST: &str = "../share/ngterm/wpe-PINS";
-/// The release marker written by `scripts/package-release.sh`, relative to the binary's install prefix.
-const BUNDLE_MARKER: &str = "share/ngterm/bundled-wpe";
 
 /// Where WPE `WebKit` comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Provider {
-    /// A system installation or release bundle, with helpers where its library looks for them.
+    /// A system installation or downloaded runtime, with helpers where its library looks for them.
     System,
     /// The vendored package, its library directory overlaid on `/usr/lib` for the engine.
     Vendored { libdir: PathBuf },
@@ -48,25 +45,6 @@ fn provider_for(libdir: &Path) -> Provider {
         }
     } else {
         Provider::System
-    }
-}
-
-/// Configure only the engine worker with a release bundle's modules. Keeping these
-/// variables off the app preserves the environment of terminal panes and session servers.
-pub(crate) fn bundle_environment(command: &mut Command, executable: &Path) {
-    let Some(prefix) = executable.parent().and_then(Path::parent) else {
-        return;
-    };
-    if !prefix.join(BUNDLE_MARKER).is_file() {
-        return;
-    }
-    for (name, relative) in [
-        ("GIO_EXTRA_MODULES", "lib/gio/modules"),
-        ("GST_PLUGIN_SYSTEM_PATH_1_0", "lib/gstreamer-1.0"),
-        ("GST_PLUGIN_SCANNER", "libexec/gstreamer-1.0/gst-plugin-scanner"),
-        ("WEBKIT_INJECTED_BUNDLE_PATH", "lib/wpe-webkit-2.0/injected-bundle"),
-    ] {
-        command.env(name, prefix.join(relative));
     }
 }
 
@@ -143,14 +121,6 @@ pub unsafe fn prepare_worker() {
         eprintln!("ngterm-web: cannot enter the WPE helper overlay: {error}");
         crate::exit_process(2);
     }
-    let mut environment = Command::new(&executable);
-    bundle_environment(&mut environment, &executable);
-    for (name, value) in environment.get_envs() {
-        if let Some(value) = value {
-            // SAFETY: caller guarantees a single thread.
-            unsafe { std::env::set_var(name, value) };
-        }
-    }
 }
 
 fn worker_overlay(libdir: &Path, image: &Path) -> Command {
@@ -193,42 +163,6 @@ mod tests {
         assert_eq!(command.get_args().last().unwrap(), "/proc/self/fd/12");
         assert!(command.get_args().any(|arg| arg == "/vendor/lib"));
         assert!(!command.get_args().any(|arg| arg == "--die-with-parent"));
-    }
-
-    #[test]
-    fn bundled_module_paths_are_scoped_to_the_worker_command() {
-        let names = [
-            "GIO_EXTRA_MODULES",
-            "GST_PLUGIN_SYSTEM_PATH_1_0",
-            "GST_PLUGIN_SCANNER",
-            "WEBKIT_INJECTED_BUNDLE_PATH",
-        ];
-        let inherited = names.map(std::env::var_os);
-        let root = tempfile::tempdir().unwrap();
-        let executable = root.path().join("usr/bin/ngterm");
-        let mut command = Command::new("engine");
-        bundle_environment(&mut command, &executable);
-        assert_eq!(command.get_envs().count(), 0, "ordinary builds keep their environment");
-        let own = root.path().join("usr/share/ngterm");
-        std::fs::create_dir_all(&own).unwrap();
-        std::fs::write(own.join("bundled-wpe"), "").unwrap();
-        bundle_environment(&mut command, &executable);
-        let env: Vec<_> = command.get_envs().collect();
-        assert_eq!(env.len(), 4);
-        for (name, relative) in [
-            ("GIO_EXTRA_MODULES", "lib/gio/modules"),
-            ("GST_PLUGIN_SYSTEM_PATH_1_0", "lib/gstreamer-1.0"),
-            ("GST_PLUGIN_SCANNER", "libexec/gstreamer-1.0/gst-plugin-scanner"),
-            ("WEBKIT_INJECTED_BUNDLE_PATH", "lib/wpe-webkit-2.0/injected-bundle"),
-        ] {
-            let (_, value) = env.iter().find(|(key, _)| *key == name).unwrap();
-            assert_eq!(Path::new(value.unwrap()), root.path().join("usr").join(relative));
-        }
-        assert_eq!(
-            names.map(std::env::var_os),
-            inherited,
-            "the app's environment is unchanged"
-        );
     }
 
     #[test]
@@ -294,13 +228,6 @@ mod tests {
             .unwrap();
         assert!(output.status.success());
         assert_eq!(output.stdout, b"a single argument");
-    }
-
-    #[test]
-    fn a_bare_executable_has_no_bundle_prefix() {
-        let mut command = Command::new("engine");
-        bundle_environment(&mut command, Path::new("engine"));
-        assert_eq!(command.get_envs().count(), 0);
     }
 
     #[test]
