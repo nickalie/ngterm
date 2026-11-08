@@ -376,3 +376,119 @@ fn keys_and_pastes_keep_their_holds_while_a_clipboard_read_is_unresolved() {
     sim.idle(PAUSES[0]);
     assert_eq!(sim.typed, b"\x1b]52;c;aGVs");
 }
+
+fn origin() -> Origin {
+    Origin {
+        env: vec![("SHELL".to_owned(), "/bin/sh".to_owned())],
+        cwd: Some(PathBuf::from("/work")),
+        executable: PathBuf::from("/opt/ngterm/bin/ngterm-session"),
+    }
+}
+
+fn usage(message: &str) -> Outcome {
+    Outcome {
+        code: crate::server::EXIT_USAGE,
+        message: Some(message.to_owned()),
+    }
+}
+
+#[test]
+fn an_attach_without_a_namespace_or_a_session_name_ends_before_the_terminal() {
+    let namespace = Contract {
+        directory: Some(PathBuf::from("/tmp/live")),
+        ..Contract::default()
+    };
+    let inside = Contract {
+        session: Some("outer".to_owned()),
+        ..namespace.clone()
+    };
+    assert_eq!(
+        prepare(&inside, "x", Vec::new(), origin()),
+        Err(Outcome::failed(
+            "this runs inside the live session outer (NGTERM_LIVE_SESSION); set it empty to attach from here"
+        ))
+    );
+    assert_eq!(
+        prepare(&Contract::default(), "x", Vec::new(), origin()),
+        Err(usage(
+            "NGTERM_LIVE_DIR is not set: it names the live sessions' namespace directory"
+        ))
+    );
+    assert_eq!(
+        prepare(&namespace, "a/b", Vec::new(), origin()),
+        Err(usage("\"a/b\" is not a session name"))
+    );
+    assert_eq!(
+        prepare(&namespace, "", Vec::new(), origin()),
+        Err(usage("a session name is required"))
+    );
+    // an empty directory names no namespace that can be made absolute
+    let empty = Contract {
+        directory: Some(PathBuf::new()),
+        ..Contract::default()
+    };
+    let outcome = prepare(&empty, "x", Vec::new(), origin()).unwrap_err();
+    assert_eq!(outcome.code, EXIT_FAILED);
+    assert!(outcome.message.is_some());
+}
+
+#[test]
+fn an_attach_creates_its_session_with_the_origins_environment_directory_and_shell() {
+    let contract = Contract {
+        directory: Some(PathBuf::from("/tmp/live")),
+        prefix: "p-".to_owned(),
+        ..Contract::default()
+    };
+    let prepared = prepare(&contract, "x", Vec::new(), origin()).unwrap();
+    assert_eq!(
+        prepared,
+        Prepared {
+            directory: std::path::absolute("/tmp/live").unwrap(),
+            name: "p-x".to_owned(),
+            spec: SessionSpec {
+                argv: default_argv(Some(std::ffi::OsStr::new("/bin/sh"))),
+                env: origin().env,
+                cwd: Some("/work".to_owned()),
+                tracked_env: Vec::new(),
+            },
+            managed: None,
+            detach_key: false,
+            executable: origin().executable,
+        }
+    );
+    let argv = vec!["htop".to_owned()];
+    assert_eq!(prepare(&contract, "x", argv.clone(), origin()).unwrap().spec.argv, argv);
+}
+
+fn reattach(name: &str) -> AttachRequest {
+    AttachRequest {
+        name: name.to_owned(),
+        create: None,
+        size: GridSize { cols: 80, rows: 24 },
+        managed: None,
+        metadata: crate::protocol::ReplyMetadata::default(),
+    }
+}
+
+#[test]
+fn attaching_again_stops_once_no_request_is_made() {
+    let root = tempfile::tempdir().unwrap();
+    assert!(matches!(attach_again(&root.path().join("live"), || None), Ok(None)));
+}
+
+/// With no server to attach to, the client tries again until [`REATTACH_WAIT`] is over, then ends with why.
+#[test]
+fn attaching_again_without_a_server_gives_up_after_its_wait() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("live");
+    let started = Instant::now();
+    let outcome = attach_again(&directory, || Some(reattach("x"))).unwrap_err();
+    assert!(started.elapsed() >= REATTACH_WAIT, "{:?}", started.elapsed());
+    assert_eq!(
+        outcome,
+        Outcome::failed(format!(
+            "lost the connection to the live session server: no live session server runs at {}",
+            crate::endpoint::Endpoint::new(&directory)
+        ))
+    );
+}

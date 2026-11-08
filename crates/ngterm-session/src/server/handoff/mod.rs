@@ -996,4 +996,234 @@ mod tests {
         }
         begun
     }
+
+    #[test]
+    fn a_line_not_utf8_or_not_the_one_due_fails_the_step() {
+        let (_directory, server, client) = pair();
+        (&*client).write_all(b"\xff\n").unwrap();
+        assert_eq!(
+            read_line(&server, STEP_TIMEOUT),
+            Err("a handoff line was not UTF-8".to_owned())
+        );
+        write_line(&client, "restored").unwrap();
+        assert_eq!(
+            expect(&server, "validated", STEP_TIMEOUT),
+            Err(r#"the replacement answered "restored" where "validated" was due"#.to_owned())
+        );
+        write_line(&client, &format!("{REFUSED}the pins differ")).unwrap();
+        assert_eq!(
+            expect(&server, "validated", STEP_TIMEOUT),
+            Err("the replacement refused the handoff: the pins differ".to_owned())
+        );
+        write_line(&client, "validated").unwrap();
+        assert_eq!(expect(&server, "validated", STEP_TIMEOUT), Ok(()));
+    }
+
+    #[test]
+    fn a_json_line_parses_or_fails_naming_what_it_is() {
+        let (_directory, server, client) = pair();
+        write_line(&client, "{not json").unwrap();
+        let error = read_json::<Identity>(&server, STEP_TIMEOUT, "the replacement's identity").unwrap_err();
+        assert!(
+            error.starts_with("the replacement's identity did not parse: "),
+            "{error}"
+        );
+        let identity = Identity::of_this_process("new");
+        write_line(&client, &serde_json::to_string(&identity).unwrap()).unwrap();
+        assert_eq!(
+            read_json::<Identity>(&server, STEP_TIMEOUT, "the replacement's identity"),
+            Ok(identity)
+        );
+    }
+
+    #[test]
+    fn the_importer_commits_only_on_the_whole_commit_line() {
+        let (_directory, server, client) = pair();
+        write_line(&client, "committed").unwrap();
+        assert!(committed(&server));
+        write_line(&client, "commit").unwrap();
+        assert!(!committed(&server), "another line is no commit");
+        drop(client);
+        assert!(!committed(&server), "a channel closed before the commit is none");
+    }
+
+    #[test]
+    fn the_manifest_crosses_with_each_panes_terminal_and_replies_after_it() {
+        let (_directory, server, client) = pair();
+        let first = Cut {
+            state: PaneState {
+                vt_len: 3,
+                replies_len: 2,
+                ..pane("a", VtEncoding::Binary)
+            },
+            vt: b"vt!".to_vec(),
+            replies: b"r!".to_vec(),
+        };
+        let second = Cut {
+            state: PaneState {
+                vt_len: 0,
+                replies_len: 1,
+                ..pane("b", VtEncoding::Formatter)
+            },
+            vt: Vec::new(),
+            replies: b"x".to_vec(),
+        };
+        let sent = manifest(vec![first.state.clone(), second.state.clone()]);
+        send_manifest(&client, &sent, &[first.clone(), second.clone()]).unwrap();
+        let got: Manifest = read_json(&server, STEP_TIMEOUT, "the handoff manifest").unwrap();
+        assert_eq!(got, sent);
+        assert_eq!(
+            read_payloads(&server, &got.panes, STEP_TIMEOUT).unwrap(),
+            [(first.vt, first.replies), (second.vt, second.replies)]
+        );
+    }
+
+    #[test]
+    fn a_pane_too_large_to_take_over_is_refused_before_it_is_read() {
+        let (_directory, server, _client) = pair();
+        let huge = PaneState {
+            vt_len: MAX_PANE_PAYLOAD,
+            replies_len: 1,
+            ..pane("huge", VtEncoding::Binary)
+        };
+        let error = read_payloads(&server, &[huge], STEP_TIMEOUT).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            error.to_string(),
+            r#"the live session "huge" is too large to take over"#
+        );
+    }
+
+    #[test]
+    fn a_manifest_sent_on_a_disconnected_channel_fails_the_send() {
+        // as the step's watchdog disconnects a channel the replacement stopped reading
+        let (_directory, server, _client) = pair();
+        endpoint::disconnect(&server);
+        let error = send_manifest(&server, &manifest(Vec::new()), &[]).unwrap_err();
+        assert!(error.starts_with("the manifest could not be sent: "), "{error}");
+    }
+
+    #[test]
+    fn the_replacement_is_accepted_on_the_channel_or_the_wait_ends_at_its_timeout() {
+        let directory = tempfile::tempdir().unwrap();
+        let silent = Endpoint::new(directory.path().join("silent"));
+        let listener = silent.bind().unwrap();
+        let started = Instant::now();
+        assert_eq!(
+            accept_within(listener, &silent, Duration::from_secs(1)).map(drop),
+            Err("the replacement did not connect to the handoff channel within 1s".to_owned())
+        );
+        assert!(started.elapsed() < STEP_TIMEOUT, "{:?}", started.elapsed());
+
+        let answered = Endpoint::new(directory.path().join("answered"));
+        let listener = answered.bind().unwrap();
+        let connecting = answered.clone();
+        let replacement = thread::spawn(move || connecting.connect().unwrap());
+        let accepted = Arc::new(accept_within(listener, &answered, STEP_TIMEOUT).unwrap());
+        let replacement = Arc::new(replacement.join().unwrap());
+        write_line(&replacement, "token").unwrap();
+        assert_eq!(read_line(&accepted, STEP_TIMEOUT).unwrap(), "token");
+    }
+
+    /// The importer's half against a scripted exporter: it presents the token and its identity, reads the manifest and
+    /// every payload whole, and refuses a manifest meant for another build with the reason the exporter fails with.
+    #[test]
+    fn an_importer_refuses_a_manifest_meant_for_another_build_once_it_read_it_whole() {
+        let directory = tempfile::tempdir().unwrap();
+        let channel = Endpoint::new(directory.path().join("channel"));
+        let listener = channel.bind().unwrap();
+        let endpoint = Endpoint::new(directory.path().join("live"));
+        let at = channel.directory().to_path_buf();
+        let importer = thread::spawn(move || {
+            receive("new", &endpoint, &at, "token-1", Limits::default())
+                .map(drop)
+                .map_err(|err| err.to_string())
+        });
+        let exporter = Arc::new(listener.accept().unwrap());
+        assert_eq!(read_line(&exporter, STEP_TIMEOUT).unwrap(), "token-1");
+        let identity: Identity = read_json(&exporter, STEP_TIMEOUT, "the replacement's identity").unwrap();
+        assert_eq!(identity, Identity::of_this_process("new"));
+        let sent = Manifest {
+            expected_build: "newer".to_owned(),
+            ..manifest(vec![pane("a", VtEncoding::Formatter)])
+        };
+        write_line(&exporter, &serde_json::to_string(&sent).unwrap()).unwrap();
+        (&*exporter).write_all(&[b'x'; 10]).unwrap();
+        let reason = r#"the handoff expected build "newer", the replacement is "new""#;
+        assert_eq!(
+            expect(&exporter, "validated", STEP_TIMEOUT),
+            Err(format!("the replacement refused the handoff: {reason}"))
+        );
+        assert_eq!(importer.join().unwrap(), Err(reason.to_owned()));
+    }
+
+    /// The importer against an exporter that is not there, or leaves before it sent the manifest or the payloads
+    /// the manifest names: it takes nothing, and says why.
+    #[test]
+    fn an_importer_whose_exporter_fails_it_takes_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let endpoint = Endpoint::new(directory.path().join("live"));
+        let absent = receive(
+            "new",
+            &endpoint,
+            &directory.path().join("absent"),
+            "token",
+            Limits::default(),
+        )
+        .map(drop)
+        .unwrap_err();
+        assert_eq!(absent.kind(), io::ErrorKind::NotFound);
+
+        // `exporter` plays the channel's other end, then leaves
+        let importing = |name: &str, exporter: fn(&Arc<Stream>)| {
+            let channel = Endpoint::new(directory.path().join(name));
+            let listener = channel.bind().unwrap();
+            let (endpoint, at) = (endpoint.clone(), channel.directory().to_path_buf());
+            let importer = thread::spawn(move || {
+                receive("new", &endpoint, &at, "token", Limits::default())
+                    .map(drop)
+                    .map_err(|err| err.to_string())
+            });
+            let stream = Arc::new(listener.accept().unwrap());
+            assert_eq!(read_line(&stream, STEP_TIMEOUT).unwrap(), "token");
+            read_json::<Identity>(&stream, STEP_TIMEOUT, "the replacement's identity").unwrap();
+            exporter(&stream);
+            endpoint::close(&stream);
+            importer.join().unwrap().unwrap_err()
+        };
+        assert_eq!(importing("no-manifest", |_| {}), "the handoff peer closed the channel");
+        let cut_short = importing("cut-short", |stream| {
+            let sent = manifest(vec![pane("a", VtEncoding::Formatter)]);
+            write_line(stream, &serde_json::to_string(&sent).unwrap()).unwrap();
+            (&**stream).write_all(b"only").unwrap();
+        });
+        assert!(!cut_short.is_empty(), "the payload of 10 bytes was cut at 4");
+    }
+
+    /// A handoff whose channel cannot be bound fails before anything is started, and is not run again.
+    #[test]
+    fn a_handoff_without_its_channel_fails_and_is_answered_so_again() {
+        let root = tempfile::tempdir().unwrap();
+        // a file where the namespace directory would be: no channel can be made under it
+        let namespace = root.path().join("live");
+        std::fs::write(&namespace, b"").unwrap();
+        let config = crate::server::ServerConfig {
+            handoff: Support::Supported,
+            ..crate::server::ServerConfig::default()
+        };
+        let shared = Shared::new(&Endpoint::new(&namespace), &config);
+        let asked = request("new", PROTOCOL_VERSION);
+        let error = export(&shared, &asked).unwrap_err();
+        assert_eq!(error.code, ErrorCode::HandoffFailed);
+        let prefix = format!(
+            "the handoff channel {} could not be bound: ",
+            Endpoint::new(channel(&namespace, std::process::id()))
+        );
+        assert!(error.message.starts_with(&prefix), "{}", error.message);
+        assert!(
+            !shared.handing_off.load(Ordering::Acquire),
+            "connections are admitted again"
+        );
+        assert_eq!(export(&shared, &asked), Err(error));
+    }
 }

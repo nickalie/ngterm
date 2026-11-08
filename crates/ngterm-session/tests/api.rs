@@ -745,3 +745,68 @@ fn a_shells_foreground_job_is_read_waited_for_and_ended() -> TestResult {
     assert_eq!(server.stopped()?, StopReason::Idle);
     Ok(())
 }
+
+/// A print waits for the program's output to stand outside any sequence, and prints nothing when it stays inside one.
+#[cfg(unix)]
+#[test]
+fn a_print_into_an_unfinished_sequence_prints_nothing() -> TestResult {
+    let server = Server::start()?;
+    let mut cut = server.attach("cut", Some(script("printf 'ready\\033['; read line")), None)?;
+    cut.attached()?;
+    let mut api = server.api()?;
+    let before = api.ready_screen("cut", "ready")?;
+    assert_eq!(
+        api.print("cut", b"mark")?,
+        Err(ApiError {
+            kind: ApiErrorKind::Failed,
+            message: "the output of the live session \"cut\" stands inside an escape sequence; nothing was printed"
+                .to_owned(),
+        })
+    );
+    assert_eq!(api.screen("cut", false)?.map_err(|err| err.message)?, before);
+    assert_eq!(api.kill(&["cut"], true)?[0].outcome, KillOutcome::Killed);
+    drop((cut, api));
+    assert_eq!(server.stopped()?, StopReason::Idle);
+    Ok(())
+}
+
+/// Typing is queued for a program that reads none of it until the queue is full; then a request types nothing. The
+/// program's terminal is raw, so what reaches it waits in the terminal's buffer instead of a line it discards.
+#[cfg(unix)]
+#[test]
+fn typing_into_a_full_input_queue_types_nothing() -> TestResult {
+    let server = Server::start()?;
+    let mut deaf = server.attach("deaf", Some(script("stty raw -echo; printf ready; sleep 600")), None)?;
+    deaf.attached()?;
+    let mut api = server.api()?;
+    api.ready_screen("deaf", "ready")?;
+    let lot = "x".repeat(2 * 1024 * 1024);
+    assert_eq!(api.type_text("deaf", &lot)?, Ok(ApiResponse::Done));
+    assert_eq!(
+        api.type_text("deaf", "y")?,
+        Err(ApiError {
+            kind: ApiErrorKind::Failed,
+            message: "the input queue of the live session \"deaf\" is full; nothing was typed".to_owned(),
+        })
+    );
+    assert_eq!(api.kill(&["deaf"], true)?[0].outcome, KillOutcome::Killed);
+    drop((deaf, api));
+    assert_eq!(server.stopped()?, StopReason::Idle);
+    Ok(())
+}
+
+/// A print waiting for the program's sequence to end, which the program's end cuts short, prints nothing: the
+/// session is gone.
+#[cfg(unix)]
+#[test]
+fn a_print_waiting_on_a_program_that_ends_finds_no_session() -> TestResult {
+    let server = Server::start()?;
+    let mut ending = server.attach("ending", Some(script("printf 'ready\\033['; sleep 1")), None)?;
+    ending.attached()?;
+    let mut api = server.api()?;
+    api.ready_screen("ending", "ready")?;
+    assert_eq!(api.print("ending", b"mark")?, Err(no_such_session("ending")));
+    drop((ending, api));
+    assert_eq!(server.stopped()?, StopReason::Idle);
+    Ok(())
+}

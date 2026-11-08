@@ -549,6 +549,35 @@ mod owner {
         );
         Ok(())
     }
+
+    /// The reply owner's work through to its detach: the program's OSC 52 read relayed to the outer terminal and its
+    /// answer back, a Kitty graphics query passed on to the outer terminal (which answers it nothing), and the
+    /// program's status report after it answered as before.
+    #[test]
+    fn a_reply_owner_relays_a_read_and_a_kitty_query_then_detaches() -> TestResult {
+        use base64::Engine as _;
+        let namespace = Namespace::new()?;
+        let answers = Answers {
+            clipboard: Some("clip-text"),
+            ..Answers::default()
+        };
+        let queries = [
+            "printf '\\033]52;c;?\\007'",
+            "printf '\\033_Gi=31,a=q;AAAA\\033\\\\'",
+            "printf '\\033[5n'",
+        ];
+        let mut client = attach_probe(&namespace, "owned", &queries, &answers)?;
+        client.type_line("go")?;
+        client.expect("DONE");
+        let data = base64::engine::general_purpose::STANDARD.encode("clip-text");
+        let answer = String::from_utf8_lossy(&reply(&client, 0)).into_owned();
+        assert!(answer.contains(&format!("]52;c;{data}")), "{answer:?}");
+        assert!(String::from_utf8_lossy(&client.output()).contains("\x1b_Gi=31,a=q;AAAA"));
+        assert_eq!(reply(&client, 2), b"\x1b[0n", "the status report after the Kitty query");
+        client.write(b"\x1c")?;
+        assert_eq!(client.wait()?, 0);
+        Ok(())
+    }
 }
 
 /// A scripted server for the reattach tests: the first attach is sent a snapshot and output, then its connection ends
@@ -695,5 +724,66 @@ fn an_attach_starts_the_namespaces_server() -> TestResult {
     client.write(b"\x1c")?;
     assert_eq!(client.wait()?, 0);
     assert_eq!(namespace.session_names(), ["started"]);
+    Ok(())
+}
+
+/// An attach whose input ends (no terminal: its standard input a closed pipe) detaches, as zmx's does, and leaves
+/// the session it created running.
+#[test]
+fn an_attach_whose_input_ends_detaches_and_leaves_its_session() -> TestResult {
+    let namespace = Namespace::new()?;
+    let mut args = vec!["attach".to_owned()];
+    args.extend(with_shell("piped"));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = namespace.run(&args, b"", &[])?;
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(namespace.session_names(), ["piped"]);
+    Ok(())
+}
+
+/// An attach that cannot write to its outer terminal detaches, leaving its session, and fails saying why.
+#[test]
+fn an_attach_that_cannot_write_to_its_terminal_detaches_and_fails() -> TestResult {
+    use std::process::{Command, Stdio};
+    let namespace = Namespace::new()?;
+    let mut child = Command::new(&namespace.executable)
+        .arg("attach")
+        .args(with_shell("unwritten"))
+        .env_clear()
+        .envs(namespace.environment(&[]))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // the terminal's output closed, its input held open: the first write fails before the input could end
+    drop(child.stdout.take());
+    let input = child.stdin.take();
+    let output = child.wait_with_output()?;
+    drop(input);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr(&output);
+    assert!(
+        stderr.starts_with("ngterm-session attach: could not write to the terminal: "),
+        "{stderr}"
+    );
+    assert_eq!(namespace.session_names(), ["unwritten"]);
+    Ok(())
+}
+
+/// An attach that cannot reach its namespace's server (the namespace under a file) fails before it attaches.
+#[cfg(unix)]
+#[test]
+fn an_attach_that_cannot_reach_its_server_fails() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let file = root.path().join("file");
+    std::fs::write(&file, b"")?;
+    let namespace = Namespace::of_peer(&file.join("live"));
+    let output = namespace.run(&["attach", "unreached", "/bin/sh"], b"", &[])?;
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr(&output);
+    assert!(
+        stderr.starts_with("ngterm-session attach: could not connect to the ngterm-session server at "),
+        "{stderr}"
+    );
     Ok(())
 }
