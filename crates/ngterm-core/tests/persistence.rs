@@ -1135,18 +1135,71 @@ fn a_closed_or_removed_window_forgets_its_failed_save() {
     );
 }
 
+/// Upstream only disarms when the launch strip fails and writes nothing, so the rewrite ngterm adds marks nothing.
 #[test]
-fn a_failed_launch_write_leaves_the_window_unmarked() {
+fn a_failed_rewrite_after_a_failed_strip_leaves_the_window_unmarked() {
     let (dir, _) = fresh().unwrap();
     let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
     one_open_window(dir.path(), window, captured(session)).unwrap();
     // the strip fails, so the launch asks for a write of the disarmed window, which fails as well
     let guard = ReadOnly::new(&dir.path().join("windows")).unwrap();
     let (mut persistence, library) = launch(dir.path());
-    assert!(!persistence.snapshot_unsaved(window), "launch writes skip the mark");
+    assert!(!persistence.snapshot_unsaved(window), "upstream makes no such write");
     assert!(!persistence.save_window(&library, window));
     assert!(persistence.snapshot_unsaved(window), "a save after launch marks it");
     drop(guard);
+}
+
+#[test]
+fn a_recovery_whose_strip_fails_leaves_the_window_unmarked() {
+    let (dir, _) = fresh().unwrap();
+    let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
+    write_window(
+        dir.path(),
+        window,
+        &tree(vec![workspace("work", vec![captured(session)])]),
+    )
+    .unwrap();
+    let guard = ReadOnly::new(&dir.path().join("windows")).unwrap();
+    let (persistence, library) = launch(dir.path());
+    drop(guard);
+    assert_eq!(library.open_ids(), [window], "recovered");
+    assert!(!persistence.snapshot_unsaved(window), "upstream makes no such write");
+}
+
+/// A state dir whose `windows` is a file, so no window file can be written there on any OS.
+fn windows_unwritable(dir: &Path) -> io::Result<()> {
+    fs::write(dir.join("windows"), b"")
+}
+
+#[test]
+fn a_failed_migration_write_marks_the_window() {
+    let (dir, _) = fresh().unwrap();
+    PersistenceStore::new(dir.path().join("workspaces.json"))
+        .save(&tree(vec![workspace("legacy", Vec::new())]))
+        .unwrap();
+    windows_unwritable(dir.path()).unwrap();
+    let (persistence, library) = launch(dir.path());
+    let window = library.windows()[0].id;
+    assert_eq!(workspace_names(&library, window), ["legacy"], "migrated");
+    assert!(!persistence.window_path(window).exists());
+    assert!(
+        persistence.snapshot_unsaved(window),
+        "upstream's migration saves through `store.save()`"
+    );
+}
+
+#[test]
+fn a_failed_seed_write_marks_the_window() {
+    let (dir, _) = fresh().unwrap();
+    windows_unwritable(dir.path()).unwrap();
+    let (persistence, library) = launch(dir.path());
+    let window = library.windows()[0].id;
+    assert_eq!(workspace_names(&library, window), ["workspace 1"], "seeded");
+    assert!(
+        persistence.snapshot_unsaved(window),
+        "upstream's seed saves through `store.save()`"
+    );
 }
 
 // MARK: - Open Recent

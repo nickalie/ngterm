@@ -72,8 +72,12 @@ pub struct LibraryPersistence {
     /// Set from a failed index write until one lands (upstream's `indexUnsaved`).
     index_unsaved: bool,
     /// The open windows whose last snapshot save failed, each until one lands (upstream's per-store
-    /// `snapshotUnsaved`); launch-time writes leave it alone, as upstream's `WindowLibrary` writes skip `saveChecked`.
+    /// `snapshotUnsaved`). The launch's writes mark it as upstream's `store.save()` calls in its seed, migration and
+    /// recovery do, all but the ones in [`Self::launch_unchecked`].
     snapshot_unsaved: HashSet<Uuid>,
+    /// The windows whose only launch write is the rewrite after a failed capture strip, which upstream does not make
+    /// (it just disarms), so it marks nothing; empty outside [`Self::bootstrap`].
+    launch_unchecked: HashSet<Uuid>,
     /// The live debounced write of each window, by token.
     pending: HashMap<Uuid, u64>,
     next_token: u64,
@@ -86,6 +90,7 @@ impl LibraryPersistence {
             directory: directory.into(),
             index_unsaved: false,
             snapshot_unsaved: HashSet::new(),
+            launch_unchecked: HashSet::new(),
             pending: HashMap::new(),
             next_token: 0,
         }
@@ -189,13 +194,23 @@ impl LibraryPersistence {
         } else if !self.recover_orphaned_windows(&mut library) && !self.migrate_legacy(&mut library) {
             library.new_window(None);
         }
+        self.write_launch_saves(&mut library);
+        library
+    }
+
+    /// Writes what the launch asked for, then the index. A failed write marks its window as upstream's
+    /// `saveChecked` does, except a write upstream never makes ([`Self::launch_unchecked`]).
+    fn write_launch_saves(&mut self, library: &mut WindowLibrary) {
+        let unchecked = std::mem::take(&mut self.launch_unchecked);
         let effects = library.drain_effects();
         for (id, _) in effects.window_saves {
-            // a launch write, so it marks nothing
-            self.write_window(&library, id);
+            if unchecked.contains(&id) {
+                self.write_window(library, id);
+            } else {
+                self.save_window(library, id);
+            }
         }
-        self.save_index(&library);
-        library
+        self.save_index(library);
     }
 
     fn reopen(&mut self, library: &mut WindowLibrary, index: &WindowsIndex) {
@@ -284,9 +299,13 @@ impl LibraryPersistence {
             .any(|session| session.foreground_command.is_some() || session.split_foreground_command.is_some());
         if launch_restore {
             // the armed copies live in the transient slots; strip the file so nothing can replay them twice, and
-            // disarm when the strip cannot land
+            // disarm when the strip cannot land; upstream writes nothing then, so a failure of the write the disarm
+            // asks for marks nothing, unless the restore asked for one of its own
             if carried_captures && !self.strip_captures(id, &snapshot) {
-                disarm_captures(&mut store);
+                let asked_before = store.outbox().save != SaveRequest::None;
+                if disarm_captures(&mut store) && !asked_before {
+                    self.launch_unchecked.insert(id);
+                }
             }
         } else {
             if carried_captures {
@@ -554,8 +573,9 @@ impl LibraryPersistence {
     }
 }
 
-/// Drops every armed one-shot capture of a store and asks for a write when there was one; the sticky overrides stay.
-fn disarm_captures(store: &mut AppStore) {
+/// Drops every armed one-shot capture of a store and asks for a write when there was one, which it returns; the sticky
+/// overrides stay.
+fn disarm_captures(store: &mut AppStore) -> bool {
     let mut stripped = false;
     for session in store.sessions_mut() {
         if session.restore.pending_foreground.is_some() || session.split_restore.pending_foreground.is_some() {
@@ -567,6 +587,7 @@ fn disarm_captures(store: &mut AppStore) {
     if stripped {
         store.request_save(SaveRequest::Now);
     }
+    stripped
 }
 
 /// The ids of the UUID-named `.json` files in the windows directory, in file name order; `None` when the directory
@@ -601,5 +622,48 @@ pub fn arm_debounced_saves<S: 'static>(
 ) {
     for save in saves.iter().copied() {
         let _ = main_loop.post_after(SAVE_DEBOUNCE, Box::new(move |state: &mut S| fire(state, save)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::snapshot::{SessionSnapshot, WorkspaceSnapshot};
+    use super::*;
+
+    /// Recovery rewrites a window whose captures it disarmed after the strip landed (upstream's `store.save()` in
+    /// `recoverOrphanedWindows`), so that write failing marks the window. The strip and the rewrite hit one file, so
+    /// the failure goes in between them.
+    #[test]
+    fn a_failed_recovery_rewrite_marks_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut persistence = LibraryPersistence::new(dir.path());
+        let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
+        let snapshot = Snapshot {
+            workspaces: vec![WorkspaceSnapshot {
+                id: Uuid::new_v4(),
+                name: "work".to_owned(),
+                sessions: vec![SessionSnapshot {
+                    foreground_command: Some(vec!["ssh".to_owned(), "prod".to_owned()]),
+                    ..SessionSnapshot::new(session, "/a")
+                }],
+                collapsed: None,
+                tint: None,
+            }],
+            ..Snapshot::default()
+        };
+        let file = persistence.window_path(window);
+        PersistenceStore::new(&file).save(&snapshot).unwrap();
+
+        let mut library = WindowLibrary::new("/home/user");
+        assert!(persistence.recover_orphaned_windows(&mut library));
+        let on_disk = PersistenceStore::new(&file).load();
+        assert_eq!(
+            on_disk.workspaces[0].sessions[0].foreground_command, None,
+            "the strip landed"
+        );
+        fs::remove_file(&file).unwrap();
+        fs::create_dir_all(file.join("occupied")).unwrap();
+        persistence.write_launch_saves(&mut library);
+        assert!(persistence.snapshot_unsaved(window));
     }
 }
