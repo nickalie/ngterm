@@ -11,6 +11,12 @@ import SwiftUI
 /// one anything typed reaches: a tab, a swipe, a chord and a touch on a pane select it, and the keyboard's focus
 /// follows the selection (``TerminalKeyboard/handOver()``).
 internal struct SessionLiveView: View {
+    // whether the pane moves and the session moves have somewhere to go (each goes both ways or neither)
+    private struct Moves: Equatable {
+        let pane: Bool
+        let session: Bool
+    }
+
     // the least height the HUD shows in: below it, it would take the terminal's last rows (a phone on its side with
     // the soft keyboard up)
     private static let hudRoom: CGFloat = 320
@@ -61,13 +67,9 @@ internal struct SessionLiveView: View {
             ),
             action: RowAction(String(localized: "End session"), perform: end)
         )
-        .onAppear {
-            model.keyboard.shortcuts = TerminalShortcuts(
-                nextPane: { move(forward: true) },
-                previousPane: { move(forward: false) },
-                nextSession: { moveSession(forward: true) },
-                previousSession: { moveSession(forward: false) }
-            )
+        .onAppear(perform: installMoves)
+        .onChange(of: moves) {
+            installMoves()
         }
         .onDisappear {
             // the moves hold this view, and through it the model that holds the keyboard
@@ -141,6 +143,14 @@ internal struct SessionLiveView: View {
         )
     }
 
+    // which moves go somewhere: a move with nowhere to go leaves its chord to the program
+    private var moves: Moves {
+        Moves(
+            pane: model.neighbor(forward: true) != nil,
+            session: model.neighborSession(forward: true) != nil
+        )
+    }
+
     // whether the window can show the origin's split, as the panes lay out now
     private var isSplittable: Bool {
         PaneAlone.isSplittable(session.live.layout, isCompact: shownCompact)
@@ -184,6 +194,21 @@ internal struct SessionLiveView: View {
         if model.select(paneId) {
             model.keyboard.handOver()
         }
+    }
+
+    // gives the keyboard the moves that go somewhere now (``moves``), each of the others left to the program
+    private func installMoves() {
+        let going = moves
+        var shortcuts = TerminalShortcuts()
+        if going.pane {
+            shortcuts.nextPane = { move(forward: true) }
+            shortcuts.previousPane = { move(forward: false) }
+        }
+        if going.session {
+            shortcuts.nextSession = { moveSession(forward: true) }
+            shortcuts.previousSession = { moveSession(forward: false) }
+        }
+        model.keyboard.shortcuts = shortcuts
     }
 
     private func move(forward: Bool) {

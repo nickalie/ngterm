@@ -4,7 +4,7 @@
 # percent rounded down; floors only rise, toward 90, as targets earn it.
 # Seeded from a clean build's run on the pinned Xcode and simulators (2026-11-07).
 # Sorted by target.
-NgTerm 40
+NgTerm 73
 NgtermCore 66
 NgtermDesign 97
 NgtermFeatures 84
