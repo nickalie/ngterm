@@ -253,10 +253,10 @@ fn a_page_holding_the_keyboard_keeps_the_undo_close_chord() {
     assert_eq!(names(&router), ["new_session", "undo_close"]);
 }
 
-/// The `undo_close` chord pressed in a page's native web view (Windows) stays the page's; the app's other chords and
+/// The `undo_close` chord pressed in a page's native web view (Windows, macOS) stays the page's; the app's other chords and
 /// Ctrl+Tab's switcher still go to the window.
 #[test]
-#[cfg(all(feature = "html", windows))]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 fn a_web_view_keeps_the_undo_close_chord() {
     let (keymap, _) = parse_keymap("", &linux_defaults());
     super::load_keymap(&keymap);
@@ -277,11 +277,107 @@ fn the_find_chord_fires_while_a_page_holds_the_keyboard() {
     assert_eq!(names(&router), ["toggle_search"]);
 }
 
-/// Find's chord pressed in a page's native web view (Windows) goes to the window.
+/// Find's chord pressed in a page's native web view (Windows, macOS) goes to the window.
 #[test]
-#[cfg(all(feature = "html", windows))]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 fn a_web_view_hands_the_find_chord_to_the_window() {
     let (keymap, _) = parse_keymap("", &linux_defaults());
     super::load_keymap(&keymap);
     assert!(super::takes(&stroke("ctrl-shift-f")));
+}
+
+/// Presses `text` on this thread's monitor, as a key the window saw.
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn press_monitor(text: &str, now: Instant) -> Press {
+    super::ROUTER.with_borrow_mut(|router| router.press(&stroke(text), now, false))
+}
+
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn dispatched(text: &str) -> Keystroke {
+    Keystroke::parse(text).unwrap().with_simulated_ime()
+}
+
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_web_view_keeps_every_key_until_a_keymap_is_loaded_except_the_switcher() {
+    assert!(!super::takes(&stroke("ctrl-shift-t")));
+    assert!(!super::takes(&stroke("a")));
+    assert!(super::takes(&stroke("ctrl-tab")));
+    assert!(!super::takes(&stroke("tab")), "Tab alone stays the page's");
+}
+
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_web_view_keeps_a_bare_modifier() {
+    let keystroke = dispatched("shift");
+    let native = NativeKey {
+        keycode: 50,
+        ..NativeKey::default()
+    };
+    let shift = KeyStroke::new(&keystroke, &Source::Native(native), false);
+    assert_eq!(crate::terminal::input::chord(&shift), None);
+    let (keymap, _) = parse_keymap("", &linux_defaults());
+    super::load_keymap(&keymap);
+    assert!(!super::takes(&shift));
+}
+
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_web_view_hands_over_the_keymap_commands_and_asking_changes_nothing() {
+    let (keymap, _) = parse_keymap(
+        "command \"x\" ctrl+shift+b true\ncommand \"g\" ctrl+a>g true\n",
+        &linux_defaults(),
+    );
+    super::load_keymap(&keymap);
+    assert!(super::takes(&stroke("ctrl-shift-b")));
+    assert!(
+        super::takes(&stroke("ctrl-a")),
+        "a leader's first chord is the keymap's"
+    );
+    assert!(!super::takes(&stroke("g")), "asking about the leader did not arm it");
+    assert_eq!(press_monitor("g", Instant::now()), Press::Passed);
+}
+
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_dispatched_key_is_released_for_the_monitor() {
+    let (keymap, _) = parse_keymap("", &linux_defaults());
+    super::load_keymap(&keymap);
+    let now = Instant::now();
+    assert!(matches!(
+        press_monitor("ctrl-shift-t", now),
+        Press::Fired(Fired::Builtin(_))
+    ));
+    assert_eq!(
+        press_monitor("ctrl-shift-t", now),
+        Press::Consumed,
+        "an autorepeat before the release"
+    );
+    super::release_dispatched(&dispatched("ctrl-shift-t"));
+    assert!(
+        super::release_simulated("ctrl-shift-t"),
+        "a late key-up listener still learns the release was the keymap's"
+    );
+    assert!(
+        matches!(press_monitor("ctrl-shift-t", now), Press::Fired(Fired::Builtin(_))),
+        "the next press is a new one, not an autorepeat"
+    );
+}
+
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn releasing_a_dispatched_repeat_tail_opens_its_repeat_window() {
+    let (keymap, _) = parse_keymap("command \"n\" ctrl+a>n --repeat true\n", &linux_defaults());
+    super::load_keymap(&keymap);
+    let now = Instant::now();
+    assert_eq!(press_monitor("ctrl-a", now), Press::Consumed);
+    assert!(matches!(press_monitor("n", now), Press::Fired(_)));
+    super::release_dispatched(&dispatched("n"));
+    assert!(
+        matches!(press_monitor("n", now), Press::Fired(_)),
+        "the tail fires again inside the window"
+    );
+    super::release_dispatched(&dispatched("n"));
+    let past = Instant::now() + super::REPEAT_TIMEOUT + Duration::from_millis(50);
+    assert_eq!(press_monitor("n", past), Press::Passed, "the window lapsed");
 }

@@ -49,4 +49,67 @@ mod tests {
         assert!(!is_network(&address));
         assert!(!requests_text_document("ngterm-text://page/other"));
     }
+
+    #[test]
+    fn a_relative_path_has_no_granted_address() {
+        assert_eq!(granted_address("site/a.html"), None);
+        assert_eq!(
+            granted_address("/tmp/a.html").as_deref(),
+            Some("ngterm-file://localhost/tmp/a.html")
+        );
+    }
+
+    #[test]
+    fn a_text_page_is_its_document_and_everything_under_it_a_resource() {
+        let document = text_address(Uuid::nil());
+        assert_eq!(document, "ngterm-text://00000000-0000-0000-0000-000000000000/");
+        assert!(requests_text_document(&document));
+        assert!(requests_text_document(&format!("{document}#line-3")));
+        assert!(!is_text_resource(&document));
+        for resource in [format!("{document}logo.png"), format!("{document}?page=2")] {
+            assert!(!requests_text_document(&resource), "{resource}");
+            assert!(is_text_resource(&resource), "{resource}");
+        }
+    }
+
+    #[test]
+    fn other_addresses_are_no_text_page() {
+        for uri in ["https://example.com/", "ngterm-file://localhost/", "not an address"] {
+            assert!(!requests_text_document(uri), "{uri}");
+            assert!(!is_text_resource(uri), "{uri}");
+        }
+    }
+
+    #[test]
+    fn a_replica_address_is_rooted_at_the_page_and_escapes_its_path() {
+        let page = "ngterm-page://00000000-0000-0000-0000-000000000000";
+        assert_eq!(
+            replica_address(Uuid::nil(), "/srv/a b%.html").unwrap(),
+            format!("{page}/srv/a%20b%25.html")
+        );
+        assert_eq!(
+            replica_address(Uuid::nil(), "a.html").unwrap(),
+            format!("{page}/a.html")
+        );
+    }
+
+    #[test]
+    fn the_app_sees_a_text_document_as_a_blank_page_keeping_its_fragment() {
+        let document = text_address(Uuid::nil());
+        assert_eq!(app_uri(&document), "about:blank");
+        assert_eq!(app_uri(&format!("{document}#line-3")), "about:blank#line-3");
+        assert_eq!(request_app_uri(&format!("{document}#line-3")), "about:blank#line-3");
+    }
+
+    #[test]
+    fn the_app_sees_other_addresses_as_they_are() {
+        for uri in [
+            "https://example.com/a?b#c",
+            "ngterm-text://page/logo.png",
+            "about:blank",
+        ] {
+            assert_eq!(app_uri(uri), uri);
+            assert_eq!(request_app_uri(uri), uri);
+        }
+    }
 }

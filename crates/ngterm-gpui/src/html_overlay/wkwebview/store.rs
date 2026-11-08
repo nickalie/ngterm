@@ -17,3 +17,7 @@ pub fn page_profile_folders(_: &Path) -> Vec<PathBuf> {
     Vec::new()
 }
 pub fn remove_later(_: PathBuf) {}
+
+#[cfg(test)]
+#[path = "store_tests.rs"]
+mod tests;
