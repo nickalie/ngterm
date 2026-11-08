@@ -30,7 +30,7 @@ fn selection_rejects_invalid_versions_and_asset_sizes() {
     let fixture = tempfile::tempdir().unwrap();
     let install = installation(fixture.path());
     assert_eq!(
-        select(&metadata("0.2.0"), &install, "bad", &Trust::default())
+        select(&metadata("0.2.0"), DOWNLOADS, &install, "bad", &Trust::default())
             .unwrap_err()
             .to_string(),
         Version::parse("bad").unwrap_err().to_string()
@@ -39,14 +39,14 @@ fn selection_rejects_invalid_versions_and_asset_sizes() {
         let mut release = metadata("0.2.0");
         release.tag_name = tag.into();
         assert_eq!(
-            select(&release, &install, "0.1.0", &Trust::default())
+            select(&release, DOWNLOADS, &install, "0.1.0", &Trust::default())
                 .unwrap_err()
                 .to_string(),
             "The release has an invalid version tag."
         );
     }
     assert!(
-        select(&metadata("0.2.0-rc.1"), &install, "0.1.0", &Trust::default())
+        select(&metadata("0.2.0-rc.1"), DOWNLOADS, &install, "0.1.0", &Trust::default())
             .unwrap()
             .is_none()
     );
@@ -54,7 +54,7 @@ fn selection_rejects_invalid_versions_and_asset_sizes() {
         let mut release = metadata("0.2.0");
         release.assets[index].size = size;
         assert_eq!(
-            select(&release, &install, "0.1.0", &Trust::default())
+            select(&release, DOWNLOADS, &install, "0.1.0", &Trust::default())
                 .unwrap_err()
                 .to_string(),
             "Release asset size is outside the supported range."
@@ -63,7 +63,9 @@ fn selection_rejects_invalid_versions_and_asset_sizes() {
     let mut release = metadata("0.2.0");
     release.assets[0].size = ASSET_LIMIT;
     release.assets[1].size = METADATA_LIMIT;
-    let selected = select(&release, &install, "0.1.0", &Trust::default()).unwrap().unwrap();
+    let selected = select(&release, DOWNLOADS, &install, "0.1.0", &Trust::default())
+        .unwrap()
+        .unwrap();
     assert_eq!(selected.version, Version::parse("0.2.0").unwrap());
     assert_eq!(selected.asset, release.assets[0].name);
     assert_eq!(selected.url, release.assets[0].browser_download_url);
@@ -321,4 +323,237 @@ fn image_prepare_keeps_the_original_file_when_transport_is_refused() {
     ));
     assert_eq!(fs::read_to_string(&root).unwrap(), "original image");
     assert_eq!(fs::read_dir(fixture.path()).unwrap().count(), 1);
+}
+
+// What follows runs `Source::check` and `Source::prepare` end to end over a release on 127.0.0.1 (`fakes::Server`),
+// into an installation tree in a temp directory: a Linux archive's, which only Linux accepts.
+
+#[cfg(target_os = "linux")]
+use crate::fakes;
+
+/// A Linux archive installation at `version` under `fixture`, found as the running one would be.
+#[cfg(target_os = "linux")]
+fn installed(fixture: &Path, version: &str) -> Installation {
+    let root = fixture.join("ngterm");
+    fakes::tree(&root, version).unwrap();
+    fakes::installation(&root.join("usr/bin/ngterm")).unwrap()
+}
+
+/// Asserts the installation under `fixture` still holds `version` and no stage was left beside it.
+#[cfg(target_os = "linux")]
+fn untouched(fixture: &Path, version: &str) {
+    assert_eq!(
+        fs::read_to_string(fixture.join("ngterm/usr/share/ngterm/app-BUILD")).unwrap(),
+        format!("{version}\ncommit\n")
+    );
+    assert_eq!(fs::read_dir(fixture).unwrap().count(), 1, "the stage is removed");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_newer_release_is_checked_downloaded_verified_and_staged_beside_the_installation() {
+    let fixture = tempfile::tempdir().unwrap();
+    let install = installed(fixture.path(), "0.1.0");
+    let server = fakes::Server::start().unwrap();
+    let archive = fakes::archive("0.2.0").unwrap();
+    server.publish_archive("0.2.0", &archive);
+    let source = server.source();
+    assert!(
+        source.check(&install, "0.2.0", &Trust::default()).unwrap().is_none(),
+        "the running version is current"
+    );
+    let release = source.check(&install, "0.1.0", &Trust::default()).unwrap().unwrap();
+    let asset = fakes::asset("0.2.0");
+    assert_eq!(release.version, Version::parse("0.2.0").unwrap());
+    assert_eq!(release.url, server.url(&format!("/download/v0.2.0/{asset}")));
+    assert_eq!(release.signature_url, None, "no key, no signature");
+    let mut events = Vec::new();
+    let prepared = source
+        .prepare(&install, &release, &Trust::default(), |count, size| {
+            events.push((count, size));
+            true
+        })
+        .unwrap();
+    let size = u64::try_from(archive.len()).unwrap();
+    assert_eq!(events.first(), Some(&(0, size)));
+    assert_eq!(events.last(), Some(&(size, size)));
+    assert_eq!(
+        server.requests(),
+        [
+            "/latest".to_owned(),
+            "/latest".to_owned(),
+            "/download/v0.2.0/SHA256SUMS".to_owned(),
+            format!("/download/v0.2.0/{asset}"),
+        ]
+    );
+    let stage = prepared.work.path().to_owned();
+    assert_eq!(stage.parent(), Some(fixture.path()), "staged beside the installation");
+    assert_eq!(prepared.candidate, stage.join("unpacked/ngterm"));
+    assert_eq!(
+        fs::read_to_string(prepared.candidate.join("usr/share/ngterm/app-BUILD")).unwrap(),
+        "0.2.0\ncommit\n"
+    );
+    assert!(!stage.join(&asset).exists(), "the archive is removed once unpacked");
+    assert_eq!(
+        fs::read_to_string(stage.join("expected-identity")).unwrap(),
+        "0.1.0\ncommit\n"
+    );
+    drop(prepared);
+    untouched(fixture.path(), "0.1.0");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_check_reports_transport_and_metadata_failures_with_their_messages() {
+    let fixture = tempfile::tempdir().unwrap();
+    let install = installed(fixture.path(), "0.1.0");
+    let server = fakes::Server::start().unwrap();
+    let source = server.source();
+    let check = |source: &Source| {
+        source
+            .check(&install, "0.1.0", &Trust::default())
+            .unwrap_err()
+            .to_string()
+    };
+    assert_eq!(check(&source), "http status: 404", "no release published");
+    server.route("/latest", "500 Internal Server Error", "busy");
+    assert_eq!(check(&source), "http status: 500");
+    server.route("/latest", "200 OK", "not json");
+    assert_eq!(
+        check(&source),
+        serde_json::from_str::<serde_json::Value>("not json")
+            .unwrap_err()
+            .to_string()
+    );
+    server.route("/latest", "200 OK", vec![b' '; 2 * 1024 * 1024 + 1]);
+    assert_eq!(check(&source), "Release metadata is too large.");
+    // a release whose assets live anywhere but under the source's downloads
+    let elsewhere = fakes::Server::start().unwrap();
+    elsewhere.publish_archive("0.2.0", b"archive");
+    server.route(
+        "/latest",
+        "200 OK",
+        ureq::get(&elsewhere.url("/latest"))
+            .call()
+            .unwrap()
+            .body_mut()
+            .read_to_vec()
+            .unwrap(),
+    );
+    assert_eq!(check(&source), "Release asset has an unexpected download URL.");
+    // a shipped build's agent never speaks plain HTTP, so it never even asks
+    let shipped = Source {
+        api: server.url("/latest"),
+        ..Source::github()
+    };
+    let before = server.requests().len();
+    assert!(check(&shipped).starts_with("configured for https only: "));
+    assert_eq!(server.requests().len(), before);
+    drop(server);
+    assert!(matches!(
+        source.check(&install, "0.1.0", &Trust::default()),
+        Err(Error::Http(_))
+    ));
+}
+
+/// The signed fixture manifest and its signature for v0.2.0 (tests.rs has how they were made).
+#[cfg(target_os = "linux")]
+const SIGNED_SUMS: &[u8] = include_bytes!("tests/minisign/SHA256SUMS");
+#[cfg(target_os = "linux")]
+const SIGNED_BY_TEST_KEY: &[u8] = include_bytes!("tests/minisign/SHA256SUMS.minisig");
+#[cfg(target_os = "linux")]
+const SIGNED_BY_OTHER_KEY: &[u8] = include_bytes!("tests/minisign/wrong-key.minisig");
+
+#[test]
+#[cfg(target_os = "linux")]
+fn prepare_refuses_a_manifest_whose_signature_is_missing_unreachable_or_from_another_key() {
+    const REFUSED: &str = "Release signature verification failed. The installation was not changed.";
+    let fixture = tempfile::tempdir().unwrap();
+    let install = installed(fixture.path(), "0.1.0");
+    let trust = keyed(TEST_KEY);
+    let server = fakes::Server::start().unwrap();
+    let source = server.source();
+    let asset = fakes::asset("0.2.0");
+    let prepare = |release: &Release| {
+        source
+            .prepare(&install, release, &trust, |_, _| true)
+            .unwrap_err()
+            .to_string()
+    };
+    // a release checked with no key carries no signature, so a build that trusts one refuses it
+    server.publish_archive("0.2.0", b"archive");
+    let unsigned = source.check(&install, "0.1.0", &Trust::default()).unwrap().unwrap();
+    assert_eq!(prepare(&unsigned), REFUSED);
+    untouched(fixture.path(), "0.1.0");
+    for (signature, expected) in [
+        (SIGNED_BY_OTHER_KEY, REFUSED.to_owned()),
+        (b"not a signature".as_slice(), REFUSED.to_owned()),
+        // signed by the trusted key: the manifest checks out and names the asset with another archive's hash
+        (
+            SIGNED_BY_TEST_KEY,
+            if cfg!(target_arch = "x86_64") {
+                "Downloaded release failed SHA-256 verification. The installation was not changed."
+            } else {
+                "Release checksum is missing or ambiguous."
+            }
+            .to_owned(),
+        ),
+    ] {
+        server.publish(
+            "0.2.0",
+            &[
+                (&asset, b"archive"),
+                ("SHA256SUMS", SIGNED_SUMS),
+                ("SHA256SUMS.minisig", signature),
+            ],
+        );
+        let release = source.check(&install, "0.1.0", &trust).unwrap().unwrap();
+        assert_eq!(
+            release.signature_url,
+            Some(server.url("/download/v0.2.0/SHA256SUMS.minisig"))
+        );
+        assert_eq!(prepare(&release), expected);
+        untouched(fixture.path(), "0.1.0");
+    }
+    server.route("/download/v0.2.0/SHA256SUMS.minisig", "404 Not Found", "");
+    let release = source.check(&install, "0.1.0", &trust).unwrap().unwrap();
+    assert_eq!(prepare(&release), "http status: 404");
+    untouched(fixture.path(), "0.1.0");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn prepare_refuses_an_archive_the_manifest_or_the_release_does_not_vouch_for() {
+    let fixture = tempfile::tempdir().unwrap();
+    let install = installed(fixture.path(), "0.1.0");
+    let server = fakes::Server::start().unwrap();
+    let source = server.source();
+    let asset = fakes::asset("0.2.0");
+    let archive = fakes::archive("0.2.0").unwrap();
+    let prepare = || {
+        let release = source.check(&install, "0.1.0", &Trust::default()).unwrap().unwrap();
+        let refused = source
+            .prepare(&install, &release, &Trust::default(), |_, _| true)
+            .unwrap_err()
+            .to_string();
+        untouched(fixture.path(), "0.1.0");
+        refused
+    };
+    let other = fakes::manifest(&[("ngterm-0.2.0-other.tar.gz", &archive)]);
+    server.publish("0.2.0", &[(&asset, &archive), ("SHA256SUMS", &other)]);
+    assert_eq!(prepare(), "Release checksum is missing or ambiguous.");
+    let stale = fakes::manifest(&[(&asset, b"another archive")]);
+    server.publish("0.2.0", &[(&asset, &archive), ("SHA256SUMS", &stale)]);
+    assert_eq!(
+        prepare(),
+        "Downloaded release failed SHA-256 verification. The installation was not changed."
+    );
+    // a verified archive of another version
+    server.publish_archive("0.2.0", &fakes::archive("0.3.0").unwrap());
+    assert_eq!(prepare(), "Downloaded archive identity does not match the release.");
+    server.publish_archive("0.2.0", &archive);
+    server.route(&format!("/download/v0.2.0/{asset}"), "404 Not Found", "");
+    assert_eq!(prepare(), "http status: 404");
+    server.route("/download/v0.2.0/SHA256SUMS", "503 Service Unavailable", "");
+    assert_eq!(prepare(), "http status: 503");
 }

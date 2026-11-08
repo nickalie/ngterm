@@ -62,19 +62,37 @@ fn an_install_replaced_while_the_app_was_running_is_never_downgraded() {
     let root = fixture.path().join("ngterm");
     tree(&root, "0.3.0");
     assert!(
-        download::select(&metadata("0.2.0"), &installation(&root), "0.1.0", &Trust::default())
-            .unwrap()
-            .is_none()
+        download::select(
+            &metadata("0.2.0"),
+            download::DOWNLOADS,
+            &installation(&root),
+            "0.1.0",
+            &Trust::default()
+        )
+        .unwrap()
+        .is_none()
     );
     assert!(
-        download::select(&metadata("0.3.0"), &installation(&root), "0.1.0", &Trust::default())
-            .unwrap()
-            .is_none()
+        download::select(
+            &metadata("0.3.0"),
+            download::DOWNLOADS,
+            &installation(&root),
+            "0.1.0",
+            &Trust::default()
+        )
+        .unwrap()
+        .is_none()
     );
     assert!(
-        download::select(&metadata("0.4.0"), &installation(&root), "0.1.0", &Trust::default())
-            .unwrap()
-            .is_some()
+        download::select(
+            &metadata("0.4.0"),
+            download::DOWNLOADS,
+            &installation(&root),
+            "0.1.0",
+            &Trust::default()
+        )
+        .unwrap()
+        .is_some()
     );
 }
 
@@ -245,34 +263,46 @@ pub(super) fn metadata(version: &str) -> Metadata {
 fn stable_selection_never_downgrades_or_uses_partial_releases() {
     let install = installation(Path::new("/tmp/ngterm"));
     assert!(
-        download::select(&metadata("0.2.0"), &install, "0.1.0", &Trust::default())
-            .unwrap()
-            .is_some()
+        download::select(
+            &metadata("0.2.0"),
+            download::DOWNLOADS,
+            &install,
+            "0.1.0",
+            &Trust::default()
+        )
+        .unwrap()
+        .is_some()
     );
     for version in ["0.1.0", "0.0.9"] {
         assert!(
-            download::select(&metadata(version), &install, "0.1.0", &Trust::default())
-                .unwrap()
-                .is_none()
+            download::select(
+                &metadata(version),
+                download::DOWNLOADS,
+                &install,
+                "0.1.0",
+                &Trust::default()
+            )
+            .unwrap()
+            .is_none()
         );
     }
     let mut preview = metadata("0.2.0");
     preview.prerelease = true;
     assert!(
-        download::select(&preview, &install, "0.1.0", &Trust::default())
+        download::select(&preview, download::DOWNLOADS, &install, "0.1.0", &Trust::default())
             .unwrap()
             .is_none()
     );
     let mut draft = metadata("0.2.0");
     draft.draft = true;
     assert!(
-        download::select(&draft, &install, "0.1.0", &Trust::default())
+        download::select(&draft, download::DOWNLOADS, &install, "0.1.0", &Trust::default())
             .unwrap()
             .is_none()
     );
     let mut incomplete = metadata("0.2.0");
     incomplete.assets.pop();
-    assert!(download::select(&incomplete, &install, "0.1.0", &Trust::default()).is_err());
+    assert!(download::select(&incomplete, download::DOWNLOADS, &install, "0.1.0", &Trust::default()).is_err());
 }
 
 #[test]
@@ -280,14 +310,14 @@ fn selection_rejects_external_assets_and_duplicate_manifests() {
     let install = installation(Path::new("/tmp/ngterm"));
     let mut release = metadata("0.2.0");
     release.assets[0].browser_download_url = "https://example.com/evil.tar.gz".into();
-    assert!(download::select(&release, &install, "0.1.0", &Trust::default()).is_err());
+    assert!(download::select(&release, download::DOWNLOADS, &install, "0.1.0", &Trust::default()).is_err());
     let mut release = metadata("0.2.0");
     release.assets.push(Asset {
         name: "SHA256SUMS".into(),
         browser_download_url: String::new(),
         size: 100,
     });
-    assert!(download::select(&release, &install, "0.1.0", &Trust::default()).is_err());
+    assert!(download::select(&release, download::DOWNLOADS, &install, "0.1.0", &Trust::default()).is_err());
 }
 
 // The minisign fixtures in tests/minisign/, made with the minisign CLI (0.12) and two test-only keys whose secret
@@ -372,10 +402,16 @@ fn with_a_key_selection_requires_the_signature_asset() {
     let install = installation(Path::new("/tmp/ngterm"));
     let trust = keyed(TEST_KEY);
     // no SHA256SUMS.minisig: refused with a key, fine without
-    assert!(download::select(&metadata("0.2.0"), &install, "0.1.0", &trust).is_err());
-    let release = download::select(&metadata("0.2.0"), &install, "0.1.0", &Trust::default())
-        .unwrap()
-        .unwrap();
+    assert!(download::select(&metadata("0.2.0"), download::DOWNLOADS, &install, "0.1.0", &trust).is_err());
+    let release = download::select(
+        &metadata("0.2.0"),
+        download::DOWNLOADS,
+        &install,
+        "0.1.0",
+        &Trust::default(),
+    )
+    .unwrap()
+    .unwrap();
     assert!(release.signature_url.is_none());
     let mut signed = metadata("0.2.0");
     let signature = |url: String, size| Asset {
@@ -385,21 +421,23 @@ fn with_a_key_selection_requires_the_signature_asset() {
     };
     let url = "https://github.com/nickalie/ngterm/releases/download/v0.2.0/SHA256SUMS.minisig".to_string();
     signed.assets.push(signature(url.clone(), 300));
-    let release = download::select(&signed, &install, "0.1.0", &trust).unwrap().unwrap();
+    let release = download::select(&signed, download::DOWNLOADS, &install, "0.1.0", &trust)
+        .unwrap()
+        .unwrap();
     assert_eq!(release.signature_url.as_deref(), Some(url.as_str()));
     // from somewhere else, too large, or twice
     let mut external = metadata("0.2.0");
     external
         .assets
         .push(signature("https://example.com/SHA256SUMS.minisig".into(), 300));
-    assert!(download::select(&external, &install, "0.1.0", &trust).is_err());
+    assert!(download::select(&external, download::DOWNLOADS, &install, "0.1.0", &trust).is_err());
     let mut large = metadata("0.2.0");
     large.assets.push(signature(url.clone(), 1 << 20));
-    assert!(download::select(&large, &install, "0.1.0", &trust).is_err());
+    assert!(download::select(&large, download::DOWNLOADS, &install, "0.1.0", &trust).is_err());
     let mut twice = metadata("0.2.0");
     twice.assets.push(signature(url.clone(), 300));
     twice.assets.push(signature(url, 300));
-    assert!(download::select(&twice, &install, "0.1.0", &trust).is_err());
+    assert!(download::select(&twice, download::DOWNLOADS, &install, "0.1.0", &trust).is_err());
 }
 
 #[test]

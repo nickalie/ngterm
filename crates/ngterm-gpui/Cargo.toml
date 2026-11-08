@@ -143,6 +143,8 @@ embed-resource.workspace = true
 
 [dev-dependencies]
 ngterm-host = { workspace = true, features = ["fakes"] }
+# the updater's tests check for, download and stage a local release (src/updater.rs)
+ngterm-update = { workspace = true, features = ["fakes"] }
 gpui-kit = { workspace = true, features = ["test-support"] }
 gpui-pre-wgpu.workspace = true
 

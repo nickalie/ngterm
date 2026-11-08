@@ -1,7 +1,10 @@
 //! Release updates are opt-in at packaging time. Developer and package-manager builds have no marker.
 //! Downloads are verified before extraction; installation replaces a complete tree with rollback on failure.
+//! Releases come from GitHub alone ([`Source::github`]); [`fakes`] (feature `fakes`) serves tests a local one.
 
 mod download;
+#[cfg(any(test, feature = "fakes"))]
+pub mod fakes;
 mod install;
 mod staging;
 
@@ -10,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use semver::Version;
 
-pub use download::{Release, check, prepare};
+pub use download::{Release, Source, check, prepare};
 pub use install::Prepared;
 
 /// The release signing keys this build trusts. A build trusts exactly what its source commit's `trust/` directory
