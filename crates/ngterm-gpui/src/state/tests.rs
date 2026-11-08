@@ -1181,6 +1181,9 @@ fn sidebar_width_rounds_clamps_and_ignores_missing_windows() {
     assert!((state.core.library().store(window).unwrap().sidebar().width - 300.0).abs() < f64::EPSILON);
     state.sidebar_resized(window, 300.49);
     assert!((state.core.library().store(window).unwrap().sidebar().width - 300.0).abs() < f64::EPSILON);
+    // to the nearest pixel, not down
+    state.sidebar_resized(window, 300.6);
+    assert!((state.core.library().store(window).unwrap().sidebar().width - 301.0).abs() < f64::EPSILON);
     state.sidebar_resized(window, 0.0);
     assert!(
         (state.core.library().store(window).unwrap().sidebar().width - ngterm_core::model::SIDEBAR_WIDTH_MIN).abs()
@@ -1249,9 +1252,11 @@ fn a_deferred_step_can_wait_again_and_panics_answer_the_socket() {
 
 #[test]
 fn a_detached_loop_drops_tasks_and_deferred_replies_answer_shutting_down() {
-    let (mut state, _, _) = state_with_terminal();
-    post(state.poster(), AppState::request_quit);
-    assert!(!state.take_frontend_work().quit);
+    let (state, _, _) = state_with_terminal();
+    let held = Arc::new(());
+    let in_task = Arc::clone(&held);
+    post(state.poster(), move |_| drop(in_task));
+    assert_eq!(Arc::strong_count(&held), 1, "the task is dropped, not kept");
     let (reply, sender) = Reply::deferred();
     state.schedule(
         Command::Tree,
@@ -1361,6 +1366,18 @@ fn builtin_frontend_actions_keep_their_window_and_soft_close_setting() {
     assert_eq!(
         state.take_frontend_work().actions,
         [(FrontendAction::ToggleFullscreen(window), true)]
+    );
+    state
+        .core
+        .update_settings(|settings| settings.close_grace_undo_enabled = Some(false));
+    state.keymap_fired(
+        KeyOrigin::Window(window),
+        Fired::Builtin(BuiltinAction::ToggleFullscreen),
+        None,
+    );
+    assert_eq!(
+        state.take_frontend_work().actions,
+        [(FrontendAction::ToggleFullscreen(window), false)]
     );
     state.save_on_quit();
     state.keymap_fired(
@@ -1503,7 +1520,6 @@ fn a_closed_loop_releases_deferred_replies_and_inbound_stream_capacity() {
     let (mut state, _, _) = state_with_terminal();
     let main_loop: Arc<dyn MainLoop<AppState>> = Arc::new(ClosedLoop);
     state.poster = Arc::downgrade(&main_loop);
-    post(state.poster(), AppState::request_quit);
     let (reply, sender) = Reply::deferred();
     state.schedule(
         Command::Tree,
@@ -1515,38 +1531,66 @@ fn a_closed_loop_releases_deferred_replies_and_inbound_stream_capacity() {
         reply.settled().response,
         ngterm_proto::Response::from(ControlError::ShuttingDown)
     );
+    // a line the loop refused frees its place at once: one more than the limit gets through without blocking
     let mut reader = presentation_reader(state.poster.clone(), 1);
-    for _ in 0..=ngterm_core::remote::INBOUND_LIMIT {
-        reader(b"ignored".to_vec());
-    }
-    assert!(!state.take_frontend_work().quit);
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for _ in 0..=ngterm_core::remote::INBOUND_LIMIT {
+            reader(b"ignored".to_vec());
+        }
+        done.send(()).unwrap();
+    });
+    finished
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the reader waits on capacity a closed loop never gives back");
 }
 
 #[test]
 fn presentation_lines_and_closes_are_main_loop_work_and_stand_down_after_quit() {
-    let (mut state, _, _) = state_with_terminal();
+    let (mut state, _, session) = state_with_live_terminal();
     let (main_loop, _held) = record(&mut state);
-    let mut reader = presentation_reader(state.poster.clone(), 0);
-    reader(b"invalid frame".to_vec());
-    presentation_closer(state.poster.clone(), 0)();
+    let hello = br#"{"kind":"hello","gen":0,"rev":0,"hello":{"version":1,"kinds":["status"],"mode":"mirror"}}"#;
+    let viewer = Presenter::default();
+    let serial = state
+        .core
+        .adopt_presentation_stream(&session.to_string(), Box::new(viewer.clone()));
+    presentation_reader(state.poster.clone(), serial)(hello.to_vec());
+    assert!(viewer.0.borrow().is_empty(), "the line waits for the loop");
     let posted = main_loop.take();
-    assert_eq!(posted.len(), 2);
+    assert_eq!(posted.len(), 1);
     for (_, task) in posted {
         task(&mut state);
     }
-    assert!(!state.core.has_presentation_streams());
-    state.save_on_quit();
-    for _ in 0..=ngterm_core::remote::INBOUND_LIMIT {
-        reader(b"ignored while quitting".to_vec());
-        for (_, task) in main_loop.take() {
-            task(&mut state);
-        }
-    }
-    presentation_closer(state.poster.clone(), 0)();
+    assert_eq!(viewer.last("hello")["kind"], "hello", "the hello subscribed the viewer");
+    presentation_closer(state.poster.clone(), serial)();
+    assert!(state.core.has_presentation_streams(), "the close waits for the loop");
     for (_, task) in main_loop.take() {
         task(&mut state);
     }
     assert!(!state.core.has_presentation_streams());
+
+    let late = Presenter::default();
+    let serial = state
+        .core
+        .adopt_presentation_stream(&session.to_string(), Box::new(late.clone()));
+    state.save_on_quit();
+    // every line is answered by the loop's release, so more than the limit never blocks the reader
+    let mut reader = presentation_reader(state.poster.clone(), serial);
+    for _ in 0..=ngterm_core::remote::INBOUND_LIMIT {
+        reader(hello.to_vec());
+        for (_, task) in main_loop.take() {
+            task(&mut state);
+        }
+    }
+    assert!(late.0.borrow().is_empty(), "lines after quit are not read");
+    presentation_closer(state.poster.clone(), serial)();
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    assert!(
+        state.core.has_presentation_streams(),
+        "a close after quit is left to the exit"
+    );
 }
 
 fn state_with_live_terminal() -> (AppState, Uuid, Uuid) {
@@ -1611,36 +1655,83 @@ fn a_presentation_handoff_streams_hello_and_snapshot_then_releases_on_disconnect
     assert!(!state.core.has_presentation_streams());
 }
 
-#[test]
-fn presentation_deadlines_and_heartbeats_stop_after_the_last_stream_or_quit() {
-    let (mut state, _, session) = state_with_live_terminal();
-    let (main_loop, _held) = record(&mut state);
+/// Presents `session` to a viewer: the stream's owner, and the hello deadline and heartbeat it armed, in that order
+/// (both wait the same 10 seconds, so the order is what tells them apart).
+fn present(
+    state: &mut AppState,
+    main_loop: &RecordingLoop<AppState>,
+    session: Uuid,
+) -> (
+    Box<dyn ngterm_server::StreamOwner>,
+    MainTask<AppState>,
+    MainTask<AppState>,
+) {
     let mut reply = state.handle_request(&Request {
         target: Some(session.to_string()),
         ..Request::new(Command::Live(LiveCmd::Present))
     });
     assert!(reply.response.ok, "{:?}", reply.response);
+    let timers: Vec<_> = main_loop
+        .take()
+        .into_iter()
+        .filter(|(delay, _)| *delay == Some(ngterm_core::remote::HELLO_DEADLINE))
+        .map(|(_, task)| task)
+        .collect();
+    let Ok([deadline, heartbeat]) = <[_; 2]>::try_from(timers) else {
+        panic!("a presentation arms its hello deadline and the heartbeat");
+    };
+    (reply.stream.take().unwrap(), deadline, heartbeat)
+}
+
+/// Whether `posted` holds a re-armed heartbeat.
+fn heartbeat_posted(posted: &[(Option<Duration>, MainTask<AppState>)]) -> bool {
+    posted
+        .iter()
+        .any(|(delay, _)| *delay == Some(ngterm_core::remote::HEARTBEAT_INTERVAL))
+}
+
+#[test]
+fn presentation_deadlines_and_heartbeats_stop_after_the_last_stream_or_quit() {
+    use std::io::Read as _;
+    let (mut state, _, session) = state_with_live_terminal();
+    let (main_loop, _held) = record(&mut state);
+    let (owner, deadline, heartbeat) = present(&mut state, &main_loop, session);
     assert!(state.core.has_presentation_streams());
-    let posted = main_loop.take();
     state.arm_presentation_heartbeat();
     assert!(main_loop.take().is_empty(), "the existing heartbeat is not duplicated");
-    for (delay, task) in posted {
-        if delay == Some(ngterm_core::remote::HELLO_DEADLINE) {
-            task(&mut state);
-        }
-    }
-    reply.stream.take().unwrap().abandon();
+    heartbeat(&mut state);
+    let rearmed = main_loop.take();
+    assert!(heartbeat_posted(&rearmed), "the heartbeat re-arms while a stream is up");
+    assert!(state.heartbeat_armed);
+
+    // a viewer that sends no hello is closed at its deadline
+    let (server, mut peer) = ngterm_server::endpoint::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let worker = std::thread::spawn(move || owner.adopt(server, Vec::new()));
+    deadline(&mut state);
+    assert_eq!(peer.read(&mut [0; 64]).unwrap(), 0, "the deadline closed the stream");
+    worker.join().unwrap();
     for (_, task) in main_loop.take() {
         task(&mut state);
     }
     assert!(!state.core.has_presentation_streams());
-    state.save_on_quit();
-    state.heartbeat_armed = false;
-    state.arm_presentation_heartbeat();
-    for (_, task) in main_loop.take() {
+    for (_, task) in rearmed {
         task(&mut state);
     }
+    assert!(
+        !heartbeat_posted(&main_loop.take()),
+        "no stream is left to keep the heartbeat"
+    );
     assert!(!state.heartbeat_armed);
+
+    // the quit stops the heartbeat while the stream it closed waits for its close
+    let (owner, _, heartbeat) = present(&mut state, &main_loop, session);
+    state.save_on_quit();
+    assert!(state.core.has_presentation_streams());
+    heartbeat(&mut state);
+    assert!(main_loop.take().is_empty());
+    assert!(!state.heartbeat_armed);
+    owner.abandon();
 }
 
 #[test]
@@ -2061,21 +2152,21 @@ fn the_remotes_watch_refreshes_the_model_and_stops_on_drop() {
     state.watch_remotes();
     assert!(state.remotes_watcher.is_some());
     // The watch's first callback is sent after its OS watch has been armed.
-    run_until(&mut state, &main_loop, |state| {
-        !state.core.configured_remotes().is_empty()
-    });
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let tasks = main_loop.take();
-        if !tasks.is_empty() {
-            for (_, task) in tasks {
-                task(&mut state);
+    let next_callback = |state: &mut AppState, what: &str| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let tasks = main_loop.take();
+            if !tasks.is_empty() {
+                for (_, task) in tasks {
+                    task(state);
+                }
+                return;
             }
-            break;
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::yield_now();
         }
-        assert!(Instant::now() < deadline, "watch never armed");
-        std::thread::yield_now();
-    }
+    };
+    next_callback(&mut state, "watch never armed");
     std::fs::write(&path, "studio\nlaptop\n").unwrap();
     run_until(&mut state, &main_loop, |state| {
         state.core.configured_remotes().len() == 2
@@ -2083,15 +2174,18 @@ fn the_remotes_watch_refreshes_the_model_and_stops_on_drop() {
     assert_eq!(state.core.watched_remotes_path(), path);
     state.save_on_quit();
     std::fs::write(&path, "studio\n").unwrap();
-    drop(state.remotes_watcher.take());
-    for (_, task) in main_loop.take() {
-        task(&mut state);
-    }
+    next_callback(&mut state, "the write after quit was not seen");
     assert_eq!(
         state.core.configured_remotes().len(),
         2,
         "quit ignores late watch callbacks"
     );
+    // the callbacks of that burst stop with the watch: the drop joins its thread
+    drop(state.remotes_watcher.take());
+    drop(main_loop.take());
+    std::fs::write(&path, "studio\nlaptop\nbuild\n").unwrap();
+    std::thread::sleep(crate::remotes_watcher::DEBOUNCE * 6);
+    assert!(main_loop.take().is_empty(), "a dropped watch sends nothing");
 }
 
 #[test]
@@ -2146,9 +2240,12 @@ fn window_state_zoom_and_user_activity_reach_the_model() {
     );
     state.exit_zoom(window);
     assert!(state.core.zoom_target(window).is_none());
-    state.quick_keystroke();
     state.overlay_keystroke(session);
     assert!(state.core.tree(None).unwrap().idle_ms.is_some());
+    let (mut quick, _, _) = state_with_terminal();
+    assert!(quick.core.tree(None).unwrap().idle_ms.is_none());
+    quick.quick_keystroke();
+    assert!(quick.core.tree(None).unwrap().idle_ms.is_some());
     state.save_on_quit();
     state.window_state_changed(window, ngterm_core::WindowState::default());
     assert_eq!(state.core.window_state(window), Some(changed));
@@ -2176,26 +2273,45 @@ fn the_remote_tick_rearms_while_a_host_picker_waits_and_stops_after_cancel() {
     state.settle();
     let id = state.core.tree(None).unwrap().pick_pending.unwrap();
     let first = main_loop.take();
+    assert!(state.remote_tick_armed);
     state.arm_remote_tick();
     assert!(main_loop.take().is_empty(), "a waiting picker has one tick");
     for (_, task) in first {
         task(&mut state);
     }
     assert!(state.core.modal_pending(window));
+    let second = main_loop.take();
+    assert!(second.iter().any(|(delay, _)| delay.is_some()), "the tick re-armed");
+    assert!(state.remote_tick_armed);
     state.resolve_pick(
         window,
         &id,
         ngterm_proto::ControlPickResult::outcome(ngterm_proto::ControlPickOutcome::Cancelled),
     );
-    for (_, task) in main_loop.take() {
-        task(&mut state);
-    }
     assert!(!state.core.modal_pending(window));
-    assert_eq!(state.core.remote_wake(), None);
-    state.save_on_quit();
-    for (_, task) in main_loop.take() {
+    for (_, task) in second.into_iter().chain(main_loop.take()) {
         task(&mut state);
     }
+    assert_eq!(state.core.remote_wake(), None);
+    assert!(main_loop.take().is_empty(), "nothing remote waits: the tick stops");
+    assert!(!state.remote_tick_armed);
+}
+
+#[test]
+fn a_remote_tick_armed_before_the_quit_does_not_rearm_after_it() {
+    let (mut state, window, _) = state_with_terminal();
+    let dir = tempfile::tempdir().unwrap();
+    configure_remote_choices(&mut state, dir.path());
+    let (main_loop, _held) = record(&mut state);
+    state.core.attach_remote(window);
+    state.settle();
+    let armed = main_loop.take();
+    assert!(state.remote_tick_armed);
+    state.save_on_quit();
+    for (_, task) in armed {
+        task(&mut state);
+    }
+    assert!(main_loop.take().is_empty());
     assert!(!state.remote_tick_armed);
 }
 
