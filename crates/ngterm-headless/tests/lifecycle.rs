@@ -21,7 +21,7 @@ impl Fixture {
             let bin = root.path().join("stage/bin");
             std::fs::create_dir_all(&bin)?;
             let target = bin.join("ngterm-headless");
-            std::fs::copy(source, &target)?;
+            ngterm_host::fakes::copy_executable(source, &target)?;
             let share = root.path().join("stage/share");
             std::fs::create_dir_all(&share)?;
             std::os::unix::fs::symlink(

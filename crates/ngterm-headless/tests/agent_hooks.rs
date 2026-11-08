@@ -122,7 +122,7 @@ fn stage(root: &Path) -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::other("the binary has no name"))?;
     let binary = bin.join(name);
     if fs::hard_link(source, &binary).is_err() {
-        fs::copy(source, &binary)?;
+        ngterm_host::fakes::copy_executable(source, &binary)?;
     }
     let resources = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources");
     for relative in ["agent-status", "skills/ngterm"] {

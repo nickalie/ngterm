@@ -111,7 +111,7 @@ fn a_missing_session_executable_refuses_live_with_the_probe_reason() {
 fn a_failed_reset_restart_removes_the_armed_marker() {
     let dir = tempfile::tempdir().unwrap();
     let binary = dir.path().join("restart-test");
-    std::fs::copy(std::env::current_exe().unwrap(), &binary).unwrap();
+    ngterm_host::fakes::copy_executable(&std::env::current_exe().unwrap(), &binary).unwrap();
     let mut command = std::process::Command::new(&binary);
     command
         .args(["--exact", "tests::reset_restart_child", "--nocapture"])
@@ -231,7 +231,7 @@ fn a_staged_session_build_is_installed_without_starting_an_absent_server() {
         .into_iter()
         .find(|tool| Path::new(tool).exists())
         .unwrap();
-    std::fs::copy(inert, &binary).unwrap();
+    ngterm_host::fakes::copy_executable(Path::new(inert), &binary).unwrap();
     ngterm_session::build_id::Staged::write_beside(&binary, "coverage-build").unwrap();
     let env = env(dir.path()).with("NGTERM_SESSION_PATH", &binary);
     let mut core = Core::new(
