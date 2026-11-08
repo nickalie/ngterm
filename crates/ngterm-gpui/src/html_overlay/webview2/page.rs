@@ -73,6 +73,9 @@ struct PageState {
     shown_url: Option<Url>,
     storage_failure: Option<String>,
     prompt: Option<Entity<Alert>>,
+    /// Counts the prompts the page opened, so an answer reaches only the prompt it belongs to: a withdrawal answers
+    /// its prompt late, after another may have taken its place.
+    prompt_serial: u64,
     /// A declined prompt silences the page until real input reaches it: script can click links in a loop, but it
     /// cannot make trusted pointer or key events.
     prompts_silenced: bool,
@@ -178,6 +181,7 @@ impl Page {
                 shown_url: None,
                 storage_failure,
                 prompt: None,
+                prompt_serial: 0,
                 prompts_silenced: false,
                 on_screen: false,
                 life: Life::Active,
@@ -1103,13 +1107,18 @@ impl Page {
             field: None,
         };
         let page = self.me.clone();
+        let serial = {
+            let mut state = self.state.borrow_mut();
+            state.prompt_serial += 1;
+            state.prompt_serial
+        };
         let opened = window.update(cx, |_, window, cx| {
             crate::modal::open_alert(
                 window,
                 spec,
                 move |answer, _, _| {
                     if let Some(page) = page.upgrade() {
-                        page.answer_prompt(&url, answer.button == 1);
+                        page.answer_prompt(serial, &url, answer.button == 1);
                     }
                 },
                 cx,
@@ -1120,12 +1129,14 @@ impl Page {
         }
     }
 
-    fn answer_prompt(&self, url: &Url, approved: bool) {
+    /// Prompt `serial`'s answer; one the page no longer holds (withdrawn, or replaced since) changes nothing.
+    fn answer_prompt(&self, serial: u64, url: &Url, approved: bool) {
         {
             let mut state = self.state.borrow_mut();
-            if state.prompt.take().is_none() {
+            if state.prompt.is_none() || state.prompt_serial != serial {
                 return;
             }
+            state.prompt = None;
             if !approved {
                 state.prompts_silenced = true;
             }
@@ -1135,11 +1146,14 @@ impl Page {
         }
     }
 
-    /// Withdraws the page's prompt, unanswered.
+    /// Withdraws the page's prompt, unanswered. The alert goes once the current effects end: the deck hides pages
+    /// while it updates their window, which GPUI cannot update again inside that.
     fn end_prompt(&self, cx: &mut App) {
         let prompt = self.state.borrow_mut().prompt.take();
         if let (Some(alert), Some(window)) = (prompt, self.window.get()) {
-            let _ = window.update(cx, |_, window, cx| crate::modal::withdraw_alert(&alert, window, cx));
+            cx.defer(move |cx| {
+                let _ = window.update(cx, |_, window, cx| crate::modal::withdraw_alert(&alert, window, cx));
+            });
         }
     }
 
@@ -1222,5 +1236,79 @@ mod tests {
         assert_eq!(error_text(13), "the server's name could not be resolved");
         assert_eq!(error_text(12), "could not connect to the server");
         assert_eq!(error_text(999), "the page could not be loaded");
+    }
+
+    /// A loop already gone: what the page posts is dropped.
+    struct Closed;
+
+    impl ngterm_host::MainLoop<AppState> for Closed {
+        fn post(&self, _: ngterm_host::MainTask<AppState>) -> Result<(), ngterm_host::MainLoopClosed> {
+            Err(ngterm_host::MainLoopClosed)
+        }
+
+        fn post_after(
+            &self,
+            _: std::time::Duration,
+            _: ngterm_host::MainTask<AppState>,
+        ) -> Result<(), ngterm_host::MainLoopClosed> {
+            Err(ngterm_host::MainLoopClosed)
+        }
+    }
+
+    fn alert_open(cx: &mut gpui_kit::VisualTestContext) -> bool {
+        cx.update(|window, cx| crate::modal::alert_open(window.window_handle(), cx))
+    }
+
+    #[gpui_kit::test]
+    fn hiding_a_page_withdraws_its_prompt_and_spares_one_that_replaced_it(cx: &mut gpui_kit::TestAppContext) {
+        let cx = crate::modal::tests::host(cx);
+        let overlay = HtmlOverlay::new(
+            HtmlSource::Url(Url::parse("https://example.invalid/start").unwrap()),
+            ngterm_core::html::HtmlPageFlags::default(),
+        );
+        let colors = PanelColors::resolve(&TerminalColors::default(), None);
+        let poster: Poster = std::sync::Weak::<Closed>::new();
+        let page = Page::new(&overlay, None, colors, Storage::Ephemeral, &poster);
+        page.drawn_in(cx.update(|window, _| window.window_handle()));
+        cx.update(|_, cx| page.apply(&overlay, true, cx));
+        let link = Url::parse("https://outside.invalid/path").unwrap();
+        let ask = |cx: &mut App| {
+            let page = page.me.clone();
+            let link = link.clone();
+            cx.defer(move |cx| page.upgrade().unwrap().ask_to_open(link, cx));
+        };
+        cx.update(|_, cx| ask(cx));
+        cx.run_until_parked();
+        assert!(alert_open(cx));
+        // the deck applies visibility while its window is being updated
+        cx.update(|_, cx| page.apply(&overlay, false, cx));
+        cx.run_until_parked();
+        assert!(!alert_open(cx), "a hidden page's prompt goes");
+        // a hand-off asked before a hide and a show in one flush opens its prompt before the hide withdraws the first
+        cx.update(|_, cx| page.apply(&overlay, true, cx));
+        cx.update(|_, cx| ask(cx));
+        cx.run_until_parked();
+        let first = cx
+            .update(|window, cx| crate::modal::front_alert(window.window_handle(), cx))
+            .unwrap();
+        cx.update(|_, cx| {
+            ask(cx);
+            page.apply(&overlay, false, cx);
+            page.apply(&overlay, true, cx);
+        });
+        cx.run_until_parked();
+        let second = cx
+            .update(|window, cx| crate::modal::front_alert(window.window_handle(), cx))
+            .unwrap();
+        assert_ne!(first, second);
+        // the page still holds the new prompt: hiding withdraws it, unanswered, so the page asks again once shown
+        cx.update(|_, cx| page.apply(&overlay, false, cx));
+        cx.run_until_parked();
+        assert!(!alert_open(cx), "the replacing prompt goes with the page");
+        cx.update(|_, cx| page.apply(&overlay, true, cx));
+        cx.update(|_, cx| ask(cx));
+        cx.run_until_parked();
+        assert!(alert_open(cx), "no withdrawal silenced the page");
+        cx.update(|window, cx| assert!(crate::modal::answer_front_alert(window, "Cancel", cx)));
     }
 }
