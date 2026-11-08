@@ -1365,3 +1365,7 @@ mod tests {
         assert!((size.width - 1.0).abs() < f64::EPSILON && (size.height - 300.5).abs() < f64::EPSILON);
     }
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod native_tests;

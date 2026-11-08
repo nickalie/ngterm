@@ -208,3 +208,80 @@ fn a_display_without_a_global_hotkey_says_so_once(cx: &mut gpui_kit::TestAppCont
         "said once"
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn keymap_sync_changes_the_real_windows_hotkey_in_a_child() {
+    crate::system_window::tests::run_child("global_hotkey::tests::windows_registration_child");
+}
+
+#[cfg(windows)]
+#[gpui_kit::test]
+#[ignore = "run by keymap_sync_changes_the_real_windows_hotkey_in_a_child"]
+fn windows_registration_child(cx: &mut gpui_kit::TestAppContext) {
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        MOD_ALT, MOD_CONTROL, MOD_SHIFT, RegisterHotKey, UnregisterHotKey, VK_F20,
+    };
+
+    if !crate::system_window::tests::is_child("global_hotkey::tests::windows_registration_child") {
+        return;
+    }
+    let flags = MOD_CONTROL | MOD_ALT | MOD_SHIFT;
+    let probe = || {
+        // SAFETY: a thread-owned registration with no HWND and an id private to this test thread.
+        let registered = unsafe { RegisterHotKey(std::ptr::null_mut(), 0x601, flags, u32::from(VK_F20)) } != 0;
+        if registered {
+            // SAFETY: releasing the registration just taken above.
+            assert_ne!(unsafe { UnregisterHotKey(std::ptr::null_mut(), 0x601) }, 0);
+        }
+        registered
+    };
+    assert!(probe(), "the test chord must initially be available");
+    let poster = crate::state::detached_poster();
+    let mut hotkey = GlobalHotkey::default();
+    cx.update(|cx| hotkey.sync(None, &poster, cx));
+    assert!(probe(), "an empty keymap reserves no chord");
+    let wanted = chord("ctrl+alt+shift+f20");
+    cx.update(|cx| hotkey.sync(Some(&wanted), &poster, cx));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while probe() {
+        assert!(Instant::now() < deadline, "keymap sync did not reserve its chord");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    cx.update(|cx| hotkey.sync(Some(&wanted), &poster, cx));
+    cx.update(|cx| hotkey.sync(None, &poster, cx));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !probe() {
+        assert!(
+            Instant::now() < deadline,
+            "clearing the keymap did not release its chord"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(windows)]
+#[gpui_kit::test]
+fn the_windows_press_callback_posts_the_toggle_onto_the_main_loop(cx: &mut gpui_kit::TestAppContext) {
+    use ngterm_host::MainLoop;
+    use std::sync::Arc;
+
+    let main_loop = Arc::new(crate::main_loop::GpuiMainLoop::<AppState>::new(cx.executor()));
+    let owner: Arc<dyn MainLoop<AppState>> = main_loop.clone();
+    let callback = Arc::new(fired(&Arc::downgrade(&owner)));
+    let tasks = main_loop.tasks();
+    let on_thread = Arc::clone(&callback);
+    std::thread::spawn(move || on_thread()).join().unwrap();
+    let mut state = AppState::new(core());
+    assert!(
+        !state.core.quick_visible(),
+        "the callback only posts; it cannot mutate the state on its thread"
+    );
+    tasks.try_recv().unwrap()(&mut state);
+    assert!(state.core.quick_visible());
+    assert!(tasks.try_recv().is_err(), "one press posts one toggle");
+    main_loop.close();
+    callback();
+    assert!(tasks.try_recv().is_err(), "a press after shutdown queues nothing");
+}

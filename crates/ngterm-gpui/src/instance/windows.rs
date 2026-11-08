@@ -242,3 +242,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "windows_failure_tests.rs"]
+mod failure_tests;

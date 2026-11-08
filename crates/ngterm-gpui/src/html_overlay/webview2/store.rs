@@ -113,3 +113,7 @@ mod tests {
         assert!(page_profile_folders(&dir.path().join("missing")).is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "store_removal_tests.rs"]
+mod removal_tests;

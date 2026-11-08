@@ -321,10 +321,8 @@ mod tests {
     use super::*;
 
     /// A window's root view that draws nothing.
-    #[cfg(target_os = "linux")]
     struct Blank;
 
-    #[cfg(target_os = "linux")]
     impl gpui_kit::Render for Blank {
         fn render(&mut self, _: &mut Window, _: &mut gpui_kit::Context<Self>) -> impl gpui_kit::IntoElement {
             gpui_kit::div()
@@ -332,15 +330,26 @@ mod tests {
     }
 
     /// A test window, not yet active. The test platform names no display server and its windows have no raw handles.
-    #[cfg(target_os = "linux")]
     fn window(cx: &mut gpui_kit::TestAppContext) -> &mut gpui_kit::VisualTestContext {
         cx.add_window_view(|_, _| Blank).1
     }
 
-    #[cfg(target_os = "linux")]
     fn active(cx: &mut gpui_kit::VisualTestContext) -> bool {
         cx.run_until_parked();
         cx.update(|window, cx| cx.active_window() == Some(Window::window_handle(window)))
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[gpui_kit::test]
+    fn a_forward_raises_the_window_and_an_own_launch_leaves_it_alone(cx: &mut gpui_kit::TestAppContext) {
+        let cx = window(cx);
+        assert!(!active(cx));
+        cx.update(|window, cx| launched(window, cx, &Activation::default()));
+        assert!(!active(cx), "an own launch does not activate a second time");
+        cx.update(|window, cx| activate(window, cx, &Activation::default()));
+        assert!(active(cx), "a forwarded launch raises the receiving window");
+        cx.update(|window, cx| launched(window, cx, &Activation::default()));
+        assert!(active(cx), "launch completion preserves an active window");
     }
 
     #[cfg(target_os = "linux")]

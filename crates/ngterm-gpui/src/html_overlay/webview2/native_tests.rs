@@ -1,0 +1,790 @@
+//! The browser adapter on a hidden `Win32` parent, with local documents and real `WebView2` reports.
+
+use std::os::windows::fs::OpenOptionsExt as _;
+use std::time::{Duration, Instant};
+
+use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
+};
+
+use super::*;
+
+#[test]
+fn malformed_renderer_reports_and_exceptions_have_useful_answers() {
+    for event in [
+        "garbage",
+        "null",
+        r#"{"name":"ngtermTextPageBinding"}"#,
+        r#"{"name":"ngtermTextPageBinding","executionContextId":3,"payload":false}"#,
+    ] {
+        assert_eq!(binding_called(event), None);
+    }
+    assert!(evaluation(Ok("not json".into())).is_err());
+    assert_eq!(
+        evaluation(Ok(r#"{"exceptionDetails":{"text":"bad expression"}}"#.into())),
+        Err("bad expression".into())
+    );
+    assert_eq!(
+        evaluation(Ok(r#"{"exceptionDetails":{}}"#.into())),
+        Err("the script failed".into())
+    );
+    assert_eq!(
+        evaluation(Ok(r#"{"result":{"type":"number","value":42}}"#.into())),
+        Ok(Some("42".into()))
+    );
+    assert_eq!(
+        evaluation(Ok(r#"{"result":{"type":"object","value":null}}"#.into())),
+        Ok(Some("null".into()))
+    );
+    assert_eq!(evaluation(Ok(r#"{"result":{"type":"object"}}"#.into())), Ok(None));
+    assert_eq!(without_fragment("https://example.test/a#b#c"), "https://example.test/a");
+    assert_eq!(without_fragment("https://example.test/a"), "https://example.test/a");
+    assert!(matches!(Parent(0).window_handle(), Err(HandleError::Unavailable)));
+}
+
+#[test]
+fn local_protocols_return_only_the_document_or_granted_files() {
+    let text = Text::default();
+    let address = format!("ngterm-text://{}/", uuid::Uuid::new_v4());
+    assert_eq!(serve_text(&text, &address).status(), 404);
+    text.lock().unwrap().replace("<title>通知</title>".into());
+    let response = serve_text(&text, &address);
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["Content-Type"], "text/html; charset=utf-8");
+    assert_eq!(response.headers()["Cache-Control"], "no-store");
+    assert_eq!(response.body().as_ref(), "<title>通知</title>".as_bytes());
+    assert_eq!(serve_text(&text, &(address + "secret")).status(), 404);
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("page.html");
+    std::fs::write(&file, "<p>granted</p>").unwrap();
+    let uri = url::Url::from_file_path(&file).unwrap().to_string();
+    let root = GrantRoot::new(dir.path()).unwrap();
+    assert_eq!(
+        read_granted(Some(&root), &uri).unwrap(),
+        ("text/html".into(), b"<p>granted</p>".to_vec())
+    );
+    assert_eq!(
+        read_granted(None, &uri),
+        Err("outside the page's granted directory".into())
+    );
+    assert_eq!(
+        read_granted(Some(&root), "not a file URL"),
+        Err("outside the page's granted directory".into())
+    );
+    let outside = tempfile::NamedTempFile::new().unwrap();
+    let outside = url::Url::from_file_path(outside.path()).unwrap().to_string();
+    assert_eq!(
+        read_granted(Some(&root), &outside),
+        Err("outside the page's granted directory".into())
+    );
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&file)
+        .unwrap();
+    assert_eq!(
+        read_granted(Some(&root), &uri),
+        Err(std::io::Error::from_raw_os_error(32).to_string())
+    );
+    drop(held);
+}
+
+#[test]
+fn a_real_browser_reports_local_documents_in_an_isolated_process() {
+    crate::system_window::tests::run_child("html_overlay::webview2::native::native_tests::browser_child");
+}
+
+/// Pumps COM callbacks and hidden-window messages until an observable answer arrives, with a finite deadline.
+#[track_caller]
+fn pump_until(mut ready: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !ready() {
+        assert!(Instant::now() < deadline, "WebView2 did not report its result");
+        let mut message = MSG::default();
+        // SAFETY: a message buffer owned by this thread; dispatch only its own windows' messages.
+        while unsafe { PeekMessageW(&raw mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) } != 0 {
+            // SAFETY: messages just removed from this thread's queue.
+            unsafe { TranslateMessage(&raw const message) };
+            // SAFETY: dispatching the message just removed from this thread's queue.
+            unsafe { DispatchMessageW(&raw const message) };
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[track_caller]
+fn take_report(reports: &Rc<RefCell<Vec<Report>>>, matches: impl Fn(&Report) -> bool) -> Report {
+    let mut found = None;
+    pump_until(|| {
+        let mut reports = reports.borrow_mut();
+        if let Some(index) = reports.iter().position(&matches) {
+            found = Some(reports.remove(index));
+        }
+        found.is_some()
+    });
+    found.unwrap()
+}
+
+#[track_caller]
+fn renderer_answer(native: &Native, expression: &str) -> super::super::super::text_page::Answer {
+    let answer = native.call_renderer(expression);
+    let mut result = None;
+    pump_until(|| {
+        result = answer.try_recv().ok();
+        result.is_some()
+    });
+    result.unwrap()
+}
+
+fn spec(parent: isize, dir: &Path, reports: &Rc<RefCell<Vec<Report>>>) -> Spec {
+    let sent = Rc::clone(reports);
+    Spec {
+        parent,
+        store: Store {
+            environment: None,
+            user_data: dir.to_path_buf(),
+            profile: "coverage".into(),
+            private: true,
+        },
+        javascript: true,
+        background: Some((10, 20, 30)),
+        zoom: 1.25,
+        bounds: Some(Bounds {
+            x: 0.,
+            y: 0.,
+            width: 320.,
+            height: 200.,
+        }),
+        visible: false,
+        theme: Some("window.coverageTheme = 'first'".into()),
+        scripts: vec!["window.coverageScript = true".into()],
+        trusted_document_script: Some(
+            "globalThis.coverageValue = 41; ngtermTextPageBinding('{\"ready\":true}')".into(),
+        ),
+        text_channel: true,
+        grant: Some(Grant::default()),
+        replica: None,
+        text: Some(Text::default()),
+        block_network: true,
+        decide: Rc::new(|navigation| !navigation.uri.contains("refused")),
+        post: Rc::new(move |report| {
+            eprintln!("WebView2 report: {report:?}");
+            sent.borrow_mut().push(report);
+        }),
+        take_key: Rc::new(|_| None),
+    }
+}
+
+#[test]
+#[ignore = "run by a_real_browser_reports_local_documents_in_an_isolated_process"]
+fn browser_child() {
+    if !crate::system_window::tests::is_child("html_overlay::webview2::native::native_tests::browser_child") {
+        return;
+    }
+    // SAFETY: the browser owns this child test thread's STA and leaves it after every COM object is dropped.
+    assert!(unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED.cast_unsigned()) } >= 0);
+    let dir = tempfile::tempdir().unwrap();
+    let parent = host_window().unwrap();
+    assert_eq!(host_window().unwrap(), parent, "one hidden parent per thread");
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let spec = spec(parent, dir.path(), &reports);
+    let native = Native::create(&spec).unwrap();
+    assert_eq!(
+        renderer_answer(&native, "1"),
+        Err("the renderer has not reported".into())
+    );
+    assert_eq!(
+        take_report(&reports, |r| matches!(r, Report::NetworkFilterInstalled)),
+        Report::NetworkFilterInstalled
+    );
+    load_and_report(&native, &spec, &reports);
+    browser_properties(&native, &reports, parent);
+    browser_messages(&native, &reports);
+    assert_eq!(
+        renderer_answer(&native, "confirm('coverage')"),
+        Ok(Some("false".into()))
+    );
+    assert_eq!(renderer_answer(&native, "prompt('coverage')"), Ok(Some("null".into())));
+    assert_eq!(
+        renderer_answer(&native, "Notification.requestPermission()"),
+        Ok(Some("\"denied\"".into()))
+    );
+    context_menu(&native);
+    saved_profile_clear(parent, &native.environment(), dir.path());
+    local_protocol_pages(parent, &native.environment(), dir.path());
+    close_single_page(parent, &native.environment(), dir.path());
+    network_pages(parent, &native, dir.path(), &reports);
+    invalid_specifications(parent, &native.environment(), dir.path());
+    let mut browser_pid = 0;
+    // SAFETY: reading the live web view's browser pid on its owning thread.
+    unsafe { native.webview().BrowserProcessId(&raw mut browser_pid) }.unwrap();
+    // SAFETY: opening only this test browser for the termination check and the subsequent wait.
+    let browser = unsafe { windows_sys::Win32::System::Threading::OpenProcess(0x0010_0001, 0, browser_pid) };
+    assert!(!browser.is_null());
+    browser_failures(&native, &reports, browser);
+    drop(native);
+    drop(spec);
+    // SAFETY: destroy only the hidden parent made above, after all child web views were dropped.
+    let destroyed = unsafe { DestroyWindow(std::ptr::with_exposed_provenance_mut(parent.cast_unsigned())) };
+    assert_ne!(destroyed, 0);
+    HOST.set(0);
+    pump_until(|| {
+        // SAFETY: the process handle opened above, polled without blocking the message loop.
+        (unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(browser, 0) }) == 0
+    });
+    // SAFETY: the process handle opened above is closed exactly once.
+    unsafe { windows_sys::Win32::Foundation::CloseHandle(browser) };
+    // SAFETY: balances this thread's successful apartment initialization.
+    unsafe { CoUninitialize() };
+}
+
+fn load_and_report(native: &Native, spec: &Spec, reports: &Rc<RefCell<Vec<Report>>>) {
+    spec.text
+        .as_ref()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .replace("<!doctype html><title>Coverage document</title><p>local</p>".into());
+    let address = scheme::text_address(uuid::Uuid::new_v4());
+    native.load_url(&address);
+    take_report(reports, |r| matches!(r, Report::Completed { success: true, .. }));
+    assert_eq!(
+        take_report(reports, |r| matches!(r, Report::Title(s) if s == "Coverage document")),
+        Report::Title("Coverage document".into())
+    );
+    take_report(reports, |r| matches!(r, Report::Committed));
+    take_report(reports, |r| matches!(r, Report::Source(s) if s == &address));
+    take_report(reports, |r| matches!(r, Report::TextPage(_)));
+    assert_eq!(renderer_answer(native, "coverageValue + 1"), Ok(Some("42".into())));
+    assert_eq!(renderer_answer(native, "void 0"), Ok(None));
+    assert!(
+        renderer_answer(native, "throw new Error('coverage failure')")
+            .unwrap_err()
+            .starts_with("Error: coverage failure")
+    );
+    let navigation = take_report(reports, |r| matches!(r, Report::Navigation { allowed: true, .. }));
+    assert!(matches!(
+        navigation,
+        Report::Navigation {
+            navigation: Navigation { main_frame: true, .. },
+            allowed: true
+        }
+    ));
+    native.set_theme("window.coverageTheme = 'second'");
+    take_report(reports, |r| matches!(r, Report::ThemeInstalled));
+    native.reload();
+    take_report(reports, |r| matches!(r, Report::Completed { success: true, .. }));
+    take_report(reports, |r| matches!(r, Report::TextPage(_)));
+    native.load_url("https://refused.invalid/");
+    take_report(reports, |r| matches!(r, Report::Navigation { allowed: false, .. }));
+}
+
+fn browser_properties(native: &Native, reports: &Rc<RefCell<Vec<Report>>>, parent: isize) {
+    assert!(
+        native
+            .devtools_now("Coverage.invalidMethod", &serde_json::json!({}))
+            .is_err()
+    );
+    assert!(
+        native
+            .add_script_now("")
+            .unwrap_err()
+            .starts_with("a page's script was not added: ")
+    );
+    native.set_zoom(1.5);
+    let mut zoom = 0.;
+    // SAFETY: the real controller is read on its owning STA.
+    unsafe { native.view.controller().ZoomFactor(&raw mut zoom) }.unwrap();
+    assert!((zoom - 1.5).abs() < f64::EPSILON);
+    native.set_background((31, 32, 33));
+    let mut original = windows::Win32::Foundation::RECT::default();
+    // SAFETY: the live controller's bounds are read on its owning thread.
+    unsafe { native.view.controller().Bounds(&raw mut original) }.unwrap();
+    native.set_bounds(Bounds {
+        x: 3.,
+        y: 4.,
+        width: 150.,
+        height: 100.,
+    });
+    let mut bounds = windows::Win32::Foundation::RECT::default();
+    // SAFETY: the controller and its initialized output rectangle belong to this thread.
+    unsafe { native.view.controller().Bounds(&raw mut bounds) }.unwrap();
+    let expected_width = f64::from(original.right - original.left) * 150.0 / 320.0;
+    let expected_height = f64::from(original.bottom - original.top) * 100.0 / 200.0;
+    assert!((f64::from(bounds.right - bounds.left) - expected_width).abs() <= 1.0);
+    assert!((f64::from(bounds.bottom - bounds.top) - expected_height).abs() <= 1.0);
+    native.set_visible(true);
+    let mut visible = BOOL::default();
+    // SAFETY: the controller's own visibility flag, on its thread.
+    unsafe { native.view.controller().IsVisible(&raw mut visible) }.unwrap();
+    assert!(visible.as_bool());
+    native.focus();
+    native.focus_parent();
+    native.reparent(parent);
+    native.set_visible(false);
+    native.post_json(r#"{"coverage":true}"#);
+    assert!(renderer_answer(native, "globalThis.coverageValue").is_ok());
+    assert!(
+        !reports
+            .borrow()
+            .iter()
+            .any(|r| matches!(r, Report::NetworkFilterFailed(_)))
+    );
+}
+
+fn main_script(native: &Native, expression: &str) {
+    native
+        .devtools_now(
+            "Runtime.evaluate",
+            &serde_json::json!({ "expression": expression, "awaitPromise": true }),
+        )
+        .unwrap();
+}
+
+fn browser_messages(native: &Native, reports: &Rc<RefCell<Vec<Report>>>) {
+    main_script(native, "chrome.webview.postMessage('from-page')");
+    assert_eq!(
+        take_report(reports, |r| matches!(r, Report::Message(s) if s == "from-page")),
+        Report::Message("from-page".into())
+    );
+    main_script(native, "history.pushState({}, '', '#second')");
+    take_report(reports, |r| matches!(r, Report::History { back: true, .. }));
+    native.go_back();
+    take_report(reports, |r| matches!(r, Report::History { forward: true, .. }));
+    native.go_forward();
+    take_report(reports, |r| matches!(r, Report::History { back: true, .. }));
+    main_script(native, "window.open('https://refused.invalid/new')");
+    assert!(
+        matches!(take_report(reports, |r| matches!(r, Report::NewWindow { .. })),
+        Report::NewWindow { uri, .. } if uri == "https://refused.invalid/new")
+    );
+    main_script(
+        native,
+        "chrome.webview.addEventListener('message', event => chrome.webview.postMessage('echo:' + event.data.coverage))",
+    );
+    native.post_json(r#"{"coverage":"reply"}"#);
+    take_report(reports, |r| matches!(r, Report::Message(s) if s == "echo:reply"));
+}
+
+fn saved_profile_clear(parent: isize, environment: &ICoreWebView2Environment, dir: &Path) {
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let mut saved = spec(parent, dir, &reports);
+    saved.store.environment = Some(environment.clone());
+    saved.store.private = false;
+    saved.store.profile = "coverage-saved".into();
+    saved.javascript = false;
+    saved.theme = None;
+    saved.scripts.clear();
+    saved.block_network = false;
+    let native = Native::create(&saved).unwrap();
+    saved
+        .text
+        .as_ref()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .replace("<title>Saved profile</title>".into());
+    native.load_url(&scheme::text_address(uuid::Uuid::new_v4()));
+    take_report(&reports, |r| matches!(r, Report::Completed { success: true, .. }));
+    take_report(&reports, |r| matches!(r, Report::TextPage(_)));
+    let cookie = renderer_answer(&native, "document.cookie='coverage=1; path=/'; document.cookie")
+        .unwrap()
+        .unwrap();
+    assert!(
+        cookie.contains("coverage=1"),
+        "the saved profile stores cookies: {cookie}"
+    );
+    let result = Rc::new(RefCell::new(None));
+    let done = Rc::clone(&result);
+    let returned = clear_profile(
+        parent,
+        saved.store.clone(),
+        Box::new(move |answer| {
+            done.replace(Some(answer));
+        }),
+    );
+    assert!(returned.is_some(), "the clear keeps the shared environment");
+    pump_until(|| result.borrow().is_some());
+    assert_eq!(result.take().unwrap(), Ok(()));
+    assert_eq!(renderer_answer(&native, "document.cookie"), Ok(Some("\"\"".into())));
+    drop(native);
+    drop(ANCHOR.take());
+}
+
+fn custom_menu(native: &Native) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SUBMENU,
+        ICoreWebView2Environment9,
+    };
+    let factory = native.environment().cast::<ICoreWebView2Environment9>().unwrap();
+    // SAFETY: real menu items made by this browser's environment on its owning STA, with no icon stream.
+    let root = unsafe {
+        factory.CreateContextMenuItem(
+            &HSTRING::from("test submenu"),
+            None,
+            COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SUBMENU,
+        )
+    }
+    .unwrap();
+    // SAFETY: the submenu's own collection belongs to this thread.
+    let items = unsafe { root.Children() }.unwrap();
+    trim_context_menu(&items).unwrap();
+    for kind in [
+        COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR,
+        COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND,
+    ] {
+        // SAFETY: as above; custom commands have no built-in editing action and must be removed.
+        let item = unsafe { factory.CreateContextMenuItem(&HSTRING::from("test item"), None, kind) }.unwrap();
+        assert_eq!(
+            menu_item(&item).unwrap().0,
+            kind == COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR
+        );
+        // SAFETY: adding this environment's item to its own collection.
+        unsafe { items.InsertValueAtIndex(0, &item) }.unwrap();
+    }
+    trim_context_menu(&items).unwrap();
+    let mut count = 99;
+    // SAFETY: reading the real collection's remaining item count.
+    unsafe { items.Count(&raw mut count) }.unwrap();
+    assert_eq!(count, 0, "no unrecognized custom action or separator remains");
+}
+
+fn context_menu(native: &Native) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment9;
+    custom_menu(native);
+    let factory = native.environment().cast::<ICoreWebView2Environment9>().unwrap();
+    // SAFETY: a real separator from this browser's environment, inserted before its editing actions below.
+    let leading =
+        unsafe { factory.CreateContextMenuItem(&HSTRING::new(), None, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR) }
+            .unwrap();
+    let seen = Rc::new(RefCell::new(None));
+    let capture = Rc::clone(&seen);
+    let handler = ContextMenuRequestedEventHandler::create(Box::new(move |_, args| {
+        let args = args.unwrap();
+        // SAFETY: the real event and its menu collection, read only on this callback's STA.
+        let items = unsafe { args.MenuItems() }?;
+        // SAFETY: a valid separator from this environment, added to the real menu collection on its owning STA.
+        unsafe { items.InsertValueAtIndex(0, &leading) }?;
+        trim_context_menu(&items)?;
+        let mut count = 0;
+        // SAFETY: the event's own menu collection.
+        unsafe { items.Count(&raw mut count) }?;
+        let mut names = Vec::new();
+        for index in 0..count {
+            // SAFETY: an index strictly below this collection's count.
+            names.push(menu_item(&unsafe { items.GetValueAtIndex(index) }?)?);
+        }
+        capture.replace(Some(names));
+        // SAFETY: suppress the actual OS popup; the native adapter's earlier handler already trimmed the collection.
+        unsafe { args.SetHandled(true) }
+    }));
+    let webview = native.webview().cast::<ICoreWebView2_11>().unwrap();
+    let mut token = 0;
+    // SAFETY: subscribe on the owning thread, before synthesizing browser input through CDP.
+    unsafe { webview.add_ContextMenuRequested(&handler, &raw mut token) }.unwrap();
+    native.set_visible(true);
+    main_script(native, "getSelection().selectAllChildren(document.body)");
+    native
+        .devtools_now(
+            "Input.dispatchMouseEvent",
+            &serde_json::json!({"type":"mousePressed", "x":10, "y":20, "button":"right", "clickCount":1}),
+        )
+        .unwrap();
+    native
+        .devtools_now(
+            "Input.dispatchMouseEvent",
+            &serde_json::json!({"type":"mouseReleased", "x":10, "y":20, "button":"right", "clickCount":1}),
+        )
+        .unwrap();
+    pump_until(|| seen.borrow().is_some());
+    let items = seen.take().unwrap();
+    assert!(!items.is_empty(), "selection offers editing actions");
+    assert!(!items.first().unwrap().0 && !items.last().unwrap().0);
+    assert!(
+        items
+            .iter()
+            .all(|(separator, name)| *separator || keeps_menu_item(name))
+    );
+    assert!(items.windows(2).all(|pair| !pair[0].0 || !pair[1].0));
+}
+
+fn local_protocol_pages(parent: isize, environment: &ICoreWebView2Environment, dir: &Path) {
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&requests);
+    let mut local = spec(parent, dir, &reports);
+    local.store.environment = Some(environment.clone());
+    local.store.profile = "coverage-protocols".into();
+    local.trusted_document_script = None;
+    local.text_channel = false;
+    local.replica = Some(Arc::new(move |uri, reply| {
+        seen.lock().unwrap().push(uri);
+        reply.respond(
+            wry::http::Response::builder()
+                .status(200)
+                .header("Content-Type", "text/html")
+                .body(b"<title>Replica document</title>".to_vec())
+                .unwrap(),
+        );
+    }));
+    let grant = local.grant.as_ref().unwrap();
+    grant.root.lock().unwrap().replace(GrantRoot::new(dir).unwrap());
+    let file = dir.join("granted.html");
+    std::fs::write(&file, "<title>Granted document</title><p>read from disk</p>").unwrap();
+    let native = Native::create(&local).unwrap();
+    native.load_url(&scheme::granted_address(&file.to_string_lossy()).unwrap());
+    take_report(&reports, |r| matches!(r, Report::Completed { http: 200, .. }));
+    take_report(
+        &reports,
+        |r| matches!(r, Report::Title(title) if title == "Granted document"),
+    );
+    let outside = tempfile::NamedTempFile::new().unwrap();
+    native.load_url(&scheme::granted_address(&outside.path().to_string_lossy()).unwrap());
+    take_report(&reports, |r| matches!(r, Report::Completed { http: 403, .. }));
+    assert_eq!(
+        grant.refused.lock().unwrap().as_ref().unwrap().1,
+        "outside the page's granted directory"
+    );
+    let page = uuid::Uuid::new_v4();
+    native.load_url(&scheme::replica_address(page, "/document.html").unwrap());
+    take_report(
+        &reports,
+        |r| matches!(r, Report::Title(title) if title == "Replica document"),
+    );
+    take_report(&reports, |r| matches!(r, Report::Completed { http: 200, .. }));
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|uri| uri == &format!("ngterm-page://{page}/document.html"))
+    );
+    main_script(
+        &native,
+        "let a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['download'], {type:'application/octet-stream'})); a.download = 'never-saved.txt'; a.click()",
+    );
+    take_report(
+        &reports,
+        |r| matches!(r, Report::DownloadRefused(uri) if uri.starts_with("blob:")),
+    );
+    assert!(!dir.join("never-saved.txt").exists());
+}
+
+fn close_single_page(parent: isize, environment: &ICoreWebView2Environment, dir: &Path) {
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let mut closing = spec(parent, dir, &reports);
+    closing.store.environment = Some(environment.clone());
+    closing.store.profile = "coverage-close".into();
+    closing.trusted_document_script = None;
+    closing.text_channel = false;
+    closing
+        .text
+        .as_ref()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .replace("<title>Closable</title>".into());
+    let native = Native::create(&closing).unwrap();
+    native.load_url(&scheme::text_address(uuid::Uuid::new_v4()));
+    take_report(&reports, |r| matches!(r, Report::Completed { http: 200, .. }));
+    let handler = webview2_com::ExecuteScriptCompletedHandler::create(Box::new(|_, _| Ok(())));
+    // SAFETY: a page with just one history entry may close itself; no synchronous wait spans the window's destruction.
+    unsafe {
+        native
+            .webview()
+            .ExecuteScript(&HSTRING::from("window.close()"), &handler)
+    }
+    .unwrap();
+    take_report(&reports, |r| matches!(r, Report::CloseRequested));
+}
+
+struct Fixture {
+    url: String,
+    requests: Arc<Mutex<Vec<String>>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Fixture {
+    fn start() -> Self {
+        use std::io::Write as _;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (seen, stopped) = (Arc::clone(&requests), Arc::clone(&stop));
+        let thread = std::thread::spawn(move || {
+            while !stopped.load(Ordering::Acquire) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                };
+                stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+                stream.set_write_timeout(Some(Duration::from_secs(1))).unwrap();
+                let Some(path) = requested_path(&mut stream) else {
+                    continue;
+                };
+                seen.lock().unwrap().push(path.clone());
+                let body = if path == "/" {
+                    "<title>Network fixture</title><script>addEventListener('load',()=>chrome.webview.postMessage('frames-complete'))</script><iframe src='/allowed'></iframe><iframe src='/refused'></iframe>"
+                } else {
+                    "<title>Frame</title>"
+                };
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(reply.as_bytes());
+            }
+        });
+        Self {
+            url,
+            requests,
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        self.thread.take().unwrap().join().unwrap();
+    }
+}
+
+fn network_pages(parent: isize, blocked: &Native, dir: &Path, blocked_reports: &Rc<RefCell<Vec<Report>>>) {
+    let fixture = Fixture::start();
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let mut network = spec(parent, dir, &reports);
+    network.store.environment = Some(blocked.environment());
+    network.store.profile = "coverage-network".into();
+    network.block_network = false;
+    network.grant = None;
+    network.text = None;
+    network.background = None;
+    network.zoom = 1.0;
+    network.trusted_document_script = None;
+    network.text_channel = false;
+    let native = Native::create(&network).unwrap();
+    native.load_url(&fixture.url);
+    take_report(&reports, |r| matches!(r, Report::Completed { http: 200, .. }));
+    take_report(
+        &reports,
+        |r| matches!(r, Report::Message(message) if message == "frames-complete"),
+    );
+    let requested = fixture.requests.lock().unwrap().clone();
+    assert!(requested.iter().any(|path| path == "/allowed"), "{requested:?}");
+    assert!(
+        !requested.iter().any(|path| path == "/refused"),
+        "a refused frame cannot reach the server"
+    );
+    blocked.load_url(&format!("{}blocked", fixture.url));
+    take_report(blocked_reports, |r| matches!(r, Report::Completed { http: 403, .. }));
+    assert!(!fixture.requests.lock().unwrap().iter().any(|path| path == "/blocked"));
+}
+
+fn browser_failures(
+    native: &Native,
+    reports: &Rc<RefCell<Vec<Report>>>,
+    browser: windows_sys::Win32::Foundation::HANDLE,
+) {
+    let webview = native.webview().cast::<ICoreWebView2_13>().unwrap();
+    // SAFETY: obtaining this live browser profile on its owning STA, before the browser exits.
+    let profile = unsafe { webview.Profile() }
+        .unwrap()
+        .cast::<ICoreWebView2Profile2>()
+        .unwrap();
+    let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
+    // SAFETY: crash only this test web view's renderer, exercising the engine's actual process-failure event.
+    unsafe {
+        native
+            .webview()
+            .CallDevToolsProtocolMethod(&HSTRING::from("Page.crash"), &HSTRING::from("{}"), &handler)
+    }
+    .unwrap();
+    take_report(reports, |r| matches!(r, Report::ProcessFailed { browser: false }));
+    // SAFETY: this handle names only the browser started under this test's temporary profile, opened with terminate access.
+    let terminated = unsafe { windows_sys::Win32::System::Threading::TerminateProcess(browser, 0) };
+    assert_ne!(terminated, 0);
+    take_report(reports, |r| matches!(r, Report::ProcessFailed { browser: true }));
+    assert!(
+        native
+            .add_isolated_document_script("1")
+            .unwrap_err()
+            .starts_with("the isolated document renderer was not added: ")
+    );
+    assert!(
+        native
+            .wire_renderer_channel(&native.post)
+            .unwrap_err()
+            .starts_with("the renderer's channel was not added: ")
+    );
+    native.load_url("about:blank");
+    native.set_theme("window.theme = true");
+    native.post_json("{}");
+    let answer = native.call_renderer("1");
+    pump_until(|| match answer.try_recv() {
+        Ok(answer) => {
+            assert!(answer.is_err());
+            true
+        }
+        Err(async_channel::TryRecvError::Closed) => true,
+        Err(async_channel::TryRecvError::Empty) => false,
+    });
+    let result = Rc::new(RefCell::new(None));
+    let done = Rc::clone(&result);
+    start_clear(
+        &profile,
+        Box::new(move |answer| {
+            done.replace(Some(answer));
+        }),
+    );
+    pump_until(|| result.borrow().is_some());
+    assert!(
+        result.take().unwrap().is_err(),
+        "a clear of an ended browser reports failure"
+    );
+}
+
+fn requested_path(stream: &mut std::net::TcpStream) -> Option<String> {
+    use std::io::{BufRead as _, Read as _};
+    let mut reader = std::io::BufReader::new(stream.take(16 * 1024));
+    let mut line = String::new();
+    reader.read_line(&mut line).ok()?;
+    let path = line.split_whitespace().nth(1)?.to_owned();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).ok()? == 0 || line == "\r\n" {
+            return Some(path);
+        }
+    }
+}
+
+fn invalid_specifications(parent: isize, environment: &ICoreWebView2Environment, dir: &Path) {
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let mut invalid = spec(0, dir, &reports);
+    invalid.store.environment = Some(environment.clone());
+    assert!(
+        Native::create(&invalid).is_err(),
+        "a missing parent handle cannot create a page"
+    );
+    invalid.store.profile = "invalid/profile".into();
+    let result = Rc::new(RefCell::new(None));
+    let done = Rc::clone(&result);
+    let environment = clear_profile(
+        parent,
+        invalid.store,
+        Box::new(move |answer| {
+            done.replace(Some(answer));
+        }),
+    );
+    assert!(environment.is_none(), "a refused profile creates no anchor");
+    assert!(
+        result.take().unwrap().is_err(),
+        "the clear reports why it could not start"
+    );
+}

@@ -154,3 +154,7 @@ impl Render for PageView {
             )
     }
 }
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod tests;
