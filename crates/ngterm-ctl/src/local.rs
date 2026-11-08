@@ -165,6 +165,67 @@ pub mod default_sigpipe {
     }
 }
 
+/// Running a subcommand as a shell would, in a fresh copy of the test binary (`messages::tests::command_probe`) with a
+/// standard input of the test's choosing: a terminal, or something a read fails on, which a pipe from
+/// `messages::tests::run_command` cannot be.
+#[cfg(test)]
+#[cfg(unix)]
+pub mod stdin_probe {
+    use std::os::fd::{FromRawFd as _, OwnedFd};
+    use std::process::{Command, Output, Stdio};
+
+    /// Runs `ngtermctl <arguments>` with `stdin` as its standard input and every `NGTERM_*` variable stripped. The
+    /// probe passes whatever the command returns, which its stderr names on a `PROBE_RESULT:` line.
+    pub fn run(arguments: &[&str], stdin: Stdio) -> Output {
+        let argv: Vec<&str> = std::iter::once("ngtermctl").chain(arguments.iter().copied()).collect();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "messages::tests::command_probe",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env_clear()
+            .envs(std::env::vars_os().filter(|(key, _)| !key.to_string_lossy().starts_with("NGTERM_")))
+            .env("CTL_COVERAGE_ARGUMENTS", serde_json::to_string(&argv).unwrap())
+            .stdin(stdin)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        output
+    }
+
+    /// What the command itself printed on stdout in a probe run (`run`, `messages::tests::run_command`), without the
+    /// test harness's lines around it.
+    pub fn command_stdout(output: &Output) -> String {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let start = stdout.find("command_probe ... ").expect("the probe ran") + "command_probe ... ".len();
+        let end = stdout.rfind("ok\n\ntest result:").expect("the probe passed");
+        stdout[start..end].to_owned()
+    }
+
+    /// A new terminal: its controlling side, which must outlive the run, and the side a program reads as its input.
+    pub fn terminal() -> (OwnedFd, OwnedFd) {
+        let (mut controller, mut terminal) = (-1, -1);
+        // SAFETY: both outputs point at initialized descriptor slots; the optional name and settings are null.
+        let opened = unsafe {
+            libc::openpty(
+                &raw mut controller,
+                &raw mut terminal,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(opened, 0, "{}", std::io::Error::last_os_error());
+        // SAFETY: openpty returned two fresh descriptors this process owns.
+        let controller = unsafe { OwnedFd::from_raw_fd(controller) };
+        // SAFETY: as above.
+        let terminal = unsafe { OwnedFd::from_raw_fd(terminal) };
+        (controller, terminal)
+    }
+}
+
 #[cfg(test)]
 #[cfg(windows)]
 mod windows_tests {
@@ -201,6 +262,66 @@ mod tests {
         // SAFETY: `current` is the action `signal` just returned for SIGPIPE.
         unsafe { libc::signal(libc::SIGPIPE, current) };
         current
+    }
+
+    /// The calling thread's blocked set.
+    fn blocked_signals() -> libc::sigset_t {
+        // SAFETY: a zeroed set is overwritten by `sigprocmask` below.
+        let mut current: libc::sigset_t = unsafe { std::mem::zeroed() };
+        // SAFETY: a null new set only reads the mask into `current`, a valid set.
+        let read = unsafe { libc::sigprocmask(libc::SIG_BLOCK, std::ptr::null(), &raw mut current) };
+        assert_eq!(read, 0);
+        current
+    }
+
+    /// `fd`'s descriptor flags.
+    fn descriptor_flags(fd: std::os::fd::RawFd) -> libc::c_int {
+        // SAFETY: `F_GETFD` only reads the flags of a descriptor number.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert!(flags >= 0, "{}", std::io::Error::last_os_error());
+        flags
+    }
+
+    /// What a child about to exec gets, checked in a copy of the binary of its own, since both change the whole
+    /// process: no blocked signal, no ignored one, and every descriptor beyond the standard three closed on exec.
+    #[test]
+    fn a_child_about_to_exec_starts_with_default_signals_and_only_its_standard_descriptors() {
+        use std::os::fd::{AsRawFd as _, OwnedFd};
+
+        default_sigpipe::run(
+            "local::tests::a_child_about_to_exec_starts_with_default_signals_and_only_its_standard_descriptors",
+            || {
+                // SAFETY: a zeroed set is initialized by `sigemptyset` before use.
+                let mut block: libc::sigset_t = unsafe { std::mem::zeroed() };
+                // SAFETY: `block` is a valid set to clear.
+                unsafe { libc::sigemptyset(&raw mut block) };
+                // SAFETY: `block` is a valid set and SIGUSR1 a valid signal.
+                unsafe { libc::sigaddset(&raw mut block, libc::SIGUSR1) };
+                // SAFETY: changes this probe thread's mask; the old one is not asked for.
+                let blocked = unsafe { libc::sigprocmask(libc::SIG_BLOCK, &raw const block, std::ptr::null_mut()) };
+                assert_eq!(blocked, 0);
+                // SAFETY: `SIG_IGN` installs no handler code, in this probe process alone.
+                unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
+                let leaked = OwnedFd::from(std::fs::File::open("/dev/null").unwrap());
+                // SAFETY: clears the close-on-exec flag of a descriptor this test owns, as a careless caller leaks one.
+                assert_eq!(unsafe { libc::fcntl(leaked.as_raw_fd(), libc::F_SETFD, 0) }, 0);
+                let stdin_flags = descriptor_flags(0);
+
+                reset_signals();
+                close_inherited_descriptors();
+
+                let current = blocked_signals();
+                // SAFETY: `current` was filled by `sigprocmask`.
+                assert_eq!(unsafe { libc::sigismember(&raw const current, libc::SIGUSR1) }, 0);
+                // SAFETY: installs `SIG_IGN` only to read the action back, then puts it back.
+                let action = unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
+                // SAFETY: `action` is the one `signal` just returned for SIGTERM.
+                unsafe { libc::signal(libc::SIGTERM, action) };
+                assert_eq!(action, libc::SIG_DFL);
+                assert_ne!(descriptor_flags(leaked.as_raw_fd()) & libc::FD_CLOEXEC, 0);
+                assert_eq!(descriptor_flags(0), stdin_flags, "the standard three are left alone");
+            },
+        );
     }
 
     #[test]

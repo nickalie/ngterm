@@ -394,6 +394,8 @@ mod tests {
         event_pages: VecDeque<Result<Response, ClientError>>,
         trees: HashMap<String, Value>,
         windows: Vec<Value>,
+        /// What `window.list` answers instead of `windows`.
+        windows_reply: Option<Response>,
         requests: Vec<Value>,
         sleeps: Vec<Duration>,
         clock: Duration,
@@ -411,6 +413,7 @@ mod tests {
                 event_pages: VecDeque::new(),
                 trees: HashMap::from([(WINDOW.to_owned(), tree(&sessions))]),
                 windows: vec![window(WINDOW, true, true)],
+                windows_reply: None,
                 requests: Vec::new(),
                 sleeps: Vec::new(),
                 clock: Duration::ZERO,
@@ -430,7 +433,10 @@ mod tests {
             let wire = serde_json::to_value(request).unwrap();
             self.requests.push(wire.clone());
             match wire["cmd"].as_str().unwrap() {
-                "window.list" => Ok(Response::with_result(json!({"windows": self.windows}))),
+                "window.list" => Ok(self
+                    .windows_reply
+                    .clone()
+                    .unwrap_or_else(|| Response::with_result(json!({"windows": self.windows})))),
                 "tree" => {
                     let window = wire["args"]["window"].as_str().unwrap_or_default();
                     Ok(self.trees.get(window).map_or_else(
@@ -764,6 +770,88 @@ mod tests {
         fake.windows.push(window(BACKGROUND, true, false));
         let outcome = command(&["--target", WORKER, "--until", "completed"]).wait(&mut fake);
         assert_eq!(outcome, Err("window not open".to_owned()));
+    }
+
+    #[test]
+    fn a_read_without_its_part_names_the_servers_error_or_what_is_missing() {
+        for (reply, expected) in [
+            (Response::failure("no main window"), "no main window"),
+            (Response::with_result(json!({})), "window.list response missing windows"),
+        ] {
+            let mut fake = FakeApp::new(Some("completed"), None);
+            fake.windows_reply = Some(reply);
+            let outcome = command(&["--target", WORKER, "--until", "completed"]).wait(&mut fake);
+            assert_eq!(outcome, Err(expected.to_owned()));
+        }
+        let mut fake = FakeApp::new(Some("completed"), None);
+        fake.trees.insert(WINDOW.to_owned(), Value::Null);
+        let outcome = command(&["--target", WORKER, "--until", "completed"]).wait(&mut fake);
+        assert_eq!(outcome, Err("tree response missing tree".to_owned()));
+    }
+
+    #[test]
+    fn without_a_timeout_an_empty_page_waits_the_whole_poll_delay() {
+        let mut fake = FakeApp::new(Some("active"), None);
+        fake.event_pages = VecDeque::from([
+            Ok(page(10, vec![])),
+            Ok(page(10, vec![])),
+            Ok(page(11, vec![status_event(11, WORKER, "completed")])),
+        ]);
+        let outcome = command(&["--target", WORKER, "--until", "completed"]).wait(&mut fake);
+        assert_eq!(outcome, Ok(matched(WORKER, AgentStatus::Completed)));
+        assert_eq!(fake.sleeps, [POLL_DELAY]);
+    }
+
+    /// Over a real socket: the composite reads, sleeps after an empty page, and reports the session's close with exit 2
+    /// and `session closed` on stderr, printing nothing on stdout.
+    #[cfg(unix)]
+    #[test]
+    fn a_live_wait_polls_the_socket_and_reports_the_sessions_close() {
+        let line = |response: Response| serde_json::to_string(&response).unwrap();
+        let anchor = line(page(10, vec![]));
+        let windows = line(Response::with_result(json!({"windows": [window(WINDOW, true, true)]})));
+        let tree = line(Response::with_result(
+            json!({"tree": tree(&[session(WORKER, Some("active"), true)])}),
+        ));
+        let closed = line(page(11, vec![event(11, EventKind::SessionClosed, WORKER, None, None)]));
+        let (output, requests) = crate::messages::tests::run_command(
+            &["session", "wait", "--target", WORKER, "--until", "completed"],
+            b"",
+            &[],
+            &[&anchor, &windows, &tree, &anchor, &closed],
+        );
+        let cmds: Vec<&str> = requests
+            .iter()
+            .map(|request| request["cmd"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            cmds,
+            ["events.read", "window.list", "tree", "events.read", "events.read"]
+        );
+        assert_eq!(crate::local::stdin_probe::command_stdout(&output), "");
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(error.contains("session closed\n"), "{error}");
+        assert!(error.contains("PROBE_RESULT:Err(Exit("), "{error}");
+    }
+
+    #[test]
+    fn the_connection_options_follow_the_subcommand() {
+        let command_line = [
+            "ngtermctl",
+            "session",
+            "wait",
+            "--until",
+            "idle",
+            "--socket",
+            "/tmp/w.sock",
+            "--json",
+        ];
+        let crate::Command::Session(group) = crate::Ngtermctl::try_parse_from(command_line).unwrap().command else {
+            panic!("not a session command")
+        };
+        let options = group.command().options();
+        assert_eq!(options.socket.as_deref(), Some(std::path::Path::new("/tmp/w.sock")));
+        assert!(options.json);
     }
 
     #[test]

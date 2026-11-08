@@ -279,4 +279,62 @@ mod tests {
             "reopened session api (incomplete: the entry stays in the list)"
         );
     }
+
+    #[test]
+    fn no_subcommand_has_anything_for_the_parser_to_miss() {
+        for argv in [&["recent", "list"][..], &["recent", "open", "R1"], &["recent", "clear"]] {
+            let parsed = Ngtermctl::try_parse_from(["ngtermctl"].iter().chain(argv)).unwrap();
+            let crate::Command::Recent(group) = parsed.command else {
+                panic!("not a recent command: {argv:?}");
+            };
+            assert_eq!(group.check(), Ok(()), "{argv:?}");
+        }
+    }
+
+    /// Each subcommand sends its request to `--socket` and prints the reply as upstream's `formatRecent` and
+    /// `recentOpen` branch do; a refusal is printed and fails.
+    #[cfg(unix)]
+    #[test]
+    fn each_subcommand_sends_its_request_and_prints_the_reply() {
+        use serde_json::json;
+
+        use crate::local::stdin_probe::command_stdout;
+        use crate::messages::tests::run_command;
+
+        let row = serde_json::to_value(item("R1", "session", "api", Some("work"))).unwrap();
+        let listed = json!({"ok": true, "result": {"recent": [row]}}).to_string();
+        let (output, requests) = run_command(&["recent", "list"], b"", &[], &[&listed]);
+        assert_eq!(requests, [json!({"cmd": "recent.list"})]);
+        assert_eq!(command_stdout(&output), "R1  session  api (work)\n");
+
+        let reopened = json!({"ok": true, "result": {"recentOpen": {"item": row, "window": "WIN", "complete": false}}});
+        let (output, requests) = run_command(
+            &["recent", "open", "R1", "--window", "w1"],
+            b"",
+            &[],
+            &[&reopened.to_string()],
+        );
+        assert_eq!(
+            requests,
+            [json!({"cmd": "recent.open", "target": "R1", "args": {"window": "w1"}})]
+        );
+        assert_eq!(
+            command_stdout(&output),
+            "reopened session api (incomplete: the entry stays in the list)\n"
+        );
+
+        let (output, requests) = run_command(
+            &["recent", "clear", "--json"],
+            b"",
+            &[],
+            &[r#"{"ok":false,"error":"no window"}"#],
+        );
+        assert_eq!(requests, [json!({"cmd": "recent.clear"})]);
+        assert_eq!(command_stdout(&output), "{\"ok\":false,\"error\":\"no window\"}\n");
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("PROBE_RESULT:Err(Exit(")
+        );
+    }
 }

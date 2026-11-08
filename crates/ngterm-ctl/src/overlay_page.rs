@@ -611,6 +611,41 @@ mod tests {
         assert_eq!(io.lines, vec![line.to_owned()]);
     }
 
+    /// `reload`, `submit` and `navigate` each send one request to `--socket` and print the raw reply under `--json`.
+    #[cfg(unix)]
+    #[test]
+    fn reload_submit_and_navigate_send_their_request_to_the_socket() {
+        let reply = r#"{"ok":true,"result":{"id":"S1"}}"#;
+        for (argv, cmd, field, value) in [
+            (
+                &["reload", "--pane", "right"][..],
+                "session.overlay.reload",
+                "pane",
+                "right",
+            ),
+            (&["submit", "--value", "yes"], "session.overlay.submit", "value", "yes"),
+            (&["navigate", "back"], "session.overlay.navigate", "to", "back"),
+        ] {
+            let argv: Vec<&str> = ["session", "overlay"]
+                .into_iter()
+                .chain(argv.iter().copied())
+                .chain(["--target", "S1", "--json"])
+                .collect();
+            let (output, requests) = crate::messages::tests::run_command(&argv, b"", &[], &[reply]);
+            assert_eq!(requests.len(), 1, "{argv:?}");
+            assert_eq!(requests[0]["cmd"], cmd, "{argv:?}");
+            assert_eq!(requests[0]["target"], "S1", "{argv:?}");
+            assert_eq!(requests[0]["args"][field], value, "{argv:?}");
+            assert_eq!(
+                crate::local::stdin_probe::command_stdout(&output),
+                format!("{reply}\n"),
+                "{argv:?}"
+            );
+            let error = String::from_utf8(output.stderr).unwrap();
+            assert!(error.contains("PROBE_RESULT:Ok(())"), "{error}");
+        }
+    }
+
     #[test]
     fn a_one_shot_read_of_a_pending_page_exits_1() {
         let mut io = script(opened(), vec![outcome("pending", None)]);

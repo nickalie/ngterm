@@ -481,6 +481,107 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_that_refuses_without_a_reason_or_does_not_decode_is_an_error() {
+        let Rig { app, bridge, .. } = rig();
+        client::send_all(&app, b"{\"ok\":false}\n").unwrap();
+        assert_eq!(bridge.open(&present()), Err("the app refused the stream".to_owned()));
+        let Rig { app, bridge, .. } = rig();
+        client::send_all(&app, b"not json\n").unwrap();
+        let error = bridge.open(&present()).unwrap_err();
+        assert!(error.starts_with("could not decode the reply: "), "{error}");
+    }
+
+    /// A request that cannot go out is an error. The bridge's own side is shut for writing rather than the app's end
+    /// dropped: a sibling test's child can hold that end between its fork and its exec, and take the request.
+    #[cfg(unix)]
+    #[test]
+    fn a_request_that_cannot_be_sent_is_an_error() {
+        let Rig { bridge, .. } = rig();
+        bridge.socket.shutdown(Shutdown::Write).unwrap();
+        assert_eq!(bridge.open(&present()), Err("could not send the request".to_owned()));
+    }
+
+    /// The viewer no longer reading the output ends the bridge at the next frame, though its input stays open.
+    #[cfg(unix)]
+    #[test]
+    fn the_output_closing_ends_the_bridge() {
+        let Rig {
+            app,
+            viewer_in,
+            viewer_out,
+            bridge,
+            _ends,
+        } = rig();
+        client::send_all(&app, b"{\"ok\":true}\n").unwrap();
+        bridge.open(&present()).unwrap();
+        // before the bridge can end: macOS refuses a socket option once the peer has gone
+        app.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        drop(viewer_out);
+        let pumping = thread::spawn(move || bridge.pump());
+        // a sibling test's child holds the pipe's read end between its fork and its exec, so a frame can still land
+        // there; the first one after finds no reader
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !pumping.is_finished() {
+            assert!(std::time::Instant::now() < deadline, "the bridge outlived its output");
+            let _ = client::send_all(&app, b"{\"kind\":\"frame\"}\n");
+            thread::yield_now();
+        }
+        pumping.join().unwrap();
+        drop(viewer_in);
+    }
+
+    /// An input that fails to read ends the bridge as its end does: the app sees the request, then end of stream.
+    #[cfg(unix)]
+    #[test]
+    fn an_input_that_fails_to_read_ends_the_bridge_and_the_app_sees_end_of_stream() {
+        let (app, bridge_side) = ngterm_server::endpoint::pair().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let (_viewer_out, output) = io::pipe().unwrap();
+        let bridge = StreamBridge::new(bridge_side, File::open(directory.path()).unwrap(), file(output));
+        app.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        client::send_all(&app, b"{\"ok\":true}\n").unwrap();
+        bridge.open(&present()).unwrap();
+        let pumping = thread::spawn(move || bridge.pump());
+        let mut rest = Vec::new();
+        (&app).read_to_end(&mut rest).unwrap();
+        assert!(
+            String::from_utf8_lossy(&rest).contains("live.present"),
+            "the request, then end of stream"
+        );
+        drop(app);
+        pumping.join().unwrap();
+    }
+
+    /// A process out of descriptors cannot duplicate its stdin and stdout for the bridge, and says so with the OS's
+    /// reason. In a copy of the binary of its own, since the descriptor limit is process-wide.
+    #[cfg(unix)]
+    #[test]
+    fn a_bridge_over_stdio_without_spare_descriptors_says_why() {
+        crate::local::default_sigpipe::run(
+            "stream_bridge::tests::a_bridge_over_stdio_without_spare_descriptors_says_why",
+            || {
+                let (_app, bridge_side) = ngterm_server::endpoint::pair().unwrap();
+                // SAFETY: a zeroed `rlimit` is overwritten by `getrlimit`.
+                let mut limit: libc::rlimit = unsafe { std::mem::zeroed() };
+                // SAFETY: `limit` is a valid, writable `rlimit`.
+                assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) }, 0);
+                let lowered = libc::rlimit {
+                    rlim_cur: 3,
+                    rlim_max: limit.rlim_max,
+                };
+                // SAFETY: `lowered` is a valid `rlimit`; only the soft limit drops, so it can be put back.
+                assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const lowered) }, 0);
+                let bridge = StreamBridge::over_stdio(bridge_side);
+                // SAFETY: `limit` is the limit `getrlimit` read above.
+                assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) }, 0);
+                let error = bridge.unwrap_err();
+                assert!(error.starts_with("no stdin or stdout: "), "{error}");
+                assert!(!error.contains("os error"), "{error}");
+            },
+        );
+    }
+
+    #[test]
     fn the_input_ending_while_the_app_is_silent_ends_the_bridge() {
         let Rig {
             app,

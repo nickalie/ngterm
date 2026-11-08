@@ -278,6 +278,7 @@ fn install_validation_names_the_destination() {
 #[test]
 fn every_failure_has_its_own_message() {
     let cases = [
+        (InstallFailure::InvalidDestination, "invalid destination"),
         (
             InstallFailure::TerminfoNotFound {
                 searched: vec![PathBuf::from("/a/share/terminfo"), PathBuf::from("/t")],
@@ -608,6 +609,32 @@ fn a_non_zero_remote_status_is_reported_as_itself() {
     let ssh = fixture.fake_ssh(255);
     let outcome = run(&connection("buildbox"), None, &windows_env(&database), &ssh);
     assert_eq!(outcome, Ok(Outcome::Exited(255)));
+}
+
+/// A caller that ignores SIGCHLD has the kernel reap ssh, so its status is lost and the wait fails as upstream's
+/// `waitpid` arm reports it. In a copy of the binary of its own, since the disposition is process-wide.
+#[test]
+#[cfg(unix)]
+fn a_status_the_kernel_reaped_is_a_waitpid_failure() {
+    crate::local::default_sigpipe::run(
+        "terminfo::tests::a_status_the_kernel_reaped_is_a_waitpid_failure",
+        || {
+            let fixture = Fixture::new();
+            let database = fixture.database("env", "78");
+            let ssh = fixture.fake_ssh(0, true, "");
+            // SAFETY: `SIG_IGN` installs no handler code, in this probe process alone.
+            unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN) };
+            let outcome = run(&connection("buildbox"), None, &env(&[("TERMINFO", &database)]), &ssh);
+            assert_eq!(
+                outcome,
+                Err(InstallFailure::SpawnFailed {
+                    operation: "waitpid".to_owned(),
+                    reason: "No child processes".to_owned()
+                })
+            );
+            assert!(fixture.path("ssh.args").exists(), "ssh ran");
+        },
+    );
 }
 
 #[test]

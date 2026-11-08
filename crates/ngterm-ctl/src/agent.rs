@@ -314,4 +314,87 @@ mod tests {
             Err("--pane must be left, right, or scratch".to_owned())
         );
     }
+
+    fn agent(argv: &[&str]) -> Agent {
+        let argv = ["ngtermctl", "agent"].iter().chain(argv).copied();
+        let Cli::Agent(agent) = Ngtermctl::try_parse_from(argv).unwrap().command else {
+            panic!("not agent")
+        };
+        agent
+    }
+
+    #[test]
+    fn a_mail_hook_waits_only_for_claude() {
+        assert_eq!(
+            agent(&["mail", "codex", "--wait"]).check(),
+            Err("--wait is Claude Code's asyncRewake hook: codex has no way to be woken".to_owned())
+        );
+        assert_eq!(agent(&["mail", "claude", "--wait"]).check(), Ok(()));
+    }
+
+    /// The probe's stderr, where the command's own output and its `PROBE_RESULT:` line go.
+    #[cfg(unix)]
+    fn stderr(output: std::process::Output) -> String {
+        String::from_utf8(output.stderr).unwrap()
+    }
+
+    /// A refusal of the record read other than the pane having no agent is printed as the app's error and fails.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_read_refused_otherwise_prints_the_refusal_and_fails() {
+        let (output, requests) = crate::messages::tests::run_command(
+            &["agent", "commands", "--target", "S"],
+            b"",
+            &[],
+            &[r#"{"ok":false,"error":"no such session: S"}"#],
+        );
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["cmd"], "agent.get");
+        assert_eq!(requests[0]["target"], "S");
+        assert_eq!(crate::local::stdin_probe::command_stdout(&output), "");
+        let error = stderr(output);
+        assert!(error.contains("error: no such session: S\n"), "{error}");
+        assert!(error.contains("PROBE_RESULT:Err(Exit("), "{error}");
+    }
+
+    /// A payload past the cap is refused once the cap is passed, rather than read to its end, and nothing is sent.
+    #[cfg(unix)]
+    #[test]
+    fn a_payload_over_the_cap_is_refused_and_nothing_is_sent() {
+        let payload = vec![b'{'; usize::try_from(PAYLOAD_CAP).unwrap() + 1];
+        let (output, requests) =
+            crate::messages::tests::run_command(&["agent", "hook", "claude", "SessionStart"], &payload, &[], &[]);
+        assert!(requests.is_empty());
+        let error = stderr(output);
+        assert!(
+            error.contains(r#"PROBE_RESULT:Err(Local("hook payload is over 64 MiB"))"#),
+            "{error}"
+        );
+    }
+
+    /// A terminal on standard input is refused as a usage error, since nothing would end the read.
+    #[cfg(unix)]
+    #[test]
+    fn a_hook_refuses_a_terminal_on_standard_input() {
+        let (_controller, terminal) = crate::local::stdin_probe::terminal();
+        let output = crate::local::stdin_probe::run(&["agent", "hook", "claude", "SessionStart"], terminal.into());
+        let error = stderr(output);
+        assert!(
+            error.contains(r#"PROBE_RESULT:Err(Usage("agent hook reads the hook payload on standard input"))"#),
+            "{error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hook_reports_a_standard_input_it_cannot_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let unreadable = std::fs::File::open(directory.path()).unwrap();
+        let output = crate::local::stdin_probe::run(&["agent", "hook", "claude", "SessionStart"], unreadable.into());
+        let error = stderr(output);
+        assert!(
+            error.contains(r#"PROBE_RESULT:Err(Local("could not read standard input: "#),
+            "{error}"
+        );
+    }
 }
