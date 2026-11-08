@@ -474,21 +474,23 @@ mod tests {
         panic!("no pid in {}", path.display())
     }
 
-    /// Whether `pid` is gone, waiting up to two seconds.
+    /// Whether `pid` is gone, waiting up to ten seconds: a killed process that outlived its parent leaves only once
+    /// the reaper it was handed to gets to it.
     #[cfg(unix)]
     fn gone(pid: u32) -> bool {
         let pid = libc::pid_t::try_from(pid).unwrap();
-        for _ in 0..100 {
-            // SAFETY: signal 0 only checks that the process exists.
-            if unsafe { libc::kill(pid, 0) } != 0 {
-                return true;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        // SAFETY: signal 0 only checks that the process exists.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            if Instant::now() >= deadline {
+                return false;
             }
             thread::sleep(Duration::from_millis(20));
         }
-        false
+        true
     }
 
-    /// Whether `pid` is gone, waiting up to two seconds.
+    /// Whether `pid` is gone, waiting up to ten seconds.
     #[cfg(windows)]
     fn gone(pid: u32) -> bool {
         use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
@@ -502,7 +504,7 @@ mod tests {
         // SAFETY: `raw` is the process handle just opened, owned by nothing else.
         let process = unsafe { OwnedHandle::from_raw_handle(raw) };
         // SAFETY: the handle is open with the access a wait needs.
-        (unsafe { WaitForSingleObject(process.as_raw_handle(), 2_000) }) == WAIT_OBJECT_0
+        (unsafe { WaitForSingleObject(process.as_raw_handle(), 10_000) }) == WAIT_OBJECT_0
     }
 
     #[test]
@@ -565,10 +567,16 @@ mod tests {
         }
     }
 
+    /// `path` as one POSIX shell word.
+    #[cfg(unix)]
+    fn sh_word(path: &Path) -> String {
+        ngterm_core::command_restore::shell_quoted_line(&[path.to_string_lossy()])
+    }
+
     /// A program that signals readiness after it starts ignoring the grace stop.
     #[cfg(unix)]
     fn stubborn(ready: &Path) -> OverlayLaunchContext {
-        context(&format!(r#"trap "" TERM; : > '{}'; sleep 30"#, ready.display()))
+        context(&format!(r#"trap "" TERM; : > {}; sleep 30"#, sh_word(ready)))
     }
 
     #[cfg(windows)]
@@ -687,10 +695,10 @@ mod tests {
         // races dash, which blocks every signal around its (v)fork until the child execs (seen on ubuntu-26.04 as a
         // full mask)
         let probe = format!(
-            "export {MASK_PROBE}='{}'; exec '{}' overlay_job::tests::the_mask_probe --exact --nocapture \
+            "export {MASK_PROBE}={}; exec {} overlay_job::tests::the_mask_probe --exact --nocapture \
              --test-threads=1 > /dev/null",
-            mask_file.display(),
-            std::env::current_exe().unwrap().display()
+            sh_word(&mask_file),
+            sh_word(&std::env::current_exe().unwrap())
         );
         let (status, _) = run_to_end(&probe, &plain_base());
         assert_eq!(status, 0);
@@ -701,7 +709,7 @@ mod tests {
         );
 
         let ready = dir.path().join("ready");
-        let command = format!("trap 'exit 0' TERM; : > {}; while :; do :; done", ready.display());
+        let command = format!("trap 'exit 0' TERM; : > {}; while :; do :; done", sh_word(&ready));
         let grace = Duration::from_secs(2);
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context(&command)), false);
         let runner = runner(helper, grace);
@@ -896,9 +904,9 @@ mod tests {
         let pid_file = dir.path().join("descendant.pid");
         let ready = dir.path().join("ready");
         let command = format!(
-            "/bin/sleep 60 & echo $! > '{}' && : > '{}'; wait",
-            pid_file.display(),
-            ready.display()
+            "/bin/sleep 60 & echo $! > {} && : > {}; wait",
+            sh_word(&pid_file),
+            sh_word(&ready)
         );
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context(&command)), false);
         let runner = runner(helper, Duration::from_millis(300));

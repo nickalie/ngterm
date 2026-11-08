@@ -356,6 +356,115 @@ fn command_probe() {
     eprintln!("PROBE_RESULT:{:?}", parsed.command.run(&ngterm_core::paths::ProcessEnv));
 }
 
+/// Answers each connection to `listener` with the next of `replies`, then with the last one again until the command
+/// exits (`child_exited` disconnects): a following command may poll again before it notices stdin's EOF. Returns the
+/// requests it read. Panics, so its caller drops the listener, when the command exits before consuming every scripted
+/// reply, waits more than `patience` between two scripted connections, or still runs `patience` after its scripted
+/// replies are used up.
+#[cfg(unix)]
+fn serve_replies(
+    listener: &std::os::unix::net::UnixListener,
+    replies: &[String],
+    child_exited: &std::sync::mpsc::Receiver<()>,
+    patience: Duration,
+) -> Vec<serde_json::Value> {
+    use std::io::{BufRead as _, Write as _};
+    use std::sync::mpsc::RecvTimeoutError;
+
+    let mut requests = Vec::new();
+    let mut deadline = Instant::now() + patience;
+    for reply in replies.iter().chain(replies.last().into_iter().cycle()) {
+        let scripted = requests.len() < replies.len();
+        let overdue = if scripted {
+            "command never connected"
+        } else {
+            "command kept polling after its scripted replies"
+        };
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("accept: {error}"),
+            }
+            if !matches!(
+                child_exited.recv_timeout(Duration::from_millis(10)),
+                Err(RecvTimeoutError::Timeout)
+            ) {
+                assert!(!scripted, "command did not consume its scripted replies");
+                return requests;
+            }
+            assert!(Instant::now() < deadline, "{overdue}");
+        };
+        assert!(scripted || Instant::now() < deadline, "{overdue}");
+        // On macOS an accepted socket inherits the listener's non-blocking mode; the request is read blocking.
+        stream.set_nonblocking(false).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(&stream).read_line(&mut line).unwrap();
+        requests.push(serde_json::from_str(&line).unwrap());
+        stream.write_all(reply.as_bytes()).unwrap();
+        // each scripted reply gets its own wait for the next connection; the repeats share the one after the last
+        if scripted {
+            deadline = Instant::now() + patience;
+        }
+    }
+    requests
+}
+
+/// Reads all of `pipe` on its own thread, so a chatty child never blocks on a full pipe.
+#[cfg(unix)]
+fn drain(mut pipe: impl std::io::Read + std::marker::Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).unwrap();
+        bytes
+    })
+}
+
+/// Waits for `child` to exit, then for `server`. When the server gives up first (one of its assertions failed), the
+/// child is killed and the server's panic resumes here, so a broken command fails the test instead of hanging it.
+#[cfg(unix)]
+fn wait_for_child_and_server(
+    mut child: std::process::Child,
+    server: std::thread::JoinHandle<Vec<serde_json::Value>>,
+    child_running: std::sync::mpsc::Sender<()>,
+) -> (std::process::Output, Vec<serde_json::Value>) {
+    let stdout = drain(child.stdout.take().unwrap());
+    let stderr = drain(child.stderr.take().unwrap());
+    let mut server = Some(server);
+    let mut requests = None;
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        // the server ends early without a panic only when there were no replies to give
+        if server.as_ref().is_some_and(std::thread::JoinHandle::is_finished) {
+            match server.take().unwrap().join() {
+                Ok(read) => requests = Some(read),
+                Err(panic) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    std::panic::resume_unwind(panic);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    drop(child_running);
+    let requests = requests.unwrap_or_else(|| {
+        server
+            .unwrap()
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    });
+    let output = std::process::Output {
+        status,
+        stdout: stdout.join().unwrap(),
+        stderr: stderr.join().unwrap(),
+    };
+    (output, requests)
+}
+
 #[cfg(unix)]
 pub(crate) fn run_command(
     arguments: &[&str],
@@ -363,11 +472,10 @@ pub(crate) fn run_command(
     environment: &[(&str, &str)],
     replies: &[&str],
 ) -> (std::process::Output, Vec<serde_json::Value>) {
-    use std::io::{BufRead as _, Write as _};
+    use std::io::Write as _;
     use std::os::unix::net::UnixListener;
     use std::process::Stdio;
-    use std::sync::mpsc::{self, RecvTimeoutError};
-    use std::thread;
+    use std::sync::mpsc;
 
     let directory = tempfile::tempdir().unwrap();
     let socket = directory.path().join("ctl.sock");
@@ -375,43 +483,7 @@ pub(crate) fn run_command(
     listener.set_nonblocking(true).unwrap();
     let replies: Vec<String> = replies.iter().map(|reply| format!("{reply}\n")).collect();
     let (child_running, child_exited) = mpsc::channel::<()>();
-    let server = thread::spawn(move || {
-        let mut requests = Vec::new();
-        // A following command may poll again before it notices stdin's EOF. Keep the final state available until
-        // the subprocess exits, regardless of how many rechecks scheduling lets it make.
-        for reply in replies.iter().chain(replies.last().into_iter().cycle()) {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            let (mut stream, _) = loop {
-                match listener.accept() {
-                    Ok(pair) => break pair,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                    Err(error) => panic!("accept: {error}"),
-                }
-                if !matches!(
-                    child_exited.recv_timeout(Duration::from_millis(10)),
-                    Err(RecvTimeoutError::Timeout)
-                ) {
-                    assert!(
-                        requests.len() >= replies.len(),
-                        "command did not consume its scripted replies"
-                    );
-                    return requests;
-                }
-                assert!(
-                    requests.len() >= replies.len() || Instant::now() < deadline,
-                    "command never connected"
-                );
-            };
-            // On macOS an accepted socket inherits the listener's non-blocking mode; the request is read blocking.
-            stream.set_nonblocking(false).unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            let mut line = String::new();
-            std::io::BufReader::new(&stream).read_line(&mut line).unwrap();
-            requests.push(serde_json::from_str(&line).unwrap());
-            stream.write_all(reply.as_bytes()).unwrap();
-        }
-        requests
-    });
+    let server = std::thread::spawn(move || serve_replies(&listener, &replies, &child_exited, Duration::from_secs(10)));
     let mut argv = vec!["ngtermctl".to_owned()];
     argv.extend(arguments.iter().map(|argument| (*argument).to_owned()));
     argv.extend(["--socket".to_owned(), socket.to_string_lossy().into_owned()]);
@@ -432,11 +504,64 @@ pub(crate) fn run_command(
         .spawn()
         .unwrap();
     child.stdin.take().unwrap().write_all(input).unwrap();
-    let output = child.wait_with_output().unwrap();
-    drop(child_running);
-    let requests = server.join().unwrap();
+    let (output, requests) = wait_for_child_and_server(child, server, child_running);
     assert!(output.status.success(), "{output:?}");
     (output, requests)
+}
+
+#[cfg(unix)]
+#[test]
+#[should_panic(expected = "command kept polling after its scripted replies")]
+fn the_fake_server_gives_up_on_a_command_that_keeps_polling() {
+    use std::io::{BufRead as _, Write as _};
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("ctl.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let (_child_running, child_exited) = std::sync::mpsc::channel();
+    // polls until the listener is gone
+    std::thread::spawn(move || {
+        while let Ok(mut stream) = UnixStream::connect(&socket) {
+            let mut line = String::new();
+            if stream.write_all(b"{}\n").is_err() || std::io::BufReader::new(&stream).read_line(&mut line).is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    });
+    serve_replies(
+        &listener,
+        &["{}\n".to_owned()],
+        &child_exited,
+        Duration::from_millis(300),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fake_server_that_gives_up_kills_the_command_and_fails_with_its_reason() {
+    use std::process::Stdio;
+
+    let child = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let server = std::thread::spawn(|| -> Vec<serde_json::Value> { panic!("the server gave up") });
+    let (child_running, _child_exited) = std::sync::mpsc::channel();
+    let started = Instant::now();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_for_child_and_server(child, server, child_running)
+    }))
+    .unwrap_err();
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"the server gave up"));
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the command was waited for, not killed"
+    );
 }
 
 #[cfg(unix)]
