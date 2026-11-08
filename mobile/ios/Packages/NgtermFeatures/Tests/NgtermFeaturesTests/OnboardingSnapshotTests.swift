@@ -3,7 +3,7 @@ import Testing
 
 @testable import NgtermFeatures
 
-/// Goldens of the first run: the welcome, the import with a problem, and the public key.
+/// Goldens of the first run: the welcome, the import with a problem and while it runs, the public key, and the end.
 @MainActor
 @Suite("first run snapshots")
 internal struct OnboardingSnapshotTests {
@@ -53,6 +53,33 @@ internal struct OnboardingSnapshotTests {
         await model.importKey(privateKey: &bytes, passphrase: "")
         ScreenSnapshot.check(
             OnboardingView(model: model, onFinish: ScreenSnapshot.ignore), named: "import-passphrase", variant: .light
+        )
+    }
+
+    @Test("the import while the key is read: the action busy, the screen not taking input")
+    internal func importBusy() async {
+        defer { test.remove() }
+        let held = test.maker.holdImports()
+        let model = model()
+        model.startImport()
+        let reading = Task {
+            var bytes = Data(FakeKeyMaker.encryptedKey.utf8)
+            await model.importKey(privateKey: &bytes, passphrase: FakeKeyMaker.passphrase)
+        }
+        await Wait.until { model.step == .importing(isBusy: true, problem: nil) }
+        ScreenSnapshot.check(
+            OnboardingView(model: model, onFinish: ScreenSnapshot.ignore), named: "import-busy", variant: .light
+        )
+        held.signal()
+        await reading.value
+    }
+
+    @Test("the first run once it is over shows nothing of it")
+    internal func done() async throws {
+        defer { test.remove() }
+        _ = try await test.seedKey()
+        ScreenSnapshot.check(
+            OnboardingView(model: model(), onFinish: ScreenSnapshot.ignore), named: "onboarding-done", variant: .light
         )
     }
 

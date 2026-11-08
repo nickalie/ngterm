@@ -116,6 +116,38 @@ internal struct MachinesSnapshotTests {
         ScreenSnapshot.check(screen(MachinesModel(graph: test.graph)), named: "machines-empty-offline", variant: .light)
     }
 
+    @Test(
+        "the sidebar: attached sessions under their machine, the shown one marked, on the live clock",
+        arguments: ScreenVariant.allCases
+    )
+    internal func sidebar(variant: ScreenVariant) async throws {
+        defer { test.remove() }
+        let build = machine("m1", "build-01", host: "build-01.lan")
+        try test.seed(build)
+        try test.seed(machine("m2", "studio", host: "studio.lan"))
+        test.core.sessions["m1"] = Self.sessions
+        await test.connections.connect(build.core).value
+        await test.settled()
+        try await test.connections.attach(machineId: "m1", sessionId: "s1")
+        try await test.connections.attach(machineId: "m1", sessionId: "s4")
+        // told from the test's clock, long past: on the live clock (no fixed time) its retry is due
+        let nas = machine("m3", "nas", host: "nas.lan")
+        try test.seed(nas)
+        test.connections.connect(nas.core).cancel()
+        test.connections.receive(.machineState(machineId: "m3", state: .reconnecting(nextInMs: 5_000)))
+        let model = MachinesModel(graph: test.graph)
+        let view = NavigationStack {
+            MachinesView(model: model, selection: "m1") { _ in
+                // a golden opens nothing
+            }
+            .attachedSessions(shown: SessionKey(machineId: "m1", sessionId: "s4")) { _ in
+                // a golden opens nothing
+            }
+            .navigationTitle("Machines")
+        }
+        ScreenSnapshot.check(view, named: "machines-sidebar", variant: variant)
+    }
+
     @Test("Add machine, Save tried with problems", arguments: ScreenVariant.allCases)
     internal func addForm(variant: ScreenVariant) async throws {
         defer { test.remove() }
