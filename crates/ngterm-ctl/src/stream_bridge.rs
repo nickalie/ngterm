@@ -469,13 +469,20 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
         let stop = Arc::new(AtomicBool::new(false));
-        // in no read a cancel could end
-        let stuck = thread::spawn(|| thread::sleep(Duration::from_secs(4)));
+        // in no read a cancel could end; only the test can release it
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let stuck = thread::spawn(move || {
+            let _ = wait.recv();
+        });
         let stopping = std::time::Instant::now();
-        assert!(!windows::stop_reader(&stuck, &stop));
-        assert!(stopping.elapsed() >= Duration::from_secs(2), "{:?}", stopping.elapsed());
-        assert!(stop.load(Ordering::SeqCst));
+        let stopped = windows::stop_reader(&stuck, &stop);
+        let elapsed = stopping.elapsed();
+        // release and join even if an assertion fails
+        drop(release);
         stuck.join().unwrap();
+        assert!(!stopped);
+        assert!(elapsed >= Duration::from_secs(2), "{elapsed:?}");
+        assert!(stop.load(Ordering::SeqCst));
         let stop = Arc::new(AtomicBool::new(false));
         let seen = Arc::clone(&stop);
         let watching = thread::spawn(move || {
@@ -485,6 +492,35 @@ mod tests {
         });
         assert!(windows::stop_reader(&watching, &stop));
         assert!(watching.is_finished());
+        watching.join().unwrap();
+    }
+
+    /// A pipe whose writer stays open cannot finish its read until the stop cancels it. The read starts even if
+    /// the stop flag is already set, so a cancel that lands before the read must be retried.
+    #[cfg(windows)]
+    #[test]
+    fn a_blocked_pipe_reader_is_cancelled_and_can_be_joined() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use windows_sys::Win32::Foundation::ERROR_OPERATION_ABORTED;
+        let (mut input, writer) = io::pipe().unwrap();
+        let (ready, waiting) = std::sync::mpsc::sync_channel(0);
+        let (sent, result) = std::sync::mpsc::channel();
+        let reader = thread::spawn(move || {
+            ready.send(()).unwrap();
+            sent.send(input.read(&mut [0_u8; 1])).unwrap();
+        });
+        waiting.recv_timeout(Duration::from_secs(10)).unwrap();
+        let stop = AtomicBool::new(false);
+        let stopped = windows::stop_reader(&reader, &stop);
+        // unblock a reader the stop failed to cancel, then join before asserting
+        drop(writer);
+        reader.join().unwrap();
+        assert!(stopped, "the blocked read was abandoned");
+        assert!(stop.load(Ordering::SeqCst));
+        assert_eq!(
+            result.recv().unwrap().unwrap_err().raw_os_error(),
+            Some(i32::try_from(ERROR_OPERATION_ABORTED).unwrap())
+        );
     }
 
     /// Set in the environment of [`the_console_probe`]'s process.
@@ -609,12 +645,11 @@ mod tests {
         let pumping = thread::spawn(move || bridge.pump());
 
         let cooked = ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT;
-        wait_until("raw VT input", || {
-            let mode = console_mode(&input);
-            mode & ENABLE_VIRTUAL_TERMINAL_INPUT != 0 && mode & cooked == 0
-        });
         let vt = ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
-        assert_eq!(console_mode(&output) & vt, vt);
+        wait_until("raw VT input and VT output", || {
+            let mode = console_mode(&input);
+            mode & ENABLE_VIRTUAL_TERMINAL_INPUT != 0 && mode & cooked == 0 && console_mode(&output) & vt == vt
+        });
         app.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
         // past the request
         client::read_socket_line(&app, MAX_REQUEST_LINE_BYTES).unwrap();

@@ -47,9 +47,35 @@ fn origin_frames(origin: client::Connection) -> mpsc::Receiver<OverlayJobFrame> 
 
 /// The console's Ctrl+C and Ctrl+Break are the program's keys and leave the run alone; its close cancels the run and
 /// holds the helper for the grace and half a second, so the run can report before the system ends the helper. The
-/// handler is the first canceler's: routing the signals again changes nothing.
+/// handler is the first canceler's: routing the signals again changes nothing. A child keeps the process-wide
+/// handler and canceler out of the shared test harness.
 #[test]
 fn the_consoles_close_cancels_the_run_and_its_keys_do_not() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "overlay_job::sys::tests::the_console_signal_probe",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env_clear()
+        .envs(std::env::vars_os().filter(|(key, _)| !key.to_string_lossy().starts_with("NGTERM_")))
+        .env("CTL_WINDOWS_SIGNAL_PROBE", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("the console signal probe ran"),
+        "{output:?}"
+    );
+}
+
+/// The scenario above, only in the child that opts in: installing the handler is for this process's whole life.
+#[test]
+fn the_console_signal_probe() {
+    if std::env::var_os("CTL_WINDOWS_SIGNAL_PROBE").is_none() {
+        return;
+    }
     let grace = Duration::from_millis(200);
     let (origin, helper) = ngterm_server::endpoint::pair().unwrap();
     let frames = origin_frames(origin);
@@ -87,4 +113,5 @@ fn the_consoles_close_cancels_the_run_and_its_keys_do_not() {
     drop(runner);
     assert_eq!(frames.recv().unwrap(), OverlayJobFrame::Canceled);
     assert!(frames.recv().is_err(), "a frame after the report");
+    println!("the console signal probe ran");
 }
