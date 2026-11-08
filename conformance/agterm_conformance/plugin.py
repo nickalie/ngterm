@@ -1209,16 +1209,24 @@ def pytest_runtest_protocol(item, nextitem):
         del item.stash[_TRACE_FAILED]
 
 
-@pytest.hookimpl(hookwrapper=True, tryfirst=True)
-def pytest_runtest_makereport(item, call):
+@pytest.hookimpl(hookwrapper=True, tryfirst=True, specname="pytest_runtest_makereport")
+def pytest_restore_upstream_bug_harness_errors(item, call):
+    """Outside pytest's xfail wrapper: even an assertion in fixture setup or teardown is a harness error, not the named
+    bug in the test body, so the outcome consumers must see it fail."""
     outcome = yield
     report = outcome.get_result()
-    # Outside pytest's xfail wrapper: even an assertion in fixture setup or teardown is a harness error, not the
-    # named bug in the test body. Restore it before the trace and the outcome consumers decide whether it failed.
     if (report.when != "call" and report.skipped
             and str(getattr(report, "wasxfail", "")).startswith(f"{UPSTREAM_BUG}:")):
         report.outcome = "failed"
         del report.wasxfail
+
+
+@pytest.hookimpl(hookwrapper=True, trylast=True)
+def pytest_runtest_makereport(item, call):
+    # Inside pytest's xfail wrapper: an upstream_bug's assertion still reads as failed, so it keeps its trace, the
+    # evidence its allowance rests on.
+    outcome = yield
+    report = outcome.get_result()
     record = item.stash.get(_TRACE_KEY, None)
     if record is not None and report.when == "setup":
         from agterm_conformance.impls.base import Instance

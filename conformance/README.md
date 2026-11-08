@@ -132,12 +132,12 @@ Reruns: the Rust ui runs do not rerun; they wait on read-back like the other lay
 
 Each test keeps a trace in memory, written to `traces/<nodeid-slug>/` beside the nodeid report (else the JUnit report,
 else `<rootdir>/reports/traces/`; `--trace-dir DIR` overrides) as `--trace-mode` says: `on-failure` (the default) keeps
-only a failed test's, `always` every test's, `off` none, and a rerun that passes drops its failed attempt's. A trace
-holds `actions.jsonl` (driver actions), `socket.jsonl` (control socket requests and replies), `cli.jsonl` (each
-`ngtermctl` argv, exit code and output), the instance's `app.log` and `panes/` (each pane's text), and, where a driver
-exists, `a11y-tree.txt` and `screenshot.png` (Pillow's `ImageGrab`, on Linux from the instance's Xvfb). A second
-instance's files go under `instances/<slug>/`; whatever could not be collected is named in `trace-errors.txt`. The CI
-jobs upload them with their reports.
+only a failed test's, an `upstream_bug` expected failure's included, `always` every test's, `off` none, and a rerun that
+passes drops its failed attempt's. A trace holds `actions.jsonl` (driver actions), `socket.jsonl` (control socket
+requests and replies), `cli.jsonl` (each `ngtermctl` argv, exit code and output), the instance's `app.log` and `panes/`
+(each pane's text), and, where a driver exists, `a11y-tree.txt` and `screenshot.png` (Pillow's `ImageGrab`, on Linux
+from the instance's Xvfb). A second instance's files go under `instances/<slug>/`; whatever could not be collected is
+named in `trace-errors.txt`. The CI jobs upload them with their reports.
 
 ## Reference discipline
 
@@ -153,7 +153,7 @@ in the test, not allowed. An unexplained stall remains an observation, not an es
 ### Reference observations
 
 These symptoms were reproduced against v0.41.1; their causes remain unknown. The allowances keep the assertions on
-both builds and excuse only the reference. They are separate from upstream's
+both builds and excuse only the reference. They are tracked apart from upstream's
 `docs/backlog/fast-live-command-loses-output-in-host-handoff.md`, whose command ends before the pane attaches, and
 `docs/backlog/session-host-attach-to-ended-command-misses-its-window-on-ci.md`, whose guard client is slow to exit.
 
@@ -167,8 +167,10 @@ both builds and excuse only the reference. They are separate from upstream's
 - `live-restarted-command-output-missing`: in the eight-iteration diagnostic run
   [42520472215](https://github.com/nickalie/ngterm/actions/runs/42520472215), with allowances disabled,
   `test_restart_command_interrupted_by_ctrl_c_leaves_a_prompt` missed its first-line marker from the whole text in
-  one iteration while the command's `sleep 600` still ran. A separate observation was a marker in scrollback above
-  an empty visible screen. The test requires the marker on the visible screen before sending Ctrl+C.
+  one iteration: for 10 s after the restart the pane showed only the login banner and a shell prompt, the tree at the
+  failure named no foreground program, and whether the command ran is unknown. A separate observation was a marker
+  in scrollback above an empty visible screen. The test requires the marker on the visible screen before sending
+  Ctrl+C.
 - `live-wait-command-loses-output`: in that same diagnostic run, the `--wait` tests failed three of eight
   (`test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wait`) and two of eight
   (`test_a_wait_command_keeps_scrollback_after_attached_exit`) iterations after their readiness checks read output.
