@@ -547,7 +547,7 @@ impl Client {
             ToWorker::Command(EngineCommand::Reply(token, _)) => {
                 EngineCommand::Reply(*token, Err(TOO_LARGE.to_owned()))
             }
-            ToWorker::SchemeBytes { token, .. } => EngineCommand::Scheme(
+            ToWorker::SchemeBytes { token, .. } | ToWorker::SchemeFile { token, .. } => EngineCommand::Scheme(
                 *token,
                 SchemeResponse::Error {
                     kind: SchemeError::Failed,
@@ -561,7 +561,7 @@ impl Client {
                 }
                 return;
             }
-            ToWorker::Start(_) | ToWorker::Command(_) => return,
+            ToWorker::Start(_) | ToWorker::Command(_) | ToWorker::PersistentSession { .. } => return,
         };
         self.send(instead);
     }

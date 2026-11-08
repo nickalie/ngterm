@@ -11,6 +11,22 @@ use super::*;
 use crate::config::BufferFormat;
 use crate::frames::ShmRegion;
 
+#[test]
+fn negative_damage_origins_are_clipped_without_moving_the_far_edge() {
+    assert_eq!(rect_of(&rectangle(-2, -1, 5, 3)), Some(rect(0, 0, 3, 2)));
+    for damage in [
+        rectangle(-2, 0, 2, 1),
+        rectangle(0, -2, 1, 1),
+        rectangle(i32::MIN, 0, i32::MAX, 1),
+    ] {
+        assert_eq!(rect_of(&damage), None);
+    }
+    assert_eq!(
+        rect_of(&rectangle(i32::MAX, i32::MAX, i32::MAX, i32::MAX)),
+        Some(rect(i32::MAX as u32, i32::MAX as u32, i32::MAX as u32, i32::MAX as u32))
+    );
+}
+
 /// Runs `case` (the test `name` of this module) alone in a process of its own, with a main context of its own as the
 /// thread's default, as the engine thread has: the view's acknowledgements run from sources on it. `WPEPlatform`'s
 /// first display registers types process-wide, which two test threads must not race on.
@@ -274,11 +290,13 @@ fn a_page_s_shm_frame_carries_its_damaged_pixels_and_its_buffer_goes_back_at_onc
                 rectangle(0, 0, 0, 1),
                 rectangle(1, 0, 1, -1),
                 rectangle(2, 1, 5, 1),
+                rectangle(-1, -1, 2, 2),
+                rectangle(-4, 0, 2, 1),
             ];
             render(&view, &buffer, &damage).unwrap();
             let shown = frame(&received);
             assert_eq!((shown.view, shown.width, shown.height), (ViewId(7), 4, 2));
-            assert_eq!(shown.damage, [rect(0, 0, 2, 1), rect(2, 1, 5, 1)]);
+            assert_eq!(shown.damage, [rect(0, 0, 2, 1), rect(2, 1, 5, 1), rect(0, 0, 1, 1)]);
             let FrameContent::Shm(regions) = shown.content else {
                 panic!("an SHM frame")
             };
@@ -291,6 +309,10 @@ fn a_page_s_shm_frame_carries_its_damaged_pixels_and_its_buffer_goes_back_at_onc
                     rect: rect(2, 1, 2, 1),
                     pixels: [[2, 1, 0, 255], [3, 1, 0, 255]].concat(),
                 },
+                ShmRegion {
+                    rect: rect(0, 0, 1, 1),
+                    pixels: vec![0, 0, 0, 255],
+                },
             ];
             assert_eq!(
                 regions, expected,
@@ -299,6 +321,8 @@ fn a_page_s_shm_frame_carries_its_damaged_pixels_and_its_buffer_goes_back_at_onc
             // copied out: the buffer goes back at once, and the frame counts as rendered once presented
             run_until(context, || heard.borrow().len() == 1);
             view.presented(BufferId(u64::MAX));
+            while context.iteration(false) {}
+            assert_eq!(heard.borrow().len(), 1, "an unknown buffer acknowledges nothing");
             view.presented(shown.buffer);
             run_until(context, || heard.borrow().len() == 2);
             assert_eq!(*heard.borrow(), [("released", buffer.clone()), ("rendered", buffer)]);
@@ -459,8 +483,8 @@ fn a_display_on_a_render_node_offers_the_consumer_s_formats() {
     });
 }
 
-/// The first DRM render node this process may open (`WPE_TEST_RENDER_NODE` picks another), as the headless tests
-/// pick theirs.
+/// The first DRM render node this process may open (`WPE_TEST_RENDER_NODE` picks another). Any driver suffices:
+/// unlike the headless tests, this test does not read pixels back and needs no Mesa-only filter.
 fn render_node() -> Option<PathBuf> {
     if let Some(node) = std::env::var_os("WPE_TEST_RENDER_NODE") {
         return Some(PathBuf::from(node));
