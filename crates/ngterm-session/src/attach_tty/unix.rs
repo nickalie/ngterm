@@ -136,8 +136,9 @@ mod tests {
                     &raw mut master,
                     &raw mut slave,
                     std::ptr::null_mut(),
-                    std::ptr::null(),
-                    std::ptr::null(),
+                    // `*mut` for Apple's declaration; Linux's `*const` takes it too
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
                 )
             };
         assert_eq!(result, 0);
@@ -148,16 +149,38 @@ mod tests {
         (master, slave)
     }
 
-    #[test]
-    fn a_terminal_client_restores_raw_mode_and_reports_pixels_and_resize() {
-        let (_master, slave) = pty();
-        let output = child("terminal")
+    /// Runs `case` in a child on a fresh terminal and fails if it fails or outlives its deadline. The terminal's output
+    /// is read as it comes: macOS's `TCSAFLUSH` waits for it to drain, so an unread terminal blocks raw mode's restore.
+    fn run_on_terminal(case: &str) {
+        let (master, slave) = pty();
+        let mut process = child(case)
             .stdin(Stdio::from(slave.try_clone().unwrap()))
             .stdout(Stdio::from(slave))
             .stderr(Stdio::piped())
-            .output()
+            .spawn()
             .unwrap();
+        // The reader ends when the child's end of the terminal closes; a terminal still open stays with it.
+        thread::spawn(move || io::copy(&mut std::fs::File::from(master), &mut io::sink()));
+        wait_within_deadline(&mut process, case);
+        let output = process.wait_with_output().unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    /// Waits for `process` to exit, killing it and failing the test once the deadline passes.
+    fn wait_within_deadline(process: &mut std::process::Child, what: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while process.try_wait().unwrap().is_none() {
+            if std::time::Instant::now() >= deadline {
+                process.kill().unwrap();
+                panic!("{what}: the child outlived its deadline");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn a_terminal_client_restores_raw_mode_and_reports_pixels_and_resize() {
+        run_on_terminal("terminal");
     }
 
     #[test]
@@ -187,8 +210,13 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        process.stdin.take().unwrap().write_all(b"unused").unwrap();
+        // Input stays open, so only the failed send can end the reader before the deadline.
+        let mut stdin = process.stdin.take().unwrap();
+        stdin.write_all(b"unused").unwrap();
+        stdin.flush().unwrap();
+        wait_within_deadline(&mut process, "the reader kept reading after its receiver vanished");
         let output = process.wait_with_output().unwrap();
+        drop(stdin);
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
 
@@ -300,14 +328,7 @@ mod tests {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn a_terminal_that_refuses_raw_mode_remains_usable_without_it() {
-        let (_master, slave) = pty();
-        let output = child("refused")
-            .stdin(Stdio::from(slave.try_clone().unwrap()))
-            .stdout(Stdio::from(slave))
-            .stderr(Stdio::piped())
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        run_on_terminal("refused");
     }
 
     /// Refuse terminal writes at the OS boundary, on this child test's thread alone; terminal detection still works.

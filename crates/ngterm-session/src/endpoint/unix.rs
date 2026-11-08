@@ -177,11 +177,14 @@ fn make_directory_private(directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// herdr's `prepare_socket_path`: a socket file nobody listens on is removed, a live one refused as busy. It runs under
-/// the namespace's lock ([`lock_namespace`]), so no other server is between its check and the bind.
+/// herdr's `prepare_socket_path`: a socket file nobody listens on is removed, a live one refused as busy. Only a
+/// missing socket counts as absent: a path that cannot be checked is an error. It runs under the namespace's lock
+/// ([`lock_namespace`]), so no other server is between its check and the bind.
 fn prepare_socket_path(socket: &Path) -> io::Result<()> {
-    if fs::symlink_metadata(socket).is_err() {
-        return Ok(());
+    match fs::symlink_metadata(socket) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+        Ok(_) => {}
     }
     match Stream::connect(socket.to_fs_name::<GenericFilePath>()?) {
         Ok(_) => {
@@ -355,7 +358,11 @@ mod tests {
         let identity = socket_file_identity(root.path()).unwrap();
         let error = remove_socket_file_if_owned(root.path(), &identity).unwrap_err();
         assert!(root.path().is_dir());
+        // Linux's unlink says EISDIR; macOS's says EPERM
+        #[cfg(target_os = "linux")]
         assert_eq!(error.kind(), io::ErrorKind::IsADirectory);
+        #[cfg(target_os = "macos")]
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]
@@ -363,11 +370,29 @@ mod tests {
         let root = tempfile::Builder::new().prefix("ngep-").tempdir_in("/tmp").unwrap();
         let directory = root.path().join("socket");
         fs::create_dir(&directory).unwrap();
-        assert_eq!(
-            prepare_socket_path(&directory).unwrap_err().kind(),
-            io::ErrorKind::IsADirectory
-        );
+        let error = prepare_socket_path(&directory).unwrap_err();
         assert!(directory.is_dir());
+        // Linux refuses the connection, so the unlink is tried and says EISDIR; macOS's connect says ENOTSOCK
+        #[cfg(target_os = "linux")]
+        assert_eq!(error.kind(), io::ErrorKind::IsADirectory);
+        #[cfg(target_os = "macos")]
+        assert_eq!(error.raw_os_error(), Some(libc::ENOTSOCK));
+    }
+
+    #[test]
+    fn an_inaccessible_socket_parent_reports_its_error() {
+        // root reads any directory, so its check never fails
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let root = tempfile::Builder::new().prefix("ngep-").tempdir_in("/tmp").unwrap();
+        let endpoint = Endpoint::new(root.path().join("private"));
+        let _listener = endpoint.bind().unwrap();
+        fs::set_permissions(endpoint.directory(), fs::Permissions::from_mode(0o0)).unwrap();
+        let result = prepare_socket_path(endpoint.socket_path());
+        fs::set_permissions(endpoint.directory(), fs::Permissions::from_mode(DIRECTORY_MODE)).unwrap();
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert!(endpoint.connect().is_ok());
     }
 
     #[test]
