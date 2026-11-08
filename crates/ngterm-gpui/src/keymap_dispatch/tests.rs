@@ -216,6 +216,70 @@ fn a_held_tail_outlasts_a_key_repeat_delay_longer_than_the_window() {
     ));
 }
 
+/// Modifiers changing over a held tail leave it the same key, and upstream's window starts at that key's release:
+/// past the stand-in's deadline a modified autorepeat fires nothing, and the plain one after it fires again.
+#[test]
+fn a_held_tails_window_follows_its_key_when_the_modifiers_change() {
+    let start = Instant::now();
+    let (mut router, identity) = router_with_dispatched_tail(start);
+    let modified = start + super::REPEAT_TIMEOUT + Duration::from_millis(100);
+    assert_eq!(router.press(&native_s(true, true), modified, false), Press::Consumed);
+    assert_eq!(router.deadline, None, "the key is still down");
+    assert_eq!(router.held_repeat, Some(identity));
+    router.release(identity, modified);
+    assert_eq!(
+        router.deadline,
+        Some(modified + super::REPEAT_TIMEOUT),
+        "the next stand-in reopens the window"
+    );
+    assert!(matches!(
+        router.press(&native_s(false, true), modified + Duration::from_millis(100), false),
+        Press::Fired(Fired::Command(_))
+    ));
+}
+
+/// Upstream's `releaseRepeatTail`: a key pressed meanwhile closed the window, and "a new leader keeps its own, longer
+/// timeout", so the old tail's autorepeat has nothing to suspend.
+#[test]
+fn a_tails_autorepeat_leaves_a_leader_typed_since_its_release_alone() {
+    let start = Instant::now();
+    let (mut router, _) = router_with_dispatched_tail(start);
+    let leader = start + Duration::from_millis(100);
+    assert!(press(&mut router, "ctrl-a", leader));
+    let deadline = Some(leader + super::LEADER_TIMEOUT);
+    assert_eq!(router.deadline, deadline);
+    assert_eq!(
+        router.press(&native_s(false, true), leader, false),
+        Press::Consumed,
+        "the window it repeated in is gone"
+    );
+    assert_eq!(router.deadline, deadline);
+    assert_eq!(router.held_repeat, None);
+}
+
+/// Only the tail that last fired holds the window: an older tail still repeating takes it from nobody.
+#[test]
+fn a_released_tails_autorepeat_leaves_a_newer_tails_window_alone() {
+    let now = Instant::now();
+    let mut router = router("command \"s\" ctrl+a>s --repeat true\ncommand \"p\" ctrl+a>p --repeat true\n");
+    assert!(press(&mut router, "ctrl-a", now));
+    release(&mut router, "ctrl-a", now);
+    assert!(matches!(
+        router.press(&native_s(false, false), now, false),
+        Press::Fired(Fired::Command(_))
+    ));
+    router.release(native_s(false, false).identity, now);
+    assert!(press(&mut router, "p", now));
+    assert_eq!(router.press(&native_s(true, true), now, false), Press::Consumed);
+    assert_eq!(router.held_repeat, Some(stroke("p").identity));
+    release(&mut router, "p", now);
+    assert_eq!(
+        router.deadline,
+        Some(now + super::REPEAT_TIMEOUT),
+        "p's release opens it"
+    );
+}
+
 #[test]
 fn a_fresh_press_after_a_dispatched_release_finds_the_window_lapsed() {
     let start = Instant::now();
@@ -388,19 +452,23 @@ fn dispatched(text: &str) -> Keystroke {
     Keystroke::parse(text).unwrap().with_simulated_ime()
 }
 
-/// The platform's record of `text`, a letter chord: what `NSApp.currentEvent` holds while a key a web view handed over
+/// The platform's record of `text`, a letter chord or Escape: what `NSApp.currentEvent` holds while a key a web view handed over
 /// is dispatched, so the press carries the physical key's identity rather than its name's.
 #[cfg(all(feature = "html", target_os = "macos"))]
 fn native_source(text: &str, repeat: bool) -> Source {
     let keystroke = dispatched(text);
     let letter = keystroke.key.chars().next().unwrap();
-    let code = format!("Key{}", letter.to_ascii_uppercase());
+    let (code, typed) = if keystroke.key == "escape" {
+        ("Escape".to_owned(), '\u{1b}')
+    } else {
+        (format!("Key{}", letter.to_ascii_uppercase()), letter)
+    };
     Source::Native(NativeKey {
         keycode: crate::terminal::input::xkb_keycode(&code).unwrap(),
         modifiers: keystroke.modifiers,
-        unshifted: Some(letter),
+        unshifted: Some(typed),
         ascii_layout: true,
-        text: letter.to_string(),
+        text: typed.to_string(),
         repeat,
         ..NativeKey::default()
     })
@@ -446,18 +514,23 @@ fn a_web_view_keeps_every_key_until_a_keymap_is_loaded_except_the_switcher() {
     assert!(!super::takes(&stroke("tab")), "Tab alone stays the page's");
 }
 
-#[test]
+/// The Shift key pressed alone, with a base the chord could resolve from, so only the key being a modifier keeps it
+/// from being one.
 #[cfg(all(feature = "html", target_os = "macos"))]
-fn a_web_view_keeps_a_bare_modifier() {
-    let keystroke = dispatched("shift");
-    // a base the chord could resolve from, so only the key being a modifier keeps it from being one
+fn native_shift() -> KeyStroke {
     let native = NativeKey {
         keycode: 50,
         unshifted: Some('a'),
         ascii_layout: true,
         ..NativeKey::default()
     };
-    let shift = KeyStroke::new(&keystroke, &Source::Native(native), false);
+    KeyStroke::new(&dispatched("shift"), &Source::Native(native), false)
+}
+
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_web_view_keeps_a_bare_modifier() {
+    let shift = native_shift();
     assert_eq!(crate::terminal::input::chord(&shift), None);
     let (keymap, _) = parse_keymap("", &linux_defaults());
     super::load_keymap(&keymap);
@@ -676,8 +749,14 @@ fn a_pages_leader_and_nonrepeat_tail_follow_the_leader_window() {
         let now = Instant::now();
         assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
         let deadline = super::ROUTER.with_borrow(|router| router.deadline);
-        assert_eq!(page_press("a", true, now), Press::Consumed);
-        assert_eq!(super::ROUTER.with_borrow(|router| router.deadline), deadline);
+        // the autorepeat as the matcher would read it, Ctrl held or let go, later than the press so a restart shows
+        for repeat in ["ctrl-a", "a"] {
+            assert_eq!(
+                page_press(repeat, true, now + Duration::from_millis(100)),
+                Press::Consumed
+            );
+            assert_eq!(super::ROUTER.with_borrow(|router| router.deadline), deadline);
+        }
         if lapsed {
             lapse_monitor();
             assert_eq!(page_press("a", true, Instant::now()), Press::Consumed);
@@ -693,8 +772,9 @@ fn a_pages_leader_and_nonrepeat_tail_follow_the_leader_window() {
     }
 }
 
-/// A repeat tail fires while held even beyond the synthetic release's window, and on a fresh press inside the real
-/// release's window. Once that window lapses a fresh press and all its repeats belong to the page.
+/// A repeat tail fires while held even beyond the stand-in release's window, and on a fresh press inside the window
+/// the last stand-in opened; a late key-up still reports the release as the keymap's. Once that window lapses a fresh
+/// press and all its repeats belong to the page.
 #[test]
 #[cfg(all(feature = "html", target_os = "macos"))]
 fn a_pages_repeat_tail_follows_the_release_window() {
@@ -849,4 +929,128 @@ fn a_pages_held_prefix_does_not_suspend_a_released_tails_window() {
     assert_eq!(super::ROUTER.with_borrow(|router| router.deadline), deadline);
     lapse_monitor();
     assert_eq!(page_press("n", false, Instant::now()), Press::Passed);
+}
+
+/// Loads `keymap` into this thread's monitor.
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn load_monitor(keymap: &str) {
+    let (keymap, _) = parse_keymap(keymap, &linux_defaults());
+    super::load_keymap(&keymap);
+}
+
+/// Whether this thread's monitor has a half-typed leader or an open repeat window.
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn monitor_is_live() -> bool {
+    super::ROUTER.with_borrow(|router| {
+        router
+            .engine
+            .as_ref()
+            .is_some_and(|engine| engine.is_armed() || engine.is_repeating())
+    })
+}
+
+/// Upstream's monitor sees a key typed into a page too, and an unmatched press ends the sequence: the page types the
+/// leader's next chord instead of losing it to the command. A bound menu chord the page keeps counts as unmatched.
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_key_the_page_keeps_drops_a_half_typed_leader() {
+    for kept in ["x", "ctrl-shift-z"] {
+        load_monitor("command \"g\" ctrl+a>g true\n");
+        let now = Instant::now();
+        assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
+        assert_eq!(page_press(kept, false, now), Press::Passed, "{kept}");
+        assert!(!monitor_is_live(), "{kept}");
+        assert_eq!(super::ROUTER.with_borrow(|router| router.deadline), None, "{kept}");
+        assert_eq!(page_press("g", false, now), Press::Passed, "{kept}");
+    }
+}
+
+/// Upstream's "a key that repeats nothing ends the window" (`testAKeyTypedIntoATextFieldClosesTheRepeatWindow`).
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_key_the_page_keeps_closes_a_repeat_window() {
+    load_monitor("command \"n\" ctrl+a>n --repeat true\n");
+    let now = Instant::now();
+    assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
+    assert!(matches!(page_press("n", false, now), Press::Fired(Fired::Command(_))));
+    assert_eq!(page_press("x", false, now), Press::Passed);
+    assert!(!monitor_is_live());
+    assert_eq!(super::ROUTER.with_borrow(|router| router.deadline), None);
+    assert_eq!(page_press("n", false, now), Press::Passed);
+}
+
+/// A press the page keeps never advances a shift about to be part of the next chord: upstream's bare modifier "can't
+/// advance; while armed, keep waiting".
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_bare_modifier_the_page_keeps_leaves_a_leader_waiting() {
+    load_monitor("command \"g\" ctrl+a>g true\n");
+    let now = Instant::now();
+    assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
+    assert!(!super::takes(&native_shift()));
+    assert!(monitor_is_live());
+    assert!(matches!(page_press("g", false, now), Press::Fired(Fired::Command(_))));
+}
+
+/// Upstream's Esc: it abandons a half-typed leader and is the keymap's only then, through its autorepeats and release.
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn escape_in_a_page_cancels_a_leader_and_is_consumed_only_then() {
+    load_monitor("command \"g\" ctrl+a>g true\n");
+    let now = Instant::now();
+    assert!(!super::takes(&native_stroke("escape", false)));
+    assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
+    assert_eq!(page_press("escape", false, now), Press::Consumed);
+    assert!(!monitor_is_live());
+    assert_eq!(page_press("escape", true, now), Press::Consumed);
+    assert!(super::ROUTER.with_borrow_mut(|router| router.release(native_identity("escape"), now)));
+    assert_eq!(page_press("g", false, now), Press::Passed);
+    assert!(!super::takes(&native_stroke("escape", false)));
+    page_keeps_press("escape", now);
+}
+
+/// Upstream's Esc over a repeat window: "an open repeat window closes, but Esc still reaches the terminal".
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn escape_in_a_page_closes_a_repeat_window_and_stays_the_pages() {
+    load_monitor("command \"n\" ctrl+a>n --repeat true\n");
+    let now = Instant::now();
+    assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
+    assert!(matches!(page_press("n", false, now), Press::Fired(Fired::Command(_))));
+    assert!(!super::takes(&native_stroke("escape", false)));
+    assert!(!monitor_is_live());
+    assert_eq!(page_press("n", false, now), Press::Passed);
+}
+
+/// A leader run out is gone before its timeout's next key reads it: Esc has nothing to cancel and goes to the page.
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn escape_in_a_page_after_a_lapsed_leader_stays_the_pages() {
+    load_monitor("command \"g\" ctrl+a>g true\n");
+    let now = Instant::now();
+    assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
+    lapse_monitor();
+    assert!(!super::takes(&native_stroke("escape", false)));
+    assert!(!monitor_is_live());
+}
+
+/// The tail held in a page with a modifier going down over it stays held: past the stand-in's deadline the matcher
+/// is still repeating, and the plain autorepeat after it fires.
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_pages_held_tail_outlasts_a_modifier_held_past_its_window() {
+    load_monitor("command \"n\" ctrl+a>n --repeat true\n");
+    let now = Instant::now();
+    assert_eq!(page_press("ctrl-a", false, now), Press::Consumed);
+    assert!(matches!(page_press("n", false, now), Press::Fired(Fired::Command(_))));
+    lapse_monitor();
+    assert_eq!(page_press("shift-n", true, Instant::now()), Press::Consumed);
+    assert!(
+        super::ROUTER.with_borrow(|router| router.deadline.is_some()),
+        "its stand-in reopened the window"
+    );
+    assert!(matches!(
+        page_press("n", true, Instant::now()),
+        Press::Fired(Fired::Command(_))
+    ));
 }
