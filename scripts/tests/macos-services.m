@@ -12,6 +12,7 @@ extern void ngterm_clipboard_html(const char *, const char *);
 extern unsigned ngterm_key_flags(unsigned long, bool, bool, bool);
 extern int ngterm_key_event(void *, unsigned *, unsigned *, unsigned *, char *,
                             char *, unsigned);
+extern unsigned ngterm_first_scalar(NSString *);
 extern void *
 ngterm_web_attach(void *, void *,
                   bool (*)(void *, const char *, bool, bool, bool, uint64_t),
@@ -139,6 +140,13 @@ static NSEvent *event(unsigned code, NSEventModifierFlags flags,
                            keyCode:code];
 }
 static void keyboard(void) {
+  assert(ngterm_first_scalar(@"") == 0);
+  assert(ngterm_first_scalar(@"a") == 'a');
+  assert(ngterm_first_scalar(@"ąb") == 0x105);
+  assert(ngterm_first_scalar(@"𐐀b") == 0x10400); // a surrogate pair is one key
+  const unichar lone = 0xd800;
+  assert(ngterm_first_scalar([NSString stringWithCharacters:&lone
+                                                     length:1]) == 0);
   assert((ngterm_key_flags(NSEventModifierFlagControl | NX_DEVICELCTLKEYMASK,
                            false, false, false) &
           3) == 0);

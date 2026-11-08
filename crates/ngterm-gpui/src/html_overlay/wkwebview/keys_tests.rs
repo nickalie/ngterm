@@ -1,6 +1,6 @@
 //! Native page keys keep their GPUI spelling while the application keymap decides ownership.
 
-use gpui_kit::{Keystroke, Modifiers};
+use gpui_kit::{Keystroke, Modifiers, TestAppContext, VisualTestContext};
 use ngterm_core::keymap::{linux_defaults, parse_keymap};
 
 use super::{NativeKey, app_key, app_key_from_native};
@@ -21,6 +21,79 @@ fn native(keycode: u32, unshifted: Option<char>, modifiers: Modifiers) -> Native
         ascii_layout: true,
         ..NativeKey::default()
     }
+}
+
+/// Esc as the adapter reports it: its XKB position, and the control character it types.
+fn escape() -> NativeKey {
+    native(9, Some('\u{1b}'), Modifiers::default())
+}
+
+/// A window whose keys reach the monitor, which is what arms a leader.
+fn monitored_window(cx: &mut TestAppContext) -> &mut VisualTestContext {
+    let cx = cx.add_empty_window();
+    cx.update(|window, cx| {
+        keymap_dispatch::init(cx);
+        keymap_dispatch::register_window(
+            window.window_handle(),
+            keymap_dispatch::KeyOrigin::Window(uuid::Uuid::new_v4()),
+        );
+    });
+    cx
+}
+
+/// Dispatches `keystroke` as a web view hands a key over: through the window, its release stood in for at once.
+fn dispatch(cx: &mut VisualTestContext, keystroke: Keystroke) {
+    cx.update(|window, cx| window.dispatch_keystroke(keystroke, cx));
+    keymap_dispatch::release_dispatched();
+}
+
+fn typed(text: &str) -> Keystroke {
+    Keystroke::parse(text).unwrap().with_simulated_ime()
+}
+
+/// Upstream's Esc in a page: it abandons a half-typed leader and is the keymap's only then.
+#[gpui_kit::test]
+fn escape_is_handed_over_only_while_a_leader_waits(cx: &mut TestAppContext) {
+    load("ctrl+a>g");
+    let cx = monitored_window(cx);
+    assert_eq!(
+        app_key_from_native(escape()),
+        None,
+        "with nothing to cancel Esc is the page's"
+    );
+    dispatch(cx, typed("ctrl-a"));
+    let taken = app_key_from_native(escape()).expect("Esc cancels the waiting leader");
+    assert_eq!(
+        taken,
+        Keystroke {
+            key: "escape".into(),
+            key_char: None,
+            modifiers: Modifiers::default(),
+        }
+    );
+    dispatch(cx, taken);
+    assert_eq!(
+        app_key_from_native(native(42, Some('g'), Modifiers::default())),
+        None,
+        "the leader's next key no longer completes it"
+    );
+    assert_eq!(app_key_from_native(escape()), None, "the leader is gone");
+}
+
+/// Upstream's Esc over a repeat window: "an open repeat window closes, but Esc still reaches the terminal".
+#[gpui_kit::test]
+fn escape_closes_a_repeat_window_and_stays_the_pages(cx: &mut TestAppContext) {
+    load("ctrl+a>n --repeat");
+    let cx = monitored_window(cx);
+    dispatch(cx, typed("ctrl-a"));
+    dispatch(cx, typed("n"));
+    let tail = native(57, Some('n'), Modifiers::default());
+    assert!(
+        app_key_from_native(tail.clone()).is_some(),
+        "the repeat window waits for its tail"
+    );
+    assert_eq!(app_key_from_native(escape()), None, "Esc stays the page's");
+    assert_eq!(app_key_from_native(tail), None, "Esc closed the repeat window");
 }
 
 #[test]
