@@ -558,24 +558,22 @@ mod tests {
 
     /// Waits up to ten seconds for `path` to appear.
     fn wait_for_file(path: &Path) {
-        for _ in 0..500 {
-            if path.exists() {
-                return;
-            }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !path.exists() {
+            assert!(Instant::now() < deadline, "{} never appeared", path.display());
             thread::sleep(Duration::from_millis(20));
         }
-        panic!("{} never appeared", path.display())
     }
 
-    /// A program that ignores the grace stop.
+    /// A program that signals readiness after it starts ignoring the grace stop.
     #[cfg(unix)]
-    fn stubborn() -> OverlayLaunchContext {
-        context(r#"trap "" TERM; sleep 30"#)
+    fn stubborn(ready: &Path) -> OverlayLaunchContext {
+        context(&format!(r#"trap "" TERM; : > '{}'; sleep 30"#, ready.display()))
     }
 
     #[cfg(windows)]
-    fn stubborn() -> OverlayLaunchContext {
-        probe(Probe::Ignore, &[])
+    fn stubborn(ready: &Path) -> OverlayLaunchContext {
+        probe(Probe::Ignore, &[(PROBE_READY, ready)])
     }
 
     /// The status the kill past the grace sets.
@@ -608,21 +606,21 @@ mod tests {
 
     #[test]
     fn a_cancel_kills_a_program_that_ignores_the_first_signal() {
-        let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(stubborn()), false);
+        let dir = tempfile::tempdir().unwrap();
+        let ready = dir.path().join("ready");
+        let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(stubborn(&ready)), false);
         let runner = runner(helper, Duration::from_millis(300));
         let claimed = runner.claim("job").unwrap();
         let canceler = runner.canceler();
-        let started = Instant::now();
         let status = thread::scope(|scope| {
             scope.spawn(|| {
-                thread::sleep(Duration::from_millis(300));
+                wait_for_file(&ready);
                 canceler.cancel();
             });
             runner.run(&claimed, &plain_base())
         });
         drop(runner);
         assert_eq!(status, KILLED);
-        assert!(started.elapsed() < Duration::from_secs(10));
         assert_eq!(origin.frames(), [OverlayJobFrame::Started, OverlayJobFrame::Canceled]);
     }
 
@@ -896,13 +894,18 @@ mod tests {
     fn a_cancel_ends_the_programs_descendants_too() {
         let dir = tempfile::tempdir().unwrap();
         let pid_file = dir.path().join("descendant.pid");
-        let command = format!("/bin/sleep 60 & echo $! > {}; wait", pid_file.display());
+        let ready = dir.path().join("ready");
+        let command = format!(
+            "/bin/sleep 60 & echo $! > '{}' && : > '{}'; wait",
+            pid_file.display(),
+            ready.display()
+        );
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context(&command)), false);
         let runner = runner(helper, Duration::from_millis(300));
         let claimed = runner.claim("job").unwrap();
         thread::scope(|scope| {
             scope.spawn(|| {
-                thread::sleep(Duration::from_millis(300));
+                wait_for_file(&ready);
                 origin.send(&OverlayJobFrame::Cancel);
             });
             runner.run(&claimed, &plain_base())
