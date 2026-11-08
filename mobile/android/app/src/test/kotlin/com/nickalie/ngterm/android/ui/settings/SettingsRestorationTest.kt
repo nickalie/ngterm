@@ -1,0 +1,102 @@
+package com.nickalie.ngterm.android.ui.settings
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.lifecycle.viewModelScope
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.nickalie.ngterm.android.FAKE_PUBLIC_KEY
+import com.nickalie.ngterm.android.TestGraph
+import com.nickalie.ngterm.android.awaitText
+import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
+import java.io.File
+
+/** A restored key page must reconcile its saved id with the newly read stores after process recreation. */
+@OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(AndroidJUnit4::class)
+@Config(qualifiers = "w700dp-h1000dp-mdpi")
+class SettingsRestorationTest {
+    @get:Rule val dir = TemporaryFolder()
+
+    @get:Rule val compose = createComposeRule()
+    private val graphs = mutableListOf<TestGraph>()
+    private val models = mutableListOf<SettingsViewModel>()
+    private var graph by mutableStateOf<TestGraph?>(null)
+    private var model by mutableStateOf<SettingsViewModel?>(null)
+
+    @After fun tearDown() {
+        models.forEach { it.viewModelScope.cancel() }
+        graphs.forEach { it.close() }
+    }
+
+    private fun graph(name: String): TestGraph =
+        TestGraph(File(dir.root, name).apply { mkdirs() }).also { graphs += it }
+
+    private fun openKey(): StateRestorationTester {
+        val initial = graph("initial")
+        initial.seedKey()
+        graph = initial
+        model = SettingsViewModel(initial.graph).also { models += it }
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            NgtermTheme { SettingsRoute(requireNotNull(graph).graph, "restored", model = requireNotNull(model)) }
+        }
+        compose.awaitText("core restored")
+        compose.onNodeWithText("Show public key").performScrollTo().performClick()
+        compose.onNodeWithText(FAKE_PUBLIC_KEY).assertExists()
+        return restoration
+    }
+
+    private fun restoreWith(
+        restoration: StateRestorationTester,
+        next: TestGraph,
+    ): TestDispatcher {
+        val dispatcher = StandardTestDispatcher()
+        val fresh =
+            try {
+                Dispatchers.setMain(dispatcher)
+                SettingsViewModel(next.graph).also { models += it }
+            } finally {
+                Dispatchers.resetMain()
+            }
+        compose.runOnIdle {
+            graph = next
+            model = fresh
+        }
+        restoration.emulateSavedInstanceStateRestore()
+        return dispatcher
+    }
+
+    @Test
+    fun aKeyAbsentFromTheNewProcessReturnsToSettingsWhenTheStoresFinishReading() {
+        val restoration = openKey()
+        val dispatcher = restoreWith(restoration, graph("next"))
+        compose.waitUntil(10_000) {
+            dispatcher.scheduler.runCurrent()
+            compose
+                .onAllNodes(hasText("core restored"))
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        compose.onNodeWithText("No machine uses it").assertDoesNotExist()
+    }
+}
