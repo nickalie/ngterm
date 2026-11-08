@@ -21,7 +21,8 @@ fn missing_worker_reports_its_path_before_resolving_an_engine() {
             schemes: Vec::new(),
         };
         let state = tempfile::tempdir().unwrap();
-        let Err(ngterm_wpe_client::StartError::Worker(error)) = start_worker(&config, state.path()) else {
+        let Some(Err(ngterm_wpe_client::StartError::Worker(error))) = start_worker(&config, state.path(), &mut |_| {})
+        else {
             panic!("a missing worker must fail before engine source resolution");
         };
         let worker = std::env::current_exe().unwrap().with_file_name("ngterm-web");
@@ -294,6 +295,322 @@ fn an_engine_exit_finishes_a_pending_clear_and_shutdown_refuses_late_starts() {
     engine_ended();
     assert_eq!(engine().err().as_deref(), Some("the app is quitting"));
     shutdown();
+}
+
+fn state_is(expected: fn(&EngineState) -> bool) -> bool {
+    with(|registry| expected(&registry.engine))
+}
+
+fn progress(received: u64, total: u64) -> StartStep {
+    StartStep::Progress(Progress { received, total })
+}
+
+/// A download's page: the registry waits for the start thread, with no engine to run the page on.
+fn waiting_for_start() -> Rc<Page> {
+    reset();
+    with(|registry| registry.engine = EngineState::Starting);
+    register(&url_overlay(), Storage::Ephemeral)
+}
+
+#[gpui_kit::test]
+fn a_download_runs_every_waiting_page_through_progress_then_the_engine(cx: &mut TestAppContext) {
+    let first = waiting_for_start();
+    assert_eq!(engine_wait(), None, "an ordinary start shows nothing");
+    assert!(first.waits_for_engine());
+
+    cx.update(|cx| start_step(progress(0, 200), cx));
+    assert_eq!(
+        engine_wait(),
+        Some(Wait::Downloading {
+            received: 0,
+            total: 200
+        })
+    );
+    assert_eq!(engine().err().as_deref(), Some(DOWNLOADING));
+    assert_eq!(refusal(), None, "pages may still open during a download");
+
+    // a page opened during the download waits for it, and starts no second one
+    let second = register(&url_overlay(), Storage::Ephemeral);
+    realize_waiting();
+    assert!(second.view_id().is_none() && second.failure().is_none());
+    assert!(state_is(|state| matches!(state, EngineState::Downloading { .. })));
+
+    cx.update(|cx| start_step(progress(200, 200), cx));
+    assert_eq!(
+        engine_wait(),
+        Some(Wait::Downloading {
+            received: 200,
+            total: 200
+        }),
+        "installing"
+    );
+    cx.update(|cx| start_step(StartStep::Installed, cx));
+    assert!(state_is(|state| matches!(state, EngineState::Starting)));
+    assert_eq!(
+        engine_wait(),
+        Some(Wait::Starting),
+        "the panel stays while the worker starts"
+    );
+
+    let web = Rc::new(Recorded::default());
+    finish_start(web.clone());
+    assert_eq!(engine_wait(), None);
+    assert!(
+        first.view_id().is_some() && second.view_id().is_some(),
+        "both pages load"
+    );
+    assert_eq!(web.recorder.specs.borrow().len(), 2);
+}
+
+#[gpui_kit::test]
+fn a_failed_download_keeps_the_pages_open_and_a_retry_clears_the_failure(cx: &mut TestAppContext) {
+    let page = waiting_for_start();
+    cx.update(|cx| start_step(progress(10, 200), cx));
+    let failed = Unavailable::download_failed("connection refused".to_owned());
+    cx.update(|cx| start_step(StartStep::Unavailable(failed.clone()), cx));
+    assert_eq!(engine_wait(), Some(Wait::Unavailable(failed.clone())));
+    assert_eq!(engine().err().as_deref(), Some(UNAVAILABLE));
+    assert_eq!(refusal(), None, "the page explains itself; the core does not refuse it");
+    assert!(page.failure().is_none(), "a retry can still load this page");
+    assert!(page.waits_for_engine());
+
+    // a page opened after the failure shows it too
+    let later = register(&url_overlay(), Storage::Ephemeral);
+    realize_waiting();
+    assert!(later.view_id().is_none() && later.failure().is_none());
+
+    cx.update(retry_engine);
+    assert!(
+        !matches!(engine_wait(), Some(Wait::Unavailable(_))),
+        "the failure is gone"
+    );
+    assert!(with(|registry| registry.show_start), "the retry keeps a panel up");
+
+    assert!(page.waits_for_engine() && later.waits_for_engine());
+}
+
+#[gpui_kit::test]
+fn the_pump_follows_progress_and_a_second_attempt_after_a_failed_download(cx: &mut TestAppContext) {
+    let page = waiting_for_start();
+    cx.update(init);
+    let pump = with(|registry| registry.pump.clone()).unwrap();
+    let failed = Unavailable::download_failed("connection refused".to_owned());
+    for step in [progress(10, 200), progress(20, 200)] {
+        pump.try_send(step).unwrap();
+        cx.run_until_parked();
+        assert!(state_is(|state| matches!(state, EngineState::Downloading { .. })));
+    }
+    assert_eq!(
+        engine_wait(),
+        Some(Wait::Downloading {
+            received: 20,
+            total: 200
+        })
+    );
+    pump.try_send(StartStep::Unavailable(failed.clone())).unwrap();
+    cx.run_until_parked();
+    assert_eq!(engine_wait(), Some(Wait::Unavailable(failed)));
+    cx.update(retry_engine);
+    assert!(state_is(|state| matches!(state, EngineState::Idle)));
+
+    // The test renderer has no GPU; stand in for a newly spawned start thread, keeping init's actual pump.
+    let _ = set_starting();
+    pump.try_send(progress(200, 200)).unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        engine_wait(),
+        Some(Wait::Downloading {
+            received: 200,
+            total: 200
+        })
+    );
+    pump.try_send(StartStep::Installed).unwrap();
+    cx.run_until_parked();
+    assert_eq!(engine_wait(), Some(Wait::Starting));
+    pump.try_send(StartStep::Started(Err(ngterm_wpe_client::StartError::AlreadyStarted)))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(state_is(|state| matches!(state, EngineState::Failed(_))));
+    assert!(page.failure().unwrap().contains("the web engine did not start:"));
+    reset();
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn a_retry_only_answers_a_failure(cx: &mut TestAppContext) {
+    let page = waiting_for_start();
+    cx.update(|cx| start_step(progress(10, 200), cx));
+    cx.update(retry_engine);
+    assert!(
+        state_is(|state| matches!(state, EngineState::Downloading { .. })),
+        "a running download goes on"
+    );
+    assert!(page.failure().is_none());
+}
+
+#[gpui_kit::test]
+fn steps_after_the_quit_or_a_failure_for_good_change_nothing(cx: &mut TestAppContext) {
+    waiting_for_start();
+    shutdown();
+    for step in [
+        progress(1, 2),
+        StartStep::Installed,
+        StartStep::Unavailable(Unavailable::not_installed(None)),
+    ] {
+        assert!(cx.update(|cx| start_step(step, cx)).is_none());
+        assert_eq!(engine().err().as_deref(), Some("the app is quitting"));
+    }
+}
+
+#[gpui_kit::test]
+fn an_unavailable_engine_reports_the_reason_to_the_model_and_a_retry_takes_it_back(cx: &mut TestAppContext) {
+    use ngterm_core::html::HtmlLoadState;
+    reset();
+    let source = url_overlay();
+    let mut model = Model::new(&source);
+    let page = Page::new(
+        &source,
+        None,
+        PanelColors::resolve(&TerminalColors::default(), None),
+        Storage::Ephemeral,
+        &model.poster(),
+    );
+    with(|registry| registry.pages.insert(page.id(), page.clone()));
+    with(|registry| registry.engine = EngineState::Starting);
+    let failed = Unavailable::download_failed("connection refused".to_owned());
+    cx.update(|cx| start_step(StartStep::Unavailable(failed), cx));
+    model.drain();
+    assert_eq!(model.overlay().load_state, HtmlLoadState::Failed);
+    assert_eq!(model.overlay().load_error.as_deref(), Some("connection refused"));
+    let applied = model.overlay().clone();
+    cx.update(|cx| page.apply(&applied, true, cx));
+    cx.update(retry_engine);
+    model.drain();
+    assert_eq!(model.overlay().load_state, HtmlLoadState::Loading);
+    assert_eq!(model.overlay().load_error, None);
+
+    // the strip's Reload, or a client's, is a retry too
+    let failed = Unavailable::download_failed("connection reset".to_owned());
+    with(|registry| registry.engine = EngineState::Unavailable(failed));
+    realize_waiting();
+    model.drain();
+    assert_eq!(model.overlay().load_state, HtmlLoadState::Failed);
+    assert_eq!(model.overlay().load_error.as_deref(), Some("connection reset"));
+    assert!(
+        model
+            .state
+            .core
+            .reload_html_overlay(page.id(), ngterm_core::html::HtmlReloadTarget::Current)
+    );
+    let reloaded = model.overlay().clone();
+    cx.update(|cx| page.apply(&reloaded, true, cx));
+    assert!(!matches!(engine_wait(), Some(Wait::Unavailable(_))));
+    model.drain();
+    assert_eq!(model.overlay().load_state, HtmlLoadState::Loading);
+    assert_eq!(model.overlay().load_error, None);
+}
+
+fn assert_unreadable_profile(model: &Model) {
+    assert_eq!(model.overlay().load_state, ngterm_core::html::HtmlLoadState::Failed);
+    assert_eq!(
+        model.overlay().load_error.as_deref(),
+        Some("browser profile is unreadable")
+    );
+}
+
+#[gpui_kit::test]
+fn a_store_failure_is_reported_before_the_engine_and_survives_its_failure_and_retry(cx: &mut TestAppContext) {
+    use ngterm_core::html::HtmlReloadTarget;
+    reset();
+    let mut source = url_overlay();
+    source.flags.persistent = true;
+    let mut model = Model::new(&source);
+    let page = Page::new(
+        &source,
+        None,
+        PanelColors::resolve(&TerminalColors::default(), None),
+        Storage::Unavailable("browser profile is unreadable".to_owned()),
+        &model.poster(),
+    );
+    with(|registry| registry.pages.insert(page.id(), page.clone()));
+    // Even before startup, a page that cannot use its store has its own failure cover.
+    realize_waiting();
+    model.drain();
+    assert_unreadable_profile(&model);
+    assert!(state_is(|state| matches!(state, EngineState::Idle)));
+    assert!(!page.waits_for_engine());
+    let applied = model.overlay().clone();
+    cx.update(|cx| page.apply(&applied, true, cx));
+
+    let _ = set_starting();
+    cx.update(|cx| start_step(progress(10, 200), cx));
+    model.drain();
+    assert_unreadable_profile(&model);
+
+    for unavailable in [
+        Unavailable::download_failed("connection refused".to_owned()),
+        Unavailable::not_installed(None),
+    ] {
+        with(|registry| registry.engine = EngineState::Unavailable(unavailable));
+        realize_waiting();
+        model.drain();
+        assert_unreadable_profile(&model);
+        assert!(
+            model
+                .state
+                .core
+                .reload_html_overlay(page.id(), HtmlReloadTarget::Current)
+        );
+        let reloaded = model.overlay().clone();
+        cx.update(|cx| page.apply(&reloaded, true, cx));
+        realize_waiting(); // the next prepaint must keep the store's reason
+        model.drain();
+        assert_unreadable_profile(&model);
+        assert!(
+            matches!(engine_wait(), Some(Wait::Unavailable(_))),
+            "reload cannot repair this store"
+        );
+        cx.update(retry_engine);
+        model.drain();
+        assert_unreadable_profile(&model);
+        assert_eq!(model.pending(), 0);
+    }
+}
+
+#[test]
+fn the_download_reports_its_way_and_hands_over_the_runtime() {
+    let mut steps = Vec::new();
+    let source = download_runtime(
+        |report| {
+            report(Progress { received: 0, total: 8 });
+            report(Progress { received: 8, total: 8 });
+            Ok("/runtime".into())
+        },
+        &mut |step| steps.push(step),
+    )
+    .unwrap();
+    assert_eq!(source, ngterm_wpe_client::EngineSource::Runtime("/runtime".into()));
+    assert!(matches!(
+        steps.as_slice(),
+        [
+            StartStep::Progress(Progress { received: 0, total: 8 }),
+            StartStep::Progress(Progress { received: 8, total: 8 }),
+            StartStep::Installed,
+        ]
+    ));
+}
+
+#[test]
+fn a_failed_download_names_its_reason_and_reports_no_install() {
+    let mut steps = Vec::new();
+    let unavailable = download_runtime(
+        |_| Err(ngterm_update::Error::Message("connection refused".to_owned())),
+        &mut |step| steps.push(step),
+    )
+    .unwrap_err();
+    assert_eq!(unavailable.reason, "connection refused");
+    assert!(unavailable.how_to.unwrap().contains("--install-web-engine"));
+    assert!(steps.is_empty());
 }
 
 #[test]

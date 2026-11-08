@@ -372,14 +372,14 @@ GNOME desktop, the operator's user with sudo and the host's ssh key; none starts
 **Files:**
 - Modify: `crates/ngterm-gpui/src/html_overlay/registry.rs` and the page view that draws a waiting page
 
-- [ ] invoke the `frontend-design` skill for the waiting page's download state
-- [ ] `EngineState::Downloading { received, total }`: the first page that needs the engine starts the download; every
+- [x] invoke the `frontend-design` skill for the waiting page's download state
+- [x] `EngineState::Downloading { received, total }`: the first page that needs the engine starts the download; every
       waiting page shows its progress; the engine starts when the runtime is in place
-- [ ] a failed download shows its reason and a retry; without pins or network, the page says how to install the engine
+- [x] a failed download shows its reason and a retry; without pins or network, the page says how to install the engine
       (the distro package, or `--install-web-engine`)
-- [ ] write tests: state transitions (absent → downloading → starting → running; downloading → failed → retry); pages
+- [x] write tests: state transitions (absent → downloading → starting → running; downloading → failed → retry); pages
       opened during a download wait for it
-- [ ] run the `ngterm-gpui` HTML overlay tests - must pass before Task 7
+- [x] run the `ngterm-gpui` HTML overlay tests - must pass before Task 7
 
 ### Task 7: Packages without the engine
 

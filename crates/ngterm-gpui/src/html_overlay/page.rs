@@ -301,7 +301,7 @@ impl Page {
     }
 
     /// Redraws the element: the model or the engine changed what it shows.
-    fn refresh(&self, cx: &mut App) {
+    pub(super) fn refresh(&self, cx: &mut App) {
         if let Some(element) = self.element() {
             element.update(cx, |_, cx| cx.notify());
         }
@@ -320,6 +320,41 @@ impl Page {
         if first {
             self.fail(failure.to_owned());
         }
+    }
+
+    /// There is no engine for now, and `reason` says why: the model's load fails with it, and a retry takes it back.
+    pub(super) fn engine_unavailable(&self, reason: &str) {
+        self.report_load(HtmlLoadState::Failed, Some(reason.to_owned()));
+    }
+
+    /// The user retried getting the engine: the page is loading again.
+    pub(super) fn engine_retried(&self) {
+        self.report_load(HtmlLoadState::Loading, None);
+    }
+
+    /// Reports a page's own store failure even before an engine is available.
+    pub(super) fn fail_storage(&self) -> bool {
+        let failure = self.state.borrow().storage_failure.clone();
+        if let Some(failure) = failure {
+            self.fail(failure);
+            return true;
+        }
+        false
+    }
+
+    /// Back to a page no engine has made (the element's tests).
+    #[cfg(test)]
+    pub(super) fn forget_engine(&self) {
+        self.view.set(None);
+        self.web.replace(None);
+    }
+
+    /// Whether the page is still waiting for the engine, and has not failed for good.
+    pub(super) fn waits_for_engine(&self) -> bool {
+        self.view.get().is_none()
+            && self.web.borrow().is_none()
+            && self.active()
+            && self.state.borrow().storage_failure.is_none()
     }
 
     /// Makes the engine's page on `web`, `session` its store (none: the store is unavailable, and the page loads
@@ -677,6 +712,10 @@ impl Page {
             Some(HtmlReloadTarget::Current) => self.reload_shown(),
             Some(HtmlReloadTarget::Original) => self.load_original(),
             None => {}
+        }
+        // a reload of a page with no engine is a retry
+        if reload.is_some() && self.waits_for_engine() {
+            registry::retry_engine(cx);
         }
     }
 

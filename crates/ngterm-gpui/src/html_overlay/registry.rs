@@ -8,9 +8,11 @@
 //! the environment its web process gets is the worker's, never the app's (the audio fix `ngterm_wpe_client::worker` gives it
 //! reaches no terminal); the start runs on a thread of its own, so the main thread never waits on it and a quit
 //! meanwhile waits for nothing;
-//! a page mounted before it ends stays waiting and is realized once it does. Its events come back on one channel the
-//! pump ([`init`]) dispatches on the main thread; should they end while the app runs (the worker died), every page
-//! fails for the rest of the run.
+//! a page mounted before it ends stays waiting and is realized once it does. Without a usable engine that thread first
+//! downloads the verified runtime (`ngterm_update::web_engine`), the first page needing it starting the download and
+//! every waiting page showing it (`engine_wait`); a failed download, or a build that cannot download, leaves the pages
+//! waiting with the reason and a retry. Its events come back on one channel the pump ([`init`]) dispatches on the main
+//! thread; should they end while the app runs (the worker died), every page fails for the rest of the run.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -29,6 +31,7 @@ use ngterm_core::html::{
 use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::replica_page::{ContentFailures, PageResource};
 use ngterm_proto::Response;
+use ngterm_update::web_engine::Progress;
 use ngterm_wpe_client::{
     BufferFormat, DmaBufTarget, Event, FrameMode, HostConfig, ReplyToken, SchemeError, SchemeRequest, SchemeResponse,
     SchemeToken, SessionId, SessionSpec, ViewId,
@@ -36,6 +39,7 @@ use ngterm_wpe_client::{
 use uuid::Uuid;
 
 use super::engine::{Engine, Web};
+use super::engine_wait::{Throttle, Unavailable, Wait};
 use super::page::{Page, Storage};
 use super::panel::{PanelColors, TerminalColors};
 use super::policy::{self, GRANT_SCHEME};
@@ -47,6 +51,10 @@ use crate::state::{AppState, Poster, post};
 const NOT_READY: &str = "the web engine starts once a window has drawn";
 /// Why a page waits: the engine is starting.
 const STARTING: &str = "the web engine is starting";
+/// Why a page waits: the engine's runtime is being downloaded.
+const DOWNLOADING: &str = "the web engine is downloading";
+/// Why a page waits: there is no engine until the user retries ([`EngineState::Unavailable`]).
+const UNAVAILABLE: &str = "the web engine is unavailable";
 /// Why every page fails once the engine ended while the app ran (its worker died).
 const ENDED: &str = "the web engine ended unexpectedly; restart ngterm to show pages again";
 
@@ -57,6 +65,14 @@ enum EngineState {
     /// Starting on a thread of its own, so a slow start (a worker's) never holds the main thread, and a quit meanwhile
     /// waits for nothing.
     Starting,
+    /// The start thread is fetching and installing the runtime; `received` reaching `total` means it is installing.
+    Downloading {
+        received: u64,
+        total: u64,
+    },
+    /// There is no engine: the download failed or this build cannot download. The pages stay open with the reason, and
+    /// a retry starts over.
+    Unavailable(Unavailable),
     Running(Rc<dyn Web>),
     /// The start failed, or the engine ended, for good (the engine starts once per process).
     Failed(String),
@@ -65,10 +81,22 @@ enum EngineState {
 /// What the start thread hands the pump.
 type Started = Result<(ngterm_wpe_client::Host, async_channel::Receiver<Event>), ngterm_wpe_client::StartError>;
 
+/// A step of the engine's way to running, from the start thread to the pump.
+enum StartStep {
+    /// The runtime's download got this far.
+    Progress(Progress),
+    /// The runtime is in place and the worker starts on it.
+    Installed,
+    Unavailable(Unavailable),
+    Started(Started),
+}
+
 struct Registry {
     pages: HashMap<Uuid, Rc<Page>>,
     by_view: HashMap<ViewId, Uuid>,
     engine: EngineState,
+    /// A start the user is waiting on (a download's or a retry's) keeps a panel up while the worker starts.
+    show_start: bool,
     /// The page zoom every page shows at; `None` before the first settle (actual size).
     zoom: Option<f64>,
     scales: HashMap<Uuid, f64>,
@@ -90,7 +118,7 @@ struct Registry {
     colors: TerminalColors,
     poster: Option<Poster>,
     /// Where the engine's start goes from its thread: the pump [`init`] spawned.
-    pump: Option<async_channel::Sender<Started>>,
+    pump: Option<async_channel::Sender<StartStep>>,
     documents: Option<async_channel::Sender<DocumentLoad>>,
     /// Where a content replica's worker asks for a file of its origin's: the pump [`init`] spawned.
     replica_reads: Option<async_channel::Sender<ReplicaRead>>,
@@ -104,6 +132,7 @@ impl Default for Registry {
             pages: HashMap::new(),
             by_view: HashMap::new(),
             engine: EngineState::Idle,
+            show_start: false,
             zoom: None,
             scales: HashMap::new(),
             state_dir: None,
@@ -330,17 +359,20 @@ pub fn init(cx: &mut App) {
         }
     })
     .detach();
-    let (pump, starts) = async_channel::bounded::<Started>(1);
+    let (pump, steps) = async_channel::bounded::<StartStep>(1);
     with(|registry| registry.pump = Some(pump));
     cx.spawn(async move |cx| {
-        let Ok(started) = starts.recv().await else { return };
-        let Some(events) = cx.update(|_| started_engine(started)) else {
+        // a retry starts the thread again, so the steps go on until an engine runs
+        while let Ok(step) = steps.recv().await {
+            let Some(events) = cx.update(|cx| start_step(step, cx)) else {
+                continue;
+            };
+            while let Ok(event) = events.recv().await {
+                cx.update(|cx| dispatch(&event, cx));
+            }
+            cx.update(|_| engine_ended());
             return;
-        };
-        while let Ok(event) = events.recv().await {
-            cx.update(|cx| dispatch(&event, cx));
         }
-        cx.update(|_| engine_ended());
     })
     .detach();
 }
@@ -352,6 +384,8 @@ fn engine() -> Result<Rc<dyn Web>, String> {
         EngineState::Running(web) => Some(Ok(Rc::clone(web))),
         EngineState::Failed(failure) => Some(Err(failure.clone())),
         EngineState::Starting => Some(Err(STARTING.to_owned())),
+        EngineState::Downloading { .. } => Some(Err(DOWNLOADING.to_owned())),
+        EngineState::Unavailable(_) => Some(Err(UNAVAILABLE.to_owned())),
         EngineState::Idle => None,
     });
     if let Some(current) = current {
@@ -390,7 +424,12 @@ fn engine() -> Result<Rc<dyn Web>, String> {
     let state_dir = with(|registry| registry.state_dir.clone())
         .unwrap_or_else(|| ngterm_core::paths::state_dir(&ngterm_core::paths::ProcessEnv));
     let spawned = std::thread::Builder::new().name("wpe-start".to_owned()).spawn(move || {
-        let _ = pump.send_blocking(start_worker(&config, &state_dir));
+        let mut report = |step| {
+            let _ = pump.send_blocking(step);
+        };
+        if let Some(started) = start_worker(&config, &state_dir, &mut report) {
+            report(StartStep::Started(started));
+        }
     });
     match spawned {
         Ok(_) => {
@@ -401,31 +440,148 @@ fn engine() -> Result<Rc<dyn Web>, String> {
     }
 }
 
-/// Source probing and filesystem access stay off the UI thread, alongside worker startup.
-fn start_worker(config: &HostConfig, state_dir: &std::path::Path) -> Started {
-    use ngterm_update::web_engine::{self, Resolution};
-    use ngterm_wpe_client::{EngineSource, StartError, worker};
-    worker::pin_worker().map_err(StartError::Worker)?;
-    let source = match web_engine::resolve(state_dir, web_engine::KEY, worker::probe_system) {
-        Resolution::System => EngineSource::System,
-        Resolution::Runtime(directory) => EngineSource::Runtime(directory),
-        // Release packages keep their bundled engine until packaging switches to downloads.
-        Resolution::NeedsDownload if worker::bundled_engine_available() => EngineSource::System,
-        Resolution::NeedsDownload => {
-            return Err(StartError::Worker(format!(
-                "the web engine is not installed; install WPE WebKit {} or newer",
-                web_engine::MIN_VERSION
-            )));
+/// Source probing, the download and filesystem access stay off the UI thread, alongside worker startup. `None` when
+/// there is no engine, which `report` has been told.
+fn start_worker(
+    config: &HostConfig,
+    state_dir: &std::path::Path,
+    report: &mut dyn FnMut(StartStep),
+) -> Option<Started> {
+    use ngterm_wpe_client::{StartError, worker};
+    if let Err(error) = worker::pin_worker() {
+        return Some(Err(StartError::Worker(error)));
+    }
+    match engine_source(state_dir, report) {
+        Ok(source) => Some(ngterm_wpe_client::Host::start_worker(config, &source)),
+        Err(unavailable) => {
+            report(StartStep::Unavailable(unavailable));
+            None
         }
-    };
-    ngterm_wpe_client::Host::start_worker(config, &source)
+    }
+}
+
+/// Where the engine comes from, the runtime downloaded first when there is none.
+fn engine_source(
+    state_dir: &std::path::Path,
+    report: &mut dyn FnMut(StartStep),
+) -> Result<ngterm_wpe_client::EngineSource, Unavailable> {
+    use ngterm_update::web_engine::{self, Pins, Resolution};
+    use ngterm_wpe_client::{EngineSource, worker};
+    match web_engine::resolve(state_dir, web_engine::KEY, worker::probe_system) {
+        Resolution::System => Ok(EngineSource::System),
+        Resolution::Runtime(directory) => Ok(EngineSource::Runtime(directory)),
+        // Release packages keep their bundled engine until packaging switches to downloads.
+        Resolution::NeedsDownload if worker::bundled_engine_available() => Ok(EngineSource::System),
+        Resolution::NeedsDownload => match Pins::compiled() {
+            Ok(Some(pins)) => download_runtime(|progress| pins.download(state_dir, progress), report),
+            Ok(None) => Err(Unavailable::not_installed(None)),
+            Err(error) => Err(Unavailable::not_installed(Some(error.to_string()))),
+        },
+    }
+}
+
+/// Runs `download`, its progress reported at a pace the pages can draw.
+fn download_runtime(
+    download: impl FnOnce(&mut dyn FnMut(Progress)) -> Result<PathBuf, ngterm_update::Error>,
+    report: &mut dyn FnMut(StartStep),
+) -> Result<ngterm_wpe_client::EngineSource, Unavailable> {
+    let mut throttle = Throttle::default();
+    let directory = download(&mut |progress| {
+        if throttle.due(progress, std::time::Instant::now()) {
+            report(StartStep::Progress(progress));
+        }
+    })
+    .map_err(|error| {
+        tracing::warn!(%error, "the web engine download failed");
+        Unavailable::download_failed(error.to_string())
+    })?;
+    report(StartStep::Installed);
+    Ok(ngterm_wpe_client::EngineSource::Runtime(directory))
+}
+
+/// A step of the start thread, on the main thread: the waiting pages follow it. The engine's events, once it runs.
+fn start_step(step: StartStep, cx: &mut App) -> Option<async_channel::Receiver<Event>> {
+    if let StartStep::Started(started) = step {
+        return started_engine(started);
+    }
+    let on_its_way = with(|registry| {
+        let on_its_way = start_pending(registry);
+        if on_its_way {
+            match step {
+                StartStep::Progress(Progress { received, total }) => {
+                    registry.engine = EngineState::Downloading { received, total };
+                    registry.show_start = true;
+                }
+                StartStep::Installed => registry.engine = EngineState::Starting,
+                StartStep::Unavailable(unavailable) => registry.engine = EngineState::Unavailable(unavailable),
+                StartStep::Started(_) => {}
+            }
+        }
+        on_its_way
+    });
+    if on_its_way {
+        realize_waiting();
+        refresh_waiting(cx);
+    }
+    None
+}
+
+/// Whether a start is under way, its thread's steps still awaited.
+fn start_pending(registry: &Registry) -> bool {
+    matches!(registry.engine, EngineState::Starting | EngineState::Downloading { .. })
+}
+
+/// What the pages waiting for the engine show now; `None` while they show nothing of it.
+pub(super) fn engine_wait() -> Option<Wait> {
+    with(|registry| match &registry.engine {
+        EngineState::Downloading { received, total } => Some(Wait::Downloading {
+            received: *received,
+            total: *total,
+        }),
+        EngineState::Starting if registry.show_start => Some(Wait::Starting),
+        EngineState::Unavailable(unavailable) => Some(Wait::Unavailable(unavailable.clone())),
+        _ => None,
+    })
+}
+
+/// Starts over after a failed download or once the user installed an engine; anything else ignores it.
+pub(super) fn retry_engine(cx: &mut App) {
+    let pages = with(|registry| {
+        if !matches!(registry.engine, EngineState::Unavailable(_)) {
+            return None;
+        }
+        registry.engine = EngineState::Idle;
+        registry.show_start = true;
+        Some(waiting_pages(registry))
+    });
+    let Some(pages) = pages else { return };
+    for page in pages.iter().filter(|page| page.waits_for_engine()) {
+        page.engine_retried();
+    }
+    realize_waiting();
+    refresh_waiting(cx);
+}
+
+fn refresh_waiting(cx: &mut App) {
+    for page in with(|registry| waiting_pages(registry)) {
+        page.refresh(cx);
+    }
+}
+
+fn waiting_pages(registry: &Registry) -> Vec<Rc<Page>> {
+    registry
+        .pages
+        .values()
+        .filter(|page| page.view_id().is_none() && page.web().is_none() && page.active())
+        .cloned()
+        .collect()
 }
 
 /// The start thread's outcome, on the main thread: the engine runs and the waiting pages are realized on it, or they
 /// fail with its reason. A start that ends after the quit began is let go (its engine shut down off the main thread).
 /// The engine's events, when it runs.
 fn started_engine(started: Started) -> Option<async_channel::Receiver<Event>> {
-    let waited = with(|registry| matches!(registry.engine, EngineState::Starting));
+    let waited = with(|registry| start_pending(registry));
     match started {
         Ok((host, events)) if waited => {
             tracing::info!("the web engine worker started");
@@ -483,6 +639,20 @@ pub(super) fn engine_ended() {
     }
 }
 
+/// Makes `page` wait for an engine in the state `wait` shows (the element's tests).
+#[cfg(test)]
+pub(super) fn wait_on_test_engine(page: &Page, wait: Wait) {
+    page.forget_engine();
+    with(|registry| {
+        registry.show_start = true;
+        registry.engine = match wait {
+            Wait::Downloading { received, total } => EngineState::Downloading { received, total },
+            Wait::Starting => EngineState::Starting,
+            Wait::Unavailable(unavailable) => EngineState::Unavailable(unavailable),
+        };
+    });
+}
+
 /// Puts the engine back to starting, its start's outcome then given with [`started_engine`] (the unit tests).
 #[cfg(test)]
 pub(super) fn set_starting() -> impl FnOnce(Started) {
@@ -527,15 +697,19 @@ pub fn shutdown() {
 
 /// Realizes the pages that wait for the engine; a start that failed fails them.
 pub(super) fn realize_waiting() {
-    let waiting: Vec<Rc<Page>> = with(|registry| {
-        registry
-            .pages
-            .values()
-            .filter(|page| page.view_id().is_none() && page.web().is_none() && page.active())
-            .cloned()
-            .collect()
-    });
+    let mut waiting: Vec<Rc<Page>> = with(|registry| waiting_pages(registry));
+    waiting.retain(|page| !page.fail_storage());
     if waiting.is_empty() {
+        return;
+    }
+    let unavailable = with(|registry| match &registry.engine {
+        EngineState::Unavailable(unavailable) => Some(unavailable.reason.clone()),
+        _ => None,
+    });
+    if let Some(reason) = unavailable {
+        for page in waiting {
+            page.engine_unavailable(&reason);
+        }
         return;
     }
     match engine() {
@@ -544,7 +718,7 @@ pub(super) fn realize_waiting() {
                 realize(&page, &web);
             }
         }
-        Err(failure) if failure != NOT_READY && failure != STARTING => {
+        Err(failure) if ![NOT_READY, STARTING, DOWNLOADING, UNAVAILABLE].contains(&failure.as_str()) => {
             for page in waiting {
                 page.engine_failed(&failure);
             }

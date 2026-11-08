@@ -42,6 +42,8 @@ mod documents;
 #[cfg(all(feature = "html", target_os = "linux"))]
 mod engine;
 #[cfg(all(feature = "html", target_os = "linux"))]
+mod engine_wait;
+#[cfg(all(feature = "html", target_os = "linux"))]
 mod input;
 #[cfg(all(feature = "html", target_os = "linux"))]
 mod menus;

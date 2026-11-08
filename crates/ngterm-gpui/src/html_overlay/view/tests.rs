@@ -279,6 +279,71 @@ fn the_page_and_its_strip_carry_upstreams_accessibility_ids(cx: &mut TestAppCont
     assert!(text.size.height > one_line, "wrapped onto more lines: {text:?}");
 }
 
+/// A page waiting for the engine: its area shows the download, then why there is none with a retry, and neither hides
+/// the strip above it.
+#[gpui_kit::test]
+fn a_waiting_page_shows_the_download_and_a_failure_with_its_retry(cx: &mut TestAppContext) {
+    use crate::html_overlay::engine_wait::{Unavailable, Wait};
+    let mut overlay = page_overlay();
+    overlay.flags.navigation = true;
+    let (harness, cx) = harness_of(overlay, cx);
+    assert!(
+        cx.debug_bounds("htmlOverlay.engine").is_none(),
+        "a running engine shows no panel"
+    );
+
+    let page = harness.element.read_with(cx, |element, _| element.page.clone());
+    registry::wait_on_test_engine(
+        &page,
+        Wait::Downloading {
+            received: 40,
+            total: 100,
+        },
+    );
+    harness.root.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("htmlOverlay.reload").is_some(), "the strip stays");
+    assert!(cx.debug_bounds("htmlOverlay.engine").is_some());
+    assert!(cx.debug_bounds("htmlOverlay.engine-progress").is_some());
+    assert!(cx.debug_bounds("htmlOverlay.engine-retry").is_none());
+
+    let failed = Unavailable::download_failed("connection refused".to_owned());
+    let mut overlay = harness.overlay.clone();
+    overlay.load_state = ngterm_core::html::HtmlLoadState::Failed;
+    overlay.load_error = Some(failed.reason.clone());
+    registry::wait_on_test_engine(&page, Wait::Unavailable(failed));
+    cx.update(|_, cx| registry::apply(&overlay, true, cx));
+    harness.root.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("htmlOverlay.engine-progress").is_none());
+    assert!(cx.debug_bounds("htmlOverlay.engine-how-to").is_some());
+    let reason = cx
+        .debug_bounds("htmlOverlay.engine-reason")
+        .expect("the failure reason is drawn");
+    assert!(reason.size.height > px(0.), "the reason has content: {reason:?}");
+    let text = cx
+        .debug_bounds("htmlOverlay.error-text-box")
+        .expect("the reason is selectable text");
+    assert!(text.size.height > px(0.));
+    assert_eq!(
+        harness.element.read_with(cx, PageView::error_shown).as_deref(),
+        Some("connection refused")
+    );
+    cx.simulate_click(text.center(), Modifiers::default());
+    cx.simulate_keystrokes("ctrl-a ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+        Some("connection refused")
+    );
+    let retry = cx.debug_bounds("htmlOverlay.engine-retry").expect("a retry is offered");
+    cx.simulate_click(retry.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        !matches!(registry::engine_wait(), Some(Wait::Unavailable(_))),
+        "the press retried"
+    );
+}
+
 #[gpui_kit::test]
 fn a_press_focuses_the_page_goes_in_at_its_content_and_still_closes_a_popover(cx: &mut TestAppContext) {
     let (harness, cx) = harness(cx);

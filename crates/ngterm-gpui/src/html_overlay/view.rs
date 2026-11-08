@@ -738,6 +738,15 @@ impl Render for PageView {
             .map(|(menu, bounds)| menus::element(menu, bounds, &colors, cx));
         let content = self.content(window, cx);
         let error = self.error_text(&overlay, window, cx);
+        let cover = match self
+            .page
+            .waits_for_engine()
+            .then(super::registry::engine_wait)
+            .flatten()
+        {
+            Some(wait) => Some(super::engine_wait::element(&wait, &colors, error)),
+            None => panel::failure(&overlay, &colors, error),
+        };
         div()
             .id(SharedString::from(format!("html-page-{}", overlay.id)))
             .debug_selector(|| "html-page".to_owned())
@@ -760,7 +769,7 @@ impl Render for PageView {
                     .on_key_up(cx.listener(Self::key_up))
                     .on_modifiers_changed(cx.listener(Self::modifiers_changed))
                     .child(content)
-                    .children(panel::failure(&overlay, &colors, error)),
+                    .children(cover),
             )
             .children(menu)
     }
