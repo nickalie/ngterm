@@ -697,3 +697,81 @@ fn a_window_the_panel_is_closing_loses_the_keyboard_without_a_dismissal(cx: &mut
     assert!(h.state.core.quick_visible(), "the reopen is no focus loss");
     assert!(h.panel.window().is_some());
 }
+
+#[gpui_kit::test]
+fn config_changes_reach_a_hidden_terminal_without_starting_another_shell(cx: &mut TestAppContext) {
+    let mut h = harness(cx);
+    h.cx.update(|cx| h.panel.apply_config(&h.env, true, cx));
+    assert!(h.launches.lock().unwrap().is_empty());
+    h.state.core.toggle_quick_terminal();
+    h.turn();
+    let shared = Rc::clone(h.panel.shared().unwrap());
+    shared.set_font_points(23.0);
+    h.state.core.toggle_quick_terminal();
+    h.turn();
+    let mut config = TerminalConfig::default();
+    config.font.size = 17.0;
+    *h.env.config.borrow_mut() = Rc::new(config);
+    h.cx.update(|cx| h.panel.apply_config(&h.env, true, cx));
+    assert!(
+        (shared.font_points() - 23.0).abs() < f32::EPSILON,
+        "an appearance flip keeps the zoom"
+    );
+    h.cx.update(|cx| h.panel.apply_config(&h.env, false, cx));
+    assert!(
+        (shared.font_points() - 17.0).abs() < f32::EPSILON,
+        "an explicit reload takes the new size"
+    );
+    assert!(h.panel.window().is_none(), "a reload never summons the panel");
+    assert_eq!(h.launches.lock().unwrap().len(), 1);
+    h.state.core.toggle_quick_terminal();
+    h.turn();
+    assert_eq!(h.panel.shared().unwrap().key(), shared.key());
+    assert!((h.panel.shared().unwrap().font_points() - 17.0).abs() < f32::EPSILON);
+}
+
+#[gpui_kit::test]
+fn a_quick_link_opens_in_the_browser_and_a_spawn_failure_dismisses_the_panel(cx: &mut TestAppContext) {
+    let mut h = harness(cx);
+    h.state.core.toggle_quick_terminal();
+    h.turn();
+    route(
+        &h.env.poster,
+        &TerminalEvent::OpenUrl {
+            url: "https://example.com/quick".to_owned(),
+            browser: true,
+            kind: crate::terminal::LinkKind::Osc8,
+        },
+    );
+    h.turn();
+    assert_eq!(h.state.take_frontend_work().open_urls, ["https://example.com/quick"]);
+    route(&h.env.poster, &TerminalEvent::SpawnFailed("shell refused".to_owned()));
+    h.turn();
+    assert!(!h.state.core.quick_visible());
+    assert!(!h.state.core.quick_has_surface());
+    assert!(h.panel.window().is_none() && h.panel.shared().is_none());
+}
+
+/// The test platform accepts layer options but never asks a real compositor for a surface.
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+fn a_layer_panel_refits_on_its_output_and_waits_when_that_output_has_gone(cx: &mut TestAppContext) {
+    let mut h = harness(cx);
+    h.panel.host = Some(QuickHost::LayerShell);
+    h.state.core.toggle_quick_terminal();
+    h.turn();
+    let first = h.window();
+    let key = h.panel.shared().unwrap().key();
+    h.panel.shown.as_ref().unwrap().links.landed.set(Some(two()));
+    h.turn();
+    assert_eq!(h.window(), first, "a missing output keeps the old window");
+    h.panel.shown.as_mut().unwrap().frame.sized_for = Some(two());
+    h.panel.shown.as_ref().unwrap().links.landed.set(Some(one()));
+    h.turn();
+    assert_ne!(h.window(), first, "the output's frame is fitted with a fresh window");
+    let fitted = h.panel.frame().unwrap();
+    assert!(fitted.named);
+    assert_eq!(fitted.sized_for, Some(one()));
+    assert_eq!(h.panel.shared().unwrap().key(), key, "the shell stays");
+    assert_eq!(h.launches.lock().unwrap().len(), 1);
+}

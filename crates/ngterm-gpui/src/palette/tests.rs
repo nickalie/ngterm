@@ -206,3 +206,53 @@ fn another_palette_draws_no_editor_footer(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("palette-editor-hint").is_none());
     assert!(cx.debug_bounds("palette-mark:unflagged").is_none());
 }
+
+#[gpui_kit::test]
+fn a_refresh_keeps_the_query_and_selected_row_but_runs_its_new_action(cx: &mut TestAppContext) {
+    let entries = vec![
+        entry("work A", PaletteAction::Theme(Some("A".to_owned()))),
+        entry("work B", PaletteAction::Theme(Some("B".to_owned()))),
+    ];
+    let opened = view(PaletteMode::Themes, 7, entries, &[true, true]);
+    let (palette, cx, requests) = open(cx, opened.clone());
+    let field = palette.read_with(cx, |palette, _| palette.field().clone());
+    field.update_in(cx, |field, window, cx| field.focus(window, cx));
+    cx.simulate_input("work");
+    palette.update(cx, |palette, cx| {
+        palette.key(PickKey::Move(1), cx);
+        palette.refresh(opened.clone(), 120.0, Metrics::new(16.0), cx);
+    });
+    let mut refreshed = opened;
+    refreshed.entries.insert(0, entry("work 0", PaletteAction::Theme(None)));
+    refreshed.looks.insert(0, refreshed.looks[0].clone());
+    refreshed.entries[2].action = PaletteAction::Theme(Some("replacement".to_owned()));
+    palette.update(cx, |palette, cx| {
+        palette.refresh(refreshed, 120.0, Metrics::new(16.0), cx);
+        palette.key(PickKey::Swallow, cx);
+    });
+    assert_eq!(palette.read_with(cx, |palette, _| palette.query().to_owned()), "work");
+    assert_eq!(palette.read_with(cx, |palette, _| palette.selection()), 2);
+    assert_eq!(palette.read_with(cx, |palette, _| palette.generation()), 7);
+    palette.update(cx, |palette, cx| palette.key(PickKey::Run, cx));
+    assert_eq!(
+        requests.borrow().last(),
+        Some(&Request::Run(PaletteAction::Theme(Some("replacement".to_owned()))))
+    );
+}
+
+#[gpui_kit::test]
+fn focus_membership_and_custom_command_badges_are_drawn_and_the_scrim_closes(cx: &mut TestAppContext) {
+    let mut focused = entry("focused", PaletteAction::Theme(None));
+    focused.mark = Some(PaletteMark::Focus(true));
+    focused.badge = Some("current".to_owned());
+    let mut other = entry("other", PaletteAction::Theme(None));
+    other.mark = Some(PaletteMark::Focus(false));
+    let mut opened = view(PaletteMode::FocusEditor, 1, vec![focused, other], &[true, true]);
+    opened.looks[0].shortcut = Some("Ctrl+1".to_owned());
+    let (_, cx, requests) = open(cx, opened);
+    assert!(cx.debug_bounds("palette-mark:focused").is_some());
+    assert!(cx.debug_bounds("palette-mark:unfocused").is_some());
+    cx.simulate_click(gpui_kit::point(px(5.), px(5.)), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(*requests.borrow(), [Request::Close]);
+}

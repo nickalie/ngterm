@@ -657,4 +657,306 @@ mod tests {
     fn the_identity_is_this_crates_version() {
         assert_eq!(identity().version, env!("CARGO_PKG_VERSION"));
     }
+
+    /// A shell with a private persisted model, a real GPUI loop, and a launcher that starts no process.
+    fn test_shell(dir: &Path, cx: &mut App) -> Shell {
+        gpui_kit::init(cx);
+        cx.set_global(crate::status_glyph::Motion::default());
+        let env = MapEnv::new()
+            .with("NGTERM_STATE_DIR", dir.as_os_str())
+            .with("HOME", "/home/u");
+        let main_loop = Arc::new(GpuiMainLoop::new(cx.background_executor().clone()));
+        let posting: Arc<dyn MainLoop<AppState>> = main_loop.clone();
+        let poster = Arc::downgrade(&posting);
+        let core = Core::new(
+            CoreConfig {
+                app: identity(),
+                capabilities: Vec::new(),
+            },
+            load_state(&env),
+        );
+        let state = cx.new(|_| AppState::new(core));
+        state.update(cx, |state, _| state.attach(poster.clone()));
+        let env = Rc::new(DeckEnv::new(
+            PaneContext {
+                socket: dir.join("control.sock").to_string_lossy().into_owned(),
+                program_version: "1.2.3".to_owned(),
+            },
+            Rc::new(|_| Box::new(|_| Err(ngterm_term::PaneError::Closed))),
+            crate::terminal::TerminalConfig::default(),
+            poster,
+            Watermarks {
+                state_dir: dir.to_path_buf(),
+                config_with: Rc::new(|_| crate::terminal::TerminalConfig::default()),
+            },
+        ));
+        Shell {
+            main_loop,
+            posting,
+            server: RefCell::new(ControlServer::new(dir.join("control.sock"))),
+            state,
+            windows: RefCell::new(Windows::new(env, "com.nickalie.ngterm.test".to_owned(), None, None)),
+            banners: crate::notifications::Desktop::new().0,
+            shut_down: Cell::new(false),
+        }
+    }
+
+    fn drain(shell: &Shell, cx: &mut App) {
+        while let Ok(task) = shell.main_loop.tasks().try_recv() {
+            shell.state.update(cx, |state, _| task(state));
+        }
+    }
+
+    fn alert_heading(shell: &Shell, cx: &mut App) -> Option<String> {
+        let windows = shell.windows.borrow();
+        let handle = windows.frontmost(&shell.state.read(cx).core)?.handle;
+        handle
+            .update(cx, |_, window, cx| {
+                crate::modal::front_alert(window.window_handle(), cx).map(|alert| alert.read(cx).spec().heading.clone())
+            })
+            .ok()
+            .flatten()
+    }
+
+    fn answer(shell: &Shell, label: &str, cx: &mut App) {
+        let handle = shell
+            .windows
+            .borrow()
+            .frontmost(&shell.state.read(cx).core)
+            .unwrap()
+            .handle;
+        assert!(
+            handle
+                .update(cx, |_, window, cx| crate::modal::answer_front_alert(window, label, cx))
+                .unwrap()
+        );
+        drain(shell, cx);
+    }
+
+    #[gpui_kit::test]
+    fn frontend_prompts_are_landed_over_their_window_and_can_be_cancelled(cx: &mut gpui_kit::TestAppContext) {
+        let dir = tempfile::Builder::new()
+            .prefix("ngt")
+            .tempdir_in(std::env::temp_dir())
+            .unwrap();
+        let shell = cx.update(|cx| test_shell(dir.path(), cx));
+        cx.update(|cx| land(&shell, &shell.state, cx));
+        cx.run_until_parked();
+        let window = cx.update(|cx| shell.state.read(cx).core.library().active_window_id().unwrap());
+        cx.update(|cx| {
+            shell.state.update(cx, |state, _| state.close_requested(window));
+            land(&shell, &shell.state, cx);
+            assert_eq!(alert_heading(&shell, cx).as_deref(), Some("Close “window 1”?"));
+            answer(&shell, "Cancel", cx);
+            assert!(shell.state.read(cx).core.library().is_open(window));
+            shell
+                .state
+                .update(cx, |state, _| state.ask_quit("Keep the running session?".to_owned()));
+            land(&shell, &shell.state, cx);
+            assert_eq!(alert_heading(&shell, cx).as_deref(), Some("Quit Ngterm?"));
+            answer(&shell, "Cancel", cx);
+            assert!(!shell.state.update(cx, |state, _| state.take_frontend_work()).quit);
+        });
+        cx.update(|cx| {
+            shell.state.update(cx, |state, _| {
+                state.ask_live_reset(crate::live_runtime::ResetAlert::Refused(
+                    ngterm_core::ResetRefusal::NotLive,
+                ));
+            });
+            land(&shell, &shell.state, cx);
+            assert_eq!(alert_heading(&shell, cx).as_deref(), Some("Reset Live Sessions"));
+            answer(&shell, "OK", cx);
+            assert!(!shell.state.read(cx).is_quitting());
+            shut_down(&shell, cx);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn clearing_flags_confirms_then_changes_the_model_and_settings_land_in_the_window(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let dir = tempfile::Builder::new()
+            .prefix("ngt")
+            .tempdir_in(std::env::temp_dir())
+            .unwrap();
+        let shell = cx.update(|cx| test_shell(dir.path(), cx));
+        cx.update(|cx| land(&shell, &shell.state, cx));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let window = shell.state.read(cx).core.library().active_window_id().unwrap();
+            shell.state.update(cx, |state, _| {
+                let store = state.core.library_mut().store_mut(window).unwrap();
+                let session = store.active_session().unwrap().id();
+                store.set_flag(true, session);
+                state.clear_flags_requested(window);
+            });
+            land(&shell, &shell.state, cx);
+            assert_eq!(alert_heading(&shell, cx).as_deref(), Some("Clear flagged sessions?"));
+            assert_eq!(
+                shell
+                    .state
+                    .read(cx)
+                    .core
+                    .library()
+                    .store(window)
+                    .unwrap()
+                    .flagged_sessions()
+                    .len(),
+                1
+            );
+            answer(&shell, "Clear", cx);
+            assert!(
+                shell
+                    .state
+                    .read(cx)
+                    .core
+                    .library()
+                    .store(window)
+                    .unwrap()
+                    .flagged_sessions()
+                    .is_empty()
+            );
+            shell.state.update(cx, |state, _| state.open_settings(window));
+            land(&shell, &shell.state, cx);
+            assert_eq!(shell.windows.borrow().settings_host(cx), Some(window));
+            shut_down(&shell, cx);
+            assert!(shell.state.read(cx).is_quitting());
+            assert!(shell.main_loop.post(Box::new(|_| {})).is_err());
+            shut_down(&shell, cx);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn prompts_for_gone_windows_are_dropped_and_a_quit_without_a_window_proceeds(cx: &mut gpui_kit::TestAppContext) {
+        let dir = tempfile::Builder::new()
+            .prefix("ngt")
+            .tempdir_in(std::env::temp_dir())
+            .unwrap();
+        let shell = cx.update(|cx| test_shell(dir.path(), cx));
+        cx.update(|cx| {
+            let id = uuid::Uuid::new_v4();
+            let work = crate::state::FrontendWork {
+                window_closes: vec![crate::state::WindowClose {
+                    window: id,
+                    name: "gone".to_owned(),
+                    sessions: 1,
+                    mode: ngterm_core::persist::RestoreMode::None,
+                }],
+                clear_flags: Some((id, 1)),
+                ..crate::state::FrontendWork::default()
+            };
+            land_window_prompts(&shell, &work, cx);
+            land_live_reset(
+                &shell,
+                &shell.state,
+                &crate::live_runtime::ResetAlert::Refused(ngterm_core::ResetRefusal::NotLive),
+                cx,
+            );
+            assert!(cx.windows().is_empty());
+            land_quit_prompt(&shell, &shell.state, "Quit?", cx);
+            drain(&shell, cx);
+            assert!(shell.state.update(cx, |state, _| state.take_frontend_work()).quit);
+            shut_down(&shell, cx);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn bus_activations_keep_their_order_and_process_completions_settle_the_model(cx: &mut gpui_kit::TestAppContext) {
+        let dir = tempfile::Builder::new()
+            .prefix("ngt")
+            .tempdir_in(std::env::temp_dir())
+            .unwrap();
+        let shell = cx.update(|cx| test_shell(dir.path(), cx));
+        let (sender, receiver) = async_channel::unbounded();
+        let activations: Vec<_> = ["first", "second"]
+            .into_iter()
+            .map(|token| Activation {
+                token: Some(token.to_owned()),
+                ..Activation::default()
+            })
+            .collect();
+        for activation in &activations {
+            sender.try_send(BusRequest::Activate(activation.clone())).unwrap();
+        }
+        drop(sender);
+        cx.update(|cx| forward_bus_requests(receiver, Arc::downgrade(&shell.posting), cx));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            drain(&shell, cx);
+            assert_eq!(
+                shell
+                    .state
+                    .update(cx, |state, _| state.take_frontend_work())
+                    .activations,
+                activations
+            );
+            let host = process_host(&Arc::downgrade(&shell.posting), "private.sock".to_owned());
+            assert_eq!(host.socket, "private.sock");
+            (host.poster)(Box::new(|core| {
+                core.update_settings(|settings| settings.welcome_shown = Some(true));
+            }));
+            drain(&shell, cx);
+            assert_eq!(shell.state.read(cx).core.settings().welcome_shown, Some(true));
+            shut_down(&shell, cx);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn alerts_and_links_reach_the_frontend_and_a_queued_action_reaches_its_window(cx: &mut gpui_kit::TestAppContext) {
+        let dir = tempfile::Builder::new()
+            .prefix("ngt")
+            .tempdir_in(std::env::temp_dir())
+            .unwrap();
+        let mut shell = cx.update(|cx| test_shell(dir.path(), cx));
+        let (banners, queue) = crate::notifications::Desktop::new();
+        shell.banners = banners;
+        cx.update(|cx| land(&shell, &shell.state, cx));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let work = crate::state::FrontendWork {
+                sounds: vec!["beep".to_owned()],
+                welcome: true,
+                banners: vec![ngterm_core::NotificationEffect::App {
+                    identity: "update".to_owned(),
+                    title: "Ready".to_owned(),
+                    body: "Downloaded".to_owned(),
+                }],
+                ..crate::state::FrontendWork::default()
+            };
+            land_alerts(&shell, &shell.state, &work, cx);
+            assert_eq!(
+                queue.try_recv().unwrap(),
+                crate::notifications::Banner::Send {
+                    identity: "update".to_owned(),
+                    title: "Ready".to_owned(),
+                    body: "Downloaded".to_owned()
+                }
+            );
+            assert_eq!(alert_heading(&shell, cx).as_deref(), Some(FirstRunWelcome::TITLE));
+            answer(&shell, "Later", cx);
+            let id = shell.state.read(cx).core.library().active_window_id().unwrap();
+            shell.state.update(cx, |state, _| {
+                state.follow_link(
+                    "https://example.com/app",
+                    ngterm_core::link_policy::ClickOrigin::Quick,
+                    true,
+                );
+                state.frontend_action(ngterm_core::app_actions::FrontendAction::ToggleFullscreen(id));
+                state.activation_requested(Activation::default());
+            });
+            land(&shell, &shell.state, cx);
+            assert!(
+                shell
+                    .windows
+                    .borrow()
+                    .get(id)
+                    .unwrap()
+                    .handle
+                    .update(cx, |_, window, _| window.is_fullscreen())
+                    .unwrap()
+            );
+            shut_down(&shell, cx);
+        });
+        assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/app"));
+    }
 }

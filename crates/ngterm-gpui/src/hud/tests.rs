@@ -297,3 +297,269 @@ fn the_cell_estimate_measures_the_terminals_face(cx: &mut gpui_kit::TestAppConte
     let (bigger, _) = estimate(None, 26.0);
     assert!(bigger > width, "twice the size is wider: {bigger} > {width}");
 }
+
+#[derive(Default)]
+struct Posted(std::sync::Mutex<Vec<ngterm_host::MainTask<AppState>>>);
+
+impl ngterm_host::MainLoop<AppState> for Posted {
+    fn post(&self, task: ngterm_host::MainTask<AppState>) -> Result<(), ngterm_host::MainLoopClosed> {
+        self.0.lock().unwrap().push(task);
+        Ok(())
+    }
+
+    fn post_after(
+        &self,
+        _: std::time::Duration,
+        _: ngterm_host::MainTask<AppState>,
+    ) -> Result<(), ngterm_host::MainLoopClosed> {
+        Ok(())
+    }
+}
+
+fn event_state(dir: &std::path::Path) -> (AppState, Arc<Posted>, Uuid, Uuid) {
+    let library = ngterm_core::model::WindowLibrary::seeded("/home/u");
+    let window = library.active_window_id().unwrap();
+    let session = library.store(window).unwrap().active_session().unwrap().id();
+    let core = ngterm_core::Core::new(
+        ngterm_core::CoreConfig {
+            app: ngterm_proto::AppIdentity::from_recorded("1.2.3", None),
+            capabilities: Vec::new(),
+        },
+        ngterm_core::CoreState {
+            library,
+            ..ngterm_core::CoreState::default()
+        },
+    );
+    let mut state = AppState::new(core);
+    state.core.set_hud_body_dir(dir.to_path_buf());
+    state.core.set_cell_estimator(Box::new(|_, _| (8.0, 16.0)));
+    let posted = Arc::new(Posted::default());
+    let main_loop: Arc<dyn ngterm_host::MainLoop<AppState>> = posted.clone();
+    state.attach(Arc::downgrade(&main_loop));
+    (state, posted, window, session)
+}
+
+fn send_event(state: &mut AppState, posted: &Posted, session: Uuid, generation: u64, event: &TerminalEvent) {
+    panel_event(state.poster(), session, generation, event);
+    let tasks = std::mem::take(&mut *posted.0.lock().unwrap());
+    for task in tasks {
+        task(state);
+    }
+}
+
+fn open_hud(state: &mut AppState, session: Uuid, message: &str) -> (u64, PathBuf) {
+    let response = state.core.dispatch(&ngterm_proto::Request {
+        cmd: ngterm_proto::Command::Session(ngterm_proto::command::SessionCmd::HudOpen),
+        target: Some(session.to_string()),
+        args: Some(ngterm_proto::Args {
+            message: Some(message.to_owned()),
+            ..ngterm_proto::Args::default()
+        }),
+    });
+    assert!(response.ok, "{response:?}");
+    let slot = &state.core.library().held_session(session).unwrap().overlay;
+    (slot.generation, slot.hud.as_ref().unwrap().file.clone())
+}
+
+#[test]
+fn a_painters_late_exit_keeps_its_replacement_and_its_own_exit_removes_the_body() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, posted, _, session) = event_state(dir.path());
+    let (old, _) = open_hud(&mut state, session, "old");
+    let (current, file) = open_hud(&mut state, session, "replacement");
+    let exited = TerminalEvent::Pane(ngterm_term::PaneEvent::Exited(ngterm_term::ExitStatus {
+        code: 0,
+        signal: None,
+        held: false,
+    }));
+    send_event(&mut state, &posted, session, old, &exited);
+    assert!(file.exists());
+    assert!(state.core.library().held_session(session).unwrap().overlay.hud_active());
+    send_event(&mut state, &posted, session, current, &exited);
+    assert!(!file.exists());
+    assert!(!state.core.library().held_session(session).unwrap().overlay.hud_active());
+}
+
+#[test]
+fn font_and_spawn_events_refresh_the_body_and_hud_links_use_the_browser() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, posted, _, session) = event_state(dir.path());
+    let (generation, file) = open_hud(&mut state, session, "still painting");
+    for event in [TerminalEvent::Spawned, TerminalEvent::FontSize] {
+        std::fs::remove_file(&file).unwrap();
+        send_event(&mut state, &posted, session, generation, &event);
+        assert!(std::fs::read_to_string(&file).unwrap().contains("still painting"));
+    }
+    let event = TerminalEvent::OpenUrl {
+        url: "https://example.com/hud".to_owned(),
+        browser: true,
+        kind: crate::terminal::LinkKind::Osc8,
+    };
+    send_event(&mut state, &posted, session, generation, &event);
+    assert_eq!(state.take_frontend_work().open_urls, ["https://example.com/hud"]);
+    send_event(
+        &mut state,
+        &posted,
+        Uuid::new_v4(),
+        generation,
+        &TerminalEvent::FontSize,
+    );
+    assert!(file.exists(), "an event for a gone session leaves the live HUD alone");
+}
+
+#[gpui_kit::test]
+fn an_explicit_font_family_measures_a_cell_and_blank_names_use_the_default(cx: &mut gpui_kit::TestAppContext) {
+    let text = cx.update(|cx| {
+        crate::terminal::register_embedded_fonts(cx.text_system());
+        Arc::clone(cx.text_system())
+    });
+    let estimate = cell_estimator(text);
+    let default = estimate(None, 14.0);
+    assert_eq!(estimate(Some("  "), 14.0), default);
+    let (width, height) = estimate(Some("JetBrains Mono"), 14.0);
+    assert!(width >= 1.0 && height >= width);
+}
+
+struct PanelHarness<'a> {
+    state: AppState,
+    posted: Arc<Posted>,
+    deck: Entity<crate::deck::Deck>,
+    session: Uuid,
+    cx: &'a mut gpui_kit::VisualTestContext,
+}
+
+impl PanelHarness<'_> {
+    fn turn(&mut self) {
+        let tasks = std::mem::take(&mut *self.posted.0.lock().unwrap());
+        for task in tasks {
+            task(&mut self.state);
+        }
+        let core = &mut self.state.core;
+        self.deck.update_in(self.cx, |deck, window, cx| {
+            let _ = deck.reconcile(core, false, window, cx);
+        });
+        self.cx.run_until_parked();
+    }
+
+    fn panel(&self) -> (Entity<Terminal>, Entity<TerminalView>) {
+        self.deck.read_with(self.cx, |deck, _| {
+            let panel = deck.page(self.session).unwrap().hud().panel().unwrap();
+            (panel.terminal().clone(), panel.view().clone())
+        })
+    }
+}
+
+fn panel_harness<'a>(dir: &std::path::Path, cx: &'a mut gpui_kit::TestAppContext) -> PanelHarness<'a> {
+    cx.executor().allow_parking();
+    cx.update(gpui_kit::init);
+    let (mut state, posted, window, session) = event_state(dir);
+    open_hud(&mut state, session, "https://example.com/panel");
+    let env = Rc::new(DeckEnv::new(
+        crate::pane::PaneContext {
+            socket: dir.join("unused.sock").to_string_lossy().into_owned(),
+            program_version: "1.2.3".to_owned(),
+        },
+        Rc::new(|launch| {
+            let launch = launch.clone();
+            Box::new(move |config| {
+                if launch.painter.is_none() {
+                    return Err(ngterm_term::PaneError::Closed);
+                }
+                let host =
+                    ngterm_term::Host::new(&ngterm_core::ghostty_config::GhosttyConfig::default(), None, None, None);
+                ngterm_term::Pane::launch(&launch, &host, &config)
+            })
+        }),
+        crate::terminal::TerminalConfig::default(),
+        state.poster().clone(),
+        crate::deck::Watermarks {
+            state_dir: dir.to_path_buf(),
+            config_with: Rc::new(|overlay| {
+                let mut loader = ngterm_core::ghostty_config::Loader::new(None);
+                loader.load_text("hud", overlay);
+                crate::terminal::TerminalConfig::from_ghostty(&loader.finish().finalize(false, &[]).config)
+            }),
+        },
+    ));
+    let (deck, cx) = cx.add_window_view(|_, _| crate::deck::Deck::new(window, env));
+    cx.simulate_resize(gpui_kit::size(px(800.), px(600.)));
+    let mut harness = PanelHarness {
+        state,
+        posted,
+        deck,
+        session,
+        cx,
+    };
+    harness.turn();
+    harness
+}
+
+#[gpui_kit::test]
+fn hovering_a_hud_link_marks_it_and_leaving_or_adding_a_modifier_clears_it(cx: &mut gpui_kit::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = panel_harness(dir.path(), cx);
+    let (_, view) = h.panel();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        h.turn();
+        if view.read_with(h.cx, |view, _| {
+            view.painted()
+                .is_some_and(|frame| frame.lines().join("\n").contains("https://example.com/panel"))
+        }) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the painter's link never appeared"
+        );
+        std::thread::yield_now();
+    }
+    let (terminal, _) = h.panel();
+    let at = h.deck.read_with(h.cx, |deck, cx| {
+        let page = deck.page(h.session).unwrap();
+        let placement = page.hud().placement().unwrap();
+        let rect = placement.style.panel_frame(Rect {
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 600,
+        });
+        let (cell_x, cell_y) = terminal.read(cx).shared().cell_size();
+        let (row, column) = view
+            .read(cx)
+            .painted()
+            .unwrap()
+            .lines()
+            .iter()
+            .enumerate()
+            .find_map(|(row, line)| line.find("https://").map(|column| (row, column)))
+            .expect("the link has a painted cell");
+        #[expect(clippy::cast_precision_loss, reason = "the panel's row and column fit f64")]
+        let (row, column) = (row as f64, column as f64);
+        #[expect(clippy::cast_possible_truncation, reason = "the test window's coordinates fit f32")]
+        gpui_kit::point(
+            px((f64::from(rect.x) + 8.0 + (column + 2.5) * cell_x) as f32),
+            px((f64::from(rect.y) + 6.0 + (row + 0.75) * cell_y) as f32),
+        )
+    });
+    h.cx.simulate_mouse_move(at, None, Modifiers::control());
+    h.turn();
+    assert!(view.read_with(h.cx, |view, _| view.hovered_link().is_some()));
+    h.cx.simulate_mouse_move(at, None, Modifiers::control_shift());
+    h.turn();
+    assert!(view.read_with(h.cx, |view, _| view.hovered_link().is_none()));
+    h.cx.simulate_mouse_move(at, None, Modifiers::control());
+    h.turn();
+    h.cx.simulate_mouse_move(gpui_kit::point(px(0.), px(0.)), None, Modifiers::default());
+    h.turn();
+    assert!(view.read_with(h.cx, |view, _| view.hovered_link().is_none()));
+    h.deck.update(h.cx, |deck, cx| {
+        deck.page(h.session)
+            .unwrap()
+            .hud()
+            .panel()
+            .unwrap()
+            .apply_config(deck.env(), cx);
+    });
+    terminal.read_with(h.cx, |terminal, _| terminal.shared().teardown());
+}
