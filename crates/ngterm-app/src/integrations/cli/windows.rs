@@ -366,44 +366,50 @@ mod tests {
         );
     }
 
-    /// `reg query`'s view of `HKCU\<key>\<value>`: its data and type, `None` when absent.
-    fn reg_query(key: &str, value: &str) -> Option<(String, String)> {
-        let output = Command::new("reg")
-            .args(["query", &format!(r"HKCU\{key}"), "/v", value])
+    /// .NET's view of `HKCU\<key>\<value>`: its unexpanded data and type, `None` when absent. JSON over UTF-8 keeps
+    /// Unicode and whitespace intact regardless of the console's code page.
+    fn registry_query(key: &str, value: &str) -> Option<(String, REG_VALUE_TYPE)> {
+        let script = r"
+            $ErrorActionPreference = 'Stop'
+            [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+            $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($env:TEST_REGISTRY_KEY)
+            try {
+                $data = $key.GetValue($env:TEST_REGISTRY_VALUE, $null, 'DoNotExpandEnvironmentNames')
+                if ($null -eq $data) { 'null' } else {
+                    ConvertTo-Json -Compress -InputObject @(
+                        [string]$data, [int]$key.GetValueKind($env:TEST_REGISTRY_VALUE)
+                    )
+                }
+            } finally { $key.Dispose() }
+        ";
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .env("TEST_REGISTRY_KEY", key)
+            .env("TEST_REGISTRY_VALUE", value)
             .output()
             .unwrap();
-        if !output.status.success() {
-            return None;
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        // `    <name>    <type>    <data>`
-        let line = stdout
-            .lines()
-            .find(|line| {
-                line.trim_start()
-                    .to_lowercase()
-                    .starts_with(&format!("{} ", value.to_lowercase()))
-            })
-            .unwrap_or_else(|| panic!("no {value} in {stdout}"));
-        let mut fields = line.trim().splitn(3, "    ").skip(1);
-        let kind = fields.next().unwrap().to_owned();
-        Some((fields.next().unwrap_or("").to_owned(), kind))
+        assert!(output.status.success(), "{output:?}");
+        serde_json::from_slice(&output.stdout).unwrap()
     }
 
     #[test]
     fn the_environment_store_reads_the_users_own_path_value() {
         let read = UserPath::environment().read().unwrap();
-        let kind_name = |kind: REG_VALUE_TYPE| {
-            if kind == REG_EXPAND_SZ {
-                "REG_EXPAND_SZ"
-            } else {
-                "REG_SZ"
-            }
-        };
-        assert_eq!(
-            read.map(|(text, kind)| (text, kind_name(kind).to_owned())),
-            reg_query("Environment", "Path")
-        );
+        assert_eq!(read, registry_query("Environment", "Path"));
+    }
+
+    #[test]
+    fn the_registry_comparison_keeps_unicode_spaces_and_unexpanded_variables() {
+        let key = TestKey::new();
+        let store = UserPath::at(&key.0, "Path");
+        assert_eq!(registry_query(&key.0, "Path"), None);
+        for kind in [REG_SZ, REG_EXPAND_SZ] {
+            let text = "  C:\\Users\\René\\日本語;%USERPROFILE%\\bin  ";
+            store.write(text, kind).unwrap();
+            let expected = Some((text.to_owned(), kind));
+            assert_eq!(registry_query(&key.0, "Path"), expected);
+            assert_eq!(store.read().unwrap(), expected);
+        }
     }
 
     #[test]
@@ -433,8 +439,8 @@ mod tests {
             CliResult::Failed(r"Could not add C:\ngterm\bin to your PATH: the PATH value is not a string".to_owned())
         );
         assert_eq!(
-            reg_query(&key.0, "Path"),
-            Some(("0x1".to_owned(), "REG_DWORD".to_owned()))
+            registry_query(&key.0, "Path"),
+            Some(("1".to_owned(), windows_sys::Win32::System::Registry::REG_DWORD))
         );
     }
 
@@ -503,9 +509,27 @@ mod tests {
         unsafe { DefWindowProcW(window, message, wparam, lparam) }
     }
 
-    /// A hidden top-level window, which a broadcast reaches, recording the setting changes on a thread of its own; it
-    /// ends when the window is sent `WM_CLOSE`.
-    fn settings_window() -> (usize, std::thread::JoinHandle<()>) {
+    /// The broadcast window and its thread, closed and joined even when an assertion unwinds.
+    struct SettingsWindow {
+        window: usize,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Drop for SettingsWindow {
+        fn drop(&mut self) {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+            // SAFETY: this guard owns the window; its thread ends once it is destroyed.
+            let posted = unsafe { PostMessageW(self.window as _, WM_CLOSE, 0, 0) };
+            let joined = self.thread.take().unwrap().join();
+            if !std::thread::panicking() {
+                assert_ne!(posted, 0, "{}", io::Error::last_os_error());
+                joined.unwrap();
+            }
+        }
+    }
+
+    /// A hidden top-level window, which a broadcast reaches, recording the setting changes on a thread of its own.
+    fn settings_window() -> SettingsWindow {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             CreateWindowExW, DispatchMessageW, GWLP_WNDPROC, GetMessageW, MSG, SetWindowLongPtrW, WS_POPUP,
         };
@@ -541,14 +565,16 @@ mod tests {
                 unsafe { DispatchMessageW(&raw const message) };
             }
         });
-        (window.recv().unwrap(), thread)
+        SettingsWindow {
+            window: window.recv().unwrap(),
+            thread: Some(thread),
+        }
     }
 
     #[test]
     fn a_write_to_the_environment_tells_every_window_and_a_tests_key_tells_none() {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
         let key = TestKey::new();
-        let (window, thread) = settings_window();
+        let _window = settings_window();
         let told = || SETTING_CHANGES.lock().unwrap().iter().any(|area| area == "Environment");
 
         UserPath::at(&key.0, "Path").write(r"C:\a", REG_SZ).unwrap();
@@ -562,10 +588,20 @@ mod tests {
         // the broadcast is sent: it returned once every window handled it
         assert!(told(), "{:?}", SETTING_CHANGES.lock().unwrap());
         assert_eq!(announcing.read().unwrap(), Some((r"C:\a;C:\b".to_owned(), REG_SZ)));
+    }
 
-        // SAFETY: the window `settings_window` made; its thread ends once it is destroyed.
-        assert_ne!(unsafe { PostMessageW(window as _, WM_CLOSE, 0, 0) }, 0);
-        thread.join().unwrap();
+    #[test]
+    fn the_broadcast_window_is_destroyed_when_an_assertion_unwinds() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::IsWindow;
+        let window = settings_window();
+        let handle = window.window;
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _window = window;
+            panic!("an assertion failed while the window was alive");
+        }));
+        assert!(unwound.is_err());
+        // SAFETY: querying a former window handle is valid, including after the window has been destroyed.
+        assert_eq!(unsafe { IsWindow(handle as _) }, 0);
     }
 
     #[test]
