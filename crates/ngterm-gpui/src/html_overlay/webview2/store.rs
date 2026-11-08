@@ -60,17 +60,22 @@ pub fn remove_later(folder: PathBuf) {
     let spawned = std::thread::Builder::new()
         .name("webview2-profile".to_owned())
         .spawn(move || {
-            for _ in 0..10 {
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                if !folder.exists() || std::fs::remove_dir_all(&folder).is_ok() {
-                    return;
-                }
-            }
-            tracing::debug!(folder = %folder.display(), "a closed page's profile folder stays until the next start");
+            remove_retrying(&folder, || std::thread::sleep(std::time::Duration::from_secs(2)));
         });
     if let Err(err) = spawned {
         tracing::debug!(%err, "a closed page's profile folder stays until the next start");
     }
+}
+
+/// Tries to remove `folder` up to ten times, calling `pause` before each try, until it is gone.
+fn remove_retrying(folder: &Path, mut pause: impl FnMut()) {
+    for _ in 0..10 {
+        pause();
+        if !folder.exists() || std::fs::remove_dir_all(folder).is_ok() {
+            return;
+        }
+    }
+    tracing::debug!(folder = %folder.display(), "a closed page's profile folder stays until the next start");
 }
 
 #[cfg(test)]
