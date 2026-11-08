@@ -7,7 +7,7 @@
 use ashpd::desktop::global_shortcuts::{BindShortcutsOptions, GlobalShortcuts, NewShortcut, Shortcut};
 use ashpd::desktop::{CreateSessionOptions, Session};
 use futures_util::StreamExt as _;
-use gpui_kit::{App, Task};
+use gpui_kit::App;
 
 /// What the binding is asked to hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,10 +18,9 @@ pub enum Wanted {
     Bound(Option<String>),
 }
 
-/// The portal binding: a task of the app's that owns the portal session.
+/// The portal binding: a task of the app's that owns the portal session, which it closes once the binding ends.
 pub struct Binding {
     wanted: async_channel::Sender<Wanted>,
-    _task: Task<()>,
 }
 
 /// What the task hears: a new wish, an activation of some shortcut (its id), or the binding's end.
@@ -35,8 +34,10 @@ impl Binding {
     /// Starts the binding; `fired` runs for each activation of the bound shortcut.
     pub fn start(fired: impl Fn() + Send + Sync + 'static, cx: &mut App) -> Self {
         let (wanted, asked) = async_channel::unbounded::<Wanted>();
-        let task = cx.spawn(async move |_| run(asked, fired).await);
-        Self { wanted, _task: task }
+        // detached, so the binding's drop ends the task through the channel's end, which closes the session, rather
+        // than cancelling it with the session open
+        cx.spawn(async move |_| run(asked, fired).await).detach();
+        Self { wanted }
     }
 
     /// Asks the binding to hold `wanted`.
@@ -82,6 +83,20 @@ async fn open() -> Option<(GlobalShortcuts, impl futures_util::Stream<Item = Hea
             return None;
         }
     };
+    // ashpd treats most failures reading `version`, including a missing service, as version 1. Check after opening
+    // the proxy so an installed portal still gets its usual chance to activate on the bus.
+    let owned = async {
+        let bus = zbus::fdo::DBusProxy::new(portal.connection()).await?;
+        bus.name_has_owner(portal.destination().clone()).await
+    }
+    .await;
+    if !matches!(owned, Ok(true)) {
+        tracing::warn!(
+            ?owned,
+            "no global shortcuts portal: global-hotkey is ignored on this desktop"
+        );
+        return None;
+    }
     match portal.receive_activated().await {
         Ok(activations) => {
             let heard = activations.map(|activated| Heard::Activated(activated.shortcut_id().to_owned()));
