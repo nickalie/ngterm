@@ -495,18 +495,30 @@ mod tests {
         OwnedHandle::from(io::pipe().unwrap().0)
     }
 
-    /// A child that runs until it is killed.
-    fn running_child() -> std::process::Child {
-        Command::new("ping.exe")
-            .args(["-n", "600", "127.0.0.1"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .spawn()
-            .unwrap()
+    struct RunningChild(std::process::Child);
+
+    impl Drop for RunningChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
     }
 
-    fn process_handle(child: &std::process::Child) -> OwnedHandle {
-        child.as_handle().try_clone_to_owned().unwrap()
+    /// A child killed and waited for even when a test panics.
+    fn running_child() -> RunningChild {
+        RunningChild(
+            Command::new("ping.exe")
+                .args(["-n", "600", "127.0.0.1"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        )
+    }
+
+    fn process_handle(child: &RunningChild) -> OwnedHandle {
+        child.0.as_handle().try_clone_to_owned().unwrap()
     }
 
     /// A console whose signal is `signal` and whose console host is `conhost`, its other handles pipes.
@@ -552,8 +564,8 @@ mod tests {
             refusal(&console(pipe(), pipe())),
             "the pseudoconsole's console host is not a live process"
         );
-        live.kill().unwrap();
-        live.wait().unwrap();
+        live.0.kill().unwrap();
+        live.0.wait().unwrap();
         assert_eq!(
             refusal(&console(pipe(), process_handle(&live))),
             "the pseudoconsole's console host is not a live process"
@@ -639,7 +651,7 @@ mod tests {
         let current = unsafe { GetCurrentProcess() };
         // SAFETY: the current process's pseudo-handle is valid for the whole process's life.
         let this = unsafe { BorrowedHandle::borrow_raw(current) };
-        let mut child = running_child();
+        let child = running_child();
         let duplicate = |handle: OwnedHandle| duplicate_into(handle.as_raw_handle(), this).unwrap();
         let handles = PaneHandles {
             input: duplicate(pipe()),
@@ -655,7 +667,5 @@ mod tests {
             receive_refusal(&line, &[pane()]),
             "the pseudoconsole's signal handle is not a pipe"
         );
-        child.kill().unwrap();
-        child.wait().unwrap();
     }
 }

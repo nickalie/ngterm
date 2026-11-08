@@ -46,6 +46,15 @@ fn a_client_whose_server_disconnected_it_reads_as_its_peer_closed() {
 }
 
 #[test]
+fn a_server_that_disconnected_its_pipe_reads_as_its_peer_closed() {
+    let (_root, endpoint) = namespace();
+    let (_listener, _client, mut server) = connected(&endpoint);
+    assert!(!peer_closed(&mut server).unwrap());
+    disconnect(&server);
+    assert!(peer_closed(&mut server).unwrap());
+}
+
+#[test]
 fn a_pipe_end_the_probe_cannot_peek_fails_it() {
     // an anonymous pipe's write end: a pipe, without the read access a peek needs
     let (_reader, writer) = io::pipe().unwrap();
