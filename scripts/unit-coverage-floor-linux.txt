@@ -4,20 +4,20 @@
 # toward 90 per crate as crates earn it, from the job's own reports (README > Test): check_coverage.py --floor THIS
 # --add --summary A/summary.md --summary B/summary.md, A and B two runs of one commit (each floor raised to the
 # batch's lowest; a new crate added, a gone one dropped).
-# Seeded from the CI job's first runs (its rust-linux-unit-coverage summary.md); 0 until then.
+# Seeded from two runs of the CI job on one commit (its rust-linux-unit-coverage summary.md).
 # crate lines functions regions, sorted by crate.
-ngterm-app 0.00 0.00 0.00
-ngterm-core 0.00 0.00 0.00
-ngterm-ctl 0.00 0.00 0.00
-ngterm-ghostty-vt 0.00 0.00 0.00
-ngterm-gpui 0.00 0.00 0.00
-ngterm-headless 0.00 0.00 0.00
-ngterm-host 0.00 0.00 0.00
-ngterm-mobile 0.00 0.00 0.00
-ngterm-proto 0.00 0.00 0.00
-ngterm-pty 0.00 0.00 0.00
-ngterm-server 0.00 0.00 0.00
-ngterm-session 0.00 0.00 0.00
-ngterm-term 0.00 0.00 0.00
-ngterm-update 0.00 0.00 0.00
-ngterm-wpe 0.00 0.00 0.00
+ngterm-app 92.82 95.31 92.14
+ngterm-core 95.98 96.54 94.99
+ngterm-ctl 91.55 87.74 89.60
+ngterm-ghostty-vt 92.74 96.33 91.59
+ngterm-gpui 88.51 88.63 87.63
+ngterm-headless 16.79 18.31 14.60
+ngterm-host 95.82 94.16 94.50
+ngterm-mobile 90.40 89.40 90.09
+ngterm-proto 99.18 97.67 99.26
+ngterm-pty 84.98 85.82 84.15
+ngterm-server 87.91 89.13 87.31
+ngterm-session 92.97 94.17 90.91
+ngterm-term 92.88 95.22 92.17
+ngterm-update 63.66 68.35 57.47
+ngterm-wpe 86.49 88.86 85.91
