@@ -1715,4 +1715,165 @@ mod tests {
         worker.reap(Duration::ZERO);
         assert!(!alive(pid));
     }
+    fn config() -> HostConfig {
+        HostConfig {
+            frames: crate::FrameMode::Shm,
+            schemes: vec!["overlay".to_owned()],
+        }
+    }
+
+    fn hello(protocol: u32) -> FromWorker {
+        FromWorker::Hello {
+            protocol,
+            version: "test-version".to_owned(),
+            pid: 123,
+        }
+    }
+
+    fn handshake_answer(first: FromWorker, second: Option<FromWorker>) -> Result<u32, StartError> {
+        let (ours, theirs) =
+            rustix::net::socketpair(AddressFamily::UNIX, SocketType::SEQPACKET, SocketFlags::CLOEXEC, None).unwrap();
+        let peer = std::thread::spawn(move || {
+            wire::send(theirs.as_fd(), &first.packet().unwrap()).unwrap();
+            if let Some(second) = second {
+                let ToWorker::Start(config) = next_command(&theirs) else {
+                    panic!("configuration")
+                };
+                assert_eq!(config.frames, crate::FrameMode::Shm);
+                assert_eq!(config.schemes, ["overlay"]);
+                wire::send(theirs.as_fd(), &second.packet().unwrap()).unwrap();
+            }
+        });
+        let result = handshake(ours.as_fd(), &config(), Duration::from_secs(2));
+        peer.join().unwrap();
+        result
+    }
+
+    #[test]
+    fn the_handshake_checks_the_protocol_and_the_order_of_the_workers_answers() {
+        assert_eq!(
+            handshake_answer(hello(PROTOCOL), Some(FromWorker::Started(Ok(())))).unwrap(),
+            123
+        );
+        let error = handshake_answer(hello(PROTOCOL + 1), None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "the WPE worker failed: the worker speaks protocol {} (test-version), this build {PROTOCOL} ({}): the executable was replaced while ngterm ran; restart it",
+                PROTOCOL + 1,
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+        assert_eq!(
+            handshake_answer(FromWorker::Stopped, None).unwrap_err().to_string(),
+            "the WPE worker failed: the worker said Stopped before hello"
+        );
+        assert_eq!(
+            handshake_answer(hello(PROTOCOL), Some(FromWorker::Stopped))
+                .unwrap_err()
+                .to_string(),
+            "the WPE worker failed: the worker said Stopped instead of its start"
+        );
+        let error = handshake_answer(
+            hello(PROTOCOL),
+            Some(FromWorker::Started(Err(message::StartFailure::Display(
+                "not found".to_owned(),
+            )))),
+        )
+        .unwrap_err();
+        assert!(matches!(error, StartError::Display(ref message) if message == "not found"));
+    }
+
+    #[test]
+    fn a_start_that_ends_or_sends_a_broken_packet_returns_the_socket_reason() {
+        for bytes in [None, Some(b"short".as_slice())] {
+            let (ours, theirs) =
+                rustix::net::socketpair(AddressFamily::UNIX, SocketType::SEQPACKET, SocketFlags::CLOEXEC, None)
+                    .unwrap();
+            if let Some(bytes) = bytes {
+                rustix::net::send(&theirs, bytes, rustix::net::SendFlags::NOSIGNAL).unwrap();
+            }
+            drop(theirs);
+            let error = handshake(ours.as_fd(), &config(), Duration::from_secs(2)).unwrap_err();
+            let expected = if bytes.is_some() {
+                "the WPE worker failed: the worker's socket: a broken packet: 5 bytes, shorter than its header"
+            } else {
+                "the WPE worker failed: the worker ended while starting"
+            };
+            assert_eq!(error.to_string(), expected);
+        }
+        let (ours, theirs) =
+            rustix::net::socketpair(AddressFamily::UNIX, SocketType::SEQPACKET, SocketFlags::CLOEXEC, None).unwrap();
+        wire::send(
+            theirs.as_fd(),
+            &Packet {
+                body: b"{".to_vec(),
+                ..Packet::default()
+            },
+        )
+        .unwrap();
+        let error = handshake(ours.as_fd(), &config(), Duration::from_secs(2)).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "the WPE worker failed: a broken packet: an unreadable body: EOF while parsing an object at line 1 column 1"
+        );
+        let error = spawn(Command::new("/no/such/wpe-worker"), None).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("the WPE worker failed: the worker did not start (")
+        );
+    }
+
+    fn protocol_client() -> (Client, Receiver<Event>, OwnedFd) {
+        let (ours, theirs) =
+            rustix::net::socketpair(AddressFamily::UNIX, SocketType::SEQPACKET, SocketFlags::CLOEXEC, None).unwrap();
+        let worker = Arc::new(Worker {
+            child: Mutex::new(None),
+            group: 0,
+        });
+        let (client, events) = Client::running(ours, worker, 123, Duration::from_millis(200), STALL_TIMEOUT);
+        (client, events, theirs)
+    }
+
+    #[test]
+    fn evaluations_are_correlated_and_late_answers_do_not_answer_another_request() {
+        let (client, events, theirs) = protocol_client();
+        assert_eq!(format!("{client:?}"), "Client { pid: 123, .. }");
+        let first = client.evaluate(ViewId(4), "first".to_owned(), None);
+        let second = client.evaluate(ViewId(4), "second".to_owned(), Some("world".to_owned()));
+        let ToWorker::Evaluate { id: one, .. } = next_command(&theirs) else {
+            panic!("evaluation")
+        };
+        let ToWorker::Evaluate { id: two, world, .. } = next_command(&theirs) else {
+            panic!("evaluation")
+        };
+        assert_eq!(world.as_deref(), Some("world"));
+        for (id, result) in [
+            (two, Ok(Some("2".to_owned()))),
+            (two, Err("late".to_owned())),
+            (one, Err("exception".to_owned())),
+        ] {
+            wire::send(theirs.as_fd(), &FromWorker::Evaluation { id, result }.packet().unwrap()).unwrap();
+        }
+        assert_eq!(first.recv_blocking().unwrap(), Err("exception".to_owned()));
+        assert_eq!(second.recv_blocking().unwrap(), Ok(Some("2".to_owned())));
+        wire::send(theirs.as_fd(), &FromWorker::Stopped.packet().unwrap()).unwrap();
+        drop(theirs);
+        client.shutdown();
+        threads_end(&client);
+        assert!(events.is_closed());
+    }
+
+    #[test]
+    fn a_second_hello_breaks_the_transport_and_answers_waiting_evaluations() {
+        let (client, events, theirs) = protocol_client();
+        let result = client.evaluate(ViewId(1), "1".to_owned(), None);
+        let _ = next_command(&theirs);
+        wire::send(theirs.as_fd(), &hello(PROTOCOL).packet().unwrap()).unwrap();
+        assert_eq!(result.recv_blocking().unwrap(), Err(ENDED.to_owned()));
+        assert!(events.recv_blocking().is_err());
+        client.shutdown();
+        threads_end(&client);
+    }
 }

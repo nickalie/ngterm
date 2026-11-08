@@ -694,4 +694,112 @@ mod tests {
         });
         assert!(serde_json::to_vec(&FromWorker::Event(frame)).is_err());
     }
+    #[test]
+    fn start_failures_preserve_the_public_error_and_its_category_on_the_wire() {
+        let failures = [
+            (
+                StartError::Display("no render node".to_owned()),
+                "the WPE display did not connect: no render node",
+            ),
+            (StartError::Ended, "the WPE engine thread ended while starting"),
+            (
+                StartError::Thread(std::io::Error::other("no threads")),
+                "the WPE worker failed: the WPE engine thread did not start: no threads",
+            ),
+        ];
+        for (error, expected) in failures {
+            let packet = FromWorker::Started(Err(StartFailure::from(&error))).packet().unwrap();
+            let FromWorker::Started(Err(failure)) = body(&packet).unwrap() else {
+                panic!("start failure")
+            };
+            let restored = StartError::from(failure);
+            assert_eq!(restored.to_string(), expected);
+            match error {
+                StartError::Display(_) => assert!(matches!(restored, StartError::Display(_))),
+                StartError::Ended => assert!(matches!(restored, StartError::Ended)),
+                _ => assert!(matches!(restored, StartError::Worker(_))),
+            }
+        }
+    }
+    /// A kernel dmabuf over one page, as the external-texture tests use; no GPU is needed.
+    fn exported_page() -> Option<OwnedFd> {
+        #[repr(C)]
+        struct Create {
+            memfd: u32,
+            flags: u32,
+            offset: u64,
+            size: u64,
+        }
+        use std::os::fd::{AsRawFd as _, FromRawFd as _};
+        let device = match std::fs::OpenOptions::new().read(true).write(true).open("/dev/udmabuf") {
+            Ok(device) => device,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                eprintln!("dmabuf bounds: skipped (/dev/udmabuf: {error})");
+                return None;
+            }
+            Err(error) => panic!("/dev/udmabuf: {error}"),
+        };
+        let memfd = rustix::fs::memfd_create(
+            "wpe-plane",
+            rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
+        )
+        .unwrap();
+        rustix::fs::ftruncate(&memfd, 4096).unwrap();
+        rustix::fs::fcntl_add_seals(&memfd, rustix::fs::SealFlags::SHRINK).unwrap();
+        let create = Create {
+            memfd: u32::try_from(memfd.as_raw_fd()).unwrap(),
+            flags: 1,
+            offset: 0,
+            size: 4096,
+        };
+        // SAFETY: _IOW('u', 0x42, struct udmabuf_create), with the kernel's C layout and a sealed memfd.
+        let fd = unsafe { libc::ioctl(device.as_raw_fd(), 0x4018_7542, &raw const create) };
+        assert!(fd >= 0, "UDMABUF_CREATE: {}", std::io::Error::last_os_error());
+        // SAFETY: the successful ioctl returned a fresh owned descriptor.
+        Some(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
+    #[test]
+    fn real_dmabuf_planes_are_bounded_and_a_repeated_buffer_keeps_its_shared_content() {
+        let Some(fd) = exported_page() else { return };
+        let frame = || header(4, 4, Vec::new());
+        let mut no_stride = dmabuf(4, 4, 1);
+        no_stride.planes[0].1 = 0;
+        assert_eq!(
+            refused(dmabuf_frame(frame(), no_stride, vec![fd.try_clone().unwrap()], None)),
+            "a dmabuf's main plane with no stride"
+        );
+        let mut too_long = dmabuf(4, 4, 1);
+        too_long.planes[0].1 = 2048;
+        assert_eq!(
+            refused(dmabuf_frame(frame(), too_long, vec![fd.try_clone().unwrap()], None)),
+            "plane 0 reaches byte 8192 of a 4096-byte dmabuf"
+        );
+        let mut auxiliary = dmabuf(4, 4, 2);
+        auxiliary.planes[1] = (4097, 0);
+        assert_eq!(
+            refused(dmabuf_frame(
+                frame(),
+                auxiliary,
+                vec![fd.try_clone().unwrap(), fd.try_clone().unwrap()],
+                None
+            )),
+            "plane 1 reaches byte 4097 of a 4096-byte dmabuf"
+        );
+        let first = dmabuf_frame(frame(), dmabuf(4, 4, 1), vec![fd.try_clone().unwrap()], None).unwrap();
+        let FrameContent::DmaBuf(known) = first.content else {
+            panic!("dmabuf")
+        };
+        let second = dmabuf_frame(frame(), dmabuf(4, 4, 1), vec![fd], Some(Arc::clone(&known))).unwrap();
+        let FrameContent::DmaBuf(again) = second.content else {
+            panic!("dmabuf")
+        };
+        assert!(Arc::ptr_eq(&known, &again));
+        assert_eq!(again.planes[0].stride, 16);
+    }
 }

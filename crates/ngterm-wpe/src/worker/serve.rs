@@ -158,3 +158,7 @@ fn serve_until_end(socket: &OwnedFd, engine: &Local, outgoing: &async_channel::S
 fn send(socket: &OwnedFd, message: &FromWorker) -> Result<(), wire::WireError> {
     wire::send(socket.as_fd(), &message.packet()?)
 }
+
+#[cfg(test)]
+#[path = "serve_tests.rs"]
+mod tests;

@@ -97,3 +97,17 @@ fn is_socket(fd: i32) -> bool {
     let ok = unsafe { libc::fstat(fd, &raw mut stat) } == 0;
     ok && (stat.st_mode & libc::S_IFMT) == libc::S_IFSOCK
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::AsRawFd as _;
+
+    #[test]
+    fn only_open_sockets_qualify_as_worker_transports() {
+        assert!(!super::is_socket(-1));
+        let file = tempfile::tempfile().unwrap();
+        assert!(!super::is_socket(file.as_raw_fd()));
+        let (socket, _) = std::os::unix::net::UnixStream::pair().unwrap();
+        assert!(super::is_socket(socket.as_raw_fd()));
+    }
+}

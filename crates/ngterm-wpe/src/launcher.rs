@@ -215,4 +215,21 @@ mod tests {
             "a worker ends with its socket, not with the thread that started it"
         );
     }
+    #[test]
+    fn a_command_runs_the_requested_program_and_passes_its_arguments() {
+        let output = command(Path::new("/bin/printf"))
+            .arg("%s")
+            .arg("a single argument")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"a single argument");
+    }
+
+    #[test]
+    fn a_bare_executable_has_no_bundle_prefix() {
+        let mut command = Command::new("engine");
+        bundle_environment(&mut command, Path::new("engine"));
+        assert_eq!(command.get_envs().count(), 0);
+    }
 }

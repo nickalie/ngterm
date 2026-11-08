@@ -474,3 +474,7 @@ impl Drop for Host {
         self.shutdown();
     }
 }
+
+#[cfg(test)]
+#[path = "host_tests.rs"]
+mod tests;

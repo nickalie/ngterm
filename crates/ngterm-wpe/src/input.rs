@@ -132,6 +132,8 @@ mod tests {
         assert_eq!(Button::Primary.number(), 1);
         assert_eq!(Button::Middle.number(), 2);
         assert_eq!(Button::Secondary.number(), 3);
+        assert_eq!(Button::Back.number(), 8);
+        assert_eq!(Button::Forward.number(), 9);
         assert_eq!(
             PointerKind::Down(Button::Primary).event_type(),
             platform::WPE_EVENT_POINTER_DOWN
