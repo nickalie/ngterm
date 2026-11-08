@@ -97,6 +97,7 @@ fn native_page() {
     let page = Page::new(ViewId(5), &appearance, &display, &session, &events).unwrap();
     native_appearance(&page);
     native_input(&page);
+    native_permission(&page);
     page.apply(ViewCommand::Stop);
     page.apply(ViewCommand::GoForward);
     page.apply(ViewCommand::Scripts(Vec::new()));
@@ -291,13 +292,18 @@ fn load_signals() {
         page.web_view
             .emit_by_name::<bool>("load-failed", &[&load, &None::<String>, &error],)
     );
-    let Event::LoadFailed { view, uri, error } = received.try_recv().unwrap() else {
+    let Event::LoadFailed {
+        view,
+        uri,
+        error: failure,
+    } = received.try_recv().unwrap()
+    else {
         panic!("a load failure");
     };
     assert_eq!(view, ViewId(8));
     assert_eq!(uri, "");
-    assert_eq!(error.kind, LoadErrorKind::Failed);
-    assert_eq!(error.message, "connection lost");
+    assert_eq!(failure.kind, LoadErrorKind::Failed);
+    assert_eq!(failure.message, "connection lost");
     let reason = enum_value(termination_type, webkit::WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT);
     page.web_view.emit_by_name::<()>("web-process-terminated", &[&reason]);
     assert!(matches!(
@@ -307,11 +313,13 @@ fn load_signals() {
             reason: Termination::ExceededMemoryLimit
         }
     ));
-    page.close();
+    // dropped unclosed, so only the handlers' weak hold on the page keeps these from reporting it
     let web_view = page.web_view.clone();
     drop(page);
     web_view.emit_by_name::<()>("load-changed", &[&load]);
+    assert!(web_view.emit_by_name::<bool>("load-failed", &[&load, &None::<String>, &error]));
     web_view.emit_by_name::<()>("web-process-terminated", &[&reason]);
+    web_view.emit_by_name::<()>("close", &[]);
     web_view.notify("title");
     assert!(
         received.is_empty(),
@@ -319,34 +327,75 @@ fn load_signals() {
     );
 }
 
-#[test]
-fn a_geolocation_permission_is_denied_to_the_page() {
-    crate::tests::isolated(
-        "engine::page::tests::a_geolocation_permission_is_denied_to_the_page",
-        || {
-            let (host, events) = crate::Host::start(crate::HostConfig {
-                frames: crate::FrameMode::Shm,
-                schemes: Vec::new(),
-            })
-            .unwrap();
-            let session = host.create_session(crate::SessionSpec::Ephemeral);
-            let view = host.create_view(ViewSpec { session, ..spec() });
-            host.load(
-                view,
-                Load::Html {
-                    html: "<script>navigator.geolocation.getCurrentPosition(\
-                       () => document.title = 'allowed',\
-                       error => document.title = 'denied:' + error.code);</script>"
-                        .to_owned(),
-                    base_uri: Some("https://localhost/".to_owned()),
-                },
-            );
-            let title = wait_event(&host, &events, |event| match event {
-                Event::Page { view: id, page } if id == view => page.title,
-                _ => None,
-            });
-            assert_eq!(title, "denied:1");
-            host.shutdown();
-        },
-    );
+glib::wrapper! {
+    /// `WebKitPermissionRequest`.
+    struct PermissionRequest(Interface<webkit::WebKitPermissionRequest, webkit::WebKitPermissionRequestInterface>);
+    match fn { type_ => || webkit::webkit_permission_request_get_type(), }
+}
+
+// SAFETY: the interface struct is the header's (the -sys crate's layout tests check it); only its methods are set.
+unsafe impl<T: glib::subclass::types::ObjectSubclass> glib::subclass::types::IsImplementable<T> for PermissionRequest {
+    fn interface_init(iface: &mut glib::Interface<Self>) {
+        let iface = iface.as_mut();
+        iface.allow = Some(allow_request);
+        iface.deny = Some(deny_request);
+    }
+}
+
+extern "C" fn allow_request(request: *mut webkit::WebKitPermissionRequest) {
+    decide_request(request, "allow");
+}
+
+extern "C" fn deny_request(request: *mut webkit::WebKitPermissionRequest) {
+    decide_request(request, "deny");
+}
+
+fn decide_request(request: *mut webkit::WebKitPermissionRequest, decision: &'static str) {
+    use glib::subclass::prelude::ObjectSubclassIsExt as _;
+    // SAFETY: `WebKit` decides a live request, here always a `FakeRequest`; borrowing takes no reference.
+    let object: glib::translate::Borrowed<glib::Object> =
+        unsafe { glib::translate::from_glib_borrow(request.cast::<glib::gobject_ffi::GObject>()) };
+    let request = object.downcast_ref::<FakeRequest>().unwrap();
+    request.imp().decisions.borrow_mut().push(decision);
+}
+
+mod fake {
+    use glib::subclass::prelude::*;
+
+    /// A permission request that records how it was decided.
+    #[derive(Default)]
+    pub(super) struct FakeRequest {
+        pub(super) decisions: std::cell::RefCell<Vec<&'static str>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for FakeRequest {
+        const NAME: &'static str = "NgtermWpeTestPermissionRequest";
+        type Type = super::FakeRequest;
+        type Interfaces = (super::PermissionRequest,);
+    }
+
+    impl ObjectImpl for FakeRequest {}
+}
+
+glib::wrapper! {
+    struct FakeRequest(ObjectSubclass<fake::FakeRequest>) @implements PermissionRequest;
+}
+
+/// The page denies every permission request and claims it, so neither a later handler nor `WebKit`'s default (which
+/// allows a pointer lock) decides it. A page's real geolocation request cannot show this: `WebKit` denies an undecided
+/// one on its own.
+fn native_permission(page: &Page) {
+    use glib::subclass::prelude::ObjectSubclassIsExt as _;
+    let request: FakeRequest = glib::Object::new();
+    let later = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&later);
+    let spy = page.web_view.connect_local("permission-request", false, move |_| {
+        seen.set(true);
+        handled(false)
+    });
+    assert!(page.web_view.emit_by_name::<bool>("permission-request", &[&request]));
+    assert_eq!(*request.imp().decisions.borrow(), ["deny"]);
+    assert!(!later.get(), "a refused request goes no further");
+    page.web_view.disconnect(spy);
 }
