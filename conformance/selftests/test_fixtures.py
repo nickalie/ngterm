@@ -365,6 +365,47 @@ def test_rust_profile_comes_from_version(
     )
 
 
+STACKED_LIVE_SUITE = """
+import pytest
+
+@pytest.mark.requires("live-sessions")
+def test_live(ctl):
+    pass
+
+@pytest.mark.requires("live-sessions")
+@pytest.mark.requires("pages-survive")
+def test_parked(ctl):
+    pass
+"""
+
+
+@pytest.mark.parametrize(
+    ("capabilities", "ret"),
+    [
+        # the skip names pages-survive alone, yet the build lacks live-sessions as well: not excused
+        (["posix-shell"], pytest.ExitCode.TESTS_FAILED),
+        # lacking only pages-survive, the parked test's own other requirement: excused
+        (["posix-shell", "live-sessions"], pytest.ExitCode.OK),
+    ],
+)
+def test_must_pass_judges_a_skip_by_every_unmet_requirement(
+    pytester: pytest.Pytester,
+    roots: list[Path],
+    fake_bin: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capabilities: list[str],
+    ret: pytest.ExitCode,
+) -> None:
+    profile = {"parityLevel": "0.36.0", "capabilities": capabilities}
+    monkeypatch.setenv("FAKE_VERSION", json.dumps({"conformance": profile}))
+    pytester.makepyfile(STACKED_LIVE_SUITE)
+    result = run_suite(pytester, "--impl", "rust", "--bin", str(fake_bin), "--must-pass", "live-sessions")
+    result.stdout.fnmatch_lines(["*unsupported: rust lacks pages-survive*"])
+    assert result.ret == ret
+    if ret != pytest.ExitCode.OK:
+        result.stdout.fnmatch_lines(["*--must-pass live-sessions: not passed*", "*test_parked*"])
+
+
 def test_rust_without_a_profile_is_below_every_level(
     pytester: pytest.Pytester, roots: list[Path], fake_bin: Path
 ) -> None:

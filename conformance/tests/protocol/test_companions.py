@@ -218,7 +218,18 @@ def _interrupts(ctl, sid):
     wait_until(interrupted)
 
 
-@pytest.mark.parametrize("shells", ["plain", pytest.param("live", marks=LIVE)], indirect=True)
+# Seen on the reference, cause not established: the shell a Live command parent restarts as can read nothing for
+# 10 s, the pane only echoing the lines typed into it.
+RESTARTED_SHELL_STALLS = pytest.mark.upstream_bug(
+    "live-restarted-shell-reads-no-input",
+    reason="a Live pane's restarted shell can read no input; upstream records a session-host attach stall of unknown "
+    "cause in docs/backlog/session-host-attach-to-ended-command-misses-its-window-on-ci.md",
+)
+
+
+@pytest.mark.parametrize(
+    "shells", ["plain", pytest.param("live", marks=[LIVE, RESTARTED_SHELL_STALLS])], indirect=True
+)
 @pytest.mark.covers("session.companion.new")
 def test_a_parent_whose_shell_exits_restarts_it(shells):
     """A parent whose last pane exits while it has companions restarts a plain login shell in place, keeping its

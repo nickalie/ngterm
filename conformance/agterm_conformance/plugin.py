@@ -58,9 +58,19 @@ MARKERS = (
         "covers(*items, streams=()): catalog items this test covers, read by the coverage gate; a stream-mode "
         "command counts only when also named in streams, by a test that drives the stream after the ok"
     ),
+    (
+        "upstream_bug(name, reason=...): the test asserts the correct behavior where upstream has a named bug; on "
+        "the reference (swift-macos) it is an expected failure, not strict, and every other implementation must pass"
+    ),
 )
 COVERS_KWARGS = frozenset({"streams"})
 REQUIRES_KWARGS = frozenset({"reason", "any"})
+UPSTREAM_BUG_KWARGS = frozenset({"reason"})
+# The implementation an `upstream_bug` allowance holds on: upstream's own release, the reference.
+REFERENCE_IMPL = "swift-macos"
+# How an `upstream_bug` allowance's xfail reason starts, so `--must-pass` tells it from any other xfail.
+UPSTREAM_BUG = "upstream bug"
+_UPSTREAM_BUG_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 def scrub_environ(environ: MutableMapping[str, str]) -> list[str]:
@@ -92,6 +102,8 @@ _ADAPTER_KEY = pytest.StashKey["Adapter"]()
 _SUMMARY_KEY = pytest.StashKey[frozenset[str]]()
 _GATE_KEY = pytest.StashKey[coverage.Report]()
 _COLLECTED_KEY = pytest.StashKey[list[pytest.Item]]()
+# By node id: every capability of a test's unmet `requires` markers on the build, for a test skipped as unsupported.
+_UNMET_KEY = pytest.StashKey[dict[str, frozenset[str]]]()
 
 
 def get_impl_options(config: pytest.Config) -> ImplOptions:
@@ -216,7 +228,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
         if unknown := sorted(set(must_pass) - set(CAPABILITIES)):
             raise pytest.UsageError(f"--must-pass: unknown capability {', '.join(unknown)}")
-        config.pluginmanager.register(MustPass(frozenset(must_pass)), "agterm-must-pass")
+        config.pluginmanager.register(MustPass(frozenset(must_pass), config), "agterm-must-pass")
 
 
 def check_coverage_stage(options: ImplOptions) -> None:
@@ -275,15 +287,22 @@ def gate_paths(config: pytest.Config, options: ImplOptions) -> tuple[Path, Path]
 
 
 class MustPass:
-    """`--must-pass`: a skip, a failure or a deselection of a test requiring one of `capabilities` fails the run.
+    """`--must-pass`: a skip, a failure or a deselection of a test requiring one of `capabilities` fails the run, as
+    does a capability no test requiring it passed for.
 
     Except a skip for lacking only other capabilities the test also requires: the build's recorded divergence there
     (`requires`), not a gap in the must-pass ones. The reference skips the Rust-only `pages-survive` tests that need
-    Live sessions too."""
+    Live sessions too. What the build lacks is every unmet `requires` of the test against the build's profile, as
+    `pytest_runtest_setup` recorded it, not only the first one the skip message names (an in-body skip, with no such
+    record, is judged by its message); each name must be one of the test's own requirements. And except the
+    reference's expected failure under a named `upstream_bug` allowance."""
 
-    def __init__(self, capabilities: frozenset[str]) -> None:
+    def __init__(self, capabilities: frozenset[str], config: pytest.Config) -> None:
         self.capabilities = capabilities
+        self.config = config
         self.required: list[str] = []
+        # each required test's own `requires` names
+        self.requires_of: dict[str, frozenset[str]] = {}
         self.uncollected: set[str] = set(capabilities)
         self.passed: set[str] = set()
         self.spoiled: set[str] = set()
@@ -294,27 +313,44 @@ class MustPass:
     def pytest_collection_modifyitems(self, items: list[pytest.Item]) -> None:
         # tryfirst: before -k/-m deselection, so a deselected test still counts as required.
         self.required = []
+        self.requires_of = {}
         self.uncollected = set(self.capabilities)
         for item in items:
-            wanted = {name for marker in item.iter_markers("requires") for name in marker.args} & self.capabilities
-            if wanted:
+            requires = frozenset(name for marker in item.iter_markers("requires") for name in marker.args)
+            if wanted := requires & self.capabilities:
                 self.required.append(item.nodeid)
+                self.requires_of[item.nodeid] = requires
                 self.uncollected -= wanted
 
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         if report.when == "call" and report.passed:
             self.passed.add(report.nodeid)
-        elif report.skipped and (lacking := _lacking(report)) and lacking.isdisjoint(self.capabilities):
+        elif report.skipped and self._divergence(report):
+            self.excused.add(report.nodeid)
+        elif report.skipped and str(getattr(report, "wasxfail", "")).startswith(f"{UPSTREAM_BUG}:"):
             self.excused.add(report.nodeid)
         elif not report.passed:
             self.spoiled.add(report.nodeid)
 
+    def _divergence(self, report: pytest.TestReport) -> bool:
+        """An unsupported skip whose build lacks only capabilities outside the must-pass ones, all the test's own."""
+        named = _lacking(report)
+        requires = self.requires_of.get(report.nodeid, frozenset())
+        if not named or not named <= requires:
+            return False
+        unmet = self.config.stash.get(_UNMET_KEY, {}).get(report.nodeid, named)
+        return unmet <= requires and unmet.isdisjoint(self.capabilities)
+
     @pytest.hookimpl(tryfirst=True)
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
         self.problems = [f"no collected test requires {capability}" for capability in sorted(self.uncollected)]
+        passed = self.passed - self.spoiled
         self.problems += [
-            nodeid for nodeid in self.required if nodeid not in self.passed - self.spoiled and nodeid not in self.excused
+            f"no test requiring {capability} passed"
+            for capability in sorted(self.capabilities - self.uncollected)
+            if not any(capability in self.requires_of[nodeid] for nodeid in self.required if nodeid in passed)
         ]
+        self.problems += [nodeid for nodeid in self.required if nodeid not in passed and nodeid not in self.excused]
         if self.problems and session.exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
@@ -425,6 +461,8 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
         return
     for item in items:
         check_markers(item)
+        if options.impl == REFERENCE_IMPL and (allowance := upstream_bug_reason(item)) is not None:
+            item.add_marker(pytest.mark.xfail(reason=allowance, strict=False))
     # trylast: -k/-m deselection has already run, so only tests that will execute demand --impl.
     exercised = frozenset(item.nodeid for item in items if _uses_impl(item))
     if exercised:
@@ -475,6 +513,8 @@ def check_markers(item: pytest.Item) -> None:
             raise pytest.UsageError(f"{item.nodeid}: since: {error}") from None
     for covers in item.iter_markers("covers"):
         check_covers(item.nodeid, covers)
+    for marker in item.iter_markers("upstream_bug"):
+        check_upstream_bug(item.nodeid, marker)
     for marker in item.iter_markers("requires"):
         if not marker.args:
             raise pytest.UsageError(f"{item.nodeid}: requires names no capability")
@@ -488,6 +528,22 @@ def check_markers(item: pytest.Item) -> None:
                 raise pytest.UsageError(
                     f"{item.nodeid}: unknown capability {capability!r} (known: {', '.join(sorted(CAPABILITIES))})"
                 )
+
+
+def check_upstream_bug(nodeid: str, marker: pytest.Mark) -> None:
+    if len(marker.args) != 1 or not isinstance(marker.args[0], str) or not _UPSTREAM_BUG_NAME.fullmatch(marker.args[0]):
+        raise pytest.UsageError(f"{nodeid}: upstream_bug takes one kebab-case name, got {marker.args}")
+    if unknown := set(marker.kwargs) - UPSTREAM_BUG_KWARGS:
+        raise pytest.UsageError(f"{nodeid}: upstream_bug takes no {', '.join(sorted(unknown))}")
+    reason = marker.kwargs.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise pytest.UsageError(f"{nodeid}: upstream_bug {marker.args[0]} needs a reason")
+
+
+def upstream_bug_reason(item: pytest.Item) -> str | None:
+    """The reference's xfail reason for an item's `upstream_bug` allowances, each named; None without one."""
+    bugs = [f"{marker.args[0]} ({marker.kwargs['reason']})" for marker in item.iter_markers("upstream_bug")]
+    return f"{UPSTREAM_BUG}: {'; '.join(bugs)}" if bugs else None
 
 
 def check_covers(nodeid: str, marker: pytest.Mark) -> None:
@@ -587,6 +643,17 @@ def skip_reason(item: pytest.Item, adapter: Adapter) -> str | None:
     return None
 
 
+def unmet_requirements(item: pytest.Item, capabilities: frozenset[str]) -> frozenset[str]:
+    """Every capability of an item's unmet `requires` markers: an `any` marker's names when it has none of them, a
+    plain marker's missing ones. `skip_reason` names only the first such marker's."""
+    unmet: set[str] = set()
+    for marker in item.iter_markers("requires"):
+        missing = [capability for capability in marker.args if capability not in capabilities]
+        if missing and not (marker.kwargs.get("any") and len(missing) < len(marker.args)):
+            unmet.update(missing)
+    return frozenset(unmet)
+
+
 def ui_skip_reason(adapter: Adapter) -> str | None:
     from agterm_conformance.drivers.base import NoDriver, driver_class
 
@@ -604,6 +671,9 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         return
     adapter = get_adapter(item.config)
     reason = skip_reason(item, adapter)
+    if reason is not None and reason.startswith(f"{UNSUPPORTED}:"):
+        unmet = unmet_requirements(item, adapter.capabilities)
+        item.config.stash.setdefault(_UNMET_KEY, {})[item.nodeid] = unmet
     if reason is None and UI_FIXTURES.intersection(getattr(item, "fixturenames", ())):
         reason = ui_skip_reason(adapter)
     if reason is not None:

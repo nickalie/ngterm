@@ -376,13 +376,21 @@ def test_session_wait_exits_2_when_the_session_closes(cli, ctl):
 
 
 @pytest.mark.covers("cli:session wait")
+@pytest.mark.upstream_bug(
+    "session-wait-reports-a-timeout-twice",
+    reason="agtermctl's watchdog and its wait's .timedOut both print `timed out` when the deadline passes in the "
+    "wait: Session+Wait.swift run() cancels the watchdog only in a defer, after the second print",
+)
 def test_session_wait_times_out_with_124(cli, ctl):
     sid = _new_session(ctl)
-    started = time.monotonic()
-    result = cli(*WAIT, "--until", "completed", "--timeout", "0.5", "--target", sid)
-    assert time.monotonic() - started >= 0.5
-    assert (result.returncode, result.stdout, result.stderr) == (124, "", "timed out\n"), result.argv
-    assert_ok(ctl.request("session.close", sid))
+    try:
+        started = time.monotonic()
+        result = cli(*WAIT, "--until", "completed", "--timeout", "0.5", "--target", sid)
+        assert time.monotonic() - started >= 0.5
+        # once: the deadline is reported by whichever of the wait and its watchdog sees it first, never by both
+        assert (result.returncode, result.stdout, result.stderr) == (124, "", "timed out\n"), result.argv
+    finally:
+        assert_ok(ctl.request("session.close", sid))
 
 
 @pytest.mark.covers("cli:session wait")

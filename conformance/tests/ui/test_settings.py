@@ -7,7 +7,7 @@ import pytest
 from agterm_conformance.drivers.base import ElementNotFound
 from agterm_conformance.match import assert_ok, session_ids
 from agterm_conformance.plugin import Ctl, launch_options
-from agterm_conformance.wait import wait_until
+from agterm_conformance.wait import DEFAULT_TIMEOUT, wait_until
 
 STATUSES = ("active", "blocked", "completed")
 INTERFACE_ELEMENTS = (
@@ -67,17 +67,22 @@ def _open(ui, tab):
     ui.click(found)
 
 
-# How long a pressed popup gets to show its menu before the press counts as missed.
-MENU_SHOWN = 3.0
+# How long a pressed popup gets to show its menu before the press counts as missed: the driver's own wait, so a menu
+# that is merely slow to show (or to reach the accessibility tree) is not taken for a missed press.
+MENU_SHOWN = DEFAULT_TIMEOUT
 
 
-def _choose(ui, picker, item):
-    """Pick `item` from the menu of the popup `picker`. Right after a tab switch the reference's press can land on the
-    popup the previous tab showed in that place and open that one's menu (reference-macos: the Interface tab's
-    session-info menu over Appearance's density picker), so the test goes on once the open menu is the picker's own:
-    a menu without `item` is dismissed and the picker pressed again."""
+def _choose(ui, tab, picker, item):
+    """Pick `item` from the menu of the popup `picker` on Settings' `tab`. Right after a tab switch the reference's
+    press can land on the popup the previous tab showed in that place and open that one's menu (reference-macos: the
+    Interface tab's session-info menu over Appearance's density picker), so the test goes on once the open menu is the
+    picker's own: a menu without `item` is dismissed and the picker pressed again. Where Settings is a popup in the
+    main window (the Rust build), that Escape closes Settings itself when no menu was open, so a picker gone from the
+    tree has Settings opened on `tab` again first."""
 
     def opened():
+        if not ui.all(picker):
+            _open(ui, tab)
         ui.click(ui.find(picker, role="popup"))
         try:
             return ui.menu_item(item, timeout=MENU_SHOWN)
@@ -86,7 +91,7 @@ def _choose(ui, picker, item):
             raise AssertionError(f"the open menu has no {item!r}: {error}") from None
 
     opened.__qualname__ = f"{picker}'s menu listing {item!r}"
-    ui.click(wait_until(opened, timeout=30))
+    ui.click(wait_until(opened, timeout=3 * MENU_SHOWN))
 
 
 def _check(ui, expected):
@@ -319,15 +324,15 @@ def test_session_info_display_picker_persists(seeded, ui_for, adapter):
 
     assert "sessionInfoDisplay" not in _settings(seeded)
     ui.find("settings-session-info-display", role="popup", **value("Always"))
-    _choose(ui, "settings-session-info-display", "Flagged")
+    _choose(ui, "Interface", "settings-session-info-display", "Flagged")
     try:
         wait_until(lambda: _settings(seeded).get("sessionInfoDisplay") == "flagged")
         ui.find("settings-session-info-display", role="popup", **value("Flagged"))
-        _choose(ui, "settings-session-info-display", "Off")
+        _choose(ui, "Interface", "settings-session-info-display", "Off")
         wait_until(lambda: _settings(seeded).get("sessionInfoDisplay") == "off")
         ui.find("settings-session-info-display", role="popup", **value("Off"))
     finally:
-        _choose(ui, "settings-session-info-display", "Always")
+        _choose(ui, "Interface", "settings-session-info-display", "Always")
     wait_until(lambda: "sessionInfoDisplay" not in _settings(seeded))
 
 
@@ -385,12 +390,12 @@ def test_sidebar_density_picker_persists(seeded, ui_for, adapter):
     ui = ui_for(seeded)
     _open(ui, "Appearance")
     ui.find("settings-sidebar-density", role="popup", **value("Default"))
-    _choose(ui, "settings-sidebar-density", "Compact")
+    _choose(ui, "Appearance", "settings-sidebar-density", "Compact")
     try:
         wait_until(lambda: _settings(seeded).get("sidebarDensity") == "compact")
         ui.find("settings-sidebar-density", role="popup", **value("Compact"))
         assert seeded.tree()["tree"]["sidebarDensity"] == "compact"
     finally:
-        _choose(ui, "settings-sidebar-density", "Default")
+        _choose(ui, "Appearance", "settings-sidebar-density", "Default")
     # the default density is stored as no key at all
     wait_until(lambda: "sidebarDensity" not in _settings(seeded))
