@@ -25,8 +25,9 @@
 //!    scrollback row scrolls into the client's scrollback and the visible rows start from a blank, homed screen (zmx's
 //!    two phases; zmx clears with `ESC [2J` instead, which a Ghostty client erases rather than scrolls away, losing
 //!    the scrollback's last screenful);
-//! 4. the visible rows with the terminal state that restores them ([`FormatExtras::RESTORE`]: the modes, the scrolling
-//!    region, the keyboard modes, the cursor with its style, hyperlink, protection, Kitty keyboard flags and
+//! 4. the visible rows, soft wraps joined so the client wraps them again, with the terminal state that restores them
+//!    ([`FormatExtras::RESTORE`]: the modes, the scrolling region, the keyboard modes, the cursor with its style,
+//!    hyperlink, protection, Kitty keyboard flags and
 //!    charsets; and [`FormatExtras::TABSTOPS`], which zmx leaves out because the formatter it pins set them after the
 //!    cursor, while the pinned one writes them ahead of the cells), synchronized output (DECSET 2026) left out:
 //!    replayed, it would hold off a new client's rendering until its own timeout;
@@ -122,11 +123,11 @@ pub fn capture(terminal: &mut Terminal, kind: Kind) -> Result<Vec<u8>, SnapshotE
     color_overrides(terminal, &mut out);
     let synchronized = terminal.mode(Mode::SYNC_OUTPUT);
     if synchronized {
-        set_synchronized(terminal, false)?;
+        set_mode(terminal, Mode::SYNC_OUTPUT, false)?;
     }
     let cells = scrollback(terminal, &mut out).and_then(|()| visible(terminal, &mut out));
     if synchronized {
-        set_synchronized(terminal, true)?;
+        set_mode(terminal, Mode::SYNC_OUTPUT, true)?;
     }
     cells?;
     let pwd = terminal.pwd();
@@ -151,9 +152,9 @@ pub fn insert_after_reset(snapshot: &mut Vec<u8>, bytes: &[u8]) {
     }
 }
 
-fn set_synchronized(terminal: &mut Terminal, value: bool) -> Result<(), SnapshotError> {
+fn set_mode(terminal: &mut Terminal, mode: Mode, value: bool) -> Result<(), SnapshotError> {
     terminal
-        .set_mode(Mode::SYNC_OUTPUT, value)
+        .set_mode(mode, value)
         .map_err(|err| SnapshotError::Format(err.to_string()))
 }
 
@@ -193,7 +194,7 @@ fn scrollback(terminal: &mut Terminal, out: &mut Vec<u8>) -> Result<(), Snapshot
         end: Point::new(PointTag::History, last_col, last_row),
         rectangle: false,
     };
-    let cells = format(terminal, region, FormatExtras::empty())?;
+    let cells = format(terminal, region, FormatExtras::empty(), false)?;
     out.extend_from_slice(&cells);
     out.extend_from_slice(&scroll_away(history, &cells, terminal.rows()));
     Ok(())
@@ -224,19 +225,34 @@ fn visible(terminal: &mut Terminal, out: &mut Vec<u8>) -> Result<(), SnapshotErr
         ),
         rectangle: false,
     };
-    out.extend_from_slice(&format(
-        terminal,
-        region,
-        FormatExtras::RESTORE | FormatExtras::TABSTOPS,
-    )?);
+    // Cells can still wrap from before the program disabled autowrap. Replay them with wrapping enabled, then
+    // restore the program's mode after the formatter has restored the cursor.
+    let wrapping = terminal.mode(Mode::dec(7));
+    if !wrapping {
+        set_mode(terminal, Mode::dec(7), true)?;
+    }
+    let cells = format(terminal, region, FormatExtras::RESTORE | FormatExtras::TABSTOPS, true);
+    if !wrapping {
+        set_mode(terminal, Mode::dec(7), false)?;
+    }
+    out.extend_from_slice(&cells?);
+    if !wrapping {
+        out.extend_from_slice(b"\x1b[?7l");
+    }
     Ok(())
 }
 
-/// `region` in VT as zmx's formatter writes it: rows as laid out, trailing whitespace trimmed.
-fn format(terminal: &mut Terminal, region: Region, extras: FormatExtras) -> Result<Vec<u8>, SnapshotError> {
+/// `region` in VT, trailing whitespace trimmed. Joined soft wraps rewrap on the client's grid; the scrollback's
+/// separate pass needs physical rows for its padding.
+fn format(
+    terminal: &mut Terminal,
+    region: Region,
+    extras: FormatExtras,
+    unwrap: bool,
+) -> Result<Vec<u8>, SnapshotError> {
     let options = FormatOptions {
         format: Format::Vt,
-        unwrap: false,
+        unwrap,
         trim: true,
         extras,
     };
@@ -690,7 +706,7 @@ mod tests {
             end: Point::new(PointTag::Viewport, 0, u32::from(ROWS)),
             rectangle: false,
         };
-        let error = format(&mut terminal, outside, FormatExtras::empty()).unwrap_err();
+        let error = format(&mut terminal, outside, FormatExtras::empty(), true).unwrap_err();
         assert_eq!(
             error.to_string(),
             "the session's terminal could not be formatted: libghostty-vt refused an invalid value"

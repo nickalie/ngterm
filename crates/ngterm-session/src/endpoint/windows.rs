@@ -21,8 +21,9 @@ use windows_sys::Win32::System::Pipes::{DisconnectNamedPipe, PeekNamedPipe};
 
 use super::{Endpoint, Listener, Stream, is_connection_closed_error};
 
-/// `ERROR_INVALID_HANDLE`, `ERROR_BROKEN_PIPE`, `ERROR_NO_DATA`, `ERROR_PIPE_NOT_CONNECTED`: a peer that is gone.
-const PIPE_CLOSED_ERRORS: [i32; 4] = [6, 109, 232, 233];
+/// `ERROR_INVALID_HANDLE`, `ERROR_BROKEN_PIPE`, `ERROR_BAD_PIPE`, `ERROR_NO_DATA`, `ERROR_PIPE_NOT_CONNECTED`: a peer
+/// that is gone, including after this end disconnected it.
+const PIPE_CLOSED_ERRORS: [i32; 5] = [6, 109, 230, 232, 233];
 
 /// The listener of a namespace's pipe: interprocess's named-pipe listener, whose accepts make each further instance
 /// (without the first-instance flag) from its options.

@@ -32,6 +32,9 @@ use support::{TestResult, shown, stage, tagged, wait_for_exit};
 /// The session the round trip keeps alive.
 const NAME: &str = "e2e";
 
+/// Long enough that a typed command wraps, even in a short checkout path.
+const PROMPT: &str = "e2e-ready-e2e-ready-e2e-ready-e2e-ready-e2e-ready-e2e-ready-e2e-ready-e2e-ready-";
+
 /// What a terminal's screen shows, as `screen` prints it without its revision: `cols rows x y alternate`, then the
 /// text.
 fn view(screen: &Screen) -> String {
@@ -66,6 +69,18 @@ fn screen_showing(namespace: &Namespace, name: &str, all: bool, needle: &str) ->
         },
         |screen| screen.split_once('\n').is_some_and(|(_, text)| text.contains(needle)),
     )
+}
+
+/// A command's output and, on Windows, the prompt cmd writes after it: nothing more from the command is pending
+/// when this screen is compared with a later snapshot.
+fn screen_after_command(namespace: &Namespace, word: &str) -> String {
+    let output = format!("got:{word}");
+    let needle = if cfg!(windows) {
+        format!("{output}\n\n{PROMPT}>")
+    } else {
+        output
+    };
+    screen_showing(namespace, NAME, false, &needle)
 }
 
 /// Waits for `list` through the binary to show `name` with `clients` clients attached.
@@ -123,6 +138,45 @@ fn enter() -> &'static str {
 }
 
 #[test]
+fn a_reattachs_snapshot_keeps_wrapped_lines_joined() -> TestResult {
+    let contents = [
+        "wrapped".repeat(20),
+        "w".repeat(usize::from(COLS)),
+        "wide界 ".repeat(20),
+    ];
+    for (alternate, wrapping) in [(false, false), (false, true), (true, false), (true, true)] {
+        for content in &contents {
+            let mut session = Terminal::new(COLS, ROWS).map_err(|err| format!("{err:?}"))?;
+            session.set_continuation_limit(1024).map_err(|err| format!("{err:?}"))?;
+            if alternate {
+                session.vt_write(b"\x1b[?1049h");
+            }
+            session.vt_write(content.as_bytes());
+            if !wrapping {
+                session.vt_write(b"\x1b[?7l");
+            }
+            let before = read_screen(&mut session, 0, false).map_err(|err| format!("{err:?}"))?;
+            let snapshot = ngterm_session::server::snapshot::capture(
+                &mut session,
+                ngterm_session::server::snapshot::Kind::Attach,
+            )?;
+            let mut client = Terminal::new(COLS, ROWS).map_err(|err| format!("{err:?}"))?;
+            client.vt_write(&snapshot);
+            let after = read_screen(&mut client, 0, false).map_err(|err| format!("{err:?}"))?;
+            assert_eq!(view(&after), view(&before), "{alternate} {wrapping}");
+            assert_eq!(client.mode(ngterm_ghostty_vt::Mode::dec(7)), wrapping);
+            assert_eq!(session.mode(ngterm_ghostty_vt::Mode::dec(7)), wrapping);
+            session.vt_write(b"!\r\nnext");
+            client.vt_write(b"!\r\nnext");
+            let after = read_screen(&mut client, 0, false).map_err(|err| format!("{err:?}"))?;
+            let expected = read_screen(&mut session, 0, false).map_err(|err| format!("{err:?}"))?;
+            assert_eq!(view(&after), view(&expected), "continued: {alternate} {wrapping}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn a_session_outlives_its_clients_and_an_update_through_the_binary_and_the_library() -> TestResult {
     let staged = tempfile::tempdir()?;
     let mut namespace = Namespace::new()?;
@@ -146,7 +200,8 @@ fn a_session_outlives_its_clients_and_an_update_through_the_binary_and_the_libra
 /// The binary's `attach` starts the server and creates the session; typed into, read with `screen` and detached from
 /// with Ctrl+\, the session runs on with no client. The server, which runs in a process of its own; its welcome.
 fn attach_type_read_and_detach(namespace: &Namespace) -> TestResult<Welcome> {
-    let mut first = namespace.attach(&with_shell(NAME), &[], &Answers::basic())?;
+    let prompt = format!("{PROMPT}$G");
+    let mut first = namespace.attach(&with_shell(NAME), &[("PROMPT", &prompt)], &Answers::basic())?;
     first.type_line(&tagged("one"))?;
     first.expect("got:one");
     let server = running_server(namespace)?;
@@ -154,7 +209,7 @@ fn attach_type_read_and_detach(namespace: &Namespace) -> TestResult<Welcome> {
     assert_ne!(server.pid, std::process::id(), "the server runs in the test");
     assert_ne!(server.pid, first.child.pid(), "the server is the attach");
 
-    let screen = screen_showing(namespace, NAME, false, "got:one");
+    let screen = screen_after_command(namespace, "one");
     let header: Vec<&str> = screen.lines().next().unwrap_or_default().split(' ').collect();
     assert_eq!(&header[..2], [COLS.to_string(), ROWS.to_string()], "{screen}");
 
@@ -177,7 +232,7 @@ fn attach_and_kill_the_client(namespace: &Namespace, server: &Welcome) -> TestRe
     second.kill()?;
     wait_for_clients(namespace, NAME, 0);
     assert_eq!(running_server(namespace)?.pid, server.pid, "another server serves");
-    Ok(screen_showing(namespace, NAME, false, "got:two"))
+    Ok(screen_after_command(namespace, "two"))
 }
 
 /// An attach to the session through the library at the outer terminal's grid; the terminal its snapshot builds.
@@ -227,7 +282,7 @@ fn type_both_ways(namespace: &Namespace, mut attachment: Attachment) -> TestResu
         .writer
         .input(format!("{}{}", tagged("four"), enter()).as_bytes())?;
     read_until(&mut attachment.reader, |text| text.contains("got:four"))?;
-    screen_showing(namespace, NAME, false, "got:four");
+    screen_after_command(namespace, "four");
 
     attachment.writer.detach()?;
     while attachment.reader.recv()?.is_some() {}
