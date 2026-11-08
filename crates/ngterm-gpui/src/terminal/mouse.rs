@@ -830,3 +830,7 @@ impl TerminalView {
         self.pointer.link.is_some()
     }
 }
+
+#[cfg(test)]
+#[path = "mouse_tests.rs"]
+mod tests;
