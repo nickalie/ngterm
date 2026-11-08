@@ -10,11 +10,11 @@ import UserNotifications
 /// Each test's actions carry a tag of its own, by which it finds the categories the system reads back. The suite runs
 /// one test at a time, as every post sets the app's whole set of categories.
 ///
-/// A simulator's notification service can leave the first calls unanswered for well over a minute (a CI tablet's, a
-/// few minutes after its first boot, answered after about 100 seconds), so a test has longer than other suites' minute;
-/// a presentation is waited for only once the system has the notices, its own limit counting from there.
+/// A freshly booted simulator's notification service answers nothing for minutes, so the suite starts once it answers
+/// (``NotificationServiceUp``), and a test then has other suites' minute for its own work; a presentation is waited for
+/// only once the system has the notices, its own limit counting from there.
 @MainActor
-@Suite("the system's notifications", .serialized, .timeLimit(.minutes(3)))
+@Suite("the system's notifications", .serialized, .timeLimit(.minutes(1)), NotificationServiceUp())
 internal struct SystemNoticesTests {
     private let tag = UUID().uuidString
 
@@ -196,6 +196,29 @@ internal struct SystemNoticesTests {
         #expect(await UNUserNotificationCenter.current().notificationCategories() == before)
         notices.withdraw([asking.id, plain.id])
         await notices.delivered()
+    }
+
+    @Test("the wait for the notification service ends when it answers, and fails naming it when it doesn't in time")
+    internal func serviceWait() async throws {
+        let (never, release) = AsyncStream<Void>.makeStream()
+        defer { release.finish() }
+        await #expect(throws: NotificationServiceUp.Down.self) {
+            try await NotificationServiceUp.wait(
+                for: {
+                    // like the system's calls, it ignores the wait's end: it returns only once released
+                    for await _ in never {
+                        // nothing comes: the stream only ends
+                    }
+                },
+                limit: .zero
+            )
+        }
+        try await NotificationServiceUp.wait(
+            for: {
+                // answers at once
+            },
+            limit: NotificationServiceUp.limit
+        )
     }
 
     @Test("with nothing posted, waiting for delivery returns at once")
