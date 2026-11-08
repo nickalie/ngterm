@@ -1,5 +1,6 @@
 //! The welcome: its alert (ported from the GTK build's test), its keys in a test window, and the launch marking it
-//! shown before it opens. Install is never pressed: it runs the real installers.
+//! shown before it opens. Install is pressed only under an `integrations::Source` with no home, so no real installer
+//! can write.
 
 use std::cell::RefCell;
 use std::rc::Rc;

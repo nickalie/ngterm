@@ -245,7 +245,31 @@ mod tests {
             cx.notify();
         });
         cx.run_until_parked();
-        assert!(view.read_with(cx, |view, _| view.cover.shows()));
+        // the lone note's strip is drawn along the pane's bottom, and takes no click
+        cx.activate_a11y();
+        let tree = cx.a11y_tree_update().expect("the note's accessibility tree");
+        let bounds = |id: &str| {
+            tree.nodes
+                .iter()
+                .find(|(_, node)| node.author_id() == Some(id))
+                .and_then(|(_, node)| node.bounds())
+        };
+        let pane = bounds("pane-lead-cover-left").expect("the pane's cover root");
+        let note = bounds("remote-reconnect-note-left").expect("the note strip is drawn");
+        assert!(
+            (note.y1 - pane.y1).abs() < f64::EPSILON && note.y0 > pane.y0,
+            "a strip at the bottom: {note:?} in {pane:?}"
+        );
+        cx.update(Window::blur);
+        cx.simulate_mouse_down(
+            gpui_kit::point(px(100.), px(100.)),
+            MouseButton::Left,
+            gpui_kit::Modifiers::default(),
+        );
+        assert!(
+            !cx.update(|window, cx| view.read(cx).focus.is_focused(window)),
+            "a lone note takes no click"
+        );
         cx.update(|_, cx| {
             let focus = cx.focus_handle();
             assert!(element(&PaneCover::default(), Slot::Primary, Rgb::BLACK, Rgb::WHITE, &focus).is_none());

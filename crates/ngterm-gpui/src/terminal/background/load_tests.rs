@@ -103,3 +103,29 @@ fn image_diagnostics_describe_geometry_without_dumping_pixels() {
         "Decoded { size: (2, 3), tiles: (1, 1), bake: Bake { alpha: 1065353216, composite: None }, .. }"
     );
 }
+
+#[gpui_kit::test]
+fn a_file_that_goes_missing_keeps_painting_the_image_on_screen(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.png");
+    image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]))
+        .save(&path)
+        .unwrap();
+    let (_terminal, shared) = idle(cx);
+    let old = spec(path);
+    for _ in 0..4 {
+        cx.update(|cx| shared.background_image(Some(old.clone()), cx));
+        cx.run_until_parked();
+    }
+    let on_screen = shared.background_loader().current().unwrap();
+    let missing = spec(dir.path().join("missing.png"));
+    for _ in 0..2 {
+        let painted = cx.update(|cx| shared.background_image(Some(missing.clone()), cx));
+        assert!(
+            painted.is_some_and(|image| Arc::ptr_eq(&image, &on_screen)),
+            "the old image is painted"
+        );
+        cx.run_until_parked();
+    }
+    assert!(!shared.background_loader().is_loading(), "nothing to load");
+}
