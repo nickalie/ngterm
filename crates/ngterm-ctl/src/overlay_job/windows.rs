@@ -271,3 +271,7 @@ unsafe extern "system" fn on_console_event(event: u32) -> windows_sys::core::BOO
     }
     TRUE
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;
