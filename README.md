@@ -1016,7 +1016,9 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   It writes `OUT_DIR/summary.md` (lines, regions and functions % per crate), `OUT_DIR/summary-files.md` (lines,
   functions, regions and uncovered lines per file) and `OUT_DIR/lcov.info` (the uncovered lines by number), holding
   only the `-p` crates' files when given; it exits 1 when a test fails, with the report still written. Arguments after
-  `--` go to the test harness (for example, `-- --skip TEST_NAME`); the build still includes every selected test.
+  `--` go to every test binary's harness (for example, `-- --test-threads=1`); the build still includes every selected
+  test. The `harness = false` binaries read a bare argument as a name filter and take no `--skip`: a `--skip` there runs
+  only the cases its name matches, so their code reads as uncovered.
   The report uses `$PYTHON` when set, else a working `python3`, else `python`.
   `check_coverage.py` holds the summary against `scripts/unit-coverage-floor-linux.txt` (`crate lines functions
   regions`, the same 0.5 pt tolerance; floors only rise, toward 90 per crate). The gate is CI's job (linux.yml's
