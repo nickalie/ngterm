@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::api::{Machine, MobileError};
 use crate::chat::upload::{CHUNK, STALL, STALLED, UploadCancel, WINDOW, upload, upload_tail};
-use crate::transport::fake::{FakeConnection, FakeTransport, Opened};
+use crate::transport::fake::{FakeConnection, FakeTransport, Opened, Script};
 use crate::transport::{ChannelEnd, ChannelInput, Transport};
 
 fn machine() -> Machine {
@@ -285,4 +285,59 @@ async fn a_link_that_moves_nothing_fails_the_upload() {
             reason: STALLED.to_owned()
         })
     );
+}
+
+/// What an upload of three bytes as `a.txt` answers when the origin answers it with `script`.
+async fn answered(script: Script) -> Result<String, MobileError> {
+    let (transport, connection) = connected().await;
+    transport.script(&upload_tail("a.txt", 3), script);
+    upload(&connection, "a.txt", b"abc", &|_, _| {}, future::pending()).await
+}
+
+fn remote(reason: &str) -> Result<String, MobileError> {
+    Err(MobileError::Remote {
+        reason: reason.to_owned(),
+    })
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_origin_that_ends_without_its_words_is_answered_with_how_it_ended() {
+    assert_eq!(
+        answered(Script::ok("\r\n")).await,
+        remote("the machine stored the file but named no path"),
+        "a success that prints no path"
+    );
+    assert_eq!(answered(Script::failing(3, "  \n")).await, remote("exit 3"));
+    let signalled = |signal: Option<&str>| Script {
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        end: ChannelEnd::Exit {
+            code: None,
+            signal: signal.map(str::to_owned),
+        },
+    };
+    assert_eq!(answered(signalled(Some("KILL"))).await, remote("ended by KILL"));
+    assert_eq!(answered(signalled(None)).await, remote("ended by a signal"));
+    let lost = Script {
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        end: ChannelEnd::Lost("the connection was reset".to_owned()),
+    };
+    assert_eq!(answered(lost).await, remote("the connection was reset"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_origins_words_win_over_how_it_ended() {
+    let mut script = Script::failing(0, "Error: the file is over the 32 MiB cap\n");
+    script.end = ChannelEnd::Lost("reset".to_owned());
+    assert_eq!(answered(script).await, remote("the file is over the 32 MiB cap"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_upload_on_a_closed_connection_fails_with_the_transports_words() {
+    let (transport, connection) = connected().await;
+    transport.drop_connections("m1");
+    let answer = upload(&connection, "a.txt", b"abc", &|_, _| {}, future::pending()).await;
+    assert_eq!(answer, remote("the connection is closed"));
+    assert!(transport.take_opened().is_empty(), "nothing opened");
 }

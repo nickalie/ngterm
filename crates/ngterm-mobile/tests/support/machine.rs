@@ -71,6 +71,12 @@ pub(crate) fn account() -> String {
     String::from_utf8(output.stdout).expect("a user name").trim().to_owned()
 }
 
+/// The test's `LLVM_PROFILE_FILE`, set when a coverage run (cargo llvm-cov) runs it: the one variable of the test's own
+/// the private environment keeps, so the stage's instrumented binaries write their coverage where the run reads it.
+fn profile_file() -> Option<std::ffi::OsString> {
+    std::env::var_os("LLVM_PROFILE_FILE")
+}
+
 /// The private environment every process of the instance runs with.
 pub(crate) struct Private {
     pub(crate) stage: PathBuf,
@@ -92,6 +98,10 @@ impl Private {
             .env("USER", &self.user)
             .env("LOGNAME", &self.user)
             .env("LANG", "C.UTF-8");
+        // a coverage run's profile destination (cargo llvm-cov), where the stage's binaries' coverage goes
+        if let Some(profile) = profile_file() {
+            command.env("LLVM_PROFILE_FILE", profile);
+        }
         command
     }
 
@@ -196,14 +206,19 @@ impl Headless {
             .unwrap_or_default()
     }
 
-    /// The `sshd`'s forced command: the private environment, then the client's command.
+    /// The `sshd`'s forced command: the private environment (with a coverage run's profile destination, so the
+    /// stage's binaries the logins run count too), then the client's command.
     pub(crate) fn write_force_command(&self, work: &Path) -> PathBuf {
         let path = work.join("force-command.sh");
+        let profile = profile_file()
+            .map(|profile| format!("export LLVM_PROFILE_FILE={}\n", quoted(&profile.to_string_lossy())))
+            .unwrap_or_default();
         let script = format!(
             "#!/bin/sh\n\
              export NGTERM_STATE_DIR={state}\n\
              export HOME={home}\n\
              export PATH={path}\n\
+             {profile}\
              exec /bin/sh -c \"$SSH_ORIGINAL_COMMAND\"\n",
             state = quoted(&self.private.state.display().to_string()),
             home = quoted(&self.private.home.display().to_string()),

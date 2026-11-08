@@ -821,9 +821,388 @@ pub fn import_key(private_key: Vec<u8>, passphrase: Option<String>) -> Result<Ke
 
 #[cfg(test)]
 mod tests {
+    //! The facade over the scripted fake transport, its actor on its own thread as in the app: each call reaches the
+    //! actor and comes back with its answer or its events. What each command does is the actor's tests'; these hold the
+    //! calls the apps make to it.
+
+    use std::sync::mpsc::{self, Receiver, Sender};
+    use std::sync::{Arc, Mutex, PoisonError};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use futures_lite::future::{block_on, poll_once};
+    use ngterm_core::model::{AskAlignment, AskStyle};
+    use ngterm_core::remote::frames::{
+        self, Body, PresentationAsk, PresentationAskAnswer, PresentationFrame, PresentationHello, PresentationMode,
+        PresentationSnapshot,
+    };
+    use ngterm_core::remote::ssh::{present_tail, tree_tail};
+
+    use super::*;
+    use crate::chat::NOT_OPEN;
+    use crate::chat::upload::upload_tail;
+    use crate::transport::fake::{FakeTransport, Opened, Script};
+    use crate::transport::{ChannelEnd, ChannelInput, ChannelPeer};
+
+    const WAIT: Duration = Duration::from_secs(10);
+    const SESSION: &str = "00000000-0000-0000-0000-0000000000A1";
+    const PANE: &str = "00000000-0000-0000-0000-0000000000B1";
+
+    struct Recorder(Mutex<Sender<MobileEvent>>);
+
+    impl EventSink for Recorder {
+        fn on_event(&self, event: MobileEvent) {
+            let _ = self.0.lock().unwrap_or_else(PoisonError::into_inner).send(event);
+        }
+    }
+
+    /// The progress an upload told, in order.
+    #[derive(Default)]
+    struct Told(Mutex<Vec<(u64, u64)>>);
+
+    impl UploadProgress for Told {
+        fn sent(&self, sent: u64, total: u64) {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((sent, total));
+        }
+    }
+
+    impl Told {
+        fn last(&self) -> Option<(u64, u64)> {
+            self.0.lock().unwrap_or_else(PoisonError::into_inner).last().copied()
+        }
+    }
+
+    fn machine(key_id: &str) -> Machine {
+        Machine {
+            id: "m1".to_owned(),
+            label: "box".to_owned(),
+            host: "box".to_owned(),
+            port: 22,
+            user: "nick".to_owned(),
+            key_id: key_id.to_owned(),
+        }
+    }
+
+    /// A core over a fake transport, the machine `m1` connected, the events after the connect's.
+    fn connected() -> (Arc<MobileCore>, FakeTransport, Receiver<MobileEvent>) {
+        let transport = FakeTransport::new();
+        let (events, received) = mpsc::channel();
+        let sink: Arc<dyn EventSink> = Arc::new(Recorder(Mutex::new(events)));
+        let core = MobileCore::with_transport(transport.clone(), sink).unwrap();
+        block_on(core.connect(machine("key"))).unwrap();
+        received.try_iter().for_each(drop);
+        (core, transport, received)
+    }
+
+    /// The next event `matches` takes, skipping the others.
+    fn next<T>(events: &Receiver<MobileEvent>, matches: impl Fn(MobileEvent) -> Option<T>) -> T {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let event = events.recv_timeout(left).expect("the event arrives");
+            if let Some(found) = matches(event) {
+                return found;
+            }
+        }
+    }
+
+    fn state(events: &Receiver<MobileEvent>) -> MachineState {
+        next(events, |event| match event {
+            MobileEvent::MachineState { state, .. } => Some(state),
+            _ => None,
+        })
+    }
+
+    /// The next unscripted channel the core opened.
+    fn opened(transport: &FakeTransport) -> Opened {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            if let Some(opened) = transport.take_opened().pop() {
+                return opened;
+            }
+            assert!(Instant::now() < deadline, "no channel opened");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// What the core sent down `peer` until `done` is among it: the bytes, and whether it closed the channel.
+    fn inputs_until(peer: &mut ChannelPeer, done: &ChannelInput) -> (Vec<u8>, Vec<ChannelInput>) {
+        let deadline = Instant::now() + WAIT;
+        let (mut bytes, mut others) = (Vec::new(), Vec::new());
+        while !others.contains(done) {
+            match peer.try_input() {
+                Some(ChannelInput::Data(data)) => bytes.extend(data),
+                Some(other) => others.push(other),
+                None => {
+                    assert!(Instant::now() < deadline, "waited for {done:?}; got {others:?}");
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+        (bytes, others)
+    }
+
     #[test]
     fn core_version_is_the_crate_version() {
         assert_eq!(super::core_version(), env!("CARGO_PKG_VERSION"));
         assert!(!super::core_version().is_empty());
+    }
+
+    #[test]
+    fn a_generated_key_imports_back_as_itself_and_a_non_key_is_invalid() {
+        let pair = generate_key("phone".to_owned()).unwrap();
+        assert!(pair.authorized_key.ends_with(" phone"), "{}", pair.authorized_key);
+        assert_eq!(import_key(pair.private_key.clone(), None), Ok(pair));
+        assert!(matches!(
+            import_key(b"not a key".to_vec(), Some("secret".to_owned())),
+            Err(KeyError::Invalid { .. })
+        ));
+    }
+
+    #[test]
+    fn a_failed_vault_callback_is_an_unavailable_key_with_its_reason() {
+        let failed = uniffi::UnexpectedUniFFICallbackError::new("the keystore is locked");
+        let error = VaultError::from(failed);
+        assert_eq!(
+            error,
+            VaultError::Unavailable {
+                reason: "the keystore is locked".to_owned()
+            }
+        );
+        assert_eq!(error.to_string(), "the keystore is locked");
+    }
+
+    #[test]
+    fn a_key_switch_keeps_the_connection_and_makes_a_connect_with_that_key_no_edit() {
+        let (core, transport, _events) = connected();
+        assert_eq!(core.use_key("m1".to_owned(), "new".to_owned()), Ok(()));
+        assert_eq!(block_on(core.connect(machine("new"))), Ok(()));
+        assert!(transport.closed().is_empty(), "the connection stays");
+        assert_eq!(transport.connects(), ["m1"]);
+    }
+
+    #[test]
+    fn suspend_closes_the_connections_quietly_and_resume_reconnects_them() {
+        let (core, transport, events) = connected();
+        assert_eq!(core.suspend(), Ok(()));
+        // commands run in order: the listing's answer means the suspend ran
+        assert_eq!(
+            block_on(core.list_sessions("m1".to_owned())),
+            Err(MobileError::NotConnected {
+                machine_id: "m1".to_owned()
+            })
+        );
+        assert_eq!(transport.closed(), ["m1"]);
+        assert!(events.try_recv().is_err(), "no state reported");
+
+        assert_eq!(core.resume(), Ok(()));
+        assert_eq!(state(&events), MachineState::Reconnecting { next_in_ms: 0 });
+        assert_eq!(state(&events), MachineState::Connected);
+        assert_eq!(transport.connects(), ["m1", "m1"]);
+    }
+
+    /// The session attached on `core`, its stream's far end.
+    fn attached(core: &MobileCore, transport: &FakeTransport) -> ChannelPeer {
+        let remote = serde_json::json!({
+            "endpoint": {"executable": "/ngterm-session", "socketDirectory": "/tmp/ngterm-live-x"},
+            "sessions": [{"id": SESSION, "name": "main", "windowID": "w1", "windowName": "main",
+                          "workspaceID": "ws1", "workspaceName": "work", "cwd": "/repo", "panes": []}],
+            "presentation": 1,
+        });
+        let listing = serde_json::json!({"ok": true, "result": {"remote": remote}});
+        transport.script(&tree_tail(), Script::ok(&listing.to_string()));
+        block_on(core.list_sessions("m1".to_owned())).unwrap();
+        block_on(core.attach_session("m1".to_owned(), SESSION.to_owned())).unwrap();
+        let Opened { command, peer, .. } = opened(transport);
+        assert_eq!(command, present_tail(SESSION).unwrap());
+        peer
+    }
+
+    /// The origin's hello (this app presenting) and snapshot, then `ask`.
+    fn present_ask(peer: &ChannelPeer, ask: PresentationAsk) {
+        let hello = Body::Hello(PresentationHello {
+            version: frames::VERSION,
+            kinds: Vec::new(),
+            mode: PresentationMode::Presenter,
+        });
+        let bodies = [
+            hello,
+            Body::Snapshot(PresentationSnapshot::default()),
+            Body::AskRequest(ask),
+        ];
+        for (rev, body) in (1..).zip(bodies) {
+            let line = frames::encode(&PresentationFrame {
+                generation: 1,
+                rev,
+                body,
+            })
+            .unwrap();
+            assert!(block_on(peer.data(line)));
+        }
+    }
+
+    /// The first ask answer the core wrote down `peer`.
+    fn answer_written(peer: &mut ChannelPeer) -> PresentationAskAnswer {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            match peer.try_input() {
+                Some(ChannelInput::Data(line)) => {
+                    let body = frames::decode(line.strip_suffix(b"\n").unwrap()).unwrap().body;
+                    if let Body::AskResolve(answer) = body {
+                        return answer;
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    assert!(Instant::now() < deadline, "no answer written");
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_asks_answer_goes_back_down_its_sessions_stream_with_the_asks_owner() {
+        let (core, transport, events) = connected();
+        let mut peer = attached(&core, &transport);
+        let ask = PresentationAsk {
+            id: "a1".to_owned(),
+            title: "Deploy?".to_owned(),
+            message: None,
+            buttons: vec![ngterm_proto::request::AskButton {
+                id: "ok".to_owned(),
+                label: "OK".to_owned(),
+                hotkey: None,
+            }],
+            default_id: None,
+            destructive_id: None,
+            style: AskStyle::Gui,
+            align: AskAlignment::Center,
+            width: None,
+            pane: None,
+            owner: 42,
+            input: None,
+            choices: None,
+            cancel_id: None,
+        };
+        present_ask(&peer, ask);
+        let asked = next(&events, |event| match event {
+            MobileEvent::Ask { ask, .. } => Some(ask.id),
+            _ => None,
+        });
+        assert_eq!(asked, "a1");
+
+        let reply = AskReply {
+            text: Some("prod".to_owned()),
+            ..AskReply::default()
+        };
+        assert_eq!(
+            core.answer_ask("m1".to_owned(), SESSION.to_owned(), "a1".to_owned(), reply),
+            Ok(())
+        );
+        assert_eq!(
+            answer_written(&mut peer),
+            PresentationAskAnswer {
+                id: "a1".to_owned(),
+                owner: 42,
+                button: None,
+                text: Some("prod".to_owned()),
+                selected: None,
+            }
+        );
+    }
+
+    #[test]
+    fn an_older_page_of_a_chat_not_open_is_refused() {
+        let (core, _transport, _events) = connected();
+        let older = block_on(core.load_older("m1".to_owned(), SESSION.to_owned(), PANE.to_owned()));
+        assert_eq!(
+            older,
+            Err(MobileError::Remote {
+                reason: NOT_OPEN.to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn an_upload_sends_the_file_and_answers_the_stored_path() {
+        let (core, transport, _events) = connected();
+        let told = Arc::new(Told::default());
+        let progress: Arc<dyn UploadProgress> = Arc::clone(&told) as Arc<dyn UploadProgress>;
+        let uploading = {
+            let core = Arc::clone(&core);
+            thread::spawn(move || {
+                block_on(core.upload_file("m1".to_owned(), "notes.txt".to_owned(), b"hello".to_vec(), progress))
+            })
+        };
+        let mut origin = opened(&transport);
+        assert_eq!(origin.command, upload_tail("notes.txt", 5));
+        let (bytes, _) = inputs_until(&mut origin.peer, &ChannelInput::Eof);
+        assert_eq!(bytes, b"hello");
+        assert!(block_on(origin.peer.data(b"/state/uploads/1/notes.txt\n".to_vec())));
+        block_on(origin.peer.end(ChannelEnd::Exit {
+            code: Some(0),
+            signal: None,
+        }));
+        assert_eq!(uploading.join().unwrap(), Ok("/state/uploads/1/notes.txt".to_owned()));
+        assert_eq!(told.last(), Some((5, 5)));
+    }
+
+    #[test]
+    fn an_upload_to_a_machine_not_connected_is_refused() {
+        let (core, transport, _events) = connected();
+        let progress: Arc<dyn UploadProgress> = Arc::new(Told::default());
+        let cancel = UploadCancel::new();
+        let answer = block_on(core.upload_file_cancellable(
+            "m9".to_owned(),
+            "a.txt".to_owned(),
+            b"abc".to_vec(),
+            progress,
+            cancel,
+        ));
+        assert_eq!(
+            answer,
+            Err(MobileError::NotConnected {
+                machine_id: "m9".to_owned()
+            })
+        );
+        assert!(transport.take_opened().is_empty());
+    }
+
+    #[test]
+    fn cancelling_an_uploads_token_closes_its_channel_and_answers_cancelled() {
+        let (core, transport, _events) = connected();
+        let cancel = UploadCancel::new();
+        let uploading = {
+            let (core, cancel) = (Arc::clone(&core), Arc::clone(&cancel));
+            let progress: Arc<dyn UploadProgress> = Arc::new(Told::default());
+            thread::spawn(move || {
+                block_on(core.upload_file_cancellable(
+                    "m1".to_owned(),
+                    "big.bin".to_owned(),
+                    vec![1; 1024],
+                    progress,
+                    cancel,
+                ))
+            })
+        };
+        let mut origin = opened(&transport);
+        cancel.cancel();
+        assert_eq!(uploading.join().unwrap(), Err(MobileError::Cancelled));
+        inputs_until(&mut origin.peer, &ChannelInput::Close);
+    }
+
+    #[test]
+    fn dropping_an_upload_call_closes_its_channel() {
+        let (core, transport, _events) = connected();
+        let progress: Arc<dyn UploadProgress> = Arc::new(Told::default());
+        let mut call = Box::pin(core.upload_file("m1".to_owned(), "big.bin".to_owned(), vec![1; 1024], progress));
+        assert_eq!(block_on(poll_once(&mut call)), None, "the upload waits for the machine");
+        let mut origin = opened(&transport);
+        drop(call);
+        inputs_until(&mut origin.peer, &ChannelInput::Close);
     }
 }

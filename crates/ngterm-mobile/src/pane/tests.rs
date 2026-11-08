@@ -168,3 +168,18 @@ fn the_views_theme_reaches_the_terminal_in_place_and_every_later_one() {
     };
     assert!(matches!(pane.set_colors(too_many), Err(PaneInputError::Refused { .. })));
 }
+
+#[test]
+fn escape_sequences_are_dropped_whole_and_an_unfinished_one_at_the_end_too() {
+    assert_eq!(
+        super::without_escapes(b"a\x1b[1;31mb\x1b]0;title\x07c\x1bPq\x1b\\d\x1bce"),
+        b"abcde"
+    );
+    assert_eq!(super::without_escapes(b"gone\r\n\x1b"), b"gone\r\n", "a lone ESC last");
+    assert_eq!(
+        super::without_escapes(b"gone\x1b[12"),
+        b"gone",
+        "a CSI with no final byte"
+    );
+    assert_eq!(super::without_escapes(b"gone\x1b]110"), b"gone", "an OSC with no end");
+}

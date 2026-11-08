@@ -999,3 +999,172 @@ fn forgetting_a_machine_ends_its_streams() {
         assert!(harness.take_events().is_empty());
     });
 }
+
+/// An ask with a multi-line text field, over a pane, its buttons on the left of a terminal-style dialog.
+fn typed_ask() -> PresentationAsk {
+    use ngterm_core::model::{AskInputForm, AskInputMode};
+
+    PresentationAsk {
+        style: AskStyle::Terminal,
+        align: AskAlignment::Left,
+        width: Some(60),
+        pane: Some(frames::PresentationPane::Identity(Uuid::parse_str(PANE).unwrap())),
+        input: Some(AskInputForm {
+            mode: AskInputMode::Multiline,
+            value: "draft".to_owned(),
+            placeholder: Some("Notes".to_owned()),
+        }),
+        ..ask("a1", 42)
+    }
+}
+
+/// An ask with a checkbox list, one item checked and a free-form row, its buttons on the right.
+fn picked_ask() -> PresentationAsk {
+    use ngterm_core::model::AskChoiceForm;
+    use ngterm_proto::AskChoice;
+
+    PresentationAsk {
+        align: AskAlignment::Right,
+        choices: Some(AskChoiceForm {
+            choices: vec![
+                AskChoice {
+                    id: "eu".to_owned(),
+                    label: "Europe".to_owned(),
+                    subtitle: Some("Frankfurt".to_owned()),
+                },
+                AskChoice {
+                    id: "us".to_owned(),
+                    label: "US".to_owned(),
+                    subtitle: None,
+                },
+            ],
+            multiple: true,
+            checked: vec!["us".to_owned()],
+            other: Some("Elsewhere".to_owned()),
+        }),
+        ..ask("a2", 43)
+    }
+}
+
+#[test]
+fn an_asks_text_field_and_choice_list_reach_the_app_as_the_origin_sent_them() {
+    local(async {
+        let mut harness = Harness::attached(Some(1)).await;
+        harness
+            .connect(PresentationMode::Mirror, PresentationSnapshot::default())
+            .await;
+        harness.received().await;
+        harness.take_events();
+
+        harness.deliver(Body::AskRequest(typed_ask())).await;
+        harness.deliver(Body::AskRequest(picked_ask())).await;
+
+        let asks: Vec<RemoteAsk> = harness
+            .take_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                MobileEvent::Ask { ask, .. } => Some(ask),
+                _ => None,
+            })
+            .collect();
+        let [typed, picked] = asks.as_slice() else {
+            panic!("two asks: {asks:?}");
+        };
+        assert_eq!(
+            (typed.style.as_str(), typed.align.as_str(), typed.width),
+            ("terminal", "left", Some(60))
+        );
+        assert_eq!(typed.pane.as_deref(), Some(PANE), "a pane as its upper-case identity");
+        assert_eq!(
+            typed.input,
+            Some(RemoteAskInput {
+                multiline: true,
+                value: "draft".to_owned(),
+                placeholder: Some("Notes".to_owned()),
+            })
+        );
+        assert_eq!(typed.choices, None);
+
+        assert_eq!(picked.align, "right");
+        assert_eq!(picked.input, None);
+        assert_eq!(
+            picked.choices,
+            Some(RemoteAskChoices {
+                choices: vec![
+                    RemoteAskChoice {
+                        id: "eu".to_owned(),
+                        label: "Europe".to_owned(),
+                        subtitle: Some("Frankfurt".to_owned()),
+                    },
+                    RemoteAskChoice {
+                        id: "us".to_owned(),
+                        label: "US".to_owned(),
+                        subtitle: None,
+                    },
+                ],
+                multiple: true,
+                checked: vec!["us".to_owned()],
+                other: Some("Elsewhere".to_owned()),
+            })
+        );
+    });
+}
+
+#[test]
+fn a_status_shape_and_a_huds_spinner_reach_the_app_by_their_wire_names() {
+    use ngterm_core::hud::{HudPosition, HudSpinner};
+    use ngterm_core::model::StatusShape;
+
+    local(async {
+        let mut harness = Harness::attached(Some(1)).await;
+        harness
+            .connect(PresentationMode::Mirror, PresentationSnapshot::default())
+            .await;
+        harness.take_events();
+
+        let pane = Uuid::parse_str(PANE).unwrap();
+        let shaped = PresentationStatus {
+            shape: Some(StatusShape::Diamond),
+            pane: Some(frames::PresentationPane::Identity(pane)),
+            ..blocked()
+        };
+        let mut spec = HudSpec::new("Deploying");
+        spec.spinner = Some(HudSpinner::Braille);
+        spec.position = HudPosition::BottomRight;
+        let spinning = PresentationHud {
+            spec,
+            pane: Some(frames::PresentationPane::Identity(pane)),
+            ..hud()
+        };
+        harness.deliver(Body::Status(Some(shaped))).await;
+        harness.deliver(Body::Hud(Some(spinning))).await;
+
+        let events = harness.take_events();
+        let status = events.iter().find_map(|event| match event {
+            MobileEvent::SessionStatus { status, .. } => status.clone(),
+            _ => None,
+        });
+        assert_eq!(
+            status,
+            Some(RemoteStatus {
+                shape: Some("diamond".to_owned()),
+                pane: Some(PANE.to_owned()),
+                ..remote_blocked()
+            })
+        );
+        let shown = events.iter().find_map(|event| match event {
+            MobileEvent::Hud { hud, .. } => hud.clone(),
+            _ => None,
+        });
+        let shown = shown.expect("the HUD goes up");
+        assert_eq!(
+            (
+                shown.message.as_str(),
+                shown.spinner.as_deref(),
+                shown.position.as_str()
+            ),
+            ("Deploying", Some("braille"), "bottom-right")
+        );
+        assert_eq!(shown.pane.as_deref(), Some(PANE));
+    });
+}

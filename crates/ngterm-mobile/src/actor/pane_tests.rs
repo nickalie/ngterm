@@ -787,3 +787,193 @@ fn a_clipboard_read_holds_the_output_until_allowed_or_denied_and_detaching_denie
     );
     assert!(fixture.quiet().is_empty(), "nothing more about the pane");
 }
+
+#[test]
+fn the_bell_and_clipboard_writes_reach_the_app_with_the_clipboard_they_name() {
+    let mut fixture = Fixture::connected();
+    let _pane = fixture.show();
+    let opened = fixture.attach();
+
+    send(&opened.peer, b"\x07");
+    fixture.next(|event| matches!(event, MobileEvent::Bell { pane } if pane == reference()).then_some(()));
+
+    let written = |fixture: &Fixture| {
+        fixture.next(|event| match event {
+            MobileEvent::ClipboardWrite { pane, clipboard, text } if pane == reference() => Some((clipboard, text)),
+            _ => None,
+        })
+    };
+    // `hello`, `hi` and `yo`, base64
+    send(&opened.peer, b"\x1b]52;c;aGVsbG8=\x07");
+    assert_eq!(written(&fixture), (PaneClipboard::Standard, Some("hello".to_owned())));
+    send(&opened.peer, b"\x1b]52;p;aGk=\x07");
+    assert_eq!(written(&fixture), (PaneClipboard::Primary, Some("hi".to_owned())));
+    send(&opened.peer, b"\x1b]52;s;eW8=\x07");
+    assert_eq!(written(&fixture), (PaneClipboard::Selection, Some("yo".to_owned())));
+}
+
+#[test]
+fn showing_a_shown_pane_hands_back_the_same_pane_and_attaches_nothing_more() {
+    let mut fixture = Fixture::connected();
+    let first = fixture.show();
+    let _attach = fixture.attach();
+    let second = fixture.show();
+    assert!(Arc::ptr_eq(&first.terminal().unwrap(), &second.terminal().unwrap()));
+    assert!(!fixture.attaches_soon(), "no second attach");
+}
+
+#[test]
+fn commands_about_a_pane_not_shown_change_nothing() {
+    let mut fixture = Fixture::connected();
+    let pane = fixture.show();
+    let mut opened = fixture.attach();
+    fixture.attached();
+    fixture.lead();
+    let other = "00000000-0000-0000-0000-0000000000C2".to_owned();
+    let core = &fixture.core;
+    core.hide_pane(MACHINE.to_owned(), SESSION.to_owned(), other.clone())
+        .unwrap();
+    core.take_lead(MACHINE.to_owned(), SESSION.to_owned(), other.clone())
+        .unwrap();
+    core.answer_clipboard_read(MACHINE.to_owned(), SESSION.to_owned(), other, 1, ClipboardReply::Deny)
+        .unwrap();
+    // a read the shown pane never asked for
+    core.answer_clipboard_read(
+        MACHINE.to_owned(),
+        SESSION.to_owned(),
+        PANE.to_owned(),
+        99,
+        ClipboardReply::Allow {
+            text: Some("secret".to_owned()),
+        },
+    )
+    .unwrap();
+
+    assert!(fixture.quiet().is_empty(), "nothing is reported");
+    assert!(!fixture.attaches_soon(), "nothing attaches again");
+    assert!(pane.type_text("x".to_owned()).unwrap(), "the shown pane goes on");
+    let (bytes, others) = inputs_until(&mut opened.peer, |bytes, _| contains(bytes, b"x"));
+    assert_eq!((bytes.as_slice(), others.as_slice()), (b"x".as_slice(), [].as_slice()));
+}
+
+#[test]
+fn a_hidden_panes_handle_takes_a_grid_and_attaches_nothing() {
+    let mut fixture = Fixture::connected();
+    let pane = fixture.show();
+    let _attach = fixture.attach();
+    fixture.attached();
+    fixture.lead();
+    fixture
+        .core
+        .hide_pane(MACHINE.to_owned(), SESSION.to_owned(), PANE.to_owned())
+        .unwrap();
+    // the hide ran: the handle has no terminal
+    let deadline = Instant::now() + WAIT;
+    while pane.terminal().is_some() {
+        assert!(Instant::now() < deadline, "the pane is never hidden");
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(pane.resize(PaneSize { cols: 100, ..SIZE }), Ok(()));
+    assert!(!fixture.attaches_soon());
+    assert!(fixture.quiet().is_empty());
+}
+
+#[test]
+fn a_channel_lost_on_a_connection_still_up_attaches_again_on_the_backoff() {
+    let mut fixture = Fixture::connected();
+    let pane = fixture.show();
+    let first = fixture.attach();
+    fixture.attached();
+    let old = pane.terminal().unwrap();
+
+    end(first.peer, ChannelEnd::Lost("the channel was reset".to_owned()));
+    assert_eq!(
+        fixture.ended(),
+        PaneEnd::Lost {
+            reason: "the channel was reset".to_owned()
+        }
+    );
+    // the first loss waits a second, then the same connection attaches it again
+    let again = fixture.attach();
+    assert!(!lead_of(&again.command).claim);
+    fixture.attached();
+    assert!(!Arc::ptr_eq(&old, &pane.terminal().unwrap()), "a fresh terminal");
+    assert_eq!(fixture.transport.connects(), [MACHINE], "on the same connection");
+}
+
+/// A listing of the session under `session_id`, its one pane, its endpoint's executable at `executable`.
+fn listing_of(session_id: &str, executable: &str) -> Script {
+    let remote = serde_json::json!({
+        "endpoint": {"executable": executable, "socketDirectory": "/tmp/ngterm-live-x"},
+        "sessions": [{
+            "id": session_id, "name": "main", "windowID": "w1", "windowName": "main", "workspaceID": "ws1",
+            "workspaceName": "work", "cwd": "/repo", "panes": [{"pane": "left", "daemon": daemon()}],
+        }],
+        "presentation": 1,
+    });
+    Script::ok(&serde_json::json!({"ok": true, "result": {"remote": remote}}).to_string())
+}
+
+#[test]
+fn a_pane_whose_attach_cant_be_named_is_refused_as_unknown() {
+    let unknown = Err(crate::api::MobileError::Remote {
+        reason: crate::pane::UNKNOWN_PANE.to_owned(),
+    });
+    // a listed session whose id is not an identity
+    let mut fixture = Fixture::connected_with(vec![listing_of("main", "/ngterm-session")]);
+    let shown = block_on(
+        fixture
+            .core
+            .show_pane(MACHINE.to_owned(), "main".to_owned(), PANE.to_owned(), SIZE),
+    );
+    assert_eq!(shown.map(|_| ()), unknown);
+    assert!(!fixture.attaches_soon());
+
+    // an endpoint no command line can carry
+    let mut fixture = Fixture::connected_with(vec![listing_of(SESSION, "/ngterm\nsession")]);
+    let shown = block_on(
+        fixture
+            .core
+            .show_pane(MACHINE.to_owned(), SESSION.to_owned(), PANE.to_owned(), SIZE),
+    );
+    assert_eq!(shown.map(|_| ()), unknown);
+    assert!(!fixture.attaches_soon());
+}
+
+#[test]
+fn take_lead_does_nothing_while_a_takeover_is_on_its_way_or_after_the_program_ended() {
+    let mut fixture = Fixture::connected();
+    let _pane = fixture.show();
+    let _first = fixture.attach();
+    fixture.attached();
+    let take_lead = |fixture: &Fixture| {
+        fixture
+            .core
+            .take_lead(MACHINE.to_owned(), SESSION.to_owned(), PANE.to_owned())
+            .unwrap();
+    };
+
+    take_lead(&fixture);
+    let second = fixture.attach();
+    assert!(lead_of(&second.command).claim);
+    // the takeover has not reported its role yet
+    take_lead(&fixture);
+    assert!(!fixture.attaches_soon(), "one takeover at a time");
+
+    end(
+        second.peer,
+        ChannelEnd::Exit {
+            code: Some(0),
+            signal: None,
+        },
+    );
+    assert_eq!(
+        fixture.ended(),
+        PaneEnd::Exited {
+            code: Some(0),
+            signal: None
+        }
+    );
+    take_lead(&fixture);
+    assert!(!fixture.attaches_soon(), "an ended program has no lead to take");
+}
