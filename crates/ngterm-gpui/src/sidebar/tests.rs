@@ -1402,3 +1402,444 @@ fn hidden_remote_icon_moves_only_its_connection_notice_to_the_name() {
         );
     }
 }
+
+// MARK: - the row menus' items
+
+fn perform(h: &mut Harness, cx: &mut VisualTestContext, action: MenuAction) {
+    let view = h.view.clone();
+    cx.update(|window, cx| view.update(cx, |sidebar, cx| sidebar.perform(action, window, cx)));
+    h.settle(cx);
+}
+
+fn session_count(h: &Harness) -> usize {
+    h.store().sessions().count()
+}
+
+fn front_alert(cx: &mut VisualTestContext) -> Option<(String, String)> {
+    cx.update(|window, cx| {
+        crate::modal::front_alert(window.window_handle(), cx).map(|alert| {
+            let spec = alert.read(cx).spec();
+            (spec.heading.clone(), spec.body.clone())
+        })
+    })
+}
+
+/// The session menu's items land in the model on the clicked row: status, copies, companions, moves, flags, closes.
+#[gpui_kit::test]
+fn the_session_menus_items_run_on_their_rows(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let (u, srv, var) = (h.id_of("u", cx), h.id_of("srv", cx), h.id_of("var", cx));
+    let one = h.store().workspaces()[0].id();
+
+    h.store_mut().set_agent_indicator(
+        AgentIndicator {
+            status: AgentStatus::Blocked,
+            ..AgentIndicator::default()
+        },
+        srv,
+    );
+    h.settle(cx);
+    perform(&mut h, cx, MenuAction::ClearStatus(vec![srv]));
+    assert_eq!(
+        h.store().session(srv).unwrap().agent_indicator.status,
+        AgentStatus::Idle
+    );
+
+    perform(&mut h, cx, MenuAction::CopyName(Some("srv".to_owned())));
+    let copied = |cx: &mut VisualTestContext| cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(copied(cx).as_deref(), Some("srv"));
+    perform(&mut h, cx, MenuAction::CopyName(None));
+    assert_eq!(
+        copied(cx).as_deref(),
+        Some("srv"),
+        "a blank name leaves the clipboard alone"
+    );
+
+    let before = session_count(&h);
+    perform(&mut h, cx, MenuAction::Duplicate(srv));
+    assert_eq!(session_count(&h), before + 1);
+    perform(&mut h, cx, MenuAction::NewCompanion(u));
+    assert_eq!(h.store().companions(u).len(), 1);
+    // a copy replays the terminal behind the row, which a model without terminals lacks
+    perform(&mut h, cx, MenuAction::DuplicateAsCompanion(u));
+    assert_eq!(h.store().companions(u).len(), 1);
+
+    // a local row has no machine to open a session on
+    let before = session_count(&h);
+    perform(&mut h, cx, MenuAction::NewRemoteSession(u));
+    assert_eq!(session_count(&h), before);
+
+    perform(
+        &mut h,
+        cx,
+        MenuAction::MoveTo {
+            sessions: vec![var],
+            workspace: one,
+        },
+    );
+    assert_eq!(
+        h.store()
+            .workspace_for_session(var)
+            .map(ngterm_core::model::Workspace::id),
+        Some(one)
+    );
+    perform(&mut h, cx, MenuAction::ToggleFlags(vec![var]));
+    assert!(h.store().session(var).unwrap().flagged);
+
+    // without the confirmation setting, Close closes at once
+    perform(&mut h, cx, MenuAction::Close(vec![var]));
+    assert!(h.store().session(var).is_none());
+    assert_eq!(front_alert(cx), None);
+
+    perform(&mut h, cx, MenuAction::Rename(srv));
+    assert_eq!(h.view.read_with(cx, |sidebar, _| sidebar.editing()), Some(srv));
+}
+
+/// The workspace menu's items: a session in it, the focus set, flag all, and Delete Workspace confirmed while it holds
+/// sessions (upstream's `confirmDelete`), at once when empty.
+#[gpui_kit::test]
+fn the_workspace_menus_items_run_on_their_workspace(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let one = h.store().workspaces()[0].id();
+    let two = h.id_of("two", cx);
+    let entries = h.view.read_with(cx, |sidebar, _| sidebar.menu_entries(two));
+    assert!(
+        entries
+            .iter()
+            .any(|entry| matches!(entry, MenuEntry::Item(item) if item.label == "Delete Workspace")),
+        "a workspace row's menu"
+    );
+    assert!(
+        h.view
+            .read_with(cx, |sidebar, _| sidebar.menu_entries(Uuid::new_v4()))
+            .is_empty(),
+        "no row, no menu"
+    );
+
+    perform(&mut h, cx, MenuAction::NewSession(two));
+    assert_eq!(h.store().workspace(two).unwrap().sessions.len(), 2);
+    perform(&mut h, cx, MenuAction::ToggleFocus(two));
+    assert!(h.store().focus().ids().contains(&two));
+    perform(
+        &mut h,
+        cx,
+        MenuAction::FocusMembership {
+            workspace: one,
+            member: true,
+        },
+    );
+    assert!(h.store().focus().ids().contains(&one));
+    perform(&mut h, cx, MenuAction::ToggleWorkspaceFlags(two));
+    assert!(
+        h.store()
+            .workspace(two)
+            .unwrap()
+            .sessions
+            .iter()
+            .all(|session| session.flagged)
+    );
+
+    perform(&mut h, cx, MenuAction::DeleteWorkspace(two));
+    assert_eq!(
+        front_alert(cx),
+        Some((
+            "Delete “two”?".to_owned(),
+            "This closes 2 sessions after a short undo window.".to_owned()
+        ))
+    );
+    assert!(cx.update(|window, cx| crate::modal::answer_front_alert(window, "Cancel", cx)));
+    h.settle(cx);
+    assert!(h.store().workspace(two).is_some(), "cancelled");
+
+    let empty = h.store_mut().add_workspace("empty");
+    h.settle(cx);
+    perform(&mut h, cx, MenuAction::DeleteWorkspace(empty));
+    assert_eq!(front_alert(cx), None, "an empty workspace goes unasked");
+    assert!(h.store().workspace(empty).is_none());
+    let workspaces = h.store().workspaces().len();
+    perform(&mut h, cx, MenuAction::DeleteWorkspace(Uuid::new_v4()));
+    assert_eq!(
+        h.store().workspaces().len(),
+        workspaces,
+        "an unknown workspace deletes nothing"
+    );
+}
+
+/// End Session on a remote row is always confirmed, naming the machine; a local row asks nothing.
+#[gpui_kit::test]
+fn ending_a_remote_session_asks_first_and_a_cancel_keeps_it(cx: &mut TestAppContext) {
+    let (mut library, window) = library();
+    let store = library.store_mut(window).unwrap();
+    let two = store.workspaces()[1].id();
+    let api = store
+        .add_session(
+            two,
+            NewSession {
+                remote_host: Some("buildbox".to_owned()),
+                name: Some("api".to_owned()),
+                ..NewSession::at_cwd("/srv")
+            },
+        )
+        .unwrap();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let u = h.id_of("u", cx);
+    perform(&mut h, cx, MenuAction::EndRemoteSession(u));
+    assert_eq!(front_alert(cx), None, "a local row ends nothing remote");
+    perform(&mut h, cx, MenuAction::EndRemoteSession(api));
+    assert_eq!(
+        front_alert(cx),
+        Some((
+            "End “api” on buildbox?".to_owned(),
+            "Every program running in it stops on buildbox, and so do any companions it has there.".to_owned()
+        ))
+    );
+    assert!(cx.update(|window, cx| crate::modal::answer_front_alert(window, "Cancel", cx)));
+    h.settle(cx);
+    assert!(h.store().session(api).is_some());
+}
+
+// MARK: - the footer
+
+#[gpui_kit::test]
+fn the_footers_new_workspace_and_focus_filter_run(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let workspaces = h.store().workspaces().len();
+    let at = bounds(cx, "new-workspace").center();
+    cx.simulate_click(at, Modifiers::default());
+    h.settle(cx);
+    assert_eq!(h.store().workspaces().len(), workspaces + 1);
+
+    let two = h.id_of("two", cx);
+    perform(&mut h, cx, MenuAction::ToggleFocus(two));
+    assert!(h.store().focus().enabled(), "Focus applies the filter");
+    assert_eq!(h.names(cx)[0], "w:two", "only the focused workspace shows");
+    let at = bounds(cx, "focus-filter-toggle").center();
+    cx.simulate_click(at, Modifiers::default());
+    h.settle(cx);
+    assert!(!h.store().focus().enabled(), "the toggle lifts the filter");
+    assert_eq!(h.names(cx)[0], "w:workspace 1", "every workspace shows again");
+}
+
+// MARK: - clicks, renames and selection at their edges
+
+#[gpui_kit::test]
+fn a_ctrl_click_on_the_only_selected_row_empties_the_selection(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let srv = h.id_of("srv", cx);
+    let at = bounds(cx, "row:srv").center();
+    cx.simulate_click(at, Modifiers::default());
+    h.settle(cx);
+    assert_eq!(h.store().sidebar_selection_ids(), [srv]);
+    let at = bounds(cx, "row:srv").center();
+    cx.simulate_click(at, ctrl());
+    h.settle(cx);
+    assert!(h.store().sidebar_selection_ids().is_empty());
+}
+
+#[gpui_kit::test]
+fn clicks_on_the_row_being_renamed_or_on_no_row_change_nothing(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let (u, srv) = (h.id_of("u", cx), h.id_of("srv", cx));
+    h.view
+        .update_in(cx, |sidebar, window, cx| sidebar.begin_rename(u, window, cx));
+    h.settle(cx);
+    h.view.update_in(cx, |sidebar, window, cx| {
+        // a double-click on the field's own row starts no second rename, a second rename waits for the first
+        sidebar.row_clicked(u, 2, Modifiers::default(), window, cx);
+        sidebar.begin_rename(srv, window, cx);
+        sidebar.row_clicked(Uuid::new_v4(), 1, Modifiers::default(), window, cx);
+        // a plain session row has nothing to fold
+        sidebar.toggle(srv);
+    });
+    assert!(h.posted.0.lock().unwrap().is_empty(), "nothing asked of the model");
+    assert_eq!(h.view.read_with(cx, |sidebar, _| sidebar.editing()), Some(u));
+    h.settle(cx);
+    assert_eq!(h.names(cx).len(), 5);
+}
+
+/// A row added while a rename is open closes it uncommitted: the row it edits may have moved.
+#[gpui_kit::test]
+fn a_reshaped_list_closes_the_rename_without_committing_it(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let u = h.id_of("u", cx);
+    h.view
+        .update_in(cx, |sidebar, window, cx| sidebar.begin_rename(u, window, cx));
+    h.settle(cx);
+    cx.simulate_input("build");
+    let two = h.id_of("two", cx);
+    h.store_mut().add_session(two, NewSession::at_cwd("/opt")).unwrap();
+    h.settle(cx);
+    assert_eq!(h.view.read_with(cx, |sidebar, _| sidebar.editing()), None);
+    assert_eq!(h.store().session(u).unwrap().display_name(), "u", "not committed");
+}
+
+// MARK: - drags
+
+/// In the flagged list a session dragged above another reorders the flagged order, not the workspaces.
+#[gpui_kit::test]
+fn a_flagged_row_reorders_the_flagged_list_by_drag(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let ids: Vec<Uuid> = ["u", "srv", "var"].iter().map(|label| h.id_of(label, cx)).collect();
+    for id in &ids {
+        h.store_mut().set_flag(true, *id);
+    }
+    h.store_mut().set_sidebar_mode(SidebarMode::Flagged);
+    h.settle(cx);
+    assert_eq!(
+        h.names(cx),
+        ["s:u : workspace 1", "s:srv : workspace 1*", "s:var : two"]
+    );
+    let first = bounds(cx, "row:u : workspace 1");
+    let at = bounds(cx, "row:var : two").center();
+    drag(cx, at, point(first.center().x, first.origin.y + px(2.)));
+    h.settle(cx);
+    assert_eq!(h.store().ordered_flagged_session_ids(), [ids[2], ids[0], ids[1]]);
+    assert_eq!(h.names(cx)[0], "s:var : two");
+}
+
+fn file_drop(cx: &mut VisualTestContext, paths: Vec<std::path::PathBuf>, over: Point<Pixels>) {
+    cx.simulate_event(gpui_kit::FileDropEvent::Entered {
+        position: over,
+        paths: ExternalPaths(paths.into()),
+    });
+    cx.simulate_event(gpui_kit::FileDropEvent::Pending { position: over });
+    cx.simulate_event(gpui_kit::FileDropEvent::Submit { position: over });
+}
+
+/// The file manager's folders dropped on a workspace row open a session each there (upstream's directory drop);
+/// files alone open nothing; past the import cap "Too Many Folders" says so and nothing opens.
+#[gpui_kit::test]
+fn dropped_folders_open_a_session_each_in_the_workspace_under_them(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let two = h.id_of("two", cx);
+    let root = tempfile::tempdir().unwrap();
+    let (a, b, file) = (
+        root.path().join("a"),
+        root.path().join("b"),
+        root.path().join("notes.txt"),
+    );
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    std::fs::write(&file, "x").unwrap();
+
+    let over = bounds(cx, "row:two").center();
+    file_drop(cx, vec![a.clone(), b.clone()], over);
+    h.settle(cx);
+    let cwds: Vec<String> = h
+        .store()
+        .workspace(two)
+        .unwrap()
+        .sessions
+        .iter()
+        .map(|session| session.focused_cwd().to_owned())
+        .collect();
+    assert_eq!(cwds.len(), 3, "{cwds:?}");
+    for dir in [&a, &b] {
+        assert!(
+            cwds.contains(&dir.to_string_lossy().into_owned()),
+            "{dir:?} in {cwds:?}"
+        );
+    }
+    assert_eq!(
+        h.view.read_with(cx, |sidebar, _| sidebar.drag.highlight),
+        None,
+        "the highlight goes"
+    );
+
+    let before = session_count(&h);
+    let over = bounds(cx, "row:two").center();
+    file_drop(cx, vec![file], over);
+    h.settle(cx);
+    assert_eq!(session_count(&h), before, "no folder, no session");
+
+    let many = vec![a; ngterm_core::sidebar_drop::MAXIMUM_DIRECTORY_IMPORT_COUNT + 1];
+    let over = bounds(cx, "row:two").center();
+    file_drop(cx, many, over);
+    h.settle(cx);
+    assert_eq!(session_count(&h), before);
+    assert_eq!(
+        front_alert(cx),
+        Some((
+            "Too Many Folders".to_owned(),
+            format!(
+                "You can open up to {} folders at once.",
+                ngterm_core::sidebar_drop::MAXIMUM_DIRECTORY_IMPORT_COUNT
+            )
+        ))
+    );
+}
+
+/// [`library`] with a third workspace "three" holding "opt", "two" and "three" folded.
+fn three_workspaces(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
+    let (mut library, window) = library();
+    let store = library.store_mut(window).unwrap();
+    let three = store.add_workspace("three");
+    let opt = NewSession {
+        select: false,
+        ..NewSession::at_cwd("/opt")
+    };
+    store.add_session(three, opt).unwrap();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    for label in ["two", "three"] {
+        let id = h.id_of(label, cx);
+        h.view.update(cx, |sidebar, _| sidebar.toggle(id));
+        h.settle(cx);
+    }
+    assert_eq!(h.names(cx), ["w:workspace 1", "s:u", "s:srv*", "w:two", "w:three"]);
+    (h, cx)
+}
+
+/// A session drag hovering a folded workspace opens it; moving on to another one opens that and folds the first back,
+/// and a release with no drop on the list folds the last back too.
+#[gpui_kit::test]
+fn a_second_spring_load_folds_the_first_back_and_an_unlanded_release_the_second(cx: &mut TestAppContext) {
+    let (mut h, cx) = three_workspaces(cx);
+    let from = bounds(cx, "row:u").center();
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(point(from.x, from.y + px(4.)), MouseButton::Left, Modifiers::default());
+    let over = bounds(cx, "row:two").center();
+    cx.simulate_mouse_move(over, MouseButton::Left, Modifiers::default());
+    cx.executor().advance_clock(SPRING_DELAY);
+    h.settle(cx);
+    assert_eq!(h.names(cx).len(), 6, "two opened");
+    let over = bounds(cx, "row:three").center();
+    cx.simulate_mouse_move(over, MouseButton::Left, Modifiers::default());
+    cx.executor().advance_clock(SPRING_DELAY);
+    h.settle(cx);
+    assert_eq!(
+        h.names(cx),
+        ["w:workspace 1", "s:u", "s:srv*", "w:two", "w:three", "s:opt"],
+        "three opened, two folded back"
+    );
+    // released past the window's sidebar with no move there first: no drop on the list
+    cx.simulate_mouse_up(point(px(630.), px(470.)), MouseButton::Left, Modifiers::default());
+    h.settle(cx);
+    assert_eq!(h.names(cx).len(), 5, "three folded back");
+}
+
+/// A hover that leaves the folded workspace before the delay opens nothing.
+#[gpui_kit::test]
+fn a_hover_that_moves_on_before_the_delay_opens_nothing(cx: &mut TestAppContext) {
+    let (mut h, cx) = three_workspaces(cx);
+    let from = bounds(cx, "row:u").center();
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(point(from.x, from.y + px(4.)), MouseButton::Left, Modifiers::default());
+    let over = bounds(cx, "row:two").center();
+    cx.simulate_mouse_move(over, MouseButton::Left, Modifiers::default());
+    let back = bounds(cx, "row:srv").center();
+    cx.simulate_mouse_move(back, MouseButton::Left, Modifiers::default());
+    cx.executor().advance_clock(SPRING_DELAY);
+    h.settle(cx);
+    assert_eq!(h.names(cx).len(), 5, "nothing opened");
+    cx.simulate_mouse_move(point(px(630.), px(470.)), MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point(px(630.), px(470.)), MouseButton::Left, Modifiers::default());
+    h.settle(cx);
+}
