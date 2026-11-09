@@ -1280,6 +1280,51 @@ fn a_key_the_app_takes_from_a_page_goes_through_the_keymap(cx: &mut TestAppConte
     assert!(crate::keymap_dispatch::sequence_is_live(), "the leader is half typed");
 }
 
+/// A half-typed `ctrl+a>ctrl+g`, its tail's report asked about and queued.
+#[cfg(windows)]
+fn leader_tail_queued() -> gpui_kit::Keystroke {
+    let (keymap, _) = ngterm_core::keymap::parse_keymap(
+        "command \"g\" ctrl+a>ctrl+g true\n",
+        &ngterm_core::keymap::linux_defaults(),
+    );
+    crate::keymap_dispatch::load_keymap(&keymap);
+    assert_eq!(crate::keymap_dispatch::press_dispatched("ctrl-a"), Some(false));
+    let tail = gpui_kit::Keystroke::parse("ctrl-g").unwrap();
+    assert!(crate::keymap_dispatch::takes(&crate::keymap_dispatch::page_stroke(
+        &tail, 0, false
+    )));
+    tail
+}
+
+/// Whether the page would keep `ctrl-x`, which ends a live sequence.
+#[cfg(windows)]
+fn page_keeps_ctrl_x() -> bool {
+    let kept = gpui_kit::Keystroke::parse("ctrl-x").unwrap();
+    !crate::keymap_dispatch::takes(&crate::keymap_dispatch::page_stroke(&kept, 0, false))
+}
+
+/// A report with no window to go to leaves the queue, so a press the page keeps next ends the leader at once.
+#[cfg(windows)]
+#[gpui_kit::test]
+fn a_key_report_with_no_window_leaves_the_queue(cx: &mut TestAppContext) {
+    let driven = driven(&url_overlay());
+    let tail = leader_tail_queued();
+    cx.update(|cx| driven.page.report(Report::Key(tail, 0, false), cx));
+    assert!(page_keeps_ctrl_x());
+    assert!(!crate::keymap_dispatch::sequence_is_live());
+}
+
+/// A closed page's reports never reach it: they leave the queue with it.
+#[cfg(windows)]
+#[gpui_kit::test]
+fn closing_a_page_takes_its_key_reports_off_the_queue(cx: &mut TestAppContext) {
+    let driven = driven(&url_overlay());
+    leader_tail_queued();
+    cx.update(|cx| driven.page.close(cx));
+    assert!(page_keeps_ctrl_x());
+    assert!(!crate::keymap_dispatch::sequence_is_live());
+}
+
 #[test]
 fn every_navigation_error_names_its_reason() {
     for (status, reason) in [

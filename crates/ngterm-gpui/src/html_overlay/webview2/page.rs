@@ -820,15 +820,19 @@ impl Page {
         cx: &mut App,
     ) {
         let Some(window) = self.element_window.get() else {
+            crate::keymap_dispatch::page_report_dropped();
             return;
         };
-        let _ = window.update(cx, |_, window, cx| {
+        let dispatched = window.update(cx, |_, window, cx| {
             #[cfg(target_os = "macos")]
-            window.dispatch_keystroke(keystroke.clone(), cx);
+            crate::keymap_dispatch::dispatch_page_key(keystroke, window, cx);
             #[cfg(windows)]
             crate::keymap_dispatch::dispatch_page_key(keystroke, keycode, repeat, window, cx);
             crate::keymap_dispatch::release_dispatched();
         });
+        if dispatched.is_err() {
+            crate::keymap_dispatch::page_report_dropped();
+        }
     }
 
     // MARK: - the bridge and the user's input
@@ -1312,6 +1316,7 @@ impl Page {
     /// Ends the page (upstream's `close`): its prompt goes, its web view is handed to the pump to close, and the
     /// handlers still reached do nothing.
     pub fn close(&self, cx: &mut App) {
+        crate::keymap_dispatch::page_reports_dropped();
         self.end_prompt(cx);
         self.state.borrow_mut().life = Life::Released;
         self.document_generation.next();
@@ -1387,15 +1392,15 @@ pub fn error_text(status: i32) -> String {
 #[path = "page_tests.rs"]
 mod driven_tests;
 
+#[cfg(all(test, target_os = "macos"))]
+#[path = "page_macos_tests.rs"]
+mod macos_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-#[cfg(all(test, target_os = "macos"))]
-#[path = "page_macos_tests.rs"]
-mod macos_tests;
-
     fn colors_read_as_channels() {
         assert_eq!(rgb8("#102030"), Some((0x10, 0x20, 0x30)));
         assert_eq!(rgb8("102030"), None);

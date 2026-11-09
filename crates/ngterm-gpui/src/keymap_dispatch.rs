@@ -18,13 +18,11 @@
 //!
 //! A chord is the key's physical identity resolved per layout (`terminal::input::chord`). A consumed key's next press
 //! reads as its autorepeat until its release, which reaches [`key_up`] from the window's (and the terminal's) key-up
-//! listener, or is stood in for right after the press when a web view holds the key (`release_dispatched`). A Windows
-//! page carries the physical identity and autorepeat flag with each queued report and supplies them at its
-//! synchronous dispatch (`dispatch_page_key`). macOS reads `AppKit`'s current event at dispatch instead: a queued
-//! fresh press can be mistaken for a later autorepeat and swallowed without firing. Its queued reports do not yet
-//! preserve their own metadata or handle ownership overtaken by a newer page-kept press. [`keyboard_left`] forgets ownership
-//! when no ngterm window holds the keyboard any more. The leader and repeat timeouts are deadlines checked at the next key, which is when they
-//! matter. Matched chords fire as main-loop tasks
+//! listener, or is stood in for right after the press when a web view holds the key (`release_dispatched`). A page's
+//! queued report keeps the physical identity and autorepeat flag its callback saw, for its synchronous dispatch
+//! (`dispatch_page_key`): the native event current by then may be a later autorepeat of the same key.
+//! [`keyboard_left`] forgets ownership when no ngterm window holds the keyboard any more. The leader and repeat
+//! timeouts are deadlines checked at the next key, which is when they matter. Matched chords fire as main-loop tasks
 //! (`AppState::keymap_fired`); a custom command carries the terminal typed in, read now (its selection included), as
 //! the keyboard may move before the task runs.
 //!
@@ -34,12 +32,15 @@
 //! | Owned autorepeat, even when several callbacks precede dispatch | Consumed without firing again |
 //! | Owned repeat tail | Fires again and suspends its repeat timeout while held |
 //! | Owned key repeating after focus moves to a terminal | Consumed under the same physical identity |
-//! | Windows report queued before a newer press the page keeps | Taken as usual, and the key stays the page's |
+//! | Report queued ahead of a press the page keeps | Acts first; the press then ends the sequence and stays the page's |
+//! | Leader tail asked about while its prefix is still queued | Taken, and fires when the pump reaches it |
+//! | Press queued ahead of its own autorepeat | Fires once, and the autorepeat is consumed |
 //! | Unowned autorepeat | Passed without advancing the matcher or the typed-key cutoff |
 //! | Character typed after a leader, reported after an in-flight autorepeat | Ends the leader |
 //!
-//! A page-kept callback currently resets only the matcher already live at that callback. An older queued press can
-//! subsequently arm a leader across that interruption; cancellation still needs ordering with the queued reports.
+//! A page's callback runs ahead of the reports still waiting for the pump, in the order the keys came: it answers for
+//! the matcher as those reports will leave it, and a press the page keeps ends the sequence only behind them
+//! ([`QueuedReport`]).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -105,17 +106,49 @@ struct Router {
     /// The key the monitor is handling, under the identity it holds that key by: what a key dispatched for a web view
     /// lets go of ([`release_dispatched`]).
     pressed: Option<u32>,
-    /// The Windows page report being dispatched synchronously, taken by the interceptor before any listener runs.
-    #[cfg(all(feature = "html", windows))]
+    /// The page reports the callbacks took ([`takes`]) and the pump has not reached, oldest first.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    queued: std::collections::VecDeque<QueuedReport>,
+    /// The page report being dispatched synchronously, taken by the interceptor before any listener runs.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     dispatched: Option<KeyStroke>,
-    /// The key of the Windows page report being dispatched, when a newer callback left that key to the page: the
-    /// report still acts, and leaves no ownership behind ([`Router::forget_overtaken`]).
-    #[cfg(all(feature = "html", windows))]
+    /// The key of the page report being dispatched, when a newer callback left that key to the page: the report still
+    /// acts, and leaves no ownership behind ([`Router::forget_overtaken`]).
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     overtaken: Option<u32>,
     /// When the monitor last handled a fresh press (an autorepeat does not count): what a page's late report of an
     /// earlier key ([`page_typed`]) reads.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     last_press: Option<Instant>,
+}
+
+/// A key a page's callback took, waiting in the pump's queue behind the reports before it. Callbacks and the pump share
+/// the main thread and the queue is first in, first out, so these mirror it: each is taken off when the pump reaches
+/// its report ([`dispatch_page_key`]) or the report is lost ([`page_report_dropped`], [`page_reports_dropped`]).
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+struct QueuedReport {
+    /// The key as its callback saw it, which the dispatch reads rather than the native event current by then.
+    stroke: KeyStroke,
+    /// A press the page kept came behind this report: it ends a live sequence once this report has acted.
+    interrupted: bool,
+}
+
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+impl QueuedReport {
+    /// What this report will do to `engine` at the pump (`Router::press`).
+    fn replay(&self, engine: &mut CustomCommandEngine) {
+        // an autorepeat advances nothing: at most a live tail fires again, its window still open
+        if self.stroke.action != KeyAction::Repeat {
+            if self.stroke.is_escape() {
+                engine.reset();
+            } else if let Some(chord) = input::chord(&self.stroke).filter(|chord| !is_switcher(chord)) {
+                let _ = engine.advance(&chord);
+            }
+        }
+        if self.interrupted {
+            engine.reset();
+        }
+    }
 }
 
 thread_local! {
@@ -207,7 +240,8 @@ pub fn menu_action(stroke: &KeyStroke) -> Option<BuiltinAction> {
 /// does what upstream's monitor does with it: a fresh press forgets that physical key's old ownership, and unless it
 /// is a bare modifier it ends a half-typed leader or an open repeat window. Esc is the keymap's only to cancel a
 /// leader. The window's own keys there are Ctrl+Tab's switcher. A press taken here counts as owned from now on, as
-/// the keyboard's first autorepeat can come before the press's queued report is dispatched.
+/// the keyboard's first autorepeat can come before the press's queued report is dispatched. Every key taken here is
+/// about to be reported: the caller must post it to the page's pump.
 /// On Windows only the keys `WebView2` reports reach this check (`html_overlay::webview2::keys`): a typed character is
 /// not one of them, and [`page_typed`] hears of it instead.
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
@@ -216,15 +250,22 @@ pub fn takes(stroke: &KeyStroke) -> bool {
     ROUTER.with_borrow_mut(|router| {
         // an autorepeat's ownership follows the press, regardless of what the matcher would take now
         if stroke.action == KeyAction::Repeat {
-            return router.owns(stroke.identity);
-        }
-        router.released.remove(&stroke.identity);
-        router.consumed.remove(&stroke.identity);
-        let taken = router.takes_fresh(stroke);
-        if taken {
+            if !router.owns(stroke.identity) {
+                return false;
+            }
+        } else {
+            router.released.remove(&stroke.identity);
+            router.consumed.remove(&stroke.identity);
+            if !router.takes_fresh(stroke) {
+                return false;
+            }
             router.released.insert(stroke.identity);
         }
-        taken
+        router.queued.push_back(QueuedReport {
+            stroke: stroke.clone(),
+            interrupted: false,
+        });
+        true
     })
 }
 
@@ -269,21 +310,42 @@ pub fn page_stroke(keystroke: &gpui_kit::Keystroke, keycode: u32, repeat: bool) 
     stroke
 }
 
-/// Dispatches one queued Windows page report. Its metadata lives only across this synchronous dispatch, so another
-/// accelerator callback or a missing window cannot overwrite a later press's repeat flag or physical identity.
-#[cfg(all(feature = "html", windows))]
+/// Dispatches the oldest queued page report. Its metadata lives only across this synchronous dispatch, so another
+/// callback or a missing window cannot overwrite a later press's repeat flag or physical identity: Windows carries it
+/// on the report, macOS's report names only the keystroke and the queue keeps what its callback saw.
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 pub fn dispatch_page_key(
     keystroke: &gpui_kit::Keystroke,
-    keycode: u32,
-    repeat: bool,
+    #[cfg(windows)] keycode: u32,
+    #[cfg(windows)] repeat: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
-    ROUTER.with_borrow_mut(|router| router.dispatched = Some(page_stroke(keystroke, keycode, repeat)));
+    #[cfg(windows)]
+    let carried = Some(page_stroke(keystroke, keycode, repeat));
+    #[cfg(not(windows))]
+    let carried = None;
+    let interrupted = ROUTER.with_borrow_mut(|router| router.begin_report(carried));
     window.dispatch_keystroke(keystroke.clone(), cx);
+    ROUTER.with_borrow_mut(|router| router.end_report(interrupted));
+}
+
+/// The oldest queued page report found nowhere to go: the queue moves on without it.
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+pub fn page_report_dropped() {
     ROUTER.with_borrow_mut(|router| {
-        router.dispatched = None;
-        router.forget_overtaken();
+        let interrupted = router.begin_report(None);
+        router.end_report(interrupted);
+    });
+}
+
+/// The queued page reports will never come: their page closed, and the pump drops what it still holds for it.
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+pub fn page_reports_dropped() {
+    ROUTER.with_borrow_mut(|router| {
+        if router.queued.drain(..).any(|report| report.interrupted) {
+            router.reset_if_live();
+        }
     });
 }
 
@@ -340,10 +402,10 @@ pub(crate) fn press_dispatched(text: &str) -> Option<bool> {
 #[cfg(all(test, feature = "html", windows))]
 pub(crate) fn press_page_report(keystroke: &gpui_kit::Keystroke, keycode: u32, repeat: bool) -> Option<bool> {
     let press = ROUTER.with_borrow_mut(|router| {
-        router.dispatched = Some(page_stroke(keystroke, keycode, repeat));
+        let interrupted = router.begin_report(Some(page_stroke(keystroke, keycode, repeat)));
         let stroke = router.dispatched_stroke(KeyStroke::new(keystroke, &input::Source::Keystroke, false));
         let press = router.press(&stroke, Instant::now(), true);
-        router.forget_overtaken();
+        router.end_report(interrupted);
         press
     });
     release_dispatched();
@@ -376,7 +438,7 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     }
     let source = input::current_source(&event.keystroke);
     let stroke = KeyStroke::new(&event.keystroke, &source, false);
-    #[cfg(all(feature = "html", windows))]
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     let stroke = ROUTER.with_borrow_mut(|router| router.dispatched_stroke(stroke));
     // the window's own keys first: Ctrl+Tab's switcher, the picker's, palette's and search bar's fields; their release
     // is theirs too (the switcher's walk leaves the terminal the keyboard, so its key-up listener must not report it)
@@ -421,6 +483,12 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     {
         cx.stop_propagation();
     }
+}
+
+/// Whether `chord` is Ctrl+Tab's, the window's own switcher: never the matcher's.
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn is_switcher(chord: &Chord) -> bool {
+    chord.key == "tab" && chord.mods.contains(ngterm_core::keymap::Modifiers::CONTROL)
 }
 
 /// Whether `keystroke` is the one GPUI synthesizes when a lone modifier is released (`shift`, `control`, `alt`,
@@ -484,7 +552,7 @@ impl Router {
     }
 
     /// Takes the report installed immediately before the synchronous dispatch, or the native window's stroke.
-    #[cfg(all(feature = "html", windows))]
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn dispatched_stroke(&mut self, fallback: KeyStroke) -> KeyStroke {
         let Some(stroke) = self.dispatched.take() else {
             return fallback;
@@ -500,8 +568,28 @@ impl Router {
         stroke
     }
 
+    /// The pump reached the oldest queued report: it is off the queue, and its stroke (`carried`, else what its callback
+    /// saw) is the next dispatch's. Whether a press the page kept came behind it, for [`Router::end_report`].
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn begin_report(&mut self, carried: Option<KeyStroke>) -> bool {
+        let report = self.queued.pop_front();
+        let interrupted = report.as_ref().is_some_and(|report| report.interrupted);
+        self.dispatched = carried.or(report.map(|report| report.stroke));
+        interrupted
+    }
+
+    /// The report has acted: its metadata goes, and the press the page kept behind it ends the sequence now.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn end_report(&mut self, interrupted: bool) {
+        self.dispatched = None;
+        self.forget_overtaken();
+        if interrupted {
+            self.reset_if_live();
+        }
+    }
+
     /// Ends the dispatch of an overtaken report: the key is the page's, as the newer callback left it.
-    #[cfg(all(feature = "html", windows))]
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn forget_overtaken(&mut self) {
         if let Some(identity) = self.overtaken.take() {
             self.consumed.remove(&identity);
@@ -543,32 +631,59 @@ impl Router {
             let Some(chord) = input::chord(stroke) else {
                 return false;
             };
-            if chord.key == "tab" && chord.mods.contains(ngterm_core::keymap::Modifiers::CONTROL) {
+            if is_switcher(&chord) {
                 return true;
             }
             self.page_press_taken(&chord)
         };
         if !taken {
-            self.reset_if_live();
+            self.interrupt();
         }
         taken
     }
 
-    /// Whether a half-typed leader is still waiting for its next chord, a lapsed one counting as gone.
+    /// A press the page keeps ends a live sequence, behind the reports still queued (module docs).
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn interrupt(&mut self) {
+        match self.queued.back_mut() {
+            Some(report) => report.interrupted = true,
+            None => self.reset_if_live(),
+        }
+    }
+
+    /// The matcher as the reports still queued will leave it, a lapsed leader or repeat window counting as gone.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn matcher_after_queue(&self) -> Option<CustomCommandEngine> {
+        let mut engine = self.engine.clone()?;
+        if self.lapsed() {
+            engine.reset();
+        }
+        for report in &self.queued {
+            report.replay(&mut engine);
+        }
+        Some(engine)
+    }
+
+    /// Whether a half-typed leader will still be waiting for its next chord.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn leader_waits(&self) -> bool {
-        !self.lapsed() && self.engine.as_ref().is_some_and(CustomCommandEngine::is_armed)
+        self.matcher_after_queue()
+            .as_ref()
+            .is_some_and(CustomCommandEngine::is_armed)
     }
 
     /// Whether a fresh press spelled `chord`, in a page's web view, is the keymap's: `press` decides the same way, the
     /// page holding the keyboard.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn page_press_taken(&self, chord: &Chord) -> bool {
-        let armed = self.leader_waits();
+        let Some(mut engine) = self.matcher_after_queue() else {
+            return false;
+        };
+        let armed = engine.is_armed();
         self.menu
             .get(chord)
             .is_some_and(|action| menu_takes(*action, armed, true))
-            || self.sequence_takes(chord)
+            || !matches!(engine.advance(chord), EngineOutcome::Unmatched)
     }
 
     /// A key the page keeps went down at `pressed` ([`page_typed`]): after the monitor's last press, it ends the sequence.
@@ -583,19 +698,6 @@ impl Router {
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn lapsed(&self) -> bool {
         self.deadline.is_some_and(|deadline| Instant::now() >= deadline)
-    }
-
-    /// Whether the matcher would take `chord` now, a lapsed leader or repeat window counting as gone.
-    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
-    fn sequence_takes(&self, chord: &Chord) -> bool {
-        let lapsed = self.lapsed();
-        self.engine.as_ref().is_some_and(|engine| {
-            let mut engine = engine.clone();
-            if lapsed {
-                engine.reset();
-            }
-            !matches!(engine.advance(chord), EngineOutcome::Unmatched)
-        })
     }
 
     /// One press, with an HTML page holding the keyboard while `page_keys`: whether it is consumed, and what it fired.

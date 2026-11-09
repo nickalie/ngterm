@@ -459,6 +459,8 @@ fn a_web_view_hands_over_full_screen_unless_it_ends_a_live_leader() {
             assert!(super::takes(&stroke("f11")), "no leader");
             let now = Instant::now();
             assert!(super::takes(&stroke("ctrl-a")));
+            // the press goes straight to the matcher below, so its report leaves the queue here
+            super::page_reports_dropped();
             super::ROUTER.with_borrow_mut(|router| {
                 assert_eq!(router.press(&stroke("ctrl-a"), now, true), Press::Consumed);
                 assert!(router.engine.as_ref().is_some_and(CustomCommandEngine::is_armed));
@@ -587,6 +589,7 @@ fn a_web_view_hands_over_the_keymap_commands_without_advancing_the_matcher() {
         super::takes(&stroke("ctrl-a")),
         "a leader's first chord is the keymap's"
     );
+    super::page_reports_dropped();
     assert!(!super::takes(&stroke("g")), "asking about the leader did not arm it");
     assert_eq!(press_monitor("g", false, Instant::now()), Press::Passed);
 }
@@ -753,9 +756,7 @@ fn page_press(text: &str, repeat: bool, now: Instant) -> Press {
     if !super::takes(&native_stroke(text, repeat)) {
         return Press::Passed;
     }
-    let result = press_monitor(text, repeat, now);
-    release_monitor();
-    result
+    pump_report(text, repeat, repeat, now)
 }
 
 /// A press the page keeps never reaches the monitor, and its autorepeats, release and next press stay the page's.
@@ -1187,10 +1188,10 @@ fn windows_page_stroke(text: &str, repeat: bool) -> KeyStroke {
 #[cfg(all(feature = "html", windows))]
 fn dispatch_windows_page(stroke: KeyStroke, now: Instant) -> Press {
     let result = super::ROUTER.with_borrow_mut(|router| {
-        router.dispatched = Some(stroke.clone());
+        let interrupted = router.begin_report(Some(stroke.clone()));
         let stroke = router.dispatched_stroke(stroke);
         let press = router.press(&stroke, now, true);
-        router.forget_overtaken();
+        router.end_report(interrupted);
         press
     });
     release_monitor();
@@ -1554,4 +1555,139 @@ mod windows_dispatch_tests {
             "the newer press's repeats are the page's"
         );
     }
+}
+
+/// The report of `text` as its callback captured it, `repeat` when the platform flagged an autorepeat.
+#[cfg(all(feature = "html", windows))]
+fn queued_report(text: &str, repeat: bool) -> KeyStroke {
+    windows_page_stroke(text, repeat)
+}
+
+/// The report of `text` as its callback captured it, `repeat` when the platform flagged an autorepeat.
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn queued_report(text: &str, repeat: bool) -> KeyStroke {
+    native_stroke(text, repeat)
+}
+
+/// The pump reaches the oldest queued report, `text`, with the interceptor's native event an autorepeat while
+/// `current_repeat` (on macOS, `AppKit`'s current event at that moment).
+#[cfg(all(feature = "html", windows))]
+fn pump_report(text: &str, repeat: bool, _current_repeat: bool, now: Instant) -> Press {
+    dispatch_windows_page(queued_report(text, repeat), now)
+}
+
+/// The pump reaches the oldest queued report, `text`, with the interceptor's native event an autorepeat while
+/// `current_repeat` (on macOS, `AppKit`'s current event at that moment).
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn pump_report(text: &str, _repeat: bool, current_repeat: bool, now: Instant) -> Press {
+    let current = native_stroke(text, current_repeat);
+    let press = super::ROUTER.with_borrow_mut(|router| {
+        let interrupted = router.begin_report(None);
+        let stroke = router.dispatched_stroke(current);
+        let press = router.press(&stroke, now, true);
+        router.end_report(interrupted);
+        press
+    });
+    release_monitor();
+    press
+}
+
+/// Behavior table, "Report queued ahead of a press the page keeps": the press ends the leader its older report arms,
+/// as upstream's monitor, which sees them in order, resets on the unmatched press.
+#[test]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn a_press_the_page_keeps_ends_a_leader_its_queued_report_arms() {
+    load_monitor("command \"g\" ctrl+a>ctrl+g true\n");
+    let now = Instant::now();
+    assert!(super::takes(&queued_report("ctrl-a", false)));
+    assert!(!super::takes(&queued_report("ctrl-x", false)), "the page keeps it");
+    assert_eq!(pump_report("ctrl-a", false, false, now), Press::Consumed);
+    assert!(!monitor_is_live(), "the intervening unmatched press ends the leader");
+    assert!(!super::takes(&queued_report("ctrl-g", false)));
+}
+
+/// Behavior table, "Report queued ahead of a press the page keeps": the tail the callback took fires, its leader not
+/// lost to the later press, which ends the sequence only after it.
+#[test]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn a_queued_leader_tail_fires_ahead_of_a_press_the_page_keeps() {
+    load_monitor("command \"g\" ctrl+a>ctrl+g true\n");
+    let now = Instant::now();
+    assert!(super::takes(&queued_report("ctrl-a", false)));
+    assert_eq!(pump_report("ctrl-a", false, false, now), Press::Consumed);
+    assert!(super::takes(&queued_report("ctrl-g", false)));
+    assert!(!super::takes(&queued_report("ctrl-x", false)), "the page keeps it");
+    assert!(matches!(
+        pump_report("ctrl-g", false, false, now),
+        Press::Fired(Fired::Command(_))
+    ));
+    assert!(!monitor_is_live());
+}
+
+/// Behavior table, "Leader tail asked about while its prefix is still queued": the callback answers for the matcher as
+/// the queue will leave it, so the tail is the keymap's and fires.
+#[test]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn a_leader_tail_behind_its_queued_prefix_is_the_keymaps() {
+    load_monitor("command \"g\" ctrl+a>ctrl+g true\n");
+    let now = Instant::now();
+    assert!(super::takes(&queued_report("ctrl-a", false)));
+    assert!(
+        super::takes(&queued_report("ctrl-g", false)),
+        "the leader is on its way"
+    );
+    assert_eq!(pump_report("ctrl-a", false, false, now), Press::Consumed);
+    assert!(matches!(
+        pump_report("ctrl-g", false, false, now),
+        Press::Fired(Fired::Command(_))
+    ));
+}
+
+/// Behavior table, "Press queued ahead of its own autorepeat": it fires, whatever the platform's current event says by
+/// the time the pump reaches it (upstream's `handleKeyEvent`), and the autorepeat stays consumed.
+#[test]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn a_press_queued_behind_by_its_own_autorepeat_fires() {
+    load_monitor("command \"x\" ctrl+y true\n");
+    let now = Instant::now();
+    assert!(super::takes(&queued_report("ctrl-y", false)));
+    assert!(
+        super::takes(&queued_report("ctrl-y", true)),
+        "the page must not see the held key"
+    );
+    assert!(matches!(
+        pump_report("ctrl-y", false, true, now),
+        Press::Fired(Fired::Command(_))
+    ));
+    assert_eq!(pump_report("ctrl-y", true, true, now), Press::Consumed);
+}
+
+/// A report lost on its way leaves the queue, a press the page kept behind it still ending the sequence; with nothing
+/// left queued, the next such press ends it at once.
+#[test]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn a_lost_report_leaves_the_queue_and_its_interruption_stands() {
+    load_monitor("command \"g\" ctrl+a>ctrl+g true\n");
+    let now = Instant::now();
+    let armed = || {
+        assert!(super::takes(&queued_report("ctrl-a", false)));
+        assert_eq!(pump_report("ctrl-a", false, false, now), Press::Consumed);
+        assert!(monitor_is_live());
+    };
+    armed();
+    assert!(super::takes(&queued_report("ctrl-g", false)));
+    assert!(!super::takes(&queued_report("ctrl-x", false)));
+    assert!(monitor_is_live(), "the press waits behind the report");
+    super::page_report_dropped();
+    assert!(!monitor_is_live());
+    armed();
+    assert!(super::takes(&queued_report("ctrl-g", false)));
+    super::page_report_dropped();
+    assert!(!super::takes(&queued_report("ctrl-x", false)));
+    assert!(!monitor_is_live(), "nothing queued, so the press ends it at once");
+    armed();
+    assert!(super::takes(&queued_report("ctrl-g", false)));
+    assert!(!super::takes(&queued_report("ctrl-x", false)));
+    super::page_reports_dropped();
+    assert!(!monitor_is_live(), "a closed page's queue goes with what it held");
 }
