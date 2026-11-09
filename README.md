@@ -88,7 +88,8 @@ tag matching the workspace version in `Cargo.toml` is pushed:
 | Android 8.0+ | arm64-v8a, x86_64 | signed `.apk` |
 
 The archives include `ngterm`, `ngtermctl`, `ngterm-session`, `ngterm-headless`, themes, terminfo, shell and agent
-integrations, and license notices. Extract the entire archive together. Linux archives start through `ngterm/AppRun`;
+integrations, license notices and, on Linux, the HTML overlays' worker `ngterm-web`. Extract the entire archive
+together. Linux archives start through `ngterm/AppRun`;
 Windows binaries are under `ngterm/bin`; the macOS binary archive has `bin` and `share`. Native Linux packages install
 under `/opt/ngterm` and put all four commands on `PATH`. The macOS PKG installs `ngterm.app` into `/Applications`;
 the app's Help menu can install the CLI. Windows ZIPs include the same app-local VC++ runtime as the MSI.
@@ -113,9 +114,7 @@ original file; manually extracted AppImages are updated manually.
 
 Linux packages target glibc 2.39+ and libstdc++ 13+ (Ubuntu 24.04 or newer and current Debian, Fedora, Arch, and
 openSUSE releases).
-WPE WebKit is built from source on Ubuntu 24.04 and bundled with its libraries and media plugins, keeping HTML
-overlays available without installing Arch's WPE package. A Vulkan-capable graphics driver, `bubblewrap`, and
-`xdg-dbus-proxy` are required on the host, along with the standard desktop libraries excluded by linuxdeploy;
+A Vulkan-capable graphics driver, `bubblewrap`, and `xdg-dbus-proxy` are required on the host, along with the standard desktop libraries excluded by linuxdeploy;
 the native packages declare all of these dependencies in `packaging/linux/nfpm.yaml`. Alpine/musl and older glibc
 releases need a source build. AppImage users also need FUSE, or can use `--appimage-extract-and-run`. On hosts with
 restricted AppArmor user namespaces, native packages load a profile for their fixed install path; a portable install
@@ -131,6 +130,26 @@ sudo apparmor_parser -r /etc/apparmor.d/ngterm
 ```
 
 For a tarball, use the same commands with its extracted `ngterm` directory in place of `squashfs-root`.
+
+Linux packages carry no web engine. HTML overlays need WPE WebKit 2.54 or newer of the 2.x series, and the app looks
+for it when the first page opens: the system's if `ngterm-web --probe` loads a new enough one, then a runtime it already
+downloaded, and only then a download.
+
+| Install | Where the engine comes from |
+|---|---|
+| Arch package | the system's: the package depends on `wpewebkit` and the GStreamer plugins |
+| `.deb`, `.rpm` | the system's where the distribution has 2.54+ (Debian testing, openSUSE Tumbleweed): the package recommends it and the playback plugins; otherwise a download (Ubuntu, Debian 13, Fedora, openSUSE Leap 16.1), since a recommendation nothing provides is skipped |
+| `.tar.gz`, `.AppImage` | the system's if one is installed, otherwise a download |
+
+A download needs network access once: about 120 MB, shown on the waiting page, verified against the size and SHA-256
+compiled into the app, unpacked into `web-engine/<key>/` in the state directory. It is per user and later app versions
+share it until the runtime itself changes; a runtime another running version still uses is kept. Builds without release
+pins (development and distribution rebuilds) never download and need the system's package.
+
+To install without network access on the machine, fetch the archive from the runtime's `web-engine-<key>` release
+(the app release's `SHA256SUMS` names it, `ngterm-web-engine-<key>-linux-<arch>.tar.zst`) and run
+`ngterm --install-web-engine <archive>`; the same checks apply. To download from a mirror instead, set
+`NGTERM_WEB_ENGINE_URL` when starting the app: it replaces the URL only, and the size and SHA-256 stay pinned.
 
 What is signed: the Android `.apk` with ngterm's own key (which the Google Play release will carry too, so either
 install updates the other; its certificate's SHA-256 is in `packaging/android/apk-certificate.sha256`), and every
@@ -150,6 +169,11 @@ platform. A dispatch with **rehearse** on a tag signs with the real keys and pub
 run on any ref. [docs/release-signing.md](docs/release-signing.md) covers the runs, the keys and the signing mode.
 Tag/version mismatches fail before any builds. Packaging tool versions, checksums, and the WPE source checksum live
 in `packaging/release/pins.env`; update the WPE source checksum and relocation patch when changing `WPE_VERSION`.
+
+Each Linux architecture's web engine runtime has its own GitHub release, `web-engine-<key>`: a prerelease that is never
+"latest", so the update check keeps seeing the app. The workflow reuses the release while the key is unchanged, and
+publishes a new one before the app release leaves draft. Shipped apps pin these files, so never delete a `web-engine-*`
+release a shipped version pins ([docs/release-signing.md](docs/release-signing.md)).
 
 ## Parity
 
@@ -355,8 +379,9 @@ sudo pacman -S --needed wpewebkit bubblewrap meson ninja wayland wayland-protoco
 Run-time dependencies of every `ngterm` binary:
 
 - a Vulkan driver (GPUI renders through wgpu), Wayland or X11;
-- WPE WebKit, linked under `ngterm-gpui`'s default `html` feature (HTML overlays). Without the feature
-  (`--no-default-features`) the app refuses every page. On Ubuntu 23.10+ see
+- WPE WebKit for HTML overlays (`ngterm-gpui`'s default `html` feature), linked by the `ngterm-web` worker beside the
+  app and not by `ngterm` itself. Without the feature (`--no-default-features`) the app refuses every page. On Ubuntu
+  23.10+ see
   [WebKit sandbox on Ubuntu (AppArmor)](#webkit-sandbox-on-ubuntu-apparmor). A page's audio and video play through
   GStreamer's plugins, which WPE WebKit leaves optional: base for any media (playbin, Ogg, Opus, Vorbis), good, bad
   and libav for the other formats;
@@ -373,7 +398,8 @@ Without one, `bwrap` fails (`setting up uid map: Permission denied`) and WebKit 
 refuses every HTML page instead and names this fix in the error. The sandbox stays on either way.
 
 The fix is ngterm's profile, [packaging/linux/apparmor/ngterm](packaging/linux/apparmor/ngterm): Ubuntu's shape,
-unconfined plus `userns`, attached to a binary by its real path (the `bwrap` it starts inherits it):
+unconfined plus `userns`, attached to the `ngterm` binary by its real path (the `ngterm-web` worker it starts and that
+worker's `bwrap` inherit it, so neither needs a profile of its own):
 
 ```sh
 scripts/install-apparmor-profile.sh /path/to/bin/ngterm   # writes /etc/apparmor.d/ngterm (sudo) and loads it
@@ -504,9 +530,9 @@ The GPUI frontend's HTML overlays run WPE WebKit offscreen (WPEPlatform API). It
 `gir` from the `.gir` files of the pinned package (`WPE_*` and `GIR_*` in `build/pins.env`, WPE WebKit 2.54.1) and
 need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through pkg-config (`wpe-webkit-2.0`):
 
-- Arch, and every packaged ngterm: the distribution's `wpewebkit` (`sudo pacman -S wpewebkit`). A distribution build
-  has its helper processes' path compiled in (`/usr/lib/wpe-webkit-2.0`), so the app depends on that package; a system
-  `wpe-webkit-2.0` of the bound API wins over anything vendored.
+- Arch: the distribution's `wpewebkit` (`sudo pacman -S wpewebkit`). A distribution build has its helper processes'
+  path compiled in (`/usr/lib/wpe-webkit-2.0`), so the worker depends on that package; a system `wpe-webkit-2.0` of the
+  bound API wins over anything vendored.
 - No root, Arch-compatible userland (glibc 2.44+ and the package's libraries): `scripts/fetch-wpe.sh` verifies the
   pinned Arch package (`WPE_ARCH_PACKAGE_*`) and unpacks it into the vendored prefix, which `scripts/pkg-config.sh`
   offers when the system has no WPE WebKit of the bound API. Building and linking need nothing more; running pages
@@ -531,6 +557,15 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
 `ngterm-wpe-client` is the frontend's socket client, with no WebKit link or build dependency. Build
 `cargo build -p ngterm-wpe --bin ngterm-web` alongside the frontend; staging keeps the worker beside `ngterm`.
 The client pins its image at app startup and verifies its version and recorded commit during the handshake.
+
+Release builds link a relocatable WPE WebKit built from source on Ubuntu 24.04 (`scripts/build-release-wpe.sh`) and
+ship none of it. `scripts/package-web-engine.sh` packs that prefix, the GStreamer plugins in
+`packaging/linux/gstreamer-plugins.txt`, the GIO modules and their library closure into the runtime archive;
+`--print-key` prints the key, which changes with the engine, the packaging scripts, the architecture or a copied
+Ubuntu package. The release workflow compiles the runtime's `NGTERM_WEB_ENGINE_URL`, `_SIZE`, `_SHA256` and `_KEY` into
+`ngterm-update`. At run time the app picks the source as [Downloads and releases](#downloads-and-releases) describes,
+and only the worker's command gets a runtime's library, GIO, GStreamer and injected-bundle paths: the app, its panes
+and its session servers never see them.
 
 `ngterm-wpe` is the engine worker over those bindings: WPE WebKit on an engine thread with its own `GMainContext`, a
 `WPEDisplay`/`WPEView` subclass rendering on the render node the GPUI side names with the formats it imports, frames
@@ -1111,8 +1146,8 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   upstream's.
 - `vendor/`: the patched GPUI, calloop and portable-pty crates, recreated by the vendor scripts (an edit there goes back into its
   patch).
-- `scripts/`: native builds, staging, `run-gpui-dev.sh`, the lint report, the AppArmor profile installer, the Windows
-  installer's build and check, the Windows smoke checks.
+- `scripts/`: native builds, staging, `run-gpui-dev.sh`, the lint report, the Linux web engine runtime's packaging, the
+  AppArmor profile installer, the Windows installer's build and check, the Windows smoke checks.
 - `mobile/android`, `mobile/ios`: the mobile apps over `crates/ngterm-mobile`, each with its `DESIGN.md`.
 - `packaging/linux/apparmor/`: ngterm's AppArmor profile (WebKit's sandbox on Ubuntu).
 - `packaging/windows/`: the Windows installer's WiX source.

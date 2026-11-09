@@ -17,14 +17,19 @@
 //! - The `WebKit` surface the overlay uses: browser stores ([`SessionSpec`]: in memory, or on disk for saved logins;
 //!   downloads refused), [`Settings`], user scripts and script message handlers, navigation and response policy, URI
 //!   schemes, and what a page may not do (new windows, dialogs, file choosers, permissions, full screen) refused.
-//! - [`worker`]: the engine in a process of its own, which the vendored WPE `WebKit` (its helpers at a compiled-in
-//!   path, reachable only inside an overlay of `/usr/lib`, [`launcher`]) always gets, so the consumer itself never runs
-//!   in that overlay's user namespace; [`Host::start_worker`] asks for one anywhere. The worker's environment, which
-//!   its web processes inherit, carries a request size for their `PulseAudio` streams that keeps Web Audio playing on
-//!   a Bluetooth sink (module `worker`). The separate `ngterm-web` executable serves the worker; the frontend uses `ngterm-wpe-client`
-//!   and never links these engine libraries.
-//!   Downloaded runtimes additionally scope their module and injected-bundle paths to that worker, preserving the
-//!   environment of programs the consumer starts.
+//! - [`worker`]: the engine in a process of its own, this crate's `ngterm-web` binary. The frontend runs only that: it
+//!   uses `ngterm-wpe-client` and never links these engine libraries. A vendored WPE `WebKit` (its helpers at a
+//!   compiled-in path, reachable only inside an overlay of `/usr/lib`, [`launcher`]) makes the worker re-execute itself
+//!   under that overlay, so the consumer never runs in its user namespace; [`Host::start_worker`] asks for a worker
+//!   anywhere. The worker's environment, which its web processes inherit, carries a request size for their `PulseAudio`
+//!   streams that keeps Web Audio playing on a Bluetooth sink (module `worker`).
+//! - Where the engine comes from: the system's, which `ngterm-web --probe` reports by printing the version it loaded (a
+//!   loader failure means none: the binary has no RUNPATH into the app's own libraries), or a downloaded runtime, whose
+//!   relocated library finds its helpers beside itself. `ngterm-wpe-client`'s `EngineSource` holds the choice and
+//!   scopes a runtime's paths to the worker. `ngterm-web` drops `LD_LIBRARY_PATH` first thing, so `WebKit`'s helpers
+//!   and the host's `bwrap` and `xdg-dbus-proxy` never inherit it.
+//! - `AppArmor`: `ngterm-web` has no profile of its own. It runs under the one `ngterm` was attached to, as the `bwrap`
+//!   it starts does, so the app's sandbox probe reflects the worker's situation.
 //!
 //! - What `WebKitGTK` draws itself and an offscreen page cannot (module `engine::interaction`): the clipboard
 //!   (`WPEPlatform`'s is the engine's own: a page's copy is reported, the desktop's text is handed in before a paste),

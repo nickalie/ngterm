@@ -25,6 +25,8 @@ pins its runtime's size and hash, so a published archive is never replaced: `web
                                                   ARCH's runtime is not published yet (gh; reads only)
   web-engine-publish DIR COMMIT MANIFEST...       ensure each manifest's runtimes are on their `web-engine-<key>`
                                                   releases: prereleases, never "latest", tagged at COMMIT when created
+  previous-tag TAG                                print the published stable `vX.Y.Z` release just below TAG, or nothing
+                                                  (gh; reads only)
   --self-test
 
 Usage: scripts/release-artifacts.py COMMAND ...
@@ -41,6 +43,7 @@ import tempfile
 from pathlib import Path, PurePosixPath
 
 
+APP_TAG = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
 WEB_ENGINE_ARCHIVE = re.compile(r"ngterm-web-engine-([0-9a-f]{64})-linux-(x86_64|aarch64)\.tar\.zst")
 MANIFEST_KEYS = {"artifact_id", "files", "assets", "web_engine"}
 
@@ -174,6 +177,24 @@ def published_assets(tag):
             return None
         raise ArtifactError(f"gh release view {tag}: {result.stderr.strip()}")
     return {asset["name"]: asset for asset in json.loads(result.stdout)["assets"]}
+
+
+def app_version(tag):
+    """TAG's (major, minor, patch) when it names an app release, else None (a `web-engine-<key>` tag, say)."""
+    match = APP_TAG.fullmatch(tag)
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def previous_tag(tag):
+    """The published stable app release just below TAG, or "" for the first: where TAG's generated notes start, so
+    that they never start at a `web-engine-<key>` release, which is created at TAG's own commit just before it."""
+    current = app_version(tag)
+    if current is None:
+        raise ArtifactError(f"{tag} is not a vMAJOR.MINOR.PATCH tag")
+    listed = gh("release", "list", "--exclude-drafts", "--exclude-pre-releases", "--limit", "1000",
+                "--json", "tagName", "--jq", ".[].tagName").split()
+    older = [name for name in listed if (version := app_version(name)) is not None and version < current]
+    return max(older, key=app_version, default="")
 
 
 def web_engine_fetch(key, arch, directory):
@@ -414,6 +435,8 @@ def main(argv):
         print(web_engine_fetch(args[0], args[1], args[2]))
     elif command == "web-engine-publish" and len(args) >= 3:
         web_engine_publish(args[0], args[1], args[2:])
+    elif command == "previous-tag" and len(args) == 1:
+        print(previous_tag(args[0]))
     else:
         raise SystemExit(__doc__)
 

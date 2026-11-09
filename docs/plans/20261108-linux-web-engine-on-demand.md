@@ -496,12 +496,12 @@ video to a checked frame colour and a Web Audio oscillator read back through an 
 
 ### Task 10: [Final] Update documentation
 
-- [ ] README > WPE WebKit and the release section: where the engine comes from on each install, the `web-engine-*`
+- [x] README > WPE WebKit and the release section: where the engine comes from on each install, the `web-engine-*`
       releases (prerelease, never deleted while pinned), the offline install, the URL override
-- [ ] the root docs of `ngterm-wpe` and `ngterm-wpe-client`: the worker binary, the sources, the runtime
+- [x] the root docs of `ngterm-wpe` and `ngterm-wpe-client`: the worker binary, the sources, the runtime
       environment, AppArmor inheritance
-- [ ] AGENTS.md crate table (if not already done in Task 2)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] AGENTS.md crate table (done in Task 2)
+- [x] move this plan to `docs/plans/completed/` (left to the plan-exec run, which moves it when all phases finish)
 
 ## Post-Completion
 

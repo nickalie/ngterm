@@ -30,6 +30,8 @@ if args[:2] == ["release", "view"]:
     if args[2] not in releases:
         sys.exit(print("release not found", file=sys.stderr) or 1)
     print(json.dumps({"assets": [{"name": name, **asset} for name, asset in releases[args[2]].items()]}))
+elif args[:2] == ["release", "list"]:
+    print("\\n".join(releases))
 elif args[:2] == ["release", "download"]:
     name = args[args.index("--pattern") + 1]
     target = pathlib.Path(args[args.index("--dir") + 1]) / name
@@ -255,3 +257,21 @@ def test_linux_manifests_without_a_runtime_fail_before_any_release_write(
     assert published.returncode == 1
     assert "no web engine runtime in Linux manifest" in published.stderr
     assert gh.calls() == []
+
+
+@pytest.mark.parametrize(
+    ("tag", "expected"),
+    [("v0.10.0", "v0.9.2"), ("v0.9.2", "v0.1.1"), ("v0.1.1", ""), ("v1.0.0", "v0.10.0")],
+)
+def test_generated_notes_start_at_the_previous_app_release(gh, tag: str, expected: str) -> None:
+    gh.releases({f"web-engine-{KEY}": {}, "v0.1.1": {}, "v0.9.2": {}, "v0.10.0": {}})
+    result = gh.run("previous-tag", tag)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
+    assert "--exclude-pre-releases" in gh.calls()[0]
+
+
+def test_previous_tag_refuses_a_tag_that_is_no_app_release(gh) -> None:
+    result = gh.run("previous-tag", f"web-engine-{KEY}")
+    assert result.returncode != 0
+    assert "is not a vMAJOR.MINOR.PATCH tag" in result.stderr

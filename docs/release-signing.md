@@ -10,6 +10,7 @@ signs what has a key, verifies the result and publishes a GitHub release with:
 | macOS Intel and Apple Silicon: `.pkg`, `.dmg`, `.app.zip`, `.tar.gz` | ad-hoc, with the hardened runtime and ngterm's entitlements; Developer ID and notarization are `docs/plans/20261107-apple-signing.md` |
 | iOS: `ngterm-<version>-ios-unsigned.ipa` | unsigned (installs once re-signed); TestFlight and the App Store get the signed app from `ios-release.yml` (`docs/ios-release.md`) |
 | Android: `ngterm-<version>-android.apk` | ngterm's APK key, which Google Play will also sign with |
+| Linux web engine runtime, per architecture: `ngterm-web-engine-<key>-linux-<arch>.tar.zst`, on its own `web-engine-<key>` release | listed in `SHA256SUMS`; the app itself trusts only the size and SHA-256 compiled into it |
 | `SHA256SUMS`, `SHA256SUMS.minisig` | the minisign key; every asset also gets a GitHub build provenance attestation |
 
 Installed builds update themselves from these releases (README > Downloads and releases). They trust exactly the
@@ -33,6 +34,15 @@ minisign key their source commit carries, `crates/ngterm-update/trust/minisign.p
   the signed output without secrets. `scripts/check-release-workflow.py`, run by the lint CI, keeps these rules.
 - The Linux build job takes its portable WPE WebKit prefix from GHCR, unpacked only once its provenance verifies as
   `release-wpe-cache.yml`'s on main.
+- The Linux build job reuses the runtime already published for its key, or builds it, and compiles its URL, size and
+  SHA-256 into the app. Only a publishing run writes a `web-engine-<key>` release, as a prerelease with `--latest=false`
+  so that `releases/latest` keeps naming the app, and before the app release leaves draft; dry runs and rehearsals keep
+  the runtime as a workflow artifact. Each architecture has its own release, since the key covers the architecture.
+- Never delete a `web-engine-*` release that a shipped version pins, and never replace its archive: that version could
+  no longer install its engine. `release-artifacts.py web-engine-publish` fails when an archive under a published key
+  differs.
+- The app release's generated notes start at the previous stable `vX.Y.Z` release, named explicitly, so they never start
+  at a `web-engine-*` release.
 - Pushing a tag starts a publishing run at once. To rehearse a tag first, reject (or cancel) that run's approval, then
   dispatch the rehearsal, which queues behind it on the same tag.
 - A tag stays on the commit it was made at. When a rehearsal finds something to fix, the fix goes out under a new

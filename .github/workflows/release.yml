@@ -1120,10 +1120,14 @@ jobs:
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
           mapfile -t assets < <(python3 scripts/release-artifacts.py assets "$LINUX_X86_64" "$LINUX_AARCH64" "$WINDOWS" "$MACOS" "$IOS" "$ANDROID")
+          # Named, so the notes never start at the `web-engine-<key>` release just created at this very commit.
+          previous="$(python3 scripts/release-artifacts.py previous-tag "$RELEASE_TAG")"
+          notes=()
+          [[ -z "$previous" ]] || notes=(--notes-start-tag "$previous")
           cd "$RUNNER_TEMP/dist"
           # Upload into a draft first: failed uploads never expose a partial new release.
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "ngterm $RELEASE_TAG" --generate-notes
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "ngterm $RELEASE_TAG" --generate-notes "${notes[@]}"
           fi
           signature=()
           [[ ! -f SHA256SUMS.minisig ]] || signature=(SHA256SUMS.minisig)
