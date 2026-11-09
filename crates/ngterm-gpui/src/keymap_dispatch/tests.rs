@@ -1115,6 +1115,49 @@ fn an_autorepeat_of_a_passed_press_stays_passed() {
     );
 }
 
+/// Upstream's unmatched press, for a key only a Windows page's script reports: pressed after the leader armed it ends
+/// the leader, and a report arriving late for a key pressed before leaves the working leader alone.
+#[test]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn a_key_typed_in_a_page_ends_a_leader_unless_it_was_pressed_before_it() {
+    let before = Instant::now();
+    let armed = before + Duration::from_millis(40);
+    let mut router = router("command \"g\" ctrl+a>ctrl+g true\n");
+    let live = |router: &Router| router.engine.as_ref().is_some_and(CustomCommandEngine::is_armed);
+    assert!(press(&mut router, "ctrl-a", armed));
+    router.page_typed(before);
+    assert!(live(&router), "a key pressed before the leader, reported after it");
+    assert!(press(&mut router, "ctrl-g", armed + Duration::from_millis(40)));
+    assert_eq!(names(&router), ["g"], "the leader went on to fire");
+    router.fired.clear();
+    for key in ["ctrl-a", "ctrl-g"] {
+        assert!(release(&mut router, key, armed + Duration::from_millis(60)));
+    }
+    assert!(press(&mut router, "ctrl-a", armed + Duration::from_millis(80)));
+    router.page_typed(armed + Duration::from_millis(120));
+    assert!(!live(&router), "a key typed after the leader ends it");
+    assert!(!press(&mut router, "ctrl-g", armed + Duration::from_millis(160)));
+    assert!(router.fired.is_empty());
+}
+
+/// A key typed in a page closes a repeat window opened before it, as upstream's text field does, and leaves one opened
+/// after it.
+#[test]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn a_key_typed_in_a_page_closes_a_repeat_window_opened_before_it() {
+    let start = Instant::now();
+    let tail = start + Duration::from_millis(40);
+    let mut router = router("command \"n\" ctrl+a>ctrl+n --repeat true\n");
+    let repeating = |router: &Router| router.engine.as_ref().is_some_and(CustomCommandEngine::is_repeating);
+    assert!(press(&mut router, "ctrl-a", start));
+    assert!(press(&mut router, "ctrl-n", tail));
+    router.page_typed(start);
+    assert!(repeating(&router), "pressed before the tail fired");
+    router.page_typed(tail + Duration::from_millis(40));
+    assert!(!repeating(&router));
+    assert_eq!(router.deadline, None);
+}
+
 /// A key `WebView2` reported: asked about with the repeat flag its event carries, and dispatched as a bare keystroke
 /// that cannot say it is an autorepeat, its release stood in for at once.
 #[cfg(all(feature = "html", windows))]
