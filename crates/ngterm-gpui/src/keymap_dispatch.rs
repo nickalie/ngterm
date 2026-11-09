@@ -19,8 +19,9 @@
 //! A chord is the key's physical identity resolved per layout (`terminal::input::chord`). A consumed key's next press
 //! reads as its autorepeat until its release, which reaches [`key_up`] from the window's (and the terminal's) key-up
 //! listener, or is stood in for right after the press when a web view holds the key (`release_dispatched`). A macOS
-//! web view preserves the physical identity and autorepeat flag; a Windows dispatch has only the keystroke, so each
-//! autorepeat there reads as a fresh press. [`keyboard_left`] forgets ownership when no ngterm window holds the
+//! web view preserves the physical identity and autorepeat flag; a Windows dispatch has only the keystroke, so
+//! [`takes`], asked about an autorepeat, tells the dispatch that follows. [`keyboard_left`] forgets ownership when no
+//! ngterm window holds the
 //! keyboard any more. The leader and repeat timeouts are deadlines checked at the next key, which is when they
 //! matter. Matched chords fire as main-loop tasks
 //! (`AppState::keymap_fired`); a custom command carries the terminal typed in, read now (its selection included), as
@@ -89,6 +90,9 @@ struct Router {
     /// The key the monitor is handling, under the identity it holds that key by: what a key dispatched for a web view
     /// lets go of ([`release_dispatched`]).
     pressed: Option<u32>,
+    /// The key whose autorepeat [`takes`] just handed over when the dispatch to come cannot say it is one itself (a
+    /// bare keystroke, a Windows web view's): [`Router::press`] reads it as the autorepeat it is.
+    dispatched_repeat: Option<u32>,
 }
 
 thread_local! {
@@ -180,27 +184,34 @@ pub fn menu_action(stroke: &KeyStroke) -> Option<BuiltinAction> {
 /// does what upstream's monitor does with it: a fresh press forgets that physical key's old ownership, and unless it
 /// is a bare modifier it ends a half-typed leader or an open repeat window. Esc is the keymap's only to cancel a
 /// leader. The window's own keys there are Ctrl+Tab's switcher.
-/// Windows only asks about chords with Control, Alt or the Windows key held, and function keys
-/// (`html_overlay::webview2::keys::chord_keystroke`): plain typing and plain Esc never reach this check, so they leave
-/// a leader or repeat window as it was. The unmatched-press reset applies only to the keys Windows asks about.
+/// On Windows only the keys `WebView2` reports reach this check (`html_overlay::webview2::keys`): a typed character is
+/// not one of them, so it leaves a leader or repeat window as it was.
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 #[must_use]
 pub fn takes(stroke: &KeyStroke) -> bool {
     ROUTER.with_borrow_mut(|router| {
-        // macOS reports autorepeats: ownership follows the press, regardless of what the matcher would take now
+        // an autorepeat's ownership follows the press, regardless of what the matcher would take now
         if stroke.action == KeyAction::Repeat {
-            return router.owns(stroke.identity);
+            let owned = router.owns(stroke.identity);
+            router.dispatched_repeat = (owned && stroke.keycode == 0).then_some(stroke.identity);
+            return owned;
         }
+        router.dispatched_repeat = None;
         router.released.remove(&stroke.identity);
         router.consumed.remove(&stroke.identity);
-        // a bare modifier is the next chord being typed: the leader keeps waiting
-        let Some(chord) = input::chord(stroke) else {
-            return false;
+        // Esc is not bindable, and as a bare keystroke it spells no chord: it is the keymap's only to cancel a leader
+        let taken = if stroke.is_escape() {
+            router.leader_waits()
+        } else {
+            // a bare modifier is the next chord being typed: the leader keeps waiting
+            let Some(chord) = input::chord(stroke) else {
+                return false;
+            };
+            if chord.key == "tab" && chord.mods.contains(ngterm_core::keymap::Modifiers::CONTROL) {
+                return true;
+            }
+            router.page_press_taken(&chord)
         };
-        if chord.key == "tab" && chord.mods.contains(ngterm_core::keymap::Modifiers::CONTROL) {
-            return true;
-        }
-        let taken = router.page_press_taken(stroke, &chord);
         if !taken {
             router.reset_if_live();
         }
@@ -219,8 +230,7 @@ fn menu_takes(action: BuiltinAction, was_armed: bool, page_keys: bool) -> bool {
 /// Lets go of a press dispatched for an HTML page's native web view (`takes`), whose release the window never sees.
 /// Called right after the press's synchronous dispatch, so the key is the one the monitor just handled, under the
 /// identity it holds it by, however the platform named it. Standing in for the real release, this opens a `--repeat`
-/// window; on macOS an autorepeat arriving later says the key is still down ([`Router::resume_held`]). Windows
-/// dispatches only the keystroke, so its autorepeats currently read as fresh presses.
+/// window; an autorepeat arriving later says the key is still down ([`Router::resume_held`]).
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 pub fn release_dispatched() {
     ROUTER.with_borrow_mut(|router| {
@@ -252,6 +262,34 @@ pub(crate) fn release_simulated(text: &str) -> bool {
     let keystroke = gpui_kit::Keystroke::parse(text).unwrap().with_simulated_ime();
     let stroke = KeyStroke::new(&keystroke, &input::current_source(&keystroke), true);
     ROUTER.with_borrow_mut(|router| router.release(stroke.identity, Instant::now()))
+}
+
+/// Presses `text`, a simulated keystroke, as a web view's dispatch does, its release stood in for at once: `None` if
+/// it passed, else whether it fired (tests).
+#[cfg(test)]
+#[cfg(all(feature = "html", windows))]
+pub(crate) fn press_dispatched(text: &str) -> Option<bool> {
+    let keystroke = gpui_kit::Keystroke::parse(text).unwrap().with_simulated_ime();
+    let stroke = KeyStroke::new(&keystroke, &input::Source::Keystroke, false);
+    let press = ROUTER.with_borrow_mut(|router| router.press(&stroke, Instant::now(), false));
+    release_dispatched();
+    match press {
+        Press::Passed => None,
+        Press::Consumed => Some(false),
+        Press::Fired(_) => Some(true),
+    }
+}
+
+/// Whether a half-typed leader or an open repeat window is live (tests).
+#[cfg(test)]
+#[cfg(all(feature = "html", windows))]
+pub(crate) fn sequence_is_live() -> bool {
+    ROUTER.with_borrow(|router| {
+        router
+            .engine
+            .as_ref()
+            .is_some_and(|engine| engine.is_armed() || engine.is_repeating())
+    })
 }
 
 /// The interceptor (module docs).
@@ -373,14 +411,14 @@ impl Router {
     /// release was the one a macOS web view's dispatch reports at once ([`release_dispatched`]): the press's ownership
     /// stands. Only the live repeat tail's key suspends its window, which counts from the real release (upstream's
     /// `heldRepeatKeyCode`), whatever its modifiers are now; a window another key closed since is left as it is.
-    fn resume_held(&mut self, stroke: &KeyStroke) {
-        if self.released.remove(&stroke.identity) && stroke.action == KeyAction::Repeat {
-            self.consumed.insert(stroke.identity);
-            if self.released_tail == Some(stroke.identity)
+    fn resume_held(&mut self, identity: u32, repeat: bool) {
+        if self.released.remove(&identity) && repeat {
+            self.consumed.insert(identity);
+            if self.released_tail == Some(identity)
                 && self.engine.as_ref().is_some_and(CustomCommandEngine::is_repeating)
             {
                 self.released_tail = None;
-                self.held_repeat = Some(stroke.identity);
+                self.held_repeat = Some(identity);
                 self.deadline = None;
             }
         }
@@ -392,14 +430,17 @@ impl Router {
         self.consumed.contains(&identity) || self.released.contains(&identity)
     }
 
-    /// Whether a fresh press of `stroke`, spelled `chord`, in a page's web view is the keymap's: `press` decides the
-    /// same way, the page holding the keyboard.
+    /// Whether a half-typed leader is still waiting for its next chord, a lapsed one counting as gone.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
-    fn page_press_taken(&self, stroke: &KeyStroke, chord: &Chord) -> bool {
-        let armed = !self.lapsed() && self.engine.as_ref().is_some_and(CustomCommandEngine::is_armed);
-        if stroke.is_escape() {
-            return armed;
-        }
+    fn leader_waits(&self) -> bool {
+        !self.lapsed() && self.engine.as_ref().is_some_and(CustomCommandEngine::is_armed)
+    }
+
+    /// Whether a fresh press spelled `chord`, in a page's web view, is the keymap's: `press` decides the same way, the
+    /// page holding the keyboard.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn page_press_taken(&self, chord: &Chord) -> bool {
+        let armed = self.leader_waits();
         self.menu
             .get(chord)
             .is_some_and(|action| menu_takes(*action, armed, true))
@@ -428,7 +469,8 @@ impl Router {
     /// One press, with an HTML page holding the keyboard while `page_keys`: whether it is consumed, and what it fired.
     fn press(&mut self, stroke: &KeyStroke, now: Instant, page_keys: bool) -> Press {
         self.pressed = Some(stroke.identity);
-        self.resume_held(stroke);
+        let repeat = stroke.action == KeyAction::Repeat || self.dispatched_repeat.take() == Some(stroke.identity);
+        self.resume_held(stroke.identity, repeat);
         if stroke.keycode != 0 && stroke.action == KeyAction::Press {
             // the platform says the key went up since its consumed press: a release the monitor never heard (one
             // dispatched while its window had no focused element, which GPUI routes to the root view alone) must not
@@ -454,6 +496,11 @@ impl Router {
                 self.hold_repeat_or_cancel(stroke.identity);
             }
             return fired.map_or(Press::Consumed, Press::Fired);
+        }
+        // an autorepeat of a press the keymap did not take is not the keymap's either (upstream's `handleKeyEvent`):
+        // the matcher never sees it, so it neither fires nor ends a sequence
+        if repeat {
+            return Press::Passed;
         }
         if stroke.is_escape() {
             let armed = engine.is_armed();

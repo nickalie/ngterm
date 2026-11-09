@@ -531,13 +531,13 @@ fn press_monitor(text: &str, repeat: bool, now: Instant) -> Press {
 }
 
 /// Lets go of the last dispatch as the page does right after dispatching it.
-#[cfg(all(feature = "html", target_os = "macos"))]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 fn release_monitor() {
     super::release_dispatched();
 }
 
 /// Ends this thread's monitor's window, as time passing would.
-#[cfg(all(feature = "html", target_os = "macos"))]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 fn lapse_monitor() {
     super::ROUTER.with_borrow_mut(|router| router.deadline = Some(Instant::now()));
 }
@@ -969,14 +969,14 @@ fn a_pages_held_prefix_does_not_suspend_a_released_tails_window() {
 }
 
 /// Loads `keymap` into this thread's monitor.
-#[cfg(all(feature = "html", target_os = "macos"))]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 fn load_monitor(keymap: &str) {
     let (keymap, _) = parse_keymap(keymap, &linux_defaults());
     super::load_keymap(&keymap);
 }
 
 /// Whether this thread's monitor has a half-typed leader or an open repeat window.
-#[cfg(all(feature = "html", target_os = "macos"))]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 fn monitor_is_live() -> bool {
     super::ROUTER.with_borrow(|router| {
         router
@@ -1093,5 +1093,95 @@ fn a_pages_held_tail_outlasts_a_modifier_held_past_its_window() {
     assert!(matches!(
         page_press("n", true, Instant::now()),
         Press::Fired(Fired::Command(_))
+    ));
+}
+
+/// Upstream's `testKeyRepeatDoesNotToggleTwice` after a half-typed leader: the chord's press was passed, so its
+/// autorepeats are not the keymap's and full screen is not toggled by them.
+#[test]
+fn an_autorepeat_of_a_passed_press_stays_passed() {
+    let now = Instant::now();
+    let mut router =
+        router("command \"g\" ctrl+a>g true\nmap ctrl+shift+9 toggle_sidebar\nmap ctrl+shift+s toggle_fullscreen\n");
+    assert!(press(&mut router, "ctrl-a", now));
+    assert_eq!(router.press(&native_s(true, false), now, false), Press::Passed);
+    assert!(!router.engine.as_ref().is_some_and(CustomCommandEngine::is_armed));
+    for _ in 0..3 {
+        assert_eq!(router.press(&native_s(true, true), now, false), Press::Passed);
+    }
+    assert!(
+        router.fired.is_empty(),
+        "held down, the chord never toggled full screen"
+    );
+}
+
+/// A key `WebView2` reported: asked about with the repeat flag its event carries, and dispatched as a bare keystroke
+/// that cannot say it is an autorepeat, its release stood in for at once.
+#[cfg(all(feature = "html", windows))]
+fn windows_page_press(text: &str, repeat: bool, now: Instant) -> Press {
+    let mut asked = stroke(text);
+    if repeat {
+        asked.action = ngterm_core::ghostty_config::binds::KeyAction::Repeat;
+    }
+    if !super::takes(&asked) {
+        return Press::Passed;
+    }
+    let result = super::ROUTER.with_borrow_mut(|router| router.press(&stroke(text), now, false));
+    release_monitor();
+    result
+}
+
+/// Upstream's ownership table on Windows: a chord held in a page fires once, and a new press fires again.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn a_windows_page_fires_a_held_chord_once() {
+    load_monitor("");
+    let now = Instant::now();
+    let fired = Press::Fired(Fired::Builtin(ngterm_core::keymap::BuiltinAction::NewSession));
+    assert_eq!(windows_page_press("ctrl-shift-t", false, now), fired);
+    for _ in 0..3 {
+        assert_eq!(windows_page_press("ctrl-shift-t", true, now), Press::Consumed);
+    }
+    assert_eq!(windows_page_press("ctrl-shift-t", false, now), fired);
+}
+
+/// A repeat tail held in a Windows page fires on each autorepeat and keeps its window from lapsing while held; a key
+/// the keymap never took keeps its autorepeats in the page, even with a leader now waiting for it.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn a_windows_pages_held_tail_repeats_and_an_unowned_repeat_stays_the_pages() {
+    load_monitor("command \"n\" ctrl+a>n --repeat true\ncommand \"g\" ctrl+a>g true\n");
+    let now = Instant::now();
+    assert_eq!(windows_page_press("g", false, now), Press::Passed);
+    assert_eq!(windows_page_press("ctrl-a", false, now), Press::Consumed);
+    assert_eq!(windows_page_press("g", true, now), Press::Passed);
+    assert!(matches!(
+        windows_page_press("n", false, now),
+        Press::Fired(Fired::Command(_))
+    ));
+    lapse_monitor();
+    assert!(matches!(
+        windows_page_press("n", true, Instant::now()),
+        Press::Fired(Fired::Command(_))
+    ));
+    assert!(monitor_is_live(), "held past its window, the tail is still repeating");
+}
+
+/// An autorepeat asked about whose dispatch never arrived leaves nothing behind: the next fresh press fires.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn a_windows_page_forgets_an_autorepeat_whose_dispatch_never_came() {
+    load_monitor("");
+    let now = Instant::now();
+    assert!(matches!(
+        windows_page_press("ctrl-shift-t", false, now),
+        Press::Fired(_)
+    ));
+    let mut asked = stroke("ctrl-shift-t");
+    asked.action = ngterm_core::ghostty_config::binds::KeyAction::Repeat;
+    assert!(super::takes(&asked), "the keymap owns the held chord");
+    assert!(matches!(
+        windows_page_press("ctrl-shift-t", false, now),
+        Press::Fired(_)
     ));
 }
