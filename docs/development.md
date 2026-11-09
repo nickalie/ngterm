@@ -1091,6 +1091,12 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 
 - `release.yml`: tag-triggered and manual release packaging, with Linux x86_64/aarch64, Windows x86_64, and macOS
   Intel/Apple Silicon builds; see [Downloads and releases](#downloads-and-releases).
+- `zig-packages.yml` (on main: pushes that change libghostty-vt's pins, patches or preparation, and by hand): keeps a
+  mirror of the Zig packages libghostty-vt's build needs and of Ghostty's theme archive, as a `zig-packages-<key>`
+  prerelease, so preparing libghostty-vt doesn't depend on those upstream hosts being up. It builds with no write
+  access; a separate job, which runs nothing it built, publishes. `scripts/build-ghostty-vt.sh` reads the mirror first
+  and checks each package's hash; a key with no mirror falls back to the upstreams. Nothing pins these releases, so
+  deleting one is safe.
 - `release-wpe-cache.yml` (on main: pushes that change the WPE build's inputs or its store, and by hand): keeps
   `release.yml`'s portable WPE WebKit prefix, for both Linux arches, in the public GHCR package
   `ghcr.io/<owner>/ngterm-release-wpe`, one tarball per runner image and `scripts/build-release-wpe.sh --print-key`

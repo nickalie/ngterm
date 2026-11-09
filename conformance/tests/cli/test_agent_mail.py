@@ -11,9 +11,12 @@ A Codex payload's run is also refused by the argv of a headless Codex among the 
 the suite run under `codex exec` would see its Codex tests refuse."""
 
 import json
+import threading
+import uuid
 from pathlib import Path
 
 import pytest
+from agterm_conformance import transport
 from agterm_conformance.match import assert_ok, find_session
 from agterm_conformance.plugin import CliProcess
 from agterm_conformance.wait import wait_until
@@ -190,6 +193,41 @@ def test_a_read_the_app_refuses_fails_the_hook(pane):
     env = pane.env(in_pane=False)
     result = pane.mail("claude", {"hook_event_name": "Stop"}, env=env, extra=("--as", f"{pane.sid}:no-such-pane"))
     assert result.returncode == 1 and result.stdout == "" and result.stderr.startswith("Error: "), result
+
+
+def test_a_read_that_does_not_confirm_its_removal_hands_nothing_over(pane):
+    """An app that ignored the ack (an older one) would leave the mail queued: the hook hands none of it over."""
+    path = pane.cli.instance.root / f"m{uuid.uuid4().hex[:6]}.sock"
+    server = transport.Listener(path)
+    message = {"id": str(uuid.uuid4()), "to": "S:P", "ts": 1, "body": "must not reach the agent"}
+    requests = []
+
+    def serve():
+        with server.accept() as connection:
+            line = b""
+            while not line.endswith(b"\n"):
+                chunk = connection.recv(4096)
+                if not chunk:
+                    return
+                line += chunk
+            requests.append(json.loads(line))
+            reply = {"ok": True, "result": {"messages": [message], "remaining": 0}}
+            connection.sendall(json.dumps(reply).encode() + b"\n")
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        result = pane.cli.local(
+            "agent", "mail", "claude", "--as", "S:P", "--socket", str(path),
+            env=pane.env(in_pane=False), input=json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": "go on"}),
+        )
+        expected = "Error: the app did not confirm which messages it removed\n"
+        assert (result.returncode, result.stdout, result.stderr) == (1, "", expected)
+    finally:
+        server.close()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert requests == [{"cmd": "msg.read", "args": {"identity": "S:P", "ack": True}}]
 
 
 def test_a_payload_that_is_not_json_fails_the_hook(pane):
