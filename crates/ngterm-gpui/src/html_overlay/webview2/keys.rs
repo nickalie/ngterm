@@ -7,11 +7,13 @@
 //! typed character is not among the keys `WebView2` reports: the page script's report of it (`bridge`) reaches the
 //! monitor too late to take the key, so it can only end a half-typed leader or a repeat window
 //! (`keymap_dispatch::page_typed`), and a leader's plain-letter tail, which upstream's monitor fires, cannot fire here.
+//! That script reports only the top frame: typing inside an iframe leaves a leader or repeat window live until
+//! another reported key ends it or its timeout lapses.
 
 use gpui_kit::{Keystroke, Modifiers};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT};
 
-use crate::terminal::input::{KeyStroke, Source};
+use crate::terminal::input;
 
 /// GPUI's name of the key at virtual key `virtual_key`, by its US position; `None` for a key no chord names (a
 /// modifier, a media key).
@@ -82,21 +84,53 @@ fn held() -> Modifiers {
     }
 }
 
+/// The physical identity of a Windows accelerator, including the extended bit that distinguishes the navigation
+/// block and keypad. Synthesized events with no scan code use the same layout fallback as native window events.
+#[must_use]
+pub fn keycode(virtual_key: u32, scan_code: u32, extended: bool) -> u32 {
+    let scan_code = scan_code | if extended { 0xe000 } else { 0 };
+    input::xkb_keycode_of_scan_code(scan_code)
+        .or_else(|| {
+            let virtual_key = u16::try_from(virtual_key).ok()?;
+            input::xkb_keycode_of_scan_code(input::virtual_key_scan_code(virtual_key, scan_code))
+        })
+        .unwrap_or(0)
+}
+
 /// The keystroke the app takes from a press of `virtual_key` in a page (module docs), `None` for the page's own.
 /// `repeat` is the event's own word that the key was already down.
 #[must_use]
-pub fn app_key(virtual_key: u32, repeat: bool) -> Option<Keystroke> {
+pub fn app_key(virtual_key: u32, keycode: u32, repeat: bool) -> Option<Keystroke> {
     let keystroke = chord_keystroke(virtual_key, held())?;
-    let mut stroke = KeyStroke::new(&keystroke, &Source::Keystroke, false);
-    if repeat {
-        stroke.action = ngterm_core::ghostty_config::binds::KeyAction::Repeat;
-    }
+    let stroke = crate::keymap_dispatch::page_stroke(&keystroke, keycode, repeat);
     crate::keymap_dispatch::takes(&stroke).then_some(keystroke)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accelerators_and_native_events_share_physical_identities() {
+        for (virtual_key, scan, extended, expected) in [
+            (0x54, 0x14, false, "KeyT"),
+            (0x53, 0x1f, false, "KeyS"),
+            (0x74, 0x3f, false, "F5"),
+            (0x0d, 0x1c, false, "Enter"),
+            (0x0d, 0x1c, true, "NumpadEnter"),
+            (0x0d, 0, true, "NumpadEnter"),
+            (0x26, 0, false, "ArrowUp"),
+            (0x26, 0x48, true, "ArrowUp"),
+            (0x68, 0x48, false, "Numpad8"),
+        ] {
+            assert_eq!(
+                keycode(virtual_key, scan, extended),
+                input::xkb_keycode(expected).unwrap()
+            );
+        }
+        assert_eq!(keycode(0x54, 0, false), input::xkb_keycode("KeyT").unwrap());
+        assert_eq!(keycode(u32::MAX, 0xffff, false), 0);
+    }
 
     #[test]
     fn keys_are_named_as_gpui_names_them() {
@@ -258,11 +292,14 @@ mod tests {
             assert!(!modifiers.function, "Windows reports no Fn modifier");
             assert_eq!(modifiers.platform, keys.contains(&VK_LWIN) || keys.contains(&VK_RWIN));
             if modifiers.control {
-                assert_eq!(app_key(0x09, false).unwrap().key, "tab");
+                assert_eq!(app_key(0x09, keycode(0x09, 0, false), false).unwrap().key, "tab");
             } else if !modifiers.alt && !modifiers.platform {
-                assert!(app_key(0x41, false).is_none(), "plain typing stays in the page");
                 assert!(
-                    app_key(0x87, false).is_none(),
+                    app_key(0x41, keycode(0x41, 0, false), false).is_none(),
+                    "plain typing stays in the page"
+                );
+                assert!(
+                    app_key(0x87, keycode(0x87, 0, false), false).is_none(),
                     "an unbound function key stays in the page"
                 );
             }
@@ -308,13 +345,22 @@ mod tests {
     fn a_plain_escape_in_a_page_is_handed_over_while_a_leader_waits() {
         let _keyboard = armed_leader();
         assert_eq!(
-            app_key(0x1B, false).map(|keystroke| keystroke.key).as_deref(),
+            app_key(0x1B, keycode(0x1B, 0, false), false)
+                .map(|keystroke| keystroke.key)
+                .as_deref(),
             Some("escape")
         );
-        assert_eq!(crate::keymap_dispatch::press_dispatched("escape"), Some(false));
+        assert_eq!(
+            crate::keymap_dispatch::press_page_report(
+                &chord_keystroke(0x1B, held()).unwrap(),
+                keycode(0x1B, 0, false),
+                false
+            ),
+            Some(false)
+        );
         assert!(!crate::keymap_dispatch::sequence_is_live());
         assert!(
-            app_key(0x1B, false).is_none(),
+            app_key(0x1B, keycode(0x1B, 0, false), false).is_none(),
             "with nothing to cancel Esc is the page's"
         );
     }
@@ -325,7 +371,7 @@ mod tests {
         for virtual_key in [0x25, 0x0D, 0x58] {
             let _keyboard = armed_leader();
             assert!(
-                app_key(virtual_key, false).is_none(),
+                app_key(virtual_key, keycode(virtual_key, 0, false), false).is_none(),
                 "{virtual_key:#x} stays in the page"
             );
             assert!(!crate::keymap_dispatch::sequence_is_live(), "{virtual_key:#x}");
@@ -339,12 +385,17 @@ mod tests {
         let (keymap, _) =
             ngterm_core::keymap::parse_keymap("command \"x\" f5 true\n", &ngterm_core::keymap::linux_defaults());
         crate::keymap_dispatch::load_keymap(&keymap);
-        assert!(app_key(0x74, false).is_some());
-        assert_eq!(crate::keymap_dispatch::press_dispatched("f5"), Some(true));
-        assert!(app_key(0x74, true).is_some(), "the keymap owns the held key");
-        assert_eq!(crate::keymap_dispatch::press_dispatched("f5"), Some(false));
-        assert!(app_key(0x74, false).is_some());
-        assert_eq!(crate::keymap_dispatch::press_dispatched("f5"), Some(true));
+        assert!(app_key(0x74, keycode(0x74, 0, false), false).is_some());
+        let keystroke = chord_keystroke(0x74, held()).unwrap();
+        let press = |repeat| crate::keymap_dispatch::press_page_report(&keystroke, keycode(0x74, 0, false), repeat);
+        assert_eq!(press(false), Some(true));
+        assert!(
+            app_key(0x74, keycode(0x74, 0, false), true).is_some(),
+            "the keymap owns the held key"
+        );
+        assert_eq!(press(true), Some(false));
+        assert!(app_key(0x74, keycode(0x74, 0, false), false).is_some());
+        assert_eq!(press(false), Some(true));
     }
 
     /// A keyboard with exactly `keys` held on this thread until dropped.
@@ -368,8 +419,8 @@ mod tests {
         let (keymap, _) = ngterm_core::keymap::parse_keymap("", &ngterm_core::keymap::linux_defaults());
         crate::keymap_dispatch::load_keymap(&keymap);
         let press = |repeat: bool| {
-            let keystroke = app_key(0x54, repeat).expect("the keymap owns the chord");
-            crate::keymap_dispatch::press_dispatched(&keystroke.unparse())
+            let keystroke = app_key(0x54, keycode(0x54, 0, false), repeat).expect("the keymap owns the chord");
+            crate::keymap_dispatch::press_page_report(&keystroke, keycode(0x54, 0, false), repeat)
         };
         assert_eq!(press(false), Some(true), "the first press fires");
         for _ in 0..3 {
@@ -382,10 +433,12 @@ mod tests {
     #[test]
     fn a_leaders_next_plain_key_is_handed_over_and_a_modifier_is_not_asked_about() {
         let _keyboard = armed_leader();
-        assert!(app_key(0x10, false).is_none(), "Shift alone");
+        assert!(app_key(0x10, keycode(0x10, 0, false), false).is_none(), "Shift alone");
         assert!(crate::keymap_dispatch::sequence_is_live(), "still waiting");
         assert_eq!(
-            app_key(0x47, false).map(|keystroke| keystroke.key).as_deref(),
+            app_key(0x47, keycode(0x47, 0, false), false)
+                .map(|keystroke| keystroke.key)
+                .as_deref(),
             Some("g")
         );
     }

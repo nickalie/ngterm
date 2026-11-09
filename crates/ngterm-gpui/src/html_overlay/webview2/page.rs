@@ -629,7 +629,10 @@ impl Page {
             Report::Message(raw) => self.message(&raw),
             Report::Focus(focused) => self.native_focus(focused, cx),
             Report::DownloadRefused(uri) => tracing::info!(uri, "a page's download was refused"),
+            #[cfg(target_os = "macos")]
             Report::Key(keystroke) => self.app_key(&keystroke, cx),
+            #[cfg(windows)]
+            Report::Key(keystroke, keycode, repeat) => self.app_key(&keystroke, keycode, repeat, cx),
             Report::ThemeInstalled => {
                 if self.reload_after_theme.take() {
                     self.rebuild_shown();
@@ -800,12 +803,21 @@ impl Page {
 
     /// A key pressed in the page that the app takes: dispatched to the page's window as the keymap reads it, its
     /// release, which the window never sees, let go at once.
-    fn app_key(&self, keystroke: &gpui_kit::Keystroke, cx: &mut App) {
+    fn app_key(
+        &self,
+        keystroke: &gpui_kit::Keystroke,
+        #[cfg(windows)] keycode: u32,
+        #[cfg(windows)] repeat: bool,
+        cx: &mut App,
+    ) {
         let Some(window) = self.element_window.get() else {
             return;
         };
         let _ = window.update(cx, |_, window, cx| {
+            #[cfg(target_os = "macos")]
             window.dispatch_keystroke(keystroke.clone(), cx);
+            #[cfg(windows)]
+            crate::keymap_dispatch::dispatch_page_key(keystroke, keycode, repeat, window, cx);
             crate::keymap_dispatch::release_dispatched();
         });
     }
@@ -1491,10 +1503,15 @@ mod tests {
         Page::new(&overlay, None, colors, Storage::Ephemeral, &poster)
     }
 
-    /// The page script's report of a press of `key` `age` ago.
+    /// The page script's report of a press of `key` `age` ago; zero age uses a future timestamp so millisecond
+    /// rounding cannot put the press before the monitor's last one.
     #[cfg(windows)]
     fn key_report(page: &Page, key: &str, age: std::time::Duration) -> String {
-        let pressed = std::time::SystemTime::now() - age;
+        let pressed = if age.is_zero() {
+            std::time::SystemTime::now() + std::time::Duration::from_secs(1)
+        } else {
+            std::time::SystemTime::now() - age
+        };
         let at = pressed.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
         let nonce = page.nonce.split_once(':').unwrap().0;
         format!(r#"{{"n":"{nonce}","k":"input","click":false,"key":"{key}","at":{at}}}"#)

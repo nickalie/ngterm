@@ -1158,20 +1158,39 @@ fn a_key_typed_in_a_page_closes_a_repeat_window_opened_before_it() {
     assert_eq!(router.deadline, None);
 }
 
-/// A key `WebView2` reported: asked about with the repeat flag its event carries, and dispatched as a bare keystroke
-/// that cannot say it is an autorepeat, its release stood in for at once.
+/// The physical identity carried with a Windows page's report, shared by its later native window events.
+#[cfg(all(feature = "html", windows))]
+fn windows_page_stroke(text: &str, repeat: bool) -> KeyStroke {
+    let keystroke = Keystroke::parse(text).unwrap().with_simulated_ime();
+    let code = if keystroke.key.len() == 1 {
+        format!("Key{}", keystroke.key.to_ascii_uppercase())
+    } else {
+        keystroke.key.to_ascii_uppercase()
+    };
+    let keycode = crate::terminal::input::xkb_keycode(&code).unwrap();
+    super::page_stroke(&keystroke, keycode, repeat)
+}
+
+/// One queued page report reaching the interceptor, with metadata installed immediately before dispatch.
+#[cfg(all(feature = "html", windows))]
+fn dispatch_windows_page(stroke: KeyStroke, now: Instant) -> Press {
+    let result = super::ROUTER.with_borrow_mut(|router| {
+        router.dispatched = Some(stroke.clone());
+        let stroke = router.dispatched_stroke(stroke);
+        router.press(&stroke, now, true)
+    });
+    release_monitor();
+    result
+}
+
+/// A key `WebView2` reported: asked about with its own identity and repeat flag, then dispatched through the pump.
 #[cfg(all(feature = "html", windows))]
 fn windows_page_press(text: &str, repeat: bool, now: Instant) -> Press {
-    let mut asked = stroke(text);
-    if repeat {
-        asked.action = ngterm_core::ghostty_config::binds::KeyAction::Repeat;
-    }
+    let asked = windows_page_stroke(text, repeat);
     if !super::takes(&asked) {
         return Press::Passed;
     }
-    let result = super::ROUTER.with_borrow_mut(|router| router.press(&stroke(text), now, false));
-    release_monitor();
-    result
+    dispatch_windows_page(asked, now)
 }
 
 /// Upstream's ownership table on Windows: a chord held in a page fires once, and a new press fires again.
@@ -1220,11 +1239,158 @@ fn a_windows_page_forgets_an_autorepeat_whose_dispatch_never_came() {
         windows_page_press("ctrl-shift-t", false, now),
         Press::Fired(_)
     ));
-    let mut asked = stroke("ctrl-shift-t");
-    asked.action = ngterm_core::ghostty_config::binds::KeyAction::Repeat;
+    let asked = windows_page_stroke("ctrl-shift-t", true);
     assert!(super::takes(&asked), "the keymap owns the held chord");
     assert!(matches!(
         windows_page_press("ctrl-shift-t", false, now),
         Press::Fired(_)
     ));
+}
+
+/// Accelerator callbacks may queue several reports before the pump dispatches any of them.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn queued_page_autorepeats_keep_their_ownership() {
+    load_monitor("command \"x\" f5 true\n");
+    let now = Instant::now();
+    assert!(matches!(windows_page_press("f5", false, now), Press::Fired(_)));
+    let asked = windows_page_stroke("f5", true);
+    assert!(super::takes(&asked));
+    assert!(super::takes(&asked));
+    for _ in 0..2 {
+        assert_eq!(dispatch_windows_page(asked.clone(), now), Press::Consumed);
+    }
+}
+
+/// Moving focus from a page to a terminal must not turn a consumed chord's repeats into terminal input.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn page_autorepeats_stay_consumed_after_focus_moves_to_a_terminal() {
+    load_monitor("");
+    let now = Instant::now();
+    assert!(matches!(
+        windows_page_press("ctrl-shift-s", false, now),
+        Press::Fired(_)
+    ));
+    for modifiers_held in [true, false, false] {
+        assert_eq!(
+            super::ROUTER.with_borrow_mut(|router| router.press(&native_s(modifiers_held, true), now, false)),
+            Press::Consumed
+        );
+    }
+    assert!(super::ROUTER.with_borrow_mut(|router| router.release(native_s(false, true).identity, now)));
+    assert_eq!(
+        super::ROUTER.with_borrow_mut(|router| router.press(&native_s(false, false), now, false)),
+        Press::Passed,
+        "a fresh press after the real release can type"
+    );
+}
+
+/// A leader's delayed autorepeat does not hide the report of a character typed after the fresh press.
+#[test]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn a_delayed_autorepeat_does_not_advance_the_typed_key_cutoff() {
+    let now = Instant::now();
+    let mut router = router("command \"g\" f5>ctrl+g true\n");
+    assert_eq!(router.press(&stroke("f5"), now, true), Press::Consumed);
+    let mut repeated = stroke("f5");
+    repeated.action = ngterm_core::ghostty_config::binds::KeyAction::Repeat;
+    assert_eq!(
+        router.press(&repeated, now + Duration::from_millis(20), true),
+        Press::Consumed
+    );
+    router.page_typed(now + Duration::from_millis(10));
+    assert!(!router.engine.as_ref().is_some_and(CustomCommandEngine::is_armed));
+    assert_eq!(
+        router.press(&stroke("ctrl-g"), now + Duration::from_millis(30), true),
+        Press::Passed
+    );
+}
+
+/// A later callback may clear ownership before an already accepted autorepeat reaches the pump.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn a_queued_autorepeat_survives_later_callbacks() {
+    load_monitor("command \"x\" f5 true\n");
+    let now = Instant::now();
+    assert!(matches!(windows_page_press("f5", false, now), Press::Fired(_)));
+    let repeated = windows_page_stroke("f5", true);
+    assert!(super::takes(&repeated));
+    assert!(!super::takes(&windows_page_stroke("g", true)), "an unowned repeat");
+    assert!(super::takes(&windows_page_stroke("f5", false)), "a later fresh press");
+    assert_eq!(dispatch_windows_page(repeated, now), Press::Consumed);
+    assert!(matches!(
+        dispatch_windows_page(windows_page_stroke("f5", false), now),
+        Press::Fired(_)
+    ));
+}
+
+#[cfg(all(feature = "html", windows))]
+mod windows_dispatch_tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui_kit::{
+        Context, FocusHandle, InteractiveElement as _, IntoElement, Render, Styled as _, TestAppContext, Window, div,
+    };
+
+    use super::*;
+
+    struct Target {
+        focus: FocusHandle,
+        seen: Rc<Cell<usize>>,
+    }
+
+    impl Render for Target {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let seen = self.seen.clone();
+            div()
+                .size_full()
+                .track_focus(&self.focus)
+                .on_key_down(move |_, _, _| seen.set(seen.get() + 1))
+        }
+    }
+
+    /// The real interceptor reads each report's metadata before listeners can turn it into terminal input.
+    #[gpui_kit::test]
+    fn queued_reports_reach_the_interceptor_with_their_own_metadata(cx: &mut TestAppContext) {
+        let seen = Rc::new(Cell::new(0));
+        let (target, cx) = cx.add_window_view(|_, cx| Target {
+            focus: cx.focus_handle(),
+            seen: seen.clone(),
+        });
+        cx.update(|window, cx| {
+            super::super::init(cx);
+            super::super::register_window(
+                window.window_handle(),
+                super::super::KeyOrigin::Window(uuid::Uuid::new_v4()),
+            );
+            window.focus(&target.read(cx).focus.clone(), cx);
+        });
+        cx.run_until_parked();
+        load_monitor("command \"x\" f5 true\n");
+        let keystroke = Keystroke::parse("f5").unwrap().with_simulated_ime();
+        let keycode = crate::terminal::input::xkb_keycode("F5").unwrap();
+        let dispatch = |repeat, cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|window, cx| {
+                super::super::dispatch_page_key(&keystroke, keycode, repeat, window, cx);
+                release_monitor();
+            });
+        };
+        assert!(super::super::takes(&windows_page_stroke("f5", false)));
+        dispatch(false, cx);
+        assert_eq!(super::super::take_fired().len(), 1);
+        for _ in 0..2 {
+            assert!(super::super::takes(&windows_page_stroke("f5", true)));
+        }
+        for _ in 0..2 {
+            dispatch(true, cx);
+        }
+        assert!(super::super::take_fired().is_empty(), "queued repeats fired nothing");
+        assert_eq!(seen.get(), 0, "no owned repeat reached the focused key listener");
+        assert!(super::super::ROUTER.with_borrow(|router| router.released.contains(&keycode)));
+        assert!(super::super::takes(&windows_page_stroke("f5", false)));
+        dispatch(false, cx);
+        assert_eq!(super::super::take_fired().len(), 1, "the next fresh press fires");
+    }
 }

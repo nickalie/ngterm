@@ -19,13 +19,21 @@
 //! A chord is the key's physical identity resolved per layout (`terminal::input::chord`). A consumed key's next press
 //! reads as its autorepeat until its release, which reaches [`key_up`] from the window's (and the terminal's) key-up
 //! listener, or is stood in for right after the press when a web view holds the key (`release_dispatched`). A macOS
-//! web view preserves the physical identity and autorepeat flag; a Windows dispatch has only the keystroke, so
-//! [`takes`], asked about an autorepeat, tells the dispatch that follows. [`keyboard_left`] forgets ownership when no
-//! ngterm window holds the
-//! keyboard any more. The leader and repeat timeouts are deadlines checked at the next key, which is when they
+//! web view preserves the physical identity and autorepeat flag; a Windows page carries both with each queued
+//! report and supplies them at its synchronous dispatch (`dispatch_page_key`). [`keyboard_left`] forgets ownership
+//! when no ngterm window holds the keyboard any more. The leader and repeat timeouts are deadlines checked at the next key, which is when they
 //! matter. Matched chords fire as main-loop tasks
 //! (`AppState::keymap_fired`); a custom command carries the terminal typed in, read now (its selection included), as
 //! the keyboard may move before the task runs.
+//!
+//! | Page key | Monitor behavior |
+//! |---|---|
+//! | Fresh bound chord | Consumed and fired once |
+//! | Owned autorepeat, even when several callbacks precede dispatch | Consumed without firing again |
+//! | Owned repeat tail | Fires again and suspends its repeat timeout while held |
+//! | Owned key repeating after focus moves to a terminal | Consumed under the same physical identity |
+//! | Unowned autorepeat | Passed without advancing the matcher or the typed-key cutoff |
+//! | Character typed after a leader, reported after an in-flight autorepeat | Ends the leader |
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -90,9 +98,9 @@ struct Router {
     /// The key the monitor is handling, under the identity it holds that key by: what a key dispatched for a web view
     /// lets go of ([`release_dispatched`]).
     pressed: Option<u32>,
-    /// The key whose autorepeat [`takes`] just handed over when the dispatch to come cannot say it is one itself (a
-    /// bare keystroke, a Windows web view's): [`Router::press`] reads it as the autorepeat it is.
-    dispatched_repeat: Option<u32>,
+    /// The Windows page report being dispatched synchronously, taken by the interceptor before any listener runs.
+    #[cfg(all(feature = "html", windows))]
+    dispatched: Option<KeyStroke>,
     /// When the monitor last handled a press: what a page's late report of an earlier key ([`page_typed`]) reads.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     last_press: Option<Instant>,
@@ -195,11 +203,8 @@ pub fn takes(stroke: &KeyStroke) -> bool {
     ROUTER.with_borrow_mut(|router| {
         // an autorepeat's ownership follows the press, regardless of what the matcher would take now
         if stroke.action == KeyAction::Repeat {
-            let owned = router.owns(stroke.identity);
-            router.dispatched_repeat = (owned && stroke.keycode == 0).then_some(stroke.identity);
-            return owned;
+            return router.owns(stroke.identity);
         }
-        router.dispatched_repeat = None;
         router.released.remove(&stroke.identity);
         router.consumed.remove(&stroke.identity);
         // Esc is not bindable, and as a bare keystroke it spells no chord: it is the keymap's only to cancel a leader
@@ -222,9 +227,9 @@ pub fn takes(stroke: &KeyStroke) -> bool {
     })
 }
 
-/// A key went down in a Windows page at `at` (milliseconds since the epoch) that the page keeps and no key event
-/// reported, its page script's word for it (`html_overlay::webview2::bridge`): an unmatched press to upstream's
-/// monitor, so it ends a half-typed leader or an open repeat window. The report comes the long way round through the
+/// A key went down in a Windows page at `at` (milliseconds since the epoch) that the page keeps, its page script's
+/// word for it (`html_overlay::webview2::bridge`); for a typed character no key event reports it at all. An unmatched
+/// press to upstream's monitor, so it ends a half-typed leader or an open repeat window. The report comes through the
 /// renderer, so it can arrive after the keymap's next press; a key that went down before that press is not what the
 /// press is waiting on and changes nothing, and the key stays the page's either way.
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
@@ -245,6 +250,37 @@ pub fn page_typed(at: u64) {
 /// the chrome focused the chord still undoes the close, even while a page covers the session.
 fn menu_takes(action: BuiltinAction, was_armed: bool, page_keys: bool) -> bool {
     !(was_armed && action == BuiltinAction::ToggleFullscreen || page_keys && action == BuiltinAction::UndoClose)
+}
+
+/// A Windows page's key, named as its accelerator reports it, with the physical identity and repeat flag carried
+/// by that same report. The identity also names native events after focus moves to a terminal.
+#[cfg(all(feature = "html", windows))]
+#[must_use]
+pub fn page_stroke(keystroke: &gpui_kit::Keystroke, keycode: u32, repeat: bool) -> KeyStroke {
+    let mut stroke = KeyStroke::new(keystroke, &input::Source::Keystroke, false);
+    stroke.keycode = keycode;
+    if keycode != 0 {
+        stroke.identity = keycode;
+    }
+    if repeat {
+        stroke.action = KeyAction::Repeat;
+    }
+    stroke
+}
+
+/// Dispatches one queued Windows page report. Its metadata lives only across this synchronous dispatch, so another
+/// accelerator callback or a missing window cannot overwrite a later press's repeat flag or physical identity.
+#[cfg(all(feature = "html", windows))]
+pub fn dispatch_page_key(
+    keystroke: &gpui_kit::Keystroke,
+    keycode: u32,
+    repeat: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    ROUTER.with_borrow_mut(|router| router.dispatched = Some(page_stroke(keystroke, keycode, repeat)));
+    window.dispatch_keystroke(keystroke.clone(), cx);
+    ROUTER.with_borrow_mut(|router| router.dispatched = None);
 }
 
 /// Lets go of a press dispatched for an HTML page's native web view (`takes`), whose release the window never sees.
@@ -290,8 +326,17 @@ pub(crate) fn release_simulated(text: &str) -> bool {
 #[cfg(all(feature = "html", windows))]
 pub(crate) fn press_dispatched(text: &str) -> Option<bool> {
     let keystroke = gpui_kit::Keystroke::parse(text).unwrap().with_simulated_ime();
-    let stroke = KeyStroke::new(&keystroke, &input::Source::Keystroke, false);
-    let press = ROUTER.with_borrow_mut(|router| router.press(&stroke, Instant::now(), false));
+    press_page_report(&keystroke, 0, false)
+}
+
+/// Dispatches one Windows report through the same metadata handoff as the interceptor (tests).
+#[cfg(all(test, feature = "html", windows))]
+pub(crate) fn press_page_report(keystroke: &gpui_kit::Keystroke, keycode: u32, repeat: bool) -> Option<bool> {
+    let press = ROUTER.with_borrow_mut(|router| {
+        router.dispatched = Some(page_stroke(keystroke, keycode, repeat));
+        let stroke = router.dispatched_stroke(KeyStroke::new(keystroke, &input::Source::Keystroke, false));
+        router.press(&stroke, Instant::now(), true)
+    });
     release_dispatched();
     match press {
         Press::Passed => None,
@@ -322,6 +367,8 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     }
     let source = input::current_source(&event.keystroke);
     let stroke = KeyStroke::new(&event.keystroke, &source, false);
+    #[cfg(all(feature = "html", windows))]
+    let stroke = ROUTER.with_borrow_mut(|router| router.dispatched_stroke(stroke));
     // the window's own keys first: Ctrl+Tab's switcher, the picker's, palette's and search bar's fields; their release
     // is theirs too (the switcher's walk leaves the terminal the keyboard, so its key-up listener must not report it)
     if crate::window::intercept_key(&stroke, window, cx)
@@ -427,8 +474,21 @@ impl Router {
         self.reset();
     }
 
-    /// Forgets `stroke`'s key's release, as it is pressed again. An autorepeat says the key never went up, so that
-    /// release was the one a macOS web view's dispatch reports at once ([`release_dispatched`]): the press's ownership
+    /// Takes the report installed immediately before the synchronous dispatch, or the native window's stroke.
+    #[cfg(all(feature = "html", windows))]
+    fn dispatched_stroke(&mut self, fallback: KeyStroke) -> KeyStroke {
+        let Some(stroke) = self.dispatched.take() else {
+            return fallback;
+        };
+        if stroke.action == KeyAction::Repeat {
+            // the callback already took this repeat: a later fresh callback may have cleared its old ownership
+            self.consumed.insert(stroke.identity);
+        }
+        stroke
+    }
+
+    /// Forgets key `identity`'s release, as it is pressed again. `repeat` says the key never went up, so that
+    /// release was the one a web view's dispatch reports at once ([`release_dispatched`]): the press's ownership
     /// stands. Only the live repeat tail's key suspends its window, which counts from the real release (upstream's
     /// `heldRepeatKeyCode`), whatever its modifiers are now; a window another key closed since is left as it is.
     fn resume_held(&mut self, identity: u32, repeat: bool) {
@@ -497,11 +557,11 @@ impl Router {
     /// One press, with an HTML page holding the keyboard while `page_keys`: whether it is consumed, and what it fired.
     fn press(&mut self, stroke: &KeyStroke, now: Instant, page_keys: bool) -> Press {
         self.pressed = Some(stroke.identity);
+        let repeat = stroke.action == KeyAction::Repeat;
         #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
-        {
+        if !repeat {
             self.last_press = Some(now);
         }
-        let repeat = stroke.action == KeyAction::Repeat || self.dispatched_repeat.take() == Some(stroke.identity);
         self.resume_held(stroke.identity, repeat);
         if stroke.keycode != 0 && stroke.action == KeyAction::Press {
             // the platform says the key went up since its consumed press: a release the monitor never heard (one
