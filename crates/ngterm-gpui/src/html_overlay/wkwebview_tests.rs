@@ -6,13 +6,22 @@ use gpui_kit::{TestAppContext, px, size};
 use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
 
 use super::page::{Page, Storage};
-use super::runtime::installed_version;
+use super::runtime::{installed_version, version_for};
 use super::{PageView, hide};
 use crate::html_overlay::panel::{PanelColors, TerminalColors};
 
 #[test]
 fn a_supported_mac_reports_the_system_webkit() {
     assert_eq!(installed_version().as_deref(), Ok("system WebKit"));
+}
+
+#[test]
+fn a_mac_too_old_for_webkit_says_what_it_needs() {
+    assert_eq!(version_for(true), Ok("system WebKit".to_owned()));
+    assert_eq!(
+        version_for(false),
+        Err("HTML pages require macOS 14 or newer".to_owned())
+    );
 }
 
 #[gpui_kit::test]
