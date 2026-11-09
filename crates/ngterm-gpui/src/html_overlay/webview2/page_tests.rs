@@ -1331,11 +1331,12 @@ fn a_key_report_with_a_closed_window_leaves_the_queue(cx: &mut TestAppContext) {
     assert!(!crate::keymap_dispatch::sequence_is_live());
 }
 
-/// The page's script's report of a key it stopped: its virtual key, Shift, autorepeat and the key's names.
+/// The page's script's report of a key it stopped: its virtual key, Shift, autorepeat and the key's names. Its
+/// timestamp is in the future so millisecond rounding cannot put the press before the monitor's last one.
 #[cfg(windows)]
 fn stopped_key(page: &Page, virtual_key: u32, shift: bool, repeat: bool, names: (&str, &str)) -> Report {
     let nonce = page.nonce.split_once(':').unwrap().0;
-    let at = std::time::SystemTime::now()
+    let at = (std::time::SystemTime::now() + std::time::Duration::from_secs(1))
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis();
