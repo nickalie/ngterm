@@ -3,7 +3,8 @@
 #
 #   resolve-rev.sh [TARGET]
 #
-# CURRENT is LIBGHOSTTY_VT_REV of build/pins.env. TARGET is the argument (a commit sha, a tag such as vt-1.0.0 or
+# CURRENT is LIBGHOSTTY_VT_REV of build/pins.env at HEAD, what a sync branch starts from whatever the tree has
+# uncommitted. TARGET is the argument (a commit sha, a tag such as vt-1.0.0 or
 # v1.4.0, or a branch), `vt` for the newest vt-* tag (libghostty-vt's releases), `main-green` for the newest commit on
 # ghostty main whose libghostty-vt CI is green (every check run named build-libghostty-vt* or test-lib-vt completed with
 # success; a skipped or neutral one means nothing built the library there, so the commit is not green), or, by default,
@@ -25,9 +26,9 @@ CHECKS='^(build-libghostty-vt|test-lib-vt)'
 RELEASE='^v[0-9]+[.][0-9]+[.][0-9]+$'
 
 root="$(git rev-parse --show-toplevel)"
-pins="$root/build/pins.env"
-current="$(sed -nE 's/^LIBGHOSTTY_VT_REV="([0-9a-f]+)".*/\1/p' "$pins" | head -n 1)"
-[[ -n "$current" ]] || { echo "resolve-rev: no LIBGHOSTTY_VT_REV in $pins" >&2; exit 1; }
+pins="$(git -C "$root" show HEAD:build/pins.env)" || { echo "resolve-rev: no build/pins.env at HEAD" >&2; exit 1; }
+current="$(sed -nE 's/^LIBGHOSTTY_VT_REV="([0-9a-f]+)".*/\1/p' <<<"$pins" | head -n 1)"
+[[ -n "$current" ]] || { echo "resolve-rev: no LIBGHOSTTY_VT_REV in build/pins.env at HEAD" >&2; exit 1; }
 
 die() { echo "resolve-rev: $*" >&2; exit 1; }
 

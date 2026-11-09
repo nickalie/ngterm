@@ -1,0 +1,1 @@
+../../../agterm-upstream-sync/references/prompts/stage.md

@@ -1,8 +1,8 @@
 # Plan template
 
-The `plan-exec` skill (Claude: `/plan-exec`; Codex: `$plan-exec`) reads `## Overview` and `## Context`, then runs
-each `### Task N:` in a fresh subagent that sees only the plan and the repo (applicable AGENTS.md instructions
-included). The `- [ ]` items are that subagent's work list, so each task names its own files and sources. Write the
+The sync hands this plan to the `plan-exec` skill, which reads `## Overview` and `## Context`, then runs each
+`### Task N:` in a fresh worker that sees only the plan and the repo (applicable AGENTS.md instructions included). The
+`- [ ]` items are that worker's work list, so each task names its own files and sources. Write the
 plan in English and drop sections that would stay empty.
 
 ````markdown
@@ -48,6 +48,8 @@ plan in English and drop sections that would stay empty.
 - Each change reaches the Android and iOS renderers and key mapping where they draw or name that thing (UI work through
   the `frontend-design` skill inside each app's `DESIGN.md`), and the session server where its VT is involved.
 - Checks per task follow AGENTS.md > Choosing checks.
+- Commits stay local: no task pushes or opens a PR, even when a check could only run on CI. Such a check is logged as
+  a `[deviation]` and left to the user's PR.
 - Machines (`.claude/skills/libghostty-sync/references/machines.md`): Windows work (builds, clippy, tests, debugging,
   GUI runs) runs in the Windows VM, macOS and iOS work on the Mac over ssh, Android work on the emulator; the VM and
   the emulator start on demand and stop when the task's work on them is done.
@@ -102,7 +104,6 @@ plan in English and drop sections that would stay empty.
   (Zig version, patches carried, new behaviors)
 - [ ] every ngterm file in the report's review checklist was reviewed by a task above; those citing a revision say
   the new one
-- [ ] manual (user): the PR's CI (all three OSes, the libghostty-vt builds for Android and iOS) holds the ratchet
 ````
 
 ## Notes on tasks
