@@ -54,7 +54,11 @@ static BEFORE_MAIN: extern "C" fn() = before_main;
 
 extern "C" fn before_main() {
     if std::env::var_os(CHILD).is_some() {
-        objc2::rc::autoreleasepool(|_| run());
+        // A panic cannot leave an `extern "C"` function: it would abort. The panic hook has printed the failed check by
+        // now, for the test to report.
+        if std::panic::catch_unwind(|| objc2::rc::autoreleasepool(|_| run())).is_err() {
+            std::process::exit(1);
+        }
         println!("{PASSED}");
     }
 }
@@ -123,7 +127,20 @@ fn wait_for(log: &Log, what: &str, wanted: impl Fn(&Report) -> bool) {
 fn load(native: &Native, log: &Log, address: &str) {
     let before = completed(log);
     native.load_url(address);
-    pump_until(address, || completed(log) > before);
+    // The count alone could be met by an earlier load still ending, as a refused page's does.
+    pump_until(address, || completed(log) > before && !is_loading(native));
+}
+
+fn is_loading(native: &Native) -> bool {
+    let web = web_object(native);
+    // SAFETY: the main thread and a live view.
+    unsafe { msg_send![&*web, isLoading] }
+}
+
+/// Waits for the load in flight to end. The history's cursor moves, and is reported, while a step's load is still
+/// running, and a `WKWebView` loses a step asked for by then: the first step's load goes on, and the cursor stays.
+fn settle(native: &Native, what: &str) {
+    pump_until(what, || !is_loading(native));
 }
 
 /// Runs `script` in the page's own world: the value as JSON.
@@ -319,11 +336,13 @@ fn navigation(native: &Native, log: &Log) {
     wait_for(log, "the way back", |report| {
         matches!(report, Report::History { forward: true, .. })
     });
+    settle(native, "the way back's load");
     log.borrow_mut().clear();
     native.go_forward();
     wait_for(log, "the way forward", |report| {
         matches!(report, Report::History { forward: false, .. })
     });
+    settle(native, "the way forward's load");
 }
 
 fn web_object(native: &Native) -> Retained<AnyObject> {
