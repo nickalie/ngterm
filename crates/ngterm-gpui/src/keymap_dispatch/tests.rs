@@ -695,6 +695,20 @@ fn a_web_view_hands_over_the_autorepeat_of_a_key_the_keymap_took() {
     );
 }
 
+/// The first autorepeat can reach the web view's callback while its fresh press still waits in the report queue.
+#[test]
+#[cfg(all(feature = "html", target_os = "macos"))]
+fn a_web_view_owns_an_autorepeat_behind_its_queued_press() {
+    let (keymap, _) = parse_keymap("", &linux_defaults());
+    super::load_keymap(&keymap);
+    let now = Instant::now();
+    assert!(super::takes(&native_stroke("ctrl-shift-t", false)));
+    assert!(super::takes(&native_stroke("ctrl-shift-t", true)));
+    assert!(matches!(press_monitor("ctrl-shift-t", false, now), Press::Fired(_)));
+    release_monitor();
+    assert_eq!(press_monitor("ctrl-shift-t", true, now), Press::Consumed);
+}
+
 /// A half-typed leader run out: the page keeps the key the leader was waiting for.
 #[test]
 #[cfg(all(feature = "html", target_os = "macos"))]
@@ -1177,7 +1191,9 @@ fn dispatch_windows_page(stroke: KeyStroke, now: Instant) -> Press {
     let result = super::ROUTER.with_borrow_mut(|router| {
         router.dispatched = Some(stroke.clone());
         let stroke = router.dispatched_stroke(stroke);
-        router.press(&stroke, now, true)
+        let press = router.press(&stroke, now, true);
+        router.forget_overtaken();
+        press
     });
     release_monitor();
     result
@@ -1325,13 +1341,106 @@ fn a_queued_autorepeat_survives_later_callbacks() {
     ));
 }
 
+/// A report the callback took stays consumed at the pump, but a newer press the page kept since is what the key is
+/// now: the autorepeat of a chord that fired or of a leader that armed does not hand the key back to the keymap.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn a_queued_autorepeat_does_not_reclaim_a_key_a_newer_press_left_to_the_page() {
+    for (keymap, newer) in [
+        ("command \"x\" f5 true\n", "shift-f5"),
+        ("command \"g\" f5>ctrl+g true\n", "shift-f5"),
+    ] {
+        load_monitor(keymap);
+        let now = Instant::now();
+        assert_ne!(windows_page_press("f5", false, now), Press::Passed, "{keymap}");
+        let repeated = windows_page_stroke("f5", true);
+        assert!(super::takes(&repeated), "{keymap}");
+        assert!(!super::takes(&windows_page_stroke(newer, false)), "{keymap}");
+        assert_eq!(dispatch_windows_page(repeated, now), Press::Consumed, "{keymap}");
+        let held = windows_page_stroke(newer, true);
+        assert!(
+            !super::takes(&held),
+            "{keymap}: the newer press's repeats are the page's"
+        );
+        assert_eq!(
+            super::ROUTER.with_borrow_mut(|router| router.press(&held, now, false)),
+            Press::Passed,
+            "{keymap}: and they stay unowned after focus moves to a terminal"
+        );
+    }
+}
+
+/// A fresh press still queued fires when the pump reaches it, and a newer press the page kept since keeps the key.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn a_queued_press_does_not_reclaim_a_key_a_newer_press_left_to_the_page() {
+    load_monitor("command \"x\" f5 true\n");
+    let fresh = windows_page_stroke("f5", false);
+    assert!(super::takes(&fresh));
+    assert!(!super::takes(&windows_page_stroke("shift-f5", false)));
+    assert!(matches!(dispatch_windows_page(fresh, Instant::now()), Press::Fired(_)));
+    assert!(!super::takes(&windows_page_stroke("shift-f5", true)));
+}
+
+/// Focus leaving ngterm forgets ownership, and an autorepeat the pump delivers afterwards does not bring it back.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn a_queued_autorepeat_stays_forgotten_after_the_keyboard_leaves() {
+    load_monitor("command \"x\" f5 true\n");
+    let now = Instant::now();
+    assert!(matches!(windows_page_press("f5", false, now), Press::Fired(_)));
+    let repeated = windows_page_stroke("f5", true);
+    assert!(super::takes(&repeated));
+    super::keyboard_left();
+    assert_eq!(dispatch_windows_page(repeated.clone(), now), Press::Consumed);
+    assert!(!super::takes(&repeated));
+}
+
+/// The keyboard's first autorepeat can reach the callback before the pump has dispatched its fresh press.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn an_autorepeat_behind_its_queued_press_is_owned() {
+    load_monitor("command \"x\" f5 true\n");
+    let now = Instant::now();
+    let (fresh, repeated) = (windows_page_stroke("f5", false), windows_page_stroke("f5", true));
+    assert!(super::takes(&fresh));
+    assert!(super::takes(&repeated), "the page must not see the held key");
+    assert!(matches!(dispatch_windows_page(fresh, now), Press::Fired(_)));
+    assert_eq!(dispatch_windows_page(repeated, now), Press::Consumed);
+}
+
+/// The window's own key and a cancelling Esc are taken like a bound chord: an autorepeat behind them is owned too.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn autorepeats_behind_the_switcher_and_a_cancelling_escape_are_owned() {
+    let page_stroke = |text: &str, code: &str, repeat| {
+        let keystroke = Keystroke::parse(text).unwrap().with_simulated_ime();
+        super::page_stroke(&keystroke, crate::terminal::input::xkb_keycode(code).unwrap(), repeat)
+    };
+    load_monitor("command \"g\" ctrl+a>g true\n");
+    assert!(super::takes(&page_stroke("ctrl-tab", "Tab", false)));
+    assert!(super::takes(&page_stroke("ctrl-tab", "Tab", true)));
+    let now = Instant::now();
+    assert_eq!(windows_page_press("ctrl-a", false, now), Press::Consumed);
+    let (fresh, repeated) = (
+        page_stroke("escape", "Escape", false),
+        page_stroke("escape", "Escape", true),
+    );
+    assert!(super::takes(&fresh), "Esc cancels the waiting leader");
+    assert!(super::takes(&repeated));
+    assert_eq!(dispatch_windows_page(fresh, now), Press::Consumed);
+    assert_eq!(dispatch_windows_page(repeated, now), Press::Consumed);
+    assert!(!monitor_is_live());
+}
+
 #[cfg(all(feature = "html", windows))]
 mod windows_dispatch_tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
     use gpui_kit::{
-        Context, FocusHandle, InteractiveElement as _, IntoElement, Render, Styled as _, TestAppContext, Window, div,
+        Context, FocusHandle, InteractiveElement as _, IntoElement, Render, Styled as _, TestAppContext,
+        VisualTestContext, Window, div,
     };
 
     use super::*;
@@ -1351,10 +1460,8 @@ mod windows_dispatch_tests {
         }
     }
 
-    /// The real interceptor reads each report's metadata before listeners can turn it into terminal input.
-    #[gpui_kit::test]
-    fn queued_reports_reach_the_interceptor_with_their_own_metadata(cx: &mut TestAppContext) {
-        let seen = Rc::new(Cell::new(0));
+    /// A focused view under the monitor in a new window, counting the keys that reach its listener in `seen`.
+    fn monitored_window<'a>(cx: &'a mut TestAppContext, seen: &Rc<Cell<usize>>) -> &'a mut VisualTestContext {
         let (target, cx) = cx.add_window_view(|_, cx| Target {
             focus: cx.focus_handle(),
             seen: seen.clone(),
@@ -1368,10 +1475,18 @@ mod windows_dispatch_tests {
             window.focus(&target.read(cx).focus.clone(), cx);
         });
         cx.run_until_parked();
+        cx
+    }
+
+    /// The real interceptor reads each report's metadata before listeners can turn it into terminal input.
+    #[gpui_kit::test]
+    fn queued_reports_reach_the_interceptor_with_their_own_metadata(cx: &mut TestAppContext) {
+        let seen = Rc::new(Cell::new(0));
+        let cx = monitored_window(cx, &seen);
         load_monitor("command \"x\" f5 true\n");
         let keystroke = Keystroke::parse("f5").unwrap().with_simulated_ime();
         let keycode = crate::terminal::input::xkb_keycode("F5").unwrap();
-        let dispatch = |repeat, cx: &mut gpui_kit::VisualTestContext| {
+        let dispatch = |repeat, cx: &mut VisualTestContext| {
             cx.update(|window, cx| {
                 super::super::dispatch_page_key(&keystroke, keycode, repeat, window, cx);
                 release_monitor();
@@ -1392,5 +1507,33 @@ mod windows_dispatch_tests {
         assert!(super::super::takes(&windows_page_stroke("f5", false)));
         dispatch(false, cx);
         assert_eq!(super::super::take_fired().len(), 1, "the next fresh press fires");
+    }
+
+    /// A report overtaken by a press the page kept is consumed by the real dispatch, which leaves the key the page's.
+    #[gpui_kit::test]
+    fn an_overtaken_report_is_consumed_and_leaves_the_key_the_pages(cx: &mut TestAppContext) {
+        let seen = Rc::new(Cell::new(0));
+        let cx = monitored_window(cx, &seen);
+        load_monitor("command \"x\" f5 true\n");
+        let keystroke = Keystroke::parse("f5").unwrap().with_simulated_ime();
+        let keycode = crate::terminal::input::xkb_keycode("F5").unwrap();
+        let dispatch = |repeat, cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                super::super::dispatch_page_key(&keystroke, keycode, repeat, window, cx);
+                release_monitor();
+            });
+        };
+        assert!(super::super::takes(&windows_page_stroke("f5", false)));
+        dispatch(false, cx);
+        assert_eq!(super::super::take_fired().len(), 1);
+        assert!(super::super::takes(&windows_page_stroke("f5", true)));
+        assert!(!super::super::takes(&windows_page_stroke("shift-f5", false)));
+        dispatch(true, cx);
+        assert!(super::super::take_fired().is_empty());
+        assert_eq!(seen.get(), 0, "the report the callback took reaches no listener");
+        assert!(
+            !super::super::takes(&windows_page_stroke("shift-f5", true)),
+            "the newer press's repeats are the page's"
+        );
     }
 }

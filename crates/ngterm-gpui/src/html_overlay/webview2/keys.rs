@@ -378,7 +378,8 @@ mod tests {
         }
     }
 
-    /// An autorepeat is asked about as one, so the dispatch that follows does not fire the held key again.
+    /// An owned autorepeat is handed over, and its report carries the repeat flag to the dispatch, which does not fire
+    /// the held key again.
     #[test]
     fn a_held_keys_autorepeat_is_handed_over_without_firing_again() {
         let _keyboard = PlainKeyboard::new();
