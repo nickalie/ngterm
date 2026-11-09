@@ -176,11 +176,16 @@ class FirstConnectTest {
         compose.awaitText("nick@build-02.lan:22")
     }
 
-    // The fake core reads a pin on the main thread. The home screen's first read of the store may hold DataStore's
-    // first-read lock by then, and if it has to come back to the main thread to let go of it, the blocked thread waits
-    // for itself. The store's own worker is held so that the first read has the lock when the blocking one starts.
     @Test
-    fun aBlockingPinReadDoesNotWaitForTheThreadItBlocks() {
+    fun aBlockingPinReadDoesNotWaitForTheThreadCollectingAllPins() = assertBlockingReadCompletes { it.all.first() }
+
+    @Test
+    fun aBlockingPinReadDoesNotWaitForTheThreadGettingAPin() = assertBlockingReadCompletes { it.get("m1") }
+
+    // The fake core reads a pin on the main thread. The app's first read of the store may hold DataStore's
+    // first-read lock by then, and if it has to come back to the main thread to let go of it, the blocked thread waits
+    // for itself. Holding the store's worker forces this interleaving if the first reader stays on main.
+    private fun assertBlockingReadCompletes(firstRead: suspend (PinnedHostKeys) -> Unit) {
         val worker = Executors.newSingleThreadExecutor()
         val storeScope = CoroutineScope(worker.asCoroutineDispatcher() + SupervisorJob())
         val homeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -188,12 +193,12 @@ class FirstConnectTest {
         val pins = PinnedHostKeys(store)
         val main = Thread.currentThread()
         val answered = CountDownLatch(1)
-        homeScope.launch { pins.all.first() }
-        // the read's first step has run on the worker, and what follows it is queued for this thread
+        homeScope.launch { firstRead(pins) }
+        // With a reader on main, its first step runs on the worker and queues its continuation for this thread.
         worker.submit {}.get()
         val hold = CountDownLatch(1)
         worker.execute { hold.await() }
-        // the first read goes on here: it takes the lock and leaves its file read queued behind the hold
+        // Such a main-thread reader resumes here, taking the lock and queuing its file read behind the hold.
         shadowOf(Looper.getMainLooper()).idle()
         hold.countDown()
         val watchdog =
