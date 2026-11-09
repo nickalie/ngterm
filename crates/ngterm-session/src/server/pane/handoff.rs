@@ -615,6 +615,15 @@ mod tests {
         wait_screen(pane, "got:printed");
     }
 
+    /// Queue `held` as a reply made while frozen. What a cut must then carry, in order: the replies still waiting (a
+    /// pseudoconsole asks for the cursor as it starts, so the answer may be one), then `held`.
+    fn queue_reply(pane: &Pane, held: &str) -> Vec<Vec<u8>> {
+        let mut expected = pane.core.outlet.ready_replies();
+        pane.core.outlet.push(held.as_bytes());
+        expected.push(held.as_bytes().to_vec());
+        expected
+    }
+
     /// A pane held at its cut in `encoding`, rebuilt from it over its own PTY and made the PTY's owner, as a
     /// replacement server does: the scrollback, the screen, what `print` wrote on it, and the shell carry over.
     fn crosses(encoding: VtEncoding) {
@@ -709,14 +718,10 @@ mod tests {
         } else {
             "echo got\"\":held\n"
         };
-        pane.core.outlet.push(held.as_bytes());
+        let expected = queue_reply(&pane, held);
         let cut = pane.cut(VtEncoding::Binary).unwrap();
-        assert_eq!(cut.replies, held.as_bytes());
-        assert_eq!(
-            pane.core.outlet.ready_replies(),
-            [held.as_bytes().to_vec()],
-            "kept for a rollback"
-        );
+        assert_eq!(cut.replies, expected.concat());
+        assert_eq!(pane.core.outlet.ready_replies(), expected, "kept for a rollback");
         pane.resume(true);
         wait_screen(&pane, "got:held");
         let tagged = if cfg!(windows) {
@@ -726,6 +731,46 @@ mod tests {
         };
         type_line(&pane, tagged);
         wait_screen(&pane, "got:resumed");
+        assert!(pane.kill(true).unwrap());
+    }
+
+    /// A reply the terminal made before the cut and could not write yet stays first: the cut carries it ahead of what
+    /// came later and a rollback writes each once, in that order (the program reads them as one line).
+    #[cfg(unix)]
+    #[test]
+    fn a_rollback_writes_a_reply_from_before_the_cut_once_and_first() {
+        let namespace = tempfile::tempdir().unwrap();
+        let script = concat!(
+            "read go; printf '\\033[6n'; IFS= read -r line; ",
+            "printf 'read:%s:\\n' \"$line\" | tr -d '\\033'; read end",
+        );
+        let program = SessionSpec {
+            argv: vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()],
+            ..shell()
+        };
+        let config = PaneConfig::new("early", namespace.path(), program, GridSize { cols: 80, rows: 24 });
+        let (pane, _creator) = Pane::spawn(config).unwrap();
+        assert!(pane.freeze());
+        type_line(&pane, "go");
+        let deadline = Instant::now() + PATIENCE;
+        while !pane.core.outlet.ready() {
+            assert!(
+                Instant::now() < deadline,
+                "the terminal never answered the cursor query"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        pane.quiesce(Duration::from_secs(5)).unwrap();
+        let answer = pane.core.outlet.ready_replies().concat();
+        assert!(answer.starts_with(b"\x1b[") && answer.ends_with(b"R"), "{answer:?}");
+
+        let expected = queue_reply(&pane, "held\n");
+        let cut = pane.cut(VtEncoding::Binary).unwrap();
+        assert_eq!(cut.replies, expected.concat());
+        pane.resume(true);
+
+        let answer = String::from_utf8(answer).unwrap().replace('\x1b', "");
+        wait_screen(&pane, &format!("read:{answer}held:"));
         assert!(pane.kill(true).unwrap());
     }
 
@@ -796,9 +841,9 @@ mod tests {
         } else {
             "echo got\"\":held\n"
         };
-        pane.core.outlet.push(held.as_bytes());
+        let expected = queue_reply(&pane, held);
         let mut cut = pane.cut(VtEncoding::Binary).unwrap();
-        assert_eq!(cut.replies, held.as_bytes());
+        assert_eq!(cut.replies, expected.concat());
         let size = GridSize { cols: 100, rows: 30 };
         cut.state.size = size;
         let imported = Pane::import(&cut.state, &cut.vt, &cut.replies, taken_over(&pane), Limits::default()).unwrap();
