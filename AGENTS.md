@@ -82,7 +82,7 @@ ports that keep the terminal's behavior and rendering Ghostty's: the `libghostty
 - Code no test can reach gets the smallest seam that lets one reach it, not a coverage exclusion.
 - Every crate and mobile app aims for 90% coverage, and that target only rises.
 
-README > Test and `scripts/unit-coverage.sh` have the how; the mobile apps' are in their README sections.
+docs/development.md > Test and `scripts/unit-coverage.sh` have the how; the mobile apps' are in its Android and iOS sections.
 
 ## Choosing checks
 
