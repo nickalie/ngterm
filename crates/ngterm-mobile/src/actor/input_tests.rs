@@ -31,14 +31,25 @@ use crate::pane::{PaneRole, without_escapes};
 use crate::transport::fake::{Opened, Script};
 use crate::transport::{ChannelInput, ChannelPeer};
 
-/// Short waits, so a refused claim times out quickly and a step that never shows gives up soon.
+/// Short settles, and deadlines no stall of a test's own thread can cross: the test decides when the screen answers,
+/// so a loaded machine must not make the action give up on it first. A test that waits for a deadline to run out
+/// uses [`expiring`].
 fn timing() -> InputTiming {
     InputTiming {
         quiet: Duration::from_millis(150),
         settle_max: Duration::from_secs(1),
+        confirm: Duration::from_secs(60),
+        lead_timeout: Duration::from_secs(60),
+        poll: Duration::from_millis(10),
+    }
+}
+
+/// Short deadlines, for a test that waits for one to run out: a claim that is never answered, a step that never shows.
+fn expiring() -> InputTiming {
+    InputTiming {
         confirm: Duration::from_millis(1500),
         lead_timeout: Duration::from_millis(800),
-        poll: Duration::from_millis(10),
+        ..timing()
     }
 }
 
@@ -64,7 +75,11 @@ struct Agents {
 
 impl Agents {
     fn start(agent: &str, capture: &str) -> Self {
-        let mut fixture = Fixture::connected_timed(vec![listing(true)], timing());
+        Self::start_timed(agent, capture, timing())
+    }
+
+    fn start_timed(agent: &str, capture: &str, timing: InputTiming) -> Self {
+        let mut fixture = Fixture::connected_timed(vec![listing(true)], timing);
         block_on(fixture.core.attach_session(MACHINE.to_owned(), SESSION.to_owned())).unwrap();
         let stream = fixture.opened(|opened| opened.command == present_tail(SESSION).unwrap());
         let frame = |rev: i64, body: Body| {
@@ -147,9 +162,14 @@ impl Agents {
         outcome
     }
 
-    /// Feeds `peer` the capture up to `state`.
+    /// Feeds `peer` the capture up to `state`, and waits until the terminal took it.
     fn show(&self, peer: &ChannelPeer, state: &str) {
-        send(peer, self.capture.at(state));
+        self.feed(peer, self.capture.at(state));
+    }
+
+    /// Sends `bytes` down `peer` and waits until the pane's terminal took them.
+    fn feed(&self, peer: &ChannelPeer, bytes: &[u8]) {
+        feed_into(&self.pane, peer, bytes);
     }
 
     /// Feeds `peer` `text` in the prompt of the capture's `state`, as the TUI draws what was pasted.
@@ -161,8 +181,23 @@ impl Agents {
     fn show_in_prompt(&self, peer: &ChannelPeer, agent: Agent, state: &str, style: &str, text: &str) {
         let term = self.capture.term();
         term.feed(self.capture.at(state));
-        send(peer, &into_prompt(&term, agent, style, text));
+        self.feed(peer, &into_prompt(&term, agent, style, text));
     }
+}
+
+/// Sends `bytes` down `peer` and waits until `pane`'s terminal took them: an action settles on what the terminal
+/// holds, so one started sooner would read the screen before them and give up on it.
+fn feed_into(pane: &Pane, peer: &ChannelPeer, bytes: &[u8]) {
+    let terminal = pane.terminal().expect("the pane's terminal");
+    let taken = terminal.stats().bytes + bytes.len() as u64;
+    send(peer, bytes);
+    for _ in 0..1000 {
+        if terminal.stats().bytes >= taken {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("the terminal never took what was sent");
 }
 
 fn outcome(
@@ -197,7 +232,7 @@ fn claimed(agents: &mut Agents, state: &str) -> Opened {
     let claim = agents.fixture.attach();
     let lead = lead_of(&claim.command);
     assert!(lead.claim, "the action claims the lead");
-    send(&claim.peer, &role_title(&lead.nonce, "leader", 2));
+    agents.feed(&claim.peer, &role_title(&lead.nonce, "leader", 2));
     agents.show(&claim.peer, state);
     claim
 }
@@ -242,7 +277,7 @@ fn a_leader_skips_the_claim() {
 
 #[test]
 fn a_claim_refused_or_unanswered_sends_nothing() {
-    let mut agents = Agents::start("claude", "claude-44x36");
+    let mut agents = Agents::start_timed("claude", "claude-44x36", expiring());
     agents.first_is("follower");
     let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "Yes".to_owned())));
     let mut claim = agents.fixture.attach();
@@ -297,14 +332,14 @@ fn a_prompt_is_pasted_then_entered_and_a_second_action_waits_its_turn() {
     agents.first_is("leader");
     agents.show(&agents.first.peer, "idle");
     let prompt = agents.act(|pane| block_on(pane.send_prompt("/compact keep it short".to_owned())));
-    thread::sleep(Duration::from_millis(50));
+    let (pasted, _) = inputs_until(&mut agents.first.peer, |bytes, _| contains(bytes, b"\x1b[201~"));
+    // the paste went and its Enter waits for the screen: the action holds the pane
     assert_eq!(
         block_on(agents.pane.interrupt()),
         Err(PaneInputError::Refused {
             reason: ACTION_IN_FLIGHT.to_owned()
         })
     );
-    let (pasted, _) = inputs_until(&mut agents.first.peer, |bytes, _| contains(bytes, b"\x1b[201~"));
     assert!(
         pasted.ends_with(b"\x1b[200~/compact keep it short\x1b[201~"),
         "a bracketed paste of the whole command: {:?}",
@@ -317,7 +352,7 @@ fn a_prompt_is_pasted_then_entered_and_a_second_action_waits_its_turn() {
     assert_eq!(outcome(&prompt), Ok(AgentInputOutcome::Sent));
 }
 
-/// Longer than a few quiet periods and shorter than the confirm deadline: a round trip on a slow link.
+/// Longer than a few quiet periods: a round trip on a slow link, the action still waiting for its screen.
 const ROUND_TRIP: Duration = Duration::from_millis(700);
 
 #[test]
@@ -355,7 +390,7 @@ fn a_slow_round_trip_holds_the_next_key_until_the_screen_answers_and_never_repea
 
 #[test]
 fn a_prompt_holding_a_draft_or_a_paste_that_never_shows_gets_no_enter() {
-    let mut agents = Agents::start("codex", "codex-44x36");
+    let mut agents = Agents::start_timed("codex", "codex-44x36", expiring());
     agents.first_is("leader");
     // a draft typed at the terminal: nothing goes
     agents.show(&agents.first.peer, "idle");
@@ -445,8 +480,8 @@ fn a_handle_whose_pane_was_hidden_is_closed_even_once_the_pane_is_shown_again() 
     .unwrap();
     let mut second = agents.fixture.attach();
     let nonce = lead_of(&second.command).nonce;
-    send(&second.peer, &role_title(&nonce, "leader", 1));
-    agents.show(&second.peer, "permission");
+    feed_into(&shown_again, &second.peer, &role_title(&nonce, "leader", 1));
+    feed_into(&shown_again, &second.peer, agents.capture.at("permission"));
 
     // the retired handle reaches nothing, though the pane it named is shown again with the dialog up
     assert_eq!(
