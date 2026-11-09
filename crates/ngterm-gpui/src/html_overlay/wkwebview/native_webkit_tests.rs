@@ -20,13 +20,19 @@ use super::{Log, memory_spec};
 
 /// Set in the child: run the checks.
 const CHILD: &str = "WKWEBVIEW_CHECKS_CHILD";
-/// The child's last line, so that a child that ran nothing fails.
+/// Printed once the checks finish, so that a child that ran nothing fails.
 const PASSED: &str = "every WKWebView check passed";
 
 #[test]
 fn a_real_web_view_does_what_a_page_asks() {
     let home = TempDir::new().unwrap();
-    let output = Command::new(std::env::current_exe().unwrap())
+    let mut child = Command::new(std::env::current_exe().unwrap());
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("NGTERM_") {
+            child.env_remove(key);
+        }
+    }
+    let output = child
         .args(["--exact", "the checks already ran"])
         .env(CHILD, "1")
         .env("CFFIXED_USER_HOME", home.path())
@@ -132,7 +138,7 @@ fn page_value(native: &Native, script: &str) -> String {
     value.lock().unwrap().take().unwrap()
 }
 
-fn renderer_answer(native: &Native, expression: &str) -> super::super::super::super::text_page::Answer {
+fn renderer_answer(native: &dyn NativeView, expression: &str) -> super::super::super::super::text_page::Answer {
     let answer = native.call_renderer(expression);
     let mut got = None;
     pump_until(expression, || {
@@ -268,7 +274,13 @@ fn strings_that_cannot_cross(native: &Native, log: &Log) {
     native.set_theme("window.themed = 'bad\0';");
     native.post_json("{\0}");
     assert_eq!(log.borrow().len(), before, "a refused theme is never installed");
-    assert!(native.call_renderer("1\0").try_recv().is_err());
+    assert_eq!(
+        native.call_renderer("1\0").try_recv(),
+        Err(async_channel::TryRecvError::Closed)
+    );
+    let before = completed(log);
+    native.reload();
+    pump_until("the theme after a refused replacement", || completed(log) > before);
     assert_eq!(page_value(native, "window.themed"), "\"new\"");
 }
 
@@ -336,6 +348,7 @@ fn geometry(native: &Native, stage: &Stage) {
     });
     // SAFETY: as above.
     let frame: NSRect = unsafe { msg_send![&*web, frame] };
+    assert_eq!((frame.origin.x, frame.origin.y), (10.0, 260.0));
     assert_eq!((frame.size.width, frame.size.height), (300.0, 200.0));
     native.set_zoom(2.0);
     // SAFETY: as above.
@@ -343,6 +356,7 @@ fn geometry(native: &Native, stage: &Stage) {
     assert!((zoom - 2.0).abs() < f64::EPSILON);
     native.set_zoom(1.0);
     native.set_background((10, 20, 30));
+    background(&web);
     // SAFETY: as above; both views are live.
     let parent: *const AnyObject = unsafe { msg_send![&*web, superview] };
     assert_eq!(parent, Retained::as_ptr(&stage.parent));
@@ -351,6 +365,32 @@ fn geometry(native: &Native, stage: &Stage) {
     let moved: *const AnyObject = unsafe { msg_send![&*web, superview] };
     assert_eq!(moved, Retained::as_ptr(&stage.other));
     native.reparent(stage.parent_handle());
+}
+
+fn background(web: &AnyObject) {
+    // SAFETY: the main thread and a live WKWebView; both returned objects live through the autorelease pool.
+    let color: *mut AnyObject = unsafe { msg_send![web, underPageBackgroundColor] };
+    // SAFETY: a live shared color space, used below to read the color's RGB components.
+    let space: *mut AnyObject = unsafe { msg_send![class!(NSColorSpace), sRGBColorSpace] };
+    // SAFETY: the color and color space are live objects of the expected classes.
+    let color: *mut AnyObject = unsafe { msg_send![color, colorUsingColorSpace: space] };
+    assert!(!color.is_null());
+    let components: [f64; 4] = [
+        // SAFETY: the converted color is in RGB space, so these component selectors are valid.
+        unsafe { msg_send![color, redComponent] },
+        // SAFETY: as above.
+        unsafe { msg_send![color, greenComponent] },
+        // SAFETY: as above.
+        unsafe { msg_send![color, blueComponent] },
+        // SAFETY: as above.
+        unsafe { msg_send![color, alphaComponent] },
+    ];
+    for (actual, expected) in components.into_iter().zip([10.0, 20.0, 30.0, 255.0]) {
+        assert!(
+            (actual - expected / 255.0).abs() < 1e-6,
+            "component {actual}, expected {expected}/255"
+        );
+    }
 }
 
 fn first_responder(stage: &Stage) -> *const AnyObject {
@@ -384,7 +424,7 @@ fn a_full_page(stage: &Stage) {
     keyboard(&native, &log, stage);
 }
 
-/// A locked-down page, made through the seam: no script, no theme, the network filtered.
+/// A hidden page made through the seam disables authored scripts and reports its installed network filter.
 fn a_locked_down_page(stage: &Stage) {
     let log = Log::default();
     let spec = Spec {
@@ -392,6 +432,9 @@ fn a_locked_down_page(stage: &Stage) {
         visible: false,
         block_network: true,
         scripts: vec![super::super::super::bridge::GUARD_SCRIPT.to_owned(), "1;".to_owned()],
+        text: Some(Arc::new(Mutex::new(Some(
+            "<title>locked down</title><script>document.documentElement.dataset.authored = 'ran';</script>".to_owned(),
+        )))),
         ..memory_spec(stage.parent_handle(), &log)
     };
     let (view, environment) = native_view::create(&spec).unwrap_or_else(|error| panic!("{error}"));
@@ -399,6 +442,16 @@ fn a_locked_down_page(stage: &Stage) {
     wait_for(&log, "the network filter", |report| {
         *report == Report::NetworkFilterInstalled
     });
+    view.load_url(&scheme::text_address(Uuid::new_v4()));
+    pump_until("the locked-down document", || completed(&log) > 0);
+    assert_eq!(
+        renderer_answer(&*view, "document.title"),
+        Ok(Some("\"locked down\"".to_owned()))
+    );
+    assert_eq!(
+        renderer_answer(&*view, "document.documentElement.dataset.authored"),
+        Ok(None)
+    );
     drop(view);
 }
 
