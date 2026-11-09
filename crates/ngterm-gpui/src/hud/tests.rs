@@ -494,26 +494,43 @@ fn panel_harness<'a>(dir: &std::path::Path, cx: &'a mut gpui_kit::TestAppContext
     harness
 }
 
-#[gpui_kit::test]
-fn hovering_a_hud_link_marks_it_and_leaving_or_adding_a_modifier_clears_it(cx: &mut gpui_kit::TestAppContext) {
-    let dir = tempfile::tempdir().unwrap();
-    let mut h = panel_harness(dir.path(), cx);
-    let (_, view) = h.panel();
+/// Waits for the panel's link on its final row. A paint that lands before the panel has its final grid leaves the link
+/// on the top row until the resize's repaint centers it, so the row comes from the painter's own header
+/// (`<columns> <rows> ...`), which settles a one-line body in the middle.
+fn await_settled_link(h: &mut PanelHarness<'_>, view: &Entity<TerminalView>) {
+    let settled = {
+        let slot = &h.state.core.library().held_session(h.session).unwrap().overlay;
+        let body = std::fs::read_to_string(&slot.hud.as_ref().unwrap().file).unwrap();
+        let rows: usize = body.split_whitespace().nth(1).unwrap().parse().unwrap();
+        (rows - 1) / 2
+    };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
         h.turn();
         if view.read_with(h.cx, |view, _| {
-            view.painted()
-                .is_some_and(|frame| frame.lines().join("\n").contains("https://example.com/panel"))
+            view.painted().is_some_and(|frame| {
+                frame
+                    .lines()
+                    .get(settled)
+                    .is_some_and(|line| line.contains("https://example.com/panel"))
+            })
         }) {
             break;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "the painter's link never appeared"
+            "the painter's link never settled on its row"
         );
         std::thread::yield_now();
     }
+}
+
+#[gpui_kit::test]
+fn hovering_a_hud_link_marks_it_and_leaving_or_adding_a_modifier_clears_it(cx: &mut gpui_kit::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = panel_harness(dir.path(), cx);
+    let (_, view) = h.panel();
+    await_settled_link(&mut h, &view);
     let (terminal, _) = h.panel();
     let at = h.deck.read_with(h.cx, |deck, cx| {
         let page = deck.page(h.session).unwrap();
