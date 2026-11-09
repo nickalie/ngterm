@@ -229,6 +229,73 @@ fn clear() -> Vec<String> {
 
 const CLI: (&str, &str) = ("CLAUDE_CODE_ENTRYPOINT", "cli");
 
+#[cfg(unix)]
+#[test]
+fn ngswap_restore_keeps_the_account_on_resume_and_fallback() {
+    let bench = Bench::new();
+    let helper = bench.path("profile helper.py");
+    fs::write(
+        &helper,
+        "import shlex,sys\nprint(shlex.join(['pinned-ngswap', 'work-account', *sys.argv[1:]]))\n",
+    )
+    .unwrap();
+    let vars = [
+        CLI,
+        ("NGSWAP_RUN_PROVIDER", "claude"),
+        ("NGSWAP_SESSION_HELPER", helper.to_str().unwrap()),
+    ];
+    let calls = bench.claude("start", &claude_payload("SessionStart", ""), &vars);
+    assert_eq!(
+        calls,
+        vec![pin(&format!(
+            "pinned-ngswap work-account prepare --provider claude --slot {SESSION}:{PANE}:resume -- --resume {ID} || pinned-ngswap work-account prepare --provider claude --slot {SESSION}:{PANE}:fresh"
+        ))]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ngswap_restore_preparation_failure_keeps_the_existing_pin() {
+    for marker in ["NGSWAP_RUN_PROVIDER", "NGSWAP_DEFAULT_ROOT"] {
+        for fail_fresh_only in [false, true] {
+            let bench = Bench::new();
+            let helper = bench.path("failing-helper.py");
+            let code = if fail_fresh_only {
+                "import sys\nif '--resume' not in sys.argv: sys.exit(1)\nprint('resume-command')\n"
+            } else {
+                "import sys\nsys.exit(1)\n"
+            };
+            fs::write(&helper, code).unwrap();
+            assert!(
+                bench
+                    .claude(
+                        "start",
+                        &claude_payload("SessionStart", ""),
+                        &[
+                            CLI,
+                            (marker, "claude"),
+                            ("NGSWAP_SESSION_HELPER", helper.to_str().unwrap()),
+                        ],
+                    )
+                    .is_empty()
+            );
+            assert_eq!(bench.agent_calls().len(), 1);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn another_ngswap_provider_does_not_suppress_claude_restore() {
+    let bench = Bench::new();
+    let calls = bench.claude(
+        "start",
+        &claude_payload("SessionStart", ""),
+        &[CLI, ("NGSWAP_RUN_PROVIDER", "codex"), ("NGSWAP_DEFAULT_ROOT", "/store")],
+    );
+    assert_eq!(calls, vec![pin(&resume_line())]);
+}
+
 #[test]
 fn a_claude_start_pins_the_live_conversation() {
     let bench = Bench::new();

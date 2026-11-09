@@ -40,7 +40,9 @@ Linux build unless it names another OS.
   live conversation (`claude --resume <id> || claude`), so a rerun launch brings each pane back to the conversation it
   was in last, through /clear, /resume and forks; a deliberate exit clears the pin, an ngterm quit keeps it. It skips
   `claude -p`, SDK runs and subagents. Upstream ships the idea only as its `claude-session-resume` cookbook recipe;
-  the script's header holds the details.
+  the script's header holds the details. On POSIX, an ngswap Claude launch uses helper-prepared resume and fresh
+  commands instead of bare `claude`, preserving the account and configuration paths. That optional branch needs
+  python3 and the ngswap profile recipe; Windows retains the ordinary pin form.
 - Another extension beyond upstream: a viewer makes and ends another machine's sessions, where upstream's only attaches
   and detaches. Attach Remote's picker ends with New Session, also offered when the machine has nothing to attach, and
   an attached row's menu has New Session on HOST and End Session on HOST… (`crates/ngterm-core/src/remote/origin_sessions.rs`).

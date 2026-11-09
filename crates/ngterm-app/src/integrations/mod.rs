@@ -30,6 +30,10 @@
 //!   header holds what it pins, what it skips and why (`build/patches/agent-status/0003-restore-adapter.patch`), and
 //!   the skill tells agents not to hand-write that hook for Claude Code
 //!   (`build/patches/skill-ngterm/0005-restore-adapter.patch`);
+//! - on POSIX, the restore adapter preserves an ngswap Claude account through helper-prepared resume and fresh
+//!   commands, using stable session/pane descriptor slots and retaining the existing pin when preparation fails;
+//!   this optional integration needs python3 and the ngswap profile recipe (Windows keeps the ordinary pin form,
+//!   since that recipe is POSIX-only): `build/patches/agent-status/0008-ngswap-restore.patch`;
 //! - every script and plugin calls `ngtermctl` where upstream's calls `agtermctl` (the wrappers' default, their
 //!   comments and the shell integration's);
 //! - the agent-status package is under this build's names: its wrappers, Pi extension and `OpenCode` plugins are

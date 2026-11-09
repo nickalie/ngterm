@@ -14,13 +14,19 @@
 #
 #   claude --resume <session_id> || claude
 #
+# On POSIX, a Claude launched through ngswap instead pins helper-generated resume and fresh commands that preserve
+# its account and configuration. This branch needs python3 and ngswap's ngswap-session.py recipe, configurable via
+# NGSWAP_SESSION_HELPER. Its two private descriptors use stable session/pane slots and are replaced atomically on
+# each start, so compaction and /clear do not accumulate unused descriptors. Windows keeps the ordinary pin form.
+#
 # The fallback starts a fresh claude when the conversation cannot be resumed: Claude Code fires SessionStart before
 # the first message, and a conversation that never got one is not resumable ("No conversation found"). Claude Code
 # exits 0 when quit (/exit, Ctrl-C twice, Ctrl-D), so the fallback runs only on that failure or a crash.
 #
 # The pin is shell code typed into the pane's login shell (fish, bash, zsh or PowerShell 7 all take `a || b`),
-# sticky and persisted, so only a strictly checked id goes into it: the payload's `session_id`, UUID-shaped, hex
-# digits and dashes only. Anything else leaves the existing pin alone.
+# sticky and persisted, so the payload's `session_id` must be UUID-shaped, hex digits and dashes only. The ngswap
+# helper shell-quotes its interpreter, script and descriptor paths. Invalid ids or failed preparation leave the
+# existing pin alone.
 #
 # What pins, and what clears: only the interactive CLI pins. A `claude -p` run (also one spawned by a tool call of
 # the pane's interactive claude, which inherits its environment) and an Agent SDK run have CLAUDE_CODE_ENTRYPOINT
@@ -34,8 +40,8 @@
 # start sets the record, the end clears it when it names the record's conversation.
 #
 # As a hook it must never disturb the agent: no output (Claude Code adds a SessionStart hook's stdout to the
-# conversation), always exit 0, and outside ngterm (NGTERM_SESSION_ID unset) it does nothing. It needs no jq or
-# python: the payload is matched with bash's own regex.
+# conversation), always exit 0, and outside ngterm (NGTERM_SESSION_ID unset) it does nothing. Payload parsing uses
+# bash's own regex and needs no jq or python; only the optional ngswap preparation uses python3.
 #
 # ngtermctl resolution: $NGTERMCTL, else the path the installer bakes in, else `ngtermctl` on PATH.
 
@@ -91,7 +97,20 @@ claude_hook() {
     start)
       agent_hook SessionStart
       id=$(session_id) || return 0
-      restore "claude --resume $id || claude"
+      if [ "${NGSWAP_RUN_PROVIDER:-}" = claude ] || {
+        [ -z "${NGSWAP_RUN_PROVIDER:-}" ] && [ -n "${NGSWAP_DEFAULT_ROOT:-}" ]
+      }; then
+        # A bare restore pin loses the account just as a bare companion launch
+        # does. Prepare both paths in this hook's still-correct environment.
+        local launcher resume_command fresh_command slot
+        launcher="${NGSWAP_SESSION_HELPER:-${XDG_CONFIG_HOME:-$HOME/.config}/ngterm/ngswap-profile/ngswap-session.py}"
+        slot="$NGTERM_SESSION_ID:${NGTERM_PANE_ID:-${NGTERM_PANE:-left}}"
+        resume_command=$(python3 "$launcher" prepare --provider claude --slot "$slot:resume" -- --resume "$id") || return 0
+        fresh_command=$(python3 "$launcher" prepare --provider claude --slot "$slot:fresh") || return 0
+        restore "$resume_command || $fresh_command"
+      else
+        restore "claude --resume $id || claude"
+      fi
       ;;
     end)
       agent_hook SessionEnd
