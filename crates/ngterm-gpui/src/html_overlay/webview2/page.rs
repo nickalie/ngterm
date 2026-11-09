@@ -1392,6 +1392,10 @@ mod tests {
     use super::*;
 
     #[test]
+#[cfg(all(test, target_os = "macos"))]
+#[path = "page_macos_tests.rs"]
+mod macos_tests;
+
     fn colors_read_as_channels() {
         assert_eq!(rgb8("#102030"), Some((0x10, 0x20, 0x30)));
         assert_eq!(rgb8("102030"), None);

@@ -23,7 +23,12 @@ mod runtime {
             fn ngterm_web_supported() -> bool;
         }
         // SAFETY: a platform version check without side effects.
-        if unsafe { ngterm_web_supported() } {
+        version_for(unsafe { ngterm_web_supported() })
+    }
+
+    /// What the app reports of a `WebKit` new enough for the pages, or of one that is not.
+    pub(super) fn version_for(supported: bool) -> Result<String, String> {
+        if supported {
             Ok("system WebKit".into())
         } else {
             Err("HTML pages require macOS 14 or newer".into())

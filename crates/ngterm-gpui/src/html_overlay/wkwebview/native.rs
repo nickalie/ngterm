@@ -653,3 +653,7 @@ fn serve_text(text: &Text, uri: &str) -> wry::http::Response<std::borrow::Cow<'s
         .body(std::borrow::Cow::Owned(body))
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;
