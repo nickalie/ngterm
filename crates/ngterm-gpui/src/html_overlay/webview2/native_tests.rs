@@ -215,6 +215,7 @@ fn browser_child() {
     local_protocol_pages(parent, &native.environment(), dir.path());
     close_single_page(parent, &native.environment(), dir.path());
     network_pages(parent, &native, dir.path(), &reports);
+    script_stops_a_live_sequences_keys(parent, &native.environment(), dir.path());
     invalid_specifications(parent, &native.environment(), dir.path());
     let mut browser_pid = 0;
     // SAFETY: reading the live web view's browser pid on its owning thread.
@@ -381,6 +382,128 @@ fn browser_messages(native: &Native, reports: &Rc<RefCell<Vec<Report>>>) {
     );
     native.post_json(r#"{"coverage":"reply"}"#);
     take_report(reports, |r| matches!(r, Report::Message(s) if s == "echo:reply"));
+}
+
+/// What the script test's page signs with.
+const KEYS_NONCE: &str = "post-nonce:reply-nonce";
+
+/// A focused page with an input field and the real page script, as the script test types into it.
+fn keys_page(
+    parent: isize,
+    environment: &ICoreWebView2Environment,
+    dir: &Path,
+    reports: &Rc<RefCell<Vec<Report>>>,
+) -> Native {
+    let mut spec = spec(parent, &dir.join("keys"), reports);
+    spec.store.environment = Some(environment.clone());
+    spec.store.profile = "keys".into();
+    spec.theme = None;
+    spec.scripts = vec![super::super::bridge::page_script(KEYS_NONCE, false, true)];
+    spec.trusted_document_script = None;
+    spec.text_channel = false;
+    spec.block_network = false;
+    spec.bounds = Some(Bounds {
+        x: 0.,
+        y: 0.,
+        width: 320.,
+        height: 200.,
+    });
+    spec.visible = true;
+    let native = Native::create(&spec).unwrap();
+    spec.text
+        .as_ref()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .replace("<!doctype html><input id=field autofocus>".into());
+    native.load_url(&scheme::text_address(uuid::Uuid::new_v4()));
+    take_report(reports, |r| matches!(r, Report::Completed { success: true, .. }));
+    native
+        .devtools_now(
+            "Emulation.setFocusEmulationEnabled",
+            &serde_json::json!({"enabled": true}),
+        )
+        .unwrap();
+    main_script(
+        &native,
+        "chrome.webview.addEventListener('message', event => { if (event.data.ngterm === 'keys') \
+         chrome.webview.postMessage('told'); }); field.focus()",
+    );
+    native
+}
+
+/// The page script on a real page, driven by the trusted input CDP gives: it stops a live sequence's key before the
+/// page sees it and reports it, a key that matches nothing reaches the page, a key stopped by stale word goes back into
+/// the page by `redelivery`, and with no sequence live nothing is stopped.
+fn script_stops_a_live_sequences_keys(parent: isize, environment: &ICoreWebView2Environment, dir: &Path) {
+    use super::super::bridge::{self, Message, StoppedKey};
+
+    const NONCE: &str = KEYS_NONCE;
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let native = keys_page(parent, environment, dir, &reports);
+    let told = |keys: &[u32]| {
+        native.post_json(&bridge::live_keys(NONCE, keys, 60_000));
+        take_report(&reports, |r| matches!(r, Report::Message(s) if s == "told"));
+    };
+    let field = || {
+        main_script(&native, "chrome.webview.postMessage('field:' + field.value)");
+        let Report::Message(value) =
+            take_report(&reports, |r| matches!(r, Report::Message(s) if s.starts_with("field:")))
+        else {
+            unreachable!()
+        };
+        value
+    };
+    let key = |letter: &str, virtual_key: u32| StoppedKey {
+        virtual_key,
+        shift: false,
+        repeat: false,
+        key: letter.to_owned(),
+        code: format!("Key{}", letter.to_uppercase()),
+        at: 0,
+    };
+    let stopped_key_report = |repeat: bool| {
+        let Report::Message(raw) = take_report(
+            &reports,
+            |r| matches!(r, Report::Message(raw) if matches!(bridge::parse(raw, NONCE), Some(Message::Key(_)))),
+        ) else {
+            unreachable!()
+        };
+        let Some(Message::Key(key)) = bridge::parse(&raw, NONCE) else {
+            unreachable!()
+        };
+        assert_eq!((key.virtual_key, key.repeat), (0x47, repeat));
+    };
+    let typed_input = |letter: &str| {
+        take_report(
+            &reports,
+            |r| matches!(r, Report::Message(raw) if raw.contains(&format!(r#""key":"{letter}""#)) && raw.contains(r#""k":"input""#)),
+        );
+    };
+
+    told(&[0x47]);
+    let [press, release] = bridge::redelivery(&key("g", 0x47));
+    native.redeliver_key(std::slice::from_ref(&press));
+    stopped_key_report(false);
+    let mut autorepeat = press.clone();
+    autorepeat["autoRepeat"] = serde_json::Value::Bool(true);
+    native.redeliver_key(std::slice::from_ref(&autorepeat));
+    stopped_key_report(true);
+    native.redeliver_key(std::slice::from_ref(&release));
+    assert_eq!(
+        field(),
+        "field:",
+        "the page never had the stopped key or its autorepeat"
+    );
+
+    native.redeliver_key(&bridge::redelivery(&key("x", 0x58)));
+    typed_input("x");
+    assert_eq!(field(), "field:x", "a key the sequence does not take is the page's");
+
+    told(&[]);
+    native.redeliver_key(&bridge::redelivery(&key("g", 0x47)));
+    typed_input("g");
+    assert_eq!(field(), "field:xg", "with no live sequence nothing is stopped");
 }
 
 fn saved_profile_clear(parent: isize, environment: &ICoreWebView2Environment, dir: &Path) {

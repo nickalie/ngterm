@@ -37,6 +37,8 @@
 //! | Press queued ahead of its own autorepeat | Fires once, and the autorepeat is consumed |
 //! | Unowned autorepeat | Passed without advancing the matcher or the typed-key cutoff |
 //! | Character typed after a leader, reported after an in-flight autorepeat | Ends the leader |
+//! | Windows: a leader's typing tail (letter, Enter, Backspace), stopped by the page's script | Fires, and the page never has it |
+//! | Windows: a key the page's script stopped that the keymap no longer takes | Goes back into the page |
 //!
 //! A page's callback runs ahead of the reports still waiting for the pump, in the order the keys came: it answers for
 //! the matcher as those reports will leave it, and a press the page keeps ends the sequence only behind them
@@ -283,14 +285,81 @@ pub fn takes(stroke: &KeyStroke) -> bool {
 /// press is waiting on and changes nothing, and the key stays the page's either way.
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 pub fn page_typed(at: u64) {
+    if let Some(pressed) = instant_of(at) {
+        ROUTER.with_borrow_mut(|router| router.page_typed(pressed));
+    }
+}
+
+/// The moment `at`, in the system clock's milliseconds since the epoch, on the monotonic clock.
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn instant_of(at: u64) -> Option<Instant> {
     let now = Instant::now();
     let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     let age = clock.map_or(0, |since| {
         u64::try_from(since.as_millis()).unwrap_or(u64::MAX).saturating_sub(at)
     });
-    if let Some(pressed) = now.checked_sub(Duration::from_millis(age)) {
-        ROUTER.with_borrow_mut(|router| router.page_typed(pressed));
+    now.checked_sub(Duration::from_millis(age))
+}
+
+/// A Windows page's script stopped this press for a live sequence (`html_overlay::webview2::bridge`) and reported it:
+/// the keymap takes it as it stands now and it is dispatched to the window here, in the pump's order (the reports queued
+/// behind it are newer keys, not older ones). Whether the keymap took it; a key it did not take goes back to the page.
+#[cfg(all(feature = "html", windows))]
+pub fn dispatch_stopped_key(
+    keystroke: &gpui_kit::Keystroke,
+    keycode: u32,
+    repeat: bool,
+    at: u64,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let stroke = page_stroke(keystroke, keycode, repeat);
+    let identity = stroke.identity;
+    let taken = ROUTER.with_borrow_mut(|router| {
+        let taken = router.takes_stopped(&stroke);
+        if taken {
+            router.dispatched = Some(stroke);
+            router.dispatched_at = instant_of(at);
+        }
+        taken
+    });
+    if !taken {
+        return false;
     }
+    window.dispatch_keystroke(keystroke.clone(), cx);
+    ROUTER.with_borrow_mut(|router| {
+        let owned = router.owns(identity);
+        router.end_report(false);
+        owned
+    })
+}
+
+/// How long the live leader or repeat window has left, as the queued reports will leave it; `None` when none is live
+/// or it has no deadline.
+#[cfg(all(feature = "html", windows))]
+#[must_use]
+pub fn live_remaining() -> Option<Duration> {
+    ROUTER.with_borrow(|router| {
+        let engine = router.matcher_after_queue()?;
+        (engine.is_armed() || engine.is_repeating()).then_some(())?;
+        router.deadline?.checked_duration_since(Instant::now())
+    })
+}
+
+/// Whether a fresh press spelled `stroke` would complete or advance the live sequence, asked without changing it. Esc
+/// is not asked: it comes through the page's accelerator, for the leader alone.
+#[cfg(all(feature = "html", windows))]
+#[must_use]
+pub fn would_advance(stroke: &KeyStroke) -> bool {
+    !stroke.is_escape()
+        && input::chord(stroke).is_some_and(|chord| {
+            !is_switcher(&chord)
+                && ROUTER.with_borrow(|router| {
+                    router
+                        .matcher_after_queue()
+                        .is_some_and(|mut engine| !matches!(engine.advance(&chord), EngineOutcome::Unmatched))
+                })
+        })
 }
 
 /// Whether the app takes `action`'s menu chord: full screen yields after a half-typed leader, and `undo_close`
@@ -651,13 +720,20 @@ impl Router {
         }
     }
 
-    /// The matcher as the reports still queued will leave it, a lapsed leader or repeat window counting as gone.
+    /// The matcher as it stands, a lapsed leader or repeat window counting as gone.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
-    fn matcher_after_queue(&self) -> Option<CustomCommandEngine> {
+    fn matcher_now(&self) -> Option<CustomCommandEngine> {
         let mut engine = self.engine.clone()?;
         if self.lapsed() {
             engine.reset();
         }
+        Some(engine)
+    }
+
+    /// The matcher as the reports still queued will leave it.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn matcher_after_queue(&self) -> Option<CustomCommandEngine> {
+        let mut engine = self.matcher_now()?;
         for report in &self.queued {
             report.replay(&mut engine);
         }
@@ -676,7 +752,13 @@ impl Router {
     /// page holding the keyboard.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn page_press_taken(&self, chord: &Chord) -> bool {
-        let Some(mut engine) = self.matcher_after_queue() else {
+        self.matcher_takes(self.matcher_after_queue(), chord)
+    }
+
+    /// Whether `engine` or the menu takes a fresh press spelled `chord`, a page holding the keyboard.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn matcher_takes(&self, engine: Option<CustomCommandEngine>, chord: &Chord) -> bool {
+        let Some(mut engine) = engine else {
             return false;
         };
         let armed = engine.is_armed();
@@ -684,6 +766,27 @@ impl Router {
             .get(chord)
             .is_some_and(|action| menu_takes(*action, armed, true))
             || !matches!(engine.advance(chord), EngineOutcome::Unmatched)
+    }
+
+    /// Whether the keymap takes a press a page's script stopped ([`dispatch_stopped_key`]), as it stands now: the
+    /// reports still queued are newer keys, and it goes first. An autorepeat is the keymap's while it owns the press. A
+    /// fresh press the keymap does not take ends the sequence, as any key the page keeps does.
+    #[cfg(all(feature = "html", windows))]
+    fn takes_stopped(&mut self, stroke: &KeyStroke) -> bool {
+        if stroke.action == KeyAction::Repeat {
+            return self.owns(stroke.identity);
+        }
+        self.released.remove(&stroke.identity);
+        self.consumed.remove(&stroke.identity);
+        let taken = input::chord(stroke)
+            .filter(|chord| !is_switcher(chord))
+            .is_some_and(|chord| self.matcher_takes(self.matcher_now(), &chord));
+        if taken {
+            self.released.insert(stroke.identity);
+        } else {
+            self.reset_if_live();
+        }
+        taken
     }
 
     /// A key the page keeps went down at `pressed` ([`page_typed`]): after the monitor's last press, it ends the sequence.
