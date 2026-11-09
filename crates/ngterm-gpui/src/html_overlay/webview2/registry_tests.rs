@@ -11,6 +11,7 @@ use tempfile::TempDir;
 
 use super::super::fake_native::{self, Call, FakeEngine, FakeView, Model, Probe, overlay, settle_until, url_overlay};
 use super::*;
+use crate::html_overlay::text_page;
 
 /// A window's content holding one page's element, as the deck does.
 struct Holder {
@@ -708,11 +709,16 @@ fn a_text_page_rebuilds_for_a_new_theme_and_stops_with_its_page(cx: &mut TestApp
     cx.update(|cx| page.report(Report::ThemeInstalled, cx));
     settle_until(cx, || probe.take().iter().any(|call| matches!(call, Call::Load(_))));
 
+    assert!(text_page::focus_search(page.id()), "the bridge is registered");
     cx.update(|cx| {
         page.apply(&source, false, cx);
         page.close(cx);
     });
     assert!(!page.active());
+    assert!(
+        !text_page::focus_search(page.id()),
+        "closing removes the bridge even while the page is held"
+    );
     settle_until(cx, || true);
 }
 
@@ -938,9 +944,10 @@ fn a_clear_is_refused_while_it_cannot_run(cx: &mut TestAppContext) {
 #[test]
 fn a_clear_with_nothing_to_run_in_reports_it() {
     let engine = fake_native::install();
+    // no pump either: nobody hears, and nothing panics
     clear();
     assert!(engine.clears().is_empty());
-    // no pump either: nobody hears, and nothing panics
+    // with a pump but no window, the failure is reported
     let (jobs, queue) = async_channel::unbounded::<Job>();
     with(|registry| registry.jobs = Some(jobs));
     clear();
@@ -1020,15 +1027,18 @@ fn shutdown_lets_the_pages_go_and_refuses_what_comes_after() {
         let source = url_overlay();
         let model = Model::new(&source);
         let (page, probe) = realized(&source, &model);
-        with(|registry| registry.graveyard.push((page.native().unwrap(), None)));
+        let id = page.id();
+        drop(page);
+        let (buried, buried_probe) = FakeView::made();
+        with(|registry| registry.graveyard.push((buried, None)));
         shutdown();
-        assert!(self::page(page.id()).is_none());
+        assert!(self::page(id).is_none());
         assert_eq!(PageHost.web_views_unavailable().as_deref(), Some("the app is quitting"));
         assert!(
             !probe.dropped(),
             "let go, not closed: a close would run inside the quit"
         );
-        drop(page);
+        assert!(!buried_probe.dropped(), "buried views are also let go without closing");
     })
     .join()
     .unwrap();
@@ -1043,7 +1053,22 @@ fn a_layer_over_a_window_covers_only_that_windows_pages(cx: &mut TestAppContext)
     let source = url_overlay();
     let model = Model::new(&source);
     let (page, probe) = realized(&source, &model);
-    let cx = window_of(cx);
+    let other_source = url_overlay();
+    let other_model = Model::new(&other_source);
+    let (other_page, _) = realized(&other_source, &other_model);
+    let other_cx = window_of(cx);
+    let other_handle = other_cx.update(|window, _| window.window_handle());
+    let _other_element =
+        other_cx.update(|window, cx| cx.new(|cx| PageView::new(Rc::clone(&other_page), 8, window, cx)));
+    other_cx.update(|_, cx| apply(&other_source, true, cx));
+    other_page.place(native::Bounds {
+        x: 0.,
+        y: 0.,
+        width: 10.,
+        height: 10.,
+    });
+    let mut root_cx = other_cx.cx.clone();
+    let cx = window_of(&mut root_cx);
     let handle = cx.update(|window, _| window.window_handle());
     let _element = cx.update(|window, cx| cx.new(|cx| PageView::new(Rc::clone(&page), 7, window, cx)));
     cx.update(|_, cx| apply(&source, true, cx));
@@ -1055,10 +1080,13 @@ fn a_layer_over_a_window_covers_only_that_windows_pages(cx: &mut TestAppContext)
     });
     assert!(!is_covered(handle));
     assert!(page.wanted().visible);
+    assert!(other_page.wanted().visible);
     cx.update(|window, cx| set_covered(window, true, cx));
     assert!(is_covered(handle));
     assert_eq!(with(|registry| registry.windows.get(&handle).copied()), Some(7));
     assert!(!page.wanted().visible, "the pages of a covered window step aside");
+    assert!(!is_covered(other_handle));
+    assert!(other_page.wanted().visible, "another window keeps its page visible");
     cx.update(|window, cx| set_covered(window, true, cx));
     settle_until(cx, || true);
     assert!(probe.take().iter().all(|call| matches!(call, Call::Bounds(_))));

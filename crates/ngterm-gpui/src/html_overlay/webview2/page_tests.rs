@@ -553,7 +553,7 @@ fn an_image_wears_no_theme_but_a_closed_page_follows_nothing(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn a_new_theme_before_the_web_view_exists_rebuilds_nothing_but_fails_a_page_without_a_store(cx: &mut TestAppContext) {
+fn a_new_theme_before_the_web_view_exists_fails_a_page_without_a_store(cx: &mut TestAppContext) {
     let (source, _held) = file_overlay("<p>page</p>");
     fake_native::install();
     let mut model = Model::new(&source);
@@ -562,6 +562,27 @@ fn a_new_theme_before_the_web_view_exists_rebuilds_nothing_but_fails_a_page_with
     cx.update(|cx| page.apply_theme(&terminal("#102030"), cx));
     model.drain();
     assert_eq!(model.overlay().load_error.as_deref(), Some("no profile"));
+}
+
+#[gpui_kit::test]
+fn a_text_page_waits_for_its_web_view_before_building_for_a_new_theme(cx: &mut TestAppContext) {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("notes.txt");
+    std::fs::write(&path, "hello").unwrap();
+    let source = overlay(HtmlSource::Text {
+        path: path.to_string_lossy().into_owned(),
+        line: None,
+    });
+    fake_native::install();
+    let model = Model::new(&source);
+    let page = Page::new(&source, None, colors(), Storage::Ephemeral, &model.poster());
+    assert!(page.text_bridge.is_some() && page.native().is_none());
+    cx.update(|cx| page.apply_theme(&terminal("#102030"), cx));
+    assert_eq!(model.pending(), 0, "no document build posts to the model yet");
+    assert!(page.text().lock().unwrap().is_none());
+    let (view, _probe) = FakeView::made();
+    page.realized(view);
+    assert!(model.pending() > 0, "the first build starts once the web view exists");
 }
 
 // MARK: - the navigation policy
@@ -1210,14 +1231,22 @@ fn a_refused_click_on_a_shown_page_is_offered_and_the_shown_document_stays(cx: &
 #[gpui_kit::test]
 fn closing_a_page_withdraws_its_prompt_and_releases_its_element(cx: &mut TestAppContext) {
     let driven = driven(&url_overlay());
-    let (_element, cx) = mounted(&driven, cx);
+    let (element, cx) = mounted(&driven, cx);
     driven.page.drawn_in(cx.update(|window, _| window.window_handle()));
     cx.update(|_, cx| driven.show(cx));
     asks(&driven, cx);
     assert!(prompt_up(cx));
+    cx.update(gpui_kit::Window::blur);
+    cx.run_until_parked();
+    assert!(!driven.page.laid_out.get().focused);
     cx.update(|_, cx| driven.page.close(cx));
     cx.run_until_parked();
     assert!(!prompt_up(cx), "the prompt goes with the page");
+    focus_element(&element, cx);
+    assert!(
+        !driven.page.laid_out.get().focused,
+        "the released element ignores focus even while the page is held"
+    );
     assert!(!driven.page.active() && driven.page.native().is_none());
     assert!(!driven.view.dropped(), "the pump buries the web view");
 }
