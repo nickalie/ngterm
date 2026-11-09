@@ -581,6 +581,9 @@ fn the_pump_drops_key_reports_queued_after_a_page_closed(cx: &mut TestAppContext
     queued_key(Uuid::new_v4(), "ctrl-a");
     run(queue.try_recv().unwrap(), &mut cx.to_async());
     queued_key(Uuid::new_v4(), "ctrl-g");
+    // Ends on a prefix: a report the pump failed to drop would leave the replayed matcher armed for the chord below.
+    queued_key(Uuid::new_v4(), "ctrl-a");
+    run(queue.try_recv().unwrap(), &mut cx.to_async());
     run(queue.try_recv().unwrap(), &mut cx.to_async());
     run(queue.try_recv().unwrap(), &mut cx.to_async());
     assert!(
