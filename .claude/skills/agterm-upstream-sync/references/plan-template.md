@@ -28,7 +28,7 @@ The sync hands this plan to the `plan-exec` skill, which reads `## Overview` and
 ## Approach
 
 - Each task follows AGENTS.md > Porting a command group: upstream's Swift sources and tests hold the exact strings.
-- Where upstream overlaps an ngterm feature or deliberate deviation (README, `conformance/docs/rust-build.md`),
+- Where upstream overlaps an ngterm feature or deliberate deviation (`docs/development.md`, `conformance/docs/rust-build.md`),
   ngterm's form wins: a task adapts upstream's change onto it or leaves the contradicting part out, and never reworks
   the ngterm feature toward upstream.
 - Behavior that upstream builds on a macOS API gets a form for macOS, Linux and Windows (AGENTS.md > Platforms), or
@@ -80,7 +80,7 @@ section, `.claude/rules/*.md`>
 ### Task <N>: Claim <new tag> parity and update the docs
 
 - [ ] bump `PARITY_LEVEL` and its mirrors (`tag-mentions.sh <old>`, class `claim`) once every task above is done
-- [ ] README.md (its Android and iOS sections included), conformance/README.md and conformance/docs/rust-build.md
+- [ ] README.md, docs/development.md (its Android and iOS sections included), conformance/README.md and conformance/docs/rust-build.md
   describe what changed
 ````
 
@@ -94,5 +94,5 @@ section, `.claude/rules/*.md`>
   checked, not assumed.
 - Each task's checks name the machine for each platform it reaches (`references/machines.md`): the iOS build and
   tests on the Mac, the Android app's instrumented tests and screen checks on the emulator, Windows in the VM.
-  Mobile checks follow README > Android and > iOS.
+  Mobile checks follow docs/development.md > Android and > iOS.
 - Facts come from this run's reports and greps, not from memory of earlier syncs.

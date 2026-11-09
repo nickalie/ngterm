@@ -5,7 +5,7 @@
 #
 # Classes (first matching rule wins, by path):
 #   generated  catalog.yaml, ui-ids.yaml: gen_catalog.py rewrites them; never edit by hand
-#   bump       the parity *target*: README.md, AGENTS.md, conformance/README.md, .revmux/profile.md's project line;
+#   bump       the parity *target*: README.md, docs/development.md, AGENTS.md, conformance/README.md, .revmux/profile.md's project line;
 #              a line there that states the build's claim (it says "claim") is `claim` instead
 #   reference  swift_macos.py's PARITY_LEVEL, the macOS reference app's level, which is the catalog's release; its
 #              mirror is the `parity_level` assert in selftests/test_impls.py::test_swift_macos_profile_follows_launch_mode.
@@ -38,7 +38,7 @@ cd "$root"
 classify() {
   case "$1" in
     conformance/catalog.yaml|conformance/ui-ids.yaml) echo generated ;;
-    README.md|AGENTS.md|conformance/README.md|.revmux/profile.md) echo bump ;;
+    README.md|docs/development.md|AGENTS.md|conformance/README.md|.revmux/profile.md) echo bump ;;
     conformance/agterm_conformance/impls/swift_macos.py) echo reference ;;
     build/pins.env) echo pins ;;
     crates/ngterm-app/src/integrations/mod.rs) echo resources ;;

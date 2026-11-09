@@ -41,7 +41,7 @@ plan in English and drop sections that would stay empty.
   ngterm gap-filler or a patch once it covers the case.
 - Ghostty's Zig tests beside the changed code are the cases each port's unit tests assert; sprite changes keep
   `crates/ngterm-gpui/tests/golden/` equal to Ghostty's `src/font/sprite/testdata/`.
-- Recorded ngterm deviations (README, `conformance/docs/rust-build.md`, `build/patches/ghostty-vt/README.md`) win over
+- Recorded ngterm deviations (`docs/development.md`, `conformance/docs/rust-build.md`, `build/patches/ghostty-vt/README.md`) win over
   Ghostty's new form.
 - Platforms: Ghostty's macOS form on macOS, its Linux form on Linux, the Linux form on Windows unless a Windows
   convention decides (recorded in the module).
@@ -100,7 +100,7 @@ plan in English and drop sections that would stay empty.
 
 ### Task <last>: Record the new pin in the docs
 
-- [ ] README.md, `conformance/docs/rust-build.md` and the patches README describe the new pin and what changed
+- [ ] `docs/development.md`, `conformance/docs/rust-build.md` and the patches README describe the new pin and what changed
   (Zig version, patches carried, new behaviors)
 - [ ] every ngterm file in the report's review checklist was reviewed by a task above; those citing a revision say
   the new one
@@ -116,5 +116,5 @@ plan in English and drop sections that would stay empty.
   the computed values (colors, rects, layers), not GPUI's output.
 - Each task's checks name the machine for each platform it reaches (`references/machines.md`): the iOS build and
   tests and the macOS renderer on the Mac, the Android renderer's instrumented tests and screen checks on the
-  emulator, Windows in the VM. Mobile checks follow README > Android and > iOS.
+  emulator, Windows in the VM. Mobile checks follow docs/development.md > Android and > iOS.
 - Facts come from this run's reports and greps, not from memory of earlier syncs.

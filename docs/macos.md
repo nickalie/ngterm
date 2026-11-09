@@ -30,7 +30,7 @@ the `release` environment holds the Apple secrets (`sign-macos.sh package`; `doc
 
 A second launch forwards activation over an owner-only Unix socket, protected by a file lock that also serializes
 recovery after a crash. Application ids and state directories isolate dev instances. The state and configuration
-locations follow the Unix XDG rules documented in the README; `NGTERM_STATE_DIR` overrides the state directory.
+locations follow the Unix XDG rules documented in [development.md](development.md); `NGTERM_STATE_DIR` overrides the state directory.
 
 When no locale is supplied, pane launches set `LANG=en_US.UTF-8`, so readline preserves Unicode input. Explicit
 locale settings take precedence. Frontends and session servers raise their soft descriptor limit to support many

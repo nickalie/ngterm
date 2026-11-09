@@ -13,7 +13,7 @@ signs what has a key, verifies the result and publishes a GitHub release with:
 | Linux web engine runtime, per architecture: `ngterm-web-engine-<key>-linux-<arch>.tar.zst`, on its own `web-engine-<key>` release | listed in `SHA256SUMS`; the app itself trusts only the size and SHA-256 compiled into it |
 | `SHA256SUMS`, `SHA256SUMS.minisig` | the minisign key; every asset also gets a GitHub build provenance attestation |
 
-Installed builds update themselves from these releases (README > Downloads and releases). They trust exactly the
+Installed builds update themselves from these releases (docs/development.md > Downloads and releases). They trust exactly the
 minisign key their source commit carries, `crates/ngterm-update/trust/minisign.pub`, and refuse a release whose
 `SHA256SUMS` signature doesn't verify against it or whose trusted comment isn't `ngterm v<version> SHA256SUMS`.
 

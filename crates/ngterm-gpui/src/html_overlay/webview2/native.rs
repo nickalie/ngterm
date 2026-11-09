@@ -49,7 +49,7 @@ use wry::{
 
 use super::super::policy::GrantRoot;
 use super::native_view::NativeView;
-use super::scheme;
+use super::{scheme, store};
 
 /// A page's content area in its window, in logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1173,7 +1173,7 @@ pub fn clear_profile(
         profile,
         ..
     } = store;
-    let (webview, environment) = match anchor(&profile, &user_data, environment) {
+    let (webview, environment) = match anchor(&profile, false, &user_data, environment) {
         Ok(anchor) => anchor,
         Err(err) => {
             done(Err(err));
@@ -1213,14 +1213,18 @@ fn start_clear(profile: &ICoreWebView2Profile2, done: Box<dyn FnOnce(Result<(), 
     }
 }
 
-// MARK: - the saved store's anchor
+// MARK: - the profile and browser anchor
 
-/// A hidden web view on the saved store's profile, kept for the rest of the run once a page or the clear used the
-/// profile. `WebView2` unloads a profile when its last web view closes and loads it again for the next one; a web view
+/// A hidden web view that keeps the saved store's profile or the browser alive for the rest of the run.
+/// `WebView2` unloads a profile when its last web view closes and loads it again for the next one; a web view
 /// made while it unloads may find the profile's cookies not there yet, and a clear through it then empties nothing,
 /// the cookie coming back for the page after it (CI, `test_clear_empties_the_store_persistent_pages_share`). With the
 /// anchor the profile stays loaded, so every page and the clear see the one cookie store. It sits in a hidden window
 /// of its own ([`host_window`]), which no GPUI window's close takes with it.
+///
+/// The browser process has the same life: it ends a moment after its last web view closes, and a next page then starts
+/// a new one, the seconds of a cold start every time the last page closed. So with no saved store to anchor, an
+/// in-memory profile's anchor keeps the browser for the next page ([`hold_profile`]).
 struct Anchor {
     profile: String,
     view: WebView,
@@ -1232,10 +1236,11 @@ thread_local! {
     static HOST: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
 }
 
-/// The web view and environment of `profile`'s anchor (in `user_data`), made (in `environment`, the pages' own) when
-/// there is none for the profile. Pumps the window's messages while it is made.
+/// The web view and environment of `profile`'s anchor (in `user_data`, in memory when `private`), made (in `environment`,
+/// the pages' own) when there is none for the profile. Pumps the window's messages while it is made.
 fn anchor(
     profile: &str,
+    private: bool,
     user_data: &Path,
     environment: Option<ICoreWebView2Environment>,
 ) -> Result<(ICoreWebView2, ICoreWebView2Environment), String> {
@@ -1252,7 +1257,9 @@ fn anchor(
     let mut context = WebContext::new(Some(user_data.to_path_buf()));
     let mut builder = WebViewBuilder::new_with_web_context(&mut context)
         .with_visible(false)
+        .with_focused(false)
         .with_devtools(false)
+        .with_incognito(private)
         .with_profile_name(profile)
         .with_bounds(
             Bounds {
@@ -1308,7 +1315,7 @@ fn host_window() -> Result<isize, String> {
     };
     if window.is_null() {
         return Err(format!(
-            "the saved store's window was not made: {}",
+            "the anchor's window was not made: {}",
             std::io::Error::last_os_error()
         ));
     }
@@ -1317,13 +1324,16 @@ fn host_window() -> Result<isize, String> {
     Ok(window)
 }
 
-/// Makes the saved store's anchor beside page web view `native`, when it has none.
+/// Makes the anchor beside page web view `native`: the saved store's for a page on it, else one that only keeps the
+/// browser, unless an anchor already does. Its in-memory profile's name is a page's, so its folder is swept with theirs.
 fn hold_profile(store: &Store, native: &Native) {
-    if store.private {
+    let keeper = store::page_profile(uuid::Uuid::nil());
+    let profile = if store.private { &keeper } else { &store.profile };
+    if store.private && ANCHOR.with_borrow(Option::is_some) {
         return;
     }
-    if let Err(err) = anchor(&store.profile, &store.user_data, Some(native.environment())) {
-        tracing::warn!(err, "WebView2 could not make the saved store's anchor");
+    if let Err(err) = anchor(profile, store.private, &store.user_data, Some(native.environment())) {
+        tracing::warn!(err, "WebView2 could not make the anchor");
     }
 }
 

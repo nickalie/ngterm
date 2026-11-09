@@ -48,7 +48,7 @@ run_dev_instance() {
   fi
 
   # the workspace without what links WPE WebKit (ngtermctl among it), then the app with its HTML overlays (which need a
-  # WPE WebKit, README > WPE WebKit)
+  # WPE WebKit, docs/development.md > WPE WebKit)
   local profile_args=()
   [[ "$profile" == release ]] && profile_args=(--release)
   (cd "$NATIVE_ROOT" && cargo build "${profile_args[@]}" "${WORKSPACE_WITHOUT_WPE[@]}" \

@@ -10,7 +10,7 @@
 # before the launch. It prints the app id, the state dir, the socket, the `ngtermctl <command> --socket ...` line that
 # drives the instance and the instance's pid, by which to stop it.
 #
-# On Windows it runs under Git Bash (README > Windows): the root is under the user's TEMP, the paths it sets and prints
+# On Windows it runs under Git Bash (docs/development.md > Windows): the root is under the user's TEMP, the paths it sets and prints
 # are Windows', the socket path names the instance's control pipe, and the app runs as the script's child (the pid
 # printed is its Windows pid, for `taskkill /F /PID`), with the script waiting for it.
 #

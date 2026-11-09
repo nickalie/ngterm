@@ -187,7 +187,7 @@ the two differ the build follows the pin: `copy-on-select = clipboard`, both cli
 (upstream's docs give it for a selection on the system clipboard "as well"), is the system clipboard only, the
 selection clipboard untouched (`both` is upstream's meaning); an explicit `copy-on-select = true`, upstream's
 selection pasteboard on macOS, goes through Ghostty's compatibility handler, the selection clipboard on Linux and the
-system clipboard only on macOS and Windows (README > The selection clipboard). No capability marks it: the harness's
+system clipboard only on macOS and Windows (docs/development.md > The selection clipboard). No capability marks it: the harness's
 ghostty config sets `copy-on-select = false`.
 
 ## Rust-only extensions
@@ -276,7 +276,7 @@ the Android chat view (`remote::agents`).
 
 ## Release behavior at v0.40.0
 
-The [README parity notes](../../README.md#parity) describe the user-facing additions. Their observable contracts are:
+The [parity notes](../../docs/development.md#parity) describe the user-facing additions. Their observable contracts are:
 
 - `msg.send/read/ack`: process-local pane mailboxes, one delivery per resolved pane, reader-scoped acknowledgement,
   bounded atomic read-and-ack and body-free `message` events. The tree omits `pendingMessages` at zero. Mail follows
@@ -302,7 +302,7 @@ The [README parity notes](../../README.md#parity) describe the user-facing addit
 
 ## Release behavior at v0.41.1
 
-The claim covers v0.41.0 and v0.41.1; the [README parity notes](../../README.md#parity) describe the user-facing
+The claim covers v0.41.0 and v0.41.1; the [parity notes](../../docs/development.md#parity) describe the user-facing
 additions and how each OS does them. Their observable contracts are:
 
 - Text pages: `session.overlay.open` takes `textFile` (with an optional `line`) and tree `htmlOverlays[].text` names
@@ -473,13 +473,13 @@ The Rust build is the GPUI one since the switch (the GPUI plan's Task 34), which
 is `ngterm-gpui`'s `ngterm`, and `rust-passing.txt` holds it (the GPUI build's own ratchet, kept beside the GTK one
 until the switch, was folded into it).
 
-Build. The native inputs come first, each into its vendored prefix (README > Native dependencies):
+Build. The native inputs come first, each into its vendored prefix (docs/development.md > Native dependencies):
 `scripts/build-ghostty-vt.sh` (the patched libghostty-vt source, which `ngterm-ghostty-vt-sys`'s build script builds
 with Zig, offline, and Ghostty's resources at `LIBGHOSTTY_VT_REV`) and `scripts/fetch-fonts.sh` (the fonts the
 terminal embeds); the live sessions' server, `ngterm-session`, is a workspace binary. `run-linux.sh` then builds
 the release workspace without what links WPE WebKit, `ngterm-gpui` with its default `html` feature and
 `ngterm-wpe`'s `ngterm-web` worker, so the staged app shows HTML overlays and the worker needs WPE WebKit
-(README > WPE WebKit; the CI's is Arch's `wpewebkit`). `--stage DIR` runs a tree staged elsewhere instead.
+(docs/development.md > WPE WebKit; the CI's is Arch's `wpewebkit`). `--stage DIR` runs a tree staged elsewhere instead.
 
 Staging. `scripts/stage.sh` assembles the tree the harness launches, `target/conformance-stage` by default:
 `bin/ngterm`, `bin/ngtermctl` (the harness takes it from beside `--bin`; upstream's CLI is `agtermctl`,

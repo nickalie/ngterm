@@ -28,7 +28,7 @@ behavior reaches, the plan gives each of them its task items, and a change that 
 
 ## ngterm's own features win
 
-ngterm is more than a port: it has features upstream lacks and behaviors it chose to do differently. README lists them
+ngterm is more than a port: it has features upstream lacks and behaviors it chose to do differently. `docs/development.md` lists them
 (the "extension beyond upstream" and "differs from upstream by choice" bullets), and
 `conformance/docs/rust-build.md` records the Rust-only extensions and deliberate deviations; the user's standing
 overrides of upstream live there and in the project's own decisions (the Settings popup, the `live` names, ngterm's

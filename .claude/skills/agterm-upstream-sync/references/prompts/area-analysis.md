@@ -44,7 +44,7 @@ Do this:
    <ROOT>/mobile/android and <ROOT>/mobile/ios), what each lacks, and the screen that should show it; if not, give
    the one-line reason.
 5. ngterm's own features: check whether the behavior overlaps something ngterm has that upstream lacks, or does
-   differently by choice (<ROOT>/README.md "extension beyond upstream" and "differs from upstream by choice";
+   differently by choice (<ROOT>/docs/development.md "extension beyond upstream" and "differs from upstream by choice";
    <ROOT>/conformance/docs/rust-build.md, Rust-only extensions and deviations). ngterm's form always wins: propose
    only the part of upstream's change that fits it, adapted, and name what is left out. Never propose reworking an
    ngterm feature toward upstream.

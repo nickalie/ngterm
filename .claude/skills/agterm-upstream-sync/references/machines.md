@@ -3,7 +3,7 @@
 The Linux host builds and checks Linux only. Work for another platform runs on that platform's own machine: building,
 clippy, tests, conformance runs, debugging and GUI runs of code that is Windows-, macOS-, iOS- or Android-specific
 (a `cfg` branch, an OS mechanism, a mobile screen), and the checks of a change that reaches that platform. A
-cross-build on the host (README's x86_64 macOS build path, say) checks nothing for that platform: never run one in
+cross-build on the host (docs/development.md's x86_64 macOS build path, say) checks nothing for that platform: never run one in
 place of a check there, and don't leave such a check to CI alone. The PR's CI stays the final gate on every platform.
 GUI runs follow AGENTS.md > Never touch the user's running ngterm on every machine.
 
@@ -11,7 +11,7 @@ GUI runs follow AGENTS.md > Never touch the user's running ngterm on every machi
 |---|---|---|
 | Windows | a Windows VM on the host | ssh (PowerShell) |
 | macOS, iOS | a Mac with Metal, Xcode and the iOS simulators, the operator's own | ssh |
-| Android | the `ngterm-phone` and `ngterm-tablet` emulators on the host (README > Android toolchain) | `adb` |
+| Android | the `ngterm-phone` and `ngterm-tablet` emulators on the host (docs/development.md > Android toolchain) | `adb` |
 
 ## The machine values are private
 
@@ -110,5 +110,5 @@ run that dies has to show up as a failure, never as a wait that goes on.
   running ngterm, as on the host.
 - Android: builds and JVM tests run on the host (`scripts/build-android.sh`); the emulator is for installing the app,
   instrumented tests and looking at a screen.
-- iOS: `scripts/setup-ios.sh` and `scripts/build-ios.sh` on the Mac (README > iOS toolchain, > iOS); its header has
+- iOS: `scripts/setup-ios.sh` and `scripts/build-ios.sh` on the Mac (docs/development.md > iOS toolchain, > iOS); its header has
   the notes for a Mac reached over ssh.

@@ -204,7 +204,7 @@ if [[ -z "$stage" && -n "$coverage" ]]; then
 elif [[ -z "$stage" ]]; then
     stage="$target_root/conformance-stage"
     # the workspace without what links WPE WebKit (WORKSPACE_WITHOUT_WPE: ngtermctl is in it), then the app with its
-    # HTML overlays, which need a WPE WebKit (README > WPE WebKit)
+    # HTML overlays, which need a WPE WebKit (docs/development.md > WPE WebKit)
     # shellcheck source=../../scripts/lib/native.sh
     (
         cd "$repo" && source scripts/lib/native.sh && cargo build --release "${WORKSPACE_WITHOUT_WPE[@]}" || exit

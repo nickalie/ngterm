@@ -230,6 +230,9 @@ pub struct WindowView {
     switcher: Entity<SessionSwitcher>,
     /// Whether an alert was up at the last sync: the GUI ask it covered takes the keyboard back once it goes.
     alert_up: bool,
+    /// What the last render told the window's pages about what covers them.
+    #[cfg(test)]
+    covered: Cell<bool>,
     layers: Vec<(Layer, AnyView)>,
     /// The OS window title's writes, coalesced so an animated title lands at most twice a second (upstream's
     /// `WindowAccessor.setTitle`, #817); a due trailing write is a timer on the window.
@@ -349,6 +352,8 @@ impl WindowView {
             search,
             switcher,
             alert_up: false,
+            #[cfg(test)]
+            covered: Cell::new(false),
             layers,
             title: TitleThrottle::new(TITLE_WRITE_INTERVAL, UNTITLED),
             closing,
@@ -898,10 +903,8 @@ impl WindowView {
             self.focus_settings(window, cx);
         }
         let modal = dialog || alert || popover || self.settings.is_some();
-        let sidebar = self.sidebar.read(cx);
-        // the sidebar's row menu or the app menu holds the keyboard while it is open
-        let held = sidebar.menu_open() || self.titlebar.read(cx).menu_open();
-        let owner = sidebar.keyboard_owner(cx);
+        let held = self.menu_open(cx);
+        let owner = self.sidebar.read(cx).keyboard_owner(cx);
         let focused = self.deck.update(cx, |deck, cx| {
             deck.hold_keyboard(held, owner);
             deck.reconcile(core, modal, window, cx)
@@ -919,6 +922,11 @@ impl WindowView {
         self.sync_title(core, dialog || alert, window, cx);
         cx.notify();
         focused
+    }
+
+    /// Whether the sidebar's row menu or the app menu is open: it holds the keyboard and is drawn over the content.
+    fn menu_open(&self, cx: &App) -> bool {
+        self.sidebar.read(cx).menu_open() || self.titlebar.read(cx).menu_open()
     }
 
     /// The window's dialogs: the GUI ask, the picker, the palette and the popovers. The front one takes the keyboard
@@ -1054,14 +1062,17 @@ impl Render for WindowView {
             })
             .collect();
         let alert = crate::modal::alert_layer(window.window_handle(), cx);
-        // a dialog, the palette, a popover, the switcher or an alert over the content: pages that sit above everything
-        // the window draws (Windows' native ones) step aside meanwhile
+        // a dialog, the palette, a popover, a menu, the switcher or an alert over the content: pages that sit above
+        // everything the window draws (the native ones of Windows and macOS) step aside meanwhile
         let covered = alert.is_some()
             || self.switcher.read(cx).is_active()
+            || self.menu_open(cx)
             || self
                 .layers
                 .iter()
                 .any(|(layer, _)| !matches!(layer, Layer::Search | Layer::Switcher));
+        #[cfg(test)]
+        self.covered.set(covered);
         crate::html_overlay::set_covered(window, covered, cx);
         div()
             .id("window")

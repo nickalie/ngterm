@@ -31,7 +31,7 @@ fn main() {
         (Err(err), _) | (_, Err(err)) => println!(
             "cargo::error=ngterm-wpe needs WPE WebKit 2.54 or newer ({}): install the distribution's wpewebkit or run \
              scripts/fetch-wpe.sh, or build without the WPE crates (\"${{WORKSPACE_WITHOUT_WPE[@]}}\" of \
-             scripts/lib/native.sh); see README > WPE WebKit",
+             scripts/lib/native.sh); see docs/development.md > WPE WebKit",
             err.to_string().replace('\n', " ")
         ),
     }

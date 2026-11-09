@@ -4,6 +4,7 @@ use std::os::windows::fs::OpenOptionsExt as _;
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
 };
@@ -93,6 +94,81 @@ fn local_protocols_return_only_the_document_or_granted_files() {
 #[test]
 fn a_real_browser_reports_local_documents_in_an_isolated_process() {
     crate::system_window::tests::run_child("html_overlay::webview2::native::native_tests::browser_child");
+}
+
+#[test]
+fn the_browser_outlives_the_last_page_in_an_isolated_process() {
+    crate::system_window::tests::run_child("html_overlay::webview2::native::native_tests::last_page_child");
+}
+
+/// How long the browser is watched past its last page: `WebView2` ends an unheld browser within this.
+const BROWSER_WATCH: Duration = Duration::from_secs(5);
+
+/// A browser whose last page closed and ended took the next page through a fresh browser start, seconds that a page
+/// open pays each time (CI's `test_reload_and_navigate_a_page`): the browser has to stay for the next page.
+#[test]
+#[ignore = "run by the_browser_outlives_the_last_page_in_an_isolated_process"]
+fn last_page_child() {
+    if !crate::system_window::tests::is_child("html_overlay::webview2::native::native_tests::last_page_child") {
+        return;
+    }
+    // SAFETY: the browser owns this child test thread's STA and leaves it after every COM object is dropped.
+    assert!(unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED.cast_unsigned()) } >= 0);
+    let dir = tempfile::tempdir().unwrap();
+    let parent = host_window().unwrap();
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let first = spec(parent, dir.path(), &reports);
+    // The first private page makes the hidden anchor, which must leave keyboard focus with the parent.
+    let focused = std::ptr::with_exposed_provenance_mut(parent.cast_unsigned());
+    // SAFETY: this test's live parent window belongs to the current thread.
+    unsafe { SetFocus(focused) };
+    // SAFETY: reads only this thread's focus window.
+    let before = unsafe { GetFocus() };
+    assert_eq!(before, focused);
+    let native = Native::create(&first).unwrap();
+    // SAFETY: reads only this thread's focus window after the hidden anchor is made.
+    let after = unsafe { GetFocus() };
+    assert_eq!(after, focused, "the hidden anchor took keyboard focus");
+    let environment = native.environment();
+    let pid = browser_pid(&native);
+    // SAFETY: opening only this test's browser, for the waits below.
+    let browser = unsafe { windows_sys::Win32::System::Threading::OpenProcess(0x0010_0001, 0, pid) };
+    assert!(!browser.is_null());
+    drop(native);
+    let exited = || {
+        // SAFETY: the process handle opened above, polled without blocking the message loop.
+        (unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(browser, 0) }) == 0
+    };
+    let watched = Instant::now();
+    pump_until(|| {
+        assert!(!exited(), "the browser ended with its last page");
+        watched.elapsed() >= BROWSER_WATCH
+    });
+    let mut second = spec(parent, dir.path(), &reports);
+    second.store.environment = Some(environment.clone());
+    second.store.profile = "coverage-next".into();
+    let next = Native::create(&second).unwrap();
+    assert_eq!(browser_pid(&next), pid, "the next page runs in the same browser");
+    drop(next);
+    drop((first, second, environment));
+    drop(ANCHOR.take());
+    // SAFETY: destroy only the hidden parent made above, after all child web views were dropped.
+    let destroyed = unsafe { DestroyWindow(std::ptr::with_exposed_provenance_mut(parent.cast_unsigned())) };
+    assert_ne!(destroyed, 0);
+    HOST.set(0);
+    pump_until(exited);
+    // SAFETY: the process handle opened above is closed exactly once.
+    unsafe { windows_sys::Win32::Foundation::CloseHandle(browser) };
+    // SAFETY: balances this thread's successful apartment initialization.
+    unsafe { CoUninitialize() };
+    profiles_released(dir);
+}
+
+fn browser_pid(native: &Native) -> u32 {
+    let mut pid = 0;
+    // SAFETY: reading the live web view's browser pid on its owning thread.
+    unsafe { native.webview().BrowserProcessId(&raw mut pid) }.unwrap();
+    pid
 }
 
 /// Pumps COM callbacks and hidden-window messages until an observable answer arrives, with a finite deadline.
@@ -228,6 +304,7 @@ fn browser_child() {
     browser_failures(&native, &reports, browser);
     drop(native);
     drop(spec);
+    drop(ANCHOR.take());
     // SAFETY: destroy only the hidden parent made above, after all child web views were dropped.
     let destroyed = unsafe { DestroyWindow(std::ptr::with_exposed_provenance_mut(parent.cast_unsigned())) };
     assert_ne!(destroyed, 0);

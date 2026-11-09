@@ -35,7 +35,7 @@ the behavior:
 
 Precedence where Ghostty is not the last word:
 
-- **ngterm's recorded deviations** win: README's "differs from upstream by choice" bullets, `conformance/docs/rust-build.md`
+- **ngterm's recorded deviations** win: docs/development.md's "differs from upstream by choice" bullets, `conformance/docs/rust-build.md`
   (deviations, Rust-only extensions), the parity patches with their reasons (`build/patches/ghostty-vt/README.md`), and
   ngterm's built-in defaults that override Ghostty's for upstream agterm's behavior (`ghostty-defaults.conf`, e.g.
   `copy-on-select`). A Ghostty change that contradicts one is not ported toward Ghostty; the plan records it.
