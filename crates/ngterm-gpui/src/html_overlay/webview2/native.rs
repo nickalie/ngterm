@@ -997,9 +997,6 @@ fn wire_keys(controller: &ICoreWebView2Controller, take_key: &TakeKey, post: &Po
         let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
         // SAFETY: the event's own arguments, read on its thread.
         unsafe { args.KeyEventKind(&raw mut kind) }?;
-        if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN {
-            return Ok(());
-        }
         let mut virtual_key = 0u32;
         // SAFETY: as above.
         unsafe { args.VirtualKey(&raw mut virtual_key) }?;
@@ -1007,6 +1004,15 @@ fn wire_keys(controller: &ICoreWebView2Controller, take_key: &TakeKey, post: &Po
         // SAFETY: as above.
         unsafe { args.PhysicalKeyStatus(&raw mut status) }?;
         let keycode = super::keys::keycode(virtual_key, status.ScanCode, status.IsExtendedKey.as_bool());
+        if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN {
+            // the release of a key the keymap took stays off the page too (`keymap_dispatch::owns_page_release`). A key
+            // released once Ctrl or Alt is up is no accelerator: `WebView2` reports it to nobody but the page
+            if crate::keymap_dispatch::owns_page_release(keycode) {
+                // SAFETY: as above, answered on its thread.
+                unsafe { args.SetHandled(true) }?;
+            }
+            return Ok(());
+        }
         let repeat = status.WasKeyDown.as_bool();
         if let Some(keystroke) = take(virtual_key, keycode, repeat) {
             // SAFETY: as above, answered on its thread.

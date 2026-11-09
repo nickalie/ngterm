@@ -125,10 +125,14 @@ struct Router {
     /// earlier key ([`page_typed`]) reads.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     last_press: Option<Instant>,
-    /// A page-kept accelerator can overtake a stopped key still in the renderer. Keep the matcher it interrupted
-    /// until an older stopped press has acted or a newer fresh dispatch supersedes it.
+    /// An accelerator, the page's or the app's, can overtake a stopped key still in the renderer. The matcher it
+    /// ended stays for the older stopped presses, each advancing it, until a key the page kept ends it, a newer fresh
+    /// dispatch supersedes it, a keymap loads or the keyboard leaves.
     #[cfg(all(feature = "html", windows))]
     interrupted_matcher: Option<InterruptedMatcher>,
+    /// What a page report being dispatched would leave as [`Self::interrupted_matcher`] if it ends the sequence.
+    #[cfg(all(feature = "html", windows))]
+    ending_matcher: Option<InterruptedMatcher>,
     #[cfg(all(feature = "html", windows))]
     replaying_interruption: bool,
 }
@@ -302,6 +306,15 @@ pub fn page_typed(at: u64) {
     if let Some(pressed) = instant_of(at) {
         ROUTER.with_borrow_mut(|router| router.page_typed(pressed));
     }
+}
+
+/// Whether the keymap took the press of the key `keycode` that just went up in a Windows page: its release stays off
+/// the page (upstream's `handleKeyEvent`, ownership lasting through the release). With no physical identity no press
+/// can be named.
+#[cfg(all(feature = "html", windows))]
+#[must_use]
+pub fn owns_page_release(keycode: u32) -> bool {
+    keycode != 0 && ROUTER.with_borrow(|router| router.owns(keycode))
 }
 
 /// The moment `at`, in the system clock's milliseconds since the epoch, on the monotonic clock.
@@ -758,19 +771,24 @@ impl Router {
             return;
         }
         #[cfg(windows)]
-        if let Some(engine) = self
-            .matcher_now()
-            .filter(|engine| engine.is_armed() || engine.is_repeating())
-        {
-            let at = Instant::now();
-            self.interrupted_matcher = Some(InterruptedMatcher {
-                engine,
-                since: self.last_press.unwrap_or(at),
-                at,
-                deadline: self.deadline,
-            });
+        if let Some(interrupted) = self.matcher_interrupted_at(Instant::now()) {
+            self.interrupted_matcher = Some(interrupted);
         }
         self.reset_if_live();
+    }
+
+    /// The live sequence, for the stopped presses before `at` that a press at `at` would overtake.
+    #[cfg(all(feature = "html", windows))]
+    fn matcher_interrupted_at(&self, at: Instant) -> Option<InterruptedMatcher> {
+        let engine = self
+            .matcher_now()
+            .filter(|engine| engine.is_armed() || engine.is_repeating())?;
+        Some(InterruptedMatcher {
+            engine,
+            since: self.last_press.unwrap_or(at),
+            at,
+            deadline: self.deadline,
+        })
     }
 
     /// The matcher as it stands, a lapsed leader or repeat window counting as gone.
@@ -848,18 +866,37 @@ impl Router {
         if taken {
             self.released.insert(stroke.identity);
         } else {
-            self.reset_if_live();
+            // a report older than the last press is not what a newer sequence is waiting on
+            if self.replaying_interruption || pressed.is_none_or(|pressed| self.after_last_press(pressed)) {
+                self.reset_if_live();
+            }
             self.end_stopped_replay();
         }
         taken
     }
 
-    /// A key the page keeps went down at `pressed` ([`page_typed`]): after the monitor's last press, it ends the sequence.
+    /// A key the page keeps went down at `pressed` ([`page_typed`]): after the monitor's last press, it ends the
+    /// sequence. Inside an interrupted sequence's lifetime it ends that sequence there, whatever the last press was:
+    /// only a stopped press before it can still act.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn page_typed(&mut self, pressed: Instant) {
-        if self.last_press.is_none_or(|last| pressed >= last) {
+        #[cfg(windows)]
+        if let Some(interrupted) = self
+            .interrupted_matcher
+            .as_mut()
+            .filter(|interrupted| pressed >= interrupted.since && pressed < interrupted.at)
+        {
+            interrupted.at = pressed;
+        }
+        if self.after_last_press(pressed) {
             self.reset_if_live();
         }
+    }
+
+    /// Whether a key that went down at `pressed` came after the monitor's last press.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn after_last_press(&self, pressed: Instant) -> bool {
+        self.last_press.is_none_or(|last| pressed >= last)
     }
 
     /// Whether the leader or repeat window has run out (the next press lapses it for real).
@@ -880,8 +917,13 @@ impl Router {
         };
         if !repeat {
             #[cfg(windows)]
-            if !self.replaying_interruption {
-                self.interrupted_matcher = None;
+            {
+                self.ending_matcher = if self.replaying_interruption {
+                    None
+                } else {
+                    self.interrupted_matcher = None;
+                    self.dispatched_at.and_then(|at| self.matcher_interrupted_at(at))
+                };
             }
             self.last_press = Some(self.dispatched_at.take().unwrap_or(now));
         }
@@ -969,6 +1011,10 @@ impl Router {
             }
             EngineOutcome::Unmatched => {
                 self.deadline = None;
+                #[cfg(all(feature = "html", windows))]
+                {
+                    self.interrupted_matcher = self.ending_matcher.take();
+                }
                 // the menu's key equivalents: consumed even when the item is disabled, as a menu consumes its own
                 let Some(action) = self.menu.get(chord).copied() else {
                     return Press::Passed;

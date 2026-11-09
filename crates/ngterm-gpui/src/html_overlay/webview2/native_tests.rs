@@ -216,6 +216,8 @@ fn browser_child() {
     close_single_page(parent, &native.environment(), dir.path());
     network_pages(parent, &native, dir.path(), &reports);
     script_stops_a_live_sequences_keys(parent, &native.environment(), dir.path());
+    consumed_keys_stay_off_a_real_page(parent, &native.environment(), dir.path());
+    the_script_reads_what_it_took_before_the_page_ran(parent, &native.environment(), dir.path());
     invalid_specifications(parent, &native.environment(), dir.path());
     let mut browser_pid = 0;
     // SAFETY: reading the live web view's browser pid on its owning thread.
@@ -504,6 +506,144 @@ fn script_stops_a_live_sequences_keys(parent: isize, environment: &ICoreWebView2
     native.redeliver_key(&bridge::redelivery(&key("g", 0x47)));
     typed_input("g");
     assert_eq!(field(), "field:xg", "with no live sequence nothing is stopped");
+}
+
+/// A press and release as trusted CDP input, each finished before it returns: the script's word changes between them.
+fn cdp_key(native: &Native, event: &serde_json::Value) {
+    native.devtools_now("Input.dispatchKeyEvent", event).unwrap();
+}
+
+/// What the page's own listeners have seen of the keyboard, as `keys:` report text.
+fn page_keys_seen(native: &Native, reports: &Rc<RefCell<Vec<Report>>>) -> String {
+    main_script(native, "chrome.webview.postMessage('keys:' + seen.join())");
+    let Report::Message(seen) = take_report(reports, |r| matches!(r, Report::Message(s) if s.starts_with("keys:")))
+    else {
+        unreachable!()
+    };
+    seen
+}
+
+/// A stopped press, its autorepeat after the sequence ended, and its release stay off a real page's listeners and out
+/// of its field, and so do Enter's and Backspace's; a key the sequence does not take reaches them whole, and so does
+/// the same key once nothing is live.
+fn consumed_keys_stay_off_a_real_page(parent: isize, environment: &ICoreWebView2Environment, dir: &Path) {
+    use super::super::bridge::{self, StoppedKey};
+
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let native = keys_page(parent, environment, dir, &reports);
+    main_script(
+        &native,
+        "window.seen = []; for (const kind of ['keydown', 'keyup']) \
+         window.addEventListener(kind, event => seen.push(kind + ':' + event.key));",
+    );
+    let told = |keys: &[u32]| {
+        native.post_json(&bridge::live_keys(KEYS_NONCE, keys, 60_000));
+        take_report(&reports, |r| matches!(r, Report::Message(s) if s == "told"));
+    };
+    let key = |letter: &str, code: &str, virtual_key: u32| {
+        bridge::redelivery(&StoppedKey {
+            virtual_key,
+            shift: false,
+            repeat: false,
+            key: letter.to_owned(),
+            code: code.to_owned(),
+            at: 0,
+        })
+    };
+    let tap = |letter: &str, code: &str, virtual_key: u32| {
+        for event in key(letter, code, virtual_key) {
+            cdp_key(&native, &event);
+        }
+    };
+
+    told(&[0x47]);
+    let [press, release] = key("g", "KeyG", 0x47);
+    cdp_key(&native, &press);
+    told(&[]);
+    let mut autorepeat = press;
+    autorepeat["autoRepeat"] = serde_json::Value::Bool(true);
+    cdp_key(&native, &autorepeat);
+    cdp_key(&native, &release);
+    told(&[0x0D, 0x08]);
+    tap("Enter", "Enter", 0x0D);
+    tap("Backspace", "Backspace", 0x08);
+    assert_eq!(page_keys_seen(&native, &reports), "keys:");
+
+    tap("x", "KeyX", 0x58);
+    assert_eq!(page_keys_seen(&native, &reports), "keys:keydown:x,keyup:x");
+    told(&[]);
+    tap("g", "KeyG", 0x47);
+    assert_eq!(
+        page_keys_seen(&native, &reports),
+        "keys:keydown:x,keyup:x,keydown:g,keyup:g"
+    );
+    main_script(&native, "chrome.webview.postMessage('field:' + field.value)");
+    take_report(&reports, |r| matches!(r, Report::Message(s) if s == "field:xg"));
+}
+
+/// A page that replaces the fields of its events on the prototype changes neither report: what the script reads, it
+/// took before the page ran.
+fn the_script_reads_what_it_took_before_the_page_ran(
+    parent: isize,
+    environment: &ICoreWebView2Environment,
+    dir: &Path,
+) {
+    use super::super::bridge::{self, Message, StoppedKey};
+
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let native = keys_page(parent, environment, dir, &reports);
+    main_script(
+        &native,
+        "Object.defineProperty(Event.prototype, 'timeStamp', {get: () => undefined}); \
+         for (const [name, value] of [['repeat', true], ['ctrlKey', true], ['altKey', true], ['key', 'Shift']]) \
+         Object.defineProperty(KeyboardEvent.prototype, name, {get: () => value});",
+    );
+    let tap = |letter: &str, code: &str, virtual_key: u32| {
+        for event in bridge::redelivery(&StoppedKey {
+            virtual_key,
+            shift: false,
+            repeat: false,
+            key: letter.to_owned(),
+            code: code.to_owned(),
+            at: 0,
+        }) {
+            cdp_key(&native, &event);
+        }
+    };
+    let told = |keys: &[u32]| {
+        native.post_json(&bridge::live_keys(KEYS_NONCE, keys, 60_000));
+        take_report(&reports, |r| matches!(r, Report::Message(s) if s == "told"));
+    };
+
+    told(&[0x47]);
+    tap("g", "KeyG", 0x47);
+    let Report::Message(raw) = take_report(
+        &reports,
+        |r| matches!(r, Report::Message(raw) if matches!(bridge::parse(raw, KEYS_NONCE), Some(Message::Key(_)))),
+    ) else {
+        unreachable!()
+    };
+    let Some(Message::Key(stopped)) = bridge::parse(&raw, KEYS_NONCE) else {
+        unreachable!()
+    };
+    assert_eq!(stopped.key, "g");
+    assert!(stopped.at > 0, "a real time: {raw}");
+
+    told(&[]);
+    tap("x", "KeyX", 0x58);
+    let Report::Message(raw) = take_report(
+        &reports,
+        |r| matches!(r, Report::Message(raw) if matches!(bridge::parse(raw, KEYS_NONCE), Some(Message::Input { .. }))),
+    ) else {
+        unreachable!()
+    };
+    let Some(Message::Input { click: false, typed_at }) = bridge::parse(&raw, KEYS_NONCE) else {
+        unreachable!()
+    };
+    assert!(
+        typed_at.is_some_and(|at| at > 0),
+        "the typed key still ends a leader: {raw}"
+    );
 }
 
 fn saved_profile_clear(parent: isize, environment: &ICoreWebView2Environment, dir: &Path) {
