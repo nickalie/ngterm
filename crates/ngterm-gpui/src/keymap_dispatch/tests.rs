@@ -1786,6 +1786,20 @@ fn a_lost_report_leaves_the_queue_and_its_interruption_stands() {
     assert!(!monitor_is_live(), "nothing queued, so the press ends it at once");
 }
 
+/// A key the monitor took stays the keymap's through its release; a key the page kept, or no key, does not.
+#[cfg(all(feature = "html", windows))]
+#[test]
+fn only_a_taken_press_owns_its_release_in_a_page() {
+    load_monitor("command \"x\" ctrl+y true\n");
+    let taken = queued_report("ctrl-y", false);
+    assert!(super::takes(&taken));
+    assert!(super::owns_page_release(taken.identity));
+    let kept = queued_report("ctrl-g", false);
+    assert!(!super::takes(&kept));
+    assert!(!super::owns_page_release(kept.identity));
+    assert!(!super::owns_page_release(0));
+}
+
 /// More than one stopped tail can precede an unmatched accelerator; each advances the interrupted matcher in order.
 #[cfg(all(feature = "html", windows))]
 #[test]
@@ -1811,6 +1825,89 @@ fn stopped_tails_before_an_interrupt_keep_their_sequence_order() {
     }
 }
 
+/// Upstream's monitor hears a key the page keeps in order: it ends the sequence, so only a stopped key pressed before
+/// it can still act against the matcher a later accelerator interrupted.
+#[cfg(all(feature = "html", windows))]
+#[test]
+fn a_key_the_page_kept_before_an_interrupt_ends_the_saved_sequence() {
+    let now = Instant::now();
+    let at = |age: u64| now.checked_sub(Duration::from_millis(age)).unwrap();
+    for (leader, tails) in [
+        ("ctrl+a>g", vec![(100, false)]),
+        ("ctrl+a>g", vec![(300, true)]),
+        ("ctrl+a>g>h", vec![(300, true), (100, false)]),
+    ] {
+        let mut router = router(&format!("command \"c\" {leader} true\n"));
+        assert!(press(&mut router, "ctrl-a", at(400)));
+        assert!(!router.takes_fresh(&windows_page_stroke("ctrl-x", false)));
+        router.page_typed(at(200));
+        for ((age, taken), key) in tails.into_iter().zip(["g", "h"]) {
+            let stroke = windows_page_stroke(key, false);
+            assert_eq!(
+                router.takes_stopped(&stroke, Some(at(age))),
+                taken,
+                "{leader}: {key} at -{age}ms"
+            );
+            if taken {
+                router.dispatched_at = Some(at(age));
+                assert_ne!(router.press(&stroke, now, true), Press::Passed);
+                router.end_report(false);
+            }
+        }
+    }
+}
+
+/// A fresh press after the interrupt starts a sequence of its own: an older stopped report neither restores the old
+/// matcher over it nor, being older than that press, ends it.
+#[cfg(all(feature = "html", windows))]
+#[test]
+fn a_fresh_press_after_an_interrupt_supersedes_the_saved_matcher() {
+    let now = Instant::now();
+    let at = |age: u64| now.checked_sub(Duration::from_millis(age)).unwrap();
+    let mut router = router("command \"g\" ctrl+a>g true\ncommand \"h\" ctrl+b>h true\n");
+    assert!(press(&mut router, "ctrl-a", at(300)));
+    assert!(!router.takes_fresh(&windows_page_stroke("ctrl-x", false)));
+    assert_eq!(
+        router.press(&windows_page_stroke("ctrl-b", false), at(50), true),
+        Press::Consumed
+    );
+    assert!(!router.takes_stopped(&windows_page_stroke("g", false), Some(at(200))));
+    assert!(router.engine.as_ref().unwrap().is_armed(), "ctrl+b is still waiting");
+    assert!(matches!(
+        router.press(&windows_page_stroke("h", false), now, true),
+        Press::Fired(Fired::Command(_))
+    ));
+}
+
+/// A stopped tail still in the renderer acts even when an accelerator the app takes overtakes it: the pump reaches
+/// the accelerator first and ends the sequence, as a page-kept one does.
+#[cfg(all(feature = "html", windows))]
+#[test]
+fn a_stopped_tail_replays_past_an_accelerator_the_app_took() {
+    let now = Instant::now();
+    let at = |age: u64| now.checked_sub(Duration::from_millis(age)).unwrap();
+    let new_session = Press::Fired(Fired::Builtin(ngterm_core::keymap::BuiltinAction::NewSession));
+    for (age, fires) in [(200, true), (50, false)] {
+        let mut router = router("command \"g\" ctrl+a>g true\n");
+        assert!(press(&mut router, "ctrl-a", at(300)));
+        router.dispatched_at = Some(at(100));
+        assert_eq!(
+            router.press(&windows_page_stroke("ctrl-shift-t", false), now, true),
+            new_session
+        );
+        router.end_report(false);
+        assert!(!router.engine.as_ref().unwrap().is_armed());
+        let g = windows_page_stroke("g", false);
+        assert_eq!(router.takes_stopped(&g, Some(at(age))), fires, "g at -{age}ms");
+        if fires {
+            router.dispatched_at = Some(at(age));
+            assert!(matches!(router.press(&g, now, true), Press::Fired(Fired::Command(_))));
+            router.end_report(false);
+            assert!(!router.engine.as_ref().unwrap().is_armed());
+        }
+    }
+}
+
 /// Only a press in the interrupted sequence's lifetime can use its matcher, and loading a keymap forgets it.
 #[cfg(all(feature = "html", windows))]
 #[test]
@@ -1824,7 +1921,8 @@ fn a_stopped_press_cannot_use_an_expired_or_replaced_matcher() {
             now.checked_sub(Duration::from_millis(300)).unwrap()
         ));
         router.deadline = Some(now.checked_sub(Duration::from_millis(150)).unwrap());
-        // The interrupt was before the deadline; an eligible older report is between the prefix and that deadline.
+        // A matcher an earlier replay left: its deadline falls before the interrupt, and only a report older than that
+        // deadline can use it.
         let engine = router.engine.clone().unwrap();
         router.interrupted_matcher = Some(super::InterruptedMatcher {
             engine,
