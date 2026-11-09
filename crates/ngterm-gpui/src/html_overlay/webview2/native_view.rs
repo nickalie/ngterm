@@ -1,6 +1,7 @@
-//! The seam between a page and its web view: what `page` and `registry` ask of one ([`NativeView`]), and the two
-//! calls that make or clear one ([`create`], [`clear_profile`]). Each platform's `native::Native` is the view; a unit
-//! test stands in for all three (`fake_native`), as the WPE host's tests stand in for its engine.
+//! The seam between a page and its web view: what `page` and `registry` ask of one ([`NativeView`]), and the
+//! calls that make or clear one ([`create`], [`clear_profile`]) or open the system browser ([`open_browser`]). Each
+//! platform's `native::Native` is the view; a unit test stands in for the view and all three calls (`fake_native`), as
+//! the WPE host's tests stand in for its engine.
 
 use std::rc::Rc;
 
