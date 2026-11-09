@@ -246,15 +246,29 @@ fn dismissed_but_retained(center: &Center, toast: &ToastNotification, identity: 
         ))
         .unwrap();
     center.notifier.Hide(toast).unwrap();
-    assert_eq!(
-        reason.recv_timeout(Duration::from_secs(5)).unwrap(),
-        ToastDismissalReason::ApplicationHidden
-    );
-    assert_eq!(
-        center.shown.lock().unwrap().get(identity),
-        Some(toast),
-        "only a user's cancellation forgets the retained notification"
-    );
+    hidden_and_retained(center, toast, identity, &reason);
+}
+
+/// Waits for the report of a `Hide`. `TimedOut` is a separate report that the toast's banner ended, within milliseconds
+/// when Windows gives it none, so it can arrive first; the toast stays retained through both.
+fn hidden_and_retained(
+    center: &Center,
+    toast: &ToastNotification,
+    identity: &str,
+    reasons: &std::sync::mpsc::Receiver<ToastDismissalReason>,
+) {
+    loop {
+        let reason = reasons.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            center.shown.lock().unwrap().get(identity),
+            Some(toast),
+            "only a user's cancellation forgets the retained notification"
+        );
+        if reason == ToastDismissalReason::ApplicationHidden {
+            return;
+        }
+        assert_eq!(reason, ToastDismissalReason::TimedOut);
+    }
 }
 
 fn refused_notifier_drains_its_queue() {
@@ -326,7 +340,8 @@ fn registration_failures(previous: &str, dir: &Path) {
 }
 
 fn notifier_handoff(app_id: &str) {
-    let cases: [fn(&Center); 4] = [
+    let cases: [fn(&Center); 5] = [
+        a_toast_without_a_banner_stays_retained_through_its_timeout_and_hide,
         notifier_receives_real_xml_slots_and_activation_reveals_the_original_identity,
         only_cancelling_the_current_toast_forgets_it_and_other_slots_survive,
         refused_show_preserves_the_previous_toast_and_returns_the_notifier_error,
@@ -364,6 +379,40 @@ fn post(center: &Center, identity: &str, clicked: &Clicked) -> Posted {
         )
         .unwrap();
     posted.unwrap()
+}
+
+/// A toast Windows gives no banner reports `TimedOut` right after `Show`, before any `Hide`, and stays in the
+/// notification center. The report's handler is attached before `Show`, so it cannot miss that first report.
+fn a_toast_without_a_banner_stays_retained_through_its_timeout_and_hide(center: &Center) {
+    let clicked: Clicked = Arc::new(|_| panic!("no toast was clicked"));
+    let identity = "note:no-banner";
+    let (reported, reasons) = std::sync::mpsc::channel();
+    center
+        .show_with(
+            identity,
+            "No banner",
+            "body",
+            &clicked,
+            |toast, _activated, dismissed| {
+                toast.SetSuppressPopup(true)?;
+                toast.Dismissed(&TypedEventHandler::<ToastNotification, ToastDismissedEventArgs>::new(
+                    move |sender, args| {
+                        let reason = args.as_ref().unwrap().Reason()?;
+                        dismissed(sender.as_ref(), Some(reason));
+                        let _ = reported.send(reason);
+                        Ok(())
+                    },
+                ))?;
+                center.notifier.Show(toast)
+            },
+        )
+        .unwrap();
+    wait_history(center, identity, true);
+    let toast = center.shown.lock().unwrap()[identity].clone();
+    center.notifier.Hide(&toast).unwrap();
+    hidden_and_retained(center, &toast, identity, &reasons);
+    center.withdraw(identity);
+    wait_history(center, identity, false);
 }
 
 fn notifier_receives_real_xml_slots_and_activation_reveals_the_original_identity(center: &Center) {
