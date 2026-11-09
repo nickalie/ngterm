@@ -133,13 +133,16 @@ fn a_handed_over_child_is_killed_through_its_process_handle() {
     assert_eq!(os_error(&again), Some(ERROR_ACCESS_DENIED), "{again}");
 }
 
+/// A process killed while it is still creating its own child takes that child with it (`STATUS_PROCESS_IS_TERMINATING`,
+/// with or without a job or a console), so the kill waits for a grandchild that has run: a job listing the inner
+/// cmd's ping shows the inner cmd got far enough to start it.
 #[test]
 fn a_handed_over_childs_killer_clone_kills_it() {
-    let running = lasting();
+    let running = run("cmd.exe", &["/d", "/c", "cmd /d /c ping -n 300 127.0.0.1 >nul"]);
     let mut handed = handed_over(&running.child, None, None);
     let view = running.child.job_view();
-    wait_until("cmd started its ping", || {
-        view.process_ids().is_some_and(|pids| pids.len() >= 2)
+    wait_until("the inner cmd started its ping", || {
+        view.process_ids().is_some_and(|pids| pids.len() >= 3)
     });
     let mut killer = handed.inner.clone_killer();
     killer.kill().expect("the kill");
