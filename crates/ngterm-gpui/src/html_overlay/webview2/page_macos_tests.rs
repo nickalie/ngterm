@@ -130,7 +130,14 @@ fn the_failure_ending_a_refused_navigation_is_the_refusals_once(cx: &mut TestApp
 fn an_interruption_ending_a_refused_navigation_is_the_refusals_too(cx: &mut TestAppContext) {
     let mut shown = shown();
     shown.report(refused(9), cx);
-    let before = shown.load();
+    assert_eq!(
+        shown.load(),
+        (HtmlLoadState::Failed, Some(format!("navigation blocked: {OUTSIDE}")))
+    );
+    let failed = shown.model.overlay().clone();
+    cx.update(|cx| shown.page.apply(&failed, true, cx));
+    shown.report(Report::Started, cx);
+    assert_eq!(shown.load(), (HtmlLoadState::Loading, None));
     shown.report(
         Report::Interrupted {
             id: 9,
@@ -138,7 +145,7 @@ fn an_interruption_ending_a_refused_navigation_is_the_refusals_too(cx: &mut Test
         },
         cx,
     );
-    assert_eq!(shown.load(), before);
+    assert_eq!(shown.load(), (HtmlLoadState::Loading, None));
 }
 
 fn mounted<'a>(shown: &Shown, cx: &'a mut TestAppContext) -> &'a mut VisualTestContext {
