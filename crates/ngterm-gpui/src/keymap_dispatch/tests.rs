@@ -1536,6 +1536,8 @@ mod page_dispatch_tests {
     #[gpui_kit::test]
     fn a_stopped_tail_acts_before_a_later_unmatched_accelerator(cx: &mut TestAppContext) {
         for repeating in [false, true] {
+            // Each case backdates its presses: the previous case's tail must not look newer after millisecond rounding.
+            super::super::keyboard_left();
             let seen = Rc::new(Cell::new(0));
             let visual = monitored_window(cx, &seen);
             load_monitor(&format!(
