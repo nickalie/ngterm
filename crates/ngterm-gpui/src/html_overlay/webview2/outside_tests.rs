@@ -1,5 +1,7 @@
 //! The queue on fresh Win32 message threads, including a timer dispatched inside an item's nested loop.
 
+use std::any::Any;
+use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
@@ -8,7 +10,23 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMO
 
 use super::*;
 
-/// Dispatches one real thread timer, with a deadline so a lost wake fails the test.
+thread_local! {
+    /// What failed inside a checked item, until [`dispatch_timer`] is back on the test's own frames.
+    static FAILED_CHECK: Cell<Option<Box<dyn Any + Send>>> = const { Cell::new(None) };
+}
+
+/// Queues an item whose assertions fail the test: `fire` cannot unwind, so a panic through it would abort every test
+/// in the binary.
+fn run_checked(check: impl FnOnce() + 'static) {
+    run(Box::new(move || {
+        if let Err(failure) = panic::catch_unwind(AssertUnwindSafe(check)) {
+            FAILED_CHECK.set(Some(failure));
+        }
+    }));
+}
+
+/// Dispatches one real thread timer, with a deadline so a lost wake fails the test, and fails with what a checked item
+/// it ran failed on.
 #[track_caller]
 fn dispatch_timer() {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -20,6 +38,9 @@ fn dispatch_timer() {
     }
     // SAFETY: a timer message just removed from this thread's queue.
     unsafe { DispatchMessageW(&raw const message) };
+    if let Some(failure) = FAILED_CHECK.take() {
+        panic::resume_unwind(failure);
+    }
 }
 
 #[test]
@@ -27,7 +48,7 @@ fn timers_run_work_in_order_without_reentering_an_item() {
     std::thread::spawn(|| {
         let order = Rc::new(RefCell::new(Vec::new()));
         let first = Rc::clone(&order);
-        run(Box::new(move || {
+        run_checked(move || {
             first.borrow_mut().push("start");
             let nested = Rc::clone(&first);
             run(Box::new(move || nested.borrow_mut().push("nested")));
@@ -39,7 +60,7 @@ fn timers_run_work_in_order_without_reentering_an_item() {
             dispatch_timer();
             assert_eq!(*first.borrow(), ["start"], "a nested timer cannot run the next item");
             first.borrow_mut().push("end");
-        }));
+        });
         let second = Rc::clone(&order);
         run(Box::new(move || second.borrow_mut().push("second")));
         assert!(order.borrow().is_empty(), "work waits for the message loop");
@@ -53,7 +74,7 @@ fn timers_run_work_in_order_without_reentering_an_item() {
 }
 
 #[test]
-fn draining_runs_every_item_and_leaves_an_armed_timer_nothing_to_do() {
+fn draining_runs_every_item_and_the_spent_timer_lets_new_work_arm_another() {
     std::thread::spawn(|| {
         let (sender, receiver) = mpsc::channel();
         for value in [1, 2, 3] {
@@ -63,7 +84,9 @@ fn draining_runs_every_item_and_leaves_an_armed_timer_nothing_to_do() {
         drain();
         assert_eq!(receiver.try_iter().collect::<Vec<_>>(), [1, 2, 3]);
         dispatch_timer();
-        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+        run(Box::new(move || sender.send(4).unwrap()));
+        dispatch_timer();
+        assert_eq!(receiver.try_recv(), Ok(4));
     })
     .join()
     .unwrap();
@@ -82,12 +105,12 @@ fn take_quit() -> usize {
 #[test]
 fn quitting_drops_pending_and_future_work_and_reposts_a_consumed_quit() {
     std::thread::spawn(|| {
-        run(Box::new(|| {
+        run_checked(|| {
             quit();
             // SAFETY: only this fresh test thread is asked to quit; its nested wait consumes the message.
             unsafe { PostQuitMessage(37) };
             assert_eq!(take_quit(), 37);
-        }));
+        });
         let (queued, pending) = mpsc::channel::<()>();
         run(Box::new(move || queued.send(()).unwrap()));
         dispatch_timer();
