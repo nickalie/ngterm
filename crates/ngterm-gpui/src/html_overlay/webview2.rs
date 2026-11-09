@@ -32,8 +32,11 @@
 
 mod bridge;
 mod browser;
+#[cfg(test)]
+mod fake_native;
 mod keys;
 mod native;
+mod native_view;
 mod outside;
 mod page;
 mod registry;
