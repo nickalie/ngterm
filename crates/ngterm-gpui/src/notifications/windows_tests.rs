@@ -382,11 +382,14 @@ fn post(center: &Center, identity: &str, clicked: &Clicked) -> Posted {
 }
 
 /// A toast Windows gives no banner reports `TimedOut` right after `Show`, before any `Hide`, and stays in the
-/// notification center. The report's handler is attached before `Show`, so it cannot miss that first report.
+/// notification center. Windows no longer lists it once `Hide` is reported, so from there only the app's own record is
+/// checked. The handler attached before `Show` cannot miss the first report, and it waits for `show_with` to retain the
+/// toast, because forgetting a toast not yet retained would change nothing.
 fn a_toast_without_a_banner_stays_retained_through_its_timeout_and_hide(center: &Center) {
     let clicked: Clicked = Arc::new(|_| panic!("no toast was clicked"));
     let identity = "note:no-banner";
     let (reported, reasons) = std::sync::mpsc::channel();
+    let (retained, retained_yet) = std::sync::mpsc::channel::<()>();
     center
         .show_with(
             identity,
@@ -397,6 +400,7 @@ fn a_toast_without_a_banner_stays_retained_through_its_timeout_and_hide(center: 
                 toast.SetSuppressPopup(true)?;
                 toast.Dismissed(&TypedEventHandler::<ToastNotification, ToastDismissedEventArgs>::new(
                     move |sender, args| {
+                        let _ = retained_yet.recv_timeout(Duration::from_secs(5));
                         let reason = args.as_ref().unwrap().Reason()?;
                         dismissed(sender.as_ref(), Some(reason));
                         let _ = reported.send(reason);
@@ -407,12 +411,20 @@ fn a_toast_without_a_banner_stays_retained_through_its_timeout_and_hide(center: 
             },
         )
         .unwrap();
-    wait_history(center, identity, true);
+    drop(retained);
     let toast = center.shown.lock().unwrap()[identity].clone();
+    assert_eq!(
+        reasons.recv_timeout(Duration::from_secs(5)).unwrap(),
+        ToastDismissalReason::TimedOut
+    );
+    assert_eq!(
+        center.shown.lock().unwrap().get(identity),
+        Some(&toast),
+        "a timed-out toast stays clickable"
+    );
+    wait_history(center, identity, true);
     center.notifier.Hide(&toast).unwrap();
     hidden_and_retained(center, &toast, identity, &reasons);
-    center.withdraw(identity);
-    wait_history(center, identity, false);
 }
 
 fn notifier_receives_real_xml_slots_and_activation_reveals_the_original_identity(center: &Center) {
