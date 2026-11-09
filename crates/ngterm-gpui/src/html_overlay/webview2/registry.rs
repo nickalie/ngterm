@@ -543,9 +543,9 @@ pub fn is_covered(window: AnyWindowHandle) -> bool {
     with(|registry| registry.covered.get(&window).copied().unwrap_or(false))
 }
 
-/// Whether a layer the app draws (a dialog, the palette, a popover, the switcher, an alert) covers `window`'s content:
-/// its pages' native windows, which sit above everything the window draws, step aside meanwhile. Called by the
-/// window's view at every render.
+/// Whether a layer the app draws (a dialog, the palette, a popover, a menu, the switcher, an alert) covers `window`'s
+/// content: its pages' native windows, which sit above everything the window draws, step aside meanwhile. Called by
+/// the window's view at every render.
 pub fn set_covered(window: &Window, covered: bool, _: &mut App) {
     let handle = window.window_handle();
     let native = native_window(window);

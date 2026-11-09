@@ -149,9 +149,9 @@ pub fn focus_page_search(page: uuid::Uuid) {
     let _ = page;
 }
 
-/// Whether a layer the app draws over `window`'s content (a dialog, the palette, a popover, an alert) is up: native
-/// pages are hidden under it on macOS and Windows, where they sit above everything the window draws. Nothing to do where the
-/// app draws the pages itself.
+/// Whether a layer the app draws over `window`'s content (a dialog, the palette, a popover, a menu, the switcher, an
+/// alert) is up: native pages are hidden under it on macOS and Windows, where they sit above everything the window
+/// draws. Nothing to do where the app draws the pages itself.
 #[cfg(not(all(feature = "html", any(windows, target_os = "macos"))))]
 pub fn set_covered(_: &gpui_kit::Window, _: bool, _: &mut gpui_kit::App) {}
 

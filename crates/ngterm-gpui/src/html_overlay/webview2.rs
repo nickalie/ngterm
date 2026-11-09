@@ -6,9 +6,9 @@
 //! view's own, but for the app's chords, which the keymap gets first as on Linux (`keys`). The policy, the load
 //! tracker, the page reports and the hand-offs are the WPE host's (`policy`, core's `html`), read through `WebView2`'s
 //! events (`page`, `native`). GPUI's `DirectComposition` visual sits under its child windows (a `gpui-pre-windows`
-//! patch) so the native windows show; anything the app draws over the content (a dialog, the palette, a popover, the
-//! switcher, an alert) hides the pages of its window meanwhile ([`set_covered`]), as a native window cannot sit under
-//! the app's drawing.
+//! patch) so the native windows show; anything the app draws over the content (a dialog, the palette, a popover, a
+//! menu, the switcher, an alert) hides the pages of its window meanwhile ([`set_covered`]), as a native window cannot
+//! sit under the app's drawing.
 //!
 //! - Stores (`store`): one `WebView2` environment per state directory, the saved store a profile named by the browser
 //!   profile id, every other page an `InPrivate` profile of its own. Saved logins live under
