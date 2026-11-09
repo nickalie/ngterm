@@ -455,9 +455,8 @@ impl Shell<'_> {
             .map(Session::id)
     }
 
-    /// Opens `var`'s row menu with a right-click, its Close Session's confirmation, and the menu's dismissal, as a
-    /// click on the item runs them.
-    fn close_var_from_its_menu(&mut self) {
+    /// Opens `var`'s row menu with a right-click and gives back the sidebar that holds it.
+    fn open_var_row_menu(&mut self) -> Entity<Sidebar> {
         let row = self.cx.debug_bounds("row:var").expect("the row is laid out").center();
         self.cx
             .simulate_mouse_down(row, gpui_kit::MouseButton::Right, gpui_kit::Modifiers::default());
@@ -469,6 +468,13 @@ impl Shell<'_> {
             sidebar.read_with(self.cx, |sidebar, _| sidebar.menu_open()),
             "the menu holds the keyboard"
         );
+        sidebar
+    }
+
+    /// Opens `var`'s row menu with a right-click, its Close Session's confirmation, and the menu's dismissal, as a
+    /// click on the item runs them.
+    fn close_var_from_its_menu(&mut self) {
+        let sidebar = self.open_var_row_menu();
         let var = self.session("var").unwrap();
         sidebar.update_in(self.cx, |sidebar, window, cx| {
             sidebar.close_sessions(vec![var], window, cx);
@@ -1312,6 +1318,33 @@ fn a_menu_item_runs_in_its_window_and_the_terminal_gets_the_keyboard_back(cx: &m
     let after = s.state.core.library().store(s.window).unwrap().sessions().count();
     assert_eq!(after, before + 1, "New Session ran in the menu's window");
     assert!(s.terminal_focused(), "the new session's terminal has the keyboard");
+}
+
+/// Whether the window's last render told its pages that something it draws covers them.
+fn pages_covered(s: &mut Shell<'_>) -> bool {
+    s.view.read_with(s.cx, |view, _| view.covered.get())
+}
+
+#[gpui_kit::test]
+fn an_open_menu_covers_the_pages_until_it_closes(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    assert!(!pages_covered(&mut s), "nothing is over the content yet");
+
+    s.click("app-menu-button");
+    s.settle();
+    assert!(s.menu_open());
+    assert!(pages_covered(&mut s), "a page's native window would hide the app menu");
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    assert!(!s.menu_open(), "Escape closes the app menu");
+    assert!(!pages_covered(&mut s), "the pages come back with the app menu gone");
+
+    let sidebar = s.open_var_row_menu();
+    s.settle();
+    assert!(pages_covered(&mut s), "a page's native window would hide the row menu");
+    sidebar.update(s.cx, |sidebar, cx| sidebar.dismiss_menu(cx));
+    s.settle();
+    assert!(!pages_covered(&mut s), "the pages come back with the row menu gone");
 }
 
 #[gpui_kit::test]
