@@ -74,6 +74,16 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
 Upstream syncs and pin bumps: use the `agterm-upstream-sync` skill; a Ghostty pin bump (`LIBGHOSTTY_VT_*`), with the
 ports that keep the terminal's behavior and rendering Ghostty's: the `libghostty-sync` skill.
 
+## Testing
+
+- New code ships with tests that would fail if it broke.
+- A test asserts what a caller, the user or the OS observes, not how the code gets there.
+- A flaky test is a bug in the test or the code: find the cause, never rerun it away.
+- Code no test can reach gets the smallest seam that lets one reach it, not a coverage exclusion.
+- Every crate and mobile app aims for 90% coverage. The target and the floors are raise-only: close a gap with tests.
+
+README > Test and `scripts/unit-coverage.sh` have the how; the mobile apps' are in their README sections.
+
 ## Choosing checks
 
 There is no fixed gate: you decide which checks a change needs and how far to take them. Don't overrun the gate:
