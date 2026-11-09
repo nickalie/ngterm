@@ -33,9 +33,18 @@
 # session forwards TERM to a host that needs the entry installed (`ngtermctl terminfo install`, as from Linux), and WSL
 # starts its programs with its own TERM unless WSLENV forwards the pane's.
 #
+# The Zig packages come from the project's own mirror when it has them: the `zig-packages-<key>` prerelease that
+# zig-packages.yml publishes, one tar of the package archives Zig keeps in its global cache, each named by its package
+# hash, and of the pinned theme archive. `zig fetch` recomputes each package's hash from its contents, and a name it
+# doesn't reproduce fails the script, so the mirror can't change what Ghostty's pinned build.zig.zon files ask for; the
+# theme archive is checked against its pinned sha256. A key with no mirror, or one out of reach, is not an error: Zig
+# then fetches each package from its upstream, every attempt bounded and retried.
+#
 # Usage: scripts/build-ghostty-vt.sh                 prepare the prefix unless it is complete, then print its path
 #        scripts/build-ghostty-vt.sh --print-prefix  print the prefix path only (ngterm-ghostty-vt-sys/build.rs)
 #        scripts/build-ghostty-vt.sh --verify        exit 0 when the prefix is complete, 1 otherwise
+#        scripts/build-ghostty-vt.sh --print-zig-packages-key   print the key of the Zig packages' mirror
+#        scripts/build-ghostty-vt.sh --print-zig-cache          print Zig's global cache, whose p/ the mirror holds
 #
 # It runs on Linux, stock macOS (bash 3.2, shasum, BSD patch) and under Git Bash on Windows (scripts/lib/native.sh >
 # Portable shell); on Windows the stamp records native paths, which the build script hands to zig. It needs curl, tar,
@@ -67,9 +76,39 @@ ios_sdk_present() {
   [[ "$(host_os)" == macos ]] && xcrun --sdk "$sdk" --show-sdk-path >/dev/null 2>&1
 }
 
+# Where the mirror's releases are, and how long and how often one target's package fetch from the upstreams may run: a
+# stalled download otherwise hangs for as long as the job may run. The environment overrides are for testing this.
+ZIG_PACKAGES_RELEASES="${NGTERM_ZIG_PACKAGES_RELEASES:-https://github.com/nickalie/ngterm/releases/download}"
+ZIG_FETCH_TIMEOUT="${NGTERM_ZIG_FETCH_TIMEOUT:-300}"
+ZIG_FETCH_ATTEMPTS="${NGTERM_ZIG_FETCH_ATTEMPTS:-5}"
+ZIG_FETCH_BACKOFF="${NGTERM_ZIG_FETCH_BACKOFF:-15}"
+
+# The mirror's key: what decides which packages the build asks for (the pins, the patches, the targets configured), and
+# nothing about the host, so every OS and arch reads the same release.
+zig_packages_key() {
+  local patch
+  {
+    echo "targets ${ZIG_TARGETS[*]}"
+    pin_lines LIBGHOSTTY_VT
+    for patch in "$PATCHES"/*.patch; do
+      [[ -f "$patch" ]] || continue
+      echo "patch $(basename "$patch")"
+      cat "$patch"
+    done
+  } | sha256_of | cut -c1-16
+}
+
 case "${1:-}" in
   --print-prefix)
     echo "$PREFIX"
+    exit 0
+    ;;
+  --print-zig-packages-key)
+    zig_packages_key
+    exit 0
+    ;;
+  --print-zig-cache)
+    ghostty_vt_zig_cache
     exit 0
     ;;
   --verify)
@@ -77,7 +116,10 @@ case "${1:-}" in
     exit
     ;;
   "") ;;
-  *) die "usage: scripts/build-ghostty-vt.sh [--print-prefix | --verify]" ;;
+  *)
+    die "usage: scripts/build-ghostty-vt.sh [--print-prefix | --verify | --print-zig-packages-key" \
+      "| --print-zig-cache]"
+    ;;
 esac
 
 if ghostty_vt_prefix_is_complete "$PREFIX"; then
@@ -122,7 +164,8 @@ TREE="$STAGE/src"
 # The source archive of the full commit id, verified against its pinned sha256 before anything is unpacked: the
 # build needs no git.
 echo "fetching ghostty $LIBGHOSTTY_VT_REV for libghostty-vt..." >&2
-curl -fsSL --retry 3 -o "$BUILD_DIR/source.tar.gz" "$LIBGHOSTTY_VT_REPO/archive/$LIBGHOSTTY_VT_REV.tar.gz"
+curl -fsSL --retry 5 --connect-timeout 30 --max-time 600 -o "$BUILD_DIR/source.tar.gz" \
+  "$LIBGHOSTTY_VT_REPO/archive/$LIBGHOSTTY_VT_REV.tar.gz"
 sha256_matches "$LIBGHOSTTY_VT_SHA256" "$BUILD_DIR/source.tar.gz" \
   || die "ghostty $LIBGHOSTTY_VT_REV source archive sha256 mismatch"
 mkdir "$TREE"
@@ -139,6 +182,64 @@ for patch in "$PATCHES"/*.patch; do
 done
 find "$TREE" -name '*.orig' -type f -exec rm -f {} +
 
+# Puts the mirror's packages into Zig's global cache and the tree's zig-pkg/, each checked against its name. See the
+# header for why a missing mirror is fine and a wrong package is not.
+seed_zig_packages() {
+  local key archive package name fetched
+  key="$(zig_packages_key)"
+  archive="$BUILD_DIR/zig-packages.tar"
+  if ! curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 -o "$archive" \
+    "$ZIG_PACKAGES_RELEASES/zig-packages-$key/zig-packages.tar"; then
+    echo "no mirror of libghostty-vt's Zig packages for $key: fetching them from their upstreams" >&2
+    return 0
+  fi
+  echo "seeding libghostty-vt's Zig packages from the mirror $key..." >&2
+  mkdir "$BUILD_DIR/zig-packages"
+  tar --no-same-owner -xf "$archive" -C "$BUILD_DIR/zig-packages" || die "the Zig package mirror $key does not unpack"
+  for package in "$BUILD_DIR"/zig-packages/*.tar.gz; do
+    [[ -f "$package" ]] || die "the Zig package mirror $key holds no packages"
+    name="$(basename "$package" .tar.gz)"
+    fetched="$(cd "$TREE" && "$ZIG_EXE" fetch --global-cache-dir "$ZIG_CACHE" "$(native_path "$package")")" \
+      || die "zig cannot read $name from the Zig package mirror $key"
+    [[ "$fetched" == "$name" ]] || die "the Zig package mirror $key holds $fetched under the name $name"
+  done
+}
+
+# Runs "$@" in the background and ends it after $1 seconds, returning its status. Stock macOS has no timeout(1). The
+# watchdog sleeps a second at a time so that stopping it leaves no long sleep behind.
+run_bounded() {
+  local limit="$1" pid watchdog status=0
+  shift
+  "$@" &
+  pid=$!
+  (
+    elapsed=0
+    while ((elapsed < limit)); do
+      sleep 1
+      elapsed=$((elapsed + 1))
+    done
+    echo "still running after ${limit}s: stopping it" >&2
+    kill -TERM "$pid" 2>/dev/null || exit 0
+    sleep 5
+    kill -KILL "$pid" 2>/dev/null || true
+  ) >/dev/null &
+  watchdog=$!
+  wait "$pid" || status=$?
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  return "$status"
+}
+
+# Configures the tree for Zig triple $1, which fetches what that target needs. It replaces its own process with zig, so
+# that run_bounded's signal reaches zig itself.
+configure_for_target() {
+  cd "$TREE"
+  export ANDROID_NDK_HOME
+  ANDROID_NDK_HOME="$(native_path "$BUILD_DIR/android-ndk")"
+  exec "$ZIG_EXE" build --list-steps --cache-dir "$BUILD_DIR/zig-cache" --global-cache-dir "$ZIG_CACHE" \
+    -Demit-lib-vt=true -Dtarget="$1" >/dev/null
+}
+
 # The packages: Zig fetches a lazy dependency only when a build's configure step asks for it, so each mapped target's
 # libghostty-vt configuration is run once (listing its steps builds nothing), which fetches what that target's build
 # needs into the tree's zig-pkg/. The local cache is scratch: the tree is left as the build script will read it.
@@ -148,6 +249,7 @@ find "$TREE" -name '*.orig' -type f -exec rm -f {} +
 # Zig doesn't bundle, so it runs only on a macOS host whose Xcode has that SDK (ios_sdk_present) and is skipped
 # elsewhere: Linux, Windows, or a Mac with the command-line tools alone. Its packages are the macOS configurations' (no
 # lazy dependency of libghostty-vt's build is iOS-only), so a prefix prepared without it still builds for iOS.
+seed_zig_packages
 echo "fetching libghostty-vt's Zig packages with zig $LIBGHOSTTY_VT_ZIG_VERSION..." >&2
 mkdir "$BUILD_DIR/android-ndk"
 for target in "${ZIG_TARGETS[@]}"; do
@@ -155,12 +257,14 @@ for target in "${ZIG_TARGETS[@]}"; do
     echo "skipping $target: its configuration needs Xcode's iOS SDK, which this host lacks" >&2
     continue
   fi
-  (
-    cd "$TREE"
-    ANDROID_NDK_HOME="$(native_path "$BUILD_DIR/android-ndk")" \
-      "$ZIG_EXE" build --list-steps --cache-dir "$BUILD_DIR/zig-cache" --global-cache-dir "$ZIG_CACHE" \
-      -Demit-lib-vt=true -Dtarget="$target" >/dev/null
-  ) || die "cannot fetch the Zig packages of libghostty-vt for $target"
+  attempt=1
+  until run_bounded "$ZIG_FETCH_TIMEOUT" configure_for_target "$target"; do
+    ((attempt < ZIG_FETCH_ATTEMPTS)) \
+      || die "cannot fetch the Zig packages of libghostty-vt for $target after $attempt attempts"
+    echo "fetching the Zig packages for $target failed (attempt $attempt of $ZIG_FETCH_ATTEMPTS), retrying..." >&2
+    sleep $((attempt * ZIG_FETCH_BACKOFF))
+    attempt=$((attempt + 1))
+  done
 done
 [[ -d "$TREE/zig-pkg" ]] || die "the libghostty-vt configuration fetched no Zig packages"
 
@@ -179,7 +283,13 @@ cp -R "$TREE/src/shell-integration" "$STAGE/share/ghostty/shell-integration"
 grep -F "$LIBGHOSTTY_VT_THEMES_URL" "$TREE/build.zig.zon" >/dev/null \
   || die "ghostty $LIBGHOSTTY_VT_REV no longer declares the pinned theme package (LIBGHOSTTY_VT_THEMES_URL)"
 echo "fetching the pinned Ghostty theme package..." >&2
-curl -fsSL --retry 3 -o "$BUILD_DIR/ghostty-themes.tgz" "$LIBGHOSTTY_VT_THEMES_URL"
+if [[ -f "$BUILD_DIR/zig-packages/ghostty-themes.tgz" ]] \
+  && sha256_matches "$LIBGHOSTTY_VT_THEMES_SHA256" "$BUILD_DIR/zig-packages/ghostty-themes.tgz"; then
+  mv "$BUILD_DIR/zig-packages/ghostty-themes.tgz" "$BUILD_DIR/ghostty-themes.tgz"
+else
+  curl -fsSL --retry 5 --connect-timeout 30 --max-time 600 -o "$BUILD_DIR/ghostty-themes.tgz" \
+    "$LIBGHOSTTY_VT_THEMES_URL"
+fi
 sha256_matches "$LIBGHOSTTY_VT_THEMES_SHA256" "$BUILD_DIR/ghostty-themes.tgz" \
   || die "Ghostty theme package sha256 mismatch"
 tar -xzf "$BUILD_DIR/ghostty-themes.tgz" -C "$STAGE/share/ghostty/themes" --strip-components=1

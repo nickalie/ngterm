@@ -1,0 +1,113 @@
+# Keeps a mirror of what preparing libghostty-vt downloads from hosts other than GitHub, so that a build doesn't depend
+# on them: the Zig packages (Ghostty's build.zig.zon files pin URLs on several; an outage of one failed every platform
+# of a release) and Ghostty's theme archive. One `zig-packages-<key>` prerelease per
+# scripts/build-ghostty-vt.sh --print-zig-packages-key, holding one tar of the package archives from Zig's global cache,
+# each named by its package hash, and the theme archive. scripts/build-ghostty-vt.sh reads it first, has `zig fetch`
+# check every hash and checks the theme archive's pinned sha256, so the mirror needs no provenance of its own.
+#
+# `build` runs Ghostty's and its packages' build code with no write access and no token in its environment. `publish`
+# holds the write token and runs nothing `build` made: it only uploads the tar.
+#
+# A prerelease with --latest=false, so `releases/latest` keeps naming the app. A published release is written once: a
+# key that has one builds nothing here. A draft a killed upload left behind is replaced. Nothing pins these releases;
+# one that's gone only sends builds back to the upstreams.
+name: zig-packages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/zig-packages.yml
+      - scripts/build-ghostty-vt.sh
+      - scripts/lib/native.sh
+      - build/pins.env
+      - build/patches/ghostty-vt/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zig-packages
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      key: ${{ steps.probe.outputs.key }}
+      exists: ${{ steps.probe.outputs.exists }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Published already?
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          key="$(scripts/build-ghostty-vt.sh --print-zig-packages-key)"
+          draft="$(gh release view "zig-packages-$key" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          exists=false
+          [[ "$draft" != false ]] || exists=true
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
+      - name: The packages and the theme archive
+        if: steps.probe.outputs.exists == 'false'
+        env:
+          NGTERM_VENDOR: ${{ runner.temp }}/vendor
+          STAGE: ${{ runner.temp }}/zig-packages
+          ARCHIVE: ${{ runner.temp }}/zig-packages.tar
+        run: |
+          scripts/build-ghostty-vt.sh
+          mkdir "$STAGE"
+          cp "$(scripts/build-ghostty-vt.sh --print-zig-cache)"/p/*.tar.gz "$STAGE/"
+          source build/pins.env
+          curl -fsSL --retry 5 --connect-timeout 30 --max-time 600 -o "$STAGE/ghostty-themes.tgz" \
+            "$LIBGHOSTTY_VT_THEMES_URL"
+          echo "$LIBGHOSTTY_VT_THEMES_SHA256  $STAGE/ghostty-themes.tgz" | sha256sum -c -
+          tar -cf "$ARCHIVE" -C "$STAGE" .
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.probe.outputs.exists == 'false'
+        with:
+          name: zig-packages
+          path: ${{ runner.temp }}/zig-packages.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    if: needs.build.outputs.exists == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: zig-packages
+          path: ${{ runner.temp }}/mirror
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          KEY: ${{ needs.build.outputs.key }}
+          ARCHIVE: ${{ runner.temp }}/mirror/zig-packages.tar
+        run: |
+          release="zig-packages-$KEY"
+          if [[ "$(gh release view "$release" --json isDraft --jq .isDraft 2>/dev/null || true)" == true ]]; then
+            gh release delete "$release" --yes
+          fi
+          gh release create "$release" --prerelease --latest=false --target "$GITHUB_SHA" \
+            --title "Zig packages $KEY" \
+            --notes "What preparing libghostty-vt downloads, at this key. See zig-packages.yml." \
+            "$ARCHIVE"
