@@ -357,13 +357,6 @@ def test_must_pass_excuses_only_an_upstream_bug_allowance(pytester: pytest.Pytes
     result.stdout.no_fnmatch_line("*test_bug_shows*")
 
 
-@pytest.mark.parametrize(
-    "shell_blocker",
-    [
-        pytest.param(None, id="live-available"),
-        pytest.param("the password-database login shell is /bin/bash, not zsh or fish", id="bash-login"),
-    ],
-)
 @pytest.mark.parametrize("must_pass", [False, True])
 @pytest.mark.parametrize(
     ("phase", "exception", "outcomes"),
@@ -376,11 +369,17 @@ def test_must_pass_excuses_only_an_upstream_bug_allowance(pytester: pytest.Pytes
     ],
 )
 def test_an_upstream_bug_does_not_excuse_harness_errors(
-    pytester: pytest.Pytester, bin_path: Path, monkeypatch: pytest.MonkeyPatch, shell_blocker: str | None,
-    must_pass: bool, phase: str, exception: str, outcomes: dict[str, int]
+    pytester: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+    bin_path: Path,
+    must_pass: bool,
+    phase: str,
+    exception: str,
+    outcomes: dict[str, int],
 ) -> None:
-    # These outcome-only tests must run even when the host cannot launch live sessions.
-    monkeypatch.setattr("agterm_conformance.impls.swift_macos.login_shell_blocker", lambda: shell_blocker)
+    # The inner tests pass the adapter's `requires` gate as real conformance tests do: on a host whose login shell
+    # rules out live sessions they would skip, and these outcomes would never be reached.
+    monkeypatch.setattr("agterm_conformance.impls.swift_macos.login_shell_blocker", lambda: None)
     pytester.makepyfile(
         f"""
         import pytest
@@ -395,13 +394,13 @@ def test_an_upstream_bug_does_not_excuse_harness_errors(
 
         @pytest.mark.requires("live-sessions")
         @pytest.mark.upstream_bug("lost-output", reason="upstream loses it")
-        def test_bug(resource):
+        def test_bug(resource, impl_options):
             if {phase!r} == "call":
                 raise {exception}("broken call")
             assert False
 
         @pytest.mark.requires("live-sessions")
-        def test_healthy():
+        def test_healthy(impl_options):
             pass
         """
     )
