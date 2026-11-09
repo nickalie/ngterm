@@ -103,8 +103,8 @@ def main() -> int:
         new["LIBGHOSTTY_VT_REV"] = rev
         repo = pins["LIBGHOSTTY_VT_REPO"]
         new["LIBGHOSTTY_VT_SHA256"] = sha256(fetch(f"{repo}/archive/{rev}.tar.gz"))
-        notes.append("the LIBGHOSTTY_VT comment block: the new revision's date, its merge and its green "
-                     "build-libghostty-vt* jobs")
+        notes.append("the LIBGHOSTTY_VT comment block and README's pin paragraph: what the pin follows, the new "
+                     "revision's date, its release tag or merge, and its build-libghostty-vt* jobs")
 
     zig = re.search(r'\.minimum_zig_version\s*=\s*"([^"]+)"', zon)
     if not zig:

@@ -6,8 +6,8 @@
 # DIR defaults to <repo>/.upstream/ghostty, the read-only reference clone (git-ignored through .upstream/ in
 # .git/info/exclude). A missing clone is created blobless (full history, blobs fetched on demand); a shallow one is
 # unshallowed, since `git log OLD..NEW` needs the history. The clone is never written to beyond fetching and checking
-# out NEW_REV (detached): local changes in it stop the script. github.com drops large fetches now and then, so every
-# network step retries.
+# out NEW_REV (detached): local changes in it stop the script. Tags are fetched with --force, since Ghostty moves its
+# `tip` tag. github.com drops large fetches now and then, so every network step retries.
 # Prints GHOSTTY=, OLD_SHA=, NEW_SHA=, COMMITS= (all commits in OLD..NEW), MERGES= (first-parent commits: one per
 # merged pull request, the clusters of the analysis).
 set -euo pipefail
@@ -57,9 +57,9 @@ else
     exit 1
   fi
   if [[ "$(git -C "$clone" rev-parse --is-shallow-repository)" == true ]]; then
-    retry git -C "$clone" fetch -q --unshallow --tags origin
+    retry git -C "$clone" fetch -q --force --unshallow --tags origin
   else
-    retry git -C "$clone" fetch -q --tags origin
+    retry git -C "$clone" fetch -q --force --tags origin
   fi
 fi
 
@@ -67,7 +67,16 @@ for rev in "$old" "$new"; do
   git -C "$clone" rev-parse -q --verify "$rev^{commit}" >/dev/null \
     || { echo "prepare-ghostty: $rev not found in $clone" >&2; exit 1; }
 done
-git -C "$clone" merge-base --is-ancestor "$old" "$new" \
+# a patch release cut from a maintenance branch is no ancestor of the next minor, so a higher release may follow it
+release_at() { git -C "$clone" tag --points-at "$1" | awk '/^v[0-9]+[.][0-9]+[.][0-9]+$/' | sort -V | tail -n 1; }
+newer_release() {
+  local from to
+  from="$(release_at "$old")"
+  to="$(release_at "$new")"
+  [[ -n "$from" && -n "$to" && "$from" != "$to" \
+    && "$(printf '%s\n%s\n' "$from" "$to" | sort -V | tail -n 1)" == "$to" ]]
+}
+git -C "$clone" merge-base --is-ancestor "$old" "$new" || newer_release \
   || { echo "prepare-ghostty: $old is not an ancestor of $new" >&2; exit 1; }
 
 # a blobless clone fetches the blobs a diff needs lazily: fetch them now, with retries, so later reads stay local

@@ -4,22 +4,25 @@
 #   resolve-rev.sh [TARGET]
 #
 # CURRENT is LIBGHOSTTY_VT_REV of build/pins.env. TARGET is the argument (a commit sha, a tag such as vt-1.0.0 or
-# v1.4.0, or a branch), `vt` for the newest vt-* tag (libghostty-vt's releases), or, by default, the newest commit on
-# ghostty main whose libghostty-vt CI is green: every check run named build-libghostty-vt* or test-lib-vt completed with
-# success (the pin's own rule, build/pins.env); a skipped or neutral one means nothing built the library there, so the
-# commit is not green. A named TARGET is taken as given; its CI state is still reported.
+# v1.4.0, or a branch), `vt` for the newest vt-* tag (libghostty-vt's releases), `main-green` for the newest commit on
+# ghostty main whose libghostty-vt CI is green (every check run named build-libghostty-vt* or test-lib-vt completed with
+# success; a skipped or neutral one means nothing built the library there, so the commit is not green), or, by default,
+# the newest Ghostty release: the highest vX.Y.Z tag (its GitHub releases hold only the rolling `tip`, so tags are the
+# record). A release or a named TARGET is taken as given; its CI state is still reported.
 #
 # Prints CURRENT=, TARGET= (full sha), TARGET_REF= (what it was resolved from), STATUS= (ahead | identical | behind |
 # diverged: TARGET relative to CURRENT), AHEAD= (commits from CURRENT to TARGET), CI= (green | red | pending |
 # skipped | none: the libghostty-vt checks of TARGET; skipped when some were skipped or neutral and none failed).
-# Exit 0 when TARGET is ahead of CURRENT, 3 when there is nothing to sync (identical or behind), 1 on an error (a gh
-# call that failed stops the script with gh's own message) or a diverged TARGET (a pin must move forward along ghostty
-# main's history).
+# Exit 0 when TARGET is ahead of CURRENT, or diverged from it with both on release tags and TARGET the higher version (a
+# patch release cut from a maintenance branch is no ancestor of the next minor: v1.2.3 and v1.3.0). Exit 3 when there is
+# nothing to sync (identical or behind), 1 on an error (a gh call that failed stops the script with gh's own message)
+# or any other diverged TARGET (a pin must not lose commits it has).
 set -euo pipefail
 
 REPO="ghostty-org/ghostty"
 SCAN=40          # main commits searched for a green one
 CHECKS='^(build-libghostty-vt|test-lib-vt)'
+RELEASE='^v[0-9]+[.][0-9]+[.][0-9]+$'
 
 root="$(git rev-parse --show-toplevel)"
 pins="$root/build/pins.env"
@@ -42,8 +45,32 @@ ci_state() {
   fi
 }
 
-ref="${1:-main-green}"
+# Every tag of ghostty as "name sha".
+tags() {
+  gh api --paginate "repos/$REPO/tags?per_page=100" --jq '.[] | .name + " " + .commit.sha' \
+    || die "cannot list $REPO's tags (gh failed: see above)"
+}
+
+# Sets `tag` to the highest version among the tags whose name matches $1, and `target` to its commit.
+newest_tag() {
+  local all
+  all="$(tags)" || exit 1
+  tag="$(awk -v re="$1" '$1 ~ re { print $1 }' <<<"$all" | sort -V | tail -n 1)"
+  [[ -n "$tag" ]] || die "no tag matching $1 in $REPO"
+  target="$(awk -v name="$tag" '$1 == name { print $2 }' <<<"$all")"
+}
+
+# The highest release tag on commit $2 in the "name sha" list $1, or nothing.
+release_at() {
+  awk -v re="$RELEASE" -v sha="$2" '$1 ~ re && $2 == sha { print $1 }' <<<"$1" | sort -V | tail -n 1
+}
+
+ref="${1:-release}"
 case "$ref" in
+  release)
+    newest_tag "$RELEASE"
+    ref="$tag"
+    ;;
   main-green)
     target=""
     shas="$(gh api "repos/$REPO/commits?sha=main&per_page=$SCAN" --jq '.[].sha')" \
@@ -55,11 +82,8 @@ case "$ref" in
     [[ -n "$target" ]] || die "none of main's last $SCAN commits has green libghostty-vt CI"
     ;;
   vt)
-    tags="$(gh api --paginate "repos/$REPO/tags?per_page=100" --jq '.[].name')" || die "cannot list $REPO's tags"
-    tag="$(grep -E '^vt-[0-9]' <<<"$tags" | sort -V | tail -n 1)"
-    [[ -n "$tag" ]] || die "no vt-* tag in $REPO"
+    newest_tag '^vt-[0-9]'
     ref="$tag"
-    target="$(gh api "repos/$REPO/commits/$tag" --jq .sha)" || die "cannot resolve $tag"
     ;;
   *)
     target="$(gh api "repos/$REPO/commits/$ref" --jq .sha)" || die "$ref is not a commit, tag or branch of $REPO"
@@ -81,5 +105,14 @@ echo "CI=$ci"
 case "$status" in
   ahead) exit 0 ;;
   identical | behind) exit 3 ;;
-  *) die "$target has diverged from the pin $current" ;;
+  *)
+    all="$(tags)" || exit 1
+    from="$(release_at "$all" "$current")"
+    to="$(release_at "$all" "$target")"
+    if [[ -n "$from" && -n "$to" && "$from" != "$to" \
+      && "$(printf '%s\n%s\n' "$from" "$to" | sort -V | tail -n 1)" == "$to" ]]; then
+      exit 0
+    fi
+    die "$target has diverged from the pin $current"
+    ;;
 esac

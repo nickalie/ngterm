@@ -1,6 +1,6 @@
 ---
 name: libghostty-sync
-description: "Move ngterm's Ghostty pin (LIBGHOSTTY_VT_REV: libghostty-vt and Ghostty's resources) to a newer ghostty main commit or tag, and keep ngterm's terminal behaving and rendering as Ghostty does: analyse the Ghostty diff against the Rust, Kotlin and Swift code that mirrors Ghostty's renderer, font, sprite font, Surface, termio, input and config; bump pins, patches, bindings and config keys when that is mechanical; write a docs/plans/ porting plan for plan-exec. Use for 'sync with ghostty', 'bump libghostty', 'ghostty pin bump', 'update libghostty-vt', 'Ghostty parity', or Ghostty change analysis. Ports no behavior itself."
+description: "Move ngterm's Ghostty pin (LIBGHOSTTY_VT_REV: libghostty-vt and Ghostty's resources) to the latest Ghostty release or a named commit or tag, and keep ngterm's terminal behaving and rendering as Ghostty does: analyse the Ghostty diff against the Rust, Kotlin and Swift code that mirrors Ghostty's renderer, font, sprite font, Surface, termio, input and config; bump pins, patches, bindings and config keys when that is mechanical; write a docs/plans/ porting plan for plan-exec. Use for 'sync with ghostty', 'bump libghostty', 'ghostty pin bump', 'update libghostty-vt', 'Ghostty parity', or Ghostty change analysis. Ports no behavior itself."
 ---
 
 # libghostty-sync
@@ -32,8 +32,9 @@ discovery. Edit the shared source so both agents get the same workflow.
 - **Claude Code:** `/libghostty-sync [TARGET]`; later `/plan-exec docs/plans/<file>`.
 - **Codex:** `$libghostty-sync [TARGET]`; later `$plan-exec docs/plans/<file>`.
 
-TARGET is a ghostty commit, tag (`vt-1.0.0`, `v1.4.0`) or branch, `vt` for the newest `vt-*` tag, or nothing for the
-newest ghostty main commit with green libghostty-vt CI (the pin's own rule in `build/pins.env`).
+TARGET is a ghostty commit, tag (`vt-1.0.0`, `v1.4.0`) or branch, `vt` for the newest `vt-*` tag (libghostty-vt's
+releases), `main-green` for the newest ghostty main commit with green libghostty-vt CI, or nothing for the latest
+Ghostty release (the highest `vX.Y.Z` tag).
 
 Read the checkout's `AGENTS.md` and any more specific directory instructions first. Set `SKILL_DIR` to the absolute
 directory holding this `SKILL.md`; its `scripts/` and `references/` are meant below. The scripts act on the repository
@@ -58,8 +59,8 @@ bash $SKILL_DIR/scripts/resolve-rev.sh [TARGET]      # CURRENT, TARGET, TARGET_R
 bash $SKILL_DIR/scripts/prepare-ghostty.sh CURRENT TARGET
 ```
 
-Exit 3 from `resolve-rev.sh` means there is nothing to sync: say so and stop. A named TARGET whose `CI` is not
-`green` is synced only because the user named it: record that in the plan. Start from a tree with no modified tracked
+Exit 3 from `resolve-rev.sh` means there is nothing to sync: say so and stop. A release or a TARGET the user named is
+synced whatever its `CI`: when that is not `green`, record it in the plan. Start from a tree with no modified tracked
 files, so the branch holds only this sync.
 
 ## 2. Analysis
@@ -99,7 +100,7 @@ tool, up to four at a time within the environment's slots. Before a subagent's `
 The bump is **mechanical** when the report says `API_BREAK=none` and `patches.txt` has no `conflict`. Then:
 
 1. `python3 -I $SKILL_DIR/scripts/bump-pins.py --apply TARGET`, then the hand edits it prints (the pins.env comment
-   blocks: date, merge, green jobs, Zig lookup date, the themes' and fonts' Zig hashes).
+   blocks: what the pin follows, date, release tag or merge, CI jobs, Zig lookup date, the themes' and fonts' Zig hashes).
 2. `bash $SKILL_DIR/scripts/patches-check.sh --rebase TARGET`. An `upstreamed` patch is dropped only as
    `build/patches/ghostty-vt/README.md` says (its verification passes without it), its README entry with it; if that
    verification fails, the bump is not mechanical. Update each kept patch's `base:` line in the README.
