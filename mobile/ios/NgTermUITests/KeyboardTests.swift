@@ -6,11 +6,27 @@ import XCTest
 /// pane alone (`-ngterm-fake-terminal`), with what the pane got written over it.
 internal final class KeyboardTests: XCTestCase {
     private static let wait: TimeInterval = 15
+    // how long the slide-to-type introduction gets to come up after the keyboard, which it follows within a moment
+    private static let introductionWait: TimeInterval = 5
 
     // the extra key named `name`
     @MainActor
     private static func key(_ name: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)["extra-key-\(name)"]
+    }
+
+    // Closes the system's slide-to-type introduction if it came up over the soft keyboard. Its Continue is the only way
+    // past it: it covers the keyboard's lower half and the extra keys, so every tap lands on it and types nothing.
+    // build-ios.sh sets the preference that should stop it, but a simulator's first keyboard now and then shows it
+    // anyway.
+    @MainActor
+    private static func closeTheKeyboardIntroduction(in app: XCUIApplication) {
+        let introduction = app.descendants(matching: .any)["UIContinuousPathIntroductionView"]
+        guard introduction.waitForExistence(timeout: introductionWait) else {
+            return
+        }
+        introduction.buttons["Continue"].tap()
+        XCTAssertTrue(introduction.waitForNonExistence(timeout: wait), "the slide-to-type introduction stayed")
     }
 
     // waits until the bench's `line` reads `text`
@@ -42,6 +58,7 @@ internal final class KeyboardTests: XCTestCase {
         guard keyboard.waitForExistence(timeout: Self.wait) else {
             throw XCTSkip("the simulator has the Mac's keyboard attached, so no soft keyboard shows")
         }
+        Self.closeTheKeyboardIntroduction(in: app)
         keyboard.keys["l"].tap()
         keyboard.keys["s"].tap()
         Self.expect("bench-typed", reads: "ls", in: app)
