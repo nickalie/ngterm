@@ -1394,6 +1394,14 @@ fn a_leaders_typing_tail_stopped_by_the_pages_script_fires_it(cx: &mut TestAppCo
         visual.run_until_parked();
         assert_eq!(crate::keymap_dispatch::take_fired().len(), 1, "{shortcut} fires");
         assert!(
+            !driven
+                .view
+                .take()
+                .iter()
+                .any(|call| matches!(call, Call::Redelivered(_))),
+            "{shortcut} stays off the page"
+        );
+        assert!(
             !crate::keymap_dispatch::sequence_is_live(),
             "{shortcut} ends the leader"
         );
@@ -1468,6 +1476,60 @@ fn the_script_hears_of_a_live_leader_and_of_its_end(cx: &mut TestAppContext) {
         &mut visual.cx,
     );
     assert_eq!(told_keys(&driven.view), Vec::<Vec<u32>>::new(), "nothing is live");
+}
+
+/// A leader armed outside the page tells the script its tails as soon as the page gains focus, even before mount.
+#[cfg(windows)]
+#[gpui_kit::test]
+fn a_leader_begun_outside_the_page_goes_on_when_it_takes_focus(cx: &mut TestAppContext) {
+    let driven = driven(&url_overlay());
+    let (keymap, _) =
+        ngterm_core::keymap::parse_keymap("command \"g\" ctrl+a>g true\n", &ngterm_core::keymap::linux_defaults());
+    crate::keymap_dispatch::load_keymap(&keymap);
+    assert_eq!(crate::keymap_dispatch::press_dispatched("ctrl-a"), Some(false));
+    driven.report(Report::Focus(false), cx);
+    assert!(told_keys(&driven.view).is_empty());
+    driven.report(Report::Focus(true), cx);
+    assert_eq!(told_keys(&driven.view), vec![vec![0x47]]);
+}
+
+/// Ownership of a script-stopped keypad Enter follows the physical key when focus moves to a terminal.
+#[cfg(windows)]
+#[gpui_kit::test]
+fn a_stopped_key_keeps_its_physical_identity(cx: &mut TestAppContext) {
+    use crate::terminal::input::{self, KeyStroke, NativeKey, Source};
+
+    for (code, expected, other) in [
+        ("Enter", "Enter", "NumpadEnter"),
+        ("NumpadEnter", "NumpadEnter", "Enter"),
+        ("", "Enter", "NumpadEnter"),
+    ] {
+        crate::keymap_dispatch::keyboard_left();
+        let driven = driven(&url_overlay());
+        let visual = under_monitor(&driven, cx, "command \"enter\" ctrl+a>return true\n", &["ctrl-a"]);
+        let report = stopped_key(&driven.page, 0x0D, false, false, ("Enter", code));
+        visual.cx.update(|cx| driven.page.report(report, cx));
+        visual.run_until_parked();
+        assert_eq!(crate::keymap_dispatch::take_fired().len(), 1);
+        let keystroke = gpui_kit::Keystroke::parse("enter").unwrap();
+        let held = |code| {
+            KeyStroke::new(
+                &keystroke,
+                &Source::Native(NativeKey {
+                    keycode: input::xkb_keycode(code).unwrap(),
+                    repeat: true,
+                    ..NativeKey::default()
+                }),
+                false,
+            )
+        };
+        assert!(crate::keymap_dispatch::takes(&held(expected)), "{code} is still owned");
+        crate::keymap_dispatch::page_report_dropped();
+        assert!(
+            !crate::keymap_dispatch::takes(&held(other)),
+            "the other Enter is not owned"
+        );
+    }
 }
 
 /// A leader whose tails are all chords has nothing for the script to stop: `AcceleratorKeyPressed` reports those.

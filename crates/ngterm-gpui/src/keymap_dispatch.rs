@@ -125,6 +125,20 @@ struct Router {
     /// earlier key ([`page_typed`]) reads.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     last_press: Option<Instant>,
+    /// A page-kept accelerator can overtake a stopped key still in the renderer. Keep the matcher it interrupted
+    /// until an older stopped press has acted or a newer fresh dispatch supersedes it.
+    #[cfg(all(feature = "html", windows))]
+    interrupted_matcher: Option<InterruptedMatcher>,
+    #[cfg(all(feature = "html", windows))]
+    replaying_interruption: bool,
+}
+
+#[cfg(all(feature = "html", windows))]
+struct InterruptedMatcher {
+    engine: CustomCommandEngine,
+    since: Instant,
+    at: Instant,
+    deadline: Option<Instant>,
 }
 
 /// A key a page's callback took, waiting in the pump's queue behind the reports before it. Callbacks and the pump share
@@ -302,8 +316,9 @@ fn instant_of(at: u64) -> Option<Instant> {
 }
 
 /// A Windows page's script stopped this press for a live sequence (`html_overlay::webview2::bridge`) and reported it:
-/// the keymap takes it as it stands now and it is dispatched to the window here, in the pump's order (the reports queued
-/// behind it are newer keys, not older ones). Whether the keymap took it; a key it did not take goes back to the page.
+/// the keymap takes it and it is dispatched to the window here. A later page-kept accelerator may have already ended
+/// the sequence; an older stopped press still acts against the matcher it interrupted. Whether the keymap took it;
+/// a key it did not take goes back to the page.
 #[cfg(all(feature = "html", windows))]
 pub fn dispatch_stopped_key(
     keystroke: &gpui_kit::Keystroke,
@@ -316,10 +331,11 @@ pub fn dispatch_stopped_key(
     let stroke = page_stroke(keystroke, keycode, repeat);
     let identity = stroke.identity;
     let taken = ROUTER.with_borrow_mut(|router| {
-        let taken = router.takes_stopped(&stroke);
+        let pressed = instant_of(at);
+        let taken = router.takes_stopped(&stroke, pressed);
         if taken {
             router.dispatched = Some(stroke);
-            router.dispatched_at = instant_of(at);
+            router.dispatched_at = pressed;
         }
         taken
     });
@@ -610,6 +626,10 @@ enum Press {
 
 impl Router {
     fn load(&mut self, keymap: &ngterm_core::keymap::Keymap) {
+        #[cfg(all(feature = "html", windows))]
+        {
+            self.interrupted_matcher = None;
+        }
         self.engine = Some(CustomCommandEngine::from_keymap(keymap));
         self.menu = BuiltinAction::all()
             .filter_map(|action| keymap.equivalent(action).map(|chord| (chord.clone(), action)))
@@ -651,9 +671,28 @@ impl Router {
         self.dispatched = None;
         self.dispatched_at = None;
         self.forget_overtaken();
+        #[cfg(all(feature = "html", windows))]
+        self.end_stopped_replay();
         if interrupted {
             self.reset_if_live();
         }
+    }
+
+    /// An older stopped report acted against the interrupted matcher. Its remaining sequence still belongs before
+    /// the interrupt; the current sequence stays cancelled, including a repeat window the older report just opened.
+    #[cfg(all(feature = "html", windows))]
+    fn end_stopped_replay(&mut self) {
+        if !std::mem::take(&mut self.replaying_interruption) {
+            return;
+        }
+        if let (Some(mut interrupted), Some(engine)) = (self.interrupted_matcher.take(), self.engine.clone()) {
+            interrupted.engine = engine;
+            interrupted.since = self.last_press.unwrap_or(interrupted.since);
+            interrupted.deadline = self.deadline;
+            self.last_press = Some(interrupted.at);
+            self.interrupted_matcher = Some(interrupted);
+        }
+        self.reset_if_live();
     }
 
     /// Ends the dispatch of an overtaken report: the key is the page's, as the newer callback left it.
@@ -714,10 +753,24 @@ impl Router {
     /// A press the page keeps ends a live sequence, behind the reports still queued (module docs).
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn interrupt(&mut self) {
-        match self.queued.back_mut() {
-            Some(report) => report.interrupted = true,
-            None => self.reset_if_live(),
+        if let Some(report) = self.queued.back_mut() {
+            report.interrupted = true;
+            return;
         }
+        #[cfg(windows)]
+        if let Some(engine) = self
+            .matcher_now()
+            .filter(|engine| engine.is_armed() || engine.is_repeating())
+        {
+            let at = Instant::now();
+            self.interrupted_matcher = Some(InterruptedMatcher {
+                engine,
+                since: self.last_press.unwrap_or(at),
+                at,
+                deadline: self.deadline,
+            });
+        }
+        self.reset_if_live();
     }
 
     /// The matcher as it stands, a lapsed leader or repeat window counting as gone.
@@ -768,13 +821,24 @@ impl Router {
             || !matches!(engine.advance(chord), EngineOutcome::Unmatched)
     }
 
-    /// Whether the keymap takes a press a page's script stopped ([`dispatch_stopped_key`]), as it stands now: the
-    /// reports still queued are newer keys, and it goes first. An autorepeat is the keymap's while it owns the press. A
+    /// Whether the keymap takes a press a page's script stopped ([`dispatch_stopped_key`]), restoring the matcher a
+    /// later unmatched accelerator interrupted when this press preceded it. An autorepeat stays owned. A
     /// fresh press the keymap does not take ends the sequence, as any key the page keeps does.
     #[cfg(all(feature = "html", windows))]
-    fn takes_stopped(&mut self, stroke: &KeyStroke) -> bool {
+    fn takes_stopped(&mut self, stroke: &KeyStroke, pressed: Option<Instant>) -> bool {
         if stroke.action == KeyAction::Repeat {
             return self.owns(stroke.identity);
+        }
+        if let Some(interrupted) = self.interrupted_matcher.as_ref().filter(|interrupted| {
+            pressed.is_some_and(|pressed| {
+                pressed >= interrupted.since
+                    && pressed < interrupted.at
+                    && interrupted.deadline.is_none_or(|deadline| pressed < deadline)
+            })
+        }) {
+            self.engine = Some(interrupted.engine.clone());
+            self.deadline = None;
+            self.replaying_interruption = true;
         }
         self.released.remove(&stroke.identity);
         self.consumed.remove(&stroke.identity);
@@ -785,6 +849,7 @@ impl Router {
             self.released.insert(stroke.identity);
         } else {
             self.reset_if_live();
+            self.end_stopped_replay();
         }
         taken
     }
@@ -803,14 +868,32 @@ impl Router {
         self.deadline.is_some_and(|deadline| Instant::now() >= deadline)
     }
 
+    /// Records a fresh dispatch's event time. Replaying an interrupted matcher uses that time for its next deadline
+    /// too, so a stalled renderer cannot lengthen a leader's timeout.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn page_press_time(&mut self, repeat: bool, now: Instant) -> Instant {
+        #[cfg(windows)]
+        let now = if self.replaying_interruption {
+            self.dispatched_at.unwrap_or(now)
+        } else {
+            now
+        };
+        if !repeat {
+            #[cfg(windows)]
+            if !self.replaying_interruption {
+                self.interrupted_matcher = None;
+            }
+            self.last_press = Some(self.dispatched_at.take().unwrap_or(now));
+        }
+        now
+    }
+
     /// One press, with an HTML page holding the keyboard while `page_keys`: whether it is consumed, and what it fired.
     fn press(&mut self, stroke: &KeyStroke, now: Instant, page_keys: bool) -> Press {
         self.pressed = Some(stroke.identity);
         let repeat = stroke.action == KeyAction::Repeat;
         #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
-        if !repeat {
-            self.last_press = Some(self.dispatched_at.take().unwrap_or(now));
-        }
+        let now = self.page_press_time(repeat, now);
         self.resume_held(stroke.identity, repeat);
         if stroke.keycode != 0 && stroke.action == KeyAction::Press {
             // the platform says the key went up since its consumed press: a release the monitor never heard (one
@@ -929,6 +1012,10 @@ impl Router {
     }
 
     fn keyboard_left(&mut self) {
+        #[cfg(all(feature = "html", windows))]
+        {
+            self.interrupted_matcher = None;
+        }
         self.consumed.clear();
         self.released.clear();
         self.held_repeat = None;

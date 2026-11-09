@@ -884,7 +884,8 @@ impl Page {
         ) else {
             return false;
         };
-        let keycode = super::keys::keycode(key.virtual_key, 0, false);
+        let keycode = crate::terminal::input::xkb_keycode(&key.code)
+            .unwrap_or_else(|| super::keys::keycode(key.virtual_key, 0, false));
         let taken = window.update(cx, |_, window, cx| {
             let taken =
                 crate::keymap_dispatch::dispatch_stopped_key(&keystroke, keycode, key.repeat, key.at, window, cx);
