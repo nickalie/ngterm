@@ -287,6 +287,13 @@ mod tests {
     }
 
     #[test]
+    fn the_waiting_pages_icons_are_served() {
+        for path in ["icons/download.svg", "icons/triangle-alert.svg"] {
+            assert!(crate::titlebar::serves(path), "{path} is not among the app's assets");
+        }
+    }
+
+    #[test]
     fn a_failed_download_offers_the_ways_that_need_none() {
         let failed = Unavailable::download_failed("connection refused".to_owned());
         assert_eq!(failed.reason, "connection refused");

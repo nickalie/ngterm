@@ -115,6 +115,8 @@ gpui_kit::assets::icon_assets!(
         Menu,
         Copy,
         CopySlash,
+        // the waiting page's download state (`html_overlay::engine_wait`)
+        Download,
     ]
 );
 

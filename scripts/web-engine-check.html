@@ -1,0 +1,120 @@
+<!doctype html>
+<!-- The page scripts/check-web-engine-install.sh opens: plays red.webm (beside it) and a Web Audio oscillator, and
+     answers with what it saw. -->
+<title>web engine check</title>
+<body style="margin:0;background:#202020;color:#e0e0e0;font:14px monospace">
+  <video id="v" src="red.webm" muted playsinline preload="auto" width="320" height="240"></video>
+  <pre id="o">running...</pre>
+  <script>
+    const limit = (ms, what) => new Promise((_, reject) => setTimeout(() => reject(new Error(what + ' timed out')), ms));
+
+    async function video() {
+      const v = document.getElementById('v');
+      await Promise.race([
+        new Promise((resolve, reject) => {
+          if (v.readyState >= 2) resolve();
+          v.addEventListener('loadeddata', resolve, { once: true });
+          v.addEventListener('error', () => reject(new Error('video error: ' + (v.error && v.error.message))), { once: true });
+        }),
+        limit(30000, 'loadeddata'),
+      ]);
+      await Promise.race([v.play(), limit(15000, 'play')]);
+      await Promise.race([
+        new Promise((resolve) => {
+          const timer = setInterval(() => {
+            if (v.currentTime >= 0.4) {
+              clearInterval(timer);
+              resolve();
+            }
+          }, 50);
+        }),
+        limit(20000, 'playback'),
+      ]);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext('2d');
+      context.drawImage(v, 0, 0, 1, 1);
+      const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
+      const quality = v.getVideoPlaybackQuality();
+      return {
+        currentTime: v.currentTime,
+        size: [v.videoWidth, v.videoHeight],
+        rgb: [r, g, b],
+        frames: quality.totalVideoFrames,
+        ok: v.videoWidth === 64 && v.videoHeight === 48 && r > 150 && g < 90 && b < 90,
+      };
+    }
+
+    // Web Audio needs a gesture (ngterm's pages require one for sound): the harness clicks or presses keys until this page answers.
+    function audioOnGesture() {
+      document.getElementById('o').textContent = 'click anywhere or press a key';
+      return Promise.race([
+        new Promise((resolve) => {
+          const start = (event) => {
+            // Escape dismisses the first launch's welcome alert, and never counts as a user gesture for sound
+            if (event.key === 'Escape') return;
+            document.removeEventListener('click', start);
+            document.removeEventListener('keydown', start);
+            const context = new AudioContext();
+            resolve({ context, resumed: context.resume() });
+          };
+          document.addEventListener('click', start);
+          document.addEventListener('keydown', start);
+        }),
+        limit(120000, 'a gesture on the page'),
+      ]);
+    }
+
+    async function audio() {
+      const { context, resumed } = await audioOnGesture();
+      await Promise.race([resumed, limit(15000, 'AudioContext resume')]);
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      gain.gain.value = 0.2;
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 2048;
+      oscillator.connect(gain);
+      gain.connect(analyser);
+      analyser.connect(context.destination);
+      oscillator.start();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const samples = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(samples);
+      const peak = samples.reduce((max, sample) => Math.max(max, Math.abs(sample)), 0);
+      const state = context.state;
+      const time = context.currentTime;
+      const rate = context.sampleRate;
+      await context.close();
+      return { state, currentTime: time, rate, peak, ok: state === 'running' && time > 0.5 && peak > 0.05 };
+    }
+
+    function codecs() {
+      const v = document.createElement('video');
+      const a = document.createElement('audio');
+      return {
+        vp8: v.canPlayType('video/webm; codecs="vp8"'),
+        vp9: v.canPlayType('video/webm; codecs="vp9"'),
+        av1: v.canPlayType('video/mp4; codecs="av01.0.05M.08"'),
+        h264: v.canPlayType('video/mp4; codecs="avc1.42E01E"'),
+        hevc: v.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"'),
+        aac: a.canPlayType('audio/mp4; codecs="mp4a.40.2"'),
+        mp3: a.canPlayType('audio/mpeg'),
+        opus: a.canPlayType('audio/ogg; codecs="opus"'),
+        flac: a.canPlayType('audio/flac'),
+      };
+    }
+
+    const attempt = (run) => run().catch((error) => ({ ok: false, error: String(error) }));
+
+    (async () => {
+      const result = {
+        userAgent: navigator.userAgent,
+        codecs: codecs(),
+        video: await attempt(video),
+        audio: await attempt(audio),
+      };
+      document.getElementById('o').textContent = JSON.stringify(result, null, 1);
+      await ngterm.request('session.overlay.submit', { args: { value: JSON.stringify(result) } });
+    })();
+  </script>
+</body>

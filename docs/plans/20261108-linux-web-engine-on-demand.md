@@ -441,20 +441,58 @@ branch that only added an `actions/cache` step around the WPE prefix.
 
 ### Task 9: Verify acceptance criteria
 
-- [ ] every Linux package is under 45 MB; the runtime archive under 130 MB per architecture
-- [ ] a fresh Ubuntu 24.04 container (headless GUI as README > Test describes), runtime served locally through
+- [x] every Linux package is under 45 MB; the runtime archive under 130 MB per architecture
+- [x] a fresh Ubuntu 24.04 container (headless GUI as README > Test describes), runtime served locally through
       `NGTERM_WEB_ENGINE_URL`: the deb installs without WPE, the first page downloads the runtime, plays a video and
       Web Audio, the second app start reuses it
-- [ ] each of the four test machines, at most two running at once, reverted to its clean snapshot: install the deb or
+- [x] each of the four test machines, at most two running at once, reverted to its clean snapshot: install the deb or
       rpm, then on its desktop open a page that plays a video and Web Audio; it takes the engine path Task 1 recorded
       for it (system engine and no download, or the download through `NGTERM_WEB_ENGINE_URL`); the tarball and the
       AppImage download on at least one of them
-- [ ] Arch: the package pulls `wpewebkit`, the probe picks the system engine, nothing is downloaded
-- [ ] ➕ the deb in a Debian testing container and the rpm in an openSUSE Tumbleweed container (both ship WPE 2.54.2
+- [x] Arch: the package pulls `wpewebkit`, the probe picks the system engine, nothing is downloaded
+- [x] ➕ the deb in a Debian testing container and the rpm in an openSUSE Tumbleweed container (both ship WPE 2.54.2
       with WPEPlatform; no test VM does, Task 1): the system engine, nothing downloaded
-- [ ] offline: `--install-web-engine` from a file; a tampered archive is refused
-- [ ] an older app and a newer one sharing the data dir: neither deletes the other's runtime while it runs
-- [ ] scoped clippy and the touched crates' tests green
+- [x] offline: `--install-web-engine` from a file; a tampered archive is refused
+- [x] an older app and a newer one sharing the data dir: neither deletes the other's runtime while it runs
+- [x] scoped clippy and the touched crates' tests green
+
+Results (2026-11-09, `scripts/check-web-engine-install.sh`, `-container.sh`, `-cache.sh`; each page run played a VP8
+video to a checked frame colour and a Web Audio oscillator read back through an analyser, after a real click or key):
+
+| package (MB, 10^6 bytes) | x86_64 | aarch64 |
+|---|---|---|
+| deb | 37.32 | 32.76 |
+| rpm | 37.41 | 32.86 |
+| Arch | 43.33 | 40.92 |
+| tar.gz | 44.56 | 41.90 |
+| AppImage | 41.43 | 38.91 |
+| runtime archive | 122.21 | 115.32 |
+
+| where | install | engine path | result |
+|---|---|---|---|
+| Ubuntu 24.04 container | deb, no WPE package installed | download, then cached (no request) | pass |
+| Ubuntu 26.10 VM | deb | download, then cached | pass |
+| Debian 13 VM | deb | download, then cached | pass |
+| Fedora 45 VM | rpm; tar.gz and AppImage, each with an empty cache | download, then cached; download for both | pass |
+| openSUSE Leap 16.1 VM | rpm | download, then cached | pass |
+| Debian testing container | deb, pulls `libwpewebkit-2.0-1` 2.54.2 | system's, nothing downloaded | pass |
+| openSUSE Tumbleweed container | rpm with recommends, pulls `libWPEWebKit-2_0-1` 2.54.2 | system's, nothing downloaded | pass |
+| Arch container | Arch package, pulls `wpewebkit` 2.54.2 | system's, nothing downloaded | pass |
+
+- Offline (Ubuntu 24.04 container, no network namespace): `--install-web-engine` installs; a tampered archive is refused
+  with "failed SHA-256 verification" and leaves no runtime.
+- Two versions sharing the data dir (same container): each keeps the other's runtime while the other's engine runs; the
+  next install after that removes the unused one. The "newer" app is the same build with its key and hash pins rewritten
+  to a repacked runtime, since the pins are all two releases' runtime handling differs by.
+- Defects found and fixed here: deb 45.49 MB and rpm 46.80 MB (x86_64) were over the limit, so both now use xz; Debian
+  testing's web process died without `libGLESv2.so.2`, which libepoxy dlopens and no `NEEDED` names, so the deb and rpm
+  depend on it (Arch's `libglvnd` has it); the waiting page's download icon was not among the app's assets.
+- The packages and binaries tested are release dry run 42532459444's. deb and rpm were rebuilt from its tree with the
+  pinned nfpm and the final `nfpm.yaml`; the x86_64 VMs installed the xz build before the `libGLESv2` dependency was
+  added (it resolves on their distros in a dry-run install). The icon fix is covered by a unit test, not these runs.
+  aarch64 was measured, not run.
+- Validation: strict clippy (both lines) and tests of `ngterm-gpui`, `ngterm-wpe`, `ngterm-wpe-client`, `ngterm-update`;
+  49 packaging selftests; `scripts/lint.sh`.
 
 ### Task 10: [Final] Update documentation
 

@@ -7,6 +7,11 @@ maintainer: Nick Alie <nickalie@users.noreply.github.com>
 description: Terminal with persistent sessions and agent integrations
 homepage: https://github.com/nickalie/ngterm
 license: MIT
+# xz: nfpm's gzip default costs both packages 8 to 9 MB; every dpkg and rpm these packages install on reads xz.
+deb:
+  compression: xz
+rpm:
+  compression: xz
 scripts:
   postinstall: packaging/linux/postinstall.sh
   preremove: packaging/linux/preremove.sh
@@ -45,6 +50,8 @@ overrides:
       - ca-certificates
       - libvulkan1
       - libegl1
+      # dlopened by libepoxy (WebKit's and the runtime's), so no NEEDED entry names it
+      - libgles2
       - libgl1
       - libglx0
       - libglvnd0
@@ -87,6 +94,8 @@ overrides:
       - "libgcc_s.so.1()(64bit)"
       - "libvulkan.so.1()(64bit)"
       - "libEGL.so.1()(64bit)"
+      # dlopened by libepoxy (WebKit's and the runtime's), so no NEEDED entry names it
+      - "libGLESv2.so.2()(64bit)"
       - "libGL.so.1()(64bit)"
       - "libGLX.so.0()(64bit)"
       - "libGLdispatch.so.0()(64bit)"
