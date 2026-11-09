@@ -730,7 +730,8 @@ mod tests {
             "echo got\"\":resumed"
         };
         type_line(&pane, tagged);
-        wait_screen(&pane, "got:resumed");
+        let screen = wait_screen(&pane, "got:resumed");
+        assert_eq!(screen.matches("got:held").count(), 1, "{screen}");
         assert!(pane.kill(true).unwrap());
     }
 
@@ -742,7 +743,8 @@ mod tests {
         let namespace = tempfile::tempdir().unwrap();
         let script = concat!(
             "read go; printf '\\033[6n'; IFS= read -r line; ",
-            "printf 'read:%s:\\n' \"$line\" | tr -d '\\033'; read end",
+            "printf 'read:%s:\\n' \"$line\" | tr -d '\\033'; ",
+            "IFS= read -r end; printf 'end:%s:\\n' \"$end\"; read stop",
         );
         let program = SessionSpec {
             argv: vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()],
@@ -771,6 +773,8 @@ mod tests {
 
         let answer = String::from_utf8(answer).unwrap().replace('\x1b', "");
         wait_screen(&pane, &format!("read:{answer}held:"));
+        type_line(&pane, "tail");
+        wait_screen(&pane, "end:tail:");
         assert!(pane.kill(true).unwrap());
     }
 
