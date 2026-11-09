@@ -1140,7 +1140,7 @@ fn a_key_typed_in_a_page_ends_a_leader_unless_it_was_pressed_before_it() {
     let mut router = router("command \"g\" ctrl+a>ctrl+g true\n");
     let live = |router: &Router| router.engine.as_ref().is_some_and(CustomCommandEngine::is_armed);
     assert!(press(&mut router, "ctrl-a", armed));
-    router.page_typed(before);
+    router.page_typed(before, None);
     assert!(live(&router), "a key pressed before the leader, reported after it");
     assert!(press(&mut router, "ctrl-g", armed + Duration::from_millis(40)));
     assert_eq!(names(&router), ["g"], "the leader went on to fire");
@@ -1149,7 +1149,7 @@ fn a_key_typed_in_a_page_ends_a_leader_unless_it_was_pressed_before_it() {
         assert!(release(&mut router, key, armed + Duration::from_millis(60)));
     }
     assert!(press(&mut router, "ctrl-a", armed + Duration::from_millis(80)));
-    router.page_typed(armed + Duration::from_millis(120));
+    router.page_typed(armed + Duration::from_millis(120), None);
     assert!(!live(&router), "a key typed after the leader ends it");
     assert!(!press(&mut router, "ctrl-g", armed + Duration::from_millis(160)));
     assert!(router.fired.is_empty());
@@ -1166,9 +1166,9 @@ fn a_key_typed_in_a_page_closes_a_repeat_window_opened_before_it() {
     let repeating = |router: &Router| router.engine.as_ref().is_some_and(CustomCommandEngine::is_repeating);
     assert!(press(&mut router, "ctrl-a", start));
     assert!(press(&mut router, "ctrl-n", tail));
-    router.page_typed(start);
+    router.page_typed(start, None);
     assert!(repeating(&router), "pressed before the tail fired");
-    router.page_typed(tail + Duration::from_millis(40));
+    router.page_typed(tail + Duration::from_millis(40), None);
     assert!(!repeating(&router));
     assert_eq!(router.deadline, None);
 }
@@ -1336,7 +1336,7 @@ fn a_delayed_autorepeat_does_not_advance_the_typed_key_cutoff() {
         router.press(&repeated, now + Duration::from_millis(20), true),
         Press::Consumed
     );
-    router.page_typed(now + Duration::from_millis(10));
+    router.page_typed(now + Duration::from_millis(10), None);
     assert!(!router.engine.as_ref().is_some_and(CustomCommandEngine::is_armed));
     assert_eq!(
         router.press(&stroke("ctrl-g"), now + Duration::from_millis(30), true),
@@ -1353,7 +1353,7 @@ fn a_character_typed_after_a_queued_press_ends_its_leader() {
     let typed = Instant::now();
     let pumped = typed + Duration::from_millis(20);
     assert_eq!(pump_report("ctrl-a", false, false, pumped), Press::Consumed);
-    super::ROUTER.with_borrow_mut(|router| router.page_typed(typed));
+    super::ROUTER.with_borrow_mut(|router| router.page_typed(typed, None));
     assert!(!monitor_is_live(), "the character followed the press, not the pump");
     assert!(!super::takes(&queued_report("ctrl-g", false)));
 }
@@ -1794,6 +1794,12 @@ fn only_a_taken_press_owns_its_release_in_a_page() {
     let taken = queued_report("ctrl-y", false);
     assert!(super::takes(&taken));
     assert!(super::owns_page_release(taken.identity));
+    let older = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+    super::ROUTER.with_borrow_mut(|router| router.page_typed(older, Some(taken.identity)));
+    assert!(
+        super::owns_page_release(taken.identity),
+        "the newer callback's press is still queued"
+    );
     let kept = queued_report("ctrl-g", false);
     assert!(!super::takes(&kept));
     assert!(!super::owns_page_release(kept.identity));
@@ -1832,16 +1838,22 @@ fn stopped_tails_before_an_interrupt_keep_their_sequence_order() {
 fn a_key_the_page_kept_before_an_interrupt_ends_the_saved_sequence() {
     let now = Instant::now();
     let at = |age: u64| now.checked_sub(Duration::from_millis(age)).unwrap();
-    for (leader, tails) in [
-        ("ctrl+a>g", vec![(100, false)]),
-        ("ctrl+a>g", vec![(300, true)]),
-        ("ctrl+a>g>h", vec![(300, true), (100, false)]),
+    for (leader, reports) in [
+        ("ctrl+a>g", vec![("x", 200, None), ("g", 100, Some(false))]),
+        ("ctrl+a>g", vec![("g", 300, Some(true)), ("x", 200, None)]),
+        (
+            "ctrl+a>g>h",
+            vec![("g", 300, Some(true)), ("x", 200, None), ("h", 100, Some(false))],
+        ),
     ] {
         let mut router = router(&format!("command \"c\" {leader} true\n"));
         assert!(press(&mut router, "ctrl-a", at(400)));
         assert!(!router.takes_fresh(&windows_page_stroke("ctrl-x", false)));
-        router.page_typed(at(200));
-        for ((age, taken), key) in tails.into_iter().zip(["g", "h"]) {
+        for (key, age, taken) in reports {
+            let Some(taken) = taken else {
+                router.page_typed(at(age), None);
+                continue;
+            };
             let stroke = windows_page_stroke(key, false);
             assert_eq!(
                 router.takes_stopped(&stroke, Some(at(age))),
@@ -1864,19 +1876,24 @@ fn a_key_the_page_kept_before_an_interrupt_ends_the_saved_sequence() {
 fn a_fresh_press_after_an_interrupt_supersedes_the_saved_matcher() {
     let now = Instant::now();
     let at = |age: u64| now.checked_sub(Duration::from_millis(age)).unwrap();
-    let mut router = router("command \"g\" ctrl+a>g true\ncommand \"h\" ctrl+b>h true\n");
-    assert!(press(&mut router, "ctrl-a", at(300)));
-    assert!(!router.takes_fresh(&windows_page_stroke("ctrl-x", false)));
-    assert_eq!(
-        router.press(&windows_page_stroke("ctrl-b", false), at(50), true),
-        Press::Consumed
-    );
-    assert!(!router.takes_stopped(&windows_page_stroke("g", false), Some(at(200))));
-    assert!(router.engine.as_ref().unwrap().is_armed(), "ctrl+b is still waiting");
-    assert!(matches!(
-        router.press(&windows_page_stroke("h", false), now, true),
-        Press::Fired(Fired::Command(_))
-    ));
+    for (leader, tail) in [("ctrl-a", "g"), ("ctrl-b", "g"), ("ctrl-b", "h")] {
+        let mut router = router(&format!(
+            "command \"g\" ctrl+a>g true\ncommand \"new\" ctrl+b>{tail} true\n"
+        ));
+        assert!(press(&mut router, "ctrl-a", at(300)));
+        assert!(!router.takes_fresh(&windows_page_stroke("ctrl-x", false)));
+        assert_eq!(
+            router.press(&windows_page_stroke(leader, false), at(50), true),
+            Press::Consumed
+        );
+        assert!(!router.takes_stopped(&windows_page_stroke("g", false), Some(at(200))));
+        router.page_typed(at(200), None);
+        assert!(router.engine.as_ref().unwrap().is_armed(), "{leader} is still waiting");
+        let Press::Fired(Fired::Command(command)) = router.press(&windows_page_stroke(tail, false), now, true) else {
+            panic!("the newer leader must fire");
+        };
+        assert_eq!(command.name, if leader == "ctrl-a" { "g" } else { "new" });
+    }
 }
 
 /// A stopped tail still in the renderer acts even when an accelerator the app takes overtakes it: the pump reaches
@@ -1963,4 +1980,56 @@ fn a_delayed_stopped_report_does_not_lengthen_the_leader_timeout() {
         !router.takes_stopped(&h, Some(now + Duration::from_secs(3))),
         "h arrived two seconds after g: the leader already expired"
     );
+}
+
+/// A character the page keeps starts its own ownership, even if an earlier shortcut used the same physical key.
+#[cfg(all(feature = "html", windows))]
+#[test]
+fn a_page_kept_press_forgets_the_previous_presses_release() {
+    let now = Instant::now();
+    for stopped in [false, true] {
+        let mut router = router("command \"y\" ctrl+y true\ncommand \"g\" ctrl+a>g true\n");
+        let key = windows_page_stroke(if stopped { "g" } else { "ctrl-y" }, false);
+        if stopped {
+            assert!(press(&mut router, "ctrl-a", now));
+            assert!(router.takes_stopped(&key, Some(now + Duration::from_millis(10))));
+        }
+        assert!(matches!(
+            router.press(&key, now + Duration::from_millis(10), true),
+            Press::Fired(_)
+        ));
+        if stopped {
+            assert!(router.release(key.identity, now + Duration::from_millis(20)));
+            assert!(release(&mut router, "ctrl-a", now + Duration::from_millis(20)));
+        }
+        // A newer press of another key must not shelter this key's old ownership from its typed report.
+        assert!(press(&mut router, "ctrl-a", now + Duration::from_millis(40)));
+        router.page_typed(now + Duration::from_millis(30), Some(key.identity));
+        assert!(!router.owns(key.identity), "the page owns this press and its release");
+        assert!(
+            router.engine.as_ref().unwrap().is_armed(),
+            "the newer leader stays live"
+        );
+        let mut repeated = key.clone();
+        repeated.action = ngterm_core::ghostty_config::binds::KeyAction::Repeat;
+        assert!(!router.takes_stopped(&repeated, Some(now + Duration::from_millis(40))));
+    }
+}
+
+/// A late typed report for the same key must leave a newer taken press's release with that press.
+#[cfg(all(feature = "html", windows))]
+#[test]
+fn an_older_page_kept_press_leaves_a_newer_presses_release_alone() {
+    let now = Instant::now();
+    let mut router = router("command \"y\" ctrl+y true\n");
+    let key = windows_page_stroke("ctrl-y", false);
+    assert!(matches!(
+        router.press(&key, now + Duration::from_millis(30), true),
+        Press::Fired(_)
+    ));
+    assert!(router.release(key.identity, now + Duration::from_millis(40)));
+    router.page_typed(now + Duration::from_millis(10), Some(key.identity));
+    assert!(router.owns(key.identity));
+    assert!(!router.takes_stopped(&key, Some(now + Duration::from_millis(20))));
+    assert!(router.owns(key.identity));
 }

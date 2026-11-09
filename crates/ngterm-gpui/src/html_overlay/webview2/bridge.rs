@@ -148,7 +148,7 @@ fn typed() -> &'static str {
     ['keyCode', 'repeat', 'key', 'code', 'shiftKey', 'ctrlKey', 'altKey', 'metaKey', 'isComposing'].map(keyField);
   const pressedAt = (event) => floor(now() - (sinceOrigin() - stampOf(event)));
   const typed = (event) => repeated(event) || ctrl(event) || alt(event) ? '' :
-    ',"key":' + stringify(keyName(event) || '') + ',"at":' + pressedAt(event);"#
+    ',"key":' + stringify(keyName(event) || '') + ',"code":' + stringify(codeName(event) || '') + ',"at":' + pressedAt(event);"#
     }
     #[cfg(target_os = "macos")]
     {
@@ -170,16 +170,19 @@ fn keydown() -> &'static str {
   const stopped = new Set();
   let live = null;
   let until = 0;
+  let after = 0;
   listen('message', (event) => {
     const data = event.data;
     if (!data || data.ngterm !== 'keys' || data.n !== responseNonce) return;
     live = data.keys.length ? new Set(data.keys) : null;
     until = sinceOrigin() + data.ms;
+    after = data.after || 0;
   });
   const stops = (event) => {
     const key = virtualKey(event);
     if (repeated(event)) return stopped.has(key);
     stopped.delete(key);
+    if (pressedAt(event) < after) return false;
     if (!live || ctrl(event) || alt(event) || meta(event) || composing(event) || keyName(event) === 'Dead') return false;
     if (sinceOrigin() >= until) { live = null; return false; }
     return live.has(key | (shifted(event) ? 0x100 : 0));
@@ -229,8 +232,12 @@ pub const GUARD_SCRIPT: &str = include_str!("guard.js");
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     /// The user pressed (`click`) or typed in the page; `typed_at` is when, for a key that can end a half-typed leader
-    /// (`typed`), in milliseconds since the epoch.
-    Input { click: bool, typed_at: Option<u64> },
+    /// (`typed`), in milliseconds since the epoch. `typed_code` names that press's physical key, for release ownership.
+    Input {
+        click: bool,
+        typed_at: Option<u64>,
+        typed_code: Option<String>,
+    },
     /// A bridge request: its reply id and the JSON the page sent.
     Bridge { id: u64, body: String },
     /// A key the script stopped for a live sequence ([`keydown`]): the keymap's now, or given back to the page.
@@ -268,6 +275,7 @@ pub fn parse(raw: &str, nonce: &str) -> Option<Message> {
         "input" => Some(Message::Input {
             click: value.get("click")?.as_bool()?,
             typed_at: typed_at(&value),
+            typed_code: value.get("code").and_then(Value::as_str).map(str::to_owned),
         }),
         "bridge" => Some(Message::Bridge {
             id: value.get("id")?.as_u64()?,
@@ -332,16 +340,17 @@ pub fn reply(id: u64, nonce: &str, answer: Result<Value, String>) -> String {
 
 /// The web message that tells the script of the page signing with `nonce` which `keys` a live sequence takes for the
 /// next `ms` milliseconds: virtual keys, each with [`SHIFTED`] when it is the press with Shift; none when no sequence is
-/// live.
+/// live. `after` is the sequence's last fresh press time: an older key given back to the page must not be stopped
+/// again, even if the new sequence binds the same key.
 #[cfg(not(target_os = "macos"))]
 #[must_use]
-pub fn live_keys(nonce: &str, keys: &[u32], ms: u64) -> String {
-    serde_json::json!({"ngterm": "keys", "n": credentials(nonce).1, "keys": keys, "ms": ms}).to_string()
+pub fn live_keys(nonce: &str, keys: &[u32], ms: u64, after: Option<u64>) -> String {
+    serde_json::json!({"ngterm": "keys", "n": credentials(nonce).1, "keys": keys, "ms": ms, "after": after}).to_string()
 }
 
 /// The `Input.dispatchKeyEvent` calls that give `key` back to the page: a trusted press and release, so a text field
 /// types it and a page's own listeners see it. A stopped key's real press has already gone, so this one is never an
-/// autorepeat.
+/// autorepeat. It keeps the original press time so its input report cannot end a newer leader.
 #[cfg(not(target_os = "macos"))]
 #[must_use]
 pub fn redelivery(key: &StoppedKey) -> [Value; 2] {
@@ -356,6 +365,7 @@ pub fn redelivery(key: &StoppedKey) -> [Value; 2] {
             "key": key.key,
             "code": key.code,
             "windowsVirtualKeyCode": key.virtual_key,
+            "timestamp": std::time::Duration::from_millis(key.at).as_secs_f64(),
             "modifiers": if key.shift { 8 } else { 0 },
         })
     };
@@ -407,7 +417,8 @@ mod tests {
             parse(&input, &credential),
             Some(Message::Input {
                 click: true,
-                typed_at: None
+                typed_at: None,
+                typed_code: None
             })
         );
         assert_eq!(parse(&input, "other"), None, "another page's or a forged nonce");
@@ -422,7 +433,10 @@ mod tests {
         let nonce = credentials(&credential).0;
         let typed = |rest: &str| {
             let raw = format!(r#"{{"n":"{nonce}","k":"input","click":false{rest}}}"#);
-            let Some(Message::Input { click: false, typed_at }) = parse(&raw, &credential) else {
+            let Some(Message::Input {
+                click: false, typed_at, ..
+            }) = parse(&raw, &credential)
+            else {
                 panic!("an input report: {rest}");
             };
             typed_at
@@ -455,6 +469,19 @@ mod tests {
         assert_eq!(typed(r#","key":"g""#), None, "no time");
         assert_eq!(typed(r#","key":"g","at":"soon""#), None);
         assert_eq!(typed(r#","key":7,"at":7"#), None);
+    }
+
+    #[test]
+    fn a_typed_report_carries_the_physical_key_independently_of_its_text() {
+        let raw = r#"{"n":"nonce","k":"input","click":false,"key":"ю","code":"KeyG","at":7}"#;
+        assert_eq!(
+            parse(raw, "nonce"),
+            Some(Message::Input {
+                click: false,
+                typed_at: Some(7),
+                typed_code: Some("KeyG".into()),
+            })
+        );
     }
 
     /// The script a page runs on Windows reports the key of a fresh press without Control or Alt, as JSON the host
@@ -506,12 +533,13 @@ mod tests {
     #[test]
     fn the_host_tells_the_script_the_live_keys_with_the_reply_credential() {
         let credential = nonce();
-        let told: Value = serde_json::from_str(&live_keys(&credential, &[0x47, 0x47 | SHIFTED], 1500)).unwrap();
+        let told: Value =
+            serde_json::from_str(&live_keys(&credential, &[0x47, 0x47 | SHIFTED], 1500, Some(9))).unwrap();
         assert_eq!(
             told,
-            serde_json::json!({"ngterm": "keys", "n": credentials(&credential).1, "keys": [71, 327], "ms": 1500})
+            serde_json::json!({"ngterm": "keys", "n": credentials(&credential).1, "keys": [71, 327], "ms": 1500, "after": 9})
         );
-        let idle: Value = serde_json::from_str(&live_keys(&credential, &[], 0)).unwrap();
+        let idle: Value = serde_json::from_str(&live_keys(&credential, &[], 0, None)).unwrap();
         assert_eq!(idle["keys"], serde_json::json!([]));
     }
 
@@ -554,13 +582,13 @@ mod tests {
         assert_eq!(
             press,
             serde_json::json!({
-                "type": "keyDown", "key": "G", "code": "KeyG", "windowsVirtualKeyCode": 71, "modifiers": 8, "text": "G"
+                "type": "keyDown", "key": "G", "code": "KeyG", "windowsVirtualKeyCode": 71, "modifiers": 8, "text": "G", "timestamp": 0.0
             })
         );
         assert_eq!(
             release,
             serde_json::json!({
-                "type": "keyUp", "key": "G", "code": "KeyG", "windowsVirtualKeyCode": 71, "modifiers": 8
+                "type": "keyUp", "key": "G", "code": "KeyG", "windowsVirtualKeyCode": 71, "modifiers": 8, "timestamp": 0.0
             })
         );
         let [enter, _] = redelivery(&stopped("Enter", "Enter", 13, false));
@@ -568,6 +596,23 @@ mod tests {
         let [backspace, _] = redelivery(&stopped("Backspace", "Backspace", 8, false));
         assert_eq!(backspace["type"], "rawKeyDown", "Backspace types nothing");
         assert!(backspace.get("text").is_none());
+    }
+
+    /// Redelivery is the original press, even when the renderer reports it after a newer leader armed.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn redelivery_keeps_the_original_press_time() {
+        let key = StoppedKey {
+            virtual_key: 71,
+            shift: false,
+            repeat: false,
+            key: "g".into(),
+            code: "KeyG".into(),
+            at: 1_794_184_123_456,
+        };
+        for event in redelivery(&key) {
+            assert_eq!(event["timestamp"], serde_json::json!(1_794_184_123.456));
+        }
     }
 
     #[test]
