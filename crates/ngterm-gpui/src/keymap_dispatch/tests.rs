@@ -1531,6 +1531,87 @@ mod page_dispatch_tests {
         cx
     }
 
+    /// An unmatched accelerator can overtake the renderer's older stopped tail; the tail still fires first.
+    #[cfg(windows)]
+    #[gpui_kit::test]
+    fn a_stopped_tail_acts_before_a_later_unmatched_accelerator(cx: &mut TestAppContext) {
+        for repeating in [false, true] {
+            let seen = Rc::new(Cell::new(0));
+            let visual = monitored_window(cx, &seen);
+            load_monitor(&format!(
+                "command \"g\" ctrl+a>g {}true\n",
+                if repeating { "--repeat " } else { "" }
+            ));
+            let now = Instant::now();
+            assert_eq!(
+                super::super::ROUTER.with_borrow_mut(|router| router.press(
+                    &queued_report("ctrl-a", false),
+                    now.checked_sub(Duration::from_millis(200)).unwrap(),
+                    true
+                )),
+                Press::Consumed
+            );
+            release_monitor();
+            let at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let at = u64::try_from(at).unwrap() - 100;
+            assert!(!super::super::takes(&queued_report("ctrl-x", false)));
+            assert!(!monitor_is_live());
+            let key = Keystroke::parse("g").unwrap();
+            visual.update(|window, cx| {
+                assert!(super::super::dispatch_stopped_key(
+                    &key,
+                    queued_report("g", false).keycode,
+                    false,
+                    at,
+                    window,
+                    cx
+                ));
+                release_monitor();
+            });
+            assert_eq!(super::super::take_fired().len(), 1, "the earlier tail fires");
+            assert_eq!(seen.get(), 0);
+            assert!(
+                !monitor_is_live(),
+                "the later unmatched accelerator still ends the sequence"
+            );
+        }
+    }
+
+    /// A stopped key pressed after the unmatched accelerator cannot revive the cancelled leader.
+    #[cfg(windows)]
+    #[gpui_kit::test]
+    fn a_newer_stopped_tail_does_not_revive_a_cancelled_leader(cx: &mut TestAppContext) {
+        let seen = Rc::new(Cell::new(0));
+        let visual = monitored_window(cx, &seen);
+        load_monitor("command \"g\" ctrl+a>g true\n");
+        assert_eq!(
+            super::super::ROUTER.with_borrow_mut(|router| router.press(
+                &queued_report("ctrl-a", false),
+                Instant::now(),
+                true
+            )),
+            Press::Consumed
+        );
+        release_monitor();
+        assert!(!super::super::takes(&queued_report("ctrl-x", false)));
+        let key = Keystroke::parse("g").unwrap();
+        visual.update(|window, cx| {
+            assert!(!super::super::dispatch_stopped_key(
+                &key,
+                queued_report("g", false).keycode,
+                false,
+                u64::MAX,
+                window,
+                cx
+            ));
+        });
+        assert!(super::super::take_fired().is_empty());
+        assert!(!monitor_is_live());
+    }
+
     /// The real interceptor reads each report's metadata before listeners can turn it into terminal input.
     #[gpui_kit::test]
     fn queued_reports_reach_the_interceptor_with_their_own_metadata(cx: &mut TestAppContext) {
@@ -1703,4 +1784,85 @@ fn a_lost_report_leaves_the_queue_and_its_interruption_stands() {
     super::page_report_dropped();
     assert!(!super::takes(&queued_report("ctrl-x", false)));
     assert!(!monitor_is_live(), "nothing queued, so the press ends it at once");
+}
+
+/// More than one stopped tail can precede an unmatched accelerator; each advances the interrupted matcher in order.
+#[cfg(all(feature = "html", windows))]
+#[test]
+fn stopped_tails_before_an_interrupt_keep_their_sequence_order() {
+    let now = Instant::now();
+    let mut router = router("command \"g\" ctrl+a>g>h true\n");
+    assert!(press(
+        &mut router,
+        "ctrl-a",
+        now.checked_sub(Duration::from_millis(300)).unwrap()
+    ));
+    assert!(!router.takes_fresh(&windows_page_stroke("ctrl-x", false)));
+    for (key, age, fires) in [("g", 200, false), ("h", 100, true)] {
+        let at = now.checked_sub(Duration::from_millis(age)).unwrap();
+        let stroke = windows_page_stroke(key, false);
+        assert!(router.takes_stopped(&stroke, Some(at)));
+        router.dispatched_at = Some(at);
+        let result = router.press(&stroke, now, true);
+        assert_eq!(matches!(result, Press::Fired(_)), fires);
+        assert_ne!(result, Press::Passed);
+        router.end_report(false);
+        assert!(!router.engine.as_ref().unwrap().is_armed());
+    }
+}
+
+/// Only a press in the interrupted sequence's lifetime can use its matcher, and loading a keymap forgets it.
+#[cfg(all(feature = "html", windows))]
+#[test]
+fn a_stopped_press_cannot_use_an_expired_or_replaced_matcher() {
+    let now = Instant::now();
+    for (age, reload) in [(400, false), (100, false), (200, true)] {
+        let mut router = router("command \"g\" ctrl+a>g true\n");
+        assert!(press(
+            &mut router,
+            "ctrl-a",
+            now.checked_sub(Duration::from_millis(300)).unwrap()
+        ));
+        router.deadline = Some(now.checked_sub(Duration::from_millis(150)).unwrap());
+        // The interrupt was before the deadline; an eligible older report is between the prefix and that deadline.
+        let engine = router.engine.clone().unwrap();
+        router.interrupted_matcher = Some(super::InterruptedMatcher {
+            engine,
+            since: now.checked_sub(Duration::from_millis(300)).unwrap(),
+            at: now,
+            deadline: router.deadline,
+        });
+        router.reset();
+        if reload {
+            let (keymap, _) = parse_keymap("command \"g\" ctrl+a>g true\n", &linux_defaults());
+            router.load(&keymap);
+        }
+        assert!(!router.takes_stopped(
+            &windows_page_stroke("g", false),
+            Some(now.checked_sub(Duration::from_millis(age)).unwrap())
+        ));
+    }
+}
+
+/// Processing an older tail late cannot extend the time the next tail has to arrive.
+#[cfg(all(feature = "html", windows))]
+#[test]
+fn a_delayed_stopped_report_does_not_lengthen_the_leader_timeout() {
+    let now = Instant::now();
+    let mut router = router("command \"g\" ctrl+a>g>h true\n");
+    assert!(press(&mut router, "ctrl-a", now));
+    assert!(!router.takes_fresh(&windows_page_stroke("ctrl-x", false)));
+    // Model an interrupt five seconds after the prefix and a renderer stalled until then.
+    router.interrupted_matcher.as_mut().unwrap().at = now + Duration::from_secs(5);
+    let g = windows_page_stroke("g", false);
+    let pressed = now + Duration::from_secs(1);
+    assert!(router.takes_stopped(&g, Some(pressed)));
+    router.dispatched_at = Some(pressed);
+    assert_eq!(router.press(&g, now + Duration::from_secs(5), true), Press::Consumed);
+    router.end_report(false);
+    let h = windows_page_stroke("h", false);
+    assert!(
+        !router.takes_stopped(&h, Some(now + Duration::from_secs(3))),
+        "h arrived two seconds after g: the leader already expired"
+    );
 }

@@ -17,7 +17,8 @@
 //!   which key it was and when, as no key event reports a typed character (`keys`): it ends a half-typed leader.
 //! - on Windows, the keys of a live leader or repeat window (`keys`): the host tells the script which keys would
 //!   advance or complete the sequence ([`live_keys`]) and until when, the capture listener stops those and only those
-//!   and reports them, and with no sequence live it stops nothing. The script's word can lag the host's: a stopped key
+//!   and reports them; their autorepeats and releases stay consumed after the sequence ends. With no sequence live it
+//!   stops no fresh press. The script's word can lag the host's: a stopped key
 //!   the keymap no longer takes goes back into the page ([`redelivery`]) so it is never lost. That script runs in the
 //!   top frame alone, so a tail typed inside an iframe goes on reaching the frame.
 //!
@@ -140,7 +141,8 @@ fn typed() -> &'static str {
         r#"const {floor} = Math;
   const {now} = Date;
   const sinceOrigin = performance.now.bind(performance);
-  const pressedAt = (event) => floor(now() - (sinceOrigin() - event.timeStamp));
+  const stampOf = Function.call.bind(Object.getOwnPropertyDescriptor(Event.prototype, 'timeStamp').get);
+  const pressedAt = (event) => floor(now() - (sinceOrigin() - stampOf(event)));
   const typed = (event) => event.repeat || event.ctrlKey || event.altKey ? '' :
     ',"key":' + stringify(event.key || '') + ',"at":' + pressedAt(event);"#
     }
@@ -189,7 +191,9 @@ fn keydown() -> &'static str {
     send('key', ',"vk":' + virtualKey(event) + ',"shift":' + shifted(event) + ',"repeat":' + repeated(event) +
       ',"key":' + stringify(keyName(event)) + ',"code":' + stringify(codeName(event)) + ',"at":' + pressedAt(event));
   };
-  window.addEventListener('keyup', (event) => { if (event.isTrusted) stopped.delete(virtualKey(event)); }, true);"#
+  window.addEventListener('keyup', (event) => {
+    if (event.isTrusted && stopped.delete(virtualKey(event))) { prevent(event); halt(event); }
+  }, true);"#
     }
     #[cfg(target_os = "macos")]
     {
@@ -621,5 +625,249 @@ mod tests {
             "the --js relay"
         );
         assert!(helper_script().starts_with("if (window.top === window)"));
+    }
+}
+
+/// The capture listener on a real Chromium document, with trusted CDP presses and the page's own event handlers.
+#[cfg(test)]
+#[cfg(windows)]
+mod browser_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle};
+    use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
+    use windows::core::HSTRING;
+    use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
+        WS_EX_TOOLWINDOW, WS_POPUP,
+    };
+    use wry::{WebView, WebViewBuilder, WebViewExtWindows as _};
+
+    use super::*;
+
+    const NONCE: &str = "post:reply";
+    const RELEASE: &str = "html_overlay::webview2::bridge::browser_tests::release_child";
+    const STAMP: &str = "html_overlay::webview2::bridge::browser_tests::timestamp_child";
+
+    struct Parent(windows_sys::Win32::Foundation::HWND);
+
+    impl HasWindowHandle for Parent {
+        fn window_handle(&self) -> Result<WindowHandle<'_>, raw_window_handle::HandleError> {
+            let handle =
+                Win32WindowHandle::new(std::num::NonZeroIsize::new(self.0.expose_provenance().cast_signed()).unwrap());
+            // SAFETY: this test owns the hidden window for the web view's lifetime.
+            Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Win32(handle)) })
+        }
+    }
+
+    impl Drop for Parent {
+        fn drop(&mut self) {
+            // SAFETY: all web views were dropped before their test-owned parent and this thread's COM apartment.
+            unsafe { DestroyWindow(self.0) };
+            // SAFETY: the apartment was initialized on this thread and all of its web views have been dropped.
+            unsafe { CoUninitialize() };
+        }
+    }
+
+    struct Browser {
+        view: WebView,
+        reports: Rc<RefCell<Vec<String>>>,
+        _parent: Parent,
+        _directory: tempfile::TempDir,
+    }
+
+    impl Browser {
+        fn new() -> Self {
+            // SAFETY: this isolated child thread owns the apartment until Parent drops.
+            assert!(unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED.cast_unsigned()) } >= 0);
+            // SAFETY: a system class, no parent, no menu and no data; the hidden window belongs to this test thread.
+            let parent = Parent(unsafe {
+                CreateWindowExW(
+                    WS_EX_TOOLWINDOW,
+                    windows_sys::core::w!("STATIC"),
+                    std::ptr::null(),
+                    WS_POPUP,
+                    0,
+                    0,
+                    320,
+                    200,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                )
+            });
+            assert!(!parent.0.is_null());
+            let directory = tempfile::tempdir().unwrap();
+            let reports = Rc::new(RefCell::new(Vec::new()));
+            let sent = Rc::clone(&reports);
+            let mut context = wry::WebContext::new(Some(directory.path().to_path_buf()));
+            let view = WebViewBuilder::new_with_web_context(&mut context)
+                .with_initialization_script(page_script(NONCE, false, false))
+                .with_ipc_handler(move |request| sent.borrow_mut().push(request.body().clone()))
+                .with_html("<!doctype html><input id=field><script>\
+                    window.releases = []; addEventListener('keyup', e => releases.push(e.key));\
+                    chrome.webview.addEventListener('message', e => { if (e.data.ngterm === 'keys') ipc.postMessage('told'); });\
+                    ipc.postMessage('ready');</script>")
+                .build_as_child(&parent).unwrap();
+            let browser = Self {
+                view,
+                reports,
+                _parent: parent,
+                _directory: directory,
+            };
+            browser.wait_for("ready");
+            browser.cdp(
+                "Emulation.setFocusEmulationEnabled",
+                &serde_json::json!({"enabled": true}),
+            );
+            browser.evaluate("field.focus()");
+            browser
+        }
+
+        fn wait_for(&self, expected: &str) {
+            let until = Instant::now() + Duration::from_secs(15);
+            while !self.reports.borrow().iter().any(|report| report == expected) {
+                assert!(
+                    Instant::now() < until,
+                    "missing {expected}: {:?}",
+                    self.reports.borrow()
+                );
+                let mut message = MSG::default();
+                // SAFETY: only this test thread's messages, read into its own buffer.
+                while unsafe { PeekMessageW(&raw mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) } != 0 {
+                    // SAFETY: the message just read from this thread's queue.
+                    unsafe { TranslateMessage(&raw const message) };
+                    // SAFETY: dispatching that message on its owning thread.
+                    unsafe { DispatchMessageW(&raw const message) };
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        fn cdp(&self, method: &str, parameters: &Value) {
+            let view = self.view.webview();
+            let method = HSTRING::from(method);
+            let parameters = HSTRING::from(parameters.to_string());
+            CallDevToolsProtocolMethodCompletedHandler::wait_for_async_operation(
+                Box::new(move |handler| {
+                    // SAFETY: the web view is called on its owning apartment thread.
+                    unsafe { view.CallDevToolsProtocolMethod(&method, &parameters, &handler) }.map_err(Into::into)
+                }),
+                Box::new(|result, _| result),
+            )
+            .unwrap();
+        }
+
+        fn evaluate(&self, expression: &str) {
+            self.cdp("Runtime.evaluate", &serde_json::json!({"expression": expression}));
+        }
+
+        fn tell(&self, keys: &[u32]) {
+            self.reports.borrow_mut().clear();
+            // SAFETY: a live web view and a valid JSON string, on its apartment thread.
+            unsafe {
+                self.view
+                    .webview()
+                    .PostWebMessageAsJson(&HSTRING::from(live_keys(NONCE, keys, 60_000)))
+            }
+            .unwrap();
+            self.wait_for("told");
+        }
+
+        fn key(&self, key: &str, code: &str, virtual_key: u32) {
+            for event in redelivery(&StoppedKey {
+                virtual_key,
+                shift: false,
+                repeat: false,
+                key: key.into(),
+                code: code.into(),
+                at: 0,
+            }) {
+                self.cdp("Input.dispatchKeyEvent", &event);
+            }
+        }
+    }
+
+    #[test]
+    fn consumed_releases_stay_off_a_real_page() {
+        crate::system_window::tests::run_child(RELEASE);
+    }
+
+    #[test]
+    #[ignore = "run by consumed_releases_stay_off_a_real_page"]
+    fn release_child() {
+        if !crate::system_window::tests::is_child(RELEASE) {
+            return;
+        }
+        let browser = Browser::new();
+        browser.tell(&[0x47]);
+        let [press, release] = redelivery(&StoppedKey {
+            virtual_key: 0x47,
+            shift: false,
+            repeat: false,
+            key: "g".into(),
+            code: "KeyG".into(),
+            at: 0,
+        });
+        browser.cdp("Input.dispatchKeyEvent", &press);
+        browser.tell(&[]);
+        let mut repeated = press;
+        repeated["autoRepeat"] = Value::Bool(true);
+        browser.cdp("Input.dispatchKeyEvent", &repeated);
+        browser.cdp("Input.dispatchKeyEvent", &release);
+        browser.tell(&[0x0D, 0x08]);
+        browser.key("Enter", "Enter", 0x0D);
+        browser.key("Backspace", "Backspace", 0x08);
+        browser.key("x", "KeyX", 0x58);
+        browser.evaluate("ipc.postMessage('releases:' + JSON.stringify(releases))");
+        browser.evaluate("ipc.postMessage('first-releases-done')");
+        browser.wait_for("first-releases-done");
+        assert!(
+            browser
+                .reports
+                .borrow()
+                .iter()
+                .any(|report| report == "releases:[\"x\"]"),
+            "a consumed press, its autorepeat and its release stay off the page: {:?}",
+            browser.reports.borrow()
+        );
+        browser.tell(&[]);
+        browser.key("g", "KeyG", 0x47);
+        browser.evaluate("ipc.postMessage('releases:' + JSON.stringify(releases))");
+        browser.wait_for("releases:[\"x\",\"g\"]");
+    }
+
+    #[test]
+    fn a_page_cannot_replace_a_stopped_keys_timestamp() {
+        crate::system_window::tests::run_child(STAMP);
+    }
+
+    #[test]
+    #[ignore = "run by a_page_cannot_replace_a_stopped_keys_timestamp"]
+    fn timestamp_child() {
+        if !crate::system_window::tests::is_child(STAMP) {
+            return;
+        }
+        let browser = Browser::new();
+        browser.evaluate("Object.defineProperty(Event.prototype, 'timeStamp', {get: () => undefined})");
+        browser.tell(&[0x47]);
+        browser.key("g", "KeyG", 0x47);
+        browser.evaluate("ipc.postMessage('done')");
+        browser.wait_for("done");
+        let reports = browser.reports.borrow();
+        let keys: Vec<_> = reports
+            .iter()
+            .filter_map(|report| match parse(report, NONCE) {
+                Some(Message::Key(key)) => Some(key),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(keys.len(), 1, "the stopped key is still a valid report: {reports:?}");
+        assert_eq!(keys[0].key, "g");
+        assert!(keys[0].at > 0);
     }
 }
