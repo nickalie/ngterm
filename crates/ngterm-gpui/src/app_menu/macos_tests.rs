@@ -46,15 +46,10 @@ fn synced(core: &Core) -> Option<Value> {
 
 /// The first entry titled `title` in `entries` and their submenus.
 fn entry<'a>(entries: &'a [Value], title: &str) -> &'a Value {
-    fn walk<'a>(entries: &'a [Value], title: &str) -> Option<&'a Value> {
-        entries.iter().find_map(|entry| {
-            if entry["title"] == title {
-                return Some(entry);
-            }
-            walk(entry["children"].as_array()?, title)
-        })
-    }
-    walk(entries, title).unwrap_or_else(|| panic!("no entry {title}"))
+    entries
+        .iter()
+        .find_map(|value| find_title(value, title))
+        .unwrap_or_else(|| panic!("no entry {title}"))
 }
 
 fn menu<'a>(json: &'a Value, title: &str) -> &'a [Value] {
@@ -258,10 +253,11 @@ fn click(tag: usize, cx: &mut TestAppContext, queue: &Posted, state: &mut AppSta
     queue.run_on(state)
 }
 
-/// `EVENTS` is the process's, so its whole life is one test: a click before `init`, `init` twice, and each kind of
-/// action through the loop.
-#[gpui_kit::test]
-fn each_native_click_runs_its_action_in_the_menus_window(cx: &mut TestAppContext) {
+/// `EVENTS` is the process's, so use one context even when GPUI's `ITERATIONS` override is set. A click before
+/// `init` is ignored; after two calls to `init`, each kind of action still reaches the first poster.
+#[test]
+fn each_native_click_runs_its_action_in_the_menus_window() {
+    let cx = &mut TestAppContext::single();
     let dir = tempfile::tempdir().unwrap();
     let mut state = AppState::new(seeded(dir.path().to_str().unwrap()));
     let window = state.core.library().active_window_id().unwrap();
@@ -298,7 +294,8 @@ fn each_native_click_runs_its_action_in_the_menus_window(cx: &mut TestAppContext
     core_items_run_through_the_core(cx, &queue, &mut state, window, dir.path());
     app_items_run_in_the_menus_window(cx, &queue, &mut state, window);
 
-    assert_eq!(second.run_on(&mut state), 0, "the second init started no second loop");
+    assert_eq!(second.run_on(&mut state), 0, "no clicks reached the second poster");
+    cx.quit();
 }
 
 /// Tags 0 and 1 of the click test: a palette command and a live entry.
