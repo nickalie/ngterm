@@ -13,7 +13,8 @@
 //!   `isTrusted`) settles nothing. Core's adapter and `--js` relay run over it unchanged but for the name they reach it
 //!   by.
 //! - the user's input, real presses and keys only (`isTrusted`, which page code cannot fake), reported for
-//!   auto-follow and to lift a declined hand-off's silence (upstream's `onUserInput`).
+//!   auto-follow and to lift a declined hand-off's silence (upstream's `onUserInput`). On Windows a press also says
+//!   which key it was and when, as no key event reports a typed character (`keys`): it ends a half-typed leader.
 //!
 //! With the page's JavaScript off (`IsScriptEnabled`), `WebView2` still runs these scripts and nothing of the page's.
 //! The guard script ([`GUARD_SCRIPT`]), in every frame, keeps a page from what the WPE host refuses natively: file
@@ -49,14 +50,16 @@ pub fn page_script(nonce: &str, themed: bool, javascript: bool) -> String {
         r#"(() => {{
   {transport}
   const stringify = JSON.stringify;
+  {typed}
   const nonce = '{request_nonce}';
   const responseNonce = '{response_nonce}';
   const send = (kind, rest) => post('{{"n":"' + nonce + '","k":"' + kind + '"' + rest + '}}', kind);
-  const report = (click) => (event) => {{ if (event.isTrusted) send('input', ',"click":' + click); }};
+  const report = (click) => (event) => {{ if (event.isTrusted) send('input', ',"click":' + click + (click ? '' : typed(event))); }};
   window.addEventListener('pointerdown', report(true), true);
   window.addEventListener('keydown', report(false), true);
 "#,
         transport = transport(),
+        typed = typed(),
     );
     if themed {
         let _ = write!(
@@ -121,6 +124,24 @@ fn transport() -> &'static str {
     }
 }
 
+/// What a keydown's report adds on Windows: the key and when it went down, in the system clock's milliseconds since the
+/// epoch, for a fresh press with no Control or Alt held. `AcceleratorKeyPressed` reports the keys that have those
+/// (`keys`), and upstream's monitor leaves an autorepeat alone. macOS's monitor hears every press itself.
+fn typed() -> &'static str {
+    #[cfg(not(target_os = "macos"))]
+    {
+        r#"const {floor} = Math;
+  const {now} = Date;
+  const sinceOrigin = performance.now.bind(performance);
+  const typed = (event) => event.repeat || event.ctrlKey || event.altKey ? '' :
+    ',"key":' + stringify(event.key || '') + ',"at":' + floor(now() - (sinceOrigin() - event.timeStamp));"#
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "const typed = () => '';"
+    }
+}
+
 fn credentials(nonce: &str) -> (&str, &str) {
     nonce.split_once(':').unwrap_or((nonce, nonce))
 }
@@ -146,8 +167,9 @@ pub const GUARD_SCRIPT: &str = include_str!("guard.js");
 /// What ngterm's script in a page posted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
-    /// The user pressed (`click`) or typed in the page.
-    Input { click: bool },
+    /// The user pressed (`click`) or typed in the page; `typed_at` is when, for a key that can end a half-typed leader
+    /// (`typed`), in milliseconds since the epoch.
+    Input { click: bool, typed_at: Option<u64> },
     /// A bridge request: its reply id and the JSON the page sent.
     Bridge { id: u64, body: String },
 }
@@ -163,6 +185,7 @@ pub fn parse(raw: &str, nonce: &str) -> Option<Message> {
     match value.get("k")?.as_str()? {
         "input" => Some(Message::Input {
             click: value.get("click")?.as_bool()?,
+            typed_at: typed_at(&value),
         }),
         "bridge" => Some(Message::Bridge {
             id: value.get("id")?.as_u64()?,
@@ -170,6 +193,32 @@ pub fn parse(raw: &str, nonce: &str) -> Option<Message> {
         }),
         _ => None,
     }
+}
+
+/// When the report `value` says a key that can end a half-typed leader went down: a bare modifier is the next chord
+/// being typed, and a key no name is known for names no chord either.
+fn typed_at(value: &Value) -> Option<u64> {
+    let key = value.get("key")?.as_str()?;
+    let names_no_key = matches!(
+        key,
+        "" | "Unidentified"
+            | "Alt"
+            | "AltGraph"
+            | "CapsLock"
+            | "Control"
+            | "Fn"
+            | "FnLock"
+            | "Hyper"
+            | "Meta"
+            | "NumLock"
+            | "OS"
+            | "ScrollLock"
+            | "Shift"
+            | "Super"
+            | "Symbol"
+            | "SymbolLock"
+    );
+    if names_no_key { None } else { value.get("at")?.as_u64() }
 }
 
 /// The web message that settles bridge request `id` of the page signing with `nonce` with `answer`: its result, or
@@ -221,11 +270,72 @@ mod tests {
             serde_json::json!({"cmd": "notify", "args": {"text": "hi"}})
         );
         let input = format!(r#"{{"n":"{nonce}","k":"input","click":true}}"#);
-        assert_eq!(parse(&input, &credential), Some(Message::Input { click: true }));
+        assert_eq!(
+            parse(&input, &credential),
+            Some(Message::Input {
+                click: true,
+                typed_at: None
+            })
+        );
         assert_eq!(parse(&input, "other"), None, "another page's or a forged nonce");
         assert_eq!(parse(r#"{"k":"input","click":true}"#, nonce), None, "no nonce");
         assert_eq!(parse("not json", nonce), None);
         assert_eq!(parse(&format!(r#"{{"n":"{nonce}","k":"other"}}"#), nonce), None);
+    }
+
+    #[test]
+    fn a_keydown_report_says_when_a_key_that_can_end_a_leader_went_down() {
+        let credential = nonce();
+        let nonce = credentials(&credential).0;
+        let typed = |rest: &str| {
+            let raw = format!(r#"{{"n":"{nonce}","k":"input","click":false{rest}}}"#);
+            let Some(Message::Input { click: false, typed_at }) = parse(&raw, &credential) else {
+                panic!("an input report: {rest}");
+            };
+            typed_at
+        };
+        for key in ["g", "G", " ", "ю", "Enter", "ArrowLeft", "Dead", "Process"] {
+            assert_eq!(typed(&format!(r#","key":"{key}","at":7"#)), Some(7), "{key}");
+        }
+        for key in [
+            "",
+            "Unidentified",
+            "Alt",
+            "AltGraph",
+            "CapsLock",
+            "Control",
+            "Fn",
+            "FnLock",
+            "Hyper",
+            "Meta",
+            "NumLock",
+            "OS",
+            "ScrollLock",
+            "Shift",
+            "Super",
+            "Symbol",
+            "SymbolLock",
+        ] {
+            assert_eq!(typed(&format!(r#","key":"{key}","at":7"#)), None, "{key}");
+        }
+        assert_eq!(typed(""), None, "a chord's report names no key");
+        assert_eq!(typed(r#","key":"g""#), None, "no time");
+        assert_eq!(typed(r#","key":"g","at":"soon""#), None);
+        assert_eq!(typed(r#","key":7,"at":7"#), None);
+    }
+
+    /// The script a page runs on Windows reports the key of a fresh press without Control or Alt, as JSON the host
+    /// parses whatever the key is called; macOS's monitor hears every press itself, so its reports stay as they were.
+    #[test]
+    fn only_windows_pages_say_which_key_they_typed() {
+        let script = page_script(&nonce(), false, false);
+        let says = script.contains(r#","key":' + stringify(event.key"#);
+        assert_eq!(says, !cfg!(target_os = "macos"));
+        assert_eq!(
+            script.contains("event.repeat || event.ctrlKey || event.altKey"),
+            !cfg!(target_os = "macos")
+        );
+        assert_eq!(script.contains("const typed = () => '';"), cfg!(target_os = "macos"));
     }
 
     #[test]

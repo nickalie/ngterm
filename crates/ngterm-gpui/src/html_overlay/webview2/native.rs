@@ -22,8 +22,9 @@ use raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, Win32Wind
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR, COREWEBVIEW2_KEY_EVENT_KIND,
     COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN, COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
-    COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
-    COREWEBVIEW2_WEB_ERROR_STATUS, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
+    COREWEBVIEW2_PHYSICAL_KEY_STATUS, COREWEBVIEW2_PROCESS_FAILED_KIND,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED, COREWEBVIEW2_WEB_ERROR_STATUS,
+    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
     COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL, COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT,
     ICoreWebView2, ICoreWebView2_11, ICoreWebView2_13, ICoreWebView2_22, ICoreWebView2ContextMenuItem,
     ICoreWebView2ContextMenuItemCollection, ICoreWebView2Controller, ICoreWebView2Environment,
@@ -138,8 +139,8 @@ pub enum Report {
 pub type Decide = Rc<dyn Fn(&Navigation) -> bool>;
 /// Posts a report to the pump.
 pub type Post = Rc<dyn Fn(Report)>;
-/// The keystroke the app takes from a key pressed in the page, by its virtual key.
-pub type TakeKey = Rc<dyn Fn(u32) -> Option<gpui_kit::Keystroke>>;
+/// The keystroke the app takes from a key pressed in the page, by its virtual key and whether it is an autorepeat.
+pub type TakeKey = Rc<dyn Fn(u32, bool) -> Option<gpui_kit::Keystroke>>;
 
 /// How the grant's protocol answers: the page's grant, and the last read it refused (an address and
 /// why), which a failed main-frame load reports.
@@ -972,7 +973,10 @@ fn wire_keys(controller: &ICoreWebView2Controller, take_key: &TakeKey, post: &Po
         let mut virtual_key = 0u32;
         // SAFETY: as above.
         unsafe { args.VirtualKey(&raw mut virtual_key) }?;
-        if let Some(keystroke) = take(virtual_key) {
+        let mut status = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
+        // SAFETY: as above.
+        unsafe { args.PhysicalKeyStatus(&raw mut status) }?;
+        if let Some(keystroke) = take(virtual_key, status.WasKeyDown.as_bool()) {
             // SAFETY: as above, answered on its thread.
             unsafe { args.SetHandled(true) }?;
             sent(Report::Key(keystroke));

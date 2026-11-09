@@ -3,7 +3,10 @@
 //! one with Control or Alt held, or one that types no character, Esc and the arrows among them) is asked about, as
 //! upstream's monitor sees every press, and one the keymap or the window would take (a custom command, a menu chord,
 //! Ctrl+Tab's switcher, the Esc that abandons a half-typed leader) is kept from the page and dispatched to the window
-//! instead. Every other key, typing and the page's own shortcuts (copy, paste, select all), stays the page's.
+//! instead. Every other key, typing and the page's own shortcuts (copy, paste, select all), stays the page's. A
+//! typed character is not among the keys `WebView2` reports: the page script's report of it (`bridge`) reaches the
+//! monitor too late to take the key, so it can only end a half-typed leader or a repeat window
+//! (`keymap_dispatch::page_typed`), and a leader's plain-letter tail, which upstream's monitor fires, cannot fire here.
 
 use gpui_kit::{Keystroke, Modifiers};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT};
@@ -80,14 +83,9 @@ fn held() -> Modifiers {
 }
 
 /// The keystroke the app takes from a press of `virtual_key` in a page (module docs), `None` for the page's own.
-/// The event's handler does not hand over the key's repeat state yet, so every report reads as a fresh press.
+/// `repeat` is the event's own word that the key was already down.
 #[must_use]
-pub fn app_key(virtual_key: u32) -> Option<Keystroke> {
-    asked(virtual_key, false)
-}
-
-/// Whether the keymap or the window takes the key `virtual_key`, an autorepeat when `repeat`: which keystroke, if so.
-fn asked(virtual_key: u32, repeat: bool) -> Option<Keystroke> {
+pub fn app_key(virtual_key: u32, repeat: bool) -> Option<Keystroke> {
     let keystroke = chord_keystroke(virtual_key, held())?;
     let mut stroke = KeyStroke::new(&keystroke, &Source::Keystroke, false);
     if repeat {
@@ -260,10 +258,13 @@ mod tests {
             assert!(!modifiers.function, "Windows reports no Fn modifier");
             assert_eq!(modifiers.platform, keys.contains(&VK_LWIN) || keys.contains(&VK_RWIN));
             if modifiers.control {
-                assert_eq!(app_key(0x09).unwrap().key, "tab");
+                assert_eq!(app_key(0x09, false).unwrap().key, "tab");
             } else if !modifiers.alt && !modifiers.platform {
-                assert!(app_key(0x41).is_none(), "plain typing stays in the page");
-                assert!(app_key(0x87).is_none(), "an unbound function key stays in the page");
+                assert!(app_key(0x41, false).is_none(), "plain typing stays in the page");
+                assert!(
+                    app_key(0x87, false).is_none(),
+                    "an unbound function key stays in the page"
+                );
             }
         }
     }
@@ -306,10 +307,16 @@ mod tests {
     #[test]
     fn a_plain_escape_in_a_page_is_handed_over_while_a_leader_waits() {
         let _keyboard = armed_leader();
-        assert_eq!(app_key(0x1B).map(|keystroke| keystroke.key).as_deref(), Some("escape"));
+        assert_eq!(
+            app_key(0x1B, false).map(|keystroke| keystroke.key).as_deref(),
+            Some("escape")
+        );
         assert_eq!(crate::keymap_dispatch::press_dispatched("escape"), Some(false));
         assert!(!crate::keymap_dispatch::sequence_is_live());
-        assert!(app_key(0x1B).is_none(), "with nothing to cancel Esc is the page's");
+        assert!(
+            app_key(0x1B, false).is_none(),
+            "with nothing to cancel Esc is the page's"
+        );
     }
 
     /// Upstream's unmatched press: a plain key the page keeps ends the half-typed leader.
@@ -317,7 +324,10 @@ mod tests {
     fn a_plain_key_the_page_keeps_ends_a_half_typed_leader() {
         for virtual_key in [0x25, 0x0D, 0x58] {
             let _keyboard = armed_leader();
-            assert!(app_key(virtual_key).is_none(), "{virtual_key:#x} stays in the page");
+            assert!(
+                app_key(virtual_key, false).is_none(),
+                "{virtual_key:#x} stays in the page"
+            );
             assert!(!crate::keymap_dispatch::sequence_is_live(), "{virtual_key:#x}");
         }
     }
@@ -329,20 +339,54 @@ mod tests {
         let (keymap, _) =
             ngterm_core::keymap::parse_keymap("command \"x\" f5 true\n", &ngterm_core::keymap::linux_defaults());
         crate::keymap_dispatch::load_keymap(&keymap);
-        assert!(asked(0x74, false).is_some());
+        assert!(app_key(0x74, false).is_some());
         assert_eq!(crate::keymap_dispatch::press_dispatched("f5"), Some(true));
-        assert!(asked(0x74, true).is_some(), "the keymap owns the held key");
+        assert!(app_key(0x74, true).is_some(), "the keymap owns the held key");
         assert_eq!(crate::keymap_dispatch::press_dispatched("f5"), Some(false));
-        assert!(asked(0x74, false).is_some());
+        assert!(app_key(0x74, false).is_some());
         assert_eq!(crate::keymap_dispatch::press_dispatched("f5"), Some(true));
+    }
+
+    /// A keyboard with exactly `keys` held on this thread until dropped.
+    fn holding(keys: &[u16]) -> PlainKeyboard {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetKeyboardState;
+        let keyboard = PlainKeyboard::new();
+        let mut state = [0u8; 256];
+        for key in keys {
+            state[usize::from(*key)] = 0x80;
+        }
+        // SAFETY: this updates only the calling thread, never injects system input.
+        assert_ne!(unsafe { SetKeyboardState(state.as_ptr()) }, 0);
+        keyboard
+    }
+
+    /// Upstream's `testKeyRepeatDoesNotToggleTwice` in a page, from the keys the event reports to the window's
+    /// dispatch of what they hand over: a held chord fires once, however often it repeats, and a new press fires again.
+    #[test]
+    fn a_chord_held_in_a_page_fires_once() {
+        let _keyboard = holding(&[VK_CONTROL, VK_SHIFT]);
+        let (keymap, _) = ngterm_core::keymap::parse_keymap("", &ngterm_core::keymap::linux_defaults());
+        crate::keymap_dispatch::load_keymap(&keymap);
+        let press = |repeat: bool| {
+            let keystroke = app_key(0x54, repeat).expect("the keymap owns the chord");
+            crate::keymap_dispatch::press_dispatched(&keystroke.unparse())
+        };
+        assert_eq!(press(false), Some(true), "the first press fires");
+        for _ in 0..3 {
+            assert_eq!(press(true), Some(false), "an autorepeat fires nothing");
+        }
+        assert_eq!(press(false), Some(true), "a new press fires again");
     }
 
     /// A plain key the leader is waiting for is the keymap's, and a bare modifier leaves the leader waiting.
     #[test]
     fn a_leaders_next_plain_key_is_handed_over_and_a_modifier_is_not_asked_about() {
         let _keyboard = armed_leader();
-        assert!(app_key(0x10).is_none(), "Shift alone");
+        assert!(app_key(0x10, false).is_none(), "Shift alone");
         assert!(crate::keymap_dispatch::sequence_is_live(), "still waiting");
-        assert_eq!(app_key(0x47).map(|keystroke| keystroke.key).as_deref(), Some("g"));
+        assert_eq!(
+            app_key(0x47, false).map(|keystroke| keystroke.key).as_deref(),
+            Some("g")
+        );
     }
 }

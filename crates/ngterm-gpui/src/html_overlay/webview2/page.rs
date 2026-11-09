@@ -814,7 +814,12 @@ impl Page {
 
     fn message(&self, raw: &str) {
         match bridge::parse(raw, &self.nonce) {
-            Some(bridge::Message::Input { click }) => self.user_input(click),
+            Some(bridge::Message::Input { click, typed_at }) => {
+                if let Some(at) = typed_at {
+                    crate::keymap_dispatch::page_typed(at);
+                }
+                self.user_input(click);
+            }
             Some(bridge::Message::Bridge { id, body }) => self.bridge_message(id, body),
             None => tracing::debug!(page = %self.id, "a web message that is none of ngterm's script's"),
         }
@@ -1472,5 +1477,100 @@ mod tests {
         assert_eq!(gate.document_read(), NetworkGate::Failed);
         assert!(!gate.installed());
         assert_eq!(gate, NetworkGate::Failed);
+    }
+
+    /// A page with no web view, whose script's reports are handed to it directly.
+    #[cfg(windows)]
+    fn page_taking_reports() -> Rc<Page> {
+        let overlay = HtmlOverlay::new(
+            HtmlSource::Url(Url::parse("https://example.invalid/start").unwrap()),
+            ngterm_core::html::HtmlPageFlags::default(),
+        );
+        let colors = PanelColors::resolve(&TerminalColors::default(), None);
+        let poster: Poster = std::sync::Weak::<Closed>::new();
+        Page::new(&overlay, None, colors, Storage::Ephemeral, &poster)
+    }
+
+    /// The page script's report of a press of `key` `age` ago.
+    #[cfg(windows)]
+    fn key_report(page: &Page, key: &str, age: std::time::Duration) -> String {
+        let pressed = std::time::SystemTime::now() - age;
+        let at = pressed.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+        let nonce = page.nonce.split_once(':').unwrap().0;
+        format!(r#"{{"n":"{nonce}","k":"input","click":false,"key":"{key}","at":{at}}}"#)
+    }
+
+    /// `keymap` loaded and `pressed` dispatched from a page, as `Report::Key` does.
+    #[cfg(windows)]
+    fn pressed_in_page(keymap: &str, pressed: &[&str]) {
+        let (keymap, _) = ngterm_core::keymap::parse_keymap(keymap, &ngterm_core::keymap::linux_defaults());
+        crate::keymap_dispatch::load_keymap(&keymap);
+        for key in pressed {
+            assert!(crate::keymap_dispatch::press_dispatched(key).is_some(), "{key}");
+        }
+        assert!(crate::keymap_dispatch::sequence_is_live());
+    }
+
+    /// Upstream's unmatched press: a character typed into the page, which no key event reports, ends a half-typed
+    /// leader, and the page keeps it.
+    #[cfg(windows)]
+    #[test]
+    fn a_character_typed_in_a_page_ends_a_half_typed_leader() {
+        let page = page_taking_reports();
+        pressed_in_page("command \"g\" ctrl+a>ctrl+g true\n", &["ctrl-a"]);
+        page.message(&key_report(&page, "x", std::time::Duration::ZERO));
+        assert!(!crate::keymap_dispatch::sequence_is_live());
+    }
+
+    /// What a page can report without ending a half-typed leader: the next chord's modifier going down, and a chord
+    /// (`AcceleratorKeyPressed` reports it, the script names no key for it).
+    #[cfg(windows)]
+    #[test]
+    fn a_page_report_of_a_bare_modifier_or_a_chord_leaves_a_leader_waiting() {
+        let page = page_taking_reports();
+        pressed_in_page("command \"g\" ctrl+a>ctrl+g true\n", &["ctrl-a"]);
+        for key in ["Control", "Shift", "Alt", "Meta", "CapsLock"] {
+            page.message(&key_report(&page, key, std::time::Duration::ZERO));
+            assert!(crate::keymap_dispatch::sequence_is_live(), "{key}");
+        }
+        let nonce = page.nonce.split_once(':').unwrap().0;
+        page.message(&format!(r#"{{"n":"{nonce}","k":"input","click":false}}"#));
+        assert!(crate::keymap_dispatch::sequence_is_live(), "a chord's report");
+        assert_eq!(crate::keymap_dispatch::press_dispatched("ctrl-g"), Some(true));
+    }
+
+    /// The report of a key typed before the leader, delivered after it armed: the leader goes on working.
+    #[cfg(windows)]
+    #[test]
+    fn a_page_report_arriving_after_a_leader_armed_for_an_earlier_key_leaves_it_waiting() {
+        let page = page_taking_reports();
+        pressed_in_page("command \"g\" ctrl+a>ctrl+g true\n", &["ctrl-a"]);
+        page.message(&key_report(&page, "x", std::time::Duration::from_secs(5)));
+        assert!(crate::keymap_dispatch::sequence_is_live());
+        page.message(&key_report(&page, "x", std::time::Duration::from_hours(40 * 365 * 24)));
+        assert!(crate::keymap_dispatch::sequence_is_live());
+        assert_eq!(crate::keymap_dispatch::press_dispatched("ctrl-g"), Some(true));
+    }
+
+    /// A plain-letter tail typed in a page: `WebView2` reports no typed character before the page has it, so the
+    /// leader ends with nothing fired where upstream's monitor would fire it.
+    #[cfg(windows)]
+    #[test]
+    fn a_leaders_plain_letter_tail_typed_in_a_page_ends_it_unfired() {
+        let page = page_taking_reports();
+        pressed_in_page("command \"g\" ctrl+a>g true\n", &["ctrl-a"]);
+        page.message(&key_report(&page, "g", std::time::Duration::ZERO));
+        assert!(!crate::keymap_dispatch::sequence_is_live());
+        assert!(crate::keymap_dispatch::take_fired().is_empty());
+    }
+
+    /// Upstream's `testAKeyTypedIntoATextFieldClosesTheRepeatWindow`, in a page.
+    #[cfg(windows)]
+    #[test]
+    fn a_character_typed_in_a_page_closes_a_repeat_window() {
+        let page = page_taking_reports();
+        pressed_in_page("command \"n\" ctrl+a>ctrl+n --repeat true\n", &["ctrl-a", "ctrl-n"]);
+        page.message(&key_report(&page, "x", std::time::Duration::ZERO));
+        assert!(!crate::keymap_dispatch::sequence_is_live());
     }
 }

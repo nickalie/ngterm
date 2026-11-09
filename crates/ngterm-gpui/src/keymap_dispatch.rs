@@ -93,6 +93,9 @@ struct Router {
     /// The key whose autorepeat [`takes`] just handed over when the dispatch to come cannot say it is one itself (a
     /// bare keystroke, a Windows web view's): [`Router::press`] reads it as the autorepeat it is.
     dispatched_repeat: Option<u32>,
+    /// When the monitor last handled a press: what a page's late report of an earlier key ([`page_typed`]) reads.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    last_press: Option<Instant>,
 }
 
 thread_local! {
@@ -185,7 +188,7 @@ pub fn menu_action(stroke: &KeyStroke) -> Option<BuiltinAction> {
 /// is a bare modifier it ends a half-typed leader or an open repeat window. Esc is the keymap's only to cancel a
 /// leader. The window's own keys there are Ctrl+Tab's switcher.
 /// On Windows only the keys `WebView2` reports reach this check (`html_overlay::webview2::keys`): a typed character is
-/// not one of them, so it leaves a leader or repeat window as it was.
+/// not one of them, and [`page_typed`] hears of it instead.
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 #[must_use]
 pub fn takes(stroke: &KeyStroke) -> bool {
@@ -217,6 +220,23 @@ pub fn takes(stroke: &KeyStroke) -> bool {
         }
         taken
     })
+}
+
+/// A key went down in a Windows page at `at` (milliseconds since the epoch) that the page keeps and no key event
+/// reported, its page script's word for it (`html_overlay::webview2::bridge`): an unmatched press to upstream's
+/// monitor, so it ends a half-typed leader or an open repeat window. The report comes the long way round through the
+/// renderer, so it can arrive after the keymap's next press; a key that went down before that press is not what the
+/// press is waiting on and changes nothing, and the key stays the page's either way.
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+pub fn page_typed(at: u64) {
+    let now = Instant::now();
+    let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    let age = clock.map_or(0, |since| {
+        u64::try_from(since.as_millis()).unwrap_or(u64::MAX).saturating_sub(at)
+    });
+    if let Some(pressed) = now.checked_sub(Duration::from_millis(age)) {
+        ROUTER.with_borrow_mut(|router| router.page_typed(pressed));
+    }
 }
 
 /// Whether the app takes `action`'s menu chord: full screen yields after a half-typed leader, and `undo_close`
@@ -447,6 +467,14 @@ impl Router {
             || self.sequence_takes(chord)
     }
 
+    /// A key the page keeps went down at `pressed` ([`page_typed`]): after the monitor's last press, it ends the sequence.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn page_typed(&mut self, pressed: Instant) {
+        if self.last_press.is_none_or(|last| pressed >= last) {
+            self.reset_if_live();
+        }
+    }
+
     /// Whether the leader or repeat window has run out (the next press lapses it for real).
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn lapsed(&self) -> bool {
@@ -469,6 +497,10 @@ impl Router {
     /// One press, with an HTML page holding the keyboard while `page_keys`: whether it is consumed, and what it fired.
     fn press(&mut self, stroke: &KeyStroke, now: Instant, page_keys: bool) -> Press {
         self.pressed = Some(stroke.identity);
+        #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+        {
+            self.last_press = Some(now);
+        }
         let repeat = stroke.action == KeyAction::Repeat || self.dispatched_repeat.take() == Some(stroke.identity);
         self.resume_held(stroke.identity, repeat);
         if stroke.keycode != 0 && stroke.action == KeyAction::Press {
