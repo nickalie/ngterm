@@ -695,18 +695,16 @@ fn a_web_view_hands_over_the_autorepeat_of_a_key_the_keymap_took() {
     );
 }
 
-/// The first autorepeat can reach the web view's callback while its fresh press still waits in the report queue.
+/// The callback owns the first autorepeat even while the fresh press still waits in the report queue. This checks
+/// callback ownership only: macOS's queued dispatch still reads `AppKit`'s current event (module docs).
 #[test]
 #[cfg(all(feature = "html", target_os = "macos"))]
 fn a_web_view_owns_an_autorepeat_behind_its_queued_press() {
     let (keymap, _) = parse_keymap("", &linux_defaults());
     super::load_keymap(&keymap);
-    let now = Instant::now();
     assert!(super::takes(&native_stroke("ctrl-shift-t", false)));
     assert!(super::takes(&native_stroke("ctrl-shift-t", true)));
-    assert!(matches!(press_monitor("ctrl-shift-t", false, now), Press::Fired(_)));
-    release_monitor();
-    assert_eq!(press_monitor("ctrl-shift-t", true, now), Press::Consumed);
+    assert!(super::ROUTER.with_borrow(|router| router.owns(native_identity("ctrl-shift-t"))));
 }
 
 /// A half-typed leader run out: the page keeps the key the leader was waiting for.
@@ -1209,6 +1207,26 @@ fn windows_page_press(text: &str, repeat: bool, now: Instant) -> Press {
     dispatch_windows_page(asked, now)
 }
 
+/// The shared page-dispatch helper asks the callback before dispatching, so its chord and leader tests retain the
+/// same ownership as an ordinary report, and an unbound key stays in the page.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn a_simulated_page_dispatch_keeps_ownership() {
+    for (keymap, text, fired) in [
+        ("command \"x\" f5 true\n", "f5", true),
+        ("command \"g\" ctrl+a>g true\n", "ctrl-a", false),
+    ] {
+        load_monitor(keymap);
+        assert_eq!(super::press_dispatched(text), Some(fired), "{text}");
+        let keystroke = Keystroke::parse(text).unwrap().with_simulated_ime();
+        assert!(super::takes(&super::page_stroke(&keystroke, 0, true)), "{text}");
+        assert!(super::release_simulated(text), "{text}");
+    }
+    load_monitor("");
+    assert_eq!(super::press_dispatched("g"), None);
+    assert!(!super::release_simulated("g"));
+}
+
 /// Upstream's ownership table on Windows: a chord held in a page fires once, and a new press fires again.
 #[test]
 #[cfg(all(feature = "html", windows))]
@@ -1323,7 +1341,7 @@ fn a_delayed_autorepeat_does_not_advance_the_typed_key_cutoff() {
     );
 }
 
-/// A later callback may clear ownership before an already accepted autorepeat reaches the pump.
+/// An accepted autorepeat stays consumed when a later taken press queues behind it, and that press still fires.
 #[test]
 #[cfg(all(feature = "html", windows))]
 fn a_queued_autorepeat_survives_later_callbacks() {

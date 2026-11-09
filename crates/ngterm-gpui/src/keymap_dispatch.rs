@@ -18,9 +18,11 @@
 //!
 //! A chord is the key's physical identity resolved per layout (`terminal::input::chord`). A consumed key's next press
 //! reads as its autorepeat until its release, which reaches [`key_up`] from the window's (and the terminal's) key-up
-//! listener, or is stood in for right after the press when a web view holds the key (`release_dispatched`). A macOS
-//! web view preserves the physical identity and autorepeat flag; a Windows page carries both with each queued
-//! report and supplies them at its synchronous dispatch (`dispatch_page_key`). [`keyboard_left`] forgets ownership
+//! listener, or is stood in for right after the press when a web view holds the key (`release_dispatched`). A Windows
+//! page carries the physical identity and autorepeat flag with each queued report and supplies them at its
+//! synchronous dispatch (`dispatch_page_key`). macOS reads `AppKit`'s current event at dispatch instead: a queued
+//! fresh press can be mistaken for a later autorepeat and swallowed without firing. Its queued reports do not yet
+//! preserve their own metadata or handle ownership overtaken by a newer page-kept press. [`keyboard_left`] forgets ownership
 //! when no ngterm window holds the keyboard any more. The leader and repeat timeouts are deadlines checked at the next key, which is when they
 //! matter. Matched chords fire as main-loop tasks
 //! (`AppState::keymap_fired`); a custom command carries the terminal typed in, read now (its selection included), as
@@ -32,9 +34,12 @@
 //! | Owned autorepeat, even when several callbacks precede dispatch | Consumed without firing again |
 //! | Owned repeat tail | Fires again and suspends its repeat timeout while held |
 //! | Owned key repeating after focus moves to a terminal | Consumed under the same physical identity |
-//! | Report queued before a newer press the page keeps | Taken as usual, and the key stays the page's |
+//! | Windows report queued before a newer press the page keeps | Taken as usual, and the key stays the page's |
 //! | Unowned autorepeat | Passed without advancing the matcher or the typed-key cutoff |
 //! | Character typed after a leader, reported after an in-flight autorepeat | Ends the leader |
+//!
+//! A page-kept callback currently resets only the matcher already live at that callback. An older queued press can
+//! subsequently arm a leader across that interruption; cancellation still needs ordering with the queued reports.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -325,6 +330,9 @@ pub(crate) fn release_simulated(text: &str) -> bool {
 #[cfg(all(feature = "html", windows))]
 pub(crate) fn press_dispatched(text: &str) -> Option<bool> {
     let keystroke = gpui_kit::Keystroke::parse(text).unwrap().with_simulated_ime();
+    if !takes(&page_stroke(&keystroke, 0, false)) {
+        return None;
+    }
     press_page_report(&keystroke, 0, false)
 }
 
