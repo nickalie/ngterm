@@ -19,6 +19,9 @@ import com.nickalie.ngterm.core.ffi.RemoteSession
 import com.nickalie.ngterm.core.ffi.UploadCancel
 import com.nickalie.ngterm.core.ffi.UploadProgress
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 
 /** One call the app made on a [FakeMobileCore]: the method's name and its arguments, in order. */
 data class FakeCall(
@@ -43,7 +46,8 @@ data class FakeCall(
  *   matches connects; another pinned key reports [MobileEvent.HostKeyChanged] with both and fails ([HOST_KEY_CHANGED]);
  *   no pin reports [MobileEvent.HostKeyUnknown] and the connect waits for [answerHostKey], which pins the key through
  *   [hosts] and connects when it trusts the key on offer, and fails ([HOST_KEY_REFUSED]) otherwise; a [disconnect]
- *   while it waits cancels it ([MobileException.Cancelled]);
+ *   while it waits cancels it ([MobileException.Cancelled]); [hosts] is called in [hostsContext], which a test whose
+ *   store blocks gives a thread of its own, as the real core calls it on its own thread and waits;
  * - sign-ins, when [signIns] names what a machine's host asks the user to sign in with: after its host key, the
  *   connect reports [MobileEvent.SignInRequested] and waits for [finishSignIn], which connects it once signed in and
  *   fails it ([SIGN_IN_UNFINISHED]) otherwise; a [disconnect] while it waits cancels it ([MobileException.Cancelled]);
@@ -77,6 +81,7 @@ data class FakeCall(
 class FakeMobileCore(
     private val sink: EventSink? = null,
     private val hosts: HostKeyStore? = null,
+    private val hostsContext: CoroutineContext = EmptyCoroutineContext,
 ) : MobileCoreInterface {
     private val recorded = mutableListOf<FakeCall>()
     private val records = mutableMapOf<String, Machine>()
@@ -244,7 +249,7 @@ class FakeMobileCore(
     private suspend fun checkHostKey(machine: Machine) {
         val store = hosts ?: return
         val offered = hostKeys[machine.host] ?: return
-        val pinned = store.pinned(machine.id)
+        val pinned = withContext(hostsContext) { store.pinned(machine.id) }
         when {
             // pinned as offered: the handshake goes on
             pinned == offered -> {}
@@ -266,7 +271,7 @@ class FakeMobileCore(
                     }
                 if (trusted == null) throw MobileException.Cancelled()
                 if (!trusted) unreachable(machine.id, HOST_KEY_REFUSED)
-                store.pin(machine.id, offered)
+                withContext(hostsContext) { store.pin(machine.id, offered) }
             }
         }
     }
