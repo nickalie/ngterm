@@ -112,11 +112,14 @@ struct Router {
     /// The page report being dispatched synchronously, taken by the interceptor before any listener runs.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     dispatched: Option<KeyStroke>,
+    /// When that report's callback saw the press, rather than when the pump dispatched it.
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    dispatched_at: Option<Instant>,
     /// The key of the page report being dispatched, when a newer callback left that key to the page: the report still
     /// acts, and leaves no ownership behind ([`Router::forget_overtaken`]).
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     overtaken: Option<u32>,
-    /// When the monitor last handled a fresh press (an autorepeat does not count): what a page's late report of an
+    /// When the last fresh press went down (an autorepeat does not count): what a page's late report of an
     /// earlier key ([`page_typed`]) reads.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     last_press: Option<Instant>,
@@ -124,11 +127,13 @@ struct Router {
 
 /// A key a page's callback took, waiting in the pump's queue behind the reports before it. Callbacks and the pump share
 /// the main thread and the queue is first in, first out, so these mirror it: each is taken off when the pump reaches
-/// its report ([`dispatch_page_key`]) or the report is lost ([`page_report_dropped`], [`page_reports_dropped`]).
+/// its report ([`dispatch_page_key`]) or the report is lost ([`page_report_dropped`]).
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 struct QueuedReport {
     /// The key as its callback saw it, which the dispatch reads rather than the native event current by then.
     stroke: KeyStroke,
+    /// When the callback saw the key: a typed character behind it is later even if the pump stalls.
+    at: Instant,
     /// A press the page kept came behind this report: it ends a live sequence once this report has acted.
     interrupted: bool,
 }
@@ -234,14 +239,15 @@ pub fn menu_action(stroke: &KeyStroke) -> Option<BuiltinAction> {
     ROUTER.with_borrow(|router| router.menu.get(&chord).copied())
 }
 
-/// Whether the keymap or the window's own keys take `stroke` now: a key pressed in an HTML page's native web view
-/// (macOS and Windows, `html_overlay::webview2::keys`) goes to the window only then. A key taken does not advance the
-/// matcher here: its dispatch reaches the monitor, which does. A key the page keeps never reaches the monitor, so this
-/// does what upstream's monitor does with it: a fresh press forgets that physical key's old ownership, and unless it
-/// is a bare modifier it ends a half-typed leader or an open repeat window. Esc is the keymap's only to cancel a
-/// leader. The window's own keys there are Ctrl+Tab's switcher. A press taken here counts as owned from now on, as
-/// the keyboard's first autorepeat can come before the press's queued report is dispatched. Every key taken here is
-/// about to be reported: the caller must post it to the page's pump.
+/// Whether the keymap or the window's own keys take `stroke`, after the reports still queued have acted. A key pressed
+/// in an HTML page's native web view (macOS and Windows, `html_overlay::webview2::keys`) goes to the window only then.
+/// A key taken does not advance the matcher here: its dispatch reaches the monitor, which does. A key the page keeps
+/// never reaches the monitor, so this does what upstream's monitor does with it: a fresh press forgets that physical
+/// key's old ownership, and unless it is a bare modifier it ends a half-typed leader or an open repeat window behind
+/// those reports (at once with none queued). Esc is the keymap's only to cancel a leader. The window's own keys there
+/// are Ctrl+Tab's switcher. A press taken here counts as owned from now on, as the keyboard's first autorepeat can come
+/// before the press's queued report is dispatched. Every key taken here is about to be reported: the caller must post
+/// it to the page's pump.
 /// On Windows only the keys `WebView2` reports reach this check (`html_overlay::webview2::keys`): a typed character is
 /// not one of them, and [`page_typed`] hears of it instead.
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
@@ -263,6 +269,7 @@ pub fn takes(stroke: &KeyStroke) -> bool {
         }
         router.queued.push_back(QueuedReport {
             stroke: stroke.clone(),
+            at: Instant::now(),
             interrupted: false,
         });
         true
@@ -336,16 +343,6 @@ pub fn page_report_dropped() {
     ROUTER.with_borrow_mut(|router| {
         let interrupted = router.begin_report(None);
         router.end_report(interrupted);
-    });
-}
-
-/// The queued page reports will never come: their page closed, and the pump drops what it still holds for it.
-#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
-pub fn page_reports_dropped() {
-    ROUTER.with_borrow_mut(|router| {
-        if router.queued.drain(..).any(|report| report.interrupted) {
-            router.reset_if_live();
-        }
     });
 }
 
@@ -574,6 +571,7 @@ impl Router {
     fn begin_report(&mut self, carried: Option<KeyStroke>) -> bool {
         let report = self.queued.pop_front();
         let interrupted = report.as_ref().is_some_and(|report| report.interrupted);
+        self.dispatched_at = report.as_ref().map(|report| report.at);
         self.dispatched = carried.or(report.map(|report| report.stroke));
         interrupted
     }
@@ -582,6 +580,7 @@ impl Router {
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn end_report(&mut self, interrupted: bool) {
         self.dispatched = None;
+        self.dispatched_at = None;
         self.forget_overtaken();
         if interrupted {
             self.reset_if_live();
@@ -620,7 +619,8 @@ impl Router {
         self.consumed.contains(&identity) || self.released.contains(&identity)
     }
 
-    /// Whether a fresh press in a page is the keymap's or the window's, ending a live sequence if not ([`takes`]).
+    /// Whether a fresh press in a page is taken after the queued reports act, ending a live sequence behind them if
+    /// not ([`takes`]).
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn takes_fresh(&mut self, stroke: &KeyStroke) -> bool {
         // Esc is not bindable, and as a bare keystroke it spells no chord: it is the keymap's only to cancel a leader
@@ -706,7 +706,7 @@ impl Router {
         let repeat = stroke.action == KeyAction::Repeat;
         #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
         if !repeat {
-            self.last_press = Some(now);
+            self.last_press = Some(self.dispatched_at.take().unwrap_or(now));
         }
         self.resume_held(stroke.identity, repeat);
         if stroke.keycode != 0 && stroke.action == KeyAction::Press {

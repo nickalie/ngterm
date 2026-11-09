@@ -261,6 +261,9 @@ fn run(job: Job, cx: &mut AsyncApp) {
         Job::Report(id, report) => cx.update(|cx| {
             if let Some(page) = page(id) {
                 page.report(report, cx);
+            } else if matches!(report, Report::Key(..)) {
+                // Only this report is lost: other pages' keys and callbacks still wired until burial stay in order.
+                crate::keymap_dispatch::page_report_dropped();
             }
         }),
         Job::ReplicaRead { page, uri, reply } => cx.update(|_| replica_read(page, &uri, reply)),

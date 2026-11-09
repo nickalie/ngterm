@@ -457,10 +457,11 @@ fn a_web_view_hands_over_full_screen_unless_it_ends_a_live_leader() {
         for lapsed in [false, true] {
             super::load_keymap(&keymap);
             assert!(super::takes(&stroke("f11")), "no leader");
+            super::page_report_dropped();
             let now = Instant::now();
             assert!(super::takes(&stroke("ctrl-a")));
             // the press goes straight to the matcher below, so its report leaves the queue here
-            super::page_reports_dropped();
+            super::page_report_dropped();
             super::ROUTER.with_borrow_mut(|router| {
                 assert_eq!(router.press(&stroke("ctrl-a"), now, true), Press::Consumed);
                 assert!(router.engine.as_ref().is_some_and(CustomCommandEngine::is_armed));
@@ -472,6 +473,7 @@ fn a_web_view_hands_over_full_screen_unless_it_ends_a_live_leader() {
             let taken = lapsed || tail == "f11";
             assert_eq!(super::takes(&stroke("f11")), taken, "tail={tail}, lapsed={lapsed}");
             if taken {
+                super::page_report_dropped();
                 let fired = super::ROUTER.with_borrow_mut(|router| router.press(&stroke("f11"), now, true));
                 if lapsed {
                     assert_eq!(
@@ -585,11 +587,12 @@ fn a_web_view_hands_over_the_keymap_commands_without_advancing_the_matcher() {
     );
     super::load_keymap(&keymap);
     assert!(super::takes(&stroke("ctrl-shift-b")));
+    super::page_report_dropped();
     assert!(
         super::takes(&stroke("ctrl-a")),
         "a leader's first chord is the keymap's"
     );
-    super::page_reports_dropped();
+    super::page_report_dropped();
     assert!(!super::takes(&stroke("g")), "asking about the leader did not arm it");
     assert_eq!(press_monitor("g", false, Instant::now()), Press::Passed);
 }
@@ -698,8 +701,7 @@ fn a_web_view_hands_over_the_autorepeat_of_a_key_the_keymap_took() {
     );
 }
 
-/// The callback owns the first autorepeat even while the fresh press still waits in the report queue. This checks
-/// callback ownership only: macOS's queued dispatch still reads `AppKit`'s current event (module docs).
+/// The callback owns the first autorepeat even while the fresh press still waits in the report queue.
 #[test]
 #[cfg(all(feature = "html", target_os = "macos"))]
 fn a_web_view_owns_an_autorepeat_behind_its_queued_press() {
@@ -1342,6 +1344,20 @@ fn a_delayed_autorepeat_does_not_advance_the_typed_key_cutoff() {
     );
 }
 
+/// A character typed behind a queued prefix ends the leader even if its report reaches a stalled pump much later.
+#[test]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+fn a_character_typed_after_a_queued_press_ends_its_leader() {
+    load_monitor("command \"g\" ctrl+a>ctrl+g true\n");
+    assert!(super::takes(&queued_report("ctrl-a", false)));
+    let typed = Instant::now();
+    let pumped = typed + Duration::from_millis(20);
+    assert_eq!(pump_report("ctrl-a", false, false, pumped), Press::Consumed);
+    super::ROUTER.with_borrow_mut(|router| router.page_typed(typed));
+    assert!(!monitor_is_live(), "the character followed the press, not the pump");
+    assert!(!super::takes(&queued_report("ctrl-g", false)));
+}
+
 /// An accepted autorepeat stays consumed when a later taken press queues behind it, and that press still fires.
 #[test]
 #[cfg(all(feature = "html", windows))]
@@ -1452,8 +1468,8 @@ fn autorepeats_behind_the_switcher_and_a_cancelling_escape_are_owned() {
     assert!(!monitor_is_live());
 }
 
-#[cfg(all(feature = "html", windows))]
-mod windows_dispatch_tests {
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+mod page_dispatch_tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -1463,6 +1479,24 @@ mod windows_dispatch_tests {
     };
 
     use super::*;
+
+    fn dispatch(text: &str, repeat: bool, cx: &mut VisualTestContext) {
+        let keystroke = Keystroke::parse(text).unwrap().with_simulated_ime();
+        cx.update(|window, cx| {
+            super::super::dispatch_page_key(
+                &keystroke,
+                #[cfg(windows)]
+                queued_report(text, repeat).keycode,
+                #[cfg(windows)]
+                repeat,
+                window,
+                cx,
+            );
+            release_monitor();
+        });
+        #[cfg(target_os = "macos")]
+        let _ = repeat;
+    }
 
     struct Target {
         focus: FocusHandle,
@@ -1502,29 +1536,21 @@ mod windows_dispatch_tests {
     fn queued_reports_reach_the_interceptor_with_their_own_metadata(cx: &mut TestAppContext) {
         let seen = Rc::new(Cell::new(0));
         let cx = monitored_window(cx, &seen);
-        load_monitor("command \"x\" f5 true\n");
-        let keystroke = Keystroke::parse("f5").unwrap().with_simulated_ime();
-        let keycode = crate::terminal::input::xkb_keycode("F5").unwrap();
-        let dispatch = |repeat, cx: &mut VisualTestContext| {
-            cx.update(|window, cx| {
-                super::super::dispatch_page_key(&keystroke, keycode, repeat, window, cx);
-                release_monitor();
-            });
-        };
-        assert!(super::super::takes(&windows_page_stroke("f5", false)));
-        dispatch(false, cx);
+        load_monitor("command \"x\" ctrl+y true\n");
+        let keycode = queued_report("ctrl-y", false).identity;
+        assert!(super::super::takes(&queued_report("ctrl-y", false)));
+        assert!(super::super::takes(&queued_report("ctrl-y", true)));
+        dispatch("ctrl-y", false, cx);
         assert_eq!(super::super::take_fired().len(), 1);
+        assert!(super::super::takes(&queued_report("ctrl-y", true)));
         for _ in 0..2 {
-            assert!(super::super::takes(&windows_page_stroke("f5", true)));
-        }
-        for _ in 0..2 {
-            dispatch(true, cx);
+            dispatch("ctrl-y", true, cx);
         }
         assert!(super::super::take_fired().is_empty(), "queued repeats fired nothing");
         assert_eq!(seen.get(), 0, "no owned repeat reached the focused key listener");
         assert!(super::super::ROUTER.with_borrow(|router| router.released.contains(&keycode)));
-        assert!(super::super::takes(&windows_page_stroke("f5", false)));
-        dispatch(false, cx);
+        assert!(super::super::takes(&queued_report("ctrl-y", false)));
+        dispatch("ctrl-y", false, cx);
         assert_eq!(super::super::take_fired().len(), 1, "the next fresh press fires");
     }
 
@@ -1533,25 +1559,17 @@ mod windows_dispatch_tests {
     fn an_overtaken_report_is_consumed_and_leaves_the_key_the_pages(cx: &mut TestAppContext) {
         let seen = Rc::new(Cell::new(0));
         let cx = monitored_window(cx, &seen);
-        load_monitor("command \"x\" f5 true\n");
-        let keystroke = Keystroke::parse("f5").unwrap().with_simulated_ime();
-        let keycode = crate::terminal::input::xkb_keycode("F5").unwrap();
-        let dispatch = |repeat, cx: &mut VisualTestContext| {
-            cx.update(|window, cx| {
-                super::super::dispatch_page_key(&keystroke, keycode, repeat, window, cx);
-                release_monitor();
-            });
-        };
-        assert!(super::super::takes(&windows_page_stroke("f5", false)));
-        dispatch(false, cx);
+        load_monitor("command \"x\" ctrl+y true\n");
+        assert!(super::super::takes(&queued_report("ctrl-y", false)));
+        dispatch("ctrl-y", false, cx);
         assert_eq!(super::super::take_fired().len(), 1);
-        assert!(super::super::takes(&windows_page_stroke("f5", true)));
-        assert!(!super::super::takes(&windows_page_stroke("shift-f5", false)));
-        dispatch(true, cx);
+        assert!(super::super::takes(&queued_report("ctrl-y", true)));
+        assert!(!super::super::takes(&queued_report("shift-y", false)));
+        dispatch("ctrl-y", true, cx);
         assert!(super::super::take_fired().is_empty());
         assert_eq!(seen.get(), 0, "the report the callback took reaches no listener");
         assert!(
-            !super::super::takes(&windows_page_stroke("shift-f5", true)),
+            !super::super::takes(&queued_report("shift-y", true)),
             "the newer press's repeats are the page's"
         );
     }
@@ -1685,9 +1703,4 @@ fn a_lost_report_leaves_the_queue_and_its_interruption_stands() {
     super::page_report_dropped();
     assert!(!super::takes(&queued_report("ctrl-x", false)));
     assert!(!monitor_is_live(), "nothing queued, so the press ends it at once");
-    armed();
-    assert!(super::takes(&queued_report("ctrl-g", false)));
-    assert!(!super::takes(&queued_report("ctrl-x", false)));
-    super::page_reports_dropped();
-    assert!(!monitor_is_live(), "a closed page's queue goes with what it held");
 }
