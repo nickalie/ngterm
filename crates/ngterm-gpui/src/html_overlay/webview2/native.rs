@@ -122,8 +122,8 @@ pub enum Report {
     Focus(bool),
     /// A download the page started, refused.
     DownloadRefused(String),
-    /// A key pressed in the page that the app takes (`keys`), kept from the page.
-    Key(gpui_kit::Keystroke),
+    /// A key the app takes (`keys`), kept from the page: its keystroke, XKB physical identity and autorepeat flag.
+    Key(gpui_kit::Keystroke, u32, bool),
     /// A replaced theme script is in place: later loads wear it.
     ThemeInstalled,
     /// The network filter of a page that blocks the network ([`Spec::block_network`]) is in place: its document may
@@ -139,8 +139,8 @@ pub enum Report {
 pub type Decide = Rc<dyn Fn(&Navigation) -> bool>;
 /// Posts a report to the pump.
 pub type Post = Rc<dyn Fn(Report)>;
-/// The keystroke the app takes from a key pressed in the page, by its virtual key and whether it is an autorepeat.
-pub type TakeKey = Rc<dyn Fn(u32, bool) -> Option<gpui_kit::Keystroke>>;
+/// The keystroke the app takes from a page press, by its virtual key, XKB physical identity and autorepeat flag.
+pub type TakeKey = Rc<dyn Fn(u32, u32, bool) -> Option<gpui_kit::Keystroke>>;
 
 /// How the grant's protocol answers: the page's grant, and the last read it refused (an address and
 /// why), which a failed main-frame load reports.
@@ -976,10 +976,12 @@ fn wire_keys(controller: &ICoreWebView2Controller, take_key: &TakeKey, post: &Po
         let mut status = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
         // SAFETY: as above.
         unsafe { args.PhysicalKeyStatus(&raw mut status) }?;
-        if let Some(keystroke) = take(virtual_key, status.WasKeyDown.as_bool()) {
+        let keycode = super::keys::keycode(virtual_key, status.ScanCode, status.IsExtendedKey.as_bool());
+        let repeat = status.WasKeyDown.as_bool();
+        if let Some(keystroke) = take(virtual_key, keycode, repeat) {
             // SAFETY: as above, answered on its thread.
             unsafe { args.SetHandled(true) }?;
-            sent(Report::Key(keystroke));
+            sent(Report::Key(keystroke, keycode, repeat));
         }
         Ok(())
     }));

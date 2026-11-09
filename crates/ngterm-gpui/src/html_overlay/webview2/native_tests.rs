@@ -172,7 +172,7 @@ fn spec(parent: isize, dir: &Path, reports: &Rc<RefCell<Vec<Report>>>) -> Spec {
             eprintln!("WebView2 report: {report:?}");
             sent.borrow_mut().push(report);
         }),
-        take_key: Rc::new(|_, _| None),
+        take_key: Rc::new(|_, _, _| None),
     }
 }
 
