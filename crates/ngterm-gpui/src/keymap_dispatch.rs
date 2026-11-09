@@ -32,6 +32,7 @@
 //! | Owned autorepeat, even when several callbacks precede dispatch | Consumed without firing again |
 //! | Owned repeat tail | Fires again and suspends its repeat timeout while held |
 //! | Owned key repeating after focus moves to a terminal | Consumed under the same physical identity |
+//! | Report queued before a newer press the page keeps | Taken as usual, and the key stays the page's |
 //! | Unowned autorepeat | Passed without advancing the matcher or the typed-key cutoff |
 //! | Character typed after a leader, reported after an in-flight autorepeat | Ends the leader |
 
@@ -79,7 +80,8 @@ struct Router {
     /// Keys whose press was consumed: their autorepeats and release stay consumed.
     consumed: HashSet<u32>,
     /// Consumed keys already released, until they are pressed again: a second key-up listener (the window's and the
-    /// terminal's both report a release) still learns the release was the keymap's.
+    /// terminal's both report a release) still learns the release was the keymap's. A press a web view handed over
+    /// waits here too, so an autorepeat that overtakes its queued report is the keymap's ([`takes`]).
     released: HashSet<u32>,
     /// The fired `--repeat` tail still held down.
     held_repeat: Option<u32>,
@@ -101,7 +103,12 @@ struct Router {
     /// The Windows page report being dispatched synchronously, taken by the interceptor before any listener runs.
     #[cfg(all(feature = "html", windows))]
     dispatched: Option<KeyStroke>,
-    /// When the monitor last handled a press: what a page's late report of an earlier key ([`page_typed`]) reads.
+    /// The key of the Windows page report being dispatched, when a newer callback left that key to the page: the
+    /// report still acts, and leaves no ownership behind ([`Router::forget_overtaken`]).
+    #[cfg(all(feature = "html", windows))]
+    overtaken: Option<u32>,
+    /// When the monitor last handled a fresh press (an autorepeat does not count): what a page's late report of an
+    /// earlier key ([`page_typed`]) reads.
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     last_press: Option<Instant>,
 }
@@ -194,7 +201,8 @@ pub fn menu_action(stroke: &KeyStroke) -> Option<BuiltinAction> {
 /// matcher here: its dispatch reaches the monitor, which does. A key the page keeps never reaches the monitor, so this
 /// does what upstream's monitor does with it: a fresh press forgets that physical key's old ownership, and unless it
 /// is a bare modifier it ends a half-typed leader or an open repeat window. Esc is the keymap's only to cancel a
-/// leader. The window's own keys there are Ctrl+Tab's switcher.
+/// leader. The window's own keys there are Ctrl+Tab's switcher. A press taken here counts as owned from now on, as
+/// the keyboard's first autorepeat can come before the press's queued report is dispatched.
 /// On Windows only the keys `WebView2` reports reach this check (`html_overlay::webview2::keys`): a typed character is
 /// not one of them, and [`page_typed`] hears of it instead.
 #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
@@ -207,21 +215,9 @@ pub fn takes(stroke: &KeyStroke) -> bool {
         }
         router.released.remove(&stroke.identity);
         router.consumed.remove(&stroke.identity);
-        // Esc is not bindable, and as a bare keystroke it spells no chord: it is the keymap's only to cancel a leader
-        let taken = if stroke.is_escape() {
-            router.leader_waits()
-        } else {
-            // a bare modifier is the next chord being typed: the leader keeps waiting
-            let Some(chord) = input::chord(stroke) else {
-                return false;
-            };
-            if chord.key == "tab" && chord.mods.contains(ngterm_core::keymap::Modifiers::CONTROL) {
-                return true;
-            }
-            router.page_press_taken(&chord)
-        };
-        if !taken {
-            router.reset_if_live();
+        let taken = router.takes_fresh(stroke);
+        if taken {
+            router.released.insert(stroke.identity);
         }
         taken
     })
@@ -280,7 +276,10 @@ pub fn dispatch_page_key(
 ) {
     ROUTER.with_borrow_mut(|router| router.dispatched = Some(page_stroke(keystroke, keycode, repeat)));
     window.dispatch_keystroke(keystroke.clone(), cx);
-    ROUTER.with_borrow_mut(|router| router.dispatched = None);
+    ROUTER.with_borrow_mut(|router| {
+        router.dispatched = None;
+        router.forget_overtaken();
+    });
 }
 
 /// Lets go of a press dispatched for an HTML page's native web view (`takes`), whose release the window never sees.
@@ -335,7 +334,9 @@ pub(crate) fn press_page_report(keystroke: &gpui_kit::Keystroke, keycode: u32, r
     let press = ROUTER.with_borrow_mut(|router| {
         router.dispatched = Some(page_stroke(keystroke, keycode, repeat));
         let stroke = router.dispatched_stroke(KeyStroke::new(keystroke, &input::Source::Keystroke, false));
-        router.press(&stroke, Instant::now(), true)
+        let press = router.press(&stroke, Instant::now(), true);
+        router.forget_overtaken();
+        press
     });
     release_dispatched();
     match press {
@@ -480,11 +481,24 @@ impl Router {
         let Some(stroke) = self.dispatched.take() else {
             return fallback;
         };
-        if stroke.action == KeyAction::Repeat {
-            // the callback already took this repeat: a later fresh callback may have cleared its old ownership
-            self.consumed.insert(stroke.identity);
+        if !self.owns(stroke.identity) {
+            // a newer callback left the key to the page, or the keyboard left ngterm; the callback still took this
+            // report, so an autorepeat stays consumed, for this dispatch only
+            self.overtaken = Some(stroke.identity);
+            if stroke.action == KeyAction::Repeat {
+                self.consumed.insert(stroke.identity);
+            }
         }
         stroke
+    }
+
+    /// Ends the dispatch of an overtaken report: the key is the page's, as the newer callback left it.
+    #[cfg(all(feature = "html", windows))]
+    fn forget_overtaken(&mut self) {
+        if let Some(identity) = self.overtaken.take() {
+            self.consumed.remove(&identity);
+            self.released.remove(&identity);
+        }
     }
 
     /// Forgets key `identity`'s release, as it is pressed again. `repeat` says the key never went up, so that
@@ -508,6 +522,28 @@ impl Router {
     #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
     fn owns(&self, identity: u32) -> bool {
         self.consumed.contains(&identity) || self.released.contains(&identity)
+    }
+
+    /// Whether a fresh press in a page is the keymap's or the window's, ending a live sequence if not ([`takes`]).
+    #[cfg(all(feature = "html", any(windows, target_os = "macos")))]
+    fn takes_fresh(&mut self, stroke: &KeyStroke) -> bool {
+        // Esc is not bindable, and as a bare keystroke it spells no chord: it is the keymap's only to cancel a leader
+        let taken = if stroke.is_escape() {
+            self.leader_waits()
+        } else {
+            // a bare modifier is the next chord being typed: the leader keeps waiting
+            let Some(chord) = input::chord(stroke) else {
+                return false;
+            };
+            if chord.key == "tab" && chord.mods.contains(ngterm_core::keymap::Modifiers::CONTROL) {
+                return true;
+            }
+            self.page_press_taken(&chord)
+        };
+        if !taken {
+            self.reset_if_live();
+        }
+        taken
     }
 
     /// Whether a half-typed leader is still waiting for its next chord, a lapsed one counting as gone.
