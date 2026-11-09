@@ -46,7 +46,7 @@ Do this:
 4. For `port` and `api`: STATUS per behavior: `absent` (ngterm has no counterpart), `partial` (part missing, or
    no Rust test asserts Ghostty's cases), `already-mirrored` (code and tests there: cite file:line). Mark inferred
    claims without a deciding line as "unconfirmed" in RISKS.
-5. Precedence (areas.md > The parity contract): check <ROOT>/README.md ("differs from upstream by choice"),
+5. Precedence (areas.md > The parity contract): check <ROOT>/docs/development.md ("differs from upstream by choice"),
    <ROOT>/conformance/docs/rust-build.md (deviations) and the patches README. A Ghostty change that contradicts a
    recorded ngterm deviation is not ported toward Ghostty: name the deviation and what of the change is left out.
 6. Platforms: where Ghostty's behavior differs between its macOS and Linux apps, give ngterm's form on macOS, Linux

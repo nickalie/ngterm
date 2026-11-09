@@ -1,6 +1,6 @@
 # ngterm — review profile
 
-Source of truth: `AGENTS.md` (rules), `README.md` (commands, gates), `conformance/README.md`,
+Source of truth: `AGENTS.md` (rules), `docs/development.md` (commands, gates), `conformance/README.md`,
 `conformance/docs/rust-build.md`. Where this file and those disagree, they win.
 
 ## What the software is

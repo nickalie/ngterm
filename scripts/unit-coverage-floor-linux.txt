@@ -1,7 +1,7 @@
 # Unit-test coverage floors on Linux (conformance/tools/check_coverage.py): lines, functions and regions % per
 # workspace crate of `cargo test` (scripts/unit-coverage.sh: linux.yml's unit-coverage job), test code and vendor/ out
 # of the denominator. A crate more than 0.5 pt below a floor in any of the three fails the job. Raised, never lowered,
-# toward 90 per crate as crates earn it, from the job's own reports (README > Test): check_coverage.py --floor THIS
+# toward 90 per crate as crates earn it, from the job's own reports (docs/development.md > Test): check_coverage.py --floor THIS
 # --add --summary A/summary.md --summary B/summary.md, A and B two runs of one commit (each floor raised to the
 # batch's lowest; a new crate added, a gone one dropped).
 # Seeded from two runs of the CI job on one commit (its rust-linux-unit-coverage summary.md).

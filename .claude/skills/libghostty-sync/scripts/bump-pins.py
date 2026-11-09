@@ -103,7 +103,7 @@ def main() -> int:
         new["LIBGHOSTTY_VT_REV"] = rev
         repo = pins["LIBGHOSTTY_VT_REPO"]
         new["LIBGHOSTTY_VT_SHA256"] = sha256(fetch(f"{repo}/archive/{rev}.tar.gz"))
-        notes.append("the LIBGHOSTTY_VT comment block and README's pin paragraph: what the pin follows, the new "
+        notes.append("the LIBGHOSTTY_VT comment block and docs/development.md's pin paragraph: what the pin follows, the new "
                      "revision's date, its release tag or merge, and its build-libghostty-vt* jobs")
 
     zig = re.search(r'\.minimum_zig_version\s*=\s*"([^"]+)"', zon)
@@ -120,7 +120,7 @@ def main() -> int:
                 raise SystemExit(f"bump-pins: zig {version} has no {key} archive")
             new[f"LIBGHOSTTY_VT_ZIG_SHA256_{suffix}"] = index[version][key]["shasum"]
         notes.append(f"zig {version}: the zig comment's lookup date; every zig-version mention outside pins.env "
-                     "(rg -n 'ZIG_VERSION|zig 0\\.' scripts crates README.md .github)")
+                     "(rg -n 'ZIG_VERSION|zig 0\\.' scripts crates docs/development.md .github)")
 
     themes = zon_dep_url(zon, "iterm2_themes")
     if themes is None:
@@ -145,7 +145,7 @@ def main() -> int:
         if url != pins[f"{prefix}_URL"]:
             new[f"{prefix}_URL"] = url
             new[f"{prefix}_SHA256"] = sha256(fetch(url))
-            notes.append(f"{dep} moved: the FONTS comment (versions, Zig hash), README's font versions, and "
+            notes.append(f"{dep} moved: the FONTS comment (versions, Zig hash), docs/development.md's font versions, and "
                          "scripts/fetch-fonts.sh's paths inside the archive (run it)")
 
     for name, value in new.items():

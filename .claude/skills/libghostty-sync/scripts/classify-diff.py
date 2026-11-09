@@ -100,7 +100,7 @@ MIRROR_AREAS = {"renderer", "font", "sprite", "termio", "surface", "input", "con
 
 TEST_RE = re.compile(r'^[+-]\s*test\s+"([^"]+)"')
 CITE_RE = re.compile(r"[\w./+-]*[\w+-]\.(?:zig|h|glsl|metal|c|cpp|swift|frag|vert|py|sh)\b")
-CITE_GLOBS = ("crates", "scripts", "build", "mobile", "conformance/docs", "resources", "README.md", "AGENTS.md")
+CITE_GLOBS = ("crates", "scripts", "build", "mobile", "conformance/docs", "resources", "README.md", "docs/development.md", "AGENTS.md")
 BINDINGS = "crates/ngterm-ghostty-vt-sys/src/bindings.rs"
 TEXT_SUFFIXES = {".rs", ".md", ".sh", ".py", ".toml", ".kt", ".kts", ".swift", ".env", ".txt", ".h", ".m", ".yml"}
 

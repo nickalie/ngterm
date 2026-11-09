@@ -62,7 +62,7 @@ API (keyboard layouts, the Command key, pasteboard, Notification Center, dock, F
 recorded reason why an OS has none (a Homebrew cask fix, an AppKit bug workaround). Put OS-specific logic in an `any`
 crate where it can live, since CI builds only those on macOS and Windows.
 
-The Android and iOS apps are the other two targets. They are remote-only viewers (README > Android, > iOS): over ssh
+The Android and iOS apps are the other two targets. They are remote-only viewers (docs/development.md > Android, > iOS): over ssh
 they list a machine's live sessions, make and end them, attach their panes and show what the presentation stream
 carries. `ngterm-mobile` builds on `ngterm-proto`, `ngterm-term` and parts of `ngterm-core`: the remote client
 (`remote::*`), `live`, `agent_chat`, `model`, `hud`, the key binds of `ghostty_config` and the palettes' ranking

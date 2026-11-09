@@ -14,7 +14,7 @@ python -m venv .venv && .venv/Scripts/python.exe -m pip install -e conformance  
 ```
 
 The Linux ui layer also needs Xvfb, at-spi2-core (`at-spi-bus-launcher`, `at-spi2-registryd`) and the distribution's
-`Atspi-2.0` typelib (README > Prerequisites); pip builds PyGObject against gobject-introspection and cairo.
+`Atspi-2.0` typelib (docs/development.md > Prerequisites); pip builds PyGObject against gobject-introspection and cairo.
 
 ## Running
 
@@ -228,7 +228,7 @@ about, and `--add` adds only ids that ran and passed. A narrower selection (`-k`
 the mode `partial`: the listed ids that did not run are not judged, so a partial run can neither break nor shrink
 the list through what it left out. The report names the mode and the suite time.
 A full run stays the script's default, but locally a change runs only a partial run (`-- -k EXPR`) over the ids that
-cover the behavior it touches (README > Test); full and ratchet-only runs are CI's, which holds the whole list on every
+cover the behavior it touches (docs/development.md > Test); full and ratchet-only runs are CI's, which holds the whole list on every
 PR and push to main. A partial run finds newly passing ids only among what it selected.
 `--nodeid-report` cannot be combined with `--coverage-gate`.
 

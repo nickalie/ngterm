@@ -1390,7 +1390,7 @@ fn a_mouse_selection_leaves_the_system_clipboard_alone_unless_copy_on_select_say
     assert_eq!(primary(&mut f).as_deref(), Some("hello"));
     assert_eq!(clipboard(&mut f).as_deref(), Some("seeded"));
     // `copy-on-select = clipboard` puts a selection on the system clipboard only (Ghostty's meaning at the pin; the
-    // older libghostty upstream links copied to both, README > The selection clipboard)
+    // older libghostty upstream links copied to both, docs/development.md > The selection clipboard)
     f.terminal.update(f.cx, |terminal, cx| {
         terminal.set_config(config("copy-on-select = clipboard\n"), cx);
     });

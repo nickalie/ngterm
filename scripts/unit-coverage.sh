@@ -22,8 +22,8 @@
 # leaves a truncated profile that would fail the whole merge: those are dropped and counted in the summary. Doc tests
 # are not run.
 #
-# On Linux the default features need WPE WebKit (README > WPE WebKit) and the app's tests a display and a session bus:
-# run it as README > Test runs `cargo test` (under xvfb-run and dbus-run-session). Needs cargo-llvm-cov and the toolchain's
+# On Linux the default features need WPE WebKit (docs/development.md > WPE WebKit) and the app's tests a display and a session bus:
+# run it as docs/development.md > Test runs `cargo test` (under xvfb-run and dbus-run-session). Needs cargo-llvm-cov and the toolchain's
 # `llvm-tools` component, Python 3 for the report ($PYTHON, else a working python3, else python).
 #
 # Usage: scripts/unit-coverage.sh OUT_DIR [-p CRATE]... [-- TEST_ARGS...]

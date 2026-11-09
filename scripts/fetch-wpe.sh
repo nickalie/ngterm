@@ -50,7 +50,7 @@ done
 glibc="$(getconf GNU_LIBC_VERSION | awk '{print $2}')"
 [[ "$(printf '%s\n%s\n' "$WPE_ARCH_GLIBC" "$glibc" | sort -V | head -n1)" == "$WPE_ARCH_GLIBC" ]] \
   || die "the pinned WPE WebKit package needs glibc $WPE_ARCH_GLIBC, this host has $glibc: install the distro's" \
-    "wpewebkit >= $WPE_API_VERSION instead (README > WPE WebKit)"
+    "wpewebkit >= $WPE_API_VERSION instead (docs/development.md > WPE WebKit)"
 
 mkdir -p "$VENDOR_ROOT"
 # both scratch dirs live in the vendor root, beside the final prefix, not in a shared /tmp

@@ -26,7 +26,7 @@ the skill starts. Steps 1 and 2's grouping are the orchestrator's; each later st
 ngterm's terminal behaves and renders as Ghostty does, as closely as the toolkit allows. `references/areas.md` holds
 the contract: the VT arrives with the library; the embedder-side mirrors follow Ghostty's code and match its outcome
 (values, bytes sent, pixels, metrics, colors), not its internal design; an official C API replaces ngterm's own
-gap-filler or a patch once it covers the case. Recorded ngterm deviations win over Ghostty (README's "differs from
+gap-filler or a patch once it covers the case. Recorded ngterm deviations win over Ghostty (docs/development.md's "differs from
 upstream by choice", `conformance/docs/rust-build.md`, the parity patches); upstream agterm owns the app around the
 terminal, so Ghostty's own app chrome is never a target. Read areas.md before the analysis.
 

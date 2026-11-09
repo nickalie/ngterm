@@ -2,7 +2,9 @@
 
 A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI frontend that renders libghostty-vt itself.
 
-- Build, run, test, CI, Windows setup and repo layout: [README.md](README.md).
+- Build, run, test, CI, Windows setup and repo layout: [docs/development.md](docs/development.md).
+- `README.md` is the page end users land on: what ngterm is, how to install and use it. Deep technical detail goes in
+  `docs/development.md`, never in the README.
 - The conformance suite and the ratchet: [conformance/README.md](conformance/README.md),
   [conformance/docs/rust-build.md](conformance/docs/rust-build.md).
 - `docs/plans/` records past decisions, not the current state: read the code instead. Scope a task from the user's
@@ -55,7 +57,7 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
   ideas only, no code.
 - **herdr** (`.upstream/herdr`, Apache-2.0): the source of the session server and PTY actor. Derived files name their
   herdr source; `NOTICE` carries the license. User-visible behavior follows upstream, not herdr.
-- **Identity** is ngterm's own (README lists the names). agterm names appear only in citations and the reference
+- **Identity** is ngterm's own (docs/development.md lists the names). agterm names appear only in citations and the reference
   build's harness adapter, never as fallbacks.
 
 ## Porting a command group
@@ -78,7 +80,7 @@ There is no fixed gate: you decide which checks a change needs and how far to ta
 size it to what the change can break and stop there. A small change gets a small, fast check, not a long build or
 suite run; a check the change can't affect is skipped, and so is waiting on CI unless its result decides your next
 step. Reviews (revmux and similar) scale the same way. Fix every verified revmux finding before finishing.
-README > Test has the commands and how to scope them.
+docs/development.md > Test has the commands and how to scope them.
 
 ## What CI enforces
 
@@ -102,5 +104,5 @@ Agents usually run inside a pane of the user's live ngterm. Keep every dev run o
 - Strip `NGTERM_*` from the environment of anything you launch.
 - Give every `ngtermctl` call an explicit `--socket`.
 - Use a private state dir; reap sessions through that dir's own server, never by process name.
-- Run the GUI headless only (README > Test). A Windows GUI run goes on a CI runner or a throwaway VM; a macOS one on
+- Run the GUI headless only (docs/development.md > Test). A Windows GUI run goes on a CI runner or a throwaway VM; a macOS one on
   a CI runner or a Mac the operator provides for it, under these same rules there.

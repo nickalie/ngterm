@@ -314,7 +314,7 @@ jobs:
       # directories ngterm-core's persistence tests count on to refuse a write. It owns the checkout and the job's home (the
       # toolchain, cargo's registry, the vendor prefixes), may use /dev/udmabuf (the external texture test, required
       # like the display tests) and gets the unprivileged user namespaces WebKit's bubblewrap sandbox needs, which the
-      # runner's AppArmor restricts (README > WebKit sandbox on Ubuntu) and root alone escapes.
+      # runner's AppArmor restricts (docs/development.md > WebKit sandbox on Ubuntu) and root alone escapes.
       - name: an unprivileged test user
         shell: bash
         run: |
