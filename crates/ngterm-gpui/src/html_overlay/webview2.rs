@@ -58,3 +58,7 @@ pub fn hide(element: &gpui_kit::Entity<PageView>, cx: &mut gpui_kit::App) {
     let overlay = page.overlay();
     page.apply(&overlay, false, cx);
 }
+
+#[cfg(test)]
+#[path = "webview2_tests.rs"]
+mod tests;

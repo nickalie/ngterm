@@ -127,7 +127,7 @@ fn take_report(reports: &Rc<RefCell<Vec<Report>>>, matches: impl Fn(&Report) -> 
 }
 
 #[track_caller]
-fn renderer_answer(native: &Native, expression: &str) -> super::super::super::text_page::Answer {
+fn renderer_answer(native: &dyn NativeView, expression: &str) -> super::super::super::text_page::Answer {
     let answer = native.call_renderer(expression);
     let mut result = None;
     pump_until(|| {
@@ -393,7 +393,8 @@ fn saved_profile_clear(parent: isize, environment: &ICoreWebView2Environment, di
     saved.theme = None;
     saved.scripts.clear();
     saved.block_network = false;
-    let native = Native::create(&saved).unwrap();
+    let (native, made_environment) = super::super::native_view::create(&saved).unwrap();
+    assert_eq!(made_environment.as_ref(), Some(environment));
     saved
         .text
         .as_ref()
@@ -404,26 +405,29 @@ fn saved_profile_clear(parent: isize, environment: &ICoreWebView2Environment, di
     native.load_url(&scheme::text_address(uuid::Uuid::new_v4()));
     take_report(&reports, |r| matches!(r, Report::Completed { success: true, .. }));
     take_report(&reports, |r| matches!(r, Report::TextPage(_)));
-    let cookie = renderer_answer(&native, "document.cookie='coverage=1; path=/'; document.cookie")
+    let cookie = renderer_answer(native.as_ref(), "document.cookie='coverage=1; path=/'; document.cookie")
         .unwrap()
         .unwrap();
     assert!(
         cookie.contains("coverage=1"),
         "the saved profile stores cookies: {cookie}"
     );
-    let result = Rc::new(RefCell::new(None));
-    let done = Rc::clone(&result);
-    let returned = clear_profile(
+    let result = Arc::new(Mutex::new(None));
+    let done = Arc::clone(&result);
+    let returned = super::super::native_view::clear_profile(
         parent,
         saved.store.clone(),
         Box::new(move |answer| {
-            done.replace(Some(answer));
+            done.lock().unwrap().replace(answer);
         }),
     );
     assert!(returned.is_some(), "the clear keeps the shared environment");
-    pump_until(|| result.borrow().is_some());
-    assert_eq!(result.take().unwrap(), Ok(()));
-    assert_eq!(renderer_answer(&native, "document.cookie"), Ok(Some("\"\"".into())));
+    pump_until(|| result.lock().unwrap().is_some());
+    assert_eq!(result.lock().unwrap().take().unwrap(), Ok(()));
+    assert_eq!(
+        renderer_answer(native.as_ref(), "document.cookie"),
+        Ok(Some("\"\"".into()))
+    );
     drop(native);
     drop(ANCHOR.take());
 }
@@ -790,18 +794,18 @@ fn invalid_specifications(parent: isize, environment: &ICoreWebView2Environment,
         "a missing parent handle cannot create a page"
     );
     invalid.store.profile = "invalid/profile".into();
-    let result = Rc::new(RefCell::new(None));
-    let done = Rc::clone(&result);
-    let environment = clear_profile(
+    let result = Arc::new(Mutex::new(None));
+    let done = Arc::clone(&result);
+    let environment = super::super::native_view::clear_profile(
         parent,
         invalid.store,
         Box::new(move |answer| {
-            done.replace(Some(answer));
+            done.lock().unwrap().replace(answer);
         }),
     );
     assert!(environment.is_none(), "a refused profile creates no anchor");
     assert!(
-        result.take().unwrap().is_err(),
+        result.lock().unwrap().take().unwrap().is_err(),
         "the clear reports why it could not start"
     );
 }

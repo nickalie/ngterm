@@ -104,3 +104,7 @@ fn run_item(work: Work) {
         unsafe { PostQuitMessage(0) };
     }
 }
+
+#[cfg(test)]
+#[path = "outside_tests.rs"]
+mod tests;

@@ -265,7 +265,7 @@ fn launch_and_reap(directory: &Path) {
     let _association = Association::new(Some(&template));
     assert_eq!(https_command().as_deref(), Some(template.as_str()));
     let uri = directory.join("no-such-program.exe").to_string_lossy().into_owned();
-    assert!(open(&uri));
+    assert!(super::super::native_view::open_browser(&uri));
     assert_eq!(reap_helper(directory), uri);
 }
 
