@@ -859,7 +859,12 @@ impl Page {
         self.script_keys.set(live.is_some());
         let (keys, ms) = live.unwrap_or_default();
         if let Some(native) = self.native() {
-            native.post_json(&bridge::live_keys(&self.nonce, &keys, ms));
+            native.post_json(&bridge::live_keys(
+                &self.nonce,
+                &keys,
+                ms,
+                crate::keymap_dispatch::page_press_at(),
+            ));
         }
     }
 
@@ -899,9 +904,14 @@ impl Page {
 
     fn message(&self, raw: &str, #[cfg(windows)] cx: &mut App) {
         match bridge::parse(raw, &self.nonce) {
-            Some(bridge::Message::Input { click, typed_at }) => {
+            Some(bridge::Message::Input {
+                click,
+                typed_at,
+                typed_code,
+            }) => {
                 if let Some(at) = typed_at {
-                    crate::keymap_dispatch::page_typed(at);
+                    let keycode = typed_code.as_deref().and_then(crate::terminal::input::xkb_keycode);
+                    crate::keymap_dispatch::page_typed(at, keycode);
                 }
                 #[cfg(windows)]
                 self.sync_script_keys();

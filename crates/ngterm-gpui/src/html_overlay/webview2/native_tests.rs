@@ -444,7 +444,7 @@ fn script_stops_a_live_sequences_keys(parent: isize, environment: &ICoreWebView2
     let reports = Rc::new(RefCell::new(Vec::new()));
     let native = keys_page(parent, environment, dir, &reports);
     let told = |keys: &[u32]| {
-        native.post_json(&bridge::live_keys(NONCE, keys, 60_000));
+        native.post_json(&bridge::live_keys(NONCE, keys, 60_000, None));
         take_report(&reports, |r| matches!(r, Report::Message(s) if s == "told"));
     };
     let field = || {
@@ -537,7 +537,7 @@ fn consumed_keys_stay_off_a_real_page(parent: isize, environment: &ICoreWebView2
          window.addEventListener(kind, event => seen.push(kind + ':' + event.key));",
     );
     let told = |keys: &[u32]| {
-        native.post_json(&bridge::live_keys(KEYS_NONCE, keys, 60_000));
+        native.post_json(&bridge::live_keys(KEYS_NONCE, keys, 60_000, None));
         take_report(&reports, |r| matches!(r, Report::Message(s) if s == "told"));
     };
     let key = |letter: &str, code: &str, virtual_key: u32| {
@@ -595,9 +595,16 @@ fn the_script_reads_what_it_took_before_the_page_ran(
     main_script(
         &native,
         "Object.defineProperty(Event.prototype, 'timeStamp', {get: () => undefined}); \
-         for (const [name, value] of [['repeat', true], ['ctrlKey', true], ['altKey', true], ['key', 'Shift']]) \
+         for (const [name, value] of [['repeat', true], ['ctrlKey', true], ['altKey', true], ['key', 'Shift'], ['code', 'KeyZ']]) \
          Object.defineProperty(KeyboardEvent.prototype, name, {get: () => value});",
     );
+    let pressed = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
     let tap = |letter: &str, code: &str, virtual_key: u32| {
         for event in bridge::redelivery(&StoppedKey {
             virtual_key,
@@ -605,13 +612,13 @@ fn the_script_reads_what_it_took_before_the_page_ran(
             repeat: false,
             key: letter.to_owned(),
             code: code.to_owned(),
-            at: 0,
+            at: pressed,
         }) {
             cdp_key(&native, &event);
         }
     };
     let told = |keys: &[u32]| {
-        native.post_json(&bridge::live_keys(KEYS_NONCE, keys, 60_000));
+        native.post_json(&bridge::live_keys(KEYS_NONCE, keys, 60_000, None));
         take_report(&reports, |r| matches!(r, Report::Message(s) if s == "told"));
     };
 
@@ -627,9 +634,24 @@ fn the_script_reads_what_it_took_before_the_page_ran(
         unreachable!()
     };
     assert_eq!(stopped.key, "g");
-    assert!(stopped.at > 0, "a real time: {raw}");
+    assert!(
+        stopped.at.abs_diff(pressed) <= 2,
+        "redelivery keeps its press time {pressed}: {raw}"
+    );
 
-    told(&[]);
+    // Keep the press inside this document's lifetime, then let a newer leader overtake its redelivery.
+    std::thread::sleep(Duration::from_millis(250));
+    let (keymap, _) =
+        ngterm_core::keymap::parse_keymap("command \"g\" ctrl+a>g true\n", &ngterm_core::keymap::linux_defaults());
+    crate::keymap_dispatch::load_keymap(&keymap);
+    assert_eq!(crate::keymap_dispatch::press_dispatched("ctrl-a"), Some(false));
+    native.post_json(&bridge::live_keys(
+        KEYS_NONCE,
+        &[0x58],
+        60_000,
+        crate::keymap_dispatch::page_press_at(),
+    ));
+    take_report(&reports, |r| matches!(r, Report::Message(s) if s == "told"));
     tap("x", "KeyX", 0x58);
     let Report::Message(raw) = take_report(
         &reports,
@@ -637,13 +659,67 @@ fn the_script_reads_what_it_took_before_the_page_ran(
     ) else {
         unreachable!()
     };
-    let Some(Message::Input { click: false, typed_at }) = bridge::parse(&raw, KEYS_NONCE) else {
+    redelivered_input_keeps_the_newer_leader(&raw, pressed);
+    a_newer_live_key_is_still_stopped(&native, &reports);
+}
+
+/// The cutoff exempts the old redelivery, while a fresh press of that same key is still the sequence's.
+fn a_newer_live_key_is_still_stopped(native: &Native, reports: &Rc<RefCell<Vec<Report>>>) {
+    use super::super::bridge::{self, Message, StoppedKey};
+
+    let key = StoppedKey {
+        virtual_key: 0x58,
+        shift: false,
+        repeat: false,
+        key: "x".into(),
+        code: "KeyX".into(),
+        at: crate::keymap_dispatch::page_press_at().unwrap(),
+    };
+    for event in bridge::redelivery(&key) {
+        cdp_key(native, &event);
+    }
+    let Report::Message(raw) = take_report(
+        reports,
+        |r| matches!(r, Report::Message(raw) if matches!(bridge::parse(raw, KEYS_NONCE), Some(Message::Key(_)))),
+    ) else {
+        unreachable!()
+    };
+    let Some(Message::Key(stopped)) = bridge::parse(&raw, KEYS_NONCE) else {
+        unreachable!()
+    };
+    assert_eq!(stopped.virtual_key, key.virtual_key);
+}
+
+/// The real renderer's typed report keeps its original time and physical identity all the way to the monitor.
+fn redelivered_input_keeps_the_newer_leader(raw: &str, pressed: u64) {
+    use super::super::bridge::{self, Message};
+
+    let Some(Message::Input {
+        click: false,
+        typed_at,
+        typed_code,
+    }) = bridge::parse(raw, KEYS_NONCE)
+    else {
         unreachable!()
     };
     assert!(
-        typed_at.is_some_and(|at| at > 0),
-        "the typed key still ends a leader: {raw}"
+        typed_at.is_some_and(|at| at.abs_diff(pressed) <= 2),
+        "a typed redelivery keeps its old press time {pressed}: {raw}"
     );
+    assert_eq!(
+        typed_code.as_deref(),
+        Some("KeyX"),
+        "physical identity uses the captured getter"
+    );
+    crate::keymap_dispatch::page_typed(
+        typed_at.unwrap(),
+        typed_code.as_deref().and_then(crate::terminal::input::xkb_keycode),
+    );
+    assert!(
+        crate::keymap_dispatch::sequence_is_live(),
+        "redelivery leaves the newer leader waiting"
+    );
+    assert_eq!(crate::keymap_dispatch::press_dispatched("g"), Some(true));
 }
 
 fn saved_profile_clear(parent: isize, environment: &ICoreWebView2Environment, dir: &Path) {

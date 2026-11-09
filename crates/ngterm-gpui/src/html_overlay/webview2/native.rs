@@ -1006,7 +1006,7 @@ fn wire_keys(controller: &ICoreWebView2Controller, take_key: &TakeKey, post: &Po
         let keycode = super::keys::keycode(virtual_key, status.ScanCode, status.IsExtendedKey.as_bool());
         if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN {
             // the release of a key the keymap took stays off the page too (`keymap_dispatch::owns_page_release`). A key
-            // released once Ctrl or Alt is up is no accelerator: `WebView2` reports it to nobody but the page
+            // that types a character, released once Ctrl and Alt are up, is no accelerator: `WebView2` reports it only to the page
             if crate::keymap_dispatch::owns_page_release(keycode) {
                 // SAFETY: as above, answered on its thread.
                 unsafe { args.SetHandled(true) }?;
