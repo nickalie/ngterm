@@ -48,6 +48,7 @@ use wry::{
 };
 
 use super::super::policy::GrantRoot;
+use super::native_view::NativeView;
 use super::scheme;
 
 /// A page's content area in its window, in logical pixels.
@@ -199,6 +200,9 @@ pub struct Spec {
     pub take_key: TakeKey,
 }
 
+/// What later pages share once a web view made one.
+pub type Environment = ICoreWebView2Environment;
+
 /// A parent window handle as wry takes it.
 struct Parent(isize);
 
@@ -329,39 +333,6 @@ impl Native {
             .map_err(|error| failed(error.to_string()))
     }
 
-    /// Evaluates `expression` in the renderer's world (CDP's `Runtime.evaluate` in its context, a promise awaited);
-    /// its answer arrives on the returned channel. Before the renderer's first report there is no context to run in.
-    pub fn call_renderer(&self, expression: &str) -> async_channel::Receiver<super::super::text_page::Answer> {
-        let (sender, answer) = async_channel::bounded(1);
-        let Some(context) = self.renderer.get() else {
-            let _ = sender.try_send(Err("the renderer has not reported".to_owned()));
-            return answer;
-        };
-        let parameters = serde_json::json!({
-            "expression": expression,
-            "contextId": context,
-            "returnByValue": true,
-            "awaitPromise": true,
-        });
-        let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
-            let _ = sender.try_send(evaluation(result.map(|()| json).map_err(|error| error.to_string())));
-            Ok(())
-        }));
-        let webview = self.webview();
-        // SAFETY: a COM call on the web view's own thread; the handler answers once.
-        let called = unsafe {
-            webview.CallDevToolsProtocolMethod(
-                &HSTRING::from("Runtime.evaluate"),
-                &HSTRING::from(parameters.to_string()),
-                &handler,
-            )
-        };
-        if let Err(err) = called {
-            tracing::debug!(%err, "a call into the renderer did not start");
-        }
-        answer
-    }
-
     /// Adds `script` for later documents and waits until `WebView2` did (pumping the window's messages); its id.
     fn add_script_now(&self, script: &str) -> Result<String, String> {
         let webview = self.webview();
@@ -409,10 +380,45 @@ impl Native {
             tracing::warn!(%err, "a page's script was not added");
         }
     }
+}
+
+impl NativeView for Native {
+    /// Evaluates `expression` in the renderer's world (CDP's `Runtime.evaluate` in its context, a promise awaited);
+    /// its answer arrives on the returned channel. Before the renderer's first report there is no context to run in.
+    fn call_renderer(&self, expression: &str) -> async_channel::Receiver<super::super::text_page::Answer> {
+        let (sender, answer) = async_channel::bounded(1);
+        let Some(context) = self.renderer.get() else {
+            let _ = sender.try_send(Err("the renderer has not reported".to_owned()));
+            return answer;
+        };
+        let parameters = serde_json::json!({
+            "expression": expression,
+            "contextId": context,
+            "returnByValue": true,
+            "awaitPromise": true,
+        });
+        let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
+            let _ = sender.try_send(evaluation(result.map(|()| json).map_err(|error| error.to_string())));
+            Ok(())
+        }));
+        let webview = self.webview();
+        // SAFETY: a COM call on the web view's own thread; the handler answers once.
+        let called = unsafe {
+            webview.CallDevToolsProtocolMethod(
+                &HSTRING::from("Runtime.evaluate"),
+                &HSTRING::from(parameters.to_string()),
+                &handler,
+            )
+        };
+        if let Err(err) = called {
+            tracing::debug!(%err, "a call into the renderer did not start");
+        }
+        answer
+    }
 
     /// Replaces the theme script, which later documents run (the WPE host's `set_scripts`); the page hears once it is
     /// in place ([`Report::ThemeInstalled`]).
-    pub fn set_theme(&self, script: &str) {
+    fn set_theme(&self, script: &str) {
         if let Some(old) = self.theme.take() {
             let webview = self.webview();
             // SAFETY: a COM call on the web view's own thread.
@@ -422,57 +428,57 @@ impl Native {
     }
 
     /// Loads `address`, as the web view spells it.
-    pub fn load_url(&self, address: &str) {
+    fn load_url(&self, address: &str) {
         if let Err(err) = self.view.load_url(address) {
             tracing::warn!(%err, "a page's load did not start");
         }
     }
 
-    pub fn reload(&self) {
+    fn reload(&self) {
         let _ = self.view.reload();
     }
 
-    pub fn go_back(&self) {
+    fn go_back(&self) {
         let _ = self.view.go_back();
     }
 
-    pub fn go_forward(&self) {
+    fn go_forward(&self) {
         let _ = self.view.go_forward();
     }
 
-    pub fn set_zoom(&self, zoom: f64) {
+    fn set_zoom(&self, zoom: f64) {
         let _ = self.view.zoom(zoom);
     }
 
-    pub fn set_background(&self, (red, green, blue): (u8, u8, u8)) {
+    fn set_background(&self, (red, green, blue): (u8, u8, u8)) {
         let _ = self.view.set_background_color((red, green, blue, 255));
     }
 
-    pub fn set_bounds(&self, bounds: Bounds) {
+    fn set_bounds(&self, bounds: Bounds) {
         let _ = self.view.set_bounds(bounds.rect());
     }
 
-    pub fn set_visible(&self, visible: bool) {
+    fn set_visible(&self, visible: bool) {
         let _ = self.view.set_visible(visible);
     }
 
     /// Gives the web view the keyboard.
-    pub fn focus(&self) {
+    fn focus(&self) {
         let _ = self.view.focus();
     }
 
     /// Hands the keyboard back to the window.
-    pub fn focus_parent(&self) {
+    fn focus_parent(&self) {
         let _ = self.view.focus_parent();
     }
 
     /// Moves the web view into window `parent` (its session went to another window).
-    pub fn reparent(&self, parent: isize) {
+    fn reparent(&self, parent: isize) {
         let _ = self.view.reparent(parent);
     }
 
     /// Posts `json` to the page as a web message.
-    pub fn post_json(&self, json: &str) {
+    fn post_json(&self, json: &str) {
         let webview = self.webview();
         // SAFETY: a COM call on the web view's own thread.
         let posted = unsafe { webview.PostWebMessageAsJson(&HSTRING::from(json)) };

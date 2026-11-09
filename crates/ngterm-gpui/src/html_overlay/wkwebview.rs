@@ -2,8 +2,13 @@
 #[path = "webview2/bridge.rs"]
 mod bridge;
 mod browser;
+#[cfg(test)]
+#[path = "webview2/fake_native.rs"]
+mod fake_native;
 mod keys;
 mod native;
+#[path = "webview2/native_view.rs"]
+mod native_view;
 #[path = "webview2/page.rs"]
 mod page;
 #[path = "webview2/registry.rs"]

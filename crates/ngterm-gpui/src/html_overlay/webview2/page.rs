@@ -31,7 +31,8 @@ use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_WEB_ERROR_STATUS
 use super::super::panel::{PanelColors, TerminalColors};
 use super::super::policy::{self, LoadEvent, LoadOutcome, LoadTracker, ThemeChange};
 use super::super::text_page::{self, PageChannel, TextPage};
-use super::native::{Bounds, Grant, Native, Navigation, Report, Text};
+use super::native::{Bounds, Grant, Navigation, Report, Text};
+use super::native_view::{self, NativeView};
 use super::view::PageView;
 use super::{bridge, registry, scheme};
 use crate::modal::{Alert, AlertButton, AlertSpec};
@@ -173,7 +174,7 @@ pub struct Page {
     grant: Grant,
     /// The text a file page without a grant shows.
     text: Text,
-    native: RefCell<Option<Rc<Native>>>,
+    native: RefCell<Option<Rc<dyn NativeView>>>,
     /// The pump is making the web view.
     building: Cell<bool>,
     element: RefCell<Option<WeakEntity<PageView>>>,
@@ -281,7 +282,7 @@ impl Page {
         self.state.borrow().active()
     }
 
-    pub fn native(&self) -> Option<Rc<Native>> {
+    pub fn native(&self) -> Option<Rc<dyn NativeView>> {
         self.native.borrow().clone()
     }
 
@@ -303,6 +304,14 @@ impl Page {
         laid_out.parent = Some(parent);
         self.laid_out.set(laid_out);
         self.placement_changed();
+    }
+
+    /// The page's native parent without an element, which a test of the registry's builds stands in for.
+    #[cfg(test)]
+    pub(super) fn place_in(&self, parent: isize) {
+        let mut laid_out = self.laid_out.get();
+        laid_out.parent = Some(parent);
+        self.laid_out.set(laid_out);
     }
 
     pub fn element_window(&self) -> Option<AnyWindowHandle> {
@@ -448,10 +457,10 @@ impl Page {
     }
 
     /// The pump made the web view: it takes its place and loads the source.
-    pub fn realized(&self, native: Native) {
+    pub fn realized(&self, native: Rc<dyn NativeView>) {
         self.building.set(false);
         if !self.active() {
-            registry::bury(Rc::new(native), self.private_folder());
+            registry::bury(native, self.private_folder());
             return;
         }
         let parent = self.laid_out.get().parent;
@@ -461,7 +470,7 @@ impl Page {
         });
         // the network gate is kept as it stands: it was set when the page was made, and the web view's filter may
         // have reported already, while `Native::create` pumped messages (`outside`); a page makes one web view
-        self.native.replace(Some(Rc::new(native)));
+        self.native.replace(Some(native));
         self.placement_changed();
         self.load_original();
     }
@@ -1078,7 +1087,7 @@ impl Page {
                     None => return self.fail(format!("not an absolute path: {path}")),
                 }
             }
-            HtmlSource::File { path, grant_root: None } => return self.load_text(&native, &path),
+            HtmlSource::File { path, grant_root: None } => return self.load_text(native.as_ref(), &path),
             // a replica's files come from the machine that opened it: an HTML file read through its own protocol, any
             // other page built here from its fetched bytes
             HtmlSource::Replica {
@@ -1098,7 +1107,7 @@ impl Page {
 
     /// Loads file `path`'s text through the text protocol, at the one address that replaces the text shown (module
     /// docs of `scheme`).
-    fn load_text(&self, native: &Native, path: &str) {
+    fn load_text(&self, native: &dyn NativeView, path: &str) {
         let html = match std::fs::read_to_string(path) {
             Ok(html) => html,
             Err(error) => return self.fail(error.to_string()),
@@ -1176,7 +1185,9 @@ impl Page {
                 if let Some(refusal) = super::super::documents::browser_refusal(&self.overlay().source) {
                     return Err(refusal.to_owned());
                 }
-                let opened = self.browser_url().is_some_and(|url| super::browser::open(url.as_str()));
+                let opened = self
+                    .browser_url()
+                    .is_some_and(|url| native_view::open_browser(url.as_str()));
                 if !opened {
                     return Err(errors::NO_BROWSER.to_owned());
                 }
@@ -1268,7 +1279,7 @@ impl Page {
                 state.prompts_silenced = true;
             }
         }
-        if approved && !super::browser::open(url.as_str()) {
+        if approved && !native_view::open_browser(url.as_str()) {
             tracing::warn!("no default web browser to open the link in");
         }
     }
@@ -1371,6 +1382,10 @@ pub fn error_text(status: i32) -> String {
     };
     reason.to_owned()
 }
+
+#[cfg(test)]
+#[path = "page_tests.rs"]
+mod driven_tests;
 
 #[cfg(test)]
 mod tests {

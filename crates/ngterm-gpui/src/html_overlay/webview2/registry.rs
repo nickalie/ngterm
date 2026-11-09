@@ -17,8 +17,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-#[cfg(target_os = "macos")]
-use super::native::Environment;
 use gpui_kit::{AnyWindowHandle, App, AppContext as _, AsyncApp, ClipboardItem, Entity, Window};
 use ngterm_core::Core;
 use ngterm_core::html::bridge;
@@ -31,13 +29,11 @@ use ngterm_core::remote::replica_page::{ContentFailures, PageResource};
 use ngterm_proto::Response;
 use raw_window_handle::RawWindowHandle;
 use uuid::Uuid;
-#[cfg(windows)]
-use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment as Environment;
-use wry::RequestAsyncResponder;
 
 use super::super::panel::{PanelColors, TerminalColors};
 use super::super::policy;
-use super::native::{self, Native, Report, Spec, Store};
+use super::native::{self, Environment, Report, Spec, Store};
+use super::native_view::{self, NativeView, ReadReply};
 use super::page::{Page, Storage};
 use super::view::PageView;
 use super::{runtime, store};
@@ -61,7 +57,7 @@ pub enum Job {
     ReplicaRead {
         page: Uuid,
         uri: String,
-        reply: RequestAsyncResponder,
+        reply: ReadReply,
     },
     /// Close the released pages' web views.
     Bury,
@@ -93,7 +89,7 @@ struct Registry {
     replies: HashMap<u64, (Uuid, u64)>,
     next_reply: u64,
     /// The replica reads waiting on the machine that opened their page.
-    reads: HashMap<u64, RequestAsyncResponder>,
+    reads: HashMap<u64, ReadReply>,
     next_read: u64,
     /// The terminal's colors the pages are drawn in.
     colors: TerminalColors,
@@ -104,7 +100,7 @@ struct Registry {
     covered: HashMap<AnyWindowHandle, bool>,
     windows: HashMap<AnyWindowHandle, isize>,
     /// Released pages' web views, closed by the pump, and the in-memory profile folders they leave.
-    graveyard: Vec<(Rc<Native>, Option<PathBuf>)>,
+    graveyard: Vec<(Rc<dyn NativeView>, Option<PathBuf>)>,
 }
 
 thread_local! {
@@ -240,6 +236,18 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
+/// Forgets every page, store and pump, so a test starts from an empty registry.
+#[cfg(test)]
+pub(super) fn reset() {
+    with(|registry| *registry = Registry::default());
+}
+
+/// Makes `page` a registered page.
+#[cfg(test)]
+pub(super) fn add_page(page: &Rc<Page>) {
+    with(|registry| registry.pages.insert(page.id(), Rc::clone(page)));
+}
+
 /// One of the pump's jobs: the web views' work outside GPUI's callbacks, the pages' inside one.
 fn run(job: Job, cx: &mut AsyncApp) {
     match job {
@@ -328,6 +336,10 @@ pub fn engine_ended() {
 
 /// The native handle of GPUI window `window`.
 fn native_window(window: &Window) -> Option<isize> {
+    #[cfg(test)]
+    if let Some(parent) = super::fake_native::window_handle(window) {
+        return Some(parent);
+    }
     match raw_window_handle::HasWindowHandle::window_handle(window).ok()?.as_raw() {
         #[cfg(target_os = "macos")]
         RawWindowHandle::AppKit(handle) => Some(handle.ns_view.as_ptr() as isize),
@@ -401,12 +413,13 @@ fn build(id: Uuid) {
             return;
         }
     };
-    match Native::create(&spec) {
-        Ok(native) => {
-            let environment = native.environment();
-            with(|registry| {
-                registry.environment.get_or_insert(environment);
-            });
+    match native_view::create(&spec) {
+        Ok((native, environment)) => {
+            if let Some(environment) = environment {
+                with(|registry| {
+                    registry.environment.get_or_insert(environment);
+                });
+            }
             page.realized(native);
         }
         Err(failure) => {
@@ -464,7 +477,8 @@ fn spec(page: &Rc<Page>) -> Result<Spec, String> {
     );
     let replica = html_replica.then(|| {
         let jobs = jobs.clone();
-        Arc::new(move |uri: String, reply: RequestAsyncResponder| {
+        Arc::new(move |uri: String, reply: wry::RequestAsyncResponder| {
+            let reply: ReadReply = Box::new(move |response| reply.respond(response));
             let _ = jobs.try_send(Job::ReplicaRead { page: id, uri, reply });
         }) as native::ReplicaRead
     });
@@ -507,7 +521,7 @@ pub fn sync_later(id: Uuid) {
 }
 
 /// A released page's web view, closed by the pump, and the in-memory profile folder it leaves.
-pub fn bury(native: Rc<Native>, folder: Option<PathBuf>) {
+pub fn bury(native: Rc<dyn NativeView>, folder: Option<PathBuf>) {
     with(|registry| registry.graveyard.push((native, folder)));
     send(Job::Bury);
 }
@@ -707,7 +721,7 @@ fn clear() {
     let done = Box::new(move |result| {
         let _ = jobs.try_send(Job::Cleared(result));
     });
-    if let Some(environment) = native::clear_profile(parent, store, done) {
+    if let Some(environment) = native_view::clear_profile(parent, store, done) {
         with(|registry| {
             registry.environment.get_or_insert(environment);
         });
@@ -781,7 +795,7 @@ pub fn relay(page: Uuid, body: String, reply: u64) {
 /// A read of the replica protocol (upstream's `HtmlPageSchemeHandler`): served only for the replica page whose id the
 /// address names as its host, from the file of that path on the machine that opened it; a read naming another page,
 /// or from a page that is no replica, fails without reaching that machine.
-fn replica_read(page_id: Uuid, uri: &str, reply: RequestAsyncResponder) {
+fn replica_read(page_id: Uuid, uri: &str, reply: ReadReply) {
     let path = page(page_id).and_then(|page| {
         matches!(
             page.overlay().source,
@@ -818,7 +832,7 @@ fn answer_read(token: u64, result: Result<PageResource, String>) {
     }
 }
 
-fn respond(reply: RequestAsyncResponder, answer: Result<(String, Vec<u8>), String>) {
+fn respond(reply: ReadReply, answer: Result<(String, Vec<u8>), String>) {
     let response = match answer {
         Ok((mime, body)) => wry::http::Response::builder()
             .status(200)
@@ -830,7 +844,7 @@ fn respond(reply: RequestAsyncResponder, answer: Result<(String, Vec<u8>), Strin
             .body(message.into_bytes()),
     };
     if let Ok(response) = response {
-        reply.respond(response);
+        reply(response);
     }
 }
 
@@ -881,3 +895,7 @@ fn focused_page(window: &Window, cx: &App) -> Option<Rc<Page>> {
             .is_some_and(|element| element.read(cx).focus().is_focused(window))
     })
 }
+
+#[cfg(test)]
+#[path = "registry_tests.rs"]
+mod tests;

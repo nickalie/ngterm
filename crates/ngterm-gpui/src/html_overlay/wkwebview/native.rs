@@ -1,5 +1,6 @@
 //! `WKWebView` through wry, with native navigation and UI delegates enforcing the page policy.
 use super::super::policy::GrantRoot;
+use super::native_view::NativeView;
 use super::scheme;
 use raw_window_handle::{AppKitWindowHandle, HandleError, HasWindowHandle, RawWindowHandle, WindowHandle};
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -132,7 +133,18 @@ pub struct Environment;
 
 #[derive(Clone)]
 pub struct Store {
+    #[expect(
+        dead_code,
+        reason = "the shared registry fills it; WKWebView keeps its stores by profile alone"
+    )]
     pub environment: Option<Environment>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the shared registry fills it; WKWebView keeps its stores by profile alone"
+        )
+    )]
     pub user_data: PathBuf,
     pub profile: String,
     /// An `InPrivate` profile: kept in memory.
@@ -402,7 +414,9 @@ impl Native {
     pub fn environment(&self) -> Environment {
         Environment
     }
-    pub fn set_theme(&self, script: &str) {
+}
+impl NativeView for Native {
+    fn set_theme(&self, script: &str) {
         if let Ok(script) = CString::new(script) {
             // SAFETY: main-thread web view and a live string copied by the adapter.
             unsafe {
@@ -416,38 +430,38 @@ impl Native {
             (self.post)(Report::ThemeInstalled);
         }
     }
-    pub fn load_url(&self, address: &str) {
+    fn load_url(&self, address: &str) {
         let _ = self.view.load_url(address);
     }
-    pub fn reload(&self) {
+    fn reload(&self) {
         let _ = self.view.reload();
     }
-    pub fn go_back(&self) {
+    fn go_back(&self) {
         let _ = self.view.go_back();
     }
-    pub fn go_forward(&self) {
+    fn go_forward(&self) {
         let _ = self.view.go_forward();
     }
-    pub fn set_zoom(&self, zoom: f64) {
+    fn set_zoom(&self, zoom: f64) {
         let _ = self.view.zoom(zoom);
     }
-    pub fn set_background(&self, (r, g, b): (u8, u8, u8)) {
+    fn set_background(&self, (r, g, b): (u8, u8, u8)) {
         let _ = self.view.set_background_color((r, g, b, 255));
     }
-    pub fn set_bounds(&self, bounds: Bounds) {
+    fn set_bounds(&self, bounds: Bounds) {
         let _ = self.view.set_bounds(bounds.rect());
     }
-    pub fn set_visible(&self, visible: bool) {
+    fn set_visible(&self, visible: bool) {
         let _ = self.view.set_visible(visible);
     }
-    pub fn focus(&self) {
+    fn focus(&self) {
         let _ = self.view.focus();
     }
-    pub fn focus_parent(&self) {
+    fn focus_parent(&self) {
         // SAFETY: the adapter resolves the current parent after any reparenting.
         unsafe { ngterm_web_focus_parent(objc2::rc::Retained::as_ptr(&self.view.webview()).cast_mut().cast()) };
     }
-    pub fn reparent(&self, parent: isize) {
+    fn reparent(&self, parent: isize) {
         // SAFETY: both pointers are live main-thread NSViews; the adapter preserves the WKWebView.
         unsafe {
             ngterm_web_reparent(
@@ -460,7 +474,7 @@ impl Native {
     }
     /// Evaluates `expression` in the renderer's world (`callAsyncJavaScript`, so a promise is awaited); its answer
     /// arrives on the returned channel.
-    pub fn call_renderer(&self, expression: &str) -> async_channel::Receiver<super::super::text_page::Answer> {
+    fn call_renderer(&self, expression: &str) -> async_channel::Receiver<super::super::text_page::Answer> {
         let (sender, answer) = async_channel::bounded(1);
         let (Ok(script), Ok(world)) = (
             CString::new(format!("return ({expression});")),
@@ -481,7 +495,7 @@ impl Native {
         };
         answer
     }
-    pub fn post_json(&self, json: &str) {
+    fn post_json(&self, json: &str) {
         if let Ok(json) = CString::new(json) {
             // SAFETY: the native handler completes the matching main-frame request, copying the JSON.
             unsafe {
