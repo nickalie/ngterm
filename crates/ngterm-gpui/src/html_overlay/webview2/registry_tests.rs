@@ -489,6 +489,106 @@ fn a_web_views_reports_and_policy_reach_its_page_through_the_pump(cx: &mut TestA
     assert!(!(spec.decide)(&allowed), "a page gone decides nothing");
 }
 
+fn takes_page_key(text: &str) -> bool {
+    let keystroke = gpui_kit::Keystroke::parse(text).unwrap().with_simulated_ime();
+    crate::keymap_dispatch::takes(&crate::terminal::input::KeyStroke::new(
+        &keystroke,
+        &crate::terminal::input::Source::Keystroke,
+        false,
+    ))
+}
+
+/// Takes a page key and posts exactly the report its native callback would post.
+fn queued_key(id: Uuid, text: &str) {
+    let keystroke = gpui_kit::Keystroke::parse(text).unwrap().with_simulated_ime();
+    assert!(takes_page_key(text), "{text}");
+    #[cfg(windows)]
+    let report = Report::Key(keystroke, 0, false);
+    #[cfg(target_os = "macos")]
+    let report = Report::Key(keystroke);
+    send(Job::Report(id, report));
+}
+
+/// A surviving page's report and the interruption behind it stay in order when another page closes.
+#[gpui_kit::test]
+fn closing_another_page_keeps_the_surviving_pages_key_reports(cx: &mut TestAppContext) {
+    pumped(cx);
+    let queue = jobs_for_the_test();
+    let source = url_overlay();
+    let model = Model::new(&source);
+    let survivor = page_of(&source, Storage::Ephemeral, &model);
+    let other_source = url_overlay();
+    let other_model = Model::new(&other_source);
+    let other = page_of(&other_source, Storage::Ephemeral, &other_model);
+    let (_root, visual) = cx.add_window_view(|window, cx| Holder {
+        element: Some(cx.new(|cx| PageView::new(survivor.clone(), 11, window, cx))),
+    });
+    visual.update(|window, cx| {
+        crate::keymap_dispatch::init(cx);
+        crate::keymap_dispatch::register_window(
+            window.window_handle(),
+            crate::keymap_dispatch::KeyOrigin::Window(Uuid::new_v4()),
+        );
+    });
+    let (keymap, _) = ngterm_core::keymap::parse_keymap(
+        "command \"g\" ctrl+a>ctrl+g true\n",
+        &ngterm_core::keymap::linux_defaults(),
+    );
+    crate::keymap_dispatch::load_keymap(&keymap);
+    queued_key(survivor.id(), "ctrl-a");
+    // The other page's pending key is dropped between two reports that still have a destination.
+    queued_key(other.id(), "ctrl-g");
+    queued_key(survivor.id(), "ctrl-a");
+    assert!(!takes_page_key("ctrl-x"));
+    cx.update(|cx| {
+        with(|registry| registry.pages.remove(&other.id()));
+        other.close(cx);
+    });
+    for _ in 0..3 {
+        run(queue.try_recv().unwrap(), &mut cx.to_async());
+    }
+    assert!(
+        crate::keymap_dispatch::take_fired().is_empty(),
+        "the closed page's tail never acts"
+    );
+    assert!(
+        !takes_page_key("ctrl-g"),
+        "the page-kept press ended the surviving report's leader"
+    );
+}
+
+/// A callback still wired while its closed web view awaits burial can queue another report; the pump drops each.
+#[gpui_kit::test]
+fn the_pump_drops_key_reports_queued_after_a_page_closed(cx: &mut TestAppContext) {
+    pumped(cx);
+    let queue = jobs_for_the_test();
+    let source = url_overlay();
+    let model = Model::new(&source);
+    let page = page_of(&source, Storage::Ephemeral, &model);
+    let (keymap, _) = ngterm_core::keymap::parse_keymap(
+        "command \"g\" ctrl+a>ctrl+g true\n",
+        &ngterm_core::keymap::linux_defaults(),
+    );
+    crate::keymap_dispatch::load_keymap(&keymap);
+    cx.update(|cx| {
+        with(|registry| registry.pages.remove(&page.id()));
+        page.close(cx);
+    });
+    queued_key(page.id(), "ctrl-a");
+    run(queue.try_recv().unwrap(), &mut cx.to_async());
+    // An unrelated report for the same missing page must not pop the next page's key.
+    send(Job::Report(page.id(), Report::Title("late".to_owned())));
+    queued_key(Uuid::new_v4(), "ctrl-a");
+    run(queue.try_recv().unwrap(), &mut cx.to_async());
+    queued_key(Uuid::new_v4(), "ctrl-g");
+    run(queue.try_recv().unwrap(), &mut cx.to_async());
+    run(queue.try_recv().unwrap(), &mut cx.to_async());
+    assert!(
+        !takes_page_key("ctrl-g"),
+        "a dropped prefix cannot claim the next chord"
+    );
+}
+
 #[gpui_kit::test]
 fn the_pump_moves_the_native_window_and_buries_released_web_views(cx: &mut TestAppContext) {
     pumped(cx);

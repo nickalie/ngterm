@@ -1314,13 +1314,19 @@ fn a_key_report_with_no_window_leaves_the_queue(cx: &mut TestAppContext) {
     assert!(!crate::keymap_dispatch::sequence_is_live());
 }
 
-/// A closed page's reports never reach it: they leave the queue with it.
+/// A mounted page can outlive its window: a report the closed window refuses must leave the queue too.
 #[cfg(windows)]
 #[gpui_kit::test]
-fn closing_a_page_takes_its_key_reports_off_the_queue(cx: &mut TestAppContext) {
+fn a_key_report_with_a_closed_window_leaves_the_queue(cx: &mut TestAppContext) {
     let driven = driven(&url_overlay());
-    leader_tail_queued();
-    cx.update(|cx| driven.page.close(cx));
+    let (_element, visual) = mounted(&driven, cx);
+    let window = visual.update(|window, _| window.window_handle());
+    visual.update(|window, _| window.remove_window());
+    let tail = leader_tail_queued();
+    cx.update(|cx| {
+        assert!(window.update(cx, |_, _, _| ()).is_err(), "the handle is stale");
+        driven.page.report(Report::Key(tail, 0, false), cx);
+    });
     assert!(page_keeps_ctrl_x());
     assert!(!crate::keymap_dispatch::sequence_is_live());
 }

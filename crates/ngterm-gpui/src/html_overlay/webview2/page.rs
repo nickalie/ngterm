@@ -1316,7 +1316,6 @@ impl Page {
     /// Ends the page (upstream's `close`): its prompt goes, its web view is handed to the pump to close, and the
     /// handlers still reached do nothing.
     pub fn close(&self, cx: &mut App) {
-        crate::keymap_dispatch::page_reports_dropped();
         self.end_prompt(cx);
         self.state.borrow_mut().life = Life::Released;
         self.document_generation.next();
