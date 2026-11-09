@@ -251,7 +251,7 @@ ensure_swiftlint() {
   mkdir -p "$VENDOR_ROOT"
   work="$(mktemp -d "$VENDOR_ROOT/.swiftlint.XXXXXX")"
   echo "fetching SwiftLint $SWIFTLINT_VERSION..." >&2
-  if ! curl -fsSL -o "$work/portable_swiftlint.zip" "$SWIFTLINT_URL"; then
+  if ! curl -fsSL --retry 5 -o "$work/portable_swiftlint.zip" "$SWIFTLINT_URL"; then
     rm -rf "$work"
     could_not "SwiftLint: download of $SWIFTLINT_URL failed"
     return 0
