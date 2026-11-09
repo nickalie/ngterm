@@ -20,8 +20,9 @@ path or anything else of the operator's setup: not in this file, a plan, a commi
 placeholders: `<win-ssh>` and `<mac-ssh>` (the ssh destinations), `<win-clone>` and `<mac-clone>` (the ngterm clone
 on each), and the VM's state, start and stop commands. Their values are in
 `.claude/skills/agterm-upstream-sync/references/machines.local.md`, a git-ignored file of the operator's (with the
-machines' own quirks). Read it before using a machine; if it is missing or lacks a value, ask the user for it instead
-of guessing, and write it there.
+machines' own quirks). Read it before using a machine; if it is missing or lacks a value, never guess. An unattended
+worker logs the check it could not run as a `[deviation]`, with the missing value as the reason; anyone else asks the
+user for the value and writes it there.
 
 ## Start on demand, stop when done
 
@@ -46,7 +47,7 @@ The Windows VM and the emulators are off by default and cost the host CPU and me
    `<win-clone>`, Getting the code there): it's using the VM; stop it once that worktree is gone.
 
 The Mac is the operator's own and always on: never shut it down. It may be asleep at first contact ("No route to
-host"): retry for a minute. A brief to a subagent that may need any of these machines carries this file's path.
+host"): retry for a minute. A brief to a worker that may need any of these machines carries this file's path.
 
 ## Getting the code there
 
@@ -102,7 +103,7 @@ run that dies has to show up as a failure, never as a wait that goes on.
   the ssh session (`Get-Process -Id <pid>` checks it from a later call). Without `-ExecutionPolicy Bypass` the script
   is refused and the process exits at once, with no log or marker. The run is then waited on as
   [Waiting on a remote run](#waiting-on-a-remote-run) says. One cargo build at a time in the VM. Its GUI runs need a
-  console logon; ask the user if you lack it.
+  console logon; if you lack it, ask the user, or log a `[deviation]` when unattended.
 - Mac: no `timeout` (`perl -e 'alarm N; exec @ARGV' cmd` does it); wrap long work in `caffeinate -is`. Over ssh there
   is no Screen Recording grant, so no screenshots, and a locked screen gives GPUI no frames (`session not realized`):
   check the lock before reading anything into that. A dev run there follows AGENTS.md > Never touch the user's

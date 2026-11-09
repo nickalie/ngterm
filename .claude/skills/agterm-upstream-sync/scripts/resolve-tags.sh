@@ -3,7 +3,8 @@
 #
 #   resolve-tags.sh [TARGET_TAG]
 #
-# CURRENT is `upstream:` of conformance/catalog.yaml (the line reference-macos.yml reads). TARGET is the argument,
+# CURRENT is `upstream:` of conformance/catalog.yaml at HEAD, what a sync branch starts from whatever the tree has
+# uncommitted (the line reference-macos.yml reads). TARGET is the argument,
 # else the latest published, non-draft, non-prerelease release of umputun/agterm.
 # Prints CURRENT=, TARGET=, STATUS= (newer | up-to-date | older) and, for newer, RELEASES= (every release tag after
 # CURRENT up to TARGET, oldest first, space separated).
@@ -12,11 +13,10 @@ set -euo pipefail
 
 REPO="umputun/agterm"
 root="$(git rev-parse --show-toplevel)"
-catalog="$root/conformance/catalog.yaml"
-[[ -f "$catalog" ]] || { echo "resolve-tags: no $catalog" >&2; exit 1; }
+catalog="$(git -C "$root" show HEAD:conformance/catalog.yaml)" || { echo "resolve-tags: no conformance/catalog.yaml at HEAD" >&2; exit 1; }
 
-current="$(sed -nE "s/^upstream:[[:space:]]*[\"']?([^\"'[:space:]#]+).*/\1/p" "$catalog" | head -n 1)"
-[[ -n "$current" ]] || { echo "resolve-tags: no upstream: line in $catalog" >&2; exit 1; }
+current="$(sed -nE "s/^upstream:[[:space:]]*[\"']?([^\"'[:space:]#]+).*/\1/p" <<<"$catalog" | head -n 1)"
+[[ -n "$current" ]] || { echo "resolve-tags: no upstream: line in conformance/catalog.yaml at HEAD" >&2; exit 1; }
 
 releases="$(gh release list --repo "$REPO" --exclude-drafts --exclude-pre-releases --limit 100 \
   --json tagName --jq '.[].tagName')" || { echo "resolve-tags: gh release list failed" >&2; exit 1; }

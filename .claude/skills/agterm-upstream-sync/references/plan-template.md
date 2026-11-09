@@ -1,9 +1,8 @@
 # Plan template
 
-The `plan-exec` skill (Claude: `/plan-exec`; Codex: `$plan-exec`) reads `## Overview` and
-`## Context`, then runs each `### Task N:` in a fresh subagent that sees only the plan and the repo (applicable
-AGENTS.md instructions included). The `- [ ]` items are that subagent's work list. So each task names its own files
-and sources. Write the plan in English and drop sections that would stay empty.
+The sync hands this plan to the `plan-exec` skill, which reads `## Overview` and `## Context`, then runs each
+`### Task N:` in a fresh worker that sees only the plan and the repo (applicable AGENTS.md instructions included). The
+`- [ ]` items are that worker's work list. So each task names its own files and sources. Write the plan in English and drop sections that would stay empty.
 
 ````markdown
 # Upstream sync <old tag> -> <new tag>
@@ -40,6 +39,8 @@ and sources. Write the plan in English and drop sections that would stay empty.
   (below), or the feature's task records why an app has no counterpart.
 - Checks per task follow AGENTS.md > Choosing checks. A new conformance test must also pass on the macOS reference
   (`reference-macos.yml`), which the user runs.
+- Commits stay local: no task pushes or opens a PR, even when a check could only run on CI. Such a check is logged as
+  a `[deviation]` and left to the user's PR.
 - Machines (`.claude/skills/agterm-upstream-sync/references/machines.md`): Windows work (builds, clippy, tests,
   debugging, GUI runs) runs in the Windows VM, macOS and iOS work on the Mac over ssh, Android work on the emulator;
   the VM and the emulator start on demand and stop when the task's work on them is done.
@@ -81,7 +82,6 @@ section, `.claude/rules/*.md`>
 - [ ] bump `PARITY_LEVEL` and its mirrors (`tag-mentions.sh <old>`, class `claim`) once every task above is done
 - [ ] README.md (its Android and iOS sections included), conformance/README.md and conformance/docs/rust-build.md
   describe what changed
-- [ ] manual (user): the PR's CI holds the ratchet
 ````
 
 ## Notes on tasks

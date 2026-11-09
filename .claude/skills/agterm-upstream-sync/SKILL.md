@@ -1,16 +1,22 @@
 ---
 name: agterm-upstream-sync
-description: "Sync ngterm's parity target with a new umputun/agterm release: analyse upstream changes, make the mechanical bump, and write a docs/plans/ porting plan for plan-exec that covers all five apps (desktop on macOS, Linux and Windows; Android; iOS). Use for upstream release syncs, parity target bumps, or upstream change analysis, including 'sync with upstream'. Ports no features itself."
+description: "Sync ngterm's parity target with a new umputun/agterm release from start to end, unattended: analyse upstream changes, make the mechanical bump, write a docs/plans/ porting plan that covers all five apps (desktop on macOS, Linux and Windows; Android; iOS), and run it through plan-exec, the work split between Claude and Codex workers in ngterm companion sessions. Runs only inside ngterm. Use for upstream release syncs, parity target bumps, or upstream change analysis, including 'sync with upstream'."
 ---
 
 # agterm-upstream-sync
 
-Moves ngterm from the upstream release it targets to a newer one in three parts:
+Moves ngterm from the upstream release it targets to a newer one, in four parts, without stopping between them:
 
 1. **Analysis**: what changed upstream, and how much of it the Rust build already has.
 2. **Mechanical bump** on a branch: everything that needs no porting judgment.
-3. **Plan** for the porting, executed later by the `plan-exec` skill. The skill ports no behavior itself, so every port
-   goes through that run's per-task review.
+3. **Plan** for the porting.
+4. **Port**: the plan goes straight into the `plan-exec` skill, so every port goes through that run's per-task review.
+
+## Unattended, in ngterm workers
+
+Read `references/autonomous-run.md` first and follow it: it holds the setup, who runs each stage below (Claude and
+Codex workers in ngterm companion sessions), and the hand-over to plan-exec. Nobody is asked anything from the moment
+the skill starts. Steps 1 and 2's grouping are the orchestrator's; each later step names its worker.
 
 ## Five apps
 
@@ -45,42 +51,50 @@ lacks, and port that part in ngterm's terms.
 The shared source is `.claude/skills/agterm-upstream-sync`; `.agents/skills/agterm-upstream-sync` links to it for
 Codex discovery. Edit the shared source so both agents get the same workflow.
 
-- **Claude Code:** invoke `/agterm-upstream-sync [TARGET]`; later execute the plan with
-  `/plan-exec docs/plans/<file>`.
-- **Codex:** invoke `$agterm-upstream-sync [TARGET]`; later execute the plan with
-  `$plan-exec docs/plans/<file>`. A Codex install that still lists the skill under its old name runs it as
-  `$plan-exec-revmux`, the same skill.
+- **Claude Code:** invoke `/agterm-upstream-sync [TARGET]`.
+- **Codex:** invoke `$agterm-upstream-sync [TARGET]`.
 
 Read the checkout's `AGENTS.md` (the shared architecture and check guidance) and any more specific directory
-instructions before starting. Use the current agent's file, search, shell and subagent tools; Claude tool names are
-not required.
+instructions before starting. Use the current agent's file, search and shell tools; Claude tool names are not
+required.
 
 Set `SKILL_DIR` to the absolute directory containing the loaded `SKILL.md`; either discovery path works.
 Its `scripts/` and `references/` are meant below. The scripts act on the
 repository of the current directory, so run them from the checkout (or worktree) being synced. Most take
 `--upstream DIR` for a clone other than `.upstream/agterm`.
 
-Keep scratch output (the classify report, analyses, logs, saved patches) in a `WORK` dir in the session scratchpad
-when available, otherwise create one with `WORK=$(mktemp -d "${TMPDIR:-/tmp}/ngterm-upstream-sync.XXXXXX")`.
-Use the same absolute `WORK` path across tool calls and pass it to subagents that need the reports.
+Scratch output (the classify report, analyses, logs, saved patches) goes in `WORK`, under the run's state dir
+(`references/autonomous-run.md`), so that workers can read it and it survives a reboot. Pass its absolute path to
+every worker.
 
 **Sync-specific rules** (AGENTS.md covers the rest):
 - `.upstream/agterm` is read-only apart from fetching and checking out the new tag.
-- Commits stay local: the user pushes, opens the PR and runs the macOS reference workflow.
+- Commits stay local: the user pushes, opens the PR and runs the macOS reference workflow once the run has ended.
 - The branch keeps building and keeps the ratchet green. Anything that would break either becomes a plan task
   instead of part of the bump.
 - Windows work runs in the Windows VM, macOS and iOS work on the Mac over ssh, Android work on the emulator; the VM
   and the emulator start on demand and stop when that work is done (`references/machines.md`).
 
-## 1. Tags and upstream clone
+## 1. Tags, upstream clone and worktree
 
 ```bash
 bash $SKILL_DIR/scripts/resolve-tags.sh [TARGET]                       # CURRENT, TARGET, STATUS, RELEASES
 bash $SKILL_DIR/scripts/prepare-upstream.sh [--upstream DIR] CURRENT TARGET
+bash $SKILL_DIR/scripts/sync-worktree.sh upstream-sync-TARGET          # WORKDIR, PLAN, STATE
 ```
 
-Exit 3 from `resolve-tags.sh` means there is nothing to sync: say so and stop. Several skipped releases are synced in
-one go. Start from a tree with no modified tracked files, so the branch holds only this sync.
+Exit 3 from `resolve-tags.sh` means there is nothing to sync, unless the branch `upstream-sync-TARGET` already exists
+(`git show-ref --verify refs/heads/<branch>`): a run started from inside a worktree whose bump is committed lands here
+too, so skip `prepare-upstream.sh` and go on with `sync-worktree.sh` and its `STATE`. With no such branch, say there is
+nothing to sync and stop. Several skipped releases are synced in one go. The branch lives in its own worktree, so it holds only this sync whatever the checkout has uncommitted. Act
+on `STATE`:
+
+- `new`: go on with Step 2.
+- `planned`: an earlier run got as far as the plan. Resume at Step 6 when `WORK/plan-check.md` is missing, else at
+  Step 7; plan-exec picks up from the plan's checkboxes.
+- `done`: the sync already ran to its end. Report the branch and stop.
+- `unplanned`: an earlier run left work on the branch and died before its plan. Its state can't be trusted, so report
+  the branch and the worktree and stop; nothing is deleted.
 
 ## 2. Analysis
 
@@ -110,15 +124,16 @@ reaches has it: one the desktop has and a mobile app lacks still gets that app's
 `ngterm-core`'s remote client with Attach Remote, so a change there can reach them with no mobile code; an app screen
 that should show it still can't.
 
-Analyse small syncs yourself. For more than a few clusters, delegate read-only analysis using
-`references/prompts/area-analysis.md`: Claude's `Agent` with `subagent_type: "general-purpose"`, or Codex's available
-subagent tool (for example, `spawn_agent`). Use up to four at a time, within the environment's available slots.
-If subagents are unavailable or disallowed, analyse the clusters yourself with the same prompt. Before a
-subagent's `absent` or `already-ported` claim goes into the plan, confirm it with a search of your own.
+Every cluster gets one read-only analysis worker with `references/prompts/area-analysis.md`, up to four at a time,
+each on the agent `references/autonomous-run.md` > Stages picks for it. Each writes its answer to
+`WORK/analysis/<cluster-slug>.md`.
+
+The orchestrator writes `WORK/clusters.md` before starting them: each cluster with its commits, and the "no port
+needed" list with the reason for each entry.
 
 ## 3. Mechanical bump
 
-`git switch -c upstream-sync-TARGET`. If the branch already exists, it is an earlier run: report it and stop.
+Worker: `Bump`. The branch and its worktree exist since Step 1.
 
 1. **Catalog**: `.venv/bin/python conformance/tools/gen_catalog.py --tag TARGET --repo UPSTREAM`. If it fails to
    parse, leave the catalog to a plan task.
@@ -138,7 +153,7 @@ subagent's `absent` or `already-ported` claim goes into the plan, confirm it wit
 
 ## 4. Baseline
 
-Check the bump as AGENTS.md > Choosing checks says, scoped to what it touched, each platform it reaches on that
+Worker: `Baseline`. Check the bump as AGENTS.md > Choosing checks says, scoped to what it touched, each platform it reaches on that
 platform's machine (`references/machines.md`).
 
 The usual expected reds are:
@@ -151,7 +166,8 @@ revert that part, and turn it into a plan task.
 
 ## 5. Plan
 
-Write `docs/plans/<YYYYMMDD>-upstream-sync-TARGET.md` from `references/plan-template.md`, then commit it on the branch.
+Worker: `Plan`, from the reports in `WORK` (classify, `clusters.md`, `analysis/`, bump, baseline, catalog delta). Write
+`docs/plans/<YYYYMMDD>-upstream-sync-TARGET.md` from `references/plan-template.md`, then commit it on the branch.
 Order the tasks:
 1. new wire names and CLI skeletons (when the catalog gained any);
 2. one task per command group or feature;
@@ -162,11 +178,29 @@ Order the tasks:
 6. "Claim TARGET parity and update the docs", always last.
 
 Each task names its upstream files and Swift tests, its Rust, Kotlin and Swift files, its conformance ids and the apps
-it reaches, so a subagent can work from the plan alone. List `already-ported` clusters in Context with their evidence.
+it reaches, so a worker can work from the plan alone. List `already-ported` clusters in Context with their evidence.
 
-## 6. Report
+## 6. Plan check
 
-Reply in the user's language with:
+Worker: `Plan check`, on the agent that did not write the plan. Read the plan against the reports in `WORK` and the
+code, independently of how the analyses reached their answers:
+
+- confirm each `absent`, `already-ported` and `no-behavior-change` claim with a search of your own;
+- every cluster and every no-port entry of `WORK/clusters.md` is accounted for, every app each behavior reaches has its task or its recorded
+  reason, and each overlap with an ngterm feature follows "ngterm's own features win";
+- each task names what `references/plan-template.md` asks for, so a worker can run it from the plan alone, and the
+  tasks follow Step 5's order.
+
+Correct the plan in place, commit it by name, and put in the record what changed and why.
+
+## 7. Port
+
+The orchestrator hands the plan to plan-exec, as `references/autonomous-run.md` > Handing over says, and follows it to
+its end.
+
+## 8. Report
+
+Reply in the user's language, after plan-exec's own report, with:
 - the range and what changed upstream (one line per feature or fix), with the apps each one reaches;
 - the branch and its commits: what was bumped, and what was left out and why;
 - the baseline result and which task fixes each expected red;
@@ -174,6 +208,6 @@ Reply in the user's language with:
 - what is already in the Rust build and the mobile apps, and what needs no port;
 - each overlap with an ngterm feature or deliberate deviation: what of upstream's change was taken, what was left,
   and the feature that decided it;
-- next steps: invoke `plan-exec` with the plan path using the current agent's syntax above (if that skill is
-  unavailable, report the missing dependency); then the user pushes, runs `reference-macos.yml` on the branch,
-  and opens a PR so the cross-platform jobs and the full suite run.
+- how the port ended, and which workers ran on which agent;
+- next steps: the branch and its worktree are ready; the user pushes, runs `reference-macos.yml` on the branch, and
+  opens a PR so the cross-platform jobs and the full suite run.

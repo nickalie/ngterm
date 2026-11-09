@@ -1,9 +1,8 @@
-# Pull request analysis subagent
+# Pull request analysis worker
 
-One subagent per cluster (one Ghostty pull request, or several that change the same ngterm mirror), doing read-only
-work. Use Claude's `Agent` with `subagent_type: "general-purpose"` or Codex's available subagent tool, within the
-concurrency limit in SKILL.md. If delegation is unavailable or disallowed, use this checklist yourself. Replace every
-`<...>` before sending, including the absolute `SKILL_DIR`; the subagent sees nothing of this skill.
+The brief of one analysis worker per cluster (one Ghostty pull request, or several that change the same ngterm mirror),
+doing read-only work (`spawn-worker.sh` adds the reporting protocol). Replace every `<...>` before saving it, including
+the absolute `SKILL_DIR` and the answer file; the worker sees nothing of this skill.
 
 ```
 You analyse one change in Ghostty (ghostty-org/ghostty) for ngterm, a terminal app whose terminal must behave and
@@ -11,8 +10,9 @@ render as Ghostty does, as closely as possible. ngterm links Ghostty's VT librar
 and re-implements in Rust what Ghostty leaves to the embedder: renderer, font metrics, sprite font, mouse/selection/
 links (Surface), PTY-side replies (termio), key tables, config semantics. Its Android and iOS apps draw the terminal
 themselves (Kotlin, Swift) from frames the Rust core sends. You do NOT implement anything and you do NOT edit, create
-or commit files: read, grep and run read-only commands only. Do not run cargo or zig (builds share caches and are
-running or about to). Your answer is a draft plan task.
+or commit repository files: read, grep and run read-only commands only. The one file you write is your answer,
+<ANSWER_FILE>. Do not run cargo or zig (builds share caches and are running or about to). Your answer is a draft plan
+task. Nobody is available: never ask, and mark what you cannot settle as "unconfirmed" in RISKS.
 
 Repository: <ROOT> (ngterm). Ghostty clone (read-only): <GHOSTTY>, range <OLD>..<NEW>.
 Read <ROOT>/AGENTS.md and <SKILL_DIR>/references/areas.md first (the parity contract, the area table, platforms,
@@ -57,8 +57,9 @@ Do this:
    conformance ids that cover the behavior (`rg -n` in <ROOT>/conformance/tests; listed ones are in
    <ROOT>/conformance/rust-passing.txt).
 
-Answer in this exact shape, nothing before or after. When the cluster holds independent changes, give one block per
-change, each starting with KIND:
+Write your answer to <ANSWER_FILE> in this exact shape, nothing before or after, and report only that path with one
+line per block (KIND and TITLE). When the cluster holds independent changes, give one block per change, each starting
+with KIND:
 
 KIND: inherited | api | port | build | resources | no-port | no-behavior-change
 STATUS: absent | partial | already-mirrored | n/a

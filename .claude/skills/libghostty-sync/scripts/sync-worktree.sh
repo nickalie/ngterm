@@ -1,0 +1,1 @@
+../../agterm-upstream-sync/scripts/sync-worktree.sh

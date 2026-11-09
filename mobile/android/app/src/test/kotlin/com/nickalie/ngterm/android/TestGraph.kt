@@ -23,6 +23,7 @@ import com.nickalie.ngterm.android.platform.PinnedHostKeys
 import com.nickalie.ngterm.android.ui.chat.PaneChats
 import com.nickalie.ngterm.android.ui.session.SessionPanes
 import com.nickalie.ngterm.core.fake.FakeMobileCore
+import com.nickalie.ngterm.core.ffi.HostKeyStore
 import com.nickalie.ngterm.core.ffi.KeyException
 import com.nickalie.ngterm.core.ffi.KeyPair
 import kotlinx.coroutines.CoroutineScope
@@ -114,6 +115,35 @@ fun testStore(
 ): DataStore<Preferences> = PreferenceDataStoreFactory.create { File(dir, "$name.preferences_pb") }
 
 /**
+ * [hosts] as the real core uses them, on a thread of its own: a call on the thread that made this (a UI test's main
+ * thread) fails at once. There it would block for good when a collector on the main thread is in the store's first
+ * read, whose lock is let go only back on that thread.
+ */
+private class OffThreadHostKeys(
+    private val hosts: HostKeyStore,
+) : HostKeyStore {
+    private val owner = Thread.currentThread()
+
+    private fun checkThread() =
+        check(Thread.currentThread() !== owner) {
+            "the core's host keys are called off this thread"
+        }
+
+    override fun pinned(machineId: String): String? {
+        checkThread()
+        return hosts.pinned(machineId)
+    }
+
+    override fun pin(
+        machineId: String,
+        fingerprint: String,
+    ) {
+        checkThread()
+        hosts.pin(machineId, fingerprint)
+    }
+}
+
+/**
  * The app's graph over fakes in [dir]: the [core] a [FakeMobileCore] pinning through the real [PinnedHostKeys], the
  * stores real DataStores, the vault sealing with a [SoftwareWrapper], the clock [now], the network [online] and the
  * clipboard's text [clipboard] set by the test. [scope] runs the connections' calls (the main thread's in UI tests);
@@ -131,7 +161,10 @@ class TestGraph(
     val pins = PinnedHostKeys(testStore(dir, "pins"))
     lateinit var core: FakeMobileCore
         private set
-    val connections = Connections(scope, { now }) { sink -> FakeMobileCore(sink, pins).also { core = it } }
+    val connections =
+        Connections(scope, { now }) { sink ->
+            FakeMobileCore(sink, OffThreadHostKeys(pins), Dispatchers.IO).also { core = it }
+        }
 
     /** What the device's clipboard holds, as the clipboard reads see it. */
     @Volatile var clipboard: String? = null

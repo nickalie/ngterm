@@ -1,16 +1,17 @@
-# Feature analysis subagent
+# Feature analysis worker
 
-One subagent per feature cluster (a command group, or one changelog entry with its commits), doing read-only work.
-Use Claude's `Agent` with `subagent_type: "general-purpose"` or Codex's available subagent tool, within the concurrency
-limit in SKILL.md. If delegation is unavailable or disallowed, use this checklist yourself. Replace every `<...>`
-before sending, including the absolute `SKILL_DIR`; the subagent sees nothing of this skill.
+The brief of one analysis worker per feature cluster (a command group, or one changelog entry with its commits), doing
+read-only work (`spawn-worker.sh` adds the reporting protocol). Replace every `<...>` before saving it, including the
+absolute `SKILL_DIR` and the answer file; the worker sees nothing of this skill.
 
 ```
 You analyse one upstream agterm change for a port into ngterm (Rust, GPUI; macOS, Linux and Windows are equal
 targets, while upstream is macOS only; the Android and iOS apps, remote-only viewers over `crates/ngterm-mobile`, are
 targets too). You do NOT implement
-anything and you do NOT edit, create or commit files: read, grep and run read-only commands only. Do not run cargo
-(build, test, clippy): the gates share target/ and are running or about to. Your answer is a draft plan task.
+anything and you do NOT edit, create or commit repository files: read, grep and run read-only commands only. The one
+file you write is your answer, <ANSWER_FILE>. Do not run cargo (build, test, clippy): the gates share target/ and are
+running or about to. Your answer is a draft plan task. Nobody is available: never ask, and mark what you cannot settle
+as "unconfirmed" in RISKS.
 
 Repository: <ROOT> (ngterm). Upstream clone (read-only): <UPSTREAM>, range <OLD>..<NEW>.
 Read <ROOT>/AGENTS.md and any more specific directory instructions first (crate map, reference rule, porting order).
@@ -53,8 +54,9 @@ Do this:
    rename or comment). Mark any claim you inferred from reading code without finding the deciding line as
    "unconfirmed" in RISKS.
 
-Answer in this exact shape, nothing before or after. When the cluster holds independent changes, give one block
-per change, each starting with STATUS:
+Write your answer to <ANSWER_FILE> in this exact shape, nothing before or after, and report only that path with one
+line per block (STATUS and TITLE). When the cluster holds independent changes, give one block per change, each
+starting with STATUS:
 
 STATUS: absent | partial | already-ported | no-behavior-change
 TITLE: <task title: group or feature, with PR numbers>

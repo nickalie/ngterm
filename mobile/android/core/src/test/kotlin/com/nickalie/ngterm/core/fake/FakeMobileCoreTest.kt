@@ -12,7 +12,9 @@ import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -22,6 +24,8 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Collections
+import java.util.concurrent.Executors
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class FakeMobileCoreTest {
@@ -340,6 +344,42 @@ class FakeMobileCoreTest {
             )
             assertTrue(core.connected.isEmpty())
             assertEquals("SHA256:old", pins.pins["m1"])
+        }
+
+    @Test
+    fun theHostKeyStoreIsCalledInTheContextGiven() =
+        runTest {
+            val threads = Collections.synchronizedList(mutableListOf<String>())
+            val pins =
+                object : HostKeyStore {
+                    override fun pinned(machineId: String): String? {
+                        threads += Thread.currentThread().name
+                        return null
+                    }
+
+                    override fun pin(
+                        machineId: String,
+                        fingerprint: String,
+                    ) {
+                        threads += Thread.currentThread().name
+                    }
+                }
+            val asked = CompletableDeferred<Unit>()
+            val sink =
+                object : EventSink {
+                    override fun onEvent(event: MobileEvent) {
+                        if (event is MobileEvent.HostKeyUnknown) asked.complete(Unit)
+                    }
+                }
+            Executors.newSingleThreadExecutor { Thread(it, "host keys") }.asCoroutineDispatcher().use { hostKeys ->
+                val core = FakeMobileCore(sink, pins, hostKeys)
+                core.hostKeys["box.example"] = "SHA256:new"
+                val connect = async { core.connect(machine) }
+                asked.await()
+                core.answerHostKey("m1", "SHA256:new", trust = true)
+                connect.await()
+            }
+            assertEquals(listOf("host keys", "host keys"), threads.map { it.substringBefore(" @") })
         }
 
     private class MemoryHostKeys : HostKeyStore {
