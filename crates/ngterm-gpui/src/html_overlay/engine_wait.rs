@@ -287,8 +287,20 @@ mod tests {
     }
 
     #[test]
-    fn the_waiting_pages_icons_are_served() {
-        for path in ["icons/download.svg", "icons/triangle-alert.svg"] {
+    fn the_pages_icons_are_served() {
+        // The waiting states, failure cover and every button in `panel::button`.
+        for path in [
+            "icons/download.svg",
+            "icons/triangle-alert.svg",
+            "icons/chevron-left.svg",
+            "icons/chevron-right.svg",
+            "icons/rotate-cw.svg",
+            "icons/compass.svg",
+            "icons/folder-open.svg",
+            "icons/link.svg",
+            "icons/minus.svg",
+            "icons/x.svg",
+        ] {
             assert!(crate::titlebar::serves(path), "{path} is not among the app's assets");
         }
     }

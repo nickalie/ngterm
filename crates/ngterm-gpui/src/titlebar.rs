@@ -117,6 +117,9 @@ gpui_kit::assets::icon_assets!(
         CopySlash,
         // the waiting page's download state (`html_overlay::engine_wait`)
         Download,
+        // the page strip's browser and copy-link buttons (`html_overlay::panel`)
+        Compass,
+        Link,
     ]
 );
 
