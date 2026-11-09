@@ -232,8 +232,10 @@ fn claimed(agents: &mut Agents, state: &str) -> Opened {
     let claim = agents.fixture.attach();
     let lead = lead_of(&claim.command);
     assert!(lead.claim, "the action claims the lead");
-    agents.feed(&claim.peer, &role_title(&lead.nonce, "leader", 2));
-    agents.show(&claim.peer, state);
+    // the redraw follows the role report in one delivery, with no test-thread wait between them
+    let mut report = role_title(&lead.nonce, "leader", 2);
+    report.extend(agents.capture.at(state));
+    agents.feed(&claim.peer, &report);
     claim
 }
 
@@ -882,7 +884,7 @@ fn a_screen_resized_and_not_redrawn_yet_gets_no_key() {
     // the program draws the dialog for the new grid: its key goes
     let mut redrawn = b"\x1b[0m\x1b[H\x1b[2J".to_vec();
     redrawn.extend(tablet.at("permission"));
-    send(&agents.first.peer, &redrawn);
+    agents.feed(&agents.first.peer, &redrawn);
     let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "No".to_owned())));
     let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
         without_escapes(bytes).contains(&b'4')
@@ -914,7 +916,7 @@ fn a_screen_resized_and_not_redrawn_yet_gets_no_key() {
     );
     assert!(typed(&mut agents.first.peer).is_empty());
     // the program writes again: its key goes
-    send(&agents.first.peer, b"\x1b[0m");
+    agents.feed(&agents.first.peer, b"\x1b[0m");
     let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "No".to_owned())));
     let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
         without_escapes(bytes).contains(&b'4')
