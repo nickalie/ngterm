@@ -1,5 +1,6 @@
 package com.nickalie.ngterm.android.ui.machines
 
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
@@ -10,25 +11,43 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.TestGraph
 import com.nickalie.ngterm.android.awaitDescription
 import com.nickalie.ngterm.android.awaitText
+import com.nickalie.ngterm.android.platform.PinnedHostKeys
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.android.ui.NavLayout
 import com.nickalie.ngterm.android.ui.NgtermApp
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
+
+// how long a blocking read may take before the test calls it stuck
+private const val BLOCKING_READ_WAIT_S = 30L
 
 /** The machine flows end to end on the fake core: add, the first connect's host key, a changed key, removal. */
 @RunWith(AndroidJUnit4::class)
@@ -155,6 +174,44 @@ class FirstConnectTest {
         compose.onNodeWithText("build-01.lan").performTextReplacement("build-02.lan")
         compose.onNodeWithText("Save").performClick()
         compose.awaitText("nick@build-02.lan:22")
+    }
+
+    // The fake core reads a pin on the main thread. The home screen's first read of the store may hold DataStore's
+    // first-read lock by then, and if it has to come back to the main thread to let go of it, the blocked thread waits
+    // for itself. The store's own worker is held so that the first read has the lock when the blocking one starts.
+    @Test
+    fun aBlockingPinReadDoesNotWaitForTheThreadItBlocks() {
+        val worker = Executors.newSingleThreadExecutor()
+        val storeScope = CoroutineScope(worker.asCoroutineDispatcher() + SupervisorJob())
+        val homeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val store = PreferenceDataStoreFactory.create(scope = storeScope) { File(dir.root, "held.preferences_pb") }
+        val pins = PinnedHostKeys(store)
+        val main = Thread.currentThread()
+        val answered = CountDownLatch(1)
+        homeScope.launch { pins.all.first() }
+        // the read's first step has run on the worker, and what follows it is queued for this thread
+        worker.submit {}.get()
+        val hold = CountDownLatch(1)
+        worker.execute { hold.await() }
+        // the first read goes on here: it takes the lock and leaves its file read queued behind the hold
+        shadowOf(Looper.getMainLooper()).idle()
+        hold.countDown()
+        val watchdog =
+            thread(isDaemon = true) {
+                if (!answered.await(BLOCKING_READ_WAIT_S, TimeUnit.SECONDS)) main.interrupt()
+            }
+        try {
+            assertNull(pins.pinned("m1"))
+        } catch (_: InterruptedException) {
+            fail("the blocking pin read waited for the thread it had blocked")
+        } finally {
+            answered.countDown()
+            watchdog.join()
+            Thread.interrupted()
+            homeScope.cancel()
+            storeScope.cancel()
+            worker.shutdown()
+        }
     }
 
     private fun machineId(): String =
