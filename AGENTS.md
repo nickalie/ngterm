@@ -76,9 +76,9 @@ ports that keep the terminal's behavior and rendering Ghostty's: the `libghostty
 
 - New code ships with tests that would fail if it broke.
 - A test asserts what a caller, the user or the OS observes, not how the code gets there.
-- A flaky test is a bug in the test or the code: find the cause, never rerun it away.
+- Find a flaky test's cause; never rerun it away.
 - Code no test can reach gets the smallest seam that lets one reach it, not a coverage exclusion.
-- Every crate and mobile app aims for 90% coverage. The target and the floors are raise-only: close a gap with tests.
+- Every crate and mobile app aims for 90% coverage, and that target only rises.
 
 README > Test and `scripts/unit-coverage.sh` have the how; the mobile apps' are in their README sections.
 
@@ -95,8 +95,8 @@ README > Test has the commands and how to scope them.
 - The ratchet (`conformance/rust-passing.txt`): a listed id that goes red fails CI. Treat a flaky test as a bug in
   the build or the test, not as noise.
 - Coverage floors: no workspace crate's unit-test coverage (lines, functions, regions of `cargo test`) may drop more
-  than the tolerance below its floor. A change that lowers a crate's coverage adds the tests that keep it; floors
-  only rise, as crates earn it.
+  than the tolerance below its floor, and no mobile app's below its own. A change that lowers a crate's or an app's
+  coverage adds the tests that keep it; floors only rise, as crates and apps earn it.
 - Strict clippy with the `clippy.toml` complexity limits. Split a function that exceeds them; an item-level
   `#[expect(..., reason = "...")]` is the escape hatch, `#[allow]` is not.
 - Generated bindings and `vendor/` are checked against their generator and vendor scripts: change them only through
