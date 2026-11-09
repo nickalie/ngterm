@@ -15,6 +15,11 @@
 //! - the user's input, real presses and keys only (`isTrusted`, which page code cannot fake), reported for
 //!   auto-follow and to lift a declined hand-off's silence (upstream's `onUserInput`). On Windows a press also says
 //!   which key it was and when, as no key event reports a typed character (`keys`): it ends a half-typed leader.
+//! - on Windows, the keys of a live leader or repeat window (`keys`): the host tells the script which keys would
+//!   advance or complete the sequence ([`live_keys`]) and until when, the capture listener stops those and only those
+//!   and reports them, and with no sequence live it stops nothing. The script's word can lag the host's: a stopped key
+//!   the keymap no longer takes goes back into the page ([`redelivery`]) so it is never lost. That script runs in the
+//!   top frame alone, so a tail typed inside an iframe goes on reaching the frame.
 //!
 //! With the page's JavaScript off (`IsScriptEnabled`), `WebView2` still runs these scripts and nothing of the page's.
 //! The guard script ([`GUARD_SCRIPT`]), in every frame, keeps a page from what the WPE host refuses natively: file
@@ -55,11 +60,13 @@ pub fn page_script(nonce: &str, themed: bool, javascript: bool) -> String {
   const responseNonce = '{response_nonce}';
   const send = (kind, rest) => post('{{"n":"' + nonce + '","k":"' + kind + '"' + rest + '}}', kind);
   const report = (click) => (event) => {{ if (event.isTrusted) send('input', ',"click":' + click + (click ? '' : typed(event))); }};
+  {keydown}
   window.addEventListener('pointerdown', report(true), true);
-  window.addEventListener('keydown', report(false), true);
+  window.addEventListener('keydown', keydown, true);
 "#,
         transport = transport(),
         typed = typed(),
+        keydown = keydown(),
     );
     if themed {
         let _ = write!(
@@ -133,12 +140,60 @@ fn typed() -> &'static str {
         r#"const {floor} = Math;
   const {now} = Date;
   const sinceOrigin = performance.now.bind(performance);
+  const pressedAt = (event) => floor(now() - (sinceOrigin() - event.timeStamp));
   const typed = (event) => event.repeat || event.ctrlKey || event.altKey ? '' :
-    ',"key":' + stringify(event.key || '') + ',"at":' + floor(now() - (sinceOrigin() - event.timeStamp));"#
+    ',"key":' + stringify(event.key || '') + ',"at":' + pressedAt(event);"#
     }
     #[cfg(target_os = "macos")]
     {
         "const typed = () => '';"
+    }
+}
+
+/// The keydown listener. On Windows it stops the keys a live sequence takes ([`live_keys`]), and a stopped key's
+/// autorepeats until its release, and reports them instead of the page getting them; everything else is the page's and
+/// is reported as `input`. A key that an input method or a dead key is composing stays the page's too. What it reads of
+/// the event it took before the page's scripts ran, as the guard does: an event's `isTrusted` cannot be faked, but its
+/// other fields can be replaced on the prototype. macOS's monitor takes these keys itself.
+fn keydown() -> &'static str {
+    #[cfg(not(target_os = "macos"))]
+    {
+        r#"const keyField = (name) => Function.call.bind(Object.getOwnPropertyDescriptor(KeyboardEvent.prototype, name).get);
+  const [virtualKey, repeated, keyName, codeName, shifted, ctrl, alt, meta, composing] =
+    ['keyCode', 'repeat', 'key', 'code', 'shiftKey', 'ctrlKey', 'altKey', 'metaKey', 'isComposing'].map(keyField);
+  const prevent = Function.call.bind(Event.prototype.preventDefault);
+  const halt = Function.call.bind(Event.prototype.stopImmediatePropagation);
+  const stopped = new Set();
+  let live = null;
+  let until = 0;
+  listen('message', (event) => {
+    const data = event.data;
+    if (!data || data.ngterm !== 'keys' || data.n !== responseNonce) return;
+    live = data.keys.length ? new Set(data.keys) : null;
+    until = sinceOrigin() + data.ms;
+  });
+  const stops = (event) => {
+    const key = virtualKey(event);
+    if (repeated(event)) return stopped.has(key);
+    stopped.delete(key);
+    if (!live || ctrl(event) || alt(event) || meta(event) || composing(event) || keyName(event) === 'Dead') return false;
+    if (sinceOrigin() >= until) { live = null; return false; }
+    return live.has(key | (shifted(event) ? 0x100 : 0));
+  };
+  const reportInput = report(false);
+  const keydown = (event) => {
+    if (!event.isTrusted || !stops(event)) { reportInput(event); return; }
+    prevent(event);
+    halt(event);
+    stopped.add(virtualKey(event));
+    send('key', ',"vk":' + virtualKey(event) + ',"shift":' + shifted(event) + ',"repeat":' + repeated(event) +
+      ',"key":' + stringify(keyName(event)) + ',"code":' + stringify(codeName(event)) + ',"at":' + pressedAt(event));
+  };
+  window.addEventListener('keyup', (event) => { if (event.isTrusted) stopped.delete(virtualKey(event)); }, true);"#
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "const keydown = report(false);"
     }
 }
 
@@ -172,7 +227,28 @@ pub enum Message {
     Input { click: bool, typed_at: Option<u64> },
     /// A bridge request: its reply id and the JSON the page sent.
     Bridge { id: u64, body: String },
+    /// A key the script stopped for a live sequence ([`keydown`]): the keymap's now, or given back to the page.
+    #[cfg(not(target_os = "macos"))]
+    Key(StoppedKey),
 }
+
+/// A key the page's script kept from the page, as it reported it.
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoppedKey {
+    pub virtual_key: u32,
+    pub shift: bool,
+    pub repeat: bool,
+    /// The event's `key` and `code`, which giving it back to the page needs ([`redelivery`]).
+    pub key: String,
+    pub code: String,
+    /// When it went down, in milliseconds since the epoch.
+    pub at: u64,
+}
+
+/// What [`live_keys`] adds to a virtual key for a press with Shift held; the script's `0x100`.
+#[cfg(not(target_os = "macos"))]
+pub const SHIFTED: u32 = 0x100;
 
 /// The message `raw` carries when ngterm's script posted it with `nonce`; `None` for anything else (the page's own
 /// messages, a frame's, a malformed one).
@@ -191,8 +267,23 @@ pub fn parse(raw: &str, nonce: &str) -> Option<Message> {
             id: value.get("id")?.as_u64()?,
             body: value.get("body")?.to_string(),
         }),
+        #[cfg(not(target_os = "macos"))]
+        "key" => Some(Message::Key(stopped_key(&value)?)),
         _ => None,
     }
+}
+
+/// The stopped key the report `value` names.
+#[cfg(not(target_os = "macos"))]
+fn stopped_key(value: &Value) -> Option<StoppedKey> {
+    Some(StoppedKey {
+        virtual_key: u32::try_from(value.get("vk")?.as_u64()?).ok()?,
+        shift: value.get("shift")?.as_bool()?,
+        repeat: value.get("repeat")?.as_bool()?,
+        key: value.get("key")?.as_str()?.to_owned(),
+        code: value.get("code")?.as_str()?.to_owned(),
+        at: value.get("at")?.as_u64()?,
+    })
 }
 
 /// When the report `value` says a key that can end a half-typed leader went down: a bare modifier is the next chord
@@ -231,6 +322,42 @@ pub fn reply(id: u64, nonce: &str, answer: Result<Value, String>) -> String {
         Err(error) => serde_json::json!({"ngterm": "reply", "n": nonce, "id": id, "error": error}),
     };
     message.to_string()
+}
+
+/// The web message that tells the script of the page signing with `nonce` which `keys` a live sequence takes for the
+/// next `ms` milliseconds: virtual keys, each with [`SHIFTED`] when it is the press with Shift; none when no sequence is
+/// live.
+#[cfg(not(target_os = "macos"))]
+#[must_use]
+pub fn live_keys(nonce: &str, keys: &[u32], ms: u64) -> String {
+    serde_json::json!({"ngterm": "keys", "n": credentials(nonce).1, "keys": keys, "ms": ms}).to_string()
+}
+
+/// The `Input.dispatchKeyEvent` calls that give `key` back to the page: a trusted press and release, so a text field
+/// types it and a page's own listeners see it. A stopped key's real press has already gone, so this one is never an
+/// autorepeat.
+#[cfg(not(target_os = "macos"))]
+#[must_use]
+pub fn redelivery(key: &StoppedKey) -> [Value; 2] {
+    let text = match key.key.as_str() {
+        "Enter" => Some("\r".to_owned()),
+        name if name.chars().count() == 1 => Some(name.to_owned()),
+        _ => None,
+    };
+    let event = |kind: &str| {
+        serde_json::json!({
+            "type": kind,
+            "key": key.key,
+            "code": key.code,
+            "windowsVirtualKeyCode": key.virtual_key,
+            "modifiers": if key.shift { 8 } else { 0 },
+        })
+    };
+    let mut press = event(if text.is_some() { "keyDown" } else { "rawKeyDown" });
+    if let Some(text) = text {
+        press["text"] = Value::String(text);
+    }
+    [press, event("keyUp")]
 }
 
 /// Core's theme script as a `WebView2` document runs it: at document creation the document has no root element yet
@@ -336,6 +463,105 @@ mod tests {
             !cfg!(target_os = "macos")
         );
         assert_eq!(script.contains("const typed = () => '';"), cfg!(target_os = "macos"));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_stopped_keys_report_names_the_key_and_how_it_was_pressed() {
+        let credential = nonce();
+        let nonce = credentials(&credential).0;
+        let report = format!(
+            r#"{{"n":"{nonce}","k":"key","vk":71,"shift":true,"repeat":false,"key":"G","code":"KeyG","at":9}}"#
+        );
+        assert_eq!(
+            parse(&report, &credential),
+            Some(Message::Key(StoppedKey {
+                virtual_key: 71,
+                shift: true,
+                repeat: false,
+                key: "G".to_owned(),
+                code: "KeyG".to_owned(),
+                at: 9
+            }))
+        );
+        let forged = format!(r#"{{"n":"{}","k":"key","vk":71}}"#, credentials(&credential).1);
+        assert_eq!(
+            parse(&forged, &credential),
+            None,
+            "the reply credential authorizes nothing"
+        );
+        assert_eq!(
+            parse(&format!(r#"{{"n":"{nonce}","k":"key","vk":71}}"#), &credential),
+            None
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn the_host_tells_the_script_the_live_keys_with_the_reply_credential() {
+        let credential = nonce();
+        let told: Value = serde_json::from_str(&live_keys(&credential, &[0x47, 0x47 | SHIFTED], 1500)).unwrap();
+        assert_eq!(
+            told,
+            serde_json::json!({"ngterm": "keys", "n": credentials(&credential).1, "keys": [71, 327], "ms": 1500})
+        );
+        let idle: Value = serde_json::from_str(&live_keys(&credential, &[], 0)).unwrap();
+        assert_eq!(idle["keys"], serde_json::json!([]));
+    }
+
+    /// The script is what stops a key, in a real page's capture phase: the part a unit test can see is what it reads.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn the_script_stops_live_keys_and_reports_them_as_trusted_only() {
+        let script = page_script(&nonce(), false, false);
+        assert!(script.contains("data.ngterm !== 'keys' || data.n !== responseNonce"));
+        assert!(script.contains("if (!event.isTrusted || !stops(event))"));
+        assert!(script.contains("window.addEventListener('keydown', keydown, true)"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_macos_page_stops_no_key() {
+        let script = page_script(&nonce(), false, false);
+        assert!(script.contains("const keydown = report(false);"));
+        assert!(!script.contains("preventDefault") && !script.contains("stopImmediatePropagation"));
+        let credential = nonce();
+        let nonce = credentials(&credential).0;
+        let report = format!(
+            r#"{{"n":"{nonce}","k":"key","vk":71,"shift":false,"repeat":false,"key":"g","code":"KeyG","at":9}}"#
+        );
+        assert_eq!(parse(&report, &credential), None);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_stopped_key_goes_back_to_the_page_as_a_trusted_press_and_release() {
+        let stopped = |key: &str, code: &str, virtual_key: u32, shift: bool| StoppedKey {
+            virtual_key,
+            shift,
+            repeat: true,
+            key: key.to_owned(),
+            code: code.to_owned(),
+            at: 0,
+        };
+        let [press, release] = redelivery(&stopped("G", "KeyG", 71, true));
+        assert_eq!(
+            press,
+            serde_json::json!({
+                "type": "keyDown", "key": "G", "code": "KeyG", "windowsVirtualKeyCode": 71, "modifiers": 8, "text": "G"
+            })
+        );
+        assert_eq!(
+            release,
+            serde_json::json!({
+                "type": "keyUp", "key": "G", "code": "KeyG", "windowsVirtualKeyCode": 71, "modifiers": 8
+            })
+        );
+        let [enter, _] = redelivery(&stopped("Enter", "Enter", 13, false));
+        assert_eq!(enter["text"], "\r", "Enter types a line break");
+        let [backspace, _] = redelivery(&stopped("Backspace", "Backspace", 8, false));
+        assert_eq!(backspace["type"], "rawKeyDown", "Backspace types nothing");
+        assert!(backspace.get("text").is_none());
     }
 
     #[test]

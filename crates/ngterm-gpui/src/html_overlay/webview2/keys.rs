@@ -4,11 +4,12 @@
 //! upstream's monitor sees every press, and one the keymap or the window would take (a custom command, a menu chord,
 //! Ctrl+Tab's switcher, the Esc that abandons a half-typed leader) is kept from the page and dispatched to the window
 //! instead. Every other key, typing and the page's own shortcuts (copy, paste, select all), stays the page's. A
-//! typed character is not among the keys `WebView2` reports: the page script's report of it (`bridge`) reaches the
+//! typed character is not among the keys `WebView2` reports. The page script's report of it (`bridge`) reaches the
 //! monitor too late to take the key, so it can only end a half-typed leader or a repeat window
-//! (`keymap_dispatch::page_typed`), and a leader's plain-letter tail, which upstream's monitor fires, cannot fire here.
-//! That script reports only the top frame: typing inside an iframe leaves a leader or repeat window live until
-//! another reported key ends it or its timeout lapses.
+//! (`keymap_dispatch::page_typed`), unless the host told the script the keys a live sequence takes ([`live_keys`]): those
+//! the script stops itself and reports (`keymap_dispatch::dispatch_stopped_key`), which is how a leader's plain-letter,
+//! Enter or Backspace tail fires as upstream's monitor fires it. That script reports only the top frame: typing inside
+//! an iframe leaves a leader or repeat window live until another reported key ends it or its timeout lapses.
 
 use gpui_kit::{Keystroke, Modifiers};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT};
@@ -95,6 +96,37 @@ pub fn keycode(virtual_key: u32, scan_code: u32, extended: bool) -> u32 {
             input::xkb_keycode_of_scan_code(input::virtual_key_scan_code(virtual_key, scan_code))
         })
         .unwrap_or(0)
+}
+
+/// The keystroke a press of `virtual_key` is, with Shift held if `shift`: what a page's script stopped (`bridge`).
+#[must_use]
+pub fn stopped_keystroke(virtual_key: u32, shift: bool) -> Option<Keystroke> {
+    chord_keystroke(
+        virtual_key,
+        Modifiers {
+            shift,
+            ..Modifiers::default()
+        },
+    )
+}
+
+/// The keys a page's script should stop while a leader or repeat window is live (`bridge::live_keys`), and how many
+/// milliseconds it stays so; `None` when no sequence is live or none of its next keys is one the script reports.
+/// Each is asked of the matcher as the press itself would be, so the script stops only what advances the sequence.
+#[must_use]
+pub fn live_keys() -> Option<(Vec<u32>, u64)> {
+    let remaining = crate::keymap_dispatch::live_remaining()?;
+    let keys: Vec<u32> = (0..=0xFF)
+        .flat_map(|virtual_key| [virtual_key, virtual_key | super::bridge::SHIFTED])
+        .filter(|key| {
+            let virtual_key = key & !super::bridge::SHIFTED;
+            stopped_keystroke(virtual_key, key & super::bridge::SHIFTED != 0).is_some_and(|keystroke| {
+                let stroke = crate::keymap_dispatch::page_stroke(&keystroke, keycode(virtual_key, 0, false), false);
+                crate::keymap_dispatch::would_advance(&stroke)
+            })
+        })
+        .collect();
+    (!keys.is_empty()).then(|| (keys, u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)))
 }
 
 /// The keystroke the app takes from a press of `virtual_key` in a page (module docs), `None` for the page's own.
@@ -428,6 +460,23 @@ mod tests {
             assert_eq!(press(true), Some(false), "an autorepeat fires nothing");
         }
         assert_eq!(press(false), Some(true), "a new press fires again");
+    }
+
+    /// The script stops only what the monitor would take of a live sequence, its Shift-held tails too.
+    #[test]
+    fn a_live_sequence_names_the_keys_it_takes_and_no_sequence_names_none() {
+        let _keyboard = PlainKeyboard::new();
+        assert_eq!(live_keys(), None, "no keymap loaded");
+        let (keymap, _) = ngterm_core::keymap::parse_keymap(
+            "command \"g\" ctrl+a>g true\ncommand \"h\" ctrl+a>shift+h true\ncommand \"e\" ctrl+a>return true\n",
+            &ngterm_core::keymap::linux_defaults(),
+        );
+        crate::keymap_dispatch::load_keymap(&keymap);
+        assert_eq!(live_keys(), None, "nothing armed");
+        assert_eq!(crate::keymap_dispatch::press_dispatched("ctrl-a"), Some(false));
+        let (keys, ms) = live_keys().expect("a live leader");
+        assert_eq!(keys, vec![0x0D, 0x47, 0x48 | 0x100]);
+        assert!((1..=1500).contains(&ms), "{ms}");
     }
 
     /// A plain key the leader is waiting for is the keymap's, and a bare modifier leaves the leader waiting.

@@ -34,6 +34,10 @@ pub trait NativeView {
     fn reparent(&self, parent: isize);
     /// Posts `json` to the page as a web message.
     fn post_json(&self, json: &str);
+    /// Gives the page back a key its script stopped and the keymap did not take: `events` are its
+    /// `Input.dispatchKeyEvent` calls, in order (`bridge::redelivery`).
+    #[cfg(windows)]
+    fn redeliver_key(&self, events: &[serde_json::Value]);
     /// Evaluates `expression` in the renderer's world; its answer arrives on the returned channel.
     fn call_renderer(&self, expression: &str) -> Receiver<Answer>;
 }

@@ -486,6 +486,30 @@ impl NativeView for Native {
             tracing::debug!(%err, "a page's reply was not delivered");
         }
     }
+
+    /// Gives the page back a key its script stopped: CDP's trusted input, so the page types and hears it as a real one.
+    fn redeliver_key(&self, events: &[serde_json::Value]) {
+        let webview = self.webview();
+        for event in events {
+            let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|result, _| {
+                if let Err(err) = result {
+                    tracing::warn!(%err, "a page's key could not be given back");
+                }
+                Ok(())
+            }));
+            // SAFETY: a COM call on the web view's own thread; the handler answers once.
+            let called = unsafe {
+                webview.CallDevToolsProtocolMethod(
+                    &HSTRING::from("Input.dispatchKeyEvent"),
+                    &HSTRING::from(event.to_string()),
+                    &handler,
+                )
+            };
+            if let Err(err) = called {
+                tracing::warn!(%err, "a page's key could not be given back");
+            }
+        }
+    }
 }
 
 /// The web view of `spec` (wry's part of it).

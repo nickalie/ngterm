@@ -187,6 +187,9 @@ pub struct Page {
     applied: Cell<Placement>,
     /// The web view holds the keyboard, as it last reported.
     native_focused: Cell<bool>,
+    /// The page's script was last told a live sequence's keys (`keys::live_keys`).
+    #[cfg(windows)]
+    script_keys: Cell<bool>,
     /// A file page reloads once its replaced theme script is in place.
     reload_after_theme: Cell<bool>,
     document_generation: super::super::documents::Generation,
@@ -243,6 +246,8 @@ impl Page {
             laid_out: Cell::new(Placement::default()),
             applied: Cell::new(Placement::default()),
             native_focused: Cell::new(false),
+            #[cfg(windows)]
+            script_keys: Cell::new(false),
             reload_after_theme: Cell::new(false),
             document_generation: super::super::documents::Generation::default(),
             text_bridge: TextPage::new(overlay, me.clone() as Weak<dyn PageChannel>, poster),
@@ -635,7 +640,10 @@ impl Page {
                 };
                 self.offer(&navigation, HtmlNavigationTarget::NewWindow, cx);
             }
+            #[cfg(target_os = "macos")]
             Report::Message(raw) => self.message(&raw),
+            #[cfg(windows)]
+            Report::Message(raw) => self.message(&raw, cx),
             Report::Focus(focused) => self.native_focus(focused, cx),
             Report::DownloadRefused(uri) => tracing::info!(uri, "a page's download was refused"),
             #[cfg(target_os = "macos")]
@@ -799,6 +807,9 @@ impl Page {
         if !focused {
             return;
         }
+        // a sequence begun outside the page goes on inside it
+        #[cfg(windows)]
+        self.sync_script_keys();
         let (Some(element), Some(window)) = (self.element(), self.element_window.get()) else {
             return;
         };
@@ -833,19 +844,71 @@ impl Page {
         if dispatched.is_err() {
             crate::keymap_dispatch::page_report_dropped();
         }
+        #[cfg(windows)]
+        self.sync_script_keys();
+    }
+
+    /// Tells the page's script which keys a live leader or repeat window takes, or that none does any longer; while no
+    /// sequence is live and none was, it hears nothing (`bridge`).
+    #[cfg(windows)]
+    fn sync_script_keys(&self) {
+        let live = super::keys::live_keys();
+        if live.is_none() && !self.script_keys.get() {
+            return;
+        }
+        self.script_keys.set(live.is_some());
+        let (keys, ms) = live.unwrap_or_default();
+        if let Some(native) = self.native() {
+            native.post_json(&bridge::live_keys(&self.nonce, &keys, ms));
+        }
+    }
+
+    /// A key the page's script stopped: the keymap's if it still wants it, else it goes back into the page, so a key
+    /// the script stopped on stale word is never lost.
+    #[cfg(windows)]
+    fn stopped_key(&self, key: &bridge::StoppedKey, cx: &mut App) {
+        if !self.dispatch_stopped(key, cx)
+            && let Some(native) = self.native()
+        {
+            native.redeliver_key(&bridge::redelivery(key));
+        }
+        self.sync_script_keys();
+    }
+
+    /// Whether the keymap took the stopped `key`, dispatched to the page's window as a key from its accelerator is.
+    #[cfg(windows)]
+    fn dispatch_stopped(&self, key: &bridge::StoppedKey, cx: &mut App) -> bool {
+        let (Some(window), Some(keystroke)) = (
+            self.element_window.get(),
+            super::keys::stopped_keystroke(key.virtual_key, key.shift),
+        ) else {
+            return false;
+        };
+        let keycode = super::keys::keycode(key.virtual_key, 0, false);
+        let taken = window.update(cx, |_, window, cx| {
+            let taken =
+                crate::keymap_dispatch::dispatch_stopped_key(&keystroke, keycode, key.repeat, key.at, window, cx);
+            crate::keymap_dispatch::release_dispatched();
+            taken
+        });
+        taken.unwrap_or(false)
     }
 
     // MARK: - the bridge and the user's input
 
-    fn message(&self, raw: &str) {
+    fn message(&self, raw: &str, #[cfg(windows)] cx: &mut App) {
         match bridge::parse(raw, &self.nonce) {
             Some(bridge::Message::Input { click, typed_at }) => {
                 if let Some(at) = typed_at {
                     crate::keymap_dispatch::page_typed(at);
                 }
+                #[cfg(windows)]
+                self.sync_script_keys();
                 self.user_input(click);
             }
             Some(bridge::Message::Bridge { id, body }) => self.bridge_message(id, body),
+            #[cfg(windows)]
+            Some(bridge::Message::Key(key)) => self.stopped_key(&key, cx),
             None => tracing::debug!(page = %self.id, "a web message that is none of ngterm's script's"),
         }
     }
@@ -1554,63 +1617,70 @@ mod tests {
     /// Upstream's unmatched press: a character typed into the page, which no key event reports, ends a half-typed
     /// leader, and the page keeps it.
     #[cfg(windows)]
-    #[test]
-    fn a_character_typed_in_a_page_ends_a_half_typed_leader() {
+    #[gpui_kit::test]
+    fn a_character_typed_in_a_page_ends_a_half_typed_leader(cx: &mut gpui_kit::TestAppContext) {
         let page = page_taking_reports();
         pressed_in_page("command \"g\" ctrl+a>ctrl+g true\n", &["ctrl-a"]);
-        page.message(&key_report(&page, "x", std::time::Duration::ZERO));
+        cx.update(|cx| page.message(&key_report(&page, "x", std::time::Duration::ZERO), cx));
         assert!(!crate::keymap_dispatch::sequence_is_live());
     }
 
     /// What a page can report without ending a half-typed leader: the next chord's modifier going down, and a chord
     /// (`AcceleratorKeyPressed` reports it, the script names no key for it).
     #[cfg(windows)]
-    #[test]
-    fn a_page_report_of_a_bare_modifier_or_a_chord_leaves_a_leader_waiting() {
+    #[gpui_kit::test]
+    fn a_page_report_of_a_bare_modifier_or_a_chord_leaves_a_leader_waiting(cx: &mut gpui_kit::TestAppContext) {
         let page = page_taking_reports();
         pressed_in_page("command \"g\" ctrl+a>ctrl+g true\n", &["ctrl-a"]);
         for key in ["Control", "Shift", "Alt", "Meta", "CapsLock"] {
-            page.message(&key_report(&page, key, std::time::Duration::ZERO));
+            cx.update(|cx| page.message(&key_report(&page, key, std::time::Duration::ZERO), cx));
             assert!(crate::keymap_dispatch::sequence_is_live(), "{key}");
         }
         let nonce = page.nonce.split_once(':').unwrap().0;
-        page.message(&format!(r#"{{"n":"{nonce}","k":"input","click":false}}"#));
+        cx.update(|cx| page.message(&format!(r#"{{"n":"{nonce}","k":"input","click":false}}"#), cx));
         assert!(crate::keymap_dispatch::sequence_is_live(), "a chord's report");
         assert_eq!(crate::keymap_dispatch::press_dispatched("ctrl-g"), Some(true));
     }
 
     /// The report of a key typed before the leader, delivered after it armed: the leader goes on working.
     #[cfg(windows)]
-    #[test]
-    fn a_page_report_arriving_after_a_leader_armed_for_an_earlier_key_leaves_it_waiting() {
+    #[gpui_kit::test]
+    fn a_page_report_arriving_after_a_leader_armed_for_an_earlier_key_leaves_it_waiting(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         let page = page_taking_reports();
         pressed_in_page("command \"g\" ctrl+a>ctrl+g true\n", &["ctrl-a"]);
-        page.message(&key_report(&page, "x", std::time::Duration::from_secs(5)));
+        cx.update(|cx| page.message(&key_report(&page, "x", std::time::Duration::from_secs(5)), cx));
         assert!(crate::keymap_dispatch::sequence_is_live());
-        page.message(&key_report(&page, "x", std::time::Duration::from_hours(40 * 365 * 24)));
+        cx.update(|cx| {
+            page.message(
+                &key_report(&page, "x", std::time::Duration::from_hours(40 * 365 * 24)),
+                cx,
+            );
+        });
         assert!(crate::keymap_dispatch::sequence_is_live());
         assert_eq!(crate::keymap_dispatch::press_dispatched("ctrl-g"), Some(true));
     }
 
-    /// A plain-letter tail typed in a page: `WebView2` reports no typed character before the page has it, so the
-    /// leader ends with nothing fired where upstream's monitor would fire it.
+    /// A plain-letter tail the page's script let through (its word on the live sequence still on the way): the page
+    /// has the key, and the leader ends with nothing fired.
     #[cfg(windows)]
-    #[test]
-    fn a_leaders_plain_letter_tail_typed_in_a_page_ends_it_unfired() {
+    #[gpui_kit::test]
+    fn a_plain_tail_the_script_let_through_ends_the_leader_unfired(cx: &mut gpui_kit::TestAppContext) {
         let page = page_taking_reports();
         pressed_in_page("command \"g\" ctrl+a>g true\n", &["ctrl-a"]);
-        page.message(&key_report(&page, "g", std::time::Duration::ZERO));
+        cx.update(|cx| page.message(&key_report(&page, "g", std::time::Duration::ZERO), cx));
         assert!(!crate::keymap_dispatch::sequence_is_live());
         assert!(crate::keymap_dispatch::take_fired().is_empty());
     }
 
     /// Upstream's `testAKeyTypedIntoATextFieldClosesTheRepeatWindow`, in a page.
     #[cfg(windows)]
-    #[test]
-    fn a_character_typed_in_a_page_closes_a_repeat_window() {
+    #[gpui_kit::test]
+    fn a_character_typed_in_a_page_closes_a_repeat_window(cx: &mut gpui_kit::TestAppContext) {
         let page = page_taking_reports();
         pressed_in_page("command \"n\" ctrl+a>ctrl+n --repeat true\n", &["ctrl-a", "ctrl-n"]);
-        page.message(&key_report(&page, "x", std::time::Duration::ZERO));
+        cx.update(|cx| page.message(&key_report(&page, "x", std::time::Duration::ZERO), cx));
         assert!(!crate::keymap_dispatch::sequence_is_live());
     }
 }

@@ -1331,6 +1331,248 @@ fn a_key_report_with_a_closed_window_leaves_the_queue(cx: &mut TestAppContext) {
     assert!(!crate::keymap_dispatch::sequence_is_live());
 }
 
+/// The page's script's report of a key it stopped: its virtual key, Shift, autorepeat and the key's names.
+#[cfg(windows)]
+fn stopped_key(page: &Page, virtual_key: u32, shift: bool, repeat: bool, names: (&str, &str)) -> Report {
+    let nonce = page.nonce.split_once(':').unwrap().0;
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let (key, code) = names;
+    Report::Message(format!(
+        r#"{{"n":"{nonce}","k":"key","vk":{virtual_key},"shift":{shift},"repeat":{repeat},"key":"{key}","code":"{code}","at":{at}}}"#
+    ))
+}
+
+/// `driven`'s page in a window under the key monitor, `keymap` loaded and `pressed` dispatched from the page.
+#[cfg(windows)]
+fn under_monitor<'a>(
+    driven: &Driven,
+    cx: &'a mut TestAppContext,
+    keymap: &str,
+    pressed: &[&str],
+) -> &'a mut VisualTestContext {
+    let (keymap, _) = ngterm_core::keymap::parse_keymap(keymap, &ngterm_core::keymap::linux_defaults());
+    crate::keymap_dispatch::load_keymap(&keymap);
+    let (_element, cx) = mounted(driven, cx);
+    cx.update(|window, cx| {
+        crate::keymap_dispatch::init(cx);
+        crate::keymap_dispatch::register_window(
+            window.window_handle(),
+            crate::keymap_dispatch::KeyOrigin::Window(Uuid::new_v4()),
+        );
+    });
+    for key in pressed {
+        assert!(crate::keymap_dispatch::press_dispatched(key).is_some(), "{key}");
+    }
+    cx
+}
+
+/// Upstream's monitor sees every press in a page: a leader's tail that types (a letter, Enter, Backspace) fires it, and
+/// its press never reaches the page. `AcceleratorKeyPressed` reports none of these, so it is the page's script that
+/// stops them.
+#[cfg(windows)]
+#[gpui_kit::test]
+fn a_leaders_typing_tail_stopped_by_the_pages_script_fires_it(cx: &mut TestAppContext) {
+    for (shortcut, virtual_key, key, code) in [
+        ("g", 0x47, "g", "KeyG"),
+        ("return", 0x0D, "Enter", "Enter"),
+        ("delete", 0x08, "Backspace", "Backspace"),
+    ] {
+        let driven = driven(&url_overlay());
+        let visual = under_monitor(
+            &driven,
+            cx,
+            &format!("command \"t\" ctrl+a>{shortcut} true\n"),
+            &["ctrl-a"],
+        );
+        crate::keymap_dispatch::take_fired();
+        driven.view.take();
+        let report = stopped_key(&driven.page, virtual_key, false, false, (key, code));
+        visual.cx.update(|cx| driven.page.report(report, cx));
+        visual.run_until_parked();
+        assert_eq!(crate::keymap_dispatch::take_fired().len(), 1, "{shortcut} fires");
+        assert!(
+            !crate::keymap_dispatch::sequence_is_live(),
+            "{shortcut} ends the leader"
+        );
+    }
+}
+
+/// What the page's script was last told of a live sequence's keys, of the calls since the last take.
+#[cfg(windows)]
+fn told_keys(view: &Probe) -> Vec<Vec<u32>> {
+    view.take()
+        .into_iter()
+        .filter_map(|call| match call {
+            Call::Post(json) => {
+                let message: serde_json::Value = serde_json::from_str(&json).unwrap();
+                (message["ngterm"] == "keys").then(|| {
+                    message["keys"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|key| u32::try_from(key.as_u64().unwrap()).unwrap())
+                        .collect()
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A press of `key` the page's accelerator reports, as `wire_keys` hands it over.
+#[cfg(windows)]
+fn accelerator_key(driven: &Driven, visual: &mut VisualTestContext, key: &str) {
+    let keystroke = gpui_kit::Keystroke::parse(key).unwrap();
+    assert!(crate::keymap_dispatch::takes(&crate::keymap_dispatch::page_stroke(
+        &keystroke, 0, false
+    )));
+    visual
+        .cx
+        .update(|cx| driven.page.report(Report::Key(keystroke, 0, false), cx));
+    visual.run_until_parked();
+}
+
+/// The host tells the script when a leader arms and when it ends, and which keys its next chord can be.
+#[cfg(windows)]
+#[gpui_kit::test]
+fn the_script_hears_of_a_live_leader_and_of_its_end(cx: &mut TestAppContext) {
+    let driven = driven(&url_overlay());
+    let visual = under_monitor(
+        &driven,
+        cx,
+        "command \"g\" ctrl+a>g true\ncommand \"h\" ctrl+a>shift+h true\n",
+        &[],
+    );
+    driven.view.take();
+    accelerator_key(&driven, visual, "ctrl-a");
+    assert_eq!(
+        told_keys(&driven.view),
+        vec![vec![0x47, 0x48 | 0x100]],
+        "the leader's plain tails"
+    );
+    let report = stopped_key(&driven.page, 0x47, false, false, ("g", "KeyG"));
+    visual.cx.update(|cx| driven.page.report(report, cx));
+    visual.run_until_parked();
+    assert_eq!(told_keys(&driven.view), vec![Vec::<u32>::new()], "the leader ended");
+    crate::keymap_dispatch::take_fired();
+    // and with no sequence live, a key and a report say nothing to the script
+    accelerator_key(&driven, visual, "ctrl-shift-t");
+    driven.report(
+        Report::Message(format!(
+            r#"{{"n":"{}","k":"input","click":false}}"#,
+            driven.page.nonce.split_once(':').unwrap().0
+        )),
+        &mut visual.cx,
+    );
+    assert_eq!(told_keys(&driven.view), Vec::<Vec<u32>>::new(), "nothing is live");
+}
+
+/// A leader whose tails are all chords has nothing for the script to stop: `AcceleratorKeyPressed` reports those.
+#[cfg(windows)]
+#[gpui_kit::test]
+fn a_leader_of_chords_only_leaves_the_script_doing_nothing(cx: &mut TestAppContext) {
+    let driven = driven(&url_overlay());
+    let visual = under_monitor(&driven, cx, "command \"g\" ctrl+a>ctrl+g true\n", &[]);
+    driven.view.take();
+    accelerator_key(&driven, visual, "ctrl-a");
+    assert!(crate::keymap_dispatch::sequence_is_live());
+    assert_eq!(told_keys(&driven.view), Vec::<Vec<u32>>::new());
+}
+
+/// A key the script stopped on stale word (the sequence ended first) goes back to the page, so no key is ever lost; a
+/// key the live sequence does not take is the same, and it ends the sequence, as any key the page keeps does.
+#[cfg(windows)]
+#[gpui_kit::test]
+fn a_stopped_key_the_keymap_does_not_take_goes_back_to_the_page(cx: &mut TestAppContext) {
+    let driven = driven(&url_overlay());
+    let visual = under_monitor(&driven, cx, "command \"g\" ctrl+a>g true\n", &["ctrl-a"]);
+    driven.view.take();
+    let redelivered = |view: &Probe| -> usize {
+        view.take()
+            .iter()
+            .filter(|call| matches!(call, Call::Redelivered(events) if events.len() == 2))
+            .count()
+    };
+    let report = stopped_key(&driven.page, 0x58, false, false, ("x", "KeyX"));
+    visual.cx.update(|cx| driven.page.report(report, cx));
+    assert_eq!(redelivered(&driven.view), 1, "x matches nothing");
+    assert!(!crate::keymap_dispatch::sequence_is_live(), "and ends the leader");
+    let report = stopped_key(&driven.page, 0x47, false, false, ("g", "KeyG"));
+    visual.cx.update(|cx| driven.page.report(report, cx));
+    assert_eq!(redelivered(&driven.view), 1, "the leader was already gone");
+    assert!(crate::keymap_dispatch::take_fired().is_empty(), "nothing fired");
+}
+
+/// With no window to dispatch into, a stopped key still goes back to the page.
+#[cfg(windows)]
+#[gpui_kit::test]
+fn a_stopped_key_with_no_window_goes_back_to_the_page(cx: &mut TestAppContext) {
+    let driven = driven(&url_overlay());
+    let report = stopped_key(&driven.page, 0x47, false, false, ("g", "KeyG"));
+    cx.update(|cx| driven.page.report(report, cx));
+    assert!(matches!(driven.view.take().as_slice(), [Call::Redelivered(events)] if events[0]["text"] == "g"));
+}
+
+/// `driven`'s script stopped key `g`, pressed or autorepeating, and the report has acted.
+#[cfg(windows)]
+fn stopped_g(driven: &Driven, repeat: bool, visual: &mut VisualTestContext) {
+    let report = stopped_key(&driven.page, 0x47, false, repeat, ("g", "KeyG"));
+    visual.cx.update(|cx| driven.page.report(report, cx));
+    visual.run_until_parked();
+}
+
+/// A leader's held tail fires once, and its autorepeats stay the keymap's without firing or going back to the page.
+#[cfg(windows)]
+#[gpui_kit::test]
+fn a_stopped_tails_autorepeat_fires_nothing_and_stays_the_keymaps(cx: &mut TestAppContext) {
+    let driven = driven(&url_overlay());
+    let visual = under_monitor(&driven, cx, "command \"g\" ctrl+a>g true\n", &["ctrl-a"]);
+    crate::keymap_dispatch::take_fired();
+    driven.view.take();
+    stopped_g(&driven, false, visual);
+    assert_eq!(crate::keymap_dispatch::take_fired().len(), 1);
+    stopped_g(&driven, true, visual);
+    assert!(
+        crate::keymap_dispatch::take_fired().is_empty(),
+        "the autorepeat fires nothing"
+    );
+    assert!(
+        !driven
+            .view
+            .take()
+            .iter()
+            .any(|call| matches!(call, Call::Redelivered(_))),
+        "and is not given back"
+    );
+}
+
+/// A `--repeat` tail's autorepeat fires again, the window staying open, and the script keeps stopping it.
+#[cfg(windows)]
+#[gpui_kit::test]
+fn a_stopped_repeat_tails_autorepeat_fires_again(cx: &mut TestAppContext) {
+    let driven = driven(&url_overlay());
+    let visual = under_monitor(&driven, cx, "command \"g\" ctrl+a>g --repeat true\n", &["ctrl-a"]);
+    crate::keymap_dispatch::take_fired();
+    driven.view.take();
+    stopped_g(&driven, false, visual);
+    assert_eq!(crate::keymap_dispatch::take_fired().len(), 1);
+    stopped_g(&driven, true, visual);
+    assert_eq!(
+        crate::keymap_dispatch::take_fired().len(),
+        1,
+        "a live tail's autorepeat fires again"
+    );
+    assert!(crate::keymap_dispatch::sequence_is_live(), "the window stays open");
+    assert_eq!(
+        told_keys(&driven.view).last().unwrap(),
+        &vec![0x47],
+        "the script is told the tail"
+    );
+}
+
 #[test]
 fn every_navigation_error_names_its_reason() {
     for (status, reason) in [

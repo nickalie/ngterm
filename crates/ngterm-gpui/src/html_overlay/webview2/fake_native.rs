@@ -35,6 +35,8 @@ pub(super) enum Call {
     Reparent(isize),
     Post(String),
     Renderer(String),
+    #[cfg(windows)]
+    Redelivered(Vec<serde_json::Value>),
 }
 
 /// One web view as the test watches it: what it was asked, and whether its last holder let it go.
@@ -122,6 +124,10 @@ impl NativeView for FakeView {
     }
     fn post_json(&self, json: &str) {
         self.record(Call::Post(json.to_owned()));
+    }
+    #[cfg(windows)]
+    fn redeliver_key(&self, events: &[serde_json::Value]) {
+        self.record(Call::Redelivered(events.to_vec()));
     }
     fn call_renderer(&self, expression: &str) -> Receiver<Answer> {
         self.record(Call::Renderer(expression.to_owned()));
