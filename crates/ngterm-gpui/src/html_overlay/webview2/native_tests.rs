@@ -4,6 +4,7 @@ use std::os::windows::fs::OpenOptionsExt as _;
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
 };
@@ -117,7 +118,17 @@ fn last_page_child() {
     let parent = host_window().unwrap();
     let reports = Rc::new(RefCell::new(Vec::new()));
     let first = spec(parent, dir.path(), &reports);
+    // The first private page makes the hidden anchor, which must leave keyboard focus with the parent.
+    let focused = std::ptr::with_exposed_provenance_mut(parent.cast_unsigned());
+    // SAFETY: this test's live parent window belongs to the current thread.
+    unsafe { SetFocus(focused) };
+    // SAFETY: reads only this thread's focus window.
+    let before = unsafe { GetFocus() };
+    assert_eq!(before, focused);
     let native = Native::create(&first).unwrap();
+    // SAFETY: reads only this thread's focus window after the hidden anchor is made.
+    let after = unsafe { GetFocus() };
+    assert_eq!(after, focused, "the hidden anchor took keyboard focus");
     let environment = native.environment();
     let pid = browser_pid(&native);
     // SAFETY: opening only this test's browser, for the waits below.
@@ -293,6 +304,7 @@ fn browser_child() {
     browser_failures(&native, &reports, browser);
     drop(native);
     drop(spec);
+    drop(ANCHOR.take());
     // SAFETY: destroy only the hidden parent made above, after all child web views were dropped.
     let destroyed = unsafe { DestroyWindow(std::ptr::with_exposed_provenance_mut(parent.cast_unsigned())) };
     assert_ne!(destroyed, 0);

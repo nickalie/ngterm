@@ -1213,10 +1213,10 @@ fn start_clear(profile: &ICoreWebView2Profile2, done: Box<dyn FnOnce(Result<(), 
     }
 }
 
-// MARK: - the saved store's anchor
+// MARK: - the profile and browser anchor
 
-/// A hidden web view on the saved store's profile, kept for the rest of the run once a page or the clear used the
-/// profile. `WebView2` unloads a profile when its last web view closes and loads it again for the next one; a web view
+/// A hidden web view that keeps the saved store's profile or the browser alive for the rest of the run.
+/// `WebView2` unloads a profile when its last web view closes and loads it again for the next one; a web view
 /// made while it unloads may find the profile's cookies not there yet, and a clear through it then empties nothing,
 /// the cookie coming back for the page after it (CI, `test_clear_empties_the_store_persistent_pages_share`). With the
 /// anchor the profile stays loaded, so every page and the clear see the one cookie store. It sits in a hidden window
@@ -1257,6 +1257,7 @@ fn anchor(
     let mut context = WebContext::new(Some(user_data.to_path_buf()));
     let mut builder = WebViewBuilder::new_with_web_context(&mut context)
         .with_visible(false)
+        .with_focused(false)
         .with_devtools(false)
         .with_incognito(private)
         .with_profile_name(profile)
@@ -1314,7 +1315,7 @@ fn host_window() -> Result<isize, String> {
     };
     if window.is_null() {
         return Err(format!(
-            "the saved store's window was not made: {}",
+            "the anchor's window was not made: {}",
             std::io::Error::last_os_error()
         ));
     }
