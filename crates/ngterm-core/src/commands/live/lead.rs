@@ -160,6 +160,7 @@ impl Core {
         }
         let changed = self.remote_pane_held(session, token) || stopped;
         self.respawn_pane_held(session, token);
+        self.check_ended_companion(session);
         changed
     }
 

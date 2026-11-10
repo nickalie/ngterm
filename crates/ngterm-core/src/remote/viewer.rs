@@ -106,6 +106,8 @@ pub(crate) struct ViewerRuntime {
     pub(crate) handed_companions: Vec<super::companions::PageAttach>,
     /// Page companions whose page ended on their origin, waiting for its outcome before their rows close.
     pub(crate) page_endings: Vec<super::companions::PageEnding>,
+    /// Companion rows with every pane held, waiting for their origin's listing ([`super::ended_companions`]).
+    pub(crate) ended_companions: Vec<super::ended_companions::EndedCheck>,
     /// The machines whose saved rows wait to attach again after a launch ([`super::relaunch`]).
     pub(crate) relaunch_reads: Vec<super::relaunch::RelaunchRead>,
     /// New viewer panes waiting for an origin split and its live daemon.
@@ -215,6 +217,7 @@ impl Core {
         self.advance_end_flows();
         self.advance_remote_splits();
         self.settle_page_endings();
+        self.advance_ended_companions(now);
     }
 
     /// When the frontend should run [`Core::remote_tick`] next, `None` while nothing remote is up.
@@ -230,6 +233,7 @@ impl Core {
             || !viewer.queued_split_panes.is_empty()
             || !viewer.split_layouts.is_empty()
             || !viewer.page_endings.is_empty()
+            || !viewer.ended_companions.is_empty()
             || self.remote.respawns.waiting()
             || self.relaunch_pending() == Some(true)
         {

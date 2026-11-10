@@ -2464,6 +2464,9 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
   left a hold prompt. The last replica waits for its ssh exit and may then close the row. A pending viewer
   split prevents automatic primary removal until its origin binding is ready; an ordinary disconnect still shows the disconnect line, held
   or reconnecting per the attach section above.
+- A terminal companion row whose panes have all stopped on their exit prompt asks its machine for the session, and closes
+  here once that machine no longer has it. A machine that doesn't answer leaves the row on its last line, as does a local
+  scratch shell or overlay open on the row, and a top-level row always keeps its line.
 - `presentation.state` in `tree` reports the stream. `connected` means mirroring works; it is not a claim
   about the panes' ssh connections. An origin too old for it reads `unsupported` and the attach still works.
 - When the stream drops, the mirrored status, context, info line and HUD are cleared here and come back on reconnect. Retries

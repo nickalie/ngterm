@@ -874,3 +874,216 @@ fn a_gui_duplicate_whose_origin_refuses_shows_the_reason_over_the_row() {
     assert!(message.starts_with("Duplicate as Companion"), "{message}");
     assert!(remote.companions().is_empty());
 }
+
+// MARK: - a companion that ended on its origin
+
+/// The origin's `live list`: one claimed pane per session id, `observation` as a daemon being rebuilt reads too.
+fn inventory_of(sessions: &[&str], complete: bool, observation: &str) -> RemoteCommandResult {
+    let entries: Vec<Value> = sessions
+        .iter()
+        .map(|id| {
+            json!({"daemon": daemon_name(Uuid::new_v4()), "state": "claimed", "observation": observation,
+            "sessionID": id})
+        })
+        .collect();
+    let restore =
+        json!({"configured": "live", "requestedAtLaunch": "live", "active": "live", "restartRequired": false});
+    let live = json!({"restore": restore, "inventoryComplete": complete, "entries": entries});
+    result(0, &json!({"ok": true, "result": {"live": live}}).to_string(), "")
+}
+
+fn inventory(sessions: &[&str]) -> RemoteCommandResult {
+    inventory_of(sessions, true, "running")
+}
+
+impl Remote {
+    /// A terminal companion attached under the row, its origin session `CREATED`.
+    fn attached_companion() -> (Self, Uuid) {
+        let mut remote = Self::new(vec![origin(), reply(CREATED), tree(&[session(CREATED)])]);
+        let response = remote.new_companion(|_| {});
+        let companion = id_of(&response);
+        (remote, companion)
+    }
+
+    fn hold_pane(&mut self, row: Uuid, pane: Uuid) {
+        self.core().pane_held(row, &wire(pane));
+        self.fixture.core.commit();
+    }
+
+    fn hold_primary(&mut self, row: Uuid) {
+        let pane = self.fixture.store().session(row).unwrap().pane_identity;
+        self.hold_pane(row, pane);
+    }
+}
+
+#[test]
+fn a_held_companion_the_origin_no_longer_has_closes_here() {
+    let (mut remote, companion) = Remote::attached_companion();
+    remote.script(vec![inventory(&[ORIGIN])]);
+
+    remote.hold_primary(companion);
+    remote.tick_until(|remote| remote.companions().is_empty());
+
+    assert!(remote.companions().is_empty());
+    assert!(remote.fixture.store().session(remote.row).is_some(), "its parent stays");
+    assert_eq!(remote.runner.calls().len(), 4, "one read decides it");
+    assert!(remote.runner.line(3).contains("list"), "{}", remote.runner.line(3));
+}
+
+#[test]
+fn a_held_companion_still_there_keeps_its_row_after_a_few_reads() {
+    let (mut remote, companion) = Remote::attached_companion();
+    let listed = || inventory(&[ORIGIN, CREATED]);
+    remote.script(vec![listed(), listed(), listed()]);
+
+    remote.hold_primary(companion);
+    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_companions.is_empty());
+    remote.ticks(3);
+
+    assert_eq!(remote.companions(), [companion]);
+    assert_eq!(remote.runner.calls().len(), 6, "three reads, then it stops asking");
+}
+
+#[test]
+fn a_held_companion_there_once_then_gone_closes_here() {
+    let (mut remote, companion) = Remote::attached_companion();
+    remote.script(vec![inventory(&[ORIGIN, CREATED]), inventory(&[ORIGIN])]);
+
+    remote.hold_primary(companion);
+    remote.tick_until(|remote| remote.companions().is_empty());
+
+    assert!(remote.companions().is_empty());
+}
+
+#[test]
+fn a_held_companion_whose_origin_does_not_answer_keeps_its_row() {
+    let (mut remote, companion) = Remote::attached_companion();
+    remote.script(vec![result(255, "", "ssh: connect to host buildbox: timed out")]);
+
+    remote.hold_primary(companion);
+    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_companions.is_empty());
+
+    assert_eq!(remote.companions(), [companion]);
+    assert_eq!(remote.runner.calls().len(), 4);
+}
+
+#[test]
+fn a_held_parent_is_never_checked() {
+    let (mut remote, _) = Remote::attached_companion();
+    let row = remote.row;
+    let pane = remote.fixture.store().session(row).unwrap().pane_identity;
+    remote.fixture.store_mut().unwrap().bind_remote(
+        RemoteBinding::new(ORIGIN, HashMap::from([(pane, daemon_name(Uuid::new_v4()))]), None, None),
+        row,
+    );
+
+    remote.hold_pane(row, pane);
+    remote.ticks(2);
+
+    assert_eq!(remote.runner.calls().len(), 3, "a top-level row keeps its exit line");
+    assert!(remote.fixture.store().session(row).is_some());
+}
+
+#[test]
+fn a_companion_attached_again_before_its_read_keeps_its_row() {
+    let (mut remote, companion) = Remote::attached_companion();
+    remote.script(vec![inventory(&[ORIGIN])]);
+
+    remote.hold_primary(companion);
+    let pane = remote.fixture.store().session(companion).unwrap().pane_identity;
+    remote.fixture.store_mut().unwrap().remote_pane_resumed(pane, companion);
+    remote.ticks(2);
+
+    assert_eq!(remote.companions(), [companion]);
+    assert_eq!(remote.runner.calls().len(), 3, "nothing is left to ask about");
+}
+
+#[test]
+fn a_companion_with_a_pane_still_running_is_not_checked() {
+    let (mut remote, companion) = Remote::attached_companion();
+    let store = remote.fixture.store_mut().unwrap();
+    let primary = store.session(companion).unwrap().pane_identity;
+    let split = Uuid::new_v4();
+    let found = store.session_mut(companion).unwrap();
+    found.split_pane_identity = Some(split);
+    found.split.exists = true;
+    remote.script(vec![inventory(&[ORIGIN])]);
+
+    remote.hold_pane(companion, primary);
+    remote.ticks(2);
+
+    assert_eq!(remote.companions(), [companion]);
+    assert_eq!(remote.runner.calls().len(), 3);
+}
+
+#[test]
+fn a_companion_being_restarted_on_its_origin_keeps_its_row() {
+    let (mut remote, companion) = Remote::attached_companion();
+    // its daemon is being rebuilt: `live tree` would leave the session out, the inventory still has its claim
+    let restarting = || inventory_of(&[ORIGIN, CREATED], true, "absent");
+    remote.script(vec![restarting(), restarting(), restarting()]);
+
+    remote.hold_primary(companion);
+    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_companions.is_empty());
+
+    assert_eq!(remote.companions(), [companion]);
+}
+
+#[test]
+fn an_incomplete_inventory_without_the_session_proves_nothing() {
+    let (mut remote, companion) = Remote::attached_companion();
+    remote.script(vec![inventory_of(&[ORIGIN], false, "running")]);
+
+    remote.hold_primary(companion);
+    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_companions.is_empty());
+
+    assert_eq!(remote.companions(), [companion]);
+}
+
+#[test]
+fn a_refused_inventory_proves_nothing() {
+    let (mut remote, companion) = Remote::attached_companion();
+    let refused = json!({"ok": false, "error": "live sessions are not running"}).to_string();
+    remote.script(vec![result(1, &refused, "")]);
+
+    remote.hold_primary(companion);
+    remote.tick_until(|remote| remote.fixture.core.remote.viewer.ended_companions.is_empty());
+
+    assert_eq!(remote.companions(), [companion]);
+}
+
+#[test]
+fn a_companion_with_a_local_scratch_shell_is_not_checked() {
+    let (mut remote, companion) = Remote::attached_companion();
+    let store = remote.fixture.store_mut().unwrap();
+    let scratch = Box::new(ngterm_host::fakes::FakeSurface::new("scratch"));
+    store.session_mut(companion).unwrap().scratch_surface.replace(scratch);
+    remote.script(vec![inventory(&[ORIGIN])]);
+
+    remote.hold_primary(companion);
+    remote.ticks(2);
+
+    assert_eq!(
+        remote.companions(),
+        [companion],
+        "closing it would kill the scratch shell"
+    );
+    assert_eq!(remote.runner.calls().len(), 3);
+}
+
+#[test]
+fn a_companion_with_a_local_overlay_program_is_not_checked() {
+    let (mut remote, companion) = Remote::attached_companion();
+    let program = crate::model::OverlayProgram {
+        command: "top".to_owned(),
+        ..crate::model::OverlayProgram::default()
+    };
+    assert!(remote.fixture.store_mut().unwrap().open_overlay(companion, program));
+    remote.script(vec![inventory(&[ORIGIN])]);
+
+    remote.hold_primary(companion);
+    remote.ticks(2);
+
+    assert_eq!(remote.companions(), [companion], "closing it would end the program");
+    assert_eq!(remote.runner.calls().len(), 3);
+}

@@ -33,6 +33,7 @@ pub mod client;
 pub mod clipboard;
 mod companion_page;
 pub(crate) mod companions;
+pub(crate) mod ended_companions;
 pub mod frames;
 /// One parent and its freshly discovered companion group.
 pub(crate) mod group_attach;
