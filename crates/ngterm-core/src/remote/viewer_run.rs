@@ -195,7 +195,9 @@ mod tests {
         assert_eq!(parts[..2], [REMOTE_CLI, VIEWER_RUN]);
         assert_eq!(parts.len(), 3, "{line}");
         assert!(
-            parts[2].chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'),
+            parts[2]
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'),
             "nothing cmd.exe reads: {line}"
         );
         assert_eq!(ViewerRun::decode(parts[2]).unwrap(), run);

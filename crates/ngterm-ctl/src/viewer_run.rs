@@ -85,7 +85,11 @@ fn status_of(ran: io::Result<i32>, argv: &[String]) -> i32 {
         Err(error) => {
             let program = argv.first().map_or("", String::as_str);
             eprintln!("ngtermctl: could not run {program}: {error}");
-            if error.kind() == io::ErrorKind::NotFound { 127 } else { 126 }
+            if error.kind() == io::ErrorKind::NotFound {
+                127
+            } else {
+                126
+            }
         }
     }
 }
@@ -226,7 +230,10 @@ mod tests {
     fn any_other_command_line_passes_through() {
         let plain: Vec<OsString> = ["ngtermctl", "live", "tree"].iter().map(OsString::from).collect();
         assert!(matches!(intercept(plain.clone()), Intercepted::Arguments(got) if got == plain));
-        let extra: Vec<OsString> = ["ngtermctl", VIEWER_RUN, "e30", "more"].iter().map(OsString::from).collect();
+        let extra: Vec<OsString> = ["ngtermctl", VIEWER_RUN, "e30", "more"]
+            .iter()
+            .map(OsString::from)
+            .collect();
         assert!(matches!(intercept(extra.clone()), Intercepted::Arguments(got) if got == extra));
     }
 
