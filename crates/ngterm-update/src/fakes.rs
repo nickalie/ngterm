@@ -180,6 +180,24 @@ pub fn installation(executable: &Path) -> Result<Installation, Error> {
     Installation::at(executable)
 }
 
+/// `installation` with `program` run in place of the system's password popup.
+#[must_use]
+pub fn prompting(mut installation: Installation, program: &Path) -> Installation {
+    installation.prompter = Some(program.to_owned());
+    installation
+}
+
+/// The asset a `.deb` installation on this machine downloads at `version`.
+#[must_use]
+pub fn deb_asset(version: &str) -> String {
+    let arch = if std::env::consts::ARCH == "aarch64" {
+        "arm64"
+    } else {
+        "amd64"
+    };
+    format!("ngterm_{version}-1_{arch}.deb")
+}
+
 /// The asset a macOS bundle installation on this machine downloads at `version`.
 #[cfg(target_os = "macos")]
 #[must_use]

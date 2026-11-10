@@ -1,5 +1,6 @@
-//! Release updates are opt-in at packaging time. Developer and package-manager builds have no marker.
-//! Downloads are verified before extraction; installation replaces a complete tree with rollback on failure.
+//! Release updates are opt-in at packaging time. Developer and third-party package builds have no marker.
+//! Downloads are verified before extraction; installation replaces a complete tree with rollback on failure, or, for
+//! an installation the system owns, hands the package to the system's installer ([`privileged`]).
 //! App releases come from GitHub alone ([`Source::github`]); [`fakes`] (feature `fakes`) serves tests a local one.
 //! [`web_engine`] holds the pinned, verified Linux engine runtime download and per-user cache, with a URL-only
 //! mirror override and atomic runtime publication.
@@ -8,6 +9,7 @@ mod download;
 #[cfg(any(test, feature = "fakes"))]
 pub mod fakes;
 mod install;
+mod privileged;
 mod staging;
 pub mod web_engine;
 
@@ -18,6 +20,7 @@ use semver::Version;
 
 pub use download::{Release, Source};
 pub use install::Prepared;
+pub use privileged::{PrivilegedInstall, PromptOutcome, TerminalInstall, TerminalStatus};
 
 /// The release signing keys this build trusts. A build trusts exactly what its source commit's `trust/` directory
 /// says, so no release can talk an installed build out of checking.
@@ -82,10 +85,18 @@ pub enum Format {
     MacBundle,
     WindowsArchive,
     WindowsMsi,
+    LinuxDeb,
+    LinuxRpm,
+    LinuxPacman,
+    /// A root-owned `/Applications/ngterm.app`, which carries the same marker as a [`Format::MacBundle`].
+    MacPkg,
 }
 
 impl Format {
     fn asset(self, version: &Version, arch: &str) -> Result<String, Error> {
+        if let Some(name) = self.linux_package_asset(version, arch) {
+            return Ok(name);
+        }
         let (platform, arch, extension) = match (self, arch) {
             (Self::LinuxArchive, "x86_64" | "aarch64") => ("linux", arch, "tar.gz"),
             (Self::AppImage, "x86_64" | "aarch64") => ("linux", arch, "AppImage"),
@@ -95,14 +106,48 @@ impl Format {
             (Self::MacBundle, "aarch64") => ("macos", "arm64", "app.zip"),
             (Self::WindowsArchive, "x86_64") => ("windows", arch, "zip"),
             (Self::WindowsMsi, "x86_64") => ("windows", arch, "msi"),
+            (Self::MacPkg, "x86_64") => ("macos", arch, "pkg"),
+            (Self::MacPkg, "aarch64") => ("macos", "arm64", "pkg"),
             _ => return Err(error("No release binary is available for this architecture.")),
         };
         Ok(format!("ngterm-{version}-{platform}-{arch}.{extension}"))
     }
 
+    /// The names nfpm gives the native Linux packages.
+    fn linux_package_asset(self, version: &Version, arch: &str) -> Option<String> {
+        match (self, arch) {
+            (Self::LinuxDeb, "x86_64") => Some(format!("ngterm_{version}-1_amd64.deb")),
+            (Self::LinuxDeb, "aarch64") => Some(format!("ngterm_{version}-1_arm64.deb")),
+            (Self::LinuxRpm, "x86_64" | "aarch64") => Some(format!("ngterm-{version}-1.{arch}.rpm")),
+            (Self::LinuxPacman, "x86_64" | "aarch64") => Some(format!("ngterm-{version}-1-{arch}.pkg.tar.zst")),
+            _ => None,
+        }
+    }
+
+    /// The package kind the privileged installer takes, for an installation the system owns.
+    pub(crate) fn system_package(self) -> Option<&'static str> {
+        match self {
+            Self::LinuxDeb => Some("deb"),
+            Self::LinuxRpm => Some("rpm"),
+            Self::LinuxPacman => Some("pacman"),
+            Self::MacPkg => Some("pkg"),
+            _ => None,
+        }
+    }
+
+    fn is_linux_tree(self) -> bool {
+        matches!(
+            self,
+            Self::LinuxArchive | Self::LinuxDeb | Self::LinuxRpm | Self::LinuxPacman
+        )
+    }
+
     fn from_marker(marker: &str) -> Option<Self> {
         match marker.trim() {
             "linux-archive" if cfg!(target_os = "linux") => Some(Self::LinuxArchive),
+            "linux-deb" if cfg!(target_os = "linux") => Some(Self::LinuxDeb),
+            "linux-rpm" if cfg!(target_os = "linux") => Some(Self::LinuxRpm),
+            "linux-pacman" if cfg!(target_os = "linux") => Some(Self::LinuxPacman),
             "macos-archive" if cfg!(target_os = "macos") => Some(Self::MacArchive),
             "macos-bundle" if cfg!(target_os = "macos") => Some(Self::MacBundle),
             "windows-archive" if cfg!(windows) => Some(Self::WindowsArchive),
@@ -119,9 +164,34 @@ pub struct Installation {
     executable: PathBuf,
     format: Format,
     image_identity: Option<Vec<u8>>,
+    /// Where a system-owned installation's package waits, its own parent being unwritable.
+    stage: Option<PathBuf>,
+    /// Replaces the system's password popup in tests.
+    prompter: Option<PathBuf>,
 }
 
 impl Installation {
+    /// Keeps the downloaded package of a system-owned installation under `dir`. Other installations stage beside
+    /// themselves, for an atomic rename.
+    #[must_use]
+    pub fn staged_under(mut self, dir: PathBuf) -> Self {
+        self.stage = Some(dir);
+        self
+    }
+
+    /// Where this installation's update stages go, created if needed.
+    pub(crate) fn stage_parent(&self) -> Result<PathBuf, Error> {
+        if self.format.system_package().is_some() {
+            let dir = self.stage.clone().unwrap_or_else(std::env::temp_dir);
+            fs::create_dir_all(&dir)?;
+            return Ok(dir);
+        }
+        self.root
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| error("Installation has no parent directory."))
+    }
+
     /// Whether a state or configuration directory would be replaced with this installation. Existing symlinks are
     /// resolved, so callers can refuse updates that would remove user data stored inside a portable installation.
     /// Unresolvable paths are conservatively treated as protected.
@@ -149,7 +219,7 @@ impl Installation {
     /// Removes abandoned stages for this installation, preserving live helpers and recovery backups.
     ///
     /// # Errors
-    /// Returns an error if the installation's parent cannot be read. Busy stages are retained for a later attempt.
+    /// Returns an error if the directory holding the stages cannot be read. Busy stages are retained for a later attempt.
     pub fn cleanup_stale(&self) -> Result<usize, Error> {
         staging::cleanup(self)
     }
@@ -189,6 +259,8 @@ impl Installation {
                     executable: root.clone(),
                     root,
                     format: Format::AppImage,
+                    stage: None,
+                    prompter: None,
                 });
             }
         }
@@ -212,14 +284,17 @@ impl Installation {
             (root, root.join(MARKER))
         };
         let format = fs::read_to_string(marker).ok().and_then(|text| Format::from_marker(&text))
-            .ok_or_else(|| error("Automatic updates are available for official release archives, AppImages, macOS app bundles and Windows installers. Update package-manager installations with your package manager; rebuild development installations from source."))?;
-        let root = if format == Format::LinuxArchive {
+            .ok_or_else(|| error("Automatic updates are available for official releases. Update installations from other sources with their package manager; rebuild development installations from source."))?;
+        let root = if format.is_linux_tree() {
             root.parent()
                 .filter(|_| root.file_name().is_some_and(|name| name == "usr"))
                 .ok_or_else(|| error("Invalid Linux archive layout."))?
         } else {
             root
         };
+        #[cfg(target_os = "macos")]
+        // SAFETY: geteuid only reads the current process's effective user ID.
+        let format = system_owned_bundle(format, root, bundle_access(root, unsafe { libc::geteuid() }).is_ok());
         if format == Format::MacBundle && root.extension().is_none_or(|extension| extension != "app") {
             return Err(error(
                 "Keep the macOS release inside its .app bundle to use automatic updates.",
@@ -239,9 +314,22 @@ impl Installation {
             executable,
             format,
             image_identity: None,
+            stage: None,
+            prompter: None,
         };
         installation.validate_access()?;
         Ok(installation)
+    }
+}
+
+/// A bundle in `/Applications` the user cannot replace came from the PKG, which only the system's installer may
+/// update. A bundle anywhere else stays a [`Format::MacBundle`], refused with its explanation.
+#[cfg(any(target_os = "macos", test))]
+fn system_owned_bundle(format: Format, root: &Path, writable: bool) -> Format {
+    if format == Format::MacBundle && !writable && root == Path::new("/Applications/ngterm.app") {
+        Format::MacPkg
+    } else {
+        format
     }
 }
 
@@ -282,8 +370,8 @@ fn resolved_path(path: &Path) -> std::io::Result<PathBuf> {
 impl Installation {
     fn identity_file(&self) -> PathBuf {
         let prefix = match self.format {
-            Format::LinuxArchive => self.root.join("usr"),
-            Format::MacBundle => self.root.join("Contents"),
+            format if format.is_linux_tree() => self.root.join("usr"),
+            Format::MacBundle | Format::MacPkg => self.root.join("Contents"),
             _ => self.root.clone(),
         };
         prefix.join("share/ngterm/app-BUILD")

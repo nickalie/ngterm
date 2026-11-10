@@ -71,9 +71,9 @@ Good to know before you start:
 - **iOS** builds on the Releases page have to be re-signed before they install, with a sideloading tool or your own
   Xcode team.
 
-ngterm updates itself in the background and offers **Restart to Update** in the title bar, unless you turn that off in
-Settings ▸ General ▸ Updates. `.deb`, `.rpm`, Arch package and macOS `.pkg` installs are updated by hand or through
-your package manager. To verify a download, see [release signing](docs/release-signing.md).
+ngterm downloads updates in the background and offers **Install Update** in the title bar, unless you turn that off in
+Settings ▸ General ▸ Updates. `.deb`, `.rpm`, Arch package and macOS `.pkg` installs ask for your password when you
+press it. To verify a download, see [release signing](docs/release-signing.md).
 
 ## Get started
 

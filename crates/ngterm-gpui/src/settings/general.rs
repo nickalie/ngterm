@@ -33,7 +33,7 @@ pub fn sections(snapshot: &Snapshot) -> Vec<Section> {
                 ),
                 Item::hint(
                     "settings-auto-update-hint",
-                    "Official releases check at launch and hourly. Choose Restart to Update when a download is ready. Package manager installations use their package manager.",
+                    "Official releases check at launch and hourly. Choose Install Update when a download is ready.",
                 ),
             ],
         ),

@@ -1,4 +1,6 @@
-//! The app-wide release updater: one worker at a time, hourly automatic checks, explicit restart.
+//! The app-wide release updater: one worker at a time, hourly automatic checks, one button to install. An installation
+//! the system owns installs through its own installer while the app is open: a password popup, or `sudo` in a new
+//! session where the desktop cannot show one, and the app restarts only once that has succeeded.
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -12,13 +14,20 @@ use gpui_kit::{
 };
 use ngterm_core::chrome::ChromeColors;
 use ngterm_core::paths::{self, ProcessEnv};
-use ngterm_update::{Installation, Prepared, RELEASES_URL, Source, Trust};
+use ngterm_proto::command::SessionCmd;
+use ngterm_proto::{Args, Command, Request};
+use ngterm_update::{
+    Installation, Prepared, PrivilegedInstall, PromptOutcome, RELEASES_URL, Source, TerminalInstall, TerminalStatus,
+    Trust,
+};
 
 use crate::chrome::button::Button;
 use crate::modal::{AlertButton, AlertSpec, open_alert};
 use crate::state::{AppState, Poster, post};
 
 const INTERVAL: Duration = Duration::from_hours(1);
+/// How often a terminal pane's install is checked on.
+const PANE_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Status {
@@ -27,6 +36,7 @@ enum Status {
     Downloading(String),
     Current,
     Ready(String),
+    Installing(String),
     Failed(String),
 }
 
@@ -65,7 +75,7 @@ impl Global for Updater {}
 impl Updater {
     fn display_status(&self) -> Status {
         match &self.status {
-            Status::Ready(_) | Status::Current | Status::Failed(_) => self.status.clone(),
+            Status::Ready(_) | Status::Installing(_) | Status::Current | Status::Failed(_) => self.status.clone(),
             _ => self.notice.clone().map_or_else(|| self.status.clone(), Status::Failed),
         }
     }
@@ -81,8 +91,11 @@ pub fn init(state: &Entity<AppState>, poster: Poster, cx: &mut App) {
         source: Source::github(),
         trust: Trust::release,
     };
-    let installation = Installation::detect().map_err(|error| error.to_string());
-    start(state, poster, installation, releases, paths::state_dir(&ProcessEnv), cx);
+    let state_dir = paths::state_dir(&ProcessEnv);
+    let installation = Installation::detect()
+        .map(|installation| installation.staged_under(state_dir.join("updates")))
+        .map_err(|error| error.to_string());
+    start(state, poster, installation, releases, state_dir, cx);
 }
 
 /// Installs the updater for `installation`, checking `releases`, with the update error file under `state_dir`.
@@ -129,7 +142,7 @@ pub fn set_automatic(enabled: bool, cx: &mut App) {
     if !enabled {
         let updater = cx.global_mut::<Updater>();
         updater.polling.take();
-        if updater.origin == Origin::Automatic {
+        if updater.origin == Origin::Automatic && !matches!(updater.status, Status::Installing(_)) {
             if let Some(cancelled) = updater.cancelled.take() {
                 cancelled.store(true, Ordering::Release);
             }
@@ -154,7 +167,7 @@ pub fn set_automatic(enabled: bool, cx: &mut App) {
     cx.global_mut::<Updater>().polling = Some(task);
 }
 
-/// Help > Check for Updates. A ready update opens its restart confirmation.
+/// Help > Check for Updates. A ready update opens its install confirmation.
 pub fn check(window: &mut Window, cx: &mut App) {
     let Some(updater) = cx.try_global::<Updater>() else {
         return;
@@ -163,7 +176,7 @@ pub fn check(window: &mut Window, cx: &mut App) {
         open_alert(window, AlertSpec::info("Updates", reason), |_, _, _| {}, cx);
     } else if matches!(
         updater.status,
-        Status::Ready(_) | Status::Checking | Status::Downloading(_)
+        Status::Ready(_) | Status::Installing(_) | Status::Checking | Status::Downloading(_)
     ) {
         show_status(window, cx);
     } else {
@@ -262,13 +275,13 @@ fn show_status(window: &mut Window, cx: &mut App) {
         Status::Ready(version) => AlertSpec {
             buttons: vec![
                 AlertButton::cancel("Later").as_default(),
-                AlertButton::plain("Restart to Update").suggested(),
+                AlertButton::plain("Install Update").suggested(),
                 AlertButton::plain("Release Notes"),
             ],
             ..AlertSpec::info(
                 "Update ready",
                 format!(
-                    "ngterm {version} has been downloaded and verified. Restart to install it. Live sessions reconnect after restarting; other shells close and restore according to your session settings."
+                    "ngterm {version} has been downloaded and verified. Installing it restarts ngterm: live sessions reconnect; other shells close and restore according to your session settings."
                 ),
             )
         },
@@ -283,6 +296,7 @@ fn show_status(window: &mut Window, cx: &mut App) {
         Status::Downloading(version) => {
             AlertSpec::info("Updates", format!("Downloading and verifying ngterm {version}…"))
         }
+        Status::Installing(version) => AlertSpec::info("Updates", format!("Installing ngterm {version}…")),
         Status::Current => AlertSpec::info(
             "Up to date",
             format!(
@@ -316,6 +330,11 @@ fn show_status(window: &mut Window, cx: &mut App) {
 }
 
 fn restart(window: &mut Window, cx: &mut App) {
+    let privileged = cx.global::<Updater>().prepared.as_ref().and_then(Prepared::privileged);
+    if let Some(install) = privileged {
+        install_privileged(install, window, cx);
+        return;
+    }
     let Some(prepared) = cx.global_mut::<Updater>().prepared.take() else {
         return;
     };
@@ -333,12 +352,137 @@ fn restart(window: &mut Window, cx: &mut App) {
     }
 }
 
-/// Persistent titlebar feedback while a download is in progress or waiting for a restart.
+/// Starts the system's installer behind its password popup, keeping the update staged until it has succeeded.
+fn install_privileged(install: PrivilegedInstall, window: &mut Window, cx: &mut App) {
+    let Status::Ready(version) = cx.global::<Updater>().status.clone() else {
+        return;
+    };
+    if let Err(error) = install.check_unchanged() {
+        let updater = cx.global_mut::<Updater>();
+        updater.prepared.take();
+        updater.status = Status::Failed(error.to_string());
+        cx.refresh_windows();
+        show_status(window, cx);
+        return;
+    }
+    cx.global_mut::<Updater>().status = Status::Installing(version.clone());
+    cx.refresh_windows();
+    let host = window.window_handle();
+    let task = cx.spawn(async move |cx| {
+        let prompted = cx
+            .background_spawn({
+                let install = install.clone();
+                async move { install.prompt() }
+            })
+            .await;
+        cx.update(|cx| match prompted {
+            Ok(PromptOutcome::Installed) => installed(&install, cx),
+            Ok(PromptOutcome::Cancelled) => not_installed(&version, None, host, cx),
+            Ok(PromptOutcome::Unavailable) => install_in_pane(&install, version.clone(), host, cx),
+            Err(error) => not_installed(&version, Some(error.to_string()), host, cx),
+        });
+    });
+    cx.global_mut::<Updater>().job = Some(task);
+}
+
+/// A desktop with no password popup: `sudo` asks in a new session, which the updater watches until it reports.
+fn install_in_pane(install: &PrivilegedInstall, version: String, host: AnyWindowHandle, cx: &mut App) {
+    let terminal = match install.terminal() {
+        Ok(terminal) => terminal,
+        Err(error) => return not_installed(&version, Some(error.to_string()), host, cx),
+    };
+    let request = pane_request(&terminal);
+    post(&cx.global::<Updater>().poster, move |state| {
+        open_install_session(state, &request);
+    });
+    let install = install.clone();
+    let task = cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(PANE_POLL).await;
+            match terminal.status() {
+                TerminalStatus::Running => {}
+                TerminalStatus::Installed => return cx.update(|cx| installed(&install, cx)),
+                TerminalStatus::Cancelled => return cx.update(|cx| not_installed(&version, None, host, cx)),
+                TerminalStatus::Failed(code) => {
+                    let message = format!(
+                        "The update could not be installed (exit code {code}). The session that ran it shows why."
+                    );
+                    return cx.update(|cx| not_installed(&version, Some(message), host, cx));
+                }
+            }
+        }
+    });
+    cx.global_mut::<Updater>().job = Some(task);
+}
+
+fn open_install_session(state: &mut AppState, request: &Request) {
+    let response = state.core.dispatch(request);
+    if !response.ok {
+        tracing::error!(?response, "could not open a session for the update");
+    }
+    state.settle();
+}
+
+fn pane_request(terminal: &TerminalInstall) -> Request {
+    Request {
+        cmd: Command::Session(SessionCmd::New),
+        target: None,
+        args: Some(Args {
+            command: Some(terminal.command().to_owned()),
+            name: Some("Install ngterm update".to_owned()),
+            ..Args::default()
+        }),
+    }
+}
+
+/// The system's installer finished: the app quits and reopens on the new version.
+fn installed(install: &PrivilegedInstall, cx: &mut App) {
+    let reopens = crate::live_runtime::spawn_relauncher_for(Ok(install.executable().to_path_buf()), std::process::id());
+    if !reopens {
+        tracing::error!("the update is installed, but the app could not arrange to reopen");
+    }
+    let updater = cx.global_mut::<Updater>();
+    updater.job.take();
+    updater.prepared.take();
+    updater.restart = true;
+    post(&updater.poster, AppState::request_quit);
+}
+
+/// Back to the button, the update still staged for another try; `reason` says what went wrong, when anything did.
+fn not_installed(version: &str, reason: Option<String>, host: AnyWindowHandle, cx: &mut App) {
+    let updater = cx.global_mut::<Updater>();
+    updater.job.take();
+    updater.status = Status::Ready(version.to_owned());
+    cx.refresh_windows();
+    if let Some(reason) = reason {
+        tracing::warn!(%reason, "the update was not installed");
+        let _ = host.update(cx, |_, window, cx| {
+            open_alert(
+                window,
+                AlertSpec::info("Update needs attention", reason),
+                |_, _, _| {},
+                cx,
+            );
+        });
+    }
+}
+
+/// The titlebar's update button: a ready update installs at a press; anything else opens its status.
+fn press_button(window: &mut Window, cx: &mut App) {
+    if matches!(cx.global::<Updater>().display_status(), Status::Ready(_)) {
+        restart(window, cx);
+    } else {
+        show_status(window, cx);
+    }
+}
+
+/// Persistent titlebar feedback while an update downloads, waits to be installed or installs.
 pub fn button(colors: ChromeColors, cx: &App) -> Option<impl gpui_kit::IntoElement> {
     let updater = cx.try_global::<Updater>()?;
     let label = match updater.display_status() {
         Status::Downloading(_) => "Downloading update…",
-        Status::Ready(_) => "Restart to Update",
+        Status::Ready(_) => "Install Update",
+        Status::Installing(_) => "Installing update…",
         Status::Failed(_) => "Update needs attention",
         _ => return None,
     };
@@ -349,12 +493,13 @@ pub fn button(colors: ChromeColors, cx: &App) -> Option<impl gpui_kit::IntoEleme
             .px(px(8.))
             .h(px(24.))
             .text_size(px(12.))
-            .on_click(|_, window, cx| show_status(window, cx))
+            .on_click(|_, window, cx| press_button(window, cx))
             .child(label),
     )
 }
 
-/// Called once after the quit save. Installs a ready update without reopening on ordinary quits. A live reset has
+/// Called once after the quit save. Installs a ready update without reopening on ordinary quits, unless it needs the
+/// system's installer, which would have to ask for a password. A live reset has
 /// its own relauncher, so that quit discards the update to avoid racing it.
 pub fn on_quit(live_reset: bool, cx: &mut App) {
     if cx.try_global::<Updater>().is_none() {
@@ -366,7 +511,11 @@ pub fn on_quit(live_reset: bool, cx: &mut App) {
         cancelled.store(true, Ordering::Release);
     }
     updater.job.take();
-    let prepared = updater.prepared.take();
+    // a package needs a password, which a quit has no way to ask for: it is downloaded again next launch
+    let prepared = updater
+        .prepared
+        .take()
+        .filter(|prepared| prepared.privileged().is_none());
     if !live_reset
         && let Some(prepared) = prepared
         && let Err(error) = install(prepared, false, cx)
@@ -532,7 +681,7 @@ mod tests {
     use gpui_kit::{Context, IntoElement, Render, VisualTestContext, div};
 
     /// `Installation::detect`'s refusal for a build without the release marker, as every test binary is.
-    const SOURCE_BUILD: &str = "Automatic updates are available for official release archives, AppImages, macOS app bundles and Windows installers. Update package-manager installations with your package manager; rebuild development installations from source.";
+    const SOURCE_BUILD: &str = "Automatic updates are available for official releases. Update installations from other sources with their package manager; rebuild development installations from source.";
 
     fn app_state(cx: &mut App) -> Entity<AppState> {
         cx.new(|_| {
@@ -799,9 +948,9 @@ mod tests {
         assert_eq!(alert.heading, "Update ready");
         assert_eq!(
             alert.body,
-            "ngterm 0.2.0 has been downloaded and verified. Restart to install it. Live sessions reconnect after restarting; other shells close and restore according to your session settings."
+            "ngterm 0.2.0 has been downloaded and verified. Installing it restarts ngterm: live sessions reconnect; other shells close and restore according to your session settings."
         );
-        assert_eq!(labels(&alert), ["Later", "Restart to Update", "Release Notes"]);
+        assert_eq!(labels(&alert), ["Later", "Install Update", "Release Notes"]);
         assert_eq!(alert.default_button(), Some(0), "Later is the default");
         press(cx, "Later");
         assert_eq!(cx.opened_url(), None, "Later opens nothing");
@@ -1128,7 +1277,7 @@ mod tests {
         let alert = front(cx).expect("Check for Updates shows the waiting update");
         assert_eq!(alert.heading, "Update ready");
         assert_eq!(fixture.server.requests().len(), 3);
-        press(cx, "Restart to Update");
+        press(cx, "Install Update");
         stop_helper(&stage);
         cx.update(|_, cx| {
             let updater = cx.global::<Updater>();
@@ -1264,7 +1413,7 @@ mod tests {
         std::fs::remove_dir_all(fixture.root()).unwrap();
         let gone = std::fs::metadata(fixture.root()).unwrap_err().to_string();
         cx.update(show_status);
-        press(cx, "Restart to Update");
+        press(cx, "Install Update");
         let alert = front(cx).expect("a restart that cannot install says why");
         assert_eq!(
             (alert.heading.as_str(), alert.body.as_str()),
@@ -1289,5 +1438,226 @@ mod tests {
             "Application state is unavailable."
         );
         assert!(fixture.stages().is_empty());
+    }
+
+    /// A `.deb` installation of 0.1.0 with a newer package published, whose password popup runs `prompt`.
+    #[cfg(target_os = "linux")]
+    fn package_fixture(prompt: &str) -> Fixture {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ngterm");
+        fakes::tree(&root, "0.1.0").unwrap();
+        std::fs::write(root.join("usr").join(ngterm_update::MARKER), "linux-deb\n").unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        let prompter = dir.path().join("prompter");
+        std::fs::write(&prompter, format!("#!/bin/sh\n{prompt}\n")).unwrap();
+        std::fs::set_permissions(&prompter, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let installation = fakes::installation(&root.join("usr/bin/ngterm"))
+            .unwrap()
+            .staged_under(state.join("updates"));
+        let server = fakes::Server::start().unwrap();
+        let asset = fakes::deb_asset(NEWER);
+        let sums = fakes::manifest(&[(asset.as_str(), b"package")]);
+        server.publish(NEWER, &[(asset.as_str(), b"package"), ("SHA256SUMS", &sums)]);
+        Fixture {
+            installation: fakes::prompting(installation, &prompter),
+            dir,
+            server,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn package_stage(fixture: &Fixture) -> PathBuf {
+        let [stage] = <[PathBuf; 1]>::try_from(
+            std::fs::read_dir(fixture.state_dir().join("updates"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        stage
+    }
+
+    #[cfg(target_os = "linux")]
+    fn package_ready<'a>(
+        fixture: &Fixture,
+        cx: &'a mut TestAppContext,
+    ) -> (&'a mut VisualTestContext, Entity<AppState>) {
+        let cx = host(cx);
+        let state = cx.update(|_, cx| fixture.start(true, cx));
+        cx.run_until_parked();
+        assert_eq!(status(cx), Status::Ready(NEWER.into()));
+        (cx, state)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn press_titlebar(cx: &mut VisualTestContext) {
+        cx.update(press_button);
+        cx.run_until_parked();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn staged(cx: &mut VisualTestContext) -> bool {
+        cx.update(|_, cx| cx.global::<Updater>().prepared.is_some())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn restarting(cx: &mut VisualTestContext) -> bool {
+        cx.update(|_, cx| cx.global::<Updater>().restart)
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn the_titlebar_button_installs_a_package_behind_the_password_popup(cx: &mut TestAppContext) {
+        let calls = tempfile::tempdir().unwrap();
+        let log = calls.path().join("args");
+        let fixture = package_fixture(&format!(r#"echo "$8" > '{}'"#, log.display()));
+        let (cx, _state) = package_ready(&fixture, cx);
+        assert!(!fixture.server.requests().is_empty());
+        press_titlebar(cx);
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "deb\n",
+            "the system's installer got the package"
+        );
+        assert!(
+            front(cx).is_none(),
+            "no confirmation stands between the press and the install"
+        );
+        assert!(restarting(cx), "the app restarts on the new version");
+        assert!(!staged(cx), "the package has served its purpose");
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn dismissing_the_password_popup_changes_nothing(cx: &mut TestAppContext) {
+        let fixture = package_fixture("exit 126");
+        let (cx, _state) = package_ready(&fixture, cx);
+        press_titlebar(cx);
+        assert_eq!(status(cx), Status::Ready(NEWER.into()), "the button is back");
+        assert!(front(cx).is_none(), "a dismissal needs no explanation");
+        assert!(staged(cx) && !restarting(cx));
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn an_installer_failure_says_why_and_keeps_the_update_for_another_try(cx: &mut TestAppContext) {
+        let fixture = package_fixture("echo 'E: broken' >&2; exit 100");
+        let (cx, _state) = package_ready(&fixture, cx);
+        press_titlebar(cx);
+        let alert = front(cx).expect("a failed install says why");
+        assert_eq!(
+            (alert.heading.as_str(), alert.body.as_str()),
+            (
+                "Update needs attention",
+                "The update could not be installed.\nE: broken"
+            )
+        );
+        assert_eq!(status(cx), Status::Ready(NEWER.into()));
+        assert!(staged(cx) && !restarting(cx));
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn a_package_the_installation_outgrew_is_discarded(cx: &mut TestAppContext) {
+        let fixture = package_fixture("exit 0");
+        let (cx, _state) = package_ready(&fixture, cx);
+        std::fs::write(fixture.root().join("usr/share/ngterm/app-BUILD"), "1000.0.0\n").unwrap();
+        press_titlebar(cx);
+        let reason = "The installed version changed after the download started. Check for updates again.";
+        assert_eq!(front(cx).expect("it says why").body, reason);
+        assert_eq!(status(cx), Status::Failed(reason.into()));
+        assert!(!staged(cx) && !restarting(cx));
+    }
+
+    /// Reports `result` from the pane the install is waiting on, and lets the updater notice.
+    #[cfg(target_os = "linux")]
+    fn pane_reports(fixture: &Fixture, result: &str, cx: &mut VisualTestContext) {
+        std::fs::write(package_stage(fixture).join("terminal-result"), result).unwrap();
+        cx.executor().advance_clock(PANE_POLL);
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn a_desktop_with_no_popup_installs_through_sudo_in_a_pane(cx: &mut TestAppContext) {
+        let fixture = package_fixture("echo 'Error executing command: No authentication agent found.' >&2; exit 127");
+        let (cx, state) = package_ready(&fixture, cx);
+        press_titlebar(cx);
+        assert_eq!(status(cx), Status::Installing(NEWER.into()), "waiting on the pane");
+        assert!(package_stage(&fixture).join("install-in-terminal.sh").is_file());
+        let request = cx.update(|_, cx| {
+            let prepared = cx.global::<Updater>().prepared.as_ref().unwrap();
+            pane_request(&prepared.privileged().unwrap().terminal().unwrap())
+        });
+        let opened = cx.update(|_, cx| {
+            state.update(cx, |state, _| {
+                state.core.library_mut().new_window(None);
+                open_install_session(state, &request);
+                let store = state.core.library().active_store().unwrap();
+                store.sessions().any(|session| {
+                    session.custom_name.as_deref() == Some("Install ngterm update")
+                        && session
+                            .launch
+                            .command
+                            .as_deref()
+                            .is_some_and(|command| command.contains("install-in-terminal.sh"))
+                })
+            })
+        });
+        assert!(opened, "the core accepted the session and it runs the install");
+
+        // turning automatic updates off doesn't pull the package out from under the pane
+        cx.update(|_, cx| set_automatic(false, cx));
+        assert!(staged(cx), "the install keeps its package");
+        assert!(cx.update(|_, cx| cx.global::<Updater>().job.is_some()));
+
+        pane_reports(&fixture, "0\n", cx);
+        assert!(restarting(cx), "the pane's success restarts the app");
+        assert!(!staged(cx));
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn a_failed_pane_install_points_at_the_pane(cx: &mut TestAppContext) {
+        let fixture = package_fixture("echo 'No authentication agent' >&2; exit 127");
+        let (cx, _state) = package_ready(&fixture, cx);
+        press_titlebar(cx);
+        pane_reports(&fixture, "1\n", cx);
+        assert_eq!(
+            front(cx).expect("it says why").body,
+            "The update could not be installed (exit code 1). The session that ran it shows why."
+        );
+        assert_eq!(status(cx), Status::Ready(NEWER.into()));
+        assert!(staged(cx) && !restarting(cx));
+    }
+
+    #[gpui_kit::test]
+    #[cfg(target_os = "linux")]
+    fn a_quit_cannot_ask_for_a_password_so_it_leaves_a_package_uninstalled(cx: &mut TestAppContext) {
+        let fixture = package_fixture("exit 0");
+        let (cx, _state) = package_ready(&fixture, cx);
+        let stage = package_stage(&fixture);
+        cx.update(|_, cx| on_quit(false, cx));
+        assert!(!stage.exists(), "no helper took the package over");
+        assert!(!error_file(&fixture.state_dir()).exists(), "and nothing went wrong");
+    }
+
+    #[gpui_kit::test]
+    fn the_titlebar_button_opens_the_status_of_anything_not_ready(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let cx = host(cx);
+        cx.update(|_, cx| {
+            let state = app_state(cx);
+            let updater = source_build(&state, Status::Downloading("0.2.0".into()), dir.path());
+            cx.set_global(updater);
+        });
+        cx.update(press_button);
+        cx.run_until_parked();
+        assert_eq!(
+            front(cx).expect("the status is up").body,
+            "Downloading and verifying ngterm 0.2.0…"
+        );
     }
 }

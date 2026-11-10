@@ -100,22 +100,25 @@ Windows binaries are under `ngterm/bin`; the macOS binary archive has `bin` and 
 under `/opt/ngterm` and put all four commands on `PATH`. The macOS PKG installs `ngterm.app` into `/Applications`;
 the app's Help menu can install the CLI. Windows ZIPs include the same app-local VC++ runtime as the MSI.
 
-Official archives, AppImages, user-owned macOS app bundles (including DMG installs), and Windows MSI installs check GitHub
-for stable updates at launch and hourly. Updates download in the background and are verified against the release's
+Every official release checks GitHub for stable updates at launch and hourly. Updates download in the background and are verified against the release's
 `SHA256SUMS`, whose minisign signature must match the key the running build was released with
-(`crates/ngterm-update/trust/minisign.pub`). Choose **Restart to Update** in the titlebar, or **Help → Check for Updates…**, to install after the
+(`crates/ngterm-update/trust/minisign.pub`). Choose **Install Update** in the titlebar, or **Help → Check for Updates…**, to install after the
 normal quit save and reopen ngterm. Ready updates also install on an ordinary quit, without reopening the app.
 Live sessions reconnect; other shells close and follow the configured restore
 mode. A failed archive replacement restores the previous installation. Windows MSI updates use Windows Installer
 without forcing other ngterm processes to close; busy files can require closing those processes and retrying.
 Interrupted downloads are cleaned up on a later launch or check. Backups needed for recovery are retained.
-Root-owned macOS PKG installations are updated manually with a newer PKG or DMG.
+Installations the system owns (`.deb`, `.rpm`, Arch packages and a root-owned `/Applications/ngterm.app` from the PKG)
+download the matching package into the state directory and install it through apt, dnf, zypper, rpm, pacman or
+`installer`, with the app still open. Rights come from polkit (`pkexec`) or the macOS administrator dialog; a Linux
+desktop with no polkit agent runs `sudo` in a new ngterm session instead. Dismissing the prompt changes nothing.
+These installs happen only from the button, since a quit can't ask for a password. Each package's
+`share/ngterm/update-format` marker names its format; builds packaged by others have none and don't self-update.
 
 Disable background checks and downloads in **Settings → General → Updates** (`autoUpdate: false` in `settings.json`);
 manual checks remain available. Archive installs must stay together in a dedicated directory named `ngterm`, with
 its parent writable by your user. For the macOS binary tarball, create that directory and extract `bin` and `share`
-inside it. Shared prefixes, source builds, and native Linux package installs are updated manually or through their
-package manager. Keep your state and configuration directories outside the installation. AppImages update their
+inside it. Shared prefixes and source builds are updated manually. Keep your state and configuration directories outside the installation. AppImages update their
 original file; manually extracted AppImages are updated manually.
 
 Linux packages target glibc 2.39+ and libstdc++ 13+ (Ubuntu 24.04 or newer and current Debian, Fedora, Arch, and

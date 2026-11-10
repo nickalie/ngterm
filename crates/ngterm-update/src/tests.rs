@@ -242,6 +242,8 @@ pub(super) fn installation(root: &Path) -> Installation {
         executable: root.join("usr/bin/ngterm"),
         format: Format::LinuxArchive,
         image_identity: None,
+        stage: None,
+        prompter: None,
     }
 }
 pub(super) fn metadata(version: &str) -> Metadata {
@@ -920,7 +922,7 @@ fn bundle_access_refuses_another_owner_and_a_directory_missing_an_owner_bit() {
 
 /// The refusal of an installation no release packaging enabled.
 #[cfg(target_os = "macos")]
-const NOT_ENABLED: &str = "Automatic updates are available for official release archives, AppImages, macOS app bundles and Windows installers. Update package-manager installations with your package manager; rebuild development installations from source.";
+const NOT_ENABLED: &str = "Automatic updates are available for official releases. Update installations from other sources with their package manager; rebuild development installations from source.";
 
 /// The loose tree of a macOS release archive at `version` under `root`.
 #[cfg(target_os = "macos")]
@@ -1121,7 +1123,73 @@ fn detected_image_matches_environment(mode: &str) {
     } else {
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Automatic updates are available for official release archives, AppImages, macOS app bundles and Windows installers. Update package-manager installations with your package manager; rebuild development installations from source."
+            "Automatic updates are available for official releases. Update installations from other sources with their package manager; rebuild development installations from source."
         );
     }
+}
+
+#[test]
+fn system_packages_download_their_own_release_assets() {
+    let version = Version::parse("1.2.3").unwrap();
+    for (format, arch, name) in [
+        (Format::LinuxDeb, "x86_64", "ngterm_1.2.3-1_amd64.deb"),
+        (Format::LinuxDeb, "aarch64", "ngterm_1.2.3-1_arm64.deb"),
+        (Format::LinuxRpm, "x86_64", "ngterm-1.2.3-1.x86_64.rpm"),
+        (Format::LinuxRpm, "aarch64", "ngterm-1.2.3-1.aarch64.rpm"),
+        (Format::LinuxPacman, "x86_64", "ngterm-1.2.3-1-x86_64.pkg.tar.zst"),
+        (Format::LinuxPacman, "aarch64", "ngterm-1.2.3-1-aarch64.pkg.tar.zst"),
+        (Format::MacPkg, "x86_64", "ngterm-1.2.3-macos-x86_64.pkg"),
+        (Format::MacPkg, "aarch64", "ngterm-1.2.3-macos-arm64.pkg"),
+    ] {
+        assert_eq!(format.asset(&version, arch).unwrap(), name);
+    }
+    assert!(Format::LinuxDeb.asset(&version, "riscv64").is_err());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn the_native_package_markers_name_their_formats() {
+    assert_eq!(Format::from_marker("linux-deb\n"), Some(Format::LinuxDeb));
+    assert_eq!(Format::from_marker("linux-rpm\n"), Some(Format::LinuxRpm));
+    assert_eq!(Format::from_marker("linux-pacman\n"), Some(Format::LinuxPacman));
+}
+
+#[test]
+fn only_a_bundle_in_applications_the_user_cannot_replace_is_a_pkg_install() {
+    let applications = Path::new("/Applications/ngterm.app");
+    assert_eq!(
+        system_owned_bundle(Format::MacBundle, applications, false),
+        Format::MacPkg
+    );
+    assert_eq!(
+        system_owned_bundle(Format::MacBundle, applications, true),
+        Format::MacBundle
+    );
+    let elsewhere = Path::new("/Users/me/ngterm.app");
+    assert_eq!(
+        system_owned_bundle(Format::MacBundle, elsewhere, false),
+        Format::MacBundle
+    );
+    assert_eq!(
+        system_owned_bundle(Format::MacArchive, applications, false),
+        Format::MacArchive
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_system_owned_installation_stages_outside_its_unwritable_parent() {
+    let fixture = tempfile::tempdir().unwrap();
+    let mut install = installation(&fixture.path().join("ngterm"));
+    assert_eq!(
+        install.stage_parent().unwrap(),
+        fixture.path(),
+        "beside itself, for the rename"
+    );
+    install.format = Format::LinuxRpm;
+    assert_eq!(install.stage_parent().unwrap(), std::env::temp_dir());
+    let stage = fixture.path().join("state/updates");
+    let install = install.staged_under(stage.clone());
+    assert_eq!(install.stage_parent().unwrap(), stage);
+    assert!(stage.is_dir(), "created for the download");
 }

@@ -56,6 +56,7 @@ fn containment_resolves_existing_and_future_directories_before_every_install() {
         let work = staging::create(&install, fixture.path()).unwrap();
         let stage = work.path().to_path_buf();
         let prepared = Prepared {
+            sha256: String::new(),
             installation: install.clone(),
             candidate: work.path().join("unused"),
             work,

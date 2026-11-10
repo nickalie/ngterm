@@ -150,6 +150,7 @@ fn failed_helper_script_write_drops_the_prepared_stage() {
     .unwrap();
     let stage = work.path().to_owned();
     let prepared = Prepared {
+        sha256: String::new(),
         installation: installation(&root),
         candidate: work.path().join("unused"),
         work,
@@ -240,6 +241,7 @@ fn launch_child(fixture: &Path) {
     fs::write(&executable, reopen_script()).unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
     let prepared = Prepared {
+        sha256: String::new(),
         installation: install,
         work,
         candidate,
@@ -298,6 +300,7 @@ fn failed_ownership_transfer_stops_the_helper_and_removes_its_stage() {
     fs::create_dir(work.path().join(crate::staging::OWNER)).unwrap();
     let stage = work.path().to_owned();
     let prepared = Prepared {
+        sha256: String::new(),
         installation: installation(&root),
         candidate: work.path().join("unused"),
         work,
@@ -523,6 +526,7 @@ fn an_empty_error_file_path_refuses_the_launch_and_drops_the_stage() {
     let work = tempfile::tempdir_in(fixture.path()).unwrap();
     let stage = work.path().to_owned();
     let prepared = Prepared {
+        sha256: String::new(),
         installation: installation(&root),
         candidate: work.path().join("unused"),
         work,
@@ -578,4 +582,58 @@ fn image_stamp_reports_a_failing_stat() {
         image_stamp(&fixture.path().join("missing")).unwrap_err().to_string(),
         "Could not identify the installed application image."
     );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_system_package_stays_as_downloaded_and_never_goes_to_the_tree_helper() {
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().join("ngterm");
+    tree(&root, "0.1.0");
+    fs::write(root.join("usr").join(MARKER), "linux-deb\n").unwrap();
+    let install = Installation::at(&root.join("usr/bin/ngterm")).unwrap();
+    assert_eq!(install.format, Format::LinuxDeb);
+    assert_eq!(install.root, root);
+    assert_eq!(install.identity_file(), root.join("usr/share/ngterm/app-BUILD"));
+
+    let asset = fixture.path().join("package.deb");
+    fs::write(&asset, "package").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let version = Version::parse("0.2.0").unwrap();
+    assert_eq!(extract(&install, &asset, work.path(), &version).unwrap(), asset);
+    fs::remove_dir(work.path().join("unpacked")).unwrap();
+
+    let prepared = Prepared {
+        sha256: "sum".into(),
+        installation: install,
+        candidate: asset.clone(),
+        work,
+    };
+    let privileged = prepared.privileged().expect("a package goes to the system's installer");
+    assert_eq!((privileged.kind, privileged.sha256.as_str()), ("deb", "sum"));
+    assert_eq!(privileged.package, asset);
+    assert_eq!(
+        privileged.identity_sha256, "",
+        "with no record, no installed identity can match"
+    );
+    assert_eq!(
+        prepared
+            .launch(&fixture.path().join("error"), true, &[])
+            .unwrap_err()
+            .to_string(),
+        "The system's installer has to install this update."
+    );
+}
+
+#[test]
+fn an_installation_the_app_replaces_itself_has_no_privileged_install() {
+    let fixture = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let prepared = Prepared {
+        sha256: String::new(),
+        installation: installation(fixture.path()),
+        candidate: fixture.path().join("unused"),
+        work,
+    };
+    assert!(prepared.privileged().is_none());
 }

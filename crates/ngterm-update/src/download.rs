@@ -221,11 +221,7 @@ impl Source {
             return Err(error("Update download was cancelled."));
         }
         installation.validate_access()?;
-        let parent = installation
-            .root
-            .parent()
-            .ok_or_else(|| error("Installation has no parent directory."))?;
-        let work = crate::staging::create(installation, parent)?;
+        let work = crate::staging::create(installation, &installation.stage_parent()?)?;
         crate::install::record_installation(installation, work.path())?;
         if installation.format != crate::Format::AppImage {
             let recorded = fs::read_to_string(work.path().join("expected-identity"))?;
@@ -260,7 +256,7 @@ impl Source {
         let asset = work.path().join(&release.asset);
         download(agent, release, &asset, &expected, &mut progress)?;
         let candidate = crate::install::extract(installation, &asset, work.path(), &release.version)?;
-        // The archive is no longer needed, except when Windows Installer consumes an MSI after this process exits.
+        // The archive is no longer needed, unless an installer consumes the asset itself.
         if candidate != asset {
             fs::remove_file(asset)?;
         }
@@ -268,6 +264,7 @@ impl Source {
             installation: installation.clone(),
             work,
             candidate,
+            sha256: expected,
         })
     }
 }

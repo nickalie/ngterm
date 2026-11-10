@@ -4,17 +4,38 @@ use std::process::{Command, Stdio};
 
 use semver::Version;
 
-use crate::{Error, Format, Installation, MARKER, error};
+use crate::{Error, Format, Installation, MARKER, PrivilegedInstall, error};
 
-/// A verified replacement. The installation is untouched until the app quits or the user chooses to restart.
+/// A verified replacement. The installation is untouched until the app quits or the user chooses to restart, or, for
+/// an installation the system owns, until the user installs it from the app ([`Prepared::privileged`]).
 #[derive(Debug)]
 pub struct Prepared {
     pub(crate) installation: Installation,
     pub(crate) work: tempfile::TempDir,
     pub(crate) candidate: PathBuf,
+    /// The verified checksum of the release asset, kept in memory where a package on disk cannot change it.
+    pub(crate) sha256: String,
 }
 
 impl Prepared {
+    /// How to install this update through the system's installer; `None` for an installation the app replaces itself.
+    #[must_use]
+    pub fn privileged(&self) -> Option<PrivilegedInstall> {
+        Some(PrivilegedInstall {
+            kind: self.installation.format.system_package()?,
+            package: self.candidate.clone(),
+            sha256: self.sha256.clone(),
+            work: self.work.path().to_path_buf(),
+            identity: self.installation.identity_file(),
+            // an unreadable record hashes to nothing, which no installed identity matches
+            identity_sha256: fs::read(self.work.path().join("expected-identity"))
+                .map(|bytes| crate::privileged::sha256_hex(&bytes))
+                .unwrap_or_default(),
+            executable: self.installation.executable.clone(),
+            prompter: self.installation.prompter.clone(),
+        })
+    }
+
     /// Starts a detached helper which waits for the app to quit before replacing it, reopening the executable only
     /// when `reopen` is true. A failed replacement restores the previous installation. Errors survive in `error_file` for the
     /// next launch to show. Start this before requesting an orderly quit; if spawning fails, keep the app open.
@@ -22,6 +43,9 @@ impl Prepared {
     /// # Errors
     /// Returns a protected-path, filesystem or process error when installing is unsafe or the helper cannot start.
     pub fn launch(self, error_file: &Path, reopen: bool, protected_paths: &[PathBuf]) -> Result<(), Error> {
+        if self.installation.format.system_package().is_some() {
+            return Err(error("The system's installer has to install this update."));
+        }
         self.installation.validate_paths(protected_paths)?;
         let original_cwd = std::env::current_dir().unwrap_or_default();
         let script = self
@@ -117,7 +141,9 @@ pub(crate) fn extract(
             }
             return Ok(asset.to_path_buf());
         }
-        Format::WindowsMsi => return Ok(asset.to_path_buf()),
+        Format::WindowsMsi | Format::LinuxDeb | Format::LinuxRpm | Format::LinuxPacman | Format::MacPkg => {
+            return Ok(asset.to_path_buf());
+        }
         Format::LinuxArchive | Format::MacArchive => {
             let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(File::open(asset)?));
             archive.unpack(&unpacked)?;

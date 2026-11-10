@@ -30,14 +30,11 @@ pub(crate) fn transfer(work: &Path, installation: &Installation, pid: u32) -> Re
 }
 
 pub(crate) fn cleanup(installation: &Installation) -> Result<usize, Error> {
-    let parent = installation
-        .root
-        .parent()
-        .ok_or_else(|| crate::error("Installation has no parent directory."))?;
+    let parent = installation.stage_parent()?;
     let root = dunce::canonicalize(&installation.root)?;
     cleanup_lock(&installation.root);
     let mut removed = 0;
-    for entry in fs::read_dir(parent)?.flatten() {
+    for entry in fs::read_dir(&parent)?.flatten() {
         if !entry.file_name().to_string_lossy().starts_with(".ngterm-update-")
             || !entry.file_type().is_ok_and(|kind| kind.is_dir())
         {
@@ -93,7 +90,7 @@ fn cleanup_lock(root: &Path) {
 }
 
 #[cfg(unix)]
-fn process_alive(pid: u32) -> bool {
+pub(crate) fn process_alive(pid: u32) -> bool {
     let Ok(pid) = i32::try_from(pid) else {
         return true;
     };
@@ -105,7 +102,7 @@ fn process_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn process_alive(pid: u32) -> bool {
+pub(crate) fn process_alive(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
     if pid == 0 {

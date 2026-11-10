@@ -126,8 +126,6 @@ case "$(host_os)" in
     "$root/usr/bin/ngtermctl" --help >/dev/null
     echo linux-archive > "$root/usr/share/ngterm/update-format"
     tar -C "$work" -czf "$dist/ngterm-$version-linux-$arch.tar.gz" ngterm
-    # Native package files remain owned exclusively by their package manager.
-    rm "$root/usr/share/ngterm/update-format"
     export PACKAGE_ROOT="$root" PACKAGE_VERSION="$version"
     case "$arch" in x86_64) PACKAGE_ARCH=amd64 ;; aarch64) PACKAGE_ARCH=arm64 ;; *) die "unsupported arch: $arch" ;; esac
     export PACKAGE_ARCH
@@ -144,9 +142,15 @@ PY
     download "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_${nfpm_arch}.tar.gz" \
       "$work/nfpm.tar.gz" "${!sha_var}"
     tar -xf "$work/nfpm.tar.gz" -C "$work" nfpm
+    # Each package names itself, so the app updates through the system's installer for that format.
     for format in deb rpm archlinux; do
+      marker="linux-$format"
+      [[ "$format" != archlinux ]] || marker=linux-pacman
+      echo "$marker" > "$root/usr/share/ngterm/update-format"
       (cd "$NATIVE_ROOT" && "$work/nfpm" package --config "$work/nfpm.yaml" --packager "$format" --target "$dist/")
     done
+    # An AppImage is recognized by its environment and carries no marker.
+    rm "$root/usr/share/ngterm/update-format"
     sha_var="APPIMAGETOOL_${key}_SHA256"
     download "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-$arch.AppImage" \
       "$work/appimagetool.AppImage" "${!sha_var}"
