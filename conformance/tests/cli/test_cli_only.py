@@ -60,6 +60,70 @@ def _env(cli, session=None, directory=None, **extra):
     return env
 
 
+# -- viewer-run (Rust-only, Windows): what a Windows viewer's remote pane or overlay runs through `cmd.exe`
+
+VIEWER_RUN = pytest.mark.requires(
+    "cmd-command-line", reason="a Unix viewer runs a remote pane's attach as a /bin/sh line, not through viewer-run"
+)
+# The bar a lost link shows, before the escapes `LostLink::output` puts around it (ASCII, as the captured stdout is
+# decoded in the console's code page).
+LOST_BAR = "Connection to box lost"
+LOST_TITLE = "ngterm-remote;n1:lost"
+
+
+def _viewer_run(cli, record):
+    """`ngtermctl viewer-run WORD` for `record` (`ViewerRun`'s JSON)."""
+    word = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":")).encode()).decode().rstrip("=")
+    return _viewer_run_word(cli, word)
+
+
+def _viewer_run_word(cli, word):
+    """`ngtermctl viewer-run WORD` with no `ssh` on PATH, so a pane's keep-alive probe finds no config and its attach
+    runs as given; stdin closed, so a lost link's wait ends at once."""
+    system = os.environ.get("SystemRoot", r"C:\Windows")
+    return cli.local("viewer-run", word, env=_env(cli, PATH=os.path.join(system, "System32")), input="")
+
+
+def _exits(status):
+    return ["cmd.exe", "/d", "/c", f"exit {status}"]
+
+
+@VIEWER_RUN
+def test_viewer_run_runs_a_program_and_ends_with_its_status(cli):
+    result = _viewer_run(cli, {"kind": "program", "argv": _exits(7)})
+    assert (result.returncode, result.stdout) == (7, ""), result.stderr
+
+
+@VIEWER_RUN
+def test_viewer_run_pane_reports_how_its_attach_ended(cli):
+    report = "ngterm: build (left) on box disconnected, exit"
+    lost = {"bar": LOST_BAR, "title": LOST_TITLE}
+    ended = _viewer_run(cli, {"kind": "pane", "attach": _exits(3), "report": report, "lost": lost})
+    assert (ended.returncode, ended.stdout) == (3, f"{report} 3\n"), ended.stderr
+    # without a lead, even ssh's own failure is an ordinary end
+    plain = _viewer_run(cli, {"kind": "pane", "attach": _exits(255), "report": report, "lost": None})
+    assert (plain.returncode, plain.stdout) == (255, f"{report} 255\n"), plain.stderr
+
+
+@VIEWER_RUN
+def test_viewer_run_pane_shows_the_reconnecting_bar_when_ssh_lost_the_link(cli):
+    report = "ngterm: build (left) on box disconnected, exit"
+    lost = {"bar": LOST_BAR, "title": LOST_TITLE}
+    result = _viewer_run(cli, {"kind": "pane", "attach": _exits(255), "report": report, "lost": lost})
+    assert result.returncode == 255, result.stderr
+    assert report not in result.stdout, "the bar replaces the exit line"
+    assert f"\x1b[30;43m {LOST_BAR} \x1b[K" in result.stdout, repr(result.stdout)
+    assert f"\x1b]2;{LOST_TITLE}\x07" in result.stdout, repr(result.stdout)
+    assert result.stdout.endswith("\x1b[?25l"), repr(result.stdout)
+
+
+@VIEWER_RUN
+def test_viewer_run_refuses_a_word_no_build_wrote(cli):
+    result = _viewer_run_word(cli, "?!")
+    assert (result.returncode, result.stdout) == (64, ""), result.stderr
+    assert result.stderr.startswith("ngtermctl: viewer-run: "), result.stderr
+
+
 # -- clipboard set
 
 
