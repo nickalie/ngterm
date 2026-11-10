@@ -43,14 +43,30 @@ internal final class SettingsTests: XCTestCase {
         }
     }
 
+    /// Touches the switch inside `row` (the switch itself, at the row's trailing end) until the row reads `value`, and
+    /// leaves it to the caller to assert that it does. UISwitch starts its press on a 10 ms timer, and a tap lasts 67
+    /// ms: when XCTest's own accessibility snapshots hold the app's main thread for longer, as on a loaded host, the
+    /// touch's down and up are handled together, the timer never runs and the switch ignores the touch. A 0.6 s press
+    /// outlasts most of those stalls; one that doesn't is repeated. A dead switch still fails the assert.
+    @MainActor
+    private func flip(_ row: XCUIElement, to value: String) {
+        let flipped = NSPredicate(format: "value == %@", value)
+        for _ in 0..<3 {
+            row.switches.firstMatch.press(forDuration: 0.6)
+            let read = XCTNSPredicateExpectation(predicate: flipped, object: row)
+            if XCTWaiter.wait(for: [read], timeout: 3) == .completed {
+                return
+            }
+        }
+    }
+
     @MainActor
     internal func testAChangedSettingSticks() throws {
         let app = openSettings()
         let keepOn = app.switches["keep-screen-on"]
         FakeApp.expect(keepOn, "Keep the screen on")
         XCTAssertEqual(keepOn.value as? String, "0")
-        // the switch itself, at the row's trailing end
-        keepOn.switches.firstMatch.tap()
+        flip(keepOn, to: "1")
         XCTAssertEqual(keepOn.value as? String, "1")
         try FakeApp.auditForm(app, page: app.collectionViews["settings-form"])
 
