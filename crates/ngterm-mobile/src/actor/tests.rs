@@ -432,7 +432,7 @@ fn session_commands_need_a_connection() {
 #[test]
 fn a_listing_is_answered_and_arrives_as_a_tree() {
     let transport = FakeTransport::new();
-    let tree = ngterm_core::remote::ssh::tree_tail();
+    let tree = ngterm_core::remote::ssh::tree_tail(ngterm_core::remote::origin::OriginShell::Posix);
     transport.script(&tree, listing(&[(COMPANION, Some(PARENT)), (PARENT, None)]));
     let (sink, events) = recorder();
     let core = core(&transport, &sink);
@@ -449,7 +449,7 @@ fn a_listing_is_answered_and_arrives_as_a_tree() {
 #[test]
 fn a_remote_failure_names_the_machine_by_its_label() {
     let transport = FakeTransport::new();
-    let tree = ngterm_core::remote::ssh::tree_tail();
+    let tree = ngterm_core::remote::ssh::tree_tail(ngterm_core::remote::origin::OriginShell::Posix);
     transport.script(&tree, crate::transport::fake::Script::failing(1, ""));
     let (sink, _events) = recorder();
     let core = core(&transport, &sink);
@@ -468,13 +468,15 @@ fn a_remote_failure_names_the_machine_by_its_label() {
 #[test]
 fn an_ended_session_leaves_the_tree_with_its_companions() {
     let transport = FakeTransport::new();
-    let tree = ngterm_core::remote::ssh::tree_tail();
+    let tree = ngterm_core::remote::ssh::tree_tail(ngterm_core::remote::origin::OriginShell::Posix);
     transport.script(
         &tree,
         listing(&[(PARENT, None), (COMPANION, Some(PARENT)), (OTHER, None)]),
     );
-    let close =
-        ngterm_core::remote::ssh::control_tail(&ngterm_core::remote::origin_replies::end_session_arguments(PARENT));
+    let close = ngterm_core::remote::ssh::control_tail(
+        ngterm_core::remote::origin::OriginShell::Posix,
+        &ngterm_core::remote::origin_replies::end_session_arguments(PARENT),
+    );
     transport.script(
         &close,
         crate::transport::fake::Script::ok(r#"{"ok": true, "result": {}}"#),
@@ -522,8 +524,10 @@ fn a_disconnect_ends_a_session_command_running_on_the_connection() {
 #[test]
 fn a_listing_that_began_before_an_end_answers_but_is_neither_kept_nor_reported() {
     let transport = FakeTransport::new();
-    let close =
-        ngterm_core::remote::ssh::control_tail(&ngterm_core::remote::origin_replies::end_session_arguments(PARENT));
+    let close = ngterm_core::remote::ssh::control_tail(
+        ngterm_core::remote::origin::OriginShell::Posix,
+        &ngterm_core::remote::origin_replies::end_session_arguments(PARENT),
+    );
     transport.script(
         &close,
         crate::transport::fake::Script::ok(r#"{"ok": true, "result": {}}"#),
@@ -553,7 +557,10 @@ fn a_listing_that_began_before_an_end_answers_but_is_neither_kept_nor_reported()
     let answered = block_on(first).expect("listed");
     assert_eq!(ids(&answered), [PARENT, OTHER]);
     // a later listing is kept and reported, and it is the first tree the app sees
-    transport.script(&ngterm_core::remote::ssh::tree_tail(), listing(&[(OTHER, None)]));
+    transport.script(
+        &ngterm_core::remote::ssh::tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        listing(&[(OTHER, None)]),
+    );
     block_on(core.list_sessions("m1".to_owned())).expect("listed again");
     let (_, sessions) = next_tree(&events);
     assert_eq!(ids(&sessions), [OTHER]);

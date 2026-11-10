@@ -5435,6 +5435,7 @@ dependencies = [
  "ngterm-core",
  "ngterm-host",
  "ngterm-proto",
+ "ngterm-pty",
  "ngterm-server",
  "ngterm-session",
  "ngterm-term",

@@ -60,6 +60,7 @@ use std::time::Duration;
 use ::russh::client::{self, AuthResult, Handle, Msg};
 use ::russh::keys::{HashAlg, PrivateKeyWithHashAlg};
 use ::russh::{ChannelMsg, Disconnect, Sig};
+use ngterm_core::remote::origin::OriginShell;
 use ngterm_term::GridSize;
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
@@ -215,6 +216,7 @@ impl RusshTransport {
             never = prompt.run(asked) => match never {},
         };
         Ok(RusshConnection {
+            origin_shell: std::cell::Cell::default(),
             handle: RefCell::new(Some(Rc::new(handle))),
             closed: Arc::new(AtomicBool::new(false)),
             gone,
@@ -682,9 +684,18 @@ pub struct RusshConnection {
     closed: Arc<AtomicBool>,
     /// Closed once russh's session has ended (its [`Client`] dropped).
     gone: watch::Receiver<()>,
+    origin_shell: std::cell::Cell<OriginShell>,
 }
 
 impl Connection for RusshConnection {
+    fn origin_shell(&self) -> OriginShell {
+        self.origin_shell.get()
+    }
+
+    fn set_origin_shell(&self, shell: OriginShell) {
+        self.origin_shell.set(shell);
+    }
+
     async fn exec(&self, command: &str, pty: Option<GridSize>) -> Result<Channel, TransportError> {
         let handle = self.handle.borrow().clone().ok_or(TransportError::Closed)?;
         // Opened apart from this future, so a channel confirmed after `exec` is dropped is still closed.

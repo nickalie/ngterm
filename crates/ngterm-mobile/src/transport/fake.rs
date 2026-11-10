@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use ngterm_core::remote::origin::OriginShell;
 use ngterm_term::GridSize;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -268,6 +269,7 @@ impl Transport for FakeTransport {
             };
             state.links.insert(id, link);
             Ok(FakeConnection {
+                origin_shell: std::cell::Cell::default(),
                 id,
                 machine_id: machine.id.clone(),
                 state: Arc::clone(&self.state),
@@ -296,9 +298,18 @@ pub struct FakeConnection {
     machine_id: String,
     state: Arc<Mutex<State>>,
     lost: watch::Receiver<bool>,
+    origin_shell: std::cell::Cell<OriginShell>,
 }
 
 impl Connection for FakeConnection {
+    fn origin_shell(&self) -> OriginShell {
+        self.origin_shell.get()
+    }
+
+    fn set_origin_shell(&self, shell: OriginShell) {
+        self.origin_shell.set(shell);
+    }
+
     async fn exec(&self, command: &str, pty: Option<GridSize>) -> Result<Channel, TransportError> {
         let script = {
             let mut state = lock(&self.state);

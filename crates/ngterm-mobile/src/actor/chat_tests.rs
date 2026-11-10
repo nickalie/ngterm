@@ -98,12 +98,23 @@ fn conversation(id: &str, cursor: u64) -> String {
 
 /// The chat channel resuming after `at` in conversation `id`.
 fn resumed(side: Side, at: u64, id: &str) -> String {
-    chat_tail(SESSION, side, Some(Cursor { at, conversation: id }))
+    chat_tail(
+        ngterm_core::remote::origin::OriginShell::Posix,
+        SESSION,
+        side,
+        Some(Cursor { at, conversation: id }),
+    )
 }
 
 /// An older page before `at` in conversation `id`.
 fn paging(at: u64, id: &str) -> String {
-    page_tail(SESSION, Side::Left, Cursor { at, conversation: id }, OLDER_PAGE)
+    page_tail(
+        ngterm_core::remote::origin::OriginShell::Posix,
+        SESSION,
+        Side::Left,
+        Cursor { at, conversation: id },
+        OLDER_PAGE,
+    )
 }
 
 fn live(cursor: u64) -> String {
@@ -139,7 +150,9 @@ struct Fixture {
 impl Fixture {
     async fn start() -> Self {
         let actor = Actor::start();
-        actor.transport.script(&tree_tail(), listing());
+        actor
+            .transport
+            .script(&tree_tail(ngterm_core::remote::origin::OriginShell::Posix), listing());
         actor.connect().await;
         actor.list().await;
         actor.attach().await.unwrap();
@@ -344,7 +357,12 @@ fn a_chat_delivers_its_events_in_order_and_a_later_line_updates_the_same_id() {
     local(async {
         let mut fixture = Fixture::start().await;
         assert_eq!(fixture.open(LEFT).await, Ok(()));
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
 
         let running = line(
             "toolu_1",
@@ -376,7 +394,12 @@ fn older_pages_run_before_the_oldest_main_cursor_until_the_start() {
     local(async {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         assert_eq!(fixture.older(LEFT).await, Ok(Vec::new()), "nothing to page from yet");
 
         // a subagent's cursor is in its own file: paging goes by the main transcript's
@@ -424,7 +447,12 @@ fn a_severed_connection_resumes_after_the_newest_cursor_with_no_repeats_and_no_g
     local(async {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(&chat, &[conversation("c1", 0), assistant("line-0", 0, "a"), live(100)]).await;
         feed(&chat, &[assistant("line-100", 100, "b")]).await;
         fixture.reported();
@@ -459,7 +487,12 @@ fn a_failed_command_after_the_backlog_is_retried_on_its_backoff_from_the_newest_
     local(async {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(&chat, &[conversation("c1", 0), assistant("line-0", 0, "a"), live(40)]).await;
         chat.end(ChannelEnd::Exit {
             code: Some(1),
@@ -486,10 +519,10 @@ fn a_reset_starts_over_and_the_catalog_is_fetched_once_per_conversation() {
             {"name": "compact", "description": "Clear history", "kind": "builtin", "argument_hint": "[instructions]"},
             {"name": "deploy", "description": "Ship it", "kind": "a-kind-from-later"},
         ]);
-        fixture
-            .actor
-            .transport
-            .script(&commands_tail(SESSION, Side::Left), Script::ok(&catalog.to_string()));
+        fixture.actor.transport.script(
+            &commands_tail(ngterm_core::remote::origin::OriginShell::Posix, SESSION, Side::Left),
+            Script::ok(&catalog.to_string()),
+        );
         let expected = vec![AgentCommand {
             name: "compact".to_owned(),
             description: "Clear history".to_owned(),
@@ -501,7 +534,12 @@ fn a_reset_starts_over_and_the_catalog_is_fetched_once_per_conversation() {
         assert_eq!(fixture.chat_execs().len(), 1, "fetched once");
 
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(&chat, &[assistant("line-0", 0, "a"), live(10)]).await;
         feed(&chat, &[reset(), assistant("line-0", 0, "a"), live(10)]).await;
         let (events, _) = fixture.reported();
@@ -517,7 +555,7 @@ fn a_reset_starts_over_and_the_catalog_is_fetched_once_per_conversation() {
         assert_eq!(fixture.commands(LEFT).await, Ok(expected));
         assert_eq!(fixture.chat_execs().len(), 4, "a new conversation fetches it again");
         fixture.actor.transport.script(
-            &commands_tail(SESSION, Side::Left),
+            &commands_tail(ngterm_core::remote::origin::OriginShell::Posix, SESSION, Side::Left),
             Script::failing(64, "unrecognized subcommand"),
         );
         fixture.send(agent_frame(LEFT, Some("c3"))).await;
@@ -530,7 +568,12 @@ fn the_channel_ending_tells_the_app_to_show_the_terminal() {
     local(async {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(&chat, &[live(0)]).await;
         chat.end(ChannelEnd::Exit {
             code: Some(0),
@@ -549,7 +592,12 @@ fn the_channel_ending_tells_the_app_to_show_the_terminal() {
 
         // no agent left in the pane, said after the backlog: ended too, not retried
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(&chat, &[live(0)]).await;
         assert!(chat.stderr(b"Error: no agent in this pane\n".to_vec()).await);
         chat.end(ChannelEnd::Exit {
@@ -570,7 +618,12 @@ fn an_origin_without_the_chat_command_degrades_to_the_terminal_with_no_error() {
     local(async {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         assert!(chat.stderr(b"error: unrecognized subcommand 'agent'\n".to_vec()).await);
         chat.end(ChannelEnd::Exit {
             code: Some(64),
@@ -589,7 +642,9 @@ fn an_origin_without_the_chat_command_degrades_to_the_terminal_with_no_error() {
 fn an_origin_that_never_announces_an_agent_reports_none() {
     local(async {
         let actor = Actor::start();
-        actor.transport.script(&tree_tail(), listing());
+        actor
+            .transport
+            .script(&tree_tail(ngterm_core::remote::origin::OriginShell::Posix), listing());
         actor.connect().await;
         actor.list().await;
         actor.attach().await.unwrap();
@@ -617,13 +672,23 @@ fn chat_channels_exist_only_for_shown_panes_and_close_on_hide() {
         );
         fixture.open(LEFT).await.unwrap();
         fixture.open(LEFT).await.unwrap();
-        let mut chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let mut chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         assert!(fixture.chats().is_empty(), "opening an open chat opens nothing");
 
         fixture.actor.post(Command::CloseChat(reference(LEFT)));
         assert!(closed(&mut chat).await, "closing the chat closes its channel");
         fixture.open(LEFT).await.unwrap();
-        let mut chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let mut chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         fixture.actor.post(Command::HidePane(reference(LEFT)));
         assert!(closed(&mut chat).await, "hiding the pane closes its chat");
         assert_eq!(
@@ -641,7 +706,12 @@ fn a_pane_that_changes_sides_resumes_its_chat_on_the_new_side() {
     local(async {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let mut chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let mut chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(&chat, &[conversation("c1", 0), assistant("line-0", 0, "a"), live(30)]).await;
 
         fixture.send(Body::Layout(layout(RIGHT, LEFT))).await;
@@ -669,7 +739,12 @@ fn a_conversation_switched_while_away_resumes_by_the_cursors_conversation_and_st
     local(async {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(
             &chat,
             &[
@@ -778,7 +853,12 @@ fn a_channel_lost_before_live_resumes_where_its_catch_up_began() {
     local(async {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         // the first launch: lost after main lines, before the subagents' backlogs and the `live`
         let first = [
             conversation("c1", 50),
@@ -835,7 +915,12 @@ fn a_channel_lost_before_live_resumes_where_its_catch_up_began() {
         feed(&chat, &[reset()]).await;
         assert_eq!(texts(&fixture.reported().0), ["reset"]);
         retried(chat, FAILED).await;
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(&chat, &[conversation("c3", 0), assistant("line-0", 0, "z"), live(60)]).await;
         assert_eq!(texts(&fixture.reported().0), ["conversation:c3", "line-0:z", "live"]);
     });
@@ -877,7 +962,12 @@ fn a_channel_lost_between_a_polls_main_and_subagent_lines_loses_nothing() {
 
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(&chat, &ndjson(&backlog)).await;
         fixture.reported();
 
@@ -925,7 +1015,12 @@ fn a_chat_that_named_no_conversation_resumes_with_none_and_pages_nothing() {
     local(async {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(&chat, &[live(200)]).await;
         assert_eq!(fixture.older(LEFT).await, Ok(Vec::new()));
         assert!(
@@ -948,7 +1043,12 @@ fn a_page_of_another_conversation_or_of_a_closed_chat_is_cancelled() {
     local(async {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(
             &chat,
             &[conversation("c1", 100), assistant("line-100", 100, "b"), live(200)],
@@ -976,7 +1076,12 @@ fn a_page_of_another_conversation_or_of_a_closed_chat_is_cancelled() {
         fixture.actor.post(Command::CloseChat(reference(LEFT)));
         settle().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(
             &chat,
             &[conversation("c1", 100), assistant("line-100", 100, "b"), live(200)],
@@ -1008,7 +1113,12 @@ fn a_chat_failing_after_a_resume_is_reported_reconnecting() {
     local(async {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(&chat, &[conversation("c1", 0), assistant("line-0", 0, "a"), live(40)]).await;
         fixture.reported();
 
@@ -1065,10 +1175,10 @@ fn a_pane_the_sessions_layout_does_not_hold_has_no_chat_and_no_catalog() {
 fn a_catalog_read_that_fails_with_no_words_says_how_it_exited() {
     local(async {
         let fixture = Fixture::start().await;
-        fixture
-            .actor
-            .transport
-            .script(&commands_tail(SESSION, Side::Left), Script::failing(2, " \n"));
+        fixture.actor.transport.script(
+            &commands_tail(ngterm_core::remote::origin::OriginShell::Posix, SESSION, Side::Left),
+            Script::failing(2, " \n"),
+        );
         assert_eq!(
             fixture.commands(LEFT).await,
             Err(MobileError::Remote {
@@ -1083,7 +1193,12 @@ fn while_the_machine_stays_down_the_chat_opens_no_channel_and_its_older_pages_wa
     local(async {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
         feed(
             &chat,
             &[conversation("c1", 0), assistant("line-100", 100, "b"), live(150)],

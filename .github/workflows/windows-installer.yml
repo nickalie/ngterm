@@ -53,7 +53,7 @@ jobs:
       - name: terminal fonts
         run: scripts/fetch-fonts.sh
       - name: release build
-        run: cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session
+        run: cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless
       - name: stage
         run: scripts/stage.sh "$RUNNER_TEMP/stage" --profile release
       # the MSI, and one of the next patch version from the same tree, which the check upgrades to

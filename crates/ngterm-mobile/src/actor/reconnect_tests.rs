@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use ngterm_core::remote::origin::{self, OriginShell};
 use ngterm_core::remote::ssh::{present_tail, tree_tail};
 use tokio::sync::oneshot;
 
@@ -97,7 +98,10 @@ fn opened(actor: &Actor) -> Vec<String> {
 /// (kept open: a peer dropped ends its channel).
 async fn attached_both() -> (Actor, Vec<ChannelPeer>) {
     let actor = Actor::start();
-    actor.transport.script(&tree_tail(), two_sessions());
+    actor.transport.script(
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        two_sessions(),
+    );
     actor.connect().await;
     actor.list().await;
     attach(&actor, SESSION).await;
@@ -110,6 +114,143 @@ async fn attached_both() -> (Actor, Vec<ChannelPeer>) {
     }
     actor.sink.take();
     (actor, peers)
+}
+
+/// A connected actor whose machine turned out to be Windows on its first listing, with [`SESSION`] attached.
+async fn on_a_windows_machine() -> Actor {
+    let actor = Actor::start();
+    actor.transport.script(
+        &tree_tail(OriginShell::Posix),
+        Script::failing(1, "\'\'\' is not recognized as an internal or external command,\r\n"),
+    );
+    actor
+        .transport
+        .script(origin::WINDOWS_PROBE, Script::ok("%OS%Windows_NT\r\n"));
+    actor.transport.script(&tree_tail(OriginShell::Windows), two_sessions());
+    actor.connect().await;
+    actor.list().await;
+    attach(&actor, SESSION).await;
+    settle().await;
+    assert_eq!(opened(&actor), [present_tail(OriginShell::Windows, SESSION).unwrap()]);
+    actor
+}
+
+/// Attaching [`OTHER`] builds its stream's command from what the connection knows of its machine now.
+async fn other_stream_is_the_windows_form(actor: &Actor) {
+    attach(actor, OTHER).await;
+    settle().await;
+    let wanted = present_tail(OriginShell::Windows, OTHER).unwrap();
+    assert!(opened(actor).contains(&wanted), "{wanted}");
+}
+
+#[test]
+fn a_lost_connection_keeps_what_the_machine_turned_out_to_be() {
+    local(async {
+        let actor = on_a_windows_machine().await;
+        actor.transport.drop_connections("m1");
+        settle().await;
+        advance(1000).await;
+        settle().await;
+        assert_eq!(actor.transport.connects().len(), 2, "reconnected");
+        opened(&actor);
+        other_stream_is_the_windows_form(&actor).await;
+    });
+}
+
+#[test]
+fn a_suspend_keeps_what_the_machine_turned_out_to_be() {
+    local(async {
+        let actor = on_a_windows_machine().await;
+        actor.post(Command::Suspend);
+        settle().await;
+        actor.post(Command::Resume);
+        settle().await;
+        assert_eq!(actor.transport.connects().len(), 2, "reconnected");
+        opened(&actor);
+        other_stream_is_the_windows_form(&actor).await;
+    });
+}
+
+#[test]
+fn a_disconnected_machine_is_learned_again() {
+    local(async {
+        let actor = on_a_windows_machine().await;
+        // the loss records what it was; the disconnect is what clears that
+        actor.transport.drop_connections("m1");
+        settle().await;
+        advance(1000).await;
+        settle().await;
+        actor.post(Command::Disconnect {
+            machine_id: "m1".to_owned(),
+        });
+        settle().await;
+        // the same entry is a Unix machine now
+        actor.transport.script(&tree_tail(OriginShell::Posix), two_sessions());
+        let before = actor.transport.execs().len();
+        actor.connect().await;
+        actor.list().await;
+        assert_eq!(
+            actor.transport.execs()[before].command,
+            tree_tail(OriginShell::Posix),
+            "the first listing is in the POSIX form again"
+        );
+    });
+}
+
+/// A Windows machine's connection is lost and its reconnect refused for good: nothing of it is left but what it
+/// turned out to be.
+async fn windows_machine_refused_after_a_loss() -> Actor {
+    let actor = on_a_windows_machine().await;
+    actor.transport.refuse_for_good("box", "the host key changed");
+    actor.transport.drop_connections("m1");
+    settle().await;
+    advance(1000).await;
+    settle().await;
+    actor.transport.accept("box");
+    actor
+}
+
+/// The form of the first listing after `actor` connects `machine` and lists it.
+async fn first_listing_after_connecting(actor: &Actor, machine: crate::api::Machine) -> String {
+    let before = actor.transport.execs().len();
+    let (reply, answer) = oneshot::channel();
+    actor.post(Command::Connect { machine, reply });
+    answer.await.unwrap().unwrap();
+    actor.list().await;
+    let tails = [tree_tail(OriginShell::Posix), tree_tail(OriginShell::Windows)];
+    // a stream kept across the refusal may restart first
+    actor.transport.execs()[before..]
+        .iter()
+        .map(|exec| exec.command.clone())
+        .find(|command| tails.contains(command))
+        .expect("the listing ran")
+}
+
+#[test]
+fn a_refused_machine_edited_to_reach_another_is_learned_again() {
+    local(async {
+        let actor = windows_machine_refused_after_a_loss().await;
+        actor.transport.script(&tree_tail(OriginShell::Posix), two_sessions());
+        let edited = crate::api::Machine {
+            host: "unix".to_owned(),
+            ..machine()
+        };
+        assert_eq!(
+            first_listing_after_connecting(&actor, edited).await,
+            tree_tail(OriginShell::Posix)
+        );
+    });
+}
+
+#[test]
+fn a_refused_machine_retried_unedited_keeps_what_it_turned_out_to_be() {
+    local(async {
+        let actor = windows_machine_refused_after_a_loss().await;
+        assert_eq!(
+            first_listing_after_connecting(&actor, machine()).await,
+            tree_tail(OriginShell::Windows)
+        );
+    });
 }
 
 #[test]
@@ -278,7 +419,7 @@ fn on_reconnect_every_stream_retries_at_once() {
         assert_eq!(machine_states(&events), [reconnecting(0), MachineState::Connected]);
         assert_eq!(stream_states(&events, SESSION), [StreamState::Connecting]);
         assert_eq!(stream_states(&events, OTHER), [StreamState::Connecting]);
-        let tail = |id: &str| present_tail(id).unwrap();
+        let tail = |id: &str| present_tail(ngterm_core::remote::origin::OriginShell::Posix, id).unwrap();
         let mut commands = opened(&actor);
         commands.sort();
         let mut expected = vec![tail(SESSION), tail(OTHER)];
@@ -291,7 +432,10 @@ fn on_reconnect_every_stream_retries_at_once() {
 fn suspend_closes_quietly_and_resume_reattaches_everything() {
     local(async {
         let actor = Actor::start();
-        actor.transport.script(&tree_tail(), listing(Some(1)));
+        actor.transport.script(
+            &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+            listing(Some(1)),
+        );
         actor.connect().await;
         actor.list().await;
         actor.attach().await.unwrap();
@@ -491,7 +635,10 @@ fn use_key(actor: &Actor, key_id: &str) {
 fn a_key_switch_keeps_the_connection_and_the_reconnect_signs_in_with_it() {
     local(async {
         let actor = Actor::start();
-        actor.transport.script(&tree_tail(), listing(Some(1)));
+        actor.transport.script(
+            &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+            listing(Some(1)),
+        );
         actor.connect().await;
         actor.list().await;
         actor.attach().await.unwrap();

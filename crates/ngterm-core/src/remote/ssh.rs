@@ -7,10 +7,12 @@
 //! so a client with its own ssh transport runs exactly what desktop runs. Desktop's argv for those lines is
 //! [`ssh_arguments`] plus the tail, except that attach also puts `-o LogLevel=ERROR` before the host (see
 //! [`attach_command`]); a client attaching over its own transport should keep ssh's banners off the pane likewise. The
-//! job, page-serve, tunnel and probe lines build their remote commands inline and have no tail builder.
+//! job, page-serve, tunnel and probe lines build their remote commands inline and have no tail builder. Each line has
+//! the form of the shell its host's commands go to ([`super::origin`]).
 
 use ngterm_proto::ControlLiveEndpoint;
 
+use super::origin::{self, OriginRun, OriginShell, windows_cli_tail};
 use super::reconnect::RemoteLinkNotice;
 use super::tree::{InvocationError, REMOTE_CLI, is_plain, remote_cli_chain, ssh_arguments, validate};
 use crate::command_restore::shell_quoted_line;
@@ -34,31 +36,37 @@ fn is_path(value: &str) -> bool {
 /// A host ssh may not take, or a session id that is not one plain token.
 pub fn present_command(host: &str, session: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
-    let tail = present_tail(session)?;
+    let tail = present_tail(origin::shell_of(host), session)?;
     let mut argv = ssh_arguments(host, 5, false);
     argv.push(tail);
     Ok(argv)
 }
 
 /// The remote command of [`present_command`]: `ngtermctl live present SESSION` through [`remote_cli_chain`], run with
-/// `exec`.
+/// `exec`, or `shell`'s own form.
 ///
 /// # Errors
 ///
 /// A session id that is not one plain token.
-pub fn present_tail(session: &str) -> Result<String, InvocationError> {
+pub fn present_tail(shell: OriginShell, session: &str) -> Result<String, InvocationError> {
     if !is_plain(session) {
         return Err(InvocationError::InvalidSession);
+    }
+    if shell == OriginShell::Windows {
+        return Ok(windows_cli_tail(&["live", "present", session]));
     }
     let invocation = format!("exec {REMOTE_CLI} live present {}", shell_quoted_line(&[session]));
     Ok(remote_cli_chain(&invocation))
 }
 
-/// The remote command of [`super::tree::tree_command`]: the far side's bare `ngtermctl live tree --json` through
-/// [`remote_cli_chain`].
+/// The remote command of [`super::tree::tree_argv`]: the far side's bare `ngtermctl live tree --json` through
+/// [`remote_cli_chain`], or `shell`'s own form.
 #[must_use]
-pub fn tree_tail() -> String {
-    remote_cli_chain(&format!("{REMOTE_CLI} live tree --json"))
+pub fn tree_tail(shell: OriginShell) -> String {
+    match shell {
+        OriginShell::Posix => remote_cli_chain(&format!("{REMOTE_CLI} live tree --json")),
+        OriginShell::Windows => windows_cli_tail(&["live", "tree", "--json"]),
+    }
 }
 
 /// One ssh invocation running the helper of `job`, an overlay the origin handed to this machine, for as long as the
@@ -73,19 +81,21 @@ pub fn run_job_command(host: &str, job: &str) -> Result<Vec<String>, InvocationE
     if !is_plain(job) {
         return Err(InvocationError::InvalidSession);
     }
-    let tail = format!(
-        "exec {REMOTE_CLI} session overlay run-job {}",
-        shell_quoted_line(&[job])
-    );
+    let tail = match origin::shell_of(host) {
+        OriginShell::Posix => remote_cli_chain(&format!(
+            "exec {REMOTE_CLI} session overlay run-job {}",
+            shell_quoted_line(&[job])
+        )),
+        OriginShell::Windows => windows_cli_tail(&["session", "overlay", "run-job", job]),
+    };
     let mut argv = ssh_arguments(host, 5, true);
-    argv.push(remote_cli_chain(&tail));
+    argv.push(tail);
     Ok(argv)
 }
 
 /// One ssh invocation carrying the channel of `token`'s page, a page the origin handed to this machine, for as long as
 /// the page is shown (upstream's `pageServeCommand`): `-T`, as frames travel on plain stdio a pty would mangle, the
 /// same PATH chain as the presentation stream, and `exec` so the far shell does not linger between ssh and the helper.
-/// A Windows origin needs its own remote form, as the presentation stream and the overlay job do.
 ///
 /// # Errors
 ///
@@ -95,12 +105,15 @@ pub fn page_serve_command(host: &str, token: &str) -> Result<Vec<String>, Invoca
     if !is_plain(token) {
         return Err(InvocationError::InvalidSession);
     }
-    let tail = format!(
-        "exec {REMOTE_CLI} session overlay page-serve {}",
-        shell_quoted_line(&[token])
-    );
+    let tail = match origin::shell_of(host) {
+        OriginShell::Posix => remote_cli_chain(&format!(
+            "exec {REMOTE_CLI} session overlay page-serve {}",
+            shell_quoted_line(&[token])
+        )),
+        OriginShell::Windows => windows_cli_tail(&["session", "overlay", "page-serve", token]),
+    };
     let mut argv = ssh_arguments(host, 5, false);
-    argv.push(remote_cli_chain(&tail));
+    argv.push(tail);
     Ok(argv)
 }
 
@@ -143,8 +156,16 @@ pub fn tunnel_command(host: &str, plan: &super::page_tunnel::TunnelPlan) -> Resu
         .map(str::to_owned),
     );
     argv.push(destination);
-    let script = format!("printf '%s\\n' {}; exec cat >/dev/null", super::page_tunnel::READY_LINE);
-    argv.push(["/bin/sh", "-c", script.as_str()].map(account_shell_quoted).join(" "));
+    argv.push(match origin::shell_of(host) {
+        OriginShell::Posix => {
+            let script = format!("printf '%s\\n' {}; exec cat >/dev/null", super::page_tunnel::READY_LINE);
+            ["/bin/sh", "-c", script.as_str()].map(account_shell_quoted).join(" ")
+        }
+        OriginShell::Windows => OriginRun::Hold {
+            ready: super::page_tunnel::READY_LINE.to_owned(),
+        }
+        .tail(),
+    });
     Ok(argv)
 }
 
@@ -183,6 +204,8 @@ pub fn attach_command(
 
 /// The remote command of [`attach_command`]: `ngterm-session attach DAEMON` under `/usr/bin/env` with the attach
 /// contract's variables cleared, `lead`'s words ahead of the executable, and the create-only gone guard after it.
+/// An endpoint whose paths are Windows' ([`OriginShell::of_endpoint`]) gets that machine's form instead, the same contract
+/// through [`OriginRun::Program`].
 ///
 /// # Errors
 ///
@@ -197,6 +220,9 @@ pub fn attach_tail(
     }
     if !is_path(&endpoint.executable) || !is_path(&endpoint.socket_directory) {
         return Err(InvocationError::InvalidEndpoint);
+    }
+    if OriginShell::of_endpoint(endpoint) == OriginShell::Windows {
+        return Ok(windows_attach_tail(endpoint, daemon, lead));
     }
     let mut words = vec![
         "/usr/bin/env".to_owned(),
@@ -219,6 +245,26 @@ pub fn attach_tail(
         .map(str::to_owned),
     );
     Ok(shell_quoted_line(&words))
+}
+
+/// [`attach_tail`] for a Windows origin: the executable under the same contract's environment, its create-only guard
+/// in `cmd.exe`'s words ([`origin::WINDOWS_GONE_GUARD`]).
+fn windows_attach_tail(endpoint: &ControlLiveEndpoint, daemon: &str, lead: Option<&LeadAttachment>) -> String {
+    let mut environment = vec![
+        (SESSION_VARIABLE.to_owned(), String::new()),
+        (SESSION_PREFIX_VARIABLE.to_owned(), String::new()),
+        (NO_DETACH_KEY_VARIABLE.to_owned(), "1".to_owned()),
+        (DIRECTORY_VARIABLE.to_owned(), endpoint.socket_directory.clone()),
+    ];
+    environment.extend(lead.map(LeadAttachment::environment).unwrap_or_default());
+    let mut words = vec!["attach".to_owned(), daemon.to_owned()];
+    words.extend(origin::WINDOWS_GONE_GUARD.map(str::to_owned));
+    OriginRun::Program {
+        program: endpoint.executable.clone(),
+        environment,
+        words,
+    }
+    .tail()
 }
 
 /// What a remote pane's command needs to name it in its last line.
@@ -294,14 +340,21 @@ pub fn attach_pane_command(
 pub fn probe_command(host: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
     let mut argv = ssh_arguments(host, 5, false);
-    argv.push("true".to_owned());
+    // `true` is no command in `cmd.exe` or PowerShell, whose `exit 0` is every shell's
+    argv.push(
+        if origin::shell_of(host) == OriginShell::Windows {
+            "exit 0"
+        } else {
+            "true"
+        }
+        .to_owned(),
+    );
     Ok(argv)
 }
 
 /// One ssh invocation running the far side's `ngtermctl` with `arguments` plus `--json`, so the reply is the server's
 /// own response line (upstream's `RemoteSession.controlCommand`). The arguments carry user text, so the outer layer is
-/// quoted for any login shell ([`account_shell_quoted`]), as the page forward's remote script is. A Windows origin
-/// needs its own remote form, as the other remote lines do.
+/// quoted for any login shell ([`account_shell_quoted`]), as the page forward's remote script is.
 ///
 /// # Errors
 ///
@@ -309,16 +362,19 @@ pub fn probe_command(host: &str) -> Result<Vec<String>, InvocationError> {
 pub fn control_command<S: AsRef<str>>(host: &str, arguments: &[S]) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
     let mut argv = ssh_arguments(host, 5, false);
-    argv.push(control_tail(arguments));
+    argv.push(control_tail(origin::shell_of(host), arguments));
     Ok(argv)
 }
 
 /// The remote command of [`control_command`]: the widened `PATH`, then `ngtermctl ARGUMENTS --json`, under `/bin/sh
-/// -c` quoted for any login shell.
+/// -c` quoted for any login shell, or `shell`'s own form.
 #[must_use]
-pub fn control_tail<S: AsRef<str>>(arguments: &[S]) -> String {
+pub fn control_tail<S: AsRef<str>>(shell: OriginShell, arguments: &[S]) -> String {
     let mut words: Vec<&str> = arguments.iter().map(AsRef::as_ref).collect();
     words.push("--json");
+    if shell == OriginShell::Windows {
+        return windows_cli_tail(&words);
+    }
     let chain = format!(
         "{} && {REMOTE_CLI} {}",
         super::tree::cli_path_prefix(),
@@ -381,6 +437,112 @@ mod tests {
         pane: "left",
     };
 
+    /// The record a Windows tail carries.
+    fn windows_run(tail: &str) -> OriginRun {
+        let word = tail.strip_prefix("ngtermctl origin-run ").expect(tail);
+        OriginRun::decode(word).unwrap()
+    }
+
+    fn cli_words(tail: &str) -> Vec<String> {
+        match windows_run(tail) {
+            OriginRun::Cli { words } => words,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_windows_origins_lines_carry_their_words_past_either_shell() {
+        let host = "learned-windows.example";
+        origin::learn(host, OriginShell::Windows);
+        let words = |tail: &str| {
+            assert!(
+                !tail.contains(['\'', '"', '$', '%', ' '].as_slice()) || tail.starts_with("ngtermctl origin-run "),
+                "{tail}"
+            );
+            cli_words(tail)
+        };
+        assert_eq!(words(&tree_tail(OriginShell::Windows)), ["live", "tree", "--json"]);
+        assert_eq!(
+            words(present_command(host, "S'1").unwrap().last().unwrap()),
+            ["live", "present", "S'1"]
+        );
+        assert_eq!(
+            words(
+                control_command(host, &["session", "new", "--name=it's %x% $y"])
+                    .unwrap()
+                    .last()
+                    .unwrap()
+            ),
+            ["session", "new", "--name=it's %x% $y", "--json"]
+        );
+        let job = run_job_command(host, "job1").unwrap();
+        assert_eq!(job[1], "-tt");
+        assert_eq!(words(job.last().unwrap()), ["session", "overlay", "run-job", "job1"]);
+        assert_eq!(
+            words(page_serve_command(host, "tok").unwrap().last().unwrap()),
+            ["session", "overlay", "page-serve", "tok"]
+        );
+        assert_eq!(probe_command(host).unwrap().last().unwrap(), "exit 0");
+        let plan = super::super::page_tunnel::TunnelPlan::new("http://127.0.0.1:8000/", 9000).unwrap();
+        assert_eq!(
+            windows_run(tunnel_command(host, &plan).unwrap().last().unwrap()),
+            OriginRun::Hold {
+                ready: super::super::page_tunnel::READY_LINE.to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn a_host_never_learned_keeps_every_posix_line() {
+        let host = "never-learned.example";
+        assert!(
+            present_command(host, "S")
+                .unwrap()
+                .last()
+                .unwrap()
+                .starts_with("'/bin/sh' '-c' ")
+        );
+        assert_eq!(probe_command(host).unwrap().last().unwrap(), "true");
+    }
+
+    #[test]
+    fn a_windows_endpoints_attach_is_the_session_program_with_its_contract() {
+        let endpoint = ControlLiveEndpoint {
+            executable: r"C:\Program Files\ngterm\ngterm-session.exe".to_owned(),
+            socket_directory: r"C:\Users\me\AppData\Local\ngterm\live\ab".to_owned(),
+        };
+        let daemon = daemon_name(Uuid::from_u128(0x42));
+        let tail = attach_tail(&endpoint, &daemon, Some(&lead("n0nce", true))).unwrap();
+        let OriginRun::Program {
+            program,
+            environment,
+            words,
+        } = windows_run(&tail)
+        else {
+            panic!("{tail}");
+        };
+        assert_eq!(program, endpoint.executable);
+        for (name, value) in [
+            (SESSION_VARIABLE, ""),
+            (SESSION_PREFIX_VARIABLE, ""),
+            (NO_DETACH_KEY_VARIABLE, "1"),
+            (DIRECTORY_VARIABLE, endpoint.socket_directory.as_str()),
+        ] {
+            assert!(
+                environment.iter().any(|(key, set)| key == name && set == value),
+                "{name} in {environment:?}"
+            );
+        }
+        assert!(
+            environment.iter().any(|(_, value)| value == "n0nce"),
+            "the lead nonce: {environment:?}"
+        );
+        assert_eq!(words[..2], ["attach".to_owned(), daemon]);
+        // the guard's last word prints what a viewer reads the gone session by
+        assert!(words.last().unwrap().contains(SESSION_GONE), "{words:?}");
+        assert_eq!(words[2], "cmd.exe");
+    }
+
     /// The destination and options every non-interactive desktop line opens with.
     fn plain_prefix() -> Vec<String> {
         ssh_arguments("me@box", 5, false)
@@ -399,20 +561,24 @@ mod tests {
     #[test]
     fn the_tree_and_present_lines_are_the_ssh_options_plus_their_tails() {
         let tree = r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && ngtermctl live tree --json'"#;
-        assert_eq!(tree_tail(), tree);
+        assert_eq!(tree_tail(OriginShell::Posix), tree);
         assert_eq!(
-            super::super::tree::tree_command("me@box").unwrap(),
+            super::super::tree::tree_argv("me@box", OriginShell::Posix),
             joined(plain_prefix(), tree)
         );
         let present = r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && exec ngtermctl live present '\''S'\''\'\'''\''1'\'''"#;
         assert!(present.starts_with(PATH_CHAIN));
-        assert_eq!(present_tail("S'1").unwrap(), present);
+        assert_eq!(present_tail(OriginShell::Posix, "S'1").unwrap(), present);
         assert_eq!(
             present_command("me@box", "S'1").unwrap(),
             joined(plain_prefix(), present)
         );
         for bad in ["", "s 1", "s1\u{1b}[31m"] {
-            assert_eq!(present_tail(bad), Err(InvocationError::InvalidSession), "{bad:?}");
+            assert_eq!(
+                present_tail(OriginShell::Posix, bad),
+                Err(InvocationError::InvalidSession),
+                "{bad:?}"
+            );
         }
     }
 
@@ -478,7 +644,7 @@ mod tests {
         ];
         for (arguments, want) in cases {
             assert!(want.starts_with(PATH_CHAIN));
-            assert_eq!(control_tail(arguments), want);
+            assert_eq!(control_tail(OriginShell::Posix, arguments), want);
             assert_eq!(
                 control_command("me@box", arguments).unwrap(),
                 joined(plain_prefix(), want)
@@ -497,7 +663,7 @@ mod tests {
         let script = "#!/bin/sh\nfor word in \"$@\"; do printf '[%s]' \"$word\"; done\n";
         ngterm_host::fakes::write_executable(&bin.join("ngtermctl"), script).unwrap();
         let ran = Command::new("/bin/sh")
-            .args(["-c", &present_tail("S'1;rm").unwrap()])
+            .args(["-c", &present_tail(OriginShell::Posix, "S'1;rm").unwrap()])
             .env_clear()
             .env("HOME", home.path())
             .env("PATH", "/usr/bin:/bin")

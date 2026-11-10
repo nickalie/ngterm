@@ -20,7 +20,7 @@ use super::frames;
 use super::origin_replies::read_remote_tree;
 use super::reconnect::retry_delay;
 use super::tree;
-use super::viewer::{Answer, run_off_thread, take_answer};
+use super::viewer::{Answer, run_tree_off_thread, take_answer};
 use crate::Core;
 use crate::model::AppStore;
 use crate::persist::RemoteSessionSnapshot;
@@ -133,13 +133,13 @@ impl Core {
             if read.retry_at > now {
                 return Some(read);
             }
-            let Ok(argv) = tree::tree_command(&read.host) else {
+            if tree::validate(&read.host).is_err() {
                 // a host ssh is never handed cannot become attachable later
                 let names = self.forget_saved_rows_of(&read.host);
                 self.report_dropped_rows(&read.host, "invalid", &names, "an invalid host");
                 return None;
-            };
-            match run_off_thread(&self.remote.runner, argv, tree::TREE_DEADLINE) {
+            }
+            match run_tree_off_thread(&self.remote.runner, &read.host, tree::TREE_DEADLINE) {
                 Some(answer) => read.answer = Some(answer),
                 None => return self.relaunch_failed(read, now, "the listing could not start"),
             }

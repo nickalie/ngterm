@@ -72,6 +72,7 @@ use ngterm_core::command_restore::shell_quoted_line;
 use ngterm_core::fuzzy::fuzzy_rank;
 use ngterm_core::palette::search::palette_search_keys;
 use ngterm_core::pane_env::uuid_string;
+use ngterm_core::remote::origin::{OriginShell, windows_cli_tail};
 use ngterm_core::remote::reconnect::retry_delay;
 use ngterm_core::remote::tree::{REMOTE_CLI, remote_cli_chain};
 use tokio::sync::mpsc;
@@ -151,7 +152,7 @@ pub(crate) struct Cursor<'a> {
 /// The chat channel's remote command: the backlog, or everything from the line at `after` on, then following (or a
 /// `reset` and the backlog when the pane is in another conversation now).
 #[must_use]
-pub(crate) fn chat_tail(session_id: &str, side: Side, after: Option<Cursor<'_>>) -> String {
+pub(crate) fn chat_tail(shell: OriginShell, session_id: &str, side: Side, after: Option<Cursor<'_>>) -> String {
     let mut words = agent_words("chat", session_id, side);
     if let Some(after) = after {
         words.extend([
@@ -160,13 +161,13 @@ pub(crate) fn chat_tail(session_id: &str, side: Side, after: Option<Cursor<'_>>)
             format!("--conversation={}", after.conversation),
         ]);
     }
-    remote_cli_chain(&format!("exec {REMOTE_CLI} {}", shell_quoted_line(&words)))
+    agent_tail(shell, "exec ", &words)
 }
 
 /// An older page's remote command: about `limit` events before `before` (or a `reset` alone when the pane is in
 /// another conversation now).
 #[must_use]
-pub(crate) fn page_tail(session_id: &str, side: Side, before: Cursor<'_>, limit: usize) -> String {
+pub(crate) fn page_tail(shell: OriginShell, session_id: &str, side: Side, before: Cursor<'_>, limit: usize) -> String {
     let mut words = agent_words("chat", session_id, side);
     words.extend([
         "--before".to_owned(),
@@ -175,14 +176,22 @@ pub(crate) fn page_tail(session_id: &str, side: Side, before: Cursor<'_>, limit:
         "--limit".to_owned(),
         limit.to_string(),
     ]);
-    remote_cli_chain(&format!("{REMOTE_CLI} {}", shell_quoted_line(&words)))
+    agent_tail(shell, "", &words)
 }
 
 /// The catalog's remote command.
 #[must_use]
-pub(crate) fn commands_tail(session_id: &str, side: Side) -> String {
+pub(crate) fn commands_tail(shell: OriginShell, session_id: &str, side: Side) -> String {
     let words = agent_words("commands", session_id, side);
-    remote_cli_chain(&format!("{REMOTE_CLI} {}", shell_quoted_line(&words)))
+    agent_tail(shell, "", &words)
+}
+
+/// `words` as the origin's `ngtermctl` command line, under `prefix` on a POSIX origin (`exec `, or nothing).
+fn agent_tail(shell: OriginShell, prefix: &str, words: &[String]) -> String {
+    match shell {
+        OriginShell::Posix => remote_cli_chain(&format!("{prefix}{REMOTE_CLI} {}", shell_quoted_line(words))),
+        OriginShell::Windows => windows_cli_tail(words),
+    }
 }
 
 /// The dropdown's rows for `query` (what follows the `/`): the commands whose name matches, best first, ties A→Z, as
@@ -441,7 +450,7 @@ impl<C: Connection> Chat<C> {
             at,
             conversation: self.conversation.as_deref().unwrap_or_default(),
         });
-        let command = chat_tail(&self.key.session_id, self.side, after);
+        let command = chat_tail(connection.origin_shell(), &self.key.session_id, self.side, after);
         tokio::task::spawn_local(run_link(connection, command, launch, stopped, Rc::clone(&self.report)));
         self.link = Some(Link { launch, _stop: stop });
     }
@@ -837,8 +846,14 @@ impl<C: Connection> Chats<C> {
             .filter(|oldest| *oldest > 0)
             .zip(chat.conversation.as_deref());
         Ok(before.map(|(at, conversation)| Job {
+            command: page_tail(
+                connection.origin_shell(),
+                &key.session_id,
+                chat.side,
+                Cursor { at, conversation },
+                OLDER_PAGE,
+            ),
             connection,
-            command: page_tail(&key.session_id, chat.side, Cursor { at, conversation }, OLDER_PAGE),
             generation: chat.generation,
         }))
     }
@@ -883,8 +898,8 @@ impl<C: Connection> Chats<C> {
             return Ok(Lookup::Kept(commands.clone()));
         }
         Ok(Lookup::Fetch(Job {
+            command: commands_tail(connection.origin_shell(), &key.session_id, side),
             connection,
-            command: commands_tail(&key.session_id, side),
             generation: catalog.generation,
         }))
     }

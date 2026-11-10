@@ -5,13 +5,17 @@
 //! bundle, before any pane's shell starts ([`set_up_agents`]): a server has no Help menu or welcome to run them from,
 //! and the panes' agents report to this instance only through them. `--skip-agent-setup` leaves the configs alone; a
 //! build run from cargo's target directory always does, so a dev run never points the real home's hooks at a
-//! checkout's `ngtermctl`.
+//! checkout's `ngtermctl`. On Windows a staged start also puts its own folder on the user's `PATH`,
+//! whatever `--skip-agent-setup` says ([`put_cli_on_path`]).
 
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::Parser;
+#[cfg(windows)]
+use ngterm_app::integrations::cli;
 use ngterm_app::integrations::hooks::{self, OpenCodeStart};
 use ngterm_app::integrations::{Environment, InstallError, opencode, skill};
 use ngterm_core::paths::{self, ProcessEnv};
@@ -20,6 +24,7 @@ use ngterm_headless::{Options, relaunch};
 
 /// ngterm with no window: its sessions, control socket and live sessions, for Attach Remote from another machine.
 #[derive(Debug, Parser)]
+#[expect(clippy::struct_excessive_bools, reason = "each is a command-line flag of its own")]
 #[command(
     name = "ngterm-headless",
     version,
@@ -30,11 +35,15 @@ use ngterm_headless::{Options, relaunch};
                   \n\
                   Create sessions with `ngtermctl session new`; they keep running when this process ends, and the \
                   next start attaches them again. SIGTERM, SIGINT or SIGHUP (on Windows the console's Ctrl+C, \
-                  Ctrl+Break or close) saves the state and ends it.\n\
+                  Ctrl+Break or close) saves the state and ends it. --detach starts it in the background, outliving \
+                  the session that ran it (an ssh login, say); on Windows, where an ssh session takes everything \
+                  started in it down with it, that is how a server is started over ssh.\n\
                   \n\
                   Each start installs the agent skill and status hooks into this machine's agent and shell configs, \
                   or updates them to this build's, as Help's installers do on the desktop (--skip-agent-setup to \
-                  leave them alone)."
+                  leave them alone). On Windows a start of a staged build also puts its own folder on the user's \
+                  PATH, so another machine's ssh finds ngtermctl there, unless NGTERM_STATE_DIR names a private \
+                  state directory."
 )]
 struct Cli {
     /// Install or update the agent skill and status hooks in this machine's agent and shell configs, then exit.
@@ -49,6 +58,9 @@ struct Cli {
     /// The grid every terminal starts at, as `COLUMNSxROWS`; an attached viewer's own grid replaces it.
     #[arg(long, value_name = "COLUMNSxROWS", value_parser = parse_grid, default_value = "80x24")]
     grid: (u16, u16),
+    /// Start in the background and return: the server outlives this command and the session that ran it.
+    #[arg(long, conflicts_with = "install_agent_hooks")]
+    detach: bool,
     /// Started by an instance that quit for a Live sessions reset: wait for its state lock.
     #[arg(long, hide = true)]
     relaunched: bool,
@@ -113,6 +125,36 @@ fn install_agent_integrations(version: Option<opencode::Version>) -> Result<Inst
         opencode_skipped,
         hooks_failed,
     })
+}
+
+/// Whether a start puts its own folder on the user's `PATH`, so a viewer's ssh finds `ngtermctl` there (an installer's
+/// `PATH` entry has it already; a portable folder has none): with a bundled CLI, and not on a private state directory,
+/// a dev run or a test, which leaves the user's real `PATH` as it is. An empty variable counts as unset, as
+/// [`paths::state_dir`] takes it, and a Windows variable's name is in any case.
+#[cfg(windows)]
+fn puts_the_cli_on_path(vars: &std::collections::HashMap<String, String>, bundled_cli: bool) -> bool {
+    bundled_cli
+        && !vars
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case(paths::STATE_DIR_ENV) && !value.is_empty())
+}
+
+/// A staged start's part in being reachable: its own folder on the user's `PATH`, into the log. Not an agent setting,
+/// so `--skip-agent-setup` does not skip it.
+#[cfg(windows)]
+fn put_cli_on_path() {
+    let Some(env) = Environment::process() else {
+        return;
+    };
+    if !puts_the_cli_on_path(&env.vars, env.bundled_cli.is_some()) {
+        return;
+    }
+    let result = cli::apply(&cli::plan(&env), None);
+    if result.is_warning() {
+        tracing::warn!("{}: {}", result.title(), result.text());
+    } else {
+        tracing::info!("{}: {}", result.title(), result.text());
+    }
 }
 
 /// `--install-agent-hooks`: the installers' results on standard output; a hooks failure is the error.
@@ -183,8 +225,32 @@ fn claim(state_dir: &Path, relaunched: bool) -> Result<StateDirectoryLock, Strin
     }
 }
 
+/// The command line of the background server `--detach` starts: this one's, without the flag.
+fn detached_arguments(arguments: impl Iterator<Item = OsString>) -> Vec<OsString> {
+    arguments.filter(|word| word != "--detach").collect()
+}
+
+/// `--detach`: starts this command again as a background server, says which and exits. The instance's own failures
+/// (another instance on the state directory, say) go to its log, as they do when it starts in the foreground.
+fn detach() -> ExitCode {
+    let arguments = detached_arguments(std::env::args_os().skip(1));
+    match std::env::current_exe().and_then(|exe| ngterm_session::server::spawn::spawn_detached(&exe, &arguments)) {
+        Ok(pid) => {
+            println!("ngterm-headless: started in the background (pid {pid})");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("ngterm-headless: could not start in the background: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if cli.detach {
+        return detach();
+    }
     if cli.install_agent_hooks {
         return match install_agent_hooks(cli.opencode_version) {
             Ok(()) => ExitCode::SUCCESS,
@@ -211,10 +277,15 @@ fn main() -> ExitCode {
         opencode_version: cli.opencode_version,
     };
     // before any pane's shell starts, so a first start's shells already source the shell integration
-    if sets_up_agents(&options, Environment::process_is_staged()) {
+    let staged = Environment::process_is_staged();
+    if sets_up_agents(&options, staged) {
         set_up_agents(options.opencode_version);
     } else {
         tracing::info!("the agent skill and hooks are left as they are");
+    }
+    #[cfg(windows)]
+    if staged {
+        put_cli_on_path();
     }
     let status = ngterm_headless::run(&options);
     if status == 0 {

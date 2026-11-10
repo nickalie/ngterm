@@ -86,15 +86,21 @@ fn refusal(error: &str) -> Script {
 }
 
 fn restore_line() -> String {
-    control_tail(&RESTORE_MODE_ARGUMENTS)
+    control_tail(ngterm_core::remote::origin::OriginShell::Posix, &RESTORE_MODE_ARGUMENTS)
 }
 
 fn new_line(name: Option<&str>) -> String {
-    control_tail(&new_session_arguments(name))
+    control_tail(
+        ngterm_core::remote::origin::OriginShell::Posix,
+        &new_session_arguments(name),
+    )
 }
 
 fn end_line(session: &str) -> String {
-    control_tail(&end_session_arguments(session))
+    control_tail(
+        ngterm_core::remote::origin::OriginShell::Posix,
+        &end_session_arguments(session),
+    )
 }
 
 fn commands(transport: &FakeTransport) -> Vec<String> {
@@ -110,10 +116,37 @@ fn creating(transport: &FakeTransport, name: Option<&str>) {
 // MARK: - the list
 
 #[tokio::test]
+async fn a_windows_machine_is_learned_from_its_shells_refusal_and_keeps_its_form() {
+    use ngterm_core::remote::origin::{self, OriginShell};
+    let transport = FakeTransport::default();
+    let connection = connected(&transport).await;
+    transport.script(
+        &tree_tail(OriginShell::Posix),
+        exits(
+            1,
+            "",
+            "\'\'\' is not recognized as an internal or external command,\r\n",
+        ),
+    );
+    transport.script(origin::WINDOWS_PROBE, exits(0, "%OS%Windows_NT\r\n", ""));
+    transport.script(
+        &tree_tail(OriginShell::Windows),
+        listing(&[session("A", "a", None, None)]),
+    );
+    let tree = list(&connection, "pc").await.unwrap();
+    assert_eq!(tree.sessions.len(), 1);
+    assert_eq!(connection.origin_shell(), OriginShell::Windows);
+    // the next listing goes straight to the Windows form
+    let asked = commands(&transport).len();
+    list(&connection, "pc").await.unwrap();
+    assert_eq!(commands(&transport)[asked..], [tree_tail(OriginShell::Windows)]);
+}
+
+#[tokio::test]
 async fn the_list_drops_page_companions_and_puts_parents_first() {
     let transport = FakeTransport::new();
     transport.script(
-        &tree_tail(),
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
         listing(&[
             session(COMPANION, "companion", Some(PARENT), None),
             session(PAGE, "page", Some(PARENT), Some("page")),
@@ -130,14 +163,20 @@ async fn the_list_drops_page_companions_and_puts_parents_first() {
     let companion = &listed_sessions(&tree)[1];
     assert_eq!(companion.parent.as_deref(), Some(PARENT));
     assert_eq!(companion.pane_count, 1);
-    assert_eq!(commands(&transport), [tree_tail()]);
+    assert_eq!(
+        commands(&transport),
+        [tree_tail(ngterm_core::remote::origin::OriginShell::Posix)]
+    );
     assert_eq!(transport.execs()[0].pty, None);
 }
 
 #[tokio::test]
 async fn a_list_the_far_side_refuses_says_why() {
     let transport = FakeTransport::new();
-    transport.script(&tree_tail(), refusal("live sessions are off"));
+    transport.script(
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        refusal("live sessions are off"),
+    );
     let connection = connected(&transport).await;
 
     assert_eq!(list(&connection, HOST).await, Err("live sessions are off".to_owned()));
@@ -146,7 +185,10 @@ async fn a_list_the_far_side_refuses_says_why() {
 #[tokio::test]
 async fn a_missing_ngtermctl_surfaces_the_shells_words() {
     let transport = FakeTransport::new();
-    transport.script(&tree_tail(), exits(127, "", MISSING_CLI));
+    transport.script(
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        exits(127, "", MISSING_CLI),
+    );
     let connection = connected(&transport).await;
 
     assert_eq!(list(&connection, HOST).await, Err(MISSING_CLI.trim().to_owned()));
@@ -155,14 +197,20 @@ async fn a_missing_ngtermctl_surfaces_the_shells_words() {
 #[tokio::test]
 async fn an_unreadable_list_and_a_silent_failure_read_as_desktops_strings() {
     let transport = FakeTransport::new();
-    transport.script(&tree_tail(), Script::ok("not json"));
+    transport.script(
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        Script::ok("not json"),
+    );
     let connection = connected(&transport).await;
     assert_eq!(
         list(&connection, HOST).await,
         Err("the remote did not return a readable session list".to_owned())
     );
 
-    transport.script(&tree_tail(), exits(1, "", ""));
+    transport.script(
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        exits(1, "", ""),
+    );
     assert_eq!(
         list(&connection, HOST).await,
         Err(format!("the remote command failed on {HOST}"))
@@ -173,7 +221,7 @@ async fn an_unreadable_list_and_a_silent_failure_read_as_desktops_strings() {
 async fn a_lost_link_reads_as_its_reason_and_a_closed_connection_as_the_transports() {
     let transport = FakeTransport::new();
     transport.script(
-        &tree_tail(),
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
         Script {
             stdout: Vec::new(),
             stderr: Vec::new(),
@@ -240,7 +288,7 @@ async fn create_checks_live_creates_and_lists_until_the_session_is_there() {
     creating(&transport, None);
     let parent = session(PARENT, "parent", None, None);
     transport.script_sequence(
-        &tree_tail(),
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
         vec![
             listing(std::slice::from_ref(&parent)),
             listing(&[parent.clone(), session(CREATED, "new", None, None)]),
@@ -258,9 +306,9 @@ async fn create_checks_live_creates_and_lists_until_the_session_is_there() {
         commands(&transport),
         [
             restore_line(),
-            control_tail(&NEW_SESSION_ARGUMENTS),
-            tree_tail(),
-            tree_tail()
+            control_tail(ngterm_core::remote::origin::OriginShell::Posix, &NEW_SESSION_ARGUMENTS),
+            tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+            tree_tail(ngterm_core::remote::origin::OriginShell::Posix)
         ]
     );
 }
@@ -269,7 +317,10 @@ async fn create_checks_live_creates_and_lists_until_the_session_is_there() {
 async fn create_with_a_name_passes_it_as_one_value() {
     let transport = FakeTransport::new();
     creating(&transport, Some("-build logs"));
-    transport.script(&tree_tail(), listing(&[session(CREATED, "-build logs", None, None)]));
+    transport.script(
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        listing(&[session(CREATED, "-build logs", None, None)]),
+    );
     let connection = connected(&transport).await;
 
     let (created, _) = create(&connection, HOST, Some("  -build logs "), || {})
@@ -352,7 +403,10 @@ async fn create_reports_session_new_failures() {
         let connection = connected(&transport).await;
 
         assert_eq!(create(&connection, HOST, None, || {}).await.map(|_| ()), Err(expected));
-        assert!(!commands(&transport).contains(&tree_tail()), "nothing is listed");
+        assert!(
+            !commands(&transport).contains(&tree_tail(ngterm_core::remote::origin::OriginShell::Posix)),
+            "nothing is listed"
+        );
     }
 }
 
@@ -360,7 +414,10 @@ async fn create_reports_session_new_failures() {
 async fn create_gives_up_once_the_budget_runs_out() {
     let transport = FakeTransport::new();
     creating(&transport, None);
-    transport.script(&tree_tail(), listing(&[session(PARENT, "parent", None, None)]));
+    transport.script(
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        listing(&[session(PARENT, "parent", None, None)]),
+    );
     let connection = connected(&transport).await;
     let started = Instant::now();
 
@@ -373,7 +430,7 @@ async fn create_gives_up_once_the_budget_runs_out() {
     assert_eq!(started.elapsed(), READY_BUDGET);
     let listings = commands(&transport)
         .iter()
-        .filter(|command| **command == tree_tail())
+        .filter(|command| **command == tree_tail(ngterm_core::remote::origin::OriginShell::Posix))
         .count();
     assert_eq!(listings, 20, "one listing a second within the budget");
 }
@@ -382,7 +439,10 @@ async fn create_gives_up_once_the_budget_runs_out() {
 async fn a_failed_listing_is_the_reason_a_give_up_names() {
     let transport = FakeTransport::new();
     creating(&transport, None);
-    transport.script(&tree_tail(), refusal("the store is busy"));
+    transport.script(
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        refusal("the store is busy"),
+    );
     let connection = connected(&transport).await;
 
     let error = create(&connection, HOST, None, || {}).await.expect_err("never listed");

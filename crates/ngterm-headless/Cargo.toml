@@ -44,6 +44,8 @@ ngterm-host = { workspace = true, features = ["fakes"] }
 tempfile.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
+# the lifecycle tests run the server on a pseudo console, whose Ctrl+C ends it
+ngterm-pty.workspace = true
 # the console-signal tests' pseudo consoles and the children started on them
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Threading"] }
 

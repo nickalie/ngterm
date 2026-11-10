@@ -24,6 +24,7 @@ mod tests;
 
 use std::time::Duration;
 
+use ngterm_core::remote::origin::{self, OriginShell};
 use ngterm_core::remote::origin_replies::{
     COMPANION_DEADLINE, ListingWait, NEW_SESSION_ARGUMENTS, PAUSE, RESTORE_MODE_ARGUMENTS, WaitStep,
     check_restore_mode, end_failure, end_session_arguments, pickable_sessions, read_remote_tree, session_created,
@@ -167,9 +168,30 @@ fn out_of_time() -> RemoteCommandResult {
     }
 }
 
+/// Runs the machine's `live tree` within `deadline`, learning a Windows origin from a refusal of the POSIX form as
+/// desktop does ([`ngterm_core::remote::origin`]), kept on the connection for the commands that follow.
+async fn run_tree<C: Connection>(connection: &C, deadline: Duration) -> Result<RemoteCommandResult, String> {
+    let shell = connection.origin_shell();
+    let first = run(connection, &tree_tail(shell), deadline).await?;
+    if shell == OriginShell::Windows || !origin::rejected_by_windows_shell(&first) {
+        return Ok(first);
+    }
+    let probe = run(connection, origin::WINDOWS_PROBE, origin::WINDOWS_PROBE_DEADLINE).await?;
+    if !origin::is_windows_answer(&probe) {
+        return Ok(first);
+    }
+    connection.set_origin_shell(OriginShell::Windows);
+    run(connection, &tree_tail(OriginShell::Windows), deadline).await
+}
+
 /// Runs `host`'s `ngtermctl ARGUMENTS --json`.
 async fn control<C: Connection, S: AsRef<str>>(connection: &C, arguments: &[S]) -> Result<RemoteCommandResult, String> {
-    run(connection, &control_tail(arguments), COMPANION_DEADLINE).await
+    run(
+        connection,
+        &control_tail(connection.origin_shell(), arguments),
+        COMPANION_DEADLINE,
+    )
+    .await
 }
 
 /// `host`'s attachable sessions, within `deadline`; `host` is the name the messages give the machine.
@@ -182,7 +204,7 @@ pub async fn read_tree<C: Connection>(
     host: &str,
     deadline: Duration,
 ) -> Result<ControlRemoteTree, String> {
-    let result = run(connection, &tree_tail(), deadline).await?;
+    let result = run_tree(connection, deadline).await?;
     read_remote_tree(&result, host)
 }
 
@@ -219,7 +241,7 @@ pub async fn create<C: Connection>(
             WaitStep::List(within) => {
                 listing_starts();
                 // The connection is gone: no later listing could run either.
-                let result = match run(connection, &tree_tail(), within).await {
+                let result = match run_tree(connection, within).await {
                     Ok(result) => result,
                     Err(reason) => return Err(phone_wording(wait.unattached(host, &reason))),
                 };

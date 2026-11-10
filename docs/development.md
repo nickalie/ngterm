@@ -713,10 +713,13 @@ rejects the host), each in a terminal nobody draws, so every session is attachab
 
 ```sh
 # on the server: the staged layout (scripts/stage.sh), ngtermctl on PATH (~/.local/bin or /usr/local/bin)
-nohup ngterm-headless [--grid 120x40] </dev/null >/dev/null 2>&1 &   # one per state dir, as the app; installs or
+ngterm-headless --detach [--grid 120x40]   # one per state dir, as the app; returns once the process is started (the
+# server takes a few seconds to answer, and its own failures go to its log); installs or
 # updates the agent skill and status hooks first (--skip-agent-setup leaves them alone)
 # SIGTERM, SIGINT or SIGHUP saves and ends it (on Windows the console's Ctrl+C, Ctrl+Break or close); SIGINT or SIGHUP
-# ignored at its start stays ignored, so under nohup it outlives the ssh session that started it
+# ignored at its start stays ignored, so under nohup it outlives the ssh session that started it. --detach starts it
+# outside the session and job that ran it (a Windows ssh session takes every other process it started down with it);
+# a detached server on Windows has no console to get Ctrl events, so `taskkill` ends it, without the quit save
 ngtermctl session new --name build      # sessions to attach; they outlive ngterm-headless, the next start re-attaches
 # on the desktop: the server in remotes.conf (one `destination [label]` per line), key-based ssh to it, then
 # File ▸ Attach Remote (Attach All takes every session not attached here yet, New Session creates one there), or
@@ -742,8 +745,14 @@ The attached row is as one from a desktop instance: each pane an ssh into its li
 size), the status, context, split, HUD and notifications streamed over `ngtermctl live present`, asks, program
 overlays and pages shown on the viewer. What would be drawn on the server (banners, sounds, an overlay with no viewer)
 has no display there: banners go to its log. A session closes when its program ends, as in the app.
-It builds and runs on macOS and Windows too; a viewer reaches a Linux or macOS origin only, since Attach Remote runs
-its commands there through `/bin/sh` (`docs/backlog/attach-remote-cannot-reach-a-windows-origin.md`).
+It builds and runs on macOS and Windows too. On a Unix origin a viewer's remote commands go through `/bin/sh -c`.
+A Windows origin (Windows' OpenSSH server, whichever of `cmd.exe` and PowerShell it runs) has neither `/bin/sh` nor one
+quoting both shells read, so there each is `ngtermctl origin-run WORD`, with what to run base64-encoded in the word,
+carried out by the origin's `ngtermctl` (`crates/ngterm-core/src/remote/origin.rs`). A viewer tells the two apart once
+per host: a `live tree` in the POSIX form refused by a Windows shell, then a shell-neutral probe; the endpoint's paths
+say the same to an attach. `ngtermctl` must be on the PATH of that account's ssh logins: the MSI adds it, and a staged
+`ngterm-headless` adds its own folder to the user's PATH (not with a private `NGTERM_STATE_DIR`). A full-screen program
+reaches a viewer through the origin's ConPTY, which re-renders what it draws, as on any ssh login there.
 
 ## Android
 

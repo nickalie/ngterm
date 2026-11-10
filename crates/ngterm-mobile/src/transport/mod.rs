@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use ngterm_core::remote::origin::OriginShell;
 use ngterm_term::GridSize;
 use tokio::sync::{Notify, mpsc};
 
@@ -82,6 +83,12 @@ pub trait Connection: 'static {
     /// Runs `command` (the remote shell line, as `ngterm_core::remote::ssh`'s tails build it) on a new exec channel,
     /// with a pty of `pty`'s size when given.
     async fn exec(&self, command: &str, pty: Option<GridSize>) -> Result<Channel, TransportError>;
+
+    /// The shell this machine's remote commands go to, as learned so far ([`ngterm_core::remote::origin`]).
+    fn origin_shell(&self) -> OriginShell;
+
+    /// Records what this machine turned out to be, for the commands that follow on this connection.
+    fn set_origin_shell(&self, shell: OriginShell);
 
     /// Closes the connection: every open channel ends as [`ChannelEnd::Lost`], and later [`Connection::exec`]s fail
     /// with [`TransportError::Closed`].

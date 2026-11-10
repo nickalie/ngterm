@@ -127,7 +127,10 @@ impl Harness {
         let mut opened = self.fake.take_opened();
         assert_eq!(opened.len(), 1, "one stream opened");
         let opened = opened.remove(0);
-        assert_eq!(opened.command, present_tail(SESSION).unwrap());
+        assert_eq!(
+            opened.command,
+            present_tail(ngterm_core::remote::origin::OriginShell::Posix, SESSION).unwrap()
+        );
         assert_eq!(opened.pty, None);
         self.peer = Some(opened.peer);
         self.rev = 0;

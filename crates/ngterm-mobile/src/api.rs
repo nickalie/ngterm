@@ -1013,11 +1013,17 @@ mod tests {
             "presentation": 1,
         });
         let listing = serde_json::json!({"ok": true, "result": {"remote": remote}});
-        transport.script(&tree_tail(), Script::ok(&listing.to_string()));
+        transport.script(
+            &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+            Script::ok(&listing.to_string()),
+        );
         block_on(core.list_sessions("m1".to_owned())).unwrap();
         block_on(core.attach_session("m1".to_owned(), SESSION.to_owned())).unwrap();
         let Opened { command, peer, .. } = opened(transport);
-        assert_eq!(command, present_tail(SESSION).unwrap());
+        assert_eq!(
+            command,
+            present_tail(ngterm_core::remote::origin::OriginShell::Posix, SESSION).unwrap()
+        );
         peer
     }
 
@@ -1139,7 +1145,10 @@ mod tests {
             })
         };
         let mut origin = opened(&transport);
-        assert_eq!(origin.command, upload_tail("notes.txt", 5));
+        assert_eq!(
+            origin.command,
+            upload_tail(ngterm_core::remote::origin::OriginShell::Posix, "notes.txt", 5)
+        );
         let (bytes, _) = inputs_until(&mut origin.peer, &ChannelInput::Eof);
         assert_eq!(bytes, b"hello");
         assert!(block_on(origin.peer.data(b"/state/uploads/1/notes.txt\n".to_vec())));

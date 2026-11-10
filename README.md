@@ -120,14 +120,16 @@ Any computer running ngterm can share its Live sessions over ssh. On your deskto
 On a phone, the app creates an ssh key on first launch and shows the line to add to `~/.ssh/authorized_keys` on each
 machine. Then add the machine by host, port and user.
 
-Attaching works with Linux and macOS machines. Windows machines can attach to others, but cannot be attached to yet.
+You can attach to Linux, macOS and Windows machines. A Windows machine needs Windows' OpenSSH server, with key-based
+ssh set up for your account. For now, attach from a Linux or macOS desktop or from the phone app: **Attach Remote** does
+not run on a Windows desktop yet.
 
 ### A server without a display
 
 To host sessions on a machine with no screen, install ngterm there and run its windowless version:
 
 ```sh
-nohup ngterm-headless </dev/null >/dev/null 2>&1 &   # keeps running after you log out
+ngterm-headless --detach   # keeps running after you log out
 ```
 
 Give it a few seconds to start, then create a session to attach to:
@@ -136,8 +138,10 @@ Give it a few seconds to start, then create a session to attach to:
 ngtermctl session new --name build
 ```
 
-`ngtermctl` has to be on the `PATH` of ssh logins. The `.deb`, `.rpm` and Arch packages take care of that. With a
-portable or macOS install, link `ngtermctl` into `~/.local/bin` or `/usr/local/bin`. ngterm sets up the agent skill and status
+`ngtermctl` has to be on the `PATH` of ssh logins. The `.deb`, `.rpm`, Arch and Windows `.msi` packages take care of
+that, and a portable Windows folder adds itself the first time `ngterm-headless` starts there. With a portable or macOS
+install, link `ngtermctl` into `~/.local/bin` or `/usr/local/bin`. On Windows, Task Scheduler can run
+`ngterm-headless --detach` at logon so the server comes back after a reboot. ngterm sets up the agent skill and status
 hooks on the server each time it starts, so agents you run there report their status too.
 
 ## Troubleshooting

@@ -139,7 +139,10 @@ impl Actor {
         let mut opened = self.transport.take_opened();
         assert_eq!(opened.len(), 1, "one stream opened");
         let opened = opened.remove(0);
-        assert_eq!(opened.command, present_tail(SESSION).unwrap());
+        assert_eq!(
+            opened.command,
+            present_tail(ngterm_core::remote::origin::OriginShell::Posix, SESSION).unwrap()
+        );
         opened.peer
     }
 }
@@ -208,7 +211,10 @@ pub(super) fn local(test: impl Future<Output = ()>) {
 fn attaching_needs_the_connection_and_a_listing_holding_the_session() {
     local(async {
         let actor = Actor::start();
-        actor.transport.script(&tree_tail(), listing(Some(1)));
+        actor.transport.script(
+            &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+            listing(Some(1)),
+        );
 
         assert_eq!(
             actor.attach().await,
@@ -237,7 +243,10 @@ fn attaching_needs_the_connection_and_a_listing_holding_the_session() {
 fn a_listing_from_an_ngterm_without_the_stream_attaches_unsupported() {
     local(async {
         let actor = Actor::start();
-        actor.transport.script(&tree_tail(), listing(None));
+        actor.transport.script(
+            &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+            listing(None),
+        );
         actor.connect().await;
         actor.list().await;
         actor.sink.take();
@@ -254,7 +263,10 @@ fn a_listing_from_an_ngterm_without_the_stream_attaches_unsupported() {
 fn the_actors_tick_drops_a_quiet_stream_and_reopens_it_on_its_backoff() {
     local(async {
         let actor = Actor::start();
-        actor.transport.script(&tree_tail(), listing(Some(1)));
+        actor.transport.script(
+            &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+            listing(Some(1)),
+        );
         actor.connect().await;
         actor.list().await;
         actor.attach().await.unwrap();
@@ -284,7 +296,10 @@ fn the_actors_tick_drops_a_quiet_stream_and_reopens_it_on_its_backoff() {
 fn an_answer_echoes_the_owner_and_detaching_or_disconnecting_ends_the_stream() {
     local(async {
         let actor = Actor::start();
-        actor.transport.script(&tree_tail(), listing(Some(1)));
+        actor.transport.script(
+            &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+            listing(Some(1)),
+        );
         actor.connect().await;
         actor.list().await;
         actor.attach().await.unwrap();
@@ -353,7 +368,10 @@ fn an_answer_echoes_the_owner_and_detaching_or_disconnecting_ends_the_stream() {
 fn an_answer_posted_just_before_a_suspend_is_written_before_the_connection_closes() {
     local(async {
         let actor = Actor::start();
-        actor.transport.script(&tree_tail(), listing(Some(1)));
+        actor.transport.script(
+            &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+            listing(Some(1)),
+        );
         actor.connect().await;
         actor.list().await;
         actor.attach().await.unwrap();
@@ -411,7 +429,10 @@ fn an_answer_posted_just_before_a_suspend_is_written_before_the_connection_close
 fn a_suspend_waits_for_a_machine_that_takes_no_input_only_so_long() {
     local(async {
         let actor = Actor::start();
-        actor.transport.script(&tree_tail(), listing(Some(1)));
+        actor.transport.script(
+            &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+            listing(Some(1)),
+        );
         actor.connect().await;
         actor.list().await;
         actor.attach().await.unwrap();

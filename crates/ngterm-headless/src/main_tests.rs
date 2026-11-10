@@ -1,6 +1,8 @@
+use std::ffi::OsString;
+
 use clap::Parser as _;
 
-use super::{Cli, Options, parse_grid, relaunch, sets_up_agents};
+use super::{Cli, Options, detached_arguments, parse_grid, relaunch, sets_up_agents};
 
 #[test]
 fn a_grid_is_columns_by_rows() {
@@ -58,6 +60,16 @@ fn a_staged_start_sets_up_the_agents_unless_skipped() {
 }
 
 #[test]
+fn a_detached_servers_command_line_is_the_same_without_the_flag() {
+    let arguments = ["--detach", "--grid", "120x40", "--skip-agent-setup"].map(OsString::from);
+    assert_eq!(
+        detached_arguments(arguments.into_iter()),
+        ["--grid", "120x40", "--skip-agent-setup"].map(OsString::from)
+    );
+    assert!(Cli::try_parse_from(["ngterm-headless", "--detach", "--install-agent-hooks"]).is_err());
+}
+
+#[test]
 fn a_relaunch_starts_with_the_same_grid_and_waits_for_the_lock() {
     let mut arguments = vec!["ngterm-headless".into()];
     arguments.extend(relaunch::arguments(&Options {
@@ -104,4 +116,32 @@ fn claim_refuses_a_second_owner_and_a_relaunch_takes_a_released_lock() {
     release.join().unwrap();
     drop(next);
     assert!(super::claim(dir.path(), false).is_ok());
+}
+
+#[cfg(windows)]
+#[test]
+fn only_a_real_install_with_a_cli_touches_the_users_path() {
+    use std::collections::HashMap;
+
+    let vars = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect()
+    };
+    assert!(super::puts_the_cli_on_path(&vars(&[("PATH", "x")]), true));
+    assert!(
+        !super::puts_the_cli_on_path(&vars(&[("PATH", "x")]), false),
+        "no CLI to find"
+    );
+    for name in ["NGTERM_STATE_DIR", "ngterm_state_dir"] {
+        assert!(
+            !super::puts_the_cli_on_path(&vars(&[(name, r"C:\private")]), true),
+            "{name} is a private state directory"
+        );
+    }
+    assert!(
+        super::puts_the_cli_on_path(&vars(&[("NGTERM_STATE_DIR", "")]), true),
+        "an empty variable is unset"
+    );
 }

@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ngterm_core::command_restore::shell_quoted_line;
+use ngterm_core::remote::origin::{OriginShell, windows_cli_tail};
 use ngterm_core::remote::tree::{REMOTE_CLI, remote_cli_chain};
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -82,7 +83,7 @@ impl UploadCancel {
 
 /// The upload's remote command. The name goes as `--name=NAME`, one word, so a name that starts with `-` stays a value.
 #[must_use]
-pub(crate) fn upload_tail(name: &str, size: usize) -> String {
+pub(crate) fn upload_tail(shell: OriginShell, name: &str, size: usize) -> String {
     let words = [
         "agent".to_owned(),
         "upload".to_owned(),
@@ -90,7 +91,10 @@ pub(crate) fn upload_tail(name: &str, size: usize) -> String {
         "--size".to_owned(),
         size.to_string(),
     ];
-    remote_cli_chain(&format!("{REMOTE_CLI} {}", shell_quoted_line(&words)))
+    match shell {
+        OriginShell::Posix => remote_cli_chain(&format!("{REMOTE_CLI} {}", shell_quoted_line(&words))),
+        OriginShell::Windows => windows_cli_tail(&words),
+    }
 }
 
 /// Sends `bytes` as `name` on `connection` and returns the stored path, telling `progress` (bytes sent, total) as the
@@ -108,7 +112,7 @@ pub(crate) async fn upload<C: Connection>(
     cancelled: impl Future<Output = ()>,
 ) -> Result<String, MobileError> {
     tokio::pin!(cancelled);
-    let command = upload_tail(name, bytes.len());
+    let command = upload_tail(connection.origin_shell(), name, bytes.len());
     let channel = tokio::select! {
         opened = connection.exec(&command, None) => {
             opened.map_err(|error| MobileError::Remote { reason: error.to_string() })?

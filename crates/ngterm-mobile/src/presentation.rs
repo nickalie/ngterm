@@ -53,6 +53,7 @@ use ngterm_core::remote::frames::{
     Body, MAX_FRAME_BYTES, PresentationAgent, PresentationAskAnswer, PresentationOverlayChange, PresentationPageChange,
     PresentationPane, PresentationRespawns,
 };
+use ngterm_core::remote::origin::OriginShell;
 use ngterm_core::remote::ssh::present_tail;
 use ngterm_core::remote::tree::INVALID_REMOTE_SESSION;
 use ngterm_core::remote::{LinkKey, PresentationLink, PresentationTransport};
@@ -120,6 +121,16 @@ impl<C> ChannelLinks<C> {
     /// The launches' tasks not yet finished, handed over to be waited on.
     fn take_tasks(&self) -> Vec<JoinHandle<()>> {
         std::mem::take(&mut *self.tasks.borrow_mut())
+    }
+}
+
+impl<C: Connection> ChannelLinks<C> {
+    /// The shell its machine's remote commands go to; a machine down is taken for POSIX.
+    fn origin_shell(&self) -> OriginShell {
+        self.connection
+            .borrow()
+            .as_ref()
+            .map_or(OriginShell::Posix, |connection| connection.origin_shell())
     }
 }
 
@@ -331,7 +342,7 @@ impl<C: Connection> Presentations<C> {
             reason: INVALID_REMOTE_SESSION.to_owned(),
         };
         let session = Uuid::parse_str(session_id).map_err(|_| invalid())?;
-        let tail = present_tail(session_id).map_err(|_| invalid())?;
+        let tail = present_tail(links.origin_shell(), session_id).map_err(|_| invalid())?;
         self.last_client += 1;
         let mut client = PresentationClient::new(session, self.last_client, vec![tail], version);
         client.set_shows_agents(true);

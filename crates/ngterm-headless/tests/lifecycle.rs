@@ -1,12 +1,14 @@
 //! Process boundaries: every run has its own home, state and control socket. The session executable is an inert
-//! program, so exercising launch and quit cannot start a live daemon.
-#![cfg(unix)]
+//! program, so exercising launch and quit cannot start a live daemon. On Windows a server runs on a pseudo console
+//! ([`Running`]): a console's Ctrl events reach only the processes on it, so that is where its Ctrl+C is pressed.
 
+use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
+
+use ngterm_server::endpoint::{self, Connection};
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -17,17 +19,19 @@ impl Fixture {
     fn new(staged: bool) -> io::Result<Self> {
         let root = tempfile::tempdir()?;
         let source = Path::new(env!("CARGO_BIN_EXE_ngterm-headless"));
-        let binary = if staged {
+        // Windows' live probe wants the bundled PowerShell integration, which only a staged build finds
+        let binary = if staged || cfg!(windows) {
             let bin = root.path().join("stage/bin");
             std::fs::create_dir_all(&bin)?;
-            let target = bin.join("ngterm-headless");
+            let target = bin.join(format!("ngterm-headless{}", std::env::consts::EXE_SUFFIX));
             ngterm_host::fakes::copy_executable(source, &target)?;
             let share = root.path().join("stage/share");
             std::fs::create_dir_all(&share)?;
-            std::os::unix::fs::symlink(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources"),
-                share.join("ngterm"),
-            )?;
+            let resources = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources");
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(resources, share.join("ngterm"))?;
+            #[cfg(windows)]
+            copy_tree(&resources, &share.join("ngterm"))?;
             target
         } else {
             source.to_path_buf()
@@ -51,27 +55,44 @@ impl Fixture {
         Ok(Self { root, binary })
     }
 
+    /// The environment every run gets, nothing inherited but what the OS's own libraries need.
+    fn environment(&self) -> Vec<(OsString, OsString)> {
+        let home = self.root.path().join("home");
+        let mut environment: Vec<(OsString, OsString)> = vec![
+            ("HOME".into(), home.clone().into()),
+            ("USERPROFILE".into(), home.clone().into()),
+            ("XDG_CONFIG_HOME".into(), home.join(".config").into()),
+            ("NGTERM_STATE_DIR".into(), self.root.path().join("state").into()),
+            ("NGTERM_CONTROL_SOCKET".into(), self.socket().into()),
+            ("NGTERM_SESSION_PATH".into(), inert_program().into()),
+            ("GHOSTTY_RESOURCES_DIR".into(), self.root.path().join("ghostty").into()),
+        ];
+        if cfg!(windows) {
+            for name in ["SystemRoot", "SystemDrive", "TEMP", "TMP", "windir", "PATH", "ComSpec"] {
+                environment.extend(std::env::var_os(name).map(|value| (name.into(), value)));
+            }
+        } else {
+            environment.push(("PATH".into(), "/usr/bin:/bin".into()));
+            environment.push(("SHELL".into(), "/bin/sh".into()));
+        }
+        // Child profiles belong to the same measurement as this test's profile.
+        environment.extend(std::env::var_os("LLVM_PROFILE_FILE").map(|profile| ("LLVM_PROFILE_FILE".into(), profile)));
+        environment
+    }
+
     fn command(&self) -> Command {
         let mut command = Command::new(&self.binary);
-        let home = self.root.path().join("home");
         command
             .env_clear()
-            .env("HOME", &home)
-            .env("USERPROFILE", &home)
-            .env("XDG_CONFIG_HOME", home.join(".config"))
-            .env("NGTERM_STATE_DIR", self.root.path().join("state"))
-            .env("NGTERM_CONTROL_SOCKET", self.socket())
-            .env("NGTERM_SESSION_PATH", inert_program())
-            .env("GHOSTTY_RESOURCES_DIR", self.root.path().join("ghostty"))
-            .env("PATH", "/usr/bin:/bin")
-            .env("SHELL", "/bin/sh")
+            .envs(self.environment())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
-        // Child profiles belong to the same measurement as this test's profile.
-        if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
-            command.env("LLVM_PROFILE_FILE", profile);
-        }
         command
+    }
+
+    /// A server started with `args` and these variables added.
+    fn start(&self, args: &[&str], extra: &[(&str, &Path)]) -> io::Result<Running> {
+        Running::start(self, args, extra)
     }
 
     fn socket(&self) -> PathBuf {
@@ -84,6 +105,7 @@ impl Fixture {
 }
 
 /// A program that exits at once, unsuccessfully: `false` is `/bin/false` on Linux, `/usr/bin/false` alone on macOS.
+#[cfg(unix)]
 fn inert_program() -> &'static str {
     ["/bin/false", "/usr/bin/false"]
         .into_iter()
@@ -91,8 +113,59 @@ fn inert_program() -> &'static str {
         .unwrap_or("/usr/bin/false")
 }
 
-struct Running(Child);
+/// A program that exits at once, unsuccessfully: `where` asked for nothing.
+#[cfg(windows)]
+fn inert_program() -> PathBuf {
+    PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_default()).join(r"System32\where.exe")
+}
 
+#[cfg(windows)]
+fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+struct Running(std::process::Child);
+
+#[cfg(unix)]
+impl Running {
+    fn start(fixture: &Fixture, args: &[&str], extra: &[(&str, &Path)]) -> io::Result<Self> {
+        let mut command = fixture.command();
+        command.args(args).envs(extra.iter().copied());
+        Ok(Self(command.spawn()?))
+    }
+
+    fn has_exited(&mut self) -> io::Result<bool> {
+        Ok(self.0.try_wait()?.is_some())
+    }
+
+    fn exit_succeeded(&mut self) -> io::Result<Option<bool>> {
+        Ok(self.0.try_wait()?.map(|status| status.success()))
+    }
+
+    /// What ends a server the way the system does: SIGTERM.
+    fn terminate(&self) -> io::Result<()> {
+        let pid = i32::try_from(self.0.id()).map_err(io::Error::other)?;
+        // SAFETY: the signal targets only this test's private child.
+        if unsafe { libc::kill(pid, libc::SIGTERM) } == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+}
+
+#[cfg(unix)]
 impl Drop for Running {
     fn drop(&mut self) {
         if !matches!(self.0.try_wait(), Ok(Some(_))) {
@@ -102,31 +175,93 @@ impl Drop for Running {
     }
 }
 
-fn wait_exit(child: &mut Child) -> io::Result<std::process::ExitStatus> {
+/// A server on a pseudo console of its own, with its output read and thrown away.
+#[cfg(windows)]
+struct Running {
+    child: ngterm_pty::Child,
+    actor: ngterm_pty::ActorHandle,
+}
+
+#[cfg(windows)]
+impl Running {
+    fn start(fixture: &Fixture, args: &[&str], extra: &[(&str, &Path)]) -> io::Result<Self> {
+        let mut command = ngterm_pty::Command::new(&fixture.binary).env_clear().args(args);
+        for (name, value) in fixture.environment() {
+            command = command.env(name, value);
+        }
+        for (name, value) in extra {
+            command = command.env(name, value);
+        }
+        let ngterm_pty::Spawned { master, child } = ngterm_pty::spawn(&command, ngterm_pty::Size::cells(24, 80))?;
+        // a pseudo console holds its program back until the terminal answers its query of where the cursor is
+        let actor = ngterm_pty::Actor::spawn(ngterm_pty::ActorConfig::new(
+            "lifecycle",
+            master,
+            Box::new(|read| {
+                if read.windows(4).any(|bytes| bytes == b"\x1b[6n") {
+                    vec![b"\x1b[1;1R".to_vec()]
+                } else {
+                    Vec::new()
+                }
+            }),
+        ))?;
+        Ok(Self { child, actor })
+    }
+
+    fn has_exited(&mut self) -> io::Result<bool> {
+        Ok(self.child.try_wait()?.is_some())
+    }
+
+    fn exit_succeeded(&mut self) -> io::Result<Option<bool>> {
+        Ok(self.child.try_wait()?.map(|status| status.success()))
+    }
+
+    /// What ends a server the way the system does: Ctrl+C on its console.
+    fn terminate(&self) -> io::Result<()> {
+        self.actor
+            .write_input(b"\x03")
+            .map_err(|_| io::Error::other("the console is gone"))
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.child.killer().kill_tree();
+        self.actor.shutdown();
+    }
+}
+
+/// Whether the server exited successfully, within a bound.
+fn wait_exit(running: &mut Running) -> io::Result<bool> {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(status);
+        if let Some(succeeded) = running.exit_succeeded()? {
+            return Ok(succeeded);
         }
         assert!(Instant::now() < deadline, "child did not exit");
         std::thread::yield_now();
     }
 }
 
-fn ready(fixture: &Fixture, child: &mut Child) -> io::Result<UnixStream> {
+fn ready(fixture: &Fixture, child: &mut Running) -> io::Result<Connection> {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        if let Ok(stream) = UnixStream::connect(fixture.socket()) {
+        if let Ok(stream) = endpoint::connect(&fixture.socket()) {
             return Ok(stream);
         }
-        assert!(child.try_wait()?.is_none(), "headless exited before serving");
-        assert!(Instant::now() < deadline, "control socket did not open");
+        assert!(!child.has_exited()?, "headless exited before serving");
+        assert!(
+            Instant::now() < deadline,
+            "control socket did not open: {}",
+            fixture.log()
+        );
         std::thread::yield_now();
     }
 }
 
 fn control(fixture: &Fixture, request: &serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let mut stream = UnixStream::connect(fixture.socket())?;
+    let mut stream = endpoint::connect(&fixture.socket())?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     let mut bytes = serde_json::to_vec(request)?;
     bytes.push(b'\n');
@@ -136,21 +271,16 @@ fn control(fixture: &Fixture, request: &serde_json::Value) -> Result<serde_json:
     Ok(serde_json::from_str(&line)?)
 }
 
-fn terminate(child: &Child) -> io::Result<()> {
-    let pid = i32::try_from(child.id()).map_err(io::Error::other)?;
-    // SAFETY: the signal targets only this test's private child.
-    if unsafe { libc::kill(pid, libc::SIGTERM) } == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
+/// A command that exits at once.
+const fn exited_command() -> &'static str {
+    if cfg!(windows) { "cmd.exe /d /c exit" } else { "true" }
 }
 
 /// A new session named `name` running an exited command: its id.
 fn new_session(fixture: &Fixture, name: &str) -> Result<String, Box<dyn std::error::Error>> {
     let created = control(
         fixture,
-        &serde_json::json!({"cmd":"session.new", "args":{"name":name,"command":"true","wait":true}}),
+        &serde_json::json!({"cmd":"session.new", "args":{"name":name,"command":exited_command(),"wait":true}}),
     )?;
     assert_eq!(created["ok"], true, "{created}");
     Ok(created["result"]["id"].as_str().ok_or("no session id")?.to_owned())
@@ -171,8 +301,8 @@ fn saved_windows(fixture: &Fixture) -> Result<Vec<serde_json::Value>, Box<dyn st
 #[test]
 fn a_server_answers_its_private_socket_and_saves_on_termination() {
     let fixture = Fixture::new(false).unwrap();
-    let mut child = Running(fixture.command().arg("--skip-agent-setup").spawn().unwrap());
-    let mut stream = ready(&fixture, &mut child.0).unwrap();
+    let mut child = fixture.start(&["--skip-agent-setup"], &[]).unwrap();
+    let mut stream = ready(&fixture, &mut child).unwrap();
     stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     stream.write_all(b"{\"cmd\":\"version\"}\n").unwrap();
     let mut line = String::new();
@@ -195,8 +325,8 @@ fn a_server_answers_its_private_socket_and_saves_on_termination() {
     new_session(&fixture, "selection-probe-second").unwrap();
     let selected = control(&fixture, &serde_json::json!({"cmd":"session.select", "target":first})).unwrap();
     assert_eq!(selected["ok"], true, "{selected}");
-    terminate(&child.0).unwrap();
-    assert!(wait_exit(&mut child.0).unwrap().success());
+    child.terminate().unwrap();
+    assert!(wait_exit(&mut child).unwrap());
     assert!(fixture.log().contains("quit: the state is saved"));
     assert!(fixture.root.path().join("state/windows.json").is_file());
     let windows = saved_windows(&fixture).unwrap();
@@ -246,8 +376,8 @@ fn a_staged_launch_installs_agents_and_keeps_serving_after_an_install_failure() 
             std::fs::create_dir_all(&config).unwrap();
             std::fs::write(config.join("ngterm"), "blocked").unwrap();
         }
-        let mut child = Running(fixture.command().args(["--opencode-version", "v2"]).spawn().unwrap());
-        drop(ready(&fixture, &mut child.0).unwrap());
+        let mut child = fixture.start(&["--opencode-version", "v2"], &[]).unwrap();
+        drop(ready(&fixture, &mut child).unwrap());
         assert!(
             fixture
                 .root
@@ -262,8 +392,8 @@ fn a_staged_launch_installs_agents_and_keeps_serving_after_an_install_failure() 
             blocked,
             "{log}"
         );
-        terminate(&child.0).unwrap();
-        assert!(wait_exit(&mut child.0).unwrap().success());
+        child.terminate().unwrap();
+        assert!(wait_exit(&mut child).unwrap());
     }
 }
 
@@ -277,7 +407,7 @@ fn a_refused_control_socket_saves_on_quit_and_exits_unsuccessfully() {
         .open(lock_path)
         .unwrap();
     lock.try_lock().unwrap();
-    let mut child = Running(fixture.command().arg("--skip-agent-setup").spawn().unwrap());
+    let mut child = fixture.start(&["--skip-agent-setup"], &[]).unwrap();
     let log = fixture.root.path().join("state/ngterm.log");
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
@@ -287,20 +417,72 @@ fn a_refused_control_socket_saves_on_quit_and_exits_unsuccessfully() {
         {
             break;
         }
+        assert!(!child.has_exited().unwrap(), "server exited before the control refusal");
         assert!(
-            child.0.try_wait().unwrap().is_none(),
-            "server exited before the control refusal"
+            Instant::now() < deadline,
+            "control refusal not logged: {}",
+            fixture.log()
         );
-        assert!(Instant::now() < deadline, "control refusal not logged");
         std::thread::yield_now();
     }
     // the launch wrote the index; nothing changes after it, so only the quit save writes it again
     let index = fixture.root.path().join("state/windows.json");
     std::fs::remove_file(&index).unwrap();
-    terminate(&child.0).unwrap();
-    assert!(!wait_exit(&mut child.0).unwrap().success());
+    child.terminate().unwrap();
+    assert!(!wait_exit(&mut child).unwrap());
     assert!(fixture.log().contains("quit: the state is saved"));
     assert!(index.is_file());
+}
+
+/// Stops a server only its pid is known of, when the test ends.
+struct DetachedServer(u32);
+
+impl Drop for DetachedServer {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        let _ = Command::new("taskkill")
+            .args(["/F", "/PID", &self.0.to_string()])
+            .output();
+        #[cfg(unix)]
+        if let Ok(pid) = i32::try_from(self.0) {
+            // SAFETY: the signal targets only this test's own server.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+}
+
+#[test]
+fn a_detached_start_returns_and_the_server_keeps_serving() {
+    let fixture = Fixture::new(false).unwrap();
+    let mut command = fixture.command();
+    let output = command
+        .args(["--skip-agent-setup", "--detach"])
+        .stdout(Stdio::piped())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let said = String::from_utf8_lossy(&output.stdout).into_owned();
+    let pid = said
+        .split("(pid ")
+        .nth(1)
+        .and_then(|rest| rest.trim_end().strip_suffix(')'))
+        .and_then(|pid| pid.parse().ok())
+        .unwrap_or_else(|| panic!("no pid in {said:?}"));
+    let _server = DetachedServer(pid);
+    // the command that ran is gone and the server answers on its own
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let response = loop {
+        if let Ok(response) = control(&fixture, &serde_json::json!({"cmd":"version"})) {
+            break response;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "control socket did not open: {}",
+            fixture.log()
+        );
+        std::thread::yield_now();
+    };
+    assert_eq!(response["ok"], true, "{response}");
 }
 
 #[test]
@@ -328,15 +510,15 @@ fn unknown_opencode_reports_the_skipped_hooks_and_preserves_user_owned_skills() 
         std::fs::read_to_string(skill.join("SKILL.md")).unwrap(),
         "user owned skill"
     );
-    let mut child = Running(fixture.command().env("SHELL", &shell).spawn().unwrap());
-    drop(ready(&fixture, &mut child.0).unwrap());
+    let mut child = fixture.start(&[], &[("SHELL", shell.as_path())]).unwrap();
+    drop(ready(&fixture, &mut child).unwrap());
     let log = fixture.log();
     assert!(
         log.contains("OpenCode version could not be detected; skipping its hooks."),
         "{log}"
     );
-    terminate(&child.0).unwrap();
-    assert!(wait_exit(&mut child.0).unwrap().success());
+    child.terminate().unwrap();
+    assert!(wait_exit(&mut child).unwrap());
 }
 
 #[test]

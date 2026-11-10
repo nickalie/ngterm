@@ -102,16 +102,19 @@ pub fn ssh_arguments(host: &str, connect_timeout: u32, interactive: bool) -> Vec
 }
 
 /// One ssh invocation running the far side's own bare `live tree`, which answers across every open window in one
-/// document (upstream's `RemoteSession.treeCommand`): [`ssh_arguments`] plus [`super::ssh::tree_tail`].
-///
-/// # Errors
-///
-/// The host is empty or not something ssh may take as a destination.
-pub fn tree_command(host: &str) -> Result<Vec<String>, InvocationError> {
-    validate(host)?;
+/// document (upstream's `RemoteSession.treeCommand`), for a host already validated, in `shell`'s form:
+/// [`ssh_arguments`] plus [`super::ssh::tree_tail`].
+pub(crate) fn tree_argv(host: &str, shell: super::origin::OriginShell) -> Vec<String> {
     let mut argv = ssh_arguments(host, 5, false);
-    argv.push(super::ssh::tree_tail());
-    Ok(argv)
+    argv.push(super::ssh::tree_tail(shell));
+    argv
+}
+
+/// Runs `live tree` on `host`, already validated, learning a Windows origin as it does
+/// ([`super::origin::run_learning`]). Blocks.
+#[must_use]
+pub fn run_tree(runner: &dyn RemoteCommandRunner, host: &str, deadline: Duration) -> RemoteCommandResult {
+    super::origin::run_learning(runner, host, deadline, |shell| tree_argv(host, shell))
 }
 
 /// `ngtermctl`'s exit status for an argument error, `EX_USAGE` as upstream's.
@@ -951,7 +954,9 @@ mod tests {
         for cli in clis {
             ngterm_host::fakes::write_executable(&bin.join(cli), &format!("#!/bin/sh\necho {cli} \"$@\"\n")).unwrap();
         }
-        let line = tree_command("buildbox").unwrap().pop().unwrap();
+        let line = tree_argv("buildbox", super::super::origin::OriginShell::Posix)
+            .pop()
+            .unwrap();
         std::process::Command::new("/bin/sh")
             .args(["-c", &line])
             .env_clear()
@@ -977,7 +982,7 @@ mod tests {
 
     #[test]
     fn the_tree_command_runs_the_bare_form_through_sh_and_refuses_odd_hosts() {
-        let argv = tree_command("buildbox").unwrap();
+        let argv = tree_argv("buildbox", super::super::origin::OriginShell::Posix);
         assert_eq!(
             argv[..7],
             ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "buildbox"]
@@ -986,9 +991,9 @@ mod tests {
             argv[7],
             r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && ngtermctl live tree --json'"#
         );
-        assert_eq!(tree_command(""), Err(InvocationError::EmptyHost));
+        assert_eq!(validate(""), Err(InvocationError::EmptyHost));
         for host in ["-oProxyCommand=x", "bad host", "ho\u{7f}st", "a\u{1b}[31m"] {
-            assert_eq!(tree_command(host), Err(InvocationError::InvalidHost), "{host:?}");
+            assert_eq!(validate(host), Err(InvocationError::InvalidHost), "{host:?}");
         }
         assert!(is_plain("user@host.example"));
         assert!(!is_plain("\u{a0}nbsp"));

@@ -120,7 +120,7 @@ impl Fixture {
     /// A core connected to the machine, its listing read from `listings`, its chat actions timed by `timing`.
     pub(super) fn connected_timed(listings: Vec<Script>, timing: InputTiming) -> Self {
         let transport = FakeTransport::new();
-        transport.script_sequence(&tree_tail(), listings);
+        transport.script_sequence(&tree_tail(ngterm_core::remote::origin::OriginShell::Posix), listings);
         let (events, received) = mpsc::channel();
         let sink: Arc<dyn EventSink> = Arc::new(Recorder(Mutex::new(events)));
         let core = MobileCore::with_timing(transport.clone(), sink, timing).unwrap();
@@ -406,7 +406,9 @@ fn a_lost_link_covers_the_pane_and_it_reattaches_into_a_fresh_terminal_after_the
 fn an_exit_is_reported_and_attaches_again_only_after_the_origin_respawned_the_pane() {
     let mut fixture = Fixture::connected();
     block_on(fixture.core.attach_session(MACHINE.to_owned(), SESSION.to_owned())).unwrap();
-    let stream = fixture.opened(|opened| opened.command == present_tail(SESSION).unwrap());
+    let stream = fixture.opened(|opened| {
+        opened.command == present_tail(ngterm_core::remote::origin::OriginShell::Posix, SESSION).unwrap()
+    });
     let counts = |generation: i64| PresentationRespawns {
         epoch: "e1".to_owned(),
         generations: std::collections::BTreeMap::from([(daemon(), generation)]),
@@ -502,7 +504,9 @@ fn an_empty_grid_is_refused_and_a_pane_shown_at_one_attaches_as_soon_as_the_view
 fn a_pane_shown_after_its_sessions_snapshot_finds_a_respawn_missed_while_the_stream_was_down() {
     let mut fixture = Fixture::connected();
     block_on(fixture.core.attach_session(MACHINE.to_owned(), SESSION.to_owned())).unwrap();
-    let stream = fixture.opened(|opened| opened.command == present_tail(SESSION).unwrap());
+    let stream = fixture.opened(|opened| {
+        opened.command == present_tail(ngterm_core::remote::origin::OriginShell::Posix, SESSION).unwrap()
+    });
     let snapshot = |generation: i64| {
         Body::Snapshot(PresentationSnapshot {
             respawns: Some(PresentationRespawns {
@@ -578,8 +582,10 @@ fn two_machines_showing_one_origin_pane_each_attach_again_after_its_respawn() {
     let mut streams = Vec::new();
     for machine in [MACHINE, OTHER] {
         block_on(fixture.core.attach_session(machine.to_owned(), SESSION.to_owned())).unwrap();
-        let stream =
-            fixture.opened(|opened| opened.machine_id == machine && opened.command == present_tail(SESSION).unwrap());
+        let stream = fixture.opened(|opened| {
+            opened.machine_id == machine
+                && opened.command == present_tail(ngterm_core::remote::origin::OriginShell::Posix, SESSION).unwrap()
+        });
         let hello = Body::Hello(PresentationHello {
             version: frames::VERSION,
             kinds: Vec::new(),

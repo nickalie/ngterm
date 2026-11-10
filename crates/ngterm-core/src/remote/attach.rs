@@ -23,7 +23,7 @@ use super::origin_sessions::{CreateRun, NEW_SESSION, NEW_SESSION_ID};
 use super::remotes::{RemoteEntry, diagnostics_banner_body};
 use super::ssh::{PaneLabel, attach_pane_command};
 use super::tree::{self, RemoteCommandResult};
-use super::viewer::{Answer, run_off_thread, take_answer};
+use super::viewer::{Answer, run_tree_off_thread, take_answer};
 use crate::Core;
 use crate::commands::Outcome;
 use crate::dispatch::Dispatched;
@@ -60,8 +60,8 @@ pub(crate) fn start_tree_read(core: &Core, host: &str) -> Result<Answer, Control
 ///
 /// As [`start_tree_read`].
 pub(crate) fn start_tree_read_within(core: &Core, host: &str, deadline: Duration) -> Result<Answer, ControlError> {
-    let argv = tree::tree_command(host).map_err(|_| ControlError::rejected("invalid host"))?;
-    run_off_thread(&core.remote.runner, argv, deadline)
+    tree::validate(host).map_err(|_| ControlError::rejected("invalid host"))?;
+    run_tree_off_thread(&core.remote.runner, host, deadline)
         .ok_or_else(|| ControlError::rejected(format!("the remote command failed on {host}")))
 }
 

@@ -59,6 +59,25 @@ pub(crate) fn run_off_thread(
     Some(answer)
 }
 
+/// Runs `host`'s `live tree` on a thread of its own through `runner` ([`tree::run_tree`]); the slot fills when it is
+/// done. `None` when no thread starts.
+pub(crate) fn run_tree_off_thread(
+    runner: &Arc<dyn RemoteCommandRunner>,
+    host: &str,
+    deadline: Duration,
+) -> Option<Answer> {
+    let answer: Answer = Arc::new(Mutex::new(None));
+    let (runner, slot, host) = (Arc::clone(runner), Arc::clone(&answer), host.to_owned());
+    std::thread::Builder::new()
+        .name("ngterm.remote-tree".to_owned())
+        .spawn(move || {
+            let result = super::tree::run_tree(&*runner, &host, deadline);
+            *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
+        })
+        .ok()?;
+    Some(answer)
+}
+
 /// Takes a finished command's result out of its slot.
 pub(crate) fn take_answer(answer: &Answer) -> Option<RemoteCommandResult> {
     answer.lock().unwrap_or_else(PoisonError::into_inner).take()

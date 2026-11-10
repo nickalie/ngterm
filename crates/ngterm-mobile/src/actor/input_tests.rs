@@ -81,7 +81,9 @@ impl Agents {
     fn start_timed(agent: &str, capture: &str, timing: InputTiming) -> Self {
         let mut fixture = Fixture::connected_timed(vec![listing(true)], timing);
         block_on(fixture.core.attach_session(MACHINE.to_owned(), SESSION.to_owned())).unwrap();
-        let stream = fixture.opened(|opened| opened.command == present_tail(SESSION).unwrap());
+        let stream = fixture.opened(|opened| {
+            opened.command == present_tail(ngterm_core::remote::origin::OriginShell::Posix, SESSION).unwrap()
+        });
         let frame = |rev: i64, body: Body| {
             frames::encode(&PresentationFrame {
                 generation: 1,
@@ -548,10 +550,10 @@ fn reading_the_chat_and_switching_it_with_the_terminal_never_claim_or_resize() {
     }
     assert_eq!(labels.len(), 4);
     assert_eq!((labels[0].as_str(), labels[3].as_str()), ("Yes", "No"));
-    agents
-        .fixture
-        .transport
-        .script(&commands_tail(SESSION, Side::Left), Script::ok("[]"));
+    agents.fixture.transport.script(
+        &commands_tail(ngterm_core::remote::origin::OriginShell::Posix, SESSION, Side::Left),
+        Script::ok("[]"),
+    );
     let commands = block_on(agents.fixture.core.agent_commands(
         MACHINE.to_owned(),
         SESSION.to_owned(),

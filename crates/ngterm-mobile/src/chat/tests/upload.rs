@@ -60,7 +60,7 @@ async fn send_quietly(connection: FakeConnection, file: Vec<u8>) -> Result<Strin
 fn the_command_quotes_the_name_for_the_remote_shell() {
     // each word single-quoted for the inner shell, the whole line again for `sh -c`: the name's own quote survives
     assert_eq!(
-        upload_tail("it's a file.png", 42),
+        upload_tail(ngterm_core::remote::origin::OriginShell::Posix, "it's a file.png", 42),
         r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && ngtermctl '\''agent'\'' '\''upload'\'' '\''--name=it'\''\'\'''\''s a file.png'\'' '\''--size'\'' '\''42'\'''"#
     );
 }
@@ -70,7 +70,11 @@ fn the_command_quotes_the_name_for_the_remote_shell() {
 fn a_name_that_starts_with_a_dash_stays_the_names_value() {
     // `--name -notes.txt` is an unknown option to the far parser; `--name=-notes.txt` is the name
     assert_eq!(
-        super::far_words(&upload_tail("-notes.txt", 7)),
+        super::far_words(&upload_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            "-notes.txt",
+            7
+        )),
         "[agent][upload][--name=-notes.txt][--size][7]"
     );
 }
@@ -87,7 +91,10 @@ async fn the_bytes_go_whole_then_the_end_and_the_printed_path_is_the_answer() {
             let sending = upload(&connection, "shot.png", &file, &progress, future::pending());
             let origin = async {
                 let mut opened = opened(&transport).await;
-                assert_eq!(opened.command, upload_tail("shot.png", file.len()));
+                assert_eq!(
+                    opened.command,
+                    upload_tail(ngterm_core::remote::origin::OriginShell::Posix, "shot.png", file.len())
+                );
                 let (got, ended) = take_all(&mut opened).await;
                 assert!(ended);
                 opened.peer.data(b"/state/uploads/1/shot.png\n".to_vec()).await;
@@ -290,7 +297,10 @@ async fn a_link_that_moves_nothing_fails_the_upload() {
 /// What an upload of three bytes as `a.txt` answers when the origin answers it with `script`.
 async fn answered(script: Script) -> Result<String, MobileError> {
     let (transport, connection) = connected().await;
-    transport.script(&upload_tail("a.txt", 3), script);
+    transport.script(
+        &upload_tail(ngterm_core::remote::origin::OriginShell::Posix, "a.txt", 3),
+        script,
+    );
     upload(&connection, "a.txt", b"abc", &|_, _| {}, future::pending()).await
 }
 

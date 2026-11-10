@@ -4,7 +4,8 @@
 # package through Windows Installer.
 #
 # The package is made of a staged tree (scripts/stage.sh's layout, which the installed folder keeps): with --staged
-# that tree, else this script builds the release binaries (ngterm with its HTML overlays, ngtermctl, ngterm-session)
+# that tree, else this script builds the release binaries (ngterm with its HTML overlays, ngtermctl, ngterm-session,
+# ngterm-headless)
 # and stages them first, which needs the libghostty-vt prefix (scripts/build-ghostty-vt.sh) and the terminal fonts
 # (scripts/fetch-fonts.sh). The licenses and notices go under share\doc beside the staged files: ngterm's LICENSE and
 # NOTICE, upstream's license of the agent-status package and skill, the terminal fonts' licenses.
@@ -145,12 +146,12 @@ trap 'rm -rf "$WORK"' EXIT
 
 if [[ -z "$STAGED" ]]; then
   echo "→ building the release binaries" >&2
-  cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session
+  cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless
   STAGED="$WORK/stage"
   "$NATIVE_ROOT/scripts/stage.sh" "$STAGED" --profile release
 fi
 [[ "$STAGED" == [A-Za-z]:[\\/]* ]] && STAGED="$(cygpath -u "$STAGED")"
-for file in bin/ngterm.exe bin/ngtermctl.exe bin/ngterm-session.exe share/ngterm/app-BUILD; do
+for file in bin/ngterm.exe bin/ngtermctl.exe bin/ngterm-session.exe bin/ngterm-headless.exe share/ngterm/app-BUILD; do
   [[ -f "$STAGED/$file" ]] || die "the staged tree $STAGED has no $file (scripts/stage.sh stages it)"
 done
 
@@ -177,8 +178,8 @@ fi
 bundle_vc_runtime "$ROOT/bin"
 rm -f "$ROOT/share/ngterm/session-BUILD"
 
-# The portable ZIP includes the MSI's app-local VC++ runtime and resources,
-# plus the headless binary when it was built. Python preserves relative paths.
+# The portable ZIP includes the MSI's binaries, app-local VC++ runtime and resources. Python preserves relative
+# paths.
 if [[ -n "$ARCHIVE" ]]; then
   echo windows-archive > "$ROOT/share/ngterm/update-format"
   [[ "$ARCHIVE" == *.zip ]] || die "the archive is a .zip: $ARCHIVE"

@@ -802,6 +802,24 @@ impl Spawned {
     }
 }
 
+/// Starts `executable` with `args`, this process's environment and working directory, as a process of its own that
+/// outlives this one and whatever session or job started it: a session of its own on Unix, detached and out of any
+/// job on Windows (`CREATE_BREAKAWAY_FROM_JOB`, or WMI where a job refuses that), its stdio on the null device. Its pid.
+///
+/// # Errors
+///
+/// The process could not be started.
+pub fn spawn_detached(executable: &Path, args: &[OsString]) -> io::Result<u32> {
+    let command = ServerCommand {
+        executable: executable.to_path_buf(),
+        args: args.to_vec(),
+        env: std::env::vars_os().collect(),
+        cwd: None,
+    };
+    let (pid, _path, _process) = sys::spawn(&command)?;
+    Ok(pid)
+}
+
 /// Starts `<executable> server <directory>` detached from this process, with stdio on the null device and the
 /// environment of [`server_environment`]; no other descriptor or handle of this process reaches it. On Windows the
 /// server runs a private copy of `executable` (module docs).

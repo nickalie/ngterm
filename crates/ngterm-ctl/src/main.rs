@@ -19,6 +19,7 @@ mod local;
 mod messages;
 mod modal;
 mod notify;
+mod origin_run;
 mod output;
 mod overlay_job;
 mod overlay_page;
@@ -368,7 +369,10 @@ fn parse_report(args: &[OsString], error: &clap::Error, width: usize) -> usage::
 fn main() -> ExitCode {
     #[cfg(unix)]
     restore_default_sigpipe();
-    let args: Vec<OsString> = std::env::args_os().collect();
+    let args = match origin_run::intercept(std::env::args_os().collect()) {
+        origin_run::Intercepted::Arguments(args) => args,
+        origin_run::Intercepted::Exit(code) => return code,
+    };
     let args = usage::name_default_subcommands(&Ngtermctl::command(), &args);
     let cli = match Ngtermctl::try_parse_from(&args) {
         Ok(cli) => cli,
