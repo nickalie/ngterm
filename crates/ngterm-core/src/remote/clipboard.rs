@@ -3,7 +3,7 @@
 //! `/tmp`, on a Windows one the account's `%TEMP%` (`ngtermctl origin-run`, [`super::origin`]).
 
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use super::origin::{self, OriginRun, OriginShell};
@@ -61,8 +61,7 @@ fn transfer(argv: &[String], bytes: &[u8], deadline: Duration, shell: OriginShel
     input.rewind()?;
     let mut output = tempfile::tempfile()?;
     let mut errors = tempfile::tempfile()?;
-    let mut child = Command::new(&argv[0])
-        .args(&argv[1..])
+    let mut child = super::tree::local_command(argv)?
         .stdin(Stdio::from(input))
         .stdout(Stdio::from(output.try_clone()?))
         .stderr(Stdio::from(errors.try_clone()?))

@@ -23,7 +23,6 @@ use super::frames::{
 use super::reconnect::{ReconnectBook, RemoteLinkNotice};
 use super::tree::{RemoteCommandResult, RemoteCommandRunner};
 use crate::Core;
-use crate::command_restore::shell_quoted_line;
 use crate::commands::hud::Placement;
 use crate::live::lead::LeadAttachment;
 use crate::model::{
@@ -759,7 +758,7 @@ impl Core {
             return false;
         };
         let program = OverlayProgram {
-            command: shell_quoted_line(&argv),
+            command: super::viewer_run::program_line(&argv),
             wait: overlay.wait,
             size_percent: overlay.size_percent,
             points: overlay.points(),

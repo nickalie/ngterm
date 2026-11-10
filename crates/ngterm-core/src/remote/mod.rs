@@ -57,6 +57,7 @@ mod split;
 pub mod ssh;
 pub mod tree;
 mod viewer;
+pub mod viewer_run;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;

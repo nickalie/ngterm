@@ -120,9 +120,9 @@ Any computer running ngterm can share its Live sessions over ssh. On your deskto
 On a phone, the app creates an ssh key on first launch and shows the line to add to `~/.ssh/authorized_keys` on each
 machine. Then add the machine by host, port and user.
 
-You can attach to Linux, macOS and Windows machines. A Windows machine needs Windows' OpenSSH server, with key-based
-ssh set up for your account. For now, attach from a Linux or macOS desktop or from the phone app: **Attach Remote** does
-not run on a Windows desktop yet.
+You can attach to Linux, macOS and Windows machines, from a Linux, macOS or Windows desktop or from the phone app. A
+Windows machine needs Windows' OpenSSH server, with key-based ssh set up for your account; a Windows desktop uses the
+`ssh` on its `PATH`, Windows' own OpenSSH client by default.
 
 ### A server without a display
 

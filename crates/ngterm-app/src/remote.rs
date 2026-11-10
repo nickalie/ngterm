@@ -203,15 +203,9 @@ mod platform {
     use std::os::fd::AsRawFd;
     use std::process::{Child, ChildStdin, Command};
 
-    /// The bridge's command: `argv` through `/usr/bin/env`.
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "the Windows form refuses an empty argv; both forms share the spawn's call"
-    )]
+    /// The bridge's command: `argv` through `/usr/bin/env` ([`ngterm_core::remote::tree::local_command`]).
     pub(super) fn command(argv: &[String]) -> io::Result<Command> {
-        let mut command = Command::new("/usr/bin/env");
-        command.args(argv);
-        Ok(command)
+        ngterm_core::remote::tree::local_command(argv)
     }
 
     /// The child's pid, for the stop's signal.
@@ -269,21 +263,16 @@ mod platform {
     use std::cell::RefCell;
     use std::io::{self, Write};
     use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
-    use std::os::windows::process::CommandExt;
     use std::process::{Child, ChildStdin, Command};
     use std::sync::mpsc::{self, SyncSender};
 
     use ngterm_core::remote::frames::MAX_PENDING_FRAMES;
-    use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, TerminateProcess};
+    use windows_sys::Win32::System::Threading::TerminateProcess;
 
-    /// The bridge's command: `argv`'s program found on `PATH`, without a console window.
+    /// The bridge's command: `argv`'s program found on `PATH`, without a console window
+    /// ([`ngterm_core::remote::tree::local_command`]).
     pub(super) fn command(argv: &[String]) -> io::Result<Command> {
-        let (program, arguments) = argv
-            .split_first()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "an empty command"))?;
-        let mut command = Command::new(program);
-        command.args(arguments).creation_flags(CREATE_NO_WINDOW);
-        Ok(command)
+        ngterm_core::remote::tree::local_command(argv)
     }
 
     /// A handle on the child, kept open so the stop never reaches a process that took its pid.

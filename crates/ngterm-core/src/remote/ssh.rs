@@ -15,6 +15,7 @@ use ngterm_proto::ControlLiveEndpoint;
 use super::origin::{self, OriginRun, OriginShell, windows_cli_tail};
 use super::reconnect::RemoteLinkNotice;
 use super::tree::{InvocationError, REMOTE_CLI, is_plain, remote_cli_chain, ssh_arguments, validate};
+use super::viewer_run::{KEEP_ALIVE, LOST_RESET, LostLink, NO_KEEP_ALIVE, SSH_LOST, ViewerRun, config_probe};
 use crate::command_restore::shell_quoted_line;
 use crate::live::lead::LeadAttachment;
 use crate::live::{
@@ -282,6 +283,8 @@ pub struct PaneLabel<'a> {
 /// and waits on `cat` for the app to attach the pane again; the mouse and focus reporting a remote program left on is
 /// switched off first, and echo with the cursor, so nothing a paste or a wheel sends prints under the bar.
 ///
+/// That is a `/bin/sh` script on Unix; a Windows viewer's pane runs the same steps as a [`ViewerRun::Pane`].
+///
 /// # Errors
 ///
 /// As [`attach_command`].
@@ -293,12 +296,34 @@ pub fn attach_pane_command(
     lead: Option<&LeadAttachment>,
 ) -> Result<String, InvocationError> {
     let argv = attach_command(host, endpoint, daemon, lead)?;
-    let mut probe = vec!["ssh".to_owned(), "-G".to_owned()];
-    probe.extend(argv.iter().skip(1).cloned());
+    let report = format!(
+        "ngterm: {} ({}) on {host} disconnected, exit",
+        label.session, label.pane
+    );
+    let lost = lead.map(|lead| LostLink {
+        bar: format!("Connection to {host} lost · reconnecting… · any key retries now"),
+        title: RemoteLinkNotice::title(&lead.nonce),
+    });
+    if cfg!(windows) {
+        return Ok(ViewerRun::Pane {
+            attach: argv,
+            report,
+            lost,
+        }
+        .line());
+    }
+    Ok(posix_pane_command(&argv, &report, lost.as_ref()))
+}
+
+/// [`attach_pane_command`]'s `/bin/sh` script. Its escapes are `printf`'s, so the command line holds no control
+/// character.
+fn posix_pane_command(argv: &[String], report: &str, lost: Option<&LostLink>) -> String {
     // $ka is unquoted on purpose: four words or none
     let keep_alive = format!(
-        "ka=; {} 2>/dev/null | grep -qx 'serveraliveinterval 0' && ka='-o ServerAliveInterval=5 -o ServerAliveCountMax=2'",
-        shell_quoted_line(&probe)
+        "ka=; {} 2>/dev/null | grep -qx {} && ka={}",
+        shell_quoted_line(&config_probe(argv)),
+        shell_quoted_line(&[NO_KEEP_ALIVE]),
+        shell_quoted_line(&[KEEP_ALIVE.join(" ")])
     );
     let split = argv.len() - 2;
     let attach = format!(
@@ -306,29 +331,23 @@ pub fn attach_pane_command(
         shell_quoted_line(&argv[..split]),
         shell_quoted_line(&argv[split..])
     );
-    let line = format!(
-        "ngterm: {} ({}) on {host} disconnected, exit",
-        label.session, label.pane
-    );
     // the pane exits with ssh's status, not printf's zero, or a failed connection reads as a clean one
-    let report = format!("printf '%s %s\\n' {} \"$status\"", shell_quoted_line(&[line.as_str()]));
-    let script = match lead {
+    let report = format!("printf '%s %s\\n' {} \"$status\"", shell_quoted_line(&[report]));
+    let script = match lost {
         None => format!("{keep_alive}; {attach}; status=$?; {report}; exit \"$status\""),
-        Some(lead) => {
-            let bar = shell_quoted_line(&[format!(
-                "Connection to {host} lost · reconnecting… · any key retries now"
-            )]);
-            let title = shell_quoted_line(&[RemoteLinkNotice::title(&lead.nonce)]);
-            let reset = "\\033[0m\\033[?1000l\\033[?1002l\\033[?1003l\\033[?1006l\\033[?1004l\\033[?2004l\\033[?2031l\\033[?2048l";
+        Some(lost) => {
+            let bar = shell_quoted_line(&[lost.bar.as_str()]);
+            let title = shell_quoted_line(&[lost.title.as_str()]);
+            let reset = LOST_RESET.replace('\x1b', "\\033");
             format!(
-                "{keep_alive}; {attach}; status=$?; if [ \"$status\" -eq 255 ]; then \
+                "{keep_alive}; {attach}; status=$?; if [ \"$status\" -eq {SSH_LOST} ]; then \
                  printf '{reset}\\r\\n\\033[30;43m %s \\033[K\\033[0m\\n' {bar}; printf '\\033]2;%s\\007' {title}; \
                  printf '\\033[?25l'; stty -echo 2>/dev/null; cat >/dev/null; else {report}; fi; exit \"$status\""
             )
         }
     };
     // `env` takes the exec a terminal runs its command under, and a plain `sh` beneath it reads no login profile
-    Ok(shell_quoted_line(&["/usr/bin/env", "/bin/sh", "-c", script.as_str()]))
+    shell_quoted_line(&["/usr/bin/env", "/bin/sh", "-c", script.as_str()])
 }
 
 /// One ssh invocation that only proves the host answers again, before a waiting pane is attached anew (upstream's

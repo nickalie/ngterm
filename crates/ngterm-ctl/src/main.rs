@@ -48,6 +48,7 @@ mod tint;
 mod tree;
 mod usage;
 mod version;
+mod viewer_run;
 mod window;
 mod workspace;
 
@@ -372,6 +373,10 @@ fn main() -> ExitCode {
     let args = match origin_run::intercept(std::env::args_os().collect()) {
         origin_run::Intercepted::Arguments(args) => args,
         origin_run::Intercepted::Exit(code) => return code,
+    };
+    let args = match viewer_run::intercept(args) {
+        viewer_run::Intercepted::Arguments(args) => args,
+        viewer_run::Intercepted::Exit(code) => return code,
     };
     let args = usage::name_default_subcommands(&Ngtermctl::command(), &args);
     let cli = match Ngtermctl::try_parse_from(&args) {

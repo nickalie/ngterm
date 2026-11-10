@@ -924,6 +924,10 @@ differs is where things are kept and how they are reached:
   opens its system menu, as on a client-decorated Linux window (`crates/ngterm-gpui/src/titlebar.rs`). `ngterm.exe`
   embeds the app icon (`resources/icons/ngterm.ico`), which the windows, the taskbar and Alt+Tab show.
 - The live-session namespace is `%LOCALAPPDATA%\ngterm\live\<hash>` ([Live sessions](#live-sessions)).
+- Attach Remote runs `ssh` by name, without a console window, where Unix goes through `/usr/bin/env`. A remote pane's
+  attach and a remote overlay's job, a `/bin/sh` line on Unix, are `ngtermctl viewer-run WORD` here (the pane's
+  command line goes through `cmd.exe`): the `ngtermctl` beside the app, named by its path, runs the same steps, the
+  keep-alive probe and the reconnecting bar included (`crates/ngterm-core/src/remote/viewer_run.rs`).
 - Install Command Line Tool… links nothing: it puts the bundled `ngtermctl.exe`'s folder on the user's `PATH`
   (`HKCU\Environment`) unless it is there already (the installer's is). Install Agent Skill… installs into the home's
   `.claude\skills\ngterm` and `.codex\skills\ngterm`.

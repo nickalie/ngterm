@@ -153,9 +153,9 @@ pub trait RemoteCommandRunner: Send + Sync {
     fn run(&self, argv: &[String], deadline: Duration) -> RemoteCommandResult;
 }
 
-/// Runs the command as a child process (upstream's `RemoteCommandProcessRunner`): through `/usr/bin/env`, so a user's
-/// own `ssh` earlier on PATH wins; stdin closed; the deadline the caller's, since ssh's `ConnectTimeout` bounds only the
-/// handshake.
+/// Runs the command as a child process (upstream's `RemoteCommandProcessRunner`): through `/usr/bin/env` on Unix and by
+/// name on Windows ([`local_command`]), so a user's own `ssh` earlier on PATH wins; stdin closed; the deadline the
+/// caller's, since ssh's `ConnectTimeout` bounds only the handshake.
 ///
 /// The output goes to unlinked temporary files rather than pipes, read once the command exited: nothing blocks reading
 /// it, so a background helper of a PATH-resolved ssh wrapper that keeps the output open strands no reader thread or
@@ -176,8 +176,7 @@ impl RemoteCommandRunner for ProcessRemoteRunner {
         };
         let spawned = stdout.try_clone().and_then(|out| {
             let err = stderr.try_clone()?;
-            Command::new("/usr/bin/env")
-                .args(argv)
+            local_command(argv)?
                 .stdin(Stdio::null())
                 .stdout(Stdio::from(out))
                 .stderr(Stdio::from(err))
@@ -207,6 +206,33 @@ impl RemoteCommandRunner for ProcessRemoteRunner {
             stdout: read_capture(&mut stdout),
             stderr: read_capture(&mut stderr),
         }
+    }
+}
+
+/// The command that runs `argv` on this machine with its program found on `PATH`, so a user's own `ssh` earlier there
+/// wins: through `/usr/bin/env` on Unix; by name on Windows, which has no `env`, and without a console window, which a
+/// GUI app's console child would otherwise open. Every ssh a viewer runs in the background starts this way.
+///
+/// # Errors
+///
+/// `argv` is empty.
+pub fn local_command(argv: &[String]) -> std::io::Result<Command> {
+    let (program, arguments) = argv
+        .split_first()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "an empty command"))?;
+    if cfg!(windows) {
+        let mut command = Command::new(program);
+        command.args(arguments);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+        }
+        Ok(command)
+    } else {
+        let mut command = Command::new("/usr/bin/env");
+        command.args(argv);
+        Ok(command)
     }
 }
 
