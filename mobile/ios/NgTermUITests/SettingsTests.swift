@@ -43,11 +43,13 @@ internal final class SettingsTests: XCTestCase {
         }
     }
 
-    /// Touches the switch inside `row` (the switch itself, at the row's trailing end) until the row reads `value`, and
-    /// leaves it to the caller to assert that it does. UISwitch starts its press on a 10 ms timer, and a tap lasts 67
-    /// ms: when XCTest's own accessibility snapshots hold the app's main thread for longer, as on a loaded host, the
-    /// touch's down and up are handled together, the timer never runs and the switch ignores the touch. A 0.6 s press
-    /// outlasts most of those stalls; one that doesn't is repeated. A dead switch still fails the assert.
+    /// Touches the switch inside `row` until the row reads `value`, leaving the caller to assert that it does.
+    ///
+    /// The touch lands on the switch itself, at the row's trailing end. UISwitch starts its press on a 10 ms timer, and
+    /// a tap lasts 67 ms: when XCTest's own accessibility snapshots hold the app's main thread for longer, as on a
+    /// loaded host, the touch's down and up are handled together, the timer never runs and the switch ignores the
+    /// touch. A 0.6 s press outlasts most of those stalls; one that doesn't is repeated. A dead switch still fails the
+    /// assert.
     @MainActor
     private func flip(_ row: XCUIElement, to value: String) {
         let flipped = NSPredicate(format: "value == %@", value)
