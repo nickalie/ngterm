@@ -86,6 +86,10 @@ tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_woul
 tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_would_misread[]
 tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_would_misread[two words]
 tests/cli/test_cli_only.py::test_terminfo_install_reports_how_ssh_ended
+tests/cli/test_cli_only.py::test_viewer_run_pane_reports_how_its_attach_ended
+tests/cli/test_cli_only.py::test_viewer_run_pane_shows_the_reconnecting_bar_when_ssh_lost_the_link
+tests/cli/test_cli_only.py::test_viewer_run_refuses_a_word_no_build_wrote
+tests/cli/test_cli_only.py::test_viewer_run_runs_a_program_and_ends_with_its_status
 tests/cli/test_cli_output.py::test_ask_blocks_until_cancelled
 tests/cli/test_cli_output.py::test_ask_form_options
 tests/cli/test_cli_output.py::test_ask_without_blocking
