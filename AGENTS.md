@@ -106,6 +106,12 @@ docs/development.md > Test has the commands and how to scope them.
 - Fill libghostty-vt gaps in Rust where possible; a Ghostty patch is recorded as `build/patches/ghostty-vt/README.md`
   describes.
 
+## Reaching a viewer from a remote session
+
+The viewer opens every connection and the origin never connects back. Signal a viewer over the presentation stream, as
+[docs/remote-viewer-signalling.md](docs/remote-viewer-signalling.md) says; don't propose origin-to-viewer ssh or an
+always-running watcher.
+
 ## Never touch the user's running ngterm
 
 Agents usually run inside a pane of the user's live ngterm. Keep every dev run off it:
