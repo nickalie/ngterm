@@ -172,6 +172,27 @@ pub fn program_line(argv: &[String]) -> String {
     }
 }
 
+/// `line`, a pane's or overlay's command line, with a Windows [`ViewerRun::line`] spelled out as the Unix form's
+/// words: what it runs, quoted as `/bin/sh` would see it, then a pane's exit line, bar and title. Any other line is
+/// returned as it is, so a test reads the same content whichever form this OS builds.
+#[cfg(test)]
+pub(crate) fn readable(line: &str) -> String {
+    use crate::command_restore::shell_quoted_line;
+    let Some((_, word)) = line.split_once(&format!(" {VIEWER_RUN} ")) else {
+        return line.to_owned();
+    };
+    match ViewerRun::decode(word) {
+        Ok(ViewerRun::Program { argv }) => shell_quoted_line(&argv),
+        Ok(ViewerRun::Pane { attach, report, lost }) => {
+            let lost = lost
+                .map(|lost| format!(" {} {}", lost.bar, lost.title))
+                .unwrap_or_default();
+            format!("{} {report}{lost}", shell_quoted_line(&attach))
+        }
+        Err(_) => line.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,6 +302,28 @@ mod tests {
              \u{1b}[?2048l\r\n\u{1b}[30;43m Connection to box lost \u{1b}[K\u{1b}[0m\n\u{1b}]2;ngterm-remote;n1:lost\
              \u{7}\u{1b}[?25l"
         );
+    }
+
+    #[test]
+    fn a_readable_line_spells_out_what_a_windows_line_runs() {
+        let pane = ViewerRun::Pane {
+            attach: words(&["ssh", "-tt", "box", "tail"]),
+            report: "ngterm: b (left) on box disconnected, exit".to_owned(),
+            lost: Some(LostLink {
+                bar: "Connection to box lost".to_owned(),
+                title: "ngterm-remote;n1:lost".to_owned(),
+            }),
+        };
+        assert_eq!(
+            readable(&pane.line_with(REMOTE_CLI)),
+            "'ssh' '-tt' 'box' 'tail' ngterm: b (left) on box disconnected, exit Connection to box lost \
+             ngterm-remote;n1:lost"
+        );
+        let program = ViewerRun::Program {
+            argv: words(&["ssh", "-tt", "box"]),
+        };
+        assert_eq!(readable(&program.line_with(REMOTE_CLI)), "'ssh' '-tt' 'box'");
+        assert_eq!(readable("'/usr/bin/env' 'x'"), "'/usr/bin/env' 'x'");
     }
 
     #[test]

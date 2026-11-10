@@ -637,7 +637,7 @@ fn assert_remote_split_spawn(replica: &mut Replica, pane: Uuid) {
         .split_surface
         .replace(Box::new(ngterm_host::fakes::FakeSurface::new(wire(pane))));
     let seed = replica.viewer.fixture.core.request_pane_spawn(id, &wire(pane)).unwrap();
-    let command = seed.command.unwrap();
+    let command = crate::remote::viewer_run::readable(&seed.command.unwrap());
     assert!(command.contains("ssh") && command.contains(&crate::live::daemon_name(replica.viewer.origin.1)));
     assert!(command.contains("NGTERM_LIVE_MANAGED_CLAIM=1") && command.contains("reconnecting"));
     assert!(seed.wait_after_command && !seed.live);

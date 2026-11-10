@@ -296,13 +296,13 @@ fn attach_creates_a_remote_row_with_both_panes_and_opens_its_stream() {
     assert_eq!(node["splitCommandWait"], true);
     assert_eq!(node["presentation"], json!({"state": "connecting", "mode": "mirror"}));
     let session = viewer.session();
-    let primary = session.launch.command.clone().unwrap();
+    let primary = crate::remote::viewer_run::readable(&session.launch.command.clone().unwrap());
     assert!(primary.contains(&daemon_name(viewer.origin.0)), "{primary}");
     assert!(
         primary.contains("NGTERM_LIVE_MANAGED_CLAIM=1"),
         "the attach claims the lead"
     );
-    let split = session.split_launch.command.clone().unwrap();
+    let split = crate::remote::viewer_run::readable(&session.split_launch.command.clone().unwrap());
     assert!(split.contains(&daemon_name(viewer.origin.1)));
     assert!(!session.is_persistable());
     // the remote is resolved again by the attach itself, and the stream runs `live present` for the origin's session
@@ -732,7 +732,7 @@ fn a_handed_over_overlay_runs_the_jobs_helper_and_its_close_here_tells_the_origi
     let slot = &viewer.session().overlay;
     assert!(slot.program_active());
     assert_eq!(slot.size_percent, Some(60));
-    let command = slot.command.clone().unwrap();
+    let command = crate::remote::viewer_run::readable(&slot.command.clone().unwrap());
     assert!(
         command.contains("'-tt'") && command.contains("overlay run-job"),
         "{command}"
@@ -974,9 +974,10 @@ fn a_lost_link_waits_probes_with_backoff_and_attaches_the_pane_again() {
     assert_eq!(replacements.len(), 1);
     let replacement = &replacements[0];
     assert!(replacement.remote && replacement.token == token);
-    assert!(replacement.command.contains(&daemon_name(viewer.origin.0)));
+    let replaced = crate::remote::viewer_run::readable(&replacement.command);
+    assert!(replaced.contains(&daemon_name(viewer.origin.0)));
     assert!(
-        !replacement.command.contains("NGTERM_LIVE_MANAGED_CLAIM"),
+        !replaced.contains("NGTERM_LIVE_MANAGED_CLAIM"),
         "a reconnect never claims the lead"
     );
     assert!(!viewer.fixture.core.reconnect_waiting(&token));

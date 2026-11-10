@@ -3,7 +3,7 @@
 //! [`ViewerRun`] and carries it out on this process's stdio, the pane's console.
 
 use std::ffi::{OsStr, OsString};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::process::{Command, ExitCode, Stdio};
 
 use ngterm_core::remote::viewer_run::{LostLink, SSH_LOST, VIEWER_RUN, ViewerRun, config_probe, with_keep_alive};
@@ -129,9 +129,16 @@ impl Machine for Process {
     fn wait_lost(&mut self, lost: &LostLink) {
         #[cfg(windows)]
         console::lost_link_modes();
-        self.print(&lost.output());
-        let _ = io::copy(&mut io::stdin().lock(), &mut io::sink());
+        show_lost(lost, &mut io::stdout().lock(), &mut io::stdin().lock());
     }
+}
+
+/// Writes `lost`'s bar to `output`, then reads `input` to its end: the app ends the pane to attach it again, so the
+/// end of input is the pane's own end.
+fn show_lost(lost: &LostLink, output: &mut impl Write, input: &mut impl Read) {
+    let _ = output.write_all(lost.output().as_bytes());
+    let _ = output.flush();
+    let _ = io::copy(input, &mut io::sink());
 }
 
 /// The pane's console modes while a lost link waits: what ssh left them as is not known.
@@ -330,6 +337,64 @@ mod tests {
         };
         assert_eq!(carry_out(&ViewerRun::Program { argv }, &mut Process), 7);
         assert_eq!(exit_code(300), ExitCode::from(1));
+    }
+
+    #[test]
+    fn a_lost_link_shows_its_bar_then_drains_the_input() {
+        let mut output = Vec::new();
+        let mut input: &[u8] = b"any keys";
+        show_lost(&lost(), &mut output, &mut input);
+        assert_eq!(String::from_utf8(output).unwrap(), lost().output());
+        assert!(
+            input.is_empty(),
+            "every key is read, none left for anything after the pane"
+        );
+    }
+
+    /// The real machine: what a program printed when it succeeded, nothing when it failed or could not start.
+    #[test]
+    fn the_process_machine_reads_a_programs_output_only_on_success() {
+        let (ok, fail) = if cfg!(windows) {
+            (
+                words(&["cmd.exe", "/d", "/c", "echo serveraliveinterval 0"]),
+                words(&["cmd.exe", "/d", "/c", "echo x& exit 3"]),
+            )
+        } else {
+            (
+                words(&["/bin/sh", "-c", "echo serveraliveinterval 0"]),
+                words(&["/bin/sh", "-c", "echo x; exit 3"]),
+            )
+        };
+        assert_eq!(Process.output(&ok).unwrap().trim_end(), "serveraliveinterval 0");
+        assert_eq!(Process.output(&fail), None);
+        assert_eq!(Process.output(&words(&["ngterm-no-such-program"])), None);
+        assert_eq!(Process.output(&[]), None);
+        assert_eq!(Process.run(&[]).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            carry_out(
+                &ViewerRun::Program {
+                    argv: words(&["ngterm-no-such-program"])
+                },
+                &mut Process
+            ),
+            127
+        );
+        assert_eq!(status_of(Err(io::Error::other("denied")), &[]), 126);
+        Process.print("");
+    }
+
+    /// A word this build wrote is carried out and ends `main` with the run's status.
+    #[test]
+    fn a_valid_word_runs_and_exits_with_its_status() {
+        let argv = if cfg!(windows) {
+            words(&["cmd.exe", "/d", "/c", "exit 9"])
+        } else {
+            words(&["/bin/sh", "-c", "exit 9"])
+        };
+        let line = ViewerRun::Program { argv }.line();
+        let word = line.rsplit(' ').next().unwrap();
+        let command_line: Vec<OsString> = ["ngtermctl", VIEWER_RUN, word].iter().map(OsString::from).collect();
+        assert!(matches!(intercept(command_line), Intercepted::Exit(code) if code == ExitCode::from(9)));
     }
 
     /// Through `cmd.exe`, which runs a Windows pane's command line, the line runs the helper with its one word intact.

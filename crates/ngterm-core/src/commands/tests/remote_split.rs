@@ -182,7 +182,7 @@ fn a_remote_split_is_created_once_and_attached_with_lead_and_reconnect() {
     remote.request();
     remote.request();
     let seed = remote.spawn();
-    let command = seed.command.unwrap();
+    let command = crate::remote::viewer_run::readable(&seed.command.unwrap());
     assert!(command.contains("ssh") && command.contains("buildbox") && command.contains(&daemon_name(target)));
     assert!(command.contains("NGTERM_LIVE_MANAGED_CLAIM=1") && command.contains("reconnecting"));
     assert!(seed.wait_after_command);
@@ -221,7 +221,7 @@ fn a_remote_split_waits_for_the_origin_daemon_without_reissuing_the_mutation() {
         Remote::listing(&[remote.origin_pane, target]),
     ]);
     remote.request();
-    assert!(remote.spawn().command.unwrap().contains(&daemon_name(target)));
+    assert!(crate::remote::viewer_run::readable(&remote.spawn().command.unwrap()).contains(&daemon_name(target)));
     assert_eq!(remote.runner.calls.lock().unwrap().len(), 3);
 }
 
@@ -293,7 +293,7 @@ fn a_remote_split_reuses_the_surviving_origins_other_pane_after_local_close() {
         Remote::listing(&[remote.origin_pane, target]),
     ]);
     remote.request();
-    assert!(remote.spawn().command.unwrap().contains(&daemon_name(target)));
+    assert!(crate::remote::viewer_run::readable(&remote.spawn().command.unwrap()).contains(&daemon_name(target)));
     let binding = &remote
         .fixture
         .store()
@@ -335,7 +335,7 @@ fn a_remote_split_completed_during_soft_close_spawns_only_after_undo() {
     assert!(remote.fixture.core.take_spawn_grants().is_empty());
     assert!(remote.fixture.store_mut().unwrap().undo_pending_close(None));
     remote.fixture.core.commit();
-    assert!(remote.spawn().command.unwrap().contains(&daemon_name(target)));
+    assert!(crate::remote::viewer_run::readable(&remote.spawn().command.unwrap()).contains(&daemon_name(target)));
 }
 
 #[test]
@@ -370,7 +370,7 @@ fn a_transient_listing_failure_is_retried_without_recreating_the_origin_split() 
         Remote::listing(&[remote.origin_pane, target]),
     ]);
     remote.request();
-    assert!(remote.spawn().command.unwrap().contains(&daemon_name(target)));
+    assert!(crate::remote::viewer_run::readable(&remote.spawn().command.unwrap()).contains(&daemon_name(target)));
     assert_eq!(remote.runner.calls.lock().unwrap().len(), 3);
     assert!(!remote.has_failure("temporary ssh failure"));
 }
@@ -386,7 +386,7 @@ fn closing_the_sibling_during_creation_does_not_change_the_requested_origin_daem
     ]);
     remote.request();
     remote.fixture.store_mut().unwrap().close_primary_pane(remote.row);
-    assert!(remote.spawn().command.unwrap().contains(&daemon_name(target)));
+    assert!(crate::remote::viewer_run::readable(&remote.spawn().command.unwrap()).contains(&daemon_name(target)));
     assert_eq!(remote.runner.calls.lock().unwrap().len(), 3);
     assert_eq!(
         remote.fixture.store().session(remote.row).unwrap().pane_identity,
@@ -419,7 +419,7 @@ fn completing_a_split_reconsiders_a_primary_removal_deferred_by_its_unbound_pane
         remote.fixture.store().session(remote.row).unwrap().pane_identity,
         primary
     );
-    assert!(remote.spawn().command.unwrap().contains(&daemon_name(target)));
+    assert!(crate::remote::viewer_run::readable(&remote.spawn().command.unwrap()).contains(&daemon_name(target)));
     let session = remote.fixture.store().session(remote.row).unwrap();
     assert_eq!(session.pane_identity, remote.pane);
     assert!(!session.split.exists);
@@ -443,7 +443,7 @@ fn an_old_layout_does_not_close_the_split_when_its_binding_completes() {
         remote.row,
     );
     remote.request();
-    assert!(remote.spawn().command.unwrap().contains(&daemon_name(target)));
+    assert!(crate::remote::viewer_run::readable(&remote.spawn().command.unwrap()).contains(&daemon_name(target)));
     assert!(remote.fixture.store().session(remote.row).unwrap().split.exists);
 }
 
@@ -495,9 +495,9 @@ fn consecutive_pending_splits_get_distinct_origin_daemons() {
         remote.fixture.core.request_pane_spawn(remote.row, &wire(second_local)),
         None
     );
-    assert!(remote.spawn().command.unwrap().contains(&daemon_name(first)));
+    assert!(crate::remote::viewer_run::readable(&remote.spawn().command.unwrap()).contains(&daemon_name(first)));
     remote.pane = second_local;
-    assert!(remote.spawn().command.unwrap().contains(&daemon_name(second)));
+    assert!(crate::remote::viewer_run::readable(&remote.spawn().command.unwrap()).contains(&daemon_name(second)));
     let binding = &remote
         .fixture
         .store()
