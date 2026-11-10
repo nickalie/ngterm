@@ -1,10 +1,12 @@
 use super::*;
 
+#[cfg(unix)]
 fn sha256(bytes: &[u8]) -> String {
     sha256_hex(bytes)
 }
 
 /// The arguments [`ROOT_SCRIPT`] takes after the package kind, for an unchanged installation in `install`.
+#[cfg(unix)]
 fn identity_args(install: &PrivilegedInstall) -> [std::ffi::OsString; 2] {
     [
         install.identity.clone().into_os_string(),

@@ -133,15 +133,17 @@ pub(crate) fn extract(
     let unpacked = work.join("unpacked");
     fs::create_dir(&unpacked)?;
     let candidate = match installation.format {
-        Format::AppImage => {
+        Format::AppImage
+        | Format::WindowsMsi
+        | Format::LinuxDeb
+        | Format::LinuxRpm
+        | Format::LinuxPacman
+        | Format::MacPkg => {
             #[cfg(unix)]
-            {
+            if installation.format == Format::AppImage {
                 use std::os::unix::fs::PermissionsExt as _;
                 fs::set_permissions(asset, fs::Permissions::from_mode(0o755))?;
             }
-            return Ok(asset.to_path_buf());
-        }
-        Format::WindowsMsi | Format::LinuxDeb | Format::LinuxRpm | Format::LinuxPacman | Format::MacPkg => {
             return Ok(asset.to_path_buf());
         }
         Format::LinuxArchive | Format::MacArchive => {
