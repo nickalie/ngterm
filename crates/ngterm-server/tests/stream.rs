@@ -414,6 +414,32 @@ fn a_peer_that_never_reads_is_dropped_at_the_write_timeout() -> TestResult {
     Ok(())
 }
 
+/// A peer that hangs up with a line it never read: Linux resets the connection (the read fails with `ECONNRESET`, where
+/// a plain hang-up reads an end), another Unix may read an end. Either way the stream closes once. The line is in the
+/// peer's buffer before it hangs up, so which of the two the read meets depends on the OS alone, not on timing.
+#[cfg(unix)]
+#[test]
+fn a_peer_hanging_up_on_an_unread_line_closes_the_stream_once() -> TestResult {
+    use std::os::fd::AsRawFd as _;
+
+    let stream = LineStream::new(LIMITS);
+    let (peer, opened, runner) = run_on_pair(&stream)?;
+    assert!(stream.send(b"never read".to_vec()));
+    let mut ready = libc::pollfd {
+        fd: peer.writer.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let timeout = i32::try_from(TIMEOUT.as_millis())?;
+    // SAFETY: one pollfd for a descriptor the peer holds open for the call
+    let polled = unsafe { libc::poll(&raw mut ready, 1, timeout) };
+    assert_eq!(polled, 1, "the line never reached the peer");
+    drop(peer);
+    opened.assert_closed_once()?;
+    runner.join().map_err(|_| "runner panicked")?;
+    Ok(())
+}
+
 #[test]
 fn lines_split_across_reads_are_joined() -> TestResult {
     let stream = LineStream::new(LIMITS);
