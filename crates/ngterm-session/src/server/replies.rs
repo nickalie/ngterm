@@ -28,8 +28,8 @@
 //!   client that shows it. An image sent that way (`t=f`, `t=t`, `t=s`) fails to load on the server's terminal, which
 //!   then places nothing: its cursor stays where the owner's moved away from (with the default `C=0`), so the server
 //!   answers CPR and DSR from there and later snapshots put the cursor there, until the program moves it again. Its
-//!   own APC G answers are dropped, and the owner's terminal answers instead: the scanner stops at the byte that runs
-//!   each command ([`vt::Stop::KittyGraphics`]), and the output up to it is followed by a barrier sent to the owner
+//!   own APC G answers are dropped, and the owner's terminal answers instead: the terminal stops at the byte that runs
+//!   each terminated command ([`vt::Terminal::vt_write_until`]), and the output up to it is followed by a barrier sent to the owner
 //!   alone ([`ClientEvent::KittyBarrier`](super::clients::ClientEvent), when its [`ReplyMetadata::kitty_graphics`]
 //!   says it shows them), which it completes with what its terminal answered
 //!   ([`AttachClientMessage::KittyComplete`](crate::protocol::AttachClientMessage)), even nothing. The output goes on
@@ -97,7 +97,7 @@ use std::time::{Duration, Instant};
 
 use ngterm_ghostty_vt as vt;
 use ngterm_pty::ReadPause;
-use vt::{ReadCandidate, ReadScope, Stop};
+use vt::{Boundaries, ReadCandidate, ReadScope, StringEnd};
 
 use super::clients::ClientId;
 use super::pane::State;
@@ -573,6 +573,8 @@ pub struct Replies {
     /// What the terminal answers with now.
     facts: Facts,
     scanner: vt::Scanner,
+    /// Payload classification at the terminal position (the consent scanner can look ahead).
+    graphics: vt::Scanner,
     /// While a read waits: its dispatch byte, then the output read after it.
     parked: Vec<u8>,
     pending: Option<Pending>,
@@ -624,6 +626,7 @@ impl Replies {
             metadata: owner.into_iter().collect(),
             facts,
             scanner: vt::Scanner::default(),
+            graphics: vt::Scanner::default(),
             parked: Vec::new(),
             pending: None,
             next_id: 1,
@@ -672,16 +675,15 @@ impl Replies {
             .is_some_and(|pending| pending.cancelled || pending.deadline <= now)
     }
 
-    /// `bytes` were fed to the terminal outside the program's output (a print): the scanner follows them, so it
-    /// stays in step with the terminal's parser; a read among them is not delegated (the terminal finds nothing
-    /// armed for it and denies it, to no program). Whether they held a Kitty graphics command.
-    pub fn observe(&mut self, mut bytes: &[u8]) -> bool {
-        let mut kitty = false;
-        while let Some((at, stop)) = self.scanner.next(bytes) {
-            kitty |= stop == Stop::KittyGraphics;
-            bytes = &bytes[at + 1..];
-        }
-        kitty
+    /// Seed classification from bytes already fed to, or restored in, the terminal. Never replays the terminal.
+    pub fn observe(&mut self, bytes: &[u8]) {
+        follow(&mut self.scanner, bytes);
+        follow(&mut self.graphics, bytes);
+    }
+
+    /// Printed bytes already passed the terminal and graphics classifier, without clipboard consent.
+    pub(super) fn observe_print(&mut self, bytes: &[u8]) {
+        follow(&mut self.scanner, bytes);
     }
 
     fn cancel(&mut self) {
@@ -689,6 +691,13 @@ impl Replies {
             pending.cancelled = true;
             self.timer.notify_all();
         }
+    }
+}
+
+/// Advance a classifier through all bytes, ignoring reads that must not be delegated on this path.
+fn follow(scanner: &mut vt::Scanner, mut bytes: &[u8]) {
+    while let Some((at, _)) = scanner.find(bytes) {
+        bytes = &bytes[at + 1..];
     }
 }
 
@@ -710,17 +719,8 @@ impl State {
     /// the dispatch byte of a delegated one and everything after it are held. A Kitty graphics command opens a barrier
     /// right after the byte that runs it.
     fn pump(&mut self, mut bytes: &[u8]) {
-        while let Some((at, stop)) = self.replies.scanner.next(bytes) {
-            let read = match stop {
-                Stop::KittyGraphics => {
-                    self.feed(&bytes[..=at]);
-                    self.barrier(false);
-                    bytes = &bytes[at + 1..];
-                    continue;
-                }
-                Stop::Read(read) => read,
-            };
-            self.feed(&bytes[..at]);
+        while let Some((at, read)) = self.replies.scanner.find(bytes) {
+            self.feed(&bytes[..at], false);
             let (byte, rest) = (bytes[at], &bytes[at + 1..]);
             if let Some(answer) = self.delegate(read) {
                 self.dispatch(byte, read, answer);
@@ -731,7 +731,7 @@ impl State {
                 return;
             }
         }
-        self.feed(bytes);
+        self.feed(bytes, false);
     }
 
     /// The output fed so far ended with a Kitty graphics command, which the reply owner's terminal answers: a barrier
@@ -784,13 +784,35 @@ impl State {
         self.replies.outlet.expire(now);
     }
 
-    /// The program's output `chunk` into the terminal and every client.
-    fn feed(&mut self, chunk: &[u8]) {
-        if chunk.is_empty() {
-            return;
+    /// Feed each prefix once, forwarding its output before opening its Kitty barrier. Ghostty alone decides the
+    /// boundaries and whether the command ran; the scanner only identifies its first payload byte.
+    #[expect(
+        clippy::expect_used,
+        reason = "live handle, slice and fixed APC_END flag satisfy the C argument contract"
+    )]
+    pub(super) fn feed(&mut self, mut bytes: &[u8], discard: bool) {
+        while !bytes.is_empty() {
+            let stop = self
+                .terminal
+                .vt_write_until(bytes, Boundaries::APC_END)
+                .expect("a live terminal and APC_END satisfy write-until's argument contract");
+            let (chunk, rest) = bytes.split_at(stop.consumed);
+            let kitty = if stop.reached.contains(Boundaries::APC_END) {
+                follow(&mut self.replies.graphics, &chunk[..chunk.len() - 1]);
+                let kitty = self.replies.graphics.in_kitty_graphics()
+                    && matches!(stop.end, Some(StringEnd::StEsc | StringEnd::StC1));
+                follow(&mut self.replies.graphics, &chunk[chunk.len() - 1..]);
+                kitty
+            } else {
+                follow(&mut self.replies.graphics, chunk);
+                false
+            };
+            self.advance(chunk);
+            if kitty {
+                self.barrier(discard);
+            }
+            bytes = rest;
         }
-        self.terminal.vt_write(chunk);
-        self.advance(chunk);
     }
 
     /// `chunk`, just written to the terminal, at the next offset for every client; the revision moves, and the
@@ -814,11 +836,10 @@ impl State {
             scope: read.scope,
             answer,
         });
-        self.terminal.vt_write(&[byte]);
+        self.feed(&[byte], false);
         if lock(&self.replies.outlet.armed).take().is_some() {
             tracing::debug!("a clipboard read candidate was not dispatched; its answer is dropped");
         }
-        self.advance(&[byte]);
     }
 
     /// Send `read` to the reply owner, to wait for its answer (`None`), or the answer it gets at once: denied with no

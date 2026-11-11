@@ -417,7 +417,8 @@ fn imported_terminal(
                 terminal.resize(size.cols, size.rows, 0, 0).map_err(vt_error)?;
             }
             configure(&mut terminal, size, outlet, replies.facts(), term)?;
-            // the unfinished sequence the cut stood in: the scanner follows the parser into it
+            // Seed consent lookahead and Kitty payload classification from the retained continuation.
+            // The decoded terminal already stands there: never feed it these bytes a second time.
             if let Ok(vt::Continuation::Bytes(continuation)) = terminal.continuation() {
                 replies.observe(&continuation);
             }
@@ -489,6 +490,77 @@ mod tests {
     use crate::server::pane::PaneConfig;
 
     const PATIENCE: Duration = Duration::from_secs(60);
+
+    const RESTORED_APC: &[u8] = b"\x1b_Ga=t,i=7,s=1,v=1,t=d,f=24;AAAA";
+
+    fn restored_apc(encoding: VtEncoding, split: usize) {
+        use crate::protocol::ReplyMetadata;
+        use crate::server::clients::ClientEvent;
+        let query = RESTORED_APC;
+        let (core, creator) = super::super::tests::core(ReplyMetadata {
+            kitty_graphics: true,
+            ..ReplyMetadata::default()
+        });
+        let mut state = core.lock();
+        state.terminal.vt_write(&query[..split]);
+        let continuation = state.terminal.continuation().unwrap();
+        let bytes = match encoding {
+            VtEncoding::Binary => state.terminal.encode_snapshot().unwrap(),
+            VtEncoding::Formatter => snapshot::capture(&mut state.terminal, snapshot::Kind::Attach).unwrap(),
+        };
+        let manifest = PaneState {
+            name: "unit".to_owned(),
+            pid: 0,
+            created_at: 0,
+            tracked_env: Vec::new(),
+            term: None,
+            size: GridSize { cols: 80, rows: 24 },
+            offset: 0,
+            revision: 0,
+            vt: encoding,
+            vt_len: bytes.len() as u64,
+            replies_len: 0,
+        };
+        state.terminal = imported_terminal(
+            &manifest,
+            &bytes,
+            manifest.size,
+            Limits::default(),
+            &core.outlet,
+            &mut state.replies,
+        )
+        .unwrap();
+        assert_eq!(state.terminal.continuation().unwrap(), continuation);
+        drop(state);
+        core.read(&[&query[split..], b"\x1b\\\x1b[c"].concat());
+        assert!(
+            core.outlet.take().is_empty(),
+            "DA1 waits behind the restored Kitty command"
+        );
+        assert!(core.lock().terminal.kitty_graphics().unwrap().image(7).is_some());
+        let mut barriers = Vec::new();
+        while let Ok(event) = creator.subscription.recv_timeout(Duration::ZERO) {
+            if let ClientEvent::KittyBarrier { id, epoch } = event {
+                barriers.push((id, epoch));
+            }
+        }
+        assert_eq!(barriers.len(), 1, "{encoding:?}, split {split}");
+        let (id, epoch) = barriers[0];
+        assert!(
+            core.lock()
+                .complete(creator.subscription.id(), id, epoch, b"\x1b_Gi=7;OK\x1b\\")
+        );
+        assert_eq!(core.outlet.take().concat(), b"\x1b_Gi=7;OK\x1b\\\x1b[?62;22;52c");
+    }
+
+    #[test]
+    fn restoring_mid_apc_seeds_classification_without_replaying_the_terminal() {
+        for encoding in [VtEncoding::Binary, VtEncoding::Formatter] {
+            for split in 1..=RESTORED_APC.len() {
+                restored_apc(encoding, split);
+            }
+        }
+    }
 
     /// A shell that runs each line it reads (as the integration tests' `support::shell`).
     fn shell() -> SessionSpec {

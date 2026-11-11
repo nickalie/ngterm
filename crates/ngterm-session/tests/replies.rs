@@ -880,6 +880,74 @@ fn a_kitty_query_is_answered_before_the_queries_after_it() -> TestResult {
     Ok(())
 }
 
+/// Cancelled and aborted queries never run, so DA1 must not wait for a Kitty completion or timeout.
+#[cfg(unix)]
+#[test]
+fn cancelled_and_aborted_kitty_queries_do_not_open_barriers() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let queries: Vec<Vec<u8>> = [0x18, 0x1a, 0x9b, 0x80]
+        .into_iter()
+        .map(|exit| [b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA".as_slice(), &[exit], DA1].concat())
+        .collect();
+    let refs: Vec<&[u8]> = queries.iter().map(Vec::as_slice).collect();
+    let mut config = pane_config("kitty-cancel", dir.path(), probe(&refs, &gated(gate.path(), 3000)));
+    config.metadata = metadata();
+    config.kitty_wait = PATIENCE;
+    let (pane, creator) = Pane::spawn(config)?;
+    let mut owner = Viewer::new(creator, None)?;
+    open(gate.path(), queries.len())?;
+    owner.expect(&pane, "PROBE-DONE");
+    assert_eq!(
+        replies(&shown(&owner.output)),
+        vec![b"\x1b[?62;22;52c".to_vec(); queries.len()]
+    );
+    assert!(owner.barriers.is_empty());
+    assert!(owner.completed.is_empty());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn kitty_barriers_and_clipboard_consent_keep_their_stream_order() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let query = [KITTY_QUERY, CLIPBOARD_READ, KITTY_QUERY].concat();
+    let mut config = pane_config("kitty-consent", dir.path(), probe(&[&query], &gated(gate.path(), 3000)));
+    config.metadata = metadata();
+    config.kitty_wait = PATIENCE;
+    let (pane, creator) = Pane::spawn(config)?;
+    let mut owner = Viewer::new(creator, None)?;
+    go(gate.path(), 0)?;
+    owner.until(&pane, "clipboard consent after the first Kitty completion", |v| {
+        !v.delegated.is_empty()
+    });
+    assert_eq!(owner.barriers.len(), 1);
+    let (id, epoch, _) = owner.delegated[0].clone();
+    assert!(pane.answer(
+        owner.id(),
+        id,
+        epoch,
+        DelegatedReply::Clipboard {
+            text: Some("hi".to_owned())
+        }
+    ));
+    owner.expect(&pane, "PROBE-DONE");
+    assert_eq!(owner.barriers.len(), 2);
+    assert_eq!(
+        replies(&shown(&owner.output)),
+        [[
+            b"\x1b_Gi=31;OK\x1b\\".as_slice(),
+            b"\x1b[?62;22;52c",
+            b"\x1b]52;c;aGk=\x07",
+            b"\x1b_Gi=31;OK\x1b\\",
+            b"\x1b[?62;22;52c"
+        ]
+        .concat()]
+    );
+    Ok(())
+}
+
 /// The queries [`windows_conhost_record`] records, by name.
 #[cfg(windows)]
 const RECORDED: [(&str, &[u8]); 19] = [

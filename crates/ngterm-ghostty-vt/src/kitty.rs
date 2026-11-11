@@ -440,6 +440,29 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_or_aborted_kitty_commands_store_nothing_and_send_no_reply() {
+        use std::sync::{Arc, Mutex};
+        struct Answers(Arc<Mutex<Vec<u8>>>);
+        impl crate::Effects for Answers {
+            fn write_pty(&mut self, data: &[u8]) {
+                self.0.lock().unwrap().extend_from_slice(data);
+            }
+        }
+        for exit in [0x18, 0x1a, 0x9b] {
+            let mut terminal = terminal();
+            let replies = Arc::new(Mutex::new(Vec::new()));
+            terminal.set_effects(Box::new(Answers(replies.clone()))).unwrap();
+            terminal.vt_write(b"\x1b_Ga=t,f=24,s=1,v=1,i=7;AAAA");
+            terminal.vt_write(&[exit]);
+            assert!(terminal.kitty_graphics().unwrap().image(7).is_none());
+            assert!(replies.lock().unwrap().is_empty());
+            terminal.vt_write(b"\x1b_Ga=t,f=24,s=1,v=1,i=7;AAAA\x1b\\");
+            assert!(terminal.kitty_graphics().unwrap().image(7).is_some());
+            assert_eq!(*replies.lock().unwrap(), b"\x1b_Gi=7;OK\x1b\\");
+        }
+    }
+
+    #[test]
     fn a_chunked_transmission_stores_an_image_and_places_it() {
         let mut terminal = terminal();
         assert_eq!(terminal.kitty_graphics().unwrap().generation(), 0);

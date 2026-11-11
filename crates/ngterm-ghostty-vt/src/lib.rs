@@ -77,6 +77,7 @@ mod shape;
 mod snapshot;
 pub mod sys;
 mod terminal;
+mod write;
 
 pub use cell::{CellRef, CellWidth, Cells, Style, StyleColor, StyleFlags, Underline};
 pub use continuation::Continuation;
@@ -99,12 +100,13 @@ pub use render::{
     CursorPosition, CursorStyle, Dirty, PendingUpdate, RenderColors, RenderCursor, RenderState, RowId, RowRef, Rows,
 };
 pub use render_images::{RenderImage, RenderImages};
-pub use scan::{ReadCandidate, ReadScope, Scanner, Stop};
+pub use scan::{ReadCandidate, ReadScope, Scanner};
 pub use search::{Match, Search, SearchDirection, SearchResults, SearchStatus};
 pub use selection::{Point, PointTag, Selection, SelectionAdjust};
 pub use shape::{Mode, MouseShape, ScrollbackLimits, TerminalColors};
 pub use snapshot::{HistoryPage, SnapshotHistory, SnapshotOptions};
 pub use terminal::{Scroll, Terminal};
+pub use write::{Boundaries, StringEnd, StringIntroducer, StringKind, WriteStop};
 
 use std::ptr::NonNull;
 

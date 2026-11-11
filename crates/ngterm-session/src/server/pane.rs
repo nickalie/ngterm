@@ -984,16 +984,10 @@ impl Pane {
         }
         // the terminal's replies to bytes the program never printed are dropped
         self.core.outlet.discard(true);
-        state.terminal.vt_write(data);
+        state.feed(data, true);
         self.core.outlet.discard(false);
-        // the clipboard-read scanner follows the terminal's parser
-        let kitty = state.replies.observe(data);
-        // a clipboard write printed is kept for a client that falls behind on it, as the program's are
-        state.advance(data);
-        if kitty {
-            // the owner's terminal answers the printed Kitty commands too: a barrier takes those answers, dropped
-            state.barrier(true);
-        }
+        // The consent scanner follows printed input without delegating its reads.
+        state.replies.observe_print(data);
         self.release(state);
         Ok(())
     }
@@ -1671,7 +1665,7 @@ mod tests {
     use crate::server::clients::ClientEvent;
 
     /// A pane's state with no program (none is needed to feed it), its creator owning the replies with `metadata`.
-    fn core(metadata: ReplyMetadata) -> (Arc<Core>, Attached) {
+    pub(super) fn core(metadata: ReplyMetadata) -> (Arc<Core>, Attached) {
         let spec = SessionSpec {
             argv: vec!["none".to_owned()],
             env: Vec::new(),
@@ -1741,6 +1735,55 @@ mod tests {
         let next = id + 1;
         assert!(!core.lock().complete(owner, next, epoch, b"\x1b[c"));
         assert_eq!(core.outlet.take(), [b"\x1b[?62;22;52c".to_vec()]);
+    }
+
+    #[test]
+    fn cancelled_kitty_commands_never_hold_later_replies_at_any_split() {
+        for exit in [0x18, 0x1a, 0x9b, 0x80] {
+            let input = [b"\x1b_Ga=q,i=31,s=1,v=1,t=d,f=24;AAAA".as_slice(), &[exit], b"\x1b[c"].concat();
+            for split in 0..=input.len() {
+                let (core, creator) = core(ReplyMetadata {
+                    kitty_graphics: true,
+                    ..ReplyMetadata::default()
+                });
+                core.read(&input[..split]);
+                core.read(&input[split..]);
+                assert_eq!(
+                    core.outlet.take().concat(),
+                    b"\x1b[?62;22;52c",
+                    "exit {exit}, split {split}"
+                );
+                while let Ok(event) = creator.subscription.recv_timeout(Duration::ZERO) {
+                    assert!(!matches!(event, ClientEvent::KittyBarrier { .. }));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn printed_kitty_commands_open_discard_barriers_only_when_dispatched() {
+        let (core, creator) = core(ReplyMetadata {
+            kitty_graphics: true,
+            ..ReplyMetadata::default()
+        });
+        let mut state = core.lock();
+        let cancelled = b"\x1b_Ga=q,i=31,s=1,v=1,t=d,f=24;AAAA\x18";
+        state.feed(cancelled, true);
+        state.replies.observe_print(cancelled);
+        assert_eq!(state.replies.deadline(), None);
+        let query = b"\x1b_Ga=q,i=31,s=1,v=1,t=d,f=24;AAAA\x1b\\";
+        state.feed(query, true);
+        state.replies.observe_print(query);
+        let mut barriers = Vec::new();
+        while let Ok(event) = creator.subscription.recv_timeout(Duration::ZERO) {
+            if let ClientEvent::KittyBarrier { id, epoch } = event {
+                barriers.push((id, epoch));
+            }
+        }
+        assert_eq!(barriers.len(), 1);
+        let (id, epoch) = barriers[0];
+        assert!(state.complete(creator.subscription.id(), id, epoch, b"\x1b_Gi=31;OK\x1b\\"));
+        assert!(core.outlet.take().is_empty(), "printed answers are discarded");
     }
 
     fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {

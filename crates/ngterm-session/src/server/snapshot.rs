@@ -64,8 +64,8 @@ pub const CHUNK_SIZE: usize = 64 * 1024;
 /// What a client already sent some of the session's output gets ahead of a snapshot that replaces it. That output may
 /// have left anything on (the alternate screen, mouse tracking, a keyboard mode, a hidden cursor, a colour) and the
 /// snapshot writes only what the session has on, so the client's terminal starts over from a fresh one's state. In
-/// order: CAN ends any sequence the output was cut in (a string sequence, OSC, DCS or APC, is dispatched early by a
-/// Ghostty client, and the reset then undoes it); RIS resets the terminal (Ghostty's `Terminal.fullReset`: the
+/// order: CAN cancels any sequence the output was cut in (Ghostty discards a cut-short APC or OSC without
+/// dispatching it); RIS resets the terminal (Ghostty's `Terminal.fullReset`: the
 /// primary screen, the alternate one dropped, the screen and its scrollback, the modes, tab stops, palette, cursor and
 /// its style, saved cursor, charsets, protection, Kitty keyboard flags and images, title and working directory); ED 3
 /// drops the scrollback where a terminal's RIS keeps it (xterm's), so the snapshot's history is not added to what the

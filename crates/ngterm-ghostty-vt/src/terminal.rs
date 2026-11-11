@@ -2,6 +2,7 @@
 
 use crate::effects::{CALLBACKS, EffectsSlot};
 use crate::snapshot::PendingHistory;
+use crate::write::{Boundaries, WriteStop};
 use crate::{
     CursorStyle, Effects, Error, Handle, Mode, MouseShape, Rgb, ScrollbackLimits, TerminalColors, ffi, string_bytes,
 };
@@ -394,37 +395,40 @@ impl Terminal {
         unsafe { ffi::ghostty_terminal_vt_write(self.raw.ptr(), bytes.as_ptr(), bytes.len()) };
     }
 
-    /// Feed only the shortest prefix of `bytes` that brings the parser to ground (no sequence or UTF-8 character
-    /// in progress), the point where out-of-band VT sequences can go in safely; the bytes consumed, or `None` when all
-    /// of them were and the parser is still not at ground. Already at ground, nothing is consumed (`Some(0)`).
+    /// Feed through the first requested parser boundary (`terminal.h`'s `vt_write_until`). Only the consumed
+    /// prefix runs callbacks. Exhaustion consumes the whole slice and returns empty `reached` flags.
     ///
-    /// `ghostty_terminal_vt_write_until` with only `GHOSTTY_TERMINAL_BOUNDARY_GROUND` asked for (Ghostty's
-    /// `c/terminal.zig` `vt_write_until`): `GHOSTTY_SUCCESS` is a ground stop, `GHOSTTY_NO_VALUE` all input consumed
-    /// without one. Its third result, `GHOSTTY_INVALID_VALUE`, consumes nothing and is not exhaustion; these arguments
-    /// never draw it, but were it to come, the bytes go through [`Terminal::vt_write`] so none is lost and `None` holds.
-    pub fn vt_write_until_ground(&mut self, bytes: &[u8]) -> Option<usize> {
-        // SAFETY: an all-zero `GhosttyTerminalWriteStop` is a valid value (integers and C enums), sized right below.
+    /// # Errors
+    ///
+    /// [`Error::InvalidValue`] for an empty boundary set; no bytes are consumed.
+    pub fn vt_write_until(&mut self, bytes: &[u8], boundaries: Boundaries) -> Result<WriteStop, Error> {
+        // SAFETY: the out-struct contains integers and C enums; zero is valid for each field.
         let mut stop: ffi::GhosttyTerminalWriteStop = unsafe { std::mem::zeroed() };
         stop.size = std::mem::size_of::<ffi::GhosttyTerminalWriteStop>();
-        // SAFETY: `self.raw` is live and `&mut self` serializes the call; the pointer and length describe the borrowed
-        // slice, the boundary set is one defined flag, and `stop` is a size-initialized out-struct.
+        // SAFETY: the terminal is live and exclusively borrowed; the slice and sized out-struct live through the call.
         let result = unsafe {
             ffi::ghostty_terminal_vt_write_until(
                 self.raw.ptr(),
                 bytes.as_ptr(),
                 bytes.len(),
-                ffi::GHOSTTY_TERMINAL_BOUNDARY_GROUND.cast_unsigned(),
+                boundaries.bits(),
                 &raw mut stop,
             )
         };
-        match result {
-            ffi::GHOSTTY_SUCCESS => Some(stop.consumed),
-            ffi::GHOSTTY_NO_VALUE => None,
-            _ => {
-                self.vt_write(bytes);
-                None
-            }
+        if result != ffi::GHOSTTY_NO_VALUE {
+            Error::check(result)?;
         }
+        Ok(WriteStop::from_raw(stop))
+    }
+
+    /// Feed the shortest prefix bringing the parser to ground (no sequence or partial UTF-8 character).
+    /// Already at ground returns `Some(0)`; exhaustion consumes the slice and returns `None`.
+    pub fn vt_write_until_ground(&mut self, bytes: &[u8]) -> Option<usize> {
+        // This fixed, nonempty flag set and the owned handle satisfy every argument requirement.
+        self.vt_write_until(bytes, Boundaries::GROUND)
+            .ok()
+            .filter(|stop| stop.reached.contains(Boundaries::GROUND))
+            .map(|stop| stop.consumed)
     }
 
     /// Whether the parser is at ground (see [`Terminal::vt_write_until_ground`]).
