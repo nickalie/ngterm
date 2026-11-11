@@ -442,4 +442,29 @@ mod tests {
         assert_eq!(search.total(), 0);
         search.close(&mut terminal).unwrap();
     }
+
+    /// Ghostty `search/screen.zig`: selecting again drops a selected match whose history was pruned.
+    #[test]
+    fn erasing_history_drops_its_selected_search_match() {
+        let mut terminal = Terminal::new(10, 2).unwrap();
+        terminal.vt_write(b"error\r\n");
+        for _ in 0..500 {
+            terminal.vt_write(b"\r\n");
+        }
+        let (mut search, results) = searched(&mut terminal, "error");
+        assert_eq!(results.total, 1);
+        assert_eq!(
+            search
+                .select(&mut terminal, SearchDirection::Older)
+                .unwrap()
+                .unwrap()
+                .selected,
+            Some(0)
+        );
+        terminal.vt_write(b"\x1b[3J");
+        assert_eq!(terminal.selection(PointTag::Screen), None);
+        assert_eq!(search.select(&mut terminal, SearchDirection::Older).unwrap(), None);
+        assert_eq!(search.selected_index(), None);
+        search.close(&mut terminal).unwrap();
+    }
 }

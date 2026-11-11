@@ -525,6 +525,64 @@ mod tests {
             original.format(Region::Screen, plain).unwrap()
         );
     }
+
+    #[derive(Clone, Default)]
+    struct Answers(std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>);
+
+    impl crate::Effects for Answers {
+        fn write_pty(&mut self, data: &[u8]) {
+            self.0.lock().unwrap().push(data.to_vec());
+        }
+        fn title_changed(&mut self, title: &str) {
+            self.0.lock().unwrap().push(title.as_bytes().to_vec());
+        }
+    }
+
+    /// Ghostty `snapshot/snapshot.zig`: every cut of an aborted APC resumes without replaying an effect.
+    #[test]
+    fn binary_snapshots_resume_every_c1_restart_cut_without_repeating_effects() {
+        for corpus in [
+            b"\x1b_hello\x9b31mtext".as_slice(),
+            b"\x1b_Ga=q\x90$qm\x1b\\text",
+            b"\x1b_hello\x9d2;title\x07text",
+        ] {
+            for cut in 0..=corpus.len() {
+                let mut source = Terminal::new(20, 4).unwrap();
+                source.set_continuation_limit(4096).unwrap();
+                let source_effects = Answers::default();
+                source.set_effects(Box::new(source_effects.clone())).unwrap();
+                source.vt_write(&corpus[..cut]);
+                let mut restored =
+                    Terminal::decode_snapshot(&source.encode_snapshot().unwrap(), SnapshotOptions::default()).unwrap();
+                let restored_effects = Answers::default();
+                restored.set_effects(Box::new(restored_effects.clone())).unwrap();
+                source_effects.0.lock().unwrap().clear();
+                source.vt_write(&corpus[cut..]);
+                restored.vt_write(&corpus[cut..]);
+                assert_eq!(screen(&mut source), screen(&mut restored), "{corpus:?} cut {cut}");
+                assert_eq!(source.cursor(), restored.cursor());
+                assert_eq!(source.title(), restored.title());
+                assert_eq!(
+                    *source_effects.0.lock().unwrap(),
+                    *restored_effects.0.lock().unwrap(),
+                    "effects at {cut} of {corpus:?}"
+                );
+            }
+        }
+    }
+
+    /// A multi-row max-width page has enough spare memory to overflow a u16 row count when narrowed.
+    #[test]
+    fn a_decoded_wide_multi_row_page_can_be_narrowed() {
+        let mut source = Terminal::new(u16::MAX, 215).unwrap();
+        source.vt_write(b"a\x1b[215;1Hz");
+        let mut restored =
+            Terminal::decode_snapshot(&source.encode_snapshot().unwrap(), SnapshotOptions::default()).unwrap();
+        restored.resize(2, 215, 8, 16).unwrap();
+        assert_eq!((restored.cols(), restored.rows()), (2, 215));
+        assert_eq!(restored.active_row(0).unwrap().cells[0].text, "a");
+        assert_eq!(restored.active_row(214).unwrap().cells[0].text, "z");
+    }
 }
 
 #[cfg(test)]

@@ -907,4 +907,65 @@ mod tests {
         );
         assert_eq!(state(&mut terminal), before);
     }
+
+    #[derive(Clone, Default)]
+    struct CutEffects {
+        replies: std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+        titles: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl ngterm_ghostty_vt::Effects for CutEffects {
+        fn write_pty(&mut self, bytes: &[u8]) {
+            self.replies.lock().unwrap().push(bytes.to_vec());
+        }
+        fn title_changed(&mut self, title: &str) {
+            self.titles.lock().unwrap().push(title.to_owned());
+        }
+    }
+
+    #[test]
+    fn every_c1_restart_cut_restores_without_repeated_effects() {
+        for corpus in [
+            b"\x1b_hello\x9b31mtext".as_slice(),
+            b"\x1b_Ga=q\x90$qm\x1b\\text",
+            b"\x1b_hello\x9d2;title\x07text",
+        ] {
+            for cut in 0..=corpus.len() {
+                for kind in [Kind::Attach, Kind::Resync] {
+                    assert_c1_cut(corpus, cut, kind);
+                }
+            }
+        }
+    }
+
+    fn assert_c1_cut(corpus: &[u8], cut: usize, kind: Kind) {
+        let mut session = tracked();
+        let original = CutEffects::default();
+        session.set_effects(Box::new(original.clone())).unwrap();
+        session.vt_write(&corpus[..cut]);
+        let bytes = capture(&mut session, kind).unwrap();
+        let mut restored = tracked();
+        let effects = CutEffects::default();
+        restored.set_effects(Box::new(effects.clone())).unwrap();
+        restored.vt_write(&bytes);
+        assert!(
+            effects.replies.lock().unwrap().is_empty(),
+            "restoring must not repeat a query"
+        );
+        let expected_titles = if session.title().is_empty() && kind == Kind::Attach {
+            Vec::new()
+        } else {
+            vec![session.title()]
+        };
+        assert_eq!(*effects.titles.lock().unwrap(), expected_titles);
+        original.replies.lock().unwrap().clear();
+        original.titles.lock().unwrap().clear();
+        effects.titles.lock().unwrap().clear();
+        session.vt_write(&corpus[cut..]);
+        restored.vt_write(&corpus[cut..]);
+        assert_eq!(state(&mut restored), state(&mut session), "{corpus:?} cut {cut}");
+        assert_replayed_cells(&mut session, &mut restored);
+        assert_eq!(*effects.replies.lock().unwrap(), *original.replies.lock().unwrap());
+        assert_eq!(*effects.titles.lock().unwrap(), *original.titles.lock().unwrap());
+    }
 }

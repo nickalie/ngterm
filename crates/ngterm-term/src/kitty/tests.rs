@@ -312,3 +312,37 @@ fn snapshot_virtual_images_publish_pixels_only_after_their_payload_arrives() {
     assert_eq!(shown.kitty.placements[0].rect.columns, 2);
     assert_eq!(restored.restore_snapshot_step(), Ok(None));
 }
+
+#[test]
+fn erasing_history_does_not_redraw_an_erased_image_at_the_origin() {
+    let mut terminal = terminal();
+    image(&mut terminal, 1, "");
+    image(&mut terminal, 2, "");
+    image(&mut terminal, 3, "");
+    terminal.vt_write(b"\x1b_Ga=p,i=1,p=1,c=1,r=1,C=1,q=2\x1b\\");
+    terminal.vt_write(b"\x1b_Ga=p,i=3,p=1,P=1,Q=1,c=1,r=1,C=1,q=2\x1b\\");
+    terminal.vt_write(b"\x1b[1S\x1b_Ga=p,i=2,p=1,c=1,r=1,C=1,q=2\x1b\\");
+    let mut state = Capture::new().unwrap();
+    let mut prefetch = Prefetch::default();
+    prefetch.update(terminal.kitty_graphics());
+    let before = frame(&mut terminal, &mut state, &Frame::default(), &prefetch).unwrap();
+    assert!(at(&before.kitty, 1).is_empty());
+    assert_eq!(at(&before.kitty, 2), [(0, 0)]);
+    assert_eq!(
+        before.kitty.images.len(),
+        3,
+        "offscreen placements retain cached pixels"
+    );
+    terminal.vt_write(b"\x1b[3J");
+    prefetch.update(terminal.kitty_graphics());
+    let after = frame(&mut terminal, &mut state, &before, &prefetch).unwrap();
+    assert_eq!(after.kitty.placements.len(), 1);
+    assert_eq!(at(&after.kitty, 2), [(0, 0)]);
+    assert_eq!(after.kitty.images.len(), 1);
+    let mut removed: Vec<_> = after.kitty.removed.iter().map(|key| key.id).collect();
+    removed.sort_unstable();
+    assert_eq!(removed, [1, 3]);
+    terminal.vt_write(b"text");
+    let next = frame(&mut terminal, &mut state, &after, &prefetch).unwrap();
+    assert_eq!(next.kitty.placements, after.kitty.placements);
+}

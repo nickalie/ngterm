@@ -540,4 +540,171 @@ mod tests {
             assert!(graphics.placements().unwrap().is_empty());
         }
     }
+
+    #[derive(Clone, Default)]
+    struct Answers(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl crate::Effects for Answers {
+        fn write_pty(&mut self, bytes: &[u8]) {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+        }
+    }
+
+    fn file_payload(data: &[u8]) -> (tempfile::TempDir, String) {
+        use base64::Engine as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("image.data");
+        std::fs::write(&path, data).unwrap();
+        let path = path.canonicalize().unwrap();
+        let path = path.to_str().unwrap();
+        // Ghostty rejects raw Windows device namespace paths; use the ordinary local drive spelling.
+        #[cfg(windows)]
+        let path = path.strip_prefix(r"\\?\").unwrap_or(path);
+        (dir, base64::engine::general_purpose::STANDARD.encode(path))
+    }
+
+    /// Ghostty `graphics_exec.zig`: a non-direct transmission begins a new load, including its reply policy.
+    #[test]
+    fn a_file_transmission_abandons_a_chunked_image_and_uses_its_own_quiet_flag() {
+        let (_dir, payload) = file_payload(&[1, 2, 3]);
+        for (old_quiet, fresh_quiet) in [(2, 0), (0, 2)] {
+            let mut terminal = terminal();
+            terminal.set_kitty_image_media(true, None, false).unwrap();
+            let answers = Answers::default();
+            terminal.set_effects(Box::new(answers.clone())).unwrap();
+            terminal.vt_write(format!("\x1b_Ga=t,f=24,s=1,v=2,i=1,m=1,q={old_quiet};AAAA\x1b\\").as_bytes());
+            assert!(answers.0.lock().unwrap().is_empty());
+            terminal.vt_write(format!("\x1b_Ga=t,t=f,f=24,s=1,v=1,i=2,q={fresh_quiet};{payload}\x1b\\").as_bytes());
+            let graphics = terminal.kitty_graphics().unwrap();
+            assert!(graphics.image(1).is_none());
+            assert_eq!(graphics.image(2).unwrap().pixels, Some([1, 2, 3].as_slice()));
+            assert_eq!(
+                answers.0.lock().unwrap().as_slice(),
+                if fresh_quiet == 0 {
+                    b"\x1b_Gi=2;OK\x1b\\".as_slice()
+                } else {
+                    b""
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_transmission_abandons_a_chunked_frame_and_keeps_only_the_new_frame() {
+        let (_dir, payload) = file_payload(&[0, 255, 0, 0, 255, 0]);
+        for (old_quiet, fresh_quiet) in [(2, 0), (0, 2)] {
+            let mut terminal = terminal();
+            terminal.set_kitty_image_media(true, None, false).unwrap();
+            terminal.vt_write(b"\x1b_Ga=t,f=24,s=2,v=1,i=1,q=2;////////\x1b\\");
+            let answers = Answers::default();
+            terminal.set_effects(Box::new(answers.clone())).unwrap();
+            terminal.vt_write(format!("\x1b_Ga=f,i=1,f=24,s=2,v=1,m=1,q={old_quiet};/wAA\x1b\\").as_bytes());
+            assert!(answers.0.lock().unwrap().is_empty());
+            terminal.vt_write(format!("\x1b_Ga=f,t=f,i=1,f=24,s=2,v=1,q={fresh_quiet};{payload}\x1b\\").as_bytes());
+            assert_eq!(
+                answers.0.lock().unwrap().as_slice(),
+                if fresh_quiet == 0 {
+                    b"\x1b_Gi=1,r=2;OK\x1b\\".as_slice()
+                } else {
+                    b""
+                }
+            );
+            // Only the new green frame was appended; selecting a nonexistent third frame leaves it unchanged.
+            terminal.vt_write(b"\x1b_Ga=a,i=1,c=2,s=1\x1b\\");
+            assert_eq!(
+                terminal.kitty_graphics().unwrap().image(1).unwrap().pixels,
+                Some([0, 255, 0, 255, 0, 255, 0, 255].as_slice())
+            );
+            terminal.vt_write(b"\x1b_Ga=a,i=1,c=3,s=1\x1b\\");
+            assert_eq!(
+                terminal.kitty_graphics().unwrap().image(1).unwrap().pixels,
+                Some([0, 255, 0, 255, 0, 255, 0, 255].as_slice())
+            );
+        }
+    }
+
+    #[test]
+    fn erasing_history_removes_its_placements_and_relative_children() {
+        let mut terminal = terminal();
+        for id in 1..=4 {
+            terminal.vt_write(format!("\x1b_Ga=t,f=24,s=1,v=1,i={id},q=2;AAAA\x1b\\").as_bytes());
+        }
+        terminal.vt_write(b"\x1b_Ga=p,i=1,p=1,c=1,r=1,C=1,q=2\x1b\\");
+        terminal.vt_write(b"\x1b_Ga=p,i=3,p=1,P=1,Q=1,c=1,r=1,C=1,q=2\x1b\\");
+        terminal.vt_write(b"\x1b[1S\x1b_Ga=p,i=2,p=1,c=1,r=1,C=1,q=2\x1b\\");
+        terminal.vt_write(b"\x1b_Ga=p,i=4,p=1,U=1,c=1,r=1,q=2\x1b\\");
+        assert_eq!(terminal.kitty_graphics().unwrap().placements().unwrap().len(), 4);
+        terminal.vt_write(b"\x1b[3J");
+        let graphics = terminal.kitty_graphics().unwrap();
+        let mut ids: Vec<_> = graphics.placements().unwrap().iter().map(|p| p.image_id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [2, 4]);
+        for id in 1..=4 {
+            assert!(
+                graphics.image(id).is_some(),
+                "erase removes placements, retaining image {id}"
+            );
+        }
+    }
+
+    /// Ghostty `graphics_image.zig`: Darwin sandbox-style shm names have no leading slash.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn shared_memory_without_a_leading_slash_loads_and_is_unlinked() {
+        use base64::Engine as _;
+        use std::os::fd::{FromRawFd as _, OwnedFd};
+        struct SharedName(std::ffi::CString);
+        impl Drop for SharedName {
+            fn drop(&mut self) {
+                // SAFETY: a valid NUL-terminated name; ENOENT is expected after a successful load.
+                unsafe { libc::shm_unlink(self.0.as_ptr()) };
+            }
+        }
+        let prefix = if cfg!(target_os = "macos") {
+            "ngterm.test/shm-"
+        } else {
+            "ngterm-test-shm-"
+        };
+        let name = std::ffi::CString::new(format!("{prefix}{}", std::process::id())).unwrap();
+        // SAFETY: name is NUL-terminated; O_EXCL prevents modifying another process's object.
+        let fd = unsafe { libc::shm_open(name.as_ptr(), libc::O_CREAT | libc::O_EXCL | libc::O_RDWR, 0o600) };
+        assert!(fd >= 0, "shm_open: {}", std::io::Error::last_os_error());
+        let name = SharedName(name);
+        // SAFETY: a newly opened descriptor, owned exactly once from this point on.
+        let _fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        // SAFETY: the live descriptor is writable and owned by this test.
+        assert_eq!(unsafe { libc::ftruncate(fd, 3) }, 0);
+        // SAFETY: the descriptor holds three bytes; mapping avoids write(2), unsupported by macOS shm.
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                3,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        assert_ne!(ptr, libc::MAP_FAILED);
+        // SAFETY: both buffers hold three bytes, do not overlap, and the mapping is writable.
+        unsafe { std::ptr::copy_nonoverlapping([1u8, 2, 3].as_ptr(), ptr.cast(), 3) };
+        // SAFETY: releases exactly the live mapping returned above, after its last use.
+        assert_eq!(unsafe { libc::munmap(ptr, 3) }, 0);
+        let mut terminal = terminal();
+        terminal.set_kitty_image_media(false, None, true).unwrap();
+        let payload = base64::engine::general_purpose::STANDARD.encode(name.0.as_bytes());
+        terminal.vt_write(format!("\x1b_Ga=t,t=s,f=24,s=1,v=1,i=31;{payload}\x1b\\").as_bytes());
+        assert_eq!(
+            terminal.kitty_graphics().unwrap().image(31).unwrap().pixels,
+            Some([1, 2, 3].as_slice())
+        );
+        // SAFETY: only probes the test's own name; no creation flags.
+        let reopened = unsafe { libc::shm_open(name.0.as_ptr(), libc::O_RDWR, 0) };
+        if reopened >= 0 {
+            // SAFETY: close the unexpected descriptor before reporting the unlink failure.
+            unsafe { libc::close(reopened) };
+        }
+        assert_eq!(reopened, -1);
+        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ENOENT));
+    }
 }
