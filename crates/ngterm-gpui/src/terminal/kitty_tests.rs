@@ -354,6 +354,53 @@ fn drawn(view: &Entity<TerminalView>, cx: &mut VisualTestContext) -> Vec<Arc<gpu
     view.read_with(cx, |view, _| view.images().drawn())
 }
 
+#[gpui_kit::test]
+fn an_animation_frame_replaces_its_atlas_texture_without_new_output(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (sent, received) = std::sync::mpsc::channel();
+    let spawn = Box::new(move |config: PaneConfig| {
+        let (pane, feed, _) = Pane::stream(&config)?;
+        feed.deliver(
+            concat!(
+                "\x1b_Ga=T,q=2,f=32,i=1,s=1,v=1,c=1,r=1;/wAA/w==\x1b\\",
+                "\x1b_Ga=f,q=2,f=32,i=1,s=1,v=1,z=10000;AAD//w==\x1b\\",
+                "\x1b_Ga=a,q=2,i=1,r=1,z=30\x1b\\",
+            )
+            .as_bytes(),
+        );
+        sent.send(feed).unwrap();
+        Ok(pane)
+    });
+    let terminal = cx.new(|cx| Terminal::new(TerminalSpec::default(), TerminalConfig::default(), spawn, cx));
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
+    cx.simulate_resize(size(px(320.), px(200.)));
+    settle(cx, |cx| drawn(&view, cx).len() == 1);
+    let first = drawn(&view, cx).remove(0);
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    let first_key = view.read_with(cx, |view, _| {
+        let image = &view.painted().unwrap().kitty.images[0];
+        assert_eq!(&*image.pixels, &[255, 0, 0, 255]);
+        image.key
+    });
+    // Observe the static red texture before starting its clock. Even a slow first paint cannot miss it.
+    let feed = received.recv_timeout(DEADLINE).unwrap();
+    let start = b"\x1b_Ga=a,q=2,i=1,s=3\x1b\\";
+    let bytes = shared.pane().unwrap().stats().bytes + start.len() as u64;
+    assert!(feed.deliver(start));
+    feed.end_of_output();
+    settle(cx, |cx| {
+        drawn(&view, cx).first().is_some_and(|image| image.id != first.id)
+    });
+    view.read_with(cx, |view, _| {
+        let image = &view.painted().unwrap().kitty.images[0];
+        assert_eq!(&*image.pixels, &[0, 0, 255, 255]);
+        assert!(image.key.generation > first_key.generation);
+    });
+    assert_eq!(shared.pane().unwrap().stats().bytes, bytes);
+    assert!(!cx.update(|window, _| window.has_image_atlas_entry(&first)));
+    assert_eq!(shared.kitty_store().keys().len(), 1);
+}
+
 /// A 2x1 RGBA image (id 7), sent in two chunks and placed below the text at the cursor, then deleted on a line read
 /// (`q=2`: no replies on the input).
 const SCRIPT: &str = concat!(

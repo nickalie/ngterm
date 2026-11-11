@@ -191,6 +191,8 @@ pub(crate) struct Vt {
     pub(crate) pending_clear: bool,
     /// The placed Kitty images' pixels, copied on the IO thread after each batch (`kitty::Prefetch`).
     pub(crate) kitty: crate::kitty::Prefetch,
+    /// The terminal's one forward-only animation clock, shared by all its views.
+    kitty_animation: crate::kitty::Animation,
     /// Grows with every change of the program's screen: its output, a resize, a reset, a clear; not with the
     /// viewport's scroll, the selection or a search, which leave the screen as it was. An active-area read carries
     /// the generation it was made at (`ActiveScreen::generation`, with the `screen-read` feature).
@@ -269,7 +271,7 @@ pub(crate) struct Shared {
     /// pane's drop, which hangs the child up and so drops it.
     status_file: Mutex<Option<PathBuf>>,
     started: Instant,
-    /// Set once the IO worker fed the last of the output (or stopped).
+    /// Set once the IO worker fed the last of the output (or stopped); after EOF it still services animation wakes.
     eof: (Mutex<bool>, Condvar),
     /// Runs once at the start of the next paint, before it takes any lock (tests interleave a second view there).
     #[cfg(test)]
@@ -694,15 +696,20 @@ impl Pane {
     ///
     /// [`PaneError::Terminal`] when the library refuses the value.
     pub fn set_kitty_image_limit(&self, limit: u64) -> Result<(), PaneError> {
-        lock(&self.shared.vt)
-            .terminal
+        let mut vt = lock(&self.shared.vt);
+        vt.terminal
             .set_kitty_image_storage_limit(limit)
             .map_err(PaneError::terminal)?;
+        if limit == 0 {
+            self.shared.mailbox.animation_deadline(None);
+        }
+        drop(vt);
         #[cfg(feature = "local")]
         if let Io::Live(live) = &self.io {
             live.set_kitty_graphics(limit > 0);
             self.update_metadata();
         }
+        self.shared.wake();
         Ok(())
     }
 
@@ -900,6 +907,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
             word_boundaries: None,
             pending_clear: false,
             kitty: crate::kitty::Prefetch::default(),
+            kitty_animation: crate::kitty::Animation::new(Instant::now()),
             generation: 0,
             reflowed: false,
         }),
@@ -975,6 +983,18 @@ fn capture(shared: &Shared) -> Option<Arc<Frame>> {
     let mut capture = try_lock(&shared.capture)?;
     end_expired_hold(&mut vt, &mut capture);
     let mouse_shape = MouseShape::from_engine(vt.terminal.mouse_shape());
+    let held = &mut *vt;
+    let deadline = match held
+        .kitty_animation
+        .tick(&mut held.terminal, Instant::now(), capture.held())
+    {
+        Ok(deadline) => deadline,
+        Err(err) => {
+            tracing::warn!(%err, "ticking Kitty animations failed");
+            None
+        }
+    };
+    shared.mailbox.animation_deadline(deadline);
     if capture.held() {
         drop(vt);
     } else {
@@ -1283,7 +1303,11 @@ impl Worker {
                         session_io::handle(live, &self.shared, mail);
                     }
                 }
-                Mail::Idle => self.expire_hold(),
+                Mail::Idle => self.expire_deadlines(),
+                Mail::Eof => {
+                    self.shared.mark_eof();
+                    self.shared.wake();
+                }
                 Mail::End => break,
             }
         }
@@ -1296,15 +1320,15 @@ impl Worker {
         lock(&self.shared.capture).hold_deadline()
     }
 
-    /// End a hold that outlived its deadline and wake the frontend to draw the live screen.
-    fn expire_hold(&self) {
+    /// End an expired hold and wake the frontend. An animation wake only requests a capture: ticking stays under
+    /// the VT lock immediately before that capture, never on held frames or repeatedly while a pane is hidden.
+    fn expire_deadlines(&self) {
         let mut vt = lock(&self.shared.vt);
         let mut capture = lock(&self.shared.capture);
-        if end_expired_hold(&mut vt, &mut capture) {
-            drop(capture);
-            drop(vt);
-            self.shared.wake();
-        }
+        end_expired_hold(&mut vt, &mut capture);
+        drop(capture);
+        drop(vt);
+        self.shared.wake();
     }
 
     /// Feed `bytes` to the VT, stopping at each clipboard read for its answer. `false` when the pane shut down. A live
@@ -1368,7 +1392,7 @@ impl Worker {
                     return Some(ClipboardAnswer::Denied);
                 }
                 Answer::Shutdown => return None,
-                Answer::Idle => self.expire_hold(),
+                Answer::Idle => self.expire_deadlines(),
             }
         }
     }
@@ -1381,7 +1405,8 @@ impl Worker {
     fn after_batch(&self, filled: usize) {
         if filled > 0 {
             let mut vt = lock(&self.shared.vt);
-            // a new Kitty image's pixels are copied here, not on the thread that paints
+            // Prefetch new Kitty pixels for captures; a capture's animation tick or a mid-batch paint
+            // can still copy pixels on the paint thread under the VT lock.
             let held = &mut *vt;
             held.kitty.update(held.terminal.kitty_graphics());
             let colors = vt.terminal.colors();
@@ -1396,6 +1421,9 @@ impl Worker {
         self.shared.wake();
     }
 }
+
+#[cfg(test)]
+mod animation_tests;
 
 #[cfg(test)]
 #[cfg(feature = "local")]

@@ -167,6 +167,26 @@ impl KittyGraphics<'_> {
 }
 
 impl KittyGraphics<'_> {
+    /// Advance each running animation by at most one frame and return its next absolute deadline on the caller's
+    /// forward-only millisecond clock. `None` means no animation needs another tick.
+    ///
+    /// The mutable borrow prevents a tick while image pixels borrowed from this storage are still in use.
+    /// See Ghostty `src/terminal/c/kitty_graphics.zig::animation_tick` at the libghostty-vt pin.
+    ///
+    /// # Errors
+    ///
+    /// The library's result when it cannot tick the storage.
+    pub fn animation_tick(&mut self, now_ms: u64) -> Result<Option<u64>, Error> {
+        let mut next_ms = 0;
+        // SAFETY: the storage is live and exclusively borrowed; `next_ms` is a valid uint64_t out-pointer.
+        let result = unsafe { ffi::ghostty_kitty_graphics_animation_tick(self.raw, now_ms, &raw mut next_ms) };
+        if result == ffi::GHOSTTY_NO_VALUE {
+            return Ok(None);
+        }
+        Error::check(result)?;
+        Ok(Some(next_ms))
+    }
+
     /// The storage's generation: unchanged means the same placements and image data (geometry may still have moved
     /// with scrolling); zero for a storage never written.
     #[must_use]
@@ -339,6 +359,75 @@ fn placement_value<T: Copy + Default>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ANIMATION: &[u8] = concat!(
+        "\x1b_Ga=T,f=32,i=1,s=1,v=1,c=1,r=1;/wAA/w==\x1b\\",
+        "\x1b_Ga=f,f=32,i=1,s=1,v=1,z=40;AAD//w==\x1b\\",
+        "\x1b_Ga=a,i=1,r=1,z=30\x1b\\",
+        "\x1b_Ga=a,i=1,s=3\x1b\\",
+    )
+    .as_bytes();
+
+    fn snapshot(graphics: &KittyGraphics<'_>) -> (u64, Vec<u8>) {
+        let image = graphics.image(1).unwrap();
+        (image.generation, image.pixels.unwrap().to_vec())
+    }
+
+    fn assert_stopped(graphics: &mut KittyGraphics<'_>) {
+        assert_eq!(graphics.animation_tick(1100), Ok(None));
+        let mut untouched = 42;
+        // SAFETY: the live exclusively borrowed storage and valid output match the C fixture's contract.
+        let result = unsafe { ffi::ghostty_kitty_graphics_animation_tick(graphics.raw, 1100, &raw mut untouched) };
+        assert_eq!(result, ffi::GHOSTTY_NO_VALUE);
+        assert_eq!(untouched, 42);
+    }
+
+    #[test]
+    fn animation_tick_advances_the_current_frame_on_absolute_deadlines() {
+        let mut terminal = terminal();
+        terminal.vt_write(ANIMATION);
+        let mut graphics = terminal.kitty_graphics().unwrap();
+        let red = snapshot(&graphics);
+        assert_eq!(red.1, [255, 0, 0, 255]);
+        assert_eq!(graphics.animation_tick(1000), Ok(Some(1030)));
+        assert_eq!(snapshot(&graphics), red);
+        assert_eq!(graphics.animation_tick(1010), Ok(Some(1030)));
+        assert_eq!(snapshot(&graphics), red);
+        assert_eq!(graphics.animation_tick(1030), Ok(Some(1070)));
+        let blue = snapshot(&graphics);
+        assert!(blue.0 > red.0);
+        assert_eq!(blue.1, [0, 0, 255, 255]);
+        assert_eq!(graphics.animation_tick(1070), Ok(Some(1100)));
+        let red_again = snapshot(&graphics);
+        assert!(red_again.0 > blue.0);
+        assert_eq!(red_again.1, red.1);
+        terminal.vt_write(b"\x1b_Ga=a,i=1,s=1\x1b\\");
+        let mut graphics = terminal.kitty_graphics().unwrap();
+        assert_stopped(&mut graphics);
+        assert_eq!(snapshot(&graphics), red_again);
+    }
+
+    #[test]
+    fn animation_tick_late_advances_only_one_frame() {
+        let mut terminal = terminal();
+        terminal.vt_write(ANIMATION);
+        let mut graphics = terminal.kitty_graphics().unwrap();
+        assert_eq!(graphics.animation_tick(1000), Ok(Some(1030)));
+        assert_eq!(graphics.animation_tick(2000), Ok(Some(2040)));
+        assert_eq!(snapshot(&graphics).1, [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn animation_tick_without_playback_has_no_deadline_and_null_output_is_invalid() {
+        let mut terminal = terminal();
+        assert_eq!(terminal.kitty_graphics().unwrap().animation_tick(0), Ok(None));
+        terminal.vt_write(b"\x1b_Ga=T,f=32,i=1,s=1,v=1,c=1,r=1;/wAA/w==\x1b\\");
+        let mut graphics = terminal.kitty_graphics().unwrap();
+        assert_eq!(graphics.animation_tick(1000), Ok(None));
+        // SAFETY: a null output is explicitly accepted as an invalid argument by the C API.
+        let result = unsafe { ffi::ghostty_kitty_graphics_animation_tick(graphics.raw, 0, std::ptr::null_mut()) };
+        assert_eq!(result, ffi::GHOSTTY_INVALID_VALUE);
+    }
 
     /// A 2x1 RGBA image sent directly (`f=32`), in two chunks, then placed.
     const CHUNKED: &[u8] = b"\x1b_Ga=T,f=32,s=2,v=1,i=7,m=1;AQIDBAUG\x1b\\\x1b_Gm=0;Bwg=\x1b\\";

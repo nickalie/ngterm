@@ -3,9 +3,10 @@
 //! The view is captured with the frame, under the VT lock (the library's image handles die on the terminal's next
 //! mutation). Placements are converted only when the render state's placements generation changes; otherwise the
 //! previous view's placements are reused. An image's pixels are copied only when its `(id, generation)` is new — an
-//! unchanged image is shared with the previous view. A new image's pixels are copied
-//! on the pane's IO thread after the batch that completed it ([`Prefetch`]), so the paint that captures it (on the
-//! frontend's main thread) only shares them; only an image a paint catches in the middle of a batch is copied there.
+//! unchanged image is shared with the previous view. The pane's IO thread prefetches new pixels after each batch
+//! ([`Prefetch`]), so a paint that captures them (on the frontend's main thread) only shares them. An image a paint
+//! catches in the middle of a batch, or an animation frame advanced by the capture's tick, is copied on the paint
+//! thread under the VT lock.
 //!
 //! Placement geometry comes exclusively from Ghostty's render-state image API (`render.h`, `src/terminal/render.zig`
 //! at `LIBGHOSTTY_VT_REV`, <https://github.com/ghostty-org/ghostty>, MIT, Copyright Mitchell Hashimoto and contributors).
@@ -15,6 +16,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ngterm_ghostty_vt as vt;
+
+mod animation;
+pub(crate) use animation::Animation;
 
 /// An image's pixel layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -118,7 +122,9 @@ impl KittyView {
 }
 
 /// The pixels of the placed images, copied on the pane's IO thread after each batch that changed the storage (kept
-/// with the terminal, under the VT lock): what a capture shares instead of copying on the thread that paints.
+/// with the terminal, under the VT lock). A capture shares these when available; images caught mid-batch and animation
+/// frames advanced by the capture's tick are copied on the paint thread. A later batch can prefetch an animation
+/// frame already held by a captured view.
 #[derive(Debug, Default)]
 pub(crate) struct Prefetch {
     generation: u64,
