@@ -83,9 +83,13 @@ mod wheel;
 pub use actions::{FormatRegion, SelectionAdjust, TextFormat};
 #[cfg(feature = "screen-read")]
 pub use active::ActiveScreen;
+/// Native clipboard write completion statuses from the terminal protocol.
+pub use ngterm_ghostty_vt::ClipboardWriteResult;
+
 pub use effects::{
-    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, ColorScheme,
-    ExitStatus, PaneEvent, ProgramNeed, ProgramState, ProgramStatus, Progress, TerminalColors,
+    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardPermissionScope, ClipboardReadRequest,
+    ClipboardWrite, ColorScheme, ExitStatus, PaneEvent, ProgramNeed, ProgramState, ProgramStatus, Progress,
+    TerminalColors, WriteCompletion,
 };
 pub use exit::{ABNORMAL_EXIT_RUNTIME, ExitPolicy};
 pub use gesture::{Autoscroll, CLICK_REPEAT_INTERVAL, Gesture, GestureEvent};

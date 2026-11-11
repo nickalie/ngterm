@@ -1065,3 +1065,180 @@ fn windows_version() -> String {
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
         .unwrap_or_default()
 }
+
+#[cfg(unix)]
+#[test]
+fn kitty_clipboard_multipart_commit_waits_for_native_completion_on_the_owner() -> TestResult {
+    use ngterm_session::protocol::ClipboardStatus;
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let transaction = include_bytes!("../../ngterm-ghostty-vt/tests/data/clipboard/multipart.vt");
+    let extra = gated(gate.path(), 3000);
+    let (pane, creator) = Pane::spawn(pane_config(
+        "kitty-clipboard",
+        dir.path(),
+        probe(&[transaction], &extra),
+    ))?;
+    let mut owner = Viewer::new(creator, None)?;
+    let mut other = Viewer::new(pane.try_attach(SIZE, None)?, None)?;
+    go(gate.path(), 0)?;
+    owner.until(&pane, "the multipart write", |viewer| !viewer.delegated.is_empty());
+    other.drain(&pane);
+    assert!(other.delegated.is_empty());
+    assert!(replies(&server_text(&pane)).is_empty(), "the program is still waiting");
+    let (id, epoch, request) = owner.delegated[0].clone();
+    let DelegatedRequest::ClipboardWrite {
+        contents,
+        kitty: true,
+        can_remember: true,
+        ..
+    } = request
+    else {
+        panic!("expected a Kitty write");
+    };
+    assert_eq!(contents.len(), 4);
+    assert_eq!(
+        contents[2].data,
+        include_bytes!("../../ngterm-ghostty-vt/tests/data/clipboard/red.png")
+    );
+    assert_eq!(
+        contents[3].data,
+        include_bytes!("../../ngterm-ghostty-vt/tests/data/clipboard/arbitrary.bin")
+    );
+    assert!(!pane.answer(
+        other.id(),
+        id,
+        epoch,
+        DelegatedReply::ClipboardWrite {
+            status: ClipboardStatus::Success,
+            remember: true
+        }
+    ));
+    assert!(pane.answer(
+        owner.id(),
+        id,
+        epoch,
+        DelegatedReply::ClipboardWrite {
+            status: ClipboardStatus::Success,
+            remember: true
+        }
+    ));
+    assert!(!pane.answer(owner.id(), id, epoch, DelegatedReply::Denied));
+    owner.expect(&pane, "PROBE-DONE");
+    assert_eq!(
+        replies(&server_text(&pane)),
+        [b"\x1b]5522;type=write:status=DONE\x1b\\".to_vec()]
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_write_queued_after_owner_overflow_is_delegated_in_the_resync_epoch() -> TestResult {
+    use ngterm_session::protocol::ClipboardStatus;
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let mut config = pane_config(
+        "clipboard-overflow",
+        dir.path(),
+        probe(&[DSR], &gated(gate.path(), 3000)),
+    );
+    config.client_queue_limit = 32;
+    let (pane, creator) = Pane::spawn(config)?;
+    server_expects(&pane, "PROBE-READY");
+    // Leave the owner unread. Separate prints guarantee overflow even when the queue was empty.
+    pane.print(&[b'x'; 64])?;
+    pane.print(&[b'y'; 64])?;
+    pane.print(b"\x1b]52;s;\x07")?;
+    pane.resync(creator.subscription.id())?;
+    let mut owner = Viewer::new(creator, None)?;
+    owner.until(&pane, "a write retained through resync", |viewer| {
+        !viewer.delegated.is_empty()
+    });
+    let (id, epoch, request) = owner.delegated.remove(0);
+    assert!(epoch > 1);
+    assert_eq!(epoch, owner.epoch);
+    assert!(
+        matches!(request, DelegatedRequest::ClipboardWrite { selection, contents, kitty: false, .. }
+        if selection == "s" && contents.is_empty())
+    );
+    assert!(pane.answer(
+        owner.id(),
+        id,
+        epoch,
+        DelegatedReply::ClipboardWrite {
+            status: ClipboardStatus::Success,
+            remember: false,
+        }
+    ));
+    go(gate.path(), 0)?;
+    owner.expect(&pane, "PROBE-DONE");
+    assert_eq!(replies(&server_text(&pane)), [b"\x1b[0n".to_vec()]);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn kitty_clipboard_paste_is_generated_by_the_server_for_the_current_owner_epoch() -> TestResult {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use ngterm_session::protocol::{ClipboardPaste, ClipboardRepresentation};
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let queries = [b"\x1b[?5522h\x1b[5n".as_slice(), DSR];
+    let (pane, creator) = Pane::spawn(pane_config(
+        "kitty-paste",
+        dir.path(),
+        probe(&queries, &gated(gate.path(), 3000)),
+    ))?;
+    let mut owner = Viewer::new(creator, None)?;
+    let other = pane.try_attach(SIZE, None)?;
+    go(gate.path(), 0)?;
+    owner.expect(&pane, "REPLY-0:");
+    let paste = ClipboardPaste {
+        contents: vec![
+            ClipboardRepresentation {
+                mime: "text/plain".into(),
+                data: b"hello".to_vec(),
+            },
+            ClipboardRepresentation {
+                mime: "image/png".into(),
+                data: include_bytes!("../../ngterm-ghostty-vt/tests/data/clipboard/red.png").to_vec(),
+            },
+        ],
+        text_source: false,
+        selection: "c".into(),
+        allow_unsafe: false,
+    };
+    assert!(!pane.clipboard_paste(other.subscription.id(), owner.epoch, &paste)?);
+    assert!(!pane.clipboard_paste(owner.id(), owner.epoch + 1, &paste)?);
+    assert!(pane.clipboard_paste(owner.id(), owner.epoch, &paste)?);
+    assert!(pane.input(owner.id(), b"\x1b]5522;type=read:status=OK:pw=ZmFrZQ==\x1b\\")?);
+    assert!(!pane.with_terminal(|terminal| {
+        terminal
+            .clipboard_grants()
+            .lock()
+            .unwrap()
+            .peek(b"fake", vt::ClipboardDirection::Read)
+    }));
+    go(gate.path(), 1)?;
+    owner.expect(&pane, "PROBE-DONE");
+    let replies = replies(&server_text(&pane));
+    let answer = String::from_utf8(replies[1].clone())?;
+    assert!(answer.contains(&STANDARD.encode("text/plain image/png\n")));
+    let token = answer
+        .split("pw=")
+        .nth(1)
+        .unwrap()
+        .split([':', ';', '\x1b'])
+        .next()
+        .unwrap();
+    let token = STANDARD.decode(token)?;
+    assert!(pane.with_terminal(|terminal| {
+        terminal
+            .clipboard_grants()
+            .lock()
+            .unwrap()
+            .peek(&token, vt::ClipboardDirection::Read)
+    }));
+    Ok(())
+}

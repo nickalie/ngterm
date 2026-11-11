@@ -192,6 +192,11 @@ fn take_message(pane: &Pane, id: u64, message: AttachClientMessage) -> Result<bo
                 tracing::debug!(%err, "a live session's input was dropped");
             }
         }
+        AttachClientMessage::ClipboardPaste { epoch, paste } => {
+            if let Err(error) = pane.clipboard_paste(id, epoch, &paste) {
+                tracing::debug!(%error, "a live paste was refused");
+            }
+        }
         AttachClientMessage::Resize { size } => pane.resize_client(id, size),
         AttachClientMessage::Metadata(metadata) => pane.set_metadata(id, metadata),
         AttachClientMessage::ConfigReload(metadata) => pane.config_reloaded(id, metadata),

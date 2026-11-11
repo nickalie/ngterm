@@ -3,60 +3,70 @@
 //! A client whose queue overflowed is not sent the output it fell behind on (`super::clients`): its resync's
 //! snapshot brings its terminal to the session's state, but a clipboard write in that output is no state, so the
 //! client's terminal would never apply it, though `ngtermctl clipboard set` (the server's print) or the program had
-//! it written and the api answered `Done`. So the pane keeps, per clipboard location, the latest write its terminal
-//! completed (OSC 52, OSC 1337 Copy or OSC 5522, every one reaching libghostty-vt's clipboard write effect,
-//! [`Recorder`]), with the output offset of the end of the read it completed in and the order it completed in
+//! it written and the api answered `Done`. So the pane keeps, per clipboard location, the latest write the native
+//! owner completed successfully (OSC 52, OSC 1337 Copy or OSC 5522), moved from the owned deferred write
+//! with the output offset at completion and the order it completed in
 //! ([`Recovery`]). A client's resync snapshot, and the session's last snapshot for a client that fell behind, carry
 //! each location's latest write that completed past where that client's copy of the stream stopped
-//! (`Clients::missed_since`), re-encoded as OSC 52 writes, in the order they completed, right after the snapshot's
+//! (`Clients::missed_since`), re-encoded as OSC 52 or multipart OSC 5522 writes, in completion order after the snapshot's
 //! reset: before its parser continuation, which leaves the client's parser inside a sequence. A fresh attach gets none.
 //!
-//! The contract: a client that fell behind ends with each clipboard's latest value the session wrote while it was
-//! behind; values one overwrote meanwhile are not written to it. Only what a frontend applies is kept: a write with a
-//! `text/plain` representation (a frontend ignores the others, so one leaves the location's entry as it was); one
-//! whose text exceeds [`TEXT_LIMIT`] empties its location's entry instead, so a stale value is never written in its
-//! place. A write in the read the client's copy stopped in is written again (the read is the unit of the queue),
-//! which a terminal that asks before a write asks once more. The entries do not outlast an update handoff, which
-//! disconnects every client anyway.
+//! Recovery retains every MIME representation, including image-only values and empty clears. Text-only
+//! writes retain their OSC 52 form; multipart writes replay as an OSC 5522 transaction without a grant.
+//! A value exceeding the aggregate retention limit removes the old entry rather than replaying stale data.
 
+use std::fmt::Write as _;
+#[cfg(test)]
 use std::sync::{Mutex, PoisonError};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ngterm_ghostty_vt as vt;
 
-/// The most text a kept write holds: an OSC 52 write the size `ngtermctl clipboard set` takes at most, which the
-/// frontend's terminal parses whole.
-pub const TEXT_LIMIT: usize = 6 * 1024 * 1024;
+/// The maximum aggregate MIME and data bytes retained for one clipboard value.
+pub const VALUE_LIMIT: usize = 6 * 1024 * 1024;
 
-/// A clipboard write the session's terminal completed: its location and its text, `None` for one too large to keep.
+/// A clipboard write and its representations, `None` for a value too large to retain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Written {
     pub location: vt::ClipboardLocation,
-    pub text: Option<Vec<u8>>,
+    pub contents: Option<Vec<vt::ClipboardContent>>,
 }
 
-/// What the terminal's clipboard write effect records, taken by the pane after each read it feeds.
+impl Written {
+    /// Move completed representations into recovery, dropping oversized values atomically.
+    #[must_use]
+    pub fn new(location: vt::ClipboardLocation, contents: Vec<vt::ClipboardContent>) -> Self {
+        let size = contents.iter().try_fold(0usize, |size, content| {
+            size.checked_add(content.mime.len())?.checked_add(content.data.len())
+        });
+        Self {
+            location,
+            contents: size.filter(|size| *size <= VALUE_LIMIT).map(|_| contents),
+        }
+    }
+}
+
+/// Callback capture used only to test recovery replay through the real parser.
+#[cfg(test)]
 #[derive(Debug, Default)]
-pub struct Recorder {
+struct Recorder {
     writes: Mutex<Vec<Written>>,
 }
 
+#[cfg(test)]
 impl Recorder {
-    /// Records `request` when a frontend would apply it (it has a `text/plain` representation).
+    /// Records all representations atomically, or drops a value past the aggregate limit.
     pub fn record(&self, request: &vt::ClipboardWriteRequest<'_>) {
-        let Some(text) = request
+        let contents = request
             .contents
             .iter()
-            .find(|content| content.mime == b"text/plain" || content.mime.starts_with(b"text/plain;"))
-        else {
-            return;
-        };
-        let text = (text.data.len() <= TEXT_LIMIT).then(|| text.data.to_vec());
-        self.lock().push(Written {
-            location: request.location,
-            text,
-        });
+            .map(|content| vt::ClipboardContent {
+                mime: String::from_utf8_lossy(content.mime).into_owned(),
+                data: content.data.to_vec(),
+            })
+            .collect();
+        self.lock().push(Written::new(request.location, contents));
     }
 
     /// The writes recorded since the last take, in order.
@@ -77,7 +87,7 @@ struct Entry {
     ordinal: u64,
     /// The output offset of the end of the read it completed in.
     end: u64,
-    /// The write as OSC 52.
+    /// The write encoded as OSC 52 or an OSC 5522 transaction.
     sequence: Vec<u8>,
 }
 
@@ -94,10 +104,10 @@ impl Recovery {
     pub fn completed(&mut self, writes: Vec<Written>, end: u64) {
         for written in writes {
             let slot = &mut self.entries[index(written.location)];
-            *slot = written.text.map(|text| Entry {
+            *slot = written.contents.map(|contents| Entry {
                 ordinal: self.next,
                 end,
-                sequence: osc_52(written.location, &text),
+                sequence: encode(written.location, &contents),
             });
             self.next += 1;
         }
@@ -129,14 +139,37 @@ fn index(location: vt::ClipboardLocation) -> usize {
     }
 }
 
-/// The OSC 52 write of `text` to `location`, ending in BEL.
-fn osc_52(location: vt::ClipboardLocation, text: &[u8]) -> Vec<u8> {
-    let name = match location {
-        vt::ClipboardLocation::Standard => "c",
-        vt::ClipboardLocation::Selection => "s",
-        vt::ClipboardLocation::Primary => "p",
+/// Replay text-only OSC 52 unchanged; other values use an atomic Kitty transaction.
+fn encode(location: vt::ClipboardLocation, contents: &[vt::ClipboardContent]) -> Vec<u8> {
+    let text = match contents {
+        [] => Some(&[][..]),
+        [text] if text.mime == "text/plain" || text.mime.starts_with("text/plain;") => Some(text.data.as_slice()),
+        _ => None,
     };
-    format!("\x1b]52;{name};{}\x07", STANDARD.encode(text)).into_bytes()
+    if let Some(text) = text {
+        let name = match location {
+            vt::ClipboardLocation::Standard => "c",
+            vt::ClipboardLocation::Selection => "s",
+            vt::ClipboardLocation::Primary => "p",
+        };
+        return format!("\x1b]52;{name};{}\x07", STANDARD.encode(text)).into_bytes();
+    }
+    let loc = if location == vt::ClipboardLocation::Primary {
+        "primary"
+    } else {
+        "clipboard"
+    };
+    let mut result = format!("\x1b]5522;type=write:loc={loc}\x1b\\");
+    for content in contents {
+        let _ = write!(
+            result,
+            "\x1b]5522;type=wdata:mime={};{}\x1b\\",
+            STANDARD.encode(&content.mime),
+            STANDARD.encode(&content.data)
+        );
+    }
+    result.push_str("\x1b]5522;type=wdata\x1b\\");
+    result.into_bytes()
 }
 
 #[cfg(test)]
@@ -146,7 +179,10 @@ mod tests {
     fn written(location: vt::ClipboardLocation, text: &str) -> Written {
         Written {
             location,
-            text: Some(text.as_bytes().to_vec()),
+            contents: Some(vec![vt::ClipboardContent {
+                mime: "text/plain".into(),
+                data: text.as_bytes().to_vec(),
+            }]),
         }
     }
 
@@ -196,7 +232,7 @@ mod tests {
         recovery.completed(
             vec![Written {
                 location: vt::ClipboardLocation::Standard,
-                text: None,
+                contents: None,
             }],
             2,
         );
@@ -204,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn the_recorder_keeps_a_text_write_and_ignores_one_without_text() {
+    fn the_recorder_keeps_every_representation_and_empty_clears() {
         let recorder = Recorder::default();
         let image = vt::ClipboardWriteRequest {
             location: vt::ClipboardLocation::Standard,
@@ -213,12 +249,20 @@ mod tests {
                 data: b"\x89PNG",
             }],
             name: b"",
+            granted: false,
+            can_remember: false,
+            pw: b"",
+            origin: vt::ClipboardOrigin::Osc52,
         };
         recorder.record(&image);
         let clear = vt::ClipboardWriteRequest {
             location: vt::ClipboardLocation::Standard,
             contents: Vec::new(),
             name: b"",
+            granted: false,
+            can_remember: false,
+            pw: b"",
+            origin: vt::ClipboardOrigin::Osc52,
         };
         recorder.record(&clear);
         let text = vt::ClipboardWriteRequest {
@@ -234,11 +278,20 @@ mod tests {
                 },
             ],
             name: b"",
+            granted: false,
+            can_remember: false,
+            pw: b"",
+            origin: vt::ClipboardOrigin::Osc52,
         };
         recorder.record(&text);
-        assert_eq!(recorder.take(), [written(vt::ClipboardLocation::Primary, "hi")]);
+        let writes = recorder.take();
+        assert_eq!(writes.len(), 3);
+        assert_eq!(writes[0].contents.as_ref().unwrap()[0].data, b"\x89PNG");
+        assert_eq!(writes[1].contents, Some(Vec::new()));
+        assert_eq!(writes[2].contents.as_ref().unwrap().len(), 2);
+        assert_eq!(writes[2].contents.as_ref().unwrap()[1].data, b"hi");
         assert!(recorder.take().is_empty());
-        let large = vec![b'x'; TEXT_LIMIT + 1];
+        let large = vec![b'x'; VALUE_LIMIT + 1];
         recorder.record(&vt::ClipboardWriteRequest {
             location: vt::ClipboardLocation::Standard,
             contents: vec![vt::ClipboardData {
@@ -246,13 +299,68 @@ mod tests {
                 data: &large,
             }],
             name: b"",
+            granted: false,
+            can_remember: false,
+            pw: b"",
+            origin: vt::ClipboardOrigin::Osc52,
         });
         assert_eq!(
             recorder.take(),
             [Written {
                 location: vt::ClipboardLocation::Standard,
-                text: None
+                contents: None
             }]
         );
+    }
+    #[test]
+    fn multipart_recovery_replays_binary_representations_and_image_only_and_clear() {
+        struct Capture(std::sync::Arc<Recorder>);
+        impl vt::Effects for Capture {
+            fn clipboard_write(&mut self, request: &vt::ClipboardWriteRequest<'_>) -> vt::ClipboardWriteResult {
+                self.0.record(request);
+                vt::ClipboardWriteResult::Success
+            }
+        }
+        let recorder = std::sync::Arc::new(Recorder::default());
+        let mut terminal = vt::Terminal::new(80, 24).unwrap();
+        terminal.set_effects(Box::new(Capture(recorder.clone()))).unwrap();
+        terminal.vt_write(include_bytes!(
+            "../../../ngterm-ghostty-vt/tests/data/clipboard/multipart.vt"
+        ));
+        let written = recorder.take();
+        let parts = written[0].contents.clone().unwrap();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[2].data.len(), 73);
+        assert_eq!(parts[3].data.len(), 2048);
+        let mut recovery = Recovery::default();
+        recovery.completed(written.clone(), 1);
+        terminal.vt_write(&recovery.since(0));
+        assert_eq!(recorder.take(), written);
+        for contents in [vec![parts[2].clone()], Vec::new()] {
+            let written = vec![Written {
+                location: vt::ClipboardLocation::Primary,
+                contents: Some(contents),
+            }];
+            recovery.completed(written.clone(), 2);
+            terminal.vt_write(&recovery.since(1));
+            assert_eq!(recorder.take(), written);
+        }
+        for (location, selector) in [
+            (vt::ClipboardLocation::Standard, "c"),
+            (vt::ClipboardLocation::Selection, "s"),
+            (vt::ClipboardLocation::Primary, "p"),
+        ] {
+            let clear = Written::new(location, Vec::new());
+            let mut recovery = Recovery::default();
+            recovery.completed(vec![clear.clone()], 1);
+            let bytes = recovery.since(0);
+            assert_eq!(bytes, format!("\x1b]52;{selector};\x07").as_bytes());
+            terminal.vt_write(&bytes);
+            assert_eq!(
+                recorder.take(),
+                [clear],
+                "the actual parser preserves the clear's location"
+            );
+        }
     }
 }

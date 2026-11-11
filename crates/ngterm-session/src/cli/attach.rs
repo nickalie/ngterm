@@ -526,9 +526,8 @@ impl<'a> Loop<'a> {
                     self.relay.output(reset, &mut fx);
                 }
             }
-            Ok(Some(AttachEvent::SnapshotChunk(data) | AttachEvent::Output { data, .. })) => {
-                self.relay.output(&data, &mut fx);
-            }
+            Ok(Some(AttachEvent::SnapshotChunk(data))) => self.relay.output(&data, &mut fx),
+            Ok(Some(AttachEvent::Output { data, .. })) => self.relay.delegated_output(&data, &mut fx),
             Ok(Some(AttachEvent::Role { role, generation })) => {
                 self.role = Some(role);
                 self.relay.role(role, generation, now, &mut fx);

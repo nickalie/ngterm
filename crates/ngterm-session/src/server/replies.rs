@@ -101,7 +101,7 @@ use vt::{Boundaries, ReadCandidate, ReadScope, StringEnd};
 
 use super::clients::ClientId;
 use super::pane::State;
-use super::recovery::Recorder;
+use super::recovery::Written;
 use crate::protocol::{ColorScheme, DelegatedReply, DelegatedRequest, ReplyMetadata, Rgb};
 
 /// The foreground the server's terminal answers with while no owner gave one: Ghostty's default (`foreground` in its
@@ -138,7 +138,7 @@ pub const BARRIER_LIMIT: usize = 4096;
 
 /// The introducer of a Kitty graphics answer.
 const KITTY_ANSWER: &[u8] = b"\x1b_G";
-/// The MIME type a clipboard read is served (text only, as `ngterm-term` serves it).
+/// The legacy text-answer convenience representation.
 const TEXT: &str = "text/plain";
 
 /// The answer a delegated request got.
@@ -146,6 +146,16 @@ const TEXT: &str = "text/plain";
 pub enum Answer {
     /// The clipboard's text; `None` when it holds none.
     Text(Option<String>),
+    Mime {
+        contents: Vec<crate::protocol::ClipboardRepresentation>,
+        available: Vec<String>,
+        remember: bool,
+        status: crate::protocol::ClipboardStatus,
+    },
+    Write {
+        status: crate::protocol::ClipboardStatus,
+        remember: bool,
+    },
     Denied,
 }
 
@@ -154,6 +164,18 @@ impl From<DelegatedReply> for Answer {
         match reply {
             DelegatedReply::Clipboard { text } => Self::Text(text),
             DelegatedReply::Denied => Self::Denied,
+            DelegatedReply::ClipboardMime {
+                contents,
+                available,
+                remember,
+                status,
+            } => Self::Mime {
+                contents,
+                available,
+                remember,
+                status,
+            },
+            DelegatedReply::ClipboardWrite { status, remember } => Self::Write { status, remember },
         }
     }
 }
@@ -255,6 +277,7 @@ struct Armed {
     location: vt::ClipboardLocation,
     scope: ReadScope,
     answer: Answer,
+    pw: Vec<u8>,
 }
 
 /// A Kitty graphics command the reply owner's terminal answers ([`State::barrier`]): its answers go to the program in
@@ -342,7 +365,8 @@ pub struct Outlet {
     sequence: Mutex<Sequence>,
     armed: Mutex<Option<Armed>>,
     dark: AtomicBool,
-    pub(super) written: Recorder,
+    writes: Mutex<vt::DeferredClipboardWrites>,
+    paste: Mutex<Option<Vec<u8>>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -438,31 +462,73 @@ impl Outlet {
 
     /// Serve a clipboard read from the answer armed for it: only the read it was armed for (the same clipboard; a
     /// list-only answer never serves contents), once; with nothing armed (a read the scanner did not see), denied.
+    #[cfg(test)]
     fn answer(&self, request: &vt::ClipboardReadRequest<'_>) -> vt::ClipboardReadReply {
+        self.answer_reply(request).0
+    }
+
+    fn answer_reply(&self, request: &vt::ClipboardReadRequest<'_>) -> (vt::ClipboardReadReply, bool) {
         let Some(armed) = lock(&self.armed).take() else {
-            tracing::debug!("a clipboard read without an armed answer was denied");
-            return vt::ClipboardReadReply::Denied;
+            return (vt::ClipboardReadReply::Denied, false);
         };
-        if armed.location != request.location || (armed.scope == ReadScope::ListOnly && !request.mimes.is_empty()) {
-            tracing::debug!(?armed, "a clipboard read other than the one armed for was denied");
-            return vt::ClipboardReadReply::Denied;
+        if armed.location != request.location
+            || armed.pw != request.pw
+            || (armed.scope == ReadScope::ListOnly && !request.mimes.is_empty())
+        {
+            return (vt::ClipboardReadReply::Denied, false);
         }
-        let Answer::Text(text) = armed.answer else {
-            return vt::ClipboardReadReply::Denied;
+        let (contents, available, remember) = match armed.answer {
+            Answer::Text(text) => {
+                let contents: Vec<_> = text
+                    .into_iter()
+                    .map(|text| crate::protocol::ClipboardRepresentation {
+                        mime: TEXT.into(),
+                        data: text.into_bytes(),
+                    })
+                    .collect();
+                let available = contents.iter().map(|content| content.mime.clone()).collect();
+                (contents, available, false)
+            }
+            Answer::Mime {
+                contents,
+                available,
+                remember,
+                status: crate::protocol::ClipboardStatus::Success,
+            } => (contents, available, remember),
+            Answer::Mime { status, .. } => {
+                return (
+                    match status {
+                        crate::protocol::ClipboardStatus::Unsupported => vt::ClipboardReadReply::Unsupported,
+                        crate::protocol::ClipboardStatus::Busy => vt::ClipboardReadReply::Busy,
+                        crate::protocol::ClipboardStatus::IoError => vt::ClipboardReadReply::IoError,
+                        _ => vt::ClipboardReadReply::Denied,
+                    },
+                    false,
+                );
+            }
+            _ => return (vt::ClipboardReadReply::Denied, false),
         };
-        let contents = match text.as_deref() {
-            Some(text) if request.mimes.contains(&TEXT.as_bytes()) => vec![vt::ClipboardContent {
-                mime: TEXT.to_owned(),
-                data: text.as_bytes().to_vec(),
-            }],
-            _ => Vec::new(),
-        };
-        let available = if request.list && text.is_some() {
-            vec![TEXT.to_owned()]
-        } else {
-            Vec::new()
-        };
-        vt::ClipboardReadReply::Success { contents, available }
+        let contents = request
+            .mimes
+            .iter()
+            .take(4)
+            .filter_map(|mime| contents.iter().find(|content| content.mime.as_bytes() == *mime))
+            .map(|content| vt::ClipboardContent {
+                mime: content.mime.clone(),
+                data: content.data.clone(),
+            })
+            .collect();
+        (
+            vt::ClipboardReadReply::Success {
+                contents,
+                available: if request.list {
+                    available.into_iter().take(16).collect()
+                } else {
+                    Vec::new()
+                },
+            },
+            remember,
+        )
     }
 }
 
@@ -486,20 +552,27 @@ impl ServerEffects {
 
 impl vt::Effects for ServerEffects {
     fn write_pty(&mut self, data: &[u8]) {
+        if let Some(paste) = lock(&self.outlet.paste).as_mut() {
+            paste.extend_from_slice(data);
+            return;
+        }
+        if lock(&self.outlet.writes).intercept(data) {
+            return;
+        }
         // Ghostty writes each Kitty answer alone (`stream_terminal.zig` `apcEnd`)
         if !data.starts_with(KITTY_ANSWER) {
             self.outlet.push(data);
         }
     }
 
-    fn clipboard_read(&mut self, request: &vt::ClipboardReadRequest<'_>) -> vt::ClipboardReadReply {
-        self.outlet.answer(request)
+    fn clipboard_read_reply(&mut self, request: &vt::ClipboardReadRequest<'_>) -> (vt::ClipboardReadReply, bool) {
+        self.outlet.answer_reply(request)
     }
 
-    /// Recorded for the clients that fall behind on it ([`super::recovery`]), and refused as the default refuses it: the
-    /// clients' terminals apply the write, each under its own policy.
+    /// Keep owned MIME data for native-write delegation. Deny only inside C; its acknowledgement
+    /// is captured by `write_pty` and completed later by the elected owner, outside the terminal lock.
     fn clipboard_write(&mut self, request: &vt::ClipboardWriteRequest<'_>) -> vt::ClipboardWriteResult {
-        self.outlet.written.record(request);
+        lock(&self.outlet.writes).capture(request);
         vt::ClipboardWriteResult::Denied
     }
 
@@ -554,6 +627,8 @@ struct Pending {
     /// That client's epoch then.
     epoch: u64,
     read: ReadCandidate,
+    pw: Vec<u8>,
+    write: Option<vt::PendingClipboardWrite>,
     deadline: Instant,
     /// The owner changed, or the client fell behind: denied by the helper thread.
     cancelled: bool,
@@ -578,7 +653,14 @@ pub struct Replies {
     /// While a read waits: its dispatch byte, then the output read after it.
     parked: Vec<u8>,
     pending: Option<Pending>,
+    /// A scanned read waiting for earlier captured writes, with its metadata retained until dispatch.
+    deferred_read: Option<(ReadCandidate, vt::ClipboardReadDetails, bool)>,
     next_id: u64,
+    writes: VecDeque<vt::PendingClipboardWrite>,
+    /// The first queued write's bound while its owner awaits resync, before it can be delegated.
+    overflow_deadline: Option<Instant>,
+    /// Owner pruning during a feed must not resume output or publish an unfinished write capture.
+    feeding: bool,
     /// The program ended: every read is denied without asking, and no Kitty barrier opens.
     denied: bool,
     /// How long a clipboard read waits for the owner's answer.
@@ -629,7 +711,11 @@ impl Replies {
             graphics: vt::Scanner::default(),
             parked: Vec::new(),
             pending: None,
+            deferred_read: None,
             next_id: 1,
+            writes: VecDeque::new(),
+            overflow_deadline: None,
+            feeding: false,
             denied: false,
             wait,
             kitty_wait,
@@ -657,14 +743,17 @@ impl Replies {
         self.parked.len()
     }
 
-    /// When the waiting read is to be denied or the next Kitty barrier to end; `None` with neither waiting.
+    /// When a clipboard request or overflow wait is to be denied, or the next Kitty barrier to end.
     #[must_use]
     pub fn deadline(&self) -> Option<Instant> {
-        let read = self.pending.as_ref().map(|pending| pending.deadline);
-        match (read, self.outlet.deadline()) {
-            (Some(read), Some(barrier)) => Some(read.min(barrier)),
-            (read, barrier) => read.or(barrier),
-        }
+        [
+            self.pending.as_ref().map(|pending| pending.deadline),
+            self.overflow_deadline,
+            self.outlet.deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Whether the waiting read is to be denied now.
@@ -702,10 +791,42 @@ fn follow(scanner: &mut vt::Scanner, mut bytes: &[u8]) {
 }
 
 impl State {
+    pub(super) fn paste_owner(&self, client: ClientId, epoch: u64) -> bool {
+        self.replies.owner == Some(client)
+            && self.clients.epoch(client) == Some(epoch)
+            && self.clients.overflowed(client) == Some(false)
+    }
+    pub(super) fn paste_bytes(
+        &mut self,
+        contents: &[vt::ClipboardContent],
+        text_source: bool,
+        selection: &str,
+        allow_unsafe: bool,
+    ) -> Option<Vec<u8>> {
+        let outlet = &self.replies.outlet;
+        *lock(&outlet.paste) = Some(Vec::new());
+        let result = self.terminal.paste_contents(
+            contents,
+            if text_source {
+                vt::PasteSource::Text
+            } else {
+                vt::PasteSource::Clipboard
+            },
+            match selection {
+                "s" => vt::ClipboardLocation::Selection,
+                "p" => vt::ClipboardLocation::Primary,
+                _ => vt::ClipboardLocation::Standard,
+            },
+            allow_unsafe,
+        );
+        let bytes = lock(&outlet.paste).take().unwrap_or_default();
+        matches!(result, Ok(vt::PasteOutcome::Written)).then_some(bytes)
+    }
+
     /// A read of the PTY: held behind a waiting read, else fed to the terminal and the clients up to the next
     /// clipboard read, which is delegated. Reads pause while [`PARK_HIGH`] bytes or more are held.
     pub(super) fn take_output(&mut self, bytes: &[u8], pause: &ReadPause) {
-        if self.replies.pending.is_some() {
+        if self.replies.pending.is_some() || !self.replies.writes.is_empty() {
             self.replies.parked.extend_from_slice(bytes);
         } else {
             self.pump(bytes);
@@ -722,8 +843,27 @@ impl State {
         while let Some((at, read)) = self.replies.scanner.find(bytes) {
             self.feed(&bytes[..at], false);
             let (byte, rest) = (bytes[at], &bytes[at + 1..]);
-            if let Some(answer) = self.delegate(read) {
-                self.dispatch(byte, read, answer);
+            if read.scope == ReadScope::Write {
+                self.feed(&[byte], false);
+                if self.delegate_writes() {
+                    self.replies.parked.extend_from_slice(rest);
+                    return;
+                }
+                bytes = rest;
+                continue;
+            }
+            let details = self.replies.scanner.read_details();
+            let kitty = self.replies.scanner.kitty_clipboard();
+            if self.delegate_writes() {
+                // The prefix may have committed legacy writes. Keep this read until they complete.
+                self.replies.deferred_read = Some((read, details, kitty));
+                self.replies.parked.push(byte);
+                self.replies.parked.extend_from_slice(rest);
+                return;
+            }
+            let pw = details.pw.clone();
+            if let Some(answer) = self.delegate(read, details, kitty) {
+                self.dispatch(byte, read, answer, pw);
                 bytes = rest;
             } else {
                 self.replies.parked.push(byte);
@@ -732,6 +872,7 @@ impl State {
             }
         }
         self.feed(bytes, false);
+        self.delegate_writes();
     }
 
     /// The output fed so far ended with a Kitty graphics command, which the reply owner's terminal answers: a barrier
@@ -776,10 +917,17 @@ impl State {
         self.replies.outlet.complete(id, client, epoch, answers.to_vec())
     }
 
-    /// End what is due at `now`: the waiting read (denied) and the Kitty barriers whose time is up (empty).
+    /// Deny clipboard requests and overflow waits due at `now`, and end expired Kitty barriers empty.
     pub(super) fn expire(&mut self, now: Instant) {
         if self.replies.due(now) {
             self.settle(Answer::Denied);
+        }
+        if self.replies.overflow_deadline.is_some_and(|deadline| deadline <= now) {
+            self.replies.overflow_deadline = None;
+            while let Some(write) = self.replies.writes.pop_front() {
+                self.deny_write(write);
+            }
+            self.resume_clipboards();
         }
         self.replies.outlet.expire(now);
     }
@@ -791,6 +939,7 @@ impl State {
         reason = "live handle, slice and fixed APC_END flag satisfy the C argument contract"
     )]
     pub(super) fn feed(&mut self, mut bytes: &[u8], discard: bool) {
+        self.replies.feeding = true;
         while !bytes.is_empty() {
             let stop = self
                 .terminal
@@ -813,28 +962,33 @@ impl State {
             }
             bytes = rest;
         }
+        let mut writes = lock(&self.replies.outlet.writes);
+        writes.finish_feed();
+        if discard {
+            self.replies.writes.extend(writes.take().into_iter().map(|mut write| {
+                write.discard_reply = true;
+                write
+            }));
+        }
+        self.replies.feeding = false;
     }
 
-    /// `chunk`, just written to the terminal, at the next offset for every client; the revision moves, and the
-    /// clipboard writes the terminal completed in it are kept for the clients that fall behind on it.
+    /// `chunk`, just written to the terminal, at the next offset for every client; the revision moves.
     pub(super) fn advance(&mut self, chunk: &[u8]) {
         let offset = self.offset;
         self.offset += chunk.len() as u64;
         self.revision = self.revision.wrapping_add(1);
-        let written = self.replies.outlet.written.take();
-        if !written.is_empty() {
-            self.recovery.completed(written, self.offset);
-        }
         self.prune();
         self.clients.output(offset, chunk);
     }
 
     /// A read's dispatch byte, fed alone with `answer` armed for it, then disarmed whatever the terminal did.
-    fn dispatch(&mut self, byte: u8, read: ReadCandidate, answer: Answer) {
+    fn dispatch(&mut self, byte: u8, read: ReadCandidate, answer: Answer, pw: Vec<u8>) {
         *lock(&self.replies.outlet.armed) = Some(Armed {
             location: read.location,
             scope: read.scope,
             answer,
+            pw,
         });
         self.feed(&[byte], false);
         if lock(&self.replies.outlet.armed).take().is_some() {
@@ -844,16 +998,29 @@ impl State {
 
     /// Send `read` to the reply owner, to wait for its answer (`None`), or the answer it gets at once: denied with no
     /// owner, an owner that would not get the request before its resync, or once the program ended.
-    fn delegate(&mut self, read: ReadCandidate) -> Option<Answer> {
+    fn delegate(&mut self, read: ReadCandidate, details: vt::ClipboardReadDetails, kitty: bool) -> Option<Answer> {
         let replies = &mut self.replies;
         let Some(client) = replies.owner.filter(|_| !replies.denied) else {
             return Some(Answer::Denied);
         };
         let id = replies.next_id;
         replies.next_id += 1;
-        let request = DelegatedRequest::ClipboardRead {
-            selection: selection(read.location).to_owned(),
-            list_only: read.scope == ReadScope::ListOnly,
+        let grants = self.terminal.clipboard_grants();
+        let granted = read.scope == ReadScope::Data && lock(&grants).peek(&details.pw, vt::ClipboardDirection::Read);
+        let request = if kitty {
+            DelegatedRequest::ClipboardReadMime {
+                selection: selection(read.location).to_owned(),
+                mimes: details.mimes,
+                list: details.list,
+                name: details.name,
+                granted,
+                can_remember: !details.pw.is_empty(),
+            }
+        } else {
+            DelegatedRequest::ClipboardRead {
+                selection: selection(read.location).to_owned(),
+                list_only: read.scope == ReadScope::ListOnly,
+            }
         };
         let Some(epoch) = self.clients.delegate(client, id, request) else {
             return Some(Answer::Denied);
@@ -863,11 +1030,119 @@ impl State {
             client,
             epoch,
             read,
+            pw: details.pw,
+            write: None,
             deadline: Instant::now() + self.replies.wait,
             cancelled: false,
         });
         self.replies.timer.notify_all();
         None
+    }
+
+    pub(super) fn delegate_printed_writes(&mut self) {
+        if self.replies.pending.is_none() {
+            self.resume_clipboards();
+        }
+    }
+
+    /// Resume queued native writes after resync or owner changes, then the saved read and later output.
+    pub(super) fn resume_clipboards(&mut self) {
+        if self.replies.pending.is_some() || self.delegate_writes() {
+            return;
+        }
+        if let Some((read, details, kitty)) = self.replies.deferred_read.take() {
+            let pw = details.pw.clone();
+            let Some(answer) = self.delegate(read, details, kitty) else {
+                return;
+            };
+            let parked = std::mem::take(&mut self.replies.parked);
+            if let Some((&byte, rest)) = parked.split_first() {
+                self.dispatch(byte, read, answer, pw);
+                self.pump(rest);
+            }
+        } else {
+            let parked = std::mem::take(&mut self.replies.parked);
+            if !parked.is_empty() {
+                self.pump(&parked);
+            }
+        }
+    }
+
+    /// Publish committed writes only after their ACK capture slot has been resolved; whether any request waits.
+    fn delegate_writes(&mut self) -> bool {
+        if self.replies.pending.is_some() {
+            return true;
+        }
+        self.replies.writes.extend(lock(&self.replies.outlet.writes).take());
+        while !self.replies.writes.is_empty() {
+            // An overflow is temporary, but its writer may be stuck on a half-open connection indefinitely.
+            if !self.replies.denied
+                && self
+                    .replies
+                    .owner
+                    .is_some_and(|owner| self.clients.overflowed(owner) == Some(true))
+            {
+                self.replies
+                    .overflow_deadline
+                    .get_or_insert_with(|| Instant::now() + self.replies.wait);
+                self.replies.timer.notify_all();
+                return true;
+            }
+            self.replies.overflow_deadline = None;
+            let Some(write) = self.replies.writes.pop_front() else {
+                break;
+            };
+            if write.origin == vt::ClipboardOrigin::Kitty && !write.discard_reply && !write.has_acknowledgement() {
+                tracing::warn!("Kitty clipboard write has no acknowledgement template");
+            }
+            let id = self.replies.next_id;
+            self.replies.next_id += 1;
+            let request = DelegatedRequest::ClipboardWrite {
+                selection: selection(write.location).into(),
+                contents: write
+                    .contents
+                    .iter()
+                    .map(|content| crate::protocol::ClipboardRepresentation {
+                        mime: content.mime.clone(),
+                        data: content.data.clone(),
+                    })
+                    .collect(),
+                name: write.name.clone(),
+                granted: write.granted,
+                can_remember: write.can_remember,
+                kitty: write.origin == vt::ClipboardOrigin::Kitty,
+            };
+            let owner = self.replies.owner.filter(|_| !self.replies.denied);
+            if let Some((client, epoch)) =
+                owner.and_then(|client| self.clients.delegate(client, id, request).map(|epoch| (client, epoch)))
+            {
+                self.replies.pending = Some(Pending {
+                    id,
+                    client,
+                    epoch,
+                    read: ReadCandidate {
+                        location: write.location,
+                        scope: ReadScope::Write,
+                    },
+                    pw: Vec::new(),
+                    write: Some(write),
+                    deadline: Instant::now() + self.replies.wait,
+                    cancelled: false,
+                });
+                self.replies.timer.notify_all();
+                return true;
+            }
+            self.deny_write(write);
+        }
+        self.replies.overflow_deadline = None;
+        false
+    }
+
+    fn deny_write(&self, write: vt::PendingClipboardWrite) {
+        let grants = self.terminal.clipboard_grants();
+        if let Some(bytes) = write.complete(vt::ClipboardWriteResult::Denied, false, &mut lock(&grants)) {
+            self.replies.outlet.push(&bytes);
+        }
     }
 
     /// End the waiting read with `answer`: its dispatch byte goes in with it, then the output held behind it, which
@@ -876,10 +1151,26 @@ impl State {
         let Some(pending) = self.replies.pending.take() else {
             return;
         };
-        let parked = std::mem::take(&mut self.replies.parked);
-        if let Some((&byte, rest)) = parked.split_first() {
-            self.dispatch(byte, pending.read, answer);
-            self.pump(rest);
+        if let Some(mut write) = pending.write {
+            let (status, remember) = match answer {
+                Answer::Write { status, remember } => (status.engine(), remember),
+                _ => (vt::ClipboardWriteResult::Denied, false),
+            };
+            if status == vt::ClipboardWriteResult::Success {
+                let written = Written::new(write.location, std::mem::take(&mut write.contents));
+                self.recovery.completed(vec![written], self.offset);
+            }
+            let grants = self.terminal.clipboard_grants();
+            if let Some(bytes) = write.complete(status, remember, &mut lock(&grants)) {
+                self.replies.outlet.push(&bytes);
+            }
+            self.resume_clipboards();
+        } else {
+            let parked = std::mem::take(&mut self.replies.parked);
+            if let Some((&byte, rest)) = parked.split_first() {
+                self.dispatch(byte, pending.read, answer, pending.pw);
+                self.pump(rest);
+            }
         }
         self.replies.timer.notify_all();
     }
@@ -889,6 +1180,7 @@ impl State {
     pub(super) fn deny_from_now(&mut self) {
         self.replies.denied = true;
         self.settle(Answer::Denied);
+        self.resume_clipboards();
         self.replies.outlet.end(None);
     }
 
@@ -898,6 +1190,7 @@ impl State {
     pub(super) fn settle_for_handoff(&mut self) {
         let denied = std::mem::replace(&mut self.replies.denied, true);
         self.settle(Answer::Denied);
+        self.resume_clipboards();
         self.replies.denied = denied;
         self.replies.outlet.end(None);
     }
@@ -980,6 +1273,11 @@ impl State {
             self.replies.timer.notify_all();
         }
         self.apply_facts(false);
+        // advance -> prune -> tell can arrive here before feed has finished capturing the current write.
+        // Its caller will delegate after the feed; resuming here would re-enter the outer pump.
+        if !self.replies.feeding {
+            self.resume_clipboards();
+        }
     }
 
     /// The owner's facts onto the terminal when they changed, or on the reply owner's config reload (`reload`), which
@@ -1218,6 +1516,9 @@ mod tests {
             list,
             name: b"",
             granted: false,
+            can_remember: false,
+            pw: b"",
+            origin: vt::ClipboardOrigin::Osc52,
         }
     }
 
@@ -1226,6 +1527,7 @@ mod tests {
             location,
             scope,
             answer,
+            pw: Vec::new(),
         });
     }
 

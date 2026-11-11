@@ -843,10 +843,14 @@ impl<C: Connection> Panes<C> {
             }
             PaneEvent::Title(title) => events.push(shown.event(|pane| MobileEvent::PaneTitle { pane, title })),
             PaneEvent::Bell => events.push(shown.event(|pane| MobileEvent::Bell { pane })),
-            PaneEvent::ClipboardWrite(write) => events.push(clipboard_write(shown, write)),
+            PaneEvent::ClipboardWrite(write) => {
+                if let Some(event) = clipboard_write(shown, &write) {
+                    events.push(event);
+                }
+            }
             PaneEvent::ClipboardRead(request) => {
                 self.last_read += 1;
-                events.push(clipboard_read(shown, self.last_read, request));
+                events.push(clipboard_read(shown, self.last_read, &request));
             }
             _ => {}
         }
@@ -854,20 +858,43 @@ impl<C: Connection> Panes<C> {
     }
 }
 
-fn clipboard_write<C>(shown: &Shown<C>, write: ClipboardWrite) -> MobileEvent {
+fn clipboard_write<C>(shown: &Shown<C>, write: &ClipboardWrite) -> Option<MobileEvent> {
     let text = write
         .contents
-        .into_iter()
-        .find(|content| content.mime.starts_with("text/plain"))
+        .iter()
+        .find(|content| content.mime == "text/plain" || content.mime.starts_with("text/plain;"))
         .map(|content| String::from_utf8_lossy(&content.data).into_owned());
-    shown.event(|pane| MobileEvent::ClipboardWrite {
-        pane,
-        clipboard: write.location.into(),
-        text,
+    let textual = write.contents.is_empty() || text.is_some();
+    let supported = write.location == ngterm_term::ClipboardLocation::Standard && textual;
+    if write.id != 0
+        && let Some(terminal) = shown.slot.terminal()
+    {
+        // Interim text adapter: completion means enqueued for the app, not OS acceptance.
+        // Task 16 replaces this with a UniFFI completion from Kotlin/Swift after the OS write.
+        terminal.answer_clipboard_write(
+            write.id,
+            ngterm_term::WriteCompletion {
+                status: if supported {
+                    ngterm_term::ClipboardWriteResult::Success
+                } else {
+                    ngterm_term::ClipboardWriteResult::Unsupported
+                },
+                remember: false,
+            },
+        );
+    }
+    // Preserve location-tagged text events; the apps ignore unsupported locations.
+    // An image-only value must never turn into a clear.
+    textual.then(|| {
+        shown.event(|pane| MobileEvent::ClipboardWrite {
+            pane,
+            clipboard: write.location.into(),
+            text,
+        })
     })
 }
 
-fn clipboard_read<C>(shown: &mut Shown<C>, id: u64, request: ClipboardReadRequest) -> MobileEvent {
+fn clipboard_read<C>(shown: &mut Shown<C>, id: u64, request: &ClipboardReadRequest) -> MobileEvent {
     shown.reads.push(Read {
         id,
         terminal: request.id,

@@ -175,6 +175,30 @@ verification:
 cargo test -p ngterm-ghostty-vt --test patches skipped_cells
 ```
 
+## 0005 clipboard callback metadata
+
+status: active, data-only API extension
+
+patch: `build/patches/ghostty-vt/0005-clipboard-request-metadata.patch`
+
+origin: ngterm; upstream discussion and PR not opened
+
+base: `LIBGHOSTTY_VT_REV` `83fb95624b0439ee660c2679b43b38c8b63769cd`
+
+reason: Native clipboard consent and writes complete outside the terminal lock. Rust copies each committed
+request, holds its acknowledgement, and owns the per-terminal grants. The callback must expose the effective
+password Ghostty checks, since a large multipart payload cannot be classified reliably by the bounded stream
+scanner. It must also identify the protocol independently of whether an acknowledgement was captured. Trailing
+fields extend the sized C read/write structs; internal origin fields carry OSC 1337 through the existing OSC 52
+path. Parsing, grants, callback lifetimes, reply statuses and acknowledgement generation are unchanged.
+
+remove when: the official C callback exposes the effective token and protocol origin, or provides an owned async
+request API covering deferred completion and token consumption. Verify the multipart, missing-acknowledgement,
+direction-mismatch paste-token and deferred-write tests without this patch before removing it.
+
+verification: `scripts/gen-ghostty-vt-bindings.sh --check`, and the clipboard tests in `ngterm-ghostty-vt`,
+`ngterm-term` and `ngterm-session`.
+
 ## herdr patches not carried
 
 Reviewed against the pin and against what ngterm uses (herdr's `vendor/libghostty-vt.patches.md` at `HERDR_REV`):

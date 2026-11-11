@@ -409,3 +409,179 @@ fn the_window_pixels_give_the_cell_from_the_start() {
         "the window's pixels come first"
     );
 }
+
+fn clipboard_write(id: u64, contents: Vec<crate::protocol::ClipboardRepresentation>, kitty: bool) -> Delegated {
+    Delegated {
+        id,
+        epoch: 1,
+        request: DelegatedRequest::ClipboardWrite {
+            selection: "p".into(),
+            contents,
+            name: String::new(),
+            granted: false,
+            can_remember: false,
+            kitty,
+        },
+    }
+}
+fn plain(data: &[u8]) -> crate::protocol::ClipboardRepresentation {
+    crate::protocol::ClipboardRepresentation {
+        mime: "text/plain".into(),
+        data: data.to_vec(),
+    }
+}
+
+#[test]
+fn osc_52_and_1337_writes_reach_the_outer_terminal_once_after_raw_output_is_filtered() {
+    let (mut relay, _) = probed(None, Vec::new());
+    for (id, raw) in [
+        (1, b"\x1b]52;p;aGk=\x1b\\".as_slice()),
+        (2, b"\x1b]1337;Copy=:aGk=\x07"),
+    ] {
+        let mut fx = Effects::default();
+        relay.delegated_output(raw, &mut fx);
+        assert!(fx.stdout.is_empty());
+        relay.delegated(clipboard_write(id, vec![plain(b"hi")], false), Instant::now(), &mut fx);
+        assert_eq!(fx.stdout, b"\x1b]52;p;aGk=\x1b\\");
+        assert_eq!(
+            replies(&fx),
+            [(
+                id,
+                &DelegatedReply::ClipboardWrite {
+                    status: crate::protocol::ClipboardStatus::Success,
+                    remember: false
+                }
+            )]
+        );
+    }
+}
+
+#[test]
+fn a_write_completes_at_a_suppressed_st_escape_without_leaking_its_backslash() {
+    let (mut relay, _) = probed(None, Vec::new());
+    let now = Instant::now();
+    let mut fx = Effects::default();
+    relay.delegated_output(b"\x1b]52;p;aGk=\x1b", &mut fx);
+    relay.delegated(clipboard_write(1, vec![plain(b"hi")], false), now, &mut fx);
+    assert_eq!(fx.stdout, b"\x1b]52;p;aGk=\x1b\\");
+    assert_eq!(
+        replies(&fx).len(),
+        1,
+        "completion needs neither ST's backslash nor the injection timeout"
+    );
+    relay.delegated_output(b"\\after", &mut fx);
+    relay.tick(now + INJECT_WAIT, &mut fx);
+    assert_eq!(fx.stdout, b"\x1b]52;p;aGk=\x1b\\after");
+    assert_eq!(replies(&fx).len(), 1);
+}
+
+#[test]
+fn a_queued_write_completes_only_in_the_effects_that_emit_it_and_reconnect_drops_it() {
+    let (mut relay, _) = probed(None, Vec::new());
+    let now = Instant::now();
+    let mut fx = Effects::default();
+    relay.output(b"\x1b[31", &mut fx);
+    relay.delegated(clipboard_write(1, vec![plain(b"hi")], false), now, &mut fx);
+    assert!(fx.stdout.is_empty() && replies(&fx).is_empty());
+    relay.output(b"m", &mut fx);
+    assert_eq!(fx.stdout, b"\x1b[31m\x1b]52;p;aGk=\x1b\\");
+    assert_eq!(replies(&fx).len(), 1);
+    let mut fx = Effects::default();
+    relay.output(b"\x1b[31", &mut fx);
+    relay.delegated(clipboard_write(2, vec![plain(b"stale")], false), now, &mut fx);
+    relay.reattached();
+    relay.output(b"m", &mut fx);
+    assert_eq!(fx.stdout, b"\x1b[31m");
+    assert!(replies(&fx).is_empty());
+}
+
+#[test]
+fn an_explicit_clear_stays_a_clear_but_missing_text_and_kitty_writes_are_unsupported() {
+    let (mut relay, _) = probed(None, Vec::new());
+    let mut fx = Effects::default();
+    relay.delegated(clipboard_write(1, Vec::new(), false), Instant::now(), &mut fx);
+    assert_eq!(fx.stdout, b"\x1b]52;p;\x1b\\");
+    let mut fx = Effects::default();
+    let image = crate::protocol::ClipboardRepresentation {
+        mime: "image/png".into(),
+        data: vec![1, 2, 3],
+    };
+    relay.delegated(clipboard_write(2, vec![image], false), Instant::now(), &mut fx);
+    relay.delegated(clipboard_write(3, vec![plain(b"hi")], true), Instant::now(), &mut fx);
+    assert!(fx.stdout.is_empty());
+    assert_eq!(
+        replies(&fx),
+        [
+            (
+                2,
+                &DelegatedReply::ClipboardWrite {
+                    status: crate::protocol::ClipboardStatus::Unsupported,
+                    remember: false
+                }
+            ),
+            (
+                3,
+                &DelegatedReply::ClipboardWrite {
+                    status: crate::protocol::ClipboardStatus::Unsupported,
+                    remember: false
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn kitty_text_and_listing_requests_keep_the_head_text_adapter_empty_success_cases() {
+    use crate::protocol::{ClipboardRepresentation, ClipboardStatus};
+    for (mimes, list, data, expected_contents, expected_available) in [
+        (
+            vec!["text/plain", "text/html"],
+            true,
+            Some(b"hi".to_vec()),
+            vec![plain(b"hi")],
+            vec!["text/plain"],
+        ),
+        (
+            vec!["text/html"],
+            true,
+            Some(b"hi".to_vec()),
+            Vec::new(),
+            vec!["text/plain"],
+        ),
+        (vec!["text/html"], false, Some(b"hi".to_vec()), Vec::new(), Vec::new()),
+        (Vec::new(), true, Some(b"hi".to_vec()), Vec::new(), vec!["text/plain"]),
+        (vec!["text/plain"], true, Some(Vec::new()), Vec::new(), Vec::new()),
+    ] {
+        let (mut relay, _) = probed(None, Vec::new());
+        let mut fx = Effects::default();
+        let request = Delegated {
+            id: 1,
+            epoch: 1,
+            request: DelegatedRequest::ClipboardReadMime {
+                selection: "p".into(),
+                mimes: mimes.into_iter().map(str::to_owned).collect(),
+                list,
+                name: String::new(),
+                granted: false,
+                can_remember: false,
+            },
+        };
+        relay.delegated(request, Instant::now(), &mut fx);
+        assert_eq!(fx.stdout, b"\x1b]52;p;?\x1b\\");
+        assert!(replies(&fx).is_empty());
+        relay.answer(Answer::Clipboard(data), Instant::now(), &mut fx);
+        let expected_contents: Vec<ClipboardRepresentation> = expected_contents;
+        assert_eq!(
+            replies(&fx),
+            [(
+                1,
+                &DelegatedReply::ClipboardMime {
+                    contents: expected_contents,
+                    available: expected_available.into_iter().map(str::to_owned).collect(),
+                    remember: false,
+                    status: ClipboardStatus::Success
+                }
+            )]
+        );
+    }
+}

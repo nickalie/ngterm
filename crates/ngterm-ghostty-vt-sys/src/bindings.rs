@@ -1787,6 +1787,10 @@ const _: () = {
     ["Offset of field: GhosttyClipboardWriteReply::remember"]
         [::std::mem::offset_of!(GhosttyClipboardWriteReply, remember) - 12usize];
 };
+pub const GHOSTTY_CLIPBOARD_ORIGIN_KITTY: GhosttyClipboardOrigin = 0;
+pub const GHOSTTY_CLIPBOARD_ORIGIN_OSC52: GhosttyClipboardOrigin = 1;
+pub const GHOSTTY_CLIPBOARD_ORIGIN_OSC1337: GhosttyClipboardOrigin = 2;
+pub type GhosttyClipboardOrigin = ::std::os::raw::c_int;
 pub type GhosttyClipboardWriteReplyFn = ::std::option::Option<
     unsafe extern "C" fn(write: *const GhosttyClipboardWrite, reply: *const GhosttyClipboardWriteReply),
 >;
@@ -1802,10 +1806,12 @@ pub struct GhosttyClipboardWrite {
     pub can_remember: bool,
     pub ctx: *const ::std::os::raw::c_void,
     pub reply: GhosttyClipboardWriteReplyFn,
+    pub pw: GhosttyString,
+    pub origin: GhosttyClipboardOrigin,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of GhosttyClipboardWrite"][::std::mem::size_of::<GhosttyClipboardWrite>() - 72usize];
+    ["Size of GhosttyClipboardWrite"][::std::mem::size_of::<GhosttyClipboardWrite>() - 96usize];
     ["Alignment of GhosttyClipboardWrite"][::std::mem::align_of::<GhosttyClipboardWrite>() - 8usize];
     ["Offset of field: GhosttyClipboardWrite::size"][::std::mem::offset_of!(GhosttyClipboardWrite, size) - 0usize];
     ["Offset of field: GhosttyClipboardWrite::location"]
@@ -1821,6 +1827,8 @@ const _: () = {
         [::std::mem::offset_of!(GhosttyClipboardWrite, can_remember) - 49usize];
     ["Offset of field: GhosttyClipboardWrite::ctx"][::std::mem::offset_of!(GhosttyClipboardWrite, ctx) - 56usize];
     ["Offset of field: GhosttyClipboardWrite::reply"][::std::mem::offset_of!(GhosttyClipboardWrite, reply) - 64usize];
+    ["Offset of field: GhosttyClipboardWrite::pw"][::std::mem::offset_of!(GhosttyClipboardWrite, pw) - 72usize];
+    ["Offset of field: GhosttyClipboardWrite::origin"][::std::mem::offset_of!(GhosttyClipboardWrite, origin) - 88usize];
 };
 pub type GhosttyTerminalClipboardWriteFn = ::std::option::Option<
     unsafe extern "C" fn(
@@ -1882,10 +1890,12 @@ pub struct GhosttyClipboardRead {
     pub can_remember: bool,
     pub ctx: *const ::std::os::raw::c_void,
     pub reply: GhosttyClipboardReadReplyFn,
+    pub pw: GhosttyString,
+    pub origin: GhosttyClipboardOrigin,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of GhosttyClipboardRead"][::std::mem::size_of::<GhosttyClipboardRead>() - 80usize];
+    ["Size of GhosttyClipboardRead"][::std::mem::size_of::<GhosttyClipboardRead>() - 104usize];
     ["Alignment of GhosttyClipboardRead"][::std::mem::align_of::<GhosttyClipboardRead>() - 8usize];
     ["Offset of field: GhosttyClipboardRead::size"][::std::mem::offset_of!(GhosttyClipboardRead, size) - 0usize];
     ["Offset of field: GhosttyClipboardRead::location"]
@@ -1900,6 +1910,8 @@ const _: () = {
         [::std::mem::offset_of!(GhosttyClipboardRead, can_remember) - 57usize];
     ["Offset of field: GhosttyClipboardRead::ctx"][::std::mem::offset_of!(GhosttyClipboardRead, ctx) - 64usize];
     ["Offset of field: GhosttyClipboardRead::reply"][::std::mem::offset_of!(GhosttyClipboardRead, reply) - 72usize];
+    ["Offset of field: GhosttyClipboardRead::pw"][::std::mem::offset_of!(GhosttyClipboardRead, pw) - 80usize];
+    ["Offset of field: GhosttyClipboardRead::origin"][::std::mem::offset_of!(GhosttyClipboardRead, origin) - 96usize];
 };
 pub type GhosttyTerminalClipboardReadFn = ::std::option::Option<
     unsafe extern "C" fn(

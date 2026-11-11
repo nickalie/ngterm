@@ -31,6 +31,9 @@
 //!   once its header is recognized, however long it takes and whether or not its read is still live, so none of it
 //!   is typed (`super::input`, with what that leaves: a header cut before its `52`, garbage inside an answer).
 //!
+//! - Delegated OSC 52/1337 writes are injected as OSC 52 and completed when emitted. Kitty writes
+//!   receive Unsupported until the attach adapter supports the MIME transaction.
+//!
 //! An outer terminal that answers no DA1 within [`PROBE_GIVE_UP`] gets no fences: barriers are completed empty at
 //! once and clipboard reads denied, and the metadata says it shows no Kitty graphics.
 //!
@@ -41,6 +44,7 @@
 //! Kitty graphics when the outer terminal answered the query and answers fences. It is sent when the probe's fence
 //! comes, again when a refresh's does, and whenever the cell size changes.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -50,6 +54,43 @@ use crate::client::{Barrier, Delegated};
 use crate::protocol::{ColorScheme, DelegatedReply, DelegatedRequest, GridSize, LeadRole, ReplyMetadata, Rgb};
 use crate::server::lead::role_title;
 use crate::server::replies::DELEGATION_WAIT;
+
+fn clipboard_selection(selection: &str) -> &str {
+    match selection {
+        "s" | "p" => selection,
+        _ => "c",
+    }
+}
+
+/// HEAD's text-only attach adapter. MIME requests succeed empty when the requested type is unavailable.
+fn text_clipboard_reply(request: &DelegatedRequest, data: Option<Vec<u8>>) -> DelegatedReply {
+    let Some(data) = data else {
+        return DelegatedReply::Denied;
+    };
+    let text = (!data.is_empty()).then(|| String::from_utf8_lossy(&data).into_owned());
+    let DelegatedRequest::ClipboardReadMime { mimes, list, .. } = request else {
+        return DelegatedReply::Clipboard { text };
+    };
+    let available = if *list && text.is_some() {
+        vec!["text/plain".into()]
+    } else {
+        Vec::new()
+    };
+    let contents = text
+        .filter(|_| mimes.iter().any(|mime| mime == "text/plain"))
+        .into_iter()
+        .map(|text| crate::protocol::ClipboardRepresentation {
+            mime: "text/plain".into(),
+            data: text.into_bytes(),
+        })
+        .collect();
+    DelegatedReply::ClipboardMime {
+        contents,
+        available,
+        remember: false,
+        status: crate::protocol::ClipboardStatus::Success,
+    }
+}
 
 /// How long the client's own sequences wait for the output to stand at ground before CAN ends what the program left
 /// unfinished (zmx's `DEADLINE_MS`).
@@ -107,6 +148,7 @@ struct Injection {
     fence: Option<Fence>,
     /// The bytes are the clipboard read's query ([`Relay::outer_read`]).
     clipboard_read: bool,
+    completion: Option<(Delegated, DelegatedReply)>,
 }
 
 /// The clipboard read asked of the outer terminal, or to be (module docs).
@@ -267,21 +309,32 @@ impl Relay {
         }
     }
 
+    /// Program output excludes clipboard operations resolved through delegation. Snapshots replay recovery values.
+    pub fn delegated_output(&mut self, bytes: &[u8], fx: &mut Effects) {
+        self.filter.delegated_clipboards(true, &mut fx.stdout);
+        self.output_filtered(bytes, fx);
+    }
+
     /// The session's output (a snapshot's bytes too), on its way to the outer terminal.
     pub fn output(&mut self, bytes: &[u8], fx: &mut Effects) {
+        self.filter.delegated_clipboards(false, &mut fx.stdout);
+        self.output_filtered(bytes, fx);
+    }
+
+    fn output_filtered(&mut self, bytes: &[u8], fx: &mut Effects) {
         let mut rest = bytes;
         while !rest.is_empty() {
             if !self.has_pending() {
                 self.filter.feed(rest, &mut fx.stdout);
                 return;
             }
-            if self.filter.at_ground() {
+            if self.filter.can_inject() {
                 self.flush(fx);
                 continue;
             }
             let taken = self.filter.feed_until_ground(rest, &mut fx.stdout);
             rest = &rest[taken..];
-            if self.filter.at_ground() {
+            if self.filter.can_inject() {
                 self.flush(fx);
             }
         }
@@ -294,7 +347,7 @@ impl Relay {
         }
         self.role = Some((role, generation));
         self.waiting_since.get_or_insert(now);
-        if self.filter.at_ground() {
+        if self.filter.can_inject() {
             self.flush(fx);
         }
     }
@@ -311,27 +364,84 @@ impl Relay {
     /// A delegated request: a clipboard read relayed to the outer terminal; denied when it answers no fence or another
     /// read is asked of it (module docs).
     pub fn delegated(&mut self, request: Delegated, now: Instant, fx: &mut Effects) {
+        if matches!(request.request, DelegatedRequest::ClipboardWrite { .. }) {
+            self.delegated_write(request, now, fx);
+            return;
+        }
         if self.fences_work != Some(true) || self.outer_read.is_some() {
             fx.outgoing.push(Outgoing::Answer(request, DelegatedReply::Denied));
             return;
         }
-        let DelegatedRequest::ClipboardRead { selection, .. } = &request.request;
-        let selection = match selection.as_str() {
-            "s" | "p" => selection.as_str(),
-            _ => "c",
+        let selection = match &request.request {
+            DelegatedRequest::ClipboardRead { selection, .. }
+            | DelegatedRequest::ClipboardReadMime { selection, .. } => selection,
+            DelegatedRequest::ClipboardWrite { .. } => return,
         };
+        let selection = clipboard_selection(selection);
         let bytes = format!("\x1b]52;{selection};?\x1b\\").into_bytes();
         self.outer_read = Some(OuterRead {
             request: Some(request),
             deadline: now + DELEGATION_WAIT,
             asked: false,
         });
-        let injection = Injection {
-            bytes,
-            fence: None,
-            clipboard_read: true,
+        self.inject(
+            Injection {
+                bytes,
+                fence: None,
+                clipboard_read: true,
+                completion: None,
+            },
+            now,
+            fx,
+        );
+    }
+
+    /// The legacy text writer completes only when its bytes enter the stdout effect, never while queued.
+    fn delegated_write(&mut self, request: Delegated, now: Instant, fx: &mut Effects) {
+        let DelegatedRequest::ClipboardWrite {
+            selection,
+            contents,
+            kitty,
+            ..
+        } = &request.request
+        else {
+            return;
         };
-        self.inject(injection, now, fx);
+        let text = contents
+            .iter()
+            .find(|content| content.mime == "text/plain" || content.mime.starts_with("text/plain;"));
+        if *kitty || (!contents.is_empty() && text.is_none()) {
+            fx.outgoing.push(Outgoing::Answer(
+                request,
+                DelegatedReply::ClipboardWrite {
+                    status: crate::protocol::ClipboardStatus::Unsupported,
+                    remember: false,
+                },
+            ));
+            return;
+        }
+        let selection = clipboard_selection(selection);
+        let bytes = format!(
+            "\x1b]52;{selection};{}\x1b\\",
+            STANDARD.encode(text.map_or(&[][..], |content| content.data.as_slice()))
+        )
+        .into_bytes();
+        self.inject(
+            Injection {
+                bytes,
+                fence: None,
+                clipboard_read: false,
+                completion: Some((
+                    request,
+                    DelegatedReply::ClipboardWrite {
+                        status: crate::protocol::ClipboardStatus::Success,
+                        remember: false,
+                    },
+                )),
+            },
+            now,
+            fx,
+        );
     }
 
     /// The outer terminal's answer to the clipboard read asked of it, or to none (dropped).
@@ -343,13 +453,7 @@ impl Relay {
             // the unresolved read's answer: the next read may be asked
             return;
         };
-        let reply = match data {
-            Some(data) if data.is_empty() => DelegatedReply::Clipboard { text: None },
-            Some(data) => DelegatedReply::Clipboard {
-                text: Some(String::from_utf8_lossy(&data).into_owned()),
-            },
-            None => DelegatedReply::Denied,
-        };
+        let reply = text_clipboard_reply(&request.request, data);
         fx.outgoing.push(Outgoing::Answer(request, reply));
     }
 
@@ -418,7 +522,7 @@ impl Relay {
             }
         }
         self.pending
-            .retain(|injection| !matches!(injection.fence, Some(Fence::Kitty(_))));
+            .retain(|injection| !matches!(injection.fence, Some(Fence::Kitty(_))) && injection.completion.is_none());
         let _ = self.give_up_read();
         self.role = None;
         self.unqueued();
@@ -463,7 +567,7 @@ impl Relay {
             .waiting_since
             .is_some_and(|since| now.saturating_duration_since(since) >= INJECT_WAIT)
         {
-            if !self.filter.at_ground() {
+            if !self.filter.can_inject() {
                 self.filter.cancel(&mut fx.stdout);
             }
             self.flush(fx);
@@ -496,6 +600,7 @@ impl Relay {
             bytes,
             fence,
             clipboard_read: false,
+            completion: None,
         };
         self.inject(injection, now, fx);
     }
@@ -503,7 +608,7 @@ impl Relay {
     fn inject(&mut self, injection: Injection, now: Instant, fx: &mut Effects) {
         self.pending.push(injection);
         self.waiting_since.get_or_insert(now);
-        if self.filter.at_ground() {
+        if self.filter.can_inject() {
             self.flush(fx);
         }
     }
@@ -521,6 +626,9 @@ impl Relay {
             }
             if injection.clipboard_read {
                 self.asked();
+            }
+            if let Some((request, reply)) = injection.completion {
+                fx.outgoing.push(Outgoing::Answer(request, reply));
             }
         }
         self.waiting_since = None;

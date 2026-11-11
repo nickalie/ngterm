@@ -63,6 +63,11 @@ fn osc_sequences_and_bel_become_events_in_stream_order() {
             PaneEvent::Progress(Progress::Set(50)),
             PaneEvent::Bell,
             PaneEvent::ClipboardWrite(ClipboardWrite {
+                id: 1,
+                name: String::new(),
+                granted: false,
+                can_remember: false,
+                permission_scope: ngterm_term::ClipboardPermissionScope::Osc52,
                 location: ClipboardLocation::Primary,
                 contents: vec![ClipboardContent {
                     mime: "text/plain".to_owned(),
@@ -154,7 +159,7 @@ fn clipboard_round_trip(request: &str, answer: ClipboardAnswer, reply_len: usize
     let read = events
         .iter()
         .find_map(|event| match event {
-            PaneEvent::ClipboardRead(read) => Some(*read),
+            PaneEvent::ClipboardRead(read) => Some(read.clone()),
             _ => None,
         })
         .ok_or("no clipboard read")?;

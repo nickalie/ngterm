@@ -1081,3 +1081,76 @@ fn the_api_replies_are_the_session_hosts_types_field_for_field() {
     );
     assert_eq!(ngterm_host::ProcessRecord::from(process), record);
 }
+
+#[test]
+fn clipboard_mime_permission_completion_and_paste_round_trip_binary_bytes() {
+    use ngterm_session::protocol::{ClipboardPaste, ClipboardRepresentation, ClipboardStatus};
+    let contents = vec![ClipboardRepresentation {
+        mime: "application/octet-stream".into(),
+        data: (0..=255).cycle().take(4097).collect(),
+    }];
+    let requests = [
+        DelegatedRequest::ClipboardReadMime {
+            selection: "p".into(),
+            mimes: vec!["image/png".into(), "text/html".into()],
+            list: true,
+            name: "untrusted".into(),
+            granted: true,
+            can_remember: true,
+        },
+        DelegatedRequest::ClipboardWrite {
+            selection: "c".into(),
+            contents: contents.clone(),
+            name: "untrusted".into(),
+            granted: false,
+            can_remember: true,
+            kitty: true,
+        },
+        DelegatedRequest::ClipboardWrite {
+            selection: "c".into(),
+            contents: Vec::new(),
+            name: String::new(),
+            granted: false,
+            can_remember: false,
+            kitty: false,
+        },
+    ];
+    for request in requests {
+        roundtrip_message(&AttachServerMessage::DelegatedRequest {
+            id: 1,
+            epoch: 2,
+            request,
+        })
+        .unwrap();
+    }
+    for status in [
+        ClipboardStatus::Success,
+        ClipboardStatus::Denied,
+        ClipboardStatus::Unsupported,
+        ClipboardStatus::Busy,
+        ClipboardStatus::InvalidData,
+        ClipboardStatus::IoError,
+    ] {
+        for reply in [
+            DelegatedReply::ClipboardWrite { status, remember: true },
+            DelegatedReply::ClipboardMime {
+                contents: contents.clone(),
+                available: vec!["application/octet-stream".into()],
+                remember: true,
+                status,
+            },
+        ] {
+            roundtrip_message(&AttachClientMessage::DelegatedReply { id: 1, epoch: 2, reply }).unwrap();
+        }
+    }
+    roundtrip_message(&AttachClientMessage::ClipboardPaste {
+        epoch: 2,
+        paste: ClipboardPaste {
+            contents,
+            text_source: false,
+            selection: "p".into(),
+            allow_unsafe: true,
+        },
+    })
+    .unwrap();
+}

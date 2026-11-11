@@ -819,6 +819,45 @@ fn the_bell_and_clipboard_writes_reach_the_app_with_the_clipboard_they_name() {
 }
 
 #[test]
+fn clipboard_write_completion_unblocks_output_and_nontext_never_clears() {
+    let mut fixture = Fixture::connected();
+    let _pane = fixture.show();
+    let mut opened = fixture.attach();
+    for (location, mime, expected_status, expected_text) in [
+        ("clipboard", "dGV4dC9wbGFpbg==", "DONE", Some("hi")),
+        ("primary", "dGV4dC9wbGFpbg==", "ENOSYS", Some("hi")),
+        ("clipboard", "aW1hZ2UvcG5n", "ENOSYS", None),
+    ] {
+        send(&opened.peer, format!(
+            "\x1b]5522;type=write:loc={location}\x1b\\\x1b]5522;type=wdata:mime={mime};aGk=\x1b\\\x1b]5522;type=wdata\x1b\\\x1b[5n"
+        ).as_bytes());
+        let (bytes, _) = inputs_until(&mut opened.peer, |bytes, _| contains(bytes, b"\x1b[0n"));
+        assert_eq!(
+            bytes,
+            format!("\x1b]5522;type=write:status={expected_status}\x1b\\\x1b[0n").as_bytes()
+        );
+        let writes: Vec<_> = fixture
+            .quiet()
+            .into_iter()
+            .filter_map(|event| match event {
+                MobileEvent::ClipboardWrite { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            writes,
+            expected_text
+                .map(|text| vec![Some(text.to_owned())])
+                .unwrap_or_default()
+        );
+    }
+    send(&opened.peer, b"\x1b]52;c;\x07\x1b[5n");
+    let (bytes, _) = inputs_until(&mut opened.peer, |bytes, _| contains(bytes, b"\x1b[0n"));
+    assert_eq!(bytes, b"\x1b[0n");
+    fixture.next(|event| matches!(event, MobileEvent::ClipboardWrite { text: None, .. }).then_some(()));
+}
+
+#[test]
 fn showing_a_shown_pane_hands_back_the_same_pane_and_attaches_nothing_more() {
     let mut fixture = Fixture::connected();
     let first = fixture.show();

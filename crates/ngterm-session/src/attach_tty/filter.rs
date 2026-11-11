@@ -29,12 +29,16 @@
 //!
 //! A string the filter dropped and ended with ESC takes the `\` of its ST with it. The Kitty graphics commands (APC G)
 //! pass: the outer terminal shows the images, and the reply owner's terminal answers them (`super::owner`).
+//!
+//! With delegated clipboards enabled, all OSC 52, OSC 5522 and OSC 1337 Copy= commands, writes included,
+//! are suppressed as soon as their prefix is known. Snapshots forward them for recovery replay.
+//! [`OutputFilter::clipboard_only`] keeps only this suppression for live viewers, without outer-terminal rewrites.
 
 /// The longest CSI held for classification: a longer one is no query, and is passed on as it comes.
 pub const CSI_LIMIT: usize = 256;
 
-/// The longest OSC held for classification: a longer one (a clipboard write, a notification) is no query, and is
-/// passed on as it comes.
+/// The longest OSC payload held for classification, excluding ignored C0 bytes. A longer non-clipboard
+/// string (for example a notification) passes as it comes; delegated clipboard commands are dropped at their prefix.
 pub const STRING_LIMIT: usize = 4096;
 
 const ENQ: u8 = 0x05;
@@ -80,6 +84,18 @@ enum Verdict {
     Rewrite(Vec<u8>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipboardWrites {
+    Forward,
+    Delegate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilterMode {
+    OuterTerminal,
+    ClipboardOnly,
+}
+
 /// The output filter of one attach stream (module docs). Its state carries across reads and across snapshots, as the
 /// session's stream does.
 #[derive(Debug)]
@@ -98,6 +114,9 @@ pub struct OutputFilter {
     held_string_exit: bool,
     /// Written after every RIS that passes.
     after_reset: &'static [u8],
+    clipboard_writes: ClipboardWrites,
+    clipboard_osc: bool,
+    mode: FilterMode,
 }
 
 impl Default for OutputFilter {
@@ -118,6 +137,54 @@ impl OutputFilter {
             dropped_st: false,
             held_string_exit: false,
             after_reset: &[],
+            clipboard_writes: ClipboardWrites::Forward,
+            clipboard_osc: false,
+            mode: FilterMode::OuterTerminal,
+        }
+    }
+
+    /// Filter delegated clipboard OSCs for a live VT without changing queries, modes or prompt marks.
+    #[must_use]
+    pub fn clipboard_only() -> Self {
+        Self {
+            mode: FilterMode::ClipboardOnly,
+            ..Self::new()
+        }
+    }
+
+    /// Bytes may be injected after a suppressed string's ESC: no prefix reached the receiving terminal.
+    /// Keep the parser's escape state so its eventual ST backslash is still consumed.
+    #[must_use]
+    pub fn can_inject(&self) -> bool {
+        self.at_ground() || (self.state == State::Escape && self.dropped_st)
+    }
+
+    /// Ordinary output delegates clipboard commands; snapshots replay recovery values. If a snapshot
+    /// forwarded an unfinished large clipboard OSC, cancel that prefix before suppressing its remaining bytes.
+    pub fn delegated_clipboards(&mut self, delegated: bool, out: &mut Vec<u8>) {
+        self.clipboard_writes = if delegated {
+            ClipboardWrites::Delegate
+        } else {
+            ClipboardWrites::Forward
+        };
+        if delegated && self.state == State::Osc && self.clipboard_osc && self.fate != Fate::Drop {
+            if self.fate == Fate::Pass {
+                out.push(CAN);
+            }
+            self.preserve_string_exit(out);
+            self.held.clear();
+            self.fate = Fate::Drop;
+        }
+    }
+
+    /// A C API viewer must dispatch an APC at its terminating ESC before completing the server's barrier.
+    /// The filter retains this ESC for parsing ST; replaying it later only resets the viewer's escape state.
+    #[must_use]
+    pub fn apc_dispatch_prefix(&self) -> &'static [u8] {
+        if self.state == State::Escape && self.held_string_exit && self.held.as_slice() == [ESC] {
+            &[ESC]
+        } else {
+            &[]
         }
     }
 
@@ -179,7 +246,7 @@ impl OutputFilter {
                     self.begin(State::Escape, byte);
                     return at + 1;
                 }
-                ENQ => {
+                ENQ if self.mode == FilterMode::OuterTerminal => {
                     out.extend_from_slice(&bytes[..at]);
                     self.utf8 = 0;
                     return at + 1;
@@ -204,6 +271,7 @@ impl OutputFilter {
     /// Starts holding a sequence in `state` with its introducer `byte`.
     fn begin(&mut self, state: State, byte: u8) {
         self.held_string_exit = false;
+        self.clipboard_osc = false;
         self.held.clear();
         self.held.push(byte);
         self.fate = Fate::Hold;
@@ -311,7 +379,7 @@ impl OutputFilter {
                 self.state = State::SosPmApc;
             }
             // DECID: Ghostty answers it as DA1
-            b'Z' => self.finish(byte, out, &Verdict::Drop),
+            b'Z' if self.mode == FilterMode::OuterTerminal => self.finish(byte, out, &Verdict::Drop),
             0x20..=0x2F => self.enter(State::EscapeIntermediate, byte),
             b'c' => {
                 self.finish(byte, out, &Verdict::Keep);
@@ -332,7 +400,7 @@ impl OutputFilter {
     fn csi(&mut self, byte: u8, out: &mut Vec<u8>) {
         match byte {
             0x40..=0x7E => {
-                let verdict = if self.fate == Fate::Hold {
+                let verdict = if self.fate == Fate::Hold && self.mode == FilterMode::OuterTerminal {
                     self.held.push(byte);
                     let verdict = classify_held_csi(&self.held);
                     self.held.pop();
@@ -369,7 +437,7 @@ impl OutputFilter {
         match next {
             State::DcsPassthrough => {
                 self.held.push(byte);
-                if is_dcs_query(&self.held) {
+                if self.mode == FilterMode::OuterTerminal && is_dcs_query(&self.held) {
                     self.preserve_string_exit(out);
                     self.held.clear();
                     self.fate = Fate::Drop;
@@ -428,7 +496,7 @@ impl OutputFilter {
     fn osc(&mut self, byte: u8, out: &mut Vec<u8>) {
         match byte {
             BEL | ESC => {
-                let verdict = if self.fate == Fate::Hold {
+                let verdict = if self.fate == Fate::Hold && self.mode == FilterMode::OuterTerminal {
                     classify_osc(&self.held[self.body..])
                 } else {
                     Verdict::Keep
@@ -464,9 +532,33 @@ impl OutputFilter {
                 out.push(byte);
                 self.state = State::Ground;
             }
-            _ => self.push_held(byte, STRING_LIMIT, out),
+            _ => self.osc_payload(byte, out),
         }
     }
+
+    fn osc_payload(&mut self, byte: u8, out: &mut Vec<u8>) {
+        // Ghostty ignores C0 inside OSC. Discard them while classifying rather than allowing padding
+        // to exhaust the bound before a clipboard prefix is recognized (or retaining unbounded padding).
+        if self.fate == Fate::Hold && byte < 0x20 {
+            return;
+        }
+        self.push_held(byte, STRING_LIMIT, out);
+        if self.fate != Fate::Hold {
+            return;
+        }
+        self.clipboard_osc |= clipboard_osc(&self.held[self.body..]);
+        if self.clipboard_osc && self.clipboard_writes == ClipboardWrites::Delegate {
+            self.preserve_string_exit(out);
+            self.held.clear();
+            self.fate = Fate::Drop;
+        }
+    }
+}
+
+fn clipboard_osc(body: &[u8]) -> bool {
+    [b"52;".as_slice(), b"5522;", b"1337;Copy="]
+        .iter()
+        .any(|prefix| body.starts_with(prefix))
 }
 
 /// C0 controls that execute (or are ignored) without leaving a state: everything below 0x20 but CAN, SUB and ESC.

@@ -1,4 +1,4 @@
-//! Finds clipboard reads in a VT stream before the terminal parses them (`terminal.h`'s clipboard read callback), so a
+//! Finds clipboard reads and write-commit boundaries in a VT stream before the terminal parses them (`terminal.h`'s clipboard read callback), so a
 //! reader can stop right before the byte that makes Ghostty dispatch one.
 //!
 //! The read callback is synchronous: the stream waits inside [`Terminal::vt_write`](crate::Terminal::vt_write) until it
@@ -32,6 +32,8 @@ pub(crate) const MAX_BODY: usize = 4096;
 pub enum ReadScope {
     Data,
     ListOnly,
+    /// A write commit boundary: assembly and validation remain Ghostty's.
+    Write,
 }
 
 /// A clipboard read found in the stream.
@@ -39,6 +41,23 @@ pub enum ReadScope {
 pub struct ReadCandidate {
     pub location: ClipboardLocation,
     pub scope: ReadScope,
+}
+
+/// Metadata copied before a read dispatch. The effective callback password is compared before serving it.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ClipboardReadDetails {
+    pub mimes: Vec<String>,
+    pub list: bool,
+    pub name: String,
+    pub pw: Vec<u8>,
+}
+impl std::fmt::Debug for ClipboardReadDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClipboardReadDetails")
+            .field("mimes", &self.mimes)
+            .field("list", &self.list)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What the payload of the SOS, PM or APC string in progress starts with.
@@ -115,7 +134,7 @@ fn anywhere(byte: u8) -> Option<State> {
 }
 
 impl Scanner {
-    /// Advance over `bytes` until the dispatch byte of a clipboard read: returns its offset (the byte is consumed, so
+    /// Advance over `bytes` until a clipboard read or write commit dispatch byte: returns its offset (the byte is consumed, so
     /// the next call starts after it) and the read, or `None` when `bytes` holds none.
     pub fn find(&mut self, bytes: &[u8]) -> Option<(usize, ReadCandidate)> {
         for (offset, &byte) in bytes.iter().enumerate() {
@@ -124,6 +143,49 @@ impl Scanner {
             }
         }
         None
+    }
+
+    /// Whether the candidate came from OSC 5522.
+    #[must_use]
+    pub fn kitty_clipboard(&self) -> bool {
+        self.body.starts_with(b"5522;")
+    }
+
+    /// Metadata of the candidate most recently returned by `find`.
+    #[must_use]
+    pub fn read_details(&self) -> ClipboardReadDetails {
+        let Some(rest) = self.body.strip_prefix(b"5522;") else {
+            return ClipboardReadDetails {
+                mimes: vec!["text/plain".into()],
+                ..ClipboardReadDetails::default()
+            };
+        };
+        let (raw, payload) = rest
+            .iter()
+            .position(|byte| *byte == b';')
+            .map_or((rest, &[][..]), |at| (&rest[..at], &rest[at + 1..]));
+        let Some(fields) = metadata(raw) else {
+            return ClipboardReadDetails::default();
+        };
+        let mimes = BASE64.decode(payload).unwrap_or_default();
+        let mimes = String::from_utf8_lossy(&mimes);
+        let name = BASE64.decode(fields.name).unwrap_or_default();
+        let pw = if name.is_empty() {
+            Vec::new()
+        } else {
+            BASE64.decode(fields.pw).unwrap_or_default()
+        };
+        ClipboardReadDetails {
+            mimes: mimes
+                .split_ascii_whitespace()
+                .filter(|mime| *mime != ".")
+                .take(4)
+                .map(str::to_owned)
+                .collect(),
+            list: mimes.split_ascii_whitespace().any(|mime| mime == "."),
+            name: String::from_utf8_lossy(&name).into_owned(),
+            pw: if pw.len() <= MAX_PW_LEN { pw } else { Vec::new() },
+        }
     }
 
     /// One byte; `Some` when it dispatched an OSC that is a clipboard read.
@@ -359,6 +421,16 @@ fn kitty(rest: &[u8]) -> Option<ReadCandidate> {
         None => (rest, &[][..]),
     };
     let fields = metadata(raw)?;
+    if fields.op == Some(b"wdata") && BASE64.decode(fields.mime).ok()?.is_empty() {
+        return Some(ReadCandidate {
+            location: if fields.loc == b"primary" {
+                ClipboardLocation::Primary
+            } else {
+                ClipboardLocation::Standard
+            },
+            scope: ReadScope::Write,
+        });
+    }
     if fields.op != Some(b"read") {
         return None;
     }

@@ -21,7 +21,10 @@ use std::rc::Rc;
 use gpui_kit::{App, ClipboardItem, Context, Global};
 use ngterm_core::clipboard_policy::{ClipboardAccess, ClipboardDecision, ClipboardPromptPolicy};
 use ngterm_core::ghostty_config::ClipboardAccess as ConfigAccess;
-use ngterm_term::{ClipboardAnswer, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, PaneEvent, ReadScope};
+use ngterm_term::{
+    ClipboardAnswer, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, ClipboardWriteResult, PaneEvent,
+    ReadScope, WriteCompletion,
+};
 
 use super::{Shared, Terminal};
 
@@ -145,7 +148,7 @@ pub(super) fn handle(shared: &Rc<Shared>, event: &PaneEvent, cx: &mut Context<Te
             true
         }
         PaneEvent::ClipboardRead(read) => {
-            on_read(shared, *read, cx);
+            on_read(shared, read, cx);
             true
         }
         _ => false,
@@ -156,15 +159,16 @@ fn read_text(location: ClipboardLocation, cx: &App) -> Option<String> {
     super::selection_clipboard::read(location, cx).and_then(|item| item.text())
 }
 
-fn on_read(shared: &Rc<Shared>, read: ClipboardReadRequest, cx: &mut App) {
+fn on_read(shared: &Rc<Shared>, read: &ClipboardReadRequest, cx: &mut App) {
+    let (id, location) = (read.id, read.location);
     let answer = move |shared: &Shared, allowed: bool, cx: &App| {
         let answer = if allowed {
-            ClipboardAnswer::Text(read_text(read.location, cx))
+            ClipboardAnswer::Text(read_text(location, cx))
         } else {
             ClipboardAnswer::Denied
         };
         if let Some(pane) = shared.pane() {
-            pane.answer_clipboard_read(read.id, answer);
+            pane.answer_clipboard_read(id, answer);
         }
     };
     if read.scope == ReadScope::ListOnly {
@@ -187,25 +191,50 @@ fn on_read(shared: &Rc<Shared>, read: ClipboardReadRequest, cx: &mut App) {
 }
 
 fn on_write(shared: &Rc<Shared>, write: &ClipboardWrite, cx: &mut App) {
-    let Some(text) = write
-        .contents
-        .iter()
-        .find(|content| content.mime == TEXT || content.mime.starts_with("text/plain;"))
-        .map(|content| String::from_utf8_lossy(&content.data).into_owned())
-    else {
+    let text = if write.contents.is_empty() {
+        Some(String::new())
+    } else {
+        write
+            .contents
+            .iter()
+            .find(|content| content.mime == TEXT || content.mime.starts_with("text/plain;"))
+            .map(|content| String::from_utf8_lossy(&content.data).into_owned())
+    };
+    let Some(text) = text else {
+        complete_write(shared, write.id, ClipboardWriteResult::Unsupported);
         return;
     };
     let location = write.location;
+    let id = write.id;
+    let requester = Rc::clone(shared);
     let perform = move |allowed: bool, cx: &mut App| {
-        if !allowed {
-            return;
-        }
-        super::selection_clipboard::write(location, ClipboardItem::new_string(text), cx);
+        let status = if allowed {
+            super::selection_clipboard::write(location, ClipboardItem::new_string(text), cx);
+            ClipboardWriteResult::Success
+        } else {
+            ClipboardWriteResult::Denied
+        };
+        complete_write(&requester, id, status);
     };
     match shared.config().clipboard.write {
         ConfigAccess::Allow => perform(true, cx),
-        ConfigAccess::Deny => {}
+        ConfigAccess::Deny => perform(false, cx),
         ConfigAccess::Ask => request(ClipboardAccess::Write, shared, cx, Box::new(perform)),
+    }
+}
+
+/// Recovery replay (id zero) carries no request to complete.
+fn complete_write(shared: &Shared, id: u64, status: ClipboardWriteResult) {
+    if id != 0
+        && let Some(pane) = shared.pane()
+    {
+        pane.answer_clipboard_write(
+            id,
+            WriteCompletion {
+                status,
+                remember: false,
+            },
+        );
     }
 }
 

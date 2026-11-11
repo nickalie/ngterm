@@ -68,8 +68,9 @@ pub const MAGIC: [u8; 4] = *b"AGLS";
 /// The protocol of this build's message frames. Bumped whenever a message type's postcard layout changes (2: the reply
 /// owner's [`AttachServerMessage::ReplyOwner`], its Kitty graphics answers by [`AttachServerMessage::KittyBarrier`] and
 /// [`AttachClientMessage::KittyComplete`], the colour scheme in [`ReplyMetadata`], the list-only clipboard read;
-/// 3: [`AttachClientMessage::ConfigReload`] reports even unchanged colour schemes after a config reload).
-pub const PROTOCOL_VERSION: u32 = 3;
+/// 3: [`AttachClientMessage::ConfigReload`] reports even unchanged colour schemes after a config reload;
+/// 4: binary MIME clipboard requests, native-write completions, and authoritative clipboard pastes).
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// The size of a frame's header: magic, protocol, kind, length.
 pub const HEADER_LEN: usize = 16;
@@ -944,6 +945,9 @@ pub enum AttachClientMessage {
     Attach(AttachRequest),
     /// Input for the session's program.
     Input { data: Vec<u8> },
+    /// Paste generated on the authoritative terminal, accepted only from the reply owner in this epoch.
+    ClipboardPaste { epoch: u64, paste: ClipboardPaste },
+
     /// The client's grid changed; applied only while the client leads.
     Resize { size: GridSize },
     /// The client's facts for the replies the server gives on its behalf changed (they replace the earlier ones
@@ -1105,18 +1109,97 @@ pub enum LeadRole {
     Follower,
 }
 
+/// Clipboard paste contents and source, generated on the authoritative terminal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipboardPaste {
+    pub contents: Vec<ClipboardRepresentation>,
+    pub text_source: bool,
+    pub selection: String,
+    pub allow_unsafe: bool,
+}
+
+/// Binary-safe clipboard representation; zero entries means clear.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipboardRepresentation {
+    pub mime: String,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClipboardStatus {
+    Success,
+    Denied,
+    Unsupported,
+    Busy,
+    InvalidData,
+    IoError,
+}
+impl ClipboardStatus {
+    #[must_use]
+    pub fn engine(self) -> ngterm_ghostty_vt::ClipboardWriteResult {
+        use ngterm_ghostty_vt::ClipboardWriteResult as Result;
+        match self {
+            Self::Success => Result::Success,
+            Self::Denied => Result::Denied,
+            Self::Unsupported => Result::Unsupported,
+            Self::Busy => Result::Busy,
+            Self::InvalidData => Result::InvalidData,
+            Self::IoError => Result::IoError,
+        }
+    }
+}
+impl From<ngterm_ghostty_vt::ClipboardWriteResult> for ClipboardStatus {
+    fn from(status: ngterm_ghostty_vt::ClipboardWriteResult) -> Self {
+        use ngterm_ghostty_vt::ClipboardWriteResult as Result;
+        match status {
+            Result::Success => Self::Success,
+            Result::Denied => Self::Denied,
+            Result::Unsupported => Self::Unsupported,
+            Result::Busy => Self::Busy,
+            Result::InvalidData => Self::InvalidData,
+            Result::IoError => Self::IoError,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DelegatedRequest {
-    /// A program's clipboard read (OSC 52, or Kitty's OSC 5522) of `selection`: `c` the clipboard, `s` the selection
-    /// clipboard, `p` the primary selection. `list_only`: it asks only which types the clipboard holds (Kitty's `.`
-    /// target), which needs no consent; the program is never served the contents for it.
+    /// An OSC 52 read of `selection`: `c` standard, `s` selection, `p` primary.
+    /// `list_only` never serves contents and requires no consent.
     ClipboardRead { selection: String, list_only: bool },
+    /// A Kitty read/listing; `granted` is computed by the server from its terminal token grants.
+    ClipboardReadMime {
+        selection: String,
+        mimes: Vec<String>,
+        list: bool,
+        name: String,
+        granted: bool,
+        can_remember: bool,
+    },
+    /// A committed write; server-computed `granted` conveys token consent, and `kitty` selects Kitty policy.
+    ClipboardWrite {
+        selection: String,
+        contents: Vec<ClipboardRepresentation>,
+        name: String,
+        granted: bool,
+        can_remember: bool,
+        kitty: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DelegatedReply {
     /// The clipboard's text; `None` when it holds none (the program reads an empty clipboard).
     Clipboard { text: Option<String> },
+    /// MIME read/listing result; `status` is the native outcome and `remember` grants this read token.
+    ClipboardMime {
+        contents: Vec<ClipboardRepresentation>,
+        available: Vec<String>,
+        remember: bool,
+        status: ClipboardStatus,
+    },
+    /// Native write completion; `status` controls the program ACK, `remember` grants this write token.
+    ClipboardWrite { status: ClipboardStatus, remember: bool },
     /// Refused by policy or by the user: the program reads an empty clipboard (OSC 52) or `EPERM` (OSC 5522).
     Denied,
 }

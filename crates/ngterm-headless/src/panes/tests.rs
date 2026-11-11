@@ -429,6 +429,17 @@ fn sync_mounts_all_split_panes_once_and_follows_the_models_roles_and_closes() {
 #[cfg(unix)]
 #[test]
 fn a_programs_clipboard_read_is_denied_so_its_output_keeps_flowing() {
+    clipboard_unblocks(r"\033]52;c;?\007");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_programs_clipboard_write_is_unsupported_so_its_output_keeps_flowing() {
+    clipboard_unblocks(r"\033]5522;type=write\007\033]5522;type=wdata\007");
+}
+
+#[cfg(unix)]
+fn clipboard_unblocks(sequence: &str) {
     let (mut core, session, primary, _) = split_core();
     let (sender, wake) = std::sync::mpsc::channel();
     let mut panes = Panes::new(
@@ -445,7 +456,7 @@ fn a_programs_clipboard_read_is_denied_so_its_output_keeps_flowing() {
         &session,
         &primary,
         &LaunchSeed {
-            command: Some("stty -echo; printf '\\033]52;c;?\\007after-clipboard\\n'; read -r _".into()),
+            command: Some(format!("stty -echo; printf '{sequence}after-clipboard\\n'; read -r _")),
             wait_after_command: true,
             ..LaunchSeed::default()
         },

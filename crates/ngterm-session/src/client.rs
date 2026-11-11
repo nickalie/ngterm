@@ -673,6 +673,17 @@ impl AttachWriter {
         self.send(&AttachClientMessage::Input { data: data.to_vec() })
     }
 
+    /// Generate a paste on the server's terminal in this attach's epoch.
+    ///
+    /// # Errors
+    /// The attach disconnected or the message could not be written.
+    pub fn clipboard_paste(&self, paste: crate::protocol::ClipboardPaste) -> Result<(), ClientError> {
+        self.send(&AttachClientMessage::ClipboardPaste {
+            epoch: self.epoch(),
+            paste,
+        })
+    }
+
     /// The client's grid; the session takes it while the client leads.
     ///
     /// # Errors

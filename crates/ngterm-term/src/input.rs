@@ -548,6 +548,20 @@ impl Pane {
         self.paste_held(lock(&self.shared().vt), text, source, location, allow_unsafe)
     }
 
+    /// Paste every available clipboard representation; mode 5522 advertises their actual MIME types.
+    ///
+    /// # Errors
+    /// As [`Self::paste`].
+    pub fn paste_contents(
+        &self,
+        contents: &[crate::ClipboardContent],
+        source: PasteSource,
+        location: ClipboardLocation,
+        allow_unsafe: bool,
+    ) -> Result<Paste, PaneError> {
+        self.paste_contents_held(lock(&self.shared().vt), contents, source, location, allow_unsafe)
+    }
+
     /// [`Pane::paste`], only while the program's screen is still the one read at `generation`, as [`Pane::key_if`]
     /// sends a key: `None`, nothing pasted, once it changed.
     ///
@@ -573,8 +587,28 @@ impl Pane {
     /// [`Pane::paste`] under the VT lock `vt`.
     fn paste_held(
         &self,
-        mut vt: std::sync::MutexGuard<'_, Vt>,
+        vt: std::sync::MutexGuard<'_, Vt>,
         text: &str,
+        source: PasteSource,
+        location: ClipboardLocation,
+        allow_unsafe: bool,
+    ) -> Result<Paste, PaneError> {
+        self.paste_contents_held(
+            vt,
+            &[crate::ClipboardContent {
+                mime: "text/plain".into(),
+                data: text.as_bytes().to_vec(),
+            }],
+            source,
+            location,
+            allow_unsafe,
+        )
+    }
+
+    fn paste_contents_held(
+        &self,
+        mut vt: std::sync::MutexGuard<'_, Vt>,
+        contents: &[crate::ClipboardContent],
         source: PasteSource,
         location: ClipboardLocation,
         allow_unsafe: bool,
@@ -582,18 +616,47 @@ impl Pane {
         // the terminal writes the paste through its PTY callback; divert it into one piece of input, so a paste is
         // queued whole or refused whole
         *lock(&self.shared().divert) = Some(Vec::new());
-        let source = match source {
+        let engine_source = match source {
             PasteSource::Clipboard => vt::PasteSource::Clipboard,
             PasteSource::Text => vt::PasteSource::Text,
         };
-        let outcome = vt.terminal.paste(text, source, location.engine(), allow_unsafe);
+        let representations: Vec<_> = contents
+            .iter()
+            .map(|content| vt::ClipboardContent {
+                mime: content.mime.clone(),
+                data: content.data.clone(),
+            })
+            .collect();
+        let outcome = vt
+            .terminal
+            .paste_contents(&representations, engine_source, location.engine(), allow_unsafe);
         let bytes = lock(&self.shared().divert).take().unwrap_or_default();
         let paste = match outcome.map_err(PaneError::terminal)? {
             vt::PasteOutcome::Written => Paste::Written,
             vt::PasteOutcome::Empty => return Ok(Paste::Empty),
             vt::PasteOutcome::Unsafe => return Ok(Paste::Unsafe),
         };
-        self.queue(&bytes)?;
+        let queued_remotely = {
+            #[cfg(feature = "local")]
+            {
+                if let Some(live) = self.live_clipboard() {
+                    live.paste(contents, source, location, allow_unsafe)?;
+                    true
+                } else {
+                    false
+                }
+            }
+            #[cfg(not(feature = "local"))]
+            false
+        };
+        if !queued_remotely {
+            self.queue(&bytes)?;
+            vt.terminal
+                .clipboard_grants()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pasted(&bytes);
+        }
         let moved = vt.scroll_to_bottom();
         drop(vt);
         if moved {

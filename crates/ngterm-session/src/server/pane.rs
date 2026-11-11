@@ -717,6 +717,7 @@ impl Pane {
                 recover(&state, id, &mut data);
                 let (offset, size) = (state.offset, state.size);
                 state.clients.snapshot(id, offset, size, data);
+                state.resume_clipboards();
                 self.release(state);
                 Ok(())
             }
@@ -786,6 +787,39 @@ impl Pane {
             return Ok(false);
         }
         self.actor.write_input(data)?;
+        Ok(true)
+    }
+
+    /// Paste on the authoritative VT only for the current reply owner and epoch.
+    ///
+    /// # Errors
+    /// The actor refused to queue the paste.
+    pub fn clipboard_paste(
+        &self,
+        id: ClientId,
+        epoch: u64,
+        paste: &crate::protocol::ClipboardPaste,
+    ) -> Result<bool, WriteError> {
+        let mut state = self.core.lock();
+        state.prune();
+        if !state.paste_owner(id, epoch) || state.exit.is_some() {
+            return Ok(false);
+        }
+        let contents: Vec<_> = paste
+            .contents
+            .iter()
+            .map(|content| vt::ClipboardContent {
+                mime: content.mime.clone(),
+                data: content.data.clone(),
+            })
+            .collect();
+        let bytes = state.paste_bytes(&contents, paste.text_source, &paste.selection, paste.allow_unsafe);
+        let Some(bytes) = bytes else {
+            return Ok(false);
+        };
+        self.actor.write_input(&bytes)?;
+        let grants = state.terminal.clipboard_grants();
+        grants.lock().unwrap_or_else(PoisonError::into_inner).pasted(&bytes);
         Ok(true)
     }
 
@@ -998,6 +1032,7 @@ impl Pane {
         self.core.outlet.discard(false);
         // The consent scanner follows printed input without delegating its reads.
         state.replies.observe_print(data);
+        state.delegate_printed_writes();
         self.release(state);
         Ok(())
     }
@@ -1934,3 +1969,7 @@ mod tests {
         assert_eq!(unix_seconds(SystemTime::UNIX_EPOCH + Duration::from_secs(5)), 5);
     }
 }
+
+#[cfg(test)]
+#[path = "clipboard_tests.rs"]
+mod clipboard_tests;

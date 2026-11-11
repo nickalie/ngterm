@@ -541,3 +541,6 @@ mod screen_read {
         assert!(!screen.reflowed);
     }
 }
+
+#[path = "clipboard_cases.rs"]
+mod clipboard_cases;

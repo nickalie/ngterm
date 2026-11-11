@@ -34,6 +34,7 @@ pub struct Terminal {
     pub(crate) history: Option<PendingHistory>,
     raw: Handle<ffi::GhosttyTerminalImpl>,
     effects: Option<EffectsSlot>,
+    grants: std::sync::Arc<std::sync::Mutex<crate::ClipboardGrants>>,
 }
 
 // SAFETY: libghostty-vt creates no threads and keeps no thread-local state (`grep threadlocal src/terminal` is empty
@@ -61,6 +62,7 @@ impl Terminal {
             history: None,
             raw: Handle::new(raw, ffi::ghostty_terminal_free)?,
             effects: None,
+            grants: std::sync::Arc::default(),
         })
     }
 
@@ -71,7 +73,7 @@ impl Terminal {
     ///
     /// The library's result when an option is refused (a library without one of the bound options).
     pub fn set_effects(&mut self, effects: Box<dyn Effects>) -> Result<(), Error> {
-        let slot = EffectsSlot::new(effects);
+        let slot = EffectsSlot::with_grants(effects, std::sync::Arc::clone(&self.grants));
         // SAFETY: `self.raw` is live and `&mut self` serializes the call; the userdata is the slot's heap pointer,
         // which stays valid until the slot is replaced or dropped after the terminal (field order).
         let result =
@@ -85,6 +87,12 @@ impl Terminal {
         }
         drop(previous);
         Ok(())
+    }
+
+    /// This terminal's grant table. Serialize paste queueing and token registration under the terminal lock.
+    #[must_use]
+    pub fn clipboard_grants(&self) -> std::sync::Arc<std::sync::Mutex<crate::ClipboardGrants>> {
+        std::sync::Arc::clone(&self.grants)
     }
 
     /// Set the scrollback limits; lowering one prunes history right away.
@@ -612,6 +620,7 @@ impl Terminal {
             history: None,
             raw: Handle::new(raw, ffi::ghostty_terminal_free)?,
             effects: None,
+            grants: std::sync::Arc::default(),
         })
     }
 

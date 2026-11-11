@@ -47,6 +47,11 @@ fn writes_keep_the_clipboard_on_refusal_or_nontext_and_accept_text_parameters(cx
     });
     let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
     let write = |mime: &str| ClipboardWrite {
+        id: 0,
+        name: String::new(),
+        granted: false,
+        can_remember: false,
+        permission_scope: ngterm_term::ClipboardPermissionScope::Osc52,
         location: ClipboardLocation::Standard,
         contents: vec![ngterm_term::ClipboardContent {
             mime: mime.into(),
@@ -149,4 +154,101 @@ fn denied_reads_release_the_pane_without_pasting_clipboard_data(cx: &mut gpui_ki
         !f.cx
             .update(|window, cx| crate::modal::alert_open(window.window_handle(), cx))
     );
+}
+
+#[gpui_kit::test]
+fn writes_complete_after_allow_deny_prompt_or_unsupported_and_output_resumes(cx: &mut gpui_kit::TestAppContext) {
+    let text = "\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;aGk=\x1b\\";
+    for (policy, decision, status, expected) in [
+        (ConfigAccess::Allow, None, "DONE", "hi"),
+        (ConfigAccess::Deny, None, "EPERM", "before"),
+        (ConfigAccess::Ask, Some(true), "DONE", "hi"),
+        (ConfigAccess::Ask, Some(false), "EPERM", "before"),
+    ] {
+        assert_eq!(stream_write(cx, policy, text, status, decision), expected);
+    }
+    assert_eq!(
+        stream_write(
+            cx,
+            ConfigAccess::Allow,
+            "\x1b]5522;type=wdata:mime=aW1hZ2UvcG5n;aGk=\x1b\\",
+            "ENOSYS",
+            None
+        ),
+        "before"
+    );
+    assert_eq!(stream_write(cx, ConfigAccess::Allow, "", "DONE", None), "");
+}
+
+/// Exercise the real IO rendezvous through the production GPUI adapter, on every host without a child shell.
+fn stream_write(
+    cx: &mut gpui_kit::TestAppContext,
+    policy: ConfigAccess,
+    contents: &str,
+    status: &str,
+    decision: Option<bool>,
+) -> String {
+    use ngterm_term::{Outgoing, Pane, PaneConfig};
+    use std::time::{Duration, Instant};
+    cx.executor().allow_parking();
+    let (sent, received) = std::sync::mpsc::channel();
+    let spawn = Box::new(move |config: PaneConfig| {
+        let (pane, feed, out) = Pane::stream(&config)?;
+        sent.send((feed, out)).unwrap();
+        Ok(pane)
+    });
+    let mut config = TerminalConfig::default();
+    config.clipboard.write = policy;
+    let terminal = cx.new(|cx| Terminal::new(TerminalSpec::default(), config, spawn, cx));
+    let (_view, cx) =
+        cx.add_window_view(|_, cx| super::super::TerminalView::new(&terminal, super::super::ViewRole::Owner, cx));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let (feed, out) = loop {
+        cx.run_until_parked();
+        if let Ok(io) = received.try_recv() {
+            break io;
+        }
+        assert!(Instant::now() < deadline, "stream pane did not start");
+        std::thread::yield_now();
+    };
+    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("before".into())));
+    feed.deliver(format!("\x1b]5522;type=write\x1b\\{contents}\x1b]5522;type=wdata\x1b\\\x1b[5n").as_bytes());
+    let mut bytes = Vec::new();
+    let mut decision = decision;
+    loop {
+        cx.run_until_parked();
+        while let Some(event) = out.next(Some(Duration::ZERO)).unwrap() {
+            if let Outgoing::Bytes(data) = event {
+                bytes.extend(data);
+            }
+        }
+        if decision.is_some() {
+            cx.update(|_, cx| {
+                let prompt = cx
+                    .default_global::<ClipboardPrompts>()
+                    .open
+                    .iter()
+                    .next()
+                    .map(|(key, prompt)| (*key, prompt.id));
+                if let Some((key, id)) = prompt {
+                    assert!(bytes.is_empty(), "no completion before consent");
+                    answer(key, id, decision.take().unwrap(), false, cx);
+                }
+            });
+        }
+        if bytes.ends_with(b"\x1b[0n") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "clipboard write did not complete: {bytes:?}");
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        bytes,
+        format!("\x1b]5522;type=write:status={status}\x1b\\\x1b[0n").as_bytes()
+    );
+    cx.update(|_, cx| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    })
 }

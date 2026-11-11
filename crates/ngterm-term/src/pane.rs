@@ -246,6 +246,7 @@ pub(crate) struct Shared {
     capture: Arc<Mutex<Capture>>,
     published: Mutex<Arc<Frame>>,
     armed: ArmedSlot,
+    writes: Arc<Mutex<vt::DeferredClipboardWrites>>,
     /// Where the terminal's PTY writes go instead of the reply queue while a paste runs.
     pub(crate) divert: DivertSlot,
     pub(crate) search: Mutex<SearchSlot>,
@@ -810,7 +811,21 @@ impl Pane {
         events
     }
 
-    /// Answer the clipboard read `id` ([`PaneEvent::ClipboardRead`]); an answer for any other id is ignored.
+    /// The live-session clipboard bridge, when this pane is attached to a session.
+    #[cfg(feature = "local")]
+    pub(crate) fn live_clipboard(&self) -> Option<&crate::session_io::Live> {
+        match &self.io {
+            Io::Live(live) => Some(live),
+            _ => None,
+        }
+    }
+
+    /// Complete a native clipboard write. The request id can be resolved only once.
+    pub fn answer_clipboard_write(&self, id: u64, completion: crate::WriteCompletion) {
+        self.answer_clipboard_read(id, ClipboardAnswer::Write(completion));
+    }
+
+    /// Answer a clipboard read, or a write with `ClipboardAnswer::Write`; other ids are ignored.
     pub fn answer_clipboard_read(&self, id: u64, answer: ClipboardAnswer) {
         match &self.io {
             #[cfg(feature = "local")]
@@ -901,6 +916,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
     kitty_graphics(&mut terminal, config.kitty_image_limit).map_err(PaneError::terminal)?;
     let capture = Arc::new(Mutex::new(Capture::new().map_err(PaneError::terminal)?));
     let armed: ArmedSlot = Arc::default();
+    let writes = Arc::default();
     let divert: DivertSlot = Arc::default();
     let replies = Arc::new(ReplyOutlet::default());
     let scheme: SchemeSlot = Arc::new(AtomicBool::new(config.color_scheme == ColorScheme::Dark));
@@ -912,6 +928,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
             replies: Arc::clone(&replies),
             capture: Arc::clone(&capture),
             armed: Arc::clone(&armed),
+            writes: Arc::clone(&writes),
             divert: Arc::clone(&divert),
             xtversion: format!("ghostty {}", vt::version()),
             scheme: Arc::clone(&scheme),
@@ -937,6 +954,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
         capture,
         published: Mutex::new(Arc::new(Frame::default())),
         armed,
+        writes,
         divert,
         search: Mutex::new(SearchSlot::default()),
         search_wake: Condvar::new(),
@@ -1249,12 +1267,17 @@ pub(crate) fn report_exit(shared: &Shared, code: Option<u32>, signal: Option<Str
 
 /// Feed a read's dispatch byte alone with its answer armed, then disarm whatever the callback left, so an answer the
 /// terminal did not take can never serve a later read.
+#[cfg(all(test, feature = "local"))]
 fn dispatch(shared: &Shared, byte: u8, read: ReadCandidate, answer: ClipboardAnswer) {
+    dispatch_token(shared, byte, read, answer, Vec::new());
+}
+fn dispatch_token(shared: &Shared, byte: u8, read: ReadCandidate, answer: ClipboardAnswer, pw: Vec<u8>) {
     let mut vt = lock(&shared.vt);
     *lock(&shared.armed) = Some(ArmedRead {
         location: ClipboardLocation::from_engine(read.location),
         scope: read.scope,
         answer,
+        pw,
     });
     vt.terminal.vt_write(&[byte]);
     vt.changed();
@@ -1359,25 +1382,31 @@ impl Worker {
     fn feed(&mut self, bytes: &[u8]) -> bool {
         #[cfg(feature = "local")]
         if matches!(self.reads, Reads::Live(_)) {
-            self.write_vt(bytes);
-            return true;
+            return self.write_vt(bytes);
         }
         let mut start = 0;
         while let Some((offset, read)) = self.scanner.find(&bytes[start..]) {
             let dispatch = start + offset;
-            self.write_vt(&bytes[start..dispatch]);
-            let Some(answer) = self.park(read) else {
+            if !self.write_vt(&bytes[start..dispatch]) {
                 return false;
-            };
-            self.dispatch(bytes[dispatch], read, answer);
+            }
+            if read.scope == vt::ReadScope::Write {
+                if !self.write_vt(&bytes[dispatch..=dispatch]) {
+                    return false;
+                }
+            } else {
+                let Some(answer) = self.park(read) else {
+                    return false;
+                };
+                self.dispatch(bytes[dispatch], read, answer);
+            }
             start = dispatch + 1;
         }
-        self.write_vt(&bytes[start..]);
-        true
+        self.write_vt(&bytes[start..])
     }
 
     /// `vt_write` in slices, the VT lock taken per slice so paint and input get in between.
-    fn write_vt(&self, bytes: &[u8]) {
+    fn write_vt(&mut self, bytes: &[u8]) -> bool {
         for slice in bytes.chunks(VT_SLICE) {
             let mut vt = lock(&self.shared.vt);
             let started = Instant::now();
@@ -1388,7 +1417,67 @@ impl Worker {
             counters.vt_nanos.fetch_add(held, Ordering::Relaxed);
             counters.max_hold_nanos.fetch_max(held, Ordering::Relaxed);
             counters.bytes.fetch_add(slice.len() as u64, Ordering::Relaxed);
+            if !self.complete_writes() {
+                return false;
+            }
         }
+        true
+    }
+
+    fn complete_writes(&mut self) -> bool {
+        let writes = lock(&self.shared.writes).take();
+        for write in writes {
+            if write.origin == vt::ClipboardOrigin::Kitty && !write.has_acknowledgement() {
+                tracing::warn!("Kitty clipboard write has no acknowledgement template");
+            }
+            #[cfg(feature = "local")]
+            let recovery = matches!(self.reads, Reads::Live(_));
+            #[cfg(not(feature = "local"))]
+            let recovery = false;
+            self.next_read += 1;
+            let id = self.next_read;
+            self.shared.send(PaneEvent::ClipboardWrite(crate::ClipboardWrite {
+                id: if recovery { 0 } else { id },
+                location: ClipboardLocation::from_engine(write.location),
+                contents: write
+                    .contents
+                    .iter()
+                    .map(|content| crate::ClipboardContent {
+                        mime: content.mime.clone(),
+                        data: content.data.clone(),
+                    })
+                    .collect(),
+                name: write.name.clone(),
+                granted: write.granted,
+                can_remember: write.can_remember,
+                permission_scope: if write.origin == vt::ClipboardOrigin::Kitty {
+                    crate::ClipboardPermissionScope::Kitty
+                } else {
+                    crate::ClipboardPermissionScope::Osc52
+                },
+            }));
+            self.shared.wake();
+            if recovery {
+                continue;
+            }
+            let answer = self.wait_answer(id);
+            let completion = match answer {
+                Some(ClipboardAnswer::Write(completion)) => completion,
+                _ => crate::WriteCompletion {
+                    status: vt::ClipboardWriteResult::Denied,
+                    remember: false,
+                },
+            };
+            let terminal = lock(&self.shared.vt);
+            let grants = terminal.terminal.clipboard_grants();
+            if let Some(bytes) = write.complete(completion.status, completion.remember, &mut lock(&grants)) {
+                self.shared.replies.push_reply(&bytes);
+            }
+            if answer.is_none() {
+                return false;
+            }
+        }
+        true
     }
 
     /// Ask the frontend about a clipboard read and wait for its answer without the VT lock, ending expired holds
@@ -1400,14 +1489,37 @@ impl Worker {
         }
         self.next_read += 1;
         let id = self.next_read;
+        let details = self.scanner.read_details();
+        let grants = lock(&self.shared.vt).terminal.clipboard_grants();
+        let granted =
+            read.scope == vt::ReadScope::Data && lock(&grants).peek(&details.pw, vt::ClipboardDirection::Read);
         self.shared.send(PaneEvent::ClipboardRead(ClipboardReadRequest {
             id,
             location: ClipboardLocation::from_engine(read.location),
             scope: read.scope,
+            mimes: details.mimes,
+            list: details.list,
+            name: details.name,
+            granted,
+            can_remember: !details.pw.is_empty(),
+            permission_scope: if self.scanner.kitty_clipboard() {
+                crate::ClipboardPermissionScope::Kitty
+            } else {
+                crate::ClipboardPermissionScope::Osc52
+            },
         }));
         self.shared.wake();
+        self.wait_answer(id)
+    }
+
+    fn wait_answer(&mut self, id: u64) -> Option<ClipboardAnswer> {
+        if self.child_exited {
+            return Some(ClipboardAnswer::Denied);
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            match self.shared.mailbox.await_answer(id, self.hold_deadline()) {
+            let wake = self.hold_deadline().map_or(deadline, |hold| hold.min(deadline));
+            match self.shared.mailbox.await_answer(id, Some(wake)) {
                 Answer::Given(answer) => return Some(answer),
                 Answer::ChildExited => {
                     // keep processing the output instead of waiting on a prompt
@@ -1415,13 +1527,18 @@ impl Worker {
                     return Some(ClipboardAnswer::Denied);
                 }
                 Answer::Shutdown => return None,
-                Answer::Idle => self.expire_deadlines(),
+                Answer::Idle => {
+                    if Instant::now() >= deadline {
+                        return Some(ClipboardAnswer::Denied);
+                    }
+                    self.expire_deadlines();
+                }
             }
         }
     }
 
     fn dispatch(&self, byte: u8, read: ReadCandidate, answer: ClipboardAnswer) {
-        dispatch(&self.shared, byte, read, answer);
+        dispatch_token(&self.shared, byte, read, answer, self.scanner.read_details().pw);
     }
 
     /// After a batch: report color changes, count it, wake the frontend.

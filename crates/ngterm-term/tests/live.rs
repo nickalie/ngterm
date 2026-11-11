@@ -702,7 +702,7 @@ fn a_live_panes_clipboard_read_is_answered_through_the_pane() -> TestResult {
     let reads: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
-            PaneEvent::ClipboardRead(read) => Some(*read),
+            PaneEvent::ClipboardRead(read) => Some(read.clone()),
             _ => None,
         })
         .collect();
@@ -724,5 +724,67 @@ fn a_live_panes_kitty_query_is_answered_by_the_panes_terminal() -> TestResult {
     ask(&live, &pane, "\\033_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\\033\\\\", 12)?;
     wait_text(&pane, "reply:^[_Gi=31;OK^[\\");
     wait_text(&pane, "NODUP");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_live_panes_multipart_clipboard_write_is_delegated_once_and_completed_natively() -> TestResult {
+    let live = Live::new()?;
+    let pane = live.pane(&live.configuration()?)?;
+    wait_frame(&pane, prompt_painted);
+    pane.take_events();
+    let transaction = include_bytes!("../../ngterm-ghostty-vt/tests/data/clipboard/multipart.vt");
+    let request: String = transaction
+        .iter()
+        .map(|byte| match byte {
+            0x1b => "\\033".into(),
+            b'\\' => "\\134".into(),
+            byte => char::from(*byte).to_string(),
+        })
+        .collect();
+    let ack = b"\x1b]5522;type=write:status=DONE\x1b\\";
+    ask(&live, &pane, &request, ack.len())?;
+    let events = wait_events(&pane, |events| {
+        events.iter().any(|event| matches!(event, PaneEvent::ClipboardWrite(_)))
+    });
+    let writes: Vec<_> = events
+        .iter()
+        .filter_map(|event| {
+            if let PaneEvent::ClipboardWrite(write) = event {
+                Some(write)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(writes.len(), 1);
+    let write = writes[0];
+    assert_ne!(write.id, 0, "ordinary output must not produce a recovery write");
+    assert_eq!(write.permission_scope, ngterm_term::ClipboardPermissionScope::Kitty);
+    assert_eq!(write.contents.len(), 4);
+    assert_eq!(
+        write.contents[2].data,
+        include_bytes!("../../ngterm-ghostty-vt/tests/data/clipboard/red.png")
+    );
+    assert_eq!(
+        write.contents[3].data,
+        include_bytes!("../../ngterm-ghostty-vt/tests/data/clipboard/arbitrary.bin")
+    );
+    pane.answer_clipboard_write(
+        write.id,
+        ngterm_term::WriteCompletion {
+            status: ngterm_term::ClipboardWriteResult::Success,
+            remember: true,
+        },
+    );
+    wait_text(&pane, "reply:^[]5522;type=write:status=DONE^[\\");
+    wait_text(&pane, "NODUP");
+    assert!(
+        !pane
+            .take_events()
+            .iter()
+            .any(|event| matches!(event, PaneEvent::ClipboardWrite(_)))
+    );
     Ok(())
 }

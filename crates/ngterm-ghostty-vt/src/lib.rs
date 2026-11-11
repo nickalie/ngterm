@@ -82,7 +82,7 @@ mod write;
 pub use cell::{CellRef, CellWidth, Cells, Style, StyleColor, StyleFlags, Underline};
 pub use continuation::Continuation;
 pub use effects::{
-    ClipboardContent, ClipboardData, ClipboardLocation, ClipboardReadReply, ClipboardReadRequest,
+    ClipboardContent, ClipboardData, ClipboardLocation, ClipboardOrigin, ClipboardReadReply, ClipboardReadRequest,
     ClipboardWriteRequest, ClipboardWriteResult, ColorScheme, DeviceAttributes, Effects, HeldTerminal, ProgramStatus,
     ProgramStatusKind, ProgramStatusState, ProgressReport, ProgressState, SizeReport,
 };
@@ -100,7 +100,7 @@ pub use render::{
     CursorPosition, CursorStyle, Dirty, PendingUpdate, RenderColors, RenderCursor, RenderState, RowId, RowRef, Rows,
 };
 pub use render_images::{RenderImage, RenderImages};
-pub use scan::{ReadCandidate, ReadScope, Scanner};
+pub use scan::{ClipboardReadDetails, ReadCandidate, ReadScope, Scanner};
 pub use search::{Match, Search, SearchDirection, SearchResults, SearchStatus};
 pub use selection::{Point, PointTag, Selection, SelectionAdjust};
 pub use shape::{Mode, MouseShape, ScrollbackLimits, TerminalColors};
@@ -343,3 +343,9 @@ mod tests {
         assert!(format!("{terminal:?}").contains("Handle("));
     }
 }
+
+#[cfg(test)]
+mod clipboard_tests;
+
+mod clipboard;
+pub use clipboard::{ClipboardDirection, ClipboardGrants, DeferredClipboardWrites, PendingClipboardWrite};
