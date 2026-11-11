@@ -25,6 +25,7 @@
 
 pub mod background;
 mod clipboard;
+pub mod clipboard_preview;
 mod colors;
 mod element;
 mod font;

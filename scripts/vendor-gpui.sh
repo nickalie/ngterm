@@ -26,7 +26,8 @@
 #                  native key of a key with no symbols read on the effective layout, never `XKB_LAYOUT_INVALID`,
 #                  which libxkbcommon before 1.8 indexes out of bounds with (0006); outward IME rectangle rounding and
 #                  refresh sink tests, activation targets keyed by token request with launcher/portal token sink
-#                  tests (Ghostty v1.4.0 parity, 0007)
+#                  tests (Ghostty v1.4.0 parity, 0007); per-MIME clipboard and primary selection reads, writes and
+#                  type listings for the Kitty clipboard protocol on Wayland and X11 (0008)
 #   gpui-pre-windows the native key behind each key event GPUI dispatches on Windows (its scan code, the layout's
 #                  unshifted character, the modifiers with Shift and those the layout used up, the text before Ctrl
 #                  transformations), which GPUI's `Keystroke` drops, for the terminal's physical-key bindings and the

@@ -1589,6 +1589,99 @@ impl WaylandConnection {
         self.0.borrow_mut().clipboard.read()
     }
 
+    pub(crate) fn clipboard_mime_types(
+        &self,
+        target: crate::linux::ClipboardTarget,
+    ) -> Result<Vec<String>, crate::linux::ClipboardMimeError> {
+        let state = self.0.borrow();
+        let primary = target == crate::linux::ClipboardTarget::Primary;
+        if primary && state.primary_selection.is_none() {
+            return Err(crate::linux::ClipboardMimeError::Unsupported);
+        }
+        Ok(state.clipboard.mime_types(primary).unwrap_or_default())
+    }
+
+    pub(crate) fn read_clipboard_mimes(
+        &self,
+        target: crate::linux::ClipboardTarget,
+        mimes: &[String],
+    ) -> Result<Vec<crate::linux::ClipboardRepresentation>, crate::linux::ClipboardMimeError> {
+        let state = self.0.borrow();
+        let primary = target == crate::linux::ClipboardTarget::Primary;
+        if primary && state.primary_selection.is_none() {
+            return Err(crate::linux::ClipboardMimeError::Unsupported);
+        }
+        Ok(state.clipboard.read_mimes(primary, mimes))
+    }
+
+    /// Owns the clipboard or primary selection with exactly `representations`, as `write_to_clipboard` and
+    /// `write_to_primary` own them with an item; none gives the selection up, which clears it.
+    pub(crate) fn write_clipboard_representations(
+        &self,
+        target: crate::linux::ClipboardTarget,
+        representations: Vec<crate::linux::ClipboardRepresentation>,
+    ) -> Result<(), crate::linux::ClipboardMimeError> {
+        use crate::linux::ClipboardMimeError;
+        let mut state = self.0.borrow_mut();
+        let primary = target == crate::linux::ClipboardTarget::Primary;
+        let supported = if primary {
+            state.globals.primary_selection_manager.is_some() && state.primary_selection.is_some()
+        } else {
+            state.globals.data_device_manager.is_some() && state.data_device.is_some()
+        };
+        if !supported {
+            return Err(ClipboardMimeError::Unsupported);
+        }
+        if state.mouse_focused_window.is_none() && state.keyboard_focused_window.is_none() {
+            return Err(ClipboardMimeError::Io("no focused window to own the selection".into()));
+        }
+        let Some(serial) = state.serial_tracker.selection_serial() else {
+            return Err(ClipboardMimeError::Io(
+                "no keyboard or pointer press serial to own the selection".into(),
+            ));
+        };
+        let clear = representations.is_empty();
+        state.clipboard.set_representations(primary, representations)?;
+        let offered = state.clipboard.offered(primary);
+        let self_mime = state.clipboard.self_mime();
+        if primary {
+            let (Some(manager), Some(selection)) = (
+                state.globals.primary_selection_manager.clone(),
+                state.primary_selection.clone(),
+            ) else {
+                return Err(ClipboardMimeError::Unsupported);
+            };
+            if clear {
+                selection.set_selection(None, serial.as_raw());
+                return Ok(());
+            }
+            let source = manager.create_source(&state.globals.qh, ());
+            for mime_type in offered {
+                source.offer(mime_type);
+            }
+            source.offer(self_mime);
+            selection.set_selection(Some(&source), serial.as_raw());
+        } else {
+            let (Some(manager), Some(device)) = (
+                state.globals.data_device_manager.clone(),
+                state.data_device.clone(),
+            ) else {
+                return Err(ClipboardMimeError::Unsupported);
+            };
+            if clear {
+                device.set_selection(None, serial.as_raw());
+                return Ok(());
+            }
+            let source = manager.create_data_source(&state.globals.qh, DataSourceKind::Clipboard);
+            for mime_type in offered {
+                source.offer(mime_type);
+            }
+            source.offer(self_mime);
+            device.set_selection(Some(&source), serial.as_raw());
+        }
+        Ok(())
+    }
+
     pub(crate) fn active_window(&self) -> Option<AnyWindowHandle> {
         self.0
             .borrow_mut()

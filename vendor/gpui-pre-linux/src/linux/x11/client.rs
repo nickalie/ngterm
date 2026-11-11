@@ -1879,6 +1879,52 @@ impl X11Client {
         state.clipboard_item.replace(item);
     }
 
+    pub(crate) fn clipboard_mime_types(
+        &self,
+        target: crate::linux::ClipboardTarget,
+    ) -> Result<Vec<String>, crate::linux::ClipboardMimeError> {
+        let state = self.0.borrow();
+        state
+            .clipboard
+            .mime_types(x11_kind(target))
+            .map_err(|err| crate::linux::ClipboardMimeError::Io(err.to_string()))
+    }
+
+    pub(crate) fn read_clipboard_mimes(
+        &self,
+        target: crate::linux::ClipboardTarget,
+        mimes: &[String],
+    ) -> Result<Vec<crate::linux::ClipboardRepresentation>, crate::linux::ClipboardMimeError> {
+        let state = self.0.borrow();
+        state
+            .clipboard
+            .read_mimes(x11_kind(target), mimes)
+            .map_err(|err| crate::linux::ClipboardMimeError::Io(err.to_string()))
+    }
+
+    pub(crate) fn write_clipboard_representations(
+        &self,
+        target: crate::linux::ClipboardTarget,
+        representations: Vec<crate::linux::ClipboardRepresentation>,
+    ) -> Result<(), crate::linux::ClipboardMimeError> {
+        let mut state = self.0.borrow_mut();
+        let kind = x11_kind(target);
+        let text = representations
+            .iter()
+            .find(|representation| representation.mime == "text/plain")
+            .map(|representation| {
+                gpui::ClipboardItem::new_string(String::from_utf8_lossy(&representation.data).into_owned())
+            });
+        state
+            .clipboard
+            .set_representations(representations, kind, clipboard::WaitConfig::None)
+            .map_err(|err| crate::linux::ClipboardMimeError::Io(err.to_string()))?;
+        if matches!(kind, clipboard::ClipboardKind::Clipboard) {
+            state.clipboard_item = text;
+        }
+        Ok(())
+    }
+
     pub(crate) fn read_from_primary(&self) -> Option<gpui::ClipboardItem> {
         let state = self.0.borrow_mut();
         state
@@ -2924,6 +2970,62 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "needs an X server: run under xvfb-run"]
+    fn failed_mime_write_preserves_cached_text_while_the_client_owns_the_clipboard() {
+        use crate::linux::{ClipboardRepresentation, ClipboardTarget};
+
+        let event_loop = calloop::EventLoop::<'static, ()>::try_new().unwrap();
+        let (common, _main_receiver, _power_receiver) = LinuxCommon::new(event_loop.get_signal());
+        let environment = GraphicalEnvironment {
+            x11_display: Some(std::env::var_os("DISPLAY").expect("an X display")),
+            ..GraphicalEnvironment::default()
+        };
+        let client = X11Connection::attach(event_loop.handle(), Rc::new(RefCell::new(common)), &environment).unwrap();
+        client.write_to_clipboard(ClipboardItem::new_string("preserved".into()));
+        let oversized = client.0.0.borrow().xcb_connection.maximum_request_bytes() + 1;
+        let error = client
+            .write_clipboard_representations(
+                ClipboardTarget::Clipboard,
+                vec![ClipboardRepresentation {
+                    mime: "image/png".into(),
+                    data: vec![7; oversized],
+                }],
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, crate::linux::ClipboardMimeError::Io(message) if message.contains("single-transfer limit"))
+        );
+        assert_eq!(
+            client.read_from_clipboard().and_then(|item| item.text()),
+            Some("preserved".into())
+        );
+        assert_eq!(
+            client
+                .read_clipboard_mimes(ClipboardTarget::Clipboard, &["text/plain".into()])
+                .unwrap(),
+            [ClipboardRepresentation {
+                mime: "text/plain".into(),
+                data: b"preserved".to_vec(),
+            }]
+        );
+        // Successful image-only writes and clears still replace the cached text.
+        client
+            .write_clipboard_representations(
+                ClipboardTarget::Clipboard,
+                vec![ClipboardRepresentation {
+                    mime: "image/png".into(),
+                    data: vec![7],
+                }],
+            )
+            .unwrap();
+        assert!(client.read_from_clipboard().is_none());
+        client
+            .write_clipboard_representations(ClipboardTarget::Clipboard, Vec::new())
+            .unwrap();
+        assert!(client.read_from_clipboard().is_none());
+    }
+
     fn test_keymap(layouts: &str) -> xkbc::Keymap {
         test_keymap_with_variant(layouts, "")
     }
@@ -3237,5 +3339,13 @@ mod tests {
 
         // Assert pressing space while on the Czech layout still types a space.
         assert_eq!(key_event_state.key_get_utf8(space), " ");
+    }
+}
+
+/// The X11 selection a per-MIME access targets.
+fn x11_kind(target: crate::linux::ClipboardTarget) -> clipboard::ClipboardKind {
+    match target {
+        crate::linux::ClipboardTarget::Clipboard => clipboard::ClipboardKind::Clipboard,
+        crate::linux::ClipboardTarget::Primary => clipboard::ClipboardKind::Primary,
     }
 }

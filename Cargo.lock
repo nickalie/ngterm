@@ -5370,6 +5370,7 @@ version = "0.2.3"
 dependencies = [
  "ashpd",
  "async-channel",
+ "base64 0.23.1",
  "cosmic-text",
  "embed-resource",
  "fancy-regex",

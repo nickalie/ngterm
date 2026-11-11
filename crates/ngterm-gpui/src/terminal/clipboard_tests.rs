@@ -32,11 +32,20 @@ fn stale_answers_do_not_release_waiters_or_remember_a_choice(cx: &mut gpui_kit::
     assert_eq!(prompts.decision(ClipboardAccess::Write), ClipboardDecision::Prompt);
 }
 
+use super::super::selection_clipboard::fake::Fake;
 use super::super::{TerminalConfig, TerminalSpec};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gpui_kit::AppContext as _;
 
+fn part(mime: &str, data: &[u8]) -> ClipboardContent {
+    ClipboardContent {
+        mime: mime.into(),
+        data: data.to_vec(),
+    }
+}
+
 #[gpui_kit::test]
-fn writes_keep_the_clipboard_on_refusal_or_nontext_and_accept_text_parameters(cx: &mut gpui_kit::TestAppContext) {
+fn osc52_writes_keep_text_and_kitty_writes_keep_every_type_or_clear(cx: &mut gpui_kit::TestAppContext) {
     let terminal = cx.new(|cx| {
         Terminal::new(
             TerminalSpec::default(),
@@ -46,39 +55,47 @@ fn writes_keep_the_clipboard_on_refusal_or_nontext_and_accept_text_parameters(cx
         )
     });
     let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
-    let write = |mime: &str| ClipboardWrite {
+    let write = |scope: ClipboardPermissionScope, contents: Vec<ClipboardContent>| ClipboardWrite {
         id: 0,
         name: String::new(),
         granted: false,
         can_remember: false,
-        permission_scope: ngterm_term::ClipboardPermissionScope::Osc52,
+        permission_scope: scope,
         location: ClipboardLocation::Standard,
-        contents: vec![ngterm_term::ClipboardContent {
-            mime: mime.into(),
-            data: b"new text".to_vec(),
-        }],
+        contents,
     };
-    for policy in [ConfigAccess::Deny, ConfigAccess::Ask, ConfigAccess::Allow] {
+    let png = part("image/png", b"\x89PNG");
+    for policy in [ConfigAccess::Deny, ConfigAccess::Allow] {
         let mut config = TerminalConfig::default();
         config.clipboard.write = policy;
         terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
         cx.update(|cx| {
             cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
-            on_write(&shared, &write("image/png"), cx);
+            Fake::System.write(vec![part("text/plain", b"before")]);
+            on_write(
+                &shared,
+                &write(
+                    ClipboardPermissionScope::Osc52,
+                    vec![part("text/plain;charset=utf-8", b"new text")],
+                ),
+                cx,
+            );
+            let allowed = policy == ConfigAccess::Allow;
             assert_eq!(
                 cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
-                Some("before")
+                Some(if allowed { "new text" } else { "before" })
             );
-            on_write(&shared, &write("text/plain;charset=utf-8"), cx);
-            let expected = if policy == ConfigAccess::Allow {
-                "new text"
+            // an image-only Kitty write lands as the image alone, with no text left behind
+            on_write(&shared, &write(ClipboardPermissionScope::Kitty, vec![png.clone()]), cx);
+            let expected = if allowed {
+                vec![png.clone()]
             } else {
-                "before"
+                vec![part("text/plain", b"before")]
             };
-            assert_eq!(
-                cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
-                Some(expected)
-            );
+            assert_eq!(Fake::System.contents(), expected);
+            // an empty transaction clears
+            on_write(&shared, &write(ClipboardPermissionScope::Kitty, Vec::new()), cx);
+            assert_eq!(Fake::System.contents().is_empty(), allowed);
         });
     }
 }
@@ -156,99 +173,484 @@ fn denied_reads_release_the_pane_without_pasting_clipboard_data(cx: &mut gpui_ki
     );
 }
 
-#[gpui_kit::test]
-fn writes_complete_after_allow_deny_prompt_or_unsupported_and_output_resumes(cx: &mut gpui_kit::TestAppContext) {
-    let text = "\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;aGk=\x1b\\";
-    for (policy, decision, status, expected) in [
-        (ConfigAccess::Allow, None, "DONE", "hi"),
-        (ConfigAccess::Deny, None, "EPERM", "before"),
-        (ConfigAccess::Ask, Some(true), "DONE", "hi"),
-        (ConfigAccess::Ask, Some(false), "EPERM", "before"),
-    ] {
-        assert_eq!(stream_write(cx, policy, text, status, decision), expected);
-    }
-    assert_eq!(
-        stream_write(
-            cx,
-            ConfigAccess::Allow,
-            "\x1b]5522;type=wdata:mime=aW1hZ2UvcG5n;aGk=\x1b\\",
-            "ENOSYS",
-            None
-        ),
-        "before"
-    );
-    assert_eq!(stream_write(cx, ConfigAccess::Allow, "", "DONE", None), "");
+/// A stream pane (no child shell, so every host runs it) in a window, driven through the production GPUI adapter.
+struct Stream<'a> {
+    cx: &'a mut gpui_kit::VisualTestContext,
+    feed: ngterm_term::StreamFeed,
+    out: ngterm_term::StreamOut,
+    bytes: Vec<u8>,
 }
 
-/// Exercise the real IO rendezvous through the production GPUI adapter, on every host without a child shell.
-fn stream_write(
-    cx: &mut gpui_kit::TestAppContext,
-    policy: ConfigAccess,
-    contents: &str,
-    status: &str,
-    decision: Option<bool>,
-) -> String {
-    use ngterm_term::{Outgoing, Pane, PaneConfig};
-    use std::time::{Duration, Instant};
-    cx.executor().allow_parking();
-    let (sent, received) = std::sync::mpsc::channel();
-    let spawn = Box::new(move |config: PaneConfig| {
-        let (pane, feed, out) = Pane::stream(&config)?;
-        sent.send((feed, out)).unwrap();
-        Ok(pane)
-    });
-    let mut config = TerminalConfig::default();
-    config.clipboard.write = policy;
-    let terminal = cx.new(|cx| Terminal::new(TerminalSpec::default(), config, spawn, cx));
-    let (_view, cx) =
-        cx.add_window_view(|_, cx| super::super::TerminalView::new(&terminal, super::super::ViewRole::Owner, cx));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let (feed, out) = loop {
-        cx.run_until_parked();
-        if let Ok(io) = received.try_recv() {
-            break io;
-        }
-        assert!(Instant::now() < deadline, "stream pane did not start");
-        std::thread::yield_now();
-    };
-    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("before".into())));
-    feed.deliver(format!("\x1b]5522;type=write\x1b\\{contents}\x1b]5522;type=wdata\x1b\\\x1b[5n").as_bytes());
-    let mut bytes = Vec::new();
-    let mut decision = decision;
-    loop {
-        cx.run_until_parked();
-        while let Some(event) = out.next(Some(Duration::ZERO)).unwrap() {
-            if let Outgoing::Bytes(data) = event {
-                bytes.extend(data);
+impl<'a> Stream<'a> {
+    fn new(cx: &'a mut gpui_kit::TestAppContext, read: ConfigAccess, write: ConfigAccess) -> Self {
+        use ngterm_term::{Pane, PaneConfig};
+        use std::time::{Duration, Instant};
+        cx.executor().allow_parking();
+        let (sent, received) = std::sync::mpsc::channel();
+        let spawn = Box::new(move |config: PaneConfig| {
+            let (pane, feed, out) = Pane::stream(&config)?;
+            sent.send((feed, out)).unwrap();
+            Ok(pane)
+        });
+        let mut config = TerminalConfig::default();
+        config.clipboard.read = read;
+        config.clipboard.write = write;
+        let terminal = cx.new(|cx| Terminal::new(TerminalSpec::default(), config, spawn, cx));
+        let (_view, cx) =
+            cx.add_window_view(|_, cx| super::super::TerminalView::new(&terminal, super::super::ViewRole::Owner, cx));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (feed, out) = loop {
+            cx.run_until_parked();
+            if let Ok(io) = received.try_recv() {
+                break io;
             }
+            assert!(Instant::now() < deadline, "stream pane did not start");
+            std::thread::yield_now();
+        };
+        Self {
+            cx,
+            feed,
+            out,
+            bytes: Vec::new(),
         }
-        if decision.is_some() {
-            cx.update(|_, cx| {
-                let prompt = cx
-                    .default_global::<ClipboardPrompts>()
-                    .open
-                    .iter()
-                    .next()
-                    .map(|(key, prompt)| (*key, prompt.id));
-                if let Some((key, id)) = prompt {
-                    assert!(bytes.is_empty(), "no completion before consent");
-                    answer(key, id, decision.take().unwrap(), false, cx);
-                }
-            });
-        }
-        if bytes.ends_with(b"\x1b[0n") {
-            break;
-        }
-        assert!(Instant::now() < deadline, "clipboard write did not complete: {bytes:?}");
-        std::thread::yield_now();
     }
-    assert_eq!(
-        bytes,
-        format!("\x1b]5522;type=write:status={status}\x1b\\\x1b[0n").as_bytes()
+
+    /// Feeds `bytes` and a status query after them.
+    fn deliver(&mut self, bytes: &[u8]) {
+        self.feed.deliver(&[bytes, b"\x1b[5n"].concat());
+    }
+
+    /// Pumps until the pane answered the status query (everything before it is answered), or until `stop` holds.
+    fn pump(&mut self, stop: impl Fn(&mut Self) -> bool) -> bool {
+        use ngterm_term::Outgoing;
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            self.cx.run_until_parked();
+            while let Some(event) = self.out.next(Some(Duration::ZERO)).unwrap() {
+                if let Outgoing::Bytes(data) = event {
+                    self.bytes.extend(data);
+                }
+            }
+            if self.bytes.ends_with(b"\x1b[0n") {
+                return true;
+            }
+            if stop(self) {
+                return false;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no answer: {:?}",
+                String::from_utf8_lossy(&self.bytes)
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    /// The replies so far, as text, taken.
+    fn take(&mut self) -> String {
+        String::from_utf8_lossy(&std::mem::take(&mut self.bytes)).into_owned()
+    }
+
+    /// Pumps until a prompt is up and returns its spec, its preview's page titles and bodies (images decoded here).
+    fn prompt(&mut self) -> (crate::modal::AlertSpec, Vec<(String, String)>) {
+        let (spec, pages, _) = self.prompt_with_note();
+        (spec, pages)
+    }
+
+    /// [`Self::prompt`], with what its preview says when it has no page.
+    fn prompt_with_note(&mut self) -> (crate::modal::AlertSpec, Vec<(String, String)>, &'static str) {
+        assert!(
+            !self.pump(|stream| stream.front().is_some()),
+            "answered without a prompt"
+        );
+        assert!(self.bytes.is_empty(), "no reply before consent");
+        let alert = self.front().unwrap();
+        self.cx.update(|_, cx| {
+            let alert = alert.read(cx);
+            let preview = alert
+                .extra()
+                .cloned()
+                .and_then(|view| view.downcast::<super::super::clipboard_preview::Preview>().ok())
+                .expect("a preview");
+            let preview = preview.read(cx);
+            let pages = preview
+                .pages()
+                .iter()
+                .map(|page| {
+                    let page = page.clone().decoded();
+                    (page.title, format!("{:?}", page.body))
+                })
+                .collect();
+            (alert.spec().clone(), pages, preview.empty())
+        })
+    }
+
+    fn front(&mut self) -> Option<gpui_kit::Entity<crate::modal::Alert>> {
+        self.cx
+            .update(|window, cx| crate::modal::front_alert(window.window_handle(), cx))
+    }
+
+    /// Answers the front prompt with Allow or Deny, its check set to `remember`.
+    fn answer(&mut self, allow: bool, remember: bool) {
+        let alert = self.front().expect("a prompt");
+        self.cx.update(|window, cx| {
+            alert.update(cx, |alert, cx| {
+                alert.set_checked(remember, cx);
+                let button = alert
+                    .spec()
+                    .buttons
+                    .iter()
+                    .position(|button| button.label.as_ref() == if allow { ALLOW } else { DENY })
+                    .unwrap();
+                alert.answer(button, window, cx);
+            });
+        });
+    }
+}
+
+const MULTIPART: &[u8] = include_bytes!("../../../ngterm-ghostty-vt/tests/data/clipboard/multipart.vt");
+const PLAIN: &[u8] = include_bytes!("../../../ngterm-ghostty-vt/tests/data/clipboard/plain.txt");
+const HTML: &[u8] = include_bytes!("../../../ngterm-ghostty-vt/tests/data/clipboard/html.txt");
+const RED_PNG: &[u8] = include_bytes!("../../../ngterm-ghostty-vt/tests/data/clipboard/red.png");
+const ARBITRARY: &[u8] = include_bytes!("../../../ngterm-ghostty-vt/tests/data/clipboard/arbitrary.bin");
+
+fn multipart() -> Vec<ClipboardContent> {
+    vec![
+        part("text/plain", PLAIN),
+        part("text/html", HTML),
+        part("image/png", RED_PNG),
+        part("application/octet-stream", ARBITRARY),
+    ]
+}
+
+/// A Kitty write transaction of `contents` under password `pw`.
+fn transaction(pw: &str, contents: &[ClipboardContent]) -> Vec<u8> {
+    let mut packets = vec![format!(
+        "\x1b]5522;type=write:name={}:pw={}\x1b\\",
+        STANDARD.encode("Evil Program"),
+        STANDARD.encode(pw)
+    )];
+    for content in contents {
+        packets.push(format!(
+            "\x1b]5522;type=wdata:mime={};{}\x1b\\",
+            STANDARD.encode(&content.mime),
+            STANDARD.encode(&content.data)
+        ));
+    }
+    packets.push("\x1b]5522;type=wdata\x1b\\".into());
+    packets.concat().into_bytes()
+}
+
+/// A Kitty read of `mimes` (space-separated) under password `pw`.
+fn query(mimes: &str, pw: &str) -> Vec<u8> {
+    format!(
+        "\x1b]5522;type=read:name={}:pw={};{}\x1b\\",
+        STANDARD.encode("Evil Program"),
+        STANDARD.encode(pw),
+        STANDARD.encode(mimes)
+    )
+    .into_bytes()
+}
+
+#[gpui_kit::test]
+fn kitty_writes_complete_after_allow_deny_prompt_unsupported_or_clear(cx: &mut gpui_kit::TestAppContext) {
+    let text = transaction("", &[part("text/plain", b"hi")]);
+    for (policy, decision, status, expected) in [
+        (ConfigAccess::Allow, None, "DONE", vec![part("text/plain", b"hi")]),
+        (ConfigAccess::Deny, None, "EPERM", vec![part("text/plain", b"before")]),
+        (ConfigAccess::Ask, Some(true), "DONE", vec![part("text/plain", b"hi")]),
+        (
+            ConfigAccess::Ask,
+            Some(false),
+            "EPERM",
+            vec![part("text/plain", b"before")],
+        ),
+    ] {
+        Fake::System.write(vec![part("text/plain", b"before")]);
+        let mut stream = Stream::new(cx, ConfigAccess::Ask, policy);
+        stream.deliver(&text);
+        if let Some(allow) = decision {
+            let (spec, pages) = stream.prompt();
+            assert!(spec.checks.is_empty(), "no password, nothing to remember");
+            assert_eq!(pages.len(), 1);
+            stream.answer(allow, false);
+            assert!(stream.pump(|_| false));
+        } else {
+            assert!(stream.pump(|_| false));
+        }
+        assert_eq!(
+            stream.take(),
+            format!("\x1b]5522;type=write:status={status}\x1b\\\x1b[0n")
+        );
+        assert_eq!(Fake::System.contents(), expected);
+    }
+    // an image-only write keeps the image; an empty transaction clears
+    Fake::System.write(vec![part("text/plain", b"before")]);
+    let mut stream = Stream::new(cx, ConfigAccess::Ask, ConfigAccess::Allow);
+    stream.deliver(&transaction("", &[part("image/png", RED_PNG)]));
+    assert!(stream.pump(|_| false));
+    assert_eq!(stream.take(), "\x1b]5522;type=write:status=DONE\x1b\\\x1b[0n");
+    assert_eq!(Fake::System.contents(), [part("image/png", RED_PNG)]);
+    stream.deliver(&transaction("", &[]));
+    assert!(stream.pump(|_| false));
+    assert_eq!(stream.take(), "\x1b]5522;type=write:status=DONE\x1b\\\x1b[0n");
+    assert!(Fake::System.contents().is_empty());
+}
+
+#[gpui_kit::test]
+fn an_empty_write_asked_about_says_it_clears_the_clipboard(cx: &mut gpui_kit::TestAppContext) {
+    Fake::System.write(vec![part("text/plain", b"before")]);
+    let mut stream = Stream::new(cx, ConfigAccess::Ask, ConfigAccess::Ask);
+    stream.deliver(&transaction("", &[]));
+    let (_, pages, note) = stream.prompt_with_note();
+    assert!(pages.is_empty(), "{pages:?}");
+    assert_eq!(note, "Nothing: the clipboard will be cleared");
+    stream.answer(true, false);
+    assert!(stream.pump(|_| false));
+    assert!(Fake::System.contents().is_empty());
+}
+
+/// The prompt's words never carry the program's self-reported name ("Evil Program").
+fn assert_untrusted_name_absent(spec: &crate::modal::AlertSpec) {
+    let words = [spec.heading.clone(), spec.body.clone()]
+        .into_iter()
+        .chain(spec.checks.iter().map(|check| check.label.clone()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !words.contains("Evil"),
+        "the program's name is never prompt text: {words}"
     );
-    cx.update(|_, cx| {
-        cx.read_from_clipboard()
-            .and_then(|item| item.text())
-            .unwrap_or_default()
-    })
+}
+
+/// The multipart write's preview: a page per part on Linux and Windows, the text on macOS.
+fn assert_multipart_pages(pages: &[(String, String)]) {
+    if cfg!(target_os = "macos") {
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].1, format!("Text({:?})", String::from_utf8_lossy(PLAIN)));
+        return;
+    }
+    let titles: Vec<&str> = pages.iter().map(|(title, _)| title.as_str()).collect();
+    assert_eq!(
+        titles,
+        ["text/plain", "text/html", "image/png", "application/octet-stream"]
+    );
+    assert_eq!(pages[2].1, "Image(2x2)");
+    assert_eq!(pages[3].1, "NoPreview(2048)");
+}
+
+#[gpui_kit::test]
+fn the_multipart_write_previews_every_part_never_trusts_its_name_and_a_remembered_allow_grants(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    Fake::System.write(Vec::new());
+    let mut stream = Stream::new(cx, ConfigAccess::Ask, ConfigAccess::Ask);
+    stream.deliver(MULTIPART);
+    let (spec, pages) = stream.prompt();
+    assert_untrusted_name_absent(&spec);
+    assert_eq!(spec.heading, prompt_text(ClipboardAccess::Write).0);
+    assert_eq!(spec.checks.len(), 1, "a password can be remembered");
+    assert_eq!(spec.checks[0].label, KITTY_REMEMBER);
+    assert_multipart_pages(&pages);
+    stream.answer(true, true);
+    assert!(stream.pump(|_| false));
+    assert_eq!(stream.take(), "\x1b]5522;type=write:status=DONE\x1b\\\x1b[0n");
+    assert_eq!(Fake::System.contents(), multipart(), "every part byte for byte");
+    // the remembered grant covers the next write under the same password, without a prompt
+    stream.deliver(&transaction("1234", &[part("text/plain", b"again")]));
+    assert!(stream.pump(|_| false), "granted: no prompt");
+    assert_eq!(stream.take(), "\x1b]5522;type=write:status=DONE\x1b\\\x1b[0n");
+    assert_eq!(Fake::System.contents(), [part("text/plain", b"again")]);
+}
+
+#[gpui_kit::test]
+fn a_denial_is_never_remembered(cx: &mut gpui_kit::TestAppContext) {
+    let mut stream = Stream::new(cx, ConfigAccess::Ask, ConfigAccess::Ask);
+    stream.deliver(&transaction("other", &[part("text/plain", b"no")]));
+    stream.prompt();
+    stream.answer(false, true);
+    assert!(stream.pump(|_| false));
+    assert_eq!(stream.take(), "\x1b]5522;type=write:status=EPERM\x1b\\\x1b[0n");
+    stream.deliver(&transaction("other", &[part("text/plain", b"no")]));
+    stream.prompt();
+    stream.answer(false, false);
+    assert!(stream.pump(|_| false));
+}
+
+/// Served representations by MIME type, and the listing.
+type Served = (Vec<(String, Vec<u8>)>, Option<Vec<String>>);
+
+/// The base64 payloads of the read replies in `replies`, keyed by their MIME type, and the listing.
+fn served(replies: &str) -> Served {
+    let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut listing = None;
+    for packet in replies.split("\x1b]5522;").skip(1) {
+        let packet = packet.split("\x1b\\").next().unwrap_or_default();
+        let (meta, payload) = packet.split_once(';').unwrap_or((packet, ""));
+        let mime = meta
+            .split(':')
+            .find_map(|field| field.strip_prefix("mime="))
+            .map(|mime| String::from_utf8(STANDARD.decode(mime).unwrap()).unwrap());
+        let data = STANDARD.decode(payload).unwrap_or_default();
+        match mime.as_deref() {
+            Some(".") => {
+                listing = Some(
+                    String::from_utf8(data)
+                        .unwrap()
+                        .split_whitespace()
+                        .map(str::to_owned)
+                        .collect(),
+                );
+            }
+            Some(mime) => match parts.iter_mut().find(|(known, _)| known == mime) {
+                Some((_, bytes)) => bytes.extend(data),
+                None => parts.push((mime.to_owned(), data)),
+            },
+            None => {}
+        }
+    }
+    (parts, listing)
+}
+
+#[gpui_kit::test]
+fn a_kitty_listing_reads_no_data_and_never_prompts(cx: &mut gpui_kit::TestAppContext) {
+    Fake::System.write(multipart());
+    let mut stream = Stream::new(cx, ConfigAccess::Ask, ConfigAccess::Ask);
+    stream.deliver(b"\x1b]5522;type=read;Lg==\x1b\\");
+    assert!(stream.pump(|_| false), "a listing needs no consent");
+    let (parts, listing) = served(&stream.take());
+    assert!(parts.is_empty());
+    assert_eq!(
+        listing.unwrap(),
+        ["text/plain", "text/html", "image/png", "application/octet-stream"]
+    );
+    // deny refuses a listing too, the bare read and the `.` request alike (Ghostty checks deny first)
+    let mut stream = Stream::new(cx, ConfigAccess::Deny, ConfigAccess::Ask);
+    for listing in [&b"\x1b]5522;type=read;Lg==\x1b\\"[..], b"\x1b]5522;type=read\x1b\\"] {
+        stream.deliver(listing);
+        assert!(stream.pump(|_| false));
+        let replies = stream.take();
+        assert!(replies.contains("status=EPERM"), "{replies:?}");
+        let (parts, listing) = served(&replies);
+        assert!(parts.is_empty() && listing.is_none(), "{replies:?}");
+    }
+}
+
+#[gpui_kit::test]
+fn a_read_of_missing_types_with_the_listing_says_only_the_listing_is_disclosed(cx: &mut gpui_kit::TestAppContext) {
+    Fake::System.write(vec![part("text/plain", b"secret")]);
+    let mut stream = Stream::new(cx, ConfigAccess::Ask, ConfigAccess::Ask);
+    stream.deliver(&query("image/jpeg .", ""));
+    let (spec, pages, note) = stream.prompt_with_note();
+    assert_eq!(spec.heading, prompt_text(ClipboardAccess::Read).0);
+    assert!(pages.is_empty(), "{pages:?}");
+    assert_eq!(note, super::super::clipboard_preview::empty_note(ClipboardAccess::Read));
+    assert!(!note.contains("cleared"), "{note}");
+    stream.answer(true, false);
+    assert!(stream.pump(|_| false));
+    let (parts, listing) = served(&stream.take());
+    assert!(parts.is_empty());
+    assert_eq!(listing.unwrap(), ["text/plain"]);
+}
+
+/// What an allowed read serves after the clipboard changed under its prompt: Linux and Windows read again, macOS
+/// serves what it showed.
+fn served_after_a_change() -> Vec<(String, Vec<u8>)> {
+    if cfg!(target_os = "macos") {
+        vec![
+            ("image/png".into(), RED_PNG.to_vec()),
+            ("text/plain".into(), PLAIN.to_vec()),
+        ]
+    } else {
+        vec![("text/plain".to_owned(), b"changed".to_vec())]
+    }
+}
+
+#[gpui_kit::test]
+fn kitty_reads_preview_what_they_disclose_and_serve_it_once_allowed(cx: &mut gpui_kit::TestAppContext) {
+    Fake::System.write(multipart());
+    let mut stream = Stream::new(cx, ConfigAccess::Ask, ConfigAccess::Ask);
+    // a read shows exactly the requested representations, in the program's order, the missing one skipped
+    stream.deliver(&query("image/png image/jpeg text/plain", "1234"));
+    let (spec, pages) = stream.prompt();
+    assert_eq!(spec.heading, prompt_text(ClipboardAccess::Read).0);
+    let titles: Vec<&str> = pages.iter().map(|(title, _)| title.as_str()).collect();
+    let expected: &[&str] = if cfg!(target_os = "macos") {
+        &[""]
+    } else {
+        &["image/png", "text/plain"]
+    };
+    assert_eq!(titles, expected);
+    Fake::System.write(vec![part("text/plain", b"changed")]);
+    stream.answer(true, true);
+    assert!(stream.pump(|_| false));
+    assert_eq!(served(&stream.take()).0, served_after_a_change());
+    // the remembered allow grants the next read under that password; another is asked about and can be denied
+    Fake::System.write(multipart());
+    stream.deliver(&query("application/octet-stream", "1234"));
+    assert!(stream.pump(|_| false), "granted: no prompt");
+    let (parts, _) = served(&stream.take());
+    assert_eq!(parts, [("application/octet-stream".to_owned(), ARBITRARY.to_vec())]);
+    stream.deliver(&query("text/plain", "other"));
+    stream.prompt();
+    stream.answer(false, false);
+    assert!(stream.pump(|_| false));
+    let replies = stream.take();
+    assert!(replies.contains("status=EPERM"), "{replies:?}");
+    assert!(served(&replies).0.is_empty());
+}
+
+#[gpui_kit::test]
+fn kitty_reads_with_nothing_to_disclose_or_under_a_policy_never_prompt(cx: &mut gpui_kit::TestAppContext) {
+    Fake::System.write(vec![part("text/plain", b"secret")]);
+    let mut stream = Stream::new(cx, ConfigAccess::Ask, ConfigAccess::Ask);
+    stream.deliver(&query("image/png", ""));
+    assert!(stream.pump(|_| false), "nothing to serve: no prompt");
+    assert!(served(&stream.take()).0.is_empty());
+    let mut stream = Stream::new(cx, ConfigAccess::Deny, ConfigAccess::Ask);
+    stream.deliver(&query("text/plain", ""));
+    assert!(stream.pump(|_| false));
+    let replies = stream.take();
+    assert!(
+        replies.contains("status=EPERM") && served(&replies).0.is_empty(),
+        "{replies:?}"
+    );
+    let mut stream = Stream::new(cx, ConfigAccess::Allow, ConfigAccess::Ask);
+    stream.deliver(&query("text/plain", ""));
+    assert!(stream.pump(|_| false));
+    assert_eq!(
+        served(&stream.take()).0,
+        [("text/plain".to_owned(), b"secret".to_vec())]
+    );
+}
+
+#[gpui_kit::test]
+fn kitty_text_aliases_disclose_text_under_the_requested_name_and_require_consent(cx: &mut gpui_kit::TestAppContext) {
+    let aliases = ["UTF8_STRING", "text/plain;charset=utf-8", "TEXT", "STRING"];
+    let expected: Vec<_> = aliases
+        .iter()
+        .map(|mime| ((*mime).to_owned(), "café 🐈".as_bytes().to_vec()))
+        .collect();
+    let query = query(&aliases.join(" "), "");
+    Fake::System.write(vec![part("text/plain", "café 🐈".as_bytes())]);
+    let mut stream = Stream::new(cx, ConfigAccess::Allow, ConfigAccess::Ask);
+    stream.deliver(&query);
+    assert!(stream.pump(|_| false));
+    assert_eq!(served(&stream.take()).0, expected);
+
+    let mut stream = Stream::new(cx, ConfigAccess::Ask, ConfigAccess::Ask);
+    stream.deliver(&query);
+    stream.prompt();
+    stream.answer(true, false);
+    assert!(stream.pump(|_| false));
+    assert_eq!(served(&stream.take()).0, expected);
+
+    stream.deliver(&query);
+    stream.prompt();
+    stream.answer(false, false);
+    assert!(stream.pump(|_| false));
+    let reply = stream.take();
+    assert!(reply.contains("status=EPERM"), "{reply:?}");
+    assert!(served(&reply).0.is_empty());
 }

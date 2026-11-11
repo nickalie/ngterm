@@ -306,6 +306,34 @@ struct StartupEnvironment {
 }
 
 impl LinuxPlatform {
+    /// The MIME types `target` advertises (ngterm: `clipboard_mime.rs`).
+    pub(crate) fn clipboard_mime_types(
+        &self,
+        target: crate::linux::ClipboardTarget,
+    ) -> Result<Vec<String>, crate::linux::ClipboardMimeError> {
+        self.connection.borrow().clipboard_mime_types(target)
+    }
+
+    /// Each requested type `target` offers (ngterm: `clipboard_mime.rs`).
+    pub(crate) fn read_clipboard_mimes(
+        &self,
+        target: crate::linux::ClipboardTarget,
+        mimes: &[String],
+    ) -> Result<Vec<crate::linux::ClipboardRepresentation>, crate::linux::ClipboardMimeError> {
+        self.connection.borrow().read_clipboard_mimes(target, mimes)
+    }
+
+    /// Owns `target` with exactly `representations` (ngterm: `clipboard_mime.rs`).
+    pub(crate) fn write_clipboard_representations(
+        &self,
+        target: crate::linux::ClipboardTarget,
+        representations: Vec<crate::linux::ClipboardRepresentation>,
+    ) -> Result<(), crate::linux::ClipboardMimeError> {
+        self.connection
+            .borrow()
+            .write_clipboard_representations(target, representations)
+    }
+
     /// Creates the platform, headless until `run` connects it in its initial mode.
     pub(crate) fn new(allowed_modes: WindowingModes) -> Self {
         let startup = StartupEnvironment {

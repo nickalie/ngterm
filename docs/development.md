@@ -486,7 +486,7 @@ images with Ghostty's license.
 Some GPUI dependencies are patched in the tree rather than built: `vendor/calloop` and
 `vendor/gpui-pre{,-wgpu,-linux,-windows}` (GPUI's dmabuf external surfaces for the HTML overlays, the font metrics
 accessors and the coverage masks the terminal's sprites paint with, the native key behind each key event on Linux and
-Windows, the HTML clipboard offer, xdg-output geometry and X11 window state) are verified crates.io sources plus `build/patches/<crate>`, recreated by
+Windows, the HTML clipboard offer, per-MIME clipboard access, xdg-output geometry and X11 window state) are verified crates.io sources plus `build/patches/<crate>`, recreated by
 `scripts/vendor-calloop.sh` and `scripts/vendor-gpui.sh` (`--check` compares, as CI does; `vendor-gpui.sh --diff`
 turns edits under `vendor/` back into the patch files). `vendor/portable-pty` (the PTY and child under `ngterm-pty`:
 ConPTY from kernel32 only, herdr's fixes for malformed Windows environments and directories on `PATH`, the child
@@ -660,6 +660,15 @@ leaving the selection clipboard (and so a middle-click's paste) as it was, and `
 Ghostty's own default copies nothing on select on macOS and Windows; ngterm's built-in defaults set
 `copy-on-select = primary` there, for upstream's behavior. A program's OSC 52 write to the primary selection (`p`)
 goes to the system clipboard on macOS, as upstream's, and to the selection clipboard on Linux and Windows.
+
+A program using the Kitty clipboard protocol (OSC 5522) reaches the same clipboards per MIME type: text, HTML, images
+and any other type it writes land as themselves (the Wayland/X11 offer, `NSPasteboard` types, Win32 clipboard formats),
+and its reads get each requested type the clipboard holds. X11 rejects writes whose representations exceed its
+server's single-request payload limit, preserving the current selection; outgoing INCR transfers are not yet
+implemented. Under `clipboard-read`/`clipboard-write = ask` its prompt
+previews what would be disclosed or written (one page per type on Linux and Windows, the text and first image on
+macOS) and offers a grant for the program's password in that terminal; OSC 52's "Don't ask again this session" stays
+OSC 52's.
 
 The values mean what they mean in Ghostty at `LIBGHOSTTY_VT_REV`, not in the older libghostty upstream links, so two
 differ from upstream's: upstream's docs give `copy-on-select = clipboard` for "as well", which there meant both

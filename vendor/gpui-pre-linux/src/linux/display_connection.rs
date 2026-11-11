@@ -190,6 +190,41 @@ impl DisplayConnection {
         dispatch!(self, connection => connection.read_from_clipboard(), headless => None)
     }
 
+    pub(crate) fn clipboard_mime_types(
+        &self,
+        target: crate::linux::ClipboardTarget,
+    ) -> Result<Vec<String>, crate::linux::ClipboardMimeError> {
+        dispatch!(
+            self,
+            connection => connection.clipboard_mime_types(target),
+            headless => Err(crate::linux::ClipboardMimeError::Unsupported)
+        )
+    }
+
+    pub(crate) fn read_clipboard_mimes(
+        &self,
+        target: crate::linux::ClipboardTarget,
+        mimes: &[String],
+    ) -> Result<Vec<crate::linux::ClipboardRepresentation>, crate::linux::ClipboardMimeError> {
+        dispatch!(
+            self,
+            connection => connection.read_clipboard_mimes(target, mimes),
+            headless => Err(crate::linux::ClipboardMimeError::Unsupported)
+        )
+    }
+
+    pub(crate) fn write_clipboard_representations(
+        &self,
+        target: crate::linux::ClipboardTarget,
+        representations: Vec<crate::linux::ClipboardRepresentation>,
+    ) -> Result<(), crate::linux::ClipboardMimeError> {
+        dispatch!(
+            self,
+            connection => connection.write_clipboard_representations(target, representations),
+            headless => Err(crate::linux::ClipboardMimeError::Unsupported)
+        )
+    }
+
     #[cfg(any(feature = "wayland", feature = "x11"))]
     pub(crate) fn window_identifier(
         &self,

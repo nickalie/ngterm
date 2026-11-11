@@ -1,0 +1,1428 @@
+Per-MIME clipboard reads, writes and listings for the Kitty clipboard protocol (OSC 5522).
+
+GPUI's ClipboardItem carries text, images and paths only. `write_clipboard_representations`
+owns the clipboard or primary selection with exactly the given representations (Ghostty
+83fb956, GTK surface.zig `set`: one provider per MIME, `text/plain` offered as
+`text/plain;charset=utf-8` first); none gives the selection up. `read_clipboard_mimes`
+reads each requested type the owner offers, a text type from its best text target, and
+`clipboard_mime_types` lists the advertised MIME types without reading data. The
+functions reach the registered LinuxPlatform on the main thread and report Unsupported
+while headless or without a primary selection. Wayland and X11 both serve their own
+selection from the stored representations. Wayland rejects NUL-containing MIME names
+before replacing either selection or advertising them, and reads stored text aliases
+through the same source selection and conversion as foreign offers. X11 updates the
+cached item only after a successful write, and refuses writes larger than its native
+single-request payload limit before changing the selection; outgoing INCR is not yet
+implemented. An individual request failure is refused without stopping the worker.
+
+diff -ruN a/src/gpui_linux.rs b/src/gpui_linux.rs
+--- a/src/gpui_linux.rs
++++ b/src/gpui_linux.rs
+@@ -2,6 +2,7 @@
+ mod linux;
+ 
+ pub use linux::{
+-    ClipboardHtml, HTML_MIME_TYPE, NativeInput, NativeKey, current_native_input, current_platform, linux_platform,
+-    with_clipboard_html, x11_scale_factor, x11_window_maximized, x11_window_minimized,
++    ClipboardHtml, ClipboardMimeError, ClipboardRepresentation, ClipboardTarget, HTML_MIME_TYPE, NativeInput, NativeKey,
++    clipboard_mime_types, current_native_input, current_platform, is_text_mime, linux_platform, read_clipboard_mimes,
++    with_clipboard_html, write_clipboard_representations, x11_scale_factor, x11_window_maximized, x11_window_minimized,
+ };
+diff -ruN a/src/linux/clipboard_mime.rs b/src/linux/clipboard_mime.rs
+--- a/src/linux/clipboard_mime.rs
++++ b/src/linux/clipboard_mime.rs
+@@ -0,0 +1,285 @@
++//! Per-MIME clipboard access (an ngterm patch): GPUI's `ClipboardItem` carries text, images and paths, while the
++//! Kitty clipboard protocol (OSC 5522) reads and writes any MIME type (Ghostty's GTK `Surface.set` offers one content
++//! provider per representation; its Kitty reads fetch each requested type and list the advertised ones).
++//!
++//! - [`write_clipboard_representations`] owns the clipboard (or the primary selection) with exactly the given
++//!   representations: `text/plain` is offered as `text/plain;charset=utf-8` first, then the bare and X11 names
++//!   (Ghostty: some clients take the first match and garble UTF-8 offered as bare `text/plain`); any other type under
++//!   its own name. No representation clears the selection.
++//! - [`read_clipboard_mimes`] reads each requested type the owner offers, in request order, skipping the rest; a text
++//!   type is read from whichever text target the owner offers (Ghostty reads text through GDK's text conversions).
++//! - [`clipboard_mime_types`] lists the advertised MIME types without reading any data.
++//!
++//! They reach the platform on this thread (the main thread) through the one `linux_platform` registered, and fail
++//! with [`ClipboardMimeError::Unsupported`] while headless or without that selection.
++
++use std::cell::RefCell;
++use std::rc::Weak;
++
++/// One representation of a clipboard value.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct ClipboardRepresentation {
++    pub mime: String,
++    pub data: Vec<u8>,
++}
++
++/// Which selection a per-MIME access targets.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum ClipboardTarget {
++    /// The clipboard (`CLIPBOARD`, `wl_data_device`).
++    Clipboard,
++    /// The primary selection (`PRIMARY`, `zwp_primary_selection`).
++    Primary,
++}
++
++/// Why a per-MIME access did not happen.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum ClipboardMimeError {
++    /// No display connection, or the display server has no such selection.
++    Unsupported,
++    /// The display server refused or the transfer failed.
++    Io(String),
++}
++
++/// The text types Ghostty serves through text conversion (`terminal.clipboard.isTextMime`).
++#[must_use]
++pub fn is_text_mime(mime: &str) -> bool {
++    matches!(
++        mime,
++        "text/plain" | "text/plain;charset=utf-8" | "UTF8_STRING" | "TEXT" | "STRING"
++    )
++}
++
++/// The names a `text/plain` representation is offered under, UTF-8 first.
++pub(crate) const TEXT_OFFERS: [&str; 4] = [
++    "text/plain;charset=utf-8",
++    "text/plain",
++    "UTF8_STRING",
++    "text/plain;charset=UTF-8",
++];
++
++/// The types `representations` are offered under, in order and without repeats.
++#[must_use]
++pub(crate) fn offered_mimes(representations: &[ClipboardRepresentation]) -> Vec<String> {
++    let mut offered: Vec<String> = Vec::new();
++    for representation in representations {
++        let names: Vec<&str> = if representation.mime == "text/plain" {
++            TEXT_OFFERS.to_vec()
++        } else {
++            vec![representation.mime.as_str()]
++        };
++        for name in names {
++            if !offered.iter().any(|known| known == name) {
++                offered.push(name.to_owned());
++            }
++        }
++    }
++    offered
++}
++
++/// The bytes served for a request of `mime`: its own representation, else, for a text name, the `text/plain` one.
++#[must_use]
++pub(crate) fn served<'a>(representations: &'a [ClipboardRepresentation], mime: &str) -> Option<&'a [u8]> {
++    representations
++        .iter()
++        .find(|representation| representation.mime == mime)
++        .or_else(|| {
++            (is_text_mime(mime) || TEXT_OFFERS.contains(&mime))
++                .then(|| {
++                    representations
++                        .iter()
++                        .find(|representation| representation.mime == "text/plain")
++                })
++                .flatten()
++        })
++        .map(|representation| representation.data.as_slice())
++}
++
++/// The owner's type to read a request of `mime` from among `offered`: the type itself, or for a text type the first
++/// text target offered (UTF-8 ones first).
++#[must_use]
++pub(crate) fn source_type<'a>(offered: &'a [String], mime: &str) -> Option<&'a str> {
++    if let Some(exact) = offered.iter().find(|offer| *offer == mime) {
++        return Some(exact);
++    }
++    if !is_text_mime(mime) {
++        return None;
++    }
++    [
++        "text/plain;charset=utf-8",
++        "text/plain;charset=UTF-8",
++        "UTF8_STRING",
++        "text/plain",
++        "STRING",
++        "TEXT",
++    ]
++    .into_iter()
++    .find_map(|text| offered.iter().find(|offer| *offer == text))
++    .map(String::as_str)
++}
++
++/// The bytes read from the owner's `source` type as served for a request: X11's `STRING` target holds ISO Latin-1,
++/// converted to UTF-8 as GPUI's own text read does (Ghostty reads every text type through GDK's UTF-8 conversion).
++#[must_use]
++pub(crate) fn source_data(source: &str, data: Vec<u8>) -> Vec<u8> {
++    if source == "STRING" {
++        data.into_iter().map(char::from).collect::<String>().into_bytes()
++    } else {
++        data
++    }
++}
++
++/// The advertised MIME types worth listing: MIME-shaped names (no X11 target names, no GPUI's own `pid/` marker),
++/// with one UTF-8 text type standing in for X11's text-only targets and the charset's spellings.
++#[must_use]
++pub(crate) fn listed_mimes(offered: &[String], self_mime: Option<&str>) -> Vec<String> {
++    let mut listed: Vec<String> = Vec::new();
++    for offer in offered {
++        if Some(offer.as_str()) == self_mime || offer.starts_with("pid/") {
++            continue;
++        }
++        let name = if offer.eq_ignore_ascii_case("text/plain;charset=utf-8") {
++            "text/plain;charset=utf-8"
++        } else if offer.contains('/') {
++            offer.as_str()
++        } else if is_text_mime(offer) {
++            "text/plain;charset=utf-8"
++        } else {
++            continue;
++        };
++        if !listed.iter().any(|known| known == name) {
++            listed.push(name.to_owned());
++        }
++    }
++    listed
++}
++
++thread_local! {
++    static PLATFORM: RefCell<Weak<super::LinuxPlatform>> = const { RefCell::new(Weak::new()) };
++}
++
++/// Makes `platform` the one the per-MIME functions reach on this thread.
++pub(crate) fn register(platform: &std::rc::Rc<super::LinuxPlatform>) {
++    PLATFORM.set(std::rc::Rc::downgrade(platform));
++}
++
++fn with_platform<R>(
++    access: impl FnOnce(&super::LinuxPlatform) -> Result<R, ClipboardMimeError>,
++) -> Result<R, ClipboardMimeError> {
++    let platform = PLATFORM
++        .with_borrow(Weak::upgrade)
++        .ok_or(ClipboardMimeError::Unsupported)?;
++    access(&platform)
++}
++
++/// The MIME types `target` advertises, without reading their data.
++///
++/// # Errors
++/// [`ClipboardMimeError::Unsupported`] without a display connection or that selection.
++pub fn clipboard_mime_types(target: ClipboardTarget) -> Result<Vec<String>, ClipboardMimeError> {
++    with_platform(|platform| platform.clipboard_mime_types(target))
++}
++
++/// Each of `mimes` that `target` offers, read in request order; types it does not offer are skipped.
++///
++/// # Errors
++/// [`ClipboardMimeError::Unsupported`] without a display connection or that selection.
++pub fn read_clipboard_mimes(
++    target: ClipboardTarget,
++    mimes: &[String],
++) -> Result<Vec<ClipboardRepresentation>, ClipboardMimeError> {
++    with_platform(|platform| platform.read_clipboard_mimes(target, mimes))
++}
++
++/// Owns `target` with exactly `representations`; none clears it.
++///
++/// # Errors
++/// [`ClipboardMimeError::Unsupported`] without a display connection or that selection,
++/// [`ClipboardMimeError::Io`] when the display server refused ownership.
++pub fn write_clipboard_representations(
++    target: ClipboardTarget,
++    representations: Vec<ClipboardRepresentation>,
++) -> Result<(), ClipboardMimeError> {
++    with_platform(|platform| platform.write_clipboard_representations(target, representations))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn rep(mime: &str, data: &[u8]) -> ClipboardRepresentation {
++        ClipboardRepresentation {
++            mime: mime.to_owned(),
++            data: data.to_vec(),
++        }
++    }
++
++    #[test]
++    fn text_is_offered_utf8_first_beside_the_other_types() {
++        let reps = [
++            rep("text/plain", b"hi"),
++            rep("text/html", b"<b>"),
++            rep("image/png", b"\x89PNG"),
++        ];
++        assert_eq!(
++            offered_mimes(&reps),
++            [
++                "text/plain;charset=utf-8",
++                "text/plain",
++                "UTF8_STRING",
++                "text/plain;charset=UTF-8",
++                "text/html",
++                "image/png"
++            ]
++        );
++        assert_eq!(offered_mimes(&[rep("image/png", b"")]), ["image/png"]);
++        assert!(offered_mimes(&[]).is_empty());
++    }
++
++    #[test]
++    fn text_names_serve_the_text_representation_and_others_their_own() {
++        let reps = [rep("text/plain", b"hi"), rep("application/x-bin", &[0, 255])];
++        assert_eq!(served(&reps, "UTF8_STRING"), Some(&b"hi"[..]));
++        assert_eq!(served(&reps, "text/plain;charset=utf-8"), Some(&b"hi"[..]));
++        assert_eq!(served(&reps, "TEXT"), Some(&b"hi"[..]));
++        assert_eq!(served(&reps, "STRING"), Some(&b"hi"[..]));
++        assert_eq!(served(&reps, "text/plain;charset=UTF-8"), Some(&b"hi"[..]));
++        assert_eq!(served(&reps, "application/x-bin"), Some(&[0, 255][..]));
++        assert_eq!(served(&reps, "image/png"), None);
++        assert_eq!(served(&[rep("image/png", b"x")], "text/plain"), None);
++    }
++
++    #[test]
++    fn a_text_request_reads_the_best_text_target_and_others_their_exact_type() {
++        let offered: Vec<String> = ["STRING", "UTF8_STRING", "image/png"].map(String::from).to_vec();
++        assert_eq!(source_type(&offered, "text/plain"), Some("UTF8_STRING"));
++        assert_eq!(source_type(&offered, "image/png"), Some("image/png"));
++        assert_eq!(source_type(&offered, "text/html"), None);
++        let bare: Vec<String> = vec!["text/plain".into()];
++        assert_eq!(source_type(&bare, "text/plain;charset=utf-8"), Some("text/plain"));
++        // a legacy owner's Latin-1 `STRING` reads as UTF-8; other sources are served as read
++        let latin: Vec<String> = vec!["STRING".into()];
++        let source = source_type(&latin, "text/plain").unwrap();
++        assert_eq!(source_data(source, vec![b'c', b'a', b'f', 0xE9]), "café".as_bytes());
++        assert_eq!(source_data("UTF8_STRING", vec![0xE9]), [0xE9]);
++    }
++
++    #[test]
++    fn listings_keep_mime_names_and_name_text_targets_once() {
++        let offered: Vec<String> = [
++            "TARGETS",
++            "UTF8_STRING",
++            "text/plain",
++            "pid/42",
++            "image/png",
++            "STRING",
++            "text/plain;charset=UTF-8",
++        ]
++        .map(String::from)
++        .to_vec();
++        assert_eq!(
++            listed_mimes(&offered, Some("pid/42")),
++            ["text/plain;charset=utf-8", "text/plain", "image/png"]
++        );
++    }
++}
+diff -ruN a/src/linux/display_connection.rs b/src/linux/display_connection.rs
+--- a/src/linux/display_connection.rs
++++ b/src/linux/display_connection.rs
+@@ -190,6 +190,41 @@
+         dispatch!(self, connection => connection.read_from_clipboard(), headless => None)
+     }
+ 
++    pub(crate) fn clipboard_mime_types(
++        &self,
++        target: crate::linux::ClipboardTarget,
++    ) -> Result<Vec<String>, crate::linux::ClipboardMimeError> {
++        dispatch!(
++            self,
++            connection => connection.clipboard_mime_types(target),
++            headless => Err(crate::linux::ClipboardMimeError::Unsupported)
++        )
++    }
++
++    pub(crate) fn read_clipboard_mimes(
++        &self,
++        target: crate::linux::ClipboardTarget,
++        mimes: &[String],
++    ) -> Result<Vec<crate::linux::ClipboardRepresentation>, crate::linux::ClipboardMimeError> {
++        dispatch!(
++            self,
++            connection => connection.read_clipboard_mimes(target, mimes),
++            headless => Err(crate::linux::ClipboardMimeError::Unsupported)
++        )
++    }
++
++    pub(crate) fn write_clipboard_representations(
++        &self,
++        target: crate::linux::ClipboardTarget,
++        representations: Vec<crate::linux::ClipboardRepresentation>,
++    ) -> Result<(), crate::linux::ClipboardMimeError> {
++        dispatch!(
++            self,
++            connection => connection.write_clipboard_representations(target, representations),
++            headless => Err(crate::linux::ClipboardMimeError::Unsupported)
++        )
++    }
++
+     #[cfg(any(feature = "wayland", feature = "x11"))]
+     pub(crate) fn window_identifier(
+         &self,
+diff -ruN a/src/linux/platform.rs b/src/linux/platform.rs
+--- a/src/linux/platform.rs
++++ b/src/linux/platform.rs
+@@ -306,6 +306,34 @@
+ }
+ 
+ impl LinuxPlatform {
++    /// The MIME types `target` advertises (ngterm: `clipboard_mime.rs`).
++    pub(crate) fn clipboard_mime_types(
++        &self,
++        target: crate::linux::ClipboardTarget,
++    ) -> Result<Vec<String>, crate::linux::ClipboardMimeError> {
++        self.connection.borrow().clipboard_mime_types(target)
++    }
++
++    /// Each requested type `target` offers (ngterm: `clipboard_mime.rs`).
++    pub(crate) fn read_clipboard_mimes(
++        &self,
++        target: crate::linux::ClipboardTarget,
++        mimes: &[String],
++    ) -> Result<Vec<crate::linux::ClipboardRepresentation>, crate::linux::ClipboardMimeError> {
++        self.connection.borrow().read_clipboard_mimes(target, mimes)
++    }
++
++    /// Owns `target` with exactly `representations` (ngterm: `clipboard_mime.rs`).
++    pub(crate) fn write_clipboard_representations(
++        &self,
++        target: crate::linux::ClipboardTarget,
++        representations: Vec<crate::linux::ClipboardRepresentation>,
++    ) -> Result<(), crate::linux::ClipboardMimeError> {
++        self.connection
++            .borrow()
++            .write_clipboard_representations(target, representations)
++    }
++
+     /// Creates the platform, headless until `run` connects it in its initial mode.
+     pub(crate) fn new(allowed_modes: WindowingModes) -> Self {
+         let startup = StartupEnvironment {
+diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
+--- a/src/linux/wayland/client.rs
++++ b/src/linux/wayland/client.rs
+@@ -1589,6 +1589,99 @@
+         self.0.borrow_mut().clipboard.read()
+     }
+ 
++    pub(crate) fn clipboard_mime_types(
++        &self,
++        target: crate::linux::ClipboardTarget,
++    ) -> Result<Vec<String>, crate::linux::ClipboardMimeError> {
++        let state = self.0.borrow();
++        let primary = target == crate::linux::ClipboardTarget::Primary;
++        if primary && state.primary_selection.is_none() {
++            return Err(crate::linux::ClipboardMimeError::Unsupported);
++        }
++        Ok(state.clipboard.mime_types(primary).unwrap_or_default())
++    }
++
++    pub(crate) fn read_clipboard_mimes(
++        &self,
++        target: crate::linux::ClipboardTarget,
++        mimes: &[String],
++    ) -> Result<Vec<crate::linux::ClipboardRepresentation>, crate::linux::ClipboardMimeError> {
++        let state = self.0.borrow();
++        let primary = target == crate::linux::ClipboardTarget::Primary;
++        if primary && state.primary_selection.is_none() {
++            return Err(crate::linux::ClipboardMimeError::Unsupported);
++        }
++        Ok(state.clipboard.read_mimes(primary, mimes))
++    }
++
++    /// Owns the clipboard or primary selection with exactly `representations`, as `write_to_clipboard` and
++    /// `write_to_primary` own them with an item; none gives the selection up, which clears it.
++    pub(crate) fn write_clipboard_representations(
++        &self,
++        target: crate::linux::ClipboardTarget,
++        representations: Vec<crate::linux::ClipboardRepresentation>,
++    ) -> Result<(), crate::linux::ClipboardMimeError> {
++        use crate::linux::ClipboardMimeError;
++        let mut state = self.0.borrow_mut();
++        let primary = target == crate::linux::ClipboardTarget::Primary;
++        let supported = if primary {
++            state.globals.primary_selection_manager.is_some() && state.primary_selection.is_some()
++        } else {
++            state.globals.data_device_manager.is_some() && state.data_device.is_some()
++        };
++        if !supported {
++            return Err(ClipboardMimeError::Unsupported);
++        }
++        if state.mouse_focused_window.is_none() && state.keyboard_focused_window.is_none() {
++            return Err(ClipboardMimeError::Io("no focused window to own the selection".into()));
++        }
++        let Some(serial) = state.serial_tracker.selection_serial() else {
++            return Err(ClipboardMimeError::Io(
++                "no keyboard or pointer press serial to own the selection".into(),
++            ));
++        };
++        let clear = representations.is_empty();
++        state.clipboard.set_representations(primary, representations)?;
++        let offered = state.clipboard.offered(primary);
++        let self_mime = state.clipboard.self_mime();
++        if primary {
++            let (Some(manager), Some(selection)) = (
++                state.globals.primary_selection_manager.clone(),
++                state.primary_selection.clone(),
++            ) else {
++                return Err(ClipboardMimeError::Unsupported);
++            };
++            if clear {
++                selection.set_selection(None, serial.as_raw());
++                return Ok(());
++            }
++            let source = manager.create_source(&state.globals.qh, ());
++            for mime_type in offered {
++                source.offer(mime_type);
++            }
++            source.offer(self_mime);
++            selection.set_selection(Some(&source), serial.as_raw());
++        } else {
++            let (Some(manager), Some(device)) = (
++                state.globals.data_device_manager.clone(),
++                state.data_device.clone(),
++            ) else {
++                return Err(ClipboardMimeError::Unsupported);
++            };
++            if clear {
++                device.set_selection(None, serial.as_raw());
++                return Ok(());
++            }
++            let source = manager.create_data_source(&state.globals.qh, DataSourceKind::Clipboard);
++            for mime_type in offered {
++                source.offer(mime_type);
++            }
++            source.offer(self_mime);
++            device.set_selection(Some(&source), serial.as_raw());
++        }
++        Ok(())
++    }
++
+     pub(crate) fn active_window(&self) -> Option<AnyWindowHandle> {
+         self.0
+             .borrow_mut()
+diff -ruN a/src/linux/wayland/clipboard.rs b/src/linux/wayland/clipboard.rs
+--- a/src/linux/wayland/clipboard.rs
++++ b/src/linux/wayland/clipboard.rs
+@@ -11,7 +11,8 @@
+ use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
+ 
+ use crate::linux::platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout};
+-use crate::linux::{ClipboardHtml, HTML_MIME_TYPE, take_clipboard_html};
++use crate::linux::clipboard_mime::{listed_mimes, offered_mimes, served, source_data, source_type};
++use crate::linux::{ClipboardHtml, ClipboardMimeError, ClipboardRepresentation, HTML_MIME_TYPE, take_clipboard_html};
+ use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
+ 
+ /// Text mime types that we'll offer to other programs.
+@@ -33,6 +34,9 @@
+     // The HTML offered with them (ngterm: `with_clipboard_html`)
+     html: Option<ClipboardHtml>,
+     primary_html: Option<ClipboardHtml>,
++    // Exactly what a per-MIME write offers (ngterm: `write_clipboard_representations`)
++    representations: Option<Vec<ClipboardRepresentation>>,
++    primary_representations: Option<Vec<ClipboardRepresentation>>,
+ 
+     // External clipboard
+     cached_read: Option<ClipboardItem>,
+@@ -150,6 +154,8 @@
+             primary_contents: None,
+             html: None,
+             primary_html: None,
++            representations: None,
++            primary_representations: None,
+ 
+             cached_read: None,
+             current_offer: None,
+@@ -161,22 +167,150 @@
+     pub fn set(&mut self, item: ClipboardItem) {
+         self.contents = Some(item);
+         self.html = take_clipboard_html();
++        self.representations = None;
+     }
+ 
+     pub fn set_primary(&mut self, item: ClipboardItem) {
+         self.primary_contents = Some(item);
+         self.primary_html = take_clipboard_html();
++        self.primary_representations = None;
++    }
++
++    /// Takes `representations` as what the clipboard (`primary`: the primary selection) offers, exactly.
++    pub fn set_representations(
++        &mut self,
++        primary: bool,
++        representations: Vec<ClipboardRepresentation>,
++    ) -> Result<(), ClipboardMimeError> {
++        // Wayland encodes MIME names as C strings. Reject the entire write before replacing either selection or
++        // handing any name to wayland-scanner's panicking CString conversion.
++        if representations
++            .iter()
++            .any(|representation| representation.mime.contains('\0'))
++        {
++            return Err(ClipboardMimeError::Io("clipboard MIME name contains a NUL byte".into()));
++        }
++        let text = representations
++            .iter()
++            .find(|representation| representation.mime == "text/plain")
++            .map(|representation| {
++                ClipboardItem::new_string(String::from_utf8_lossy(&representation.data).into_owned())
++            });
++        if primary {
++            self.primary_contents = text;
++            self.primary_html = None;
++            self.primary_representations = Some(representations);
++        } else {
++            self.contents = text;
++            self.html = None;
++            self.representations = Some(representations);
++        }
++        Ok(())
++    }
++
++    /// What this client's own selection holds, per MIME: a per-MIME write's representations, else the item's text
++    /// and HTML.
++    fn own_representations(&self, primary: bool) -> Vec<ClipboardRepresentation> {
++        let (representations, contents, html) = if primary {
++            (&self.primary_representations, &self.primary_contents, &self.primary_html)
++        } else {
++            (&self.representations, &self.contents, &self.html)
++        };
++        if let Some(representations) = representations {
++            return representations.clone();
++        }
++        let mut own = Vec::new();
++        let with_text = html.as_ref().is_none_or(|html| html.with_text);
++        if with_text && let Some(text) = contents.as_ref().and_then(ClipboardItem::text) {
++            own.push(ClipboardRepresentation {
++                mime: "text/plain".into(),
++                data: text.into_bytes(),
++            });
++        }
++        if let Some(html) = html {
++            own.push(ClipboardRepresentation {
++                mime: HTML_MIME_TYPE.into(),
++                data: html.html.clone().into_bytes(),
++            });
++        }
++        own
++    }
++
++    /// The MIME types the clipboard (`primary`: the primary selection) advertises.
++    pub fn mime_types(&self, primary: bool) -> Option<Vec<String>> {
++        let offered = if primary {
++            self.current_primary_offer.as_ref().map(|offer| &offer.mime_types)
++        } else {
++            self.current_offer.as_ref().map(|offer| &offer.mime_types)
++        }?;
++        if offered.contains(&self.self_mime) {
++            return Some(listed_mimes(&offered_mimes(&self.own_representations(primary)), None));
++        }
++        Some(listed_mimes(offered, Some(&self.self_mime)))
++    }
++
++    /// Each of `mimes` the clipboard (`primary`: the primary selection) offers, read in order.
++    pub fn read_mimes(&self, primary: bool, mimes: &[String]) -> Vec<ClipboardRepresentation> {
++        let mut wanted: Vec<&str> = Vec::new();
++        for mime in mimes {
++            if !wanted.contains(&mime.as_str()) {
++                wanted.push(mime);
++            }
++        }
++        if primary {
++            self.current_primary_offer
++                .as_ref()
++                .map_or_else(Vec::new, |offer| self.read_offer(offer, true, &wanted))
++        } else {
++            self.current_offer
++                .as_ref()
++                .map_or_else(Vec::new, |offer| self.read_offer(offer, false, &wanted))
++        }
++    }
++
++    fn read_offer<T: ReceiveData>(
++        &self,
++        offer: &DataOffer<T>,
++        primary: bool,
++        wanted: &[&str],
++    ) -> Vec<ClipboardRepresentation> {
++        let own = offer
++            .has_mime_type(&self.self_mime)
++            .then(|| self.own_representations(primary));
++        wanted
++            .iter()
++            .filter_map(|&mime| {
++                let source = source_type(&offer.mime_types, mime)?;
++                let data = match &own {
++                    Some(own) => served(own, source)?.to_vec(),
++                    None => offer.read_bytes(&self.connection, source)?,
++                };
++                Some(ClipboardRepresentation {
++                    mime: mime.to_owned(),
++                    data: source_data(source, data),
++                })
++            })
++            .collect()
+     }
+ 
+     /// The MIME types the clipboard (`primary`: the primary selection) offers: the text types, `text/html` with an
+     /// HTML representation, or `text/html` alone.
+-    pub fn offered(&self, primary: bool) -> Vec<&'static str> {
++    pub fn offered(&self, primary: bool) -> Vec<String> {
++        let representations = if primary {
++            &self.primary_representations
++        } else {
++            &self.representations
++        };
++        if let Some(representations) = representations {
++            return offered_mimes(representations);
++        }
+         let html = if primary { &self.primary_html } else { &self.html };
+-        match html {
++        let offered = match html {
+             Some(html) if html.with_text => TEXT_MIME_TYPES.into_iter().chain([HTML_MIME_TYPE]).collect(),
+             Some(_) => vec![HTML_MIME_TYPE],
+             None => TEXT_MIME_TYPES.to_vec(),
+-        }
++        };
++        offered.into_iter().map(str::to_owned).collect()
+     }
+ 
+     pub fn set_offer(&mut self, data_offer: Option<DataOffer<WlDataOffer>>) {
+@@ -194,6 +328,12 @@
+     }
+ 
+     pub fn send(&self, mime_type: String, fd: OwnedFd) {
++        if let Some(representations) = &self.representations {
++            if let Some(data) = served(representations, &mime_type) {
++                self.send_bytes(fd, data.to_vec());
++            }
++            return;
++        }
+         if mime_type == HTML_MIME_TYPE
+             && let Some(html) = &self.html
+         {
+@@ -206,6 +346,12 @@
+     }
+ 
+     pub fn send_primary(&self, mime_type: String, fd: OwnedFd) {
++        if let Some(representations) = &self.primary_representations {
++            if let Some(data) = served(representations, &mime_type) {
++                self.send_bytes(fd, data.to_vec());
++            }
++            return;
++        }
+         if mime_type == HTML_MIME_TYPE
+             && let Some(html) = &self.primary_html
+         {
+@@ -286,3 +432,187 @@
+             .unwrap();
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use std::io::Read as _;
++    use std::os::unix::net::UnixStream;
++
++    use super::*;
++
++    fn rep(mime: &str, data: &[u8]) -> ClipboardRepresentation {
++        ClipboardRepresentation {
++            mime: mime.to_owned(),
++            data: data.to_vec(),
++        }
++    }
++
++    /// What `clipboard` sends a reader asking for `mime` (`primary`: of the primary selection).
++    fn served_to_reader(
++        clipboard: &Clipboard,
++        event_loop: &mut calloop::EventLoop<'static, ()>,
++        primary: bool,
++        mime: &str,
++    ) -> Vec<u8> {
++        let (writer, mut reader) = UnixStream::pair().unwrap();
++        writer.set_nonblocking(true).unwrap();
++        if primary {
++            clipboard.send_primary(mime.to_owned(), OwnedFd::from(writer));
++        } else {
++            clipboard.send(mime.to_owned(), OwnedFd::from(writer));
++        }
++        event_loop
++            .dispatch(Some(std::time::Duration::from_millis(100)), &mut ())
++            .unwrap();
++        let mut bytes = Vec::new();
++        reader.read_to_end(&mut bytes).unwrap();
++        bytes
++    }
++
++    #[test]
++    fn nul_mime_names_reject_the_whole_write_and_preserve_both_selections() {
++        let (socket, _server) = UnixStream::pair().unwrap();
++        let connection = Connection::from_socket(socket).unwrap();
++        let mut event_loop = calloop::EventLoop::<'static, ()>::try_new().unwrap();
++        let mut clipboard = Clipboard::new(connection, event_loop.handle());
++        for primary in [false, true] {
++            clipboard
++                .set_representations(primary, vec![rep("text/plain", b"preserved")])
++                .unwrap();
++        }
++        for primary in [false, true] {
++            let error = clipboard
++                .set_representations(
++                    primary,
++                    vec![
++                        rep("text/plain", b"replacement"),
++                        rep("application/x-test\0suffix", b"bad name"),
++                    ],
++                )
++                .unwrap_err();
++            assert!(matches!(error, ClipboardMimeError::Io(message) if message.contains("NUL")));
++            for selection in [false, true] {
++                assert_eq!(
++                    clipboard.own_representations(selection),
++                    [rep("text/plain", b"preserved")]
++                );
++                assert_eq!(
++                    served_to_reader(&clipboard, &mut event_loop, selection, "text/plain"),
++                    b"preserved"
++                );
++            }
++        }
++        // NUL bytes in the representation's data are valid.
++        clipboard
++            .set_representations(false, vec![rep("application/x-test", b"\0")])
++            .unwrap();
++        assert_eq!(
++            served_to_reader(&clipboard, &mut event_loop, false, "application/x-test"),
++            b"\0"
++        );
++    }
++
++    struct TextOffer {
++        mime: &'static str,
++        bytes: Vec<u8>,
++    }
++
++    impl ReceiveData for TextOffer {
++        fn receive_data(&self, mime_type: String, fd: BorrowedFd<'_>) {
++            assert_eq!(mime_type, self.mime);
++            File::from(fd.try_clone_to_owned().unwrap())
++                .write_all(&self.bytes)
++                .unwrap();
++        }
++    }
++
++    #[test]
++    fn owned_and_foreign_text_aliases_read_as_the_same_requested_mime() {
++        let (socket, _server) = UnixStream::pair().unwrap();
++        let connection = Connection::from_socket(socket).unwrap();
++        let event_loop = calloop::EventLoop::<'static, ()>::try_new().unwrap();
++        let mut clipboard = Clipboard::new(connection, event_loop.handle());
++        let aliases = [
++            "text/plain;charset=utf-8",
++            "text/plain;charset=UTF-8",
++            "UTF8_STRING",
++            "TEXT",
++            "STRING",
++        ];
++        for primary in [false, true] {
++            for alias in aliases {
++                let bytes = if alias == "STRING" {
++                    b"caf\xe9".to_vec()
++                } else {
++                    "café".as_bytes().to_vec()
++                };
++                clipboard
++                    .set_representations(primary, vec![rep(alias, &bytes)])
++                    .unwrap();
++                let mut offer = DataOffer::new(TextOffer { mime: alias, bytes });
++                offer.add_mime_type(alias.to_owned());
++                // The frontend normalizes every Ghostty text request to text/plain.
++                let wanted = ["text/plain", "image/png"];
++                let expected = vec![rep("text/plain", "café".as_bytes())];
++                assert_eq!(clipboard.read_offer(&offer, primary, &wanted), expected);
++                offer.add_mime_type(clipboard.self_mime());
++                assert_eq!(clipboard.read_offer(&offer, primary, &wanted), expected);
++            }
++            clipboard
++                .set_representations(
++                    primary,
++                    vec![rep("text/plain;charset=utf-8", b"alias"), rep("text/plain", b"exact")],
++                )
++                .unwrap();
++            let mut offer = DataOffer::new(TextOffer {
++                mime: "text/plain",
++                bytes: Vec::new(),
++            });
++            for mime in clipboard.offered(primary) {
++                offer.add_mime_type(mime);
++            }
++            offer.add_mime_type(clipboard.self_mime());
++            assert_eq!(
++                clipboard.read_offer(&offer, primary, &["text/plain"]),
++                [rep("text/plain", b"exact")]
++            );
++        }
++    }
++
++    #[test]
++    fn per_mime_writes_offer_and_serve_exactly_their_representations() {
++        let (socket, _server) = UnixStream::pair().unwrap();
++        let connection = Connection::from_socket(socket).unwrap();
++        let mut event_loop = calloop::EventLoop::<'static, ()>::try_new().unwrap();
++        let mut clipboard = Clipboard::new(connection, event_loop.handle());
++        let binary: Vec<u8> = (0..=255).collect();
++        clipboard.set_representations(
++            false,
++            vec![rep("text/plain", "héllo".as_bytes()), rep("image/png", &binary)],
++        ).unwrap();
++        assert_eq!(
++            clipboard.offered(false),
++            [
++                "text/plain;charset=utf-8",
++                "text/plain",
++                "UTF8_STRING",
++                "text/plain;charset=UTF-8",
++                "image/png"
++            ]
++        );
++        assert_eq!(served_to_reader(&clipboard, &mut event_loop, false, "UTF8_STRING"), "héllo".as_bytes());
++        assert_eq!(served_to_reader(&clipboard, &mut event_loop, false, "image/png"), binary);
++        assert!(served_to_reader(&clipboard, &mut event_loop, false, "text/html").is_empty());
++        // the primary selection keeps its own offer
++        assert_eq!(clipboard.offered(true), TEXT_MIME_TYPES);
++        clipboard.set_representations(true, vec![rep("text/html", b"<b>")]).unwrap();
++        assert_eq!(clipboard.offered(true), ["text/html"]);
++        assert_eq!(served_to_reader(&clipboard, &mut event_loop, true, "text/html"), b"<b>");
++        assert_eq!(clipboard.own_representations(true), [rep("text/html", b"<b>")]);
++        // a GPUI write replaces the representations with its item
++        clipboard.set(ClipboardItem::new_string("plain".into()));
++        assert_eq!(clipboard.offered(false), TEXT_MIME_TYPES);
++        assert_eq!(clipboard.own_representations(false), [rep("text/plain", b"plain")]);
++        assert_eq!(served_to_reader(&clipboard, &mut event_loop, false, "text/plain"), b"plain");
++    }
++}
+diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
+--- a/src/linux/x11/client.rs
++++ b/src/linux/x11/client.rs
+@@ -1879,6 +1879,52 @@
+         state.clipboard_item.replace(item);
+     }
+ 
++    pub(crate) fn clipboard_mime_types(
++        &self,
++        target: crate::linux::ClipboardTarget,
++    ) -> Result<Vec<String>, crate::linux::ClipboardMimeError> {
++        let state = self.0.borrow();
++        state
++            .clipboard
++            .mime_types(x11_kind(target))
++            .map_err(|err| crate::linux::ClipboardMimeError::Io(err.to_string()))
++    }
++
++    pub(crate) fn read_clipboard_mimes(
++        &self,
++        target: crate::linux::ClipboardTarget,
++        mimes: &[String],
++    ) -> Result<Vec<crate::linux::ClipboardRepresentation>, crate::linux::ClipboardMimeError> {
++        let state = self.0.borrow();
++        state
++            .clipboard
++            .read_mimes(x11_kind(target), mimes)
++            .map_err(|err| crate::linux::ClipboardMimeError::Io(err.to_string()))
++    }
++
++    pub(crate) fn write_clipboard_representations(
++        &self,
++        target: crate::linux::ClipboardTarget,
++        representations: Vec<crate::linux::ClipboardRepresentation>,
++    ) -> Result<(), crate::linux::ClipboardMimeError> {
++        let mut state = self.0.borrow_mut();
++        let kind = x11_kind(target);
++        let text = representations
++            .iter()
++            .find(|representation| representation.mime == "text/plain")
++            .map(|representation| {
++                gpui::ClipboardItem::new_string(String::from_utf8_lossy(&representation.data).into_owned())
++            });
++        state
++            .clipboard
++            .set_representations(representations, kind, clipboard::WaitConfig::None)
++            .map_err(|err| crate::linux::ClipboardMimeError::Io(err.to_string()))?;
++        if matches!(kind, clipboard::ClipboardKind::Clipboard) {
++            state.clipboard_item = text;
++        }
++        Ok(())
++    }
++
+     pub(crate) fn read_from_primary(&self) -> Option<gpui::ClipboardItem> {
+         let state = self.0.borrow_mut();
+         state
+@@ -2924,6 +2970,62 @@
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    #[ignore = "needs an X server: run under xvfb-run"]
++    fn failed_mime_write_preserves_cached_text_while_the_client_owns_the_clipboard() {
++        use crate::linux::{ClipboardRepresentation, ClipboardTarget};
++
++        let event_loop = calloop::EventLoop::<'static, ()>::try_new().unwrap();
++        let (common, _main_receiver, _power_receiver) = LinuxCommon::new(event_loop.get_signal());
++        let environment = GraphicalEnvironment {
++            x11_display: Some(std::env::var_os("DISPLAY").expect("an X display")),
++            ..GraphicalEnvironment::default()
++        };
++        let client = X11Connection::attach(event_loop.handle(), Rc::new(RefCell::new(common)), &environment).unwrap();
++        client.write_to_clipboard(ClipboardItem::new_string("preserved".into()));
++        let oversized = client.0.0.borrow().xcb_connection.maximum_request_bytes() + 1;
++        let error = client
++            .write_clipboard_representations(
++                ClipboardTarget::Clipboard,
++                vec![ClipboardRepresentation {
++                    mime: "image/png".into(),
++                    data: vec![7; oversized],
++                }],
++            )
++            .unwrap_err();
++        assert!(
++            matches!(error, crate::linux::ClipboardMimeError::Io(message) if message.contains("single-transfer limit"))
++        );
++        assert_eq!(
++            client.read_from_clipboard().and_then(|item| item.text()),
++            Some("preserved".into())
++        );
++        assert_eq!(
++            client
++                .read_clipboard_mimes(ClipboardTarget::Clipboard, &["text/plain".into()])
++                .unwrap(),
++            [ClipboardRepresentation {
++                mime: "text/plain".into(),
++                data: b"preserved".to_vec(),
++            }]
++        );
++        // Successful image-only writes and clears still replace the cached text.
++        client
++            .write_clipboard_representations(
++                ClipboardTarget::Clipboard,
++                vec![ClipboardRepresentation {
++                    mime: "image/png".into(),
++                    data: vec![7],
++                }],
++            )
++            .unwrap();
++        assert!(client.read_from_clipboard().is_none());
++        client
++            .write_clipboard_representations(ClipboardTarget::Clipboard, Vec::new())
++            .unwrap();
++        assert!(client.read_from_clipboard().is_none());
++    }
++
+     fn test_keymap(layouts: &str) -> xkbc::Keymap {
+         test_keymap_with_variant(layouts, "")
+     }
+@@ -3239,3 +3341,11 @@
+         assert_eq!(key_event_state.key_get_utf8(space), " ");
+     }
+ }
++
++/// The X11 selection a per-MIME access targets.
++fn x11_kind(target: crate::linux::ClipboardTarget) -> clipboard::ClipboardKind {
++    match target {
++        crate::linux::ClipboardTarget::Clipboard => clipboard::ClipboardKind::Clipboard,
++        crate::linux::ClipboardTarget::Primary => clipboard::ClipboardKind::Primary,
++    }
++}
+diff -ruN a/src/linux/x11/clipboard.rs b/src/linux/x11/clipboard.rs
+--- a/src/linux/x11/clipboard.rs
++++ b/src/linux/x11/clipboard.rs
+@@ -34,7 +34,7 @@
+ use parking_lot::{Condvar, Mutex, MutexGuard, RwLock};
+ use x11rb::{
+     COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, NONE,
+-    connection::Connection,
++    connection::{Connection, RequestConnection},
+     protocol::{
+         Event,
+         xproto::{
+@@ -210,6 +210,22 @@
+ }
+ 
+ impl Inner {
++    /// ChangeProperty has a 24-byte header, plus four bytes when BIG-REQUESTS is used. Until outgoing INCR is
++    /// supported, refuse data that cannot fit rather than accepting a clipboard value nobody can retrieve.
++    fn max_property_bytes(&self) -> usize {
++        self.server.conn.maximum_request_bytes().saturating_sub(28) & !3
++    }
++
++    fn validate_size(&self, size: usize) -> Result<()> {
++        let maximum = self.max_property_bytes();
++        if size > maximum {
++            return Err(Error::unknown(format!(
++                "Clipboard representation exceeds the X11 single-transfer limit ({size} > {maximum} bytes)"
++            )));
++        }
++        Ok(())
++    }
++
+     fn new(display: &str) -> Result<Self> {
+         let server = XContext::new(display)?;
+         let atoms = Atoms::new(&server.conn)
+@@ -242,6 +258,10 @@
+             ));
+         }
+ 
++        for part in &data {
++            self.validate_size(part.bytes.len())?;
++        }
++
+         let server_win = self.server.win_id;
+ 
+         // ICCCM version 2, section 2.6.1.3 states that we should re-assert ownership whenever data
+@@ -366,6 +386,46 @@
+         Err(Error::ContentNotAvailable)
+     }
+ 
++    /// The atom named `name`, created when the server has none yet (ngterm: per-MIME writes).
++    fn intern(&self, name: &str) -> Result<Atom> {
++        Ok(self
++            .server
++            .conn
++            .intern_atom(false, name.as_bytes())
++            .map_err(into_unknown)?
++            .reply()
++            .map_err(into_unknown)?
++            .atom)
++    }
++
++    /// The targets `selection` offers with their names (ngterm: per-MIME reads): this process's own data's when it
++    /// owns the selection, else the owner's `TARGETS`; none without an owner.
++    fn targets(&self, selection: ClipboardKind) -> Result<Vec<(Atom, String)>> {
++        let atoms: Vec<Atom> = if self.is_owner(selection)? {
++            self.selection_of(selection)
++                .data
++                .read()
++                .as_ref()
++                .map(|list| list.iter().map(|data| data.format).collect())
++                .unwrap_or_default()
++        } else {
++            let reader = XContext::new(&self.display)?;
++            match self.read_single(&reader, selection, self.atoms.TARGETS) {
++                Ok(ClipboardData { bytes, format }) if format == self.atoms.ATOM => Self::parse_formats(&bytes),
++                Ok(_) | Err(Error::ContentNotAvailable) => Vec::new(),
++                Err(err) => return Err(err),
++            }
++        };
++        let mut targets = Vec::with_capacity(atoms.len());
++        for atom in atoms {
++            if targets.iter().any(|(known, _)| *known == atom) {
++                continue;
++            }
++            targets.push((atom, self.query_atom_name(atom)?));
++        }
++        Ok(targets)
++    }
++
+     fn parse_formats(bytes: &[u8]) -> Vec<Atom> {
+         bytes
+             .chunks_exact(4)
+@@ -742,6 +802,10 @@
+                 success = false;
+             }
+         }
++        self.notify_selection(event, success)
++    }
++
++    fn notify_selection(&self, event: SelectionRequestEvent, success: bool) -> Result<()> {
+         // on failure we notify the requester of it
+         let property = if success {
+             event.property
+@@ -888,9 +952,14 @@
+                     context.atom_name(event.target),
+                 );
+                 // Someone is requesting the clipboard content from us.
+-                context
+-                    .handle_selection_request(event)
+-                    .map_err(into_unknown)?;
++                if let Err(error) = context.handle_selection_request(event) {
++                    log::warn!("Failed to serve a clipboard request: {error}");
++                    // A bad requestor or one failed transfer must not stop every later clipboard operation.
++                    if let Err(error) = context.notify_selection(event, false) {
++                        log::warn!("Failed to refuse a clipboard request: {error}");
++                    }
++                    continue;
++                }
+ 
+                 // if we are in the progress of saving to the clipboard manager
+                 // make sure we save that we have finished writing
+@@ -1101,6 +1170,95 @@
+     pub fn is_owner(&self, selection: ClipboardKind) -> bool {
+         self.inner.is_owner(selection).unwrap_or(false)
+     }
++
++    /// Owns `selection` with exactly `representations` (ngterm: `write_clipboard_representations`): `text/plain` under
++    /// the UTF-8 text targets, UTF-8 first, any other type under its own atom; none leaves the selection empty.
++    pub(crate) fn set_representations(
++        &self,
++        representations: Vec<crate::linux::ClipboardRepresentation>,
++        selection: ClipboardKind,
++        wait: WaitConfig,
++    ) -> Result<()> {
++        let mut data = Vec::with_capacity(representations.len() + 2);
++        for representation in representations {
++            self.inner.validate_size(representation.data.len())?;
++            if representation.mime == "text/plain" {
++                for format in [
++                    self.inner.atoms.UTF8_MIME_0,
++                    self.inner.atoms.TEXT_MIME_UNKNOWN,
++                    self.inner.atoms.UTF8_STRING,
++                ] {
++                    data.push(ClipboardData {
++                        bytes: representation.data.clone(),
++                        format,
++                    });
++                }
++                continue;
++            }
++            data.push(ClipboardData {
++                format: self.inner.intern(&representation.mime)?,
++                bytes: representation.data,
++            });
++        }
++        self.inner.write(data, selection, wait)
++    }
++
++    /// The MIME types `selection` advertises (ngterm: `clipboard_mime_types`), without reading their data.
++    pub(crate) fn mime_types(&self, selection: ClipboardKind) -> Result<Vec<String>> {
++        let targets = self.inner.targets(selection)?;
++        let names: Vec<String> = targets.into_iter().map(|(_, name)| name).collect();
++        Ok(crate::linux::clipboard_mime::listed_mimes(&names, None))
++    }
++
++    /// Each of `mimes` `selection` offers, read in order (ngterm: `read_clipboard_mimes`); a text type reads the best
++    /// text target offered.
++    pub(crate) fn read_mimes(
++        &self,
++        selection: ClipboardKind,
++        mimes: &[String],
++    ) -> Result<Vec<crate::linux::ClipboardRepresentation>> {
++        let targets = self.inner.targets(selection)?;
++        let names: Vec<String> = targets.iter().map(|(_, name)| name.clone()).collect();
++        let owner = self.inner.is_owner(selection)?;
++        let reader = if owner {
++            None
++        } else {
++            Some(XContext::new(&self.inner.display)?)
++        };
++        let mut read: Vec<crate::linux::ClipboardRepresentation> = Vec::new();
++        for mime in mimes {
++            if read.iter().any(|known| &known.mime == mime) {
++                continue;
++            }
++            let Some(source) = crate::linux::clipboard_mime::source_type(&names, mime) else {
++                continue;
++            };
++            let Some(&(atom, _)) = targets.iter().find(|(_, name)| name == source) else {
++                continue;
++            };
++            let bytes = match &reader {
++                None => self
++                    .inner
++                    .selection_of(selection)
++                    .data
++                    .read()
++                    .as_ref()
++                    .and_then(|list| list.iter().find(|data| data.format == atom).map(|data| data.bytes.clone())),
++                Some(reader) => match self.inner.read_single(reader, selection, atom) {
++                    Ok(data) => Some(data.bytes),
++                    Err(Error::ContentNotAvailable) => None,
++                    Err(err) => return Err(err),
++                },
++            };
++            if let Some(data) = bytes {
++                read.push(crate::linux::ClipboardRepresentation {
++                    mime: mime.clone(),
++                    data: crate::linux::clipboard_mime::source_data(source, data),
++                });
++            }
++        }
++        Ok(read)
++    }
+ }
+ 
+ impl Drop for Clipboard {
+@@ -1312,3 +1470,144 @@
+         }
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::linux::ClipboardRepresentation;
++
++    fn rep(mime: &str, data: &[u8]) -> ClipboardRepresentation {
++        ClipboardRepresentation {
++            mime: mime.to_owned(),
++            data: data.to_vec(),
++        }
++    }
++
++    /// Another X11 client owning the selection, served by its own thread.
++    fn foreign_owner(display: &str) -> Clipboard {
++        let inner = Arc::new(Inner::new(display).expect("an X connection"));
++        let served = Arc::clone(&inner);
++        std::thread::spawn(move || serve_requests(served).map_err(|err| err.to_string()));
++        Clipboard { inner }
++    }
++
++    #[test]
++    #[ignore = "needs an X server: run under xvfb-run"]
++    fn oversized_writes_are_refused_and_a_failed_transfer_does_not_stop_x11() {
++        let display = std::env::var("DISPLAY").expect("an X display");
++        let owner = foreign_owner(&display);
++        let reader = Clipboard {
++            inner: Arc::new(Inner::new(&display).expect("an X connection")),
++        };
++        // PRIMARY keeps this test independent of the regular CLIPBOARD round trip.
++        let selection = ClipboardKind::Primary;
++        let mime = "application/x-ngterm-large";
++        let wanted = [mime.to_owned()];
++        let old = rep(mime, b"preserved");
++        owner
++            .set_representations(vec![old.clone()], selection, WaitConfig::None)
++            .unwrap();
++        let limit = owner.inner.max_property_bytes();
++        let too_large = vec![7; limit + 1];
++        // A rejected write neither replaces this client's clipboard nor steals a foreign selection.
++        for writer in [&owner, &reader] {
++            let error = writer
++                .set_representations(vec![rep(mime, &too_large)], selection, WaitConfig::None)
++                .unwrap_err();
++            assert!(error.to_string().contains("single-transfer limit"), "{error}");
++            assert_eq!(reader.read_mimes(selection, &wanted).unwrap(), [old.clone()]);
++        }
++        assert!(reader
++            .set_text(Cow::Owned("x".repeat(limit + 1)), selection, WaitConfig::None)
++            .is_err());
++        assert_eq!(reader.read_mimes(selection, &wanted).unwrap(), [old]);
++
++        // The advertised boundary is transferable, including X11's request header and alignment.
++        let boundary = rep(mime, &vec![0xA5; limit]);
++        owner
++            .set_representations(vec![boundary.clone()], selection, WaitConfig::None)
++            .unwrap();
++        assert_eq!(reader.read_mimes(selection, &wanted).unwrap(), [boundary]);
++
++        // Simulate old/unvalidated state to force the actual ChangeProperty request to fail. The request is
++        // refused, and the same worker must serve a later write/read successfully.
++        *owner.inner.selection_of(selection).data.write() = Some(vec![ClipboardData {
++            format: owner.inner.intern(mime).unwrap(),
++            bytes: vec![7; owner.inner.server.conn.maximum_request_bytes() + 1],
++        }]);
++        assert!(reader.read_mimes(selection, &wanted).unwrap().is_empty());
++        assert!(!owner.inner.serve_stopped.load(Ordering::Relaxed));
++        let next = rep(mime, b"still running");
++        owner
++            .set_representations(vec![next.clone()], selection, WaitConfig::None)
++            .unwrap();
++        assert_eq!(reader.read_mimes(selection, &wanted).unwrap(), [next]);
++    }
++
++    #[test]
++    #[ignore = "needs an X server: run under xvfb-run"]
++    fn representations_round_trip_between_x11_clients() {
++        let display = std::env::var("DISPLAY").expect("an X display");
++        let owner = foreign_owner(&display);
++        let reader = Clipboard {
++            inner: Arc::new(Inner::new(&display).expect("an X connection")),
++        };
++        let binary: Vec<u8> = (0..2048u32).map(|i| (i * 7 % 256) as u8).collect();
++        let parts = vec![
++            rep("text/plain", "héllo".as_bytes()),
++            rep("text/html", b"<b>hi</b>"),
++            rep("application/x-ngterm-test", &binary),
++            rep("text/x-empty", b""),
++        ];
++        owner
++            .set_representations(parts, ClipboardKind::Clipboard, WaitConfig::None)
++            .unwrap();
++        assert_eq!(
++            reader.mime_types(ClipboardKind::Clipboard).unwrap(),
++            [
++                "text/plain;charset=utf-8",
++                "text/plain",
++                "text/html",
++                "application/x-ngterm-test",
++                "text/x-empty"
++            ]
++        );
++        let wanted: Vec<String> = ["application/x-ngterm-test", "image/png", "text/plain", "text/x-empty"]
++            .map(String::from)
++            .to_vec();
++        let read = reader.read_mimes(ClipboardKind::Clipboard, &wanted).unwrap();
++        assert_eq!(
++            read,
++            [
++                rep("application/x-ngterm-test", &binary),
++                rep("text/plain", "héllo".as_bytes()),
++                rep("text/x-empty", b""),
++            ]
++        );
++        // the owner reads its own selection without a round trip, alike
++        assert_eq!(owner.read_mimes(ClipboardKind::Clipboard, &wanted).unwrap(), read);
++        owner
++            .set_representations(Vec::new(), ClipboardKind::Clipboard, WaitConfig::None)
++            .unwrap();
++        assert!(reader.mime_types(ClipboardKind::Clipboard).unwrap().is_empty());
++        assert!(reader.read_mimes(ClipboardKind::Clipboard, &wanted).unwrap().is_empty());
++        // a legacy owner offering only Latin-1 `STRING` is read as UTF-8 text
++        owner
++            .inner
++            .write(
++                vec![ClipboardData {
++                    bytes: vec![b'c', b'a', b'f', 0xE9],
++                    format: owner.inner.atoms.STRING,
++                }],
++                ClipboardKind::Clipboard,
++                WaitConfig::None,
++            )
++            .unwrap();
++        assert_eq!(
++            reader
++                .read_mimes(ClipboardKind::Clipboard, &["text/plain".to_owned()])
++                .unwrap(),
++            [rep("text/plain", "café".as_bytes())]
++        );
++    }
++}
+diff -ruN a/src/linux.rs b/src/linux.rs
+--- a/src/linux.rs
++++ b/src/linux.rs
+@@ -1,4 +1,5 @@
+ mod clipboard_html;
++mod clipboard_mime;
+ mod dispatcher;
+ mod display_connection;
+ mod headless;
+@@ -18,6 +19,10 @@
+ mod xdg_desktop_portal;
+ 
+ pub use clipboard_html::{ClipboardHtml, HTML_MIME_TYPE, with_clipboard_html};
++pub use clipboard_mime::{
++    ClipboardMimeError, ClipboardRepresentation, ClipboardTarget, clipboard_mime_types, is_text_mime,
++    read_clipboard_mimes, write_clipboard_representations,
++};
+ #[cfg(any(feature = "wayland", feature = "x11"))]
+ pub(crate) use clipboard_html::take_clipboard_html;
+ pub use dispatcher::*;
+@@ -61,5 +66,7 @@
+ /// It starts windowed in the process's own environment, or headless if that names no allowed
+ /// display server. Set another initial mode with [`gpui::Application::with_windowing`].
+ pub fn linux_platform(allowed_modes: WindowingModes) -> Rc<dyn gpui::Platform> {
+-    Rc::new(LinuxPlatform::new(allowed_modes))
++    let platform = Rc::new(LinuxPlatform::new(allowed_modes));
++    clipboard_mime::register(&platform);
++    platform
+ }
