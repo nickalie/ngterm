@@ -6,10 +6,13 @@ its stamp, so a changed patch prepares a new tree and rebuilds the library. Each
 pristine tree (`a/` and `b/` labels), its header saying what it changes and where it comes from. A patch that changes a
 header is followed by `scripts/gen-ghostty-vt-bindings.sh` (its `--check` holds).
 
-Two kinds are carried. One exposes data the library already stores, as C API the app needs (0001). The other changes
-the library's logic, for a fix or a parity behavior Rust cannot reach from outside (0002 to 0004): each of those is
-recorded here, in the form of herdr's `vendor/libghostty-vt.patches.md`, with its reason, its upstream status and a
-remove-when condition with its verification. A gap Rust can fill is filled in Rust, not here.
+The carried patches change library logic for fixes or parity behavior Rust cannot reach from outside (0002 to
+0004). Each records its reason, upstream status and remove-when verification, in the form of herdr's
+`vendor/libghostty-vt.patches.md`. A gap Rust can fill is filled in Rust, not here.
+
+Patch 0001 (placement-id namespaces and parent links) was retired at v1.4.0: the official render-state image API
+supersedes its raw getters, which were never upstreamed. The wrapper and renderer now draw only that API's resolved
+placements, including placeholders and relative chains.
 
 Remove a patch only when the pinned source has the behavior and the patch's verification still passes without it. A
 pin bump rebases every patch onto the new revision (with no fuzz) and re-runs every verification below.
@@ -28,50 +31,7 @@ Ghostty's own tests run there with a scratch cache, so the tree stays as the bui
 build's glibc target, `-Dtarget=x86_64-linux-gnu.2.39` (or `aarch64-…`), as the library build does. Zig 0.16's
 linker refused the distro's `crt1.o` (its `.sframe` relocations, `R_X86_64_PC64`, gcc 16) on the native target; Zig
 0.17's links it (a native `-Dtest-filter='placement_get'` run passed against gcc 16.2's `crt1.o` at this pin), but the glibc
-target stays, as the library's floor. The test filters below were run that way on the pin (`placement_get`: 42 of
-42 pass; `cursorAbsolute`: 38 of 38, herdr's two among them).
-
-## 0001 Kitty placement-id namespaces and relative placements' parent links
-
-status: active, interim: retired once the wrapper and renderer draw Kitty placements from v1.4.0's render-state image
-API (#14780, #14789), which resolves placeholders and relative chains inside the library (the Ghostty sync plan's
-next task)
-
-patch: `build/patches/ghostty-vt/0001-kitty-placement-namespace-and-parent.patch`
-
-ngterm issue: none; Task 34 of the GPUI frontend plan (Unicode placeholders and relative placements drawn as
-Ghostty's renderer draws them)
-
-upstream discussion: not opened
-
-upstream pr: not opened
-
-base: `LIBGHOSTTY_VT_REV` `83fb95624b0439ee660c2679b43b38c8b63769cd` (v1.4.0); rebased by hand there: the header was
-reworked around an unchanged `GhosttyKittyGraphicsPlacementData` (1..12), so the enum hunk sits after its `Z` member
-and the test hunk at the file's new end
-
-files:
-
-- `include/ghostty/vt/kitty_graphics.h`
-- `src/terminal/c/kitty_graphics.zig`
-- `src/terminal/c/types.zig`
-
-reason: The storage placement iterator reports a placement's id without its namespace and a relative placement
-(`P=`/`Q=`) without its parent, so an embedder cannot resolve a placeholder's target or a chain rooted at a virtual placement the way
-Ghostty's renderer does (`placeholderTarget`, `pending_relative`). The patch reads out what storage holds, additively,
-with no logic of its own; `ngterm-term` and `ngterm-gpui` resolve chains, targets and positions in Rust.
-
-remove when: the wrapper and renderer draw Kitty placements from the render-state image API
-(`ghostty_render_state_image_iterator_*`), which reports placements already resolved, or the pinned C API reports the
-placement key's namespace and a relative placement's parent key and offsets and the wrapper reads them from there.
-
-verification:
-
-```sh
-cargo test -p ngterm-ghostty-vt kitty
-(cd "$tree" && "$zig" build test-lib-vt --cache-dir "$(mktemp -d)" -Dtest-filter='placement_get')
-scripts/gen-ghostty-vt-bindings.sh --check
-```
+target stays, as the library's floor. The test filters below were run that way on the pin (`cursorAbsolute`: 38 of 38, herdr's two among them).
 
 ## 0002 hosted Wuffs builds
 

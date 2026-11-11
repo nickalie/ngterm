@@ -62,7 +62,7 @@ fn a_chunked_png_becomes_an_image_and_a_placement() -> TestResult {
     let placement = view.placements[0];
     assert_eq!(placement.image, image.key);
     assert_eq!(placement.layer, KittyLayer::AboveText);
-    let rect = placement.rect.unwrap();
+    let rect = placement.rect;
     // placed at the cursor: column 0 of the row after `before`; 3x2 px fits one 8x16 cell
     assert_eq!((rect.column, rect.row, rect.columns, rect.rows), (0, 1, 1, 1));
     assert_eq!((rect.source.width, rect.source.height), (3, 2));
@@ -84,13 +84,12 @@ fn raw_pixels_scroll_with_the_text_and_a_deletion_is_reported() -> TestResult {
     let shown = wait_frame(pane, |frame| !frame.kitty.placements.is_empty());
     let image = &shown.kitty.images[0];
     assert_eq!(&*image.pixels, &[1, 2, 3, 4, 5, 6, 7, 8]);
-    assert_eq!(shown.kitty.placements[0].rect.map(|rect| rect.row), Some(0));
+    assert_eq!(shown.kitty.placements[0].rect.row, 0);
 
     pane.write(b"\n")?;
     let scrolled = wait_frame(pane, |frame| frame.lines().iter().any(|line| line.contains("scrolled")));
-    // off the top now: still stored, no longer on the viewport; the pixels were not copied again
-    assert_eq!(scrolled.kitty.placements.len(), 1);
-    assert_eq!(scrolled.kitty.placements[0].rect, None);
+    // Only placements intersecting the captured viewport are reported. ngterm keeps the stored image cached.
+    assert!(scrolled.kitty.placements.is_empty());
     assert!(std::sync::Arc::ptr_eq(&scrolled.kitty.images[0], image));
 
     pane.write(b"\n")?;
@@ -126,5 +125,31 @@ fn a_zero_storage_limit_turns_kitty_graphics_off() -> TestResult {
         frame.lines().iter().any(|line| line.contains("done"))
     });
     assert!(frame.kitty.images.is_empty() && frame.kitty.placements.is_empty());
+    Ok(())
+}
+
+#[test]
+fn a_synchronized_hold_keeps_matching_placements_and_pixels_until_release() -> TestResult {
+    let script = concat!(
+        "printf '\\033_Ga=T,f=32,s=2,v=1,i=7,p=1,q=2,C=1;AQIDBAUGBwg=\\033\\\\\\033[?2026h",
+        "\\033_Ga=T,f=24,s=1,v=1,i=7,p=1,q=2,C=1;////\\033\\\\'; ",
+        "read _; printf '\\033[?2026l'; exec sleep 30",
+    );
+    let fixture = spawn(script)?;
+    let held = wait_frame(&fixture.pane, |frame| frame.held);
+    assert_eq!(held.kitty.placements.len(), 1);
+    let old = &held.kitty.images[0];
+    assert_eq!((old.width, old.height), (2, 1));
+    assert_eq!(&*old.pixels, &[1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(held.kitty.placements[0].image, old.key);
+    fixture.pane.write(b"\n")?;
+    let released = wait_frame(&fixture.pane, |frame| !frame.held && frame.kitty.images[0].width == 1);
+    let new = &released.kitty.images[0];
+    assert_ne!(old.key, new.key);
+    assert_eq!(&*new.pixels, &[255, 255, 255]);
+    assert_eq!(released.kitty.placements[0].image, new.key);
+    assert!(released.kitty.removed.contains(&old.key));
+    // The published hold remains immutable even after the live image changed.
+    assert_eq!(&*old.pixels, &[1, 2, 3, 4, 5, 6, 7, 8]);
     Ok(())
 }

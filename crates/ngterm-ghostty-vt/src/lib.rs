@@ -3,7 +3,7 @@
 //! - [`Terminal`]: one VT (parser, screen and scrollback), fed with [`Terminal::vt_write`] and resized with
 //!   [`Terminal::resize`].
 //! - [`RenderState`]: the capture a renderer draws from, updated from a terminal in one call or in two phases, read
-//!   row by row through [`RenderState::rows`].
+//!   row by row through [`RenderState::rows`], with resolved image rectangles through [`RenderState::images`].
 //!
 //! - [`Effects`]: the callbacks a terminal runs synchronously inside [`Terminal::vt_write`] (replies to the PTY,
 //!   title, pwd, bell, notifications, progress, program status, clipboard, synchronized output), installed with
@@ -17,7 +17,7 @@
 //! - [`Terminal::active_row`]: a row of the active area cell by cell ([`GridRow`]), whatever the viewport shows.
 //! - [`SelectionGesture`]: Ghostty's pointer selection state machine (click counts, drags, autoscroll).
 //! - [`Search`]: scrollback search, its terminal-touching calls serialized with the terminal, its ticks free of it.
-//! - [`KittyGraphics`]: the stored Kitty images and their placements.
+//! - [`KittyGraphics`]: stored Kitty image pixels and storage metadata; drawing uses [`RenderState::images`].
 //! - Copying a terminal: [`Terminal::continuation`] (the unfinished VT input, replayed with
 //!   [`Terminal::replay_continuation`]), [`FormatExtras`] (the state VT read-back carries) and the binary snapshot
 //!   codec ([`Terminal::encode_snapshot`], [`Terminal::decode_snapshot`], [`Terminal::restore_snapshot`]).
@@ -69,6 +69,7 @@ mod kitty;
 mod mouse;
 mod paste;
 mod render;
+mod render_images;
 mod scan;
 mod search;
 mod selection;
@@ -91,15 +92,13 @@ pub use gesture::{
 };
 pub use grid::{GridCell, GridRow};
 pub use key::{Key, KeyAction, KeyEncoder, KeyEvent, KeyMods, encode_focus};
-pub use kitty::{
-    KittyFormat, KittyGraphics, KittyIdNamespace, KittyImage, KittyLayer, KittyParent, KittyPlacement,
-    KittyPlacementKey, KittyRenderInfo, PixelRect,
-};
+pub use kitty::{KittyFormat, KittyGraphics, KittyImage, KittyLayer, KittyPlacement, KittyRenderInfo, PixelRect};
 pub use mouse::{MouseAction, MouseButton, MouseEncoder, MouseEvent, MouseGeometry};
 pub use paste::{PasteOutcome, PasteSource, paste_is_safe};
 pub use render::{
     CursorPosition, CursorStyle, Dirty, PendingUpdate, RenderColors, RenderCursor, RenderState, RowId, RowRef, Rows,
 };
+pub use render_images::{RenderImage, RenderImages};
 pub use scan::{ReadCandidate, ReadScope, Scanner, Stop};
 pub use search::{Match, Search, SearchDirection, SearchResults, SearchStatus};
 pub use selection::{Point, PointTag, Selection, SelectionAdjust};

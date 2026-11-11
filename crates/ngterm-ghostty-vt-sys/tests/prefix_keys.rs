@@ -62,10 +62,15 @@ fn vt_prefix(edit: impl Fn(&str) -> String) -> String {
     print_prefix(checkout(edit).path())
 }
 
-/// The prefix after `patch` changed one file of the checkout's `build/patches/` (pins unedited).
-fn patched_prefix(patch: &str) -> String {
+/// The prefix after changing one patch in `build/patches/{build}` (pins unedited).
+fn patched_prefix(build: &str) -> String {
     let dir = checkout(str::to_owned);
-    let path = dir.path().join("build/patches").join(patch);
+    let path = fs::read_dir(dir.path().join("build/patches").join(build))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "patch"))
+        .min()
+        .expect("the build must have a patch to edit");
     let mut text = fs::read_to_string(&path).unwrap();
     text.push_str("\n# edited\n");
     fs::write(&path, text).unwrap();
@@ -113,10 +118,7 @@ fn a_libghostty_vt_pin_bump_moves_the_prefix() {
 #[test]
 fn a_libghostty_vt_patch_moves_the_prefix() {
     let base = vt_prefix(str::to_owned);
-    assert_ne!(
-        patched_prefix("ghostty-vt/0001-kitty-placement-namespace-and-parent.patch"),
-        base
-    );
+    assert_ne!(patched_prefix("ghostty-vt"), base);
 }
 
 #[test]
@@ -132,7 +134,7 @@ fn other_builds_pins_and_patches_leave_the_prefix() {
     ] {
         assert_eq!(vt_prefix(|pins| bump(pins, name, &value)), base, "{name}");
     }
-    assert_eq!(patched_prefix("gir/0001-version-from-env.patch"), base);
+    assert_eq!(patched_prefix("gir"), base);
 }
 
 /// What the build script reads: the repository's own prefix, in the host's native form (on Windows cygpath's

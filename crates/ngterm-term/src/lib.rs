@@ -93,15 +93,14 @@ pub use input::{
     KeyInput, ModSides, MouseAction, MouseButton, MouseInput, Padding, Paste, PasteSource, Scroll, Typing,
 };
 pub use kitty::{
-    KittyFormat, KittyImage, KittyImageKey, KittyLayer, KittyPlacement, KittyView, PlacementKey, PlacementNamespace,
-    PlacementRect, SourceRect, VirtualRooted,
+    KittyFormat, KittyImage, KittyImageKey, KittyLayer, KittyPlacement, KittyView, PlacementRect, SourceRect,
 };
 #[cfg(feature = "local")]
 pub use launch::{COMMAND_SHELL, FALLBACK_TERM, Host, Launch, Prepared, resolve_resources, resource_candidates};
 pub use pane::{
     DEFAULT_KITTY_IMAGE_LIMIT, DEFAULT_WRITE_LIMIT, FrameSnapshot, GridSize, Pane, PaneConfig, PaneStats, Wake,
 };
-pub use placeholder::{KittyPlaceholder, PLACEHOLDER, VirtualPlacement, virtual_placements};
+pub use placeholder::PLACEHOLDER;
 #[cfg(feature = "local")]
 pub use pty::PaneCommand;
 pub use render::{

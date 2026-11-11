@@ -978,14 +978,14 @@ fn capture(shared: &Shared) -> Option<Arc<Frame>> {
     if capture.held() {
         drop(vt);
     } else {
-        // the Kitty view is read while the terminal is held, with the state
         let held = &mut *vt;
-        capture.capture_kitty(held.terminal.kitty_graphics(), &held.kitty);
-        let pending = capture.state.begin_update(&mut vt.terminal);
-        // only the begin phase reads the terminal
+        let begun = capture.begin_update(&mut held.terminal, &held.kitty);
+        // Image geometry and pixels have been captured from the same begin phase under the VT lock.
         drop(vt);
-        if let Err(err) = pending.and_then(vt::PendingUpdate::end) {
-            tracing::warn!(%err, "capturing the terminal failed");
+        let result = begun.and_then(|(pending, kitty)| pending.end().map(|()| kitty));
+        match result {
+            Ok(kitty) => capture.finish_kitty(kitty),
+            Err(err) => tracing::warn!(%err, "capturing the terminal failed"),
         }
     }
     let mut published = lock(&shared.published);

@@ -12,7 +12,6 @@ use bitflags::bitflags;
 use ngterm_ghostty_vt as vt;
 
 use crate::kitty::KittyView;
-use crate::placeholder::{self, IdColor, KittyPlaceholder};
 
 /// A 24-bit color.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -99,8 +98,6 @@ pub struct Row {
     text: String,
     selection: Option<(u16, u16)>,
     wrapped: bool,
-    /// The Kitty Unicode placeholder cells, left to right (most rows have none).
-    placeholders: Vec<KittyPlaceholder>,
 }
 
 impl Row {
@@ -126,21 +123,6 @@ impl Row {
     #[must_use]
     pub fn cells(&self) -> &[Cell] {
         &self.cells
-    }
-
-    /// The Kitty Unicode placeholder cells of the row, left to right, with the ids their raw colors carry
-    /// ([`crate::virtual_placements`] joins them into runs).
-    #[must_use]
-    pub fn placeholders(&self) -> &[KittyPlaceholder] {
-        &self.placeholders
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_placeholders(placeholders: Vec<KittyPlaceholder>) -> Self {
-        Self {
-            placeholders,
-            ..Self::default()
-        }
     }
 
     /// The grapheme cluster of the cell at `column`; empty for a blank or spacer cell or past the end.
@@ -474,6 +456,8 @@ pub(crate) const HOLD_TIMEOUT: Duration = Duration::from_secs(1);
 #[derive(Debug)]
 pub(crate) struct Capture {
     pub(crate) state: vt::RenderState,
+    /// Both the native update and its matching image capture completed successfully.
+    ready: bool,
     held_since: Option<Instant>,
     /// The hold callback captured a frame that is not converted yet.
     fresh: bool,
@@ -488,6 +472,7 @@ impl Capture {
     pub(crate) fn new() -> Result<Self, vt::Error> {
         Ok(Self {
             state: vt::RenderState::new()?,
+            ready: true,
             held_since: None,
             fresh: false,
             seq: 0,
@@ -499,23 +484,50 @@ impl Capture {
     /// A hold began: capture the frame the program left on screen, its Kitty graphics included, from inside the
     /// callback (VT already held).
     pub(crate) fn begin_hold(&mut self, terminal: &mut vt::HeldTerminal<'_>) {
-        if let Err(err) = self.state.update_held(terminal) {
-            tracing::warn!(%err, "capturing the held frame failed");
+        self.ready = false;
+        self.pending_kitty = None;
+        let result = self.state.update_held(terminal).and_then(|()| {
+            let generation = self.state.image_placements_generation().ok_or(vt::Error::NoValue)?;
+            crate::kitty::capture(
+                terminal.kitty_graphics(),
+                generation,
+                self.state.images()?,
+                &self.kitty,
+                &crate::kitty::Prefetch::default(),
+            )
+        });
+        match result {
+            Ok(kitty) => self.finish_kitty(kitty),
+            Err(err) => tracing::warn!(%err, "capturing the held frame failed"),
         }
-        // on the IO thread already, inside the batch: nothing to share
-        self.capture_kitty(terminal.kitty_graphics(), &crate::kitty::Prefetch::default());
         self.held_since = Some(Instant::now());
         self.fresh = true;
     }
 
-    /// Capture the Kitty graphics with the state (the terminal held, as for the state's update); the next conversion
-    /// carries them.
-    pub(crate) fn capture_kitty(
-        &mut self,
-        graphics: Option<vt::KittyGraphics<'_>>,
+    /// Begin the capture and copy matching image pixels before releasing the VT lock. The caller completes the
+    /// returned guard after releasing that lock, and commits the images only if the end phase succeeds.
+    pub(crate) fn begin_update<'a>(
+        &'a mut self,
+        terminal: &mut vt::Terminal,
         prefetched: &crate::kitty::Prefetch,
-    ) {
-        self.pending_kitty = crate::kitty::capture(graphics, &self.kitty, prefetched);
+    ) -> Result<(vt::PendingUpdate<'a>, Option<KittyView>), vt::Error> {
+        self.ready = false;
+        self.pending_kitty = None;
+        let mut pending = self.state.begin_update(terminal)?;
+        let generation = pending.image_placements_generation().ok_or(vt::Error::NoValue)?;
+        let kitty = crate::kitty::capture(
+            terminal.kitty_graphics(),
+            generation,
+            pending.images()?,
+            &self.kitty,
+            prefetched,
+        )?;
+        Ok((pending, kitty))
+    }
+
+    pub(crate) fn finish_kitty(&mut self, kitty: Option<KittyView>) {
+        self.ready = true;
+        self.pending_kitty = kitty;
     }
 
     /// Something the dirty flags do not track changed (the selection): the next conversion makes a frame and checks
@@ -552,8 +564,11 @@ impl Capture {
     ///
     /// The cursor, the colors and the mouse shape are compared with `previous` as well: the capture's dirty flags
     /// track cell content, and a cursor that only moved or changed style leaves them clean. The Kitty view is the one
-    /// captured with the state ([`Capture::capture_kitty`], or the hold's).
+    /// captured with the state ([`Capture::begin_update`], or the hold's).
     pub(crate) fn convert(&mut self, previous: &Frame, mouse_shape: MouseShape) -> Result<Option<Frame>, vt::Error> {
+        if !self.ready {
+            return Err(vt::Error::NoValue);
+        }
         let held = self.held();
         let cursor = self.state.cursor().map(cursor).unwrap_or_default();
         let colors = match self.state.colors().as_ref().map(colors) {
@@ -569,11 +584,6 @@ impl Capture {
         if unchanged {
             return Ok(None);
         }
-        let kitty = self
-            .pending_kitty
-            .take()
-            .map_or_else(|| Arc::clone(&previous.kitty), Arc::new);
-        self.kitty = Arc::clone(&kitty);
         let seq = self.seq + 1;
         let full = self.state.dirty() == vt::Dirty::Full;
         let (cols, _) = self.state.size();
@@ -599,6 +609,11 @@ impl Capture {
                 None => Arc::new(build_row(&mut row, id, seq, &colors.palette)?),
             });
         }
+        let kitty = self
+            .pending_kitty
+            .take()
+            .map_or_else(|| Arc::clone(&previous.kitty), Arc::new);
+        self.kitty = Arc::clone(&kitty);
         self.state.clean();
         self.fresh = false;
         self.seq = seq;
@@ -648,15 +663,11 @@ fn build_row(row: &mut vt::RowRef<'_>, id: [u64; 2], seq: u64, palette: &[Rgb; 2
     let wrapped = row.wrapped();
     let mut text = Vec::new();
     let mut cells = Vec::new();
-    let mut placeholders = Vec::new();
     let mut walk = row.cells()?;
     while let Some(cell) = walk.next_cell() {
         let cell = cell?;
         let start = text.len();
         cell.grapheme(&mut text)?;
-        if text[start..].starts_with(PLACEHOLDER_UTF8) {
-            placeholders.extend(placeholder(&cell, cells.len(), &text[start..]));
-        }
         let mut built = Cell {
             width: width(cell.width()),
             foreground: cell.foreground().map(rgb),
@@ -679,12 +690,11 @@ fn build_row(row: &mut vt::RowRef<'_>, id: [u64; 2], seq: u64, palette: &[Rgb; 2
         text: String::from_utf8(text).unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned()),
         selection,
         wrapped,
-        placeholders,
     })
 }
 
 /// A [`Row`] of a row read by its points ([`crate::ActiveScreen`]): its cells, text and wrap, colors resolved against
-/// `palette`; no selection and no Kitty placeholders.
+/// `palette`; no selection.
 #[cfg(feature = "screen-read")]
 pub(crate) fn grid_row(row: vt::GridRow, seq: u64, palette: &[Rgb; 256]) -> Row {
     let resolve = |color: vt::StyleColor| match color {
@@ -716,31 +726,6 @@ pub(crate) fn grid_row(row: vt::GridRow, seq: u64, palette: &[Rgb; 256]) -> Row 
         text,
         selection: None,
         wrapped: row.wrapped,
-        placeholders: Vec::new(),
-    }
-}
-
-/// U+10EEEE in UTF-8, what a placeholder cell's grapheme starts with.
-const PLACEHOLDER_UTF8: &[u8] = "\u{10EEEE}".as_bytes();
-
-/// The Kitty placeholder at column `col`, its ids read from the cell's raw style colors (a palette index is an id,
-/// not the color it resolves to).
-fn placeholder(cell: &vt::CellRef<'_>, col: usize, grapheme: &[u8]) -> Option<KittyPlaceholder> {
-    let (foreground, underline) = if cell.has_styling() {
-        let style = cell.style();
-        (id_color(style.foreground), id_color(style.underline_color))
-    } else {
-        (IdColor::None, IdColor::None)
-    };
-    let text = std::str::from_utf8(grapheme).ok()?;
-    placeholder::decode(u16::try_from(col).ok()?, text, foreground, underline)
-}
-
-fn id_color(color: vt::StyleColor) -> IdColor {
-    match color {
-        vt::StyleColor::None => IdColor::None,
-        vt::StyleColor::Palette(index) => IdColor::Palette(index),
-        vt::StyleColor::Rgb(color) => IdColor::Rgb(color.r, color.g, color.b),
     }
 }
 
@@ -861,45 +846,6 @@ mod tests {
         assert_eq!(row.cells()[1].foreground, None);
         assert!(row.cells()[3].flags.contains(CellFlags::HYPERLINK));
         assert_eq!(row.line(), "A日L");
-    }
-
-    #[test]
-    fn placeholder_cells_keep_the_ids_their_raw_colors_carry() {
-        let mut terminal = terminal(12, 3);
-        // image 42 (a palette index, not the color it resolves to), placement 21, image row 0 columns 0 and 1; then
-        // image 1 as 24-bit 0,0,1 on the next line, row 1, after a plain cell
-        terminal.vt_write(
-            "\x1b[38;5;42;58;5;21m\u{10EEEE}\u{0305}\u{0305}\u{10EEEE}\u{0305}\u{030D}\x1b[0m\r\n\
-             x\x1b[38;2;0;0;1m\u{10EEEE}\u{030D}\x1b[0m"
-                .as_bytes(),
-        );
-        let mut state = Capture::new().unwrap();
-        let frame = capture(&mut terminal, &mut state, &Frame::default()).unwrap();
-        let first = frame.rows[0].placeholders();
-        assert_eq!(first.len(), 2);
-        assert_eq!(
-            (first[0].col, first[0].image_id_low, first[0].placement_id),
-            (0, 42, Some(21))
-        );
-        assert_eq!((first[1].col, first[1].row, first[1].column), (1, Some(0), Some(1)));
-        let second = frame.rows[1].placeholders();
-        assert_eq!(second.len(), 1);
-        assert_eq!(
-            (
-                second[0].col,
-                second[0].image_id_low,
-                second[0].placement_id,
-                second[0].row
-            ),
-            (1, 1, None, Some(1))
-        );
-        assert!(frame.rows[2].placeholders().is_empty());
-        let placed = crate::virtual_placements(&frame.rows);
-        let runs: Vec<(u16, u16, u32, u32, u32)> = placed
-            .iter()
-            .map(|p| (p.viewport_row, p.viewport_col, p.image_id, p.row, p.width))
-            .collect();
-        assert_eq!(runs, [(0, 0, 42, 0, 2), (1, 1, 1, 1, 1)]);
     }
 
     #[test]
@@ -1129,24 +1075,6 @@ mod tests {
         assert!(frame.rows[0].wrapped());
         assert_eq!(frame.rows[0].text(2), "");
         assert_eq!(frame.lines(), ["ab", "日"]);
-    }
-
-    #[test]
-    fn an_unstyled_placeholder_cell_names_no_image_or_placement() {
-        let mut terminal = terminal(4, 1);
-        terminal.vt_write("\u{10EEEE}\u{0305}".as_bytes());
-        let mut state = Capture::new().unwrap();
-        let frame = capture(&mut terminal, &mut state, &Frame::default()).unwrap();
-        let placeholders = frame.rows[0].placeholders();
-        assert_eq!(placeholders.len(), 1);
-        assert_eq!(
-            (
-                placeholders[0].image_id_low,
-                placeholders[0].placement_id,
-                placeholders[0].row
-            ),
-            (0, None, Some(0))
-        );
     }
 
     #[test]
