@@ -8,6 +8,7 @@ fn barrier(id: u64) -> Barrier {
 
 fn clipboard_read(id: u64) -> Delegated {
     Delegated {
+        native_alias: None,
         id,
         epoch: 1,
         request: DelegatedRequest::ClipboardRead {
@@ -216,6 +217,27 @@ fn a_clipboard_answer_nobody_asked_for_is_dropped() {
 }
 
 #[test]
+fn native_kitty_support_keeps_osc_52_reads_on_their_original_selection_and_policy() {
+    let (mut relay, _) = probed(
+        None,
+        vec![Answer::ClipboardMime(
+            crate::attach_tty::clipboard::Packet::parse(b"5522;type=read:status=OK:id=ngterm-clipboard-probe").unwrap(),
+        )],
+    );
+    let mut request = clipboard_read(1);
+    if let DelegatedRequest::ClipboardRead { selection, .. } = &mut request.request {
+        *selection = "s".into();
+    }
+    let mut fx = Effects::default();
+    relay.delegated(request, Instant::now(), &mut fx);
+    assert_eq!(fx.stdout, b"\x1b]52;s;?\x1b\\");
+    relay.answer(Answer::Clipboard(Some(b"legacy".to_vec())), Instant::now(), &mut fx);
+    assert!(
+        matches!(fx.outgoing.as_slice(), [Outgoing::Answer(_, DelegatedReply::Clipboard { text: Some(text) })] if text == "legacy")
+    );
+}
+
+#[test]
 fn a_read_whose_time_ran_out_stays_unresolved_until_its_answer_comes() {
     let (mut relay, _) = probed(None, Vec::new());
     let now = Instant::now();
@@ -412,6 +434,7 @@ fn the_window_pixels_give_the_cell_from_the_start() {
 
 fn clipboard_write(id: u64, contents: Vec<crate::protocol::ClipboardRepresentation>, kitty: bool) -> Delegated {
     Delegated {
+        native_alias: None,
         id,
         epoch: 1,
         request: DelegatedRequest::ClipboardWrite {
@@ -555,9 +578,11 @@ fn kitty_text_and_listing_requests_keep_the_head_text_adapter_empty_success_case
         let (mut relay, _) = probed(None, Vec::new());
         let mut fx = Effects::default();
         let request = Delegated {
+            native_alias: None,
             id: 1,
             epoch: 1,
             request: DelegatedRequest::ClipboardReadMime {
+                bridge: None,
                 selection: "p".into(),
                 mimes: mimes.into_iter().map(str::to_owned).collect(),
                 list,

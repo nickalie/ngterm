@@ -70,8 +70,14 @@ fn restore(managed: Option<&Managed>) -> &'static [u8] {
 }
 
 /// `ngterm-session attach <name> [argv]` under `contract`: its exit status.
-pub(super) fn run(contract: &Contract, name: &str, argv: Vec<String>) -> u8 {
-    let outcome = Origin::current().and_then(|origin| prepare(contract, name, argv, origin));
+pub(super) fn run(contract: &Contract, name: &str, argv: Vec<String>, bridge: bool) -> u8 {
+    let outcome = Origin::current().and_then(|origin| {
+        if bridge {
+            prepare_bridge(contract, name, argv, origin)
+        } else {
+            prepare(contract, name, argv, origin)
+        }
+    });
     let outcome = outcome.map(|session| {
         let restore = restore(session.managed.as_ref());
         let tty = Tty::open();
@@ -145,6 +151,7 @@ impl Origin {
 /// What an attach needs before it touches the terminal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prepared {
+    pub bridge_nonce: Option<String>,
     /// The namespace directory, absolute.
     pub directory: PathBuf,
     pub name: String,
@@ -154,6 +161,23 @@ pub struct Prepared {
     pub detach_key: bool,
     /// Started as the server when none runs.
     pub executable: PathBuf,
+}
+
+/// The explicit private attach refuses an absent, invalid or unsupported launch contract.
+///
+/// # Errors
+/// Invalid bridge negotiation or ordinary attach preparation failure.
+pub fn prepare_bridge(contract: &Contract, name: &str, argv: Vec<String>, origin: Origin) -> Result<Prepared, Outcome> {
+    let nonce = variable(&origin.env, ngterm_core::attach_bridge::VARIABLE)
+        .and_then(ngterm_core::attach_bridge::parse_variable)
+        .ok_or_else(|| Outcome {
+            code: super::EXIT_USAGE,
+            message: Some("attach-bridge requires a supported NGTERM_ATTACH_BRIDGE=<version>:<nonce>".into()),
+        })?
+        .to_owned();
+    let mut prepared = prepare(contract, name, argv, origin)?;
+    prepared.bridge_nonce = Some(nonce);
+    Ok(prepared)
 }
 
 /// The attach of `<name> [argv]` under `contract` from `origin`, the session created with `origin`'s environment and
@@ -182,13 +206,15 @@ pub fn prepare(contract: &Contract, name: &str, argv: Vec<String>, origin: Origi
     let directory = std::path::absolute(&directory).map_err(|error| Outcome::failed(error.to_string()))?;
     let name = contract.session_name(name).map_err(usage)?;
     let Origin { env, cwd, executable } = origin;
-    let env = with_fish_data_dirs(env);
+    let mut env = with_fish_data_dirs(env);
+    env.retain(|(key, _)| !same_variable(key, ngterm_core::attach_bridge::VARIABLE));
     let argv = if argv.is_empty() {
         default_argv(variable(&env, "SHELL").map(std::ffi::OsStr::new))
     } else {
         argv
     };
     Ok(Prepared {
+        bridge_nonce: None,
         directory,
         name,
         spec: SessionSpec {
@@ -323,9 +349,11 @@ impl<'a> Loop<'a> {
         let nonce = session.managed.as_ref().map(|managed| managed.nonce.clone());
         let detach_key = session.detach_key;
         let size = tty.size();
+        let mut relay = Relay::new(nonce, size.grid, size.pixels);
+        relay.enable_bridge(session.bridge_nonce.clone());
         Self {
             tty,
-            relay: Relay::new(nonce, size.grid, size.pixels),
+            relay,
             keys: Keys::new(detach_key),
             session,
             sender,
@@ -538,7 +566,8 @@ impl<'a> Loop<'a> {
                 self.emit(fx)?;
                 return Err(Outcome::ok(exit_code(&status)));
             }
-            Ok(Some(AttachEvent::SnapshotEnd | AttachEvent::Resized { .. } | AttachEvent::ReplyOwner { .. })) => {}
+            Ok(Some(AttachEvent::ReplyOwner { owner, .. })) => self.relay.reply_owner(owner),
+            Ok(Some(AttachEvent::SnapshotEnd | AttachEvent::Resized { .. })) => {}
             // the client's own detach or close
             Ok(None) => return Err(Outcome::ok(EXIT_OK)),
             Ok(Some(AttachEvent::Shutdown(_))) | Err(ClientError::Disconnected) => {
@@ -590,6 +619,7 @@ impl<'a> Loop<'a> {
                 Outgoing::Answer(request, reply) => writer.answer(request, reply).map(drop),
                 Outgoing::Complete(barrier, data) => writer.complete(barrier, data).map(drop),
                 Outgoing::Metadata(metadata) => writer.metadata(metadata),
+                Outgoing::Paste(paste) => writer.clipboard_paste(paste),
             };
         }
         Ok(())
@@ -612,8 +642,8 @@ impl Keys {
         }
     }
 
-    /// The tokens of a read that came at `now`; an OSC 52 answer in it is framed while `relay` has a clipboard read
-    /// asked (`attach_tty::input`).
+    /// Tokens read at `now`: OSC 52 is framed while a read is asked; native OSC 5522 and private bridge
+    /// packets retain framing once their complete prefixes arrive (`attach_tty::input`).
     fn read(&mut self, bytes: &[u8], now: Instant, relay: &Relay) -> Vec<Token> {
         self.input_at = Some(now);
         self.parser.set_clipboard_due(relay.clipboard_asked());
@@ -622,7 +652,7 @@ impl Keys {
 
     /// When the cut sequence the input holds is given up (`attach_tty::input`): [`ANSWER_QUIET`] after the last input
     /// for what may be an answer while one is due, [`INPUT_QUIET`] otherwise, so a hold outlives no answer the relay
-    /// gave up. `None` with none held, or one that waits for good (a cut paste end, a framed OSC 52 answer).
+    /// gave up. `None` with none held, or one that waits for good (a cut paste end, a framed clipboard answer).
     fn quiet(&self, relay: &Relay) -> Option<Instant> {
         let wait = match self.parser.held()? {
             Held::Csi | Held::Answer if relay.awaiting() => ANSWER_QUIET,

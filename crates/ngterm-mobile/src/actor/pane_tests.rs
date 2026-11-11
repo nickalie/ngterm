@@ -53,6 +53,7 @@ pub(super) fn daemon() -> String {
 
 pub(super) fn endpoint() -> ControlLiveEndpoint {
     ControlLiveEndpoint {
+        attach_bridge: None,
         executable: "/ngterm-session".to_owned(),
         socket_directory: "/tmp/ngterm-live-x".to_owned(),
     }
@@ -1021,4 +1022,53 @@ fn take_lead_does_nothing_while_a_takeover_is_on_its_way_or_after_the_program_en
     );
     take_lead(&fixture);
     assert!(!fixture.attaches_soon(), "an ended program has no lead to take");
+}
+
+#[test]
+fn shown_panes_gate_the_bridge_on_the_endpoint_and_keep_old_peer_pastes_plain() {
+    use ngterm_core::attach_bridge::{Envelope, Message, VERSION};
+    for capability in [None, Some(VERSION)] {
+        let mut script = listing(true);
+        if let Some(version) = capability {
+            let mut body: serde_json::Value = serde_json::from_slice(&script.stdout).unwrap();
+            body["result"]["remote"]["endpoint"]["attachBridge"] = serde_json::json!(version);
+            script.stdout = body.to_string().into_bytes();
+        }
+        let mut fixture = Fixture::connected_with(vec![script]);
+        let pane = fixture.show();
+        let mut opened = fixture.attach();
+        let lead = lead_of(&opened.command);
+        assert_eq!(opened.command.contains("attach-bridge"), capability.is_some());
+        fixture.attached();
+        let nonce = if capability.is_some() {
+            lead.nonce.as_str()
+        } else {
+            "forged"
+        };
+        send(
+            &opened.peer,
+            &Envelope {
+                version: VERSION,
+                nonce: nonce.into(),
+                message: Message::Hello,
+            }
+            .encode(),
+        );
+        send(&opened.peer, b"ready\x1b[6n");
+        inputs_until(&mut opened.peer, |bytes, _| contains(bytes, b"R"));
+        pane.paste("pasted".into(), false).unwrap();
+        let (bytes, _) = inputs_until(&mut opened.peer, |bytes, _| {
+            if capability.is_some() {
+                contains(bytes, b"\x1b\\")
+            } else {
+                contains(bytes, b"pasted")
+            }
+        });
+        if capability.is_some() {
+            let decoded = ngterm_core::attach_bridge::Decoder::default().feed(&bytes);
+            assert!(decoded.iter().any(|part| matches!(part, ngterm_core::attach_bridge::Part::Envelope(Envelope { nonce, message: Message::Paste(_), .. }) if nonce == &lead.nonce)));
+        } else {
+            assert_eq!(bytes, b"pasted");
+        }
+    }
 }

@@ -13,10 +13,12 @@
 
 pub mod agent_chat;
 pub mod app_actions;
+pub mod attach_bridge;
 pub mod auto_follow;
 pub mod bounded_file;
 pub mod chrome;
 pub mod clipboard_policy;
+pub mod clipboard_wire;
 pub mod command_restore;
 mod commands;
 pub mod dashboard;

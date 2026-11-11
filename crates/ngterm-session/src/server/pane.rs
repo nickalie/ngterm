@@ -359,6 +359,7 @@ impl State {
     /// Forget the clients whose subscription was dropped, and their part in the lead.
     pub(super) fn prune(&mut self) {
         for id in self.clients.prune() {
+            self.fell_behind(id);
             let change = self.lead.detach(id);
             self.tell(&change.notices);
         }
@@ -731,6 +732,7 @@ impl Pane {
     /// Detach the client `id` under the pane's lock, already held, and let go of it.
     fn disconnect(&self, mut state: MutexGuard<'_, State>, id: ClientId) {
         state.clients.detach(id);
+        state.fell_behind(id);
         let change = state.lead.detach(id);
         state.tell(&change.notices);
         self.release(state);
@@ -748,6 +750,7 @@ impl Pane {
     pub fn detach(&self, id: ClientId) -> bool {
         let mut state = self.core.lock();
         let attached = state.clients.detach(id);
+        state.fell_behind(id);
         let change = state.lead.detach(id);
         state.tell(&change.notices);
         attached
@@ -790,7 +793,7 @@ impl Pane {
         Ok(true)
     }
 
-    /// Paste on the authoritative VT only for the current reply owner and epoch.
+    /// Paste on the authoritative VT for a current client epoch; lazy reads return to that source client.
     ///
     /// # Errors
     /// The actor refused to queue the paste.
@@ -802,22 +805,52 @@ impl Pane {
     ) -> Result<bool, WriteError> {
         let mut state = self.core.lock();
         state.prune();
-        if !state.paste_owner(id, epoch) || state.exit.is_some() {
+        if !state.paste_client(id, epoch) || state.exit.is_some() {
             return Ok(false);
         }
-        let contents: Vec<_> = paste
-            .contents
-            .iter()
-            .map(|content| vt::ClipboardContent {
-                mime: content.mime.clone(),
-                data: content.data.clone(),
+        if paste.bridge.as_ref().is_some_and(|bridge| {
+            bridge.id.is_empty()
+                || bridge.id.len() > 128
+                || bridge.available.len() > 16
+                || bridge.available.iter().any(|mime| {
+                    mime.is_empty() || mime.len() > 256 || mime.bytes().any(|byte| byte.is_ascii_whitespace())
+                })
+        }) {
+            return Ok(false);
+        }
+        let placeholders: Vec<_> = paste
+            .bridge
+            .as_ref()
+            .map(|bridge| {
+                bridge
+                    .available
+                    .iter()
+                    .map(|mime| crate::protocol::ClipboardRepresentation {
+                        mime: mime.clone(),
+                        data: Vec::new(),
+                    })
+                    .collect()
             })
-            .collect();
-        let bytes = state.paste_bytes(&contents, paste.text_source, &paste.selection, paste.allow_unsafe);
+            .unwrap_or_default();
+        let contents: Vec<_> = if paste.bridge.is_some() {
+            &placeholders
+        } else {
+            &paste.contents
+        }
+        .iter()
+        .map(|content| vt::ClipboardContent {
+            mime: content.mime.clone(),
+            data: content.data.clone(),
+        })
+        .collect();
+        // A contents-only follower cannot service later reads through the owner's clipboard.
+        let text_source = paste.text_source || (paste.bridge.is_none() && state.replies.owner() != Some(id));
+        let bytes = state.paste_bytes(&contents, text_source, &paste.selection, paste.allow_unsafe);
         let Some(bytes) = bytes else {
             return Ok(false);
         };
         self.actor.write_input(&bytes)?;
+        state.register_paste_bridge(id, epoch, paste.bridge.as_ref(), &bytes);
         let grants = state.terminal.clipboard_grants();
         grants.lock().unwrap_or_else(PoisonError::into_inner).pasted(&bytes);
         Ok(true)

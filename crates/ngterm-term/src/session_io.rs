@@ -46,16 +46,15 @@ use ngterm_session::client::{
     AttachEvent, AttachReader, AttachWriter, Attachment, Barrier, Client, ClientError, Delegated,
 };
 use ngterm_session::protocol::{
-    self as wire, AttachRequest, DelegatedReply, DelegatedRequest, ExitStatus, LeadRole, Managed, ReplyMetadata,
-    SessionSpec,
+    self as wire, AttachRequest, DelegatedReply, ExitStatus, LeadRole, Managed, ReplyMetadata, SessionSpec,
 };
 use ngterm_session::server::spawn::StartOptions;
 use ngterm_session::server::{lead, snapshot};
 
-use crate::effects::{ClipboardAnswer, ClipboardLocation, ClipboardReadRequest, ColorScheme, PaneEvent};
+use crate::effects::{ClipboardAnswer, ClipboardLocation, ColorScheme, PaneEvent};
 use crate::mailbox::ReadPause;
 use crate::pane::{Shared, lock};
-use crate::{GridSize, PaneCommand, PaneError, ReadScope};
+use crate::{GridSize, PaneCommand, PaneError};
 
 /// How long the reader waits on the mailbox's resume before it looks again (a resume wakes it at once).
 const PAUSE_POLL: Duration = Duration::from_millis(100);
@@ -341,40 +340,7 @@ impl Live {
         let Some((request, connection)) = lock(&self.pending).remove(&id) else {
             return;
         };
-        let reply = match answer {
-            ClipboardAnswer::Text(text) => DelegatedReply::Clipboard { text },
-            ClipboardAnswer::Denied => DelegatedReply::Denied,
-            ClipboardAnswer::Data {
-                contents,
-                available,
-                remember,
-            } => DelegatedReply::ClipboardMime {
-                contents: contents
-                    .into_iter()
-                    .map(|content| wire::ClipboardRepresentation {
-                        mime: content.mime,
-                        data: content.data,
-                    })
-                    .collect(),
-                available,
-                remember,
-                status: wire::ClipboardStatus::Success,
-            },
-            ClipboardAnswer::Write(completion) => DelegatedReply::ClipboardWrite {
-                status: completion.status.into(),
-                remember: completion.remember,
-            },
-            status => DelegatedReply::ClipboardMime {
-                contents: Vec::new(),
-                available: Vec::new(),
-                remember: false,
-                status: match status {
-                    ClipboardAnswer::Unsupported => wire::ClipboardStatus::Unsupported,
-                    ClipboardAnswer::Busy => wire::ClipboardStatus::Busy,
-                    _ => wire::ClipboardStatus::IoError,
-                },
-            },
-        };
+        let reply = crate::bridge::answer_reply(answer);
         self.post(Message::Answer {
             request,
             reply,
@@ -482,6 +448,7 @@ fn send(writer: &AttachWriter, connection: u64, message: Message) -> Result<(), 
             selection,
             allow_unsafe,
         } => writer.clipboard_paste(wire::ClipboardPaste {
+            bridge: None,
             contents,
             text_source,
             selection,
@@ -534,82 +501,7 @@ pub(crate) fn handle(live: &Live, shared: &Shared, mail: LiveMail) {
     }
 }
 
-fn delegated_event(id: u64, request: &DelegatedRequest) -> PaneEvent {
-    let location = |selection: &str| match selection {
-        "s" => ClipboardLocation::Selection,
-        "p" => ClipboardLocation::Primary,
-        _ => ClipboardLocation::Standard,
-    };
-    match request {
-        DelegatedRequest::ClipboardRead { selection, list_only } => PaneEvent::ClipboardRead(ClipboardReadRequest {
-            id,
-            location: location(selection),
-            scope: if *list_only {
-                ReadScope::ListOnly
-            } else {
-                ReadScope::Data
-            },
-            mimes: if *list_only {
-                Vec::new()
-            } else {
-                vec!["text/plain".into()]
-            },
-            list: *list_only,
-            name: String::new(),
-            granted: false,
-            can_remember: false,
-            permission_scope: crate::ClipboardPermissionScope::Osc52,
-        }),
-        DelegatedRequest::ClipboardReadMime {
-            selection,
-            mimes,
-            list,
-            name,
-            granted,
-            can_remember,
-        } => PaneEvent::ClipboardRead(ClipboardReadRequest {
-            id,
-            location: location(selection),
-            scope: if mimes.is_empty() {
-                ReadScope::ListOnly
-            } else {
-                ReadScope::Data
-            },
-            mimes: mimes.clone(),
-            list: *list,
-            name: name.clone(),
-            granted: *granted,
-            can_remember: *can_remember,
-            permission_scope: crate::ClipboardPermissionScope::Kitty,
-        }),
-        DelegatedRequest::ClipboardWrite {
-            selection,
-            contents,
-            name,
-            granted,
-            can_remember,
-            kitty,
-        } => PaneEvent::ClipboardWrite(crate::ClipboardWrite {
-            id,
-            location: location(selection),
-            contents: contents
-                .iter()
-                .map(|content| crate::ClipboardContent {
-                    mime: content.mime.clone(),
-                    data: content.data.clone(),
-                })
-                .collect(),
-            name: name.clone(),
-            granted: *granted,
-            can_remember: *can_remember,
-            permission_scope: if *kitty {
-                crate::ClipboardPermissionScope::Kitty
-            } else {
-                crate::ClipboardPermissionScope::Osc52
-            },
-        }),
-    }
-}
+use crate::bridge::delegated_event;
 
 /// Keep `data`, a reply of the pane's terminal, in `answers` when it is a Kitty graphics answer: the only replies a
 /// live pane's terminal sends.

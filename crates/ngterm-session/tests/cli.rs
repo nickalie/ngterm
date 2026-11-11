@@ -312,6 +312,7 @@ fn a_gone_session_runs_the_guard_and_the_attach_fails() -> TestResult {
 fn the_remote_attach_line_attaches_its_session_and_fails_for_a_gone_one() -> TestResult {
     let namespace = Namespace::new()?;
     let endpoint = ngterm_proto::ControlLiveEndpoint {
+        attach_bridge: None,
         executable: namespace.executable.to_string_lossy().into_owned(),
         socket_directory: namespace.directory.to_string_lossy().into_owned(),
     };
@@ -785,5 +786,24 @@ fn an_attach_that_cannot_reach_its_server_fails() -> TestResult {
         stderr.starts_with("ngterm-session attach: could not connect to the ngterm-session server at "),
         "{stderr}"
     );
+    Ok(())
+}
+
+#[test]
+fn explicit_bridge_invocations_fail_before_attaching_without_a_valid_contract() -> TestResult {
+    let namespace = Namespace::new()?;
+    for token in ["", "1", "2:nonce", "1:", "1:bad;nonce"] {
+        let output = namespace.run(
+            &["attach-bridge", "not-created"],
+            b"",
+            &[("NGTERM_ATTACH_BRIDGE", token)],
+        )?;
+        assert_eq!(
+            output.status.code(),
+            Some(i32::from(ngterm_session::server::EXIT_USAGE))
+        );
+        assert!(stderr(&output).contains("attach-bridge requires"));
+    }
+    assert!(namespace.session_names().is_empty());
     Ok(())
 }

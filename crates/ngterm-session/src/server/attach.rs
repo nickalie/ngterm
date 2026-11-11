@@ -296,9 +296,20 @@ fn send_event(stream: &Stream, event: ClientEvent) -> Result<(), FramingError> {
         ClientEvent::ReplyOwner { owner, generation } => {
             send(stream, &AttachServerMessage::ReplyOwner { owner, generation })
         }
-        ClientEvent::Delegated { id, epoch, request } => {
-            send(stream, &AttachServerMessage::DelegatedRequest { id, epoch, request })
-        }
+        ClientEvent::Delegated {
+            id,
+            epoch,
+            request,
+            native_alias,
+        } => send(
+            stream,
+            &AttachServerMessage::DelegatedRequest {
+                id,
+                epoch,
+                request,
+                native_alias,
+            },
+        ),
         ClientEvent::KittyBarrier { id, epoch } => send(stream, &AttachServerMessage::KittyBarrier { id, epoch }),
         // handled by the writer itself
         ClientEvent::Overflowed { .. } | ClientEvent::Exit(_) => Ok(()),

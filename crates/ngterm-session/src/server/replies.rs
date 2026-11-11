@@ -104,6 +104,8 @@ use super::pane::State;
 use super::recovery::Written;
 use crate::protocol::{ColorScheme, DelegatedReply, DelegatedRequest, ReplyMetadata, Rgb};
 
+mod bridge;
+
 /// The foreground the server's terminal answers with while no owner gave one: Ghostty's default (`foreground` in its
 /// config), as ngterm's.
 pub const DEFAULT_FOREGROUND: Rgb = Rgb {
@@ -362,6 +364,7 @@ impl Sequence {
 /// behind gets back ([`super::recovery`]). The replies change under the pane's lock only.
 #[derive(Debug, Default)]
 pub struct Outlet {
+    alias_key: Mutex<Option<crate::protocol::ClipboardAlias>>,
     sequence: Mutex<Sequence>,
     armed: Mutex<Option<Armed>>,
     dark: AtomicBool,
@@ -374,6 +377,28 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Outlet {
+    pub(in crate::server) fn alias_key(&self) -> crate::protocol::ClipboardAlias {
+        let mut key = lock(&self.alias_key);
+        key.get_or_insert_with(|| crate::protocol::ClipboardAlias(uuid::Uuid::new_v4().simple().to_string()))
+            .clone()
+    }
+    pub(in crate::server) fn set_alias_key(&self, key: Option<crate::protocol::ClipboardAlias>) {
+        *lock(&self.alias_key) = key;
+    }
+    fn native_alias(&self, pw: &[u8]) -> Option<crate::protocol::ClipboardAlias> {
+        use base64::Engine as _;
+        use sha2::{Digest, Sha256};
+        if pw.is_empty() || pw.len() > 128 {
+            return None;
+        }
+        let mut hash = Sha256::new();
+        hash.update(self.alias_key().0.as_bytes());
+        hash.update(pw);
+        Some(crate::protocol::ClipboardAlias(
+            base64::engine::general_purpose::STANDARD.encode(hash.finalize()),
+        ))
+    }
+
     /// The replies ready to be written to the program, in order, taken. The pane's replies helper is the only one that
     /// takes them, and writes each batch before it takes the next, so they reach the program in the order they were
     /// made ready.
@@ -551,6 +576,10 @@ impl ServerEffects {
 }
 
 impl vt::Effects for ServerEffects {
+    fn reset(&mut self) {
+        self.outlet.set_alias_key(None);
+    }
+
     fn write_pty(&mut self, data: &[u8]) {
         if let Some(paste) = lock(&self.outlet.paste).as_mut() {
             paste.extend_from_slice(data);
@@ -638,6 +667,7 @@ struct Pending {
 /// behind it.
 #[derive(Debug)]
 pub struct Replies {
+    paste_bridges: Vec<bridge::PasteBridge>,
     outlet: Arc<Outlet>,
     /// Wakes the helper thread; waited on with the pane's lock.
     timer: Arc<Condvar>,
@@ -701,6 +731,7 @@ impl Replies {
         let facts = Facts::of(owner.as_ref().map(|(_, metadata)| metadata));
         outlet.set_scheme(facts.color_scheme);
         Self {
+            paste_bridges: Vec::new(),
             outlet,
             timer,
             owner: owner.as_ref().map(|(client, _)| *client),
@@ -791,10 +822,8 @@ fn follow(scanner: &mut vt::Scanner, mut bytes: &[u8]) {
 }
 
 impl State {
-    pub(super) fn paste_owner(&self, client: ClientId, epoch: u64) -> bool {
-        self.replies.owner == Some(client)
-            && self.clients.epoch(client) == Some(epoch)
-            && self.clients.overflowed(client) == Some(false)
+    pub(super) fn paste_client(&self, client: ClientId, epoch: u64) -> bool {
+        self.clients.epoch(client) == Some(epoch) && self.clients.overflowed(client) == Some(false)
     }
     pub(super) fn paste_bytes(
         &mut self,
@@ -996,11 +1025,16 @@ impl State {
         }
     }
 
-    /// Send `read` to the reply owner, to wait for its answer (`None`), or the answer it gets at once: denied with no
-    /// owner, an owner that would not get the request before its resync, or once the program ended.
+    /// Send `read` to its paste source, or the reply owner for ordinary reads. Wait for its answer (`None`),
+    /// or deny at once when that client is absent or overflowed, or the program ended.
     fn delegate(&mut self, read: ReadCandidate, details: vt::ClipboardReadDetails, kitty: bool) -> Option<Answer> {
+        let (paste_bridge, client) = match self.bridge_read(&details) {
+            bridge::Read::Ordinary => (None, self.replies.owner),
+            bridge::Read::Answer(answer) => return Some(answer),
+            bridge::Read::Fetch { client, id } => (Some(id), Some(client)),
+        };
         let replies = &mut self.replies;
-        let Some(client) = replies.owner.filter(|_| !replies.denied) else {
+        let Some(client) = client.filter(|_| !replies.denied) else {
             return Some(Answer::Denied);
         };
         let id = replies.next_id;
@@ -1009,6 +1043,7 @@ impl State {
         let granted = read.scope == ReadScope::Data && lock(&grants).peek(&details.pw, vt::ClipboardDirection::Read);
         let request = if kitty {
             DelegatedRequest::ClipboardReadMime {
+                bridge: paste_bridge,
                 selection: selection(read.location).to_owned(),
                 mimes: details.mimes,
                 list: details.list,
@@ -1022,7 +1057,8 @@ impl State {
                 list_only: read.scope == ReadScope::ListOnly,
             }
         };
-        let Some(epoch) = self.clients.delegate(client, id, request) else {
+        let alias = replies.outlet.native_alias(&details.pw);
+        let Some(epoch) = self.clients.delegate(client, id, request, alias) else {
             return Some(Answer::Denied);
         };
         self.replies.pending = Some(Pending {
@@ -1113,9 +1149,11 @@ impl State {
                 kitty: write.origin == vt::ClipboardOrigin::Kitty,
             };
             let owner = self.replies.owner.filter(|_| !self.replies.denied);
-            if let Some((client, epoch)) =
-                owner.and_then(|client| self.clients.delegate(client, id, request).map(|epoch| (client, epoch)))
-            {
+            if let Some((client, epoch)) = owner.and_then(|client| {
+                self.clients
+                    .delegate(client, id, request, self.replies.outlet.native_alias(&write.pw))
+                    .map(|epoch| (client, epoch))
+            }) {
                 self.replies.pending = Some(Pending {
                     id,
                     client,
@@ -1153,7 +1191,7 @@ impl State {
         };
         if let Some(mut write) = pending.write {
             let (status, remember) = match answer {
-                Answer::Write { status, remember } => (status.engine(), remember),
+                Answer::Write { status, remember } => (crate::protocol::clipboard_engine_status(status), remember),
                 _ => (vt::ClipboardWriteResult::Denied, false),
             };
             if status == vt::ClipboardWriteResult::Success {

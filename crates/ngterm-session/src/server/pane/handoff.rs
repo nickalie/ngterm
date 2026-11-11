@@ -231,6 +231,7 @@ impl Pane {
         };
         let replies = self.core.outlet.ready_replies().concat();
         let state = PaneState {
+            clipboard_alias_key: Some(self.core.outlet.alias_key()),
             name: self.name.clone(),
             pid: self.pid,
             created_at: self.created_at,
@@ -318,6 +319,7 @@ impl Pane {
             (limits.delegation_wait, limits.kitty_wait),
         );
         let terminal = imported_terminal(state, vt, size, limits, &outlet, &mut session_replies)?;
+        outlet.set_alias_key(state.clipboard_alias_key.clone());
         let parts = Parts {
             terminal,
             clients: Clients::new(limits.client_queue_limit),
@@ -509,6 +511,7 @@ mod tests {
             VtEncoding::Formatter => snapshot::capture(&mut state.terminal, snapshot::Kind::Attach).unwrap(),
         };
         let manifest = PaneState {
+            clipboard_alias_key: None,
             name: "unit".to_owned(),
             pid: 0,
             created_at: 0,
@@ -593,6 +596,7 @@ mod tests {
             .vt_write(b"\x1b_Ga=T,f=32,s=2,v=2,i=6,c=1,r=1,q=2,m=1;BwcH/wcH\x1b\\");
         let bytes = state.terminal.encode_snapshot().unwrap();
         let manifest = PaneState {
+            clipboard_alias_key: None,
             name: "images".to_owned(),
             pid: 0,
             created_at: 0,
@@ -980,6 +984,7 @@ mod tests {
         type_line(&pane, &tagged("ready"));
         wait_screen(&pane, "got:ready");
 
+        let alias_key = pane.core.outlet.alias_key();
         assert!(pane.freeze());
         pane.quiesce(Duration::from_secs(5)).unwrap();
         let held = if cfg!(windows) {
@@ -990,6 +995,7 @@ mod tests {
         let expected = queue_reply(&pane, held);
         let mut cut = pane.cut(VtEncoding::Binary).unwrap();
         assert_eq!(cut.replies, expected.concat());
+        assert_eq!(cut.state.clipboard_alias_key, Some(alias_key.clone()));
         let size = GridSize { cols: 100, rows: 30 };
         cut.state.size = size;
         let imported = Pane::import(&cut.state, &cut.vt, &cut.replies, taken_over(&pane), Limits::default()).unwrap();
@@ -997,6 +1003,7 @@ mod tests {
             imported.with_terminal(|terminal| (terminal.cols(), terminal.rows())),
             (size.cols, size.rows)
         );
+        assert_eq!(imported.core.outlet.alias_key(), alias_key);
         pane.hand_over();
         imported.activate();
         wait_screen(&imported, "got:held");
@@ -1064,6 +1071,7 @@ mod tests {
 
         let mut program = std::process::Command::new("sleep").arg("60").spawn().unwrap();
         let state = PaneState {
+            clipboard_alias_key: None,
             name: "undriven".to_owned(),
             pid: program.id(),
             created_at: 0,

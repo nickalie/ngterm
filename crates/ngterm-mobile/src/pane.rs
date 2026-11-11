@@ -628,7 +628,9 @@ impl<C: Connection> Panes<C> {
             // An actor that is gone has nothing left to draw.
             let _ = wake_notes.send(Note::News(key));
         });
-        let (terminal, feed, out) = match ngterm_term::Pane::stream(&config(built, wake)) {
+        let mut config = config(built, wake);
+        config.attach_bridge = ngterm_core::attach_bridge::launch_nonce(&shown.endpoint, &lead).map(str::to_owned);
+        let (terminal, feed, out) = match ngterm_term::Pane::stream(&config) {
             Ok(made) => made,
             Err(error) => {
                 // tried again on the backoff, in case memory is freed since

@@ -652,6 +652,7 @@ mod tests {
         let origin = RemoteOrigin {
             host: "box".to_owned(),
             endpoint: ControlLiveEndpoint {
+                attach_bridge: None,
                 executable: "ngterm".to_owned(),
                 socket_directory: "/tmp".to_owned(),
             },

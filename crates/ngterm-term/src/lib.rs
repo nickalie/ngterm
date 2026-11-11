@@ -54,6 +54,7 @@ mod active;
 #[cfg(test)]
 #[cfg(feature = "local")]
 mod bench;
+mod bridge;
 mod effects;
 mod exit;
 mod gesture;

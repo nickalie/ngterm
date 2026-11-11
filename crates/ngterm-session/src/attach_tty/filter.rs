@@ -546,6 +546,12 @@ impl OutputFilter {
         if self.fate != Fate::Hold {
             return;
         }
+        if self.held[self.body..].starts_with(ngterm_core::attach_bridge::BODY_PREFIX) {
+            self.preserve_string_exit(out);
+            self.held.clear();
+            self.fate = Fate::Drop;
+            return;
+        }
         self.clipboard_osc |= clipboard_osc(&self.held[self.body..]);
         if self.clipboard_osc && self.clipboard_writes == ClipboardWrites::Delegate {
             self.preserve_string_exit(out);
@@ -713,6 +719,7 @@ fn classify_osc(body: &[u8]) -> Verdict {
     let number = fields.next().unwrap_or_default();
     let rest: Vec<&[u8]> = fields.collect();
     match number {
+        b"777" if rest.first() == Some(&b"ngterm-attach".as_slice()) => Verdict::Drop,
         b"4" => without_palette_queries(&rest),
         b"10" | b"11" | b"12" | b"13" | b"14" | b"15" | b"16" | b"17" | b"18" | b"19" => {
             drop_if(rest.contains(&b"?".as_slice()))

@@ -459,6 +459,7 @@ pub(crate) fn unexpected(request: &'static str, got: &ApiResponse) -> ClientErro
 #[derive(Debug, PartialEq, Eq)]
 #[must_use = "a delegated request waits for its answer until the server's deadline"]
 pub struct Delegated {
+    pub native_alias: Option<crate::protocol::ClipboardAlias>,
     pub id: u64,
     /// The epoch it was sent in.
     pub epoch: u64,
@@ -721,7 +722,7 @@ impl AttachWriter {
         reason = "the request is taken so it is answered once"
     )]
     pub fn answer(&self, request: Delegated, reply: DelegatedReply) -> Result<bool, ClientError> {
-        let Delegated { id, epoch, request: _ } = request;
+        let Delegated { id, epoch, .. } = request;
         if epoch != self.epoch() {
             return Ok(false);
         }
@@ -849,11 +850,21 @@ impl StreamState {
                 }
                 AttachEvent::KittyBarrier(Barrier { id, epoch })
             }
-            AttachServerMessage::DelegatedRequest { id, epoch, request } => {
+            AttachServerMessage::DelegatedRequest {
+                id,
+                epoch,
+                request,
+                native_alias,
+            } => {
                 if !self.current(epoch, "a delegated request")? {
                     return Ok(None);
                 }
-                AttachEvent::Delegated(Delegated { id, epoch, request })
+                AttachEvent::Delegated(Delegated {
+                    native_alias,
+                    id,
+                    epoch,
+                    request,
+                })
             }
             AttachServerMessage::Refused { reason, message } => {
                 return Err(broken(format_args!(

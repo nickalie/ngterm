@@ -202,6 +202,7 @@ mod tests {
     #[test]
     fn a_windows_endpoint_is_known_by_its_paths() {
         let endpoint = |executable: &str| ControlLiveEndpoint {
+            attach_bridge: None,
             executable: executable.to_owned(),
             socket_directory: "x".to_owned(),
         };

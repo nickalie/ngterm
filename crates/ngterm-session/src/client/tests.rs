@@ -137,6 +137,7 @@ fn each_snapshot_opens_a_later_epoch_and_may_replace_an_open_one() {
 fn requests_of_a_superseded_epoch_are_dropped_and_of_a_future_one_refused() {
     let mut state = snapshotted(2, 0);
     let superseded = AttachServerMessage::DelegatedRequest {
+        native_alias: None,
         id: 7,
         epoch: 1,
         request: read("c"),
@@ -149,6 +150,7 @@ fn requests_of_a_superseded_epoch_are_dropped_and_of_a_future_one_refused() {
         None
     );
     let current = AttachServerMessage::DelegatedRequest {
+        native_alias: None,
         id: 8,
         epoch: 2,
         request: read("p"),
@@ -156,6 +158,7 @@ fn requests_of_a_superseded_epoch_are_dropped_and_of_a_future_one_refused() {
     assert_eq!(
         state.accept(current).unwrap(),
         Some(AttachEvent::Delegated(Delegated {
+            native_alias: None,
             id: 8,
             epoch: 2,
             request: read("p")

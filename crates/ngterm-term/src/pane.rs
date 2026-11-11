@@ -79,6 +79,8 @@ pub type Wake = Arc<dyn Fn() + Send + Sync>;
 /// How a pane starts.
 #[derive(Clone)]
 pub struct PaneConfig {
+    /// The expected per-launch nonce, only for viewers of a capability-advertising attach endpoint.
+    pub attach_bridge: Option<String>,
     pub size: GridSize,
     pub scrollback: ScrollbackLimits,
     pub colors: ThemeColors,
@@ -106,6 +108,7 @@ impl PaneConfig {
     #[must_use]
     pub fn new(size: GridSize) -> Self {
         Self {
+            attach_bridge: None,
             size,
             scrollback: ScrollbackLimits::default(),
             colors: ThemeColors::default(),
@@ -124,6 +127,7 @@ impl PaneConfig {
 impl std::fmt::Debug for PaneConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PaneConfig")
+            .field("attach_bridge", &self.attach_bridge)
             .field("size", &self.size)
             .field("scrollback", &self.scrollback)
             .field("colors", &self.colors)
@@ -242,6 +246,7 @@ fn write_slice(shared: &Shared, vt: &mut Vt, slice: &[u8]) {
 
 /// State shared by the pane and its threads.
 pub(crate) struct Shared {
+    pub(crate) bridge: Mutex<crate::bridge::Peer>,
     pub(crate) vt: Mutex<Vt>,
     capture: Arc<Mutex<Capture>>,
     published: Mutex<Arc<Frame>>,
@@ -310,6 +315,10 @@ impl Shared {
     /// Queue bytes the terminal answers the program with (never refused; see [`ReplyOutlet`]).
     pub(crate) fn push_reply(&self, bytes: &[u8]) {
         self.replies.push_reply(bytes);
+    }
+
+    pub(crate) fn bridge_input(&self, bytes: &[u8]) -> Result<(), PaneError> {
+        self.replies.input(bytes)
     }
 
     /// Queue bytes the pane itself sends the program (never refused): a reply on a PTY, a live pane's input.
@@ -456,6 +465,7 @@ impl Pane {
         let worker = Worker {
             shared: Arc::clone(&shared),
             reads: Reads::Live(Arc::clone(&live)),
+            bridge_decoder: ngterm_core::attach_bridge::Decoder::default(),
             scanner: Scanner::default(),
             next_read: 0,
             child_exited: false,
@@ -503,6 +513,7 @@ impl Pane {
         let worker = Worker {
             shared: Arc::clone(&shared),
             reads: Reads::Painted,
+            bridge_decoder: ngterm_core::attach_bridge::Decoder::default(),
             scanner: Scanner::default(),
             next_read: 0,
             child_exited: false,
@@ -550,6 +561,7 @@ impl Pane {
         let worker = Worker {
             shared: Arc::clone(&shared),
             reads: Reads::Stream(Arc::clone(&gate)),
+            bridge_decoder: ngterm_core::attach_bridge::Decoder::default(),
             scanner: Scanner::default(),
             next_read: 0,
             child_exited: false,
@@ -937,6 +949,10 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
     let colors = terminal.colors();
     let input = InputState::new().map_err(PaneError::terminal)?;
     Ok(Shared {
+        bridge: Mutex::new(crate::bridge::Peer {
+            expected_nonce: config.attach_bridge.clone(),
+            ..Default::default()
+        }),
         vt: Mutex::new(Vt {
             terminal,
             input,
@@ -1145,6 +1161,7 @@ impl Parts {
         let worker = Worker {
             shared: Arc::clone(&shared),
             reads: Reads::Actor(actor.clone()),
+            bridge_decoder: ngterm_core::attach_bridge::Decoder::default(),
             scanner: Scanner::default(),
             next_read: 0,
             child_exited: false,
@@ -1319,12 +1336,13 @@ impl Reads {
 }
 
 /// The IO worker: the program's output from the mailbox into the VT.
-struct Worker {
-    shared: Arc<Shared>,
+pub(crate) struct Worker {
+    bridge_decoder: ngterm_core::attach_bridge::Decoder,
+    pub(crate) shared: Arc<Shared>,
     /// Woken when the mailbox resumes the reads.
     reads: Reads,
     scanner: Scanner,
-    next_read: u64,
+    pub(crate) next_read: u64,
     /// A read was denied for the child's exit: every later one is denied without asking.
     child_exited: bool,
 }
@@ -1380,6 +1398,23 @@ impl Worker {
     /// Feed `bytes` to the VT, stopping at each clipboard read for its answer. `false` when the pane shut down. A live
     /// pane's reads are the server's to delegate: it does not stop at them.
     fn feed(&mut self, bytes: &[u8]) -> bool {
+        let enabled = lock(&self.shared.bridge).expected_nonce.is_some();
+        if !enabled {
+            return self.feed_terminal(bytes);
+        }
+        for part in self.bridge_decoder.feed(bytes) {
+            let ok = match part {
+                ngterm_core::attach_bridge::Part::Bytes(bytes) => self.feed_terminal(&bytes),
+                ngterm_core::attach_bridge::Part::Envelope(envelope) => self.bridge_envelope(envelope),
+            };
+            if !ok {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn feed_terminal(&mut self, bytes: &[u8]) -> bool {
         #[cfg(feature = "local")]
         if matches!(self.reads, Reads::Live(_)) {
             return self.write_vt(bytes);
@@ -1512,7 +1547,7 @@ impl Worker {
         self.wait_answer(id)
     }
 
-    fn wait_answer(&mut self, id: u64) -> Option<ClipboardAnswer> {
+    pub(crate) fn wait_answer(&mut self, id: u64) -> Option<ClipboardAnswer> {
         if self.child_exited {
             return Some(ClipboardAnswer::Denied);
         }

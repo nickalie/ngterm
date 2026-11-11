@@ -437,7 +437,7 @@ impl Viewer {
                 self.take_answers();
                 self.owner = owner.then_some(generation);
             }
-            ClientEvent::Delegated { id, epoch, request } => self.delegated.push((id, epoch, request)),
+            ClientEvent::Delegated { id, epoch, request, .. } => self.delegated.push((id, epoch, request)),
             ClientEvent::KittyBarrier { id, epoch } => {
                 self.barriers.push((id, epoch));
                 let answers = self.take_answers();
@@ -1179,8 +1179,7 @@ fn a_write_queued_after_owner_overflow_is_delegated_in_the_resync_epoch() -> Tes
 
 #[cfg(unix)]
 #[test]
-fn kitty_clipboard_paste_is_generated_by_the_server_for_the_current_owner_epoch() -> TestResult {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+fn kitty_clipboard_content_paste_is_typed_for_a_current_follower_epoch() -> TestResult {
     use ngterm_session::protocol::{ClipboardPaste, ClipboardRepresentation};
     let dir = tempfile::tempdir()?;
     let gate = tempfile::tempdir()?;
@@ -1195,6 +1194,7 @@ fn kitty_clipboard_paste_is_generated_by_the_server_for_the_current_owner_epoch(
     go(gate.path(), 0)?;
     owner.expect(&pane, "REPLY-0:");
     let paste = ClipboardPaste {
+        bridge: None,
         contents: vec![
             ClipboardRepresentation {
                 mime: "text/plain".into(),
@@ -1209,9 +1209,9 @@ fn kitty_clipboard_paste_is_generated_by_the_server_for_the_current_owner_epoch(
         selection: "c".into(),
         allow_unsafe: false,
     };
-    assert!(!pane.clipboard_paste(other.subscription.id(), owner.epoch, &paste)?);
+    assert!(!pane.clipboard_paste(other.subscription.id(), owner.epoch + 1, &paste)?);
     assert!(!pane.clipboard_paste(owner.id(), owner.epoch + 1, &paste)?);
-    assert!(pane.clipboard_paste(owner.id(), owner.epoch, &paste)?);
+    assert!(pane.clipboard_paste(other.subscription.id(), owner.epoch, &paste)?);
     assert!(pane.input(owner.id(), b"\x1b]5522;type=read:status=OK:pw=ZmFrZQ==\x1b\\")?);
     assert!(!pane.with_terminal(|terminal| {
         terminal
@@ -1223,22 +1223,13 @@ fn kitty_clipboard_paste_is_generated_by_the_server_for_the_current_owner_epoch(
     go(gate.path(), 1)?;
     owner.expect(&pane, "PROBE-DONE");
     let replies = replies(&server_text(&pane));
-    let answer = String::from_utf8(replies[1].clone())?;
-    assert!(answer.contains(&STANDARD.encode("text/plain image/png\n")));
-    let token = answer
-        .split("pw=")
-        .nth(1)
-        .unwrap()
-        .split([':', ';', '\x1b'])
-        .next()
-        .unwrap();
-    let token = STANDARD.decode(token)?;
-    assert!(pane.with_terminal(|terminal| {
-        terminal
-            .clipboard_grants()
-            .lock()
-            .unwrap()
-            .peek(&token, vt::ClipboardDirection::Read)
-    }));
+    assert_eq!(
+        replies[1],
+        b"hello\x1b]5522;type=read:status=OK:pw=ZmFrZQ==\x1b\\\x1b[0n"
+    );
+    assert!(
+        owner.delegated.is_empty(),
+        "a follower content paste cannot read the owner clipboard"
+    );
     Ok(())
 }

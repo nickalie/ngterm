@@ -544,3 +544,6 @@ mod screen_read {
 
 #[path = "clipboard_cases.rs"]
 mod clipboard_cases;
+
+#[path = "bridge_cases.rs"]
+mod bridge_cases;

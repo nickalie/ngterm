@@ -12,7 +12,7 @@ fn delegated(attached: &Attached) -> (u64, u64, DelegatedRequest) {
             .subscription
             .recv_timeout(Duration::ZERO)
             .expect("the request must be queued");
-        if let ClientEvent::Delegated { id, epoch, request } = event {
+        if let ClientEvent::Delegated { id, epoch, request, .. } = event {
             return (id, epoch, request);
         }
     }
@@ -545,5 +545,509 @@ fn next_request_answer(request: DelegatedRequest) -> Answer {
             Answer::Text(Some("hi".into()))
         }
         DelegatedRequest::ClipboardRead { .. } => panic!("the saved next request must be delegated"),
+    }
+}
+
+fn lazy_paste(core: &Arc<Core>, owner: &Attached) -> Vec<u8> {
+    use crate::protocol::ClipboardPasteBridge;
+    let bridge = ClipboardPasteBridge {
+        id: "lazy-source".into(),
+        available: (0..16).map(|index| format!("application/type{index}")).collect(),
+    };
+    let contents: Vec<_> = bridge
+        .available
+        .iter()
+        .map(|mime| vt::ClipboardContent {
+            mime: mime.clone(),
+            data: Vec::new(),
+        })
+        .collect();
+    let mut state = core.lock();
+    let epoch = state.clients.epoch(owner.subscription.id()).unwrap();
+    let bytes = state.paste_bytes(&contents, false, "c", false).unwrap();
+    state.register_paste_bridge(owner.subscription.id(), epoch, Some(&bridge), &bytes);
+    state.terminal.clipboard_grants().lock().unwrap().pasted(&bytes);
+    let end = bytes.windows(2).position(|part| part == b"\x1b\\").unwrap();
+    crate::attach_tty::clipboard::Packet::parse(&bytes[2..end])
+        .unwrap()
+        .token
+}
+fn token_read(types: &str, token: &[u8]) -> Vec<u8> {
+    format!(
+        "\x1b]5522;type=read:name=VGVzdA==:pw={};{}\x1b\\",
+        STANDARD.encode(token),
+        STANDARD.encode(types)
+    )
+    .into_bytes()
+}
+#[test]
+fn lazy_clipboard_listings_preserve_the_server_token_and_a_later_type_is_fetched_once() {
+    let (core, owner) = core(ReplyMetadata::default());
+    core.read(b"\x1b[?5522h");
+    let token = lazy_paste(&core, &owner);
+    core.read(&token_read(".", &token));
+    let bytes = core.outlet.take().concat();
+    assert!(
+        String::from_utf8_lossy(&bytes).contains(
+            &STANDARD.encode(
+                (0..16)
+                    .map(|index| format!("application/type{index}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    + "\n"
+            )
+        )
+    );
+    assert!(
+        core.lock()
+            .terminal
+            .clipboard_grants()
+            .lock()
+            .unwrap()
+            .peek(&token, vt::ClipboardDirection::Read)
+    );
+    core.read(&token_read("application/type12", &token));
+    let (id, epoch, request) = delegated(&owner);
+    assert!(
+        matches!(request, DelegatedRequest::ClipboardReadMime { bridge: Some(bridge), mimes, granted: true, .. } if bridge == "lazy-source" && mimes == ["application/type12"])
+    );
+    assert!(core.lock().answer(
+        owner.subscription.id(),
+        id,
+        epoch,
+        Answer::Mime {
+            contents: vec![ClipboardRepresentation {
+                mime: "application/type12".into(),
+                data: vec![0, 12, 255]
+            }],
+            available: Vec::new(),
+            status: ClipboardStatus::Success,
+            remember: false,
+        }
+    ));
+    assert!(String::from_utf8_lossy(&core.outlet.take().concat()).contains(&STANDARD.encode([0, 12, 255])));
+    core.read(&token_read("application/type12", &token));
+    assert!(String::from_utf8_lossy(&core.outlet.take().concat()).contains("EPERM"));
+    assert!(!drain_output(&owner.subscription).is_empty());
+}
+#[test]
+fn lazy_clipboard_tokens_are_terminal_scoped_and_invalidated_by_reset_or_owner_loss() {
+    for reset in [false, true] {
+        let (first, owner) = core(ReplyMetadata::default());
+        first.read(b"\x1b[?5522h");
+        let token = lazy_paste(&first, &owner);
+        let (other, other_owner) = core(ReplyMetadata::default());
+        other.read(&token_read("application/type12", &token));
+        assert!(matches!(
+            delegated(&other_owner).2,
+            DelegatedRequest::ClipboardReadMime {
+                bridge: None,
+                granted: false,
+                ..
+            }
+        ));
+        if reset {
+            first.read(b"\x1bc");
+        } else {
+            let mut state = first.lock();
+            let change = state.lead.detach(owner.subscription.id());
+            state.tell(&change.notices);
+            state.refresh_owner();
+        }
+        first.read(&token_read("application/type12", &token));
+        assert!(String::from_utf8_lossy(&first.outlet.take().concat()).contains("EPERM"));
+    }
+}
+
+#[test]
+fn evicting_a_lazy_paste_revokes_its_grant_after_an_earlier_token_was_consumed() {
+    let (core, owner) = core(ReplyMetadata::default());
+    core.read(b"\x1b[?5522h");
+    let tokens: Vec<_> = (0..32).map(|_| lazy_paste(&core, &owner)).collect();
+    core.read(&token_read("application/type12", &tokens[0]));
+    let (id, epoch, _) = delegated(&owner);
+    assert!(core.lock().answer(
+        owner.subscription.id(),
+        id,
+        epoch,
+        Answer::Mime {
+            contents: Vec::new(),
+            available: Vec::new(),
+            remember: false,
+            status: ClipboardStatus::Success,
+        }
+    ));
+    lazy_paste(&core, &owner);
+    lazy_paste(&core, &owner);
+    core.read(&token_read("application/type12", &tokens[1]));
+    assert!(matches!(
+        delegated(&owner).2,
+        DelegatedRequest::ClipboardReadMime {
+            bridge: None,
+            granted: false,
+            ..
+        }
+    ));
+}
+fn alias_delegation(owner: &Attached) -> (u64, u64, DelegatedRequest, Option<crate::protocol::ClipboardAlias>) {
+    loop {
+        let event = owner.subscription.recv_timeout(Duration::ZERO).unwrap();
+        if let ClientEvent::Delegated {
+            id,
+            epoch,
+            request,
+            native_alias,
+        } = event
+        {
+            return (id, epoch, request, native_alias);
+        }
+    }
+}
+#[test]
+fn clipboard_grants_and_native_aliases_survive_owner_switch_and_aliases_rotate_on_ris() {
+    let (core, owner) = core(ReplyMetadata::default());
+    core.read(&read("image/png", "program-token"));
+    let (id, epoch, _, alias) = alias_delegation(&owner);
+    assert!(alias.is_some());
+    assert!(core.lock().answer(
+        owner.subscription.id(),
+        id,
+        epoch,
+        Answer::Mime {
+            contents: Vec::new(),
+            available: Vec::new(),
+            remember: true,
+            status: ClipboardStatus::Success,
+        }
+    ));
+    core.outlet.take();
+    let other = {
+        let mut state = core.lock();
+        let size = state.size;
+        let offset = state.offset;
+        let change = state.lead.attach(
+            999,
+            size,
+            Some(&Managed {
+                nonce: "other".into(),
+                claim: true,
+            }),
+        );
+        let subscription = state.clients.attach(999);
+        state.remember(999, ReplyMetadata::default());
+        state.tell(&change.notices);
+        state.refresh_owner();
+        state.clients.snapshot(999, offset, size, Vec::new());
+        Attached {
+            subscription,
+            offset,
+            size,
+        }
+    };
+    core.read(&read("image/png", "program-token"));
+    let (id, epoch, request, other_alias) = alias_delegation(&other);
+    assert_eq!(alias, other_alias);
+    assert!(matches!(
+        request,
+        DelegatedRequest::ClipboardReadMime { granted: true, .. }
+    ));
+    core.lock().answer(other.subscription.id(), id, epoch, Answer::Denied);
+    core.read(b"\x1bc");
+    core.read(&read("image/png", "program-token"));
+    let (_, _, request, reset_alias) = alias_delegation(&other);
+    assert_ne!(alias, reset_alias);
+    assert!(matches!(
+        request,
+        DelegatedRequest::ClipboardReadMime { granted: false, .. }
+    ));
+    assert_eq!(format!("{:?}", alias.unwrap()), "ClipboardAlias { .. }");
+}
+
+#[test]
+fn pastes_accept_followers_only_in_their_current_epoch() {
+    let (core, owner) = core(ReplyMetadata::default());
+    let mut state = core.lock();
+    let other = state.clients.attach(999);
+    let size = state.size;
+    state.clients.snapshot(999, 0, size, Vec::new());
+    let epoch = state.clients.epoch(999).unwrap();
+    assert!(state.paste_client(999, epoch));
+    assert!(!state.paste_client(999, epoch + 1));
+    assert!(!state.paste_client(998, epoch));
+    let owner = owner.subscription.id();
+    assert!(state.paste_client(owner, state.clients.epoch(owner).unwrap()));
+    drop(other);
+}
+
+fn follower(core: &Arc<Core>) -> Attached {
+    let mut state = core.lock();
+    let size = state.size;
+    let offset = state.offset;
+    let subscription = state.clients.attach(999);
+    state.clients.snapshot(999, offset, size, Vec::new());
+    Attached {
+        subscription,
+        offset,
+        size,
+    }
+}
+
+fn claim(core: &Arc<Core>, attached: &Attached) {
+    let mut state = core.lock();
+    let size = state.size;
+    let change = state.lead.attach(
+        attached.subscription.id(),
+        size,
+        Some(&Managed {
+            nonce: "new-owner".into(),
+            claim: true,
+        }),
+    );
+    state.tell(&change.notices);
+}
+
+fn no_delegation(attached: &Attached) {
+    while let Ok(event) = attached.subscription.recv_timeout(Duration::ZERO) {
+        assert!(
+            !matches!(event, ClientEvent::Delegated { .. }),
+            "unexpected clipboard read: {event:?}"
+        );
+    }
+}
+
+fn binary_answer(data: &[u8]) -> Answer {
+    Answer::Mime {
+        contents: vec![ClipboardRepresentation {
+            mime: "application/type12".into(),
+            data: data.to_vec(),
+        }],
+        available: Vec::new(),
+        remember: false,
+        status: ClipboardStatus::Success,
+    }
+}
+
+#[test]
+fn follower_lazy_paste_lists_sixteen_types_and_reads_only_its_own_clipboard() {
+    let (core, owner) = core(ReplyMetadata::default());
+    let source = follower(&core);
+    core.read(b"\x1b[?5522h");
+    let token = lazy_paste(&core, &source);
+    core.read(&token_read(".", &token));
+    let listed = core.outlet.take().concat();
+    assert!(
+        String::from_utf8_lossy(&listed).contains(
+            &STANDARD.encode(
+                (0..16)
+                    .map(|index| format!("application/type{index}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    + "\n"
+            )
+        )
+    );
+    no_delegation(&owner);
+    no_delegation(&source);
+    core.read(&token_read("application/type12", &token));
+    let (id, epoch, request) = delegated(&source);
+    assert!(
+        matches!(request, DelegatedRequest::ClipboardReadMime { bridge: Some(bridge), mimes, granted: true, .. }
+        if bridge == "lazy-source" && mimes == ["application/type12"])
+    );
+    no_delegation(&owner);
+    assert!(
+        !core
+            .lock()
+            .answer(owner.subscription.id(), id, epoch, binary_answer(b"owner clipboard"))
+    );
+    assert!(core.lock().answer(
+        source.subscription.id(),
+        id,
+        epoch,
+        binary_answer(b"follower\0\xffclipboard")
+    ));
+    let response = String::from_utf8(core.outlet.take().concat()).unwrap();
+    assert!(response.contains(&STANDARD.encode(b"follower\0\xffclipboard")));
+    assert!(!response.contains(&STANDARD.encode(b"owner clipboard")));
+    core.read(&token_read("application/type12", &token));
+    assert!(String::from_utf8_lossy(&core.outlet.take().concat()).contains("EPERM"));
+    core.read(&read("text/plain", "ordinary"));
+    let (id, epoch, request) = delegated(&owner);
+    assert!(matches!(
+        request,
+        DelegatedRequest::ClipboardReadMime {
+            bridge: None,
+            granted: false,
+            ..
+        }
+    ));
+    no_delegation(&source);
+    assert!(core.lock().answer(owner.subscription.id(), id, epoch, Answer::Denied));
+}
+
+#[test]
+fn follower_lazy_sources_fail_closed_on_epoch_owner_change_disconnect_and_overflow() {
+    for invalidation in 0..4 {
+        let (core, owner) = core(ReplyMetadata::default());
+        let source = follower(&core);
+        core.read(b"\x1b[?5522h");
+        let token = lazy_paste(&core, &source);
+        match invalidation {
+            0 => {
+                let mut state = core.lock();
+                let size = state.size;
+                state.clients.snapshot(source.subscription.id(), 0, size, Vec::new());
+            }
+            1 => claim(&core, &source),
+            2 => {
+                core.lock().clients.detach(source.subscription.id());
+            }
+            _ => {
+                let mut state = core.lock();
+                state
+                    .clients
+                    .output(0, &vec![b'x'; super::super::clients::DEFAULT_QUEUE_LIMIT]);
+                state.clients.output(0, b"overflow");
+                assert_eq!(state.clients.overflowed(source.subscription.id()), Some(true));
+            }
+        }
+        core.read(&token_read("application/type12", &token));
+        assert!(
+            String::from_utf8_lossy(&core.outlet.take().concat()).contains("EPERM"),
+            "{invalidation}"
+        );
+        no_delegation(&owner);
+        no_delegation(&source);
+    }
+}
+
+#[test]
+fn a_follower_fetch_denial_timeout_or_source_loss_never_retries_as_input_or_owner_read() {
+    for failure in 0..3 {
+        let (core, owner) = core(ReplyMetadata::default());
+        let source = follower(&core);
+        core.read(b"\x1b[?5522h");
+        let token = lazy_paste(&core, &source);
+        core.read(&token_read("application/type12", &token));
+        let (id, epoch, _) = delegated(&source);
+        if failure == 0 {
+            assert!(core.lock().answer(source.subscription.id(), id, epoch, Answer::Denied));
+        } else {
+            let mut state = core.lock();
+            if failure == 2 {
+                state.clients.detach(source.subscription.id());
+            }
+            state.expire(Instant::now() + DELEGATION_WAIT + Duration::from_secs(1));
+        }
+        assert!(
+            !core
+                .lock()
+                .answer(source.subscription.id(), id, epoch, binary_answer(b"late"))
+        );
+        assert_eq!(core.outlet.take().concat(), b"\x1b]5522;type=read:status=EPERM\x1b\\");
+        core.read(&token_read("application/type12", &token));
+        assert_eq!(core.outlet.take().concat(), b"\x1b]5522;type=read:status=EPERM\x1b\\");
+        no_delegation(&owner);
+    }
+}
+
+#[test]
+fn a_dropped_follower_cancels_its_pending_fetch_without_waiting_for_the_deadline() {
+    let (core, owner) = core(ReplyMetadata::default());
+    let source = follower(&core);
+    core.read(b"\x1b[?5522h");
+    let token = lazy_paste(&core, &source);
+    core.read(&token_read("application/type12", &token));
+    let (id, epoch, _) = delegated(&source);
+    let source_id = source.subscription.id();
+    no_delegation(&owner);
+    core.read(&vec![b'x'; PARK_HIGH + 1]);
+    core.read(b"after-fetch\x1b[5n");
+    assert!(core.pause.is_paused());
+    drop(source);
+    let mut state = core.lock();
+    state.prune();
+    assert_eq!(state.replies.owner(), Some(owner.subscription.id()));
+    state.expire(Instant::now()); // The helper handles cancellation now, not at the 30-second deadline.
+    assert!(!state.answer(source_id, id, epoch, binary_answer(b"late")));
+    assert!(core.unpause(&state), "the stalled PTY must resume immediately");
+    drop(state);
+    assert_eq!(
+        core.outlet.take().concat(),
+        b"\x1b]5522;type=read:status=EPERM\x1b\\\x1b[0n"
+    );
+    let mut output = Vec::new();
+    while let Ok(event) = owner.subscription.recv_timeout(Duration::ZERO) {
+        if let ClientEvent::Output { data, .. } = event {
+            output.extend_from_slice(&data);
+        }
+    }
+    assert!(output.windows(b"after-fetch".len()).any(|part| part == b"after-fetch"));
+}
+
+fn owner_content_token(core: &Arc<Core>, owner: &Attached) -> Vec<u8> {
+    let mut state = core.lock();
+    let bytes = state
+        .paste_bytes(
+            &[vt::ClipboardContent {
+                mime: "text/plain".into(),
+                data: b"owner text".to_vec(),
+            }],
+            false,
+            "c",
+            false,
+        )
+        .unwrap();
+    let epoch = state.clients.epoch(owner.subscription.id()).unwrap();
+    state.register_paste_bridge(owner.subscription.id(), epoch, None, &bytes);
+    state.terminal.clipboard_grants().lock().unwrap().pasted(&bytes);
+    let end = bytes.windows(2).position(|pair| pair == b"\x1b\\").unwrap();
+    crate::attach_tty::clipboard::Packet::parse(&bytes[2..end])
+        .unwrap()
+        .token
+}
+
+#[test]
+fn owner_content_paste_tokens_list_without_consumption_and_never_read_a_replacement_owner() {
+    for change_owner in [false, true] {
+        let (core, owner) = core(ReplyMetadata::default());
+        let other = follower(&core);
+        core.read(b"\x1b[?5522h");
+        let token = owner_content_token(&core, &owner);
+        core.read(&token_read(".", &token));
+        let (id, epoch, request) = delegated(&owner);
+        assert!(matches!(request, DelegatedRequest::ClipboardReadMime { bridge: None, mimes, .. } if mimes.is_empty()));
+        assert!(core.lock().answer(
+            owner.subscription.id(),
+            id,
+            epoch,
+            Answer::Mime {
+                contents: Vec::new(),
+                available: vec!["text/plain".into()],
+                remember: false,
+                status: ClipboardStatus::Success,
+            }
+        ));
+        core.outlet.take();
+        if change_owner {
+            claim(&core, &other);
+        }
+        core.read(&token_read("text/plain", &token));
+        if change_owner {
+            assert!(String::from_utf8_lossy(&core.outlet.take().concat()).contains("EPERM"));
+            no_delegation(&owner);
+            no_delegation(&other);
+        } else {
+            let (id, epoch, request) = delegated(&owner);
+            assert!(matches!(
+                request,
+                DelegatedRequest::ClipboardReadMime {
+                    bridge: None,
+                    granted: true,
+                    ..
+                }
+            ));
+            assert!(core.lock().answer(owner.subscription.id(), id, epoch, Answer::Denied));
+        }
     }
 }

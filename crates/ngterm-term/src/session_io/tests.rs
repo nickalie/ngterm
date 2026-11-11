@@ -1,5 +1,7 @@
+use crate::{ClipboardReadRequest, ReadScope};
 use std::ffi::OsString;
 use std::path::Path;
+use wire::DelegatedRequest;
 
 use ngterm_session::cli::{self, Command, default_argv, variable as lookup};
 use ngterm_session::server::{EXIT_FAILED, EXIT_USAGE};
@@ -334,6 +336,7 @@ fn pane() -> crate::Pane {
 fn delegated(id: u64, selection: &str, list_only: bool) -> LiveMail {
     LiveMail::Delegated {
         request: Delegated {
+            native_alias: None,
             id,
             epoch: 1,
             request: DelegatedRequest::ClipboardRead {

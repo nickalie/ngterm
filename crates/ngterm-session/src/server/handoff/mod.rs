@@ -161,6 +161,8 @@ pub enum VtEncoding {
 /// (`replies_len` bytes) follow the manifest line, pane after pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneState {
+    #[serde(default)]
+    pub clipboard_alias_key: Option<crate::protocol::ClipboardAlias>,
     pub name: String,
     pub pid: u32,
     /// Whole seconds since the Unix epoch.
@@ -753,6 +755,7 @@ mod tests {
 
     fn pane(name: &str, vt: VtEncoding) -> PaneState {
         PaneState {
+            clipboard_alias_key: None,
             name: name.to_owned(),
             pid: 42,
             created_at: 1_700_000_000,

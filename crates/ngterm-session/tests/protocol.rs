@@ -327,6 +327,7 @@ fn every_reply_message_round_trips() {
     let mut messages = Vec::new();
     for (id, selection, list_only) in [(3, "c", false), (4, "s", false), (5, "p", true)] {
         messages.push(AttachServerMessage::DelegatedRequest {
+            native_alias: None,
             id,
             epoch: id - 1,
             request: DelegatedRequest::ClipboardRead {
@@ -1091,6 +1092,7 @@ fn clipboard_mime_permission_completion_and_paste_round_trip_binary_bytes() {
     }];
     let requests = [
         DelegatedRequest::ClipboardReadMime {
+            bridge: None,
             selection: "p".into(),
             mimes: vec!["image/png".into(), "text/html".into()],
             list: true,
@@ -1117,6 +1119,7 @@ fn clipboard_mime_permission_completion_and_paste_round_trip_binary_bytes() {
     ];
     for request in requests {
         roundtrip_message(&AttachServerMessage::DelegatedRequest {
+            native_alias: None,
             id: 1,
             epoch: 2,
             request,
@@ -1146,6 +1149,7 @@ fn clipboard_mime_permission_completion_and_paste_round_trip_binary_bytes() {
     roundtrip_message(&AttachClientMessage::ClipboardPaste {
         epoch: 2,
         paste: ClipboardPaste {
+            bridge: None,
             contents,
             text_source: false,
             selection: "p".into(),
@@ -1153,4 +1157,51 @@ fn clipboard_mime_permission_completion_and_paste_round_trip_binary_bytes() {
         },
     })
     .unwrap();
+}
+
+#[test]
+fn lazy_paste_registration_fetch_and_native_alias_round_trip_without_outer_tokens() {
+    use ngterm_session::protocol::{ClipboardAlias, ClipboardPaste, ClipboardPasteBridge};
+    roundtrip_message(&AttachClientMessage::ClipboardPaste {
+        epoch: 8,
+        paste: ClipboardPaste {
+            bridge: Some(ClipboardPasteBridge {
+                id: "opaque-bridge".into(),
+                available: (0..16).map(|index| format!("application/type{index}")).collect(),
+            }),
+            contents: Vec::new(),
+            text_source: false,
+            selection: "c".into(),
+            allow_unsafe: false,
+        },
+    })
+    .unwrap();
+    roundtrip_message(&AttachServerMessage::DelegatedRequest {
+        native_alias: Some(ClipboardAlias("opaque-native-alias".into())),
+        id: 9,
+        epoch: 8,
+        request: DelegatedRequest::ClipboardReadMime {
+            bridge: Some("opaque-bridge".into()),
+            selection: "c".into(),
+            mimes: vec!["application/type12".into()],
+            list: false,
+            name: "Program".into(),
+            granted: true,
+            can_remember: true,
+        },
+    })
+    .unwrap();
+}
+
+#[test]
+fn clipboard_data_keeps_its_postcard_byte_vector_layout() {
+    let contents = ngterm_session::protocol::ClipboardRepresentation {
+        mime: "x".into(),
+        data: vec![0, 255],
+    };
+    assert_eq!(postcard::to_allocvec(&contents).unwrap(), [1, b'x', 2, 0, 255]);
+    assert_eq!(
+        postcard::from_bytes::<ngterm_session::protocol::ClipboardRepresentation>(&[1, b'x', 2, 0, 255]).unwrap(),
+        contents
+    );
 }

@@ -5,6 +5,32 @@ use crate::protocol::{DelegatedReply, DelegatedRequest, GridSize};
 use crate::server::replies::DELEGATION_WAIT;
 
 #[test]
+fn a_native_probe_answer_keeps_its_framing_before_support_is_known() {
+    let now = Instant::now();
+    let mut relay = Relay::new(None, GridSize { cols: 80, rows: 24 }, None);
+    relay.start(true, now, &mut Effects::default());
+    let mut keys = Keys::new(true);
+    assert!(keys.read(b"\x1b]5522;", now, &relay).is_empty());
+    assert!(keys.due(now + ANSWER_QUIET, &relay).is_empty());
+    let tokens = keys.read(
+        b"type=read:status=OK:id=ngterm-clipboard-probe\x1b\\",
+        now + ANSWER_QUIET,
+        &relay,
+    );
+    assert!(matches!(tokens.as_slice(), [Token::Answer(Answer::ClipboardMime(packet))] if packet.status == "OK"));
+}
+
+#[test]
+fn a_mime_capable_relay_still_delivers_alt_close_bracket_as_a_key() {
+    let now = Instant::now();
+    let mut relay = Relay::new(None, GridSize { cols: 80, rows: 24 }, None);
+    relay.start(true, now, &mut Effects::default());
+    let mut keys = Keys::new(true);
+    assert!(keys.read(b"\x1b]", now, &relay).is_empty());
+    assert_eq!(keys.due(now + INPUT_QUIET, &relay), [Token::Input(b"\x1b]".to_vec())]);
+}
+
+#[test]
 fn only_a_valid_managed_nonce_preserves_output_on_leaving() {
     for (nonce, managed) in [
         (None, false),
@@ -201,6 +227,7 @@ impl Sim {
     /// The session reads the clipboard: whether the outer terminal was asked.
     fn ask(&mut self, id: u64) -> bool {
         let request = Delegated {
+            native_alias: None,
             id,
             epoch: 1,
             request: DelegatedRequest::ClipboardRead {
@@ -443,6 +470,7 @@ fn an_attach_creates_its_session_with_the_origins_environment_directory_and_shel
     assert_eq!(
         prepared,
         Prepared {
+            bridge_nonce: None,
             directory: std::path::absolute("/tmp/live").unwrap(),
             name: "p-x".to_owned(),
             spec: SessionSpec {
@@ -490,5 +518,84 @@ fn attaching_again_without_a_server_gives_up_after_its_wait() {
             "lost the connection to the live session server: no live session server runs at {}",
             crate::endpoint::Endpoint::new(&directory)
         ))
+    );
+}
+
+#[test]
+fn fast_alt_close_bracket_digits_are_input_even_with_native_support() {
+    let now = Instant::now();
+    let mut relay = Relay::new(None, GridSize { cols: 80, rows: 24 }, None);
+    relay.start(true, now, &mut Effects::default());
+    relay.answer(
+        Answer::ClipboardMime(
+            crate::attach_tty::clipboard::Packet::parse(b"5522;type=read:status=OK:id=ngterm-clipboard-probe").unwrap(),
+        ),
+        now,
+        &mut Effects::default(),
+    );
+    for bytes in [b"\x1b]7abc\r".as_slice(), b"\x1b]5abc\r"] {
+        for split in 0..=bytes.len() {
+            let mut keys = Keys::new(true);
+            let tokens =
+                keys.read(&bytes[..split], now, &relay)
+                    .into_iter()
+                    .chain(keys.read(&bytes[split..], now, &relay));
+            let mut typed = Vec::new();
+            for token in tokens {
+                let Token::Input(bytes) = token else {
+                    panic!("unexpected {token:?}");
+                };
+                typed.extend(bytes);
+            }
+            assert_eq!(typed, bytes);
+        }
+    }
+}
+
+#[test]
+fn malformed_legacy_answers_release_the_read_after_native_support_is_detected() {
+    let mut sim = Sim::new(true);
+    sim.relay.answer(
+        Answer::ClipboardMime(
+            crate::attach_tty::clipboard::Packet::parse(b"5522;type=read:status=OK:id=ngterm-clipboard-probe").unwrap(),
+        ),
+        sim.now,
+        &mut Effects::default(),
+    );
+    assert!(sim.ask(1));
+    sim.read(b"\x1b]52;malformed\x07");
+    assert_eq!(sim.replies, [(1, DelegatedReply::Denied)]);
+    assert!(sim.ask(2));
+}
+
+#[test]
+fn explicit_bridge_prepare_requires_a_supported_nonce_and_strips_it_from_the_session() {
+    let contract = Contract::from_env(|name| (name == "NGTERM_LIVE_DIR").then(|| "/tmp/private-live".into()));
+    for token in [None, Some("1"), Some("2:nonce"), Some("1:"), Some("1:bad;nonce")] {
+        let mut origin = origin();
+        if let Some(token) = token {
+            origin
+                .env
+                .push((ngterm_core::attach_bridge::VARIABLE.into(), token.into()));
+        }
+        assert_eq!(
+            prepare_bridge(&contract, "pane", Vec::new(), origin).unwrap_err().code,
+            super::super::EXIT_USAGE
+        );
+    }
+    let mut origin = origin();
+    origin
+        .env
+        .push((ngterm_core::attach_bridge::VARIABLE.into(), "1:viewer-nonce".into()));
+    let normal = prepare(&contract, "pane", Vec::new(), origin.clone()).unwrap();
+    assert!(normal.bridge_nonce.is_none());
+    let bridge = prepare_bridge(&contract, "pane", Vec::new(), origin).unwrap();
+    assert_eq!(bridge.bridge_nonce.as_deref(), Some("viewer-nonce"));
+    assert!(
+        !bridge
+            .spec
+            .env
+            .iter()
+            .any(|(key, _)| key == ngterm_core::attach_bridge::VARIABLE)
     );
 }

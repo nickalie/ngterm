@@ -613,6 +613,15 @@ impl Pane {
         location: ClipboardLocation,
         allow_unsafe: bool,
     ) -> Result<Paste, PaneError> {
+        let lazy = source == PasteSource::Clipboard && vt.terminal.mode(vt::Mode::dec(5522));
+        if lazy && self.queue_clipboard_bridge(contents, source, location, allow_unsafe, true)? {
+            let moved = vt.scroll_to_bottom();
+            drop(vt);
+            if moved {
+                self.shared().wake();
+            }
+            return Ok(Paste::Written);
+        }
         // the terminal writes the paste through its PTY callback; divert it into one piece of input, so a paste is
         // queued whole or refused whole
         *lock(&self.shared().divert) = Some(Vec::new());
@@ -636,7 +645,8 @@ impl Pane {
             vt::PasteOutcome::Empty => return Ok(Paste::Empty),
             vt::PasteOutcome::Unsafe => return Ok(Paste::Unsafe),
         };
-        let queued_remotely = {
+        let bridged = self.queue_clipboard_bridge(contents, source, location, allow_unsafe, false)?;
+        let queued_remotely = bridged || {
             #[cfg(feature = "local")]
             {
                 if let Some(live) = self.live_clipboard() {
@@ -663,6 +673,30 @@ impl Pane {
             self.shared().wake();
         }
         Ok(paste)
+    }
+
+    fn queue_clipboard_bridge(
+        &self,
+        contents: &[crate::ClipboardContent],
+        source: PasteSource,
+        location: ClipboardLocation,
+        allow_unsafe: bool,
+        lazy: bool,
+    ) -> Result<bool, PaneError> {
+        lock(&self.shared().bridge).paste(
+            self,
+            contents,
+            crate::bridge::PasteOptions {
+                text_source: source == PasteSource::Text,
+                selection: match location {
+                    ClipboardLocation::Primary => "p",
+                    ClipboardLocation::Selection => "s",
+                    ClipboardLocation::Standard => "c",
+                },
+                allow_unsafe,
+                lazy,
+            },
+        )
     }
 
     /// Scroll the viewport.

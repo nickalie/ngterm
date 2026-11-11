@@ -230,6 +230,12 @@ impl Core {
             )
             .ok_or_else(|| ControlError::rejected("could not create the session"))?;
         let daemons = install_panes(store, created, &left, right.as_deref(), split, remote);
+        if let Some(session) = store.session_mut(created) {
+            session.launch.attach_bridge =
+                crate::attach_bridge::launch_nonce(&remote_tree.endpoint, &leads.0).map(str::to_owned);
+            session.split_launch.attach_bridge =
+                crate::attach_bridge::launch_nonce(&remote_tree.endpoint, &leads.1).map(str::to_owned);
+        }
         let origin = RemoteOrigin {
             host: host.to_owned(),
             endpoint: remote_tree.endpoint.clone(),

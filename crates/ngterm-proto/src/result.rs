@@ -245,9 +245,13 @@ pub struct ControlLiveEntry {
 }
 
 /// What a caller on another machine needs to reach these daemons (upstream's `ControlZmxEndpoint`).
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControlLiveEndpoint {
+    /// The private clipboard attach protocol supported by this executable; absent on older origins.
+    #[serde(default)]
+    pub attach_bridge: Option<u32>,
     /// The live-session executable this instance runs.
     pub executable: String,
     /// The socket directory its daemons live under.
