@@ -1,11 +1,12 @@
-ngterm: Kitty placement-id namespaces and relative placements' parent links in the C API
+ngterm: Kitty placement-id namespaces and relative placements' parent links in the C API (interim, retired by the
+render-state image API adoption)
 
-The C API at LIBGHOSTTY_VT_REV (and at ghostty main on 2026-10-17: kitty_graphics.h is byte-identical) reports a
-placement's id without its namespace and a relative placement (P=/Q=) without its parent, so an embedder cannot draw
-what Ghostty's renderer draws: placeholderTarget looks a named id up among the client's (external) ids only and, with
-none named, prefers a client's virtual placement (PlacementId.preferredOver); src/renderer/image.zig positions a
-relative placement whose chain roots at a virtual placement at the root's minimum placeholder cell plus the chain's
-summed offsets (pending_relative). This patch only reads out what storage holds, additively, with no logic of its own
+The storage placement iterator at LIBGHOSTTY_VT_REV (v1.4.0) still reports a placement's id without its namespace
+and a relative placement (P=/Q=) without its parent, so an embedder cannot draw what Ghostty's renderer draws:
+placeholderTarget looks a named id up among the client's (external) ids only and, with none named, prefers a client's
+virtual placement (PlacementId.preferredOver); src/renderer/image.zig positions a relative placement whose chain
+roots at a virtual placement at the root's minimum placeholder cell plus the chain's summed offsets
+(pending_relative). This patch only reads out what storage holds, additively, with no logic of its own
 (the embedder resolves chains, targets and positions):
 
 - GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PLACEMENT_ID_NAMESPACE (GhosttyKittyPlacementIdNamespace: INTERNAL for a
@@ -15,12 +16,17 @@ summed offsets (pending_relative). This patch only reads out what storage holds,
   (Placement.Relative: the parent's key and H=/V=), GHOSTTY_NO_VALUE for a placement that is not relative;
 - the enum in the ABI type manifest (types.zig), and tests.
 
+v1.4.0's render-state image API (#14780, #14789) resolves placeholders and relative chains inside the library; once
+the wrapper and renderer draw from it, this patch goes. Until then it is rebased as is: v1.4.0 reworked the header
+around an unchanged GhosttyKittyGraphicsPlacementData (1..12), so the enum hunk now sits after its Z member and the
+test hunk at the file's new end.
+
 Nothing existing changes. Applied by scripts/build-ghostty-vt.sh; the bindings are regenerated with
 scripts/gen-ghostty-vt-bindings.sh.
 
 --- a/include/ghostty/vt/kitty_graphics.h
 +++ b/include/ghostty/vt/kitty_graphics.h
-@@ -260,10 +260,73 @@
+@@ -370,10 +370,73 @@
     */
    GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Z = 12,
  
@@ -91,9 +97,9 @@ scripts/gen-ghostty-vt-bindings.sh.
 +} GhosttyKittyPlacementIdNamespace;
 +
 +/**
-  * Z-layer classification for kitty graphics placements.
+  * A layer to limit the storage placement iterator to, set with
+  * GHOSTTY_KITTY_GRAPHICS_PLACEMENT_ITERATOR_OPTION_LAYER.
   *
-  * Based on the kitty protocol z-index conventions:
 --- a/src/terminal/c/kitty_graphics.zig
 +++ b/src/terminal/c/kitty_graphics.zig
 @@ -64,6 +64,19 @@
@@ -139,7 +145,7 @@ scripts/gen-ghostty-vt-bindings.sh.
          };
      }
  };
-@@ -409,11 +431,27 @@
+@@ -433,11 +455,27 @@
          .columns => out.* = val.columns,
          .rows => out.* = val.rows,
          .z => out.* = val.z,
@@ -167,9 +173,9 @@ scripts/gen-ghostty-vt-bindings.sh.
  pub fn placement_rect(
      iter_: PlacementIterator,
      image_: ImageHandle,
-@@ -2136,3 +2174,164 @@
-     try testing.expectEqual(Result.success, get(graphics, .generation, @ptrCast(&gen)));
-     try testing.expect(gen > gen_alt);
+@@ -2284,3 +2322,164 @@
+     try testing.expectEqual(Result.success, terminal_c.get(t, .kitty_graphics, @ptrCast(&graphics)));
+     try testing.expectEqual(Result.invalid_value, animation_tick(graphics, 0, null));
  }
 +
 +/// A placement's key as the C API reports it, for the tests below.
@@ -334,7 +340,7 @@ scripts/gen-ghostty-vt-bindings.sh.
 +}
 --- a/src/terminal/c/types.zig
 +++ b/src/terminal/c/types.zig
-@@ -276,6 +276,7 @@
+@@ -278,6 +278,7 @@
      .initEnum("GhosttyKittyGraphicsPlacementIteratorOption", kitty_graphics.PlacementIteratorOption, "GHOSTTY_KITTY_GRAPHICS_PLACEMENT_ITERATOR_OPTION_"),
      .initEnum("GhosttyKittyImageCompression", kitty_graphics.ImageCompression, "GHOSTTY_KITTY_IMAGE_COMPRESSION_"),
      .initEnum("GhosttyKittyImageFormat", kitty_graphics.ImageFormat, "GHOSTTY_KITTY_IMAGE_FORMAT_"),

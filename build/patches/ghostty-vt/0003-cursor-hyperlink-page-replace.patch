@@ -17,7 +17,7 @@ Applied by scripts/build-ghostty-vt.sh. No header changes.
 
 --- a/src/terminal/Screen.zig
 +++ b/src/terminal/Screen.zig
-@@ -1572,7 +1572,8 @@
+@@ -1578,7 +1578,8 @@
      }
  
      // If we have a hyperlink then we need to release it from the old page.
@@ -27,7 +27,7 @@ Applied by scripts/build-ghostty-vt.sh. No header changes.
          const old_page: *Page = self.cursor.page_pin.node.page();
          old_page.hyperlink_set.release(old_page.memory, self.cursor.hyperlink_id);
          // Zero the ID, it is invalid now and style changes below may
-@@ -1584,6 +1585,10 @@
+@@ -1590,6 +1591,10 @@
      // Update our pin to the new page
      self.cursor.page_pin.* = new;
  
@@ -38,7 +38,7 @@ Applied by scripts/build-ghostty-vt.sh. No header changes.
      // On the new page, we need to migrate our style
      if (old_style_) |old_style| {
          self.cursor.style = old_style;
-@@ -1600,10 +1605,14 @@
+@@ -1606,10 +1611,14 @@
  
      // On the new page, we need to migrate our hyperlink
      if (self.cursor.hyperlink) |link| {
@@ -56,7 +56,7 @@ Applied by scripts/build-ghostty-vt.sh. No header changes.
  
          // Re-add
          self.startHyperlink(link.uri, switch (link.id) {
-@@ -5041,6 +5050,83 @@
+@@ -5114,6 +5123,83 @@
      new_page.assertIntegrity();
  }
  

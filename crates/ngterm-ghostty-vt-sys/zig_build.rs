@@ -109,8 +109,9 @@ impl Stamp {
 /// The library's pin as two builds compare it to tell whether their libghostty-vt is the same code (the session
 /// server's update handoff passes a terminal as the binary snapshot only between equal pins, `snapshot.h` promising
 /// no compatibility across revisions): `LIBGHOSTTY_VT_REV` from `pins_env` (`build/pins.env`), then the FNV-1a 64 of
-/// the stamp's `patch=` lines (each patch's name and sha256, in order), as 16 lower-case hex digits. The library's own
-/// version string names no revision (`version-string=1.3.2-dev`), so it cannot tell two pins apart.
+/// the stamp's `patch=` lines (each patch's name and sha256, in order), as 16 lower-case hex digits. No version string
+/// names a revision (the stamp's `version-string`, Ghostty's app version from `build.zig.zon` such as `1.4.0`, nor
+/// the library's own `0.1.0-dev` in `build.zig`), so neither can tell two pins apart.
 ///
 /// # Errors
 ///
@@ -398,14 +399,16 @@ pub struct Build {
     pub link_name: &'static str,
     /// The `-Dtarget` it builds for.
     pub zig_target: String,
-    /// The environment it sets: `ANDROID_NDK_HOME` for an Android build whose NDK is known (Ghostty's build reads it
-    /// for bionic's headers and libc).
+    /// The environment it sets: `ZIG_GLOBAL_CACHE_DIR`, the stamp's global cache (Zig 0.17 dropped the
+    /// `--global-cache-dir` switch), and `ANDROID_NDK_HOME` for an Android build whose NDK is known (Ghostty's build
+    /// reads it for bionic's headers and libc).
     pub env: Vec<(OsString, OsString)>,
 }
 
 /// The build of `inputs`: `zig build -Demit-lib-vt` over the prefix's tree, installing into and caching under
 /// `OUT_DIR` (so builds for different targets or profiles never share an install), with the global cache the stamp
-/// names. `ReleaseFast`: Debug's terminal integrity checks make sustained PTY output unusably slow.
+/// names. `-Doptimize=fast` (Zig 0.17's name for `ReleaseFast`): Debug's terminal integrity checks make sustained PTY
+/// output unusably slow.
 ///
 /// # Errors
 ///
@@ -420,13 +423,12 @@ pub fn plan(inputs: &Inputs<'_>) -> Result<Build, String> {
     let install = inputs.out_dir.join("zig-out");
     let mut args: Vec<OsString> = vec!["build".into(), "--prefix".into(), install.clone().into()];
     args.extend(["--cache-dir".into(), inputs.out_dir.join("zig-cache").into()]);
-    args.extend(["--global-cache-dir".into(), inputs.stamp.global_cache.clone().into()]);
     args.extend(
         [
             "-Demit-lib-vt=true".to_owned(),
             // Rust links the archive directly; an XCFramework would require full Xcode.
             "-Demit-xcframework=false".to_owned(),
-            "-Doptimize=ReleaseFast".to_owned(),
+            "-Doptimize=fast".to_owned(),
             "-Dsimd=true".to_owned(),
             "-Dcpu=baseline".to_owned(),
             format!("-Dtarget={target}"),
@@ -455,12 +457,17 @@ pub fn plan(inputs: &Inputs<'_>) -> Result<Build, String> {
         archive,
         link_dir,
         link_name: if msvc { "ghostty-vt-static" } else { "ghostty-vt" },
-        env: inputs
-            .android_ndk
-            .filter(|_| inputs.target.ends_with("-android"))
-            .map(|ndk| ("ANDROID_NDK_HOME".into(), ndk.as_os_str().to_owned()))
-            .into_iter()
-            .collect(),
+        env: std::iter::once((
+            OsString::from("ZIG_GLOBAL_CACHE_DIR"),
+            inputs.stamp.global_cache.as_os_str().to_owned(),
+        ))
+        .chain(
+            inputs
+                .android_ndk
+                .filter(|_| inputs.target.ends_with("-android"))
+                .map(|ndk| ("ANDROID_NDK_HOME".into(), ndk.as_os_str().to_owned())),
+        )
+        .collect(),
         zig_target: target,
     })
 }

@@ -14,17 +14,28 @@ remove-when condition with its verification. A gap Rust can fill is filled in Ru
 Remove a patch only when the pinned source has the behavior and the patch's verification still passes without it. A
 pin bump rebases every patch onto the new revision (with no fuzz) and re-runs every verification below.
 
-The verifications use the prepared tree: `tree="$(scripts/build-ghostty-vt.sh)/src"`, and the pinned zig
-(`zig=` in `$tree/../share/ngterm/ghostty-vt-STAMP`). Ghostty's own tests run there with a scratch cache, so the tree
-stays as the build script reads it:
+The verifications use the prepared tree, the pinned zig and the vendored Zig global cache its stamp names (Zig 0.17
+takes that cache from the environment only, and without it a build fetches into the user's own):
+
+```sh
+tree="$(scripts/build-ghostty-vt.sh)/src"
+zig="$(sed -n 's/^zig=//p' "$tree/../share/ngterm/ghostty-vt-STAMP")"
+export ZIG_GLOBAL_CACHE_DIR="$(sed -n 's/^zig-global-cache=//p' "$tree/../share/ngterm/ghostty-vt-STAMP")"
+```
+
+Ghostty's own tests run there with a scratch cache, so the tree stays as the build script reads it:
 `(cd "$tree" && "$zig" build test-lib-vt --cache-dir "$(mktemp -d)" -Dtest-filter='<name>')`. On Linux add the
-build's glibc target, `-Dtarget=x86_64-linux-gnu.2.39` (or `aarch64-…`): the native target links the distro's
-`crt1.o`, whose `.sframe` relocations (`R_X86_64_PC64`, gcc 16) Zig 0.16's linker refuses. The test filters below
-were run that way on the pin (`cursorAbsolute`: 38 of 38 pass, herdr's two among them).
+build's glibc target, `-Dtarget=x86_64-linux-gnu.2.39` (or `aarch64-…`), as the library build does. Zig 0.16's
+linker refused the distro's `crt1.o` (its `.sframe` relocations, `R_X86_64_PC64`, gcc 16) on the native target; Zig
+0.17's links it (a native `-Dtest-filter='placement_get'` run passed against gcc 16.2's `crt1.o` at this pin), but the glibc
+target stays, as the library's floor. The test filters below were run that way on the pin (`placement_get`: 42 of
+42 pass; `cursorAbsolute`: 38 of 38, herdr's two among them).
 
 ## 0001 Kitty placement-id namespaces and relative placements' parent links
 
-status: active
+status: active, interim: retired once the wrapper and renderer draw Kitty placements from v1.4.0's render-state image
+API (#14780, #14789), which resolves placeholders and relative chains inside the library (the Ghostty sync plan's
+next task)
 
 patch: `build/patches/ghostty-vt/0001-kitty-placement-namespace-and-parent.patch`
 
@@ -35,7 +46,9 @@ upstream discussion: not opened
 
 upstream pr: not opened
 
-base: `LIBGHOSTTY_VT_REV` `81598385d608dda4946093d6d6a234d204a2f225`
+base: `LIBGHOSTTY_VT_REV` `83fb95624b0439ee660c2679b43b38c8b63769cd` (v1.4.0); rebased by hand there: the header was
+reworked around an unchanged `GhosttyKittyGraphicsPlacementData` (1..12), so the enum hunk sits after its `Z` member
+and the test hunk at the file's new end
 
 files:
 
@@ -43,13 +56,14 @@ files:
 - `src/terminal/c/kitty_graphics.zig`
 - `src/terminal/c/types.zig`
 
-reason: The C API reports a placement's id without its namespace and a relative placement (`P=`/`Q=`) without its
-parent, so an embedder cannot resolve a placeholder's target or a chain rooted at a virtual placement the way
+reason: The storage placement iterator reports a placement's id without its namespace and a relative placement
+(`P=`/`Q=`) without its parent, so an embedder cannot resolve a placeholder's target or a chain rooted at a virtual placement the way
 Ghostty's renderer does (`placeholderTarget`, `pending_relative`). The patch reads out what storage holds, additively,
 with no logic of its own; `ngterm-term` and `ngterm-gpui` resolve chains, targets and positions in Rust.
 
-remove when: the pinned C API reports the placement key's namespace and a relative placement's parent key and offsets,
-and the wrapper reads them from there.
+remove when: the wrapper and renderer draw Kitty placements from the render-state image API
+(`ghostty_render_state_image_iterator_*`), which reports placements already resolved, or the pinned C API reports the
+placement key's namespace and a relative placement's parent key and offsets and the wrapper reads them from there.
 
 verification:
 
@@ -61,55 +75,54 @@ scripts/gen-ghostty-vt-bindings.sh --check
 
 ## 0002 hosted Wuffs builds
 
-status: active
+status: active (the allocator-stub half only)
 
 patch: `build/patches/ghostty-vt/0002-hosted-wuffs-builds.patch`
 
 origin: herdr's `vendor/patches/libghostty-vt/0004-fix-hosted-wuffs-builds.patch` (`HERDR_REV` 143bf5f,
-Apache-2.0), modified: rebased onto the pin, whose `pkg/translate-c` wrapper takes `libc_file` as a union
-(`.direct` or `.detect_darwin`), so the option forwards the `--libc` file as `.direct` and stays `.detect_darwin`
-without one
+Apache-2.0), modified: rebased onto the pin, its guard spelled `builtin.target.os.tag` (Zig 0.17, Ghostty #14519),
+and its `pkg/wuffs/build.zig` half no longer carried (below)
 
-herdr issue: none; it keeps Windows cross-compilation and non-SIMD hosted builds working
+herdr issue: none; it keeps non-SIMD hosted builds working
 
 upstream discussion: not opened
 
 upstream pr: not opened
 
-base: `LIBGHOSTTY_VT_REV` `81598385d608dda4946093d6d6a234d204a2f225` (herdr's: `44f2a44d`); ghostty main at
-`e3ebb1d1` (2026-10-16) is still unpatched
+base: `LIBGHOSTTY_VT_REV` `83fb95624b0439ee660c2679b43b38c8b63769cd` (v1.4.0; herdr's: `44f2a44d`), still unpatched
 
 files:
 
-- `pkg/wuffs/build.zig`
 - `pkg/wuffs/src/main.zig`
 
-reason: Wuffs needs MSVC libc headers when it targets Windows. Zig's `--libc` file reaches the C compiles, but the
-translate-c step needs its own explicit option, so a build for `windows-msvc` with an SDK named by `--libc` fails
-without it (Task 10's Windows build passes one when the host has no detectable SDK). Separately, the no-libc Wuffs
-module exports hidden weak `calloc`/`free` stubs; on a hosted target built with SIMD off (libc then unlinked), the
-stubs in the static archive override the embedding executable's libc allocator, and every zeroed allocation fails.
-The stubs are now exported for freestanding targets only. Native builds without a `--libc` file and the SIMD builds
-ngterm makes are unchanged.
+reason: The no-libc Wuffs module exports hidden weak `calloc`/`free` stubs; on a hosted target built with SIMD off
+(libc then unlinked), the stubs in the static archive override the embedding executable's libc allocator, and every
+zeroed allocation fails. The stubs are now exported for freestanding targets only. The SIMD builds ngterm makes are
+unchanged.
 
 The build `ngterm-ghostty-vt-sys` makes on Linux cannot observe this patch: it has SIMD on, which links libc
-(`src/build/GhosttyZig.zig`), so the unpatched source exports no stubs either, and it passes no `--libc` file. Neither
-the wrapper's tests nor an `nm` of that archive fail without the patch. Its checks build what it changes: a
-`windows-msvc` build that names its SDK with a `--libc` file (the translator half), and a hosted build of the prepared
-tree with SIMD off (the stubs half). The second was run on the pin: the patched tree's archive defines neither
-symbol, and with the `main.zig` hunk reverted it defines both as weak (`W calloc`, `W free`).
+(`src/build/GhosttyZig.zig`), so the unpatched source exports no stubs either. Neither the wrapper's tests nor an `nm`
+of that archive fail without the patch. Its check builds what it changes: a hosted build of the prepared tree with
+SIMD off. Run at this pin, the patched tree's archive defines neither symbol (it only references them); at the
+previous pin, with the hunk reverted, it defined both as weak (`W calloc`, `W free`).
 
-remove when: the pinned source forwards the build's libc file to the Wuffs translator and exports no allocator stubs on
-hosted targets, and the checks below pass without this patch.
+not carried: herdr's other half, `pkg/wuffs/build.zig` forwarding the build's `--libc` file to Wuffs' translate-c step
+(a `windows-msvc` build that names its SDK with `--libc` needs it), is a recorded scope reduction at this pin, not an
+upstream fix: Zig 0.17 runs `build.zig` in a configurer process that never sees `--libc` (`std.Build` has no
+`libc_file`; the maker hands it to compile steps only at make time), so the hunk has no form, and ngterm never passes
+a `--libc` file (its builds find the SDK themselves). Should an explicit-SDK build be needed, restore it as an
+explicit `-D` option threaded to both Wuffs dependency sites (`src/build/GhosttyZig.zig`, `src/build/SharedDeps.zig`)
+and given beside `--libc`; reading `ZIG_LIBC` instead would be a different input, not this forwarding.
+
+remove when: the pinned source exports no allocator stubs on hosted targets, and the check below passes without this
+patch.
 
 verification:
 
 ```sh
-# the translator half: a windows-msvc build with --libc naming the MSVC SDK (Task 10's Windows build, where it
-# passes one) succeeds
-# the stubs half: a hosted build with SIMD off defines no calloc or free (only undefined references)
+# a hosted build with SIMD off defines no calloc or free (only undefined references)
 out="$(mktemp -d)" version="$(sed -n 's/^version-string=//p' "$tree/../share/ngterm/ghostty-vt-STAMP")"
-(cd "$tree" && "$zig" build -Demit-lib-vt=true -Doptimize=ReleaseFast -Dsimd=false -Dcpu=baseline \
+(cd "$tree" && "$zig" build -Demit-lib-vt=true -Doptimize=fast -Dsimd=false -Dcpu=baseline \
   -Dtarget=x86_64-linux-gnu.2.39 -Dversion-string="$version" --prefix "$out/prefix" --cache-dir "$out/cache")
 nm "$out/prefix/lib/libghostty-vt.a" | grep -E ' [TtWwVv] (calloc|free)$'   # prints nothing
 ```
@@ -132,8 +145,9 @@ upstream discussion: not opened
 
 upstream pr: not opened
 
-base: `LIBGHOSTTY_VT_REV` `81598385d608dda4946093d6d6a234d204a2f225` (herdr's: `44f2a44d`); ghostty main at
-`e3ebb1d1` (2026-10-16) is still unpatched (`cursorChangePin`)
+base: `LIBGHOSTTY_VT_REV` `83fb95624b0439ee660c2679b43b38c8b63769cd` (v1.4.0; herdr's: `44f2a44d`), still unpatched
+(`cursorChangePin`). v1.4.0's #14857 keeps the cursor's style and link across a `scrollClear` prune, a different path:
+it does not reach the page replacement or split inside `cursorChangePin` this patch fixes.
 
 files:
 
@@ -160,14 +174,15 @@ cargo test -p ngterm-ghostty-vt --test patches hyperlink   # SIGSEGV without the
   -Dtest-filter='cursorAbsolute keeps the hyperlink when style migration splits the page')
 ```
 
-## 0004 the formatter writes skipped cells unstyled
+## 0004 the HTML formatter writes skipped cells unstyled
 
-status: active
+status: active (HTML only)
 
 patch: `build/patches/ghostty-vt/0004-formatter-unstyled-blanks.patch`
 
 origin: upstream agterm v0.36.0's `scripts/zmx-patches/ghostty/0001-formatter-unstyled-blanks.patch` (MIT), the patch
-upstream applies to the Ghostty its zmx links; rebased onto the pin (line numbers; the code is upstream's).
+upstream applies to the Ghostty its zmx links; rebased onto the pin (line numbers) and narrowed to HTML output (its
+VT half is upstream now, below).
 
 agterm issue: none; parity with upstream's re-attach snapshot
 
@@ -175,22 +190,24 @@ upstream discussion: not opened
 
 upstream pr: not opened
 
-base: `LIBGHOSTTY_VT_REV` `81598385d608dda4946093d6d6a234d204a2f225`; ghostty main at `e3ebb1d1` (2026-10-16) is still
-unpatched
+base: `LIBGHOSTTY_VT_REV` `83fb95624b0439ee660c2679b43b38c8b63769cd` (v1.4.0): VT upstreamed in #14725, HTML still
+needs it
 
 files:
 
 - `src/terminal/formatter.zig`
 
-reason: The formatter wrote cells a program skipped with a cursor move as spaces under the previous cell's style, so in
-a re-attach's snapshot a gap after a colored run came back painted. A cell with no text now closes the open style
-before it is buffered as a blank; cells the program wrote, spaces included, keep their style, and plain output is
-unchanged. No formatter option controls this at the pin, and the session server's snapshot is the formatter's VT
-output, so Rust cannot fix it from outside. Every styled formatter output takes it, ngterm's own `copy_to_clipboard`
-and `write_*_file` in VT or HTML too: their gap now reads as the screen shows it.
+reason: The formatter wrote cells a program skipped with a cursor move as spaces under the previous cell's style, so a
+gap after a colored run came back painted. Since #14725 the pinned VT formatter steps over such gaps with CUF (they
+replay unpainted) and restores background-only cells with ECH, so the session server's snapshot needs nothing here
+and a style close before those cells would undo the ECH restore: the patch leaves VT output alone. The HTML formatter
+still buffers blanks under the open style (`formatter.zig`, the blank-cell branch), and no option controls it, so in
+HTML a cell with no text closes the open style before it is buffered as a blank; cells the program wrote, spaces
+included, keep their style, and plain output is unchanged. ngterm's own `copy_to_clipboard` and `write_*_file` in HTML
+take it: their gap reads as the screen shows it.
 
-remove when: the pinned formatter writes skipped cells unstyled (or an option asks for it and the snapshot sets it),
-and the checks below pass without this patch.
+remove when: the pinned HTML formatter writes skipped cells unstyled (or an option asks for it), and the checks below
+pass without this patch.
 
 verification:
 

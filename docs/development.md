@@ -322,8 +322,8 @@ and how this build does it where the OS matters:
 ## Prerequisites
 
 - Rust 1.98.1 with clippy and rustfmt, pinned by `rust-toolchain.toml` (`rustup toolchain install` reads it).
-- Zig 0.16.0 for libghostty-vt (`LIBGHOSTTY_VT_ZIG_VERSION` in `build/pins.env`). `scripts/build-ghostty-vt.sh`
-  takes `NGTERM_GHOSTTY_VT_ZIG`, a zig 0.16.0 on `PATH`, else it downloads the pinned ziglang.org archive
+- Zig 0.17.0 for libghostty-vt (`LIBGHOSTTY_VT_ZIG_VERSION` in `build/pins.env`). `scripts/build-ghostty-vt.sh`
+  takes `NGTERM_GHOSTTY_VT_ZIG`, a zig 0.17.0 on `PATH`, else it downloads the pinned ziglang.org archive
   of the host's OS and arch and checks its sha256. A Mac or a Windows machine needs a little more
   ([macOS and Windows](#macos-and-windows)).
 - pkg-config, and the development files GPUI links: Wayland, xkbcommon, xcb, fontconfig and freetype.
@@ -467,7 +467,7 @@ library stores as C API the app needs, the others change its logic for a fix or 
 from outside, each with its reason, upstream status, remove-when condition and verification. A pin bump rebases them
 all and re-runs every verification, and drops a patch only once the pinned source has its behavior.
 `LIBGHOSTTY_VT_*` is the one Ghostty pin (the source archive's sha256 and the theme package's included): it follows
-ghostty main, not upstream agterm's `GHOSTTY_REV`, whose vt API lacks what the app needs. libghostty-vt is linked
+the latest Ghostty release, not upstream agterm's `GHOSTTY_REV`, whose vt API lacks what the app needs. libghostty-vt is linked
 statically; staging takes the prefix's `share/` (the resources) only. `.cargo/config.toml` makes `scripts/pkg-config.sh`
 the pkg-config of every cargo build (it picks the WPE WebKit, below).
 `scripts/gen-ghostty-vt-bindings.sh` regenerates the bindings of `ngterm-ghostty-vt-sys` (with bindgen's layout

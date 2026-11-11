@@ -102,7 +102,7 @@ fn a_libghostty_vt_pin_bump_moves_the_prefix() {
     let base = vt_prefix(str::to_owned);
     for (name, value) in [
         ("LIBGHOSTTY_VT_REV", "0".repeat(40)),
-        ("LIBGHOSTTY_VT_ZIG_VERSION", "0.16.1".to_owned()),
+        ("LIBGHOSTTY_VT_ZIG_VERSION", "0.17.1".to_owned()),
         // the resources live in the vt prefix: a new theme package rebuilds it
         ("LIBGHOSTTY_VT_THEMES_SHA256", "0".repeat(64)),
     ] {

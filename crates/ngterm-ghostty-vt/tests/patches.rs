@@ -1,9 +1,11 @@
 //! The behavior each logic patch of `build/patches/ghostty-vt/` (its README lists them) changes, through the wrapper,
-//! so a pin bump that drops or breaks one fails here. 0002 is the exception: what it changes (a `--libc` file reaching
-//! Wuffs' translator, the allocator stubs of a hosted build with SIMD off) never occurs in the SIMD build without a
-//! `--libc` file this crate links, so no test here can see it; its README entry's verification builds what does.
+//! so a pin bump that drops or breaks one fails here. 0002 is the exception: what it changes (the allocator stubs of a
+//! hosted build with SIMD off) never occurs in the SIMD build this crate links, so no test here can see it; its README
+//! entry's verification builds what does.
 
-use ngterm_ghostty_vt::{Format, FormatExtras, FormatOptions, KittyFormat, Point, PointTag, Region, Terminal};
+use ngterm_ghostty_vt::{
+    Format, FormatExtras, FormatOptions, KittyFormat, Point, PointTag, Region, Style, StyleColor, Terminal,
+};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -66,16 +68,29 @@ fn vt(terminal: &mut Terminal) -> Result<String, Box<dyn std::error::Error>> {
     Ok(String::from_utf8(bytes)?)
 }
 
-/// 0004 (formatter unstyled blanks, upstream's zmx patch): cells a program skipped with a cursor move are written as
-/// unstyled spaces, not under the previous run's style, so a reattach's snapshot does not paint the gap; spaces the
-/// program wrote keep their style.
+/// Skipped cells come back unpainted from VT output: since #14725 the pinned formatter steps over them with CUF (0004's
+/// VT half was dropped for it), so the gap a program left after a red run replays as empty, unstyled cells, while the
+/// run and the text after the gap stay red; spaces the program wrote keep their style.
 #[test]
 fn skipped_cells_are_written_unstyled() -> TestResult {
     let mut terminal = Terminal::new(20, 2)?;
     terminal.vt_write(b"\x1b[41mAB\x1b[3CX\x1b[0m");
     let skipped = vt(&mut terminal)?;
-    assert!(skipped.contains("AB\x1b[0m   \x1b["), "{skipped:?}");
     assert!(!skipped.contains("AB   "), "{skipped:?}");
+    let mut replayed = Terminal::new(20, 2)?;
+    replayed.vt_write(skipped.as_bytes());
+    let row = replayed.active_row(0)?;
+    let red = StyleColor::Palette(1);
+    for x in [0, 1, 5] {
+        assert_eq!(row.cells[x].style.background, red, "cell {x}: {skipped:?}");
+    }
+    assert_eq!(
+        row.cells[..6].iter().map(|cell| cell.text.as_str()).collect::<Vec<_>>(),
+        ["A", "B", "", "", "", "X"]
+    );
+    for (x, cell) in row.cells.iter().enumerate().take(5).skip(2) {
+        assert_eq!(cell.style, Style::default(), "gap cell {x}: {skipped:?}");
+    }
 
     let mut terminal = Terminal::new(20, 2)?;
     terminal.vt_write(b"\x1b[41mAB   X\x1b[0m");

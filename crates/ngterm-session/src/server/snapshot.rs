@@ -38,8 +38,8 @@
 //! 6. the stream continuation: the unfinished escape sequence or UTF-8 character the session's parser stands in, so
 //!    the client's parser takes the next output where the session's does.
 //!
-//! Skipped cells come out as unstyled blanks (Ghostty patch `0004-formatter-unstyled-blanks`), as upstream's
-//! re-attach writes them. On the alternate screen the snapshot is that screen's, as zmx's: the primary screen the
+//! Skipped cells come back unstyled and empty, as upstream's re-attach writes them: the pinned formatter steps over
+//! them with CUF (Ghostty #14725, which replaced the VT half of patch `0004-formatter-unstyled-blanks`). On the alternate screen the snapshot is that screen's, as zmx's: the primary screen the
 //! program will return to is not carried.
 //!
 //! # Where to cut
@@ -291,6 +291,7 @@ pub fn chunks(data: &[u8]) -> impl Iterator<Item = &[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ngterm_ghostty_vt::{Style, StyleColor};
 
     const COLS: u16 = 40;
     const ROWS: u16 = 6;
@@ -541,9 +542,18 @@ mod tests {
     fn blank_runs_come_back_unstyled() {
         let mut session = tracked();
         session.vt_write(b"\x1b[41mAB\x1b[3CX\x1b[0m");
-        let text = String::from_utf8_lossy(&snapshot(&mut session)).into_owned();
-        assert!(text.contains("AB\x1b[0m   \x1b["), "{text:?}");
+        let bytes = snapshot(&mut session);
+        let text = String::from_utf8_lossy(&bytes).into_owned();
         assert!(!text.contains("AB   "), "{text:?}");
+        let row = client(&bytes).active_row(0).unwrap();
+        let red = StyleColor::Palette(1);
+        for x in [0, 1, 5] {
+            assert_eq!(row.cells[x].style.background, red, "cell {x}: {text:?}");
+        }
+        for (x, cell) in row.cells.iter().enumerate().take(5).skip(2) {
+            assert!(cell.text.is_empty(), "gap cell {x}: {text:?}");
+            assert_eq!(cell.style, Style::default(), "gap cell {x}: {text:?}");
+        }
     }
 
     #[test]

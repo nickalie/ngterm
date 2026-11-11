@@ -397,14 +397,34 @@ impl Terminal {
     /// Feed only the shortest prefix of `bytes` that brings the parser to ground (no sequence or UTF-8 character
     /// in progress), the point where out-of-band VT sequences can go in safely; the bytes consumed, or `None` when all
     /// of them were and the parser is still not at ground. Already at ground, nothing is consumed (`Some(0)`).
+    ///
+    /// `ghostty_terminal_vt_write_until` with only `GHOSTTY_TERMINAL_BOUNDARY_GROUND` asked for (Ghostty's
+    /// `c/terminal.zig` `vt_write_until`): `GHOSTTY_SUCCESS` is a ground stop, `GHOSTTY_NO_VALUE` all input consumed
+    /// without one. Its third result, `GHOSTTY_INVALID_VALUE`, consumes nothing and is not exhaustion; these arguments
+    /// never draw it, but were it to come, the bytes go through [`Terminal::vt_write`] so none is lost and `None` holds.
     pub fn vt_write_until_ground(&mut self, bytes: &[u8]) -> Option<usize> {
-        let mut consumed = 0;
+        // SAFETY: an all-zero `GhosttyTerminalWriteStop` is a valid value (integers and C enums), sized right below.
+        let mut stop: ffi::GhosttyTerminalWriteStop = unsafe { std::mem::zeroed() };
+        stop.size = std::mem::size_of::<ffi::GhosttyTerminalWriteStop>();
         // SAFETY: `self.raw` is live and `&mut self` serializes the call; the pointer and length describe the borrowed
-        // slice, and `consumed` is a valid out-pointer.
+        // slice, the boundary set is one defined flag, and `stop` is a size-initialized out-struct.
         let result = unsafe {
-            ffi::ghostty_terminal_vt_write_until_ground(self.raw.ptr(), bytes.as_ptr(), bytes.len(), &raw mut consumed)
+            ffi::ghostty_terminal_vt_write_until(
+                self.raw.ptr(),
+                bytes.as_ptr(),
+                bytes.len(),
+                ffi::GHOSTTY_TERMINAL_BOUNDARY_GROUND.cast_unsigned(),
+                &raw mut stop,
+            )
         };
-        (result == ffi::GHOSTTY_SUCCESS).then_some(consumed)
+        match result {
+            ffi::GHOSTTY_SUCCESS => Some(stop.consumed),
+            ffi::GHOSTTY_NO_VALUE => None,
+            _ => {
+                self.vt_write(bytes);
+                None
+            }
+        }
     }
 
     /// Whether the parser is at ground (see [`Terminal::vt_write_until_ground`]).
