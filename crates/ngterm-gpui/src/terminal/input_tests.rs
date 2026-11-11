@@ -641,6 +641,9 @@ fn a_composition_shows_at_the_cursor_and_its_commit_is_typed(cx: &mut TestAppCon
             )
         })
     });
+    #[cfg(target_os = "linux")]
+    assert_eq!(bounds.map(|bounds| bounds.size), Some(size(px(1.), px(21.))));
+    #[cfg(any(target_os = "macos", windows))]
     assert_eq!(bounds.map(|bounds| bounds.size), Some(size(px(10.), px(21.))));
     f.cx.update(|window, cx| view.update(cx, |view, cx| view.replace_text_in_range(None, "日本", window, cx)));
     f.wait_painted("日本");
@@ -657,6 +660,45 @@ fn a_composition_shows_at_the_cursor_and_its_commit_is_typed(cx: &mut TestAppCon
     f.wait_painted("z");
     let painted = f.painted();
     assert!(painted.contains("日本z"), "{painted}");
+}
+
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn candidate_bounds_follow_preedit_changes_and_focus_reentry(cx: &mut TestAppContext) {
+    let script = "stty -echo -icanon; printf 'ready'; dd bs=1 count=1 >/dev/null 2>&1; \
+                  printf '\\033[3;8Hmoved'; exec cat";
+    let mut f = fixture(cx, script, config(""));
+    f.focus();
+    let view = f.view.clone();
+    let element = gpui_kit::Bounds::new(point(px(100.25), px(200.25)), size(px(640.), px(480.)));
+    let candidate = |f: &mut Fixture<'_>, text: &str| {
+        f.cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.replace_and_mark_text_in_range(None, text, None, window, cx);
+                view.bounds_for_range(0..text.encode_utf16().count(), element, window, cx)
+                    .unwrap()
+            })
+        })
+    };
+    let initial = candidate(&mut f, "に");
+    assert_eq!(candidate(&mut f, "にほん"), initial);
+    f.cx.update(Window::blur);
+    f.pane().write(b"x").unwrap();
+    f.wait_painted("moved");
+    f.focus();
+    let moved = candidate(&mut f, "日本");
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        moved,
+        gpui_kit::Bounds::new(point(px(227.), px(244.)), size(px(1.), px(22.)))
+    );
+    #[cfg(any(target_os = "macos", windows))]
+    assert_eq!(
+        moved,
+        gpui_kit::Bounds::new(point(px(222.25), px(244.25)), size(px(10.), px(21.)))
+    );
+    assert_ne!(moved, initial);
+    assert_eq!(candidate(&mut f, "日本語"), moved);
 }
 
 #[gpui_kit::test]
@@ -1585,6 +1627,58 @@ impl Render for Pair {
             .child(div().w(px(300.)).h(px(200.)).child(self.left.clone()))
             .child(div().w(px(300.)).h(px(200.)).child(self.right.clone()))
     }
+}
+
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn candidate_positions_reach_platform_on_pane_focus_and_output(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    let first = new_terminal(cx, "first", "printf 'ready'; exec cat", dir.path(), config(""));
+    let second = new_terminal(
+        cx,
+        "second",
+        "stty -echo -icanon; printf 'ready'; dd bs=1 count=1 >/dev/null 2>&1; printf '\\033[3;8Hmoved'; exec cat",
+        dir.path(),
+        config(""),
+    );
+    let (pair, cx) = cx.add_window_view(|_, cx| Pair {
+        left: cx.new(|cx| TerminalView::new(&first, ViewRole::Owner, cx)),
+        right: cx.new(|cx| TerminalView::new(&second, ViewRole::Owner, cx)),
+    });
+    cx.simulate_scale_factor_change(1.0);
+    cx.simulate_resize(size(px(640.), px(480.)));
+    let (left, right) = pair.read_with(cx, |pair, _| (pair.left.clone(), pair.right.clone()));
+    wait_view(&left, "ready", cx);
+    wait_view(&right, "ready", cx);
+    let focus = |view: &Entity<TerminalView>, cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            window.activate_window();
+            window.focus(&view.read(cx).focus.clone(), cx);
+        });
+        cx.run_until_parked();
+        cx.update(Window::simulate_next_frame);
+    };
+    #[cfg(target_os = "linux")]
+    let rectangle = |x: f32, y: f32| gpui_kit::Bounds::new(point(px(x + 5.), px(y)), size(px(1.), px(21.)));
+    #[cfg(any(target_os = "macos", windows))]
+    let rectangle = |x: f32, y: f32| gpui_kit::Bounds::new(point(px(x), px(y)), size(px(10.), px(21.)));
+    focus(&left, cx);
+    assert_eq!(cx.ime_positions().last(), Some(&rectangle(52., 2.)));
+    let before_switch = cx.ime_positions().len();
+    focus(&right, cx);
+    assert!(
+        cx.ime_positions().len() > before_switch,
+        "pane switch must push to the platform"
+    );
+    assert_eq!(cx.ime_positions().last(), Some(&rectangle(352., 2.)));
+    // Output can move the cursor before any preedit Done or IME enable event.
+    second.read_with(cx, |terminal, _| terminal.shared.pane().unwrap().write(b"x").unwrap());
+    wait_view(&right, "moved", cx);
+    cx.update(Window::simulate_next_frame);
+    assert_eq!(cx.ime_positions().last(), Some(&rectangle(422., 44.)));
+    focus(&left, cx);
+    assert_eq!(cx.ime_positions().last(), Some(&rectangle(52., 2.)));
 }
 
 #[gpui_kit::test]

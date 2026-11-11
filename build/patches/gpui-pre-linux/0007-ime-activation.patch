@@ -1,0 +1,762 @@
+Linux IME candidate geometry and per-request OpenURI activation tokens.
+
+Round candidate positions down and cell bottoms up, keeping a nonempty rectangle at
+fractional surface scales (Ghostty 83fb956, GTK surface.zig updateImePosition).
+Count every text-input object commit and compare Done against that count, refreshing
+the first preedit while deferring stale batches; retain the duplicate-coordinate guard. Track each
+outstanding Wayland activation by its token object, so two opens cannot replace one
+another. Inject launcher/portal sinks to verify URI/token forwarding without starting
+external apps, and remove stale inherited tokens when a request has no token.
+
+diff -ruN a/src/linux/platform.rs b/src/linux/platform.rs
+--- a/src/linux/platform.rs
++++ b/src/linux/platform.rs
+@@ -1130,25 +1130,65 @@
+     activation_token: Option<&str>,
+     environment: &GraphicalEnvironment,
+ ) -> bool {
+-    for mut command in open::commands(target) {
++    run_open_commands_with(
++        open::commands(target),
++        activation_token,
++        environment,
++        run_open_command,
++    )
++    .await
++}
++
++#[cfg(any(feature = "wayland", feature = "x11"))]
++async fn run_open_commands_with(
++    commands: impl IntoIterator<Item = std::process::Command>,
++    activation_token: Option<&str>,
++    environment: &GraphicalEnvironment,
++    mut run: impl AsyncFnMut(std::process::Command) -> bool,
++) -> bool {
++    for mut command in commands {
+         environment.apply_to(&mut command);
++        // Never inherit a token for a different user interaction.
++        command.env_remove("XDG_ACTIVATION_TOKEN");
+         if let Some(token) = activation_token {
+             command.env("XDG_ACTIVATION_TOKEN", token);
+         }
+-        let program = format!("{:?}", command.get_program());
+-        match smol::process::Command::from(command).spawn() {
+-            Ok(mut child) => match child.status().await {
+-                Ok(status) if status.success() => return true,
+-                Ok(status) => log::error!("Command {} exited with status: {}", program, status),
+-                Err(error) => log::error!("Failed to get status from {}: {}", program, error),
+-            },
+-            Err(error) => log::error!("Failed to open with {}: {}", program, error),
++        if run(command).await {
++            return true;
+         }
+     }
+     false
+ }
+ 
+ #[cfg(any(feature = "wayland", feature = "x11"))]
++async fn run_open_command(command: std::process::Command) -> bool {
++    let program = format!("{:?}", command.get_program());
++    match smol::process::Command::from(command).spawn() {
++        Ok(mut child) => match child.status().await {
++            Ok(status) if status.success() => return true,
++            Ok(status) => log::error!("Command {} exited with status: {}", program, status),
++            Err(error) => log::error!("Failed to get status from {}: {}", program, error),
++        },
++        Err(error) => log::error!("Failed to open with {}: {}", program, error),
++    }
++    false
++}
++
++// Keep the URI and token together through both launch routes. Injected sinks exercise this
++// without starting a browser or connecting to the user's portal.
++#[cfg(any(feature = "wayland", feature = "x11"))]
++async fn open_uri_with(
++    uri: &ashpd::Uri,
++    token: Option<&str>,
++    launcher: impl AsyncFnOnce(&ashpd::Uri, Option<&str>) -> bool,
++    portal: impl AsyncFnOnce(&ashpd::Uri, Option<&str>),
++) {
++    if !launcher(uri, token).await {
++        portal(uri, token).await;
++    }
++}
++
++#[cfg(any(feature = "wayland", feature = "x11"))]
+ pub(super) fn open_uri_internal(
+     executor: BackgroundExecutor,
+     uri: &str,
+@@ -1158,26 +1198,24 @@
+     if let Some(uri) = ashpd::Uri::parse(uri).log_err() {
+         executor
+             .spawn(async move {
+-                let opened = run_open_commands(
+-                    uri.as_str().as_ref(),
++                open_uri_with(
++                    &uri,
+                     activation_token.as_deref(),
+-                    &environment,
+-                )
+-                .await;
+-                if !opened {
+-                    match ashpd::desktop::open_uri::OpenFileRequest::default()
+-                        .activation_token(activation_token.map(ashpd::ActivationToken::from))
+-                        .send_uri(&uri)
++                    async |uri, token| {
++                        run_open_commands(uri.as_str().as_ref(), token, &environment).await
++                    },
++                    async |uri, token| match ashpd::desktop::open_uri::OpenFileRequest::default()
++                        .activation_token(token.map(ashpd::ActivationToken::from))
++                        .send_uri(uri)
+                         .await
+                         .and_then(|e| e.response())
+                     {
+                         Ok(()) => {}
+                         Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)) => {}
+-                        Err(e) => {
+-                            log::error!("Failed to open with dbus: {}", e);
+-                        }
+-                    }
+-                }
++                        Err(e) => log::error!("Failed to open with dbus: {}", e),
++                    },
++                )
++                .await;
+             })
+             .detach();
+     }
+@@ -1739,6 +1777,58 @@
+     }
+ 
+     #[cfg(any(feature = "wayland", feature = "x11"))]
++    #[test]
++    fn uri_activation_token_reaches_launchers_and_portal_fallback() {
++        use std::ffi::OsStr;
++        use std::process::Command;
++        let uri = ashpd::Uri::parse("https://example.com/a?b=1").unwrap();
++        let environment = GraphicalEnvironment::default();
++        for token in [Some("token-for-this-click"), None] {
++            for succeeds in [true, false] {
++                let launched = RefCell::new(Vec::new());
++                let portals = RefCell::new(Vec::new());
++                smol::block_on(open_uri_with(
++                    &uri,
++                    token,
++                    async |uri, token| {
++                        let mut command = Command::new("injected-launcher");
++                        command.arg(uri.as_str());
++                        command.env("XDG_ACTIVATION_TOKEN", "stale-token");
++                        run_open_commands_with([command], token, &environment, async |command| {
++                            let actual_token = command
++                                .get_envs()
++                                .find(|(name, _)| *name == OsStr::new("XDG_ACTIVATION_TOKEN"))
++                                .and_then(|(_, value)| value)
++                                .map(|value| value.to_owned());
++                            launched.borrow_mut().push((
++                                command.get_args().next().unwrap().to_owned(),
++                                actual_token,
++                            ));
++                            succeeds
++                        })
++                        .await
++                    },
++                    async |uri, token| {
++                        portals
++                            .borrow_mut()
++                            .push((uri.to_string(), token.map(str::to_owned)));
++                    },
++                ));
++                assert_eq!(
++                    *launched.borrow(),
++                    [(uri.as_str().into(), token.map(Into::into))]
++                );
++                let expected = if succeeds {
++                    vec![]
++                } else {
++                    vec![(uri.to_string(), token.map(str::to_owned))]
++                };
++                assert_eq!(*portals.borrow(), expected);
++            }
++        }
++    }
++
++    #[cfg(any(feature = "wayland", feature = "x11"))]
+     mod idle_sleep_prevention {
+         use super::super::await_idle_sleep_prevention;
+         use anyhow::{Result, anyhow};
+diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
+--- a/src/linux/wayland/client.rs
++++ b/src/linux/wayland/client.rs
+@@ -1,6 +1,5 @@
+ use std::{
+     cell::{RefCell, RefMut},
+-    hash::Hash,
+     os::{
+         fd::{AsRawFd, BorrowedFd, FromRawFd as _, RawFd},
+         unix::net::UnixStream,
+@@ -131,10 +130,11 @@
+ impl From<Bounds<Pixels>> for ImeCursorRectangle {
+     fn from(bounds: Bounds<Pixels>) -> Self {
+         Self {
+-            x: bounds.origin.x.as_f32() as i32,
+-            y: bounds.origin.y.as_f32() as i32,
+-            width: bounds.size.width.as_f32() as i32,
+-            height: bounds.size.height.as_f32() as i32,
++            x: bounds.origin.x.as_f32().floor() as i32,
++            y: bounds.origin.y.as_f32().floor() as i32,
++            width: bounds.size.width.as_f32().ceil().max(1.0) as i32,
++            height: (bounds.bottom().as_f32().ceil() - bounds.origin.y.as_f32().floor()).max(1.0)
++                as i32,
+         }
+     }
+ }
+@@ -166,32 +166,59 @@
+     );
+ }
+ 
++#[derive(Default)]
++struct ImeState {
++    last_rectangle: Option<ImeCursorRectangle>,
++    // text-input-v3 Done acknowledges the number of commits on this object, not prior Done events.
++    commit_serial: u32,
++}
++
++impl ImeState {
++    fn commit(&mut self, text_input: &impl ImeCursorRectangleSink) {
++        text_input.commit_ime_state();
++        self.commit_serial = self.commit_serial.wrapping_add(1);
++    }
++}
++
+ fn update_ime_cursor_rectangle(
+     text_input: &impl ImeCursorRectangleSink,
+-    last_ime_cursor_rectangle: &mut Option<ImeCursorRectangle>,
++    ime_state: &mut ImeState,
+     bounds: Bounds<Pixels>,
+ ) {
+     let cursor_rectangle = ImeCursorRectangle::from(bounds);
+-    if *last_ime_cursor_rectangle == Some(cursor_rectangle) {
++    if ime_state.last_rectangle == Some(cursor_rectangle) {
+         return;
+     }
+ 
+-    *last_ime_cursor_rectangle = Some(cursor_rectangle);
++    ime_state.last_rectangle = Some(cursor_rectangle);
+     set_ime_cursor_rectangle(text_input, cursor_rectangle);
+-    text_input.commit_ime_state();
++    ime_state.commit(text_input);
++}
++
++// Enable must resend even an unchanged rectangle: the new input-method session has no state.
++fn enable_ime_cursor_rectangle(
++    text_input: &impl ImeCursorRectangleSink,
++    ime_state: &mut ImeState,
++    bounds: Option<Bounds<Pixels>>,
++) {
++    ime_state.last_rectangle = bounds.map(ImeCursorRectangle::from);
++    if let Some(rectangle) = ime_state.last_rectangle {
++        set_ime_cursor_rectangle(text_input, rectangle);
++    }
++    ime_state.commit(text_input);
+ }
+ 
+ fn set_ime_cursor_rectangle_after_done(
+     text_input: &impl ImeCursorRectangleSink,
+-    last_ime_cursor_rectangle: &mut Option<ImeCursorRectangle>,
++    ime_state: &mut ImeState,
+     bounds: Bounds<Pixels>,
+-    should_commit: bool,
++    done_serial: u32,
+ ) {
+-    if should_commit {
+-        update_ime_cursor_rectangle(text_input, last_ime_cursor_rectangle, bounds);
+-    } else {
+-        set_ime_cursor_rectangle(text_input, ImeCursorRectangle::from(bounds));
++    if done_serial == ime_state.commit_serial {
++        update_ime_cursor_rectangle(text_input, ime_state, bounds);
+     }
++    // A stale Done still applies its preedit, but must not change protocol state.
++    // The next matching Done or explicit coordinate update publishes the latest rectangle.
+ }
+ 
+ /// Pacing for retry ticks: a fixed 60Hz interval. Retries only occur for throttled or
+@@ -393,7 +420,7 @@
+     pre_edit_text: Option<String>,
+     ime_pre_edit: Option<String>,
+     composing: bool,
+-    last_ime_cursor_rectangle: Option<ImeCursorRectangle>,
++    ime_state: ImeState,
+     // Surface to Window mapping
+     windows: HashMap<ObjectId, WaylandWindowStatePtr>,
+     // Output to scale mapping
+@@ -433,7 +460,7 @@
+     data_offers: Vec<DataOffer<WlDataOffer>>,
+     primary_data_offer: Option<DataOffer<ZwpPrimarySelectionOfferV1>>,
+     cursor: Cursor,
+-    pending_activation: Option<PendingActivation>,
++    pending_activation: HashMap<ObjectId, PendingActivation>,
+     startup_activation_token: Option<String>,
+     /// The environment this connection was made in, without its activation token.
+     graphical_environment: GraphicalEnvironment,
+@@ -581,6 +608,25 @@
+     Window(ObjectId),
+ }
+ 
++// Allocate and register together: callers cannot accidentally key a target by its surface.
++fn request_activation(
++    activation: &xdg_activation_v1::XdgActivationV1,
++    qh: &QueueHandle<WaylandClientStatePtr>,
++    pending: &mut HashMap<ObjectId, PendingActivation>,
++    target: PendingActivation,
++) -> xdg_activation_token_v1::XdgActivationTokenV1 {
++    let token = activation.get_activation_token(qh, ());
++    pending.insert(token.id(), target);
++    token
++}
++
++fn complete_activation(
++    pending: &mut HashMap<ObjectId, PendingActivation>,
++    token: &xdg_activation_token_v1::XdgActivationTokenV1,
++) -> Option<PendingActivation> {
++    pending.remove(&token.id())
++}
++
+ impl WaylandClientState {
+     fn consume_startup_activation_token(&mut self, surface: &wl_surface::WlSurface) {
+         let Some(startup_activation_token) = self.startup_activation_token.take() else {
+@@ -724,34 +770,38 @@
+         true
+     }
+ 
+-    pub fn set_pending_activation(&self, window: ObjectId) {
+-        self.0.upgrade().unwrap().borrow_mut().pending_activation =
+-            Some(PendingActivation::Window(window));
++    pub fn request_window_activation(
++        &self,
++        activation: &xdg_activation_v1::XdgActivationV1,
++        window: ObjectId,
++    ) -> xdg_activation_token_v1::XdgActivationTokenV1 {
++        let client = self.get_client();
++        let mut state = client.borrow_mut();
++        let qh = state.globals.qh.clone();
++        request_activation(
++            activation,
++            &qh,
++            &mut state.pending_activation,
++            PendingActivation::Window(window),
++        )
+     }
+ 
+     pub fn enable_ime(&self) {
+         let client = self.get_client();
+         let mut state = client.borrow_mut();
+         state.ime_enabled = Some(true);
+-        state.last_ime_cursor_rectangle = None;
++        state.ime_state.last_rectangle = None;
+         let Some(text_input) = state.text_input.take() else {
+             return;
+         };
+ 
+         text_input.enable();
+         text_input.set_content_type(ContentHint::None, ContentPurpose::Normal);
+-        let mut cursor_rectangle = None;
+-        if let Some(window) = state.keyboard_focused_window.clone() {
+-            drop(state);
+-            if let Some(area) = window.get_ime_area() {
+-                let area = ImeCursorRectangle::from(area);
+-                set_ime_cursor_rectangle(&text_input, area);
+-                cursor_rectangle = Some(area);
+-            }
+-            state = client.borrow_mut();
+-        }
+-        text_input.commit();
+-        state.last_ime_cursor_rectangle = cursor_rectangle;
++        let window = state.keyboard_focused_window.clone();
++        drop(state);
++        let bounds = window.and_then(|window| window.get_ime_area());
++        state = client.borrow_mut();
++        enable_ime_cursor_rectangle(&text_input, &mut state.ime_state, bounds);
+         state.text_input = Some(text_input);
+     }
+ 
+@@ -760,9 +810,9 @@
+         let mut state = client.borrow_mut();
+         state.ime_enabled = Some(false);
+         state.composing = false;
+-        if let Some(text_input) = &state.text_input {
++        if let Some(text_input) = state.text_input.clone() {
+             text_input.disable();
+-            text_input.commit();
++            state.ime_state.commit(&text_input);
+         }
+     }
+ 
+@@ -780,7 +830,7 @@
+         let Some(text_input) = state.text_input.clone() else {
+             return;
+         };
+-        update_ime_cursor_rectangle(&text_input, &mut state.last_ime_cursor_rectangle, bounds);
++        update_ime_cursor_rectangle(&text_input, &mut state.ime_state, bounds);
+     }
+ 
+     /// Notes the effective layout and reports a change of it, or, with `keymap_changed`, of the keymap itself (an
+@@ -1112,7 +1162,7 @@
+             pre_edit_text: None,
+             ime_pre_edit: None,
+             composing: false,
+-            last_ime_cursor_rectangle: None,
++            ime_state: ImeState::default(),
+             outputs: HashMap::default(),
+             in_progress_outputs,
+             output_globals,
+@@ -1168,7 +1218,7 @@
+             data_offers: Vec::new(),
+             primary_data_offer: None,
+             cursor,
+-            pending_activation: None,
++            pending_activation: HashMap::default(),
+             startup_activation_token: activation_token,
+             graphical_environment: GraphicalEnvironment {
+                 activation_token: None,
+@@ -1440,8 +1490,13 @@
+             state.globals.activation.clone(),
+             state.mouse_focused_window.clone(),
+         ) {
+-            state.pending_activation = Some(PendingActivation::Uri(uri.to_string()));
+-            let token = activation.get_activation_token(&state.globals.qh, ());
++            let qh = state.globals.qh.clone();
++            let token = request_activation(
++                &activation,
++                &qh,
++                &mut state.pending_activation,
++                PendingActivation::Uri(uri.to_string()),
++            );
+             let serial = state.serial_tracker.get(SerialKind::MousePress);
+             token.set_serial(serial.as_raw(), &state.wl_seat);
+             token.set_surface(&window.surface());
+@@ -1458,8 +1513,13 @@
+             state.globals.activation.clone(),
+             state.mouse_focused_window.clone(),
+         ) {
+-            state.pending_activation = Some(PendingActivation::Path(path));
+-            let token = activation.get_activation_token(&state.globals.qh, ());
++            let qh = state.globals.qh.clone();
++            let token = request_activation(
++                &activation,
++                &qh,
++                &mut state.pending_activation,
++                PendingActivation::Path(path),
++            );
+             let serial = state.serial_tracker.get(SerialKind::MousePress);
+             token.set_serial(serial.as_raw(), &state.wl_seat);
+             token.set_surface(&window.surface());
+@@ -2036,10 +2096,11 @@
+         let client = this.get_client();
+         let mut state = client.borrow_mut();
+ 
++        let target = complete_activation(&mut state.pending_activation, token);
+         if let xdg_activation_token_v1::Event::Done { token } = event {
+             let executor = state.common.borrow().background_executor.clone();
+             let environment = state.graphical_environment.clone();
+-            match state.pending_activation.take() {
++            match target {
+                 Some(PendingActivation::Uri(uri)) => {
+                     open_uri_internal(executor, &uri, Some(token), environment)
+                 }
+@@ -2047,11 +2108,10 @@
+                     reveal_path_internal(executor, path, Some(token), environment)
+                 }
+                 Some(PendingActivation::Window(window)) => {
+-                    let Some(window) = get_window(&mut state, &window) else {
+-                        return;
+-                    };
+-                    let activation = state.globals.activation.as_ref().unwrap();
+-                    activation.activate(token, &window.surface());
++                    if let Some(window) = get_window(&mut state, &window) {
++                        let activation = state.globals.activation.as_ref().unwrap();
++                        activation.activate(token, &window.surface());
++                    }
+                 }
+                 None => log::error!("activation token received with no pending activation"),
+             }
+@@ -2085,6 +2145,7 @@
+                     state.composing = false;
+                 }
+ 
++                state.ime_state = ImeState::default();
+                 state.text_input = state
+                     .globals
+                     .text_input_manager
+@@ -2438,7 +2499,6 @@
+                 state.ime_pre_edit = text;
+             }
+             zwp_text_input_v3::Event::Done { serial } => {
+-                let last_serial = state.serial_tracker.get(SerialKind::InputMethod);
+                 state.serial_tracker.update(SerialKind::InputMethod, serial);
+                 let Some(window) = state.keyboard_focused_window.clone() else {
+                     return;
+@@ -2451,9 +2511,9 @@
+                         let mut state = client.borrow_mut();
+                         set_ime_cursor_rectangle_after_done(
+                             text_input,
+-                            &mut state.last_ime_cursor_rectangle,
++                            &mut state.ime_state,
+                             area,
+-                            last_serial.as_raw() == serial,
++                            serial,
+                         );
+                     }
+                 } else {
+@@ -3505,6 +3565,62 @@
+         assert_eq!(drag.window, Some("window B"));
+     }
+ 
++    #[test]
++    fn outstanding_link_activations_keep_their_own_uri_when_tokens_finish_out_of_order() {
++        // Allocate real client proxies without a compositor or a roundtrip. Both requests
++        // belong to the same activation global, but receive distinct token object IDs.
++        let (socket, _server) = UnixStream::pair().unwrap();
++        let connection = Connection::from_socket(socket).unwrap();
++        let queue = connection.new_event_queue::<WaylandClientStatePtr>();
++        let qh = queue.handle();
++        struct Registry;
++        impl Dispatch<wl_registry::WlRegistry, ()> for Registry {
++            fn event(
++                _: &mut Self,
++                _: &wl_registry::WlRegistry,
++                _: wl_registry::Event,
++                _: &(),
++                _: &Connection,
++                _: &QueueHandle<Self>,
++            ) {
++            }
++        }
++        let registry_queue = connection.new_event_queue::<Registry>();
++        let registry = connection
++            .display()
++            .get_registry(&registry_queue.handle(), ());
++        let activation = registry.bind::<xdg_activation_v1::XdgActivationV1, _, _>(1, 1, &qh, ());
++        let mut pending = HashMap::default();
++        let first = request_activation(
++            &activation,
++            &qh,
++            &mut pending,
++            PendingActivation::Uri("https://one.example/".into()),
++        );
++        let second = request_activation(
++            &activation,
++            &qh,
++            &mut pending,
++            PendingActivation::Uri("https://two.example/".into()),
++        );
++        assert_ne!(first.id(), second.id());
++        for (request, uri) in [
++            (&second, "https://two.example/"),
++            (&first, "https://one.example/"),
++        ] {
++            let Some(PendingActivation::Uri(actual)) = complete_activation(&mut pending, request)
++            else {
++                panic!("lost URI for token request {:?}", request.id());
++            };
++            assert_eq!(actual, uri);
++            assert!(
++                complete_activation(&mut pending, request).is_none(),
++                "a token completes only once"
++            );
++        }
++        assert!(pending.is_empty());
++    }
++
+     #[derive(Default)]
+     struct FakeImeCursorRectangleSink {
+         cursor_rectangles: RefCell<Vec<(i32, i32, i32, i32)>>,
+@@ -3559,37 +3675,92 @@
+     }
+ 
+     #[test]
++    fn cursor_rectangle_covers_fractional_cell_and_is_never_empty() {
++        let sink = FakeImeCursorRectangleSink::default();
++        let mut last = ImeState::default();
++        for (bounds, expected) in [
++            (ime_cursor_bounds(10.75), (10, 20, 1, 19)),
++            (
++                Bounds::new(point(px(10.75), px(20.25)), size(px(1.0), px(18.8))),
++                (10, 20, 1, 20),
++            ),
++            (
++                Bounds::new(point(px(-0.25), px(-0.25)), size(px(1.0), px(0.5))),
++                (-1, -1, 1, 2),
++            ),
++            (
++                Bounds::new(point(px(4.0), px(5.0)), size(px(1.0), px(0.0))),
++                (4, 5, 1, 1),
++            ),
++        ] {
++            update_ime_cursor_rectangle(&sink, &mut last, bounds);
++            assert_eq!(sink.cursor_rectangles.borrow().last(), Some(&expected));
++        }
++    }
++
++    #[test]
++    fn enabling_ime_refreshes_current_cursor_after_focus_reentry() {
++        let sink = FakeImeCursorRectangleSink::default();
++        let mut last = ImeState::default();
++        enable_ime_cursor_rectangle(&sink, &mut last, Some(ime_cursor_bounds(10.0)));
++        enable_ime_cursor_rectangle(&sink, &mut last, Some(ime_cursor_bounds(30.0)));
++        update_ime_cursor_rectangle(&sink, &mut last, ime_cursor_bounds(30.0));
++        assert_eq!(sink.commit_count.get(), 2);
++        assert_eq!(
++            *sink.cursor_rectangles.borrow(),
++            [(10, 20, 1, 19), (30, 20, 1, 19)]
++        );
++        enable_ime_cursor_rectangle(&sink, &mut last, None);
++        assert_eq!(last.last_rectangle, None);
++        assert_eq!(sink.commit_count.get(), 3);
++    }
++
++    #[test]
+     fn caches_cursor_rectangle_committed_after_done() {
+         let text_input = FakeImeCursorRectangleSink::default();
+-        let mut last_ime_cursor_rectangle = None;
++        let mut ime_state = ImeState::default();
+         let initial_bounds = ime_cursor_bounds(10.0);
+         let updated_bounds = ime_cursor_bounds(20.0);
+ 
+-        update_ime_cursor_rectangle(&text_input, &mut last_ime_cursor_rectangle, initial_bounds);
++        update_ime_cursor_rectangle(&text_input, &mut ime_state, initial_bounds);
+         set_ime_cursor_rectangle_after_done(
+             &text_input,
+-            &mut last_ime_cursor_rectangle,
++            &mut ime_state,
+             updated_bounds,
+-            true,
++            1,
+         );
+-        update_ime_cursor_rectangle(&text_input, &mut last_ime_cursor_rectangle, updated_bounds);
++        update_ime_cursor_rectangle(&text_input, &mut ime_state, updated_bounds);
+ 
+         assert_eq!(text_input.commit_count.get(), 2);
+         assert_eq!(text_input.cursor_rectangles.borrow().len(), 2);
+     }
+ 
+     #[test]
++    fn stale_done_defers_rectangle_without_advancing_client_state() {
++        let sink = FakeImeCursorRectangleSink::default();
++        let mut last = ImeState::default();
++        update_ime_cursor_rectangle(&sink, &mut last, ime_cursor_bounds(10.0));
++        set_ime_cursor_rectangle_after_done(&sink, &mut last, ime_cursor_bounds(20.0), 0);
++        assert_eq!(sink.commit_count.get(), 1);
++        assert_eq!(sink.cursor_rectangles.borrow().len(), 1);
++        update_ime_cursor_rectangle(&sink, &mut last, ime_cursor_bounds(20.0));
++        update_ime_cursor_rectangle(&sink, &mut last, ime_cursor_bounds(20.0));
++        assert_eq!(sink.commit_count.get(), 2);
++        assert_eq!(sink.cursor_rectangles.borrow().len(), 2);
++    }
++
++    #[test]
+     fn skips_unchanged_cursor_rectangle_after_done() {
+         let text_input = FakeImeCursorRectangleSink::default();
+-        let mut last_ime_cursor_rectangle = None;
++        let mut ime_state = ImeState::default();
+         let bounds = ime_cursor_bounds(10.0);
+ 
+-        update_ime_cursor_rectangle(&text_input, &mut last_ime_cursor_rectangle, bounds);
++        update_ime_cursor_rectangle(&text_input, &mut ime_state, bounds);
+         set_ime_cursor_rectangle_after_done(
+             &text_input,
+-            &mut last_ime_cursor_rectangle,
++            &mut ime_state,
+             bounds,
+-            true,
++            1,
+         );
+ 
+         assert_eq!(text_input.commit_count.get(), 1);
+@@ -3597,25 +3768,68 @@
+     }
+ 
+     #[test]
++    fn first_done_acknowledges_enable_and_commits_moved_preedit_rectangle() {
++        let sink = FakeImeCursorRectangleSink::default();
++        let mut ime = ImeState::default();
++        enable_ime_cursor_rectangle(&sink, &mut ime, Some(ime_cursor_bounds(10.0)));
++        assert_eq!(ime.commit_serial, 1);
++        // The first preedit Done acknowledges enable, even though no previous Done exists.
++        set_ime_cursor_rectangle_after_done(&sink, &mut ime, ime_cursor_bounds(20.0), 1);
++        assert_eq!(ime.commit_serial, 2);
++        assert_eq!(sink.commit_count.get(), 2);
++        assert_eq!(
++            *sink.cursor_rectangles.borrow(),
++            [(10, 20, 1, 19), (20, 20, 1, 19)]
++        );
++        // Another batch for the old client state must not commit or poison the cache.
++        set_ime_cursor_rectangle_after_done(&sink, &mut ime, ime_cursor_bounds(30.0), 1);
++        assert_eq!(ime.commit_serial, 2);
++        assert_eq!(sink.cursor_rectangles.borrow().len(), 2);
++        set_ime_cursor_rectangle_after_done(&sink, &mut ime, ime_cursor_bounds(30.0), 2);
++        set_ime_cursor_rectangle_after_done(&sink, &mut ime, ime_cursor_bounds(30.0), 3);
++        assert_eq!(ime.commit_serial, 3);
++        assert_eq!(sink.commit_count.get(), 3);
++        assert_eq!(sink.cursor_rectangles.borrow().last(), Some(&(30, 20, 1, 19)));
++    }
++
++    #[test]
++    fn ime_serial_counts_disable_and_reenable_on_the_same_object_and_wraps() {
++        let sink = FakeImeCursorRectangleSink::default();
++        let mut ime = ImeState::default();
++        enable_ime_cursor_rectangle(&sink, &mut ime, Some(ime_cursor_bounds(10.0)));
++        ime.commit(&sink); // disable uses the same object's commit counter
++        enable_ime_cursor_rectangle(&sink, &mut ime, Some(ime_cursor_bounds(10.0)));
++        set_ime_cursor_rectangle_after_done(&sink, &mut ime, ime_cursor_bounds(20.0), 3);
++        assert_eq!(ime.commit_serial, 4);
++        assert_eq!(sink.commit_count.get(), 4);
++        ime.commit_serial = u32::MAX - 1;
++        enable_ime_cursor_rectangle(&sink, &mut ime, Some(ime_cursor_bounds(10.0)));
++        set_ime_cursor_rectangle_after_done(&sink, &mut ime, ime_cursor_bounds(20.0), u32::MAX);
++        assert_eq!(ime.commit_serial, 0);
++        set_ime_cursor_rectangle_after_done(&sink, &mut ime, ime_cursor_bounds(30.0), 0);
++        assert_eq!(ime.commit_serial, 1);
++    }
++
++    #[test]
+     fn skips_cursor_rectangles_with_unchanged_protocol_coordinates() {
+         let text_input = FakeImeCursorRectangleSink::default();
+-        let mut last_ime_cursor_rectangle = None;
++        let mut ime_state = ImeState::default();
+ 
+         update_ime_cursor_rectangle(
+             &text_input,
+-            &mut last_ime_cursor_rectangle,
++            &mut ime_state,
+             ime_cursor_bounds(10.25),
+         );
+         update_ime_cursor_rectangle(
+             &text_input,
+-            &mut last_ime_cursor_rectangle,
++            &mut ime_state,
+             ime_cursor_bounds(10.75),
+         );
+ 
+         assert_eq!(text_input.commit_count.get(), 1);
+         assert_eq!(
+             text_input.cursor_rectangles.borrow().as_slice(),
+-            &[(10, 20, 1, 18)]
++            &[(10, 20, 1, 19)]
+         );
+     }
+ }
+diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
+--- a/src/linux/wayland/window.rs
++++ b/src/linux/wayland/window.rs
+@@ -1883,8 +1883,9 @@
+         let state = self.borrow();
+         if let (Some(activation), Some(app_id)) = (&state.globals.activation, state.app_id.clone())
+         {
+-            state.client.set_pending_activation(state.surface.id());
+-            let token = activation.get_activation_token(&state.globals.qh, ());
++            let token = state
++                .client
++                .request_window_activation(activation, state.surface.id());
+             // The serial isn't exactly important here, since the activation is probably going to be rejected anyway.
+             let serial = state.client.get_serial(SerialKind::MousePress);
+             token.set_app_id(app_id);
