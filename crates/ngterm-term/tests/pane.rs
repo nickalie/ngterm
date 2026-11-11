@@ -10,11 +10,14 @@
 
 mod support;
 
+#[path = "support/redraw.rs"]
+mod redraw;
+
 use std::time::{Duration, Instant};
 
 use ngterm_term::{
-    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardWrite, ColorScheme, GridSize, PaneCommand,
-    PaneConfig, PaneError, PaneEvent, Progress, ReadScope, Rgb,
+    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardWrite, ColorScheme, Frame, GridSize, Pane,
+    PaneCommand, PaneConfig, PaneError, PaneEvent, Progress, ReadScope, Rgb,
 };
 use support::{SIZE, TestResult, spawn, spawn_with, wait_events, wait_file, wait_file_containing, wait_text};
 
@@ -262,6 +265,15 @@ fn the_exit_status_is_reported_after_the_last_output() {
         unreachable!("waited for it")
     };
     assert!(status.signal.is_some(), "{status:?}");
+}
+
+#[test]
+fn an_immediate_resize_redraw_uses_the_new_grid() -> TestResult {
+    let pane = redraw::spawn()?;
+    redraw::wait_title(&pane, "ready");
+    pane.resize(redraw::AFTER)?;
+    redraw::assert_redrawn(&pane);
+    Ok(())
 }
 
 #[test]

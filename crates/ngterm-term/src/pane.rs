@@ -655,7 +655,11 @@ impl Pane {
         drop(vt);
         match &self.io {
             #[cfg(feature = "local")]
-            Io::Pty { actor, .. } => actor.resize(size.pty()),
+            Io::Pty { actor, .. } => {
+                actor.resize(size.pty());
+                #[cfg(test)]
+                resize_tests::after_pty_resize();
+            }
             #[cfg(feature = "local")]
             Io::Live(live) => {
                 live.resize(size);
@@ -1421,6 +1425,9 @@ impl Worker {
         self.shared.wake();
     }
 }
+
+#[cfg(all(test, feature = "local"))]
+mod resize_tests;
 
 #[cfg(test)]
 mod animation_tests;
