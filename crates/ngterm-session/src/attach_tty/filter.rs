@@ -94,6 +94,8 @@ pub struct OutputFilter {
     utf8: u8,
     /// The last string ended with ESC, and was dropped: a `\` right after it is its ST.
     dropped_st: bool,
+    /// The held introducer also ends a string already forwarded to the outer terminal.
+    held_string_exit: bool,
     /// Written after every RIS that passes.
     after_reset: &'static [u8],
 }
@@ -114,6 +116,7 @@ impl OutputFilter {
             body: 0,
             utf8: 0,
             dropped_st: false,
+            held_string_exit: false,
             after_reset: &[],
         }
     }
@@ -200,6 +203,7 @@ impl OutputFilter {
 
     /// Starts holding a sequence in `state` with its introducer `byte`.
     fn begin(&mut self, state: State, byte: u8) {
+        self.held_string_exit = false;
         self.held.clear();
         self.held.push(byte);
         self.fate = Fate::Hold;
@@ -213,6 +217,14 @@ impl OutputFilter {
             out.extend_from_slice(&self.held);
         }
         self.held.clear();
+        self.held_string_exit = false;
+    }
+
+    /// Suppressing a held introducer must not leave the outer terminal inside the preceding string.
+    fn preserve_string_exit(&mut self, out: &mut Vec<u8>) {
+        if std::mem::take(&mut self.held_string_exit) {
+            out.extend_from_slice(b"\x1b\\");
+        }
     }
 
     /// One byte in a sequence. Ground goes through [`OutputFilter::ground_run`].
@@ -242,6 +254,9 @@ impl OutputFilter {
 
     /// The sequence held ends with `byte`, which completes it, as `verdict` says.
     fn finish(&mut self, byte: u8, out: &mut Vec<u8>, verdict: &Verdict) {
+        if self.fate == Fate::Hold && *verdict != Verdict::Keep {
+            self.preserve_string_exit(out);
+        }
         match (self.fate, verdict) {
             (Fate::Hold, Verdict::Keep) => {
                 out.extend_from_slice(&self.held);
@@ -252,6 +267,7 @@ impl OutputFilter {
             (Fate::Hold | Fate::Drop, Verdict::Drop) | (Fate::Drop, _) => {}
         }
         self.held.clear();
+        self.held_string_exit = false;
         self.state = State::Ground;
     }
 
@@ -339,6 +355,7 @@ impl OutputFilter {
                 if self.held.len() > limit {
                     out.extend_from_slice(&self.held);
                     self.held.clear();
+                    self.held_string_exit = false;
                     self.fate = Fate::Pass;
                 }
             }
@@ -353,6 +370,7 @@ impl OutputFilter {
             State::DcsPassthrough => {
                 self.held.push(byte);
                 if is_dcs_query(&self.held) {
+                    self.preserve_string_exit(out);
                     self.held.clear();
                     self.fate = Fate::Drop;
                 } else {
@@ -360,12 +378,14 @@ impl OutputFilter {
                     self.held.clear();
                     self.fate = Fate::Pass;
                 }
+                self.held_string_exit = false;
                 self.state = next;
             }
             State::DcsIgnore => {
                 out.extend_from_slice(&self.held);
                 out.push(byte);
                 self.held.clear();
+                self.held_string_exit = false;
                 self.fate = Fate::Pass;
                 self.state = next;
             }
@@ -402,6 +422,7 @@ impl OutputFilter {
         } else {
             self.anywhere(byte, out);
         }
+        self.held_string_exit = !dropped && self.fate == Fate::Hold;
     }
 
     fn osc(&mut self, byte: u8, out: &mut Vec<u8>) {
@@ -413,6 +434,9 @@ impl OutputFilter {
                     Verdict::Keep
                 };
                 let dropped = matches!((self.fate, &verdict), (Fate::Drop, _) | (_, Verdict::Drop));
+                if dropped {
+                    self.preserve_string_exit(out);
+                }
                 match (self.fate, &verdict) {
                     (Fate::Hold, Verdict::Keep) => out.extend_from_slice(&self.held),
                     (Fate::Hold, Verdict::Rewrite(body)) => {
@@ -422,6 +446,7 @@ impl OutputFilter {
                     _ => {}
                 }
                 self.held.clear();
+                self.held_string_exit = false;
                 self.fate = Fate::Pass;
                 if byte == BEL {
                     if !dropped {

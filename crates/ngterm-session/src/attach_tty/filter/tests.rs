@@ -85,15 +85,110 @@ fn every_apc_exit_matches_the_real_terminal() {
 #[test]
 fn apc_c1_aborts_still_filter_the_query_they_introduce() {
     for (query, kept) in [
-        (b"\x9b6n".as_slice(), b"\x1b_G\xfftail".as_slice()),
-        (b"\x9d11;?\x07", b"\x1b_G\xfftail"),
-        (b"\x90$qm\x1b\\", b"\x1b_G\xfftail"),
+        (b"\x9b6n".as_slice(), b"\x1b_G\xff\x1b\\tail".as_slice()),
+        (b"\x9d11;?\x07", b"\x1b_G\xff\x1b\\tail"),
+        (b"\x90$qm\x1b\\", b"\x1b_G\xff\x1b\\tail"),
     ] {
         let mut stream = b"\x1b_G\xff".to_vec();
         stream.extend_from_slice(query);
         stream.extend_from_slice(b"tail");
         assert_ground_matches_terminal(&stream, kept);
     }
+}
+
+/// The outer terminal sees only filtered bytes; a suppressed introducer must still end the forwarded string.
+fn assert_forwarded_string_ends(stream: &[u8], expected: &[u8]) {
+    assert_ground_matches_terminal(stream, expected);
+    for cut in 0..=stream.len() {
+        let mut filter = OutputFilter::new();
+        let mut terminal = ngterm_ghostty_vt::Terminal::new(20, 4).unwrap();
+        let mut out = Vec::new();
+        filter.feed(&stream[..cut], &mut out);
+        terminal.vt_write(&out);
+        out.clear();
+        let taken = filter.feed_until_ground(&stream[cut..], &mut out);
+        terminal.vt_write(&out);
+        assert!(filter.at_ground(), "filter at cut {cut}: {stream:?}");
+        assert!(terminal.at_ground(), "outer terminal at cut {cut}: {stream:?}");
+        out.clear();
+        filter.feed(&stream[cut + taken..], &mut out);
+        filter.feed(b"later", &mut out);
+        terminal.vt_write(&out);
+        let text: String = terminal
+            .active_row(0)
+            .unwrap()
+            .cells
+            .iter()
+            .map(|cell| cell.text.as_str())
+            .collect();
+        assert_eq!(text, "taillater", "visible output at cut {cut}: {stream:?}");
+    }
+}
+
+#[test]
+fn suppressing_a_query_preserves_the_exit_from_a_forwarded_string() {
+    for start in [b"\x1b_G".as_slice(), b"\x1b_G\xff", b"\x1bXpayload", b"\x1b^payload"] {
+        for query in [
+            b"\x9b6n".as_slice(),
+            b"\x9d11;?\x07",
+            b"\x9d11;?\x1b\\",
+            b"\x90$qm\x1b\\",
+            b"\x1b[6n",
+            b"\x1b]11;?\x07",
+            b"\x1b]11;?\x1b\\",
+            b"\x1bP$qm\x1b\\",
+            b"\x1bZ",
+            b"\x1b[?2031h",
+        ] {
+            let stream = [start, query, b"tail"].concat();
+            let expected = [start, b"\x1b\\", b"tail"].concat();
+            assert_forwarded_string_ends(&stream, &expected);
+        }
+    }
+    // DCS payloads override C1 transitions, but ESC ends a forwarded DCS too.
+    for query in [b"\x1b[6n".as_slice(), b"\x1b]11;?\x07", b"\x1bP$qm\x1b\\", b"\x1bZ"] {
+        let stream = [b"\x1bPqpayload".as_slice(), query, b"tail"].concat();
+        assert_forwarded_string_ends(&stream, b"\x1bPqpayload\x1b\\tail");
+    }
+}
+
+#[test]
+fn a_forwarded_string_exit_is_not_repeated_for_later_queries() {
+    for end in [
+        b"\x1b[31m".as_slice(),
+        b"\x9d2;title\x07",
+        b"\x1bPqpayload\x1b\\",
+        b"\x1bP:ignored\x1b\\",
+        b"\x1b[1\x18",
+        b"\x1b]2;abandoned\x18",
+    ] {
+        let stream = [b"\x1b_G".as_slice(), end, b"\x1b[6ntail"].concat();
+        let expected = [b"\x1b_G".as_slice(), end, b"tail"].concat();
+        assert_split_safe(&stream, &expected);
+    }
+    let mut filter = OutputFilter::new();
+    let mut out = Vec::new();
+    filter.feed(b"\x1b_G\x1b[", &mut out);
+    filter.cancel(&mut out);
+    filter.feed(b"\x1b[6ntail", &mut out);
+    assert_eq!(out, b"\x1b_G\x1b[\x18tail");
+}
+
+#[test]
+fn rewriting_a_query_preserves_the_exit_from_a_forwarded_string() {
+    for (query, rewritten) in [
+        (b"\x9b6\x07n".as_slice(), b"\x07".as_slice()),
+        (b"\x1b[?2031;25h", b"\x1b[?25h"),
+    ] {
+        let stream = [b"\x1b_G\xff".as_slice(), query, b"tail"].concat();
+        let expected = [b"\x1b_G\xff\x1b\\".as_slice(), rewritten, b"tail"].concat();
+        assert_forwarded_string_ends(&stream, &expected);
+    }
+    // An OSC rewrite keeps its original introducer, which still terminates the APC itself.
+    assert_forwarded_string_ends(
+        b"\x1b_G\xff\x9d4;1;?;2;rgb:ff/00/00\x07tail",
+        b"\x1b_G\xff\x9d4;2;rgb:ff/00/00\x07tail",
+    );
 }
 
 #[test]
