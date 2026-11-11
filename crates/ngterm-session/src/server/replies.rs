@@ -36,9 +36,9 @@
 //!   meanwhile; the server's replies to what follows wait behind the barrier, so the program reads the owner's answers
 //!   before the answers to its later queries (Kitty's detection sends a query, then DA1, and takes DA1 coming first as
 //!   no support). A barrier ends empty past [`KITTY_WAIT`], when the owner changes, falls behind, leaves or withdraws
-//!   `kitty_graphics`, or past [`HELD_LIMIT`] or [`BARRIER_LIMIT`]. Neither the formatter snapshot nor, at this pin,
-//!   the binary snapshot carries images or glyph registrations, so an image is not shown again to a client that
-//!   attaches later.
+//!   `kitty_graphics`, or past [`HELD_LIMIT`] or [`BARRIER_LIMIT`]. Equal-pin binary handoffs retain images and placements
+//!   in the server. Attach/resync use formatter snapshots, which carry no images or glyph registrations, so an image
+//!   is not shown again to a client that attaches later.
 //!
 //! Every reply, whichever thread makes it (a read of the PTY, a client's answer or completion, a resize, a deadline),
 //! is queued in the pane's [`Outlet`] under the pane's lock, in that lock's order; one thread, the pane's helper, takes

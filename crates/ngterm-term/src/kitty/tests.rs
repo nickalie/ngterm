@@ -287,3 +287,28 @@ fn kitty_multiple_placements_share_pixels_and_keep_all_three_api_layers() {
         ]
     );
 }
+
+#[test]
+fn snapshot_virtual_images_publish_pixels_only_after_their_payload_arrives() {
+    let mut source = terminal();
+    source.vt_write(b"\x1b_Ga=T,U=1,f=32,s=2,v=2,i=3,c=2,r=1,q=2;AAD//wAA//8AAP//AAD//w==\x1b\\");
+    source.vt_write("\x1b[38;5;3m\u{10EEEE}\u{0305}\u{0305}\u{10EEEE}\u{0305}\u{030D}".as_bytes());
+    let mut restored =
+        vt::Terminal::restore_snapshot(source.encode_snapshot().unwrap(), vt::SnapshotOptions::default()).unwrap();
+    let mut state = Capture::new().unwrap();
+    let mut prefetch = Prefetch::default();
+    prefetch.update(restored.kitty_graphics());
+    let pending = frame(&mut restored, &mut state, &Frame::default(), &prefetch).unwrap();
+    assert!(pending.kitty.is_empty());
+    let Some(vt::SnapshotStep::Image(event)) = restored.restore_snapshot_step().unwrap() else {
+        panic!("expected image payload");
+    };
+    assert_eq!((event.image_id, event.bytes), (3, 16));
+    prefetch.update(restored.kitty_graphics());
+    let shown = frame(&mut restored, &mut state, &pending, &prefetch).unwrap();
+    assert!(shown.kitty.generation > pending.kitty.generation);
+    assert_eq!(shown.kitty.images[0].pixels.as_ref(), [0, 0, 255, 255].repeat(4));
+    assert_eq!(shown.kitty.placements.len(), 1);
+    assert_eq!(shown.kitty.placements[0].rect.columns, 2);
+    assert_eq!(restored.restore_snapshot_step(), Ok(None));
+}

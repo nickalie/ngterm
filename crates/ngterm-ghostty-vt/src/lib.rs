@@ -104,7 +104,9 @@ pub use scan::{ReadCandidate, ReadScope, Scanner};
 pub use search::{Match, Search, SearchDirection, SearchResults, SearchStatus};
 pub use selection::{Point, PointTag, Selection, SelectionAdjust};
 pub use shape::{Mode, MouseShape, ScrollbackLimits, TerminalColors};
-pub use snapshot::{HistoryPage, SnapshotHistory, SnapshotOptions};
+pub use snapshot::{
+    HistoryPage, SnapshotHistory, SnapshotImage, SnapshotImageStorage, SnapshotImages, SnapshotOptions, SnapshotStep,
+};
 pub use terminal::{Scroll, Terminal};
 pub use write::{Boundaries, StringEnd, StringIntroducer, StringKind, WriteStop};
 

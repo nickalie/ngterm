@@ -63,9 +63,9 @@
 //!
 //! Lost in a handoff, by design: the attached clients' streams (they reattach, from a snapshot) and their reply
 //! ownership; a clipboard read waiting for an answer (denied); the Kitty answers a barrier waited for (it ends
-//! empty). And at this libghostty-vt pin, from the terminal: Kitty images, their placements and glyph registrations
-//! (neither encoding carries them), and across a pin change the saved cursor (the formatter has no extra for it); see
-//! `pane/handoff.rs`.
+//! empty). Equal-pin binary snapshots retain Kitty graphics. Across a pin change, the formatter loses images,
+//! placements and the saved cursor; neither encoding carries glyph glossary registrations. Reattaching clients also
+//! use formatter snapshots; see `pane/handoff.rs`.
 
 #[cfg(unix)]
 mod unix;
@@ -147,9 +147,9 @@ impl Support {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VtEncoding {
-    /// libghostty-vt's binary snapshot: the screens, history, modes and unfinished sequence, but no Kitty images,
-    /// placements or glyph registrations (the codec ignores them at this pin); both servers run the same
-    /// libghostty-vt pin ([`vt::PIN`]).
+    /// libghostty-vt's binary snapshot: screens, history, modes, unfinished sequence and Kitty graphics (including
+    /// chunked loads). Both servers must run the same libghostty-vt pin ([`vt::PIN`]); format version 1 has no
+    /// cross-revision compatibility guarantee. Glyph glossary registrations are not carried.
     Binary,
     /// The formatter's VT restoration with its extras and the unfinished sequence (the attach snapshot), replayed into
     /// a fresh terminal: across a pin change, for a session on its primary screen. Neither the saved cursor nor Kitty

@@ -18,12 +18,11 @@
 //! 3. [`Pane::cut`]: a waiting clipboard read is denied and the Kitty barriers end, then the terminal's state, the
 //!    output offset, the revision and the replies ready to be written are taken, all under the pane's lock.
 //!
-//! What the terminal's state leaves behind at this pin: neither encoding carries Kitty images, their placements or
-//! glyph registrations (Ghostty's snapshot codec ignores them on capture, and the formatter has no extra for them,
-//! as for attach: [`crate::server::replies`]), so re-placing an earlier image by its id fails in the server's
-//! terminal after a handoff; and the formatter has no saved-cursor extra, so across a pin change a later restore
-//! (`ESC 8`) puts the server's cursor at the default position, and its CPR and DSR answers and later snapshots follow
-//! it until the program moves the cursor. Carrying them needs a libghostty-vt that exposes them.
+//! Equal-pin binary snapshots retain Kitty images, placements and unfinished chunked loads. Across a pin change,
+//! the formatter carries neither Kitty graphics nor the saved cursor: a later placement by image id fails, and a
+//! restore (`ESC 8`) uses the default cursor until the program moves it. Attach/resync also use the formatter, so
+//! reattaching viewers still lose images even when the server retained them through a binary handoff. Neither
+//! encoding carries glyph glossary registrations at this pin.
 //!
 //! A rollback ([`Pane::resume`]) undoes the first two, the replies still queued; a commit ([`Pane::hand_over`])
 //! releases the PTY and leaves the pane frozen, ending nothing when dropped.
@@ -54,8 +53,8 @@ use ngterm_pty::ActorHandle;
 use ngterm_pty::{Child, Master};
 
 use super::{
-    Condvar, DELEGATION_WAIT, ExitStatus, HELPER_IDLE, KITTY_WAIT, Lead, NEXT_PANE, Outlet, Pane, Parts, Replies,
-    SNAPSHOT_WAIT, assemble, configure, server_terminal, snapshot, start_actor, start_helper, vt_error,
+    Condvar, DELEGATION_WAIT, ExitStatus, HELPER_IDLE, KITTY_STORAGE_LIMIT, KITTY_WAIT, Lead, NEXT_PANE, Outlet, Pane,
+    Parts, Replies, SNAPSHOT_WAIT, assemble, configure, server_terminal, snapshot, start_actor, start_helper, vt_error,
 };
 use crate::protocol::GridSize;
 use crate::server::clients::{Clients, DEFAULT_QUEUE_LIMIT, ResyncBudget};
@@ -411,6 +410,7 @@ fn imported_terminal(
                 max_continuation_bytes: Some(limits.continuation_limit),
                 retain_continuation: true,
                 compress_history: false,
+                kitty_image_storage_limit: Some(KITTY_STORAGE_LIMIT),
             };
             let mut terminal = vt::Terminal::decode_snapshot(vt, options).map_err(vt_error)?;
             if (terminal.cols(), terminal.rows()) != (size.cols, size.rows) {
@@ -560,6 +560,76 @@ mod tests {
                 restored_apc(encoding, split);
             }
         }
+    }
+
+    #[test]
+    fn binary_import_keeps_inline_images_placements_and_unfinished_chunked_loads() {
+        use base64::Engine as _;
+
+        use crate::protocol::ReplyMetadata;
+        let (core, _creator) = super::super::tests::core(ReplyMetadata::default());
+        let mut state = core.lock();
+        state
+            .terminal
+            .vt_write(b"\x1b_Ga=T,f=32,s=1,v=1,i=1,p=1,q=2;AQID/w==\x1b\\");
+        // Three 4 MiB images exceed libghostty's 10 MB default but fit the server's 64 MiB limit.
+        // Import must apply that limit before decoding: configure() cannot recover evicted images.
+        let pixels = [1, 2, 3, 255].repeat(1024 * 1024);
+        let payload = base64::engine::general_purpose::STANDARD.encode(&pixels);
+        for id in 2..=4 {
+            state
+                .terminal
+                .vt_write(format!("\x1b_Ga=T,f=32,s=1024,v=1024,i={id},p=1,c=1,r=1,C=1,q=2,m=1;\x1b\\").as_bytes());
+            for chunk in payload.as_bytes().chunks(4096) {
+                state.terminal.vt_write(b"\x1b_Gm=1;");
+                state.terminal.vt_write(chunk);
+                state.terminal.vt_write(b"\x1b\\");
+            }
+            state.terminal.vt_write(b"\x1b_Gm=0;\x1b\\");
+        }
+        // Six decoded bytes of a 2x2 image; the APC is complete but its chunked transfer is not.
+        state
+            .terminal
+            .vt_write(b"\x1b_Ga=T,f=32,s=2,v=2,i=6,c=1,r=1,q=2,m=1;BwcH/wcH\x1b\\");
+        let bytes = state.terminal.encode_snapshot().unwrap();
+        let manifest = PaneState {
+            name: "images".to_owned(),
+            pid: 0,
+            created_at: 0,
+            tracked_env: Vec::new(),
+            term: None,
+            size: GridSize { cols: 80, rows: 24 },
+            offset: 0,
+            revision: 0,
+            vt: VtEncoding::Binary,
+            vt_len: bytes.len() as u64,
+            replies_len: 0,
+        };
+        let mut imported = imported_terminal(
+            &manifest,
+            &bytes,
+            manifest.size,
+            Limits::default(),
+            &core.outlet,
+            &mut state.replies,
+        )
+        .unwrap();
+        {
+            let graphics = imported.kitty_graphics().unwrap();
+            assert_eq!(graphics.image(1).unwrap().pixels.unwrap(), [1, 2, 3, 255]);
+            let placements = graphics.placements().unwrap();
+            assert_eq!(placements.len(), 4);
+            for id in 2..=4 {
+                assert_eq!(graphics.image(id).unwrap().pixels.unwrap(), pixels);
+                assert!(placements.iter().any(|p| p.image_id == id && p.placement_id == 1));
+            }
+        }
+        imported.vt_write(b"\x1b_Ga=p,i=1,p=2,q=2\x1b\\\x1b_Gm=0;B/8HBwf/BwcH/w==\x1b\\");
+        let graphics = imported.kitty_graphics().unwrap();
+        assert_eq!(graphics.image(6).unwrap().pixels.unwrap(), [7, 7, 7, 255].repeat(4));
+        let placements = graphics.placements().unwrap();
+        assert_eq!(placements.len(), 6);
+        assert!(placements.iter().any(|p| p.image_id == 1 && p.placement_id == 2));
     }
 
     /// A shell that runs each line it reads (as the integration tests' `support::shell`).
