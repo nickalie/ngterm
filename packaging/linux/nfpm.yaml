@@ -74,6 +74,25 @@ overrides:
       - libpipewire-0.3-0t64
       - libusb-1.0-0
       - libwayland-client0
+      - libglib2.0-0t64
+      - libxkbcommon0
+      - libxkbcommon-x11-0
+      - libxcb-xkb1
+      - libelf1t64
+      - libzstd1
+      - liblzma5
+      - libudev1
+      - libwayland-server0
+      - libwayland-egl1
+      - libwayland-cursor0
+      - libxext6
+      - libxfixes3
+      - libxi6
+      - libxrender1
+      - libxcb-shm0
+      - libxcb-render0
+      - libp11-kit0
+      - libtasn1-6
       - zlib1g
     recommends:
       - "libwpewebkit-2.0-1 (>= 2.54)"
@@ -118,6 +137,28 @@ overrides:
       - "libpipewire-0.3.so.0()(64bit)"
       - "libusb-1.0.so.0()(64bit)"
       - "libwayland-client.so.0()(64bit)"
+      - "libglib-2.0.so.0()(64bit)"
+      - "libgobject-2.0.so.0()(64bit)"
+      - "libgio-2.0.so.0()(64bit)"
+      - "libgmodule-2.0.so.0()(64bit)"
+      - "libxkbcommon.so.0()(64bit)"
+      - "libxkbcommon-x11.so.0()(64bit)"
+      - "libxcb-xkb.so.1()(64bit)"
+      - "libelf.so.1()(64bit)"
+      - "libzstd.so.1()(64bit)"
+      - "liblzma.so.5()(64bit)"
+      - "libudev.so.1()(64bit)"
+      - "libwayland-server.so.0()(64bit)"
+      - "libwayland-egl.so.1()(64bit)"
+      - "libwayland-cursor.so.0()(64bit)"
+      - "libXext.so.6()(64bit)"
+      - "libXfixes.so.3()(64bit)"
+      - "libXi.so.6()(64bit)"
+      - "libXrender.so.1()(64bit)"
+      - "libxcb-shm.so.0()(64bit)"
+      - "libxcb-render.so.0()(64bit)"
+      - "libp11-kit.so.0()(64bit)"
+      - "libtasn1.so.6()(64bit)"
       - "libz.so.1()(64bit)"
     recommends:
       - "libWPEWebKit-2_0-1 >= 2.54"
@@ -157,4 +198,17 @@ overrides:
       - libpipewire
       - libusb
       - wayland
+      - glib2
+      - libxkbcommon
+      - libxkbcommon-x11
+      - libelf
+      - zstd
+      - xz
+      - systemd-libs
+      - libxext
+      - libxfixes
+      - libxi
+      - libxrender
+      - p11-kit
+      - libtasn1
       - zlib

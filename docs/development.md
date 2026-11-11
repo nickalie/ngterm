@@ -123,8 +123,10 @@ original file; manually extracted AppImages are updated manually.
 
 Linux packages target glibc 2.39+ and libstdc++ 13+ (Ubuntu 24.04 or newer and current Debian, Fedora, Arch, and
 openSUSE releases).
-A Vulkan-capable graphics driver, `bubblewrap`, and `xdg-dbus-proxy` are required on the host, along with the standard desktop libraries excluded by linuxdeploy;
-the native packages declare all of these dependencies in `packaging/linux/nfpm.yaml`. Alpine/musl and older glibc
+A Vulkan-capable graphics driver, `bubblewrap`, and `xdg-dbus-proxy` are required on the host, along with the desktop
+libraries `packaging/linux/runtime-libraries.txt` lists: the packages bundle no library, so the app shares the copy the
+compositor and the GPU drivers use; the native packages declare all of these dependencies in
+`packaging/linux/nfpm.yaml`. Alpine/musl and older glibc
 releases need a source build. AppImage users also need FUSE, or can use `--appimage-extract-and-run`. On hosts with
 restricted AppArmor user namespaces, native packages load a profile for their fixed install path; a portable install
 needs a profile for its extracted `usr/bin/ngterm`; see [WebKit sandbox on Ubuntu](#webkit-sandbox-on-ubuntu-apparmor).
