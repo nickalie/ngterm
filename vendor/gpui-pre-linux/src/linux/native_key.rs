@@ -89,7 +89,12 @@ mod xkb_key {
         composing: bool,
     ) -> NativeKey {
         let keymap = state.get_keymap();
-        let layout = state.key_get_layout(keycode);
+        // A key with no symbols has no layout of its own (an ngterm patch): read the effective one, never pass
+        // `LAYOUT_INVALID` on, which libxkbcommon 1.6 indexes out of bounds with.
+        let layout = match state.key_get_layout(keycode) {
+            xkb::LAYOUT_INVALID => state.serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE),
+            layout => layout,
+        };
         let level0 = |code: Keycode| {
             keymap
                 .key_get_syms_by_level(code, layout, 0)
@@ -133,6 +138,48 @@ mod xkb_key {
             composing,
             repeat: false,
             keystroke: keystroke.clone(),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn keymap(layouts: &str) -> xkb::Keymap {
+            let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+            xkb::Keymap::new_from_names(&context, "", "pc105", layouts, "", None, xkb::COMPILE_NO_FLAGS)
+                .expect("test keymap should compile")
+        }
+
+        fn locked(keymap: &xkb::Keymap, layout: u32) -> State {
+            let mut state = State::new(keymap);
+            state.update_mask(0, 0, 0, 0, 0, layout);
+            assert_eq!(state.serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE), layout);
+            state
+        }
+
+        /// A key the keymap gives no symbols in any layout.
+        fn symbolless(keymap: &xkb::Keymap) -> Keycode {
+            (keymap.min_keycode().raw()..=keymap.max_keycode().raw())
+                .map(Keycode::new)
+                .find(|&code| keymap.num_layouts_for_key(code) == 0)
+                .expect("the pc105 keymap should have a key with no symbols")
+        }
+
+        #[test]
+        fn a_key_without_symbols_reads_the_selected_layout() {
+            // Three layouts, so the wrap of an invalid layout index cannot land on the second by chance.
+            let keymap = keymap("us,ru,de");
+            let state = locked(&keymap, 1);
+            let keycode = symbolless(&keymap);
+            assert_eq!(state.key_get_layout(keycode), xkb::LAYOUT_INVALID);
+            let native = native_key(&state, Modifiers::default(), keycode, &Keystroke::default(), false);
+            assert!(!native.ascii_layout, "the selected layout is Russian");
+            assert_eq!(native.unshifted, None);
+
+            let us = locked(&keymap, 0);
+            let latin = native_key(&us, Modifiers::default(), keycode, &Keystroke::default(), false);
+            assert!(latin.ascii_layout, "the selected layout is US");
         }
     }
 }

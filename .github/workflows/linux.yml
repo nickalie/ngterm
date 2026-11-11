@@ -135,6 +135,8 @@ jobs:
           cargo test "${WORKSPACE_WITHOUT_WPE[@]}"
           cargo test "${GPUI_WITHOUT_HTML[@]}"
           cargo test -p ngterm-term --no-default-features --lib
+          # the vendored GPUI Linux platform's own tests, ngterm's patches' among them (not a workspace member)
+          cargo test -p gpui-pre-linux --lib
 
   # The WPE WebKit -sys crates (gir bindings of the app's HTML engine) against the distro package they are generated
   # from: Arch's wpewebkit at WPE_VERSION (build/pins.env), installed from a date-pinned Arch Linux Archive snapshot in

@@ -1,0 +1,74 @@
+The native key of a key with no symbols in the keymap (0001's `native_key`). XKB gives such a key no layout of its
+own: `xkb_state_key_get_layout` answers `XKB_LAYOUT_INVALID`. `native_key` passed that on to
+`xkb_keymap_key_get_syms_by_level` for every Latin key position. libxkbcommon 1.13 brings it back into range, onto
+whichever layout the wrap lands on, so the record judged a layout the user had not selected. libxkbcommon 1.6
+indexed the key's layouts with it and crashed the app on the first press of such a key, for example under niri's
+`us,ru` keymap. A key with no layout of its own now reads the state's effective layout. scripts/vendor-gpui.sh applies
+this to the verified crates.io archive.
+
+diff -ruN a/src/linux/native_key.rs b/src/linux/native_key.rs
+--- a/src/linux/native_key.rs
++++ b/src/linux/native_key.rs
+@@ -89,7 +89,12 @@
+         composing: bool,
+     ) -> NativeKey {
+         let keymap = state.get_keymap();
+-        let layout = state.key_get_layout(keycode);
++        // A key with no symbols has no layout of its own (an ngterm patch): read the effective one, never pass
++        // `LAYOUT_INVALID` on, which libxkbcommon 1.6 indexes out of bounds with.
++        let layout = match state.key_get_layout(keycode) {
++            xkb::LAYOUT_INVALID => state.serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE),
++            layout => layout,
++        };
+         let level0 = |code: Keycode| {
+             keymap
+                 .key_get_syms_by_level(code, layout, 0)
+@@ -135,6 +140,48 @@
+             keystroke: keystroke.clone(),
+         }
+     }
++
++    #[cfg(test)]
++    mod tests {
++        use super::*;
++
++        fn keymap(layouts: &str) -> xkb::Keymap {
++            let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
++            xkb::Keymap::new_from_names(&context, "", "pc105", layouts, "", None, xkb::COMPILE_NO_FLAGS)
++                .expect("test keymap should compile")
++        }
++
++        fn locked(keymap: &xkb::Keymap, layout: u32) -> State {
++            let mut state = State::new(keymap);
++            state.update_mask(0, 0, 0, 0, 0, layout);
++            assert_eq!(state.serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE), layout);
++            state
++        }
++
++        /// A key the keymap gives no symbols in any layout.
++        fn symbolless(keymap: &xkb::Keymap) -> Keycode {
++            (keymap.min_keycode().raw()..=keymap.max_keycode().raw())
++                .map(Keycode::new)
++                .find(|&code| keymap.num_layouts_for_key(code) == 0)
++                .expect("the pc105 keymap should have a key with no symbols")
++        }
++
++        #[test]
++        fn a_key_without_symbols_reads_the_selected_layout() {
++            // Three layouts, so the wrap of an invalid layout index cannot land on the second by chance.
++            let keymap = keymap("us,ru,de");
++            let state = locked(&keymap, 1);
++            let keycode = symbolless(&keymap);
++            assert_eq!(state.key_get_layout(keycode), xkb::LAYOUT_INVALID);
++            let native = native_key(&state, Modifiers::default(), keycode, &Keystroke::default(), false);
++            assert!(!native.ascii_layout, "the selected layout is Russian");
++            assert_eq!(native.unshifted, None);
++
++            let us = locked(&keymap, 0);
++            let latin = native_key(&us, Modifiers::default(), keycode, &Keystroke::default(), false);
++            assert!(latin.ascii_layout, "the selected layout is US");
++        }
++    }
+ }
+ 
+ #[cfg(any(feature = "wayland", feature = "x11"))]
