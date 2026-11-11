@@ -556,6 +556,85 @@ mod tests {
         }
     }
 
+    /// Read the colors a renderer sees as well: a background-only cell has no text style.
+    fn backgrounds(terminal: &mut Terminal) -> Vec<Vec<Option<Rgb>>> {
+        let mut state = ngterm_ghostty_vt::RenderState::new().unwrap();
+        state.update(terminal).unwrap();
+        let mut rows = state.rows().unwrap();
+        let mut result = Vec::new();
+        while let Some(mut row) = rows.next_row() {
+            let mut colors = Vec::new();
+            let mut cells = row.cells().unwrap();
+            while let Some(cell) = cells.next_cell() {
+                colors.push(cell.unwrap().background());
+            }
+            result.push(colors);
+        }
+        result
+    }
+
+    fn assert_replayed_cells(source: &mut Terminal, replayed: &mut Terminal) {
+        assert_eq!(backgrounds(replayed), backgrounds(source));
+        assert_eq!(replayed.total_rows(), source.total_rows());
+        assert_eq!(replayed.cursor(), source.cursor());
+        for y in 0..ROWS {
+            assert_eq!(
+                replayed.active_row(y).unwrap().cells,
+                source.active_row(y).unwrap().cells,
+                "row {y}"
+            );
+            for x in 0..COLS {
+                let point = Point::new(PointTag::Active, x, u32::from(y));
+                assert_eq!(
+                    replayed.hyperlink_uri(point).unwrap(),
+                    source.hyperlink_uri(point).unwrap(),
+                    "{x},{y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn attach_and_resync_replay_links_gaps_background_rows_rgb_and_wrapped_wide_cells() {
+        // Ghostty formatter.zig: Terminal vt restores hyperlinks of cells / gaps and
+        // cells that only have a background. Include a wrapped wide character too.
+        let content = format!(
+            "\x1b[41mred\x1b[0m\x1b[10G\x1b]8;id=a;https://example.com\x1b\\link\x1b]8;;\x1b\\ plain\r\n\
+             \x1b[44m\x1b[K\x1b[0m\r\n\
+             CPU:\x1b[42m\x1b[K\x1b[48;2;1;2;3m\x1b[15G\x1b[3X\x1b[0m\x1b[19Gx\r\n\
+             {}中\r\nunlinked",
+            "w".repeat(usize::from(COLS) - 1),
+        );
+        for kind in [Kind::Attach, Kind::Resync] {
+            let mut source = tracked();
+            source.vt_write(content.as_bytes());
+            let bytes = capture(&mut source, kind).unwrap();
+            let mut replayed = tracked();
+            if kind == Kind::Resync {
+                replayed.vt_write(b"\x1b[45m\x1b[2Jold\r\nstate\x1b]8;;https://stale.example\x1b\\");
+            }
+            replayed.vt_write(&bytes);
+            assert_replayed_cells(&mut source, &mut replayed);
+            let colors = backgrounds(&mut replayed);
+            assert_eq!(colors[0][3], None, "the gap remains unpainted");
+            assert_eq!(colors[1], vec![Some(source.colors().palette[4]); usize::from(COLS)]);
+            assert_eq!(colors[2][14..17], [Some(Rgb::new(1, 2, 3)); 3]);
+            assert!(replayed.active_row(3).unwrap().wrapped);
+            assert_eq!(replayed.active_row(4).unwrap().cells[0].text, "中");
+            assert_eq!(
+                replayed
+                    .hyperlink_uri(Point::new(PointTag::Active, 9, 0))
+                    .unwrap()
+                    .as_deref(),
+                Some("https://example.com")
+            );
+            // The cursor pen is unlinked after replay, despite the earlier cell links.
+            source.vt_write(b"!");
+            replayed.vt_write(b"!");
+            assert_replayed_cells(&mut source, &mut replayed);
+        }
+    }
+
     #[test]
     fn the_title_and_working_directory_come_along() {
         let mut session = tracked();

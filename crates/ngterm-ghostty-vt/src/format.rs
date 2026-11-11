@@ -53,7 +53,7 @@ bitflags! {
         const CURSOR = 1 << 6;
         /// The cursor's current SGR style.
         const STYLE = 1 << 7;
-        /// The open hyperlink, as OSC 8.
+        /// The cursor's open hyperlink, as OSC 8. Cell hyperlinks are always included in VT output.
         const HYPERLINK = 1 << 8;
         /// Character protection, as DECSCA.
         const PROTECTION = 1 << 9;
@@ -84,7 +84,7 @@ pub struct FormatOptions {
     pub format: Format,
     /// Join soft-wrapped rows into one line.
     pub unwrap: bool,
-    /// Drop trailing whitespace of non-blank lines.
+    /// Drop trailing whitespace of non-blank lines. VT output with `trim = false` also keeps trailing blank rows.
     pub trim: bool,
     /// The terminal state VT output carries besides the cells; none by default.
     pub extras: FormatExtras,
@@ -104,7 +104,8 @@ pub enum Region {
 }
 
 impl Terminal {
-    /// The text of `region`; `None` for [`Region::Selection`] with no selection. A blank region reads as empty.
+    /// The text of `region`; `None` for [`Region::Selection`] with no selection. A blank region reads as empty in
+    /// plain text; untrimmed VT output keeps its rows, and VT output also carries cells with only a background.
     ///
     /// # Errors
     ///
@@ -331,5 +332,158 @@ mod tests {
             ..PLAIN
         };
         assert!(text(&mut terminal, Region::Viewport, html).unwrap().contains("bold"));
+    }
+
+    // Ghostty src/terminal/formatter.zig at LIBGHOSTTY_VT_REV: Page VT hyperlink, gap,
+    // background-only cell and PageList/Terminal VT untrimmed-row regressions.
+    const VT: FormatOptions = FormatOptions {
+        format: Format::Vt,
+        unwrap: false,
+        trim: true,
+        extras: FormatExtras::empty(),
+    };
+    const OPEN: &str = "\x1b]8;;https://example.com\x1b\\";
+    const CLOSE: &str = "\x1b]8;;\x1b\\";
+
+    #[test]
+    fn cell_hyperlinks_format_without_the_cursor_hyperlink_extra() {
+        let explicit = "\x1b]8;id=a;https://example.com\x1b\\";
+        let other = "\x1b]8;;https://b.example\x1b\\";
+        for (input, expected) in [
+            (
+                format!("{OPEN}link text{CLOSE} normal"),
+                format!("{OPEN}link text{CLOSE} normal"),
+            ),
+            (format!("{explicit}one{CLOSE}"), format!("{explicit}one{CLOSE}")),
+            (format!("{OPEN}ab{other}cd{CLOSE}"), format!("{OPEN}ab{other}cd{CLOSE}")),
+            (format!("{OPEN}ab\r\ncd{CLOSE}"), format!("{OPEN}ab\r\ncd{CLOSE}")),
+            (format!("{OPEN}ab{CLOSE}\r\ncd"), format!("{OPEN}ab\r\n{CLOSE}cd")),
+            (format!("{OPEN}ab"), format!("{OPEN}ab{CLOSE}")),
+            (format!("{OPEN}ab\x1b[5Gcd{CLOSE}"), format!("{OPEN}ab\x1b[2Ccd{CLOSE}")),
+        ] {
+            let mut terminal = Terminal::new(80, 3).unwrap();
+            terminal.vt_write(input.as_bytes());
+            assert_eq!(
+                text(&mut terminal, Region::Viewport, VT).unwrap(),
+                expected,
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unwrapping_closes_a_link_before_wide_character_padding() {
+        let mut terminal = Terminal::new(10, 5).unwrap();
+        terminal.vt_write(format!("{OPEN}abc\x1b[10G中{CLOSE}").as_bytes());
+        let options = FormatOptions { unwrap: true, ..VT };
+        assert_eq!(
+            text(&mut terminal, Region::Viewport, options).unwrap(),
+            format!("{OPEN}abc{CLOSE}      {OPEN}中{CLOSE}")
+        );
+    }
+
+    #[test]
+    fn gaps_step_without_painting_and_background_only_cells_erase() {
+        for (cols, rows, input, expected) in [
+            (
+                20,
+                5,
+                "\x1b[41mred\x1b[0m\x1b[10Gplain",
+                "\x1b[0m\x1b[48;5;1mred\x1b[6C\x1b[0mplain",
+            ),
+            (
+                10,
+                5,
+                "CPU:\x1b[41m\x1b[K\x1b[0m",
+                "CPU:\x1b[0m\x1b[48;5;1m\x1b[6X\x1b[6C\x1b[0m",
+            ),
+            (
+                5,
+                2,
+                "\x1b[44m\x1b[2J\x1b[Hab\x1b[0m",
+                "\x1b[0m\x1b[48;5;4mab\x1b[3X\x1b[3C\x1b[0m\r\n\x1b[0m\x1b[48;5;4m\x1b[5X\x1b[5C\x1b[0m",
+            ),
+        ] {
+            let mut terminal = Terminal::new(cols, rows).unwrap();
+            terminal.vt_write(input.as_bytes());
+            assert_eq!(
+                text(&mut terminal, Region::Viewport, VT).unwrap(),
+                expected,
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn untrimmed_vt_keeps_trailing_rows_while_trimmed_and_plain_drop_them() {
+        assert!(!FormatOptions::default().trim);
+        for (rows, input, expected) in [(6, "one\r\ntwo", "one\r\ntwo\r\n\r\n\r\n\r\n"), (4, "", "\r\n\r\n\r\n")] {
+            let mut terminal = Terminal::new(10, rows).unwrap();
+            terminal.vt_write(input.as_bytes());
+            let untrimmed = FormatOptions { trim: false, ..VT };
+            assert_eq!(text(&mut terminal, Region::Viewport, untrimmed).unwrap(), expected);
+            assert_eq!(text(&mut terminal, Region::Viewport, VT).unwrap(), input);
+            assert_eq!(
+                text(&mut terminal, Region::Viewport, PLAIN).unwrap(),
+                input.replace("\r\n", "\n")
+            );
+        }
+        // A region spanning multiple Ghostty pages retains its blank rows too.
+        let mut terminal = Terminal::new(215, 500).unwrap();
+        terminal.vt_write(b"one");
+        let output = text(&mut terminal, Region::Screen, FormatOptions { trim: false, ..VT }).unwrap();
+        assert_eq!(output, format!("one{}", "\r\n".repeat(499)));
+    }
+
+    fn assert_cells_match(source: &Terminal, target: &Terminal) {
+        assert_eq!(target.total_rows(), source.total_rows());
+        for y in 0..source.rows() {
+            assert_eq!(
+                target.active_row(y).unwrap().cells,
+                source.active_row(y).unwrap().cells,
+                "row {y}"
+            );
+            for x in 0..source.cols() {
+                let point = Point::new(PointTag::Active, x, u32::from(y));
+                assert_eq!(
+                    target.hyperlink_uri(point).unwrap(),
+                    source.hyperlink_uri(point).unwrap(),
+                    "{x},{y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vt_restores_each_cells_hyperlink_and_style() {
+        let mut source = Terminal::new(20, 3).unwrap();
+        source.vt_write(
+            concat!(
+                "\x1b]8;;https://a.example\x1b\\aa\x1b]8;;\x1b\\ ",
+                "\x1b]8;id=x;https://b.example\x1b\\bb\x1b[5Gbb\x1b]8;;\x1b\\\r\n",
+                "\x1b]8;;https://a.example\x1b\\\x1b[1mcc\x1b[0m\x1b]8;;\x1b\\ plain",
+            )
+            .as_bytes(),
+        );
+        let bytes = source.format(Region::Screen, VT).unwrap().unwrap();
+        let mut target = Terminal::new(20, 3).unwrap();
+        target.vt_write(&bytes);
+        assert_cells_match(&source, &target);
+    }
+
+    #[test]
+    fn untrimmed_screen_replay_scrolls_the_same_rows_into_history() {
+        let mut source = Terminal::new(10, 5).unwrap();
+        source.vt_write(b"1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\x1b[3;1H\x1b[J");
+        let options = FormatOptions {
+            trim: false,
+            extras: FormatExtras::CURSOR,
+            ..VT
+        };
+        let bytes = source.format(Region::Screen, options).unwrap().unwrap();
+        let mut target = Terminal::new(10, 5).unwrap();
+        target.vt_write(&bytes);
+        assert_cells_match(&source, &target);
+        assert_eq!(target.cursor(), source.cursor());
     }
 }
