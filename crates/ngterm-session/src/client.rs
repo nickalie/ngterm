@@ -691,6 +691,15 @@ impl AttachWriter {
         self.send(&AttachClientMessage::Metadata(metadata))
     }
 
+    /// The client applied its config: replace its reply facts and request the mode 2031 report as reply owner.
+    ///
+    /// # Errors
+    ///
+    /// The write failed.
+    pub fn config_reloaded(&self, metadata: ReplyMetadata) -> Result<(), ClientError> {
+        self.send(&AttachClientMessage::ConfigReload(metadata))
+    }
+
     /// Answers `request`; false, sending nothing, when its epoch is no longer the stream's current one.
     ///
     /// # Errors

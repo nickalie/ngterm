@@ -225,6 +225,7 @@ fn every_attach_client_message_round_trips() {
         },
         AttachClientMessage::Resize { size: size() },
         AttachClientMessage::Metadata(metadata()),
+        AttachClientMessage::ConfigReload(metadata()),
         AttachClientMessage::DelegatedReply {
             id: 3,
             epoch: 2,
@@ -477,6 +478,32 @@ fn a_version_mismatch_is_refused_with_its_message() {
     );
     assert_eq!(check_hello(Role::Api, PROTOCOL_VERSION), Ok(()));
     assert_eq!(check_hello(Role::Attach, PROTOCOL_VERSION), Ok(()));
+}
+
+#[test]
+fn api_and_attach_refuse_older_and_newer_protocols_before_decoding_postcard() {
+    for protocol in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
+        for role in [Role::Api, Role::Attach] {
+            let hello = Control::Hello(Hello {
+                role,
+                build: "other".into(),
+                capabilities: vec![],
+            });
+            let mut bytes = Vec::new();
+            write_control(&mut bytes, &hello).unwrap();
+            bytes[4..8].copy_from_slice(&protocol.to_le_bytes());
+            // An undecodable postcard body follows: negotiation must refuse using only the stable hello.
+            bytes.extend(raw_frame(protocol, 2, &[0xff]));
+            let mut input = bytes.as_slice();
+            let frame = read_frame(&mut input).unwrap();
+            let Control::Hello(hello) = frame.control().unwrap() else {
+                panic!("not hello")
+            };
+            let refusal = welcome(&hello, frame.protocol, "server", &[]).error.unwrap();
+            assert_eq!(refusal.code, ErrorCode::ProtocolMismatch);
+            assert!(!input.is_empty(), "postcard bytes were not consumed");
+        }
+    }
 }
 
 #[test]

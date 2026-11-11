@@ -131,6 +131,7 @@ enum Message {
     Input(Vec<u8>),
     Resize(wire::GridSize),
     Metadata(ReplyMetadata),
+    ConfigReload(ReplyMetadata),
     Answer {
         request: Delegated,
         reply: DelegatedReply,
@@ -252,6 +253,13 @@ impl Live {
         last.clone_from(&metadata);
         drop(last);
         self.post(Message::Metadata(metadata));
+    }
+
+    /// A config reload is an event even when its facts are identical. Send both together so a changed scheme
+    /// produces one report at the server, and keep the facts for a later reconnect.
+    pub(crate) fn config_reloaded(&self, metadata: ReplyMetadata) {
+        lock(&self.metadata).clone_from(&metadata);
+        self.post(Message::ConfigReload(metadata));
     }
 
     pub(crate) fn set_kitty_graphics(&self, shown: bool) {
@@ -394,6 +402,7 @@ fn send(writer: &AttachWriter, connection: u64, message: Message) -> Result<(), 
         Message::Input(data) => writer.input(&data),
         Message::Resize(size) => writer.resize(size),
         Message::Metadata(metadata) => writer.metadata(metadata),
+        Message::ConfigReload(metadata) => writer.config_reloaded(metadata),
         Message::Answer {
             request,
             reply,

@@ -755,6 +755,25 @@ impl Pane {
         }
     }
 
+    /// Finish applying a config update, reporting its scheme once while mode 2031 is on, even unchanged.
+    /// Call after the config's terminal changes. Unlike [`Self::set_color_scheme`], a reload is an event:
+    /// Ghostty's `termio/Termio.zig` `changeConfig` (#14834) reports directly on the outbound queue.
+    /// A live pane carries the event and its final facts to the server, which alone reports as reply owner.
+    pub fn config_reloaded(&self, scheme: ColorScheme) {
+        let vt = lock(&self.shared.vt);
+        self.shared.scheme.store(scheme == ColorScheme::Dark, Ordering::Release);
+        #[cfg(feature = "local")]
+        if let Io::Live(live) = &self.io {
+            drop(vt);
+            live.config_reloaded(live.metadata_of(&self.shared, scheme));
+            return;
+        }
+        // Keep the lock through enqueueing: replies to later output must follow this report.
+        if vt.terminal.mode(vt::Mode::COLOR_SCHEME_REPORT) {
+            self.shared.push_reply(scheme.engine().report());
+        }
+    }
+
     /// The color scheme the terminal answers queries with.
     #[must_use]
     pub fn color_scheme(&self) -> ColorScheme {
@@ -1815,6 +1834,17 @@ mod tests {
                 ColorScheme::Dark => ngterm_session::protocol::ColorScheme::Dark,
             })
         );
+        for _ in 0..2 {
+            pane.config_reloaded(other);
+            assert_eq!(
+                live.take_posted_reload().color_scheme,
+                Some(match other {
+                    ColorScheme::Light => ngterm_session::protocol::ColorScheme::Light,
+                    ColorScheme::Dark => ngterm_session::protocol::ColorScheme::Dark,
+                })
+            );
+            assert_eq!(pane.shared.replies.queued(), 0, "the server alone reports");
+        }
     }
 
     #[test]

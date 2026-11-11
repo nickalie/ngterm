@@ -194,6 +194,7 @@ fn take_message(pane: &Pane, id: u64, message: AttachClientMessage) -> Result<bo
         }
         AttachClientMessage::Resize { size } => pane.resize_client(id, size),
         AttachClientMessage::Metadata(metadata) => pane.set_metadata(id, metadata),
+        AttachClientMessage::ConfigReload(metadata) => pane.config_reloaded(id, metadata),
         AttachClientMessage::DelegatedReply {
             id: request,
             epoch,

@@ -391,6 +391,26 @@ fn raw_input_without_echo_is_not_password_input() {
 }
 
 #[test]
+fn config_reload_report_reaches_the_pty_before_a_following_dsr_reply() {
+    let mut config = PaneConfig::new(SIZE);
+    config.color_scheme = ColorScheme::Dark;
+    let fixture = spawn_with(
+        concat!(
+            "stty raw -echo; printf '\\033[?2031hready'; ",
+            "while [ ! -e \"$DIR/go\" ]; do sleep 0.02; done; ",
+            "printf '\\033[5n'; dd bs=1 count=13 of=\"$DIR/reply\" 2>/dev/null; printf done; exec sleep 5"
+        ),
+        &config,
+    )
+    .unwrap();
+    wait_text(&fixture.pane, "ready");
+    fixture.pane.config_reloaded(ColorScheme::Dark);
+    std::fs::write(fixture.path("go"), b"").unwrap();
+    assert_eq!(wait_file(&fixture.path("reply"), 13), b"\x1b[?997;1n\x1b[0n");
+    wait_text(&fixture.pane, "done");
+}
+
+#[test]
 fn color_scheme_queries_are_answered_and_mode_2031_gets_a_report_on_a_change_only() {
     let mut config = PaneConfig::new(SIZE);
     config.color_scheme = ColorScheme::Dark;

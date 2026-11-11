@@ -931,7 +931,7 @@ impl Terminal {
             if let Err(err) = applied {
                 tracing::warn!(target: "ngterm::surface", key = shared.key, %err, "the terminal refused the config");
             }
-            pane.set_color_scheme(config.color_scheme);
+            pane.config_reloaded(config.color_scheme);
         }
         let fonts_changed = shared.config.borrow().font != config.font;
         let cell = shared.metrics_at(shared.font_points(), shared.scale());

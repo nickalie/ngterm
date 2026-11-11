@@ -16,6 +16,36 @@ impl Live {
         };
         metadata
     }
+
+    pub(crate) fn take_posted_reload(&self) -> ReplyMetadata {
+        let mut outbox = lock(&self.outbox);
+        assert_eq!(outbox.queue.len(), 1, "{:?}", outbox.queue);
+        let Some(Message::ConfigReload(metadata)) = outbox.queue.pop_front() else {
+            panic!("not a config reload");
+        };
+        metadata
+    }
+}
+
+#[test]
+fn identical_config_reloads_are_posted_with_final_facts_and_remembered_for_reconnect() {
+    let live = Live::new(ReadPause::new(), 1024, true);
+    let metadata = ReplyMetadata {
+        color_scheme: Some(wire::ColorScheme::Dark),
+        ..ReplyMetadata::default()
+    };
+    for _ in 0..2 {
+        live.config_reloaded(metadata.clone());
+        let mut outbox = lock(&live.outbox);
+        assert_eq!(outbox.queue.len(), 1);
+        let Some(Message::ConfigReload(got)) = outbox.queue.pop_front() else {
+            panic!("not a reload");
+        };
+        assert_eq!(got, metadata);
+        assert_eq!(*lock(&live.metadata), metadata);
+    }
+    live.update_metadata(metadata);
+    assert!(lock(&live.outbox).queue.is_empty(), "ordinary facts still deduplicate");
 }
 
 fn attach(argv: &[&str]) -> LiveAttach {

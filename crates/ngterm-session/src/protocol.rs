@@ -67,8 +67,9 @@ pub const MAGIC: [u8; 4] = *b"AGLS";
 
 /// The protocol of this build's message frames. Bumped whenever a message type's postcard layout changes (2: the reply
 /// owner's [`AttachServerMessage::ReplyOwner`], its Kitty graphics answers by [`AttachServerMessage::KittyBarrier`] and
-/// [`AttachClientMessage::KittyComplete`], the colour scheme in [`ReplyMetadata`], the list-only clipboard read).
-pub const PROTOCOL_VERSION: u32 = 2;
+/// [`AttachClientMessage::KittyComplete`], the colour scheme in [`ReplyMetadata`], the list-only clipboard read;
+/// 3: [`AttachClientMessage::ConfigReload`] reports even unchanged colour schemes after a config reload).
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// The size of a frame's header: magic, protocol, kind, length.
 pub const HEADER_LEN: usize = 16;
@@ -963,6 +964,9 @@ pub enum AttachClientMessage {
     KittyComplete { id: u64, epoch: u64, data: Vec<u8> },
     /// Leave the session running and close the connection.
     Detach,
+    /// The client applied its config. Replace its reply facts and, while it owns replies and mode 2031 is on,
+    /// report the configured colour scheme once, even when the facts are unchanged.
+    ConfigReload(ReplyMetadata),
 }
 
 /// Attach to the session `name`.

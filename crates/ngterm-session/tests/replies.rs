@@ -628,6 +628,39 @@ fn theme_colours_cell_size_and_appearance_come_from_the_owner_else_the_defaults(
     Ok(())
 }
 
+#[test]
+fn config_reload_reports_for_the_owner_alone_even_with_identical_metadata() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let spec = probe(&[b"\x1b[?2031h\x1b[5n", DSR], &gated(gate.path(), 1500));
+    let mut config = pane_config("reload", dir.path(), spec);
+    config.metadata = metadata();
+    let (pane, creator) = Pane::spawn(config)?;
+    let owner = creator.subscription.id();
+    let other = pane.try_attach(SIZE, None)?;
+    assert_eq!(pane.reply_owner().0, Some(owner));
+    go(gate.path(), 0)?;
+    server_expects(&pane, "REPLY-0:");
+    pane.config_reloaded(
+        other.subscription.id(),
+        ReplyMetadata {
+            color_scheme: Some(ColorScheme::Light),
+            ..metadata()
+        },
+    );
+    pane.config_reloaded(u64::MAX, metadata()); // detached clients cannot report either
+    pane.config_reloaded(owner, metadata());
+    go(gate.path(), 1)?;
+    let got = replies(&server_expects(&pane, "PROBE-DONE"));
+    assert_eq!(got[0], b"\x1b[0n");
+    assert_eq!(
+        got[1],
+        [DARK_REPORT, b"\x1b[0n"].concat(),
+        "one owner report before the DSR"
+    );
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn a_clipboard_read_goes_to_the_owner_alone_and_the_output_after_it_waits_for_the_answer() -> TestResult {

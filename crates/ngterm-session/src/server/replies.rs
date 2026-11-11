@@ -932,6 +932,15 @@ impl State {
     /// The facts of the client `client` (attached) for the replies; they count while it owns them. An owner that no
     /// longer shows Kitty graphics ends its barriers empty.
     pub(super) fn remember(&mut self, client: ClientId, metadata: ReplyMetadata) {
+        self.remember_config(client, metadata, false);
+    }
+
+    /// A config reload reports even an unchanged scheme, but only for the reply owner.
+    pub(super) fn reload_config(&mut self, client: ClientId, metadata: ReplyMetadata) {
+        self.remember_config(client, metadata, true);
+    }
+
+    fn remember_config(&mut self, client: ClientId, metadata: ReplyMetadata, reload: bool) {
         if self.lead.role(client).is_none() {
             return;
         }
@@ -939,7 +948,7 @@ impl State {
             self.replies.outlet.end(Some(client));
         }
         self.replies.metadata.insert(client, metadata);
-        self.apply_facts();
+        self.apply_facts(reload && self.replies.owner == Some(client));
     }
 
     /// The client `id` just attached: told it does not own the replies, unless it does and was told so.
@@ -970,15 +979,17 @@ impl State {
             self.replies.outlet.end(None);
             self.replies.timer.notify_all();
         }
-        self.apply_facts();
+        self.apply_facts(false);
     }
 
-    /// The owner's facts onto the terminal when they changed; a program that asked for colour scheme reports (mode
-    /// 2031) gets one when the appearance changed, as Ghostty's surface sends it.
-    fn apply_facts(&mut self) {
+    /// The owner's facts onto the terminal when they changed, or on the reply owner's config reload (`reload`), which
+    /// reapplies them even when unchanged; a program that asked for colour scheme reports (mode 2031) gets one when
+    /// the appearance changed, as Ghostty's surface sends it, and on every such reload even for an unchanged scheme
+    /// (Ghostty Termio.changeConfig, #14834).
+    fn apply_facts(&mut self, reload: bool) {
         let owner = self.replies.owner.and_then(|id| self.replies.metadata.get(&id));
         let facts = Facts::of(owner);
-        if facts == self.replies.facts {
+        if facts == self.replies.facts && !reload {
             return;
         }
         let old = std::mem::replace(&mut self.replies.facts, facts);
@@ -988,9 +999,11 @@ impl State {
         }
         if old.color_scheme != facts.color_scheme {
             self.replies.outlet.set_scheme(facts.color_scheme);
-            if self.terminal.mode(vt::Mode::COLOR_SCHEME_REPORT) {
-                self.replies.outlet.push(scheme(facts.color_scheme).report());
-            }
+        }
+        // Ghostty Termio.changeConfig (#14834): use the existing outbound queue under the terminal lock;
+        // posting back to the IO thread's mailbox could block its only reader.
+        if (reload || old.color_scheme != facts.color_scheme) && self.terminal.mode(vt::Mode::COLOR_SCHEME_REPORT) {
+            self.replies.outlet.push(scheme(facts.color_scheme).report());
         }
         // what the terminal answered (a mode 2048 report too) is written by the helper thread
         self.replies.timer.notify_all();

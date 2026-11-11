@@ -892,6 +892,16 @@ impl Pane {
         self.release(state);
     }
 
+    /// Apply the attached client's config facts and send one mode 2031 report when it owns replies.
+    pub fn config_reloaded(&self, id: ClientId, metadata: ReplyMetadata) {
+        let mut state = self.core.lock();
+        if state.exit.is_some() {
+            return;
+        }
+        state.reload_config(id, metadata);
+        self.release(state);
+    }
+
     /// The client `id`'s answer to the delegated request `request`, given in its epoch `epoch`: it ends the clipboard
     /// read waiting for it, and the output held behind that read goes on. Whether it was taken: dropped unless that
     /// read was sent to this client in that epoch, still waits (no denial ended it: the owner changing, a deadline)
@@ -1692,6 +1702,49 @@ mod tests {
         // a read after it: its answer goes behind the report
         assert!(core.read(b"\x1b[5n").is_empty());
         assert_eq!(core.outlet.take(), [b"\x1b[?997;1n".to_vec(), b"\x1b[0n".to_vec()]);
+    }
+
+    #[test]
+    fn config_reload_reports_once_under_the_lock_before_later_output() {
+        for scheme in [ColorScheme::Dark, ColorScheme::Light] {
+            let metadata = ReplyMetadata {
+                color_scheme: Some(scheme),
+                ..ReplyMetadata::default()
+            };
+            let (core, creator) = core(metadata.clone());
+            let owner = creator.subscription.id();
+            core.lock().reload_config(owner, metadata.clone());
+            assert!(core.outlet.take().is_empty(), "mode 2031 off");
+            assert!(core.read(b"\x1b[?2031h").is_empty());
+            let report: &[u8] = if scheme == ColorScheme::Dark {
+                b"\x1b[?997;1n"
+            } else {
+                b"\x1b[?997;2n"
+            };
+            for _ in 0..2 {
+                core.lock().reload_config(owner, metadata.clone());
+                assert!(core.read(b"\x1b[5n").is_empty());
+                assert_eq!(core.outlet.take(), [report.to_vec(), b"\x1b[0n".to_vec()]);
+            }
+            let other = if scheme == ColorScheme::Dark {
+                ColorScheme::Light
+            } else {
+                ColorScheme::Dark
+            };
+            core.lock().reload_config(
+                owner,
+                ReplyMetadata {
+                    color_scheme: Some(other),
+                    ..metadata
+                },
+            );
+            let report: &[u8] = if other == ColorScheme::Dark {
+                b"\x1b[?997;1n"
+            } else {
+                b"\x1b[?997;2n"
+            };
+            assert_eq!(core.outlet.take(), [report.to_vec()], "changed scheme reported once");
+        }
     }
 
     #[test]
