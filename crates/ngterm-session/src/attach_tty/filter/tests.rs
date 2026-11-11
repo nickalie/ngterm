@@ -25,6 +25,93 @@ fn assert_split_safe(bytes: &[u8], expected: &[u8]) {
     assert_eq!(out, expected, "byte by byte");
 }
 
+/// Every read boundary agrees with the real parser about where attach may insert its own sequences.
+fn assert_ground_matches_terminal(bytes: &[u8], expected: &[u8]) {
+    assert_split_safe(bytes, expected);
+    for cut in 0..=bytes.len() {
+        let mut filter = OutputFilter::new();
+        let mut terminal = ngterm_ghostty_vt::Terminal::new(20, 4).unwrap();
+        let mut out = Vec::new();
+        filter.feed(&bytes[..cut], &mut out);
+        terminal.vt_write(&bytes[..cut]);
+        assert_eq!(filter.at_ground(), terminal.at_ground(), "prefix {cut}: {bytes:?}");
+        let taken = if filter.at_ground() {
+            0
+        } else {
+            let taken = filter.feed_until_ground(&bytes[cut..], &mut out);
+            let expected = terminal
+                .vt_write_until_ground(&bytes[cut..])
+                .unwrap_or(bytes.len() - cut);
+            assert_eq!(taken, expected, "ground after prefix {cut}: {bytes:?}");
+            assert_eq!(
+                filter.at_ground(),
+                terminal.at_ground(),
+                "after {taken} more bytes: {bytes:?}"
+            );
+            taken
+        };
+        filter.feed(&bytes[cut + taken..], &mut out);
+        assert_eq!(out, expected, "output after prefix {cut}: {bytes:?}");
+    }
+}
+
+#[test]
+fn high_bytes_stay_inside_an_apc_until_its_real_terminator() {
+    for byte in 0xA0..=0xFF {
+        for end in [b"\x1b\\".as_slice(), b"\x9c"] {
+            let mut stream = b"\x1b_G".to_vec();
+            stream.push(byte);
+            stream.extend_from_slice(b"payload");
+            // The unterminated prefix must never offer an insertion point.
+            assert_ground_matches_terminal(&stream, &stream);
+            stream.extend_from_slice(end);
+            stream.extend_from_slice(b"tail");
+            assert_ground_matches_terminal(&stream, &stream);
+        }
+    }
+}
+
+#[test]
+fn every_apc_exit_matches_the_real_terminal() {
+    for byte in 0..=u8::MAX {
+        let mut stream = b"\x1b_G".to_vec();
+        stream.push(byte);
+        // Includes C1 self-introducers, CAN/SUB, ST, ESC and C1 aborts into CSI/OSC/DCS.
+        stream.extend_from_slice(b"payload\x1b\\tail");
+        assert_ground_matches_terminal(&stream, &stream);
+    }
+}
+
+#[test]
+fn apc_c1_aborts_still_filter_the_query_they_introduce() {
+    for (query, kept) in [
+        (b"\x9b6n".as_slice(), b"\x1b_G\xfftail".as_slice()),
+        (b"\x9d11;?\x07", b"\x1b_G\xfftail"),
+        (b"\x90$qm\x1b\\", b"\x1b_G\xfftail"),
+    ] {
+        let mut stream = b"\x1b_G\xff".to_vec();
+        stream.extend_from_slice(query);
+        stream.extend_from_slice(b"tail");
+        assert_ground_matches_terminal(&stream, kept);
+    }
+}
+
+#[test]
+fn osc_and_dcs_high_bytes_stay_inside_their_strings() {
+    for byte in 0xA0..=0xFF {
+        for start in [b"\x1b]2;".as_slice(), b"\x1bPq"] {
+            let mut stream = start.to_vec();
+            stream.push(byte);
+            stream.extend_from_slice(b"payload");
+            // OSC is held for query classification until its terminator; DCS q passes as it comes.
+            let expected = if start == b"\x1b]2;" { &[][..] } else { &stream };
+            assert_ground_matches_terminal(&stream, expected);
+            stream.extend_from_slice(b"\x1b\\tail");
+            assert_ground_matches_terminal(&stream, &stream);
+        }
+    }
+}
+
 #[test]
 fn the_queries_the_server_answers_are_dropped_wherever_the_reads_cut_them() {
     let queries: [&[u8]; 21] = [

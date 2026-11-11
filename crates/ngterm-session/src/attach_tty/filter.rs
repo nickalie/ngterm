@@ -231,7 +231,8 @@ impl OutputFilter {
             State::DcsEntry | State::DcsParam | State::DcsIntermediate => self.dcs_header(byte, out),
             State::DcsPassthrough | State::DcsIgnore => self.string(byte, out),
             State::SosPmApc => match byte {
-                _ if is_inert_c0(byte) || (0x20..=0x7F).contains(&byte) => self.string(byte, out),
+                // Ghostty ignores high bytes without leaving the APC; the outer terminal still needs them verbatim.
+                _ if is_inert_c0(byte) || (0x20..=0x7F).contains(&byte) || byte >= 0xA0 => self.string(byte, out),
                 _ if anywhere(byte) == Some(State::SosPmApc) => self.string(byte, out),
                 _ => self.string_end(byte, out),
             },
