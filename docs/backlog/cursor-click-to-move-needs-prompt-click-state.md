@@ -29,3 +29,14 @@ the semantic-prompt event, plus the cursor's pen content), then port `promptClic
 waiting, have the stream scanner (`ngterm-ghostty-vt`'s `scan.rs`, which already watches OSC 52 reads) track the OSC 133
 prompt-start options per screen as Ghostty does and use the cell under the cursor in place of the pen. Meanwhile a
 `true` value is accepted by the config and has no effect.
+
+Rechecked at Ghostty v1.4.0 (`83fb95624b0439ee660c2679b43b38c8b63769cd`, 2026-11-11):
+`include/ghostty/vt/terminal.h`'s `GhosttyTerminalSemanticPrompt` still contains only the event kind, prompt kind,
+exit code, command and error (plus its size), with no click options. The terminal data enum still exposes
+`CURSOR_AT_PROMPT` but no cursor-pen semantic content or semantic-click datum. The API gaps above remain open.
+
+When porting prompt clicks, keep v1.4.0's `Surface.maybePromptClick` zero-click-count guard (#14710): a press sent
+under mouse tracking resets the selection gesture's click count, and the matching release must also be reported,
+never replaced by a prompt click. `terminal/input_tests.rs` covers exact SGR press/release bytes at cell (3,2),
+both clicks of a double click, and Shift selection with `cursor-click-to-move = true` for `click_events=1`,
+`click_events=2` and `cl=line`. This protects the existing tracking behavior while the prompt-click port is blocked.

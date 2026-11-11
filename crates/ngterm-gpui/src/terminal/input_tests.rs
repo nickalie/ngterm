@@ -750,6 +750,43 @@ fn a_program_with_the_mouse_gets_clicks_and_shift_keeps_the_mouse_for_selecting(
 
 #[gpui_kit::test]
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn prompt_click_options_keep_tracked_releases_and_shift_selection(cx: &mut TestAppContext) {
+    // Ghostty v1.4.0, Surface.maybePromptClick: a tracked press resets the click count to zero, so its release
+    // must reach the program rather than becoming a prompt click. Keep the cursor at the prompt while recording
+    // raw input separately: echoing reports back through the terminal would move it out of the prompt.
+    for option in ["click_events=1", "click_events=2", "cl=line"] {
+        let script = format!(
+            "stty raw -echo; printf 'ready\\r\\n\\033[?1000h\\033[?1006h\\033]133;A;{option}\\007hello\\033]133;B\\007'; \
+             exec cat > mouse-input"
+        );
+        let mut f = fixture(cx, &script, config("cursor-click-to-move = true\n"));
+        f.wait_painted("hello");
+        let captured = f.dir.path().join("mouse-input");
+        let report = b"\x1b[<0;3;2M\x1b[<0;3;2m";
+        // Both clicks of a double click send their own complete pair at the one-based cell (3, 2).
+        f.click(2, 1, Modifiers::default());
+        f.click(2, 1, Modifiers::default());
+        assert_eq!(f.selection(), None, "{option}");
+
+        let shift = Modifiers::shift();
+        f.cx.simulate_mouse_down(Fixture::at(0, 1), MouseButton::Left, shift);
+        let end = point(px(2. + 4. * 10. + 8.), Fixture::at(0, 1).y);
+        f.cx.simulate_mouse_move(end, Some(MouseButton::Left), shift);
+        f.cx.simulate_mouse_up(end, MouseButton::Left, shift);
+        assert_eq!(f.selection().as_deref(), Some("hello"), "{option}");
+
+        // A following key is a queue barrier: after it arrives we can assert the entire byte stream, including
+        // the absence of prompt replacement bytes or Shift-selection reports.
+        f.type_keys("x");
+        let mut expected = report.repeat(2);
+        expected.push(b'x');
+        f.settle(|_| std::fs::read(&captured).is_ok_and(|bytes| bytes.len() >= expected.len()));
+        assert_eq!(std::fs::read(&captured).unwrap(), expected, "{option}");
+    }
+}
+
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_wheel_scrolls_the_viewport_back(cx: &mut TestAppContext) {
     let script = "i=0; while [ $i -lt 60 ]; do echo line-$i; i=$((i+1)); done; printf ready; exec sleep 30";
     let mut f = fixture(cx, script, config(""));
