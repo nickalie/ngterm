@@ -488,8 +488,9 @@ impl Relay {
             return;
         }
         let selection = clipboard_selection(selection);
+        // BEL-terminated, as `ngtermctl clipboard set` prints it and the server's recovery replays it
         let bytes = format!(
-            "\x1b]52;{selection};{}\x1b\\",
+            "\x1b]52;{selection};{}\x07",
             STANDARD.encode(text.map_or(&[][..], |content| content.data.as_slice()))
         )
         .into_bytes();

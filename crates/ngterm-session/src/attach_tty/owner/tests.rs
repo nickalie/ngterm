@@ -485,7 +485,7 @@ fn osc_52_and_1337_writes_reach_the_outer_terminal_once_after_raw_output_is_filt
         relay.delegated_output(raw, &mut fx);
         assert!(fx.stdout.is_empty());
         relay.delegated(clipboard_write(id, vec![plain(b"hi")], false), Instant::now(), &mut fx);
-        assert_eq!(fx.stdout, b"\x1b]52;p;aGk=\x1b\\");
+        assert_eq!(fx.stdout, b"\x1b]52;p;aGk=\x07");
         assert_eq!(
             replies(&fx),
             [(
@@ -506,7 +506,7 @@ fn a_write_completes_at_a_suppressed_st_escape_without_leaking_its_backslash() {
     let mut fx = Effects::default();
     relay.delegated_output(b"\x1b]52;p;aGk=\x1b", &mut fx);
     relay.delegated(clipboard_write(1, vec![plain(b"hi")], false), now, &mut fx);
-    assert_eq!(fx.stdout, b"\x1b]52;p;aGk=\x1b\\");
+    assert_eq!(fx.stdout, b"\x1b]52;p;aGk=\x07");
     assert_eq!(
         replies(&fx).len(),
         1,
@@ -514,7 +514,7 @@ fn a_write_completes_at_a_suppressed_st_escape_without_leaking_its_backslash() {
     );
     relay.delegated_output(b"\\after", &mut fx);
     relay.tick(now + INJECT_WAIT, &mut fx);
-    assert_eq!(fx.stdout, b"\x1b]52;p;aGk=\x1b\\after");
+    assert_eq!(fx.stdout, b"\x1b]52;p;aGk=\x07after");
     assert_eq!(replies(&fx).len(), 1);
 }
 
@@ -527,7 +527,7 @@ fn a_queued_write_completes_only_in_the_effects_that_emit_it_and_reconnect_drops
     relay.delegated(clipboard_write(1, vec![plain(b"hi")], false), now, &mut fx);
     assert!(fx.stdout.is_empty() && replies(&fx).is_empty());
     relay.output(b"m", &mut fx);
-    assert_eq!(fx.stdout, b"\x1b[31m\x1b]52;p;aGk=\x1b\\");
+    assert_eq!(fx.stdout, b"\x1b[31m\x1b]52;p;aGk=\x07");
     assert_eq!(replies(&fx).len(), 1);
     let mut fx = Effects::default();
     relay.output(b"\x1b[31", &mut fx);
@@ -543,7 +543,7 @@ fn an_explicit_clear_stays_a_clear_but_missing_text_and_kitty_writes_are_unsuppo
     let (mut relay, _) = probed(None, Vec::new());
     let mut fx = Effects::default();
     relay.delegated(clipboard_write(1, Vec::new(), false), Instant::now(), &mut fx);
-    assert_eq!(fx.stdout, b"\x1b]52;p;\x1b\\");
+    assert_eq!(fx.stdout, b"\x1b]52;p;\x07");
     let mut fx = Effects::default();
     let image = crate::protocol::ClipboardRepresentation {
         mime: "image/png".into(),
