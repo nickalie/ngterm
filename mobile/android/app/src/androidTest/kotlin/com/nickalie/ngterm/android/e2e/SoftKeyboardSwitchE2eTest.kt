@@ -12,7 +12,6 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -41,9 +40,10 @@ import java.io.File
 
 /**
  * Typing survives the input method binding again, end to end: in a live session on a real machine, the soft keyboard
- * goes to another input method and comes back, as when a person taps Gboard's mic for voice typing (or picks another keyboard) and returns, and what they type
- * after it still reaches the shell; again for a second and a third round trip (one with a word half typed as the
- * keyboard goes, one through the system's input method switch), and after leaving the session and opening it again.
+ * goes to another input method and comes back, as when a person taps Gboard's mic for voice typing (or picks another
+ * keyboard) and returns, and what they type after it still reaches the shell; again for a second and a third round trip
+ * (one with a word half typed as the keyboard goes, one through the system's input method switch), and after leaving
+ * the session and opening it again.
  *
  * The real stack: this app and its mobile core, signed in over ssh to a private `ngterm-headless` behind a private
  * `sshd` on the host, which `scripts/test-android-e2e.sh` starts and hands over as instrumentation arguments
@@ -98,10 +98,20 @@ class SoftKeyboardSwitchE2eTest {
                     shell("settings put global $name 0")
                 }
                 before = shell("settings get secure default_input_method").trim().takeIf { it.contains('/') }
-                shell("ime enable ${QaKeyboard.id(testPackage)}")
-                shell("ime enable ${QaVoiceTyping.id(testPackage)}")
-                shell("ime set ${QaKeyboard.id(testPackage)}")
+                // a test APK installed a moment ago may not be listed as input methods yet: until it is, try again
+                val keyboard = QaKeyboard.id(testPackage)
+                val deadline = System.currentTimeMillis() + KEY_WAIT_MS
+                while (current() != keyboard && System.currentTimeMillis() < deadline) {
+                    val answers =
+                        listOf(keyboard, QaVoiceTyping.id(testPackage)).map { shell("ime enable $it") } +
+                            shell("ime set $keyboard")
+                    Log.i(TAG, "keyboards: ${answers.joinToString(" | ") { it.trim() }}")
+                    if (current() != keyboard) Thread.sleep(RETRY_MS)
+                }
+                assertTrue("the test keyboard is the device's input method (now ${current()})", current() == keyboard)
             }
+
+            private fun current() = shell("settings get secure default_input_method").trim()
 
             override fun after() {
                 before?.let { shell("ime set $it") } ?: shell("ime reset")
@@ -207,16 +217,29 @@ class SoftKeyboardSwitchE2eTest {
     }
 
     private fun leaveAndReopenTheSession() {
-        // the session bar's Back: to the attached sessions' list
-        compose.onNodeWithContentDescription(text(R.string.action_back)).performClick()
+        // a phone's session bar has Back, to the attached sessions' list; a tablet's list stays beside the session, so
+        // it leaves for Machines and comes back through Sessions
+        val back = hasContentDescription(text(R.string.action_back))
+        if (compose.onAllNodes(back).fetchSemanticsNodes().isNotEmpty()) {
+            compose.onNode(back).performClick()
+        } else {
+            compose.onNodeWithText(text(R.string.nav_machines)).performClick()
+        }
         compose.waitUntil(CONNECT_WAIT_MS) { compose.onAllNodes(terminal()).fetchSemanticsNodes().isEmpty() }
+        if (compose.onAllNodes(hasText(SESSION)).fetchSemanticsNodes().isEmpty()) {
+            compose.onNodeWithText(text(R.string.nav_sessions)).performClick()
+        }
         awaitText(SESSION)
         compose.onAllNodesWithText(SESSION)[0].performClick()
         awaitTerminal()
     }
 
-    /** A tap on the terminal, which brings up the soft keyboard: the test's. */
+    /**
+     * A tap on the terminal, which brings up the soft keyboard: the test's. Once the session is ready for it: the
+     * terminal shown on its own (no cover over it while it attaches) and the shell's prompt drawn on it.
+     */
     private fun showKeyboard() {
+        compose.waitUntil(CONNECT_WAIT_MS) { terminalText().isNotBlank() }
         compose.waitForIdle()
         val bounds = compose.onNode(terminal()).fetchSemanticsNode().boundsInWindow
         device.click(bounds.center.x.toInt(), bounds.center.y.toInt())
@@ -319,6 +342,7 @@ class SoftKeyboardSwitchE2eTest {
         const val ANSWER_WAIT_MS = 10_000L
         const val CONNECT_WAIT_MS = 60_000L
         const val ASK_WAIT_MS = 5_000L
+        const val RETRY_MS = 500L
         val ANIMATION_SCALES = listOf("window_animation_scale", "transition_animation_scale", "animator_duration_scale")
     }
 }
