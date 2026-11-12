@@ -602,9 +602,11 @@ paths use forward slashes, including paths containing spaces; `CHERE_INVOKING=1`
 
 CMD and WSL run directly in the Windows session server's ConPTY. Reattaching preserves the running process,
 its directory and variables, including WSL's Linux shell. CMD preserves startup switches such as `/D`, `/Q`
-and `/V:OFF`. A CMD profile with `/V:ON`, with or without Live, replays no captured command (after a rerun relaunch
-or a lost server) and does not re-run a Duplicate as Companion copy's program: the pane starts the plain profile
-shell, because delayed expansion would read a `!NAME!` in their arguments as a variable. WSL preserves `--distribution`/`-d`, `--user`/`-u` and `--cd` argument pairs. WSL's `--cd` controls
+and `/V:OFF`. Any CMD profile whose switches before `/C`/`/K` turn on delayed expansion (`/V:ON`, also with `/K <line>`),
+with or without Live, replays no captured command (after a rerun relaunch or a lost server), and one Live can run
+directly does not re-run a Duplicate as Companion copy's program: the pane starts the plain profile shell, because
+delayed expansion would read a `!NAME!` in their arguments as a variable. Other CMD profiles run a copy through the
+platform's command shell. WSL preserves `--distribution`/`-d`, `--user`/`-u` and `--cd` argument pairs. WSL's `--cd` controls
 its Linux starting directory; otherwise WSL translates the Windows launch directory normally. Profiles with
 one-shot commands or management options (for example CMD `/C` or WSL `--shutdown`) open ordinary sessions,
 as the menu/settings indicate, rather than silently dropping their options.

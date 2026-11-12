@@ -158,7 +158,7 @@ fn resolve_seed_in(
         if foreground_input.is_some()
             && session
                 .shell_profile_for(pane)
-                .is_some_and(|profile| !profile.reads_quoted_argv())
+                .is_some_and(crate::shell_profiles::ShellProfile::expands_typed_input)
         {
             foreground_input = None;
             tracing::warn!(
@@ -633,6 +633,31 @@ mod tests {
         let seed = resolve_seed(&mut restored, StatusPane::Left, &policy(true, &[]));
         assert_eq!((seed.command, seed.initial_input), (None, None));
         assert_eq!(restored.restore.pending_foreground, None, "consumed");
+        // the profile's shell reads the replay whether or not Live can run it directly
+        for args in [
+            &["/V:ON", "/K", r#""C:\VS\VsDevCmd.bat" -arch=x64"#][..],
+            &["/D", "/V:ON", "/K", "echo ready"],
+            &["/V:ON", "/T:0A"],
+            &["/D/V:ON"],
+            &["/V"],
+        ] {
+            for executable in [r"C:\Windows\System32\CMD.EXE", "cmd"] {
+                restored.shell_profile = Some(ShellProfile::new("cmd", "CMD", executable.into(), args));
+                restored.restore.pending_foreground = Some(captured.clone());
+                let seed = resolve_seed(&mut restored, StatusPane::Left, &policy(true, &[]));
+                assert_eq!(seed.initial_input, None, "{executable} {args:?}");
+            }
+        }
+        // a switch in the command's own text is not cmd's
+        restored.shell_profile = Some(ShellProfile::new(
+            "cmd",
+            "CMD",
+            "C:/Windows/System32/cmd.exe".into(),
+            &["/K", "tool", "/V:ON"],
+        ));
+        restored.restore.pending_foreground = Some(captured.clone());
+        let seed = resolve_seed(&mut restored, StatusPane::Left, &policy(true, &[]));
+        assert_eq!(seed.initial_input, Some(PaneInput::Replay(captured.clone())));
         restored.shell_profile = Some(ShellProfile::new(
             "cmd",
             "CMD",
