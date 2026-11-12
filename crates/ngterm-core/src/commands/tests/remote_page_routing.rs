@@ -237,6 +237,45 @@ fn a_late_answer_to_the_park_leaves_the_page_handed_back_to_the_same_desktop_ope
     assert!(origin.node()["htmlOverlays"][0].is_null());
 }
 
+/// Each close of a page dropped twice before the desktop answered takes its own answer, in whichever order its two
+/// answers come, so neither ends the page handed back a second time; the desktop's next close does.
+#[test]
+fn both_answers_to_a_page_dropped_twice_leave_the_page_handed_back_open() {
+    let answer = |kind: &str, page: &str| json!({"kind": kind, "page": {"page": page}});
+    for answers in [["page.closed", "page.rejected"], ["page.rejected", "page.closed"]] {
+        let phone = phone_kinds();
+        let mut origin = Origin::new(false, &listed(&phone));
+        let (desktop_serial, desktop) = attach(&mut origin, &SUPPORTED_KINDS);
+        let page = page_id(&open_page(&mut origin));
+        let mut phone_serial = origin.serial;
+        for _ in 0..2 {
+            origin.live.fixture.core.presentation_closed(phone_serial);
+            origin.live.fixture.core.commit();
+            phone_serial = attach(&mut origin, &listed(&phone)).0;
+        }
+        let count = |kind: &str| desktop.kinds().iter().filter(|seen| *seen == kind).count();
+        assert_eq!(
+            (count("page.close"), count("page.request")),
+            (2, 3),
+            "dropped twice, handed back twice"
+        );
+
+        for kind in answers {
+            let core = &mut origin.live.fixture.core;
+            core.presentation_line(desktop_serial, &frame(&desktop, &answer(kind, &page)));
+            core.commit();
+            let node = origin.node();
+            assert_eq!(node["htmlOverlays"][0]["id"], json!(page), "{node}");
+            assert_ne!(node["htmlOverlays"][0]["parked"], json!(true), "{node}");
+        }
+
+        let core = &mut origin.live.fixture.core;
+        core.presentation_line(desktop_serial, &frame(&desktop, &answer("page.closed", &page)));
+        core.commit();
+        assert!(origin.node()["htmlOverlays"][0].is_null());
+    }
+}
+
 /// A program overlay already open on a desktop presenter without web views stays there when a desktop that shows
 /// pages attaches beside it and takes them.
 #[test]

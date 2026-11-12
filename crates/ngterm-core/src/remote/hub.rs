@@ -5,7 +5,7 @@
 //! Where upstream's hub calls back into the server (`onPresenterLost`, `onPresenterFrame`), this one queues
 //! [`HubEvent`]s its owner takes after each call, so the hub never needs to reach the model it serves.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::time::{Duration, Instant};
 
@@ -98,8 +98,8 @@ struct Subscriber {
     /// Deltas published while the snapshot is being taken, held so they land after it.
     held: Option<Vec<Body>>,
     presents: bool,
-    /// Pages it was told to drop while they stay open here, until it answers that close.
-    dropped_pages: HashSet<String>,
+    /// The closes of pages it was told to drop while they stay open here that it has not answered yet, by page.
+    dropped_pages: HashMap<String, u32>,
 }
 
 impl Subscriber {
@@ -119,15 +119,20 @@ impl Subscriber {
         }
     }
 
-    /// Whether `body` answers a close of a replica it was told to drop; what it sends about the page after that answer
-    /// is about the page handed to it again.
+    /// Whether `body` answers a close of a replica it was told to drop, each close answered once; what it sends about
+    /// the page after its last answer is about the page handed to it again.
     fn answers_dropped_page(&mut self, body: &Body) -> bool {
-        match body {
-            Body::PageRejected(change) | Body::PageClosed(change) | Body::PageDetached(change) => {
-                self.dropped_pages.remove(&change.page)
-            }
-            _ => false,
+        let (Body::PageRejected(change) | Body::PageClosed(change) | Body::PageDetached(change)) = body else {
+            return false;
+        };
+        let Some(unanswered) = self.dropped_pages.get_mut(&change.page) else {
+            return false;
+        };
+        *unanswered -= 1;
+        if *unanswered == 0 {
+            self.dropped_pages.remove(&change.page);
         }
+        true
     }
 }
 
@@ -379,7 +384,7 @@ impl PresentationHub {
                 last_ack: now,
                 held: Some(Vec::new()),
                 presents: hello.mode == PresentationMode::Presenter,
-                dropped_pages: HashSet::new(),
+                dropped_pages: HashMap::new(),
             },
         );
         let state = snapshot(self);
@@ -472,7 +477,7 @@ impl PresentationHub {
         let close = Body::PageClose(PresentationPageChange::page(page.clone()));
         let sent = self.send_to(close, id);
         if sent && let Some(subscriber) = self.subscribers.get_mut(&id) {
-            subscriber.dropped_pages.insert(page);
+            *subscriber.dropped_pages.entry(page).or_default() += 1;
         }
         sent
     }
