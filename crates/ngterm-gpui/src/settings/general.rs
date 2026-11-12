@@ -108,8 +108,56 @@ fn sessions(snapshot: &Snapshot) -> Vec<Item> {
         &settings.effective_new_session_placement(),
         |placement| change(GeneralChange::NewSessionPlacement(placement)),
     ));
+    items.extend(shell_profiles(snapshot));
     items.extend(restore_mode(snapshot));
     items.extend(close_and_layout(snapshot));
+    items
+}
+
+/// Profiles are Windows-native; custom profiles remain visible on other platforms too.
+fn shell_profiles(snapshot: &Snapshot) -> Vec<Item> {
+    let settings = &snapshot.settings;
+    let mut profiles = ngterm_core::shell_profiles::available(settings.shell_profiles.as_deref().unwrap_or_default());
+    if let Some(selected) = &settings.default_shell_profile
+        && !profiles.contains(selected)
+    {
+        profiles.push(selected.clone());
+    }
+    if !cfg!(windows) && profiles.is_empty() {
+        return Vec::new();
+    }
+    let mut options = vec![("Config / system default", None)];
+    options.extend(
+        profiles
+            .iter()
+            .map(|profile| (profile.name.as_str(), Some(profile.clone()))),
+    );
+    let mut items = vec![
+        picker(
+            "settings-shell-profile",
+            "Default shell",
+            &options,
+            &settings.default_shell_profile,
+            |profile| change(GeneralChange::DefaultShellProfile(profile)),
+        ),
+        Item::hint(
+            "settings-shell-profile-hint",
+            "Applies to new sessions. Choose a shell for one session from the + menu.",
+        ),
+    ];
+    if let Some(profile) = &settings.default_shell_profile {
+        if !std::path::Path::new(&profile.executable).is_file() {
+            items.push(Item::hint(
+                "settings-shell-profile-missing",
+                "This shell is no longer installed. Choose another profile.",
+            ));
+        } else if settings.effective_restore_mode() == RestoreMode::Live && profile.live_shell().is_none() {
+            items.push(Item::hint(
+                "settings-shell-profile-live",
+                "This profile opens a fresh shell; Live sessions do not support its shell or startup arguments.",
+            ));
+        }
+    }
     items
 }
 

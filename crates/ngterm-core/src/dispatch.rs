@@ -274,9 +274,32 @@ impl Core {
             tint_placement: crate::model::TintParts::ICON,
         };
         core.sync_session_naming();
-        core.sync_flagged_layout();
+        core.sync_store_settings();
+        core.seed_fresh_shell_profiles();
         core.repoint_remotes();
         core
+    }
+
+    /// The bootstrap may have made a fresh window before the core owned the settings.
+    fn seed_fresh_shell_profiles(&mut self) {
+        let Some(profile) = self.settings.default_shell_profile.clone() else {
+            return;
+        };
+        for window in self.library.open_ids() {
+            let Some(store) = self.library.store_mut(window) else {
+                continue;
+            };
+            let mut changed = false;
+            for session in store.sessions_mut().filter(|session| {
+                !session.was_restored && session.remote_host().is_none() && session.shell_profile.is_none()
+            }) {
+                session.shell_profile = Some(profile.clone());
+                changed = true;
+            }
+            if changed {
+                store.save();
+            }
+        }
     }
 
     /// Pushes `sessionNameFromTerminalTitle` to the naming mirror every session name reads
@@ -289,10 +312,13 @@ impl Core {
 
     /// Pushes the effective flagged layout to the library and every open store, which navigation reads (upstream's
     /// `SettingsModel.applyFlaggedViewLayout`). A launch passes it to the bootstrap too, so the restores that ran
-    /// before the core existed already picked their selections under it.
-    fn sync_flagged_layout(&mut self) {
+    /// before the core existed already picked their selections under it. Also mirrors the default shell for future
+    /// sessions; existing panes keep their profiles.
+    fn sync_store_settings(&mut self) {
         let layout = self.settings.effective_flagged_view_layout();
         self.library.set_flagged_layout(layout);
+        self.library
+            .set_default_shell_profile(self.settings.default_shell_profile.clone());
     }
 
     /// Whether this host claims the conformance capability `name` (`window-geometry` decides whether `window.move`
@@ -520,7 +546,7 @@ impl Core {
             return false;
         }
         self.sync_session_naming();
-        self.sync_flagged_layout();
+        self.sync_store_settings();
         self.save_settings();
         true
     }

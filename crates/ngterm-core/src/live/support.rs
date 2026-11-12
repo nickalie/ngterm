@@ -149,9 +149,9 @@ const LIVE_PWSH_FLAGS: [&str; 8] = [
 ///
 /// - Unix: zsh, bash, fish or PowerShell, by the basename [`LoginShell::of`] reads. Upstream takes zsh and fish only,
 ///   so its `/bin/bash -l` is `None` there and bash here (capability `live-any-shell`).
-/// - Windows: `pwsh.exe` or `powershell.exe` only, the shells a Windows live pane runs; the absolute path is a drive's
-///   or a UNC one. A whole value that names an existing file is one path (`C:\Program Files\PowerShell\7\pwsh.exe`, as
-///   `ngterm-term` runs the login shell), anything else is split on whitespace.
+/// - Windows: `pwsh.exe`, `powershell.exe` or Git's `bash.exe`; the absolute path is a drive's or a UNC one.
+///   A whole value that names an existing file is one path. Otherwise a double-quoted executable path preserves
+///   spaces, followed by whitespace-separated startup flags.
 #[must_use]
 pub fn command_shell(command: &str) -> Option<String> {
     command_shell_on(command, cfg!(windows), &|path| Path::new(path).is_file())
@@ -168,25 +168,44 @@ fn command_shell_on(command: &str, windows: bool, is_file: &dyn Fn(&str) -> bool
         .trim();
     let (shell, flags) = if windows && is_file(value) {
         (value, Vec::new())
+    } else if let Some(quoted) = value.strip_prefix('"') {
+        let (exe, rest) = quoted.split_once('"')?;
+        if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+            return None;
+        }
+        (exe, rest.split_whitespace().collect())
     } else {
         let mut words = value.split_whitespace();
         (words.next()?, words.collect())
     };
-    let kind = LoginShell::of(shell)?;
+    let args: Vec<String> = flags.iter().map(|flag| (*flag).to_owned()).collect();
     let absolute = if windows {
         is_windows_absolute(shell)
     } else {
         shell.starts_with('/')
     };
-    let wrapped = !windows || kind == LoginShell::Pwsh;
-    let live_flags = if kind == LoginShell::Pwsh {
-        flags
-            .iter()
+    absolute.then_some(())?;
+    profile_shell(shell, &args).map(str::to_owned)
+}
+
+/// The supported shell of a structured profile, retaining only startup flags that Live itself supplies.
+#[must_use]
+pub fn profile_shell<'a>(shell: &'a str, args: &[String]) -> Option<&'a str> {
+    let kind = LoginShell::of(shell)?;
+    let windows = is_windows_absolute(shell);
+    if !windows && !shell.starts_with('/') {
+        return None;
+    }
+    if windows && !matches!(kind, LoginShell::Pwsh | LoginShell::Bash) {
+        return None;
+    }
+    let valid = if kind == LoginShell::Pwsh {
+        args.iter()
             .all(|flag| LIVE_PWSH_FLAGS.iter().any(|known| flag.eq_ignore_ascii_case(known)))
     } else {
-        flags.iter().all(|flag| LIVE_SHELL_FLAGS.contains(flag))
+        args.iter().all(|flag| LIVE_SHELL_FLAGS.contains(&flag.as_str()))
     };
-    (absolute && wrapped && live_flags).then(|| shell.to_owned())
+    valid.then_some(shell)
 }
 
 /// Whether `path` is absolute as Windows reads it: a drive's (`C:\`, `C:/`) or a UNC one (`\\server\share`).
@@ -233,6 +252,8 @@ impl Inputs {
 /// How a wrapped pane attaches to its daemon (upstream's `ZmxSupport.Configuration`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Configuration {
+    /// A CMD/WSL profile whose program and argv the server keeps alive without injected integration.
+    pub direct_profile: Option<Box<crate::shell_profiles::ShellProfile>>,
     pub executable: String,
     pub session_host_executable: Option<String>,
     /// The surface's environment.
@@ -263,17 +284,50 @@ pub fn configuration(inputs: &Inputs) -> Result<Configuration, LiveRejection> {
         inputs.resources_dir.as_deref(),
         inputs.own_resources_dir.as_deref(),
     )?;
+    let mut configuration = base_configuration(inputs, &eligible.executable, &eligible.shell);
+    shell_integration::inject_live(
+        eligible.kind,
+        &eligible.resources,
+        &inputs.inherited,
+        &mut configuration.environment,
+    );
+    Ok(configuration)
+}
+
+/// Wrap a native CMD or WSL profile without requiring an unrelated PowerShell/Bash integration.
+///
+/// # Errors
+/// The session server is unavailable or the profile has unsupported startup options.
+pub fn direct_configuration(
+    inputs: &Inputs,
+    profile: &crate::shell_profiles::ShellProfile,
+) -> Result<Configuration, LiveRejection> {
+    if !inputs.executable.is_absolute() {
+        return Err(LiveRejection::ExecutablePathNotAbsolute);
+    }
+    let executable = super::standardized_path(&inputs.executable);
+    if !is_executable_file(&executable) {
+        return Err(LiveRejection::ExecutableUnavailable);
+    }
+    if profile.direct_live().is_none() {
+        return Err(LiveRejection::UnsupportedLoginShell);
+    }
+    let mut configuration = base_configuration(inputs, &executable, &profile.executable);
+    configuration.direct_profile = Some(Box::new(profile.clone()));
+    Ok(configuration)
+}
+
+fn base_configuration(inputs: &Inputs, executable: &Path, shell: &str) -> Configuration {
     let socket_directory = socket_directory(&inputs.state_dir);
     let pane_id = uuid_string(inputs.pane_identity);
     let mut environment = inputs.base_environment.clone();
     let mut set = |key: &str, value: &str| environment.insert(key.to_owned(), value.to_owned());
     set("NGTERM_PANE_ID", &pane_id);
-    set("SHELL", &eligible.shell);
+    set("SHELL", shell);
     set(DIRECTORY_VARIABLE, &socket_directory);
     set(SESSION_VARIABLE, "");
     set(SESSION_PREFIX_VARIABLE, "");
     set(NO_DETACH_KEY_VARIABLE, "1");
-    shell_integration::inject_live(eligible.kind, &eligible.resources, &inputs.inherited, &mut environment);
     // a stale value inherited from the app's own environment would opt the client in under a nonce no pane expects
     environment.remove(NONCE_VARIABLE);
     environment.remove(CLAIM_VARIABLE);
@@ -285,14 +339,15 @@ pub fn configuration(inputs: &Inputs) -> Result<Configuration, LiveRejection> {
         .as_deref()
         .filter(|path| path.is_absolute() && is_executable_file(path))
         .map(|path| super::standardized_path(path).to_string_lossy().into_owned());
-    Ok(Configuration {
-        executable: eligible.executable.to_string_lossy().into_owned(),
+    Configuration {
+        direct_profile: None,
+        executable: executable.to_string_lossy().into_owned(),
         session_host_executable,
         environment,
         daemon_name: daemon_name(inputs.pane_identity),
         socket_directory,
         pane_id,
-    })
+    }
 }
 
 /// How a pane starts (upstream's `ZmxSupport.LaunchDisposition`).
@@ -424,6 +479,9 @@ fn creation_arguments<S: AsRef<str>>(
     creation: Option<Creation<'_>>,
     denylist: &[S],
 ) -> Vec<String> {
+    if let Some(profile) = &configuration.direct_profile {
+        return crate::shell_profiles::direct::arguments(profile, replaying, creation, denylist);
+    }
     let environment = &configuration.environment;
     let Some((shell, kind)) = environment
         .get("SHELL")
@@ -435,8 +493,13 @@ fn creation_arguments<S: AsRef<str>>(
     let Some(rearm) = shell_integration::rearm(kind, environment) else {
         return login;
     };
+    let replay_shell = if kind == LoginShell::Bash {
+        crate::shell_profiles::bash_path(shell)
+    } else {
+        shell.clone()
+    };
     let final_shell = FinalShell {
-        path: shell,
+        path: &replay_shell,
         kind,
         rearm: &rearm,
     };
@@ -524,6 +587,7 @@ mod tests {
 
     fn replay_configuration(host: Option<&str>) -> Configuration {
         Configuration {
+            direct_profile: None,
             executable: "/bin/ngterm-session".to_owned(),
             session_host_executable: host.map(str::to_owned),
             environment: BTreeMap::from([
@@ -1099,7 +1163,7 @@ mod tests {
         let pwsh = r"C:\Program Files\PowerShell\7\pwsh.exe";
         let is_file = |path: &str| path == pwsh;
         let direct = format!("direct:{pwsh}");
-        let windows: [(&str, Option<&str>); 10] = [
+        let windows: [(&str, Option<&str>); 13] = [
             // a whole value naming a file is one path, spaces and all
             (pwsh, Some(pwsh)),
             (&direct, Some(pwsh)),
@@ -1113,7 +1177,16 @@ mod tests {
             (r"C:\Program Files\PowerShell\6\pwsh.exe", None),
             ("pwsh.exe", None),
             (r"C:\Tools\pwsh.exe -Command ls", None),
-            // Windows runs PowerShell only
+            (
+                r"C:\ProgramFiles\Git\bin\bash.exe --login -i",
+                Some(r"C:\ProgramFiles\Git\bin\bash.exe"),
+            ),
+            (
+                r#""C:\Program Files\Git\bin\bash.exe" -li"#,
+                Some(r"C:\Program Files\Git\bin\bash.exe"),
+            ),
+            (r#""C:\Program Files\Git\bin\bash.exe" -c echo"#, None),
+            // Windows supports PowerShell and Git Bash
             (r"C:\msys64\usr\bin\zsh -l", None),
             ("/bin/zsh", None),
         ];

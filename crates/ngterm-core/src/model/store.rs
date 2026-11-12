@@ -117,6 +117,7 @@ impl Default for WorkspaceOptions {
 /// A session to create (upstream's `addSession` arguments).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewSession {
+    pub shell_profile: Option<crate::shell_profiles::ShellProfile>,
     pub cwd: String,
     /// What the primary pane runs instead of the login shell.
     pub command: Option<String>,
@@ -145,6 +146,7 @@ impl NewSession {
     pub fn at_cwd(cwd: impl Into<String>) -> Self {
         Self {
             cwd: cwd.into(),
+            shell_profile: None,
             command: None,
             name: None,
             wait: false,
@@ -176,6 +178,7 @@ pub struct SessionLocation {
 /// One window's workspace tree, selection and sidebar state.
 #[derive(Debug, Default)]
 pub struct AppStore {
+    pub(crate) default_shell_profile: Option<crate::shell_profiles::ShellProfile>,
     /// The app-run bus, shared with the window library. Never persisted.
     pub(crate) messages: crate::messages::MessageBus,
     pub(crate) workspaces: Vec<Workspace>,
@@ -962,6 +965,9 @@ impl AppStore {
             content: spec.content,
             ..SessionSeed::default()
         });
+        if session.remote_host().is_none() {
+            session.shell_profile = spec.shell_profile.or_else(|| self.default_shell_profile.clone());
+        }
         session.launch.command = spec.command;
         session.launch.wait = spec.wait;
         session.tint = spec.tint;

@@ -545,6 +545,7 @@ impl Panes {
             painter: None,
             status_file: None,
             remote: replacement.remote,
+            shell_profile: None,
         };
         let fresh = self.cell(&spec.token);
         let installed = core

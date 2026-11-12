@@ -219,6 +219,8 @@ pub fn session_snapshot(session: &Session) -> SessionSnapshot {
         flagged: Some(session.flagged),
         foreground_command: session.restore.foreground.clone(),
         split_foreground_command: session.split_restore.foreground.clone(),
+        shell_profile: session.shell_profile.clone(),
+        split_shell_profile: session.split_shell_profile.clone(),
         initial_command: session.launch.command.clone(),
         command_wait: session.launch.wait.then_some(true),
         split_initial_command: session.split_launch.command.clone(),
@@ -277,6 +279,8 @@ pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool, h
     session.context.clone_from(&snapshot.context);
     session.tint = snapshot.tint;
     session.last_selected_at = snapshot.last_selected_at.and_then(crate::projection::system_time);
+    session.shell_profile.clone_from(&snapshot.shell_profile);
+    session.split_shell_profile.clone_from(&snapshot.split_shell_profile);
     session.launch.command.clone_from(&snapshot.initial_command);
     session.launch.wait = snapshot.command_wait.unwrap_or(false);
     session.launch.argv = copied_argv(snapshot.initial_command.as_ref(), snapshot.initial_argv.as_ref());
@@ -320,4 +324,96 @@ pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool, h
     }
     restore_pages(&mut session, snapshot.pages.as_deref().unwrap_or_default(), home);
     session
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::{session_from_snapshot, session_snapshot};
+    use crate::model::{NewSession, WindowLibrary};
+    use crate::shell_profiles::ShellProfile;
+
+    #[test]
+    fn profile_is_persisted_and_inherited_by_splits_and_duplicates_after_default_changes() {
+        let bash = ShellProfile::new("git-bash", "Git Bash", "C:/Git/bin/bash.exe".into(), &["-li"]);
+        let powershell = ShellProfile::new("powershell", "PowerShell", "C:/Tools/pwsh.exe".into(), &["-NoLogo"]);
+        let mut library = WindowLibrary::new("/home/user");
+        library.set_default_shell_profile(Some(bash.clone()));
+        let window = library.new_window(None);
+        let id = library.store(window).unwrap().selected_session_id().unwrap();
+        library.set_default_shell_profile(Some(powershell.clone()));
+        let store = library.store_mut(window).unwrap();
+        store.set_split_visibility(id, true, None);
+        let session = store.session(id).unwrap();
+        assert_eq!(session.shell_profile.as_ref(), Some(&bash));
+        assert_eq!(session.split_shell_profile.as_ref(), Some(&bash));
+        let snapshot = session_snapshot(session);
+        let json = serde_json::to_string(&snapshot).unwrap();
+        let restored = session_from_snapshot(&serde_json::from_str(&json).unwrap(), true, "/home/user");
+        assert_eq!(restored.shell_profile.as_ref(), Some(&bash));
+        assert_eq!(restored.split_shell_profile.as_ref(), Some(&bash));
+        let copy = store.duplicate_session(id, "/home/user").unwrap();
+        assert_eq!(store.session(copy).unwrap().shell_profile.as_ref(), Some(&bash));
+        let workspace = store.current_workspace_id().unwrap();
+        let fresh = store.add_session(workspace, NewSession::at_cwd("/tmp")).unwrap();
+        assert_eq!(store.session(fresh).unwrap().shell_profile.as_ref(), Some(&powershell));
+    }
+
+    #[test]
+    fn companion_copies_and_pane_swaps_keep_each_panes_shell_profile() {
+        use crate::model::{CompanionCopy, PaneCopy, SplitAxis};
+        let bash = ShellProfile::new("bash", "Git Bash", "C:/Git/bin/bash.exe".into(), &[]);
+        let pwsh = ShellProfile::new("pwsh", "PowerShell", "C:/Tools/pwsh.exe".into(), &[]);
+        let mut library = WindowLibrary::new("/home/user");
+        library.set_default_shell_profile(Some(bash.clone()));
+        let window = library.new_window(None);
+        let store = library.store_mut(window).unwrap();
+        let id = store.selected_session_id().unwrap();
+        store.set_split_visibility(id, true, None);
+        store.session_mut(id).unwrap().split_shell_profile = Some(pwsh.clone());
+        let pane = PaneCopy {
+            cwd: "/tmp".into(),
+            command: None,
+            argv: None,
+        };
+        let copy = store
+            .duplicate_as_companion(
+                id,
+                CompanionCopy {
+                    left: pane.clone(),
+                    right: Some(pane),
+                    axis: SplitAxis::LeftRight,
+                    ratio: None,
+                    select: false,
+                },
+                "/home/user",
+            )
+            .unwrap();
+        assert_eq!(store.session(copy).unwrap().shell_profile.as_ref(), Some(&bash));
+        assert_eq!(store.session(copy).unwrap().split_shell_profile.as_ref(), Some(&pwsh));
+        let session = store.session_mut(copy).unwrap();
+        session
+            .surface
+            .replace(Box::new(ngterm_host::fakes::FakeSurface::new("left")));
+        session
+            .split_surface
+            .replace(Box::new(ngterm_host::fakes::FakeSurface::new("right")));
+        store.swap_panes(copy).unwrap();
+        assert_eq!(store.session(copy).unwrap().shell_profile.as_ref(), Some(&pwsh));
+        assert_eq!(store.session(copy).unwrap().split_shell_profile.as_ref(), Some(&bash));
+        store.close_split(copy);
+        assert_eq!(store.session(copy).unwrap().split_shell_profile, None);
+        assert_eq!(store.session(copy).unwrap().shell_profile.as_ref(), Some(&pwsh));
+    }
+
+    #[test]
+    fn legacy_snapshots_keep_using_the_config_shell() {
+        let snapshot = crate::persist::SessionSnapshot::new(uuid::Uuid::new_v4(), "/tmp");
+        let session = session_from_snapshot(&snapshot, true, "/tmp");
+        assert_eq!(session.shell_profile, None);
+        assert!(
+            !serde_json::to_string(&session_snapshot(&session))
+                .unwrap()
+                .contains("shellProfile")
+        );
+    }
 }

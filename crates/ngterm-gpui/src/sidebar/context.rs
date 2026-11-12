@@ -42,6 +42,7 @@ pub struct FooterState {
     reason = "independent settings and facts the handlers read one each"
 )]
 pub struct SidebarContext {
+    pub shell_profiles: Vec<ngterm_core::shell_profiles::ShellProfile>,
     pub menu: MenuContext,
     pub drop: DropContext,
     pub footer: FooterState,
@@ -67,6 +68,9 @@ impl SidebarContext {
         let flagged_mode = store.sidebar().mode == SidebarMode::Flagged;
         let has_flagged = store.sessions().any(|session| session.flagged);
         Self {
+            shell_profiles: ngterm_core::shell_profiles::available(
+                settings.shell_profiles.as_deref().unwrap_or_default(),
+            ),
             menu: menu_context(store, tint_placement),
             drop: drop_context(store, settings),
             footer: FooterState {

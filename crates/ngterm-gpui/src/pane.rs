@@ -168,6 +168,7 @@ impl PaneSpec {
             painter: None,
             status_file: None,
             remote: self.remote_host.is_some() && self.command.is_some(),
+            shell_profile: None,
         }
     }
 

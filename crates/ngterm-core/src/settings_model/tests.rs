@@ -756,3 +756,76 @@ fn session_info_display_is_live_persists_and_removes_its_default() {
     )));
     assert_eq!(SettingsStore::new(dir.path()).load().session_info_display, None);
 }
+
+#[test]
+fn the_default_shell_profile_persists_and_changes_only_future_sessions() {
+    use crate::shell_profiles::ShellProfile;
+    let dir = tempfile::tempdir().unwrap();
+    let mut core = persisted_core(dir.path());
+    let profile = ShellProfile::new("bash", "Git Bash", "C:/Git/bin/bash.exe".into(), &["-li"]);
+    let window = core.library().open_ids()[0];
+    let existing = core.library().store(window).unwrap().selected_session_id().unwrap();
+    assert!(core.change_settings(general(GeneralChange::DefaultShellProfile(Some(profile.clone())))));
+    assert_eq!(
+        SettingsStore::new(dir.path()).load().default_shell_profile,
+        Some(profile.clone())
+    );
+    assert_eq!(
+        core.library()
+            .store(window)
+            .unwrap()
+            .session(existing)
+            .unwrap()
+            .shell_profile,
+        None
+    );
+    let fresh = core.library_mut().new_window(None);
+    assert_eq!(
+        core.library()
+            .store(fresh)
+            .unwrap()
+            .active_session()
+            .unwrap()
+            .shell_profile
+            .as_ref(),
+        Some(&profile)
+    );
+    let invalid = ShellProfile::new("relative", "Invalid", "bash.exe".into(), &[]);
+    assert!(!core.change_settings(general(GeneralChange::DefaultShellProfile(Some(invalid)))));
+    assert_eq!(core.settings().default_shell_profile.as_ref(), Some(&profile));
+    assert!(core.change_settings(general(GeneralChange::DefaultShellProfile(None))));
+    assert_eq!(SettingsStore::new(dir.path()).load().default_shell_profile, None);
+}
+
+#[test]
+fn the_bootstrap_shell_profile_is_saved_without_another_user_action() {
+    use crate::shell_profiles::ShellProfile;
+    let dir = tempfile::tempdir().unwrap();
+    let profile = ShellProfile::new("bash", "Git Bash", "C:/Git/bin/bash.exe".into(), &["-li"]);
+    let mut library = WindowLibrary::seeded("/home/u");
+    let window = library.new_window(None);
+    let mut persistence = LibraryPersistence::new(dir.path());
+    // Bootstrap already saved the fresh window before Core acquired the settings.
+    persistence.commit(&mut library);
+    assert_eq!(
+        persistence.read_window_checked(window).unwrap().workspaces[0].sessions[0].shell_profile,
+        None
+    );
+    let mut core = Core::new(
+        CoreConfig {
+            app: AppIdentity::from_recorded("0.1.0", None),
+            capabilities: Vec::new(),
+        },
+        CoreState {
+            library,
+            settings: AppSettings {
+                default_shell_profile: Some(profile.clone()),
+                ..AppSettings::default()
+            },
+            persistence: Some(persistence),
+        },
+    );
+    core.commit();
+    let saved = LibraryPersistence::new(dir.path()).read_window_checked(window).unwrap();
+    assert_eq!(saved.workspaces[0].sessions[0].shell_profile, Some(profile));
+}

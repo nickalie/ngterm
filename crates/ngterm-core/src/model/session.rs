@@ -190,6 +190,9 @@ enum FollowMark {
 /// (and their live-session daemons) and follow a pane through a swap or a promotion.
 #[derive(Debug)]
 pub struct Session {
+    /// Resolved profiles belong to the pane, not to the current app-wide default.
+    pub shell_profile: Option<crate::shell_profiles::ShellProfile>,
+    pub split_shell_profile: Option<crate::shell_profiles::ShellProfile>,
     id: Uuid,
     /// The primary pane's process identity. Follows a promoted split survivor.
     pub pane_identity: Uuid,
@@ -357,6 +360,8 @@ impl Session {
             was_restored: false,
             scratch_active: false,
             scratch_command: None,
+            shell_profile: None,
+            split_shell_profile: None,
             background_watermark: None,
             pane_backgrounds: PaneBackgrounds::default(),
             restore: PaneRestore::default(),
