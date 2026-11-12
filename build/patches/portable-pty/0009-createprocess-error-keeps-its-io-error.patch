@@ -1,0 +1,39 @@
+A failed `CreateProcessW` came back as an `anyhow` message only: the command line and the working directory in Rust
+debug text (doubled backslashes, the NUL terminators, `Some(...)`), then the OS error's text, so a caller could neither
+read the OS error nor say what failed in plain words. The error now wraps the `io::Error` itself
+(`downcast_ref::<io::Error>()`) under the same "CreateProcessW ... failed" context, and its alternate display (`{:#}`)
+reads as before. ngterm-pty reads it to name the program as written beside the OS error (a pane whose shell profile's
+program is gone says so), see `crates/ngterm-pty/src/windows/mod.rs`.
+
+ngterm's own. Remove when portable-pty keeps a `CreateProcessW` failure's `io::Error`. Its test: ngterm-pty's
+`a_missing_program_is_refused_naming_it_as_written`.
+
+diff -ruN a/src/win/psuedocon.rs b/src/win/psuedocon.rs
+--- a/src/win/psuedocon.rs
++++ b/src/win/psuedocon.rs
+@@ -1,7 +1,7 @@
+ use super::WinChild;
+ use crate::cmdbuilder::CommandBuilder;
+ use crate::win::procthreadattr::ProcThreadAttributeList;
+-use anyhow::{bail, ensure, Error};
++use anyhow::{ensure, Error};
+ use filedescriptor::{FileDescriptor, OwnedHandle};
+ use lazy_static::lazy_static;
+ use std::ffi::{OsStr, OsString};
+@@ -246,13 +246,12 @@
+         if res == 0 {
+             let err = IoError::last_os_error();
+             let msg = format!(
+-                "CreateProcessW `{:?}` in cwd `{:?}` failed: {}",
++                "CreateProcessW `{:?}` in cwd `{:?}` failed",
+                 cmd_os,
+                 cwd.as_ref().map(|c| OsString::from_wide(c)),
+-                err
+             );
+-            log::error!("{}", msg);
+-            bail!("{}", msg);
++            log::error!("{}: {}", msg, err);
++            return Err(Error::new(err).context(msg));
+         }
+ 
+         // Make sure we close out the thread handle so we don't leak it;

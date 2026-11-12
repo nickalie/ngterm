@@ -13,6 +13,7 @@
 #        cmd.exe's command text
 #   0007 a failed openpty's io::Error kept, so ngterm-pty reads its errno (the macOS ptmx clone race's retry)
 #   0008 ConPTY dimensions beyond the signed COORD range refused with the requested size
+#   0009 a failed CreateProcessW's io::Error kept, so ngterm-pty names the program as written beside the OS error
 #
 # The source is the crates.io archive of PORTABLE_PTY_VERSION, verified against PORTABLE_PTY_SHA256 (the checksum
 # Cargo.lock records for it), unpacked verbatim apart from its Cargo.lock (which pins nothing for a dependency), then

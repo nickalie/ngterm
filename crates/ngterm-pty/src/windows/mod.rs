@@ -390,9 +390,10 @@ pub(crate) fn spawn(builder: CommandBuilder, size: Size) -> io::Result<Spawned> 
     let conpty = master
         .downcast::<ConPtyMasterPty>()
         .map_err(|_| io::Error::other("the PTY master is not a ConPTY master"))?;
+    let program = program_as_written(&builder);
     let child = conpty
         .spawn_command_in_job(builder, job.as_raw_handle())
-        .map_err(|err| pty_error(&err))?;
+        .map_err(|err| start_error(&*err, &program).unwrap_or_else(|| pty_error(&err)))?;
     let pid = child
         .process_id()
         .ok_or_else(|| io::Error::other("the PTY child has no process id"))?;
@@ -406,6 +407,24 @@ pub(crate) fn spawn(builder: CommandBuilder, size: Size) -> io::Result<Spawned> 
             job: Arc::new(job),
         },
     })
+}
+
+/// The program a builder starts, as its caller wrote it (before portable-pty's PATH search): its first argument, or
+/// the command interpreter of a builder for the default program (portable-pty's `%ComSpec%`, else `cmd.exe`).
+fn program_as_written(builder: &CommandBuilder) -> std::ffi::OsString {
+    match builder.get_argv().first() {
+        Some(program) if !builder.is_default_prog() => program.clone(),
+        _ => builder.get_env("ComSpec").unwrap_or("cmd.exe".as_ref()).to_owned(),
+    }
+}
+
+/// A failed start in plain words: the program as written, then the OS error `CreateProcessW` gave (portable-pty keeps
+/// it, `build/patches/portable-pty/0009-createprocess-error-keeps-its-io-error.patch`), not its debug-quoted command
+/// line. `None` for any other failure (a malformed environment or argument), which keeps portable-pty's own message.
+fn start_error(err: &(dyn std::error::Error + 'static), program: &std::ffi::OsStr) -> Option<io::Error> {
+    let os =
+        std::iter::successors(Some(err), |cause| cause.source()).find_map(|cause| cause.downcast_ref::<io::Error>())?;
+    Some(io::Error::new(os.kind(), format!("{}: {os}", program.display())))
 }
 
 #[cfg(test)]

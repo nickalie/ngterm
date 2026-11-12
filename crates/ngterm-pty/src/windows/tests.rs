@@ -263,18 +263,21 @@ fn a_console_of_no_size_is_refused() {
     assert_eq!(err.to_string(), "failed to create psuedo console: HRESULT -2147024809");
 }
 
-/// A program that is not there is refused with portable-pty's error, the OS error last.
+/// A program that is not there is refused in plain words: the program as written, then the OS error (no debug text:
+/// doubled backslashes, NUL terminators, `Some(...)`).
 #[test]
-fn a_missing_program_is_refused() {
+fn a_missing_program_is_refused_naming_it_as_written() {
     let program = r"C:\ngterm-no-such-dir\no-such-program.exe";
-    let err = crate::spawn(&command(program, &[]), Size::cells(24, 80)).expect_err("a program that is not there");
+    let err = crate::spawn(&command(program, &["-l"]), Size::cells(24, 80)).expect_err("a program that is not there");
     let shown = err.to_string();
+    assert_eq!(err.kind(), io::ErrorKind::NotFound, "{shown}");
     assert!(
-        shown.starts_with("CreateProcessW ")
-            && shown.contains("no-such-program.exe")
-            && shown.ends_with("(os error 3)"),
+        shown.starts_with(&format!("{program}: ")) && shown.ends_with("(os error 3)") && shown.lines().count() == 1,
         "{shown}"
     );
+    for debug_text in [r"\\", r"\0", "Some(", "CreateProcessW"] {
+        assert!(!shown.contains(debug_text), "{debug_text} in {shown}");
+    }
 }
 
 /// A console whose pipes were taken already makes no master.

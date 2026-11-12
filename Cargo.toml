@@ -282,8 +282,8 @@ gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 # ngterm-pty's PTY and child: vendor/portable-pty is the verified crates.io source plus build/patches/portable-pty
 # (scripts/vendor-portable-pty.sh): ConPTY from kernel32 only, herdr's Windows environment and PATH fixes, a child
-# spawned into its job, a ConPTY session's handles exported and imported for the session server's update handoff, and
-# a failed openpty's errno kept (the macOS ptmx clone race's retry).
+# spawned into its job, a ConPTY session's handles exported and imported for the session server's update handoff,
+# a failed openpty's errno kept (the macOS ptmx clone race's retry), and a failed CreateProcessW's OS error kept.
 portable-pty = { path = "vendor/portable-pty" }
 # AccessKit's AT-SPI mapping (gpui-pre-linux's accesskit_unix): vendor/accesskit_atspi_common is the verified
 # crates.io source plus build/patches/accesskit_atspi_common (scripts/vendor-accesskit-atspi.sh): a disabled node

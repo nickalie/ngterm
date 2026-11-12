@@ -1,7 +1,7 @@
 use super::WinChild;
 use crate::cmdbuilder::CommandBuilder;
 use crate::win::procthreadattr::ProcThreadAttributeList;
-use anyhow::{bail, ensure, Error};
+use anyhow::{ensure, Error};
 use filedescriptor::{FileDescriptor, OwnedHandle};
 use lazy_static::lazy_static;
 use std::ffi::{OsStr, OsString};
@@ -246,13 +246,12 @@ impl PsuedoCon {
         if res == 0 {
             let err = IoError::last_os_error();
             let msg = format!(
-                "CreateProcessW `{:?}` in cwd `{:?}` failed: {}",
+                "CreateProcessW `{:?}` in cwd `{:?}` failed",
                 cmd_os,
                 cwd.as_ref().map(|c| OsString::from_wide(c)),
-                err
             );
-            log::error!("{}", msg);
-            bail!("{}", msg);
+            log::error!("{}: {}", msg, err);
+            return Err(Error::new(err).context(msg));
         }
 
         // Make sure we close out the thread handle so we don't leak it;
