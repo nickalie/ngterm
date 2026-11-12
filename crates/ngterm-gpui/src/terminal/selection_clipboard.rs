@@ -38,7 +38,7 @@ use ngterm_term::{ClipboardContent, ClipboardLocation, clipboard_mime};
 pub(super) enum MimeFailure {
     /// This OS has no such clipboard (or no display connection).
     #[cfg_attr(
-        not(target_os = "linux"),
+        not(any(target_os = "linux", test)),
         expect(
             dead_code,
             reason = "only Linux can lack a clipboard: headless, or without a primary selection"

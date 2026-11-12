@@ -460,6 +460,7 @@ impl Viewer {
             .collect()
     }
 
+    #[cfg(unix)]
     fn drain(&mut self, pane: &Pane) {
         while self.receive(pane, Duration::ZERO) {}
     }
