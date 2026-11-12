@@ -547,7 +547,7 @@ fn delegated_writes(owner: &Client) -> Vec<(u64, u64)> {
 
 /// Complete, as `owner`'s native clipboard would, the clipboard write delegated to it after its first `before`: the
 /// session keeps for a client that fell behind only the writes the owner completed, and holds its output till then.
-fn complete_write(pane: &Pane, owner: &mut Client, before: usize) -> TestResult {
+fn complete_write(pane: &Pane, owner: &mut Client, before: usize) {
     let deadline = Instant::now() + PATIENCE;
     while delegated_writes(owner).len() <= before {
         assert!(
@@ -566,14 +566,14 @@ fn complete_write(pane: &Pane, owner: &mut Client, before: usize) -> TestResult 
         pane.answer(owner.id(), id, epoch, done),
         "the write was not the owner's to complete"
     );
-    Ok(())
 }
 
 /// Print `write` into the session and complete it as `owner`.
 fn print_completed(pane: &Pane, owner: &mut Client, write: &[u8]) -> TestResult {
     let before = delegated_writes(owner).len();
     pane.print(write)?;
-    complete_write(pane, owner, before)
+    complete_write(pane, owner, before);
+    Ok(())
 }
 
 /// The OSC 52 write of `text` to the clipboard `name` (`c`, `s` or `p`), as `ngtermctl clipboard set` prints one.
@@ -698,7 +698,7 @@ fn a_programs_own_clipboard_write_is_given_back_too() -> TestResult {
     // "bW9pbg==" is "moin"; then a line the watcher waits for (the shell's `read` takes a doubled backslash for one)
     let before = delegated_writes(&watcher).len();
     type_line(&pane, "printf '\\\\033]52;c;bW9pbg==\\\\007'; echo written\"\"-now")?;
-    complete_write(&pane, &mut watcher, before)?;
+    complete_write(&pane, &mut watcher, before);
     watcher.expect("written-now");
     slow.drain();
     pane.resync(slow.id())?;
