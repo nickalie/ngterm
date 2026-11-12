@@ -234,17 +234,27 @@ fn a_yielded_script_runs_on_until_a_wait_sees_it_end() {
 fn a_yielded_scripts_row_holds_what_it_printed_before_each_yield_then_its_end() {
     let events = parse(&[
         turn_started("t1"),
-        exec_call("c1", "t1", "text('first'); await tools.web_search({query:\"rust\"}); text('last');"),
+        exec_call(
+            "c1",
+            "t1",
+            "text('first'); await tools.web_search({query:\"rust\"}); text('last');",
+        ),
         printed_by_yield("c1", "first\n"),
         wait_call("w1", &json!("7")),
         wait_output(
             "w1",
-            &["Script running with cell ID 7\nWall time 1.0 seconds\nOutput:\n", "middle\n"],
+            &[
+                "Script running with cell ID 7\nWall time 1.0 seconds\nOutput:\n",
+                "middle\n",
+            ],
         ),
         wait_call("w2", &json!("7")),
         wait_output("w2", &["Script completed\nWall time 0.1 seconds\nOutput:\n", "last"]),
     ]);
-    assert_eq!(history(&events, "c1").last(), Some(&(ToolStatus::Ok, Some("first\nmiddle\nlast"))));
+    assert_eq!(
+        history(&events, "c1").last(),
+        Some(&(ToolStatus::Ok, Some("first\nmiddle\nlast")))
+    );
 
     let long = "x".repeat(OUTPUT_CAP);
     let events = parse(&[
@@ -252,12 +262,18 @@ fn a_yielded_scripts_row_holds_what_it_printed_before_each_yield_then_its_end() 
         exec_call("c1", "t1", "text(long); await tools.web_search({query:\"rust\"});"),
         printed_by_yield("c1", &long),
         wait_call("w1", &json!("7")),
-        wait_output("w1", &["Script running with cell ID 7\nWall time 1.0 seconds\nOutput:\n", &long]),
+        wait_output(
+            "w1",
+            &["Script running with cell ID 7\nWall time 1.0 seconds\nOutput:\n", &long],
+        ),
         wait_call("w2", &json!("7")),
         wait_output("w2", &["Script completed\nWall time 0.1 seconds\nOutput:\n", "last"]),
     ]);
     let ended = tool(events.last().unwrap());
-    assert_eq!((ended.output.as_deref(), ended.truncated), (Some(long.as_str()), Some(true)));
+    assert_eq!(
+        (ended.output.as_deref(), ended.truncated),
+        (Some(long.as_str()), Some(true))
+    );
 }
 
 #[test]
