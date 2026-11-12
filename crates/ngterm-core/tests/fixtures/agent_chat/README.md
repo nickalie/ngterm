@@ -128,9 +128,9 @@ Where these differ from the plan, the plan was updated.
 - Claude compaction: a `system` line with `subtype: compact_boundary`, then a `user` line with
   `isCompactSummary: true` holding the summary.
 - Claude writes many bookkeeping line types the chat ignores: `mode`, `permission-mode`, `session-owner`,
-  `atis-latch`, `file-history-snapshot`, `file-history-delta`, `attachment`, `api-request*`, `last-prompt`,
-  `ai-title`, `tools-used`, `queue-operation`, `system` (`stop_hook_summary`, `turn_duration`), and from 2.1.319 on
-  `agent-name` and `continued-in`.
+  `atis-latch`, `file-history-snapshot`, `file-history-delta`, `attachment` (except a `queued_command` one, below),
+  `api-request*`, `last-prompt`, `ai-title`, `tools-used`, `queue-operation`, `system` (`stop_hook_summary`,
+  `turn_duration`), and from 2.1.319 on `agent-name` and `continued-in`.
 - A prompt sent while Claude works (2.1.319 on) is queued (`queue-operation` `enqueue`), then usually taken into the
   running turn (`remove`, `reason: absorbed_mid_turn`) and recorded only as an `attachment` of type `queued_command`
   (`prompt`, `origin.kind` `human`, `peer` for another agent's message, `task-notification` for a background task's

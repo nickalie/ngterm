@@ -873,8 +873,8 @@ every other viewer see as before; the chat is a second view of it, read from the
   attaches a photo, a video or any file (the system's pickers, no storage permission): it goes to the origin over the
   same ssh link (`ngtermctl agent upload`, at most 32 MiB, kept a week under the state directory's `uploads/`) with
   its progress and Cancel shown, and its stored path goes into the prompt for the agent to read;
-- a permission prompt, or Claude's `AskUserQuestion`, as a card pinned above the composer and answered with its
-  buttons;
+- a permission prompt, Claude's `AskUserQuestion` or a Codex Plan-mode question, as a card pinned above the composer
+  and answered with its buttons;
 - the account the agent is signed in with and how much of its weekly limit is used, over the rows: Claude Code's
   email from its global config and its limit from the usage endpoint its `/usage` asks, with its own sign-in
   (`.credentials.json`, or the macOS Keychain); Codex's from its `auth.json` and the rate limits its rollout records.

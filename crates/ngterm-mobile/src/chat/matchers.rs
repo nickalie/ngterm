@@ -781,12 +781,10 @@ fn question_position(line: &str) -> Option<(u8, u8)> {
     (1..=count).contains(&shown).then_some((shown, count))
 }
 
-/// The first row from `from` on that is not blank.
 fn next_text(rows: &Rows, from: usize) -> Option<usize> {
     (from..rows.lines.len()).find(|index| !rows.blank(*index))
 }
 
-/// Where the run of rows with text from `from` ends: the first blank row, or the screen's end.
 fn run_end(rows: &Rows, from: usize) -> usize {
     (from..rows.lines.len())
         .find(|index| rows.blank(*index))
