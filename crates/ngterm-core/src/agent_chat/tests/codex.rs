@@ -174,10 +174,14 @@ fn request_user_input_is_a_question_its_answers_complete() {
 }
 
 fn yielded_output(call: &str) -> String {
+    printed_by_yield(call, "")
+}
+
+fn printed_by_yield(call: &str, printed: &str) -> String {
+    let output = format!("Script running with cell ID 7\nWall time 10.0 seconds\nOutput:\n{printed}");
     line(
         "response_item",
-        &json!({"type": "custom_tool_call_output", "call_id": call,
-                "output": "Script running with cell ID 7\nWall time 10.0 seconds\nOutput:\n"}),
+        &json!({"type": "custom_tool_call_output", "call_id": call, "output": output}),
     )
 }
 
@@ -224,6 +228,36 @@ fn a_yielded_script_runs_on_until_a_wait_sees_it_end() {
         ["c1", "c1"],
         "the waits make no row"
     );
+}
+
+#[test]
+fn a_yielded_scripts_row_holds_what_it_printed_before_each_yield_then_its_end() {
+    let events = parse(&[
+        turn_started("t1"),
+        exec_call("c1", "t1", "text('first'); await tools.web_search({query:\"rust\"}); text('last');"),
+        printed_by_yield("c1", "first\n"),
+        wait_call("w1", &json!("7")),
+        wait_output(
+            "w1",
+            &["Script running with cell ID 7\nWall time 1.0 seconds\nOutput:\n", "middle\n"],
+        ),
+        wait_call("w2", &json!("7")),
+        wait_output("w2", &["Script completed\nWall time 0.1 seconds\nOutput:\n", "last"]),
+    ]);
+    assert_eq!(history(&events, "c1").last(), Some(&(ToolStatus::Ok, Some("first\nmiddle\nlast"))));
+
+    let long = "x".repeat(OUTPUT_CAP);
+    let events = parse(&[
+        turn_started("t1"),
+        exec_call("c1", "t1", "text(long); await tools.web_search({query:\"rust\"});"),
+        printed_by_yield("c1", &long),
+        wait_call("w1", &json!("7")),
+        wait_output("w1", &["Script running with cell ID 7\nWall time 1.0 seconds\nOutput:\n", &long]),
+        wait_call("w2", &json!("7")),
+        wait_output("w2", &["Script completed\nWall time 0.1 seconds\nOutput:\n", "last"]),
+    ]);
+    let ended = tool(events.last().unwrap());
+    assert_eq!((ended.output.as_deref(), ended.truncated), (Some(long.as_str()), Some(true)));
 }
 
 #[test]

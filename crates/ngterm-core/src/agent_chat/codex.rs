@@ -18,7 +18,8 @@
 //!   outside code mode) read the same way.
 //! - A script that outlasts its first wait (a command waiting for its approval, a long one) yields: its output says
 //!   `Script running with cell ID N…` and the call runs on. A `wait` function call on that cell is plumbing and shows
-//!   no row: its output, once the script ended, finishes the call unless a tool item took the call's place.
+//!   no row: each output carries only what the script printed since the last, so once the script ended, all of it
+//!   finishes the call unless a tool item took the call's place.
 //! - `request_user_input` (Codex's question picker, Plan mode) is a question, not a tool: open until its output, whose
 //!   `answers` (keyed by each question's `id`; a note typed on an option as a `user_note: …` answer) complete it. A
 //!   turn that only asked ends with an empty assistant message, which shows nothing.
@@ -102,6 +103,8 @@ pub struct CodexParser {
     compactions: HashSet<String>,
     /// Yielded scripts, by cell id: the call that started each.
     cells: HashMap<String, String>,
+    /// What yielded scripts printed so far, by the call that started each.
+    printed: HashMap<String, String>,
     /// `wait` calls with no output yet, by call id: the call that started the cell waited on, when it is known.
     waits: HashMap<String, Option<String>>,
     /// Questions shown so far, by call id, with each question's id (what its answers are keyed by).
@@ -290,6 +293,7 @@ impl CodexParser {
         let (gone, kept): (Vec<Call>, Vec<Call>) = std::mem::take(&mut self.calls).into_iter().partition(ended);
         self.calls = kept;
         for call in gone {
+            self.printed.remove(&call.id);
             if let Some((asked, _)) = self.questions.get_mut(&call.id) {
                 if asked.status == ToolStatus::Running {
                     asked.status = ToolStatus::Error;
@@ -561,7 +565,7 @@ impl CodexParser {
     }
 
     /// A call's output: finishes the call unless a tool item took its place. An output whose call was shown and has
-    /// ended makes no event; one whose call is not in the window shows alone.
+    /// ended makes no event; one whose call is not in the window shows alone, unless it yielded.
     fn call_output(&mut self, payload: &Value, out: &mut Out) {
         let Some(id) = str_at(payload, "/call_id") else { return };
         if let Some(started) = self.waits.remove(id) {
@@ -575,6 +579,7 @@ impl CodexParser {
             // the script runs on: a tool item or a `wait`'s output finishes the call
             if index.is_some() {
                 self.cells.insert(cell, id.to_owned());
+                self.printed.insert(id.to_owned(), printed(payload));
             }
             return;
         }
@@ -602,9 +607,15 @@ impl CodexParser {
     /// unless a tool item took its place or its turn already ended it.
     fn waited(&mut self, started: &str, payload: &Value, out: &mut Out) {
         if yielded(payload).is_some() {
+            if let Some(text) = self.printed.get_mut(started)
+                && text.len() <= OUTPUT_CAP
+            {
+                text.push_str(&printed(payload));
+            }
             return;
         }
         self.cells.retain(|_, call| call != started);
+        let before = self.printed.remove(started).unwrap_or_default();
         let Some(index) = self.calls.iter().position(|call| call.id == started) else {
             return;
         };
@@ -613,7 +624,7 @@ impl CodexParser {
         }
         let (status, output) = call_result(payload, true);
         if let Some(tool) = self.tools.get_mut(started) {
-            finish(tool, status, &output);
+            finish(tool, status, &(before + &output));
             out.push(started, EventBody::Tool(tool.clone()));
         }
     }
@@ -705,6 +716,20 @@ fn yielded(payload: &Value) -> Option<String> {
         .take_while(char::is_ascii_alphanumeric)
         .collect();
     (!cell.is_empty()).then_some(cell)
+}
+
+/// What a yielded script printed since its last yield: what follows its first text's `Output:` line, then the rest.
+fn printed(payload: &Value) -> String {
+    let blocks = match payload.get("output") {
+        Some(Value::String(text)) => vec![text.as_str()],
+        Some(output) => strings_at(output, "/text"),
+        None => Vec::new(),
+    };
+    let Some((head, rest)) = blocks.split_first() else {
+        return String::new();
+    };
+    let after = head.split_once("Output:\n").map_or("", |(_, after)| after);
+    std::iter::once(after).chain(rest.iter().copied()).collect()
 }
 
 /// The cell a `wait` call's JSON arguments name (`{"cell_id":"1",…}`).
