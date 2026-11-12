@@ -459,7 +459,9 @@ session** is the toolbar's `+` while the machine is connected.
   started, so the pane's first report as a follower takes the lead at once, with no Take control cover to tap; a pane
   that leads already is left as it is. While the create runs, a spinner ("Creating") holds the `+`'s place, so a
   second tap starts nothing; an empty list says "Creating a session on build-01" (`StatePanel.loading`) instead. A create or
-  an attach that fails is the failed banner at the list's end, and nothing opens.
+  an attach that fails is the failed banner at the list's end, and nothing opens. A create whose screen was left, or
+  whose window opened another session meanwhile, stays attached and opens nothing: it never takes the lead unseen. Until
+  the takeover's answer, the pane shows attaching, never a Take control cover that would only flash.
 - **New named session…** is the `+`'s long-press menu (`Menu` with a primary action): a sheet with a `Form`: the name
   (mono, optional: "build-01 names it when blank"), Cancel and Create in the toolbar. Create lands in the session as
   the `+` does, the sheet closing first. While the create runs, Create gives way to a spinner and the field holds
