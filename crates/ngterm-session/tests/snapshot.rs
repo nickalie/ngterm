@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ngterm_ghostty_vt::{Format, FormatExtras, FormatOptions, Region, Terminal};
-use ngterm_session::protocol::{LeadRole, Managed};
+use ngterm_session::protocol::{ClipboardStatus, DelegatedReply, DelegatedRequest, LeadRole, Managed};
 use ngterm_session::server::clients::{ClientEvent, RecvError, ResyncBudget};
 use ngterm_session::server::pane::{Pane, ResyncError};
 use ngterm_session::server::snapshot::RESYNC_RESET;
@@ -517,6 +517,65 @@ fn a_session_ending_while_a_resync_waits_for_a_cut_gives_the_last_snapshot() -> 
 
 // -- the clipboard writes a client that fell behind gets back
 
+/// A session of [`shell`] whose managed creator leads it and so owns its clipboard writes, keeping up, with a client
+/// attached that is to fall behind; both are given a 16 KiB queue.
+fn clipboard_session(name: &str, dir: &tempfile::TempDir) -> TestResult<(Pane, Client, Client)> {
+    let mut config = config(name, dir.path(), shell());
+    config.client_queue_limit = 16 * 1024;
+    config.managed = Some(managed("owner", true));
+    let (pane, creator) = Pane::spawn(config)?;
+    let slow = Client::attach(&pane)?;
+    Ok((pane, slow, Client::new(creator)))
+}
+
+/// The clipboard writes delegated to `owner` so far: id and epoch.
+fn delegated_writes(owner: &Client) -> Vec<(u64, u64)> {
+    owner
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            ClientEvent::Delegated {
+                id,
+                epoch,
+                request: DelegatedRequest::ClipboardWrite { .. },
+                ..
+            } => Some((*id, *epoch)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Complete, as `owner`'s native clipboard would, the clipboard write delegated to it after its first `before`: the
+/// session keeps for a client that fell behind only the writes the owner completed, and holds its output till then.
+fn complete_write(pane: &Pane, owner: &mut Client, before: usize) -> TestResult {
+    let deadline = Instant::now() + PATIENCE;
+    while delegated_writes(owner).len() <= before {
+        assert!(
+            Instant::now() < deadline,
+            "no clipboard write delegated: {:?}",
+            owner.events
+        );
+        owner.receive(Duration::from_millis(100));
+    }
+    let (id, epoch) = delegated_writes(owner)[before];
+    let done = DelegatedReply::ClipboardWrite {
+        status: ClipboardStatus::Success,
+        remember: false,
+    };
+    assert!(
+        pane.answer(owner.id(), id, epoch, done),
+        "the write was not the owner's to complete"
+    );
+    Ok(())
+}
+
+/// Print `write` into the session and complete it as `owner`.
+fn print_completed(pane: &Pane, owner: &mut Client, write: &[u8]) -> TestResult {
+    let before = delegated_writes(owner).len();
+    pane.print(write)?;
+    complete_write(pane, owner, before)
+}
+
 /// The OSC 52 write of `text` to the clipboard `name` (`c`, `s` or `p`), as `ngtermctl clipboard set` prints one.
 fn clipboard_write(name: char, text: &str) -> Vec<u8> {
     use base64::Engine as _;
@@ -558,12 +617,12 @@ fn last_snapshot(client: &Client) -> TestResult<Vec<u8>> {
 #[test]
 fn a_resync_gives_a_client_each_clipboards_latest_write_it_missed() -> TestResult {
     let dir = tempfile::tempdir()?;
-    let (pane, mut slow, mut watcher) = slow_session("clipboard", &dir, ResyncBudget::default())?;
+    let (pane, mut slow, mut watcher) = clipboard_session("clipboard", &dir)?;
     // printed while it read nothing yet, then overwritten while it was behind: only the latest is its to get
-    pane.print(&clipboard_write('c', "first"))?;
+    print_completed(&pane, &mut watcher, &clipboard_write('c', "first"))?;
     flood_past(&pane, &mut watcher, dir.path(), 1..=2)?;
-    pane.print(&clipboard_write('c', "latest"))?;
-    pane.print(&clipboard_write('p', "primary"))?;
+    print_completed(&pane, &mut watcher, &clipboard_write('c', "latest"))?;
+    print_completed(&pane, &mut watcher, &clipboard_write('p', "primary"))?;
     flood_past(&pane, &mut watcher, dir.path(), 3..=3)?;
     slow.drain();
     pane.resync(slow.id())?;
@@ -598,9 +657,9 @@ fn a_resync_gives_a_client_each_clipboards_latest_write_it_missed() -> TestResul
 #[test]
 fn a_resync_snapshot_dropped_unsent_leaves_the_missed_writes_to_the_next() -> TestResult {
     let dir = tempfile::tempdir()?;
-    let (pane, mut slow, mut watcher) = slow_session("redrop", &dir, ResyncBudget::default())?;
+    let (pane, mut slow, mut watcher) = clipboard_session("redrop", &dir)?;
     flood_past(&pane, &mut watcher, dir.path(), 1..=2)?;
-    pane.print(&clipboard_write('c', "missed"))?;
+    print_completed(&pane, &mut watcher, &clipboard_write('c', "missed"))?;
     pane.resync(slow.id())?;
     // the resync's snapshot is dropped unsent with the flood after it
     flood_past(&pane, &mut watcher, dir.path(), 3..=4)?;
@@ -617,9 +676,9 @@ fn a_resync_snapshot_dropped_unsent_leaves_the_missed_writes_to_the_next() -> Te
 #[test]
 fn a_client_behind_when_the_session_ends_gets_the_writes_it_missed_in_its_last_snapshot() -> TestResult {
     let dir = tempfile::tempdir()?;
-    let (pane, mut slow, mut watcher) = slow_session("lastclip", &dir, ResyncBudget::default())?;
+    let (pane, mut slow, mut watcher) = clipboard_session("lastclip", &dir)?;
     flood_past(&pane, &mut watcher, dir.path(), 1..=2)?;
-    pane.print(&clipboard_write('s', "selected"))?;
+    print_completed(&pane, &mut watcher, &clipboard_write('s', "selected"))?;
     quit(&pane)?;
     watcher.finish();
     slow.finish();
@@ -634,10 +693,12 @@ fn a_client_behind_when_the_session_ends_gets_the_writes_it_missed_in_its_last_s
 #[test]
 fn a_programs_own_clipboard_write_is_given_back_too() -> TestResult {
     let dir = tempfile::tempdir()?;
-    let (pane, mut slow, mut watcher) = slow_session("programclip", &dir, ResyncBudget::default())?;
+    let (pane, mut slow, mut watcher) = clipboard_session("programclip", &dir)?;
     flood_past(&pane, &mut watcher, dir.path(), 1..=2)?;
     // "bW9pbg==" is "moin"; then a line the watcher waits for (the shell's `read` takes a doubled backslash for one)
+    let before = delegated_writes(&watcher).len();
     type_line(&pane, "printf '\\\\033]52;c;bW9pbg==\\\\007'; echo written\"\"-now")?;
+    complete_write(&pane, &mut watcher, before)?;
     watcher.expect("written-now");
     slow.drain();
     pane.resync(slow.id())?;

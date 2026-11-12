@@ -1857,7 +1857,7 @@ mod tests {
         };
         let described = format!("{config:?}");
         assert!(
-            described.starts_with("PaneConfig { size: GridSize { cols: 20, rows: 4"),
+            described.starts_with("PaneConfig { attach_bridge: None, size: GridSize { cols: 20, rows: 4"),
             "{described}"
         );
         assert!(described.contains("write_limit: 1048576"), "{described}");
