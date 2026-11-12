@@ -36,6 +36,10 @@ data class MachineSessions(
     val refreshing: Boolean = false,
     // the sessions whose End is under way
     val ending: Set<String> = emptySet(),
+    // the session whose Duplicate is under way
+    val duplicating: String? = null,
+    // a New session or a Duplicate is under way: neither takes another tap
+    val creating: Boolean = false,
     // whether each session's panes running an agent show as a chat
     val chatViews: ChatViews = ChatViews(),
 )
@@ -61,7 +65,8 @@ data class NewSessionState(
 
 /**
  * A machine's sessions: its listing with each session's status and whether this app has it attached, refreshing it,
- * New session (named or not; the dialog's state lives here so a rotation keeps a create under way), End session,
+ * New session (named or not; the dialog's state lives here so a rotation keeps a create under way), Duplicate session
+ * (one create at a time, landing as New session does), End session,
  * attaching and detaching. [opened] lists the machine afresh. [notice] carries what a list can't show (a create, an
  * End or an attach that failed) for a snackbar.
  */
@@ -74,6 +79,7 @@ class SessionsViewModel(
     private val ending = MutableStateFlow<Set<String>>(emptySet())
     private val newSession = MutableStateFlow<NewSessionState?>(null)
     private val starting = MutableStateFlow(false)
+    private val duplicating = MutableStateFlow<String?>(null)
     private val lands = MutableStateFlow<SessionKey?>(null)
     private val notices = MutableStateFlow<String?>(null)
 
@@ -109,9 +115,17 @@ class SessionsViewModel(
         val chatViews: ChatViews,
     )
 
+    private val underWay = combine(ending, duplicating, starting, ::UnderWay)
+
+    private data class UnderWay(
+        val ending: Set<String>,
+        val duplicating: String?,
+        val starting: Boolean,
+    )
+
     /** The screen's state. */
     val state: StateFlow<SessionsUiState> =
-        combine(machine, live, graph.online, refreshing, ending) { machine, live, online, refreshing, ending ->
+        combine(machine, live, graph.online, refreshing, underWay) { machine, live, online, refreshing, underWay ->
             if (machine == null) {
                 SessionsUiState.Gone
             } else {
@@ -124,7 +138,9 @@ class SessionsViewModel(
                         attached = live.attached,
                         offline = !online,
                         refreshing = refreshing,
-                        ending = ending,
+                        ending = underWay.ending,
+                        duplicating = underWay.duplicating,
+                        creating = underWay.starting || underWay.duplicating != null,
                         chatViews = live.chatViews,
                     ),
                 )
@@ -171,8 +187,10 @@ class SessionsViewModel(
         viewModelScope.launch { graph.machines.get(machineId)?.let { connections.connect(it.toCore()) } }
     }
 
+    private val busyCreating get() = starting.value || duplicating.value != null
+
     fun newSession() {
-        if (starting.value) return
+        if (busyCreating) return
         starting.value = true
         viewModelScope.launch {
             try {
@@ -198,7 +216,7 @@ class SessionsViewModel(
     }
 
     fun create(name: String) {
-        if (newSession.value?.running == true || starting.value) return
+        if (newSession.value?.running == true || busyCreating) return
         val mine = dialog
         newSession.value = NewSessionState(running = true)
         starting.value = true
@@ -225,6 +243,21 @@ class SessionsViewModel(
                 }
             } finally {
                 starting.value = false
+            }
+        }
+    }
+
+    /** Duplicates [sessionId] there and opens the copy in control, as New session does with the one it creates. */
+    fun duplicate(sessionId: String) {
+        if (busyCreating) return
+        duplicating.value = sessionId
+        viewModelScope.launch {
+            try {
+                land(connections.duplicateSession(machineId, sessionId).id)
+            } catch (error: MobileException) {
+                notices.value = error.reason()
+            } finally {
+                duplicating.value = null
             }
         }
     }

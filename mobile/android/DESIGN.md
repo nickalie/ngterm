@@ -181,7 +181,7 @@ white on nothing, as Android masks it. The status glyphs are 16dp filled or stro
 | `BusBar` | the copper bar marking where you are |
 | `StatusGlyph`, `StatusBadge`, `AgentStatusBadge` | a status's glyph; glyph and word for an app tone; for an origin's status |
 | `MachineCard` | a machine: name, mono address, connection badge, and a summary slot for its sessions' status |
-| `SessionRow` | a session: name, context or companion line (a machine's list indents every companion; Sessions only one under its attached parent), status slot, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, Chat view, End session) |
+| `SessionRow` | a session: name, context or companion line (a machine's list indents every companion; Sessions only one under its attached parent), status slot, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, Duplicate session, Chat view, End session) |
 | `SectionHeader` | a group's heading with an optional count and one text action |
 | `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it (busy while it runs: a small spinner, no taps); at most one quieter text-button action under it, for a retry after the fix the main one points to |
 | `Banner` | a strip about the whole screen while it stays usable, with an optional action and dismiss; announced politely |
@@ -333,10 +333,10 @@ machine is the subject: the list is quiet rows on the ground, not cards, since a
   names the session).
 - **List:** 640dp at most, centered. "Attached" (what this app has attached) first, then "On build-01" (the rest);
   each heading with its count, a group with nothing in it left out. A row is a `SessionRow`: the name, the context (or
-  the working directory when it has none), the agent's status badge, and a More menu with Attach or Detach, Chat view
-  and End session (in the error color). Companions sit indented under their parent with "Companion of …" as their line.
-  Tapping a row attaches it (the session view opens from there). A row being ended says "Ending" with a small
-  spinner in place of its status. Pull to refresh lists again; on a machine not connected it connects.
+  the working directory when it has none), the agent's status badge, and a More menu with Attach or Detach, Duplicate
+  session, Chat view and End session (in the error color). Companions sit indented under their parent with "Companion
+  of …" as their line. Tapping a row attaches it (the session view opens from there). A row being ended says "Ending",
+  one being duplicated "Duplicating", with a small spinner in place of its status. Pull to refresh lists again; on a machine not connected it connects.
 - **New session** takes one tap: the machine creates a session it names, the app attaches it and the session view
   opens on it, in control. Its pane takes the lead when its first attach reports that another device has it (Take
   control without the tap, the pane attaching meanwhile rather than flashing the cover); one that leads already is left as it is, and any later takeover is the user's to answer
@@ -344,6 +344,14 @@ machine is the subject: the list is quiet rows on the ground, not cards, since a
   takes no taps; a failed create or attach is a snackbar in the core's words, and the list stays (a session created
   but not attached shows in it). Only this device's own New session claims the lead: a session opened from a row
   keeps the Take control cover.
+- **Duplicate session** (every session's More menu: a machine's list, the attached list, the session view's bar) asks
+  nothing: the machine copies the session as desktop's Duplicate does (a fresh shell in its focused directory, right
+  after it, named by the machine; a companion's copy is a session of its own, and a parent's companions are not
+  copied), and the copy lands as a one-tap New session's does: attached, opened, in control. While it runs the source
+  says "Duplicating" with a small spinner in place of its status (on a row, or in the bar's state line), and every
+  Duplicate session item and New session take no taps, one create at a time. A failure is a snackbar in the core's
+  words and the screen stays. From the session view the copy replaces the source in the view, unless the view has
+  moved on meanwhile: the copy then waits attached in the list and claims no lead.
 - **New named session:** a long press on New session (TalkBack's action "New named session") opens a dialog over the
   list: one optional Name field ("Optional: build-01 names it when blank"), Create session and Cancel. While the
   machine creates and lists it the button says Creating with a spinner and the field holds still; Cancel closes the
@@ -524,7 +532,7 @@ The plan, reviewed against the brief:
 
 | First pass | Why it was generic | Revised to |
 |---|---|---|
-| A toolbar with the name, a status chip, and icon buttons for split, keyboard, detach and end | the "app bar of actions" every client draws, eating a terminal row per icon | one bar: the name over a line of status and context, the pane switcher, and one More menu (Detach, End session) |
+| A toolbar with the name, a status chip, and icon buttons for split, keyboard, detach and end | the "app bar of actions" every client draws, eating a terminal row per icon | one bar: the name over a line of status and context, the pane switcher, and one More menu (Detach, Duplicate session, End session) |
 | Pager dots for the panes | dots say how many, not which, and are too small to tap | numbered pane tabs (the panes are a sequence: the origin's order), the bus bar under the one on screen |
 | A tinted frame or an accent border around the focused pane of a split | a second loud mark, and a frame costs the terminal its edge cells | the bus bar again, in a 4dp gutter at the focused pane's leading edge; the other pane's cursor goes hollow |
 | The HUD as a floating toast in the origin's colors | an overlay over the text, colored by someone else | a `Banner`-shaped strip under the bar, on `surfaceContainerHigh`, the origin's words and its spinner |
@@ -547,7 +555,8 @@ compact                            medium (rail open)               expanded
 ```
 
 - **Where it lives:** under Sessions. With nothing open, Sessions lists what is attached, grouped by machine (a
-  `SectionHeader` per machine, a `SessionRow` per session with its status and a menu: Detach, Chat view, End session), or the
+  `SectionHeader` per machine, a `SessionRow` per session with its status and a menu: Detach, Duplicate session, Chat
+  view, End session), or the
   empty state pointing to Machines. The rows are the tree a machine's sessions shows, kept to what is attached: in the
   machine's order by family, an attached companion indented under its attached parent with "Companion of …" as its
   line. A companion whose parent isn't attached keeps that line but stands unindented in its family's place, so it
@@ -605,8 +614,8 @@ compact                            medium (rail open)               expanded
   ngterm can't stream ("build-01's ngterm can't share live sessions", update it there, **Detach**); and gone ("docs-site
   is gone", "It ended on build-01, so there is nothing left to show.", **Close**), which also covers a session that
   left the machine's list while it was open.
-- **More:** Detach (at once: it goes on running there, and the view closes), Chat view and End session (in the error
-  color, confirmed as on a machine's list).
+- **More:** Detach (at once: it goes on running there, and the view closes), Duplicate session (the copy opens in its
+  place, as on a machine's list), Chat view and End session (in the error color, confirmed as on a machine's list).
 - **Chat view** (`ChatViewItem`, in every session's More menu: the bar's, the attached list's, a machine's list): the
   session's own Agent chat view, a menu item with a checkbox at its end, checked while the session's panes running an
   agent show as a chat; TalkBack reads it as a checkbox. It starts at Settings' Agent chat view, and a tap sets the

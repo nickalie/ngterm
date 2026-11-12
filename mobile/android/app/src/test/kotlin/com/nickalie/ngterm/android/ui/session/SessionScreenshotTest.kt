@@ -88,9 +88,16 @@ class SessionScreenshotTest(
         open: (() -> Unit)? = null,
     ) {
         val live = LiveSession(StreamState.Connected, null, CONTEXT, layout, hud, panes)
-        val session = AttachedSession(key, "build-01", "docs-site", CONTEXT, Waiting, Link.Connected, live)
-        val groups = groups(session)
-        frame(groups, key) {
+        shoot(scene, AttachedSession(key, "build-01", "docs-site", CONTEXT, Waiting, Link.Connected, live), open)
+    }
+
+    private fun shoot(
+        scene: String,
+        session: AttachedSession,
+        open: (() -> Unit)? = null,
+    ) {
+        val layout = session.live.layout ?: return
+        frame(groups(session), key) {
             SessionScreen(
                 session = session,
                 focused = layout.primary,
@@ -204,6 +211,13 @@ class SessionScreenshotTest(
 
     @Test
     fun hiddenSplit() = capture("split_hidden", RemoteLayout(listOf("P1", "P2"), "P1", "vertical", false))
+
+    @Test
+    fun duplicating() {
+        val live = LiveSession(StreamState.Connected, null, CONTEXT, RemoteLayout(listOf("P1"), "P1", null, false))
+        val session = AttachedSession(key, "build-01", "docs-site", CONTEXT, Waiting, Link.Connected, live)
+        shoot("duplicating", session.copy(duplicating = true, canDuplicate = false))
+    }
 
     @Test
     fun follower() =

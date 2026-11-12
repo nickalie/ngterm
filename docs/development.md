@@ -797,7 +797,7 @@ reaches a viewer through the origin's ConPTY, which re-renders what it draws, as
 `mobile/android` is a native Android app (Kotlin, Jetpack Compose, phones and tablets) over the Rust core
 `crates/ngterm-mobile`, which Kotlin reaches through UniFFI. It is remote-only: it runs no sessions of its own, and
 reaches machines running ngterm (`ngterm-headless` on a server, or a desktop instance) over ssh, as File ▸ Attach Remote
-does. It lists a machine's live sessions, makes and ends them, and attaches them: their panes (one at a time on a
+does. It lists a machine's live sessions, makes, duplicates and ends them, and attaches them: their panes (one at a time on a
 phone, the origin's split on a tablet), status, context, HUD and notifications. Asks show as dialogs, or as
 notification actions while the app is in the background; a foreground service keeps attached sessions connected. Its
 design system is `mobile/android/DESIGN.md`.

@@ -22,8 +22,9 @@ fun isMissingCli(reason: String): Boolean {
 }
 
 /**
- * A session as the list shows it: the session, its parent's name when it is a companion, what is under way, and
- * whether its panes running an agent show as a chat ([chatView]: its own choice, else Settings').
+ * A session as the list shows it: the session, its parent's name when it is a companion, what is under way, whether
+ * its panes running an agent show as a chat ([chatView]: its own choice, else Settings'), and whether Duplicate takes
+ * a tap ([canDuplicate]: not while a create is under way).
  */
 data class SessionLine(
     val session: RemoteSession,
@@ -31,6 +32,8 @@ data class SessionLine(
     val attached: Boolean,
     val ending: Boolean,
     val chatView: Boolean = ChatViews().default,
+    val duplicating: Boolean = false,
+    val canDuplicate: Boolean = true,
 )
 
 /** What the body of a machine's sessions screen is, by its link and its listing. */
@@ -123,6 +126,8 @@ private fun MachineSessions.lines(listed: List<RemoteSession>): SessionsBody.Ses
             attached = session.id in attached,
             ending = session.id in ending,
             chatView = chatViews.on(SessionKey(machine.id, session.id)),
+            duplicating = session.id == duplicating,
+            canDuplicate = !creating,
         )
     }
     val families = families(listed).map { family -> family.map(line) }
@@ -143,4 +148,5 @@ data class SessionActions(
     val onEnd: (String) -> Unit,
     val onChatView: (String, Boolean) -> Unit = { _, _ -> },
     val onNewNamedSession: () -> Unit = {},
+    val onDuplicate: (String) -> Unit = {},
 )

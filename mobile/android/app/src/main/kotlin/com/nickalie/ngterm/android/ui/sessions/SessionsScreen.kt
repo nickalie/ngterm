@@ -142,7 +142,9 @@ private fun TopRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        if (newSession) NewSessionButton(starting, actions.onNewSession, actions.onNewNamedSession)
+        if (newSession) {
+            NewSessionButton(starting, !starting && !state.creating, actions.onNewSession, actions.onNewNamedSession)
+        }
     }
 }
 
@@ -150,12 +152,13 @@ private fun TopRow(
 @Composable
 private fun NewSessionButton(
     starting: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = ButtonDefaults.textButtonColors()
-    val content = if (starting) colors.disabledContentColor else colors.contentColor
+    val content = if (enabled) colors.contentColor else colors.disabledContentColor
     Row(
         modifier =
             modifier
@@ -163,7 +166,7 @@ private fun NewSessionButton(
                 .heightIn(min = ButtonDefaults.MinHeight)
                 .clip(ButtonDefaults.textShape)
                 .combinedClickable(
-                    enabled = !starting,
+                    enabled = enabled,
                     role = Role.Button,
                     onLongClickLabel = stringResource(R.string.new_session_named),
                     onLongClick = onLongClick,

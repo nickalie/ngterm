@@ -57,23 +57,7 @@ fun SessionsRoute(
     LaunchedEffect(state is SessionsUiState.Gone) {
         if (state is SessionsUiState.Gone) back()
     }
-    val uris = LocalUriHandler.current
-    val actions =
-        remember(viewModel) {
-            SessionActions(
-                onBack = { back() },
-                onNewSession = viewModel::newSession,
-                onNewNamedSession = viewModel::openNamedSession,
-                onRefresh = viewModel::refresh,
-                onConnect = viewModel::connect,
-                onReviewHostKey = { review() },
-                onOpenReadme = { uris.openUri(SERVER_SETUP_URL) },
-                onOpen = { id -> viewModel.attach(id) { openSession(SessionKey(machineId, id)) } },
-                onDetach = viewModel::detach,
-                onEnd = viewModel::end,
-                onChatView = viewModel::setChatView,
-            )
-        }
+    val actions = rememberActions(viewModel, machineId, { back() }, { review() }) { openSession(it) }
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(notice) {
         val text = notice ?: return@LaunchedEffect
@@ -94,6 +78,33 @@ fun SessionsRoute(
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
+    }
+}
+
+@Composable
+private fun rememberActions(
+    viewModel: SessionsViewModel,
+    machineId: String,
+    onBack: () -> Unit,
+    onReviewHostKey: () -> Unit,
+    onOpenSession: (SessionKey) -> Unit,
+): SessionActions {
+    val uris = LocalUriHandler.current
+    return remember(viewModel) {
+        SessionActions(
+            onBack = onBack,
+            onNewSession = viewModel::newSession,
+            onNewNamedSession = viewModel::openNamedSession,
+            onRefresh = viewModel::refresh,
+            onConnect = viewModel::connect,
+            onReviewHostKey = onReviewHostKey,
+            onOpenReadme = { uris.openUri(SERVER_SETUP_URL) },
+            onOpen = { id -> viewModel.attach(id) { onOpenSession(SessionKey(machineId, id)) } },
+            onDetach = viewModel::detach,
+            onEnd = viewModel::end,
+            onDuplicate = viewModel::duplicate,
+            onChatView = viewModel::setChatView,
+        )
     }
 }
 

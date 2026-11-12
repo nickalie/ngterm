@@ -34,6 +34,7 @@ import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.ui.chat.PaneView
 import com.nickalie.ngterm.android.ui.components.AgentStatusBadge
 import com.nickalie.ngterm.android.ui.components.StatusBadge
+import com.nickalie.ngterm.android.ui.sessions.UnderWay
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.StatusTone
 import com.nickalie.ngterm.core.ffi.StreamState
@@ -43,8 +44,8 @@ import com.nickalie.ngterm.core.ffi.StreamState
  * (the agent's status while the stream is live, the stream's own state while it isn't) and its context, the pane
  * switcher ([onSelectPane]; [focused] marked; [alone] where a tab also toggles the split, see [PaneSwitcher]), the
  * view switch while the focused pane runs an agent ([view], how it shows now; [onView] asks for the other), and More:
- * Detach ([onDetach], at once), Chat view (the session's, flipped through [onChatView]) and End session ([onEnd], once
- * confirmed).
+ * Detach ([onDetach], at once), Duplicate session ([onDuplicate]; "Duplicating" stands in for the state while it
+ * runs), Chat view (the session's, flipped through [onChatView]) and End session ([onEnd], once confirmed).
  */
 @Composable
 fun SessionBar(
@@ -59,6 +60,7 @@ fun SessionBar(
     onView: (PaneView) -> Unit = {},
     alone: Boolean? = null,
     onChatView: (Boolean) -> Unit = {},
+    onDuplicate: () -> Unit = {},
 ) {
     val spacing = NgtermTheme.spacing
     Row(
@@ -99,7 +101,7 @@ fun SessionBar(
             alone = alone,
         )
         view?.let { ViewSwitch(it, onView) }
-        BarMenu(session, onDetach, onChatView, onEnd)
+        BarMenu(session, onDetach, onChatView, onEnd, onDuplicate)
     }
 }
 
@@ -110,6 +112,7 @@ private fun BarMenu(
     onDetach: () -> Unit,
     onChatView: (Boolean) -> Unit,
     onEnd: () -> Unit,
+    onDuplicate: () -> Unit,
 ) {
     var confirming by rememberSaveable { mutableStateOf(false) }
     SessionMenu(
@@ -118,6 +121,8 @@ private fun BarMenu(
         onDetach = onDetach,
         onChatView = onChatView,
         onEnd = { confirming = true },
+        canDuplicate = session.canDuplicate,
+        onDuplicate = onDuplicate,
     )
     if (confirming) {
         EndSessionDialog(
@@ -180,6 +185,10 @@ private fun StateBadge(
     modifier: Modifier = Modifier,
 ) {
     val reconnecting = session.link is Link.Reconnecting
+    if (session.duplicating) {
+        UnderWay(stringResource(R.string.machine_sessions_duplicating), modifier)
+        return
+    }
     when (session.live.connection) {
         StreamState.Connected -> {
             session.status?.let { AgentStatusBadge(it.text, it.color, it.shape, modifier) }

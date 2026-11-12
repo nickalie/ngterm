@@ -129,6 +129,7 @@ fun SessionScreen(
                 view = focused?.let(views::get),
                 onView = { view -> selected?.let { actions.onView(it, view) } },
                 onChatView = { on -> actions.onChatView(key, on) },
+                onDuplicate = { actions.onDuplicate(key) },
             )
             live.hud?.takeIf { roomy }?.let { HudBanner(it, Modifier.padding(NgtermTheme.spacing.sm)) }
             Box(Modifier.weight(1f).fillMaxWidth()) {

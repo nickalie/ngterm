@@ -43,12 +43,14 @@ import com.nickalie.ngterm.android.ui.components.SessionRow
 import com.nickalie.ngterm.android.ui.components.StatusGlyph
 import com.nickalie.ngterm.android.ui.components.agentStatusLook
 import com.nickalie.ngterm.android.ui.components.agentStatusWord
+import com.nickalie.ngterm.android.ui.sessions.UnderWay
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
  * The attached sessions as the Sessions destination lists them when none is open: a heading per machine, then a row
  * per session, its companions indented under it as a machine's sessions shows them, with its status and a menu
- * (Detach, Chat view through [onChatView], End session: [onEnd] confirms first). Tapping a row opens it ([onOpen]).
+ * (Detach, Duplicate session through [onDuplicate], Chat view through [onChatView], End session: [onEnd] confirms
+ * first). Tapping a row opens it ([onOpen]).
  * [contentPadding] keeps the list clear of the bars.
  */
 @Composable
@@ -59,6 +61,7 @@ fun AttachedList(
     onEnd: (SessionKey) -> Unit,
     modifier: Modifier = Modifier,
     onChatView: (SessionKey, Boolean) -> Unit = { _, _ -> },
+    onDuplicate: (SessionKey) -> Unit = {},
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     LazyColumn(
@@ -83,6 +86,8 @@ fun AttachedList(
                             onDetach = { onDetach(session.key) },
                             onChatView = { onChatView(session.key, it) },
                             onEnd = { onEnd(session.key) },
+                            canDuplicate = session.canDuplicate,
+                            onDuplicate = { onDuplicate(session.key) },
                         )
                     },
                 ) { Status(session) }
@@ -198,7 +203,11 @@ private fun Status(
     session: AttachedSession,
     modifier: Modifier = Modifier,
 ) {
-    session.status?.let { AgentStatusBadge(it.text, it.color, it.shape, modifier) }
+    if (session.duplicating) {
+        UnderWay(stringResource(R.string.machine_sessions_duplicating), modifier)
+    } else {
+        session.status?.let { AgentStatusBadge(it.text, it.color, it.shape, modifier) }
+    }
 }
 
 private val RailCell = 64.dp

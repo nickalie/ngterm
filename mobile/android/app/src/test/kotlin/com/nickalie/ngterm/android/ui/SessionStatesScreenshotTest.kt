@@ -42,6 +42,7 @@ class SessionStatesScreenshotTest {
     private val missing = SampleSessions.copy(sessions = null, failure = "/bin/sh: 1: ngtermctl: not found")
     private val unreachable =
         SampleSessions.copy(link = Link.Unreachable("build-01.lan:22: connection refused"), sessions = null)
+    private val duplicating = SampleSessions.copy(ending = emptySet(), duplicating = "s4", creating = true)
     private val stale = SampleSessions.copy(failure = "build-01 gave no answer (Connection reset by peer)")
 
     @Test
@@ -59,6 +60,14 @@ class SessionStatesScreenshotTest {
     @Test
     @Config(qualifiers = PHONE_NIGHT)
     fun creatingDark() = capture("machine_sessions_creating_dark") { SessionsSample(empty, starting = true) }
+
+    @Test
+    @Config(qualifiers = PHONE)
+    fun duplicatingLight() = capture("machine_sessions_duplicating_light") { SessionsSample(duplicating) }
+
+    @Test
+    @Config(qualifiers = PHONE_NIGHT)
+    fun duplicatingDark() = capture("machine_sessions_duplicating_dark") { SessionsSample(duplicating) }
 
     @Test
     @Config(qualifiers = PHONE)

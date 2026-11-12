@@ -28,13 +28,14 @@ import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.ui.components.AgentStatusBadge
 import com.nickalie.ngterm.android.ui.components.SessionRow
 import com.nickalie.ngterm.android.ui.session.ChatViewItem
+import com.nickalie.ngterm.android.ui.session.DuplicateItem
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
  * One session's row: its name, its context (or its working directory) or the parent it is a companion of, its agent's
- * status, and a menu with Attach or Detach, Chat view and End session ([onAskEnd]: the screen confirms it).
- * Tapping it attaches it (the session view opens from there once it lands). While its End is under way it says so
- * instead of its status.
+ * status, and a menu with Attach or Detach, Duplicate session, Chat view and End session ([onAskEnd]: the screen
+ * confirms it). Tapping it attaches it (the session view opens from there once it lands). While its End or its
+ * Duplicate is under way it says so instead of its status.
  */
 @Composable
 internal fun SessionEntry(
@@ -59,6 +60,8 @@ internal fun SessionEntry(
                 ending = line.ending,
                 onAttach = { actions.onOpen(session.id) },
                 onDetach = { actions.onDetach(session.id) },
+                canDuplicate = line.canDuplicate,
+                onDuplicate = { actions.onDuplicate(session.id) },
                 chatView = line.chatView,
                 onChatView = { on -> actions.onChatView(session.id, on) },
                 onEnd = onAskEnd,
@@ -67,7 +70,11 @@ internal fun SessionEntry(
     ) {
         when {
             line.ending -> {
-                Ending()
+                UnderWay(stringResource(R.string.machine_sessions_ending))
+            }
+
+            line.duplicating -> {
+                UnderWay(stringResource(R.string.machine_sessions_duplicating))
             }
 
             !session.status.isNullOrBlank() -> {
@@ -77,8 +84,12 @@ internal fun SessionEntry(
     }
 }
 
+// what the row is doing in place of its status: a small spinner and the word for it
 @Composable
-private fun Ending(modifier: Modifier = Modifier) {
+internal fun UnderWay(
+    label: String,
+    modifier: Modifier = Modifier,
+) {
     Row(
         modifier = modifier.semantics { liveRegion = LiveRegionMode.Polite },
         horizontalArrangement = Arrangement.spacedBy(NgtermTheme.spacing.sm),
@@ -86,7 +97,7 @@ private fun Ending(modifier: Modifier = Modifier) {
     ) {
         CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
         Text(
-            text = stringResource(R.string.machine_sessions_ending),
+            text = label,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -100,6 +111,8 @@ private fun SessionMenu(
     ending: Boolean,
     onAttach: () -> Unit,
     onDetach: () -> Unit,
+    canDuplicate: Boolean,
+    onDuplicate: () -> Unit,
     chatView: Boolean,
     onChatView: (Boolean) -> Unit,
     onEnd: () -> Unit,
@@ -128,6 +141,10 @@ private fun SessionMenu(
                     if (attached) onDetach() else onAttach()
                 },
             )
+            DuplicateItem(enabled = canDuplicate && !ending) {
+                open = false
+                onDuplicate()
+            }
             ChatViewItem(chatView) { on ->
                 open = false
                 onChatView(on)

@@ -341,6 +341,17 @@ class Connections(
     ): RemoteSession = core.createSession(machineId, name.trim().ifEmpty { null })
 
     /**
+     * Duplicates [sessionId] on [machineId] as desktop's Duplicate does, and returns the copy once it is listed; the
+     * listing that has it arrives in [trees].
+     *
+     * @throws MobileException with the core's words when it could not.
+     */
+    suspend fun duplicateSession(
+        machineId: String,
+        sessionId: String,
+    ): RemoteSession = core.duplicateSession(machineId, sessionId)
+
+    /**
      * Ends [sessionId] on [machineId], with no undo, and lets go of it here when it was attached.
      *
      * @throws MobileException with the core's words when it could not.

@@ -418,6 +418,90 @@ class SessionViewModelTest {
     }
 
     @Test
+    fun duplicatingTheOpenSessionOpensTheCopyInControl() {
+        attached("s1", "s2")
+        val model = model()
+        model.open(key)
+        eventually { model.state.value.open is OpenSession.Live }
+        val gate = CompletableDeferred<Unit>().also { test.core.holds["duplicateSession"] = it }
+        model.duplicate(key)
+        eventually {
+            model.state.value.sessions
+                .single()
+                .duplicating
+        }
+        assertEquals(
+            false,
+            model.state.value.sessions
+                .single()
+                .canDuplicate,
+        )
+        model.duplicate(SessionKey("m1", "s2"))
+        gate.complete(Unit)
+        val copy = SessionKey("m1", "fake-1")
+        eventually {
+            model.state.value.open
+                ?.key == copy
+        }
+        assertEquals(setOf(copy), test.graph.panes.claims.held.value)
+        assertEquals(setOf("s1", "fake-1"), test.connections.attached.value["m1"])
+        assertEquals(1, test.core.calls.count { it.method == "duplicateSession" })
+        eventually {
+            model.state.value.sessions
+                .none { it.duplicating }
+        }
+        assertTrue(
+            model.state.value.sessions
+                .all { it.canDuplicate },
+        )
+    }
+
+    @Test
+    fun aDuplicateFinishingAfterTheViewMovedOnOpensNothingAndTakesNoLead() {
+        attached("s1", "s2")
+        runBlocking { test.connections.attach("m1", "s2") }
+        val model = model()
+        model.open(key)
+        val gate = CompletableDeferred<Unit>().also { test.core.holds["duplicateSession"] = it }
+        model.duplicate(key)
+        eventually { test.core.calls.any { it.method == "duplicateSession" } }
+        model.open(SessionKey("m1", "s2"))
+        gate.complete(Unit)
+        eventually {
+            "fake-1" in
+                test.connections.attached.value["m1"]
+                    .orEmpty()
+        }
+        eventually {
+            model.state.value.sessions
+                .none { it.duplicating }
+        }
+        assertEquals(
+            SessionKey("m1", "s2"),
+            model.state.value.open
+                ?.key,
+        )
+        assertEquals(emptySet<SessionKey>(), test.graph.panes.claims.held.value)
+    }
+
+    @Test
+    fun aFailedDuplicateIsANoticeAndTheViewStays() {
+        attached("s1")
+        val model = model()
+        model.open(key)
+        test.core.failNext("duplicateSession", MobileException.Remote("build-01 does not run live sessions"))
+        model.duplicate(key)
+        eventually { model.notice.value != null }
+        assertEquals("build-01 does not run live sessions", model.notice.value)
+        assertEquals(
+            key,
+            model.state.value.open
+                ?.key,
+        )
+        assertEquals(setOf("s1"), test.connections.attached.value["m1"])
+    }
+
+    @Test
     fun endingTheOpenSessionClosesItsViewAndAFailureIsANotice() {
         attached("s1", "s2")
         runBlocking { test.connections.attach("m1", "s2") }

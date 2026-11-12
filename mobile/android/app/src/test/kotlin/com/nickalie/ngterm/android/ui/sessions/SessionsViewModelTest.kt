@@ -164,6 +164,53 @@ class SessionsViewModelTest {
     }
 
     @Test
+    fun duplicateCopiesTheSessionAttachesAndLandsTheCopyOneCreateAtATime() {
+        connected("s1", "s2")
+        val model = model()
+        val gate = CompletableDeferred<Unit>().also { test.core.holds["duplicateSession"] = it }
+        model.duplicate("s1")
+        val running = model.ready { it.duplicating == "s1" }
+        assertEquals(true, running.creating)
+        val lines = (running.body() as SessionsBody.Sessions).others
+        assertEquals(listOf(true, false), lines.map { it.duplicating })
+        assertEquals(listOf(false, false), lines.map { it.canDuplicate })
+        model.duplicate("s2")
+        model.newSession()
+        model.openNamedSession()
+        model.create("api")
+        gate.complete(Unit)
+        eventually { model.landing.value != null }
+        assertEquals(SessionKey("m1", "fake-1"), model.landing.value)
+        assertEquals(setOf("fake-1"), test.connections.attached.value["m1"])
+        assertEquals(listOf("s1", "fake-1", "s2"), model.ids())
+        assertEquals(
+            listOf(listOf("m1", "s1")),
+            test.core.calls
+                .filter { it.method == "duplicateSession" }
+                .map { it.args },
+        )
+        assertEquals(0, test.core.calls.count { it.method == "createSession" })
+        val done = model.ready { it.duplicating == null }
+        assertEquals(false, done.creating)
+        assertEquals(emptySet<SessionKey>(), test.graph.panes.claims.held.value)
+        model.landed()
+        assertEquals(setOf(SessionKey("m1", "fake-1")), test.graph.panes.claims.held.value)
+    }
+
+    @Test
+    fun aFailedDuplicateIsANoticeAndLandsNothing() {
+        connected("s1")
+        val model = model()
+        test.core.failNext("duplicateSession", MobileException.Remote("no session matches"))
+        model.duplicate("s1")
+        eventually { model.notice.value != null }
+        assertEquals("no session matches", model.notice.value)
+        assertNull(model.landing.value)
+        assertNull(model.ready { it.duplicating == null && !it.creating }.duplicating)
+        assertNull(test.connections.attached.value["m1"])
+    }
+
+    @Test
     fun aFailedOneTapNewSessionIsANoticeAndLandsNothing() {
         connected()
         val model = model()

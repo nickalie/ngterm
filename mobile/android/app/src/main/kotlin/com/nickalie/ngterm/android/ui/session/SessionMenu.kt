@@ -25,8 +25,9 @@ import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.ui.components.ConfirmDialog
 
 /**
- * An attached session's More menu, named for the session [name]: Detach ([onDetach]), Chat view ([chatView], flipped
- * through [onChatView]) and End session ([onEnd]).
+ * An attached session's More menu, named for the session [name]: Detach ([onDetach]), Duplicate session
+ * ([onDuplicate], taking no tap unless [canDuplicate]), Chat view ([chatView], flipped through [onChatView]) and End
+ * session ([onEnd]).
  */
 @Composable
 internal fun SessionMenu(
@@ -36,6 +37,8 @@ internal fun SessionMenu(
     onChatView: (Boolean) -> Unit,
     onEnd: () -> Unit,
     modifier: Modifier = Modifier,
+    canDuplicate: Boolean = true,
+    onDuplicate: () -> Unit = {},
 ) {
     var open by rememberSaveable { mutableStateOf(false) }
     Box(modifier = modifier) {
@@ -54,6 +57,10 @@ internal fun SessionMenu(
                     onDetach()
                 },
             )
+            DuplicateItem(canDuplicate) {
+                open = false
+                onDuplicate()
+            }
             ChatViewItem(chatView) { on ->
                 open = false
                 onChatView(on)
@@ -67,6 +74,19 @@ internal fun SessionMenu(
             )
         }
     }
+}
+
+/** A session's Duplicate session item: the machine copies the session and the copy opens here in control. */
+@Composable
+internal fun DuplicateItem(
+    enabled: Boolean,
+    onDuplicate: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = { Text(stringResource(R.string.machine_sessions_duplicate)) },
+        enabled = enabled,
+        onClick = onDuplicate,
+    )
 }
 
 /**
