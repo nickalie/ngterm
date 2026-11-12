@@ -86,14 +86,17 @@ pub enum LoginShell {
 }
 
 impl LoginShell {
-    /// The shell `path` names, by its basename; `None` for any other shell. PowerShell is known by its Windows names
-    /// too ([`is_powershell`]).
+    /// The shell `path` names, by its basename; `None` for any other shell. Absolute Windows paths are recognized
+    /// on every host; other paths keep the host's separators. PowerShell is known by its Windows names too
+    /// ([`is_powershell`]).
     #[must_use]
     pub fn of(path: &str) -> Option<Self> {
-        match crate::command_restore::shell_name(basename(path))
-            .to_ascii_lowercase()
-            .as_str()
-        {
+        let name = if crate::shell_profiles::windows_absolute(path) {
+            path.rsplit(['/', '\\']).find(|part| !part.is_empty()).unwrap_or(path)
+        } else {
+            basename(path)
+        };
+        match crate::command_restore::shell_name(name).to_ascii_lowercase().as_str() {
             "zsh" => Some(Self::Zsh),
             "bash" => Some(Self::Bash),
             "fish" => Some(Self::Fish),
@@ -617,10 +620,29 @@ mod tests {
 
     #[test]
     fn git_bash_is_known_by_its_windows_executable_name() {
-        for path in [r"C:\Program Files\Git\bin\bash.exe", "C:/Git/bin/BASH.EXE", "/bin/bash"] {
-            assert_eq!(LoginShell::of(path), Some(LoginShell::Bash));
+        for path in [
+            r"C:\Program Files\Git\bin\bash.exe",
+            "C:/Git/bin/BASH.EXE",
+            r"\\server\share\Git\bin\bash.exe",
+            r"\\?\C:\Git\bin\BASH.EXE",
+            "/bin/bash",
+        ] {
+            assert_eq!(LoginShell::of(path), Some(LoginShell::Bash), "{path}");
         }
         assert_eq!(LoginShell::of("bash.exe.bak"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_shell_names_keep_literal_backslashes() {
+        for path in [
+            r"/tmp/not-a-shell\bash",
+            r"/tmp/not-a-shell\bash.exe",
+            r"/tmp/not-a-shell\zsh",
+        ] {
+            assert_eq!(LoginShell::of(path), None, "{path}");
+        }
+        assert_eq!(LoginShell::of(r"/tmp/a\b/bash"), Some(LoginShell::Bash));
     }
 
     #[test]
