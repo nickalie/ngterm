@@ -1,4 +1,4 @@
-//! Native Windows programs kept alive by the session server without injected shell startup scripts.
+//! Native Windows programs kept alive by the session server.
 //! WSL retains its distribution/user/directory arguments; the Windows server owns `wsl.exe`'s `ConPTY`.
 
 use super::{ShellProfile, windows_absolute};
@@ -48,6 +48,30 @@ fn wsl_options(args: &[String]) -> bool {
         }
     }
     true
+}
+
+/// Add WSL shell startup integration when bundled, retaining the plain-shell fallback.
+pub fn integrated_arguments<S: AsRef<str>>(
+    profile: &ShellProfile,
+    replaying: Option<&[String]>,
+    creation: Option<Creation<'_>>,
+    denylist: &[S],
+    environment: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    if profile.direct_live() == Some(DirectShell::Wsl) {
+        let payload = match (replaying, creation) {
+            (None, Some(Creation::ReturningToShell(line))) => Some((line, true)),
+            (None, Some(Creation::EndingPane(line))) => Some((line, false)),
+            _ => None,
+        };
+        if let Some(integration) = super::integration::wsl_arguments(environment, payload) {
+            let mut argv = vec![profile.executable.clone()];
+            argv.extend(profile.args.iter().cloned());
+            argv.extend(integration);
+            return argv;
+        }
+    }
+    arguments(profile, replaying, creation, denylist)
 }
 
 /// Create a persistent program, honoring explicit command lifetimes. A surviving daemon ignores this argv.

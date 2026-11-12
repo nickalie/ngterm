@@ -77,7 +77,7 @@ pub fn windows_form(path: &str) -> String {
         && bytes[0] == b'/'
         && bytes[1].is_ascii_alphabetic()
         && bytes[2] == b':'
-        && bytes.get(3).is_none_or(|byte| *byte == b'/');
+        && bytes.get(3).is_none_or(|byte| matches!(byte, b'/' | b'\\'));
     if !drive {
         return path.to_owned();
     }
@@ -244,6 +244,7 @@ mod tests {
     #[test]
     fn a_drive_spelled_as_a_uri_does_is_spelled_as_windows_does() {
         assert_eq!(windows_form("/C:/Users/me/my dir"), r"C:\Users\me\my dir");
+        assert_eq!(windows_form(r"/C:\a b\percent%20#dir"), r"C:\a b\percent%20#dir");
         assert_eq!(windows_form("/c:"), r"c:\");
         assert_eq!(windows_form("/C:/"), r"C:\");
         for other in ["/home/u", "/C", "/CD:/x", "C:/x", "/1:/x", ""] {
@@ -251,6 +252,13 @@ mod tests {
         }
         let reported = reported_path("kitty-shell-cwd://box/C:/Users/me", HOST);
         let expected = if cfg!(windows) { r"C:\Users\me" } else { "/C:/Users/me" };
+        assert_eq!(reported.as_deref(), Some(expected));
+        let reported = reported_path(r"kitty-shell-cwd://localhost/C:\a b\percent%20#dir", HOST);
+        let expected = if cfg!(windows) {
+            r"C:\a b\percent%20#dir"
+        } else {
+            r"/C:\a b\percent%20#dir"
+        };
         assert_eq!(reported.as_deref(), Some(expected));
     }
 

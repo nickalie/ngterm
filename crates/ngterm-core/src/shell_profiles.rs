@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub mod direct;
+pub mod integration;
 #[cfg(windows)]
 mod windows;
 

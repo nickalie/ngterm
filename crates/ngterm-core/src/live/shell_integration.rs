@@ -224,6 +224,8 @@ pub fn is_powershell(path: &str) -> bool {
 /// The app's own values of the variables an integration hands on or extends, read once from its environment.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Inherited {
+    /// CMD's inherited prompt, preserved when adding its directory report.
+    pub cmd_prompt: Option<String>,
     /// `ZDOTDIR`, handed on to the zsh integration.
     pub zdotdir: Option<String>,
     /// `ENV`, which the bash integration restores.
@@ -242,6 +244,7 @@ impl Inherited {
     pub fn read(env: &dyn Env) -> Self {
         let var = |key: &str| env.var(key).map(|value| value.to_string_lossy().into_owned());
         Self {
+            cmd_prompt: var("PROMPT"),
             zdotdir: var("ZDOTDIR"),
             env: var("ENV"),
             histfile: var("HISTFILE"),
@@ -796,6 +799,7 @@ mod tests {
         assert_eq!(
             Inherited::read(&env),
             Inherited {
+                cmd_prompt: None,
                 zdotdir: Some("/z".to_owned()),
                 env: Some("/e".to_owned()),
                 histfile: Some("/h".to_owned()),
