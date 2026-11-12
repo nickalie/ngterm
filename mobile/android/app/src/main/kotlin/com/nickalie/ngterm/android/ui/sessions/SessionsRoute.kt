@@ -23,10 +23,10 @@ import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.data.SessionKey
 
 /**
- * A machine's sessions, over its [SessionsViewModel]: the list, the New session dialog and the snackbar for what failed
- * out of sight (an End, an attach). It lists the machine afresh when it opens (not again on a rotation), and goes
- * [onBack] when the machine is removed meanwhile. [onReviewHostKey] opens the changed-key stop; tapping a session
- * attaches it and opens its view ([onOpenSession]).
+ * A machine's sessions, over its [SessionsViewModel]: the list, the New named session dialog and the snackbar for what
+ * failed out of sight (a create, an End, an attach). It lists the machine afresh when it opens (not again on a
+ * rotation), and goes [onBack] when the machine is removed meanwhile. [onReviewHostKey] opens the changed-key stop;
+ * tapping a session attaches it and opens its view ([onOpenSession]), as New session does with the one it creates.
  */
 @Composable
 fun SessionsRoute(

@@ -1,11 +1,15 @@
 package com.nickalie.ngterm.android.ui.session
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.test.assertAll
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.isNotEnabled
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.awaitText
+import com.nickalie.ngterm.android.data.session
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.android.ui.NgtermApp
 import com.nickalie.ngterm.android.ui.terminal.SelectingPane
@@ -16,6 +20,7 @@ import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneRole
 import com.nickalie.ngterm.core.ffi.RemoteLayout
 import com.nickalie.ngterm.core.ffi.StreamState
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -68,6 +73,9 @@ class NewSessionFlowTest : SessionViewFixture() {
         test.core.emit(MobileEvent.PaneLead(created, PaneRole.FOLLOWER, true))
         waitFor { takeLeads().isNotEmpty() }
         assertEquals(listOf(listOf("m1", "fake-1", "P1")), takeLeads())
+        compose.waitForIdle()
+        assertTrue(shows("Attaching"))
+        assertTrue(!shows("Another device is driving this pane"))
         test.core.emit(MobileEvent.PaneLead(created, PaneRole.LEADER, false))
         waitFor { described("Terminal") }
         assertTrue(!shows("Another device is driving this pane"))
@@ -89,8 +97,28 @@ class NewSessionFlowTest : SessionViewFixture() {
         newSession()
         test.core.emit(MobileEvent.PaneLead(created, PaneRole.LEADER, false))
         waitFor { described("Terminal") }
+        test.core.emit(MobileEvent.PaneLead(created, PaneRole.FOLLOWER, true))
+        waitFor { shows("Another device is driving this pane") }
         compose.waitForIdle()
         assertTrue(takeLeads().isEmpty())
+    }
+
+    @Test
+    fun theEmptyStatesNewSessionSaysCreatingAndTakesNoTapsWhileItRuns() {
+        openMachine()
+        val gate = CompletableDeferred<Unit>().also { test.core.holds["createSession"] = it }
+        compose.onAllNodesWithText("New session")[1].performClick()
+        compose.awaitText("Creating")
+        val creating = compose.onAllNodesWithText("Creating")
+        creating.assertCountEquals(2)
+        creating.assertAll(isNotEnabled())
+        gate.complete(Unit)
+        waitFor {
+            created.session.sessionId in
+                test.connections.attached.value["m1"]
+                    .orEmpty()
+        }
+        assertEquals(1, test.core.calls.count { it.method == "createSession" })
     }
 
     @Test

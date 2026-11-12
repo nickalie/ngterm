@@ -12,7 +12,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,11 +32,11 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
  * What a screen shows instead of its content: an [icon] in [tint], a [title] saying what is the case, a [body] saying
- * what to do about it, and the one [action] that does it, with at most one quieter [secondary] one under it (a
- * text button: Retry after the fix the main action points to). Every empty, error and offline state is one of these,
- * so no screen is ever blank and none leaves the user without a next step. Use [EmptyState], [ErrorState] or
- * [OfflineState]. The panel scrolls itself when its window is too short for it, so don't put it in a vertical
- * scroller.
+ * what to do about it, and the one [action] that does it ([busy]: under way, taking no taps), with at most one
+ * quieter [secondary] one under it (a text button: Retry after the fix the main action points to). Every empty, error
+ * and offline state is one of these, so no screen is ever blank and none leaves the user without a next step. Use
+ * [EmptyState], [ErrorState] or [OfflineState]. The panel scrolls itself when its window is too short for it, so don't
+ * put it in a vertical scroller.
  */
 @Composable
 fun MessagePanel(
@@ -45,6 +47,7 @@ fun MessagePanel(
     action: PanelAction,
     modifier: Modifier = Modifier,
     secondary: PanelAction? = null,
+    busy: Boolean = false,
 ) {
     val spacing = NgtermTheme.spacing
     Column(
@@ -71,10 +74,11 @@ fun MessagePanel(
         )
         Button(
             onClick = action.onClick,
+            enabled = !busy,
             modifier = Modifier.padding(top = spacing.sm),
             contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
         ) {
-            ActionLabel(action)
+            ActionLabel(action, busy)
         }
         if (secondary != null) {
             TextButton(onClick = secondary.onClick) { ActionLabel(secondary) }
@@ -83,8 +87,18 @@ fun MessagePanel(
 }
 
 @Composable
-private fun RowScope.ActionLabel(action: PanelAction) {
-    if (action.icon != null) {
+private fun RowScope.ActionLabel(
+    action: PanelAction,
+    busy: Boolean = false,
+) {
+    if (busy) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(16.dp),
+            strokeWidth = 2.dp,
+            color = LocalContentColor.current,
+        )
+        Text(action.label, modifier = Modifier.padding(start = NgtermTheme.spacing.sm))
+    } else if (action.icon != null) {
         Icon(painterResource(action.icon), contentDescription = null, modifier = Modifier.size(18.dp))
         Text(action.label, modifier = Modifier.padding(start = NgtermTheme.spacing.sm))
     } else {
@@ -99,7 +113,7 @@ data class PanelAction(
     val onClick: () -> Unit,
 )
 
-/** Nothing here yet: [action] makes the first one (Add machine, New session). */
+/** Nothing here yet: [action] makes the first one (Add machine, New session), [busy] while it does. */
 @Composable
 fun EmptyState(
     @DrawableRes icon: Int,
@@ -107,8 +121,9 @@ fun EmptyState(
     body: String,
     action: PanelAction,
     modifier: Modifier = Modifier,
+    busy: Boolean = false,
 ) {
-    MessagePanel(icon, MaterialTheme.colorScheme.primary, title, body, action, modifier)
+    MessagePanel(icon, MaterialTheme.colorScheme.primary, title, body, action, modifier, busy = busy)
 }
 
 /**

@@ -62,8 +62,8 @@ data class NewSessionState(
 /**
  * A machine's sessions: its listing with each session's status and whether this app has it attached, refreshing it,
  * New session (named or not; the dialog's state lives here so a rotation keeps a create under way), End session,
- * attaching and detaching. [opened] lists the machine afresh. [notice] carries what a list can't show (an End or an
- * attach that failed) for a snackbar.
+ * attaching and detaching. [opened] lists the machine afresh. [notice] carries what a list can't show (a create, an
+ * End or an attach that failed) for a snackbar.
  */
 @Suppress("TooManyFunctions") // a function per thing the screen does
 class SessionsViewModel(
@@ -185,23 +185,18 @@ class SessionsViewModel(
         }
     }
 
-    /** Opens the New session dialog. */
     fun openNamedSession() {
         if (newSession.value != null) return
         dialog += 1
         newSession.value = NewSessionState()
     }
 
-    /**
-     * Closes the New session dialog; a create under way goes on, its session shows in the list and its failure in the
-     * snackbar, and a dialog opened after it is not its.
-     */
+    /** A create under way goes on and still lands; its failure goes to the snackbar, not to a dialog opened later. */
     fun closeNewSession() {
         dialog += 1
         newSession.value = null
     }
 
-    /** Creates a session named [name] (blank: the machine names it); the dialog closes once it is listed. */
     fun create(name: String) {
         if (newSession.value?.running == true || starting.value) return
         val mine = dialog
@@ -236,12 +231,13 @@ class SessionsViewModel(
 
     private suspend fun land(sessionId: String) {
         connections.attach(machineId, sessionId)
-        val key = SessionKey(machineId, sessionId)
-        graph.panes.claims.claim(key)
-        lands.value = key
+        lands.value = SessionKey(machineId, sessionId)
     }
 
+    // claimed only as it opens: a page left meanwhile never opens it, and must not take its lead later
     fun landed() {
+        val key = lands.value ?: return
+        graph.panes.claims.claim(key)
         lands.value = null
     }
 

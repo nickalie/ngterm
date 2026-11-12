@@ -34,8 +34,9 @@ data class AgentStatus(
 
 /**
  * An attached session as the app shows it: its [machine]'s name, its [name], [context] and agent [status] (the stream's
- * when it has them, the machine's last listing's otherwise), its machine's [link], its stream's [live] state, and
- * whether its panes running an agent show as a chat ([chatView]: its own choice, else Settings').
+ * when it has them, the machine's last listing's otherwise), its machine's [link], its stream's [live] state,
+ * whether its panes running an agent show as a chat ([chatView]: its own choice, else Settings'), and whether this
+ * device is [taking] its lead.
  */
 data class AttachedSession(
     val key: SessionKey,
@@ -46,6 +47,7 @@ data class AttachedSession(
     val link: Link,
     val live: LiveSession,
     val chatView: Boolean = ChatViews().default,
+    val taking: Boolean = false,
 )
 
 /** A machine's attached sessions, in its listing's order. */
@@ -124,9 +126,9 @@ class SessionViewModel(
             graph.panes.live.sessions,
             openKey,
             focus,
-            combine(graph.chats.views, graph.chats.chatViews, ::Pair),
-        ) { listed, live, open, focus, (views, chatViews) ->
-            val groups = groups(listed, live, chatViews, seen)
+            combine(graph.chats.views, graph.chats.chatViews, graph.panes.claims.held, ::Triple),
+        ) { listed, live, open, focus, (views, chatViews, taking) ->
+            val groups = groups(listed, live, chatViews, taking, seen)
             AttachedUiState(groups, open?.let { open(it, listed, groups, focus, views) })
         }.catch { emit(AttachedUiState()) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, AttachedUiState())
@@ -265,6 +267,7 @@ private fun groups(
     listed: Listed,
     live: Map<SessionKey, LiveSession>,
     chatViews: ChatViews,
+    taking: Set<SessionKey>,
     seen: MutableMap<SessionKey, AttachedSession>,
 ): List<AttachedGroup> =
     listed.machines.mapNotNull { machine ->
@@ -275,7 +278,7 @@ private fun groups(
         val sessions =
             order.map { id ->
                 val key = SessionKey(machine.id, id)
-                attached(key, machine, listed, live, seen).copy(chatView = chatViews.on(key))
+                attached(key, machine, listed, live, seen).copy(chatView = chatViews.on(key), taking = key in taking)
             }
         AttachedGroup(machine.id, machine.title, sessions)
     }

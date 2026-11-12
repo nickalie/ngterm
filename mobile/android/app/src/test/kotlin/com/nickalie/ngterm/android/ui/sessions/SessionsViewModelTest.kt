@@ -157,8 +157,10 @@ class SessionsViewModelTest {
         )
         assertEquals(false, model.busy.value)
         assertNull(model.creating.value)
+        assertEquals(emptySet<SessionKey>(), test.graph.panes.claims.held.value)
         model.landed()
         assertNull(model.landing.value)
+        assertEquals(setOf(SessionKey("m1", "fake-1")), test.graph.panes.claims.held.value)
     }
 
     @Test

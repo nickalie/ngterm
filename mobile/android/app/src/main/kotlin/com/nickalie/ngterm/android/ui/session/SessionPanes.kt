@@ -57,7 +57,6 @@ class SessionPanes(
     private val failureState = MutableStateFlow<Map<PaneRef, String>>(emptyMap())
     private val showing = mutableSetOf<PaneRef>()
 
-    /** Sessions created here, to open in control. */
     val claims = LeadClaims()
 
     // each machine's link as last seen, and how many times it came back: a show begun before the last return is stale
@@ -212,10 +211,18 @@ class SessionPanes(
 
 /** A session created here opens in control: its first pane to report following takes the lead, once. */
 class LeadClaims {
-    private val keys = mutableSetOf<SessionKey>()
+    private val pending = mutableSetOf<SessionKey>()
+
+    // the pane whose takeover is on its way, until it stops reporting following
+    private val taking = mutableMapOf<SessionKey, String>()
+    private val heldState = MutableStateFlow<Set<SessionKey>>(emptySet())
+
+    /** The sessions whose lead this device is taking: their Take control cover would only flash. */
+    val held: StateFlow<Set<SessionKey>> = heldState.asStateFlow()
 
     fun claim(key: SessionKey) {
-        keys += key
+        pending += key
+        heldState.value = pending + taking.keys
     }
 
     internal fun settle(
@@ -223,21 +230,21 @@ class LeadClaims {
         sessions: Map<SessionKey, LiveSession>,
         takeLead: (PaneRef) -> Unit,
     ) {
-        keys.retainAll { it.sessionId in attached[it.machineId].orEmpty() }
-        for (key in keys.toList()) {
+        val gone = { key: SessionKey -> key.sessionId !in attached[key.machineId].orEmpty() }
+        pending.removeAll(gone)
+        taking.entries.removeAll { (key, pane) ->
+            gone(key) || sessions[key]?.panes?.get(pane)?.role != PaneRole.FOLLOWER
+        }
+        for (key in pending.toList()) {
             val panes = sessions[key]?.panes.orEmpty()
             val follower = panes.entries.firstOrNull { it.value.role == PaneRole.FOLLOWER }?.key
-            when {
-                follower != null -> {
-                    keys -= key
-                    takeLead(PaneRef(key.machineId, key.sessionId, follower))
-                }
-
-                panes.values.any { it.role == PaneRole.LEADER } -> {
-                    keys -= key
-                }
+            if (follower != null) {
+                taking[key] = follower
+                takeLead(PaneRef(key.machineId, key.sessionId, follower))
             }
+            if (follower != null || panes.values.any { it.role == PaneRole.LEADER }) pending -= key
         }
+        heldState.value = pending + taking.keys
     }
 }
 

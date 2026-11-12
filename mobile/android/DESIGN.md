@@ -183,7 +183,7 @@ white on nothing, as Android masks it. The status glyphs are 16dp filled or stro
 | `MachineCard` | a machine: name, mono address, connection badge, and a summary slot for its sessions' status |
 | `SessionRow` | a session: name, context or companion line, status slot, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, Chat view, End session) |
 | `SectionHeader` | a group's heading with an optional count and one text action |
-| `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it; at most one quieter text-button action under it, for a retry after the fix the main one points to |
+| `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it (busy while it runs: a small spinner, no taps); at most one quieter text-button action under it, for a retry after the fix the main one points to |
 | `Banner` | a strip about the whole screen while it stays usable, with an optional action and dismiss; announced politely |
 | `ConfirmDialog` | the confirmation before what can't be undone; the button repeats the action's words, in the error color |
 | `KeyPlate`, `CopyButton` | text compared or pasted character by character (a key line, a fingerprint, a command, a machine's sign-in message): mono, selectable, wrapping anywhere, on a `surfaceContainerLow` plate with an optional label above and Copy or Share under it; Copy says "Copied" for 2 s. A link in it is copper and underlined and opens on a tap; a long press still selects |
@@ -329,7 +329,7 @@ machine is the subject: the list is quiet rows on the ground, not cards, since a
   spinner in place of its status. Pull to refresh lists again; on a machine not connected it connects.
 - **New session** takes one tap: the machine creates a session it names, the app attaches it and the session view
   opens on it, in control. Its pane takes the lead when its first attach reports that another device has it (Take
-  control without the tap); one that leads already is left as it is, and any later takeover is the user's to answer
+  control without the tap, the pane attaching meanwhile rather than flashing the cover); one that leads already is left as it is, and any later takeover is the user's to answer
   as usual. While the machine creates and lists it (up to 20 s) the button says Creating with a small spinner and
   takes no taps; a failed create or attach is a snackbar in the core's words, and the list stays (a session created
   but not attached shows in it). Only this device's own New session claims the lead: a session opened from a row
@@ -344,7 +344,7 @@ machine is the subject: the list is quiet rows on the ground, not cards, since a
 - **States**, each a `MessagePanel` in place of the list: connecting and reading are a spinner with what is under
   way (a host-key question or a sign-in waits as its sheet over it); not connected offers Connect; the device offline says so with Retry; a dropped connection counts down "Trying
   again in 4 s" with Retry now; unreachable gives the core's reason with Retry; a changed host key offers Review
-  (the changed-key stop); no sessions invites New session; a listing that failed gives its reason with Retry. A
+  (the changed-key stop); no sessions invites New session (Creating with a small spinner while it runs); a listing that failed gives its reason with Retry. A
   machine without `ngtermctl` (the far shell's "not found") says "ngtermctl isn't on build-01", what to install and
   where, with Open the README (the server setup section) and Retry under it. A refresh that fails over a list keeps
   the list under an error banner with Retry; the offline banner shows over it as on the home.

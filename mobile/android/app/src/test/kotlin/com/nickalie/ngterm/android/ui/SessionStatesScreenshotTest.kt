@@ -54,11 +54,11 @@ class SessionStatesScreenshotTest {
 
     @Test
     @Config(qualifiers = PHONE)
-    fun creatingLight() = capture("machine_sessions_creating_light") { SessionsSample(SampleSessions, starting = true) }
+    fun creatingLight() = capture("machine_sessions_creating_light") { SessionsSample(empty, starting = true) }
 
     @Test
     @Config(qualifiers = PHONE_NIGHT)
-    fun creatingDark() = capture("machine_sessions_creating_dark") { SessionsSample(SampleSessions, starting = true) }
+    fun creatingDark() = capture("machine_sessions_creating_dark") { SessionsSample(empty, starting = true) }
 
     @Test
     @Config(qualifiers = PHONE)

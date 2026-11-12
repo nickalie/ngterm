@@ -88,7 +88,7 @@ fun SessionsScreen(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             contentAlignment = Alignment.Center,
         ) {
-            Body(state, actions, asking, now)
+            Body(state, actions, asking, now, starting)
         }
         state.sessions?.firstOrNull { it.id == confirming }?.let { session ->
             EndSessionDialog(
@@ -197,13 +197,14 @@ private fun Body(
     actions: SessionActions,
     onAskEnd: (String) -> Unit,
     now: () -> Long,
+    starting: Boolean,
 ) {
     val name = state.machine.title
     when (val body = state.body()) {
         SessionsBody.Connecting -> Waiting(stringResource(R.string.machine_sessions_connecting, name))
         SessionsBody.Reading -> Waiting(stringResource(R.string.machine_sessions_reading, name))
         is SessionsBody.Sessions -> Listing(state, body, actions, onAskEnd)
-        is SessionsBody.Empty -> Empty(state, body.failure, actions)
+        is SessionsBody.Empty -> Empty(state, body.failure, actions, starting)
         else -> Problem(name, body, actions, now)
     }
 }
@@ -258,6 +259,7 @@ private fun Empty(
     state: MachineSessions,
     failure: String?,
     actions: SessionActions,
+    starting: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val spacing = NgtermTheme.spacing
@@ -274,10 +276,11 @@ private fun Empty(
                 body = stringResource(R.string.machine_sessions_empty_body, name),
                 action =
                     PanelAction(
-                        stringResource(R.string.machine_sessions_new),
+                        stringResource(if (starting) R.string.new_session_creating else R.string.machine_sessions_new),
                         R.drawable.ic_add,
                         actions.onNewSession,
                     ),
+                busy = starting,
             )
         }
     }
