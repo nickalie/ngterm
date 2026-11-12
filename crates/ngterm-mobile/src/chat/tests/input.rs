@@ -302,6 +302,7 @@ fn a_file_tools_approval_goes_to_the_dialog_naming_its_path_relative_to_the_work
             detail: None,
             tool_use_id: None,
             cwd: Some(PROJECT_DIR.to_owned()),
+            questions: Vec::new(),
         },
     ] {
         let mut plan = Plan::new(Action::Approval(card.clone(), "Yes".to_owned()));

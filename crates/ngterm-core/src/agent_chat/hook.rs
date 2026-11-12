@@ -8,7 +8,9 @@
 //!   rollout (its memory consolidation) has a null `transcript_path` and is not a conversation the chat can show.
 //! - Codex fires a subagent's events in the parent, with `agent_id` and the subagent's own `transcript_path`: such a
 //!   payload must not re-point the pane's record, so only its permission prompt is kept.
-//! - `PermissionRequest` carries `tool_name` and `tool_input`, and no `tool_use_id`.
+//! - `PermissionRequest` carries `tool_name` and `tool_input`, and no `tool_use_id`. Claude's `AskUserQuestion` fires
+//!   one too, its questions in `tool_input`: Claude Code writes the call to its transcript only once it is answered,
+//!   so the prompt carries them for the chat's question card.
 //!
 //! A transcript path is checked against the agent's tree ([`config_dir`]): Claude writes
 //! `<config>/projects/<project>/<id>.jsonl`, Codex `<home>/sessions/<y>/<m>/<d>/rollout-….jsonl`. A path outside such
@@ -16,12 +18,15 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use ngterm_proto::{AgentApproval, AgentReport};
+use ngterm_proto::{AgentApproval, AgentQuestion, AgentQuestionOption, AgentReport};
 use serde_json::Value;
 
-use super::claude::{tool_kind, tool_subject, tool_title};
+use super::claude::{question, tool_kind, tool_subject, tool_title};
 use super::event::OUTPUT_CAP;
-use super::{AgentKind, cap, non_empty, title_line};
+use super::{AgentKind, QuestionItem, QuestionOption, cap, non_empty, title_line};
+
+/// The tool whose permission prompt is a question.
+pub const QUESTION_TOOL: &str = "AskUserQuestion";
 
 /// The hook events that reach the agent record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -121,7 +126,44 @@ fn approval(payload: &Value) -> Result<AgentApproval, String> {
         detail: tool_subject(kind, input).map(|subject| cap(subject, OUTPUT_CAP).0),
         tool_use_id: non_empty(payload, "/tool_use_id").map(str::to_owned),
         cwd: non_empty(payload, "/cwd").map(str::to_owned),
+        questions: (tool == QUESTION_TOOL).then(|| question(input).questions.into_iter().map(Into::into).collect()),
     })
+}
+
+impl From<QuestionItem> for AgentQuestion {
+    fn from(item: QuestionItem) -> Self {
+        Self {
+            question: item.question,
+            header: item.header,
+            multi_select: item.multi_select,
+            options: item
+                .options
+                .into_iter()
+                .map(|option| AgentQuestionOption {
+                    label: option.label,
+                    description: option.description,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<&AgentQuestion> for QuestionItem {
+    fn from(item: &AgentQuestion) -> Self {
+        Self {
+            question: item.question.clone(),
+            header: item.header.clone(),
+            multi_select: item.multi_select,
+            options: item
+                .options
+                .iter()
+                .map(|option| QuestionOption {
+                    label: option.label.clone(),
+                    description: option.description.clone(),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Checks that `transcript` lies in `agent`'s tree ([`config_dir`]).

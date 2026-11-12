@@ -223,6 +223,10 @@ pub struct Approval {
     /// The agent's working directory when it asked: what its dialog shows a path relative to.
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Claude's `AskUserQuestion`: the questions its picker asks, which make the prompt a question card. Claude Code
+    /// writes the call to its transcript only once it is answered.
+    #[serde(default)]
+    pub questions: Option<Vec<QuestionItem>>,
 }
 
 /// What a notice reports.

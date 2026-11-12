@@ -93,6 +93,7 @@ fn claude_permission_requests_carry_the_tool_its_description_and_its_command() {
                 detail: Some("touch allowed.txt".to_owned()),
                 tool_use_id: None,
                 cwd: Some("/home/user/project".to_owned()),
+                questions: None,
             }),
             ..conversation(claude, HookEvent::PermissionRequest, CLAUDE_TRANSCRIPT, CLAUDE_MAIN)
         })
@@ -130,6 +131,7 @@ fn an_edit_permission_names_the_file() {
             detail: Some("/home/user/project/notes.txt".to_owned()),
             tool_use_id: Some("toolu_1".to_owned()),
             cwd: Some("/home/user/project".to_owned()),
+            questions: None,
         })
     );
 }
@@ -156,6 +158,7 @@ fn codex_events_carry_the_thread_and_its_rollout() {
                 detail: Some("curl -sI https://example.com".to_owned()),
                 tool_use_id: None,
                 cwd: Some("/home/user/project".to_owned()),
+                questions: None,
             }),
             ..conversation(codex, PermissionRequest, CODEX_TRANSCRIPT, CODEX_MAIN)
         })
@@ -327,4 +330,43 @@ fn event_names_parse_and_an_unknown_one_lists_them() {
         HookEvent::parse("Stop"),
         Err("unknown agent event: Stop (SessionStart|UserPromptSubmit|PermissionRequest|SessionEnd)".to_owned())
     );
+}
+
+#[test]
+fn an_ask_user_question_prompt_carries_its_questions() {
+    let report = read(
+        AgentKind::Claude,
+        HookEvent::PermissionRequest,
+        "claude/hooks",
+        "27-PermissionRequest.json",
+    )
+    .unwrap();
+    let approval = report.approval.unwrap();
+    assert_eq!(approval.tool, "AskUserQuestion");
+    let questions = approval.questions.unwrap();
+    let asked: Vec<(&str, bool, usize)> = questions
+        .iter()
+        .map(|item| (item.question.as_str(), item.multi_select, item.options.len()))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            ("Which greeting style?", false, 3),
+            ("Which languages should greet() support?", true, 3)
+        ]
+    );
+    assert_eq!(questions[0].options[1].label, "Casual");
+    assert_eq!(questions[0].header.as_deref(), Some("Style"));
+}
+
+#[test]
+fn a_tool_prompt_carries_no_questions() {
+    let report = read(
+        AgentKind::Claude,
+        HookEvent::PermissionRequest,
+        "claude/hooks",
+        "33-PermissionRequest.json",
+    )
+    .unwrap();
+    assert_eq!(report.approval.unwrap().questions, None);
 }

@@ -1,11 +1,19 @@
 //! The e2e test's agent chat steps: a fake agent ([`FakeAgent`]) in the pane, the phone's chat of it read, followed,
-//! paged and resumed, a prompt sent while another client leads, an approval, and the agent's end.
+//! paged and resumed, a prompt sent while another client leads, a prompt sent while the agent works (absorbed into its
+//! turn), an approval, an approval answered while the phone is away, a question Claude Code has not written yet shown
+//! and answered, and the agent's end.
 
 use std::collections::HashSet;
 
-use ngterm_mobile::{AgentInputOutcome, ChatBody, ChatEvent, ChatState, MachineState, PaneRole, PaneSize};
+use ngterm_mobile::{
+    AgentInputOutcome, ChatApproval, ChatBody, ChatEvent, ChatQuestion, ChatQuestionItem, ChatQuestionOption,
+    ChatState, ChatToolStatus, MachineState, PaneRole, PaneSize, QuestionAnswer,
+};
+use serde_json::Value;
 
-use crate::agent::{APPROVAL_COMMAND, CONVERSATION, FIRST_PROMPT, FakeAgent};
+use crate::agent::{
+    APPROVAL_COMMAND, AWAY_COMMAND, CONVERSATION, FIRST_PROMPT, FakeAgent, QUESTION_CALL, State, question_input,
+};
 use crate::machine::World;
 use crate::phone::{Client, MACHINE_ID, block_on, enter};
 
@@ -28,8 +36,14 @@ const FOLLOWED: u64 = 2;
 const RESUMED: u64 = 3;
 /// The prompt the phone sends.
 const PROMPT: &str = "hello from the phone";
+/// The prompt the phone sends while the agent works.
+const ABSORBED: &str = "and add a test for it";
 /// What the fake agent's footer says, as the capture drew it.
 const FOOTER: &str = "for shortcuts";
+/// What the working screen's footer says.
+const WORKING: &str = "esc to interrupt";
+/// The option the phone picks in the question.
+const PICKED: &str = "Green";
 
 /// Where the chat steps run: the session's pane and the two clients of it.
 pub(crate) struct Scene<'a> {
@@ -51,7 +65,10 @@ impl Scene<'_> {
         self.page_back(&agent);
         self.resume(&agent);
         self.prompt();
+        self.absorbed(&agent);
         self.approval(&agent);
+        self.approval_away(&agent);
+        self.question(&agent);
         self.end();
     }
 
@@ -202,37 +219,140 @@ impl Scene<'_> {
         });
     }
 
-    /// A blocked status with a permission candidate is an approval in the chat; the status leaving `blocked` ends it.
-    fn approval(&mut self, agent: &FakeAgent) {
-        let pane_arguments = ["--target", self.session, "--pane", "primary", "--pane-id", self.pane];
-        let hook = [&["agent", "hook", "claude", "PermissionRequest"][..], &pane_arguments].concat();
-        let payload = agent.permission_payload();
+    /// The pane's arguments for `ngtermctl agent hook` and `session status`.
+    fn pane_arguments(&self) -> [&str; 6] {
+        ["--target", self.session, "--pane", "primary", "--pane-id", self.pane]
+    }
+
+    /// Reports `payload` through the agent's `PermissionRequest` hook and sets the pane `blocked`, as Claude Code's
+    /// hooks do when its dialog opens.
+    fn ask(&self, payload: &str) {
+        let hook = [
+            &["agent", "hook", "claude", "PermissionRequest"][..],
+            &self.pane_arguments(),
+        ]
+        .concat();
         self.world
             .headless
             .ctl_fed(&hook, Some(payload.as_bytes()))
             .expect("report the permission prompt");
-        let status = |state: &'static str| [&["session", "status", state][..], &pane_arguments].concat();
-        self.world.headless.ctl(&status("blocked")).expect("set blocked");
-        let shown = |event: &ChatEvent| {
-            matches!(&event.body, ChatBody::Approval { approval }
-                if approval.tool == "Bash" && approval.detail.as_deref() == Some(APPROVAL_COMMAND))
+        self.status("blocked");
+    }
+
+    fn status(&self, state: &str) {
+        let status = [&["session", "status", state][..], &self.pane_arguments()].concat();
+        self.world.headless.ctl(&status).expect("set the status");
+    }
+
+    /// The approval for `command` the phone was shown, once it is.
+    fn approval_card(&mut self, command: &str) -> (String, ChatApproval) {
+        let card = |event: &ChatEvent| match &event.body {
+            ChatBody::Approval { approval }
+                if approval.tool == "Bash" && approval.detail.as_deref() == Some(command) =>
+            {
+                Some((event.id.clone(), approval.clone()))
+            }
+            _ => None,
         };
-        self.first.wait("the approval", |seen| seen.chat.iter().any(shown));
-        let id = self
-            .first
-            .seen
-            .chat
-            .iter()
-            .find(|event| shown(event))
-            .expect("the approval")
-            .id
-            .clone();
-        self.world.headless.ctl(&status("active")).expect("set active");
+        self.first.wait("the approval", |seen| {
+            seen.chat.iter().any(|event| card(event).is_some())
+        });
+        self.first.seen.chat.iter().find_map(card).expect("the approval")
+    }
+
+    fn wait_done(&mut self, id: &str) {
         self.first.wait("the approval done", |seen| {
             seen.chat
                 .iter()
                 .any(|event| event.id == id && matches!(event.body, ChatBody::ApprovalDone { .. }))
         });
+    }
+
+    /// A blocked status with a permission candidate is an approval in the chat; the status leaving `blocked` ends it.
+    fn approval(&mut self, agent: &FakeAgent) {
+        self.ask(&agent.permission_payload(APPROVAL_COMMAND));
+        let (id, _) = self.approval_card(APPROVAL_COMMAND);
+        self.status("active");
+        self.wait_done(&id);
+    }
+
+    /// An approval the phone was shown and that was answered while its link was down is over once it is back: its
+    /// card must not stay up, holding the composer's Send, with no dialog left to answer.
+    fn approval_away(&mut self, agent: &FakeAgent) {
+        self.ask(&agent.permission_payload(AWAY_COMMAND));
+        let (id, _) = self.approval_card(AWAY_COMMAND);
+        self.first.drain();
+        let states = self.first.seen.chat_states.len();
+        self.first.seen.states.clear();
+        self.world.proxy.sever();
+        self.first.wait("the chat reconnecting", |seen| {
+            seen.chat_states[states..].contains(&ChatState::Reconnecting)
+        });
+        self.status("active");
+        self.first.wait("the machine connected again", |seen| {
+            seen.states
+                .iter()
+                .position(|state| matches!(state, MachineState::Reconnecting { .. }))
+                .is_some_and(|lost| seen.states[lost..].contains(&MachineState::Connected))
+        });
+        self.wait_done(&id);
+    }
+
+    /// While the agent works, the phone's prompt goes into the running turn: the agent records it only as part of that
+    /// turn, and the chat still shows it as the user's message.
+    fn absorbed(&mut self, agent: &FakeAgent) {
+        self.first.take_lead(self.session, self.pane);
+        agent.show(State::Working);
+        self.first.wait_screen(WORKING);
+        assert_eq!(self.act(ABSORBED), AgentInputOutcome::Sent);
+        self.first.wait("the absorbed prompt in the chat", |seen| {
+            seen.chat
+                .iter()
+                .any(|event| matches!(&event.body, ChatBody::User { text, .. } if text == ABSORBED))
+        });
+        agent.show(State::Idle);
+        self.first.wait_screen(FOOTER);
+    }
+
+    /// Claude Code's `AskUserQuestion` picker waits with its call not yet in the transcript: the question comes from its
+    /// `PermissionRequest` as a card the phone answers on the picker; the call written with its answer is a question
+    /// row, and the status leaving `blocked` ends the card.
+    fn question(&mut self, agent: &FakeAgent) {
+        self.first.take_lead(self.session, self.pane);
+        agent.show(State::Question);
+        let asked = asked(&question_input());
+        self.first.wait_screen(&asked[0].question);
+        self.ask(&agent.question_payload());
+        let card = |event: &ChatEvent| match &event.body {
+            ChatBody::Approval { approval } if approval.questions == asked => Some(event.id.clone()),
+            _ => None,
+        };
+        self.first.wait("the question card", |seen| {
+            seen.chat.iter().any(|event| card(event).is_some())
+        });
+        let id = self.first.seen.chat.iter().find_map(card).expect("the question card");
+        let question = ChatQuestion {
+            questions: asked,
+            status: ChatToolStatus::Running,
+            output: None,
+        };
+        let answers = vec![QuestionAnswer {
+            picked: vec![PICKED.to_owned()],
+            other: None,
+        }];
+        let pane = self.first.terminal.clone().expect("the phone's pane");
+        let outcome = block_on(pane.answer_question(question, answers)).expect("answer the question");
+        assert_eq!(outcome, AgentInputOutcome::Sent);
+        self.first.wait("the answered question", |seen| {
+            seen.chat.iter().any(|event| {
+                event.id == QUESTION_CALL
+                    && matches!(&event.body, ChatBody::Question { question }
+                        if question.status == ChatToolStatus::Ok
+                            && question.output.as_deref().is_some_and(|output| output.contains(PICKED)))
+            })
+        });
+        self.status("active");
+        self.wait_done(&id);
     }
 
     /// The agent exits, leaving the shell in the foreground: the origin clears the record, the phone hears the pane
@@ -249,6 +369,30 @@ impl Scene<'_> {
             seen.chat_states[states..].contains(&ChatState::Ended)
         });
     }
+}
+
+/// The questions of an `AskUserQuestion` input, as the chat names them.
+fn asked(input: &Value) -> Vec<ChatQuestionItem> {
+    let text = |value: &Value| value.as_str().map(str::to_owned);
+    input["questions"]
+        .as_array()
+        .expect("questions")
+        .iter()
+        .map(|item| ChatQuestionItem {
+            question: text(&item["question"]).expect("a question"),
+            header: text(&item["header"]),
+            multi_select: item["multiSelect"].as_bool().unwrap_or_default(),
+            options: item["options"]
+                .as_array()
+                .expect("options")
+                .iter()
+                .map(|option| ChatQuestionOption {
+                    label: text(&option["label"]).expect("a label"),
+                    description: text(&option["description"]),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// The oldest cursor of `events` in the main transcript (a subagent's are in its own file), as the core pages by.

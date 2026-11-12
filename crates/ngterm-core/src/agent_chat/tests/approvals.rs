@@ -12,6 +12,7 @@ fn denied_txt(since: f64) -> ControlAgentApproval {
         detail: Some("touch denied.txt".to_owned()),
         tool_use_id: None,
         cwd: None,
+        questions: None,
         since,
     }
 }
@@ -23,6 +24,7 @@ fn shown(approval: &ControlAgentApproval) -> Approval {
         detail: approval.detail.clone(),
         tool_use_id: approval.tool_use_id.clone(),
         cwd: approval.cwd.clone(),
+        questions: None,
     }
 }
 
@@ -189,6 +191,7 @@ fn a_codex_call_matches_by_its_kind_and_command_whatever_the_tool_is_named() {
         detail: Some("curl -sI https://example.com\n".to_owned()),
         tool_use_id: None,
         cwd: None,
+        questions: None,
         since: 1.0,
     }));
     let mut exec = bash("exec-1", 300, "curl -sI https://example.com", ToolStatus::Ok);
@@ -393,4 +396,82 @@ fn context_events_inform_the_calls_but_neither_answer_nor_move_the_position() {
         [("approval_done", "approval-6", 1100)],
         "still shown, at the position the shown events reached"
     );
+}
+
+/// Claude's `AskUserQuestion` prompt, as the record holds it before the transcript writes the call.
+fn color_question(since: f64) -> ControlAgentApproval {
+    ControlAgentApproval {
+        tool: "AskUserQuestion".to_owned(),
+        title: "AskUserQuestion".to_owned(),
+        detail: None,
+        tool_use_id: None,
+        cwd: None,
+        questions: Some(vec![ngterm_proto::AgentQuestion {
+            question: "Pick a color".to_owned(),
+            header: Some("Color".to_owned()),
+            multi_select: false,
+            options: vec![ngterm_proto::AgentQuestionOption {
+                label: "Red".to_owned(),
+                description: None,
+            }],
+        }]),
+        since,
+    }
+}
+
+/// The `question` event the transcript writes for [`color_question`]'s call, in `status`.
+fn color_call(id: &str, cursor: u64, question: &str, status: ToolStatus) -> ChatEvent {
+    event(
+        id,
+        cursor,
+        EventBody::Question(crate::agent_chat::Question {
+            questions: vec![crate::agent_chat::QuestionItem {
+                question: question.to_owned(),
+                header: Some("Color".to_owned()),
+                multi_select: false,
+                options: vec![crate::agent_chat::QuestionOption {
+                    label: "Red".to_owned(),
+                    description: None,
+                }],
+            }],
+            status,
+            output: (status != ToolStatus::Running).then(|| "Red".to_owned()),
+        }),
+    )
+}
+
+#[test]
+fn a_question_prompt_shows_with_its_questions_until_the_transcript_writes_the_answered_call() {
+    let mut approvals = Approvals::new();
+    let shown_events = approvals.observe(Some(&color_question(1.0)));
+    assert_eq!(types(&shown_events), [("approval", "approval-1", 0)]);
+    let EventBody::Approval(approval) = &shown_events[0].body else {
+        panic!("not an approval: {shown_events:?}");
+    };
+    let asked: Vec<&str> = approval
+        .questions
+        .iter()
+        .flatten()
+        .map(|item| item.question.as_str())
+        .collect();
+    assert_eq!(asked, ["Pick a color"]);
+    // another question's answer is not this one's
+    assert_eq!(
+        read(&mut approvals, &[color_call("t0", 5, "Pick a size", ToolStatus::Ok)]),
+        None
+    );
+    let done = read(&mut approvals, &[color_call("t1", 9, "Pick a color", ToolStatus::Ok)]).unwrap();
+    assert_eq!(types(&[done]), [("approval_done", "approval-1", 9)]);
+    // the record still holding it (the status not yet left `blocked`) shows it no more
+    assert!(approvals.observe(Some(&color_question(1.0))).is_empty());
+}
+
+#[test]
+fn a_question_prompt_whose_answered_call_was_read_first_is_not_shown() {
+    let mut approvals = Approvals::new();
+    read(
+        &mut approvals,
+        &[color_call("t1", 9, "Pick a color", ToolStatus::Ok), live(20)],
+    );
+    assert!(approvals.observe(Some(&color_question(1.0))).is_empty());
 }

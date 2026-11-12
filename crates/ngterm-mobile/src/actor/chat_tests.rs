@@ -482,6 +482,88 @@ fn a_severed_connection_resumes_after_the_newest_cursor_with_no_repeats_and_no_g
     });
 }
 
+/// An `approval` (`done`: `approval_done`) event for a `Bash` prompt `id` about `command`.
+fn prompt(id: &str, cursor: u64, command: &str, done: bool) -> String {
+    let kind = if done { "approval_done" } else { "approval" };
+    line(
+        id,
+        cursor,
+        &serde_json::json!({"type": kind, "tool": "Bash", "title": command, "detail": command}),
+    )
+}
+
+/// The prompts `events` open (`+id`) and end (`-id`), in order.
+fn prompts(events: &[ChatEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| match &event.body {
+            ChatBody::Approval { .. } => Some(format!("+{}", event.id)),
+            ChatBody::ApprovalDone { .. } => Some(format!("-{}", event.id)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_prompt_answered_while_the_channel_was_down_ends_with_the_resumed_catch_up() {
+    local(async {
+        let mut fixture = Fixture::start().await;
+        fixture.open(LEFT).await.unwrap();
+        let chat = fixture.chat(&chat_tail(
+            ngterm_core::remote::origin::OriginShell::Posix,
+            SESSION,
+            Side::Left,
+            None,
+        ));
+        feed(&chat, &[conversation("c1", 0), live(100)]).await;
+        feed(
+            &chat,
+            &[
+                prompt("approval-1", 100, "ls", false),
+                prompt("approval-2", 100, "pwd", false),
+            ],
+        )
+        .await;
+        feed(
+            &chat,
+            &[
+                prompt("approval-1", 100, "ls", true),
+                prompt("approval-3", 100, "id", false),
+            ],
+        )
+        .await;
+        fixture.reported();
+
+        fixture.actor.transport.drop_connections("m1");
+        settle().await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        settle().await;
+        let chat = fixture.chat(&resumed(Side::Left, 100, "c1"));
+        // approval-2 was answered while away; approval-3 is still open, so the catch-up names it again
+        feed(
+            &chat,
+            &[
+                conversation("c1", 100),
+                prompt("approval-3", 100, "id", false),
+                live(100),
+            ],
+        )
+        .await;
+        let (events, _) = fixture.reported();
+        assert_eq!(prompts(&events), ["-approval-2"]);
+        assert_eq!(texts(&events).last().map(String::as_str), Some("live"));
+
+        // an origin that names its prompt only after the catch-up shows it again
+        fixture.actor.transport.drop_connections("m1");
+        settle().await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        settle().await;
+        let chat = fixture.chat(&resumed(Side::Left, 100, "c1"));
+        feed(&chat, &[live(100), prompt("approval-3", 100, "id", false)]).await;
+        assert_eq!(prompts(&fixture.reported().0), ["-approval-3", "+approval-3"]);
+    });
+}
+
 #[test]
 fn a_failed_command_after_the_backlog_is_retried_on_its_backoff_from_the_newest_cursor() {
     local(async {

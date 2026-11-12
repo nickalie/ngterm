@@ -900,3 +900,47 @@ fn the_ndjson_form_leaves_unset_fields_out() {
     };
     assert_eq!(live.to_ndjson(), r#"{"id":"live","cursor":9,"type":"live"}"#);
 }
+
+/// What Claude Code 2.1.319 writes for `prompt`, sent while a turn ran and taken into it (`origin` `human`, `peer` or
+/// `task-notification`): an attachment, and no `user` line.
+fn queued_line(uuid: &str, origin: &str, prompt: &str) -> String {
+    serde_json::json!({
+        "type": "attachment", "uuid": uuid, "parentUuid": "p", "isSidechain": false, "sessionId": "s",
+        "attachment": {"type": "queued_command", "prompt": prompt, "source_uuid": "q", "commandMode": "prompt",
+            "origin": {"kind": origin}, "humanTurn": origin == "human"},
+    })
+    .to_string()
+}
+
+#[test]
+fn a_prompt_taken_into_a_running_turn_is_the_users_message() {
+    let events = parse_owned(&[queued_line("a1", "human", "also add a test")]);
+    assert_eq!(user_texts(&events), ["also add a test"]);
+    assert_eq!(last(&events, "a1").id, "a1");
+}
+
+#[test]
+fn another_agents_message_taken_into_a_turn_is_not_the_users() {
+    let events = parse_owned(&[queued_line("a1", "peer", "a teammate's report")]);
+    assert!(user_texts(&events).is_empty(), "{events:?}");
+}
+
+#[test]
+fn a_notification_taken_into_a_running_turn_ends_its_background_command() {
+    let [call, receipt] = background_bash();
+    let notification = serde_json::from_str::<serde_json::Value>(&bash_notification("completed")).unwrap();
+    let text = notification["message"]["content"].as_str().unwrap().to_owned();
+    let events = parse_owned(&[call, receipt, queued_line("a1", "task-notification", &text)]);
+    assert_eq!(tool(last(&events, "t1")).status, ToolStatus::Ok);
+    assert!(user_texts(&events).is_empty());
+}
+
+#[test]
+fn bookkeeping_lines_of_newer_versions_make_no_event() {
+    let lines = [
+        r#"{"type":"agent-name","agentName":"x","sessionId":"s"}"#.to_owned(),
+        r#"{"type":"continued-in","sessionId":"s","continuedIn":"t"}"#.to_owned(),
+        r#"{"type":"attachment","uuid":"a","attachment":{"type":"skill_listing"}}"#.to_owned(),
+    ];
+    assert!(parse_owned(&lines).is_empty());
+}

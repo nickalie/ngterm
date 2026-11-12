@@ -163,6 +163,9 @@ pub struct ChatApproval {
     pub tool_use_id: Option<String>,
     /// The agent's working directory when it asked: what its dialog shows a file's path relative to.
     pub cwd: Option<String>,
+    /// Claude's `AskUserQuestion`, asked before its transcript holds it: the picker's questions, shown as a question
+    /// card and answered as one. Empty for a permission prompt.
+    pub questions: Vec<ChatQuestionItem>,
 }
 
 /// What a notice reports.
@@ -350,6 +353,12 @@ impl From<Approval> for ChatApproval {
             detail: approval.detail,
             tool_use_id: approval.tool_use_id,
             cwd: approval.cwd,
+            questions: approval
+                .questions
+                .unwrap_or_default()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         }
     }
 }

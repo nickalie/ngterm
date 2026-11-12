@@ -246,10 +246,16 @@ struct Stream<'a> {
 impl Stream<'_> {
     /// Prints `first` and the record's prompt, then follows until stdin ends, the record clears or the reader goes.
     /// The record is read before the transcript it is weighed against, so a prompt's call is in what was read when
-    /// the record shows the prompt ([`Approvals`]).
+    /// the record shows the prompt ([`Approvals`]). The prompt goes before the catch-up's `live`: a reader resuming
+    /// takes the prompts its catch-up names as the ones still open, and ends any other it showed.
     fn run(&mut self, first: Vec<ChatEvent>, ended: &Receiver<()>) -> Result<(), Failure> {
         let mut events = self.interleave(first);
-        events.extend(self.approvals.observe(self.record.approval.as_ref()));
+        let live = events
+            .iter()
+            .rposition(|event| matches!(event.body, EventBody::Live))
+            .unwrap_or(events.len());
+        let prompt = self.approvals.observe(self.record.approval.as_ref());
+        events.splice(live..live, prompt);
         let mut checked = Instant::now();
         loop {
             self.stand(&mut events);

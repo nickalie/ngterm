@@ -1020,6 +1020,7 @@ pub(crate) fn approval_of(command: &str) -> ChatApproval {
         detail: Some(command.to_owned()),
         tool_use_id: None,
         cwd: None,
+        questions: Vec::new(),
     }
 }
 
@@ -1035,6 +1036,7 @@ pub(crate) fn file_approval(tool: &str, path: &str, cwd: Option<&str>) -> ChatAp
         detail: Some(path.to_owned()),
         tool_use_id: None,
         cwd: cwd.map(str::to_owned),
+        questions: Vec::new(),
     }
 }
 

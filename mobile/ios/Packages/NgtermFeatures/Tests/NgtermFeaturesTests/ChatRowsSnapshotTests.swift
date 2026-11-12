@@ -244,14 +244,16 @@ internal struct ChatRowsSnapshotTests {
             title: "docs/install.md",
             detail: Self.diff,
             toolUseId: "toolu_1",
-            cwd: "/home/user/project"
+            cwd: "/home/user/project",
+            questions: []
         )
         let fetch = ChatApproval(
             tool: "WebFetch",
             title: " ",
             detail: "GET https://pubs.opengroup.org/onlinepubs/9799919799/utilities/command.html",
             toolUseId: "toolu_2",
-            cwd: "/home/user/project"
+            cwd: "/home/user/project",
+            questions: []
         )
         let view = Self.column {
             ApprovalCardView(

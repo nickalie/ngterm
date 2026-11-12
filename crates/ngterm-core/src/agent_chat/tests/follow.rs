@@ -898,6 +898,7 @@ fn denied_prompt() -> ngterm_proto::ControlAgentApproval {
         detail: Some("touch denied.txt".to_owned()),
         tool_use_id: None,
         cwd: None,
+        questions: None,
         since: 1.0,
     }
 }

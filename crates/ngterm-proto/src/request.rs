@@ -300,6 +300,32 @@ pub struct AgentApproval {
     pub tool_use_id: Option<String>,
     /// The agent's working directory when it asked (the payload's `cwd`): what a dialog shows a path relative to.
     pub cwd: Option<String>,
+    /// Claude's `AskUserQuestion`: the questions its picker asks, which its transcript holds only once answered.
+    pub questions: Option<Vec<AgentQuestion>>,
+}
+
+/// One question of an `AskUserQuestion` prompt.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentQuestion {
+    pub question: String,
+    /// The short tab label.
+    #[serde(default)]
+    pub header: Option<String>,
+    /// Several options can be picked.
+    #[serde(default)]
+    pub multi_select: bool,
+    pub options: Vec<AgentQuestionOption>,
+}
+
+/// One option of an [`AgentQuestion`].
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AgentQuestionOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[cfg(test)]

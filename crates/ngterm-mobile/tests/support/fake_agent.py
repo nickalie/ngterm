@@ -16,9 +16,15 @@ would, so the origin's agent record, `ngtermctl agent chat` and the phone's chat
   reports are read and dropped.
 - `/exit` submitted ends it: the screen modes are restored and it exits 0, with no SessionEnd, so the pane's
   foreground goes back to the shell and the origin clears the record on its own.
+- The test moves it between states by writing the state's name to the `control` file and sending it SIGUSR1 (its pid
+  is in the `pid` file): `idle`; `working`, a turn in progress (the capture's `working` screen), where a submitted
+  prompt is absorbed into the turn as Claude Code 2.1.319+ writes it (a `queue-operation` and a `queued_command`
+  attachment, no user line); `question`, the `AskUserQuestion` picker (the capture's `question` screen) of the
+  `question` input, whose call Claude Code writes only once it is answered: a digit picks that option of its first
+  question, writes the call and its result, and goes back to idle.
 
 Usage: fake_agent.py CONFIG.json (the keys: transcript, backlog, payload, user_template, screens, ngtermctl, socket,
-target, pane_id).
+target, pane_id, control, pid, question).
 """
 
 import codecs
@@ -46,8 +52,11 @@ PASTE_START = "\x1b[200~"
 PASTE_END = "\x1b[201~"
 
 
+STATES = ("idle", "working", "question")
+
+
 def load_captures(directory):
-    """{(cols, rows): (the capture's bytes up to its idle mark, the cursor's (row, col) where it parks it)}."""
+    """{(cols, rows): {state: (the capture's bytes up to the state's mark, the cursor's (row, col) where it parks it)}}."""
     captures = {}
     for name in sorted(os.listdir(directory)):
         if not (name.startswith("claude-") and name.endswith(".marks.json")):
@@ -55,10 +64,15 @@ def load_captures(directory):
         with open(os.path.join(directory, name), encoding="utf-8") as file:
             marks = json.load(file)
         with open(os.path.join(directory, name[: -len(".marks.json")] + ".bin"), "rb") as file:
-            idle = file.read()[: marks["marks"]["idle"]]
-        moves = re.findall(rb"\x1b\[(\d+);(\d+)H", idle)
-        row, col = moves[-1]
-        captures[(marks["cols"], marks["rows"])] = (idle, (int(row), int(col)))
+            recorded = file.read()
+        screens = {}
+        for state in STATES:
+            if state not in marks["marks"]:
+                continue
+            drawn = recorded[: marks["marks"][state]]
+            row, col = re.findall(rb"\x1b\[(\d+);(\d+)H", drawn)[-1]
+            screens[state] = (drawn, (int(row), int(col)))
+        captures[(marks["cols"], marks["rows"])] = screens
     return captures
 
 
@@ -141,6 +155,7 @@ class Agent:
         self.composer = ""
         self.history = []
         self.parent = None
+        self.state = "idle"
 
     def size(self):
         size = os.get_terminal_size(sys.stdout.fileno())
@@ -148,12 +163,12 @@ class Agent:
 
     def draw(self):
         cols, rows = self.size()
-        capture = self.captures.get((cols, rows))
+        capture = self.captures.get((cols, rows), {}).get(self.state)
         if capture is None:
-            out(f"\x1b[?1049h\x1b[2J\x1b[Hfake agent: no recorded idle screen at {cols}x{rows}".encode())
+            out(f"\x1b[?1049h\x1b[2J\x1b[Hfake agent: no recorded {self.state} screen at {cols}x{rows}".encode())
             return
-        idle, (row, col) = capture
-        frame = bytearray(idle)
+        drawn, (row, col) = capture
+        frame = bytearray(drawn)
         for index, line in enumerate(self.history[-HISTORY_ROWS:]):
             frame += f"\x1b[{HISTORY_TOP + index};1H\x1b[0m{f'> {line}'[:cols]}".encode()
         if self.composer:
@@ -164,7 +179,10 @@ class Agent:
         text, self.composer = self.composer, ""
         if text.strip() == "/exit":
             return False
-        self.write_prompt(text)
+        if self.state == "working":
+            self.absorb(text)
+        else:
+            self.write_prompt(text)
         self.history.append(" ".join(text.split()))
         return True
 
@@ -175,13 +193,61 @@ class Agent:
         line["parentUuid"] = self.parent
         line["promptId"] = str(uuid.uuid4())
         line["message"]["content"] = text
-        line["timestamp"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        line["timestamp"] = now()
         self.parent = line["uuid"]
+        self.append([line])
+
+    def stamped(self, line):
+        line["timestamp"] = now()
+        line["sessionId"] = self.config["user_template"]["sessionId"]
+        return line
+
+    def append(self, lines):
         with open(self.config["transcript"], "a", encoding="utf-8") as file:
-            file.write(json.dumps(line, separators=(",", ":")) + "\n")
+            file.write("".join(json.dumps(line, separators=(",", ":")) + "\n" for line in lines))
+
+    def absorb(self, text):
+        """Takes `text` into the running turn, as Claude Code does with a prompt sent while it works."""
+        session = self.config["user_template"]["sessionId"]
+        source = str(uuid.uuid4())
+        enqueue = {"type": "queue-operation", "operation": "enqueue", "timestamp": now(), "sessionId": session,
+                   "content": text}
+        remove = {"type": "queue-operation", "operation": "remove", "timestamp": now(), "sessionId": session,
+                  "content": text, "reason": "absorbed_mid_turn", "commandUuid": source}
+        attachment = self.stamped({
+            "parentUuid": self.parent, "isSidechain": False, "type": "attachment", "uuid": str(uuid.uuid4()),
+            "attachment": {"type": "queued_command", "prompt": text, "source_uuid": source, "commandMode": "prompt",
+                           "origin": {"kind": "human"}, "timestamp": now(), "humanTurn": True},
+        })
+        self.parent = attachment["uuid"]
+        self.append([enqueue, remove, attachment])
+
+    def answer(self, digit):
+        """Picks option `digit` of the question's first question: the call and its result, written together."""
+        question = self.config["question"]["questions"][0]
+        if not 1 <= digit <= len(question["options"]):
+            return
+        label = question["options"][digit - 1]["label"]
+        call = self.stamped(copy.deepcopy(self.config["assistant_template"]))
+        call["uuid"], call["parentUuid"] = str(uuid.uuid4()), self.parent
+        call["message"]["id"] = "msg_e2e_question"
+        call["message"]["content"] = [{"type": "tool_use", "id": QUESTION_CALL, "name": "AskUserQuestion",
+                                       "input": self.config["question"]}]
+        result = self.stamped(copy.deepcopy(self.config["user_template"]))
+        result["uuid"], result["parentUuid"] = str(uuid.uuid4()), call["uuid"]
+        result["message"]["content"] = [{"type": "tool_result", "tool_use_id": QUESTION_CALL,
+                                         "content": f'User has answered your questions: "{question["question"]}"="{label}".'}]
+        self.parent = result["uuid"]
+        self.append([call, result])
+        self.state = "idle"
 
     def handle(self, action, value):
         """Applies one input action; False once the agent should exit."""
+        if self.state == "question":
+            if action == "text" and value.isdigit():
+                self.answer(int(value))
+            self.draw()
+            return True
         if action == "enter":
             if self.composer.strip() and not self.submit():
                 return False
@@ -200,6 +266,7 @@ class Agent:
             ready, _, _ = select.select([stdin, wake], [], [])
             if wake in ready:
                 os.read(wake, 512)
+                self.take_control()
                 self.draw()
             if stdin in ready:
                 data = os.read(stdin, 65536)
@@ -208,6 +275,24 @@ class Agent:
                 for action, value in reader.feed(data):
                     if not self.handle(action, value):
                         return
+
+
+    def take_control(self):
+        """The state the test asked for, if it names one."""
+        try:
+            with open(self.config["control"], encoding="utf-8") as file:
+                state = file.read().strip()
+        except FileNotFoundError:
+            return
+        if state in STATES:
+            self.state = state
+
+
+QUESTION_CALL = "toolu_e2e_question"
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 def out(data):
@@ -228,6 +313,9 @@ def main():
     os.set_blocking(waker, False)
     signal.set_wakeup_fd(waker)
     signal.signal(signal.SIGWINCH, lambda *_: None)
+    signal.signal(signal.SIGUSR1, lambda *_: None)
+    with open(config["pid"], "w", encoding="utf-8") as file:
+        file.write(str(os.getpid()))
     stdin = sys.stdin.fileno()
     saved = termios.tcgetattr(stdin)
     tty.setraw(stdin)

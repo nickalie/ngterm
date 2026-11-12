@@ -16,7 +16,8 @@ internal enum ChatSamples {
         title: "rm -rf build && npm run build",
         detail: "rm -rf build && npm run build",
         toolUseId: "toolu_9",
-        cwd: "/home/user/project"
+        cwd: "/home/user/project",
+        questions: []
     )
 
     /// The event `id` saying `body`.

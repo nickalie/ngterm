@@ -20,7 +20,10 @@ pub use keymap::{
     ControlKeymapMenuItem,
 };
 pub use recent::{ControlRecentItem, ControlRecentOpen};
-pub use request::{AgentApproval, AgentReport, Args, AskButton, AskChoice, MAX_REQUEST_LINE_BYTES, PickItem, Request};
+pub use request::{
+    AgentApproval, AgentQuestion, AgentQuestionOption, AgentReport, Args, AskButton, AskChoice, MAX_REQUEST_LINE_BYTES,
+    PickItem, Request,
+};
 pub use response::Response;
 pub use result::{
     BusMessage, ControlAgent, ControlAgentApproval, ControlAskOutcome, ControlAskResult, ControlCursor,

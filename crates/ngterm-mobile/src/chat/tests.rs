@@ -400,6 +400,7 @@ fn an_approval_and_its_answer_carry_the_call_they_ask_about() {
         detail: Some("Remove the build".to_owned()),
         tool_use_id: Some("toolu_7".to_owned()),
         cwd: Some("/repo".to_owned()),
+        questions: Vec::new(),
     };
     assert_eq!(
         records(&[asked, done, bare]),
@@ -415,6 +416,7 @@ fn an_approval_and_its_answer_carry_the_call_they_ask_about() {
                     detail: None,
                     tool_use_id: None,
                     cwd: None,
+                    questions: Vec::new(),
                 },
             },
         ]

@@ -3,7 +3,7 @@
 use ngterm_host::ProcessStat;
 use ngterm_host::fakes::{FakeProcessTable, FakeSurface, FakeSurfaceProbe};
 use ngterm_proto::command::{AgentCmd, SessionCmd};
-use ngterm_proto::{AgentApproval, AgentReport, Args, Command, Response};
+use ngterm_proto::{AgentApproval, AgentQuestion, AgentQuestionOption, AgentReport, Args, Command, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -37,6 +37,7 @@ fn permission(tool: &str, command: &str) -> AgentReport {
             detail: Some(command.to_owned()),
             tool_use_id: None,
             cwd: None,
+            questions: None,
         }),
         ..conversation("claude", "PermissionRequest", CLAUDE_A, "aaaa")
     }
@@ -315,13 +316,28 @@ fn the_other_panes_block_hides_a_candidate_without_ending_it() {
 }
 
 #[test]
-fn an_ask_user_question_makes_no_approval_beside_its_question() {
+fn an_ask_user_question_is_a_live_prompt_carrying_its_questions() {
     let (mut fixture, session, token) = one_pane();
     let left = || pane_args(&token, "left");
     assert!(send_report(&mut fixture, session, left(), start(CLAUDE_A, "aaaa")).ok);
-    assert!(send_report(&mut fixture, session, left(), permission("AskUserQuestion", "")).ok);
+    let mut asked = permission("AskUserQuestion", "");
+    if let Some(approval) = asked.approval.as_mut() {
+        approval.questions = Some(vec![AgentQuestion {
+            question: "Pick a color".to_owned(),
+            header: Some("Color".to_owned()),
+            multi_select: false,
+            options: vec![AgentQuestionOption {
+                label: "Red".to_owned(),
+                description: None,
+            }],
+        }]);
+    }
+    assert!(send_report(&mut fixture, session, left(), asked).ok);
     status(&mut fixture, session, "blocked", "left");
-    assert_eq!(agent_of(&get(&mut fixture, session, left())).get("approval"), None);
+    let approval = &agent_of(&get(&mut fixture, session, left()))["approval"];
+    assert_eq!(approval["tool"], "AskUserQuestion");
+    assert_eq!(approval["questions"][0]["question"], "Pick a color");
+    assert_eq!(approval["questions"][0]["options"][0]["label"], "Red");
 }
 
 #[test]

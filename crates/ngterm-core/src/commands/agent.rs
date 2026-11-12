@@ -10,8 +10,9 @@
 //!
 //! - `SessionStart` and `UserPromptSubmit` set the conversation, or re-assert it unchanged (an origin restarted under
 //!   a running agent learns it on the next prompt). Either drops a candidate: no permission dialog is open then.
-//! - `PermissionRequest` stores the candidate. Claude's `AskUserQuestion` fires one as well; its question is its own
-//!   card in the chat, so it makes no candidate.
+//! - `PermissionRequest` stores the candidate. Claude's `AskUserQuestion` fires one as well, carrying its questions:
+//!   Claude Code writes the call to its transcript only once it is answered, so this candidate is what shows the
+//!   question while its picker waits (`agent_chat::approvals`).
 //! - `SessionEnd` clears the record when it names the record's conversation: Codex ends every thread it loaded when
 //!   the CLI exits, earlier runs' included.
 //!
@@ -48,9 +49,6 @@ use crate::live::shell_integration::is_powershell;
 use crate::model::{AgentStatus, AppStore, Session, StatusPane, WindowLibrary};
 use crate::projection::epoch_seconds;
 use crate::resolve::{ACTIVE, Resolver};
-
-/// The tool whose `PermissionRequest` is a question, not an approval.
-const QUESTION_TOOL: &str = "AskUserQuestion";
 
 /// Every pane's agent record, by pane identity.
 #[derive(Debug, Default)]
@@ -304,13 +302,11 @@ fn report(core: &mut Core, request: &Request) -> Outcome {
             let record = records
                 .get_mut(&pane.identity)
                 .ok_or_else(|| ControlError::rejected(NO_AGENT))?;
-            if approval.tool != QUESTION_TOOL {
-                record.candidate = Some(Candidate {
-                    approval,
-                    since: now,
-                    held: blocked,
-                });
-            }
+            record.candidate = Some(Candidate {
+                approval,
+                since: now,
+                held: blocked,
+            });
         }
         HookEvent::SessionEnd => {
             let conversation = report
@@ -375,6 +371,7 @@ fn get(core: &mut Core, request: &Request) -> Outcome {
         detail: candidate.approval.detail.clone(),
         tool_use_id: candidate.approval.tool_use_id.clone(),
         cwd: candidate.approval.cwd.clone(),
+        questions: candidate.approval.questions.clone(),
         since: epoch_seconds(candidate.since),
     });
     Ok(ControlResult {

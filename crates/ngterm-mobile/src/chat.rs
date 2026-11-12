@@ -61,7 +61,7 @@ pub(crate) mod upload;
 
 pub use self::upload::UploadCancel;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -429,6 +429,10 @@ struct Chat<C> {
     retry_at: Option<Instant>,
     /// What was delivered of each id, hashed: an identical repeat is dropped.
     delivered: HashMap<String, u64>,
+    /// The permission prompts delivered and not ended, by id.
+    prompts: HashMap<String, wire::Approval>,
+    /// The prompts the catch-up under way named.
+    named: HashSet<String>,
     /// This chat's conversation shown now (a new one at each `reset`), from [`Chats`]' one counter: an older page
     /// begun under another generation, of this chat or of an earlier chat of the pane, is stale.
     generation: u64,
@@ -443,6 +447,7 @@ impl<C: Connection> Chat<C> {
             return;
         };
         self.catching_up = true;
+        self.named.clear();
         *last_launch += 1;
         let launch = *last_launch;
         let (stop, stopped) = mpsc::unbounded_channel();
@@ -470,6 +475,8 @@ impl<C: Connection> Chat<C> {
                     self.oldest = None;
                     self.conversation = None;
                     self.delivered.clear();
+                    self.prompts.clear();
+                    self.named.clear();
                     self.catching_up = true;
                 }
                 EventBody::Live => {
@@ -480,8 +487,10 @@ impl<C: Connection> Chat<C> {
                     if !std::mem::replace(&mut self.catching_up, false) {
                         continue;
                     }
+                    shown.extend(self.end_unnamed(event.cursor));
                 }
                 body => {
+                    self.note_prompt(&event);
                     if let (EventBody::Conversation { conversation_id, .. }, None) = (body, &event.parent) {
                         self.conversation = Some(conversation_id.clone());
                     }
@@ -495,6 +504,42 @@ impl<C: Connection> Chat<C> {
             shown.push(event.into());
         }
         (shown, reset)
+    }
+
+    /// Keeps which permission prompts are open, and which the catch-up under way names.
+    fn note_prompt(&mut self, event: &wire::ChatEvent) {
+        match &event.body {
+            EventBody::Approval(approval) => {
+                self.prompts.insert(event.id.clone(), approval.clone());
+                if self.catching_up {
+                    self.named.insert(event.id.clone());
+                }
+            }
+            EventBody::ApprovalDone(_) => {
+                self.prompts.remove(&event.id);
+            }
+            _ => {}
+        }
+    }
+
+    /// The prompts the catch-up that just ended did not name: answered while the channel was down, so ended here. A
+    /// prompt the origin names after its catch-up (one that predates the order) shows again, as a new one.
+    fn end_unnamed(&mut self, cursor: u64) -> Vec<ChatEvent> {
+        let named = std::mem::take(&mut self.named);
+        let ended: Vec<String> = self.prompts.keys().filter(|id| !named.contains(*id)).cloned().collect();
+        ended
+            .into_iter()
+            .filter_map(|id| {
+                let approval = self.prompts.remove(&id)?;
+                self.delivered.remove(&id);
+                Some(ChatEvent::from(wire::ChatEvent {
+                    id,
+                    cursor,
+                    parent: None,
+                    body: EventBody::ApprovalDone(approval),
+                }))
+            })
+            .collect()
     }
 
     /// Moves the cursors by a main-transcript event (the module docs). The `account` event is the origin's own, not a
@@ -711,6 +756,8 @@ impl<C: Connection> Chats<C> {
             failures: 0,
             retry_at: None,
             delivered: HashMap::new(),
+            prompts: HashMap::new(),
+            named: HashSet::new(),
             generation: self.last_generation,
         };
         chat.launch(&mut self.last_launch);

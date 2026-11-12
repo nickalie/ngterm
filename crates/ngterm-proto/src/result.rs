@@ -8,6 +8,7 @@ use serde_with::skip_serializing_none;
 use crate::events::EventBatch;
 use crate::keymap::{ControlHooks, ControlKeymap};
 use crate::recent::{ControlRecentItem, ControlRecentOpen};
+use crate::request::AgentQuestion;
 
 /// A command's result object.
 #[skip_serializing_none]
@@ -181,6 +182,9 @@ pub struct ControlAgentApproval {
     /// The agent's working directory when it asked.
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Claude's `AskUserQuestion`: the questions its picker asks.
+    #[serde(default)]
+    pub questions: Option<Vec<AgentQuestion>>,
     /// When the hook reported it, epoch seconds.
     pub since: f64,
 }

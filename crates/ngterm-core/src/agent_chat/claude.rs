@@ -16,6 +16,10 @@
 //!   `KillShell` or `KillBash`) usually writes no notification, so a successful stop's result finishes the stopped
 //!   task's tool, if still running, as an error with the stop's message; the result names the task in
 //!   `toolUseResult.task_id` (or `shell_id`, `bash_id`), else the stop call's input does.
+//! - An `attachment` line of type `queued_command` is a prompt sent while a turn ran, which Claude Code (2.1.319 on)
+//!   takes into that turn and writes only there, never as a `user` line: one from the user is their prompt, a
+//!   `<task-notification>` completes its task as a `user` line's does, and one from another agent (`origin.kind`
+//!   `peer`) makes no event. The other attachments are bookkeeping.
 //! - `system` lines: `compact_boundary` is a compaction notice, `api_error` an API error notice; a `local_command`
 //!   line holding a `<command-name>` shows as its `/command`, as the `user` one does (Claude Code 2.1.318 writes a
 //!   command that runs without a turn, `/context` say, only as `local_command` lines: the command, then its output,
@@ -37,12 +41,14 @@ use super::{
 
 /// Line types the chat has no use for (Task 1's fixture README lists them).
 pub const IGNORED: &[&str] = &[
+    "agent-name",
     "ai-title",
     "api-request",
     "api-request-blob",
     "api-request-shape",
     "atis-latch",
     "attachment",
+    "continued-in",
     "cost-state",
     "custom-title",
     "file-history-delta",
@@ -148,6 +154,7 @@ impl ClaudeParser {
             "assistant" => self.assistant(entry, out),
             "system" if str_at(entry, "/subtype") == Some("local_command") => self.local_command(entry, out),
             "system" => system(entry, out),
+            "attachment" if str_at(entry, "/attachment/type") == Some("queued_command") => self.queued(entry, out),
             "summary" => out.push(
                 out.line_id(),
                 notice(NoticeKind::Summary, str_at(entry, "/summary").unwrap_or_default(), None),
@@ -243,6 +250,19 @@ impl ClaudeParser {
         if !texts.is_empty() || images > 0 {
             self.prompt(&texts.join("\n"), images, id, out);
         }
+    }
+
+    /// A prompt taken into a running turn: the user's own, or a task's notification; another agent's makes none.
+    fn queued(&mut self, entry: &Value, out: &mut Out) {
+        self.conversation(entry, None, out);
+        if str_at(entry, "/attachment/origin/kind") == Some("peer") {
+            return;
+        }
+        let Some(text) = str_at(entry, "/attachment/prompt") else {
+            return;
+        };
+        let id = str_at(entry, "/uuid").map_or_else(|| out.line_id(), str::to_owned);
+        self.prompt(text, 0, id, out);
     }
 
     /// A `system` `local_command` line: its `<command-name>` shows as the command (the duplicate check included); its
@@ -578,7 +598,7 @@ fn edit_diff(name: &str, input: &Value) -> Option<String> {
 }
 
 /// An `AskUserQuestion` input's questions.
-fn question(input: &Value) -> Question {
+pub(super) fn question(input: &Value) -> Question {
     let questions = input
         .get("questions")
         .and_then(Value::as_array)

@@ -1,6 +1,7 @@
 //! The e2e test's fake agent (`fake_agent.py`, a stand-in Claude Code in the pane's foreground) and what it is fed:
 //! a transcript made from Task 1's recorded Claude session with generated turns after it, the hook payloads with
-//! their transcript path moved into the private home, and the config the program reads.
+//! their transcript path moved into the private home, the config the program reads, and the state the test moves it
+//! to ([`State`]).
 
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
@@ -25,6 +26,10 @@ pub(crate) const FILLER_TURNS: u64 = 100;
 pub(crate) const FILLER: u64 = 1;
 /// The command the phone's approval card is for: no call of the transcript runs it, so nothing answers it there.
 pub(crate) const APPROVAL_COMMAND: &str = "touch e2e-approval.txt";
+/// The second approval's command: one answered while the phone is away.
+pub(crate) const AWAY_COMMAND: &str = "touch e2e-away.txt";
+/// The tool use id the fake agent writes its answered `AskUserQuestion` call under.
+pub(crate) const QUESTION_CALL: &str = "toolu_e2e_question";
 
 const CLAUDE_FIXTURES: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -41,6 +46,18 @@ pub(crate) struct FakeAgent {
     pub(crate) filler: Vec<String>,
     turns: Turns,
     config: PathBuf,
+    control: PathBuf,
+    pid: PathBuf,
+}
+
+/// What the fake agent shows, as [`FakeAgent::show`] sets it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum State {
+    Idle,
+    /// A turn in progress: a prompt sent now is absorbed into it.
+    Working,
+    /// The `AskUserQuestion` picker of [`FakeAgent::question`].
+    Question,
 }
 
 impl FakeAgent {
@@ -68,6 +85,8 @@ impl FakeAgent {
         let payload = directory.join("session-start.json");
         fs::write(&payload, hook_payload("01-SessionStart.json", &transcript)).expect("write the payload");
         let config = directory.join("config.json");
+        let control = directory.join("state");
+        let pid = directory.join("pid");
         let settings = json!({
             "transcript": transcript,
             "backlog": backlog_path,
@@ -78,6 +97,10 @@ impl FakeAgent {
             "socket": world.headless.socket(),
             "target": session,
             "pane_id": pane,
+            "control": control,
+            "pid": pid,
+            "question": question_input(),
+            "assistant_template": turns.assistant,
         });
         fs::write(&config, settings.to_string()).expect("write the config");
         Self {
@@ -85,7 +108,33 @@ impl FakeAgent {
             filler,
             turns,
             config,
+            control,
+            pid,
         }
+    }
+
+    /// Moves the running program to `state`, which it draws at once.
+    pub(crate) fn show(&self, state: State) {
+        let name = match state {
+            State::Idle => "idle",
+            State::Working => "working",
+            State::Question => "question",
+        };
+        fs::write(&self.control, name).expect("write the fake agent's state");
+        let pid = fs::read_to_string(&self.pid).expect("the fake agent's pid");
+        let signalled = std::process::Command::new("kill")
+            .args(["-USR1", pid.trim()])
+            .status()
+            .expect("signal the fake agent");
+        assert!(signalled.success(), "the fake agent is not running");
+    }
+
+    /// The `PermissionRequest` Claude Code fires for [`FakeAgent::question`] as its picker opens.
+    pub(crate) fn question_payload(&self) -> String {
+        let mut payload: Value =
+            serde_json::from_str(&hook_payload("27-PermissionRequest.json", &self.transcript)).expect("a payload");
+        payload["tool_input"] = question_input();
+        payload.to_string()
     }
 
     /// The line that starts the program in a pane's shell: the system's `python3`, by its path.
@@ -122,12 +171,22 @@ impl FakeAgent {
     }
 
     /// A `Bash` `PermissionRequest` for [`APPROVAL_COMMAND`], as Claude Code's hook gets it.
-    pub(crate) fn permission_payload(&self) -> String {
+    pub(crate) fn permission_payload(&self, command: &str) -> String {
         let mut payload: Value =
             serde_json::from_str(&hook_payload("33-PermissionRequest.json", &self.transcript)).expect("a payload");
-        payload["tool_input"] = json!({ "command": APPROVAL_COMMAND, "description": "Create e2e-approval.txt" });
+        payload["tool_input"] = json!({ "command": command, "description": "An e2e command" });
         payload.to_string()
     }
+}
+
+/// The `AskUserQuestion` input the phone's capture draws as its picker (Task 1's recorded `Pick a color`).
+pub(crate) fn question_input() -> Value {
+    json!({ "questions": [{
+        "question": "Pick a color",
+        "header": "Color",
+        "multiSelect": false,
+        "options": [{ "label": "Red", "description": "Red" }, { "label": "Green", "description": "Green" }],
+    }] })
 }
 
 fn recorded_transcript() -> PathBuf {

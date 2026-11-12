@@ -29,6 +29,10 @@
 //! prompt's owner: the transcript (the main one, or a subagent's) holding a running call that matches, the main one
 //! first. Only the owner's result answers the prompt; while no running call matches, any transcript's result does.
 //!
+//! Claude's `AskUserQuestion` prompt is shown the same way, carrying its questions (the viewer's question card):
+//! Claude Code writes the call only once it is answered, call and result together. A call is that question's by its
+//! first question's text, and its `question` event finished answers the prompt.
+//!
 //! An approval's `cursor` is where the stream stands: the newest position the main transcript's events reached, so
 //! paging by cursor never skips a line before it.
 
@@ -37,7 +41,7 @@ use std::collections::HashMap;
 use ngterm_proto::ControlAgentApproval;
 
 use super::claude::tool_kind;
-use super::{Approval, ChatEvent, EventBody, NoticeKind, ToolKind, ToolStatus, title_line};
+use super::{Approval, ChatEvent, EventBody, NoticeKind, QuestionItem, ToolKind, ToolStatus, title_line};
 
 /// The prompts shown so far in one chat stream.
 #[derive(Debug, Default)]
@@ -173,6 +177,15 @@ impl Approvals {
                 };
                 self.calls.insert(event.id.clone(), call);
             }
+            EventBody::Question(question) => {
+                let call = Call {
+                    parent: event.parent.clone(),
+                    kind: ToolKind::Other,
+                    title: asked(&question.questions),
+                    running: question.status == ToolStatus::Running,
+                };
+                self.calls.insert(event.id.clone(), call);
+            }
             EventBody::Notice {
                 kind: NoticeKind::Interrupt,
                 ..
@@ -240,6 +253,9 @@ fn answers(shown: &Shown, event: &ChatEvent) -> bool {
             Some(id) => event.id == *id,
             None => shown.owns(event) && same_call(&shown.approval, tool.kind, &tool.title),
         },
+        EventBody::Question(question) if question.status != ToolStatus::Running => {
+            shown.owns(event) && same_call(&shown.approval, ToolKind::Other, &asked(&question.questions))
+        }
         _ => false,
     }
 }
@@ -262,6 +278,10 @@ impl From<&ControlAgentApproval> for Approval {
             detail: live.detail.clone(),
             tool_use_id: live.tool_use_id.clone(),
             cwd: live.cwd.clone(),
+            questions: live
+                .questions
+                .as_ref()
+                .map(|questions| questions.iter().map(Into::into).collect()),
         }
     }
 }
@@ -269,16 +289,29 @@ impl From<&ControlAgentApproval> for Approval {
 /// Whether `event` is the call `approval` asks about, or its result: by its tool use id when known, else by kind and
 /// title.
 pub(crate) fn is_call(approval: &Approval, event: &ChatEvent) -> bool {
-    let EventBody::Tool(tool) = &event.body else {
-        return false;
-    };
-    match &approval.tool_use_id {
-        Some(id) => event.id == *id,
-        None => same_call(approval, tool.kind, &tool.title),
+    match &event.body {
+        EventBody::Tool(tool) => match &approval.tool_use_id {
+            Some(id) => event.id == *id,
+            None => same_call(approval, tool.kind, &tool.title),
+        },
+        EventBody::Question(question) => same_call(approval, ToolKind::Other, &asked(&question.questions)),
+        _ => false,
     }
 }
 
-/// Whether a call of `kind` titled `title` is the one `approval` asks about.
+/// Whether a call of `kind` titled `title` is the one `approval` asks about; a question's title is what it asks
+/// ([`asked`]).
 fn same_call(approval: &Approval, kind: ToolKind, title: &str) -> bool {
-    kind == tool_kind(&approval.tool) && title == title_line(approval.detail.as_deref().unwrap_or(&approval.tool))
+    match &approval.questions {
+        Some(questions) => kind == ToolKind::Other && title == asked(questions),
+        None => {
+            kind == tool_kind(&approval.tool)
+                && title == title_line(approval.detail.as_deref().unwrap_or(&approval.tool))
+        }
+    }
+}
+
+/// What an `AskUserQuestion` call is told apart by: its first question, marked so no tool's title matches it.
+fn asked(questions: &[QuestionItem]) -> String {
+    format!("?{}", questions.first().map_or("", |item| item.question.as_str()))
 }
