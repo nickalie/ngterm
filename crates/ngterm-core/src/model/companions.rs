@@ -176,6 +176,15 @@ impl AppStore {
         session.companion.parent.and_then(|id| self.session(id))
     }
 
+    /// The app remote row `session`'s origin runs: its own binding's, else its parent's, as a page row has no binding of
+    /// its own. `None` for a local row or one bound without an origin.
+    #[must_use]
+    pub fn remote_peer_of(&self, session: &Session) -> Option<crate::remote::peer::RemotePeer> {
+        session
+            .remote_peer()
+            .or_else(|| self.parent_of(session).and_then(Session::remote_peer))
+    }
+
     /// Creates a companion after the parent's last one and returns its id; a companion target means its parent.
     /// `home` stands in for a parent's remote cwd, as a duplicate's does.
     ///

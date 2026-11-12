@@ -60,7 +60,7 @@ use std::time::Duration;
 use ::russh::client::{self, AuthResult, Handle, Msg};
 use ::russh::keys::{HashAlg, PrivateKeyWithHashAlg};
 use ::russh::{ChannelMsg, Disconnect, Sig};
-use ngterm_core::remote::origin::OriginForm;
+
 use ngterm_term::GridSize;
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
@@ -68,7 +68,7 @@ use tokio::time::Instant;
 use zeroize::Zeroizing;
 
 use super::{
-    Backlog, Channel, ChannelEnd, ChannelInput, ChannelOutput, ChannelPeer, Connection, PEER_GONE, Transport,
+    Backlog, Channel, ChannelEnd, ChannelInput, ChannelOutput, ChannelPeer, Connection, Learned, PEER_GONE, Transport,
     TransportError,
 };
 use crate::api::{EventSink, HostKeyStore, KeyVault, Machine, MobileEvent};
@@ -216,7 +216,7 @@ impl RusshTransport {
             never = prompt.run(asked) => match never {},
         };
         Ok(RusshConnection {
-            origin_form: std::cell::Cell::default(),
+            learned: std::cell::Cell::default(),
             handle: RefCell::new(Some(Rc::new(handle))),
             closed: Arc::new(AtomicBool::new(false)),
             gone,
@@ -684,16 +684,16 @@ pub struct RusshConnection {
     closed: Arc<AtomicBool>,
     /// Closed once russh's session has ended (its [`Client`] dropped).
     gone: watch::Receiver<()>,
-    origin_form: std::cell::Cell<OriginForm>,
+    learned: std::cell::Cell<Learned>,
 }
 
 impl Connection for RusshConnection {
-    fn origin_form(&self) -> OriginForm {
-        self.origin_form.get()
+    fn learned(&self) -> Learned {
+        self.learned.get()
     }
 
-    fn set_origin_form(&self, form: OriginForm) {
-        self.origin_form.set(form);
+    fn set_learned(&self, learned: Learned) {
+        self.learned.set(learned);
     }
 
     async fn exec(&self, command: &str, pty: Option<GridSize>) -> Result<Channel, TransportError> {

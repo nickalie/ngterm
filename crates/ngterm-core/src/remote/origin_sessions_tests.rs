@@ -59,7 +59,15 @@ fn missing_windows_and_rows_cannot_start_origin_commands() {
 fn an_invalid_host_refuses_create_before_running_a_remote_command() {
     let (mut core, window, session, _dir) = core();
     let flow = AttachFlow::new(window, Some(session));
-    assert!(core.start_origin_session(flow, "-invalid".to_owned(), None).is_none());
+    assert!(
+        core.start_origin_session(
+            flow,
+            "-invalid".to_owned(),
+            crate::remote::peer::RemotePeer::Ngterm,
+            None
+        )
+        .is_none()
+    );
     failed_panel(&core, session, NEW_SESSION, "the remote command failed on -invalid");
     assert_eq!(core.library().store(window).unwrap().sessions().count(), 1);
     assert_eq!(core.remote_wake(), None);
@@ -76,8 +84,13 @@ fn an_invalid_host_after_live_check_never_runs_create() {
         stderr: String::new(),
     })));
     assert!(
-        core.step_checking(&mut flow, "-invalid", &CreateRequest::New, answer)
-            .is_none()
+        core.step_checking(
+            &mut flow,
+            ("-invalid", crate::remote::peer::RemotePeer::Ngterm),
+            &CreateRequest::New,
+            answer
+        )
+        .is_none()
     );
     failed_panel(&core, session, NEW_SESSION, "the remote command failed on -invalid");
     assert_eq!(core.library().store(window).unwrap().sessions().count(), 1);
@@ -114,7 +127,7 @@ fn a_created_session_that_cannot_be_listed_is_reported_without_retrying_create()
     assert!(
         core.step_waiting(
             &mut flow,
-            "-invalid",
+            ("-invalid", crate::remote::peer::RemotePeer::Ngterm),
             None,
             &CreateRequest::New,
             Waiting { wait, read: None }

@@ -11,8 +11,11 @@
 //!   every later command and a relaunch reach the same app, and ssh is given only `HOST`;
 //! - otherwise the listing finds it: the far side's `ngtermctl live tree` when it answers, else its `agtermctl zmx tree`,
 //!   in one ssh call ([`super::ssh::tree_tail`]), whose agterm answer starts with [`AGTERM_ANSWER`]. What it found is
-//!   stamped on the endpoint ([`ngterm_proto::ControlLiveEndpoint::peer`]) and learned for the host ([`learn`]), which
-//!   the host's later commands follow ([`peer_of`]).
+//!   stamped on the endpoint ([`ngterm_proto::ControlLiveEndpoint::peer`]) and learned for the host ([`learn`]).
+//!
+//! A row attached from a host keeps the peer its endpoint was stamped with: every later command for that row, and its
+//! relaunch, go to that app, whichever one a later listing of the host finds. Only a command for no bound row (a new
+//! session asked of a host from the picker) follows what the host's last listing found ([`peer_of`]).
 //!
 //! An agterm origin lacks what is this build's own ([`Capabilities`]), and the frontends say so where it shows.
 
@@ -75,10 +78,20 @@ pub fn ssh_destination(host: &str) -> &str {
     destination(host).1
 }
 
+/// `host` pinned to `peer`, as a listing that must reach that app is sent: unchanged when it pins one already.
+#[must_use]
+pub fn pinned(host: &str, peer: RemotePeer) -> String {
+    match destination(host) {
+        (Some(_), _) => host.to_owned(),
+        (None, rest) => format!("{}{rest}", pin_prefix(peer)),
+    }
+}
+
 /// What was learned about each host in this process.
 static LEARNED: LazyLock<Mutex<HashMap<String, RemotePeer>>> = LazyLock::new(Mutex::default);
 
-/// The app `host`'s commands go to: its pin, else what its last listing found, else ngterm.
+/// The app a command for no bound row of `host` goes to: its pin, else what its last listing found, else ngterm. A bound
+/// row's commands go to its endpoint's peer instead.
 #[must_use]
 pub fn peer_of(host: &str) -> RemotePeer {
     if let (Some(pinned), _) = destination(host) {
@@ -285,6 +298,9 @@ mod tests {
         assert_eq!(destination("studio.local"), (None, "studio.local"));
         assert_eq!(destination("fe80::1"), (None, "fe80::1"));
         assert_eq!(ssh_destination("agterm:me@studio"), "me@studio");
+        assert_eq!(pinned("me@studio", RemotePeer::Ngterm), "ngterm:me@studio");
+        assert_eq!(pinned("studio", RemotePeer::Agterm), "agterm:studio");
+        assert_eq!(pinned("agterm:studio", RemotePeer::Ngterm), "agterm:studio");
     }
 
     #[test]

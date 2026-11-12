@@ -18,6 +18,7 @@ use uuid::Uuid;
 use super::attach::Placement;
 use super::frames;
 use super::origin_replies::read_remote_tree;
+use super::peer::RemotePeer;
 use super::reconnect::retry_delay;
 use super::tree;
 use super::viewer::{Answer, run_tree_off_thread, take_answer};
@@ -46,10 +47,12 @@ enum Reattached {
     Left,
 }
 
-/// One machine whose saved rows wait for its listing.
+/// One machine's app whose saved rows wait for its listing: a machine running both apps is listed once for each, and
+/// each listing is pinned to its app, so a row is never matched against the other app's sessions and dropped as gone.
 #[derive(Debug)]
 pub(crate) struct RelaunchRead {
     host: String,
+    peer: RemotePeer,
     /// The listing in flight; `None` while it waits for `retry_at`.
     answer: Option<Answer>,
     /// The listings in a row that failed.
@@ -59,17 +62,24 @@ pub(crate) struct RelaunchRead {
     retry_at: Instant,
 }
 
+impl RelaunchRead {
+    fn key(&self) -> (String, RemotePeer) {
+        (self.host.clone(), self.peer)
+    }
+}
+
 impl Core {
     /// Starts attaching again the rows the open windows saved: one listing per machine, none for a machine already
     /// being listed. The launch runs it once its windows are restored, and a window reopened from its file runs it
     /// again. Commit afterwards.
     pub fn reattach_saved_remotes(&mut self) {
         let now = Instant::now();
-        for host in self.saved_remote_hosts() {
+        for (host, peer) in self.saved_remote_hosts() {
             let reads = &mut self.remote.viewer.relaunch_reads;
-            if reads.iter().all(|read| read.host != host) {
+            if reads.iter().all(|read| read.host != host || read.peer != peer) {
                 reads.push(RelaunchRead {
                     host,
+                    peer,
                     answer: None,
                     failures: 0,
                     failing_since: None,
@@ -80,18 +90,19 @@ impl Core {
         self.tick_relaunch(now);
     }
 
-    /// The machines the open windows' saved rows name, in their order.
-    fn saved_remote_hosts(&self) -> Vec<String> {
+    /// The machines the open windows' saved rows name, each with the app they were attached from, in their order.
+    fn saved_remote_hosts(&self) -> Vec<(String, RemotePeer)> {
         let library = self.library();
-        let mut hosts: Vec<String> = Vec::new();
+        let mut hosts: Vec<(String, RemotePeer)> = Vec::new();
         let saved = library
             .open_ids()
             .into_iter()
             .filter_map(|window| library.store(window))
             .flat_map(AppStore::saved_remote_rows);
         for row in saved {
-            if !hosts.contains(&row.host) {
-                hosts.push(row.host.clone());
+            let key = (row.host.clone(), row.peer());
+            if !hosts.contains(&key) {
+                hosts.push(key);
             }
         }
         hosts
@@ -126,7 +137,7 @@ impl Core {
 
     fn step_relaunch(&mut self, mut read: RelaunchRead, now: Instant) -> Option<RelaunchRead> {
         // the windows holding its rows closed meanwhile: a reopen lists it again
-        if !self.saved_remote_hosts().contains(&read.host) {
+        if !self.saved_remote_hosts().contains(&read.key()) {
             return None;
         }
         let Some(answer) = read.answer.as_ref() else {
@@ -139,7 +150,8 @@ impl Core {
                 self.report_dropped_rows(&read.host, "invalid", &names, "an invalid host");
                 return None;
             }
-            match run_tree_off_thread(&self.remote.runner, &read.host, tree::TREE_DEADLINE) {
+            let listing = super::peer::pinned(&read.host, read.peer);
+            match run_tree_off_thread(&self.remote.runner, &listing, tree::TREE_DEADLINE) {
                 Some(answer) => read.answer = Some(answer),
                 None => return self.relaunch_failed(read, now, "the listing could not start"),
             }
@@ -150,7 +162,7 @@ impl Core {
         };
         match read_remote_tree(&result, &read.host) {
             Ok(tree) => {
-                self.reattach_from(&tree, &read.host);
+                self.reattach_from(&tree, &read);
                 None
             }
             Err(error) => self.relaunch_failed(read, now, &error),
@@ -179,20 +191,25 @@ impl Core {
             let Some(store) = self.library_mut().store_mut(window) else {
                 continue;
             };
-            if store.saved_remote_rows().iter().all(|row| row.host != read.host) {
+            if store
+                .saved_remote_rows()
+                .iter()
+                .all(|row| row.host != read.host || row.peer() != read.peer)
+            {
                 continue;
             }
-            expired.extend(store.wait_saved_remote_rows(&read.host, epoch, limit));
+            expired.extend(store.wait_saved_remote_rows((&read.host, read.peer), epoch, limit));
             // the start of the wait is written, so the limit counts across launches
             self.request_window_save(window);
         }
         self.report_dropped_rows(&read.host, "expired", &expired, "no answer for a week");
-        self.saved_remote_hosts().contains(&read.host).then_some(read)
+        self.saved_remote_hosts().contains(&read.key()).then_some(read)
     }
 
-    /// Attaches every saved row of `host` that `tree` still offers, parents first so each companion finds its parent's
-    /// row, and drops the rest.
-    fn reattach_from(&mut self, tree: &ControlRemoteTree, host: &str) {
+    /// Attaches every saved row of `read`'s machine and app that `tree` still offers, parents first so each companion
+    /// finds its parent's row, and drops the rest.
+    fn reattach_from(&mut self, tree: &ControlRemoteTree, read: &RelaunchRead) {
+        let host = read.host.as_str();
         let mut rows = self.rows_attached_from(host, &tree.endpoint);
         let mut gone: Vec<String> = Vec::new();
         let mut failed: Vec<String> = Vec::new();
@@ -203,7 +220,7 @@ impl Core {
             let mut saved: Vec<RemoteSessionSnapshot> = store
                 .saved_remote_rows()
                 .iter()
-                .filter(|row| row.host == host)
+                .filter(|row| row.host == host && row.peer() == read.peer)
                 .cloned()
                 .collect();
             if saved.is_empty() {

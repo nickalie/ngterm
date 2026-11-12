@@ -7,7 +7,7 @@ use std::time::Instant;
 use ngterm_proto::ControlRemoteTree;
 use uuid::Uuid;
 
-use super::attach::start_tree_read_within;
+use super::attach::start_peer_tree_read_within;
 use super::frames::PresentationPane;
 use super::origin_replies::{COMPANION_DEADLINE, PAUSE, READY_BUDGET, read_remote_tree, reply_of};
 use super::ssh::{PaneLabel, attach_pane_command, control_command};
@@ -27,6 +27,8 @@ struct Target {
     session: Uuid,
     pane: Uuid,
     host: String,
+    /// The app the row was attached from, which the split's lines go to.
+    peer: super::peer::RemotePeer,
     origin: String,
     excluded_daemons: Vec<String>,
 }
@@ -162,8 +164,10 @@ impl Core {
             .filter(|identity| *identity != pane)
             .filter_map(|identity| binding.daemon(identity).map(str::to_owned))
             .collect();
+        let peer = self.remote_row_peer(id, &host);
         let argv = control_command(
             &host,
+            peer,
             &[
                 "session",
                 "split",
@@ -186,6 +190,7 @@ impl Core {
                 session: id,
                 pane,
                 host,
+                peer,
                 origin,
                 excluded_daemons,
             },
@@ -279,8 +284,13 @@ impl Core {
                 }
                 if now >= *due {
                     *answer = Some(
-                        start_tree_read_within(self, &run.target.host, remaining.min(TREE_DEADLINE))
-                            .map_err(|error| error.to_string())?,
+                        start_peer_tree_read_within(
+                            self,
+                            &run.target.host,
+                            run.target.peer,
+                            remaining.min(TREE_DEADLINE),
+                        )
+                        .map_err(|error| error.to_string())?,
                     );
                 }
             }
@@ -299,6 +309,7 @@ impl Core {
         if binding.origin.as_ref().is_none_or(|origin| {
             origin.endpoint.executable != tree.endpoint.executable
                 || origin.endpoint.socket_directory != tree.endpoint.socket_directory
+                || origin.endpoint.peer() != tree.endpoint.peer()
         }) {
             return Err("the origin endpoint changed; reattach the remote session".to_owned());
         }

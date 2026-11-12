@@ -506,9 +506,52 @@ fn a_duplicate_answers_the_copy_and_its_listing_arrives_as_a_tree() {
     let copy = block_on(core.duplicate_session("m1".to_owned(), PARENT.to_owned())).expect("duplicated");
 
     assert_eq!(copy.id, OTHER);
+    assert_eq!(copy.peer, Some(crate::peer::PeerKind::Ngterm));
     let (machine_id, sessions) = next_tree(&events);
     assert_eq!(machine_id, "m1");
     assert_eq!(ids(&sessions), [PARENT, OTHER]);
+}
+
+/// A session made on an agterm Mac comes back marked agterm's, as its listing marks it.
+#[test]
+fn a_create_on_an_agterm_mac_answers_a_session_marked_agterm() {
+    use ngterm_core::remote::origin::{OriginForm, OriginShell};
+    use ngterm_core::remote::origin_replies::{NEW_SESSION_ARGUMENTS, RESTORE_MODE_ARGUMENTS};
+    use ngterm_core::remote::peer::{AGTERM_ANSWER, RemotePeer};
+    use ngterm_core::remote::ssh::{control_tail, tree_tail};
+    let transport = FakeTransport::new();
+    let agterm = OriginForm {
+        shell: OriginShell::Posix,
+        peer: RemotePeer::Agterm,
+    };
+    let live = r#"{"ok": true, "result": {"restore": {"configured": "live", "requestedAtLaunch": "live",
+        "active": "live", "restartRequired": false}}}"#;
+    transport.script(
+        &control_tail(agterm, &RESTORE_MODE_ARGUMENTS),
+        crate::transport::fake::Script::ok(live),
+    );
+    transport.script(
+        &control_tail(agterm, &NEW_SESSION_ARGUMENTS),
+        crate::transport::fake::Script::ok(&format!(r#"{{"ok": true, "result": {{"id": "{OTHER}"}}}}"#)),
+    );
+    let body = serde_json::json!({"ok": true, "result": {"remote": {
+        "endpoint": {"executable": "/Applications/agterm.app/Contents/MacOS/zmx", "socketDirectory": "/tmp/z"},
+        "sessions": [{"id": OTHER, "name": "new", "windowID": "w1", "windowName": "main", "workspaceID": "ws1",
+            "workspaceName": "work", "cwd": "/repo",
+            "panes": [{"pane": "left", "daemon": format!("agterm-{}", "0".repeat(32))}]}],
+    }}});
+    transport.script(
+        &tree_tail(OriginShell::Posix),
+        crate::transport::fake::Script::ok(&format!("{AGTERM_ANSWER}\n{body}")),
+    );
+    let (sink, _events) = recorder();
+    let core = core(&transport, &sink);
+    block_on(core.connect(machine("m1", "box"))).expect("connected");
+
+    let created = block_on(core.create_session("m1".to_owned(), None)).expect("created");
+
+    assert_eq!(created.id, OTHER);
+    assert_eq!(created.peer, Some(crate::peer::PeerKind::Agterm));
 }
 
 #[test]
@@ -595,6 +638,11 @@ fn a_listing_that_began_before_an_end_answers_but_is_neither_kept_nor_reported()
         thread::yield_now();
     };
 
+    // nothing has told this fresh connection's app yet, so the end lists it first, a listing no one reports
+    transport.script(
+        &ngterm_core::remote::ssh::tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        listing(&[(PARENT, None), (OTHER, None)]),
+    );
     assert_eq!(block_on(core.end_session("m1".to_owned(), PARENT.to_owned())), Ok(()));
     let old = listing(&[(PARENT, None), (OTHER, None)]);
     block_on(opened.peer.data(old.stdout));

@@ -16,6 +16,7 @@ use super::session::Session;
 use super::store::AppStore;
 use super::workspace::Workspace;
 use crate::persist::RemoteSessionSnapshot;
+use crate::remote::peer::RemotePeer;
 
 /// Where a reattached row was saved: the local row it followed and its order after that one. Kept so the next
 /// snapshot writes the same order and a later saved row of the same run goes in before it.
@@ -68,13 +69,18 @@ impl AppStore {
         before != self.saved_remote_rows.len()
     }
 
-    /// `host` could not be listed at `now` (epoch seconds): its saved rows start waiting if they were not already,
-    /// and with a `limit`, the ones that have waited longer than that many seconds are dropped. The names of the
-    /// dropped rows.
-    pub(crate) fn wait_saved_remote_rows(&mut self, host: &str, now: f64, limit: Option<f64>) -> Vec<String> {
+    /// `peer` on `host` could not be listed at `now` (epoch seconds): its saved rows start waiting if they were not
+    /// already, and with a `limit`, the ones that have waited longer than that many seconds are dropped. The names of
+    /// the dropped rows.
+    pub(crate) fn wait_saved_remote_rows(
+        &mut self,
+        (host, peer): (&str, RemotePeer),
+        now: f64,
+        limit: Option<f64>,
+    ) -> Vec<String> {
         let mut expired = Vec::new();
         self.saved_remote_rows.retain_mut(|row| {
-            if row.host != host {
+            if row.host != host || row.peer() != peer {
                 return true;
             }
             let since = *row.waiting_since.get_or_insert(now);
@@ -162,6 +168,7 @@ impl AppStore {
                     .and_then(|parent| parents.get(&parent))
                     .map(|parent| (*parent).to_owned()),
                 waiting_since: None,
+                peer: Some(origin.endpoint.peer()).filter(|peer| *peer != RemotePeer::Ngterm),
             });
         }
         rows
@@ -202,6 +209,7 @@ mod tests {
             order,
             parent_session_id: None,
             waiting_since: None,
+            peer: None,
         }
     }
 
@@ -261,23 +269,36 @@ mod tests {
         let (mut store, workspace, _) = window(1);
         let mut other = saved("B", workspace, None, 1);
         other.host = "other".to_owned();
-        store.restore_saved_remote_rows(Some(&[saved("A", workspace, None, 0), other]));
-        assert!(store.wait_saved_remote_rows("studio", 100.0, Some(50.0)).is_empty());
+        let mut agterm = saved("C", workspace, None, 2);
+        agterm.peer = Some(RemotePeer::Agterm);
+        store.restore_saved_remote_rows(Some(&[saved("A", workspace, None, 0), other, agterm]));
+        assert!(
+            store
+                .wait_saved_remote_rows(("studio", RemotePeer::Ngterm), 100.0, Some(50.0))
+                .is_empty()
+        );
         assert_eq!(store.saved_remote_rows()[0].waiting_since, Some(100.0));
         assert!(
-            store.wait_saved_remote_rows("studio", 150.0, Some(50.0)).is_empty(),
+            store
+                .wait_saved_remote_rows(("studio", RemotePeer::Ngterm), 150.0, Some(50.0))
+                .is_empty(),
             "the first failure starts the wait"
         );
         assert!(
-            store.wait_saved_remote_rows("studio", 900.0, None).is_empty(),
+            store
+                .wait_saved_remote_rows(("studio", RemotePeer::Ngterm), 900.0, None)
+                .is_empty(),
             "no limit drops nothing"
         );
-        assert_eq!(store.wait_saved_remote_rows("studio", 151.0, Some(50.0)), ["a"]);
+        assert_eq!(
+            store.wait_saved_remote_rows(("studio", RemotePeer::Ngterm), 151.0, Some(50.0)),
+            ["a"]
+        );
         assert_eq!(
             saved_ids(store.saved_remote_rows()),
-            ["B"],
-            "another machine's rows are its own"
+            ["B", "C"],
+            "another machine's rows, and another app's on the same one, are their own"
         );
-        assert_eq!(store.saved_remote_rows()[0].waiting_since, None);
+        assert!(store.saved_remote_rows().iter().all(|row| row.waiting_since.is_none()));
     }
 }

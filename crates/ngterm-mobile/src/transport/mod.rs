@@ -57,6 +57,16 @@ pub enum TransportError {
     Closed,
 }
 
+/// What a connection has learned of its machine.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Learned {
+    /// The form its commands take.
+    pub form: OriginForm,
+    /// Whether a listing has told which app answers there: until one has, `form`'s app is only the default, and a
+    /// control line lists first ([`crate::sessions`]).
+    pub peer_known: bool,
+}
+
 /// How a machine is reached: one per core, moved onto its actor.
 #[expect(
     async_fn_in_trait,
@@ -85,12 +95,22 @@ pub trait Connection: 'static {
     /// with a pty of `pty`'s size when given.
     async fn exec(&self, command: &str, pty: Option<GridSize>) -> Result<Channel, TransportError>;
 
+    /// What this connection has learned of its machine, for the commands that follow on it.
+    fn learned(&self) -> Learned;
+
+    /// Records what this machine turned out to be.
+    fn set_learned(&self, learned: Learned);
+
     /// How this machine's remote commands are formed, as learned so far: the shell they go to
     /// ([`ngterm_core::remote::origin`]) and the app that answers them ([`ngterm_core::remote::peer`]).
-    fn origin_form(&self) -> OriginForm;
+    fn origin_form(&self) -> OriginForm {
+        self.learned().form
+    }
 
-    /// Records what this machine turned out to be, for the commands that follow on this connection.
-    fn set_origin_form(&self, form: OriginForm);
+    /// Records the form of this machine's commands, keeping whether its app is known.
+    fn set_origin_form(&self, form: OriginForm) {
+        self.set_learned(Learned { form, ..self.learned() });
+    }
 
     /// The shell this machine's remote commands go to, as learned so far.
     fn origin_shell(&self) -> OriginShell {
@@ -107,9 +127,12 @@ pub trait Connection: 'static {
 
     /// Records the app that answered this machine's listing, keeping the shell learned.
     fn set_origin_peer(&self, peer: RemotePeer) {
-        self.set_origin_form(OriginForm {
-            peer,
-            ..self.origin_form()
+        self.set_learned(Learned {
+            form: OriginForm {
+                peer,
+                ..self.origin_form()
+            },
+            peer_known: true,
         });
     }
 

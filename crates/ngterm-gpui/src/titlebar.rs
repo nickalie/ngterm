@@ -782,7 +782,15 @@ impl Titlebar {
                 .line_height(px(14.))
                 .whitespace_nowrap()
                 .child(name)
-                .tooltip(move |window, cx| Tooltip::new(note.clone()).build(window, cx)),
+                .tooltip(move |window, cx| {
+                    let note = note.clone();
+                    Tooltip::element(move |_, _| {
+                        div()
+                            .debug_selector(|| "titlebar-peer-note".to_owned())
+                            .child(note.clone())
+                    })
+                    .build(window, cx)
+                }),
         )
     }
 

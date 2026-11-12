@@ -126,9 +126,11 @@ Windows machine needs Windows' OpenSSH server, with key-based ssh set up for you
 `ssh` on its `PATH`, Windows' own OpenSSH client by default.
 
 A Mac running [agterm](https://github.com/umputun/agterm) in Live sessions mode works too, from every desktop and the
-phone app: ngterm finds out which app answers and marks those sessions **agterm**. They lack what is ngterm's own: the
-agent chat view, Kitty clipboard paste, renames made on that Mac and page companions it opens later. When a Mac runs
-both apps, ngterm answers first; write `agterm:HOST` in `remotes.conf` to reach its agterm instead.
+phone app: ngterm finds out which app answers, and the desktop marks those sessions **agterm** in the title bar. They
+lack what is ngterm's own: the agent chat view (the phone app says so when you open one), Kitty clipboard paste, renames
+made on that Mac and page companions it opens later. When a Mac runs both apps, ngterm answers first; write
+`agterm:HOST` in `remotes.conf` to reach its agterm instead. A session keeps the app it was attached from, after a
+relaunch too.
 
 ### A server without a display
 

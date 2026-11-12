@@ -79,10 +79,12 @@ fn an_agterm_control_line_reaches_agtermctl_with_every_word_intact() {
 
 #[test]
 fn a_pinned_host_sends_every_line_to_agterm_and_ssh_only_its_destination() {
-    let present = present_command("agterm:me@studio", "S1").unwrap();
+    let pinned = peer::peer_of("agterm:me@studio");
+    assert_eq!(pinned, RemotePeer::Agterm);
+    let present = present_command("agterm:me@studio", pinned, "S1").unwrap();
     assert_eq!(present[6], "me@studio");
     assert_eq!(present[7], present_tail(AGTERM_FORM, "S1").unwrap());
-    let job = run_job_command("agterm:me@studio", "J1").unwrap();
+    let job = run_job_command("agterm:me@studio", pinned, "J1").unwrap();
     assert_eq!(job[1], "-tt");
     assert_eq!(job[6], "me@studio");
     assert!(
@@ -90,14 +92,14 @@ fn a_pinned_host_sends_every_line_to_agterm_and_ssh_only_its_destination() {
         "{}",
         job[7]
     );
-    let page = page_serve_command("agterm:me@studio", "T1").unwrap();
+    let page = page_serve_command("agterm:me@studio", pinned, "T1").unwrap();
     assert_eq!(page[1], "-T");
     assert!(
         page[7].contains("agtermctl '\\''session'\\'' '\\''overlay'\\'' '\\''page-serve'\\''"),
         "{}",
         page[7]
     );
-    let control = control_command("agterm:me@studio", &["session", "close", "--target", "S1"]).unwrap();
+    let control = control_command("agterm:me@studio", pinned, &["session", "close", "--target", "S1"]).unwrap();
     assert_eq!(control[6], "me@studio");
     assert_eq!(
         control[7],
@@ -107,18 +109,22 @@ fn a_pinned_host_sends_every_line_to_agterm_and_ssh_only_its_destination() {
 }
 
 #[test]
-fn a_host_whose_listing_agterm_answered_keeps_sending_agterm_its_lines() {
+fn a_line_goes_to_the_peer_it_is_given_whatever_the_host_last_listed() {
     let host = "ssh-agterm-learned.example";
-    peer::learn(host, RemotePeer::Agterm);
-    assert_eq!(
-        present_command(host, "S1").unwrap()[7],
-        present_tail(AGTERM_FORM, "S1").unwrap()
-    );
-    assert_eq!(present_command(host, "S1").unwrap()[6], host);
     peer::learn(host, RemotePeer::Ngterm);
     assert_eq!(
-        present_command(host, "S1").unwrap()[7],
+        present_command(host, RemotePeer::Agterm, "S1").unwrap()[7],
+        present_tail(AGTERM_FORM, "S1").unwrap()
+    );
+    assert_eq!(present_command(host, RemotePeer::Agterm, "S1").unwrap()[6], host);
+    peer::learn(host, RemotePeer::Agterm);
+    assert_eq!(
+        present_command(host, RemotePeer::Ngterm, "S1").unwrap()[7],
         present_tail(OriginShell::Posix, "S1").unwrap()
+    );
+    assert_eq!(
+        control_command(host, RemotePeer::Ngterm, &["live", "list"]).unwrap()[7],
+        control_tail(OriginShell::Posix, &["live", "list"])
     );
 }
 

@@ -106,7 +106,8 @@ impl Core {
     fn step_ended_check(&mut self, mut check: EndedCheck, now: Instant) -> Option<EndedCheck> {
         let Some(answer) = check.read.take() else {
             if check.due <= now {
-                let argv = control_command(&check.host, &["live", "list"]).ok()?;
+                let peer = self.remote_row_peer(check.row, &check.host);
+                let argv = control_command(&check.host, peer, &["live", "list"]).ok()?;
                 check.read = Some(run_off_thread(&self.remote.runner, argv, TREE_DEADLINE)?);
             }
             return Some(check);

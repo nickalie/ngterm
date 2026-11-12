@@ -183,6 +183,8 @@ enum Stage {
 pub(crate) struct CompanionFlow {
     request: RemoteCompanionRequest,
     host: String,
+    /// The app the remote row was attached from, which every line of the flow goes to.
+    peer: super::peer::RemotePeer,
     /// The row the companion lands under: the remote row, or its parent for a companion row.
     parent: Uuid,
     select: bool,
@@ -366,12 +368,15 @@ impl Core {
             .remote_presentation()
             .map_or_else(|| origin.clone(), |state| state.binding.remote_session_id.clone());
         let (host, parent) = (host.to_owned(), parent.id());
-        let create = control_command(&host, &request.arguments(&origin)).map_err(|_| INVALID_HOST.to_owned())?;
-        let answer = super::attach::start_tree_read(self, &host).map_err(|error| error.to_string())?;
+        let peer = self.remote_row_peer(row, &host);
+        let create = control_command(&host, peer, &request.arguments(&origin)).map_err(|_| INVALID_HOST.to_owned())?;
+        let answer = super::attach::start_peer_tree_read_within(self, &host, peer, TREE_DEADLINE)
+            .map_err(|error| error.to_string())?;
         Ok(CompanionFlow {
             progress: Some(format!("creating a companion on {host}…")),
             request,
             host,
+            peer,
             parent,
             select,
             stage: Stage::Checking { answer, listed, create },
@@ -486,7 +491,8 @@ impl Core {
             if remaining.is_zero() {
                 return fail(&reason);
             }
-            let answer = match super::attach::start_tree_read_within(self, &host, remaining.min(TREE_DEADLINE)) {
+            let within = remaining.min(TREE_DEADLINE);
+            let answer = match super::attach::start_peer_tree_read_within(self, &host, flow.peer, within) {
                 Ok(answer) => answer,
                 Err(error) => return fail(&error.to_string()),
             };
@@ -563,8 +569,13 @@ impl Core {
         parent: Uuid,
         select: bool,
     ) -> Result<PageAttach, String> {
-        let argv = control_command(host, &["session", "overlay", "page-attach", "--target", origin_session])
-            .map_err(|_| INVALID_HOST.to_owned())?;
+        let peer = self.remote_row_peer(parent, host);
+        let argv = control_command(
+            host,
+            peer,
+            &["session", "overlay", "page-attach", "--target", origin_session],
+        )
+        .map_err(|_| INVALID_HOST.to_owned())?;
         let answer = run_off_thread(&self.remote.runner, argv, COMPANION_DEADLINE)
             .ok_or_else(|| format!("the remote command failed on {host}"))?;
         Ok(PageAttach {
@@ -617,8 +628,9 @@ impl Core {
         let cannot_show = || "the page cannot be shown here".to_owned();
         let origin = frames::parse_uuid(&page.page).ok_or_else(cannot_show)?;
         let source = super::replica_page::replica_source(&page.source).ok_or_else(cannot_show)?;
+        let peer = self.remote_row_peer(attach.parent, host);
         let serve =
-            page_serve_command(host, &page.token).map_err(|_| format!("the page cannot be reached on {host}"))?;
+            page_serve_command(host, peer, &page.token).map_err(|_| format!("the page cannot be reached on {host}"))?;
         let flags = HtmlPageFlags {
             navigation: page.navigation,
             javascript: page.javascript,
@@ -752,7 +764,15 @@ impl Core {
     pub(crate) fn page_companion_ended(&mut self, local: Uuid, row: Uuid, origin: Uuid, host: &str) {
         let argv = self
             .page_outcome_pending(local)
-            .then(|| control_command(host, &["session", "overlay", "result", "--page", &uuid_string(origin)]).ok())
+            .then(|| {
+                let peer = self.remote_row_peer(row, host);
+                control_command(
+                    host,
+                    peer,
+                    &["session", "overlay", "result", "--page", &uuid_string(origin)],
+                )
+                .ok()
+            })
             .flatten();
         let answer = argv.and_then(|argv| run_off_thread(&self.remote.runner, argv, TREE_DEADLINE));
         match answer {

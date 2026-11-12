@@ -11,12 +11,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use ngterm_core::remote::origin::OriginForm;
 use ngterm_term::GridSize;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::russh::CONNECTION_LOST;
-use super::{Channel, ChannelEnd, ChannelOutput, ChannelPeer, Connection, Transport, TransportError};
+use super::{Channel, ChannelEnd, ChannelOutput, ChannelPeer, Connection, Learned, Transport, TransportError};
 use crate::api::Machine;
 
 /// A command's scripted answer: its output, then its end.
@@ -269,7 +268,7 @@ impl Transport for FakeTransport {
             };
             state.links.insert(id, link);
             Ok(FakeConnection {
-                origin_form: std::cell::Cell::default(),
+                learned: std::cell::Cell::default(),
                 id,
                 machine_id: machine.id.clone(),
                 state: Arc::clone(&self.state),
@@ -298,16 +297,16 @@ pub struct FakeConnection {
     machine_id: String,
     state: Arc<Mutex<State>>,
     lost: watch::Receiver<bool>,
-    origin_form: std::cell::Cell<OriginForm>,
+    learned: std::cell::Cell<Learned>,
 }
 
 impl Connection for FakeConnection {
-    fn origin_form(&self) -> OriginForm {
-        self.origin_form.get()
+    fn learned(&self) -> Learned {
+        self.learned.get()
     }
 
-    fn set_origin_form(&self, form: OriginForm) {
-        self.origin_form.set(form);
+    fn set_learned(&self, learned: Learned) {
+        self.learned.set(learned);
     }
 
     async fn exec(&self, command: &str, pty: Option<GridSize>) -> Result<Channel, TransportError> {

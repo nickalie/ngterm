@@ -30,7 +30,15 @@ fn machine() -> Machine {
     }
 }
 
+/// A connection a listing told is ngterm's, as the app lists a machine before it creates or ends anything there.
 async fn connected(transport: &FakeTransport) -> FakeConnection {
+    let connection = fresh(transport).await;
+    connection.set_origin_peer(ngterm_core::remote::peer::RemotePeer::Ngterm);
+    connection
+}
+
+/// A connection nothing has been listed on yet.
+async fn fresh(transport: &FakeTransport) -> FakeConnection {
     transport.connect(&machine()).await.expect("the fake connects")
 }
 
@@ -186,6 +194,62 @@ async fn an_agterm_machine_is_learned_from_its_listing_and_gets_agterms_lines() 
             reason: crate::chat::NO_CHAT_ON_AGTERM.to_owned()
         })
     );
+}
+
+/// A first control line on a fresh connection is agterm's on an agterm-only Mac: the app is listed first, never guessed.
+#[tokio::test]
+async fn a_fresh_connections_first_control_line_lists_the_app_first() {
+    use ngterm_core::remote::origin::{OriginForm, OriginShell};
+    use ngterm_core::remote::peer::RemotePeer;
+    let transport = FakeTransport::new();
+    let body = json!({"ok": true, "result": {"remote": {
+        "endpoint": {"executable": "/Applications/agterm.app/Contents/MacOS/zmx", "socketDirectory": "/tmp/agterm-zmx-1"},
+        "sessions": [session(PARENT, "parent", None, None)],
+    }}});
+    transport.script(
+        &tree_tail(OriginShell::Posix),
+        Script::ok(&format!("{}\n{body}", ngterm_core::remote::peer::AGTERM_ANSWER)),
+    );
+    let agterm = OriginForm {
+        shell: OriginShell::Posix,
+        peer: RemotePeer::Agterm,
+    };
+    transport.script(
+        &control_tail(agterm, &end_session_arguments(PARENT)),
+        ok(&json!({"ok": true})),
+    );
+    let connection = fresh(&transport).await;
+
+    end(&connection, HOST, PARENT).await.expect("ended on agterm");
+
+    assert_eq!(
+        commands(&transport),
+        [
+            tree_tail(OriginShell::Posix),
+            control_tail(agterm, &end_session_arguments(PARENT))
+        ]
+    );
+    assert!(connection.learned().peer_known);
+}
+
+/// A machine that cannot be listed gets no control line guessed at its app, and says why.
+#[tokio::test]
+async fn a_fresh_connection_whose_listing_fails_sends_no_control_line() {
+    let transport = FakeTransport::new();
+    transport.script(
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        exits(127, "", MISSING_CLI),
+    );
+    let connection = fresh(&transport).await;
+
+    let error = end(&connection, HOST, PARENT).await.expect_err("nothing answers");
+
+    assert!(error.contains("ngtermctl: not found"), "{error}");
+    assert_eq!(
+        commands(&transport),
+        [tree_tail(ngterm_core::remote::origin::OriginShell::Posix)]
+    );
+    assert!(!connection.learned().peer_known);
 }
 
 #[tokio::test]

@@ -75,8 +75,9 @@ pub fn cli_path_prefix() -> String {
     "PATH=\"$PATH:$HOME/.local/bin:/usr/local/bin\"".to_owned()
 }
 
-/// The CLI the remote calls run on the far side: this build's. A far side with only another build's CLI fails like one
-/// with none, the shell's exit 127.
+/// This build's CLI, which the remote calls run on an ngterm far side. A listing that pins no app falls back to agterm's
+/// when this one is missing or fails ([`super::ssh::tree_tail_for`], [`super::peer`]); a far side with neither fails
+/// with the shell's exit 127.
 pub const REMOTE_CLI: &str = "ngtermctl";
 
 /// The remote `/bin/sh -c CHAIN` the account's shell runs as one ordinary command: the widened `PATH`, then
@@ -124,9 +125,9 @@ pub fn ssh_arguments(host: &str, connect_timeout: u32, interactive: bool) -> Vec
     ]
 }
 
-/// One ssh invocation running the far side's own bare `live tree`, which answers across every open window in one
-/// document (upstream's `RemoteSession.treeCommand`), for a host already validated, in `shell`'s form:
-/// [`ssh_arguments`] plus [`super::ssh::tree_tail`].
+/// One ssh invocation running the far side's own `live tree`, which answers across every open window in one document
+/// (upstream's `RemoteSession.treeCommand`), for a host already validated, in `shell`'s form: [`ssh_arguments`] plus
+/// [`super::ssh::tree_tail_for`] the app the host's destination pins, if any.
 pub(crate) fn tree_argv(host: &str, shell: super::origin::OriginShell) -> Vec<String> {
     let mut argv = ssh_arguments(host, 5, false);
     argv.push(super::ssh::tree_tail_for(shell, super::peer::destination(host).0));

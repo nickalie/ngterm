@@ -1168,8 +1168,12 @@ fn duplicate_remote_session_lets_the_origin_resolve_its_directory() {
     );
     attach.runner.answer(2, restore_mode("live"));
     attach.wait_for_runs(4);
-    let expected =
-        crate::remote::ssh::control_command("studio", &["session", "duplicate", "--target", REMOTE_SESSION]).unwrap();
+    let expected = crate::remote::ssh::control_command(
+        "studio",
+        crate::remote::peer::RemotePeer::Ngterm,
+        &["session", "duplicate", "--target", REMOTE_SESSION],
+    )
+    .unwrap();
     assert_eq!(attach.runner.hosts()[3], "studio");
     assert_eq!(attach.runner.lines()[3], *expected.last().unwrap());
     attach.runner.answer(3, created_receipt());
@@ -1744,6 +1748,7 @@ fn saved_row(
         order,
         parent_session_id: None,
         waiting_since: None,
+        peer: None,
     }
 }
 
@@ -2216,4 +2221,36 @@ fn a_destination_pinned_to_agterm_attaches_its_session_and_ends_it_there() {
         .runner
         .answer(2, reply(&json!({"ok": true, "result": {"id": REMOTE_SESSION}})));
     attach.drive("the row closes", |attach| attach.remote_rows().is_empty());
+}
+
+/// A row attached from an unpinned Mac that agterm answered keeps sending agterm its lines, and is saved as agterm's,
+/// after ngterm starts there and answers a later listing of the host.
+#[test]
+fn a_row_agterm_answered_keeps_its_app_when_a_later_listing_finds_ngterm() {
+    let host = "both-apps.example";
+    let mut attach = Attach::new(Some(&format!("{host} Both\n")));
+    let window = attach.fixture.window;
+    attach.core().attach_remote(window);
+    attach.wait_for_runs(1);
+    attach.runner.answer(0, agterm_listing(&[agterm_build_session()]));
+    attach.drive("the session picker opens", |attach| attach.pending().is_some());
+    let picker = attach.pending().unwrap();
+    attach.resolve(&picker, picker.picked(0).unwrap());
+    attach.wait_for_runs(2);
+    attach.runner.answer(1, agterm_listing(&[agterm_build_session()]));
+    attach.drive("the attach lands", |attach| attach.remote_rows() == ["build"]);
+    let row = attach.fixture.store().selected_session_id().unwrap();
+    assert_eq!(attach.fixture.store().session(row).unwrap().remote_host(), Some(host));
+
+    // ngterm started there, and a listing of the host found it
+    crate::remote::peer::learn(host, crate::remote::peer::RemotePeer::Ngterm);
+
+    let saved = attach.fixture.store().snapshot().remote_sessions.unwrap();
+    assert_eq!(saved[0].peer, Some(crate::remote::peer::RemotePeer::Agterm));
+    attach.session = row;
+    assert!(attach.act(SidebarAction::EndRemoteSession(row)));
+    attach.wait_for_runs(3);
+    let line = attach.runner.lines()[2].clone();
+    assert!(line.contains("agtermctl") && !line.contains("ngtermctl"), "{line}");
+    assert!(line.contains("close") && line.contains(REMOTE_SESSION), "{line}");
 }

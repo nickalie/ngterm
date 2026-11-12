@@ -68,8 +68,7 @@ use crate::pane::{self, ClipboardReply, ClipboardWriteStatus, GoneCheck, Note, P
 use crate::presentation::{self, AskReply, ChannelLinks, LinkEvent, Presentations, Reporter};
 use crate::reconnect::Retry;
 use crate::sessions::{self, RemoteSession};
-use crate::transport::{Connection, Transport, TransportError};
-use ngterm_core::remote::origin::OriginForm;
+use crate::transport::{Connection, Learned, Transport, TransportError};
 
 /// The actor thread's name.
 pub const THREAD_NAME: &str = "ngterm-mobile";
@@ -272,9 +271,10 @@ struct State<T: Transport> {
     sink: Arc<dyn EventSink>,
     /// The live connections, each with the machine record it was made from.
     connections: RefCell<HashMap<String, Link<T::Connection>>>,
-    /// What each machine's last lost or suspended connection had learned of its shell, for its reconnect, with the
-    /// machine as it was then: an entry since edited to reach another machine learns its own.
-    origin_shells: RefCell<HashMap<String, (Machine, OriginForm)>>,
+    /// What each machine's last lost or suspended connection had learned of it ([`Learned`]: its shell and its app),
+    /// for its reconnect, whose streams start before any new listing, with the machine as it was then: an entry since
+    /// edited to reach another machine learns its own.
+    origin_forms: RefCell<HashMap<String, (Machine, Learned)>>,
     /// The connects in flight, one per machine: a later connect of the same machine joins it, a disconnect or a
     /// connect of the machine as edited cancels it.
     attempts: RefCell<HashMap<String, Attempt>>,
@@ -349,7 +349,7 @@ impl<T: Transport> State<T> {
             acting: RefCell::new(HashSet::new()),
             sink,
             connections: RefCell::new(HashMap::new()),
-            origin_shells: RefCell::new(HashMap::new()),
+            origin_forms: RefCell::new(HashMap::new()),
             attempts: RefCell::new(HashMap::new()),
             generation: Cell::new(0),
             listings: RefCell::new(HashMap::new()),
@@ -677,11 +677,11 @@ async fn reach<T: Transport>(state: Rc<State<T>>, mut machine: Machine, generati
 fn connected<T: Transport>(state: &Rc<State<T>>, machine: Machine, connection: T::Connection) {
     let id = machine.id.clone();
     let connection = Rc::new(connection);
-    if let Some((recorded, form)) = state.origin_shells.borrow().get(&id)
+    if let Some((recorded, learned)) = state.origin_forms.borrow().get(&id)
         && recorded.reached_as(&machine)
     {
         // what its last connection learned: a reconnect's streams start before any new listing
-        connection.set_origin_form(*form);
+        connection.set_learned(*learned);
     }
     let link = Link {
         machine,
@@ -712,10 +712,10 @@ async fn watch<T: Transport>(state: Rc<State<T>>, machine_id: String, connection
     let Some(link) = state.connections.borrow_mut().remove(&machine_id) else {
         return;
     };
-    state.origin_shells.borrow_mut().insert(
-        machine_id.clone(),
-        (link.machine.clone(), link.connection.origin_form()),
-    );
+    state
+        .origin_forms
+        .borrow_mut()
+        .insert(machine_id.clone(), (link.machine.clone(), link.connection.learned()));
     state.presentations.borrow_mut().machine_down(&machine_id);
     state.panes.borrow_mut().machine_down(&machine_id);
     let events = state.chats.borrow_mut().machine_down(&machine_id);
@@ -769,10 +769,10 @@ async fn suspend<T: Transport>(state: &State<T>) {
     let attempts = std::mem::take(&mut *state.attempts.borrow_mut());
     let mut set_aside = Vec::new();
     for (machine_id, link) in connections {
-        state.origin_shells.borrow_mut().insert(
-            machine_id.clone(),
-            (link.machine.clone(), link.connection.origin_form()),
-        );
+        state
+            .origin_forms
+            .borrow_mut()
+            .insert(machine_id.clone(), (link.machine.clone(), link.connection.learned()));
         link.connection.close();
         let machine = SetAside {
             machine: link.machine,
@@ -833,7 +833,7 @@ fn disconnect<T: Transport>(state: &State<T>, machine_id: &str) {
 fn close<T: Transport>(state: &State<T>, machine_id: &str) {
     state.suspended.borrow_mut().remove(machine_id);
     // a machine disconnected or edited may be another machine now: it is learned again
-    state.origin_shells.borrow_mut().remove(machine_id);
+    state.origin_forms.borrow_mut().remove(machine_id);
     state.listings.borrow_mut().remove(machine_id);
     state.presentations.borrow_mut().forget_machine(machine_id);
     state.chats.borrow_mut().forget_machine(machine_id);
@@ -945,8 +945,9 @@ async fn create_session<T: Transport>(
     })
     .await
     .map_err(remote)?;
+    let receipt = RemoteSession::listed(&created, tree.endpoint.peer());
     listed(&state, &link, machine_id, tree, began.get());
-    Ok(RemoteSession::from(&created))
+    Ok(receipt)
 }
 
 async fn duplicate_session<T: Transport>(
@@ -961,8 +962,9 @@ async fn duplicate_session<T: Transport>(
     })
     .await
     .map_err(remote)?;
+    let receipt = RemoteSession::listed(&created, tree.endpoint.peer());
     listed(&state, &link, machine_id, tree, began.get());
-    Ok(RemoteSession::from(&created))
+    Ok(receipt)
 }
 
 /// Ends the session there; while the connection is still the machine's, a listing that began before is stale from now

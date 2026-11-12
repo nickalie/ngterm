@@ -80,12 +80,12 @@ pub struct OriginForm {
 }
 
 impl OriginForm {
-    /// `host`'s form, as far as this process has learned it ([`shell_of`], [`super::peer::peer_of`]).
+    /// The form of `host`'s commands to `peer`, with the shell as far as this process has learned it ([`shell_of`]).
     #[must_use]
-    pub fn of(host: &str) -> Self {
+    pub fn of(host: &str, peer: super::peer::RemotePeer) -> Self {
         Self {
             shell: shell_of(host),
-            peer: super::peer::peer_of(host),
+            peer,
         }
     }
 
@@ -105,7 +105,8 @@ impl From<OriginShell> for OriginForm {
     }
 }
 
-/// What was learned about each host in this process. A host not here is [`OriginShell::Posix`].
+/// What was learned about each machine in this process, by its ssh destination: a pin names an app there, not another
+/// machine. A machine not here is [`OriginShell::Posix`].
 static LEARNED: LazyLock<Mutex<HashMap<String, OriginShell>>> = LazyLock::new(Mutex::default);
 
 /// The shell `host`'s remote commands go to, as far as this process has learned.
@@ -114,7 +115,7 @@ pub fn shell_of(host: &str) -> OriginShell {
     LEARNED
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .get(host)
+        .get(super::peer::ssh_destination(host))
         .copied()
         .unwrap_or_default()
 }
@@ -124,7 +125,7 @@ pub fn learn(host: &str, shell: OriginShell) {
     LEARNED
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .insert(host.to_owned(), shell);
+        .insert(super::peer::ssh_destination(host).to_owned(), shell);
 }
 
 /// Whether a command sent in the POSIX form may have been a Windows shell's refusal of it: an ordinary failure with
@@ -382,6 +383,8 @@ mod tests {
         runner.asked.lock().unwrap().clear();
         run_learning(&*runner, host, Duration::from_secs(1), argv_for);
         assert_eq!(*runner.asked.lock().unwrap(), ["windows"]);
+        // what a pinned listing learned is the machine's, whichever app its later commands go to
+        assert_eq!(shell_of(&format!("ngterm:{host}")), OriginShell::Windows);
     }
 
     #[test]

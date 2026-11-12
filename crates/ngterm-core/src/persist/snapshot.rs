@@ -204,6 +204,17 @@ pub struct RemoteSessionSnapshot {
     /// When its machine first failed to answer in a row of failures, as epoch seconds; absent while it has not.
     #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
     pub waiting_since: Option<f64>,
+    /// The app it was attached from, which its relaunch lists alone; absent for ngterm, as in older snapshots.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub peer: Option<ngterm_proto::RemotePeer>,
+}
+
+impl RemoteSessionSnapshot {
+    /// The app it was attached from.
+    #[must_use]
+    pub fn peer(&self) -> ngterm_proto::RemotePeer {
+        self.peer.unwrap_or_default()
+    }
 }
 
 /// One persisted workspace.
@@ -628,6 +639,7 @@ mod tests {
                 order: 2,
                 parent_session_id: None,
                 waiting_since: None,
+                peer: None,
             }]
         );
         assert_eq!(

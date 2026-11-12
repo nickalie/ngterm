@@ -658,8 +658,21 @@ fn an_agterm_rows_host_carries_the_apps_badge(cx: &mut TestAppContext) {
     let badge = cx.debug_bounds("titlebar-peer").expect("the badge is drawn");
     assert!(badge.origin.x > host.origin.x, "after the host");
     assert!(host.size.height >= badge.size.height, "inside the host's line");
+    assert!(
+        cx.debug_bounds("titlebar-peer-note").is_none(),
+        "no note before a hover"
+    );
     cx.simulate_mouse_move(badge.center(), None, gpui_kit::Modifiers::default());
+    cx.executor().advance_clock(std::time::Duration::from_secs(2));
     cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("titlebar-peer-note").is_some(),
+        "hovering the badge shows what the Mac lacks"
+    );
+    assert_eq!(
+        h.shown(cx).model.label.peer_note,
+        ngterm_core::remote::peer::limits_note(ngterm_core::remote::peer::RemotePeer::Agterm)
+    );
     let store = h.store_mut();
     let local = store
         .add_session(workspace, ngterm_core::model::NewSession::at_cwd("/tmp"))

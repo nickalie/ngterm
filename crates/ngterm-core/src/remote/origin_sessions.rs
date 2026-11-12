@@ -21,6 +21,7 @@ use super::origin_replies::{
     ListingWait, NEW_SESSION_ARGUMENTS, RESTORE_MODE_ARGUMENTS, WaitStep, check_restore_mode,
     duplicate_session_arguments, end_failure, end_session_arguments, session_created,
 };
+use super::peer::RemotePeer;
 use super::ssh::control_command;
 use super::tree::RemoteCommandResult;
 use super::viewer::{Answer, run_off_thread, take_answer};
@@ -36,6 +37,8 @@ const END_SESSION: &str = "End Session";
 #[derive(Debug)]
 pub(super) struct CreateRun {
     host: String,
+    /// The app every line of the create goes to: the row's it was asked from, else what the host's listing found.
+    peer: RemotePeer,
     /// The workspace of the row it was asked from; the window's current one otherwise.
     workspace: Option<Uuid>,
     request: CreateRequest,
@@ -114,7 +117,8 @@ impl Core {
         };
         let workspace = store.workspace_for_session(session).map(crate::model::Workspace::id);
         let flow = AttachFlow::new(window, Some(session));
-        if let Some(flow) = self.start_create_session(flow, host, workspace, request) {
+        let peer = self.remote_row_peer(session, &host);
+        if let Some(flow) = self.start_create_session(flow, (host, peer), workspace, request) {
             self.remote.viewer.attach_flows.push(flow);
         }
         true
@@ -132,43 +136,46 @@ impl Core {
         let host = host.to_owned();
         let workspace = store.workspace_for_session(session).map(crate::model::Workspace::id);
         let flow = AttachFlow::new(window, Some(session));
-        if let Some(flow) = self.start_origin_session(flow, host, workspace) {
+        let peer = self.remote_row_peer(session, &host);
+        if let Some(flow) = self.start_origin_session(flow, host, peer, workspace) {
             self.remote.viewer.attach_flows.push(flow);
         }
         true
     }
 
-    /// Runs `arguments` of `host`'s `ngtermctl` off the main thread.
-    fn ask_origin(&self, host: &str, arguments: &[&str]) -> Option<Answer> {
-        let argv = control_command(host, arguments).ok()?;
+    /// Runs `arguments` of `peer`'s CLI on `host` off the main thread.
+    fn ask_origin(&self, host: &str, peer: RemotePeer, arguments: &[&str]) -> Option<Answer> {
+        let argv = control_command(host, peer, arguments).ok()?;
         run_off_thread(&self.remote.runner, argv, COMPANION_DEADLINE)
     }
 
-    /// Asks `host` for a session, as `flow`'s next step; `None` once the flow ended.
+    /// Asks `peer` on `host` for a session, as `flow`'s next step; `None` once the flow ended.
     pub(super) fn start_origin_session(
         &mut self,
         flow: AttachFlow,
         host: String,
+        peer: RemotePeer,
         workspace: Option<Uuid>,
     ) -> Option<AttachFlow> {
-        self.start_create_session(flow, host, workspace, CreateRequest::New)
+        self.start_create_session(flow, (host, peer), workspace, CreateRequest::New)
     }
 
     fn start_create_session(
         &mut self,
         mut flow: AttachFlow,
-        host: String,
+        (host, peer): (String, RemotePeer),
         workspace: Option<Uuid>,
         request: CreateRequest,
     ) -> Option<AttachFlow> {
         flow.action = request.action();
         self.attach_progress(&mut flow, &format!("creating a session on {host}…"));
-        let Some(answer) = self.ask_origin(&host, &RESTORE_MODE_ARGUMENTS) else {
+        let Some(answer) = self.ask_origin(&host, peer, &RESTORE_MODE_ARGUMENTS) else {
             self.attach_failed(&mut flow, &format!("the remote command failed on {host}"));
             return None;
         };
         flow.step = Step::CreatingSession(CreateRun {
             host,
+            peer,
             workspace,
             request,
             stage: CreateStage::Checking(answer),
@@ -180,17 +187,19 @@ impl Core {
     pub(super) fn advance_origin_session(&mut self, mut flow: AttachFlow, run: CreateRun) -> Option<AttachFlow> {
         let CreateRun {
             host,
+            peer,
             workspace,
             request,
             stage,
         } = run;
         let stage = match stage {
-            CreateStage::Checking(answer) => self.step_checking(&mut flow, &host, &request, answer),
+            CreateStage::Checking(answer) => self.step_checking(&mut flow, (&host, peer), &request, answer),
             CreateStage::Creating(answer) => self.step_creating(&mut flow, &host, answer),
-            CreateStage::Waiting(waiting) => self.step_waiting(&mut flow, &host, workspace, &request, waiting),
+            CreateStage::Waiting(waiting) => self.step_waiting(&mut flow, (&host, peer), workspace, &request, waiting),
         }?;
         flow.step = Step::CreatingSession(CreateRun {
             host,
+            peer,
             workspace,
             request,
             stage,
@@ -201,7 +210,7 @@ impl Core {
     fn step_checking(
         &mut self,
         flow: &mut AttachFlow,
-        host: &str,
+        (host, peer): (&str, RemotePeer),
         request: &CreateRequest,
         answer: Answer,
     ) -> Option<CreateStage> {
@@ -213,7 +222,7 @@ impl Core {
             return None;
         }
         // New Session preserves the origin's selection; Duplicate resolves the source and its directory there.
-        let Some(answer) = self.ask_origin(host, &request.arguments()) else {
+        let Some(answer) = self.ask_origin(host, peer, &request.arguments()) else {
             self.attach_failed(flow, &format!("the remote command failed on {host}"));
             return None;
         };
@@ -241,12 +250,12 @@ impl Core {
     fn step_waiting(
         &mut self,
         flow: &mut AttachFlow,
-        host: &str,
+        (host, peer): (&str, RemotePeer),
         workspace: Option<Uuid>,
         request: &CreateRequest,
         mut waiting: Waiting,
     ) -> Option<CreateStage> {
-        let (remote, tree) = match self.next_listing(host, &mut waiting) {
+        let (remote, tree) = match self.next_listing(host, peer, &mut waiting) {
             Ok(Some(listed)) => listed,
             Ok(None) => return Some(CreateStage::Waiting(waiting)),
             Err(reason) => {
@@ -273,6 +282,7 @@ impl Core {
     fn next_listing(
         &mut self,
         host: &str,
+        peer: RemotePeer,
         waiting: &mut Waiting,
     ) -> Result<Option<(ControlRemoteSession, ControlRemoteTree)>, String> {
         let now = self.remote_now();
@@ -282,8 +292,8 @@ impl Core {
                 WaitStep::GiveUp(reason) => return Err(reason),
                 WaitStep::List(within) => within,
             };
-            let answer =
-                super::attach::start_tree_read_within(self, host, within).map_err(|error| error.to_string())?;
+            let answer = super::attach::start_peer_tree_read_within(self, host, peer, within)
+                .map_err(|error| error.to_string())?;
             waiting.read = Some(answer);
             return Ok(None);
         };
@@ -348,7 +358,8 @@ impl Core {
             window,
             session,
         };
-        let answer = self.ask_origin(&host, &end_session_arguments(&origin));
+        let peer = self.remote_row_peer(session, &host);
+        let answer = self.ask_origin(&host, peer, &end_session_arguments(&origin));
         let Some(answer) = answer else {
             let reason = format!("the remote command failed on {host}");
             self.action_failed(END_SESSION, window, Some(session), &reason);

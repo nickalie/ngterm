@@ -65,6 +65,23 @@ pub(crate) fn start_tree_read_within(core: &Core, host: &str, deadline: Duration
         .ok_or_else(|| ControlError::rejected(format!("the remote command failed on {host}")))
 }
 
+/// [`start_tree_read_within`] of `peer`'s own listing on `host`, as a bound row's flow reads it: another app answering
+/// `host` meanwhile is never read as the row's app.
+///
+/// # Errors
+///
+/// As [`start_tree_read`].
+pub(crate) fn start_peer_tree_read_within(
+    core: &Core,
+    host: &str,
+    peer: super::peer::RemotePeer,
+    deadline: Duration,
+) -> Result<Answer, ControlError> {
+    tree::validate(host).map_err(|_| ControlError::rejected("invalid host"))?;
+    run_tree_off_thread(&core.remote.runner, &super::peer::pinned(host, peer), deadline)
+        .ok_or_else(|| ControlError::rejected(format!("the remote command failed on {host}")))
+}
+
 /// Starts `live.attach HOST SESSION [--window]` (upstream's dispatcher arm): no `active` default, as the target names a
 /// session on another machine, and a target with control characters is refused before it can reach an error message.
 pub(crate) fn begin_attach(core: &mut Core, request: &Request) -> Dispatched {
@@ -565,7 +582,11 @@ impl Core {
                     Some(flow)
                 }
                 Picked::Chosen(session, _) if session == ATTACH_ALL_ID => self.start_attach_all(flow, host),
-                Picked::Chosen(session, _) if session == NEW_SESSION_ID => self.start_origin_session(flow, host, None),
+                Picked::Chosen(session, _) if session == NEW_SESSION_ID => {
+                    // no row here is bound yet: the app the picker's own listing found
+                    let peer = super::peer::peer_of(&host);
+                    self.start_origin_session(flow, host, peer, None)
+                }
                 Picked::Chosen(session, label) => {
                     let group = parents.contains(&session);
                     self.start_picked_attach(flow, host, session, &label, group)

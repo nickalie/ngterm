@@ -37,7 +37,7 @@ use ngterm_core::remote::ssh::{control_tail, tree_tail};
 use ngterm_core::remote::tree::{
     INVALID_REMOTE_SESSION, NO_ANSWER_IN_TIME, REMOTE_CLI, RemoteCommandResult, TREE_DEADLINE, is_plain,
 };
-use ngterm_proto::{ControlRemoteSession, ControlRemoteTree};
+use ngterm_proto::{ControlRemoteSession, ControlRemoteTree, RemotePeer};
 
 use crate::transport::{ChannelEnd, ChannelOutput, Connection};
 
@@ -71,8 +71,10 @@ pub struct RemoteSession {
     pub peer: Option<crate::peer::PeerKind>,
 }
 
-impl From<&ControlRemoteSession> for RemoteSession {
-    fn from(session: &ControlRemoteSession) -> Self {
+impl RemoteSession {
+    /// `session`, as a listing of `peer` showed it.
+    #[must_use]
+    pub fn listed(session: &ControlRemoteSession, peer: RemotePeer) -> Self {
         Self {
             id: session.id.clone(),
             name: session.name.clone(),
@@ -86,7 +88,7 @@ impl From<&ControlRemoteSession> for RemoteSession {
             parent: session.parent.clone(),
             pane_count: u32::try_from(session.panes.len()).unwrap_or(u32::MAX),
             split_axis: session.split_axis.clone(),
-            peer: None,
+            peer: Some(peer.into()),
         }
     }
 }
@@ -95,13 +97,10 @@ impl From<&ControlRemoteSession> for RemoteSession {
 /// that listed it.
 #[must_use]
 pub fn listed_sessions(tree: &ControlRemoteTree) -> Vec<RemoteSession> {
-    let peer = Some(tree.endpoint.peer().into());
+    let peer = tree.endpoint.peer();
     pickable_sessions(tree)
         .into_iter()
-        .map(|session| RemoteSession {
-            peer,
-            ..RemoteSession::from(session)
-        })
+        .map(|session| RemoteSession::listed(session, peer))
         .collect()
 }
 
@@ -200,8 +199,18 @@ async fn run_tree<C: Connection>(connection: &C, deadline: Duration) -> Result<R
     run(connection, &tree_tail(OriginShell::Windows), deadline).await
 }
 
-/// Runs `host`'s `ngtermctl ARGUMENTS --json`.
-async fn control<C: Connection, S: AsRef<str>>(connection: &C, arguments: &[S]) -> Result<RemoteCommandResult, String> {
+/// Runs `ARGUMENTS --json` of the CLI of the app on `host`. On a connection no listing has yet told the app of, a
+/// listing runs first, so a first line to an agterm Mac is never ngterm's.
+async fn control<C: Connection, S: AsRef<str>>(
+    connection: &C,
+    host: &str,
+    arguments: &[S],
+) -> Result<RemoteCommandResult, String> {
+    if !connection.learned().peer_known {
+        read_tree(connection, host, TREE_DEADLINE)
+            .await
+            .map_err(phone_wording)?;
+    }
     run(
         connection,
         &control_tail(connection.origin_form(), arguments),
@@ -273,9 +282,9 @@ async fn make<C: Connection, S: AsRef<str>>(
     arguments: &[S],
     mut listing_starts: impl FnMut(),
 ) -> Result<(ControlRemoteSession, ControlRemoteTree), String> {
-    let mode = control(connection, &RESTORE_MODE_ARGUMENTS).await?;
+    let mode = control(connection, host, &RESTORE_MODE_ARGUMENTS).await?;
     check_restore_mode(&mode, host)?;
-    let created = control(connection, arguments).await?;
+    let created = control(connection, host, arguments).await?;
     let created = session_created(&created, host).map_err(phone_wording)?;
     let mut wait = ListingWait::new(created, now());
     loop {
@@ -307,7 +316,7 @@ pub async fn end<C: Connection>(connection: &C, host: &str, session: &str) -> Re
     if !is_plain(session) {
         return Err(INVALID_REMOTE_SESSION.to_owned());
     }
-    let result = control(connection, &end_session_arguments(session)).await?;
+    let result = control(connection, host, &end_session_arguments(session)).await?;
     end_failure(&result, host).map_or(Ok(()), Err)
 }
 

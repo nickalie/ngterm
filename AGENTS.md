@@ -58,7 +58,9 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
 - **herdr** (`.upstream/herdr`, Apache-2.0): the source of the session server and PTY actor. Derived files name their
   herdr source; `NOTICE` carries the license. User-visible behavior follows upstream, not herdr.
 - **Identity** is ngterm's own (docs/development.md lists the names). agterm names appear only in citations and the reference
-  build's harness adapter, never as fallbacks.
+  build's harness adapter, never as fallbacks. The one exception is the agterm peer (`ngterm-core` `remote::peer`): its
+  wire constants (agterm's CLI, zmx and their variables) reach an agterm origin, and an unpinned listing falls back to
+  agterm's CLI when ngterm's does not answer. Local and default names stay ngterm's.
 
 ## Porting a command group
 

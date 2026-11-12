@@ -390,7 +390,10 @@ impl Core {
             _ => Some(
                 found
                     .remote_host()
-                    .and_then(|host| super::ssh::page_serve_command(host, &page.token).ok())
+                    .and_then(|host| {
+                        let peer = self.remote_row_peer(session, host);
+                        super::ssh::page_serve_command(host, peer, &page.token).ok()
+                    })
                     .ok_or(ORIGIN_UNREACHABLE)?,
             ),
         };

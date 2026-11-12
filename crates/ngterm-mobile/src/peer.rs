@@ -1,8 +1,8 @@
 //! Which app a machine runs, as the apps see it: another ngterm, or upstream agterm, whose sessions the core lists,
 //! attaches and presents too, with fewer features ([`ngterm_core::remote::peer`]). The core learns it from each listing
-//! ([`crate::sessions`]) and forms every later command for it; the apps read it from a listed
-//! [`RemoteSession::peer`](crate::sessions::RemoteSession) and show what [`peer_capabilities`] says is missing (the
-//! agent chat view on agterm, whose chat calls the core refuses).
+//! ([`crate::sessions`]) and forms every later command for it, and refuses the chat calls on agterm, which has no agent
+//! chat view. It reports the app on each [`RemoteSession::peer`](crate::sessions::RemoteSession) and what it lacks
+//! through [`peer_capabilities`], for the apps to show; the Android and iOS apps read neither yet.
 
 use ngterm_core::remote::peer::{self, Capabilities, RemotePeer};
 

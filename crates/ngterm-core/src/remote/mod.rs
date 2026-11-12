@@ -407,6 +407,16 @@ impl PresentationRuntime {
 }
 
 impl Core {
+    /// The app a command for remote row `row` of `host` goes to: the peer the row (or, for a page row, its parent) was
+    /// attached from, so a later listing of `host` that another app answered moves none of its lines; for no bound row,
+    /// what `host`'s last listing found ([`peer::peer_of`]).
+    pub(crate) fn remote_row_peer(&self, row: Uuid, host: &str) -> peer::RemotePeer {
+        self.library()
+            .store_for_session(row)
+            .and_then(|store| store.session(row).and_then(|found| store.remote_peer_of(found)))
+            .unwrap_or_else(|| peer::peer_of(host))
+    }
+
     /// Installs how `live.tree HOST` runs ssh (tests install a fake).
     pub fn set_remote_runner(&mut self, runner: Arc<dyn RemoteCommandRunner>) {
         self.remote.runner = runner;

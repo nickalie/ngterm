@@ -102,8 +102,9 @@ pub(crate) fn upload_tail(shell: OriginShell, name: &str, size: usize) -> String
 ///
 /// # Errors
 ///
-/// [`MobileError::Cancelled`] when `cancelled` resolved first, [`MobileError::Remote`] with the origin's words when it
-/// stored nothing, or with the transport's when the link failed or stalled.
+/// [`MobileError::Cancelled`] when `cancelled` resolved first, [`MobileError::Remote`] with [`super::NO_CHAT_ON_AGTERM`]
+/// on an agterm origin, with the origin's words when it stored nothing, or with the transport's when the link failed or
+/// stalled.
 pub(crate) async fn upload<C: Connection>(
     connection: &C,
     name: &str,

@@ -750,7 +750,8 @@ impl<C: Connection> Chats<C> {
     ///
     /// # Errors
     ///
-    /// [`MobileError::Remote`] with [`UNKNOWN_PANE`] when the session's layout does not hold the pane.
+    /// [`MobileError::Remote`] with [`UNKNOWN_PANE`] when the session's layout does not hold the pane, or with
+    /// [`NO_CHAT_ON_AGTERM`] on an agterm origin.
     pub(crate) fn open(&mut self, key: ChatKey, connection: Rc<C>, report: Reporter) -> Result<(), MobileError> {
         if self.find(&key).is_some() {
             return Ok(());
@@ -954,7 +955,8 @@ impl<C: Connection> Chats<C> {
     ///
     /// # Errors
     ///
-    /// [`MobileError::Remote`] with [`UNKNOWN_PANE`] when the session's layout does not hold the pane.
+    /// [`MobileError::Remote`] with [`UNKNOWN_PANE`] when the session's layout does not hold the pane, or with
+    /// [`NO_CHAT_ON_AGTERM`] on an agterm origin.
     pub(crate) fn commands(&mut self, key: &ChatKey, connection: Rc<C>) -> Result<Lookup<C>, MobileError> {
         offers_chat(&*connection)?;
         let side = self.side(key).ok_or_else(|| MobileError::Remote {

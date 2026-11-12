@@ -398,7 +398,8 @@ impl Core {
             return;
         };
         let binding = &state.binding;
-        let Ok(argv) = super::ssh::present_command(host, &binding.remote_session_id) else {
+        let peer = self.remote_row_peer(session, host);
+        let Ok(argv) = super::ssh::present_command(host, peer, &binding.remote_session_id) else {
             tracing::error!(%session, "no presentation stream: the origin's session id cannot be sent");
             return;
         };
@@ -751,10 +752,11 @@ impl Core {
         else {
             return false;
         };
-        let Some(Ok(argv)) = found
-            .remote_host()
-            .map(|host| super::ssh::run_job_command(host, &overlay.job))
-        else {
+        let peer = store.remote_peer_of(found);
+        let Some(Ok(argv)) = found.remote_host().map(|host| {
+            let peer = peer.unwrap_or_else(|| super::peer::peer_of(host));
+            super::ssh::run_job_command(host, peer, &overlay.job)
+        }) else {
             return false;
         };
         let program = OverlayProgram {

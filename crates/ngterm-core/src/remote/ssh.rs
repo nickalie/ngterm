@@ -1,4 +1,4 @@
-//! The ssh command lines a viewer runs against another machine's ngterm (the attach half of upstream's
+//! The ssh command lines a viewer runs against another machine's ngterm or agterm ([`super::peer`]; the attach half of upstream's
 //! `RemoteSession.swift`; `live tree`'s own argv lives in [`super::tree`]). Pure and host-free: callers run what these
 //! return.
 //!
@@ -8,7 +8,8 @@
 //! [`ssh_arguments`] plus the tail, except that attach also puts `-o LogLevel=ERROR` before the host (see
 //! [`attach_command`]); a client attaching over its own transport should keep ssh's banners off the pane likewise. The
 //! job, page-serve, tunnel and probe lines build their remote commands inline and have no tail builder. Each line has
-//! the form of the shell its host's commands go to ([`super::origin`]).
+//! the form of the shell its host's commands go to ([`super::origin`]) and of the app they go to, which the caller names:
+//! a bound row's endpoint's peer, else [`peer::peer_of`].
 
 use ngterm_proto::ControlLiveEndpoint;
 
@@ -34,9 +35,9 @@ fn is_path(value: &str) -> bool {
 /// # Errors
 ///
 /// A host ssh may not take, or a session id that is not one plain token.
-pub fn present_command(host: &str, session: &str) -> Result<Vec<String>, InvocationError> {
+pub fn present_command(host: &str, peer: RemotePeer, session: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
-    let tail = present_tail(OriginForm::of(host), session)?;
+    let tail = present_tail(OriginForm::of(host, peer), session)?;
     let mut argv = ssh_arguments(host, 5, false);
     argv.push(tail);
     Ok(argv)
@@ -120,12 +121,12 @@ pub fn tree_tail_for(shell: OriginShell, pin: Option<RemotePeer>) -> String {
 /// # Errors
 ///
 /// A host ssh may not take, or a job id that is not one plain token.
-pub fn run_job_command(host: &str, job: &str) -> Result<Vec<String>, InvocationError> {
+pub fn run_job_command(host: &str, peer: RemotePeer, job: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
     if !is_plain(job) {
         return Err(InvocationError::InvalidSession);
     }
-    let form = OriginForm::of(host);
+    let form = OriginForm::of(host, peer);
     let tail = match form.shell {
         _ if form.is_agterm() => agterm_cli_tail(&["session", "overlay", "run-job", job], true),
         OriginShell::Posix => remote_cli_chain(&format!(
@@ -146,12 +147,12 @@ pub fn run_job_command(host: &str, job: &str) -> Result<Vec<String>, InvocationE
 /// # Errors
 ///
 /// A host ssh may not take, or a token that is not one plain token.
-pub fn page_serve_command(host: &str, token: &str) -> Result<Vec<String>, InvocationError> {
+pub fn page_serve_command(host: &str, peer: RemotePeer, token: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
     if !is_plain(token) {
         return Err(InvocationError::InvalidSession);
     }
-    let form = OriginForm::of(host);
+    let form = OriginForm::of(host, peer);
     let tail = match form.shell {
         _ if form.is_agterm() => agterm_cli_tail(&["session", "overlay", "page-serve", token], true),
         OriginShell::Posix => remote_cli_chain(&format!(
@@ -226,7 +227,7 @@ pub const SESSION_GONE: &str = "ngterm: remote session is gone";
 const GONE_GUARD: &str = "printf '%s\\n' 'ngterm: remote session is gone'; exit 1";
 
 /// One ssh invocation attaching to `daemon` on `host` for the lifetime of the pane (upstream's `attachCommand`, which
-/// runs the far machine's zmx; here its `ngterm-session attach`): `-tt`, as `ngterm-session attach` reads termios and
+/// runs the far machine's zmx; here its `ngterm-session attach`, or an agterm endpoint's zmx): `-tt`, as `ngterm-session attach` reads termios and
 /// the window size, no lifetime deadline, and `LogLevel=ERROR` so ssh's own banners stay off the pane. The attach
 /// contract's variables the account may carry are cleared, as an inherited `NGTERM_LIVE_SESSION` refuses the attach
 /// (upstream's zmx switched session there) and a prefix would rename the daemon; `lead` opts the far attach client into
@@ -234,7 +235,8 @@ const GONE_GUARD: &str = "printf '%s\\n' 'ngterm: remote session is gone'; exit 
 ///
 /// # Errors
 ///
-/// A host ssh may not take, a name that is not an ngterm daemon's, or an endpoint path with control characters.
+/// A host ssh may not take, a name that is not one of the endpoint's peer's daemons, or an endpoint path with control
+/// characters.
 pub fn attach_command(
     host: &str,
     endpoint: &ControlLiveEndpoint,
@@ -253,11 +255,12 @@ pub fn attach_command(
 /// The remote command of [`attach_command`]: `ngterm-session attach DAEMON` under `/usr/bin/env` with the attach
 /// contract's variables cleared, `lead`'s words ahead of the executable, and the create-only gone guard after it.
 /// An endpoint whose paths are Windows' ([`OriginShell::of_endpoint`]) gets that machine's form instead, the same contract
-/// through [`OriginRun::Program`].
+/// through [`OriginRun::Program`]. An agterm endpoint's is its zmx's `attach DAEMON` under zmx's variables, with no
+/// clipboard bridge (`agterm_attach_tail`).
 ///
 /// # Errors
 ///
-/// A name that is not an ngterm daemon's, or an endpoint path with control characters.
+/// A name that is not one of the endpoint's peer's daemons, or an endpoint path with control characters.
 pub fn attach_tail(
     endpoint: &ControlLiveEndpoint,
     daemon: &str,
@@ -478,17 +481,21 @@ pub fn probe_command(host: &str) -> Result<Vec<String>, InvocationError> {
     Ok(argv)
 }
 
-/// One ssh invocation running the far side's `ngtermctl` with `arguments` plus `--json`, so the reply is the server's
-/// own response line (upstream's `RemoteSession.controlCommand`). The arguments carry user text, so the outer layer is
+/// One ssh invocation running `peer`'s CLI on the far side (`ngtermctl`, or agterm's with `live` read as its `zmx`) with
+/// `arguments` plus `--json`, so the reply is the server's own response line (upstream's `RemoteSession.controlCommand`). The arguments carry user text, so the outer layer is
 /// quoted for any login shell ([`account_shell_quoted`]), as the page forward's remote script is.
 ///
 /// # Errors
 ///
 /// A host ssh may not take.
-pub fn control_command<S: AsRef<str>>(host: &str, arguments: &[S]) -> Result<Vec<String>, InvocationError> {
+pub fn control_command<S: AsRef<str>>(
+    host: &str,
+    peer: RemotePeer,
+    arguments: &[S],
+) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
     let mut argv = ssh_arguments(host, 5, false);
-    argv.push(control_tail(OriginForm::of(host), arguments));
+    argv.push(control_tail(OriginForm::of(host, peer), arguments));
     Ok(argv)
 }
 
@@ -594,23 +601,33 @@ mod tests {
         };
         assert_eq!(words(&tree_tail(OriginShell::Windows)), ["live", "tree", "--json"]);
         assert_eq!(
-            words(present_command(host, "S'1").unwrap().last().unwrap()),
+            words(
+                present_command(host, RemotePeer::Ngterm, "S'1")
+                    .unwrap()
+                    .last()
+                    .unwrap()
+            ),
             ["live", "present", "S'1"]
         );
         assert_eq!(
             words(
-                control_command(host, &["session", "new", "--name=it's %x% $y"])
+                control_command(host, RemotePeer::Ngterm, &["session", "new", "--name=it's %x% $y"])
                     .unwrap()
                     .last()
                     .unwrap()
             ),
             ["session", "new", "--name=it's %x% $y", "--json"]
         );
-        let job = run_job_command(host, "job1").unwrap();
+        let job = run_job_command(host, RemotePeer::Ngterm, "job1").unwrap();
         assert_eq!(job[1], "-tt");
         assert_eq!(words(job.last().unwrap()), ["session", "overlay", "run-job", "job1"]);
         assert_eq!(
-            words(page_serve_command(host, "tok").unwrap().last().unwrap()),
+            words(
+                page_serve_command(host, RemotePeer::Ngterm, "tok")
+                    .unwrap()
+                    .last()
+                    .unwrap()
+            ),
             ["session", "overlay", "page-serve", "tok"]
         );
         assert_eq!(probe_command(host).unwrap().last().unwrap(), "exit 0");
@@ -627,7 +644,7 @@ mod tests {
     fn a_host_never_learned_keeps_every_posix_line() {
         let host = "never-learned.example";
         assert!(
-            present_command(host, "S")
+            present_command(host, RemotePeer::Ngterm, "S")
                 .unwrap()
                 .last()
                 .unwrap()
@@ -707,7 +724,7 @@ mod tests {
         assert!(present.starts_with(PATH_CHAIN));
         assert_eq!(present_tail(OriginShell::Posix, "S'1").unwrap(), present);
         assert_eq!(
-            present_command("me@box", "S'1").unwrap(),
+            present_command("me@box", RemotePeer::Ngterm, "S'1").unwrap(),
             joined(plain_prefix(), present)
         );
         for bad in ["", "s 1", "s1\u{1b}[31m"] {
@@ -787,7 +804,7 @@ mod tests {
             assert!(want.starts_with(PATH_CHAIN));
             assert_eq!(control_tail(OriginShell::Posix, arguments), want);
             assert_eq!(
-                control_command("me@box", arguments).unwrap(),
+                control_command("me@box", RemotePeer::Ngterm, arguments).unwrap(),
                 joined(plain_prefix(), want)
             );
         }
@@ -816,7 +833,7 @@ mod tests {
 
     #[test]
     fn present_is_non_interactive_and_runs_the_bridge_for_exactly_that_session() {
-        let argv = present_command("buildbox", "S1").unwrap();
+        let argv = present_command("buildbox", RemotePeer::Ngterm, "S1").unwrap();
         assert_eq!(
             &argv[..7],
             ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "buildbox"]
@@ -825,21 +842,27 @@ mod tests {
         assert!(remote.starts_with("'/bin/sh' '-c' "));
         assert!(remote.contains(r"exec ngtermctl live present '\''S1'\''"), "{remote}");
         for bad in ["", "s 1", "s1\u{1b}[31m"] {
-            assert_eq!(present_command("buildbox", bad), Err(InvocationError::InvalidSession));
+            assert_eq!(
+                present_command("buildbox", RemotePeer::Ngterm, bad),
+                Err(InvocationError::InvalidSession)
+            );
         }
         assert_eq!(
-            present_command("-oProxyCommand=x", "S1"),
+            present_command("-oProxyCommand=x", RemotePeer::Ngterm, "S1"),
             Err(InvocationError::InvalidHost)
         );
     }
 
     #[test]
     fn run_job_forces_a_pty_and_reaches_the_installed_cli() {
-        let argv = run_job_command("buildbox", "J1").unwrap();
+        let argv = run_job_command("buildbox", RemotePeer::Ngterm, "J1").unwrap();
         assert_eq!(argv[1], "-tt");
         assert!(argv.last().unwrap().contains("exec ngtermctl session overlay run-job "));
         assert!(argv.last().unwrap().contains("$HOME/.local/bin"));
-        assert_eq!(run_job_command("buildbox", "j 1"), Err(InvocationError::InvalidSession));
+        assert_eq!(
+            run_job_command("buildbox", RemotePeer::Ngterm, "j 1"),
+            Err(InvocationError::InvalidSession)
+        );
     }
 
     #[test]
@@ -871,7 +894,7 @@ mod tests {
     /// `pageServeRefusesAnInvalidHost`.
     #[test]
     fn page_serve_uses_plain_stdio_and_reaches_the_installed_cli() {
-        let argv = page_serve_command("buildbox", "tok-1").unwrap();
+        let argv = page_serve_command("buildbox", RemotePeer::Ngterm, "tok-1").unwrap();
         assert_eq!(
             &argv[..7],
             ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "buildbox"]
@@ -880,13 +903,13 @@ mod tests {
         assert!(argv[7].contains("$HOME/.local/bin"), "{}", argv[7]);
         for bad in ["", "t 1", "t1\u{1b}[31m"] {
             assert_eq!(
-                page_serve_command("buildbox", bad),
+                page_serve_command("buildbox", RemotePeer::Ngterm, bad),
                 Err(InvocationError::InvalidSession),
                 "{bad:?}"
             );
         }
         assert_eq!(
-            page_serve_command("-oProxyCommand=x", "t1"),
+            page_serve_command("-oProxyCommand=x", RemotePeer::Ngterm, "t1"),
             Err(InvocationError::InvalidHost)
         );
     }
@@ -901,7 +924,10 @@ mod tests {
         std::fs::create_dir_all(&bin).unwrap();
         let script = "#!/bin/sh\nfor word in \"$@\"; do printf '[%s]' \"$word\"; done\n";
         ngterm_host::fakes::write_executable(&bin.join("ngtermctl"), script).unwrap();
-        let line = page_serve_command("buildbox", "t1;rm").unwrap().pop().unwrap();
+        let line = page_serve_command("buildbox", RemotePeer::Ngterm, "t1;rm")
+            .unwrap()
+            .pop()
+            .unwrap();
         let ran = Command::new("/bin/sh")
             .args(["-c", &line])
             .env_clear()
@@ -1040,7 +1066,7 @@ mod tests {
 
     #[test]
     fn control_is_non_interactive_and_ends_in_json() {
-        let argv = control_command("buildbox", &["session", "new"]).unwrap();
+        let argv = control_command("buildbox", RemotePeer::Ngterm, &["session", "new"]).unwrap();
         assert_eq!(
             &argv[..7],
             ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "buildbox"]
@@ -1049,7 +1075,7 @@ mod tests {
         assert!(argv[7].starts_with("'/bin/sh' '-c' '"), "{}", argv[7]);
         assert!(argv[7].contains("ngtermctl"), "{}", argv[7]);
         assert_eq!(
-            control_command("-oProxyCommand=x", &["tree"]),
+            control_command("-oProxyCommand=x", RemotePeer::Ngterm, &["tree"]),
             Err(InvocationError::InvalidHost)
         );
         assert_eq!(account_shell_quoted(r"it's a\b"), r"'it'\''s a'\\'b'");
@@ -1086,7 +1112,10 @@ mod tests {
             "--cwd",
             "",
         ];
-        let line = control_command("buildbox", &arguments).unwrap().pop().unwrap();
+        let line = control_command("buildbox", RemotePeer::Ngterm, &arguments)
+            .unwrap()
+            .pop()
+            .unwrap();
         let mut expected: Vec<&str> = arguments.to_vec();
         expected.push("--json");
         for shell in shells {

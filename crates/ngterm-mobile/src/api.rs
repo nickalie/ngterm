@@ -703,7 +703,8 @@ impl MobileCore {
     /// # Errors
     ///
     /// [`MobileError::NotConnected`], [`MobileError::Remote`] when the pane is not shown or its session's layout
-    /// does not hold it, or [`MobileError::Stopped`].
+    /// does not hold it, or with [`NO_CHAT_ON_AGTERM`](crate::chat::NO_CHAT_ON_AGTERM) on an agterm machine, which has no
+    /// agent chat view, or [`MobileError::Stopped`].
     pub async fn open_chat(&self, machine_id: String, session_id: String, pane_id: String) -> Result<(), MobileError> {
         let (reply, answer) = oneshot::channel();
         let pane = PaneRef {
@@ -759,8 +760,9 @@ impl MobileCore {
     ///
     /// # Errors
     ///
-    /// [`MobileError::NotConnected`], [`MobileError::Remote`] when the session's layout does not hold the pane or the
-    /// origin gave no catalog (it runs no agent there, or predates the command), or [`MobileError::Stopped`].
+    /// [`MobileError::NotConnected`], [`MobileError::Remote`] when the session's layout does not hold the pane, the
+    /// origin gave no catalog (it runs no agent there, or predates the command), or with
+    /// [`NO_CHAT_ON_AGTERM`](crate::chat::NO_CHAT_ON_AGTERM) on an agterm machine, or [`MobileError::Stopped`].
     pub async fn agent_commands(
         &self,
         machine_id: String,
@@ -787,8 +789,9 @@ impl MobileCore {
     /// # Errors
     ///
     /// [`MobileError::NotConnected`], [`MobileError::Remote`] with the machine's words when it stored nothing (the
-    /// file is over its 32 MiB cap, an origin that predates the command) or the transport's when the link failed or
-    /// stalled, [`MobileError::Cancelled`], or [`MobileError::Stopped`].
+    /// file is over its 32 MiB cap, an origin that predates the command), with
+    /// [`NO_CHAT_ON_AGTERM`](crate::chat::NO_CHAT_ON_AGTERM) on an agterm machine, or with the transport's when the link
+    /// failed or stalled, [`MobileError::Cancelled`], or [`MobileError::Stopped`].
     pub async fn upload_file(
         &self,
         machine_id: String,

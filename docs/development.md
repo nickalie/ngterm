@@ -814,14 +814,18 @@ mobile core over its own ssh channels, and each only sends that Mac the command 
 
 - Which app: a listing runs the far side's `ngtermctl live tree` when it is installed and answers, else its
   `agtermctl zmx tree` under a marker line, in one ssh call. The viewer stamps the answer on the endpoint
-  (`endpoint.peer`, in `live tree HOST --json` too) and learns it for the host, which the host's later lines follow. A
-  destination may pin the app, `agterm:HOST` or `ngterm:HOST` (`remotes.conf`, `live tree`, `live attach`); the pin
-  stays in the row's host, so a relaunch reaches the same app, and ssh gets only `HOST`.
+  (`endpoint.peer`, in `live tree HOST --json` too). A row keeps the app its endpoint names: its later lines, the
+  listings its own flows wait on (split, companion, New/Duplicate Session) and its relaunch go to that app only, so an
+  app that starts or stops on that Mac later moves none of them, and a saved row records its app (`peer` in
+  `remoteSessions`) for a relaunch listing pinned to it. A line for no row (New Session from the picker) follows what
+  the host's last listing found. A destination may pin the app, `agterm:HOST` or `ngterm:HOST` (`remotes.conf`,
+  `live tree`, `live attach`); the pin stays in the row's host, and ssh gets only `HOST`. The mobile core lists a fresh
+  connection's machine before its first control line, so that line is never guessed at the app.
 - What agterm lacks (`peer::Capabilities`): the agent chat view (the mobile core refuses its calls), the Kitty clipboard
   bridge (no `attachBridge`), the stream's `name` and `companion.page` frames (its hello never offers them). The title
   bar shows an `agterm` badge beside the host, with that list as its tooltip; `live tree HOST` prints it as a header; the
   mobile core gives each listed session its `peer` and `peer_capabilities` the apps' line.
-- Checked against agterm v0.41.1's bundled zmx on a Mac (an attach through these lines reports `zmx-role;<nonce>:leader`
+- Checked against agterm v0.41.1's bundled zmx on a Mac (an attach through these lines reports `zmx-role;<nonce>:leader:<generation>`
   and runs what is typed); the listing and stream are pinned by upstream's own fixtures, as a locked Mac's agterm
   answers no control socket.
 
