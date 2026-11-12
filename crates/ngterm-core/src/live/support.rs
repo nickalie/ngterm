@@ -357,6 +357,45 @@ fn base_configuration(inputs: &Inputs, executable: &Path, shell: &str) -> Config
     }
 }
 
+/// `base` extended with a shell profile's `env`. Where names ignore case (`fold_case`: Windows) a profile variable
+/// replaces every spelling of it, so the pane's environment keeps one spelling of each name.
+pub(crate) fn extend_with_profile(
+    base: &mut BTreeMap<String, String>,
+    env: &BTreeMap<String, String>,
+    fold_case: bool,
+) {
+    for (key, value) in env {
+        if fold_case {
+            let folded = key.to_lowercase();
+            base.retain(|other, _| other.to_lowercase() != folded);
+        }
+        base.insert(key.clone(), value.clone());
+    }
+}
+
+/// Where names ignore case (`fold_case`: Windows), drops each spelling of a profile variable in `env` that the wrap
+/// set again under another spelling (an integration variable, `SHELL`, the attach's own). The session host applies
+/// the environment in key order, folding case, so a profile's `env` would otherwise replace the integration's `ENV`
+/// loader: the integration's variables win, as they do in an ordinary pane.
+pub(crate) fn drop_profile_aliases(
+    environment: &mut BTreeMap<String, String>,
+    env: &BTreeMap<String, String>,
+    fold_case: bool,
+) {
+    if !fold_case {
+        return;
+    }
+    for key in env.keys() {
+        let folded = key.to_lowercase();
+        let respelled = environment
+            .keys()
+            .any(|other| other != key && other.to_lowercase() == folded);
+        if respelled {
+            environment.remove(key);
+        }
+    }
+}
+
 /// How a pane starts (upstream's `ZmxSupport.LaunchDisposition`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchDisposition {
@@ -539,6 +578,62 @@ mod tests {
     use super::*;
 
     const NO_DENYLIST: [&str; 0] = [];
+
+    fn variables(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn a_profile_variable_replaces_every_spelling_of_it_where_names_ignore_case() {
+        let profile = variables(&[("PATH", "/profile/bin"), ("env", "/profile/startup")]);
+        let base = variables(&[("Path", "/app/bin"), ("HOME", "/home/me")]);
+        let mut windows = base.clone();
+        extend_with_profile(&mut windows, &profile, true);
+        assert_eq!(
+            windows,
+            variables(&[
+                ("HOME", "/home/me"),
+                ("PATH", "/profile/bin"),
+                ("env", "/profile/startup")
+            ])
+        );
+        let mut unix = base;
+        extend_with_profile(&mut unix, &profile, false);
+        assert_eq!(unix.get("Path").map(String::as_str), Some("/app/bin"));
+        assert_eq!(unix.get("PATH").map(String::as_str), Some("/profile/bin"));
+    }
+
+    #[test]
+    fn the_wraps_own_spelling_of_a_profile_variable_wins_where_names_ignore_case() {
+        let profile = variables(&[
+            ("env", "C:/profile/startup"),
+            ("shell", "C:/profile/sh"),
+            ("EDITOR", "vim"),
+        ]);
+        let wrapped = variables(&[
+            ("ENV", "/integration/ghostty.bash"),
+            ("EDITOR", "vim"),
+            ("SHELL", "C:/Git/bin/bash.exe"),
+            ("env", "C:/profile/startup"),
+            ("shell", "C:/profile/sh"),
+        ]);
+        let mut windows = wrapped.clone();
+        drop_profile_aliases(&mut windows, &profile, true);
+        assert_eq!(
+            windows,
+            variables(&[
+                ("ENV", "/integration/ghostty.bash"),
+                ("EDITOR", "vim"),
+                ("SHELL", "C:/Git/bin/bash.exe")
+            ])
+        );
+        let mut unix = wrapped.clone();
+        drop_profile_aliases(&mut unix, &profile, false);
+        assert_eq!(unix, wrapped);
+    }
 
     /// The shell line a wrapped pane's launch runs: [`live_attach`]'s attach as [`attach_line`] spells it.
     fn attach_command<S: AsRef<str>>(

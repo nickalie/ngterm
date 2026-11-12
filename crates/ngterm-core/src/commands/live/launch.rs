@@ -134,6 +134,8 @@ impl Core {
         let mut inputs = self.live.wrap.clone()?;
         inputs.pane_identity = identity;
         inputs.lead = lead;
+        let fold_case = cfg!(windows);
+        let mut profile_env = BTreeMap::new();
         if let Some(session) = self
             .library
             .all_open_sessions()
@@ -148,7 +150,7 @@ impl Core {
             let profile = session.shell_profile_for(pane);
             if let Some(profile) = profile {
                 // Ineligible profiles fall back to their own ordinary shell, never to PowerShell.
-                inputs.base_environment.extend(profile.env.clone());
+                support::extend_with_profile(&mut inputs.base_environment, &profile.env, fold_case);
                 inputs.inherited = std::mem::take(&mut inputs.inherited).with_overrides(&profile.env);
                 if profile.direct_live().is_some() {
                     let mut configuration = logged(identity, support::direct_configuration(&inputs, profile))?;
@@ -157,6 +159,7 @@ impl Core {
                         session.cwd_for(pane),
                         &mut configuration.environment,
                     );
+                    support::drop_profile_aliases(&mut configuration.environment, &profile.env, fold_case);
                     return Some(configuration);
                 }
                 let Some(shell) = profile.live_shell() else {
@@ -168,9 +171,12 @@ impl Core {
                     return None;
                 };
                 inputs.command_shell = Some(shell.to_owned());
+                profile_env.clone_from(&profile.env);
             }
         }
-        logged(identity, support::configuration(&inputs))
+        let mut configuration = logged(identity, support::configuration(&inputs))?;
+        support::drop_profile_aliases(&mut configuration.environment, &profile_env, fold_case);
+        Some(configuration)
     }
 
     /// The launch steps that follow one another before any window mounts (upstream's `LaunchOrchestration.run`): a

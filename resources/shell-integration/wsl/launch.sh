@@ -1,6 +1,7 @@
 # Executed by /bin/sh inside the selected WSL distribution. Arguments, never source:
 # Ghostty resources (Windows), ngterm resources (Windows), login/return/end, command, Linux cwd.
-# Do not run a login sh here: the user's actual shell must read its startup files once.
+# The user's shell is not run through a login sh: it reads its own startup files. A return-mode command runs in
+# its own login sh child first (it needs the profile's PATH), so that mode reads the profile once more.
 ngterm_shell=${SHELL:-/bin/sh}
 case "$5" in
     /*) CDPATH= cd "$5" 2>/dev/null || : ;;

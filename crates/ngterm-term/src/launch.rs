@@ -517,24 +517,25 @@ impl Vars {
         self.removed.push(key.to_owned());
     }
 
-    /// Drop every spelling of `key` from both lists.
-    /// Whether `a` and `b` name one variable (case folded where names ignore case).
+    /// Whether `a` and `b` name one variable (case folded, as portable-pty folds it, where names ignore case).
     fn same_name(&self, a: &str, b: &str) -> bool {
-        if self.fold_case {
-            a.eq_ignore_ascii_case(b)
-        } else {
-            a == b
-        }
+        names_match(self.fold_case, a, b)
     }
 
+    /// Drop every spelling of `key` from both lists.
     fn forget(&mut self, key: &str) {
-        let folded = self.fold_case.then(|| key.to_lowercase());
-        let same = |other: &str| match &folded {
-            Some(folded) => other.to_lowercase() == *folded,
-            None => other == key,
-        };
-        self.removed.retain(|removed| !same(removed));
-        self.set.retain(|set, _| !same(set));
+        let fold_case = self.fold_case;
+        self.removed.retain(|removed| !names_match(fold_case, removed, key));
+        self.set.retain(|set, _| !names_match(fold_case, set, key));
+    }
+}
+
+/// Whether `a` and `b` name one variable: [`Vars::same_name`] without a borrow of `Vars`, so its lists can be filtered.
+fn names_match(fold_case: bool, a: &str, b: &str) -> bool {
+    if fold_case {
+        a.to_lowercase() == b.to_lowercase()
+    } else {
+        a == b
     }
 }
 
