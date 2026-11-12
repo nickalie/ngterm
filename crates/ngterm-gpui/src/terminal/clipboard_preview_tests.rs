@@ -205,3 +205,173 @@ fn a_large_text_previews_its_head_and_how_much_is_left() {
 }
 
 use gpui_kit::AppContext as _;
+
+/// What the preview draws for its page, by the kind of body (and the caption and pager beside it).
+const DRAWN: [&str; 9] = [
+    "clipboard-preview-text",
+    "clipboard-preview-empty-part",
+    "clipboard-preview-image",
+    "clipboard-preview-loading",
+    "clipboard-preview-no-preview",
+    "clipboard-preview-note",
+    "clipboard-preview-caption",
+    "clipboard-preview-previous",
+    "clipboard-preview-next",
+];
+
+/// `preview` under a Kitty write prompt in a test window, drawn.
+fn prompt_over(
+    cx: &mut gpui_kit::TestAppContext,
+    preview: impl FnOnce(&mut App) -> gpui_kit::Entity<Preview>,
+) -> (&mut gpui_kit::VisualTestContext, gpui_kit::Entity<Preview>) {
+    let cx = crate::modal::tests::host(cx);
+    let preview = cx.update(|window, cx| {
+        let preview = preview(cx);
+        crate::modal::open_alert_with(
+            window,
+            super::super::clipboard::kitty_alert(ClipboardAccess::Write, false),
+            Some(preview.clone().into()),
+            |_, _, _| {},
+            cx,
+        );
+        preview
+    });
+    cx.run_until_parked();
+    (cx, preview)
+}
+
+fn drawn(cx: &mut gpui_kit::VisualTestContext) -> Vec<&'static str> {
+    DRAWN
+        .into_iter()
+        .filter(|selector| cx.debug_bounds(selector).is_some())
+        .collect()
+}
+
+fn click(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
+    let at = cx.debug_bounds(selector).expect("laid out").center();
+    cx.simulate_click(at, gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn the_pager_steps_through_every_kind_of_part_and_stops_at_the_ends(cx: &mut gpui_kit::TestAppContext) {
+    let tall = png(300, 400);
+    let contents = [
+        part("text/plain", "héllo".as_bytes()),
+        part("image/png", &tall),
+        part("application/octet-stream", ARBITRARY),
+        part("text/x-empty", b""),
+    ];
+    let (cx, preview) = prompt_over(cx, |cx| cx.new(|_| Preview::new(pages(&contents), "none")));
+    let selected = |cx: &mut gpui_kit::VisualTestContext| preview.read_with(cx, |preview, _| preview.selected());
+    let pager = [
+        "clipboard-preview-caption",
+        "clipboard-preview-previous",
+        "clipboard-preview-next",
+    ];
+    let shows = |body: &'static str| {
+        let mut expected = vec![body];
+        expected.extend(pager);
+        expected.sort_by_key(|selector| DRAWN.iter().position(|known| known == selector));
+        expected
+    };
+    assert_eq!(drawn(cx), shows("clipboard-preview-text"));
+    assert!(cx.debug_bounds("clipboard-preview-text").unwrap().size.height > gpui_kit::px(0.));
+    let well = cx.debug_bounds("clipboard-preview").unwrap();
+    assert_eq!(well.size.height, gpui_kit::px(PREVIEW_HEIGHT));
+    // nothing before the first part
+    click(cx, "clipboard-preview-previous");
+    assert_eq!(selected(cx), 0);
+    // the image part decodes once shown and is drawn fitted to the preview's height
+    click(cx, "clipboard-preview-next");
+    assert_eq!(selected(cx), 1);
+    assert_eq!(drawn(cx), shows("clipboard-preview-image"));
+    let image = cx.debug_bounds("clipboard-preview-image").unwrap();
+    assert_eq!(
+        (image.size.width, image.size.height),
+        (gpui_kit::px(150.), gpui_kit::px(PREVIEW_HEIGHT))
+    );
+    click(cx, "clipboard-preview-next");
+    assert_eq!(drawn(cx), shows("clipboard-preview-no-preview"));
+    click(cx, "clipboard-preview-next");
+    assert_eq!(drawn(cx), shows("clipboard-preview-empty-part"));
+    // nothing past the last part
+    click(cx, "clipboard-preview-next");
+    assert_eq!(selected(cx), 3);
+    click(cx, "clipboard-preview-previous");
+    assert_eq!(selected(cx), 2);
+    assert_eq!(drawn(cx), shows("clipboard-preview-no-preview"));
+}
+
+#[gpui_kit::test]
+fn a_single_part_shows_no_pager_and_an_image_that_does_not_decode_shows_a_note(cx: &mut gpui_kit::TestAppContext) {
+    let contents = [part("image/png", ARBITRARY)];
+    let (cx, _) = prompt_over(cx, |cx| cx.new(|_| Preview::new(pages(&contents), "none")));
+    assert_eq!(drawn(cx), ["clipboard-preview-no-preview", "clipboard-preview-caption"]);
+}
+
+#[gpui_kit::test]
+fn a_write_of_one_text_part_shows_it_with_its_caption(cx: &mut gpui_kit::TestAppContext) {
+    let contents = [part("text/plain", b"copied")];
+    let (cx, _) = prompt_over(cx, |cx| view(&contents, ClipboardAccess::Write, cx));
+    assert_eq!(drawn(cx), ["clipboard-preview-text", "clipboard-preview-caption"]);
+}
+
+#[gpui_kit::test]
+fn nothing_to_show_draws_the_directions_note_alone(cx: &mut gpui_kit::TestAppContext) {
+    let (cx, preview) = prompt_over(cx, |cx| view(&[], ClipboardAccess::Write, cx));
+    assert_eq!(drawn(cx), ["clipboard-preview-note"]);
+    let note = preview.read_with(cx, |preview, _| preview.empty());
+    assert_eq!(note, empty_note(ClipboardAccess::Write));
+}
+
+#[gpui_kit::test]
+fn the_macos_form_draws_the_first_image_under_the_text(cx: &mut gpui_kit::TestAppContext) {
+    let contents = [part("text/plain", b"copied"), part("image/png", &png(40, 20))];
+    let (cx, _) = prompt_over(cx, |cx| cx.new(|_| Preview::new(vec![summary(&contents)], "none")));
+    assert_eq!(
+        drawn(cx),
+        [
+            "clipboard-preview-text",
+            "clipboard-preview-image",
+            "clipboard-preview-caption"
+        ]
+    );
+    let text = cx.debug_bounds("clipboard-preview-text").unwrap();
+    let image = cx.debug_bounds("clipboard-preview-image").unwrap();
+    assert!(image.top() >= text.bottom(), "{image:?} under {text:?}");
+    assert_eq!(
+        (image.size.width, image.size.height),
+        (gpui_kit::px(40.), gpui_kit::px(20.))
+    );
+}
+
+#[gpui_kit::test]
+fn leaving_a_page_drops_the_image_under_its_text_too(cx: &mut gpui_kit::TestAppContext) {
+    let page = |text: &[u8]| summary(&[part("text/plain", text), part("image/png", RED_PNG)]);
+    let preview = cx.new(|_| Preview::new(vec![page(b"one"), page(b"two")], "none"));
+    let images = |cx: &mut gpui_kit::TestAppContext| {
+        preview.read_with(cx, |preview, _| {
+            preview
+                .pages()
+                .iter()
+                .map(|page| format!("{:?}", page.image))
+                .collect::<Vec<_>>()
+        })
+    };
+    preview.update(cx, Preview::load_selected);
+    cx.run_until_parked();
+    assert_eq!(images(cx), ["Some(Image(2x2))", "Some(Decoding(73))"]);
+    preview.update(cx, |preview, cx| preview.select(1, cx));
+    cx.run_until_parked();
+    assert_eq!(images(cx), ["Some(Decoding(73))", "Some(Image(2x2))"]);
+}
+
+#[test]
+fn a_page_debugs_as_what_it_shows_never_its_bytes() {
+    let page = pages(&[part("image/png", RED_PNG)]).remove(0);
+    assert_eq!(
+        format!("{page:?}"),
+        "Page { title: \"image/png\", body: Decoding(73), size: 73, image: None, .. }"
+    );
+}

@@ -433,21 +433,29 @@ impl Preview {
                 div()
                     .flex()
                     .justify_center()
-                    .child(img(Arc::clone(image)).w(px(w)).h(px(h)))
+                    .child(
+                        img(Arc::clone(image))
+                            .debug_selector(|| "clipboard-preview-image".to_owned())
+                            .w(px(w))
+                            .h(px(h)),
+                    )
                     .into_any_element()
             }
             Body::Text(text) if text.is_empty() => div()
+                .debug_selector(|| "clipboard-preview-empty-part".to_owned())
                 .text_color(dim)
                 .text_size(px(12.))
                 .child("Empty")
                 .into_any_element(),
             Body::Text(text) => div()
+                .debug_selector(|| "clipboard-preview-text".to_owned())
                 .font_family("monospace")
                 .text_size(px(12.))
                 .whitespace_normal()
                 .child(SharedString::from(text.clone()))
                 .into_any_element(),
             Body::Decoding(size) => div()
+                .debug_selector(|| "clipboard-preview-loading".to_owned())
                 .size_full()
                 .flex()
                 .flex_col()
@@ -459,6 +467,7 @@ impl Preview {
                 .child(format_size(*size))
                 .into_any_element(),
             Body::NoPreview(size) => div()
+                .debug_selector(|| "clipboard-preview-no-preview".to_owned())
                 .size_full()
                 .flex()
                 .flex_col()
@@ -554,10 +563,14 @@ impl Render for Preview {
             .border_color(crate::chrome::color(colors.foreground, 0.12))
             .text_size(px(13.));
         let Some(page) = self.pages.get(self.selected) else {
-            return div()
-                .flex()
-                .flex_col()
-                .child(well.child(div().text_color(dim).child(self.empty)));
+            return div().flex().flex_col().child(
+                well.child(
+                    div()
+                        .debug_selector(|| "clipboard-preview-note".to_owned())
+                        .text_color(dim)
+                        .child(self.empty),
+                ),
+            );
         };
         let body = Self::render_body(&page.body, colors);
         let image = page.image.as_ref().map(|image| Self::render_body(image, colors));
@@ -578,6 +591,7 @@ impl Render for Preview {
                 };
                 content.child(
                     div()
+                        .debug_selector(|| "clipboard-preview-caption".to_owned())
                         .flex()
                         .justify_between()
                         .gap_2()

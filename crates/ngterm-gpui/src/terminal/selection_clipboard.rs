@@ -22,7 +22,6 @@
 #[cfg(any(windows, test))]
 mod cf_html;
 #[cfg(target_os = "linux")]
-#[cfg_attr(test, expect(dead_code, reason = "a test build keeps these stores in memory"))]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -160,22 +159,21 @@ mod system {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "an in-memory store shares the native stores' signatures"
-)]
 mod system {
     use super::{App, ClipboardContent, MimeFailure, fake::Fake};
 
     pub(super) fn mime_types(_: &App) -> Result<Vec<String>, MimeFailure> {
+        Fake::System.available()?;
         Ok(Fake::System.mime_types())
     }
 
     pub(super) fn read_mimes(wanted: &[String], _: &App) -> Result<Vec<ClipboardContent>, MimeFailure> {
+        Fake::System.available()?;
         Ok(Fake::System.read(wanted))
     }
 
     pub(super) fn write_mimes(contents: Vec<ClipboardContent>, _: &mut App) -> Result<(), MimeFailure> {
+        Fake::System.available()?;
         Fake::System.write(contents);
         Ok(())
     }
@@ -198,8 +196,11 @@ pub(super) mod fake {
         Primary,
     }
 
+    use super::MimeFailure;
+
     thread_local! {
         static STORES: RefCell<[Vec<ClipboardContent>; 2]> = RefCell::default();
+        static FAILURES: RefCell<[Option<MimeFailure>; 2]> = RefCell::default();
     }
 
     impl Fake {
@@ -225,6 +226,15 @@ pub(super) mod fake {
         pub(in super::super) fn read(self, wanted: &[String]) -> Vec<ClipboardContent> {
             super::pick(&self.contents(), wanted)
         }
+
+        /// Makes every per-MIME access of this store fail with `failure` (none: succeed again).
+        pub(in super::super) fn fail(self, failure: Option<MimeFailure>) {
+            FAILURES.with_borrow_mut(|failures| failures[self.index()] = failure);
+        }
+
+        pub(in super::super) fn available(self) -> Result<(), MimeFailure> {
+            FAILURES.with_borrow(|failures| failures[self.index()].clone().map_or(Ok(()), Err))
+        }
     }
 }
 
@@ -238,22 +248,21 @@ mod selection_mimes {
 }
 
 #[cfg(all(target_os = "linux", test))]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "an in-memory store shares the native stores' signatures"
-)]
 mod selection_mimes {
     use super::{App, ClipboardContent, MimeFailure, fake::Fake};
 
     pub(super) fn mime_types(_: &App) -> Result<Vec<String>, MimeFailure> {
+        Fake::Primary.available()?;
         Ok(Fake::Primary.mime_types())
     }
 
     pub(super) fn read_mimes(wanted: &[String], _: &App) -> Result<Vec<ClipboardContent>, MimeFailure> {
+        Fake::Primary.available()?;
         Ok(Fake::Primary.read(wanted))
     }
 
     pub(super) fn write_mimes(contents: Vec<ClipboardContent>, _: &mut App) -> Result<(), MimeFailure> {
+        Fake::Primary.available()?;
         Fake::Primary.write(contents);
         Ok(())
     }

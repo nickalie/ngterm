@@ -94,4 +94,30 @@ mod tests {
         );
         assert_eq!(contents(representations(vec![content.clone()])), [content]);
     }
+
+    #[gpui_kit::test]
+    fn the_clipboard_and_the_primary_selection_report_a_missing_platform_alike(cx: &mut gpui_kit::TestAppContext) {
+        let wanted = ["text/plain".to_owned()];
+        let part = || ClipboardContent {
+            mime: "text/plain".into(),
+            data: b"x".to_vec(),
+        };
+        cx.update(|cx| {
+            assert_eq!(clipboard_mime_types(cx), Err(MimeFailure::Unsupported));
+            assert_eq!(primary_mime_types(cx), Err(MimeFailure::Unsupported));
+            assert_eq!(read_clipboard_mimes(&wanted, cx), Err(MimeFailure::Unsupported));
+            assert_eq!(read_primary_mimes(&wanted, cx), Err(MimeFailure::Unsupported));
+            assert_eq!(write_clipboard_mimes(vec![part()], cx), Err(MimeFailure::Unsupported));
+            assert_eq!(write_primary_mimes(vec![part()], cx), Err(MimeFailure::Unsupported));
+        });
+    }
+
+    #[test]
+    fn a_refused_transfer_keeps_its_reason() {
+        assert_eq!(
+            failure(ClipboardMimeError::Io("the owner went away".into())),
+            MimeFailure::Io("the owner went away".into())
+        );
+        assert_eq!(failure(ClipboardMimeError::Unsupported), MimeFailure::Unsupported);
+    }
 }

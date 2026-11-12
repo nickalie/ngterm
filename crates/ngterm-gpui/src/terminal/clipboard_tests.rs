@@ -654,3 +654,91 @@ fn kitty_text_aliases_disclose_text_under_the_requested_name_and_require_consent
     assert!(reply.contains("status=EPERM"), "{reply:?}");
     assert!(served(&reply).0.is_empty());
 }
+
+#[gpui_kit::test]
+fn kitty_accesses_the_clipboard_cannot_serve_answer_enosys_or_eio_without_asking(cx: &mut gpui_kit::TestAppContext) {
+    for (failure, status) in [
+        (MimeFailure::Unsupported, "ENOSYS"),
+        (MimeFailure::Io("the owner went away".into()), "EIO"),
+    ] {
+        Fake::System.fail(None);
+        Fake::System.write(vec![part("text/plain", b"before")]);
+        let mut stream = Stream::new(cx, ConfigAccess::Ask, ConfigAccess::Ask);
+        Fake::System.fail(Some(failure));
+        for read in [query("text/plain", "").as_slice(), b"\x1b]5522;type=read;Lg==\x1b\\"] {
+            stream.deliver(read);
+            assert!(stream.pump(|_| false), "{status}: answered without a prompt");
+            let replies = stream.take();
+            assert!(replies.contains(&format!("status={status}")), "{replies:?}");
+            assert_eq!(served(&replies), (Vec::new(), None), "{replies:?}");
+        }
+        // a write is asked about first: the failure comes from the native write after the Allow
+        stream.deliver(&transaction("", &[part("text/plain", b"hi")]));
+        stream.prompt();
+        stream.answer(true, false);
+        assert!(stream.pump(|_| false));
+        assert_eq!(
+            stream.take(),
+            format!("\x1b]5522;type=write:status={status}\x1b\\\x1b[0n")
+        );
+        Fake::System.fail(None);
+        assert_eq!(Fake::System.contents(), [part("text/plain", b"before")]);
+    }
+}
+
+#[gpui_kit::test]
+fn a_terminal_with_no_window_to_ask_in_is_refused_and_nothing_is_remembered(cx: &mut gpui_kit::TestAppContext) {
+    let mut config = TerminalConfig::default();
+    config.clipboard.write = ConfigAccess::Ask;
+    let terminal = cx.new(|cx| Terminal::new(TerminalSpec::default(), config, Box::new(|_| panic!("no view")), cx));
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    let write = |scope: ClipboardPermissionScope| ClipboardWrite {
+        id: 0,
+        name: String::new(),
+        granted: false,
+        can_remember: true,
+        permission_scope: scope,
+        location: ClipboardLocation::Standard,
+        contents: vec![part("text/plain", b"from the program")],
+    };
+    cx.update(|cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
+        Fake::System.write(vec![part("text/plain", b"before")]);
+        on_write(&shared, &write(ClipboardPermissionScope::Osc52), cx);
+        on_write(&shared, &write(ClipboardPermissionScope::Kitty), cx);
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+            Some("before")
+        );
+        assert_eq!(Fake::System.contents(), [part("text/plain", b"before")]);
+        assert_eq!(
+            cx.default_global::<ClipboardPrompts>().decision(ClipboardAccess::Write),
+            ClipboardDecision::Prompt
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn an_empty_osc52_write_empties_the_text_and_one_with_no_text_changes_nothing(cx: &mut gpui_kit::TestAppContext) {
+    let mut config = TerminalConfig::default();
+    config.clipboard.write = ConfigAccess::Allow;
+    let terminal = cx.new(|cx| Terminal::new(TerminalSpec::default(), config, Box::new(|_| panic!("no view")), cx));
+    let shared = terminal.read_with(cx, |terminal, _| Rc::clone(terminal.shared()));
+    let write = |contents: Vec<ClipboardContent>| ClipboardWrite {
+        id: 0,
+        name: String::new(),
+        granted: false,
+        can_remember: false,
+        permission_scope: ClipboardPermissionScope::Osc52,
+        location: ClipboardLocation::Standard,
+        contents,
+    };
+    cx.update(|cx| {
+        let text = |cx: &App| cx.read_from_clipboard().and_then(|item| item.text());
+        cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
+        on_write(&shared, &write(vec![part("image/png", RED_PNG)]), cx);
+        assert_eq!(text(cx).as_deref(), Some("before"), "OSC 52 carries text only");
+        on_write(&shared, &write(Vec::new()), cx);
+        assert_eq!(text(cx).unwrap_or_default(), "");
+    });
+}

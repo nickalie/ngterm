@@ -216,4 +216,16 @@ mod tests {
         assert_eq!(unwrap(b"<p>no envelope</p>"), b"<p>no envelope</p>");
         assert!(unwrap(&wrap(b"")).is_empty());
     }
+
+    #[test]
+    fn a_fragment_that_breaks_utf8_inside_the_header_window_still_unwraps() {
+        // the header window ends inside a two-byte character for one of the paddings
+        for pad in 0..2 {
+            let fragment = format!("<p>{}{}</p>", "a".repeat(pad), "é".repeat(400));
+            assert_eq!(unwrap(&wrap(fragment.as_bytes())), fragment.as_bytes(), "{pad}");
+        }
+        let latin1 = b"<b>caf\xe9</b>";
+        assert_eq!(unwrap(&wrap(latin1)), latin1);
+        assert_eq!(unwrap(b"caf\xe9 no markup"), b"caf\xe9 no markup");
+    }
 }
