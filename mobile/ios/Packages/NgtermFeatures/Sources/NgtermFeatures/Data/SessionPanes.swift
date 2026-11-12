@@ -209,12 +209,12 @@ public final class SessionPanes {
         let session = SessionKey(pane)
         release(pane)
         switch role {
-        case .follower?:
+        case .follower:
             if claims.remove(session) != nil {
                 take(pane)
             }
 
-        case .leader?:
+        case .leader:
             claims.remove(session)
 
         default:

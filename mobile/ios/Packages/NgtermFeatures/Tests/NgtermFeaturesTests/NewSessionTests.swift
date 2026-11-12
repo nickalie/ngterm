@@ -12,14 +12,14 @@ internal struct NewSessionTests {
 
     private let test = TestGraph()
 
+    private var claims: Set<SessionKey> {
+        test.graph.panes.claims
+    }
+
     private func model() -> SessionsModel {
         let model = SessionsModel(graph: test.graph, machineId: "m1")
         model.setShowing(true)
         return model
-    }
-
-    private var claims: Set<SessionKey> {
-        test.graph.panes.claims
     }
 
     private func connected() async throws {

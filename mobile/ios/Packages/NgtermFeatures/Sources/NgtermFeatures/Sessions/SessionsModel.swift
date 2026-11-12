@@ -158,10 +158,14 @@ public final class SessionsModel {
                 return
             }
             // dismissed before navigating, not under it
-            let landed = await land(session.id, if: { sheet == mine && isWanted(began) }) { sessionId in
-                newSession = nil
-                onOpen(sessionId)
-            }
+            let landed = await land(
+                session.id,
+                if: { sheet == mine && isWanted(began) },
+                then: { sessionId in
+                    newSession = nil
+                    onOpen(sessionId)
+                }
+            )
             let isAttached = graph.connections.attached[machineId]?.contains(session.id) == true
             if !landed, sheet != mine, opens == began, isAttached {
                 // cancelled during the attach: left as a Cancel before it would be, listed only

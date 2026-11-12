@@ -115,9 +115,10 @@ internal struct SessionPanesTests {
     // the session's stream connected with `P1` shown, and no lead reported yet
     private func connectedUnreported() async throws {
         try await world.attach()
+        let layout = SessionWorld.layout(["P1"], axis: nil, shown: true)
         await world.emit(
             .sessionConnection(machineId: "m1", sessionId: "s1", state: .connected),
-            .sessionLayout(machineId: "m1", sessionId: "s1", layout: SessionWorld.layout(["P1"], axis: nil, shown: true))
+            .sessionLayout(machineId: "m1", sessionId: "s1", layout: layout)
         )
         await world.show("P1")
     }
