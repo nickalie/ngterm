@@ -192,7 +192,8 @@ fun hardwareKeyboardAttached(): Boolean {
  * line of sixteen once the width gives each 48dp. A key acts as it goes down, with a tick; the arrows and the page
  * keys repeat while held. Ctrl and Alt hold for the next key (outlined in copper), lock on a second tap (filled), and
  * let go on a third. While a hardware keyboard is attached the row is not shown. Settings' [layout] keeps two lines
- * at every width ([ExtraKeysChoice.TwoLines]) or hides the row ([ExtraKeysChoice.Hidden]).
+ * at every width ([ExtraKeysChoice.TwoLines]) or hides the row ([ExtraKeysChoice.Hidden]). While text waits to be
+ * typed, its [CompositionStrip] takes the top line, so the row keeps its height and the terminal its size.
  */
 @Composable
 fun ExtraKeysRow(
@@ -225,8 +226,13 @@ fun ExtraKeysRow(
             }
         val scale = (room * FIT / widest).coerceIn(0f, 1f)
         val legends = Legends(wordStyle.copy(fontSize = wordStyle.fontSize * scale), symbolStyle)
+        val held = keyboard.target?.composing.orEmpty()
         Column {
-            for (keys in rows) {
+            for ((line, keys) in rows.withIndex()) {
+                if (line == 0 && held.isNotEmpty()) {
+                    CompositionStrip(held, Modifier.fillMaxWidth().height(KeyHeight))
+                    continue
+                }
                 Row(Modifier.fillMaxWidth()) {
                     for (key in keys) ExtraKeyButton(key, keyboard, legends, Modifier.weight(1f))
                 }

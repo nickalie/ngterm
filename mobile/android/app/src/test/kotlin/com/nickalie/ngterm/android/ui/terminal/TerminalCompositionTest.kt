@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.input.key.Key
@@ -102,7 +101,6 @@ class TerminalCompositionTest {
                 Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         TerminalView(state, Modifier.fillMaxSize(), keyboard = keyboard)
-                        CompositionStrip(keyboard, Modifier.align(Alignment.BottomEnd))
                     }
                     ExtraKeysRow(keyboard)
                 }

@@ -2,6 +2,7 @@ package com.nickalie.ngterm.android.ui.session
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -23,8 +24,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -35,6 +38,7 @@ import com.nickalie.ngterm.android.ui.chat.PaneView
 import com.nickalie.ngterm.android.ui.components.AgentStatusBadge
 import com.nickalie.ngterm.android.ui.components.StatusBadge
 import com.nickalie.ngterm.android.ui.sessions.UnderWay
+import com.nickalie.ngterm.android.ui.terminal.CompositionStrip
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.StatusTone
 import com.nickalie.ngterm.core.ffi.StreamState
@@ -45,7 +49,8 @@ import com.nickalie.ngterm.core.ffi.StreamState
  * switcher ([onSelectPane]; [focused] marked; [alone] where a tab also toggles the split, see [PaneSwitcher]), the
  * view switch while the focused pane runs an agent ([view], how it shows now; [onView] asks for the other), and More:
  * Detach ([onDetach], at once), Duplicate session ([onDuplicate]; "Duplicating" stands in for the state while it
- * runs), Chat view (the session's, flipped through [onChatView]) and End session ([onEnd], once confirmed).
+ * runs), Chat view (the session's, flipped through [onChatView]) and End session ([onEnd], once confirmed). Text
+ * waiting to be typed ([held]) shows in the name's place while there is no extra-keys row to hold it.
  */
 @Composable
 fun SessionBar(
@@ -61,6 +66,7 @@ fun SessionBar(
     alone: Boolean? = null,
     onChatView: (Boolean) -> Unit = {},
     onDuplicate: () -> Unit = {},
+    held: String = "",
 ) {
     val spacing = NgtermTheme.spacing
     Row(
@@ -78,19 +84,24 @@ fun SessionBar(
                 Icon(painterResource(R.drawable.ic_back), contentDescription = stringResource(R.string.action_back))
             }
         }
-        Column(
-            modifier = Modifier.weight(1f).padding(vertical = spacing.sm),
-            verticalArrangement = Arrangement.spacedBy(spacing.xxs),
-        ) {
-            Text(
-                text = session.name,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.semantics { heading() },
-            )
-            StateLine(session)
+        Box(Modifier.weight(1f)) {
+            // kept in place under the held text, so the bar keeps its height and the terminal its size
+            val title = if (held.isEmpty()) Modifier else Modifier.alpha(0f).clearAndSetSemantics {}
+            Column(
+                modifier = title.fillMaxWidth().padding(vertical = spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(spacing.xxs),
+            ) {
+                Text(
+                    text = session.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.semantics { heading() },
+                )
+                StateLine(session)
+            }
+            if (held.isNotEmpty()) CompositionStrip(held, Modifier.matchParentSize(), inset = 0.dp)
         }
         val live = session.live
         PaneSwitcher(

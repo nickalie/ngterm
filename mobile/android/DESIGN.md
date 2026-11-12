@@ -504,16 +504,21 @@ sideways or wider (48dp a key or more): one line of sixteen
   (below) as a dead key's accent does, and goes when the word is done, landing at the cursor. Backspace past it is the
   program's.
 - **The strip** (`CompositionStrip`) shows what waits to be typed, and only while something does: a word the soft
-  keyboard holds, or a dead key's accent. Plain letters never wait, so typing Latin never shows it. It is a one-line
-  chip off the grid, floating over the panes' bottom edge at the trailing side, 8dp in from the edge and over the row
-  (or over the keyboard with no row): the text in the terminal's face at 18 sp, underlined 2dp in copper as an input
-  method's text is until it goes, on `surfaceContainerHigh` with a 1dp `outlineVariant` edge (it floats over text of
-  any color) and a 12dp radius. It hugs its text; a word past the width scrolls in it, its end in view.
+  keyboard holds, or a dead key's accent. Plain letters never wait, so typing Latin never shows it. It never covers a
+  cell or resizes the grid, so it takes a place of the chrome's that keeps its size: the extra keys' top line (Esc,
+  `/`, `|`, `~`, Home, Up, End and PgUp on a phone held upright, the whole line of sixteen when it is one), the
+  bottom line staying, and the keys come back as the text goes. With no row (Settings hides it, or a hardware
+  keyboard stands it aside) it takes the bar's title, the name and state line kept in place under it so the bar keeps
+  its height. It is one line of the text in the terminal's face at 18 sp, underlined 2dp in copper as an input
+  method's text is until it goes, on the ground of the place it takes (`surfaceContainer`), 16dp in from the row's
+  edges and aligned with the name in the bar. A word past the width scrolls in it, its end in view: the text runs in
+  its own direction, so a Hindi word keeps its end in view on an Arabic phone too.
 
   | First pass | Why it was wrong | Revised to |
   |---|---|---|
-  | The held text drawn on the grid at the cursor, as the terminal will place it | the app can't know the program's widths, wraps and line editing, so each attempt covered text or moved touches and the selection off the cells | a chip off the grid: the terminal shows only what the program has, and the text lands where the program puts it |
-  | A full-width bar between the panes and the row | the pane shrinks while it shows, so the program is resized and redraws on every held word | a chip floating over the panes' edge: the grid never changes size |
+  | The held text drawn on the grid at the cursor, as the terminal will place it | the app can't know the program's widths, wraps and line editing, so each attempt covered text or moved touches and the selection off the cells | a line off the grid: the terminal shows only what the program has, and the text lands where the program puts it |
+  | A full-width bar between the panes and the row | the pane shrinks while it shows, so the program is resized and redraws on every held word | the row's top line: the row keeps its height, so the grid never changes size |
+  | A chip floating over the panes' bottom edge | the bottom rows are where the cursor, a shell's prompt and an agent's input box are, so the chip hid the line being typed into | the row's top line, or the bar's title: nothing over the grid |
   | A label ("Composing") in front of the text | a word to read for something the copper underline already says | the text alone, underlined |
 
   TalkBack reads it as "Waiting to be typed:" and the text; it is no live region, since the keyboard speaks each key
@@ -646,8 +651,8 @@ compact                            medium (rail open)               expanded
   other for that session alone, kept on this device (`SessionChatViews`, the newest 256 sessions); one set back to
   Settings' value follows Settings again. The menu closes on the tap.
 - **The keyboard:** one `TerminalKeyboard` for the view, shared by every pane and the extra-keys row, so a held Ctrl
-  stays as the selection moves; the row sits under the panes over the soft keyboard (the strip floats over the panes'
-  bottom edge, so a held word never resizes a pane), and steps aside while every pane
+  stays as the selection moves; the row sits under the panes over the soft keyboard (a held word takes its top line,
+  or the bar's title with no row, so it never covers or resizes a pane), and steps aside while every pane
   on screen shows its chat (The chat, below). Ctrl+Shift+Left and Right go to
   the previous and next pane, Ctrl+Shift+Up and Down to the previous and next attached session.
 - **One selected pane:** each session has one selected pane, the one a tab, a swipe, a chord or a touch on a pane

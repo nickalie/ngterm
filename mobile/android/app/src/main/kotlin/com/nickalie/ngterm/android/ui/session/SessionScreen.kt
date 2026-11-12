@@ -64,10 +64,11 @@ import com.nickalie.ngterm.core.ffi.StreamState
 
 /**
  * An attached session, live: its bar (name, status, context, the pane switcher, Detach and End session), the origin's
- * HUD, its panes, what waits to be typed ([CompositionStrip]) over their bottom edge, and the extra keys over the soft
- * keyboard. A phone ([compact]) shows the [focused] pane alone and a swipe across it moves to the next or previous one;
- * wider windows show the origin's split, or the [focused] pane [alone] once a pane tab asked for it ([tabTapAlone],
- * through [SessionViewActions.onAlone]). The shown panes' states are [panes] (by pane), and why one could not be shown
+ * HUD, its panes, and the extra keys over the soft keyboard; what waits to be typed ([CompositionStrip]) takes the
+ * extra keys' top line, or the bar's title with no row, so it never covers or resizes the terminal. A phone
+ * ([compact]) shows the [focused] pane alone and a swipe across it moves to the next or previous one; wider windows
+ * show the origin's split, or the [focused] pane [alone] once a pane tab asked for it ([tabTapAlone], through
+ * [SessionViewActions.onAlone]). The shown panes' states are [panes] (by pane), and why one could not be shown
  * [failures]. One [keyboard] serves every pane and the extra keys, laid out as Settings' [extraKeys] says; its chords
  * move between the panes and the sessions. [views] says how each pane running an agent shows (by pane id), and the bar
  * switches the selected one's; a pane in chat view draws its open chat from [chats] (by pane) in its terminal's place.
@@ -117,7 +118,8 @@ fun SessionScreen(
     ) {
         // a short window (a phone on its side with the soft keyboard up) keeps its rows for the terminal
         val roomy = maxHeight >= HudRoom
-        val reserve = if (chatsOnly) extraKeysHeight(extraKeys, maxWidth) else 0.dp
+        val keysHeight = extraKeysHeight(extraKeys, maxWidth)
+        val reserve = if (chatsOnly) keysHeight else 0.dp
         Column(Modifier.fillMaxSize()) {
             SessionBar(
                 session = session,
@@ -131,25 +133,13 @@ fun SessionScreen(
                 onView = { view -> selected?.let { actions.onView(it, view) } },
                 onChatView = { on -> actions.onChatView(key, on) },
                 onDuplicate = { actions.onDuplicate(key) },
+                // with no row to hold it; over chats alone the keyboard has no terminal, so nothing is held
+                held = if (keysHeight == 0.dp) keyboard.target?.composing.orEmpty() else "",
             )
             live.hud?.takeIf { roomy }?.let { HudBanner(it, Modifier.padding(NgtermTheme.spacing.sm)) }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                val paneActions =
-                    remember(keyboard, session.machine, actions, key) {
-                        PaneActions(
-                            keyboard = keyboard,
-                            machine = session.machine,
-                            onShow = actions.onShow,
-                            onRetry = actions.onRetry,
-                            onFocus = { actions.onFocus(key, it) },
-                            onTakeLead = actions.onTakeLead,
-                            onDetach = { actions.onDetach(key) },
-                            onShowTerminal = { actions.onView(it, PaneView.Terminal) },
-                        )
-                    }
+                val paneActions = rememberPaneActions(keyboard, session, actions)
                 Panes(session, spots, focused, compact, splittable && !alone, paneActions, move, reserve)
-                // over the panes rather than beside them, so a held word never resizes the terminal
-                CompositionStrip(keyboard, Modifier.align(Alignment.BottomEnd).padding(NgtermTheme.spacing.sm))
             }
             if (!chatsOnly) ExtraKeysRow(keyboard, layout = extraKeys)
         }

@@ -1,7 +1,10 @@
 package com.nickalie.ngterm.android.ui.session
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.ui.chat.PaneView
+import com.nickalie.ngterm.android.ui.terminal.TerminalKeyboard
 import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
 
@@ -29,3 +32,24 @@ data class SessionViewActions(
     val onChatView: (SessionKey, Boolean) -> Unit = { _, _ -> },
     val onDuplicate: (SessionKey) -> Unit = {},
 )
+
+@Composable
+internal fun rememberPaneActions(
+    keyboard: TerminalKeyboard,
+    session: AttachedSession,
+    actions: SessionViewActions,
+): PaneActions {
+    val key = session.key
+    return remember(keyboard, session.machine, actions, key) {
+        PaneActions(
+            keyboard = keyboard,
+            machine = session.machine,
+            onShow = actions.onShow,
+            onRetry = actions.onRetry,
+            onFocus = { actions.onFocus(key, it) },
+            onTakeLead = actions.onTakeLead,
+            onDetach = { actions.onDetach(key) },
+            onShowTerminal = { actions.onView(it, PaneView.Terminal) },
+        )
+    }
+}
