@@ -547,7 +547,7 @@ fn stdin_closing_ends_the_process_within_a_bound() -> TestResult {
     Ok(())
 }
 
-/// A live approval shows as `approval` after the backlog; the transcript writing the denied call's result ends it at
+/// A live approval shows as `approval` at the end of the backlog, before its `live`; the transcript writing the denied call's result ends it at
 /// once, right after that result, and the record still holding it (the status has not left `blocked`) shows it no
 /// more. A new candidate shows, and the record dropping it ends it.
 #[test]
@@ -558,11 +558,13 @@ fn approvals_are_interleaved_and_end_by_the_transcript_or_the_record() -> TestRe
     let path = write_transcript(dir.path(), MAIN, slice(&bytes, 0, DENIED_RESULT)?)?;
     let server = Scripted::serve(&socket, Some(record(&path, MAIN, Some(denied_txt(100.0)))?))?;
     let chat = Chat::spawn(dir.path(), &socket, &["--target", "S"])?;
-    chat.until("live")?;
+    let mut backlog = chat.until("live")?;
+    backlog.pop();
     let approval = json!({"tool": "Bash", "title": "Create empty file denied.txt", "detail": "touch denied.txt"});
     let mut shown = json!({"id": "approval-100", "cursor": DENIED_RESULT, "type": "approval"});
     merge(&mut shown, &approval);
-    assert_eq!(chat.next()?, shown);
+    assert_eq!(backlog.pop(), Some(shown));
+    assert_eq!(prompts(&backlog), 0);
 
     append(&path, slice(&bytes, DENIED_RESULT, NEXT_PROMPT)?)?;
     let golden = golden(MAIN)?;
@@ -609,14 +611,14 @@ fn a_prompt_the_transcript_answered_before_the_record_was_read_is_never_shown() 
     let server = Scripted::serve(&socket, Some(record(&path, MAIN, Some(denied_txt(100.0)))?))?;
     for args in [&["--target", "S"][..], &["--target", "S", "--after", "0"]] {
         let chat = Chat::spawn(dir.path(), &socket, args)?;
-        chat.until("live")?;
+        assert_eq!(prompts(&chat.until("live")?), 0, "{args:?}");
         assert!(chat.silent_for(Duration::from_millis(1500)), "{args:?}");
     }
 
     fs::write(&path, slice(&bytes, 0, DENIED_RESULT)?)?;
     server.set(Some(record(&path, MAIN, None)?))?;
     let chat = Chat::spawn(dir.path(), &socket, &["--target", "S"])?;
-    chat.until("live")?;
+    assert_eq!(prompts(&chat.until("live")?), 0);
     append(&path, slice(&bytes, DENIED_RESULT, NEXT_PROMPT)?)?;
     let answered = lines_in(&golden(MAIN)?, DENIED_RESULT, NEXT_PROMPT);
     assert_eq!(chat.followed(answered.len())?.0, answered);
@@ -639,7 +641,7 @@ fn a_reconnect_past_the_denials_result_never_shows_the_answered_prompt() -> Test
     let _server = Scripted::serve(&socket, Some(record(&path, MAIN, Some(denied_txt(100.0)))?))?;
     for after in [INTERRUPT_NOTICE, NEXT_PROMPT] {
         let chat = Chat::spawn(dir.path(), &socket, &["--target", "S", "--after", &after.to_string()])?;
-        chat.until("live")?;
+        assert_eq!(prompts(&chat.until("live")?), 0, "--after {after}");
         assert!(chat.silent_for(Duration::from_millis(1500)), "--after {after}");
     }
 
@@ -657,10 +659,14 @@ fn a_reconnect_past_the_denials_result_never_shows_the_answered_prompt() -> Test
     assert!(end - DENIED_RESULT > 2 * 128 * 1024, "past what the context reads");
     for args in [["--after", &end.to_string()], ["--limit", "1"]] {
         let chat = Chat::spawn(dir.path(), &socket, &[&["--target", "S"][..], &args].concat())?;
-        chat.until("live")?;
+        assert_eq!(prompts(&chat.until("live")?), 0, "{args:?}");
         assert!(chat.silent_for(Duration::from_millis(1500)), "{args:?}");
     }
     Ok(())
+}
+
+fn prompts(events: &[Value]) -> usize {
+    events.iter().filter(|event| event["type"] == "approval").count()
 }
 
 fn merge(into: &mut Value, from: &Value) {
