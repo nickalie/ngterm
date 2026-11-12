@@ -150,6 +150,7 @@ val NoSessionActions = SessionActions({}, {}, {}, {}, {}, {}, {}, {}, {})
 fun SessionsSample(
     state: MachineSessions,
     modifier: Modifier = Modifier,
+    starting: Boolean = false,
 ) {
-    InScaffold(modifier) { SessionsScreen(state, NoSessionActions, now = { SAMPLE_NOW }) }
+    InScaffold(modifier) { SessionsScreen(state, NoSessionActions, now = { SAMPLE_NOW }, starting = starting) }
 }

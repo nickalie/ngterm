@@ -319,17 +319,26 @@ machine is the subject: the list is quiet rows on the ground, not cards, since a
 ```
 
 - **Top row:** Back, the machine's name as the heading with its mono address under it (wrapping at a large font scale
-  rather than losing its end), and New session at the end while connected.
+  rather than losing its end), and New session at the end while connected (a text button's look; a long press
+  names the session).
 - **List:** 640dp at most, centered. "Attached" (what this app has attached) first, then "On build-01" (the rest);
   each heading with its count, a group with nothing in it left out. A row is a `SessionRow`: the name, the context (or
   the working directory when it has none), the agent's status badge, and a More menu with Attach or Detach, Chat view
   and End session (in the error color). Companions sit indented under their parent with "Companion of …" as their line.
   Tapping a row attaches it (the session view opens from there). A row being ended says "Ending" with a small
   spinner in place of its status. Pull to refresh lists again; on a machine not connected it connects.
-- **New session:** a dialog over the list: one optional Name field ("Optional: build-01 names it when blank"),
-  Create session and Cancel. While the machine creates and lists it (up to 20 s) the button says Creating with a
-  spinner and the field holds still; Cancel closes the dialog and the create goes on. A failure shows under the
-  field, in the core's words, and the name stays for another try.
+- **New session** takes one tap: the machine creates a session it names, the app attaches it and the session view
+  opens on it, in control. Its pane takes the lead when its first attach reports that another device has it (Take
+  control without the tap); one that leads already is left as it is, and any later takeover is the user's to answer
+  as usual. While the machine creates and lists it (up to 20 s) the button says Creating with a small spinner and
+  takes no taps; a failed create or attach is a snackbar in the core's words, and the list stays (a session created
+  but not attached shows in it). Only this device's own New session claims the lead: a session opened from a row
+  keeps the Take control cover.
+- **New named session:** a long press on New session (TalkBack's action "New named session") opens a dialog over the
+  list: one optional Name field ("Optional: build-01 names it when blank"), Create session and Cancel. While the
+  machine creates and lists it the button says Creating with a spinner and the field holds still; Cancel closes the
+  dialog and the create goes on. A failed create shows under the field, in the core's words, and the name stays for
+  another try; once created, the session lands as a one-tap New session's does.
 - **End session** confirms ("End docs-site?", "It stops on build-01, with everything running in it. This can't be
   undone.", End session in the error color). A failed End or attach is a snackbar in the core's words.
 - **States**, each a `MessagePanel` in place of the list: connecting and reading are a spinner with what is under

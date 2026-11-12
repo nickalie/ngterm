@@ -199,6 +199,7 @@
   <string name="new_session_name_hint">Optional: %1$s names it when blank</string>
   <string name="new_session_create">Create session</string>
   <string name="new_session_creating">Creating</string>
+  <string name="new_session_named">New named session</string>
 
   <!-- ui/terminal -->
   <string name="terminal_description">Terminal</string>

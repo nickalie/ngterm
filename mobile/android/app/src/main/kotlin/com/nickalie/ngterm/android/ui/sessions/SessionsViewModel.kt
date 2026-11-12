@@ -73,6 +73,8 @@ class SessionsViewModel(
     private val refreshing = MutableStateFlow(false)
     private val ending = MutableStateFlow<Set<String>>(emptySet())
     private val newSession = MutableStateFlow<NewSessionState?>(null)
+    private val starting = MutableStateFlow(false)
+    private val lands = MutableStateFlow<SessionKey?>(null)
     private val notices = MutableStateFlow<String?>(null)
 
     // which opening of the New session dialog is showing (main thread): a create answers only the dialog it began in
@@ -133,6 +135,10 @@ class SessionsViewModel(
     /** The New session dialog, or null while it is closed. */
     val creating: StateFlow<NewSessionState?> = newSession.asStateFlow()
 
+    val busy: StateFlow<Boolean> = starting.asStateFlow()
+
+    val landing: StateFlow<SessionKey?> = lands.asStateFlow()
+
     /** What the screen should say once in a snackbar, until [noticeShown]. */
     val notice: StateFlow<String?> = notices.asStateFlow()
 
@@ -165,8 +171,22 @@ class SessionsViewModel(
         viewModelScope.launch { graph.machines.get(machineId)?.let { connections.connect(it.toCore()) } }
     }
 
+    fun newSession() {
+        if (starting.value) return
+        starting.value = true
+        viewModelScope.launch {
+            try {
+                land(connections.createSession(machineId, "").id)
+            } catch (error: MobileException) {
+                notices.value = error.reason()
+            } finally {
+                starting.value = false
+            }
+        }
+    }
+
     /** Opens the New session dialog. */
-    fun openNewSession() {
+    fun openNamedSession() {
         if (newSession.value != null) return
         dialog += 1
         newSession.value = NewSessionState()
@@ -183,23 +203,46 @@ class SessionsViewModel(
 
     /** Creates a session named [name] (blank: the machine names it); the dialog closes once it is listed. */
     fun create(name: String) {
-        if (newSession.value?.running == true) return
+        if (newSession.value?.running == true || starting.value) return
         val mine = dialog
         newSession.value = NewSessionState(running = true)
+        starting.value = true
         viewModelScope.launch {
             try {
-                connections.createSession(machineId, name)
+                val id =
+                    try {
+                        connections.createSession(machineId, name).id
+                    } catch (error: MobileException) {
+                        // a dialog closed meanwhile has no one to tell: the failure goes to the snackbar
+                        val reason = error.reason()
+                        if (dialog == mine) {
+                            newSession.update { it?.copy(running = false, failed = reason) }
+                        } else {
+                            notices.value = reason
+                        }
+                        return@launch
+                    }
                 if (dialog == mine) newSession.value = null
-            } catch (error: MobileException) {
-                // a dialog closed meanwhile has no one to tell: the failure goes to the snackbar
-                val reason = error.reason()
-                if (dialog == mine) {
-                    newSession.update { it?.copy(running = false, failed = reason) }
-                } else {
-                    notices.value = reason
+                try {
+                    land(id)
+                } catch (error: MobileException) {
+                    notices.value = error.reason()
                 }
+            } finally {
+                starting.value = false
             }
         }
+    }
+
+    private suspend fun land(sessionId: String) {
+        connections.attach(machineId, sessionId)
+        val key = SessionKey(machineId, sessionId)
+        graph.panes.claims.claim(key)
+        lands.value = key
+    }
+
+    fun landed() {
+        lands.value = null
     }
 
     /** Ends the session [sessionId] there, with no undo (the screen confirms first). */

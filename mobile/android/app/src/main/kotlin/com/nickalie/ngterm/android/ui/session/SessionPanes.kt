@@ -15,6 +15,7 @@ import com.nickalie.ngterm.android.ui.terminal.TerminalState
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.Pane
 import com.nickalie.ngterm.core.ffi.PaneRef
+import com.nickalie.ngterm.core.ffi.PaneRole
 import com.nickalie.ngterm.core.ffi.PaneSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -56,6 +57,9 @@ class SessionPanes(
     private val failureState = MutableStateFlow<Map<PaneRef, String>>(emptyMap())
     private val showing = mutableSetOf<PaneRef>()
 
+    /** Sessions created here, to open in control. */
+    val claims = LeadClaims()
+
     // each machine's link as last seen, and how many times it came back: a show begun before the last return is stale
     private var links: Map<String, Link> = emptyMap()
     private val returns = mutableMapOf<String, Int>()
@@ -69,7 +73,10 @@ class SessionPanes(
     init {
         scope.launch {
             combine(connections.attached, live.sessions) { attached, sessions -> attached to sessions }
-                .collect { (attached, sessions) -> prune(attached, sessions) }
+                .collect { (attached, sessions) ->
+                    prune(attached, sessions)
+                    claims.settle(attached, sessions, ::takeLead)
+                }
         }
         scope.launch { connections.links.collect(::linked) }
         scope.launch {
@@ -198,6 +205,37 @@ class SessionPanes(
             when {
                 key.sessionId !in attached[key.machineId].orEmpty() -> drop(pane)
                 layout != null && pane.paneId !in layout.panes -> hide(pane)
+            }
+        }
+    }
+}
+
+/** A session created here opens in control: its first pane to report following takes the lead, once. */
+class LeadClaims {
+    private val keys = mutableSetOf<SessionKey>()
+
+    fun claim(key: SessionKey) {
+        keys += key
+    }
+
+    internal fun settle(
+        attached: Map<String, Set<String>>,
+        sessions: Map<SessionKey, LiveSession>,
+        takeLead: (PaneRef) -> Unit,
+    ) {
+        keys.retainAll { it.sessionId in attached[it.machineId].orEmpty() }
+        for (key in keys.toList()) {
+            val panes = sessions[key]?.panes.orEmpty()
+            val follower = panes.entries.firstOrNull { it.value.role == PaneRole.FOLLOWER }?.key
+            when {
+                follower != null -> {
+                    keys -= key
+                    takeLead(PaneRef(key.machineId, key.sessionId, follower))
+                }
+
+                panes.values.any { it.role == PaneRole.LEADER } -> {
+                    keys -= key
+                }
             }
         }
     }

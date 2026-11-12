@@ -159,4 +159,5 @@ data class SessionActions(
     val onDetach: (String) -> Unit,
     val onEnd: (String) -> Unit,
     val onChatView: (String, Boolean) -> Unit = { _, _ -> },
+    val onNewNamedSession: () -> Unit = {},
 )
