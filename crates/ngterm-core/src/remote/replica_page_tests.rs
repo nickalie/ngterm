@@ -166,6 +166,25 @@ fn a_forward_stops_if_its_page_cannot_be_placed_when_it_becomes_ready() {
     assert_eq!(origin.heard("page.rejected").len(), 1);
 }
 
+/// The origin hears a close of a page still waiting for its forward answered as it hears any other close, so it can
+/// tell that answer from one about the page it hands back.
+#[test]
+fn closing_a_page_still_waiting_for_its_forward_is_answered() {
+    let (mut core, row, launcher) = core();
+    let origin = Origin::listening(&mut core, row);
+    let page = loopback();
+    core.show_replica_page(&page, row).unwrap();
+    let (_, _, helper) = launcher.launches.borrow()[0].clone();
+
+    core.close_replica_page(&page.page, row);
+
+    assert!(helper.0.get());
+    assert!(core.remote.viewer.pages.pending.is_empty());
+    assert_eq!(origin.heard("page.closed"), [json!({"page": page.page})]);
+    core.close_replica_page(&page.page, row);
+    assert_eq!(origin.heard("page.closed").len(), 1);
+}
+
 #[test]
 fn stale_forward_reports_leave_the_current_launch_running() {
     let (mut core, row, launcher) = core();

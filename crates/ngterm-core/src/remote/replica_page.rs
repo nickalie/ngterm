@@ -677,8 +677,9 @@ impl Core {
     }
 
     /// Drops the forwards waiting for `session`'s pages, or for its page `origin` alone. With `refusal`, the origin
-    /// hears each page refused for it, as it would a page placed here and then closed; without, the origin ended them.
-    fn cancel_pending_tunnels(&mut self, session: Option<Uuid>, origin: Option<&str>, refusal: Option<&str>) {
+    /// hears each page refused for it, as it would a page placed here and then closed; without, the origin closed them.
+    /// Whether any was dropped.
+    fn cancel_pending_tunnels(&mut self, session: Option<Uuid>, origin: Option<&str>, refusal: Option<&str>) -> bool {
         let pages = &mut self.remote.viewer.pages;
         let cancelled: Vec<Uuid> = pages
             .pending
@@ -691,12 +692,14 @@ impl Core {
             .into_iter()
             .filter_map(|id| pages.pending.remove(&id))
             .collect();
+        let any = !stopped.is_empty();
         for pending in stopped {
             pending.tunnel.stop();
             if let Some(refusal) = refusal {
                 self.reject_page(pending.session, pending.page.page, refusal.to_owned());
             }
         }
+        any
     }
 
     /// Starts the helper of file page `local`; one that cannot start closes the page at once.
@@ -759,8 +762,11 @@ impl Core {
     /// Takes down the page shown for `origin`, once its origin closed it (upstream's `closeReplicaPage`); the origin
     /// still hears `page.closed`, its close echoed back.
     pub(crate) fn close_replica_page(&mut self, origin: &str, session: Uuid) {
-        self.cancel_pending_tunnels(Some(session), Some(origin), None);
+        let waited = self.cancel_pending_tunnels(Some(session), Some(origin), None);
         let Some((pane, _)) = self.replica_local(origin, session) else {
+            if waited {
+                self.answer_origin(session, Body::PageClosed(PresentationPageChange::page(origin)));
+            }
             return;
         };
         if let Some(store) = self.library_mut().store_for_session_mut(session) {

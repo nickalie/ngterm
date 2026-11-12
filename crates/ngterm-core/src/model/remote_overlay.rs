@@ -25,7 +25,8 @@ pub struct RemoteOverlaySlot {
     pub job: String,
     /// The pane the slot covers, `None` for the session-wide slot. Follows its pane across a swap.
     pub pane: Option<OverlayPane>,
-    /// The presenter generation the job was handed to; only that stream can still reach its surface.
+    /// The generation of the viewer holding the slot's surface the job was handed to
+    /// (`PresentationHub::surface_generation`); only that stream can still reach it.
     pub owner: i64,
     /// The size requested for a session-wide overlay, `None` for full. What the viewer applied is not known.
     pub size_percent: Option<i64>,
@@ -571,8 +572,8 @@ impl AppStore {
         parked
     }
 
-    /// Hands the parked page under `job` to presenter generation `owner` under a fresh claim `token`; `None` when no
-    /// parked page is held there, else what follows its request.
+    /// Hands the parked page under `job` to the pages' holder of generation `owner` under a fresh claim `token`; `None`
+    /// when no parked page is held there, else what follows its request.
     pub(crate) fn hand_on_remote_page(
         &mut self,
         session: Uuid,

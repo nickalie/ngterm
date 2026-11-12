@@ -176,8 +176,8 @@ impl Core {
 
     /// Tells the viewer showing `parent`'s pages to show its new page companion `companion` (this build's
     /// `companion.page`): on a headless origin nothing shows the page here, so without it the page would wait unseen
-    /// until a viewer attached the group again. A presenter that does not list the kind is told nothing, and a mirror
-    /// attaches it with `live attach`.
+    /// until a viewer attached the group again. A viewer showing the pages that does not list the kind is told nothing,
+    /// and any other viewer attaches it with `live attach`.
     pub(crate) fn hand_companion_page_to_viewer(&mut self, parent: Uuid, companion: Uuid) {
         let body = Body::CompanionPage(PresentationCompanion {
             session: uuid_string(companion),

@@ -208,12 +208,10 @@ impl PresentationClient {
     }
 
     fn set_opt_in(&mut self, kind: &'static str, listed: bool) {
-        self.opt_in.retain(|listed| *listed != kind);
+        self.opt_in.retain(|known| *known != kind);
         if listed {
             self.opt_in.push(kind);
         }
-        self.opt_in
-            .sort_by_key(|kind| OPT_IN_KINDS.iter().position(|known| known == kind));
     }
 
     /// Whether the origin's last hello answer listed `kind`: both sides speak it. False before any answer.
@@ -225,7 +223,12 @@ impl PresentationClient {
     /// The kinds the next hello lists.
     fn hello_kinds(&self) -> Vec<String> {
         let mut kinds = viewer_kinds(self.shows_pages);
-        kinds.extend(self.opt_in.iter().map(|kind| (*kind).to_owned()));
+        kinds.extend(
+            OPT_IN_KINDS
+                .iter()
+                .filter(|kind| self.opt_in.contains(kind))
+                .map(|kind| (*kind).to_owned()),
+        );
         kinds
     }
 

@@ -1042,7 +1042,7 @@ fn an_older_presenter_gets_a_point_resize_as_its_percent_alone() {
     );
 }
 
-/// A reservation still belongs to its original presenter generation.
+/// A reservation still belongs to the overlays' holder generation it was handed to.
 #[test]
 fn a_point_resize_after_the_program_presenter_changed_preserves_the_slot() {
     use crate::model::{OverlayPointSize, RemoteOverlaySlot};

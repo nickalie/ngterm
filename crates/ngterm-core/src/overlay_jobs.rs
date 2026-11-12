@@ -71,7 +71,7 @@ pub struct OverlayJob {
     pub session: Uuid,
     /// The pane the overlay covers, `None` for the session-wide slot.
     pub pane: Option<OverlayPane>,
-    /// The presenter generation the job was handed to.
+    /// The generation of the overlays' holder the job was handed to.
     pub owner: i64,
     pub context: OverlayLaunchContext,
     pub state: OverlayJobState,

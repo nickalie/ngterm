@@ -205,3 +205,57 @@ fn a_desktop_presenter_without_web_views_keeps_its_overlays_while_its_pages_go_b
     assert_eq!(desktop.last("page.request").unwrap()["page"]["page"], json!(page));
     assert!(origin.presenter.last("page.request").is_none());
 }
+
+/// The desktop's answer to the `page.close` that parked its page can arrive after the phone came back and the page was
+/// handed to the desktop again: that answer belongs to the old replica, so the page stays open until the desktop closes
+/// the new one.
+#[test]
+fn a_late_answer_to_the_park_leaves_the_page_handed_back_to_the_same_desktop_open() {
+    let phone = phone_kinds();
+    let mut origin = Origin::new(false, &listed(&phone));
+    let (desktop_serial, desktop) = attach(&mut origin, &SUPPORTED_KINDS);
+    let page = page_id(&open_page(&mut origin));
+
+    origin.live.fixture.core.presentation_closed(origin.serial);
+    origin.live.fixture.core.commit();
+    assert_eq!(desktop.last("page.close").unwrap()["page"], json!({"page": page}));
+    attach(&mut origin, &listed(&phone));
+    let requests = desktop.kinds().iter().filter(|kind| *kind == "page.request").count();
+    assert_eq!(requests, 2, "the page is handed back to the desktop");
+
+    let closed = json!({"kind": "page.closed", "page": {"page": page}});
+    let core = &mut origin.live.fixture.core;
+    core.presentation_line(desktop_serial, &frame(&desktop, &closed));
+    core.commit();
+    let node = origin.node();
+    assert_eq!(node["htmlOverlays"][0]["id"], json!(page), "{node}");
+    assert_ne!(node["htmlOverlays"][0]["parked"], json!(true));
+
+    let core = &mut origin.live.fixture.core;
+    core.presentation_line(desktop_serial, &frame(&desktop, &closed));
+    core.commit();
+    assert!(origin.node()["htmlOverlays"][0].is_null());
+}
+
+/// A program overlay already open on a desktop presenter without web views stays there when a desktop that shows
+/// pages attaches beside it and takes them.
+#[test]
+fn an_open_overlay_stays_on_the_presenter_when_a_desktop_beside_it_takes_the_pages() {
+    let bare = viewer_kinds(false);
+    let mut origin = Origin::new(false, &listed(&bare));
+    assert!(
+        origin
+            .overlay(SessionCmd::OverlayOpen, |a| a.command = Some("sleep 9".to_owned()))
+            .ok
+    );
+    assert!(origin.presenter.last("overlay.request").is_some());
+
+    let (_, desktop) = attach(&mut origin, &SUPPORTED_KINDS);
+    assert!(origin.presenter.last("overlay.close").is_none());
+    assert!(desktop.last("overlay.request").is_none());
+
+    let response = origin.overlay(SessionCmd::OverlayResize, |a| a.size_percent = Some(50));
+    assert!(response.ok, "{response:?}");
+    assert!(origin.presenter.last("overlay.resize").is_some());
+    assert!(desktop.last("overlay.resize").is_none());
+}

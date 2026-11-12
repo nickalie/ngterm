@@ -439,8 +439,7 @@ impl Core {
     }
 
     /// Applies what the presenter of `session` reported about one of its pages (upstream's `receiveRemotePageFrame`):
-    /// a state is mirrored, a rejection or close ends the page. A parked page takes none of them: the presenter
-    /// answering the `page.close` that parked it only confirms it dropped its replica.
+    /// a state is mirrored, a rejection or close ends the page. A parked page takes none of them.
     pub(super) fn receive_remote_page_frame(&mut self, session: Uuid, body: &Body) {
         let page = match body {
             Body::PageState(state) => &state.page,
@@ -563,8 +562,9 @@ impl Core {
             .store_for_session_mut(session)
             .is_some_and(|store| store.park_remote_page(session, &job));
         if parked {
-            let close = Body::PageClose(PresentationPageChange::page(job));
-            self.remote.hub.send_to_surface(Surface::Pages, close, session);
+            if let Some(holder) = self.remote.hub.surface_holder(Surface::Pages, session) {
+                self.remote.hub.drop_page_replica(job, holder);
+            }
             self.shut_page_serve_channel(page);
         }
     }
@@ -578,8 +578,7 @@ impl Core {
             .map(|store| store.park_remote_pages(session))
             .unwrap_or_default();
         for page in pages {
-            let close = Body::PageClose(PresentationPageChange::page(uuid_string(page)));
-            self.remote.hub.send_to(close, holder);
+            self.remote.hub.drop_page_replica(uuid_string(page), holder);
             self.shut_page_serve_channel(page);
         }
     }

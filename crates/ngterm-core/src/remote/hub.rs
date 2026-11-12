@@ -5,15 +5,15 @@
 //! Where upstream's hub calls back into the server (`onPresenterLost`, `onPresenterFrame`), this one queues
 //! [`HubEvent`]s its owner takes after each call, so the hub never needs to reach the model it serves.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
 use super::frames::{
-    self, Body, PresentationFrame, PresentationHello, PresentationLayout, PresentationMode, PresentationSnapshot,
-    PresentationStatus, negotiated_version,
+    self, Body, PresentationFrame, PresentationHello, PresentationLayout, PresentationMode, PresentationPageChange,
+    PresentationSnapshot, PresentationStatus, negotiated_version,
 };
 
 /// Where the hub hands a subscriber's frames. The bounded queue and the socket live behind it; the hub only learns
@@ -98,6 +98,8 @@ struct Subscriber {
     /// Deltas published while the snapshot is being taken, held so they land after it.
     held: Option<Vec<Body>>,
     presents: bool,
+    /// Pages it was told to drop while they stay open here, until it answers that close.
+    dropped_pages: HashSet<String>,
 }
 
 impl Subscriber {
@@ -114,6 +116,17 @@ impl Subscriber {
                 Body::Snapshot(snapshot)
             }
             body => body,
+        }
+    }
+
+    /// Whether `body` answers a close of a replica it was told to drop; what it sends about the page after that answer
+    /// is about the page handed to it again.
+    fn answers_dropped_page(&mut self, body: &Body) -> bool {
+        match body {
+            Body::PageRejected(change) | Body::PageClosed(change) | Body::PageDetached(change) => {
+                self.dropped_pages.remove(&change.page)
+            }
+            _ => false,
         }
     }
 }
@@ -274,9 +287,10 @@ pub const AGENT_KIND: &str = "agent";
 /// viewer that predates it shows overlays.
 pub const NO_OVERLAYS_KIND: &str = "overlay.none";
 
-/// The kinds this build adds that go only to a viewer whose hello lists them, published state included, so a viewer
-/// that predates them (desktop Attach Remote, upstream's) gets the stream it always got. A viewer's hello lists them
-/// beside [`SUPPORTED_KINDS`], and the hub's answer echoes them back when both sides speak them.
+/// The kinds this build adds that a viewer's hello lists beside [`SUPPORTED_KINDS`], and the hub's answer echoes back
+/// when both sides speak them. A frame kind goes only to a viewer whose hello lists it, published state included, so a
+/// viewer that predates it (desktop Attach Remote, upstream's) gets the stream it always got; a frameless one
+/// ([`NO_OVERLAYS_KIND`]) only says what the viewer refuses.
 pub const OPT_IN_KINDS: [&str; 2] = [AGENT_KIND, NO_OVERLAYS_KIND];
 
 /// Whether a hello's kinds decide whether `kind` reaches that viewer.
@@ -365,6 +379,7 @@ impl PresentationHub {
                 last_ack: now,
                 held: Some(Vec::new()),
                 presents: hello.mode == PresentationMode::Presenter,
+                dropped_pages: HashSet::new(),
             },
         );
         let state = snapshot(self);
@@ -451,6 +466,17 @@ impl PresentationHub {
         self.takes(id, body.kind()) && self.send(body, id)
     }
 
+    /// Tells subscriber `id` to drop its replica of `page`, which stays open here to be handed on. Its answer to this
+    /// close never reaches the page, which may be handed back to it before that answer arrives.
+    pub fn drop_page_replica(&mut self, page: String, id: SubscriberId) -> bool {
+        let close = Body::PageClose(PresentationPageChange::page(page.clone()));
+        let sent = self.send_to(close, id);
+        if sent && let Some(subscriber) = self.subscribers.get_mut(&id) {
+            subscriber.dropped_pages.insert(page);
+        }
+        sent
+    }
+
     /// Whether some viewer of `session` listed `kind` in its hello.
     #[must_use]
     pub fn watched_for(&self, kind: &str, session: Uuid) -> bool {
@@ -516,7 +542,7 @@ impl PresentationHub {
         let Some(subscriber) = self.subscribers.get_mut(&from) else {
             return;
         };
-        if frame.generation != from.0 {
+        if frame.generation != from.0 || subscriber.answers_dropped_page(&frame.body) {
             return;
         }
         let session = subscriber.session;
@@ -1599,9 +1625,19 @@ mod tests {
         let (bare, bare_seen) = attach(&mut hub, session, PresentationMode::Presenter, Shows::Overlays);
         assert_eq!(holders(&hub, session), [Some(bare); 2]);
         assert!(!hub.surface_supports(Surface::Pages, PAGE_KINDS[0], session));
+        hub.take_events();
+        let overlays = hub.surface_generation(Surface::Overlays, session);
         let (desktop, desktop_seen) = attach(&mut hub, session, PresentationMode::Presenter, Shows::Both);
         assert_eq!(holders(&hub, session), [Some(bare), Some(desktop)]);
-        hub.take_events();
+        assert_eq!(
+            hub.take_events(),
+            [
+                lost(session, &[Surface::Pages], bare),
+                gained(session, &[Surface::Pages])
+            ]
+            .concat()
+        );
+        assert_eq!(hub.surface_generation(Surface::Overlays, session), overlays);
 
         let close = Body::OverlayClose(PresentationOverlayChange::job("j1"));
         assert!(hub.send_to_surface(Surface::Overlays, close.clone(), session));
@@ -1699,6 +1735,38 @@ mod tests {
         assert_eq!(
             hub.take_events(),
             [vec![HubEvent::PresenterLost(session)], lost(session, &BOTH, desktop)].concat()
+        );
+    }
+
+    /// A desktop's answer to the close of a page it was told to drop is taken, also while it holds no pages, so it never
+    /// ends that page handed back to it; its next close of the page counts.
+    #[test]
+    fn the_answer_to_a_dropped_page_never_reaches_the_page_handed_back() {
+        use crate::remote::frames::PresentationPageChange;
+        let Beside {
+            mut hub,
+            session,
+            phone,
+            desktop,
+            desktop_seen,
+            ..
+        } = beside();
+        assert!(hub.drop_page_replica("p1".to_owned(), desktop));
+        assert_eq!(
+            bodies(&desktop_seen).last(),
+            Some(&Body::PageClose(PresentationPageChange::page("p1")))
+        );
+        hub.unsubscribe(phone);
+        let closed = Body::PageClosed(PresentationPageChange::page("p1"));
+        hub.receive(frame(desktop, closed.clone()), desktop);
+        attach(&mut hub, session, PresentationMode::Presenter, Shows::Nothing);
+        assert_eq!(hub.surface_holder(Surface::Pages, session), Some(desktop));
+        hub.take_events();
+
+        hub.receive(frame(desktop, closed.clone()), desktop);
+        assert_eq!(
+            hub.take_events(),
+            vec![HubEvent::PresenterFrame(session, Box::new(closed))]
         );
     }
 
