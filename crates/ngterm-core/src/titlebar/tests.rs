@@ -18,7 +18,45 @@ fn parts() -> TitlebarParts {
         context: None,
         detail: "~/src/api".into(),
         remote_host: None,
+        remote_peer: None,
     }
+}
+
+#[test]
+fn an_agterm_host_shows_its_destination_beside_the_app_and_what_it_lacks() {
+    let agterm = TitlebarParts {
+        remote_host: Some("agterm:me@studio".into()),
+        remote_peer: Some(crate::remote::peer::RemotePeer::Agterm),
+        ..parts()
+    };
+    for mode in [ToolbarMode::Normal, ToolbarMode::Compact] {
+        let composed = compose(&agterm, mode);
+        assert_eq!(composed.host.as_deref(), Some("me@studio"));
+        assert_eq!(composed.peer.as_deref(), Some("agterm"));
+        assert!(
+            composed
+                .peer_note
+                .as_deref()
+                .unwrap()
+                .starts_with("Attached from agterm: the agent chat view")
+        );
+    }
+    let hidden_host = TitlebarParts {
+        remote_host: None,
+        ..agterm.clone()
+    };
+    assert_eq!(
+        compose(&hidden_host, ToolbarMode::Normal).peer,
+        None,
+        "the host's toggle hides the badge too"
+    );
+    let ngterm = TitlebarParts {
+        remote_host: Some("ngterm:box".into()),
+        remote_peer: Some(crate::remote::peer::RemotePeer::Ngterm),
+        ..parts()
+    };
+    let composed = compose(&ngterm, ToolbarMode::Normal);
+    assert_eq!((composed.host.as_deref(), composed.peer), (Some("ngterm:box"), None));
 }
 
 #[test]

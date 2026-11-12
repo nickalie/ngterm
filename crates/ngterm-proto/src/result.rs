@@ -84,8 +84,9 @@ pub struct ControlResult {
     /// `restore.mode`: the restore-mode policy (`live.list` repeats it as its header).
     #[serde(default)]
     pub restore: Option<ControlRestoreStatus>,
-    /// `live.list`: the daemons joined against the panes that claim them (upstream's `zmx` key, renamed).
-    #[serde(default)]
+    /// `live.list`: the daemons joined against the panes that claim them (upstream's `zmx` key, renamed; read under
+    /// that key too, from an agterm peer's `zmx list`).
+    #[serde(default, alias = "zmx")]
     pub live: Option<ControlLiveInventory>,
     /// `live.tree`: the attachable sessions, here or on another machine.
     #[serde(default)]
@@ -248,6 +249,27 @@ pub struct ControlLiveEntry {
     pub outdated: Option<bool>,
 }
 
+/// The kind of app on the far side of a remote session: another ngterm, or upstream agterm, whose sessions an ngterm
+/// viewer attaches too, with fewer features.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemotePeer {
+    #[default]
+    Ngterm,
+    Agterm,
+}
+
+impl RemotePeer {
+    /// The peer's name as the wire, the CLI and the UI spell it.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Ngterm => "ngterm",
+            Self::Agterm => "agterm",
+        }
+    }
+}
+
 /// What a caller on another machine needs to reach these daemons (upstream's `ControlZmxEndpoint`).
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,6 +282,18 @@ pub struct ControlLiveEndpoint {
     pub executable: String,
     /// The socket directory its daemons live under.
     pub socket_directory: String,
+    /// The app that answered, stamped by the viewer that read the listing; absent for ngterm, which an origin never
+    /// reports about itself.
+    #[serde(default)]
+    pub peer: Option<RemotePeer>,
+}
+
+impl ControlLiveEndpoint {
+    /// The app behind this endpoint.
+    #[must_use]
+    pub fn peer(&self) -> RemotePeer {
+        self.peer.unwrap_or_default()
+    }
 }
 
 /// One pane of an attachable session (upstream's `ControlRemotePane`).
@@ -705,6 +739,28 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn an_agterm_peers_inventory_reads_under_its_zmx_key_and_its_peer_only_when_stamped() {
+        let agterm: ControlResult = serde_json::from_value(json!({"zmx": {
+            "restore": {"configured": "live", "requestedAtLaunch": "live", "active": "live", "restartRequired": false},
+            "inventoryComplete": true, "entries": []}}))
+        .unwrap();
+        assert!(agterm.live.is_some_and(|inventory| inventory.inventory_complete));
+        let endpoint: ControlLiveEndpoint =
+            serde_json::from_value(json!({"executable": "/zmx", "socketDirectory": "/tmp/z"})).unwrap();
+        assert_eq!(endpoint.peer(), RemotePeer::Ngterm);
+        assert_eq!(
+            serde_json::to_value(&endpoint).unwrap(),
+            json!({"executable": "/zmx", "socketDirectory": "/tmp/z"})
+        );
+        let stamped = ControlLiveEndpoint {
+            peer: Some(RemotePeer::Agterm),
+            ..endpoint
+        };
+        assert_eq!(serde_json::to_value(&stamped).unwrap()["peer"], "agterm");
+        assert_eq!(stamped.peer().name(), "agterm");
+    }
 
     #[test]
     fn pick_and_ask_outcomes_nest_with_their_fields_in_upstreams_order() {

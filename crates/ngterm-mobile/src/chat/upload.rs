@@ -111,6 +111,7 @@ pub(crate) async fn upload<C: Connection>(
     progress: &dyn Fn(u64, u64),
     cancelled: impl Future<Output = ()>,
 ) -> Result<String, MobileError> {
+    super::offers_chat(connection)?;
     tokio::pin!(cancelled);
     let command = upload_tail(connection.origin_shell(), name, bytes.len());
     let channel = tokio::select! {

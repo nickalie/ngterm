@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use ngterm_core::remote::origin::OriginShell;
+use ngterm_core::remote::origin::OriginForm;
 use ngterm_term::GridSize;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -269,7 +269,7 @@ impl Transport for FakeTransport {
             };
             state.links.insert(id, link);
             Ok(FakeConnection {
-                origin_shell: std::cell::Cell::default(),
+                origin_form: std::cell::Cell::default(),
                 id,
                 machine_id: machine.id.clone(),
                 state: Arc::clone(&self.state),
@@ -298,16 +298,16 @@ pub struct FakeConnection {
     machine_id: String,
     state: Arc<Mutex<State>>,
     lost: watch::Receiver<bool>,
-    origin_shell: std::cell::Cell<OriginShell>,
+    origin_form: std::cell::Cell<OriginForm>,
 }
 
 impl Connection for FakeConnection {
-    fn origin_shell(&self) -> OriginShell {
-        self.origin_shell.get()
+    fn origin_form(&self) -> OriginForm {
+        self.origin_form.get()
     }
 
-    fn set_origin_shell(&self, shell: OriginShell) {
-        self.origin_shell.set(shell);
+    fn set_origin_form(&self, form: OriginForm) {
+        self.origin_form.set(form);
     }
 
     async fn exec(&self, command: &str, pty: Option<GridSize>) -> Result<Channel, TransportError> {

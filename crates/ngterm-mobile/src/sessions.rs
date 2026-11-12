@@ -66,6 +66,9 @@ pub struct RemoteSession {
     pub pane_count: u32,
     /// The divider's direction when it has a split.
     pub split_axis: Option<String>,
+    /// The app the machine runs ([`crate::peer`]); `None` reads as ngterm.
+    #[uniffi(default = None)]
+    pub peer: Option<crate::peer::PeerKind>,
 }
 
 impl From<&ControlRemoteSession> for RemoteSession {
@@ -83,14 +86,23 @@ impl From<&ControlRemoteSession> for RemoteSession {
             parent: session.parent.clone(),
             pane_count: u32::try_from(session.panes.len()).unwrap_or(u32::MAX),
             split_axis: session.split_axis.clone(),
+            peer: None,
         }
     }
 }
 
-/// The sessions of `tree` the app lists: desktop's picker's (no page companions, parents first).
+/// The sessions of `tree` the app lists: desktop's picker's (no page companions, parents first), each naming the app
+/// that listed it.
 #[must_use]
 pub fn listed_sessions(tree: &ControlRemoteTree) -> Vec<RemoteSession> {
-    pickable_sessions(tree).into_iter().map(RemoteSession::from).collect()
+    let peer = Some(tree.endpoint.peer().into());
+    pickable_sessions(tree)
+        .into_iter()
+        .map(|session| RemoteSession {
+            peer,
+            ..RemoteSession::from(session)
+        })
+        .collect()
 }
 
 /// `message` with desktop's `ngtermctl live attach` advice replaced by [`ATTACH_FROM_LIST`]; any other message as it
@@ -192,7 +204,7 @@ async fn run_tree<C: Connection>(connection: &C, deadline: Duration) -> Result<R
 async fn control<C: Connection, S: AsRef<str>>(connection: &C, arguments: &[S]) -> Result<RemoteCommandResult, String> {
     run(
         connection,
-        &control_tail(connection.origin_shell(), arguments),
+        &control_tail(connection.origin_form(), arguments),
         COMPANION_DEADLINE,
     )
     .await
@@ -209,7 +221,9 @@ pub async fn read_tree<C: Connection>(
     deadline: Duration,
 ) -> Result<ControlRemoteTree, String> {
     let result = run_tree(connection, deadline).await?;
-    read_remote_tree(&result, host)
+    let tree = read_remote_tree(&result, host)?;
+    connection.set_origin_peer(tree.endpoint.peer());
+    Ok(tree)
 }
 
 /// [`read_tree`] within desktop's [`TREE_DEADLINE`].

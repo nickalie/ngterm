@@ -31,7 +31,7 @@ pub use result::{
     ControlLiveResetStatus, ControlPickOutcome, ControlPickResult, ControlRemoteGroup, ControlRemoteGroupMember,
     ControlRemoteMember, ControlRemotePane, ControlRemoteSession, ControlRemoteTree, ControlRestartReceipt,
     ControlRestoreStatus, ControlResult, ControlWindowFrame, ControlWindowNode, MessageRejection,
-    MessageRejectionReason,
+    MessageRejectionReason, RemotePeer,
 };
 pub use tree::{ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode};
 pub use version::{AppIdentity, ConformanceProfile, PARITY_LEVEL, VersionResult};

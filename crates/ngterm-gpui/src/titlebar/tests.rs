@@ -621,6 +621,54 @@ fn a_remote_hosts_title_names_the_host_and_the_compact_bar_its_context(cx: &mut 
     assert_eq!(row.size.height, COMPACT_HEIGHT);
 }
 
+/// A row attached from an agterm Mac shows the destination with an `agterm` badge beside it, whose tooltip says what
+/// that Mac lacks; an ngterm row has none.
+#[gpui_kit::test]
+fn an_agterm_rows_host_carries_the_apps_badge(cx: &mut TestAppContext) {
+    let (mut h, cx) = harness(cx, |_| {});
+    let store = h.store_mut();
+    let workspace = store.workspaces()[0].id();
+    let remote = store
+        .add_session(
+            workspace,
+            ngterm_core::model::NewSession {
+                remote_host: Some("agterm:studio".to_owned()),
+                ..ngterm_core::model::NewSession::at_cwd("/srv")
+            },
+        )
+        .unwrap();
+    let origin = ngterm_core::model::RemoteOrigin {
+        host: "agterm:studio".to_owned(),
+        endpoint: ngterm_proto::ControlLiveEndpoint {
+            attach_bridge: None,
+            executable: "/Applications/agterm.app/Contents/MacOS/zmx".to_owned(),
+            socket_directory: "/tmp/agterm-zmx-1".to_owned(),
+            peer: Some(ngterm_proto::RemotePeer::Agterm),
+        },
+        session_name: "build".to_owned(),
+    };
+    let binding = ngterm_core::model::RemoteBinding::new("S1", std::collections::HashMap::new(), Some(1), Some(origin));
+    store.bind_remote(binding, remote);
+    store.select_session(Some(remote));
+    h.settle(cx);
+    let label = h.shown(cx).model.label;
+    assert_eq!(label.host.as_deref(), Some("studio"));
+    assert_eq!(label.peer.as_deref(), Some("agterm"));
+    let host = cx.debug_bounds("titlebar-host").unwrap();
+    let badge = cx.debug_bounds("titlebar-peer").expect("the badge is drawn");
+    assert!(badge.origin.x > host.origin.x, "after the host");
+    assert!(host.size.height >= badge.size.height, "inside the host's line");
+    cx.simulate_mouse_move(badge.center(), None, gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    let store = h.store_mut();
+    let local = store
+        .add_session(workspace, ngterm_core::model::NewSession::at_cwd("/tmp"))
+        .unwrap();
+    store.select_session(Some(local));
+    h.settle(cx);
+    assert!(cx.debug_bounds("titlebar-peer").is_none(), "a local row has no badge");
+}
+
 /// A primary press on the bar may become a window move and its release ends it; a secondary press under the window
 /// manager's own title bar opens no menu of the bar's. Windows has no such title bar: the bar draws the controls
 /// there ([`draws_controls`]), and its secondary press opens the system menu, which GPUI's test window cannot show.

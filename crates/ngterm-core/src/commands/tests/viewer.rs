@@ -123,13 +123,37 @@ fn viewer_with(split: bool) -> Viewer {
 
 /// [`viewer_with`], with `setup` run on the fixture before the attach (a host of web views, a page helper).
 pub(super) fn viewer_built(split: bool, setup: impl FnOnce(&mut Fixture)) -> Viewer {
+    viewer_answered("origin", split, setup, tree_answer)
+}
+
+/// An agterm Mac's listing of the same session, under the listing's marker line: its own endpoint, zmx daemon names.
+fn agterm_tree_answer(origin: (Uuid, Uuid), split: bool) -> String {
+    let agterm = |identity: Uuid| crate::remote::peer::daemon_name(crate::remote::peer::RemotePeer::Agterm, identity);
+    let mut value: Value = serde_json::from_str(&tree_answer(origin, split)).unwrap();
+    let remote = &mut value["result"]["remote"];
+    remote["endpoint"] = json!({"executable": "/Applications/agterm.app/Contents/MacOS/zmx",
+        "socketDirectory": "/tmp/agterm-zmx-abc"});
+    remote["sessions"][0]["panes"][0]["daemon"] = json!(agterm(origin.0));
+    if split {
+        remote["sessions"][0]["panes"][1]["daemon"] = json!(agterm(origin.1));
+    }
+    format!("{}\n{value}", crate::remote::peer::AGTERM_ANSWER)
+}
+
+/// [`viewer_built`] attached from `host`, whose listing is `answer`.
+fn viewer_answered(
+    host: &str,
+    split: bool,
+    setup: impl FnOnce(&mut Fixture),
+    answer: fn((Uuid, Uuid), bool) -> String,
+) -> Viewer {
     let mut fixture = Fixture::new(0);
     setup(&mut fixture);
     let origin = (Uuid::new_v4(), Uuid::new_v4());
     let runner = Arc::new(Runner {
         tree: Mutex::new(RemoteCommandResult {
             status: 0,
-            stdout: tree_answer(origin, split),
+            stdout: answer(origin, split),
             stderr: String::new(),
         }),
         probe_status: Mutex::new(255),
@@ -138,7 +162,7 @@ pub(super) fn viewer_built(split: bool, setup: impl FnOnce(&mut Fixture)) -> Vie
     fixture.core.set_remote_runner(runner.clone());
     let transport = Rc::new(Transport::default());
     fixture.core.set_presentation_transport(transport.clone());
-    let response = attach(&mut fixture.core, Some("origin"), Some(ORIGIN_SESSION));
+    let response = attach(&mut fixture.core, Some(host), Some(ORIGIN_SESSION));
     let session = super::answered_id(&response).unwrap_or_else(|| panic!("{response:?}"));
     // the frontend mounts the replicas' terminals, each carrying its pane identity as its token
     let store = fixture.store_mut().unwrap();
@@ -323,6 +347,84 @@ fn attach_creates_a_remote_row_with_both_panes_and_opens_its_stream() {
     );
     assert!(link.0.borrow().argv.last().unwrap().contains(ORIGIN_SESSION));
     assert_eq!(viewer.sent("hello").len(), 1);
+}
+
+/// An agterm Mac's session attaches as an ngterm one does: each pane runs that Mac's own zmx under zmx's names, the
+/// stream runs its `agtermctl zmx present`, its frames land on the row, and its zmx client's role reports set the lead.
+#[test]
+fn an_agterm_session_attaches_through_its_own_zmx_and_mirrors_its_stream() {
+    let host = "agterm-viewer.example";
+    let mut viewer = viewer_answered(host, true, |_| {}, agterm_tree_answer);
+    let node = viewer.node();
+    assert_eq!(node["remoteHost"], host);
+    assert_eq!(node["splitAxis"], "horizontal");
+    assert_agterm_launches(&viewer);
+    // upstream's hello offers none of this build's own kinds, and its snapshot lands as an ngterm one does
+    let kinds = [
+        "status",
+        "hud",
+        "notify",
+        "sound",
+        "context",
+        "info",
+        "layout",
+        "presenter",
+        "ask",
+        "overlay",
+    ];
+    viewer.connect_listing(&kinds, &json!({"status": {"status": "blocked", "blink": true}}));
+    let node = viewer.node();
+    assert_eq!(node["status"], "blocked");
+    assert_eq!(node["presentation"]["state"], "connected");
+    let pane = viewer.session().pane_identity;
+    let nonce = viewer.fixture.core.live.leads.nonce(pane).unwrap().to_owned();
+    let title = crate::commands::panes::PaneReport::Title(format!("zmx-role;{nonce}:follower:2"));
+    assert!(viewer.fixture.core.report_pane(viewer.session, &wire(pane), &title));
+    assert_eq!(
+        viewer.fixture.core.live.leads.role(pane),
+        Some(crate::live::lead::LeadRole::Follower)
+    );
+}
+
+/// Each pane of `viewer`'s agterm row runs that Mac's zmx under zmx's names, its listing was the detecting one, and its
+/// stream runs that Mac's `agtermctl`.
+fn assert_agterm_launches(viewer: &Viewer) {
+    let session = viewer.session();
+    let binding = &session.remote_presentation().unwrap().binding;
+    let endpoint = &binding.origin.as_ref().unwrap().endpoint;
+    assert_eq!(endpoint.peer, Some(crate::remote::peer::RemotePeer::Agterm));
+    assert_eq!(binding.remote_pane(session.pane_identity), Some(viewer.origin.0));
+    let agterm = |identity| crate::remote::peer::daemon_name(crate::remote::peer::RemotePeer::Agterm, identity);
+    for (launch, daemon) in [
+        (&session.launch, agterm(viewer.origin.0)),
+        (&session.split_launch, agterm(viewer.origin.1)),
+    ] {
+        let line = crate::remote::viewer_run::readable(launch.command.as_ref().unwrap());
+        for part in [
+            daemon.as_str(),
+            "ZMX_MANAGED_CLAIM=1",
+            "ZMX_DIR=/tmp/agterm-zmx-abc",
+            "/Applications/agterm.app/Contents/MacOS/zmx",
+        ] {
+            assert!(line.contains(part), "{part}: {line}");
+        }
+        assert!(!line.contains("NGTERM_LIVE"), "{line}");
+        assert_eq!(launch.attach_bridge, None, "agterm has no clipboard bridge");
+    }
+    let runs = viewer.runner.runs.lock().unwrap().clone();
+    assert_eq!(
+        runs[0].last().unwrap(),
+        &crate::remote::ssh::tree_tail(crate::remote::origin::OriginShell::Posix)
+    );
+    let stream = viewer.link().0.borrow().argv.last().unwrap().clone();
+    assert!(
+        stream.contains("exec agtermctl") && stream.contains("present"),
+        "{stream}"
+    );
+    assert!(
+        stream.contains(ORIGIN_SESSION) && !stream.contains("ngtermctl"),
+        "{stream}"
+    );
 }
 
 #[test]

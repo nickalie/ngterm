@@ -171,9 +171,9 @@ pub fn read_remote_tree(result: &RemoteCommandResult, host: &str) -> Result<Cont
         let detail = tree::remote_error(&result.stdout).or_else(|| (!stderr.is_empty()).then(|| stderr.to_owned()));
         return Err(detail.unwrap_or_else(|| format!("the remote command failed on {host}")));
     }
-    tree::decode(&result.stdout)
-        .map(|remote| remote.stamped(host))
-        .map_err(|error| error.message())
+    let remote = tree::decode(&result.stdout).map_err(|error| error.message())?;
+    super::peer::learn(host, remote.endpoint.peer());
+    Ok(remote.stamped(host))
 }
 
 /// Whether a listed session is one a picker offers: a page companion attaches only under its parent's row, which a

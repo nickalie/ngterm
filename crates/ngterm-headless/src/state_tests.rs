@@ -324,6 +324,7 @@ fn presented() -> (HeadlessState, Arc<Loop>, Uuid, Lines, u64, tempfile::TempDir
     state.core.install_live_sessions(ngterm_core::LiveInstall {
         host: Arc::new(FakeSessionHost::new()),
         endpoint: ngterm_proto::ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: "/bin/sh".into(),
             socket_directory: dir.path().join("live").to_string_lossy().into_owned(),

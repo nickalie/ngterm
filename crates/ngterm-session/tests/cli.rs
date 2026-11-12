@@ -312,6 +312,7 @@ fn a_gone_session_runs_the_guard_and_the_attach_fails() -> TestResult {
 fn the_remote_attach_line_attaches_its_session_and_fails_for_a_gone_one() -> TestResult {
     let namespace = Namespace::new()?;
     let endpoint = ngterm_proto::ControlLiveEndpoint {
+        peer: None,
         attach_bridge: None,
         executable: namespace.executable.to_string_lossy().into_owned(),
         socket_directory: namespace.directory.to_string_lossy().into_owned(),

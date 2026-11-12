@@ -12,10 +12,11 @@ pub const LIMIT: usize = 64 * 1024 * 1024;
 /// Raw contents budget after two base64 layers, reserving space for metadata and MIME names.
 pub const DATA_LIMIT: usize = (LIMIT - 64 * 1024) * 9 / 16;
 
-/// Whether this endpoint can safely launch the private attach protocol.
+/// Whether this endpoint can safely launch the private attach protocol: an ngterm origin's that advertises it, never
+/// an agterm origin's.
 #[must_use]
 pub fn supported(endpoint: &ngterm_proto::ControlLiveEndpoint) -> bool {
-    endpoint.attach_bridge == Some(VERSION)
+    endpoint.attach_bridge == Some(VERSION) && crate::remote::peer::Capabilities::of(endpoint.peer()).clipboard_bridge
 }
 
 #[must_use]

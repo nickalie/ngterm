@@ -48,6 +48,7 @@ pub(super) fn install<H: SessionHost + 'static>(core: &mut Core, host: &Arc<H>, 
     core.install_live_sessions(LiveInstall {
         host: Arc::clone(host) as Arc<dyn SessionHost>,
         endpoint: ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: "/opt/ngterm/bin/ngterm-session".to_owned(),
             socket_directory: "/tmp/ngterm-live-test".to_owned(),
@@ -2395,6 +2396,7 @@ fn live_install_debug_names_the_endpoint_and_state_directory() {
     let install = LiveInstall {
         host: Arc::new(FakeSessionHost::new()),
         endpoint: ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: "test-session-host".to_owned(),
             socket_directory: "test-sockets".to_owned(),
@@ -2518,6 +2520,7 @@ fn a_config_reload_keeps_the_shell_the_launch_latched() {
     fixture.core.install_live_sessions(LiveInstall {
         host: Arc::clone(&host) as Arc<dyn SessionHost>,
         endpoint: ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: "/opt/ngterm/bin/ngterm-session".to_owned(),
             socket_directory: "/tmp/ngterm-live-test".to_owned(),

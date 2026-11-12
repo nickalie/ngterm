@@ -12,15 +12,14 @@
 
 use ngterm_proto::ControlLiveEndpoint;
 
-use super::origin::{self, OriginRun, OriginShell, windows_cli_tail};
+use super::origin::{self, OriginForm, OriginRun, OriginShell, windows_cli_tail};
+use super::peer::{self, AGTERM_ANSWER, RemotePeer, agterm};
 use super::reconnect::RemoteLinkNotice;
-use super::tree::{InvocationError, REMOTE_CLI, is_plain, remote_cli_chain, ssh_arguments, validate};
+use super::tree::{InvocationError, REMOTE_CLI, is_plain, peer_cli_chain, remote_cli_chain, ssh_arguments, validate};
 use super::viewer_run::{KEEP_ALIVE, LOST_RESET, LostLink, NO_KEEP_ALIVE, SSH_LOST, ViewerRun, config_probe};
 use crate::command_restore::shell_quoted_line;
 use crate::live::lead::LeadAttachment;
-use crate::live::{
-    DIRECTORY_VARIABLE, NO_DETACH_KEY_VARIABLE, SESSION_PREFIX_VARIABLE, SESSION_VARIABLE, is_daemon_name,
-};
+use crate::live::{DIRECTORY_VARIABLE, NO_DETACH_KEY_VARIABLE, SESSION_PREFIX_VARIABLE, SESSION_VARIABLE};
 
 /// A filesystem path, which may hold spaces: only control characters and NUL are refused, neither of which survives a
 /// path anyway (upstream's `isPath`).
@@ -37,36 +36,80 @@ fn is_path(value: &str) -> bool {
 /// A host ssh may not take, or a session id that is not one plain token.
 pub fn present_command(host: &str, session: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
-    let tail = present_tail(origin::shell_of(host), session)?;
+    let tail = present_tail(OriginForm::of(host), session)?;
     let mut argv = ssh_arguments(host, 5, false);
     argv.push(tail);
     Ok(argv)
 }
 
 /// The remote command of [`present_command`]: `ngtermctl live present SESSION` through [`remote_cli_chain`], run with
-/// `exec`, or `shell`'s own form.
+/// `exec`, or `form`'s own: a Windows origin's, or an agterm origin's `agtermctl zmx present SESSION`.
 ///
 /// # Errors
 ///
 /// A session id that is not one plain token.
-pub fn present_tail(shell: OriginShell, session: &str) -> Result<String, InvocationError> {
+pub fn present_tail(form: impl Into<OriginForm>, session: &str) -> Result<String, InvocationError> {
     if !is_plain(session) {
         return Err(InvocationError::InvalidSession);
     }
-    if shell == OriginShell::Windows {
+    let form = form.into();
+    if form.is_agterm() {
+        return Ok(agterm_cli_tail(&["live", "present", session], true));
+    }
+    if form.shell == OriginShell::Windows {
         return Ok(windows_cli_tail(&["live", "present", session]));
     }
     let invocation = format!("exec {REMOTE_CLI} live present {}", shell_quoted_line(&[session]));
     Ok(remote_cli_chain(&invocation))
 }
 
-/// The remote command of [`super::tree::tree_argv`]: the far side's bare `ngtermctl live tree --json` through
-/// [`remote_cli_chain`], or `shell`'s own form.
+/// An agterm origin's `agtermctl WORDS` (`live` read as its `zmx`) through [`peer_cli_chain`], run with `exec` when
+/// nothing follows it.
+fn agterm_cli_tail(words: &[&str], exec: bool) -> String {
+    let invocation = format!(
+        "{}{} {}",
+        if exec { "exec " } else { "" },
+        agterm::CLI,
+        shell_quoted_line(&peer::cli_words(RemotePeer::Agterm, words))
+    );
+    peer_cli_chain(RemotePeer::Agterm, &invocation)
+}
+
+/// The remote command of [`super::tree::tree_argv`] for a host that pins no peer: [`tree_tail_for`] with none.
 #[must_use]
 pub fn tree_tail(shell: OriginShell) -> String {
-    match shell {
-        OriginShell::Posix => remote_cli_chain(&format!("{REMOTE_CLI} live tree --json")),
-        OriginShell::Windows => windows_cli_tail(&["live", "tree", "--json"]),
+    tree_tail_for(shell, None)
+}
+
+/// The remote command of [`super::tree::tree_argv`]: the far side's bare `ngtermctl live tree --json`, or, for a host
+/// pinned to agterm, its `agtermctl zmx tree --json` after the [`AGTERM_ANSWER`] line. A host that pins neither runs
+/// ngterm's when it is installed and answers, else agterm's under that line, else ngterm's failure: one ssh call tells
+/// the peer ([`super::peer`]). A Windows origin's form is ngterm's, as agterm runs only on Macs.
+#[must_use]
+pub fn tree_tail_for(shell: OriginShell, pin: Option<RemotePeer>) -> String {
+    let ngterm = format!("{REMOTE_CLI} live tree --json");
+    let agterm = format!("{} {} tree --json", agterm::CLI, agterm::LIVE_GROUP);
+    let marker = shell_quoted_line(&[AGTERM_ANSWER]);
+    match (shell, pin) {
+        (OriginShell::Windows, _) => windows_cli_tail(&["live", "tree", "--json"]),
+        (OriginShell::Posix, Some(RemotePeer::Ngterm)) => remote_cli_chain(&ngterm),
+        (OriginShell::Posix, Some(RemotePeer::Agterm)) => {
+            peer_cli_chain(RemotePeer::Agterm, &format!("printf '%s\\n' {marker} && exec {agterm}"))
+        }
+        (OriginShell::Posix, None) => {
+            let (n, a) = (REMOTE_CLI, agterm::CLI);
+            let script = format!(
+                "PATH=\"$PATH:$HOME/.local/bin:{dirs}\"; \
+                 if command -v {n} >/dev/null 2>&1; then o=$({ngterm}); s=$?; \
+                 if [ \"$s\" -eq 0 ] || ! command -v {a} >/dev/null 2>&1; then printf '%s\\n' \"$o\"; exit \"$s\"; fi; fi; \
+                 if command -v {a} >/dev/null 2>&1; then p=$({agterm}); t=$?; \
+                 if [ \"$t\" -eq 0 ] || [ -z \"${{s:-}}\" ]; then printf '%s\\n%s\\n' {marker} \"$p\"; exit \"$t\"; fi; \
+                 printf '%s\\n' \"$o\"; exit \"$s\"; fi; \
+                 exec {ngterm}",
+                dirs = agterm::PATH_DIRECTORIES,
+            );
+            shell_quoted_line(&["/bin/sh", "-c", script.as_str()])
+        }
     }
 }
 
@@ -82,7 +125,9 @@ pub fn run_job_command(host: &str, job: &str) -> Result<Vec<String>, InvocationE
     if !is_plain(job) {
         return Err(InvocationError::InvalidSession);
     }
-    let tail = match origin::shell_of(host) {
+    let form = OriginForm::of(host);
+    let tail = match form.shell {
+        _ if form.is_agterm() => agterm_cli_tail(&["session", "overlay", "run-job", job], true),
         OriginShell::Posix => remote_cli_chain(&format!(
             "exec {REMOTE_CLI} session overlay run-job {}",
             shell_quoted_line(&[job])
@@ -106,7 +151,9 @@ pub fn page_serve_command(host: &str, token: &str) -> Result<Vec<String>, Invoca
     if !is_plain(token) {
         return Err(InvocationError::InvalidSession);
     }
-    let tail = match origin::shell_of(host) {
+    let form = OriginForm::of(host);
+    let tail = match form.shell {
+        _ if form.is_agterm() => agterm_cli_tail(&["session", "overlay", "page-serve", token], true),
         OriginShell::Posix => remote_cli_chain(&format!(
             "exec {REMOTE_CLI} session overlay page-serve {}",
             shell_quoted_line(&[token])
@@ -216,11 +263,15 @@ pub fn attach_tail(
     daemon: &str,
     lead: Option<&LeadAttachment>,
 ) -> Result<String, InvocationError> {
-    if !is_daemon_name(daemon) {
+    let peer = endpoint.peer();
+    if !peer::is_daemon_name(peer, daemon) {
         return Err(InvocationError::InvalidSession);
     }
     if !is_path(&endpoint.executable) || !is_path(&endpoint.socket_directory) {
         return Err(InvocationError::InvalidEndpoint);
+    }
+    if peer == RemotePeer::Agterm {
+        return Ok(agterm_attach_tail(endpoint, daemon, lead));
     }
     if OriginShell::of_endpoint(endpoint) == OriginShell::Windows {
         return Ok(windows_attach_tail(endpoint, daemon, lead));
@@ -259,6 +310,34 @@ pub fn attach_tail(
         .map(str::to_owned),
     );
     Ok(shell_quoted_line(&words))
+}
+
+/// [`attach_tail`] for an agterm origin (upstream's `attachCommand`): its bundled zmx at the endpoint, under zmx's
+/// attach and lead variables ([`peer::attach_environment`], [`peer::lead_environment`]), with no clipboard bridge.
+fn agterm_attach_tail(endpoint: &ControlLiveEndpoint, daemon: &str, lead: Option<&LeadAttachment>) -> String {
+    let mut words = vec!["/usr/bin/env".to_owned()];
+    let environment = peer::attach_environment(RemotePeer::Agterm, &endpoint.socket_directory);
+    let lead_environment = lead.map(|lead| peer::lead_environment(RemotePeer::Agterm, lead));
+    words.extend(
+        environment
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value))
+            .chain(lead_environment.into_iter().flatten())
+            .map(|(name, value)| format!("{name}={value}")),
+    );
+    words.extend(
+        [
+            endpoint.executable.as_str(),
+            "attach",
+            daemon,
+            "/bin/sh",
+            "-c",
+            GONE_GUARD,
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
+    shell_quoted_line(&words)
 }
 
 /// [`attach_tail`] for a Windows origin: the executable under the same contract's environment, its create-only guard
@@ -409,22 +488,25 @@ pub fn probe_command(host: &str) -> Result<Vec<String>, InvocationError> {
 pub fn control_command<S: AsRef<str>>(host: &str, arguments: &[S]) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
     let mut argv = ssh_arguments(host, 5, false);
-    argv.push(control_tail(origin::shell_of(host), arguments));
+    argv.push(control_tail(OriginForm::of(host), arguments));
     Ok(argv)
 }
 
 /// The remote command of [`control_command`]: the widened `PATH`, then `ngtermctl ARGUMENTS --json`, under `/bin/sh
-/// -c` quoted for any login shell, or `shell`'s own form.
+/// -c` quoted for any login shell, or `form`'s own: a Windows origin's, or an agterm origin's `agtermctl` with
+/// `live` read as its `zmx`.
 #[must_use]
-pub fn control_tail<S: AsRef<str>>(shell: OriginShell, arguments: &[S]) -> String {
-    let mut words: Vec<&str> = arguments.iter().map(AsRef::as_ref).collect();
-    words.push("--json");
-    if shell == OriginShell::Windows {
+pub fn control_tail<S: AsRef<str>>(form: impl Into<OriginForm>, arguments: &[S]) -> String {
+    let form = form.into();
+    let mut words = peer::cli_words(form.peer, arguments);
+    words.push("--json".to_owned());
+    if form.shell == OriginShell::Windows && !form.is_agterm() {
         return windows_cli_tail(&words);
     }
     let chain = format!(
-        "{} && {REMOTE_CLI} {}",
-        super::tree::cli_path_prefix(),
+        "{} && {} {}",
+        super::tree::peer_path_prefix(form.peer),
+        peer::cli(form.peer),
         shell_quoted_line(&words)
     );
     ["/bin/sh", "-c", chain.as_str()].map(account_shell_quoted).join(" ")
@@ -467,6 +549,7 @@ mod tests {
 
     fn endpoint() -> ControlLiveEndpoint {
         ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: "/opt/ngterm/bin/ngterm-session".to_owned(),
             socket_directory: "/tmp/ngterm-live-abc".to_owned(),
@@ -556,6 +639,7 @@ mod tests {
     #[test]
     fn a_windows_endpoints_attach_is_the_session_program_with_its_contract() {
         let endpoint = ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: r"C:\Program Files\ngterm\ngterm-session.exe".to_owned(),
             socket_directory: r"C:\Users\me\AppData\Local\ngterm\live\ab".to_owned(),
@@ -610,10 +694,14 @@ mod tests {
     #[test]
     fn the_tree_and_present_lines_are_the_ssh_options_plus_their_tails() {
         let tree = r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && ngtermctl live tree --json'"#;
-        assert_eq!(tree_tail(OriginShell::Posix), tree);
+        assert_eq!(tree_tail_for(OriginShell::Posix, Some(RemotePeer::Ngterm)), tree);
+        assert_eq!(
+            super::super::tree::tree_argv("ngterm:me@box", OriginShell::Posix),
+            joined(plain_prefix(), tree)
+        );
         assert_eq!(
             super::super::tree::tree_argv("me@box", OriginShell::Posix),
-            joined(plain_prefix(), tree)
+            joined(plain_prefix(), &tree_tail(OriginShell::Posix))
         );
         let present = r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && exec ngtermctl live present '\''S'\''\'\'''\''1'\'''"#;
         assert!(present.starts_with(PATH_CHAIN));
@@ -634,6 +722,7 @@ mod tests {
     #[test]
     fn the_attach_line_is_the_ssh_options_plus_its_tail_with_and_without_a_lead() {
         let endpoint = ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: "/opt/My Apps/ngterm-session".to_owned(),
             socket_directory: "/tmp/ngterm-live-abc".to_owned(),
@@ -667,6 +756,7 @@ mod tests {
             Err(InvocationError::InvalidSession)
         );
         let hostile = ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: "/opt/ngterm-session".to_owned(),
             socket_directory: "/tmp/x\n".to_owned(),
@@ -858,6 +948,7 @@ mod tests {
                 Some(crate::attach_bridge::VERSION + 1),
             ] {
                 let endpoint = ControlLiveEndpoint {
+                    peer: None,
                     executable: executable.into(),
                     socket_directory: "/tmp/live".into(),
                     attach_bridge: version,
@@ -902,6 +993,7 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let endpoint = ControlLiveEndpoint {
+            peer: None,
             executable: executable.to_string_lossy().into_owned(),
             socket_directory: dir.path().to_string_lossy().into_owned(),
             attach_bridge: Some(crate::attach_bridge::VERSION),
@@ -928,12 +1020,14 @@ mod tests {
         }
         let daemon = daemon_name(Uuid::new_v4());
         let spaced = ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: "/home/me/My Apps/ngterm/bin/ngterm-session".to_owned(),
             socket_directory: "/tmp/x".to_owned(),
         };
         assert!(attach_command("buildbox", &spaced, &daemon, None).is_ok());
         let hostile = ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: "/opt/ngterm-session\n".to_owned(),
             socket_directory: "/tmp/x".to_owned(),
@@ -1212,3 +1306,7 @@ mod tests {
         assert!(!fake.marker().exists(), "the name is data, never shell syntax");
     }
 }
+
+#[cfg(test)]
+#[path = "ssh_agterm_tests.rs"]
+mod agterm_tests;

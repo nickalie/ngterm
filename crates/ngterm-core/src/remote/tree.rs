@@ -39,10 +39,11 @@ pub fn is_plain(value: &str) -> bool {
 }
 
 /// Whether `value` may be handed to ssh as its destination: plain, and no leading `-` that ssh would read as an option
-/// (upstream's `RemoteSession.isHost`).
+/// (upstream's `RemoteSession.isHost`), past a peer pin ([`super::peer::destination`]) too.
 #[must_use]
 pub fn is_host(value: &str) -> bool {
-    is_plain(value) && !value.starts_with('-')
+    let destination = super::peer::ssh_destination(value);
+    is_plain(value) && !destination.is_empty() && !destination.starts_with('-')
 }
 
 /// Why an ssh invocation could not be built (upstream's `RemoteSession.InvocationError`).
@@ -87,6 +88,28 @@ pub fn remote_cli_chain(invocation: &str) -> String {
     shell_quoted_line(&["/bin/sh", "-c", chain.as_str()])
 }
 
+/// The `PATH` widening for `peer`'s CLI: this build's install directories, or an agterm Mac's (upstream's
+/// `cliPathPrefix`).
+#[must_use]
+pub fn peer_path_prefix(peer: super::peer::RemotePeer) -> String {
+    match peer {
+        super::peer::RemotePeer::Ngterm => cli_path_prefix(),
+        super::peer::RemotePeer::Agterm => {
+            format!(
+                "PATH=\"$PATH:$HOME/.local/bin:{}\"",
+                super::peer::agterm::PATH_DIRECTORIES
+            )
+        }
+    }
+}
+
+/// [`remote_cli_chain`] for `peer`, whose `invocation` calls [`super::peer::cli`]`(peer)`.
+#[must_use]
+pub fn peer_cli_chain(peer: super::peer::RemotePeer, invocation: &str) -> String {
+    let chain = format!("{} && {invocation}", peer_path_prefix(peer));
+    shell_quoted_line(&["/bin/sh", "-c", chain.as_str()])
+}
+
 /// The ssh options every invocation carries: no pty unless `interactive`, never a prompt, a bounded handshake.
 #[must_use]
 pub fn ssh_arguments(host: &str, connect_timeout: u32, interactive: bool) -> Vec<String> {
@@ -97,7 +120,7 @@ pub fn ssh_arguments(host: &str, connect_timeout: u32, interactive: bool) -> Vec
         "BatchMode=yes".to_owned(),
         "-o".to_owned(),
         format!("ConnectTimeout={connect_timeout}"),
-        host.to_owned(),
+        super::peer::ssh_destination(host).to_owned(),
     ]
 }
 
@@ -106,7 +129,7 @@ pub fn ssh_arguments(host: &str, connect_timeout: u32, interactive: bool) -> Vec
 /// [`ssh_arguments`] plus [`super::ssh::tree_tail`].
 pub(crate) fn tree_argv(host: &str, shell: super::origin::OriginShell) -> Vec<String> {
     let mut argv = ssh_arguments(host, 5, false);
-    argv.push(super::ssh::tree_tail(shell));
+    argv.push(super::ssh::tree_tail_for(shell, super::peer::destination(host).0));
     argv
 }
 
@@ -302,7 +325,7 @@ impl MergeError {
 /// `ngtermctl --json` prints a refusal to stdout and exits nonzero, so stderr is empty on exactly these failures.
 #[must_use]
 pub fn remote_error(stdout: &str) -> Option<String> {
-    let response: Response<ControlResult> = serde_json::from_str(stdout).ok()?;
+    let response: Response<ControlResult> = serde_json::from_str(super::peer::split_answer(stdout).1).ok()?;
     if response.ok {
         return None;
     }
@@ -312,13 +335,21 @@ pub fn remote_error(stdout: &str) -> Option<String> {
         .filter(|error| !error.is_empty())
 }
 
-/// Reads back what the far side's own `live tree` printed (upstream's `decode(stdout:)`). The caller rejects a nonzero
-/// exit before calling this, and stamps the host it was given onto the result.
+/// Reads back what the far side's own `live tree` printed (upstream's `decode(stdout:)`), stamping on its endpoint the
+/// app that answered ([`super::peer::split_answer`]). The caller rejects a nonzero exit before calling this, and stamps
+/// the host it was given onto the result.
 ///
 /// # Errors
 ///
 /// The output is not a response, the far side refused, or an older far side answered without a session list.
 pub fn decode(stdout: &str) -> Result<ControlRemoteTree, MergeError> {
+    let (peer, stdout) = super::peer::split_answer(stdout);
+    let mut tree = decode_answer(stdout)?;
+    tree.endpoint.peer = (peer != super::peer::RemotePeer::Ngterm).then_some(peer);
+    Ok(tree)
+}
+
+fn decode_answer(stdout: &str) -> Result<ControlRemoteTree, MergeError> {
     let response: Response<ControlResult> =
         serde_json::from_str(stdout).map_err(|_| MergeError::MalformedProjection)?;
     if !response.ok {
@@ -485,6 +516,7 @@ mod tests {
 
     fn endpoint() -> ControlLiveEndpoint {
         ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: "/opt/ngterm/bin/ngterm-session".to_owned(),
             socket_directory: "/tmp/ngterm-live-abc".to_owned(),
@@ -970,20 +1002,19 @@ mod tests {
         assert_eq!(remote_error("garbage"), None);
     }
 
-    /// Runs the tree command's remote line the way sshd hands it to the account's shell, in a home whose
-    /// `~/.local/bin` holds a stand-in for each of `clis`, each printing its own name and arguments. Unix only: the
-    /// far side's shell is `/bin/sh`.
+    /// Runs the tree command's remote line for `host` the way sshd hands it to the account's shell, in a home whose
+    /// `~/.local/bin` holds a stand-in for each of `clis` (name, exit status), each printing its own name and
+    /// arguments. Unix only: the far side's shell is `/bin/sh`.
     #[cfg(unix)]
-    fn run_remote_line(clis: &[&str]) -> std::process::Output {
+    fn run_remote_line(host: &str, clis: &[(&str, i32)]) -> std::process::Output {
         let home = tempfile::tempdir().unwrap();
         let bin = home.path().join(".local/bin");
         std::fs::create_dir_all(&bin).unwrap();
-        for cli in clis {
-            ngterm_host::fakes::write_executable(&bin.join(cli), &format!("#!/bin/sh\necho {cli} \"$@\"\n")).unwrap();
+        for (cli, status) in clis {
+            let script = format!("#!/bin/sh\necho {cli} \"$@\"\nexit {status}\n");
+            ngterm_host::fakes::write_executable(&bin.join(cli), &script).unwrap();
         }
-        let line = tree_argv("buildbox", super::super::origin::OriginShell::Posix)
-            .pop()
-            .unwrap();
+        let line = tree_argv(host, super::super::origin::OriginShell::Posix).pop().unwrap();
         std::process::Command::new("/bin/sh")
             .args(["-c", &line])
             .env_clear()
@@ -993,23 +1024,66 @@ mod tests {
             .unwrap()
     }
 
+    /// Stand-in CLIs: each name and the status it exits with.
+    #[cfg(unix)]
+    type Clis<'a> = &'a [(&'a str, i32)];
+
+    #[cfg(unix)]
+    fn answer(output: &std::process::Output) -> (Option<i32>, String) {
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+        )
+    }
+
+    /// One ssh call tells the peer: ngterm's listing whenever it answers, agterm's under its marker line when ngterm is
+    /// missing or fails, ngterm's failure when both fail, and the shell's command-not-found when neither is installed.
     #[cfg(unix)]
     #[test]
-    fn the_remote_line_runs_ngtermctl_and_never_another_cli() {
-        let ours = run_remote_line(&["ngtermctl", "agtermctl"]);
-        assert_eq!(String::from_utf8_lossy(&ours.stdout), "ngtermctl live tree --json\n");
-        let other = run_remote_line(&["agtermctl"]);
+    fn the_remote_line_prefers_ngterm_and_marks_an_agterm_answer() {
+        let ngterm = "ngtermctl live tree --json\n";
+        let agterm = "ngterm-peer: agterm\nagtermctl zmx tree --json\n";
+        let cases: [(Clis<'_>, Option<i32>, &str); 6] = [
+            (&[("ngtermctl", 0), ("agtermctl", 0)], Some(0), ngterm),
+            (&[("ngtermctl", 0)], Some(0), ngterm),
+            (&[("agtermctl", 0)], Some(0), agterm),
+            (&[("ngtermctl", 1), ("agtermctl", 0)], Some(0), agterm),
+            (&[("ngtermctl", 1), ("agtermctl", 1)], Some(1), ngterm),
+            (&[("agtermctl", 1)], Some(1), agterm),
+        ];
+        for (clis, status, stdout) in cases {
+            assert_eq!(
+                answer(&run_remote_line("buildbox", clis)),
+                (status, stdout.to_owned()),
+                "{clis:?}"
+            );
+        }
+        let none = run_remote_line("buildbox", &[]);
+        assert_eq!(none.status.code(), Some(127), "the shell's command-not-found: {none:?}");
+        assert!(none.stdout.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pinned_peer_runs_only_that_apps_listing() {
+        let both: &[(&str, i32)] = &[("ngtermctl", 0), ("agtermctl", 0)];
         assert_eq!(
-            other.status.code(),
-            Some(127),
-            "the shell's command-not-found: {other:?}"
+            answer(&run_remote_line("agterm:buildbox", both)),
+            (Some(0), "ngterm-peer: agterm\nagtermctl zmx tree --json\n".to_owned())
         );
-        assert!(other.stdout.is_empty());
+        assert_eq!(
+            answer(&run_remote_line("ngterm:buildbox", &[("agtermctl", 0)])).0,
+            Some(127)
+        );
+        assert_eq!(
+            answer(&run_remote_line("ngterm:buildbox", both)),
+            (Some(0), "ngtermctl live tree --json\n".to_owned())
+        );
     }
 
     #[test]
     fn the_tree_command_runs_the_bare_form_through_sh_and_refuses_odd_hosts() {
-        let argv = tree_argv("buildbox", super::super::origin::OriginShell::Posix);
+        let argv = tree_argv("ngterm:buildbox", super::super::origin::OriginShell::Posix);
         assert_eq!(
             argv[..7],
             ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "buildbox"]
@@ -1018,8 +1092,22 @@ mod tests {
             argv[7],
             r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && ngtermctl live tree --json'"#
         );
+        let agterm = tree_argv("agterm:me@studio", super::super::origin::OriginShell::Posix);
+        assert_eq!(agterm[6], "me@studio");
+        assert_eq!(
+            agterm[7],
+            r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin" && printf '\''%s\n'\'' '\''ngterm-peer: agterm'\'' && exec agtermctl zmx tree --json'"#
+        );
         assert_eq!(validate(""), Err(InvocationError::EmptyHost));
-        for host in ["-oProxyCommand=x", "bad host", "ho\u{7f}st", "a\u{1b}[31m"] {
+        for host in [
+            "-oProxyCommand=x",
+            "bad host",
+            "ho\u{7f}st",
+            "a\u{1b}[31m",
+            "agterm:",
+            "agterm:-oProxyCommand=x",
+            "ngterm:-x",
+        ] {
             assert_eq!(validate(host), Err(InvocationError::InvalidHost), "{host:?}");
         }
         assert!(is_plain("user@host.example"));

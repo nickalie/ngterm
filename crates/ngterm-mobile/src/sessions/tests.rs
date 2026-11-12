@@ -8,7 +8,7 @@ use serde_json::json;
 use tokio::time::Instant;
 
 use super::*;
-use crate::api::Machine;
+use crate::api::{Machine, MobileError};
 use crate::transport::fake::{FakeConnection, FakeTransport, Script};
 use crate::transport::{ChannelInput, Transport};
 
@@ -142,6 +142,52 @@ async fn a_windows_machine_is_learned_from_its_shells_refusal_and_keeps_its_form
     assert_eq!(commands(&transport)[asked..], [tree_tail(OriginShell::Windows)]);
 }
 
+/// An agterm Mac answers the same listing under its marker line: the connection learns it, every session says so, its
+/// later lines go to `agtermctl`, and the agent chat's calls are refused, as agterm has none.
+#[tokio::test]
+async fn an_agterm_machine_is_learned_from_its_listing_and_gets_agterms_lines() {
+    use ngterm_core::remote::origin::{OriginForm, OriginShell};
+    use ngterm_core::remote::peer::RemotePeer;
+    let transport = FakeTransport::new();
+    let body = json!({"ok": true, "result": {"remote": {
+        "endpoint": {"executable": "/Applications/agterm.app/Contents/MacOS/zmx", "socketDirectory": "/tmp/agterm-zmx-1"},
+        "sessions": [session(PARENT, "parent", None, None)],
+    }}});
+    transport.script(
+        &tree_tail(OriginShell::Posix),
+        Script::ok(&format!("{}\n{body}", ngterm_core::remote::peer::AGTERM_ANSWER)),
+    );
+    let agterm = OriginForm {
+        shell: OriginShell::Posix,
+        peer: RemotePeer::Agterm,
+    };
+    transport.script(
+        &control_tail(agterm, &end_session_arguments(PARENT)),
+        ok(&json!({"ok": true})),
+    );
+    let connection = connected(&transport).await;
+
+    let tree = list(&connection, HOST).await.expect("a listing");
+
+    assert_eq!(connection.origin_form(), agterm);
+    assert_eq!(tree.endpoint.peer, Some(RemotePeer::Agterm));
+    let listed = listed_sessions(&tree);
+    assert_eq!(listed[0].peer, Some(crate::peer::PeerKind::Agterm));
+    end(&connection, HOST, PARENT).await.expect("ended on agterm");
+    let lines = commands(&transport);
+    assert!(
+        lines[1].contains("agtermctl") && !lines[1].contains("ngtermctl"),
+        "{}",
+        lines[1]
+    );
+    assert_eq!(
+        crate::chat::offers_chat(&connection),
+        Err(MobileError::Remote {
+            reason: crate::chat::NO_CHAT_ON_AGTERM.to_owned()
+        })
+    );
+}
+
 #[tokio::test]
 async fn the_list_drops_page_companions_and_puts_parents_first() {
     let transport = FakeTransport::new();
@@ -162,6 +208,8 @@ async fn the_list_drops_page_companions_and_puts_parents_first() {
     assert_eq!(tree.sessions.len(), 3, "the whole listing is kept for attaching");
     let companion = &listed_sessions(&tree)[1];
     assert_eq!(companion.parent.as_deref(), Some(PARENT));
+    assert_eq!(companion.peer, Some(crate::peer::PeerKind::Ngterm));
+    assert!(crate::chat::offers_chat(&connection).is_ok());
     assert_eq!(companion.pane_count, 1);
     assert_eq!(
         commands(&transport),

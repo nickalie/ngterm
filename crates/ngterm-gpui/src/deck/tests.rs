@@ -846,6 +846,7 @@ fn live_core(library: WindowLibrary, resources: &Path) -> Core {
     core.install_live_sessions(LiveInstall {
         host: Arc::new(FakeSessionHost::new()) as Arc<dyn SessionHost>,
         endpoint: ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: "/opt/ngterm/bin/ngterm-session".to_owned(),
             socket_directory: "/tmp/ngterm-live-test".to_owned(),

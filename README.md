@@ -125,6 +125,11 @@ You can attach to Linux, macOS and Windows machines, from a Linux, macOS or Wind
 Windows machine needs Windows' OpenSSH server, with key-based ssh set up for your account; a Windows desktop uses the
 `ssh` on its `PATH`, Windows' own OpenSSH client by default.
 
+A Mac running [agterm](https://github.com/umputun/agterm) in Live sessions mode works too, from every desktop and the
+phone app: ngterm finds out which app answers and marks those sessions **agterm**. They lack what is ngterm's own: the
+agent chat view, Kitty clipboard paste, renames made on that Mac and page companions it opens later. When a Mac runs
+both apps, ngterm answers first; write `agterm:HOST` in `remotes.conf` to reach its agterm instead.
+
 ### A server without a display
 
 To host sessions on a machine with no screen, install ngterm there and run its windowless version:

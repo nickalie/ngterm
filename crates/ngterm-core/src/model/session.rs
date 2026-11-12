@@ -422,6 +422,17 @@ impl Session {
         self.remote_host.as_deref()
     }
 
+    /// The app this remote row's origin runs, from its binding's endpoint; `None` for a local row or one not bound.
+    #[must_use]
+    pub fn remote_peer(&self) -> Option<crate::remote::peer::RemotePeer> {
+        self.remote_presentation
+            .as_ref()?
+            .binding
+            .origin
+            .as_ref()
+            .map(|origin| origin.endpoint.peer())
+    }
+
     /// The session this one is a companion of; `None` for a top-level session.
     #[must_use]
     pub fn parent_id(&self) -> Option<Uuid> {

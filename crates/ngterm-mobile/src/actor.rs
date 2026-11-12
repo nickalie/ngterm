@@ -50,7 +50,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle, ThreadId};
 use std::time::Duration;
 
-use ngterm_core::live::pane_identity;
+use ngterm_core::remote::peer::origin_pane_identity as pane_identity;
 use ngterm_proto::ControlRemoteTree;
 use uuid::Uuid;
 
@@ -69,7 +69,7 @@ use crate::presentation::{self, AskReply, ChannelLinks, LinkEvent, Presentations
 use crate::reconnect::Retry;
 use crate::sessions::{self, RemoteSession};
 use crate::transport::{Connection, Transport, TransportError};
-use ngterm_core::remote::origin::OriginShell;
+use ngterm_core::remote::origin::OriginForm;
 
 /// The actor thread's name.
 pub const THREAD_NAME: &str = "ngterm-mobile";
@@ -274,7 +274,7 @@ struct State<T: Transport> {
     connections: RefCell<HashMap<String, Link<T::Connection>>>,
     /// What each machine's last lost or suspended connection had learned of its shell, for its reconnect, with the
     /// machine as it was then: an entry since edited to reach another machine learns its own.
-    origin_shells: RefCell<HashMap<String, (Machine, OriginShell)>>,
+    origin_shells: RefCell<HashMap<String, (Machine, OriginForm)>>,
     /// The connects in flight, one per machine: a later connect of the same machine joins it, a disconnect or a
     /// connect of the machine as edited cancels it.
     attempts: RefCell<HashMap<String, Attempt>>,
@@ -677,11 +677,11 @@ async fn reach<T: Transport>(state: Rc<State<T>>, mut machine: Machine, generati
 fn connected<T: Transport>(state: &Rc<State<T>>, machine: Machine, connection: T::Connection) {
     let id = machine.id.clone();
     let connection = Rc::new(connection);
-    if let Some((recorded, shell)) = state.origin_shells.borrow().get(&id)
+    if let Some((recorded, form)) = state.origin_shells.borrow().get(&id)
         && recorded.reached_as(&machine)
     {
         // what its last connection learned: a reconnect's streams start before any new listing
-        connection.set_origin_shell(*shell);
+        connection.set_origin_form(*form);
     }
     let link = Link {
         machine,
@@ -714,7 +714,7 @@ async fn watch<T: Transport>(state: Rc<State<T>>, machine_id: String, connection
     };
     state.origin_shells.borrow_mut().insert(
         machine_id.clone(),
-        (link.machine.clone(), link.connection.origin_shell()),
+        (link.machine.clone(), link.connection.origin_form()),
     );
     state.presentations.borrow_mut().machine_down(&machine_id);
     state.panes.borrow_mut().machine_down(&machine_id);
@@ -771,7 +771,7 @@ async fn suspend<T: Transport>(state: &State<T>) {
     for (machine_id, link) in connections {
         state.origin_shells.borrow_mut().insert(
             machine_id.clone(),
-            (link.machine.clone(), link.connection.origin_shell()),
+            (link.machine.clone(), link.connection.origin_form()),
         );
         link.connection.close();
         let machine = SetAside {

@@ -84,7 +84,7 @@ impl Core {
         let origin = state.binding.origin.as_ref().ok_or(missing)?;
         let focused = session.split.focused;
         let lead = LeadAttachment::new(true);
-        let daemon = crate::live::daemon_name(*identity);
+        let daemon = super::peer::daemon_name(origin.endpoint.peer(), *identity);
         let command = attach_pane_command(
             &origin.host,
             &origin.endpoint,

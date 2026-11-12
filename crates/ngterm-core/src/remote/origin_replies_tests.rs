@@ -234,6 +234,65 @@ fn read_remote_tree_stamps_the_host_on_a_listing() {
     assert_eq!(tree.host.as_deref(), Some(HOST));
 }
 
+/// An agterm Mac's `agtermctl zmx tree --json`, in the shape upstream's own suite pins
+/// (`agtermTests/ControlServerRemoteGroupTests.swift`'s `tree`, `ControlServerZmxTests.swift`), after the listing's
+/// marker line.
+const AGTERM_LISTING: &str = concat!(
+    "ngterm-peer: agterm\n",
+    r#"{"ok":true,"result":{"remote":{"endpoint":{"executable":"/Applications/agterm.app/zmx","#,
+    r#""socketDirectory":"/tmp/agterm-zmx-abc"},"presentation":1,"sessions":[{"id":"P","name":"build","#,
+    r#""windowID":"w1","windowName":"main","workspaceID":"ws1","workspaceName":"work","cwd":"/repo","#,
+    r#""splitAxis":"leftRight","status":"working","statusColor":"green","companions":[{"id":"C","name":"tests"}],"#,
+    r#""panes":[{"pane":"left","daemon":"agterm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"},"#,
+    r#"{"pane":"right","daemon":"agterm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2","foreground":["claude"]}]},"#,
+    r#"{"id":"C","name":"tests","windowID":"w1","windowName":"main","workspaceID":"ws1","workspaceName":"work","#,
+    r#""cwd":"/repo","parent":"P","panes":[{"pane":"left","daemon":"agterm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3"}]}]}}}"#,
+    "\n"
+);
+
+#[test]
+fn an_agterm_listing_reads_whole_with_its_peer_stamped_and_learned() {
+    let host = "origin-replies-agterm.example";
+    let tree = read_remote_tree(&answered(0, AGTERM_LISTING, ""), host).unwrap();
+    assert_eq!(tree.host.as_deref(), Some(host));
+    assert_eq!(tree.endpoint.peer, Some(crate::remote::peer::RemotePeer::Agterm));
+    assert_eq!(tree.endpoint.executable, "/Applications/agterm.app/zmx");
+    assert_eq!(tree.presentation, Some(1));
+    assert_eq!(names(&pickable_sessions(&tree)), ["build", "tests"]);
+    assert_eq!(
+        tree.sessions[0].panes[1].daemon,
+        "agterm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2"
+    );
+    assert_eq!(
+        crate::remote::peer::peer_of(host),
+        crate::remote::peer::RemotePeer::Agterm
+    );
+    // the same host answering as ngterm later goes back to ngterm's lines
+    read_remote_tree(&listing(&[created_session()]), host).unwrap();
+    assert_eq!(
+        crate::remote::peer::peer_of(host),
+        crate::remote::peer::RemotePeer::Ngterm
+    );
+}
+
+#[test]
+fn only_the_listings_marker_says_agterm_never_the_answer_itself() {
+    let claims = json!({"ok": true, "result": {"remote": {
+        "endpoint": {"executable": "/opt/ngterm-session", "socketDirectory": "/tmp/n", "peer": "agterm"},
+        "sessions": []}}});
+    let tree = read_remote_tree(&reply(&claims), HOST).unwrap();
+    assert_eq!(tree.endpoint.peer, None);
+}
+
+#[test]
+fn an_agterm_refusal_under_the_marker_is_read_as_its_own_words() {
+    let refusal = "ngterm-peer: agterm\n{\"ok\":false,\"error\":\"agterm is not running\"}\n";
+    assert_eq!(
+        read_remote_tree(&answered(1, refusal, ""), HOST).unwrap_err(),
+        "agterm is not running"
+    );
+}
+
 #[test]
 fn read_remote_tree_prefers_the_far_refusal_then_ssh_then_a_generic_failure() {
     let refusal = answered(1, "{\"ok\": false, \"error\": \"live sessions are off\"}", "ignored");

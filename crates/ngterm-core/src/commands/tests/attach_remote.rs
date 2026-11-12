@@ -2107,6 +2107,7 @@ fn initial_remote_panes_pair_their_capability_gated_commands_and_nonces() {
         let tree = ngterm_proto::ControlRemoteTree {
             host: None,
             endpoint: ngterm_proto::ControlLiveEndpoint {
+                peer: None,
                 executable: "/session".into(),
                 socket_directory: "/live".into(),
                 attach_bridge: capability,
@@ -2154,4 +2155,65 @@ fn initial_remote_panes_pair_their_capability_gated_commands_and_nonces() {
             );
         }
     }
+}
+
+/// `sessions` as an agterm Mac lists them, under the listing's marker line.
+fn agterm_listing(sessions: &[serde_json::Value]) -> RemoteCommandResult {
+    let body = json!({"ok": true, "result": {"remote": {
+        "endpoint": {"executable": "/Applications/agterm.app/Contents/MacOS/zmx", "socketDirectory": "/tmp/agterm-zmx-x"},
+        "presentation": 1,
+        "sessions": sessions,
+    }}});
+    RemoteCommandResult {
+        status: 0,
+        stdout: format!("{}\n{body}", crate::remote::peer::AGTERM_ANSWER),
+        stderr: String::new(),
+    }
+}
+
+/// [`build_session`] on an agterm Mac: its daemon is zmx's.
+fn agterm_build_session() -> serde_json::Value {
+    let mut session = build_session();
+    session["panes"][0]["daemon"] = json!(crate::remote::peer::daemon_name(
+        crate::remote::peer::RemotePeer::Agterm,
+        Uuid::from_u128(0xd1)
+    ));
+    session
+}
+
+/// A `remotes.conf` line pinned to agterm lists and attaches that Mac's agterm, ssh given only the destination, and the
+/// row's later lines (End Session here) go to agterm's CLI too.
+#[test]
+fn a_destination_pinned_to_agterm_attaches_its_session_and_ends_it_there() {
+    let mut attach = Attach::new(Some("agterm:studio Studio\n"));
+    let window = attach.fixture.window;
+    attach.core().attach_remote(window);
+    attach.wait_for_runs(1);
+    assert_eq!(attach.runner.hosts(), ["studio"]);
+    assert!(attach.runner.lines()[0].contains("exec agtermctl zmx tree --json"));
+    assert_eq!(attach.hud(), Some(progress("listing sessions on agterm:studio…")));
+    attach.runner.answer(0, agterm_listing(&[agterm_build_session()]));
+    attach.drive("the session picker opens", |attach| attach.pending().is_some());
+    let picker = attach.pending().unwrap();
+    assert_eq!(picker.prompt.as_deref(), Some("Attach from agterm:studio"));
+    attach.resolve(&picker, picker.picked(0).unwrap());
+    attach.wait_for_runs(2);
+    attach.runner.answer(1, agterm_listing(&[agterm_build_session()]));
+    attach.drive("the attach lands", |attach| attach.remote_rows() == ["build"]);
+    let row = attach.fixture.store().selected_session_id().unwrap();
+    let session = attach.fixture.store().session(row).unwrap();
+    assert_eq!(session.remote_host(), Some("agterm:studio"));
+    let command = crate::remote::viewer_run::readable(session.launch.command.as_ref().unwrap());
+    assert!(command.contains("'ZMX_DIR=/tmp/agterm-zmx-x'"), "{command}");
+    attach.session = row;
+    assert!(attach.act(SidebarAction::EndRemoteSession(row)));
+    attach.wait_for_runs(3);
+    assert_eq!(attach.runner.hosts()[2], "studio");
+    let line = attach.runner.lines()[2].clone();
+    assert!(line.contains("agtermctl") && !line.contains("ngtermctl"), "{line}");
+    assert!(line.contains("close") && line.contains(REMOTE_SESSION), "{line}");
+    attach
+        .runner
+        .answer(2, reply(&json!({"ok": true, "result": {"id": REMOTE_SESSION}})));
+    attach.drive("the row closes", |attach| attach.remote_rows().is_empty());
 }

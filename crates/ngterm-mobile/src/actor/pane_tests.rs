@@ -53,6 +53,7 @@ pub(super) fn daemon() -> String {
 
 pub(super) fn endpoint() -> ControlLiveEndpoint {
     ControlLiveEndpoint {
+        peer: None,
         attach_bridge: None,
         executable: "/ngterm-session".to_owned(),
         socket_directory: "/tmp/ngterm-live-x".to_owned(),

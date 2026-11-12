@@ -75,6 +75,7 @@ impl Remote {
             .surface
             .replace(Box::new(FakeSurface::new(wire(primary))));
         let endpoint = ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: "/ngterm-session".to_owned(),
             socket_directory: "/tmp/live".to_owned(),

@@ -42,7 +42,7 @@ impl RemoteBinding {
     /// Binds a newly attached viewer pane to an origin daemon.
     pub(crate) fn insert_pane(&mut self, local: Uuid, daemon: String) {
         self.local_by_remote.retain(|_, mapped| *mapped != local);
-        if let Some(remote) = crate::live::pane_identity(&daemon) {
+        if let Some(remote) = crate::remote::peer::origin_pane_identity(&daemon) {
             self.local_by_remote.insert(remote, local);
         }
         self.daemons_by_local.insert(local, daemon);
@@ -59,7 +59,9 @@ impl RemoteBinding {
     ) -> Self {
         let local_by_remote = daemons_by_local
             .iter()
-            .filter_map(|(local, daemon)| crate::live::pane_identity(daemon).map(|remote| (remote, *local)))
+            .filter_map(|(local, daemon)| {
+                crate::remote::peer::origin_pane_identity(daemon).map(|remote| (remote, *local))
+            })
             .collect();
         Self {
             remote_session_id: remote_session_id.into(),
@@ -652,6 +654,7 @@ mod tests {
         let origin = RemoteOrigin {
             host: "box".to_owned(),
             endpoint: ControlLiveEndpoint {
+                peer: None,
                 attach_bridge: None,
                 executable: "ngterm".to_owned(),
                 socket_directory: "/tmp".to_owned(),

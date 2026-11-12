@@ -71,6 +71,40 @@ impl OriginShell {
     }
 }
 
+/// How a host's remote commands are formed: the shell that runs them and the app that answers them. An agterm origin
+/// is a Mac, so its commands always take the POSIX form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OriginForm {
+    pub shell: OriginShell,
+    pub peer: super::peer::RemotePeer,
+}
+
+impl OriginForm {
+    /// `host`'s form, as far as this process has learned it ([`shell_of`], [`super::peer::peer_of`]).
+    #[must_use]
+    pub fn of(host: &str) -> Self {
+        Self {
+            shell: shell_of(host),
+            peer: super::peer::peer_of(host),
+        }
+    }
+
+    /// Whether the commands go to an agterm origin.
+    #[must_use]
+    pub fn is_agterm(self) -> bool {
+        self.peer == super::peer::RemotePeer::Agterm
+    }
+}
+
+impl From<OriginShell> for OriginForm {
+    fn from(shell: OriginShell) -> Self {
+        Self {
+            shell,
+            peer: super::peer::RemotePeer::Ngterm,
+        }
+    }
+}
+
 /// What was learned about each host in this process. A host not here is [`OriginShell::Posix`].
 static LEARNED: LazyLock<Mutex<HashMap<String, OriginShell>>> = LazyLock::new(Mutex::default);
 
@@ -202,6 +236,7 @@ mod tests {
     #[test]
     fn a_windows_endpoint_is_known_by_its_paths() {
         let endpoint = |executable: &str| ControlLiveEndpoint {
+            peer: None,
             attach_bridge: None,
             executable: executable.to_owned(),
             socket_directory: "x".to_owned(),

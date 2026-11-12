@@ -60,7 +60,7 @@ use std::time::Duration;
 use ::russh::client::{self, AuthResult, Handle, Msg};
 use ::russh::keys::{HashAlg, PrivateKeyWithHashAlg};
 use ::russh::{ChannelMsg, Disconnect, Sig};
-use ngterm_core::remote::origin::OriginShell;
+use ngterm_core::remote::origin::OriginForm;
 use ngterm_term::GridSize;
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
@@ -216,7 +216,7 @@ impl RusshTransport {
             never = prompt.run(asked) => match never {},
         };
         Ok(RusshConnection {
-            origin_shell: std::cell::Cell::default(),
+            origin_form: std::cell::Cell::default(),
             handle: RefCell::new(Some(Rc::new(handle))),
             closed: Arc::new(AtomicBool::new(false)),
             gone,
@@ -684,16 +684,16 @@ pub struct RusshConnection {
     closed: Arc<AtomicBool>,
     /// Closed once russh's session has ended (its [`Client`] dropped).
     gone: watch::Receiver<()>,
-    origin_shell: std::cell::Cell<OriginShell>,
+    origin_form: std::cell::Cell<OriginForm>,
 }
 
 impl Connection for RusshConnection {
-    fn origin_shell(&self) -> OriginShell {
-        self.origin_shell.get()
+    fn origin_form(&self) -> OriginForm {
+        self.origin_form.get()
     }
 
-    fn set_origin_shell(&self, shell: OriginShell) {
-        self.origin_shell.set(shell);
+    fn set_origin_form(&self, form: OriginForm) {
+        self.origin_form.set(form);
     }
 
     async fn exec(&self, command: &str, pty: Option<GridSize>) -> Result<Channel, TransportError> {

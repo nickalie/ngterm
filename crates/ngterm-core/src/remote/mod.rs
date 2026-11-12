@@ -48,6 +48,7 @@ mod page;
 pub mod page_channel;
 pub mod page_serve;
 pub mod page_tunnel;
+pub mod peer;
 pub mod reconnect;
 pub(crate) mod relaunch;
 pub mod remotes;

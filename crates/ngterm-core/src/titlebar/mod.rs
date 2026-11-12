@@ -43,6 +43,8 @@ pub struct TitlebarParts {
     /// The focused pane's terminal title or its cwd.
     pub detail: String,
     pub remote_host: Option<String>,
+    /// The app the active remote row was attached from; `None` for a local row and for ngterm.
+    pub remote_peer: Option<crate::remote::peer::RemotePeer>,
 }
 
 /// The title bar's two lines.
@@ -50,8 +52,12 @@ pub struct TitlebarParts {
 pub struct TitlebarComposition {
     /// Line one's workspace, session and window identity.
     pub title: String,
-    /// The SSH target after the identity, styled and truncated apart.
+    /// The SSH target after the identity, styled and truncated apart; without its peer pin when [`Self::peer`] names it.
     pub host: Option<String>,
+    /// The app on the host's side when it is not ngterm (`agterm`), drawn beside the host.
+    pub peer: Option<String>,
+    /// What that app lacks, the peer badge's tooltip.
+    pub peer_note: Option<String>,
     /// The compact bar's context, its separator included when another part precedes it.
     pub tail: String,
     /// Line two; empty outside the normal bar.
@@ -71,6 +77,14 @@ pub fn compose(parts: &TitlebarParts, mode: ToolbarMode) -> TitlebarComposition 
     .flatten()
     .collect::<Vec<_>>()
     .join(IDENTITY_SEPARATOR);
+    let peer = parts.remote_host.as_ref().and(parts.remote_peer);
+    let peer_note = peer.and_then(crate::remote::peer::limits_note);
+    let peer = peer.filter(|_| peer_note.is_some());
+    let host = parts.remote_host.as_deref().map(|host| match peer {
+        Some(_) => crate::remote::peer::ssh_destination(host).to_owned(),
+        None => host.to_owned(),
+    });
+    let peer = peer.map(|peer| peer.name().to_owned());
     match mode {
         ToolbarMode::Hidden => TitlebarComposition::default(),
         ToolbarMode::Compact => {
@@ -82,7 +96,9 @@ pub fn compose(parts: &TitlebarParts, mode: ToolbarMode) -> TitlebarComposition 
             };
             TitlebarComposition {
                 title: identity,
-                host: parts.remote_host.clone(),
+                host,
+                peer,
+                peer_note,
                 tail: if context.is_empty() {
                     String::new()
                 } else {
@@ -93,7 +109,9 @@ pub fn compose(parts: &TitlebarParts, mode: ToolbarMode) -> TitlebarComposition 
         }
         ToolbarMode::Normal => TitlebarComposition {
             title: identity,
-            host: parts.remote_host.clone(),
+            host,
+            peer,
+            peer_note,
             tail: String::new(),
             subtitle: parts.context.clone().unwrap_or_else(|| parts.detail.clone()),
         },
@@ -488,6 +506,9 @@ impl Core {
             remote_host: shows(InterfaceElement::RemoteHost)
                 .then(|| active.and_then(Session::remote_host).map(str::to_owned))
                 .flatten(),
+            remote_peer: active
+                .and_then(Session::remote_peer)
+                .filter(|peer| *peer != crate::remote::peer::RemotePeer::Ngterm),
         }
     }
 

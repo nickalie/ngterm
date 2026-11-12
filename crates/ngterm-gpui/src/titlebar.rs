@@ -34,11 +34,12 @@ use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, AssetSource, Context, Decorations, Div, EntityId, EventEmitter, FontWeight, Hsla,
     InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowButton, WindowButtonLayout,
-    WindowControlArea, WindowControls, div, prelude::FluentBuilder as _, px, svg,
+    Render, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Window, WindowButton,
+    WindowButtonLayout, WindowControlArea, WindowControls, div, prelude::FluentBuilder as _, px, svg,
 };
 use ngterm_core::Core;
 use ngterm_core::app_actions::ActionEffect;
@@ -699,6 +700,7 @@ impl Titlebar {
         let host = composition.host.as_ref().map(|host| {
             div()
                 .id("titlebar-host")
+                .debug_selector(|| "titlebar-host".to_owned())
                 .flex()
                 .flex_row()
                 .flex_shrink_0()
@@ -715,6 +717,7 @@ impl Titlebar {
                         .text_ellipsis_middle()
                         .child(middle_ellipsis(host, 30)),
                 )
+                .children(Self::peer_badge(composition, colors))
         });
         let tail = (!composition.tail.is_empty()).then(|| {
             div()
@@ -759,6 +762,28 @@ impl Titlebar {
                     .children(tail),
             )
             .children(subtitle)
+    }
+
+    /// The app on the host's side when it is not ngterm: its name in the host's dimmed ink inside a hairline outline,
+    /// and on hover what it lacks.
+    fn peer_badge(composition: &TitlebarComposition, colors: ChromeColors) -> Option<Stateful<Div>> {
+        let name = composition.peer.clone()?;
+        let note = composition.peer_note.clone().unwrap_or_default();
+        Some(
+            div()
+                .id("titlebar-peer")
+                .debug_selector(|| "titlebar-peer".to_owned())
+                .flex_shrink_0()
+                .px(px(4.))
+                .rounded(px(4.))
+                .border_1()
+                .border_color(chrome::color(colors.foreground, DIVIDER_ALPHA))
+                .text_size(px(11.))
+                .line_height(px(14.))
+                .whitespace_nowrap()
+                .child(name)
+                .tooltip(move |window, cx| Tooltip::new(note.clone()).build(window, cx)),
+        )
     }
 
     /// A 1px divider between two button groups (upstream's `chromeText.opacity(0.25)`, 16 high).

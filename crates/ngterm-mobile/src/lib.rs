@@ -51,6 +51,7 @@ pub mod api;
 pub mod chat;
 pub mod keys;
 pub mod pane;
+pub mod peer;
 pub mod presentation;
 pub mod reconnect;
 pub mod release;
@@ -70,6 +71,7 @@ pub use chat::{
 };
 pub use keys::{KeyError, KeyPair};
 pub use pane::{ClipboardPart, ClipboardReply, ClipboardWriteStatus, PaneClipboard, PaneEnd, PaneRef, PaneRole};
+pub use peer::{PeerCapabilities, PeerKind, peer_capabilities};
 pub use presentation::{
     AskReply, PresentationRole, RemoteAsk, RemoteAskButton, RemoteAskChoice, RemoteAskChoices, RemoteAskInput,
     RemoteHud, RemoteLayout, RemoteNotice, RemoteStatus, StreamState,

@@ -179,6 +179,24 @@ pub(crate) fn page_tail(shell: OriginShell, session_id: &str, side: Side, before
     agent_tail(shell, "", &words)
 }
 
+/// What a chat action on an agterm origin answers: agterm has no `ngtermctl agent`, so the pane stays a terminal.
+pub const NO_CHAT_ON_AGTERM: &str = "agterm has no agent chat view; the pane shows its terminal";
+
+/// Refuses a chat action on a machine whose app has no agent chat ([`ngterm_core::remote::peer::Capabilities`]).
+///
+/// # Errors
+///
+/// [`MobileError::Remote`] with [`NO_CHAT_ON_AGTERM`] on an agterm origin.
+pub(crate) fn offers_chat<C: Connection>(connection: &C) -> Result<(), MobileError> {
+    if ngterm_core::remote::peer::Capabilities::of(connection.origin_form().peer).agent_chat {
+        Ok(())
+    } else {
+        Err(MobileError::Remote {
+            reason: NO_CHAT_ON_AGTERM.to_owned(),
+        })
+    }
+}
+
 /// The catalog's remote command.
 #[must_use]
 pub(crate) fn commands_tail(shell: OriginShell, session_id: &str, side: Side) -> String {
@@ -737,6 +755,7 @@ impl<C: Connection> Chats<C> {
         if self.find(&key).is_some() {
             return Ok(());
         }
+        offers_chat(&*connection)?;
         let side = self.side(&key).ok_or_else(|| MobileError::Remote {
             reason: UNKNOWN_PANE.to_owned(),
         })?;
@@ -937,6 +956,7 @@ impl<C: Connection> Chats<C> {
     ///
     /// [`MobileError::Remote`] with [`UNKNOWN_PANE`] when the session's layout does not hold the pane.
     pub(crate) fn commands(&mut self, key: &ChatKey, connection: Rc<C>) -> Result<Lookup<C>, MobileError> {
+        offers_chat(&*connection)?;
         let side = self.side(key).ok_or_else(|| MobileError::Remote {
             reason: UNKNOWN_PANE.to_owned(),
         })?;

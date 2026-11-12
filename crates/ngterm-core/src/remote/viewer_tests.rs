@@ -260,6 +260,7 @@ fn reconnect_replacements_rotate_the_expected_nonce_and_disable_it_for_old_endpo
             host: "origin".into(),
             session_name: "remote".into(),
             endpoint: ngterm_proto::ControlLiveEndpoint {
+                peer: None,
                 executable: "/session".into(),
                 socket_directory: "/live".into(),
                 attach_bridge: capability,

@@ -389,6 +389,10 @@ fn short_id(id: &str) -> &str {
                   across every one of its open windows. Feed the result to a picker and hand what the user chooses to \
                   `live attach`.\n\
                   \n\
+                  A Mac running upstream agterm answers too, with fewer features, which the listing names: its \
+                  ngterm answers when it can, else its agterm. `agterm:HOST` asks only its agterm (when it runs both), \
+                  `ngterm:HOST` only its ngterm; `live attach` takes the same HOST.\n\
+                  \n\
                   With no HOST, reports this app's own attachable sessions in the same shape — which is exactly the \
                   form the remote call runs on the far side, so it is also how to see what another machine would \
                   answer without sshing anywhere.\n\
@@ -600,48 +604,59 @@ pub fn format_remote_tree(tree: &ngterm_proto::ControlRemoteTree) -> String {
         .as_deref()
         .map(|host| format!(" on {host}"))
         .unwrap_or_default();
+    let peer = tree.endpoint.peer();
     if tree.sessions.is_empty() {
-        return format!("no attachable sessions{place}");
+        let app = if peer == ngterm_proto::RemotePeer::Ngterm {
+            String::new()
+        } else {
+            format!(" ({})", peer.name())
+        };
+        return format!("no attachable sessions{place}{app}");
     }
-    tree.sessions
-        .iter()
-        .map(|session| {
-            let split = if session.panes.len() > 1 {
-                let axis = session
-                    .split_axis
-                    .as_deref()
-                    .map(|axis| format!(" {axis}"))
-                    .unwrap_or_default();
-                format!(" (split{axis})")
-            } else {
-                String::new()
-            };
-            // what the row is for, then where it is: the running command answers "attach to which one" more often
-            // than the path does, and the context line is the far side's own answer to it
-            let running: Vec<&str> = session
-                .panes
-                .iter()
-                .filter_map(|pane| pane.foreground.as_ref()?.first())
-                .map(|program| ngterm_core::command_restore::basename(program))
-                .collect();
-            let detail = [
-                session.context.clone(),
-                (!running.is_empty()).then(|| running.join(" | ")),
-            ]
-            .into_iter()
-            .flatten()
+    let header = ngterm_core::remote::peer::missing_phrase(peer)
+        .map(|missing| format!("{}{place}: {missing} are not available\n", peer.name()))
+        .unwrap_or_default();
+    header
+        + &tree
+            .sessions
+            .iter()
+            .map(|session| {
+                let split = if session.panes.len() > 1 {
+                    let axis = session
+                        .split_axis
+                        .as_deref()
+                        .map(|axis| format!(" {axis}"))
+                        .unwrap_or_default();
+                    format!(" (split{axis})")
+                } else {
+                    String::new()
+                };
+                // what the row is for, then where it is: the running command answers "attach to which one" more often
+                // than the path does, and the context line is the far side's own answer to it
+                let running: Vec<&str> = session
+                    .panes
+                    .iter()
+                    .filter_map(|pane| pane.foreground.as_ref()?.first())
+                    .map(|program| ngterm_core::command_restore::basename(program))
+                    .collect();
+                let detail = [
+                    session.context.clone(),
+                    (!running.is_empty()).then(|| running.join(" | ")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("  ");
+                let tail = if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!("  {detail}")
+                };
+                let at = format!("{}/{}/{}", session.window_name, session.workspace_name, session.name);
+                format!("  {at}{split}  [{}]  {}{tail}", session.id, session.cwd)
+            })
             .collect::<Vec<_>>()
-            .join("  ");
-            let tail = if detail.is_empty() {
-                String::new()
-            } else {
-                format!("  {detail}")
-            };
-            let at = format!("{}/{}/{}", session.window_name, session.workspace_name, session.name);
-            format!("  {at}{split}  [{}]  {}{tail}", session.id, session.cwd)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+            .join("\n")
 }
 
 #[cfg(test)]
@@ -706,6 +721,29 @@ mod tests {
             unreachable!()
         };
         assert_eq!(group.command().make_request().cmd, Command::Live(LiveCmd::Attach));
+    }
+
+    #[test]
+    fn an_agterm_listing_says_which_app_answered_and_what_it_lacks() {
+        let mut tree: ngterm_proto::ControlRemoteTree = serde_json::from_value(serde_json::json!({
+            "host": "studio",
+            "endpoint": {"executable": "/zmx", "socketDirectory": "/tmp/z", "peer": "agterm"},
+            "sessions": []
+        }))
+        .unwrap();
+        assert_eq!(format_remote_tree(&tree), "no attachable sessions on studio (agterm)");
+        tree.sessions = serde_json::from_value(serde_json::json!([{
+            "id": "S1", "name": "build", "windowID": "w", "windowName": "main", "workspaceID": "ws",
+            "workspaceName": "work", "cwd": "/repo", "panes": [{"pane": "left", "daemon": "agterm-1"}]
+        }]))
+        .unwrap();
+        assert_eq!(
+            format_remote_tree(&tree),
+            "agterm on studio: the agent chat view, Kitty clipboard paste, renames made there and page companions \
+             opened there later are not available\n  main/work/build  [S1]  /repo"
+        );
+        tree.endpoint.peer = None;
+        assert_eq!(format_remote_tree(&tree), "  main/work/build  [S1]  /repo");
     }
 
     #[test]

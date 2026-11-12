@@ -26,7 +26,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ngterm_core::remote::origin::OriginShell;
+use ngterm_core::remote::origin::{OriginForm, OriginShell};
+use ngterm_core::remote::peer::RemotePeer;
 use ngterm_term::GridSize;
 use tokio::sync::{Notify, mpsc};
 
@@ -84,11 +85,33 @@ pub trait Connection: 'static {
     /// with a pty of `pty`'s size when given.
     async fn exec(&self, command: &str, pty: Option<GridSize>) -> Result<Channel, TransportError>;
 
-    /// The shell this machine's remote commands go to, as learned so far ([`ngterm_core::remote::origin`]).
-    fn origin_shell(&self) -> OriginShell;
+    /// How this machine's remote commands are formed, as learned so far: the shell they go to
+    /// ([`ngterm_core::remote::origin`]) and the app that answers them ([`ngterm_core::remote::peer`]).
+    fn origin_form(&self) -> OriginForm;
 
     /// Records what this machine turned out to be, for the commands that follow on this connection.
-    fn set_origin_shell(&self, shell: OriginShell);
+    fn set_origin_form(&self, form: OriginForm);
+
+    /// The shell this machine's remote commands go to, as learned so far.
+    fn origin_shell(&self) -> OriginShell {
+        self.origin_form().shell
+    }
+
+    /// Records the shell this machine turned out to run, keeping the app learned.
+    fn set_origin_shell(&self, shell: OriginShell) {
+        self.set_origin_form(OriginForm {
+            shell,
+            ..self.origin_form()
+        });
+    }
+
+    /// Records the app that answered this machine's listing, keeping the shell learned.
+    fn set_origin_peer(&self, peer: RemotePeer) {
+        self.set_origin_form(OriginForm {
+            peer,
+            ..self.origin_form()
+        });
+    }
 
     /// Closes the connection: every open channel ends as [`ChannelEnd::Lost`], and later [`Connection::exec`]s fail
     /// with [`TransportError::Closed`].

@@ -85,10 +85,13 @@ impl LeadNotice {
     pub const PREFIX: &'static str = "ngterm-live-role;";
 
     /// The notice `title` carries; `None` for any other title, and for one that is not
-    /// `<prefix><nonce>:<role>:<generation>` under [`Self::PREFIX`].
+    /// `<prefix><nonce>:<role>:<generation>` under [`Self::PREFIX`], or under an agterm origin's zmx client's prefix
+    /// for a pane attached from one ([`crate::remote::peer::agterm::ROLE_TITLE_PREFIX`]).
     #[must_use]
     pub fn parse(title: &str) -> Option<Self> {
-        let body = title.strip_prefix(Self::PREFIX)?;
+        let body = title
+            .strip_prefix(Self::PREFIX)
+            .or_else(|| title.strip_prefix(crate::remote::peer::agterm::ROLE_TITLE_PREFIX))?;
         let fields: Vec<&str> = body.split(':').collect();
         let [nonce, role, generation] = fields.as_slice() else {
             return None;
@@ -222,6 +225,8 @@ mod tests {
             ("ngterm-live-role;n1:leader:7", LeadRole::Leader, 7),
             ("ngterm-live-role;n1:follower:0", LeadRole::Follower, 0),
             ("ngterm-live-role;n1:unowned:4294967295", LeadRole::Unowned, u32::MAX),
+            // an agterm origin's zmx client, attached from a pane here
+            ("zmx-role;n1:leader:3", LeadRole::Leader, 3),
         ] {
             assert_eq!(
                 LeadNotice::parse(title),
@@ -246,8 +251,7 @@ mod tests {
             "ngterm-live-role;n1:leader:4294967296",
             "ngterm-live-role;:leader:7",
             "ngterm-live-role;n1:leader:7:extra",
-            // upstream's patched zmx's prefix: no live session reports under it any more
-            "zmx-role;n1:leader:7",
+            "zmx-role;n1:leader",
             // this build's prefix before it took the name ngterm
             "agterm-live-role;n1:leader:7",
         ] {

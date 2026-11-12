@@ -803,6 +803,28 @@ say the same to an attach. `ngtermctl` must be on the PATH of that account's ssh
 `ngterm-headless` adds its own folder to the user's PATH (not with a private `NGTERM_STATE_DIR`). A full-screen program
 reaches a viewer through the origin's ConPTY, which re-renders what it draws, as on any ssh login there.
 
+### An agterm origin
+
+A viewer attaches the live sessions of a Mac running upstream agterm too (`crates/ngterm-core/src/remote/peer.rs`). That
+Mac speaks the protocol this remote layer was ported from under its own names, so the viewer forms each remote command
+for the app that answers: `agtermctl zmx tree|present|list`, `agtermctl session …`, and for each pane that Mac's bundled
+zmx under zmx's attach and lead variables, its role reports read under zmx's title prefix. Nothing of agterm runs on the
+viewer: a Unix desktop's pane runs ssh from its `/bin/sh` script, a Windows desktop's through `ngtermctl viewer-run`, the
+mobile core over its own ssh channels, and each only sends that Mac the command strings.
+
+- Which app: a listing runs the far side's `ngtermctl live tree` when it is installed and answers, else its
+  `agtermctl zmx tree` under a marker line, in one ssh call. The viewer stamps the answer on the endpoint
+  (`endpoint.peer`, in `live tree HOST --json` too) and learns it for the host, which the host's later lines follow. A
+  destination may pin the app, `agterm:HOST` or `ngterm:HOST` (`remotes.conf`, `live tree`, `live attach`); the pin
+  stays in the row's host, so a relaunch reaches the same app, and ssh gets only `HOST`.
+- What agterm lacks (`peer::Capabilities`): the agent chat view (the mobile core refuses its calls), the Kitty clipboard
+  bridge (no `attachBridge`), the stream's `name` and `companion.page` frames (its hello never offers them). The title
+  bar shows an `agterm` badge beside the host, with that list as its tooltip; `live tree HOST` prints it as a header; the
+  mobile core gives each listed session its `peer` and `peer_capabilities` the apps' line.
+- Checked against agterm v0.41.1's bundled zmx on a Mac (an attach through these lines reports `zmx-role;<nonce>:leader`
+  and runs what is typed); the listing and stream are pinned by upstream's own fixtures, as a locked Mac's agterm
+  answers no control socket.
+
 ## Android
 
 `mobile/android` is a native Android app (Kotlin, Jetpack Compose, phones and tablets) over the Rust core
