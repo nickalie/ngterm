@@ -1,13 +1,13 @@
 //! Rows attached from other machines come back after a relaunch, an extension beyond upstream, whose relaunch drops
 //! them. Each window's snapshot lists them and its store holds them as saved rows until they attach again
-//! (`model::saved_remote_rows`); here every machine is listed once and each saved row it still offers attaches where
-//! it stood, a companion under its parent's row, nothing selected. A session the machine no longer offers, or one that
-//! cannot be attached, is dropped and named in a banner, as is a saved row whose workspace was closed meanwhile,
-//! silently. A machine that cannot be listed (asleep, offline, ssh refused) is listed again on the reconnect schedule
-//! ([`super::reconnect::retry_delay`]) and its rows stay saved, so a quit before it answers keeps them for the next
-//! launch, until they have waited [`GIVE_UP_AFTER`] through failures in a row (and [`GIVE_UP_IN_RUN`] of them in one
-//! run). Attaching the session by hand meanwhile
-//! takes its saved row over, and closing an attached row is what forgets it.
+//! (`model::saved_remote_rows`); here every machine is listed once for each app its saved rows came from, and each
+//! saved row it still offers attaches where it stood, a companion under its parent's row, nothing selected. A session
+//! the machine no longer offers, or one that cannot be attached, is dropped and named in a banner, as is a saved row
+//! whose workspace was closed meanwhile, silently. A machine that cannot be listed (asleep, offline, ssh refused) is
+//! listed again on the reconnect schedule ([`super::reconnect::retry_delay`]) and its rows stay saved, so a quit before
+//! it answers keeps them for the next launch, until they have waited [`GIVE_UP_AFTER`] through failures in a row (and
+//! [`GIVE_UP_IN_RUN`] of them in one run). Attaching the session by hand meanwhile takes its saved row over, and closing
+//! an attached row is what forgets it.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::attach::Placement;
 use super::frames;
-use super::origin_replies::read_remote_tree;
+use super::origin_replies::read_peer_tree;
 use super::peer::RemotePeer;
 use super::reconnect::retry_delay;
 use super::tree;
@@ -69,8 +69,8 @@ impl RelaunchRead {
 }
 
 impl Core {
-    /// Starts attaching again the rows the open windows saved: one listing per machine, none for a machine already
-    /// being listed. The launch runs it once its windows are restored, and a window reopened from its file runs it
+    /// Starts attaching again the rows the open windows saved: one listing per machine and app the saved rows name, none
+    /// for one already being listed. The launch runs it once its windows are restored, and a window reopened from its file runs it
     /// again. Commit afterwards.
     pub fn reattach_saved_remotes(&mut self) {
         let now = Instant::now();
@@ -147,7 +147,7 @@ impl Core {
             if tree::validate(&read.host).is_err() {
                 // a host ssh is never handed cannot become attachable later
                 let names = self.forget_saved_rows_of(&read.host);
-                self.report_dropped_rows(&read.host, "invalid", &names, "an invalid host");
+                self.report_dropped_rows(&read, "invalid", &names, "an invalid host");
                 return None;
             }
             let listing = super::peer::pinned(&read.host, read.peer);
@@ -160,7 +160,7 @@ impl Core {
         let Some(result) = take_answer(answer) else {
             return Some(read);
         };
-        match read_remote_tree(&result, &read.host) {
+        match read_peer_tree(&result, &read.host) {
             Ok(tree) => {
                 self.reattach_from(&tree, &read);
                 None
@@ -202,7 +202,7 @@ impl Core {
             // the start of the wait is written, so the limit counts across launches
             self.request_window_save(window);
         }
-        self.report_dropped_rows(&read.host, "expired", &expired, "no answer for a week");
+        self.report_dropped_rows(&read, "expired", &expired, "no answer for a week");
         self.saved_remote_hosts().contains(&read.key()).then_some(read)
     }
 
@@ -236,10 +236,10 @@ impl Core {
             }
             self.request_window_save(window);
         }
-        self.report_dropped_rows(host, "gone", &gone, "gone there");
+        self.report_dropped_rows(read, "gone", &gone, "gone there");
         if !failed.is_empty() {
             tracing::warn!(host, failures = failed.join("; "), "saved remote rows did not attach");
-            self.report_dropped_rows(host, "failed", &failed, "could not be attached");
+            self.report_dropped_rows(read, "failed", &failed, "could not be attached");
         }
     }
 
@@ -357,19 +357,24 @@ impl Core {
         names
     }
 
-    /// The banner naming the saved rows of `host` that did not come back, and why; `kind` keeps one reason's banner
-    /// from replacing another's.
-    fn report_dropped_rows(&mut self, host: &str, kind: &str, names: &[String], why: &str) {
+    /// The banner naming the saved rows of `read`'s machine that did not come back, and why; `kind`, and the app for an
+    /// app other than ngterm, keep one reason's or one app's banner from replacing another's.
+    fn report_dropped_rows(&mut self, read: &RelaunchRead, kind: &str, names: &[String], why: &str) {
         if names.is_empty() {
             return;
         }
+        let host = &read.host;
         let what = if names.len() == 1 { "session" } else { "sessions" };
         let body = format!(
             "{} {what} from {host} not attached again ({why}): {}",
             names.len(),
             names.join(", ")
         );
-        self.post_app_banner(format!("remote-relaunch-{kind}-{host}"), BANNER_TITLE, body);
+        let app = match read.peer {
+            RemotePeer::Ngterm => String::new(),
+            RemotePeer::Agterm => format!("-{}", RemotePeer::Agterm.name()),
+        };
+        self.post_app_banner(format!("remote-relaunch-{kind}-{host}{app}"), BANNER_TITLE, body);
     }
 
     /// Asks for `window`'s snapshot to be written now, so a dropped saved row stays dropped.

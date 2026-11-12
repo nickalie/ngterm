@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use super::attach::start_peer_tree_read_within;
 use super::frames::PresentationPane;
-use super::origin_replies::{COMPANION_DEADLINE, PAUSE, READY_BUDGET, read_remote_tree, reply_of};
+use super::origin_replies::{COMPANION_DEADLINE, PAUSE, READY_BUDGET, read_peer_tree, reply_of};
 use super::ssh::{PaneLabel, attach_pane_command, control_command};
 use super::tree::TREE_DEADLINE;
 use super::viewer::{Answer, run_off_thread, take_answer};
@@ -266,7 +266,7 @@ impl Core {
                         return Ok(true);
                     };
                     *answer = None;
-                    let attached = match read_remote_tree(&result, &run.target.host) {
+                    let attached = match read_peer_tree(&result, &run.target.host) {
                         Ok(tree) => self.attach_remote_split(&run.target, &tree)?,
                         Err(error) => {
                             *reason = error;

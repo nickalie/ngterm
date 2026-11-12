@@ -2,7 +2,7 @@ use ngterm_core::remote::origin_replies::{
     self, NEW_SESSION_ARGUMENTS, NOT_ATTACHABLE, PAUSE, READY_BUDGET, RESTORE_MODE_ARGUMENTS, SESSION_NOUN,
     duplicate_session_arguments, end_session_arguments,
 };
-use ngterm_core::remote::ssh::{control_tail, tree_tail};
+use ngterm_core::remote::ssh::{control_tail, tree_tail, tree_tail_for};
 use ngterm_core::remote::tree::{RemoteCommandResult, TREE_DEADLINE};
 use serde_json::json;
 use tokio::time::Instant;
@@ -91,6 +91,14 @@ fn created_receipt() -> serde_json::Value {
 
 fn refusal(error: &str) -> Script {
     exits(1, &json!({"ok": false, "error": error}).to_string(), "")
+}
+
+/// The listing a create's wait runs on an ngterm machine: ngterm's alone, as it created there.
+fn ready_tail() -> String {
+    tree_tail_for(
+        ngterm_core::remote::origin::OriginShell::Posix,
+        Some(ngterm_core::remote::peer::RemotePeer::Ngterm),
+    )
 }
 
 fn restore_line() -> String {
@@ -400,7 +408,7 @@ async fn create_checks_live_creates_and_lists_until_the_session_is_there() {
     creating(&transport, None);
     let parent = session(PARENT, "parent", None, None);
     transport.script_sequence(
-        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        &ready_tail(),
         vec![
             listing(std::slice::from_ref(&parent)),
             listing(&[parent.clone(), session(CREATED, "new", None, None)]),
@@ -419,8 +427,8 @@ async fn create_checks_live_creates_and_lists_until_the_session_is_there() {
         [
             restore_line(),
             control_tail(ngterm_core::remote::origin::OriginShell::Posix, &NEW_SESSION_ARGUMENTS),
-            tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
-            tree_tail(ngterm_core::remote::origin::OriginShell::Posix)
+            ready_tail(),
+            ready_tail()
         ]
     );
 }
@@ -429,10 +437,7 @@ async fn create_checks_live_creates_and_lists_until_the_session_is_there() {
 async fn create_with_a_name_passes_it_as_one_value() {
     let transport = FakeTransport::new();
     creating(&transport, Some("-build logs"));
-    transport.script(
-        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
-        listing(&[session(CREATED, "-build logs", None, None)]),
-    );
+    transport.script(&ready_tail(), listing(&[session(CREATED, "-build logs", None, None)]));
     let connection = connected(&transport).await;
 
     let (created, _) = create(&connection, HOST, Some("  -build logs "), || {})
@@ -515,10 +520,7 @@ async fn create_reports_session_new_failures() {
         let connection = connected(&transport).await;
 
         assert_eq!(create(&connection, HOST, None, || {}).await.map(|_| ()), Err(expected));
-        assert!(
-            !commands(&transport).contains(&tree_tail(ngterm_core::remote::origin::OriginShell::Posix)),
-            "nothing is listed"
-        );
+        assert!(!commands(&transport).contains(&ready_tail()), "nothing is listed");
     }
 }
 
@@ -526,10 +528,7 @@ async fn create_reports_session_new_failures() {
 async fn create_gives_up_once_the_budget_runs_out() {
     let transport = FakeTransport::new();
     creating(&transport, None);
-    transport.script(
-        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
-        listing(&[session(PARENT, "parent", None, None)]),
-    );
+    transport.script(&ready_tail(), listing(&[session(PARENT, "parent", None, None)]));
     let connection = connected(&transport).await;
     let started = Instant::now();
 
@@ -542,7 +541,7 @@ async fn create_gives_up_once_the_budget_runs_out() {
     assert_eq!(started.elapsed(), READY_BUDGET);
     let listings = commands(&transport)
         .iter()
-        .filter(|command| **command == tree_tail(ngterm_core::remote::origin::OriginShell::Posix))
+        .filter(|command| **command == ready_tail())
         .count();
     assert_eq!(listings, 20, "one listing a second within the budget");
 }
@@ -551,10 +550,7 @@ async fn create_gives_up_once_the_budget_runs_out() {
 async fn a_failed_listing_is_the_reason_a_give_up_names() {
     let transport = FakeTransport::new();
     creating(&transport, None);
-    transport.script(
-        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
-        refusal("the store is busy"),
-    );
+    transport.script(&ready_tail(), refusal("the store is busy"));
     let connection = connected(&transport).await;
 
     let error = create(&connection, HOST, None, || {}).await.expect_err("never listed");
@@ -594,6 +590,43 @@ async fn create_stops_waiting_once_the_connection_is_gone() {
     assert!(started.elapsed() < READY_BUDGET);
 }
 
+/// A Mac running both apps, created on agterm: the wait lists agterm alone, so ngterm answering the machine meanwhile
+/// never hides the session agterm created.
+#[tokio::test(start_paused = true)]
+async fn a_create_on_agterm_waits_on_agterms_listing_whichever_app_answers_the_machine() {
+    use ngterm_core::remote::origin::{OriginForm, OriginShell};
+    use ngterm_core::remote::peer::{AGTERM_ANSWER, RemotePeer};
+    let transport = FakeTransport::new();
+    let agterm = OriginForm {
+        shell: OriginShell::Posix,
+        peer: RemotePeer::Agterm,
+    };
+    transport.script(&control_tail(agterm, &RESTORE_MODE_ARGUMENTS), restore_mode("live"));
+    transport.script(&control_tail(agterm, &NEW_SESSION_ARGUMENTS), ok(&created_receipt()));
+    transport.script(&tree_tail(OriginShell::Posix), listing(&[]));
+    let body = json!({"ok": true, "result": {"remote": {
+        "endpoint": {"executable": "/Applications/agterm.app/Contents/MacOS/zmx", "socketDirectory": "/tmp/agterm-zmx-1"},
+        "sessions": [session(CREATED, "new", None, None)],
+    }}});
+    let agterm_tree = tree_tail_for(OriginShell::Posix, Some(RemotePeer::Agterm));
+    transport.script(&agterm_tree, Script::ok(&format!("{AGTERM_ANSWER}\n{body}")));
+    let connection = fresh(&transport).await;
+    connection.set_origin_peer(RemotePeer::Agterm);
+
+    let (created, tree) = create(&connection, HOST, None, || {}).await.expect("created on agterm");
+
+    assert_eq!(created.id, CREATED);
+    assert_eq!(tree.endpoint.peer(), RemotePeer::Agterm);
+    assert_eq!(
+        commands(&transport),
+        [
+            control_tail(agterm, &RESTORE_MODE_ARGUMENTS),
+            control_tail(agterm, &NEW_SESSION_ARGUMENTS),
+            agterm_tree
+        ]
+    );
+}
+
 // MARK: - Duplicate
 
 fn duplicate_line(source: &str) -> String {
@@ -610,7 +643,7 @@ async fn duplicate_checks_live_duplicates_the_source_and_lists_until_the_copy_is
     transport.script(&duplicate_line(PARENT), ok(&created_receipt()));
     let parent = session(PARENT, "parent", None, None);
     transport.script_sequence(
-        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        &ready_tail(),
         vec![
             listing(std::slice::from_ref(&parent)),
             listing(&[parent.clone(), session(CREATED, "parent 2", None, None)]),
@@ -634,8 +667,8 @@ async fn duplicate_checks_live_duplicates_the_source_and_lists_until_the_copy_is
                 ngterm_core::remote::origin::OriginShell::Posix,
                 &["session", "duplicate", "--target", PARENT]
             ),
-            tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
-            tree_tail(ngterm_core::remote::origin::OriginShell::Posix)
+            ready_tail(),
+            ready_tail()
         ]
     );
 }

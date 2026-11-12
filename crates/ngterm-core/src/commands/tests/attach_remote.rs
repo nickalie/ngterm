@@ -1016,6 +1016,33 @@ fn new_session_creates_it_on_the_machine_and_attaches_it_selected() {
     assert_eq!(attach.runner.lines().len(), 4, "the origin is asked once");
 }
 
+/// A Mac running both apps: New Session goes to the app the picker listed, whichever app a listing of the machine
+/// found meanwhile.
+#[test]
+fn new_session_asks_the_app_the_picker_listed() {
+    let host = "two-apps.example";
+    let mut attach = Attach::new(Some(&format!("{host}\n")));
+    let window = attach.fixture.window;
+    attach.core().attach_remote(window);
+    attach.wait_for_runs(1);
+    let agterm = listing(&[]);
+    attach.runner.answer(
+        0,
+        RemoteCommandResult {
+            stdout: format!("{}\n{}", crate::remote::peer::AGTERM_ANSWER, agterm.stdout),
+            ..agterm
+        },
+    );
+    attach.drive("the session picker opens", |attach| attach.pending().is_some());
+    let picker = attach.pending().unwrap();
+    crate::remote::peer::learn(host, crate::remote::peer::RemotePeer::Ngterm);
+
+    attach.pick_new_session(1, &picker);
+
+    let check = attach.runner.lines()[1].clone();
+    assert!(check.contains("agtermctl") && !check.contains("ngtermctl"), "{check}");
+}
+
 #[test]
 fn new_session_on_a_machine_outside_live_sessions_creates_nothing_and_says_why() {
     let answers = [

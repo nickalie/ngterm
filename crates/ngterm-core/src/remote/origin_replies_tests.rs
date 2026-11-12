@@ -275,6 +275,24 @@ fn an_agterm_listing_reads_whole_with_its_peer_stamped_and_learned() {
     );
 }
 
+/// A listing pinned to one app reads the same, but leaves which app the host's own listing finds as it was.
+#[test]
+fn a_pinned_listing_reads_whole_and_learns_nothing() {
+    let host = "origin-replies-pinned.example";
+    read_remote_tree(&listing(&[created_session()]), host).unwrap();
+    let tree = read_peer_tree(&answered(0, AGTERM_LISTING, ""), host).unwrap();
+    assert_eq!(tree.host.as_deref(), Some(host));
+    assert_eq!(tree.endpoint.peer, Some(crate::remote::peer::RemotePeer::Agterm));
+    assert_eq!(
+        crate::remote::peer::peer_of(host),
+        crate::remote::peer::RemotePeer::Ngterm
+    );
+    assert_eq!(
+        read_peer_tree(&answered(1, "", ""), host).unwrap_err(),
+        format!("the remote command failed on {host}")
+    );
+}
+
 #[test]
 fn only_the_listings_marker_says_agterm_never_the_answer_itself() {
     let claims = json!({"ok": true, "result": {"remote": {

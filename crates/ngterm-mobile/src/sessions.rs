@@ -27,13 +27,13 @@ mod tests;
 
 use std::time::Duration;
 
-use ngterm_core::remote::origin::{self, OriginShell};
+use ngterm_core::remote::origin::{self, OriginForm, OriginShell};
 use ngterm_core::remote::origin_replies::{
     COMPANION_DEADLINE, ListingWait, NEW_SESSION_ARGUMENTS, PAUSE, RESTORE_MODE_ARGUMENTS, WaitStep,
     check_restore_mode, duplicate_session_arguments, end_failure, end_session_arguments, pickable_sessions,
     read_remote_tree, session_created,
 };
-use ngterm_core::remote::ssh::{control_tail, tree_tail};
+use ngterm_core::remote::ssh::{control_tail, tree_tail_for};
 use ngterm_core::remote::tree::{
     INVALID_REMOTE_SESSION, NO_ANSWER_IN_TIME, REMOTE_CLI, RemoteCommandResult, TREE_DEADLINE, is_plain,
 };
@@ -184,10 +184,15 @@ fn out_of_time() -> RemoteCommandResult {
 }
 
 /// Runs the machine's `live tree` within `deadline`, learning a Windows origin from a refusal of the POSIX form as
-/// desktop does ([`ngterm_core::remote::origin`]), kept on the connection for the commands that follow.
-async fn run_tree<C: Connection>(connection: &C, deadline: Duration) -> Result<RemoteCommandResult, String> {
+/// desktop does ([`ngterm_core::remote::origin`]), kept on the connection for the commands that follow. `pin` lists
+/// that app alone, as a flow that has chosen it reads the machine.
+async fn run_tree<C: Connection>(
+    connection: &C,
+    deadline: Duration,
+    pin: Option<RemotePeer>,
+) -> Result<RemoteCommandResult, String> {
     let shell = connection.origin_shell();
-    let first = run(connection, &tree_tail(shell), deadline).await?;
+    let first = run(connection, &tree_tail_for(shell, pin), deadline).await?;
     if shell == OriginShell::Windows || !origin::rejected_by_windows_shell(&first) {
         return Ok(first);
     }
@@ -196,7 +201,7 @@ async fn run_tree<C: Connection>(connection: &C, deadline: Duration) -> Result<R
         return Ok(first);
     }
     connection.set_origin_shell(OriginShell::Windows);
-    run(connection, &tree_tail(OriginShell::Windows), deadline).await
+    run(connection, &tree_tail_for(OriginShell::Windows, pin), deadline).await
 }
 
 /// Runs `ARGUMENTS --json` of the CLI of the app on `host`. On a connection no listing has yet told the app of, a
@@ -206,17 +211,28 @@ async fn control<C: Connection, S: AsRef<str>>(
     host: &str,
     arguments: &[S],
 ) -> Result<RemoteCommandResult, String> {
+    let form = known_form(connection, host).await?;
+    control_in(connection, form, arguments).await
+}
+
+/// The form of the connection's commands, once a listing has told it the app: a connection no listing has told yet
+/// lists first.
+async fn known_form<C: Connection>(connection: &C, host: &str) -> Result<OriginForm, String> {
     if !connection.learned().peer_known {
         read_tree(connection, host, TREE_DEADLINE)
             .await
             .map_err(phone_wording)?;
     }
-    run(
-        connection,
-        &control_tail(connection.origin_form(), arguments),
-        COMPANION_DEADLINE,
-    )
-    .await
+    Ok(connection.origin_form())
+}
+
+/// Runs `ARGUMENTS --json` in `form`.
+async fn control_in<C: Connection, S: AsRef<str>>(
+    connection: &C,
+    form: OriginForm,
+    arguments: &[S],
+) -> Result<RemoteCommandResult, String> {
+    run(connection, &control_tail(form, arguments), COMPANION_DEADLINE).await
 }
 
 /// `host`'s attachable sessions, within `deadline`; `host` is the name the messages give the machine.
@@ -229,7 +245,7 @@ pub async fn read_tree<C: Connection>(
     host: &str,
     deadline: Duration,
 ) -> Result<ControlRemoteTree, String> {
-    let result = run_tree(connection, deadline).await?;
+    let result = run_tree(connection, deadline, None).await?;
     let tree = read_remote_tree(&result, host)?;
     connection.set_origin_peer(tree.endpoint.peer());
     Ok(tree)
@@ -282,9 +298,11 @@ async fn make<C: Connection, S: AsRef<str>>(
     arguments: &[S],
     mut listing_starts: impl FnMut(),
 ) -> Result<(ControlRemoteSession, ControlRemoteTree), String> {
-    let mode = control(connection, host, &RESTORE_MODE_ARGUMENTS).await?;
+    // the app asked to create is the one whose listing shows the session, whichever app answers the machine meanwhile
+    let form = known_form(connection, host).await?;
+    let mode = control_in(connection, form, &RESTORE_MODE_ARGUMENTS).await?;
     check_restore_mode(&mode, host)?;
-    let created = control(connection, host, arguments).await?;
+    let created = control_in(connection, form, arguments).await?;
     let created = session_created(&created, host).map_err(phone_wording)?;
     let mut wait = ListingWait::new(created, now());
     loop {
@@ -294,7 +312,7 @@ async fn make<C: Connection, S: AsRef<str>>(
             WaitStep::List(within) => {
                 listing_starts();
                 // The connection is gone: no later listing could run either.
-                let result = match run_tree(connection, within).await {
+                let result = match run_tree(connection, within, Some(form.peer)).await {
                     Ok(result) => result,
                     Err(reason) => return Err(phone_wording(wait.unattached(host, &reason))),
                 };

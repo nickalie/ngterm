@@ -166,13 +166,24 @@ pub fn unattached(noun: &str, created: &str, host: &str, reason: &str) -> String
 ///
 /// The refusal or failure as the caller reads it.
 pub fn read_remote_tree(result: &RemoteCommandResult, host: &str) -> Result<ControlRemoteTree, String> {
+    let remote = read_peer_tree(result, host)?;
+    super::peer::learn(host, remote.endpoint.peer());
+    Ok(remote)
+}
+
+/// [`read_remote_tree`] of a listing pinned to one app ([`super::peer::pinned`]): what answered it says nothing about
+/// which app `host`'s own listing finds, so nothing is learned.
+///
+/// # Errors
+///
+/// As [`read_remote_tree`].
+pub fn read_peer_tree(result: &RemoteCommandResult, host: &str) -> Result<ControlRemoteTree, String> {
     if result.status != 0 {
         let stderr = result.stderr.trim();
         let detail = tree::remote_error(&result.stdout).or_else(|| (!stderr.is_empty()).then(|| stderr.to_owned()));
         return Err(detail.unwrap_or_else(|| format!("the remote command failed on {host}")));
     }
     let remote = tree::decode(&result.stdout).map_err(|error| error.message())?;
-    super::peer::learn(host, remote.endpoint.peer());
     Ok(remote.stamped(host))
 }
 
@@ -275,7 +286,7 @@ impl ListingWait {
         host: &str,
         now: Instant,
     ) -> Option<(ControlRemoteSession, ControlRemoteTree)> {
-        match read_remote_tree(result, host) {
+        match read_peer_tree(result, host) {
             Ok(tree) => {
                 if let Some(session) = tree.sessions.iter().find(|session| session.id == self.created) {
                     return Some((session.clone(), tree));

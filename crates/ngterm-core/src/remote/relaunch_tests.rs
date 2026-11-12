@@ -257,3 +257,34 @@ fn each_apps_saved_rows_are_listed_from_that_app_alone() {
     core.reattach_from(&tree, &read("studio", RemotePeer::Agterm));
     assert_eq!(core.library().store(window).unwrap().saved_remote_rows(), &[ngterm]);
 }
+
+/// Both apps of one Mac drop rows after a reboot: each app's banner stands, neither replaces the other.
+#[test]
+fn each_apps_dropped_rows_get_a_banner_of_their_own() {
+    let (mut core, window, workspace) = core();
+    let ngterm = saved("studio", "one", workspace);
+    let agterm = RemoteSessionSnapshot {
+        peer: Some(RemotePeer::Agterm),
+        ..saved("studio", "two", workspace)
+    };
+    core.library_mut()
+        .store_mut(window)
+        .unwrap()
+        .restore_saved_remote_rows(Some(&[ngterm, agterm]));
+    let empty = |peer: &str| {
+        serde_json::from_value::<ControlRemoteTree>(json!({
+            "endpoint": {"executable": "/x", "socketDirectory": "/tmp/x", "peer": peer},
+            "sessions": []
+        }))
+        .unwrap()
+    };
+
+    core.reattach_from(&empty("ngterm"), &read("studio", RemotePeer::Ngterm));
+    core.reattach_from(&empty("agterm"), &read("studio", RemotePeer::Agterm));
+
+    let identities: Vec<String> = banners(&mut core).into_iter().map(|(identity, ..)| identity).collect();
+    assert_eq!(
+        identities,
+        ["remote-relaunch-gone-studio", "remote-relaunch-gone-studio-agterm"]
+    );
+}

@@ -473,7 +473,7 @@ fn a_remote_failure_names_the_machine_by_its_label() {
 fn a_duplicate_answers_the_copy_and_its_listing_arrives_as_a_tree() {
     use ngterm_core::remote::origin::OriginShell;
     use ngterm_core::remote::origin_replies::{RESTORE_MODE_ARGUMENTS, duplicate_session_arguments};
-    use ngterm_core::remote::ssh::{control_tail, tree_tail};
+    use ngterm_core::remote::ssh::{control_tail, tree_tail, tree_tail_for};
     let transport = FakeTransport::new();
     let live = r#"{"ok": true, "result": {"restore": {"configured": "live", "requestedAtLaunch": "live",
         "active": "live", "restartRequired": false}}}"#;
@@ -495,10 +495,12 @@ fn a_duplicate_answers_the_copy_and_its_listing_arrives_as_a_tree() {
         "endpoint": {"executable": "/ngterm-session", "socketDirectory": "/tmp/ngterm-live-x"},
         "sessions": [attachable(PARENT), attachable(OTHER)],
     }}});
-    transport.script(
-        &tree_tail(OriginShell::Posix),
-        crate::transport::fake::Script::ok(&body.to_string()),
-    );
+    for tail in [
+        tree_tail(OriginShell::Posix),
+        tree_tail_for(OriginShell::Posix, Some(ngterm_core::remote::peer::RemotePeer::Ngterm)),
+    ] {
+        transport.script(&tail, crate::transport::fake::Script::ok(&body.to_string()));
+    }
     let (sink, events) = recorder();
     let core = core(&transport, &sink);
     block_on(core.connect(machine("m1", "box"))).expect("connected");
@@ -518,7 +520,7 @@ fn a_create_on_an_agterm_mac_answers_a_session_marked_agterm() {
     use ngterm_core::remote::origin::{OriginForm, OriginShell};
     use ngterm_core::remote::origin_replies::{NEW_SESSION_ARGUMENTS, RESTORE_MODE_ARGUMENTS};
     use ngterm_core::remote::peer::{AGTERM_ANSWER, RemotePeer};
-    use ngterm_core::remote::ssh::{control_tail, tree_tail};
+    use ngterm_core::remote::ssh::{control_tail, tree_tail, tree_tail_for};
     let transport = FakeTransport::new();
     let agterm = OriginForm {
         shell: OriginShell::Posix,
@@ -540,10 +542,16 @@ fn a_create_on_an_agterm_mac_answers_a_session_marked_agterm() {
             "workspaceName": "work", "cwd": "/repo",
             "panes": [{"pane": "left", "daemon": format!("agterm-{}", "0".repeat(32))}]}],
     }}});
-    transport.script(
-        &tree_tail(OriginShell::Posix),
-        crate::transport::fake::Script::ok(&format!("{AGTERM_ANSWER}\n{body}")),
-    );
+    // the wait for the created session lists agterm alone
+    for tail in [
+        tree_tail(OriginShell::Posix),
+        tree_tail_for(OriginShell::Posix, Some(RemotePeer::Agterm)),
+    ] {
+        transport.script(
+            &tail,
+            crate::transport::fake::Script::ok(&format!("{AGTERM_ANSWER}\n{body}")),
+        );
+    }
     let (sink, _events) = recorder();
     let core = core(&transport, &sink);
     block_on(core.connect(machine("m1", "box"))).expect("connected");

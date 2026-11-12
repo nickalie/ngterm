@@ -342,6 +342,8 @@ pub(super) enum Step {
     /// The window's picker asks which session.
     ChoosingSession {
         host: String,
+        /// The app that answered the listing, which a New Session is asked of.
+        peer: super::peer::RemotePeer,
         pick: String,
         parents: HashSet<String>,
     },
@@ -576,15 +578,23 @@ impl Core {
                 };
                 self.listed(flow, &host, &result)
             }
-            Step::ChoosingSession { host, pick, parents } => match self.picked(flow.window, &pick) {
+            Step::ChoosingSession {
+                host,
+                peer,
+                pick,
+                parents,
+            } => match self.picked(flow.window, &pick) {
                 Picked::Waiting => {
-                    flow.step = Step::ChoosingSession { host, pick, parents };
+                    flow.step = Step::ChoosingSession {
+                        host,
+                        peer,
+                        pick,
+                        parents,
+                    };
                     Some(flow)
                 }
                 Picked::Chosen(session, _) if session == ATTACH_ALL_ID => self.start_attach_all(flow, host),
                 Picked::Chosen(session, _) if session == NEW_SESSION_ID => {
-                    // no row here is bound yet: the app the picker's own listing found
-                    let peer = super::peer::peer_of(&host);
                     self.start_origin_session(flow, host, peer, None)
                 }
                 Picked::Chosen(session, label) => {
@@ -652,6 +662,7 @@ impl Core {
         let pick = self.open_internal_pick(flow.window, items, &format!("Attach from {host}"))?;
         flow.step = Step::ChoosingSession {
             host: host.to_owned(),
+            peer: endpoint.peer(),
             pick,
             parents: sessions
                 .iter()

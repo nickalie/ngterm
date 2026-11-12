@@ -27,7 +27,7 @@ use uuid::Uuid;
 use super::attach::{ActionPanel, AttachRequest, ERROR_SECONDS, PROGRESS_SECONDS, Placement};
 use super::frames::{self, PresentationCompanion, PresentationPage, PresentationPageSource};
 use super::origin_replies::{
-    COMPANION_DEADLINE, NOT_ATTACHABLE, PAUSE, READY_BUDGET, origin_created, read_remote_tree, reply_of, unattached,
+    COMPANION_DEADLINE, NOT_ATTACHABLE, PAUSE, READY_BUDGET, origin_created, read_peer_tree, reply_of, unattached,
 };
 use super::ssh::{control_command, page_serve_command};
 use super::tree::{RemoteCommandResult, TREE_DEADLINE};
@@ -427,7 +427,7 @@ impl Core {
         create: Vec<String>,
     ) -> Step<CompanionFlow> {
         let host = flow.host.clone();
-        let tree = match read_remote_tree(result, &host) {
+        let tree = match read_peer_tree(result, &host) {
             Ok(tree) => tree,
             Err(error) => return Step::done(Err(error)),
         };
@@ -513,7 +513,7 @@ impl Core {
             };
             return Step::Pending(flow, POLL);
         };
-        let listed = read_remote_tree(&result, &host);
+        let listed = read_peer_tree(&result, &host);
         let remote = match &listed {
             Ok(tree) => tree.sessions.iter().find(|session| session.id == created),
             Err(error) => {

@@ -11,11 +11,13 @@
 //!   every later command and a relaunch reach the same app, and ssh is given only `HOST`;
 //! - otherwise the listing finds it: the far side's `ngtermctl live tree` when it answers, else its `agtermctl zmx tree`,
 //!   in one ssh call ([`super::ssh::tree_tail`]), whose agterm answer starts with [`AGTERM_ANSWER`]. What it found is
-//!   stamped on the endpoint ([`ngterm_proto::ControlLiveEndpoint::peer`]) and learned for the host ([`learn`]).
+//!   stamped on the endpoint ([`ngterm_proto::ControlLiveEndpoint::peer`]) and learned for the host ([`learn`]); a
+//!   listing pinned to one app learns nothing.
 //!
 //! A row attached from a host keeps the peer its endpoint was stamped with: every later command for that row, and its
-//! relaunch, go to that app, whichever one a later listing of the host finds. Only a command for no bound row (a new
-//! session asked of a host from the picker) follows what the host's last listing found ([`peer_of`]).
+//! relaunch, go to that app, whichever one a later listing of the host finds. A new session asked of a host from the
+//! picker goes to the app the picker's listing found. Only a command with neither follows what the host's last
+//! unpinned listing found ([`peer_of`]).
 //!
 //! An agterm origin lacks what is this build's own ([`Capabilities`]), and the frontends say so where it shows.
 
