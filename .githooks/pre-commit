@@ -61,8 +61,18 @@ done
 ((${#unformatted[@]} == 0)) || {
   printf 'pre-commit: these staged Rust files are not formatted as cargo fmt leaves them:\n' >&2
   printf '  %s\n' "${unformatted[@]}" >&2
-  printf 'Fix: cargo fmt --all && git add' >&2
-  printf ' %q' "${unformatted[@]}" >&2
-  printf '\n' >&2
+  partial=()
+  for file in "${unformatted[@]}"; do
+    git diff --quiet -- "$file" || partial+=("$file")
+  done
+  if ((${#partial[@]} == 0)); then
+    printf 'Fix: cargo fmt --all && git add' >&2
+    printf ' %q' "${unformatted[@]}" >&2
+    printf '\n' >&2
+  else
+    # `git add` of the whole file would also stage the edits left out of this commit.
+    printf 'Fix: cargo fmt --all, then git add -p only the hunks for this commit; these also have unstaged edits:\n' >&2
+    printf '  %s\n' "${partial[@]}" >&2
+  fi
   exit 1
 }

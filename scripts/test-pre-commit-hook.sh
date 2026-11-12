@@ -52,6 +52,11 @@ expect_commit "formatted Rust commits"
 printf 'pub fn  a( ) {}\n' >crates/a/src/lib.rs
 git add crates/a/src/lib.rs
 expect_refusal "unformatted staged Rust is refused" crates/a/src/lib.rs
+if grep -qF 'git add crates/a/src/lib.rs' "$errors"; then
+  pass "a fully staged file's fix stages it"
+else
+  flunk "a fully staged file's fix doesn't stage it: $(cat "$errors")"
+fi
 
 printf 'pub fn a() {}' >crates/a/src/lib.rs
 git add crates/a/src/lib.rs
@@ -66,6 +71,11 @@ printf 'pub fn a() {}\npub fn  c( ) {}\n' >crates/a/src/lib.rs
 git add crates/a/src/lib.rs
 printf 'pub fn a() {}\npub fn c() {}\n' >crates/a/src/lib.rs
 expect_refusal "unformatted staged contents are refused under a formatted working tree" crates/a/src/lib.rs
+if grep -qF 'git add -p' "$errors" && ! grep -qF 'git add crates' "$errors"; then
+  pass "a partially staged file's fix doesn't stage its unstaged edits"
+else
+  flunk "a partially staged file's fix stages the whole file: $(cat "$errors")"
+fi
 git checkout --quiet -- crates/a/src/lib.rs
 
 printf 'mod missing;\npub fn  d( ) {}\n' >crates/a/src/lib.rs
