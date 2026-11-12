@@ -169,6 +169,9 @@ const LINES: &[(&str, usize)] = &[
     ("vt-xt-checksum-report", 0),
     ("vt-xt-checksum-extension = no-negate,no-attributes,no-trim,full", 0),
     ("vt-xt-checksum-extension = bogus", 1),
+    ("gtk-tabs-inverted = true", 0),
+    ("gtk-tabs-inverted", 0),
+    ("gtk-tabs-inverted = maybe", 1),
 ];
 
 /// `keybind` lines (Task 8's port of `Binding.zig`): triggers, flags, sequences, tables, chains and parameters, with
