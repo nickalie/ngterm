@@ -265,8 +265,7 @@ public final class SessionsModel {
     @discardableResult
     @preconcurrency
     public func attach(sessionId: String, then onAttached: @escaping @MainActor () -> Void) -> Task<Void, Never> {
-        windowShows(sessionId)
-        return Task {
+        Task {
             do {
                 try await graph.connections.attach(machineId: machineId, sessionId: sessionId)
                 onAttached()

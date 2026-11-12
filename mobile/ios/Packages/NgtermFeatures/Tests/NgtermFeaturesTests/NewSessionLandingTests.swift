@@ -157,17 +157,39 @@ internal struct NewSessionLandingTests {
         model.closeNewSession()
         let other = ScaffoldModel(windows: windows)
         let session = SessionWindowID(machineID: "m1", sessionID: "fake-1")
+        let otherGate = test.core.hold("attachSession")
         let opening = SessionsModel(graph: test.graph, machineId: "m1", windows: windows).attach(sessionId: "fake-1") {
             other.session = session
         }
-        let key = SessionKey(machineId: "m1", sessionId: "fake-1")
-        await Wait.until { test.connections.attaching[key] == 2 }
+        await otherGate.reached()
         gate.open()
         await creating?.value
-        await opening.value
-        #expect(other.session == session)
+        #expect(other.session == nil)
         #expect(model.state?.attached == ["fake-1"])
         #expect(!test.core.calls.contains { $0.method == "detachSession" })
+        otherGate.open()
+        await opening.value
+        #expect(other.session == session)
+    }
+
+    @Test("a create during which a tap's attach of another session failed still lands")
+    internal func createTapFailed() async throws {
+        defer { test.remove() }
+        try await connected()
+        let model = model()
+        let gate = test.core.hold("createSession")
+        var opened: [String] = []
+        let creating = model.createAndOpen { opened.append($0) }
+        await gate.reached()
+        test.core.failNext("attachSession", with: .Remote(reason: "the session is gone"))
+        var tapped = false
+        await model.attach(sessionId: "s0") { tapped = true }.value
+        gate.open()
+        await creating?.value
+        #expect(!tapped)
+        #expect(model.notice == "the session is gone")
+        #expect(opened == ["fake-1"])
+        #expect(claims == [SessionKey(machineId: "m1", sessionId: "fake-1")])
     }
 
     @Test("a named create whose screen was left meanwhile closes its sheet, opens nothing and claims nothing")
