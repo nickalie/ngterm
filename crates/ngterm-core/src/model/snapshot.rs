@@ -279,8 +279,10 @@ pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool, h
     session.context.clone_from(&snapshot.context);
     session.tint = snapshot.tint;
     session.last_selected_at = snapshot.last_selected_at.and_then(crate::projection::system_time);
-    session.shell_profile.clone_from(&snapshot.shell_profile);
-    session.split_shell_profile.clone_from(&snapshot.split_shell_profile);
+    // a hand-edited profile that is not well formed (a relative executable, a variable name holding `=`) never runs
+    let valid = crate::shell_profiles::ShellProfile::valid;
+    session.shell_profile = snapshot.shell_profile.clone().filter(valid);
+    session.split_shell_profile = snapshot.split_shell_profile.clone().filter(valid);
     session.launch.command.clone_from(&snapshot.initial_command);
     session.launch.wait = snapshot.command_wait.unwrap_or(false);
     session.launch.argv = copied_argv(snapshot.initial_command.as_ref(), snapshot.initial_argv.as_ref());
@@ -403,6 +405,24 @@ mod lifecycle_tests {
         store.close_split(copy);
         assert_eq!(store.session(copy).unwrap().split_shell_profile, None);
         assert_eq!(store.session(copy).unwrap().shell_profile.as_ref(), Some(&pwsh));
+    }
+
+    #[test]
+    fn malformed_profiles_in_a_snapshot_or_the_settings_are_dropped() {
+        let mut relative = ShellProfile::new("rel", "Relative", "bash.exe".into(), &[]);
+        let mut snapshot = crate::persist::SessionSnapshot::new(uuid::Uuid::new_v4(), "/tmp");
+        snapshot.shell_profile = Some(relative.clone());
+        relative.executable = "C:/Git/bin/bash.exe".into();
+        relative.env.insert("PATH=x;".into(), "y".into());
+        snapshot.split_shell_profile = Some(relative.clone());
+        let session = session_from_snapshot(&snapshot, true, "/tmp");
+        assert_eq!((session.shell_profile, session.split_shell_profile), (None, None));
+        let mut library = WindowLibrary::new("/home/user");
+        library.set_default_shell_profile(Some(relative));
+        let window = library.new_window(None);
+        let store = library.store(window).unwrap();
+        let id = store.selected_session_id().unwrap();
+        assert_eq!(store.session(id).unwrap().shell_profile, None);
     }
 
     #[test]

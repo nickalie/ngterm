@@ -101,8 +101,10 @@ pub struct WindowLibrary {
 }
 
 impl WindowLibrary {
-    /// Apply a default to future sessions only. Existing panes retain their saved profiles.
+    /// Apply a default to future sessions only. Existing panes retain their saved profiles. A profile that is not well
+    /// formed (a hand-edited settings file) is no default.
     pub fn set_default_shell_profile(&mut self, profile: Option<crate::shell_profiles::ShellProfile>) {
+        let profile = profile.filter(crate::shell_profiles::ShellProfile::valid);
         for store in self.stores.values_mut() {
             store.default_shell_profile.clone_from(&profile);
         }

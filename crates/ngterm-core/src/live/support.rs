@@ -29,6 +29,7 @@ use crate::command_restore::{shell_quoted_line, should_restore};
 use crate::pane_env::uuid_string;
 use crate::persist::RestoreMode;
 use crate::restore::mode::LiveRejection;
+use crate::shell_profiles::windows_absolute;
 
 /// What the host offers a wrap: the `ngterm-session` executable, the pane shell and its bundled integration, all
 /// checked.
@@ -149,9 +150,12 @@ const LIVE_PWSH_FLAGS: [&str; 8] = [
 ///
 /// - Unix: zsh, bash, fish or PowerShell, by the basename [`LoginShell::of`] reads. Upstream takes zsh and fish only,
 ///   so its `/bin/bash -l` is `None` there and bash here (capability `live-any-shell`).
-/// - Windows: `pwsh.exe`, `powershell.exe` or Git's `bash.exe`; the absolute path is a drive's or a UNC one.
-///   A whole value that names an existing file is one path. Otherwise a double-quoted executable path preserves
-///   spaces, followed by whitespace-separated startup flags.
+/// - Windows: `pwsh.exe`, `powershell.exe` or a Git for Windows (or MSYS2/Cygwin) `bash.exe`, never the legacy WSL
+///   launcher under `Windows\System32`; the absolute path is a drive's or a UNC one. A whole value that names an
+///   existing file is one path.
+///
+/// On every OS a double-quoted executable path keeps its spaces, followed by whitespace-separated startup flags
+/// (`"/opt/my shells/zsh" -l`); an unquoted value splits on whitespace.
 #[must_use]
 pub fn command_shell(command: &str) -> Option<String> {
     command_shell_on(command, cfg!(windows), &|path| Path::new(path).is_file())
@@ -180,7 +184,7 @@ fn command_shell_on(command: &str, windows: bool, is_file: &dyn Fn(&str) -> bool
     };
     let args: Vec<String> = flags.iter().map(|flag| (*flag).to_owned()).collect();
     let absolute = if windows {
-        is_windows_absolute(shell)
+        windows_absolute(shell)
     } else {
         shell.starts_with('/')
     };
@@ -192,11 +196,13 @@ fn command_shell_on(command: &str, windows: bool, is_file: &dyn Fn(&str) -> bool
 #[must_use]
 pub fn profile_shell<'a>(shell: &'a str, args: &[String]) -> Option<&'a str> {
     let kind = LoginShell::of(shell)?;
-    let windows = is_windows_absolute(shell);
+    let windows = windows_absolute(shell);
     if !windows && !shell.starts_with('/') {
         return None;
     }
-    if windows && !matches!(kind, LoginShell::Pwsh | LoginShell::Bash) {
+    if windows
+        && (!matches!(kind, LoginShell::Pwsh | LoginShell::Bash) || (kind == LoginShell::Bash && wsl_launcher(shell)))
+    {
         return None;
     }
     let valid = if kind == LoginShell::Pwsh {
@@ -208,11 +214,13 @@ pub fn profile_shell<'a>(shell: &'a str, args: &[String]) -> Option<&'a str> {
     valid.then_some(shell)
 }
 
-/// Whether `path` is absolute as Windows reads it: a drive's (`C:\`, `C:/`) or a UNC one (`\\server\share`).
-fn is_windows_absolute(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    path.starts_with(r"\\")
-        || (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/'))
+/// `%SystemRoot%\System32\bash.exe` (or its `SysWOW64`/`Sysnative` view) is WSL's legacy launcher, which runs a Linux
+/// shell that never sees the Windows-side integration variables; discovery skips it the same way.
+fn wsl_launcher(shell: &str) -> bool {
+    let lower = shell.replace('\\', "/").to_ascii_lowercase();
+    ["/windows/system32/", "/windows/syswow64/", "/windows/sysnative/"]
+        .iter()
+        .any(|dir| lower.contains(dir))
 }
 
 /// Everything a pane's wrap configuration is built from (upstream's `ZmxSupport.Inputs`).
@@ -1135,7 +1143,7 @@ mod tests {
     #[test]
     fn a_command_shell_is_an_absolute_wrapped_shell_with_only_live_flags() {
         let no_file = |_: &str| false;
-        let unix: [(&str, Option<&str>); 20] = [
+        let unix: [(&str, Option<&str>); 23] = [
             ("/opt/homebrew/bin/fish --login", Some("/opt/homebrew/bin/fish")),
             ("/bin/zsh", Some("/bin/zsh")),
             ("direct:/bin/zsh -l", Some("/bin/zsh")),
@@ -1157,6 +1165,10 @@ mod tests {
             ("/bin/tcsh -l", None),
             ("direct:shell:/bin/zsh", None),
             (r"C:\Program Files\PowerShell\7\pwsh.exe", None),
+            // a double-quoted path keeps its spaces on Unix too
+            (r#""/opt/my shells/zsh" -l"#, Some("/opt/my shells/zsh")),
+            (r#""/bin/zsh""#, Some("/bin/zsh")),
+            (r#""/bin/zsh"-l"#, None),
         ];
         for (command, expected) in unix {
             assert_eq!(
@@ -1168,7 +1180,7 @@ mod tests {
         let pwsh = r"C:\Program Files\PowerShell\7\pwsh.exe";
         let is_file = |path: &str| path == pwsh;
         let direct = format!("direct:{pwsh}");
-        let windows: [(&str, Option<&str>); 13] = [
+        let windows: [(&str, Option<&str>); 15] = [
             // a whole value naming a file is one path, spaces and all
             (pwsh, Some(pwsh)),
             (&direct, Some(pwsh)),
@@ -1191,6 +1203,9 @@ mod tests {
                 Some(r"C:\Program Files\Git\bin\bash.exe"),
             ),
             (r#""C:\Program Files\Git\bin\bash.exe" -c echo"#, None),
+            // WSL's legacy launcher is no Git Bash
+            (r"C:\Windows\System32\bash.exe -l", None),
+            ("c:/WINDOWS/sysnative/bash.exe", None),
             // Windows supports PowerShell and Git Bash
             (r"C:\msys64\usr\bin\zsh -l", None),
             ("/bin/zsh", None),

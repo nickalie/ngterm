@@ -264,7 +264,11 @@ impl Core {
         let current = store
             .active_session()
             .map(|session| session.local_working_directory(session.focused_cwd(), &home));
-        let selected = profile.as_ref().or(settings.default_shell_profile.as_ref());
+        let default = settings
+            .default_shell_profile
+            .as_ref()
+            .filter(|profile| profile.valid());
+        let selected = profile.as_ref().or(default);
         let cwd = selected
             .and_then(|profile| profile.starting_directory.clone())
             .unwrap_or_else(|| settings.resolve_new_session_cwd(current.as_deref(), &home));

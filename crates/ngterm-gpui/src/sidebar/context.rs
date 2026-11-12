@@ -43,6 +43,8 @@ pub struct FooterState {
 )]
 pub struct SidebarContext {
     pub shell_profiles: Vec<ngterm_core::shell_profiles::ShellProfile>,
+    /// Sessions are restored live (Settings' restore mode), so a profile Live cannot run is marked as a fresh shell.
+    pub live_restore: bool,
     pub menu: MenuContext,
     pub drop: DropContext,
     pub footer: FooterState,
@@ -71,6 +73,7 @@ impl SidebarContext {
             shell_profiles: ngterm_core::shell_profiles::available(
                 settings.shell_profiles.as_deref().unwrap_or_default(),
             ),
+            live_restore: settings.effective_restore_mode() == ngterm_core::persist::RestoreMode::Live,
             menu: menu_context(store, tint_placement),
             drop: drop_context(store, settings),
             footer: FooterState {

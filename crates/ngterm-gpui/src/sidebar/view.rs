@@ -504,8 +504,9 @@ impl Sidebar {
             .menu(gpui_kit::Anchor::BottomLeft, move |popup: PopupMenu, _, cx| {
                 let mut popup = popup.item(footer_item(&sidebar, "New Session", FooterAction::NewSession));
                 if let Some(entity) = sidebar.upgrade() {
-                    for profile in &entity.read(cx).context.shell_profiles {
-                        popup = popup.item(shell_profile_item(&sidebar, profile));
+                    let context = &entity.read(cx).context;
+                    for profile in &context.shell_profiles {
+                        popup = popup.item(shell_profile_item(&sidebar, profile, context.live_restore));
                     }
                 }
                 popup.item(footer_item(&sidebar, "Open Directory…", FooterAction::OpenDirectory))
@@ -585,13 +586,23 @@ fn menu_closed(sidebar: &WeakEntity<Sidebar>, menu: EntityId, cx: &mut App) {
 fn shell_profile_item(
     sidebar: &WeakEntity<Sidebar>,
     profile: &ngterm_core::shell_profiles::ShellProfile,
+    live_restore: bool,
 ) -> PopupMenuItem {
-    let label = if profile.live_shell().is_some() {
-        profile.name.clone()
-    } else {
+    footer_item(
+        sidebar,
+        shell_profile_label(profile, live_restore),
+        FooterAction::ShellProfile(profile.clone()),
+    )
+}
+
+/// A profile's menu label: marked "(fresh shell)" only where sessions are restored live and Live cannot run it, as
+/// Settings' hint says; outside Live every session starts fresh alike.
+pub(super) fn shell_profile_label(profile: &ngterm_core::shell_profiles::ShellProfile, live_restore: bool) -> String {
+    if live_restore && profile.live_shell().is_none() {
         format!("{} (fresh shell)", profile.name)
-    };
-    footer_item(sidebar, label, FooterAction::ShellProfile(profile.clone()))
+    } else {
+        profile.name.clone()
+    }
 }
 
 /// An item of the footer's add-session menu, running `action`.

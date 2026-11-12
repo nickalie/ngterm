@@ -83,6 +83,80 @@ pub fn wsl_arguments(environment: &BTreeMap<String, String>, payload: Option<(&s
 mod tests {
     use super::*;
 
+    /// `launch.sh` run by this host's `/bin/sh` as `wsl.exe --exec /bin/sh -c` runs it, `wslpath` faked by `bin`.
+    #[cfg(unix)]
+    fn run_launcher(args: [&str; 5], home: &std::path::Path, shell: &str, bin: Option<&std::path::Path>) -> String {
+        let path = match bin {
+            Some(bin) => format!("{}:/usr/bin:/bin", bin.display()),
+            None => "/usr/bin:/bin".to_owned(),
+        };
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", WSL_START, "ngterm-wsl"])
+            .args(args)
+            .env_clear()
+            .env("HOME", home)
+            .env("PATH", path)
+            .env("SHELL", shell)
+            .current_dir(home)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_returning_command_runs_in_a_login_shell_outside_the_launchers_scope() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join(".profile"), "export NGTERM_TEST_PROFILE=read\n").unwrap();
+        let line = "echo \"profile=$NGTERM_TEST_PROFILE mode=$3.\"; ngterm_shell=/bin/false";
+        let output = run_launcher(["", "", "return", line, ":"], home.path(), "/bin/echo", None);
+        assert!(output.contains("profile=read mode=."), "{output}");
+        // the user's shell still takes the pane: the command could not replace it
+        assert_eq!(output.lines().last(), Some("-l"), "{output}");
+    }
+
+    /// Linux only: Apple's bash 3.2 skips the `ENV` startup altogether.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wsl_bash_sources_its_loader_from_a_path_holding_expansions_without_running_them() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let wslpath = bin.join("wslpath");
+        std::fs::write(&wslpath, "#!/bin/sh\nfor last; do :; done\nprintf '%s\\n' \"$last\"\n").unwrap();
+        let executable = <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755);
+        std::fs::set_permissions(&wslpath, executable).unwrap();
+        let ghostty = root.path().join("ghostty");
+        let loader = ghostty.join("shell-integration/bash/ghostty.bash");
+        std::fs::create_dir_all(loader.parent().unwrap()).unwrap();
+        std::fs::write(
+            &loader,
+            "echo \"ghostty-loaded bash_env=${NGTERM_WSL_BASH_ENV-unset}\"\n",
+        )
+        .unwrap();
+        let own = root.path().join("own$(touch ran)`touch ran2`");
+        let wsl = own.join("shell-integration/wsl");
+        std::fs::create_dir_all(wsl.join("zsh")).unwrap();
+        std::fs::write(
+            wsl.join("bash-env"),
+            include_str!("../../../../resources/shell-integration/wsl/bash-env"),
+        )
+        .unwrap();
+        let bash = ["/usr/bin/bash", "/bin/bash"]
+            .into_iter()
+            .find(|bash| std::path::Path::new(bash).is_file())
+            .unwrap();
+        let output = run_launcher(
+            [ghostty.to_str().unwrap(), own.to_str().unwrap(), "login", ":", ":"],
+            root.path(),
+            bash,
+            Some(&bin),
+        );
+        assert!(output.contains("ghostty-loaded bash_env=unset"), "{output}");
+        assert!(!root.path().join("ran").exists() && !root.path().join("ran2").exists());
+    }
+
     #[test]
     fn cmd_preserves_the_custom_prompt_and_does_not_duplicate_integration() {
         let mut environment = BTreeMap::from([("Prompt".into(), "hello $P$G".into())]);

@@ -585,7 +585,14 @@ Session action; an explicit CLI directory, a split's directory or a restored ses
 Each primary/split pane saves a copy of its profile in its session snapshot (`shellProfile`/`splitShellProfile`).
 Splitting and duplicating preserve it; changing the default affects only new sessions. Removing a catalog entry or
 an executable does not silently switch existing panes to another shell. Old snapshots without profiles retain the
-config/system behavior. Explicit creation commands keep their existing execution semantics.
+config/system behavior. A malformed profile in a snapshot or `settings.json` (a relative `executable`, an `env` name
+holding `=`) is dropped when read, and the pane starts the config/system shell.
+
+An explicit creation command (`ngtermctl session new --command`) runs through a CMD or WSL profile, with or without
+Live: `cmd <args> /S /C "<line>"` with the line as written, or `/bin/sh -lc <line>` inside the distribution. With
+any other profile it keeps the platform's command shell (`cmd /D /S /C` on Windows, `/bin/sh -c` elsewhere) without
+Live, and the profile's own shell under Live, as with no profile. A profile's `env` applies whenever its program
+runs, not to a command the platform's command shell runs instead.
 
 Live uses the same executable and environment as the selected profile. Git Bash and PowerShell use injected
 integration and accept login/interactive flags (plus PowerShell's banner/stay-open flags). Git Bash integration
@@ -593,7 +600,8 @@ paths use forward slashes, including paths containing spaces; `CHERE_INVOKING=1`
 
 CMD and WSL run directly in the Windows session server's ConPTY. Reattaching preserves the running process,
 its directory and variables, including WSL's Linux shell. CMD preserves startup switches such as `/D`, `/Q`
-and `/V:OFF`. WSL preserves `--distribution`/`-d`, `--user`/`-u` and `--cd` argument pairs. WSL's `--cd` controls
+and `/V:OFF`. A CMD profile with `/V:ON` gets no replay of a captured command after a lost server: delayed expansion
+would read a `!NAME!` in its arguments as a variable. WSL preserves `--distribution`/`-d`, `--user`/`-u` and `--cd` argument pairs. WSL's `--cd` controls
 its Linux starting directory; otherwise WSL translates the Windows launch directory normally. Profiles with
 one-shot commands or management options (for example CMD `/C` or WSL `--shutdown`) open ordinary sessions,
 as the menu/settings indicate, rather than silently dropping their options.
@@ -615,7 +623,7 @@ WSL foreground Linux processes are not captured by the Windows process table for
 Live preserves processes while the server and distribution remain running; it does not survive a Windows reboot
 or `wsl --shutdown`. Reopening after a lost server starts a fresh shell, without its old variables or process
 memory. Explicit WSL creation commands run through `/bin/sh -lc` in the selected distribution; explicit restart
-commands run as POSIX shell text before entering the integrated shell. A surviving daemon always reattaches to
+commands run in a login `/bin/sh -lc` (reading the profile's `PATH`) before entering the integrated shell. A surviving daemon always reattaches to
 its original process.
 
 `python conformance/tools/check_windows_shell_profiles.py STAGE --shell cmd` (or `--shell wsl --distribution Ubuntu`)

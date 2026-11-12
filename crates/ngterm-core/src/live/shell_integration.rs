@@ -255,6 +255,43 @@ impl Inherited {
             xdg_data_dirs: var("XDG_DATA_DIRS"),
         }
     }
+
+    /// These values under a pane's own `overrides` (a shell profile's `env`, applied over the app's environment): the
+    /// integration hands on and extends what the pane's shell would have read without it. Names match as the OS
+    /// matches them (case-insensitively on Windows).
+    #[must_use]
+    pub fn with_overrides(self, overrides: &BTreeMap<String, String>) -> Self {
+        self.with_overrides_on(overrides, cfg!(windows))
+    }
+
+    fn with_overrides_on(mut self, overrides: &BTreeMap<String, String>, fold_case: bool) -> Self {
+        let value = |name: &str| {
+            overrides
+                .iter()
+                .rev()
+                .find(|(key, _)| {
+                    if fold_case {
+                        key.eq_ignore_ascii_case(name)
+                    } else {
+                        *key == name
+                    }
+                })
+                .map(|(_, value)| value.clone())
+        };
+        for (field, name) in [
+            (&mut self.cmd_prompt, "PROMPT"),
+            (&mut self.zdotdir, "ZDOTDIR"),
+            (&mut self.env, "ENV"),
+            (&mut self.histfile, "HISTFILE"),
+            (&mut self.home, "HOME"),
+            (&mut self.xdg_data_dirs, "XDG_DATA_DIRS"),
+        ] {
+            if let Some(value) = value(name) {
+                *field = Some(value);
+            }
+        }
+        self
+    }
 }
 
 /// Sets `shell`'s integration variables in `environment`, the integration under `resources` (a Ghostty resources
@@ -313,6 +350,26 @@ pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, enviro
         }
         environment.insert("CHERE_INVOKING".to_owned(), "1".to_owned());
     }
+    if shell == LoginShell::Bash
+        && let Some(loader) = environment.get_mut("ENV")
+    {
+        *loader = bash_env_literal(loader);
+    }
+}
+
+/// `path` as an `ENV` value bash sources literally: in POSIX mode bash runs parameter expansion, command substitution
+/// and arithmetic expansion on `ENV` before sourcing it, so a `$`, `` ` `` or `\` in an install path is escaped
+/// rather than run (`a$(cmd)b` would run `cmd`). The user's own `ENV`, handed on in `GHOSTTY_BASH_ENV`, is theirs and
+/// stays as written.
+fn bash_env_literal(path: &str) -> String {
+    let mut literal = String::with_capacity(path.len());
+    for c in path.chars() {
+        if matches!(c, '$' | '`' | '\\') {
+            literal.push('\\');
+        }
+        literal.push(c);
+    }
+    literal
 }
 
 /// [`inject`] for a live pane's surface: fish gets only [`FISH_INTEGRATION_VARIABLE`], and `XDG_DATA_DIRS` stays the
@@ -412,7 +469,8 @@ pub fn setup_as(
     Some(line)
 }
 
-/// Integrate structured argv without reparsing a path or an argument containing whitespace or quotes.
+/// Integrate structured argv without reparsing a path or an argument containing whitespace or quotes. Detection
+/// is [`setup`]'s: on macOS Apple's `/bin/bash` is left alone unless the integration is forced.
 #[must_use]
 pub fn setup_profile(
     force: Option<LoginShell>,
@@ -421,7 +479,26 @@ pub fn setup_profile(
     inherited: &Inherited,
     environment: &mut BTreeMap<String, String>,
 ) -> Option<Vec<String>> {
-    let shell = force.or_else(|| LoginShell::of(&profile.executable))?;
+    setup_profile_on(
+        cfg!(target_os = "macos"),
+        force,
+        profile,
+        resources,
+        inherited,
+        environment,
+    )
+}
+
+/// [`setup_profile`] with Ghostty's detection on `darwin` or not, so both are tested on every OS.
+fn setup_profile_on(
+    darwin: bool,
+    force: Option<LoginShell>,
+    profile: &crate::shell_profiles::ShellProfile,
+    resources: &Path,
+    inherited: &Inherited,
+    environment: &mut BTreeMap<String, String>,
+) -> Option<Vec<String>> {
+    let shell = force.or_else(|| detect(&profile.executable, darwin))?;
     if !shell.is_bundled(resources) {
         return None;
     }
@@ -1071,5 +1148,80 @@ mod structured_profile_tests {
         assert_eq!(env.get("GHOSTTY_BASH_RCFILE").unwrap(), "/home/a b/init.sh");
         assert_eq!(env.get("GHOSTTY_BASH_INJECT").unwrap(), "1 --noprofile");
         assert!(env.contains_key("ENV"));
+    }
+
+    /// Linux only: Apple's bash 3.2 skips the `ENV` startup altogether.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bash_sources_a_loader_whose_path_holds_expansions_without_running_them() {
+        let resources = tempfile::tempdir().unwrap();
+        let root = resources.path().join("a$(touch ran)b`touch ran2`\\c$HOME");
+        let loader = root.join("shell-integration/bash/ghostty.bash");
+        std::fs::create_dir_all(loader.parent().unwrap()).unwrap();
+        std::fs::write(&loader, "echo sourced-literally\n").unwrap();
+        let mut env = BTreeMap::new();
+        inject(LoginShell::Bash, &root, &Inherited::default(), &mut env);
+        let output = std::process::Command::new("bash")
+            .args(["--posix", "-i"])
+            .env_clear()
+            .env("ENV", &env["ENV"])
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .current_dir(resources.path())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&output.stdout).contains("sourced-literally"));
+        assert!(!resources.path().join("ran").exists() && !resources.path().join("ran2").exists());
+        assert_eq!(bash_env_literal("/plain/path"), "/plain/path");
+    }
+
+    #[test]
+    fn a_profiles_startup_variables_are_handed_on_over_the_apps() {
+        let app = Inherited {
+            env: Some("/app/env".to_owned()),
+            home: Some("/home/app".to_owned()),
+            ..Inherited::default()
+        };
+        let profile = BTreeMap::from([
+            ("HISTFILE".to_owned(), "/profile/history".to_owned()),
+            ("zdotdir".to_owned(), "/profile/zdot".to_owned()),
+        ]);
+        let unix = app.clone().with_overrides_on(&profile, false);
+        assert_eq!(unix.histfile.as_deref(), Some("/profile/history"));
+        assert_eq!((unix.zdotdir.as_deref(), unix.env.as_deref()), (None, Some("/app/env")));
+        let windows = app.with_overrides_on(&profile, true);
+        assert_eq!(windows.zdotdir.as_deref(), Some("/profile/zdot"));
+        // the bash integration keeps the profile's history file instead of pinning the home's
+        let resources = tempfile::tempdir().unwrap();
+        let mut env = BTreeMap::new();
+        inject(LoginShell::Bash, resources.path(), &unix, &mut env);
+        assert!(!env.contains_key("HISTFILE") && !env.contains_key("GHOSTTY_BASH_UNEXPORT_HISTFILE"));
+        assert_eq!(env["GHOSTTY_BASH_ENV"], "/app/env");
+    }
+
+    #[test]
+    fn apples_bin_bash_profile_is_not_detected_on_macos_unless_forced() {
+        let resources = tempfile::tempdir().unwrap();
+        let loader = resources.path().join("shell-integration/bash/ghostty.bash");
+        std::fs::create_dir_all(loader.parent().unwrap()).unwrap();
+        std::fs::write(loader, "").unwrap();
+        let profile = crate::shell_profiles::ShellProfile::new("bash", "Bash", "/bin/bash".into(), &["-l"]);
+        let mut env = BTreeMap::new();
+        let detected = setup_profile_on(true, None, &profile, resources.path(), &Inherited::default(), &mut env);
+        assert_eq!((detected, env.is_empty()), (None, true), "Apple's bash runs as given");
+        let forced = setup_profile_on(
+            true,
+            Some(LoginShell::Bash),
+            &profile,
+            resources.path(),
+            &Inherited::default(),
+            &mut env,
+        );
+        assert_eq!(forced.unwrap(), ["--posix", "-l"]);
+        let mut env = BTreeMap::new();
+        let elsewhere = setup_profile_on(false, None, &profile, resources.path(), &Inherited::default(), &mut env);
+        assert_eq!(elsewhere.unwrap(), ["--posix", "-l"]);
+        let other = crate::shell_profiles::ShellProfile::new("bash", "Bash", "/opt/homebrew/bin/bash".into(), &[]);
+        assert!(setup_profile_on(true, None, &other, resources.path(), &Inherited::default(), &mut env).is_some());
     }
 }

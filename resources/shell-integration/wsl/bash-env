@@ -1,5 +1,6 @@
 # Let the bundled Ghostty integration restore Bash startup files and install command markers.
 # Keep ENV quoted: the bundled loader's legacy export splits values containing spaces.
+builtin unset NGTERM_WSL_BASH_ENV
 __ngterm_wsl_env_set=${GHOSTTY_BASH_ENV+x}
 __ngterm_wsl_env=${GHOSTTY_BASH_ENV-}
 builtin unset GHOSTTY_BASH_ENV

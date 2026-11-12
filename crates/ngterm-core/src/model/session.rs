@@ -562,6 +562,15 @@ impl Session {
         self.current_cwd.as_deref().unwrap_or(&self.initial_cwd)
     }
 
+    /// The shell profile of a pane role: the split pane's for [`StatusPane::Right`], else the primary's.
+    #[must_use]
+    pub fn shell_profile_for(&self, pane: StatusPane) -> Option<&crate::shell_profiles::ShellProfile> {
+        match pane {
+            StatusPane::Right => self.split_shell_profile.as_ref(),
+            StatusPane::Left | StatusPane::Scratch => self.shell_profile.as_ref(),
+        }
+    }
+
     /// The working directory of a pane role: the split pane's for [`StatusPane::Right`], else the primary's.
     #[must_use]
     pub fn cwd_for(&self, pane: StatusPane) -> &str {

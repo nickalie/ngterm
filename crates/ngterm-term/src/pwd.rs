@@ -21,6 +21,9 @@
 //! - On Windows a path naming a drive as a URI spells it, `/C:/Users/me` (RFC 8089's form, which ngterm's
 //!   PowerShell integration writes), is reported as Windows spells it, `C:\Users\me` ([`windows_form`]): the path the
 //!   app's other working directories (a launch's, a restored one) carry there. Ghostty leaves that to the embedder.
+//!   A network path (`//server/share`, `\\server\share`, `\\?\UNC\…`) is ignored there: any program printing to
+//!   the pane can send one, and a spawn in it (its `is_dir` check included) would authenticate to that server over
+//!   SMB, handing it the user's NTLM hash.
 //!
 //! [`PaneEvent::Pwd`]: crate::PaneEvent::Pwd
 
@@ -65,7 +68,21 @@ pub fn reported_path(raw: &str, hostname: &str) -> Option<String> {
         let end = path.find(['?', '#']).unwrap_or(path.len());
         decode(&path[..end])
     };
-    Some(if cfg!(windows) { windows_form(&path) } else { path })
+    if !cfg!(windows) {
+        return Some(path);
+    }
+    let path = windows_form(&path);
+    if network_path(&path) {
+        tracing::debug!("OSC 7 path names a network share, which Windows would contact");
+        return None;
+    }
+    Some(path)
+}
+
+/// Whether Windows reads `path` as a network (UNC) path or a device path: it starts with two separators, either kind.
+fn network_path(path: &str) -> bool {
+    let mut chars = path.chars();
+    chars.next().is_some_and(|c| matches!(c, '/' | '\\')) && chars.next().is_some_and(|c| matches!(c, '/' | '\\'))
 }
 
 /// `path` as Windows spells it when it names a drive as a URI does (`/C:/Users/me`, `/C:`): without the leading
@@ -210,6 +227,24 @@ mod tests {
     use super::*;
 
     const HOST: &str = "box";
+
+    #[test]
+    fn windows_ignores_a_network_share_a_program_reports() {
+        for share in [
+            "//attacker/share",
+            r"\\attacker\share",
+            r"/\attacker\share",
+            r"\\?\UNC\attacker\share",
+        ] {
+            assert!(network_path(share), "{share}");
+        }
+        for local in [r"C:\Users\me", "/home/u", "/", ""] {
+            assert!(!network_path(local), "{local}");
+        }
+        let reported = reported_path("kitty-shell-cwd://localhost//attacker/share", HOST);
+        let expected = if cfg!(windows) { None } else { Some("//attacker/share") };
+        assert_eq!(reported.as_deref(), expected);
+    }
 
     #[test]
     fn a_local_file_uri_reports_its_decoded_path() {

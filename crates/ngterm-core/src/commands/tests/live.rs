@@ -2619,3 +2619,31 @@ fn cmd_and_wsl_profiles_attach_as_live_programs_with_their_exact_arguments() {
         assert_eq!(argv[1..], profile.args);
     }
 }
+
+#[test]
+fn a_live_bash_profile_hands_its_own_startup_variables_to_the_integration() {
+    use crate::shell_profiles::ShellProfile;
+    let mut live = live();
+    let bash = live.resources.path().join("shell-integration/bash");
+    std::fs::create_dir_all(&bash).unwrap();
+    std::fs::write(bash.join("ghostty.bash"), "").unwrap();
+    let mut profile = ShellProfile::new("git-bash", "Git Bash", "C:/Git/bin/bash.exe".into(), &["-l"]);
+    profile.env.insert("ENV".into(), "/profile/env".into());
+    profile.env.insert("HISTFILE".into(), "/profile/history".into());
+    let session = live.session;
+    live.fixture
+        .store_mut()
+        .unwrap()
+        .session_mut(session)
+        .unwrap()
+        .shell_profile = Some(profile);
+    let token = uuid_string(live.left);
+    let seed = live.fixture.core.request_pane_spawn(session, &token).unwrap();
+    assert!(seed.live);
+    let env: std::collections::BTreeMap<_, _> = seed.env.into_iter().collect();
+    // the integration's loader takes ENV and hands the profile's own on; the profile's history file stays exported
+    assert_eq!(env.get("GHOSTTY_BASH_ENV").map(String::as_str), Some("/profile/env"));
+    assert_ne!(env.get("ENV").map(String::as_str), Some("/profile/env"));
+    assert_eq!(env.get("HISTFILE").map(String::as_str), Some("/profile/history"));
+    assert!(!env.contains_key("GHOSTTY_BASH_UNEXPORT_HISTFILE"));
+}

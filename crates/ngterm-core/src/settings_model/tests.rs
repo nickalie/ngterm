@@ -829,3 +829,42 @@ fn the_bootstrap_shell_profile_is_saved_without_another_user_action() {
     let saved = LibraryPersistence::new(dir.path()).read_window_checked(window).unwrap();
     assert_eq!(saved.workspaces[0].sessions[0].shell_profile, Some(profile));
 }
+
+#[test]
+fn the_bootstrap_leaves_restored_sessions_and_a_malformed_default_alone() {
+    use crate::shell_profiles::ShellProfile;
+    let bootstrap = |default: ShellProfile, restored: bool| {
+        let mut library = WindowLibrary::seeded("/home/u");
+        let window = library.new_window(None);
+        let store = library.store_mut(window).unwrap();
+        let id = store.selected_session_id().unwrap();
+        store.session_mut(id).unwrap().was_restored = restored;
+        let core = Core::new(
+            CoreConfig {
+                app: AppIdentity::from_recorded("0.1.0", None),
+                capabilities: Vec::new(),
+            },
+            CoreState {
+                library,
+                settings: AppSettings {
+                    default_shell_profile: Some(default),
+                    ..AppSettings::default()
+                },
+                persistence: None,
+            },
+        );
+        core.library()
+            .store(window)
+            .unwrap()
+            .session(id)
+            .unwrap()
+            .shell_profile
+            .clone()
+    };
+    let bash = ShellProfile::new("bash", "Git Bash", "C:/Git/bin/bash.exe".into(), &["-li"]);
+    assert_eq!(bootstrap(bash.clone(), false), Some(bash.clone()));
+    // a legacy snapshot's session keeps the config shell it ran
+    assert_eq!(bootstrap(bash, true), None);
+    let relative = ShellProfile::new("rel", "Relative", "bash.exe".into(), &[]);
+    assert_eq!(bootstrap(relative, false), None);
+}

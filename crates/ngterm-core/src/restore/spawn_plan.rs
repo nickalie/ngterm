@@ -103,12 +103,22 @@ impl LaunchSeedPolicy {
 /// Pane `pane`'s seed, consuming the slots the launch armed for it (upstream's `LaunchSeedProvider.seed`). The scratch
 /// has none.
 pub fn resolve_seed(session: &mut Session, pane: StatusPane, policy: &LaunchSeedPolicy) -> LaunchSeed {
-    let mut seed = resolve_seed_in(session, pane, policy, ORDINARY_DIALECT);
-    seed.shell_profile = match pane {
-        StatusPane::Right => session.split_shell_profile.clone(),
-        _ => session.shell_profile.clone(),
-    };
+    let profile = session.shell_profile_for(pane).cloned();
+    let dialect = profile_dialect(profile.as_ref(), ORDINARY_DIALECT);
+    let mut seed = resolve_seed_in(session, pane, policy, dialect);
+    seed.shell_profile = profile;
     seed
+}
+
+/// The dialect a pane's creation command is quoted in: a WSL profile's runs in its distribution's `/bin/sh`, a CMD
+/// profile's in `cmd` (both run it through the profile, ordinary and Live alike); any other pane's is `fallback`.
+fn profile_dialect(profile: Option<&crate::shell_profiles::ShellProfile>, fallback: ShellDialect) -> ShellDialect {
+    use crate::shell_profiles::direct::DirectShell;
+    match profile.and_then(crate::shell_profiles::ShellProfile::direct_live) {
+        Some(DirectShell::Wsl) => ShellDialect::Posix,
+        Some(DirectShell::Cmd) => ShellDialect::Cmd,
+        None => fallback,
+    }
 }
 
 /// [`resolve_seed`] with a copied argv quoted for `dialect`.
@@ -220,16 +230,7 @@ fn live_creation_command(session: &Session, pane: StatusPane, configuration: &Co
         // no login shell: the attach runs no creation payload at all
         return launch.command.clone();
     };
-    let dialect = if configuration
-        .direct_profile
-        .as_deref()
-        .and_then(crate::shell_profiles::ShellProfile::direct_live)
-        == Some(crate::shell_profiles::direct::DirectShell::Wsl)
-    {
-        ShellDialect::Posix
-    } else {
-        ShellDialect::of_shell(shell)
-    };
+    let dialect = profile_dialect(configuration.direct_profile.as_deref(), ShellDialect::of_shell(shell));
     creation_command(launch, dialect).unwrap_or_else(|Uncarried| {
         warn_uncarried(session, pane, dialect);
         None
@@ -451,6 +452,29 @@ mod tests {
     }
 
     const NODE: [&str; 2] = [r"C:\Program Files\nodejs\node.exe", "app.js"];
+
+    /// A WSL pane's copied argv runs in its distribution's `/bin/sh`, so it is quoted for POSIX with or without Live,
+    /// whatever the platform's own command shell reads.
+    #[test]
+    fn a_wsl_panes_copied_argv_is_quoted_for_its_distributions_shell() {
+        use crate::shell_profiles::ShellProfile;
+        let argv = ["printf", "%s", "it's $HOME"];
+        let wsl = ShellProfile::new("wsl", "Ubuntu", "C:/Windows/System32/wsl.exe".into(), &["-d", "Ubuntu"]);
+        let posix = ShellDialect::Posix.line(&argv.map(str::to_owned)).unwrap();
+        let mut copy = copied(&argv, ShellDialect::Cmd, false);
+        copy.shell_profile = Some(wsl.clone());
+        let seed = resolve_seed(&mut copy, StatusPane::Left, &policy(false, &[]));
+        assert_eq!(seed.command.as_deref(), Some(posix.as_str()));
+        let mut live = wrapped_in("C:/Windows/System32/wsl.exe");
+        live.direct_profile = Some(Box::new(wsl));
+        assert_eq!(
+            live_creation_command(&copy, StatusPane::Left, &live).as_deref(),
+            Some(posix.as_str())
+        );
+        let cmd = ShellProfile::new("cmd", "CMD", "C:/Windows/System32/cmd.exe".into(), &["/D"]);
+        assert_eq!(profile_dialect(Some(&cmd), ShellDialect::Posix), ShellDialect::Cmd);
+        assert_eq!(profile_dialect(None, ShellDialect::Posix), ShellDialect::Posix);
+    }
 
     /// A copy made outside Live on Windows (or while Live had fallen back) stores cmd's line; launched later with Live
     /// working under PowerShell, its argv is quoted with the call operator, not handed to the script block as cmd's

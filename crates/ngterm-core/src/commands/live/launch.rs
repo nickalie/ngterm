@@ -140,16 +140,18 @@ impl Core {
             .into_iter()
             .find(|session| session.pane_identity == identity || session.split_pane_identity == Some(identity))
         {
-            let (profile, pane) = if session.pane_identity == identity {
-                (session.shell_profile.as_ref(), StatusPane::Left)
+            let pane = if session.pane_identity == identity {
+                StatusPane::Left
             } else {
-                (session.split_shell_profile.as_ref(), StatusPane::Right)
+                StatusPane::Right
             };
+            let profile = session.shell_profile_for(pane);
             if let Some(profile) = profile {
                 // Ineligible profiles fall back to their own ordinary shell, never to PowerShell.
                 inputs.base_environment.extend(profile.env.clone());
+                inputs.inherited = std::mem::take(&mut inputs.inherited).with_overrides(&profile.env);
                 if profile.direct_live().is_some() {
-                    let mut configuration = support::direct_configuration(&inputs, profile).ok()?;
+                    let mut configuration = logged(identity, support::direct_configuration(&inputs, profile))?;
                     crate::shell_profiles::integration::working_directory(
                         profile,
                         session.cwd_for(pane),
@@ -157,14 +159,18 @@ impl Core {
                     );
                     return Some(configuration);
                 }
-                inputs.command_shell = Some(profile.live_shell()?.to_owned());
+                let Some(shell) = profile.live_shell() else {
+                    tracing::warn!(
+                        pane = %identity,
+                        profile = %profile.id,
+                        "the pane's shell profile cannot run live (its shell or startup arguments): it runs as an ordinary pane"
+                    );
+                    return None;
+                };
+                inputs.command_shell = Some(shell.to_owned());
             }
         }
-        support::configuration(&inputs)
-            .inspect_err(|rejection| {
-                tracing::error!(pane = %identity, reason = rejection.message(), "the live-session configuration failed");
-            })
-            .ok()
+        logged(identity, support::configuration(&inputs))
     }
 
     /// The launch steps that follow one another before any window mounts (upstream's `LaunchOrchestration.run`): a
@@ -310,6 +316,15 @@ pub(crate) fn reap(
         );
     }
     Some(running)
+}
+
+/// `result`'s configuration, a rejection logged as pane `identity`'s failed live-session configuration.
+fn logged(identity: Uuid, result: Result<Configuration, crate::restore::mode::LiveRejection>) -> Option<Configuration> {
+    result
+        .inspect_err(|rejection| {
+            tracing::error!(pane = %identity, reason = rejection.message(), "the live-session configuration failed");
+        })
+        .ok()
 }
 
 #[cfg(test)]

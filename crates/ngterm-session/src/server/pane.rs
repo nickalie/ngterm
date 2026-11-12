@@ -1230,11 +1230,17 @@ fn wait_for_session(_pid: u32, _deadline: Instant) {}
 
 /// The program of `spec` with the environment `env` as its whole environment.
 fn command(spec: &SessionSpec, env: &[(String, String)]) -> io::Result<ngterm_pty::Command> {
+    // a CMD profile's command text is passed as written (`ShellCommand::argv`): the C runtime's quoting of its quotes
+    // would change what cmd runs
     let (program, args) = spec
         .argv
         .split_first()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "a session needs a program to run"))?;
-    let mut command = program_command(program, args).env_clear();
+    let shell = ngterm_host::command_line::ShellCommand::argv(program, args);
+    let mut command = ngterm_pty::Command::new(&shell.program).args(&shell.args).env_clear();
+    if let Some(tail) = &shell.raw_tail {
+        command = command.raw_arg(tail);
+    }
     for (key, value) in env {
         command = command.env(key, value);
     }
@@ -1242,23 +1248,6 @@ fn command(spec: &SessionSpec, env: &[(String, String)]) -> io::Result<ngterm_pt
         command = command.cwd(cwd);
     }
     Ok(command)
-}
-
-/// Structured /S /C or /S /K payloads have one raw cmd command tail. Escaping its quotes with backslashes
-/// (the ordinary Windows argv convention) changes what cmd executes.
-fn program_command(program: &str, args: &[String]) -> ngterm_pty::Command {
-    let mut command = ngterm_pty::Command::new(program);
-    let cmd = ngterm_core::command_restore::basename(program).eq_ignore_ascii_case("cmd.exe");
-    if cfg!(windows) && cmd && args.len() >= 3 {
-        let tail = args.len() - 1;
-        if args[tail - 2].eq_ignore_ascii_case("/S")
-            && (args[tail - 1].eq_ignore_ascii_case("/C") || args[tail - 1].eq_ignore_ascii_case("/K"))
-        {
-            command = command.args(&args[..tail]).raw_arg(format!("\"{}\"", args[tail]));
-            return command;
-        }
-    }
-    command.args(args)
 }
 
 /// The home directory of the environment `env`: `HOME`, or `USERPROFILE` on Windows.
@@ -2002,6 +1991,27 @@ mod tests {
     }
 
     #[test]
+    fn a_cmd_profiles_command_text_runs_as_written() {
+        let line = "echo \"two words\" & echo done";
+        let spec = SessionSpec {
+            argv: ["C:/Windows/System32/cmd.exe", "/D", "/S", "/K", line]
+                .map(str::to_owned)
+                .to_vec(),
+            env: Vec::new(),
+            cwd: None,
+            tracked_env: Vec::new(),
+        };
+        let command = command(&spec, &[]).unwrap();
+        if cfg!(windows) {
+            assert_eq!(command.args, ["/D", "/S", "/K"].map(OsString::from));
+            assert_eq!(command.raw_args, [OsString::from(format!("\"{line}\""))]);
+        } else {
+            assert_eq!(command.args.len(), 4);
+            assert!(command.raw_args.is_empty());
+        }
+    }
+
+    #[test]
     fn an_empty_argv_is_refused() {
         let spec = SessionSpec {
             argv: Vec::new(),
@@ -2023,20 +2033,3 @@ mod tests {
 #[cfg(test)]
 #[path = "clipboard_tests.rs"]
 mod clipboard_tests;
-
-#[cfg(all(test, windows))]
-mod cmd_profile_tests {
-    use super::program_command;
-
-    #[test]
-    fn cmd_payload_keeps_quotes_and_metacharacters_as_command_text() {
-        let line = "echo \"two words\" & echo done";
-        let args = ["/D", "/S", "/K", line].map(str::to_owned);
-        let command = program_command("C:/Windows/System32/cmd.exe", &args);
-        assert_eq!(command.args, ["/D", "/S", "/K"].map(std::ffi::OsString::from));
-        assert_eq!(command.raw_args, [std::ffi::OsString::from(format!("\"{line}\""))]);
-        let ordinary = program_command("C:/Tools/tool.exe", &args);
-        assert_eq!(ordinary.args.len(), 4);
-        assert!(ordinary.raw_args.is_empty());
-    }
-}

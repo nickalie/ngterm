@@ -8,7 +8,8 @@
 //!   `ngterm-session attach` line would read ([`Launch::live`], from
 //!   [`ngterm_core::restore::spawn_plan::resolve_live_seed`]): the line's session and creation argv, the environment
 //!   below (carrying the wrap configuration from [`Runtime`]) and the working directory; a plain pane runs its seed's
-//!   command, or the login shell with its `initial_input` typed in.
+//!   command, or the login shell with its `initial_input` typed in. A pane's shell profile takes the login shell's
+//!   place, run from its structured argv, and runs the command itself when it is a CMD or WSL one ([`Launch::shell_profile`]).
 //! - **Windows**: a command line runs as `cmd.exe`'s command text, `%ComSpec% /D /S /C "<line>"` (no `AutoRun`, as
 //!   `sh -c` reads no rc file; `/S` with the outer quotes keeps the line's own quotes as written, which a quoted
 //!   program path needs), its tail passed as written ([`PaneCommand::raw_args`]). The login shell runs directly, as
@@ -187,7 +188,11 @@ impl Host {
             Some(features) => vars.set("GHOSTTY_SHELL_FEATURES", features),
             None => vars.remove("GHOSTTY_SHELL_FEATURES"),
         }
-        let profile = launch.shell_profile.as_ref().filter(|_| launch.command.is_none());
+        let runs = ProfileRun::of(launch);
+        let profile = match runs {
+            Some(ProfileRun::Shell(profile)) => Some(profile),
+            _ => None,
+        };
         let mut line = launch
             .command
             .clone()
@@ -196,12 +201,15 @@ impl Host {
             .initial_input
             .as_ref()
             .and_then(|input| typed_input(input, ShellDialect::of_shell(&line)));
-        let integrated_profile_args = self.integrate(launch, profile, &mut line, env, &mut vars);
+        let integration = self.integrate(launch, profile, &mut line, env, &mut vars);
         for (key, value) in &self.env {
             vars.set(key, value.clone());
         }
-        for (key, value) in launch.shell_profile.iter().flat_map(|profile| &profile.env) {
-            vars.set(key, value.clone());
+        // the profile's variables go with its program; what the integration set from them stays the integration's
+        for (key, value) in runs.iter().flat_map(|run| &run.profile().env) {
+            if !integration.variables.iter().any(|set| vars.same_name(set, key)) {
+                vars.set(key, value.clone());
+            }
         }
         // Bridge negotiation is a per-launch decision; an inherited or config value cannot enable it.
         vars.remove(ngterm_core::attach_bridge::VARIABLE);
@@ -220,10 +228,9 @@ impl Host {
         if let Some(cwd) = &cwd {
             vars.set("PWD", cwd.to_string_lossy().into_owned());
         }
-        let (mut command, argv) = if let Some(profile) = profile {
-            profile_program(profile, integrated_profile_args.as_deref())
-        } else {
-            program(&line, launch.command.is_none(), cwd.as_deref(), env)
+        let (mut command, argv) = match runs {
+            Some(run) => run.program(integration.profile_args.as_deref()),
+            None => program(&line, launch.command.is_none(), cwd.as_deref(), env),
         };
         command.cwd = cwd;
         command.env_remove = vars.removed.into_iter().map(Into::into).collect();
@@ -245,7 +252,8 @@ impl Host {
         }
     }
 
-    /// Apply startup integration to a shell line or structured profile, keeping its argument boundaries.
+    /// Apply startup integration to a shell line or structured profile, keeping its argument boundaries. A profile's
+    /// own `env` is what its shell would have read, so the integration hands that on (`ENV`, `ZDOTDIR`, `HISTFILE`).
     fn integrate(
         &self,
         launch: &Launch,
@@ -253,33 +261,30 @@ impl Host {
         line: &mut String,
         env: &dyn Env,
         vars: &mut Vars,
-    ) -> Option<Vec<String>> {
+    ) -> Integrated {
         let force = match self.integration(launch) {
             Integration::Off => None,
             Integration::Detect => Some(None),
             Integration::As(shell) => Some(Some(shell)),
         };
-        let mut integrated_profile_args = None;
+        let mut integrated = Integrated::default();
         if let (Some(resources), Some(force)) = (&self.resources_dir, force) {
             let mut integration = BTreeMap::new();
             if let Some(profile) = profile {
-                integrated_profile_args = shell_integration::setup_profile(
-                    force,
-                    profile,
-                    resources,
-                    &Inherited::read(env),
-                    &mut integration,
-                );
-            } else if let Some(integrated) =
+                let inherited = Inherited::read(env).with_overrides(&profile.env);
+                integrated.profile_args =
+                    shell_integration::setup_profile(force, profile, resources, &inherited, &mut integration);
+            } else if let Some(shell_line) =
                 shell_integration::setup_as(force, line, resources, &Inherited::read(env), &mut integration)
             {
-                *line = integrated;
+                *line = shell_line;
             }
             for (key, value) in integration {
                 vars.set(&key, value);
+                integrated.variables.push(key);
             }
         }
-        integrated_profile_args
+        integrated
     }
 
     /// Whether and how the shell integration is injected into `launch` (never on Windows: the zsh, bash and fish
@@ -513,6 +518,15 @@ impl Vars {
     }
 
     /// Drop every spelling of `key` from both lists.
+    /// Whether `a` and `b` name one variable (case folded where names ignore case).
+    fn same_name(&self, a: &str, b: &str) -> bool {
+        if self.fold_case {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    }
+
     fn forget(&mut self, key: &str) {
         let folded = self.fold_case.then(|| key.to_lowercase());
         let same = |other: &str| match &folded {
@@ -559,24 +573,78 @@ fn read_bounded(reader: impl std::io::Read, limit: u64) -> std::io::Result<Vec<u
     Ok(contents)
 }
 
-/// A profile's argument boundaries come from its structured argv, independently of its display label.
-fn profile_program(
-    profile: &ngterm_core::shell_profiles::ShellProfile,
-    integrated_args: Option<&[String]>,
-) -> (PaneCommand, String) {
-    let args = integrated_args.unwrap_or(&profile.args);
-    (
-        PaneCommand::new(&profile.executable).args(args.iter().cloned()),
-        format!("{} {:?}", profile.executable, args),
-    )
+/// What [`Host::integrate`] did: a profile's integrated arguments, and the variables it set.
+#[derive(Default)]
+struct Integrated {
+    profile_args: Option<Vec<String>>,
+    variables: Vec<String>,
+}
+
+/// How a pane's shell profile runs, if it does.
+#[derive(Clone, Copy)]
+enum ProfileRun<'a> {
+    /// As the pane's shell: no command.
+    Shell(&'a ngterm_core::shell_profiles::ShellProfile),
+    /// A CMD or WSL profile running the pane's command, as a Live pane runs it
+    /// ([`ngterm_core::shell_profiles::direct::arguments`]): `cmd <args> /S /C "<line>"`,
+    /// `wsl.exe <args> --exec /bin/sh -lc <line>`.
+    Command(&'a ngterm_core::shell_profiles::ShellProfile, &'a str),
+}
+
+impl<'a> ProfileRun<'a> {
+    /// `None` without a profile, for any other profile with a command (the platform's command shell runs it) and for
+    /// a profile that is not well formed (a hand-edited snapshot or settings file), which the login shell replaces.
+    fn of(launch: &'a Launch) -> Option<Self> {
+        let profile = launch.shell_profile.as_ref()?;
+        if !profile.valid() {
+            tracing::warn!(profile = %profile.id, "the pane's shell profile is malformed: the login shell runs instead");
+            return None;
+        }
+        match launch.command.as_deref() {
+            None => Some(Self::Shell(profile)),
+            Some(line) => profile.direct_live().map(|_| Self::Command(profile, line)),
+        }
+    }
+
+    fn profile(self) -> &'a ngterm_core::shell_profiles::ShellProfile {
+        match self {
+            Self::Shell(profile) | Self::Command(profile, _) => profile,
+        }
+    }
+
+    /// What runs, a shell's arguments the integration's (`integrated`) when it rewrote them.
+    fn program(self, integrated: Option<&[String]>) -> (PaneCommand, String) {
+        match self {
+            Self::Shell(profile) => profile_program(&profile.executable, integrated.unwrap_or(&profile.args)),
+            Self::Command(profile, line) => {
+                let argv = ngterm_core::shell_profiles::direct::arguments(
+                    profile,
+                    None,
+                    Some(ngterm_core::live::support::Creation::EndingPane(line)),
+                    &[] as &[&str],
+                );
+                profile_program(&profile.executable, &argv[1..])
+            }
+        }
+    }
+}
+
+/// A profile's executable and structured arguments, their boundaries kept whatever its display label; a CMD
+/// command's text passed as written ([`ShellCommand::argv`]).
+fn profile_program(executable: &str, args: &[String]) -> (PaneCommand, String) {
+    pane_command(&ShellCommand::argv(executable, args))
 }
 
 /// What a pane runs (upstream's `LaunchSeed` on the pane's own surface spec).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Launch {
+    /// The pane's shell profile: without a `command` its executable and arguments run in place of the login shell
+    /// (integrated as the login shell is); with one, a CMD or WSL profile runs it (`cmd <args> /S /C "<line>"`,
+    /// `wsl.exe <args> --exec /bin/sh -lc <line>`, as a Live pane runs it) and any other profile is left out. Its
+    /// `env` applies whenever its program runs. A malformed profile (a hand-edited snapshot) is ignored.
     pub shell_profile: Option<ngterm_core::shell_profiles::ShellProfile>,
-    /// A shell line run through `/bin/sh -c` (`cmd /D /S /C` on Windows: a seed's command, a live pane's attach);
-    /// `None` runs the login shell.
+    /// A shell line run through `/bin/sh -c` (`cmd /D /S /C` on Windows: a seed's command, a live pane's attach), or
+    /// through a CMD or WSL `shell_profile`; `None` runs the pane's shell profile, else the login shell.
     pub command: Option<String>,
     /// Typed into the program as soon as it starts (a captured command replayed into the login shell), quoted for the
     /// shell the launch runs (`ngterm_core::shell_dialect`).
@@ -1807,6 +1875,138 @@ mod profile_tests {
         );
         assert!(prepared.command.raw_args.is_empty());
     }
+
+    fn os(words: &[&str]) -> Vec<std::ffi::OsString> {
+        words.iter().map(std::ffi::OsString::from).collect()
+    }
+
+    fn with_env(mut profile: ShellProfile) -> ShellProfile {
+        profile.env.insert("PROFILE_MARKER".into(), "value".into());
+        profile
+    }
+
+    fn has_marker(prepared: &Prepared) -> bool {
+        prepared.command.env.iter().any(|(key, _)| key == "PROFILE_MARKER")
+    }
+
+    fn command_launch(profile: ShellProfile, line: &str) -> Launch {
+        Launch {
+            shell_profile: Some(profile),
+            command: Some(line.to_owned()),
+            ..Launch::default()
+        }
+    }
+
+    #[test]
+    fn a_wsl_profile_runs_the_panes_command_inside_its_distribution_as_live_does() {
+        let wsl = with_env(ShellProfile::new(
+            "wsl",
+            "Ubuntu",
+            "C:/Windows/System32/wsl.exe".into(),
+            &["-d", "Ubuntu Dev"],
+        ));
+        let host = Host::new(&GhosttyConfig::default(), None, None, None);
+        let prepared = host.prepare(&command_launch(wsl.clone(), "ls -la ~/proj"), &MapEnv::new());
+        assert_eq!(prepared.command.program, std::ffi::OsString::from(&wsl.executable));
+        assert_eq!(
+            prepared.command.args,
+            os(&["-d", "Ubuntu Dev", "--exec", "/bin/sh", "-lc", "ls -la ~/proj"])
+        );
+        assert!(has_marker(&prepared));
+        assert!(matches!(prepared.exit, ExitPolicy::Launched { command: true, .. }));
+    }
+
+    #[test]
+    fn a_cmd_profile_runs_the_panes_command_with_its_switches_and_the_text_as_written() {
+        let cmd = ShellProfile::new("cmd", "CMD", "C:/Windows/System32/cmd.exe".into(), &["/D", "/V:ON"]);
+        let host = Host::new(&GhosttyConfig::default(), None, None, None);
+        let line = r#""C:\Program Files\tool.exe" "a b" & echo done"#;
+        let prepared = host.prepare(&command_launch(cmd, line), &MapEnv::new());
+        if cfg!(windows) {
+            assert_eq!(prepared.command.args, os(&["/D", "/V:ON", "/S", "/C"]));
+            assert_eq!(prepared.command.raw_args, os(&[&format!("\"{line}\"")]));
+        } else {
+            assert_eq!(prepared.command.args, os(&["/D", "/V:ON", "/S", "/C", line]));
+        }
+    }
+
+    #[test]
+    fn a_hand_written_cmd_profiles_command_text_is_passed_as_written() {
+        let payload = r#""C:\Program Files\x\VsDevCmd.bat" -arch=x64"#;
+        let cmd = ShellProfile::new(
+            "dev",
+            "Developer CMD",
+            "C:/Windows/System32/cmd.exe".into(),
+            &["/D", "/S", "/K", payload],
+        );
+        let host = Host::new(&GhosttyConfig::default(), None, None, None);
+        let launch = Launch {
+            shell_profile: Some(cmd),
+            ..Launch::default()
+        };
+        let prepared = host.prepare(&launch, &MapEnv::new());
+        if cfg!(windows) {
+            assert_eq!(prepared.command.args, os(&["/D", "/S", "/K"]));
+            assert_eq!(prepared.command.raw_args, os(&[&format!("\"{payload}\"")]));
+        } else {
+            assert_eq!(prepared.command.args, os(&["/D", "/S", "/K", payload]));
+        }
+    }
+
+    #[test]
+    fn any_other_profile_leaves_a_command_to_the_command_shell_without_its_variables() {
+        let bash = with_env(ShellProfile::new(
+            "git-bash",
+            "Git Bash",
+            "C:/Git/bin/bash.exe".into(),
+            &["-l"],
+        ));
+        let host = Host::new(&GhosttyConfig::default(), None, None, None);
+        let prepared = host.prepare(&command_launch(bash.clone(), "echo hi"), &MapEnv::new());
+        let plain = host.prepare(&command_launch_without_profile("echo hi"), &MapEnv::new());
+        assert_eq!(
+            (&prepared.command.program, &prepared.command.args),
+            (&plain.command.program, &plain.command.args)
+        );
+        assert!(!has_marker(&prepared));
+        // a pane with no command runs the profile with its variables
+        let shell = host.prepare(
+            &Launch {
+                shell_profile: Some(bash.clone()),
+                ..Launch::default()
+            },
+            &MapEnv::new(),
+        );
+        assert_eq!(shell.command.program, std::ffi::OsString::from(&bash.executable));
+        assert!(has_marker(&shell));
+    }
+
+    fn command_launch_without_profile(line: &str) -> Launch {
+        Launch {
+            command: Some(line.to_owned()),
+            ..Launch::default()
+        }
+    }
+
+    #[test]
+    fn a_malformed_profile_is_ignored_for_the_login_shell() {
+        let host = Host::new(&GhosttyConfig::default(), Some("/bin/zsh".into()), None, None);
+        let plain = host.prepare(&Launch::default(), &MapEnv::new());
+        for profile in [ShellProfile::new("rel", "Relative", "bash.exe".into(), &[]), {
+            let mut bad = with_env(ShellProfile::new("env", "Env", "C:/Git/bin/bash.exe".into(), &[]));
+            bad.env.insert("PATH=x;".into(), "y".into());
+            bad
+        }] {
+            let launch = Launch {
+                shell_profile: Some(profile),
+                ..Launch::default()
+            };
+            let prepared = host.prepare(&launch, &MapEnv::new());
+            assert_eq!(prepared.command.program, plain.command.program);
+            assert!(!has_marker(&prepared));
+            assert!(!prepared.command.env.iter().any(|(key, _)| key == "PATH=x;"));
+        }
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -1832,5 +2032,34 @@ mod unix_profile_tests {
             [std::ffi::OsString::from("--posix"), "-li".into()]
         );
         assert!(prepared.command.env.iter().any(|(key, _)| key == "ENV"));
+    }
+
+    #[test]
+    fn a_bash_profiles_own_startup_variables_are_handed_to_the_integration() {
+        let resources = tempfile::tempdir().unwrap();
+        let loader = resources.path().join("shell-integration/bash/ghostty.bash");
+        std::fs::create_dir_all(loader.parent().unwrap()).unwrap();
+        std::fs::write(loader, "").unwrap();
+        let mut host = Host::new(&GhosttyConfig::default(), Some("/bin/bash".into()), None, None);
+        host.resources_dir = Some(resources.path().to_owned());
+        let mut profile = ngterm_core::shell_profiles::ShellProfile::new("bash", "Bash", "/bin/bash".into(), &["-l"]);
+        profile.env.insert("ENV".into(), "/profile/env".into());
+        profile.env.insert("HISTFILE".into(), "/profile/history".into());
+        let launch = Launch {
+            shell_profile: Some(profile),
+            ..Launch::default()
+        };
+        let inherited = ngterm_core::paths::MapEnv::new().with("HOME", "/home/app");
+        let prepared = host.prepare(&launch, &inherited);
+        let env: std::collections::BTreeMap<_, _> = prepared
+            .command
+            .env
+            .iter()
+            .map(|(key, value)| (key.to_string_lossy().into_owned(), value.to_string_lossy().into_owned()))
+            .collect();
+        assert_eq!(env.get("GHOSTTY_BASH_ENV").map(String::as_str), Some("/profile/env"));
+        assert!(env["ENV"].ends_with("ghostty.bash"), "the loader keeps ENV: {env:?}");
+        assert_eq!(env.get("HISTFILE").map(String::as_str), Some("/profile/history"));
+        assert!(!env.contains_key("GHOSTTY_BASH_UNEXPORT_HISTFILE"));
     }
 }

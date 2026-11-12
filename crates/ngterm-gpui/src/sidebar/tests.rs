@@ -2222,3 +2222,28 @@ fn the_workspace_row_menu_folds_the_clicked_workspace_with_chevrons_hidden_and_r
     assert_eq!(h.names(cx).len(), 5);
     assert!(h.store().workspace(two).unwrap().is_expanded);
 }
+
+#[test]
+fn a_profile_is_marked_fresh_only_where_sessions_are_restored_live() {
+    use ngterm_core::shell_profiles::ShellProfile;
+    let cmd = ShellProfile::new(
+        "cmd",
+        "Command Prompt",
+        "C:/Windows/System32/cmd.exe".into(),
+        &["/C", "exit"],
+    );
+    let bash = ShellProfile::new("git-bash", "Git Bash", "C:/Git/bin/bash.exe".into(), &["-l"]);
+    assert_eq!(view::shell_profile_label(&cmd, true), "Command Prompt (fresh shell)");
+    assert_eq!(view::shell_profile_label(&cmd, false), "Command Prompt");
+    assert_eq!(view::shell_profile_label(&bash, true), "Git Bash");
+    let mut settings = AppSettings {
+        restore_mode: Some(ngterm_core::persist::RestoreMode::Live),
+        ..AppSettings::default()
+    };
+    let mut library = WindowLibrary::new("/home/user");
+    let window = library.new_window(None);
+    let store = library.store(window).unwrap();
+    assert!(SidebarContext::take(store, &settings, ngterm_core::model::TintParts::ICON).live_restore);
+    settings.restore_mode = Some(ngterm_core::persist::RestoreMode::None);
+    assert!(!SidebarContext::take(store, &settings, ngterm_core::model::TintParts::ICON).live_restore);
+}

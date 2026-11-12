@@ -11,7 +11,7 @@ use super::session::Session;
 use super::store::{AppStore, NewSession};
 use crate::duplicate_replay::rebind_arguments;
 use crate::live::daemon_name;
-use crate::pane_env::uuid_string;
+use crate::pane_env::{StatusPane, uuid_string};
 use crate::restore::spawn_plan::ORDINARY_DIALECT;
 
 /// One pane of a Duplicate as Companion copy: where it starts, and the creation command it ends with (`None` for a
@@ -78,11 +78,12 @@ impl AppStore {
     pub fn duplicate_session(&mut self, id: Uuid, home: &str) -> Option<Uuid> {
         let session = self.session(id)?;
         let cwd = session.local_working_directory(session.focused_cwd(), home);
-        let profile = if session.split.focused {
-            session.split_shell_profile.clone()
+        let focused = if session.split.focused {
+            StatusPane::Right
         } else {
-            session.shell_profile.clone()
+            StatusPane::Left
         };
+        let profile = session.shell_profile_for(focused).cloned();
         let location = self.session_location(id)?;
         let copy = self.add_session(
             location.workspace,

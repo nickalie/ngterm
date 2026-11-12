@@ -282,7 +282,8 @@ impl Core {
 
     /// The bootstrap may have made a fresh window before the core owned the settings.
     fn seed_fresh_shell_profiles(&mut self) {
-        let Some(profile) = self.settings.default_shell_profile.clone() else {
+        let valid = self.settings.default_shell_profile.clone();
+        let Some(profile) = valid.filter(crate::shell_profiles::ShellProfile::valid) else {
             return;
         };
         for window in self.library.open_ids() {
