@@ -372,7 +372,7 @@ jobs:
   #   sessions) and `--must-pass live-any-shell`, and `--must-pass pages-survive` (the Rust-only parking of a page whose
   #   presenter went, whose tests need Live sessions).
   # - bash, zsh and fish: `--must-pass agent-chat` too (the Rust-only agent record and `ngtermctl agent` behind the
-  #   Android chat view).
+  #   Android chat view), and `--must-pass kitty-clipboard` (a program's Rust-only Kitty clipboard protocol).
 # - coverage: the zsh entry again on an instrumented build (run-linux.sh --coverage: cargo-llvm-cov and the toolchain's
 #   llvm-tools), every layer, judged by conformance/coverage-floor-linux.txt (tools/check_coverage.py: line % per
 #   workspace crate) and nothing else: instrumentation slows the app, so the ratchet stays the entries above. zsh, as
@@ -388,15 +388,17 @@ jobs:
         include:
           - shell: bash
             out: rust-linux
-            must-pass: --must-pass live-any-shell --must-pass agent-chat
+            must-pass: --must-pass live-any-shell --must-pass agent-chat --must-pass kitty-clipboard
           - shell: zsh
             out: rust-linux-zsh
             must-pass: >-
               --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
+              --must-pass kitty-clipboard
           - shell: fish
             out: rust-linux-fish
             must-pass: >-
               --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
+              --must-pass kitty-clipboard
           - shell: zsh
             out: rust-linux-coverage
             coverage: true

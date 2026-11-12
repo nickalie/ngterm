@@ -116,6 +116,7 @@ share is asserted directly, with no capability.
 | `live-any-shell` |  | Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the pane shell (the password-database login shell, or the one ghostty `command` names in its place) is one of them and ngterm-session is staged |
 | `agent-chat` |  | Rust-only: the agent record behind the Android chat view: `ngtermctl agent hook` keeps a pane's Claude Code or Codex conversation from its hook payload, `agent.get` reads it back, `ngtermctl agent chat` streams its transcript as chat events, `ngtermctl agent commands` lists the agent's slash commands and `ngtermctl agent upload` stores a file the chat attaches |
 | `pages-survive` |  | Rust-only: an HTML page lives until it is closed: a page handed to the viewer presenting a session is parked, its slot reserved and its outcome pending, when that presenter or its page helper goes, and handed again to the next presenter that speaks pages |
+| `kitty-clipboard` |  | Rust-only: a program's Kitty clipboard protocol (OSC 5522) reads and writes per MIME type, refused under `clipboard-read`/`clipboard-write = deny`, asked about with a preview of their data under `ask`, a listing answered without a prompt, in a plain pane and in a Live one through the session server |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
@@ -150,7 +151,8 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `agent-chat`: on every OS, the `agent.*` group and `ngtermctl agent` behind the Android chat view, a Rust-only
   extension (below);
 - `pages-survive`: on every OS, a page handed to a presenter parked on its presenter's loss and handed to the next, a
-  Rust-only extension (below).
+  Rust-only extension (below);
+- `kitty-clipboard`: on every OS, a program's Kitty clipboard protocol (OSC 5522), a Rust-only extension (below).
 
 It does not claim:
 
@@ -195,7 +197,7 @@ ghostty config sets `copy-on-select = false`.
 A Rust-only extension is a capability the reference does not claim, so its tests (`requires` on it) skip as
 `unsupported` on the reference and the reference discipline holds them to nothing there: the Rust CI validates them
 instead, with `--must-pass` on the capability in every job whose host can claim it.
-Today there are three. `live-any-shell`: a Live pane runs its shell in its live session (the password database's login
+Today there are four. `live-any-shell`: a Live pane runs its shell in its live session (the password database's login
 shell, or the one ghostty `command` names in its place), zsh and fish as upstream, bash and PowerShell as well, each
 started with its shell integration the way libghostty starts a shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in
 POSIX mode for bash, `XDG_DATA_DIRS` for fish, the integration's root merged in front of the pane's own value as
@@ -239,6 +241,16 @@ nothing when its row, its stream or the app goes. Its tests are in `tests/protoc
 goes and the next one that attaches, and a page closed meanwhile that is not handed on; the upstream test of a helper
 that goes branches on the claim. They need Live sessions too, so the zsh and fish legs run with
 `--must-pass pages-survive`. The build claims it on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`).
+
+`kitty-clipboard`: a program's Kitty clipboard protocol (OSC 5522), which Ghostty took up after upstream's pin
+(docs/development.md > The selection clipboard). Its tests are in `tests/protocol/test_kitty_clipboard.py` and
+`tests/ui/test_kitty_clipboard_prompt.py` (helpers in `agterm_conformance/kitty_clipboard.py`): the pane `cat`s the program's
+request and the terminal echoes the reply into the pane, a write with text, HTML and an image refused under
+`clipboard-write = deny`, a read refused under `clipboard-read = deny`, a listing answered without a prompt, and a
+write under `ask` answered only once its prompt is (Escape denies it), each in a plain pane and in a Live one
+(`LIVE_IN_ANY_SHELL`), whose request reaches the app through the session server. No test writes the desktop clipboard.
+The build claims it on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and every conformance job that judges
+the ratchet runs with `--must-pass kitty-clipboard`: the three Linux legs and Windows' `windows` job.
 
 ### Commands
 

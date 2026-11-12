@@ -186,6 +186,9 @@ CAPABILITIES: Mapping[str, str] = {
     "pages-survive": "Rust-only: an HTML page lives until it is closed: a page handed to the viewer presenting a "
     "session is parked, its slot reserved and its outcome pending, when that presenter or its page helper goes, and "
     "handed again to the next presenter that speaks pages",
+    "kitty-clipboard": "Rust-only: a program's Kitty clipboard protocol (OSC 5522) reads and writes per MIME type, "
+    "refused under `clipboard-read`/`clipboard-write = deny`, asked about with a preview of their data under `ask`, a "
+    "listing answered without a prompt, in a plain pane and in a Live one through the session server",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
     "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",

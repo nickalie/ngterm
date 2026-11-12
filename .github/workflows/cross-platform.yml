@@ -199,11 +199,12 @@ jobs:
       # every stopped instance's logs (the harness's and the app's own), named after its test, uploaded with the report
       # --must-pass live-any-shell: the login shell is Windows PowerShell, which the build runs its live sessions in; a
       # skipped, failed or deselected Live test fails the job, as does finding none. --must-pass agent-chat: the
-      # Rust-only agent record and `ngtermctl agent` behind the Android chat view, likewise.
+      # Rust-only agent record and `ngtermctl agent` behind the Android chat view, likewise; --must-pass
+      # kitty-clipboard: a program's Rust-only Kitty clipboard protocol, likewise.
       - name: suite (protocol, cli, behaviors, ui)
         run: >-
           CONFORMANCE_KEEP_LOGS="$(cygpath -w "$PWD/conformance/reports/rust-windows/instances")"
-          conformance/tools/run-windows.sh -- --must-pass live-any-shell --must-pass agent-chat
+          conformance/tools/run-windows.sh -- --must-pass live-any-shell --must-pass agent-chat --must-pass kitty-clipboard
       - name: report into the summary
         if: always()
         run: |
