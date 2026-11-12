@@ -521,8 +521,8 @@ impl AppStore {
         }
     }
 
-    /// The viewer presenting `session` is gone: each program slot's surface counts as gone, and each page it showed is
-    /// parked for the next presenter. The program jobs, whose unclaimed ones the caller cancels, and the pages parked
+    /// The viewer showing `session`'s overlays and pages is gone or gave them up: each program slot's surface counts
+    /// as gone, and each page it showed is parked for the next one. The program jobs, whose unclaimed ones the caller cancels, and the pages parked
     /// now, whose channels the caller shuts, are returned.
     pub fn remote_overlay_presenter_lost(&mut self, session: Uuid) -> (Vec<String>, Vec<Uuid>) {
         let Some(found) = self.session_mut(session) else {

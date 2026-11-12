@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::frames::{
-    self, Body, PresentationFrame, PresentationHello, PresentationLayout, PresentationSnapshot, PresentationStatus,
-    negotiated_version,
+    self, Body, PresentationFrame, PresentationHello, PresentationLayout, PresentationMode, PresentationSnapshot,
+    PresentationStatus, negotiated_version,
 };
 
 /// Where the hub hands a subscriber's frames. The bounded queue and the socket live behind it; the hub only learns
@@ -59,11 +59,14 @@ impl SubscriberId {
 pub enum HubEvent {
     /// The session's presenter went away; the role is released.
     PresenterLost(Uuid),
-    /// A viewer was just granted the session's presenter role, after its answer went out (this build's addition: the
-    /// owner hands it the pages parked since the last presenter).
-    PresenterGained(Uuid),
-    /// What the session's current presenter sent about work it was handed. Frames of these kinds from any other
-    /// viewer are dropped before they get here.
+    /// The viewer showing the session's overlays and pages ([`PresentationHub::surface_holder`]) went away or gave
+    /// them up to another; what it held is the owner's to take back.
+    SurfacesLost(Uuid),
+    /// A viewer just became the one showing the session's overlays and pages, after any answer it was due went out
+    /// (this build's addition: the owner hands it the pages parked since the last one).
+    SurfacesGained(Uuid),
+    /// What the session's presenter sent about an ask, or its surface holder about an overlay or a page. Frames of
+    /// these kinds from any other viewer are dropped before they get here.
     PresenterFrame(Uuid, Box<Body>),
 }
 
@@ -78,6 +81,8 @@ struct Subscriber {
     last_ack: Instant,
     /// Deltas published while the snapshot is being taken, held so they land after it.
     held: Option<Vec<Body>>,
+    /// Its hello asked for the presenter role; one that asked to mirror is handed no work.
+    presents: bool,
 }
 
 impl Subscriber {
@@ -144,6 +149,19 @@ impl PresenterGrant {
 
     fn holder(&self, session: Uuid) -> Option<SubscriberId> {
         self.holders.get(&session).copied()
+    }
+
+    /// Gives `session` to `holder`, or to nobody; whether that changed the holder.
+    fn hand(&mut self, session: Uuid, holder: Option<SubscriberId>) -> bool {
+        if self.holder(session) == holder {
+            return false;
+        }
+        match holder {
+            Some(holder) => self.holders.insert(session, holder),
+            None => self.holders.remove(&session),
+        };
+        *self.generations.entry(session).or_default() += 1;
+        true
     }
 
     fn generation(&self, session: Uuid) -> i64 {
@@ -244,6 +262,8 @@ pub struct PresentationHub {
     last_generation: i64,
     layouts: HashMap<Uuid, PresentationLayout>,
     grant: PresenterGrant,
+    /// Who shows each session's overlays and pages ([`PresentationHub::surface_holder`]), and its generations.
+    surfaces: PresenterGrant,
     events: Vec<HubEvent>,
 }
 
@@ -268,6 +288,7 @@ impl PresentationHub {
             last_generation: 0,
             layouts: HashMap::new(),
             grant: PresenterGrant::default(),
+            surfaces: PresenterGrant::default(),
             events: Vec::new(),
         }
     }
@@ -307,6 +328,7 @@ impl PresentationHub {
                 revision: 0,
                 last_ack: now,
                 held: Some(Vec::new()),
+                presents: hello.mode == PresentationMode::Presenter,
             },
         );
         let state = snapshot(self);
@@ -329,6 +351,7 @@ impl PresentationHub {
                 break;
             }
         }
+        self.reroute_surfaces(session);
         Ok(id)
     }
 
@@ -336,8 +359,8 @@ impl PresentationHub {
     pub fn unsubscribe(&mut self, id: SubscriberId) {
         if let Some(subscriber) = self.subscribers.remove(&id) {
             self.forget_layout_if_unwatched(subscriber.session);
+            self.release(id, subscriber.session);
         }
-        self.release(id);
     }
 
     /// Sends `body` to `session`'s presenter alone. False when there is none, it stalled and was dropped, or `body` is
@@ -351,6 +374,39 @@ impl PresentationHub {
             return false;
         }
         self.send(body, holder)
+    }
+
+    /// Who shows `session`'s program overlays and pages (this build's extension): the presenter, unless it shows no
+    /// pages (a phone) and another viewer of the session does, so a page is not refused while a desktop beside the
+    /// phone could show it. Asks and sounds stay the presenter's.
+    #[must_use]
+    pub fn surface_holder(&self, session: Uuid) -> Option<SubscriberId> {
+        self.surfaces.holder(session)
+    }
+
+    /// [`PresentationHub::presenter_supports`] for `session`'s [`PresentationHub::surface_holder`].
+    #[must_use]
+    pub fn surfaces_support(&self, kind: &str, session: Uuid) -> bool {
+        self.surface_holder(session)
+            .is_some_and(|holder| self.holder_supports(holder, kind))
+    }
+
+    /// [`PresentationHub::send_to_presenter`] for `session`'s [`PresentationHub::surface_holder`].
+    pub fn send_to_surfaces(&mut self, body: Body, session: Uuid) -> bool {
+        let Some(holder) = self.surface_holder(session) else {
+            return false;
+        };
+        if negotiated(body.kind()) && !self.holder_supports(holder, body.kind()) {
+            return false;
+        }
+        self.send(body, holder)
+    }
+
+    /// Counts changes of `session`'s [`PresentationHub::surface_holder`], which the overlays and pages it is handed
+    /// are bound to.
+    #[must_use]
+    pub fn surface_generation(&self, session: Uuid) -> i64 {
+        self.surfaces.generation(session)
     }
 
     /// Sends `body` to subscriber `id` alone, unless it is an opt-in kind ([`OPT_IN_KINDS`]) its hello did not list.
@@ -434,7 +490,6 @@ impl PresentationHub {
                 self.send(Body::Ack, from);
             }
             Body::PresenterAcquire => {
-                let fresh = self.grant.holder(session).is_none();
                 let granted = self.grant.acquire(session, from);
                 let answer = if granted {
                     Body::PresenterGranted
@@ -442,19 +497,20 @@ impl PresentationHub {
                     Body::PresenterRefused
                 };
                 // the answer can drop a stalled viewer, which releases the role it was just given
-                if self.send(answer, from) && granted && fresh {
-                    self.events.push(HubEvent::PresenterGained(session));
+                if self.send(answer, from) {
+                    self.reroute_surfaces(session);
                 }
             }
-            body @ (Body::AskResolve(_)
-            | Body::AskRejected(_)
-            | Body::OverlayRejected(_)
+            body @ (Body::AskResolve(_) | Body::AskRejected(_)) if self.grant.holder(session) == Some(from) => {
+                self.events.push(HubEvent::PresenterFrame(session, Box::new(body)));
+            }
+            body @ (Body::OverlayRejected(_)
             | Body::OverlayClosed(_)
             | Body::PageRejected(_)
             | Body::PageClosed(_)
             | Body::PageDetached(_)
             | Body::PageState(_))
-                if self.grant.holder(session) == Some(from) =>
+                if self.surfaces.holder(session) == Some(from) =>
             {
                 self.events.push(HubEvent::PresenterFrame(session, Box::new(body)));
             }
@@ -535,7 +591,7 @@ impl PresentationHub {
         };
         self.forget_layout_if_unwatched(subscriber.session);
         subscriber.sink.close(reason);
-        self.release(id);
+        self.release(id, subscriber.session);
     }
 
     fn forget_layout_if_unwatched(&mut self, session: Uuid) {
@@ -544,9 +600,50 @@ impl PresentationHub {
         }
     }
 
-    fn release(&mut self, id: SubscriberId) {
+    fn release(&mut self, id: SubscriberId, session: Uuid) {
         for session in self.grant.release(id) {
             self.events.push(HubEvent::PresenterLost(session));
+        }
+        self.reroute_surfaces(session);
+    }
+
+    /// Whether subscriber `id` asked to present and shows handed-over pages: its hello listed every [`PAGE_KINDS`].
+    fn shows_pages(&self, id: SubscriberId) -> bool {
+        self.subscribers.get(&id).is_some_and(|subscriber| subscriber.presents)
+            && PAGE_KINDS.iter().all(|kind| self.holder_supports(id, kind))
+    }
+
+    /// Who should show `session`'s overlays and pages: none without a presenter, the presenter when it shows pages,
+    /// else a viewer of the session that does (the one already showing them, then the earliest), else the presenter.
+    fn wanted_surface_holder(&self, session: Uuid) -> Option<SubscriberId> {
+        let presenter = self.grant.holder(session)?;
+        if self.shows_pages(presenter) {
+            return Some(presenter);
+        }
+        let watching = |id: &SubscriberId| {
+            self.subscribers
+                .get(id)
+                .is_some_and(|subscriber| subscriber.session == session)
+                && self.shows_pages(*id)
+        };
+        let current = self.surfaces.holder(session).filter(watching);
+        current
+            .or_else(|| self.subscribers.keys().copied().find(watching))
+            .or(Some(presenter))
+    }
+
+    /// Moves `session`'s overlays and pages to the viewer that should show them now, announcing the change.
+    fn reroute_surfaces(&mut self, session: Uuid) {
+        let previous = self.surfaces.holder(session);
+        let wanted = self.wanted_surface_holder(session);
+        if !self.surfaces.hand(session, wanted) {
+            return;
+        }
+        if previous.is_some() {
+            self.events.push(HubEvent::SurfacesLost(session));
+        }
+        if wanted.is_some() {
+            self.events.push(HubEvent::SurfacesGained(session));
         }
     }
 }
@@ -558,7 +655,6 @@ mod tests {
 
     use super::*;
     use crate::model::{AgentStatus, StatusShape};
-    use crate::remote::frames::PresentationMode;
 
     /// What a test sink saw, shared with the test.
     #[derive(Default)]
@@ -1175,7 +1271,7 @@ mod tests {
         assert_eq!(hub.presenter_generation(session), 1);
         assert_eq!(
             hub.take_events(),
-            vec![HubEvent::PresenterGained(session)],
+            vec![HubEvent::SurfacesGained(session)],
             "only the new holder is announced"
         );
         hub.publish(&Body::Status(None), session);
@@ -1192,7 +1288,11 @@ mod tests {
         hub.receive(frame(second, Body::PresenterAcquire), second);
         assert_eq!(
             hub.take_events(),
-            vec![HubEvent::PresenterLost(session), HubEvent::PresenterGained(session)]
+            vec![
+                HubEvent::PresenterLost(session),
+                HubEvent::SurfacesLost(session),
+                HubEvent::SurfacesGained(session)
+            ]
         );
         assert_eq!(hub.presenter_generation(session), 3);
     }
@@ -1217,7 +1317,7 @@ mod tests {
             let session = Uuid::new_v4();
             let (id, _) = subscribe(&mut hub, session, PresentationMode::Presenter);
             hub.receive(frame(id, Body::PresenterAcquire), id);
-            assert_eq!(hub.take_events(), vec![HubEvent::PresenterGained(session)]);
+            assert_eq!(hub.take_events(), vec![HubEvent::SurfacesGained(session)]);
             if stale {
                 advance(&clock, 31);
                 hub.heartbeat();
@@ -1226,7 +1326,10 @@ mod tests {
             }
             assert!(!hub.has_presenter(session));
             assert_eq!(hub.presenter_generation(session), 2);
-            assert_eq!(hub.take_events(), vec![HubEvent::PresenterLost(session)]);
+            assert_eq!(
+                hub.take_events(),
+                vec![HubEvent::PresenterLost(session), HubEvent::SurfacesLost(session)]
+            );
         }
     }
 
@@ -1263,7 +1366,7 @@ mod tests {
         assert_eq!(
             hub.take_events(),
             vec![
-                HubEvent::PresenterGained(session),
+                HubEvent::SurfacesGained(session),
                 HubEvent::PresenterFrame(session, Box::new(rejected))
             ]
         );
@@ -1280,7 +1383,7 @@ mod tests {
         let (presenter, _) = subscribe(&mut hub, session, PresentationMode::Presenter);
         let (mirror, _) = subscribe(&mut hub, session, PresentationMode::Mirror);
         hub.receive(frame(presenter, Body::PresenterAcquire), presenter);
-        assert_eq!(hub.take_events(), vec![HubEvent::PresenterGained(session)]);
+        assert_eq!(hub.take_events(), vec![HubEvent::SurfacesGained(session)]);
         let closed = Body::PageClosed(PresentationPageChange::page("p1"));
         // this build's detach goes the same way
         let detached = Body::PageDetached(PresentationPageChange::page("p1"));
@@ -1326,5 +1429,160 @@ mod tests {
             let close = Body::PageClose(PresentationPageChange::page("p1"));
             assert_eq!(hub.send_to_presenter(close, session), listed);
         }
+    }
+
+    // MARK: - who shows a session's overlays and pages (this build's extension)
+
+    fn subscribe_pages(
+        hub: &mut PresentationHub,
+        session: Uuid,
+        mode: PresentationMode,
+        pages: bool,
+    ) -> (SubscriberId, Rc<RefCell<Seen>>) {
+        let (sink, seen) = sink();
+        let mut kinds = vec!["status".to_owned()];
+        if pages {
+            kinds.extend(PAGE_KINDS.iter().map(|kind| (*kind).to_owned()));
+        }
+        let asked = PresentationHello {
+            version: 1,
+            kinds,
+            mode,
+        };
+        let id = hub
+            .subscribe(session, &asked, sink, |_| PresentationSnapshot::default())
+            .unwrap();
+        hub.receive(frame(id, Body::PresenterAcquire), id);
+        (id, seen)
+    }
+
+    /// A phone presenting (no pages), a viewer asking only to mirror, then two desktops; the events taken.
+    struct Beside {
+        hub: PresentationHub,
+        session: Uuid,
+        phone: SubscriberId,
+        desktop: SubscriberId,
+        desktop_seen: Rc<RefCell<Seen>>,
+        later: SubscriberId,
+    }
+
+    fn beside() -> Beside {
+        let (mut hub, _) = hub();
+        let session = Uuid::new_v4();
+        let (phone, _) = subscribe_pages(&mut hub, session, PresentationMode::Presenter, false);
+        subscribe_pages(&mut hub, session, PresentationMode::Mirror, true);
+        let (desktop, desktop_seen) = subscribe_pages(&mut hub, session, PresentationMode::Presenter, true);
+        let (later, _) = subscribe_pages(&mut hub, session, PresentationMode::Presenter, true);
+        hub.take_events();
+        Beside {
+            hub,
+            session,
+            phone,
+            desktop,
+            desktop_seen,
+            later,
+        }
+    }
+
+    /// A presenter showing no pages keeps the role and what it shows, while the overlays and pages go to the first
+    /// viewer beside it that shows them and asked to present.
+    #[test]
+    fn a_presenter_without_pages_leaves_them_to_a_viewer_that_shows_them() {
+        let (mut hub, _) = hub();
+        let session = Uuid::new_v4();
+        let (phone, _) = subscribe_pages(&mut hub, session, PresentationMode::Presenter, false);
+        assert_eq!(hub.surface_holder(session), Some(phone));
+        subscribe_pages(&mut hub, session, PresentationMode::Mirror, true);
+        assert_eq!(
+            hub.surface_holder(session),
+            Some(phone),
+            "a viewer that asked to mirror is handed nothing"
+        );
+        assert_eq!(hub.take_events(), vec![HubEvent::SurfacesGained(session)]);
+        let (desktop, desktop_seen) = subscribe_pages(&mut hub, session, PresentationMode::Presenter, true);
+        assert_eq!(bodies(&desktop_seen).last(), Some(&Body::PresenterRefused));
+        assert!(hub.presenter_supports("status", session));
+        assert!(!hub.presenter_supports(PAGE_KINDS[0], session));
+        assert_eq!(hub.surface_holder(session), Some(desktop));
+        assert!(hub.surfaces_support(PAGE_KINDS[0], session));
+        assert_eq!(
+            hub.take_events(),
+            vec![HubEvent::SurfacesLost(session), HubEvent::SurfacesGained(session)]
+        );
+    }
+
+    /// Work on a page goes to the viewer showing pages and only its page reports count; asks stay the presenter's.
+    #[test]
+    fn page_work_goes_to_the_surface_holder_and_asks_to_the_presenter() {
+        use crate::remote::frames::{PresentationAskRef, PresentationPageChange};
+        let Beside {
+            mut hub,
+            session,
+            phone,
+            desktop,
+            desktop_seen,
+            ..
+        } = beside();
+        let close = Body::PageClose(PresentationPageChange::page("p1"));
+        assert!(hub.send_to_surfaces(close.clone(), session));
+        assert_eq!(bodies(&desktop_seen).last(), Some(&close));
+        let closed = Body::PageClosed(PresentationPageChange::page("p1"));
+        let rejected = Body::AskRejected(PresentationAskRef {
+            id: "a".to_owned(),
+            owner: 1,
+        });
+        hub.receive(frame(phone, closed.clone()), phone);
+        hub.receive(frame(desktop, rejected.clone()), desktop);
+        assert!(
+            hub.take_events().is_empty(),
+            "the phone's page report and the desktop's ask report are dropped"
+        );
+        hub.receive(frame(desktop, closed.clone()), desktop);
+        hub.receive(frame(phone, rejected.clone()), phone);
+        assert_eq!(
+            hub.take_events(),
+            vec![
+                HubEvent::PresenterFrame(session, Box::new(closed)),
+                HubEvent::PresenterFrame(session, Box::new(rejected))
+            ]
+        );
+    }
+
+    /// The overlays and pages move on when their viewer goes, back to the presenter after the last, and go with it.
+    #[test]
+    fn the_surfaces_move_on_when_their_viewer_goes() {
+        let Beside {
+            mut hub,
+            session,
+            phone,
+            desktop,
+            later,
+            ..
+        } = beside();
+        let generation = hub.surface_generation(session);
+        hub.unsubscribe(desktop);
+        assert_eq!(hub.surface_holder(session), Some(later));
+        assert!(hub.surface_generation(session) > generation);
+        hub.unsubscribe(later);
+        assert_eq!(hub.surface_holder(session), Some(phone));
+        assert_eq!(hub.take_events().len(), 4, "each move is a loss and a gain");
+        hub.unsubscribe(phone);
+        assert_eq!(hub.surface_holder(session), None);
+        assert_eq!(
+            hub.take_events(),
+            vec![HubEvent::PresenterLost(session), HubEvent::SurfacesLost(session)]
+        );
+    }
+
+    /// A presenter that shows pages keeps them whoever attaches after it.
+    #[test]
+    fn a_presenter_showing_pages_keeps_them() {
+        let (mut hub, _) = hub();
+        let session = Uuid::new_v4();
+        let (desktop, _) = subscribe_pages(&mut hub, session, PresentationMode::Presenter, true);
+        subscribe_pages(&mut hub, session, PresentationMode::Presenter, true);
+        subscribe_pages(&mut hub, session, PresentationMode::Presenter, false);
+        assert_eq!(hub.surface_holder(session), Some(desktop));
+        assert_eq!(hub.take_events(), vec![HubEvent::SurfacesGained(session)]);
     }
 }

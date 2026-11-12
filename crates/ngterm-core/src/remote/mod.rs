@@ -614,8 +614,8 @@ impl Core {
         }
     }
 
-    /// Acts on what the hub queued: a presenter lost takes its work back, a presenter granted is handed the session's
-    /// parked pages, a presenter's frame is applied.
+    /// Acts on what the hub queued: a presenter lost takes its ask back, a surface holder lost its overlays and pages,
+    /// a new surface holder is handed the session's parked pages, a viewer's frame is applied.
     fn run_hub_events(&mut self) {
         loop {
             let events = self.remote.hub.take_events();
@@ -624,8 +624,9 @@ impl Core {
             }
             for event in events {
                 match event {
-                    HubEvent::PresenterLost(session) => self.presenter_lost(session),
-                    HubEvent::PresenterGained(session) => self.hand_on_parked_pages(session),
+                    HubEvent::PresenterLost(session) => self.take_back_remote_ask(session),
+                    HubEvent::SurfacesLost(session) => self.surfaces_lost(session),
+                    HubEvent::SurfacesGained(session) => self.hand_on_parked_pages(session),
                     HubEvent::PresenterFrame(session, body) => self.receive_presenter_frame(session, *body),
                 }
             }

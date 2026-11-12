@@ -181,7 +181,7 @@ impl Core {
         let body = Body::CompanionPage(PresentationCompanion {
             session: uuid_string(companion),
         });
-        if !self.remote.hub.send_to_presenter(body, parent) {
+        if !self.remote.hub.send_to_surfaces(body, parent) {
             tracing::info!(%parent, %companion, "no presenter takes the page companion; it waits for an attach");
         }
     }

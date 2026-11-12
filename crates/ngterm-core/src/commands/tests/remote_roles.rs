@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::live::{Live, live};
-use super::remote::{node, set_lead};
+use super::remote::{frame, node, set_lead, subscribe_listing};
 use super::viewer::{Viewer, viewer_built};
 use super::{Fixture, args, wire};
 use crate::html::{HtmlHost, HtmlLoadState, HtmlNavigation, HtmlPageInfo};
@@ -155,11 +155,24 @@ struct Roles {
 impl Roles {
     /// A viewer that shows pages when `pages`.
     fn new(pages: bool) -> Self {
+        Self::build(pages, false)
+    }
+
+    /// [`Roles::new`], with a phone (no pages) attached and presenting first when `phone_first`.
+    fn build(pages: bool, phone_first: bool) -> Self {
         let mut origin = live();
         origin.fixture.core.set_html_host(Box::new(Host));
         let left = origin.left;
         set_lead(&mut origin.fixture.core, left, "follower");
         let session = origin.session;
+        if phone_first {
+            let kinds = crate::remote::client::viewer_kinds(false);
+            let kinds: Vec<&str> = kinds.iter().map(String::as_str).collect();
+            let core = &mut origin.fixture.core;
+            let (serial, phone) = subscribe_listing(core, session, "presenter", &kinds);
+            core.presentation_line(serial, &frame(&phone, &json!({"kind": "presenter.acquire"})));
+            core.commit();
+        }
         let response = origin.fixture.core.dispatch(&Request {
             cmd: Command::Live(LiveCmd::Present),
             target: Some(wire(session)),
@@ -439,6 +452,33 @@ fn a_file_page_handed_to_the_viewer_loads_and_submits_through_its_channel() {
         "the helper stopped with the page"
     );
     assert!(roles.origin_node().get("htmlOverlays").is_none());
+}
+
+/// A desktop that attached after a phone took the presenter role still shows the session's pages as a mirror, and the
+/// page's channel carries its submit back (this build's extension).
+#[test]
+fn a_mirror_beside_a_phone_presenter_shows_the_page_through_its_channel() {
+    let mut roles = Roles::build(true, true);
+    assert_eq!(roles.viewer.node()["presentation"]["mode"], json!("mirror"));
+
+    let opened = roles.open_page();
+
+    assert!(opened.ok, "{opened:?}");
+    let page = opened.result.unwrap()["pageID"].as_str().unwrap().to_owned();
+    let local = roles.replica().expect("the mirror shows the page");
+    let reply: Rc<RefCell<Option<Result<Value, String>>>> = Rc::default();
+    let into = Rc::clone(&reply);
+    roles.viewer.fixture.core.replica_bridge(
+        local,
+        r#"{"cmd":"session.overlay.submit","args":{"value":"done"}}"#,
+        Box::new(move |result| *into.borrow_mut() = Some(result)),
+    );
+    roles.pump();
+    assert_eq!(
+        roles.outcome(&page),
+        json!({"pageID": page, "outcome": "submitted", "value": "done"})
+    );
+    assert!(roles.replica().is_none());
 }
 
 /// Upstream's `testTheOriginReadsTheViewersPageStateAndPresenterLossDismissesIt`, but for the loss: the origin parks

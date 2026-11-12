@@ -120,10 +120,10 @@ pub(crate) fn travels(source: &HtmlSource) -> bool {
 /// decode (upstream's guards in `openRemotePage`).
 fn presenter_builds(core: &Core, session: Uuid, source: &PresentationPageSource) -> bool {
     let hub = &core.remote.hub;
-    if source.is_content() && !hub.presenter_supports(PAGE_CONTENT_KIND, session) {
+    if source.is_content() && !hub.surfaces_support(PAGE_CONTENT_KIND, session) {
         return false;
     }
-    !matches!(source, PresentationPageSource::Document { .. }) || hub.presenter_supports(PAGE_DOCUMENT_KIND, session)
+    !matches!(source, PresentationPageSource::Document { .. }) || hub.surfaces_support(PAGE_DOCUMENT_KIND, session)
 }
 
 /// The identity of the pane `pane` addresses, `None` for the session-wide slot.
@@ -215,7 +215,7 @@ pub(crate) fn open_remote_page(
     }
     if !PAGE_KINDS
         .iter()
-        .all(|kind| core.remote.hub.presenter_supports(kind, session))
+        .all(|kind| core.remote.hub.surfaces_support(kind, session))
     {
         return RemotePageOpen::Unsupported;
     }
@@ -245,7 +245,7 @@ pub(crate) fn open_remote_page(
         return RemotePageOpen::TooLarge;
     }
     let hud = found.overlay.hud_active();
-    let owner = core.remote.hub.presenter_generation(session);
+    let owner = core.remote.hub.surface_generation(session);
     let Some(store) = core.library_mut().store_mut(window) else {
         return RemotePageOpen::Local;
     };
@@ -270,7 +270,7 @@ pub(crate) fn open_remote_page(
         },
     );
     core.register_viewer_page_outcome(overlay.id);
-    core.remote.hub.send_to_presenter(request, session);
+    core.remote.hub.send_to_surfaces(request, session);
     core.arm_page_claim_expiry(channel);
     RemotePageOpen::Opened
 }
@@ -298,7 +298,7 @@ fn unreachable_loopback(core: &Core, session: Uuid, source: &HtmlSource) -> bool
         && !core
             .remote
             .hub
-            .presenter_supports(super::page_tunnel::TUNNEL_KIND, session)
+            .surfaces_support(super::page_tunnel::TUNNEL_KIND, session)
 }
 
 /// Where a page handed to the presenter is reserved now (upstream's `remotePagePlace`).
@@ -337,7 +337,7 @@ impl Core {
     fn page_shown_by_owner(&self, session: Uuid, slot: &RemoteOverlaySlot) -> bool {
         slot.page.as_ref().is_some_and(|page| !page.parked)
             && self.remote.hub.has_presenter(session)
-            && self.remote.hub.presenter_generation(session) == slot.owner
+            && self.remote.hub.surface_generation(session) == slot.owner
     }
 
     /// Asks the presenter to act on the page in `pane`'s slot (upstream's `sendRemotePageCommand`); false when no remote
@@ -374,7 +374,7 @@ impl Core {
             size_percent: size.percent,
             merge,
         };
-        self.remote.hub.send_to_presenter(Body::PageCommand(command), session)
+        self.remote.hub.send_to_surfaces(Body::PageCommand(command), session)
     }
 
     /// Runs a toolbar navigation on the page in `pane`'s slot when the presenting machine shows it (upstream's
@@ -477,7 +477,7 @@ impl Core {
     pub(super) fn close_remote_page(&mut self, session: Uuid, page: Uuid, shown: bool) {
         if shown {
             let close = Body::PageClose(PresentationPageChange::page(uuid_string(page)));
-            self.remote.hub.send_to_presenter(close, session);
+            self.remote.hub.send_to_surfaces(close, session);
         }
         self.remote_page_ended(page);
     }
@@ -489,7 +489,7 @@ impl Core {
             .and_then(|found| found.remote_overlays().slot_of_job(&command.page))
             .is_some_and(|slot| self.page_shown_by_owner(session, slot));
         if owned {
-            self.remote.hub.send_to_presenter(Body::PageCommand(command), session);
+            self.remote.hub.send_to_surfaces(Body::PageCommand(command), session);
         }
     }
 
@@ -556,7 +556,7 @@ impl Core {
             .is_some_and(|store| store.park_remote_page(session, &job));
         if parked {
             let close = Body::PageClose(PresentationPageChange::page(job));
-            self.remote.hub.send_to_presenter(close, session);
+            self.remote.hub.send_to_surfaces(close, session);
             self.shut_page_serve_channel(page);
         }
     }
@@ -610,11 +610,11 @@ impl Core {
     pub(crate) fn hand_on_parked_pages(&mut self, session: Uuid) {
         if !PAGE_KINDS
             .iter()
-            .all(|kind| self.remote.hub.presenter_supports(kind, session))
+            .all(|kind| self.remote.hub.surfaces_support(kind, session))
         {
             return;
         }
-        let generation = self.remote.hub.presenter_generation(session);
+        let generation = self.remote.hub.surface_generation(session);
         let parked: Vec<(RemoteOverlaySlot, bool)> = self
             .presented_session(session)
             .map(|found| {
@@ -695,7 +695,7 @@ impl Core {
         if !fits_one_frame(&request) {
             return;
         }
-        let owner = self.remote.hub.presenter_generation(session);
+        let owner = self.remote.hub.surface_generation(session);
         let deadline = Instant::now() + PAGE_CLAIM_WINDOW;
         let Some(handed) = self
             .library_mut()
@@ -704,7 +704,7 @@ impl Core {
         else {
             return;
         };
-        self.remote.hub.send_to_presenter(request, session);
+        self.remote.hub.send_to_surfaces(request, session);
         if let HandedOn::Hidden(seq) = handed {
             let command = PresentationPageCommand {
                 width: None,
@@ -715,7 +715,7 @@ impl Core {
                 size_percent: None,
                 merge: None,
             };
-            self.remote.hub.send_to_presenter(Body::PageCommand(command), session);
+            self.remote.hub.send_to_surfaces(Body::PageCommand(command), session);
         }
         self.arm_page_claim_expiry(channel);
     }
