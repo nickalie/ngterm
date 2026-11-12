@@ -13,7 +13,13 @@ internal struct NewSessionTests {
     private let test = TestGraph()
 
     private func model() -> SessionsModel {
-        SessionsModel(graph: test.graph, machineId: "m1")
+        let model = SessionsModel(graph: test.graph, machineId: "m1")
+        model.setShowing(true)
+        return model
+    }
+
+    private var claims: Set<SessionKey> {
+        test.graph.panes.claims
     }
 
     private func connected() async throws {
@@ -102,7 +108,7 @@ internal struct NewSessionTests {
         #expect(opened.isEmpty)
         #expect(!model.isCreating)
         #expect(model.notice == "build-01 does not run live sessions")
-        #expect(test.graph.panes.claims.isEmpty)
+        #expect(claims.isEmpty)
     }
 
     @Test("a created session whose attach fails stays in the list, opens nothing and says why")
@@ -117,7 +123,7 @@ internal struct NewSessionTests {
         #expect(model.notice == "the session is gone")
         #expect(ids(model) == ["fake-1"])
         #expect(model.state?.attached.isEmpty == true)
-        #expect(test.graph.panes.claims.isEmpty)
+        #expect(claims.isEmpty)
     }
 
     @Test("a created session missing from the last listing (a listing raced the create's) is listed afresh and opens")
@@ -145,7 +151,7 @@ internal struct NewSessionTests {
         await model.create(name: "api") { _ in sheetOnOpen.append(model.newSession) }?.value
         #expect(sheetOnOpen == [nil])
         #expect(model.state?.attached == ["fake-1"])
-        #expect(test.graph.panes.claims == [SessionKey(machineId: "m1", sessionId: "fake-1")])
+        #expect(claims == [SessionKey(machineId: "m1", sessionId: "fake-1")])
     }
 
     @Test("a named create whose sheet was cancelled only lists its session")
@@ -166,6 +172,79 @@ internal struct NewSessionTests {
         #expect(ids(model) == ["fake-1"])
         #expect(model.state?.attached.isEmpty == true)
         #expect(model.notice == nil)
+    }
+
+    @Test("a named create whose sheet is cancelled during the attach opens nothing, claims nothing and is only listed")
+    internal func createNamedCancelledAttaching() async throws {
+        defer { test.remove() }
+        try await connected()
+        let model = model()
+        model.openNewSession()
+        let gate = test.core.hold("attachSession")
+        var opened = false
+        let creating = model.create(name: "api") { _ in opened = true }
+        await gate.reached()
+        model.closeNewSession()
+        gate.open()
+        await creating?.value
+        await test.settled()
+        #expect(!opened)
+        #expect(claims.isEmpty)
+        #expect(ids(model) == ["fake-1"])
+        #expect(model.state?.attached.isEmpty == true)
+        #expect(model.newSession == nil)
+    }
+
+    @Test("a create whose screen was left before it attached stays attached, opens nothing and claims nothing")
+    internal func createLeft() async throws {
+        defer { test.remove() }
+        try await connected()
+        let model = model()
+        let gate = test.core.hold("attachSession")
+        var opened: [String] = []
+        let creating = model.createAndOpen { opened.append($0) }
+        await gate.reached()
+        model.setShowing(false)
+        gate.open()
+        await creating?.value
+        #expect(opened.isEmpty)
+        #expect(claims.isEmpty)
+        #expect(model.state?.attached == ["fake-1"])
+        #expect(!model.isCreating)
+    }
+
+    @Test("a create during which the window opened another session leaves that session in its place")
+    internal func createOpenedElsewhere() async throws {
+        defer { test.remove() }
+        try await connected()
+        let model = model()
+        let gate = test.core.hold("createSession")
+        var opened: [String] = []
+        let creating = model.createAndOpen { opened.append($0) }
+        await gate.reached()
+        model.openedElsewhere()
+        gate.open()
+        await creating?.value
+        #expect(opened.isEmpty)
+        #expect(claims.isEmpty)
+    }
+
+    @Test("a named create whose screen was left meanwhile closes its sheet, opens nothing and claims nothing")
+    internal func createNamedLeft() async throws {
+        defer { test.remove() }
+        try await connected()
+        let model = model()
+        model.openNewSession()
+        let gate = test.core.hold("attachSession")
+        var opened = false
+        let creating = model.create(name: "api") { _ in opened = true }
+        await gate.reached()
+        model.setShowing(false)
+        gate.open()
+        await creating?.value
+        #expect(!opened)
+        #expect(claims.isEmpty)
+        #expect(model.newSession == nil)
     }
 
     @Test("a named create whose attach fails closes the sheet and says why in the banner")

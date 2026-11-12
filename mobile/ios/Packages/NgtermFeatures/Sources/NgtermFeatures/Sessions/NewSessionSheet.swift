@@ -3,9 +3,9 @@ import SwiftUI
 
 /// New session on a machine: an optional name (blank lets the machine name it) and Create.
 ///
-/// While the create runs (it waits until the machine lists the session) Create gives way to a spinner and the field
-/// holds still; Cancel closes the sheet and the create goes on. What went wrong shows under the field, which keeps its
-/// text for another try.
+/// While the create runs (until its session is attached and opened) Create gives way to a spinner and the field
+/// holds still; Cancel closes the sheet and the create goes on, its session only listed. What went wrong shows under
+/// the field, which keeps its text for another try.
 internal struct NewSessionSheet: View {
     internal let machine: String
     internal let state: NewSessionState

@@ -55,7 +55,7 @@ public struct SessionsView: View {
         }
     }
 
-    private var isCreating: Binding<Bool> {
+    private var isNamingSession: Binding<Bool> {
         Binding {
             model.newSession != nil
         } set: { isShown in
@@ -167,7 +167,16 @@ public struct SessionsView: View {
             .task {
                 model.opened()
             }
-            .sheet(isPresented: isCreating) {
+            .onAppear {
+                model.setShowing(true)
+            }
+            .onDisappear {
+                model.setShowing(false)
+            }
+            .onChange(of: selection) {
+                model.openedElsewhere()
+            }
+            .sheet(isPresented: isNamingSession) {
                 if let newSession = model.newSession {
                     NewSessionSheet(machine: state.machine.title, state: newSession) { name in
                         model.create(name: name, then: onOpen)

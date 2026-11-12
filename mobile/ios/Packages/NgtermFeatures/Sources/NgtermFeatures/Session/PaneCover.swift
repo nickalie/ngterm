@@ -17,8 +17,8 @@ public enum PaneCover: Equatable, Sendable {
     }
 
     /// What covers a pane: its show's `failure`, no terminal yet (`hasTerminal` false), its attach's end, or its
-    /// role's cover; `nil` when it is the user's to use.
-    public static func of(_ live: PaneLive?, hasTerminal: Bool, failure: String?) -> Self? {
+    /// role's cover (attaching while this device is taking its lead, `isTaking`); `nil` when it is the user's to use.
+    public static func of(_ live: PaneLive?, hasTerminal: Bool, failure: String?, isTaking: Bool = false) -> Self? {
         if let failure {
             return .failed(reason: failure)
         }
@@ -38,6 +38,6 @@ public enum PaneCover: Equatable, Sendable {
         guard live?.isCovered == true else {
             return nil
         }
-        return live?.role == .follower ? .follower : .attaching
+        return live?.role == .follower && !isTaking ? .follower : .attaching
     }
 }

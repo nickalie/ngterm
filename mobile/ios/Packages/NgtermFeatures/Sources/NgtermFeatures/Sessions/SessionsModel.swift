@@ -5,7 +5,7 @@ import Observation
 /// this app has it attached, refreshing it, New session (named or not), End session, attaching and detaching.
 ///
 /// The New session sheet's state lives here, so a size change keeps a create under way. ``notice`` carries what the
-/// list can't show (an End or an attach that failed, a create whose sheet was closed) for a banner.
+/// list can't show, for a banner.
 @preconcurrency
 @MainActor
 @Observable
@@ -26,6 +26,9 @@ public final class SessionsModel {
     // which opening of the New session sheet is showing: a create answers only the sheet it began in
     @ObservationIgnored private var sheet = 0
     @ObservationIgnored private var isOpened = false
+    // a create lands only on a screen still showing, with nothing else opened since it began: it takes the lead
+    @ObservationIgnored private var isShowing = false
+    @ObservationIgnored private var opens = 0
 
     /// What the screen knows of the machine; `nil` once it is no longer saved (removed while its screen was open).
     public var state: MachineSessions? {
@@ -70,6 +73,16 @@ public final class SessionsModel {
         }
     }
 
+    /// Whether the screen shows, as it appears and disappears.
+    public func setShowing(_ isShowing: Bool) {
+        self.isShowing = isShowing
+    }
+
+    /// The window opened another session, so a create under way doesn't take its place.
+    public func openedElsewhere() {
+        opens += 1
+    }
+
     /// Lists the sessions again (pull to refresh, or Retry after a failed listing); one under way already is enough.
     public func refresh() async {
         guard !isRefreshing else {
@@ -111,6 +124,7 @@ public final class SessionsModel {
             return nil
         }
         isCreating = true
+        let began = opens
         return Task {
             defer { isCreating = false }
             let session: RemoteSession
@@ -123,11 +137,12 @@ public final class SessionsModel {
                 // cancelled: the core still creates it, and the listing shows it
                 return
             }
-            await land(session.id, then: onOpen)
+            await land(session.id, if: { isWanted(began) }, then: onOpen)
         }
     }
 
-    /// Creates a session named `name` from the sheet, then opens it as ``createAndOpen(then:)`` does.
+    /// Creates a session named `name` from the sheet and lands in it as ``createAndOpen(then:)`` does; after a Cancel
+    /// it is only listed, and a failure stays in the sheet, or goes to ``notice`` once the sheet is closed.
     @discardableResult
     @preconcurrency
     public func create(name: String, then onOpen: @escaping @MainActor (String) -> Void) -> Task<Void, Never>? {
@@ -135,6 +150,7 @@ public final class SessionsModel {
             return nil
         }
         let mine = sheet
+        let began = opens
         newSession = NewSessionState(isRunning: true)
         return Task {
             // Cancel while it ran: the user chose not to land in it
@@ -142,16 +158,23 @@ public final class SessionsModel {
                 return
             }
             // dismissed before navigating, not under it
-            await land(session.id) { sessionId in
-                if sheet == mine {
-                    newSession = nil
-                }
+            let landed = await land(session.id, if: { sheet == mine && isWanted(began) }) { sessionId in
+                newSession = nil
                 onOpen(sessionId)
+            }
+            let isAttached = graph.connections.attached[machineId]?.contains(session.id) == true
+            if !landed, sheet != mine, opens == began, isAttached {
+                // cancelled during the attach: left as a Cancel before it would be, listed only
+                graph.connections.detach(machineId: machineId, sessionId: session.id)
             }
             if sheet == mine {
                 newSession = nil
             }
         }
+    }
+
+    private func isWanted(_ began: Int) -> Bool {
+        isShowing && opens == began
     }
 
     private func createInSheet(name: String, sheet mine: Int) async -> RemoteSession? {
@@ -173,7 +196,12 @@ public final class SessionsModel {
         return nil
     }
 
-    private func land(_ sessionId: String, then onOpen: @MainActor (String) -> Void) async {
+    @discardableResult
+    private func land(
+        _ sessionId: String,
+        if isWanted: () -> Bool,
+        then onOpen: @MainActor (String) -> Void
+    ) async -> Bool {
         let connections = graph.connections
         do {
             do {
@@ -186,12 +214,16 @@ public final class SessionsModel {
             try Task.checkCancellation()
         } catch let error as MobileError {
             notice = error.reason
-            return
+            return false
         } catch {
-            return
+            return false
+        }
+        guard isWanted() else {
+            return false
         }
         graph.panes.claimLead(of: SessionKey(machineId: machineId, sessionId: sessionId))
         onOpen(sessionId)
+        return true
     }
 
     /// Ends the session `sessionId` there, with no undo (the screen confirms first).
@@ -217,7 +249,8 @@ public final class SessionsModel {
     @discardableResult
     @preconcurrency
     public func attach(sessionId: String, then onAttached: @escaping @MainActor () -> Void) -> Task<Void, Never> {
-        Task {
+        openedElsewhere()
+        return Task {
             do {
                 try await graph.connections.attach(machineId: machineId, sessionId: sessionId)
                 onAttached()

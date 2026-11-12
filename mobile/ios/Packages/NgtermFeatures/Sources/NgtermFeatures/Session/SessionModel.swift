@@ -68,7 +68,8 @@ public final class SessionModel {
 
     /// The panes of the session's layout, in its order, as the view places them, from what `session` says.
     public func spots(of session: AttachedSession) -> [PaneSpot] {
-        (session.live.layout?.panes ?? []).map { paneId in
+        let isTaking = graph.panes.isTakingLead(key)
+        return (session.live.layout?.panes ?? []).map { paneId in
             let ref = PaneRef(machineId: key.machineId, sessionId: key.sessionId, paneId: paneId)
             let isChat = graph.chats.view(of: ref) == .chat
             return PaneSpot(
@@ -77,7 +78,8 @@ public final class SessionModel {
                 live: session.live.panes[paneId],
                 failure: graph.panes.failures[ref],
                 isChatView: isChat,
-                chat: isChat ? graph.chats.chats[ref] : nil
+                chat: isChat ? graph.chats.chats[ref] : nil,
+                isTakingLead: isTaking
             )
         }
     }

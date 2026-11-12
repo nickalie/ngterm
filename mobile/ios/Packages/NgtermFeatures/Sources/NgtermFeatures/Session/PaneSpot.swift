@@ -18,6 +18,8 @@ public struct PaneSpot {
     public let isChatView: Bool
     /// Its chat, once open.
     public let chat: ChatModel?
+    /// Whether this device is taking its session's lead.
+    public let isTakingLead: Bool
 
     /// The pane's id in its session.
     public var id: String {
@@ -26,7 +28,7 @@ public struct PaneSpot {
 
     /// What covers it, if anything: a chat only a failed show's, since reading a chat never takes control.
     public var cover: PaneCover? {
-        let found = PaneCover.of(live, hasTerminal: shown != nil, failure: failure)
+        let found = PaneCover.of(live, hasTerminal: shown != nil, failure: failure, isTaking: isTakingLead)
         guard isChatView else {
             return found
         }
@@ -37,14 +39,15 @@ public struct PaneSpot {
     }
 
     /// The pane `ref`, `shown` or not yet, with its `live` state and its show's `failure`; in chat view
-    /// (`isChatView`) with its `chat` once open.
+    /// (`isChatView`) with its `chat` once open; `isTakingLead` while this device is taking its session's lead.
     public init(
         ref: PaneRef,
         shown: ShownPane?,
         live: PaneLive?,
         failure: String?,
         isChatView: Bool = false,
-        chat: ChatModel? = nil
+        chat: ChatModel? = nil,
+        isTakingLead: Bool = false
     ) {
         self.ref = ref
         self.shown = shown
@@ -52,5 +55,6 @@ public struct PaneSpot {
         self.failure = failure
         self.isChatView = isChatView
         self.chat = chat
+        self.isTakingLead = isTakingLead
     }
 }

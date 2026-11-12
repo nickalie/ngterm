@@ -112,6 +112,81 @@ internal struct SessionPanesTests {
         #expect(panes.claims.isEmpty)
     }
 
+    // the session's stream connected with `P1` shown, and no lead reported yet
+    private func connectedUnreported() async throws {
+        try await world.attach()
+        await world.emit(
+            .sessionConnection(machineId: "m1", sessionId: "s1", state: .connected),
+            .sessionLayout(machineId: "m1", sessionId: "s1", layout: SessionWorld.layout(["P1"], axis: nil, shown: true))
+        )
+        await world.show("P1")
+    }
+
+    private func cover() -> PaneCover? {
+        let model = SessionModel(graph: world.graph, key: SessionWorld.key)
+        guard case .live(let session, _) = model.state else {
+            return nil
+        }
+        return model.spots(of: session).first?.cover
+    }
+
+    @Test("a claimed pane shows attaching, not Take control, until its takeover's next lead report, whatever it says")
+    internal func claimHolds() async throws {
+        defer { world.remove() }
+        try await connectedUnreported()
+        panes.claimLead(of: SessionWorld.key)
+        await world.emit(.paneLead(pane: SessionWorld.pane("P1"), role: .follower, covered: true))
+        #expect(cover() == .attaching)
+        #expect(panes.isTakingLead(SessionWorld.key))
+        // another device kept the lead: the cover is the user's to tap again
+        await world.emit(.paneLead(pane: SessionWorld.pane("P1"), role: .follower, covered: true))
+        #expect(cover() == .follower)
+        #expect(!panes.isTakingLead(SessionWorld.key))
+    }
+
+    @Test("a claimed pane whose takeover leads shows its terminal")
+    internal func claimTakes() async throws {
+        defer { world.remove() }
+        try await connectedUnreported()
+        panes.claimLead(of: SessionWorld.key)
+        await world.emit(
+            .paneLead(pane: SessionWorld.pane("P1"), role: .follower, covered: true),
+            .paneLead(pane: SessionWorld.pane("P1"), role: .leader, covered: false)
+        )
+        #expect(cover() == nil)
+        #expect(!panes.isTakingLead(SessionWorld.key))
+    }
+
+    @Test("a takeover the core refuses holds nothing: Take control shows")
+    internal func claimRefused() async throws {
+        defer { world.remove() }
+        try await connectedUnreported()
+        panes.claimLead(of: SessionWorld.key)
+        world.core.failNext("takeLead", with: .Stopped)
+        await world.emit(.paneLead(pane: SessionWorld.pane("P1"), role: .follower, covered: true))
+        #expect(cover() == .follower)
+    }
+
+    @Test("a lost link drops a claim and its takeover: another device may lead once it is back")
+    internal func claimLostLink() async throws {
+        defer { world.remove() }
+        try await connectedUnreported()
+        panes.claimLead(of: SessionWorld.key)
+        await world.emit(.machineState(machineId: "m1", state: .reconnecting(nextInMs: 1_000)))
+        #expect(!panes.isTakingLead(SessionWorld.key))
+        panes.claimLead(of: SessionWorld.key)
+        #expect(panes.claims.isEmpty, "no claim while the link is down")
+        await world.emit(
+            .machineState(machineId: "m1", state: .connected),
+            .paneLead(pane: SessionWorld.pane("P1"), role: .follower, covered: true)
+        )
+        #expect(!world.core.calls.contains { $0.method == "takeLead" })
+        panes.claimLead(of: SessionWorld.key)
+        await world.emit(.paneLead(pane: SessionWorld.pane("P1"), role: .follower, covered: true))
+        await world.emit(.machineState(machineId: "m1", state: .reconnecting(nextInMs: 1_000)))
+        #expect(!panes.isTakingLead(SessionWorld.key))
+    }
+
     @Test("a claimed session whose pane leads already is left as it is")
     internal func claimLeader() async throws {
         defer { world.remove() }

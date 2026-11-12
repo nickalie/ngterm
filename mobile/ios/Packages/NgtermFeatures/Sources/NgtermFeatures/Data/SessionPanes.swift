@@ -16,6 +16,9 @@ import Observation
 /// class finds the same pane; it goes with its session's detach. So is whether a session shows its selected pane
 /// alone where the window could show the origin's split (``alone``): the device's own choice, which the origin never
 /// hears of, kept while the app runs.
+///
+/// A session created and opened here claims its lead (``claimLead(of:)``), taken at its first follower report with no
+/// Take control cover in between; a detach or a lost link drops the claim, as another device may lead by then.
 @preconcurrency
 @MainActor
 @Observable
@@ -31,8 +34,9 @@ public final class SessionPanes {
     public private(set) var focus: [SessionKey: String] = [:]
     /// The sessions showing their selected pane alone, where the window could show the origin's split.
     public private(set) var alone: Set<SessionKey> = []
-    /// The sessions just created here whose first pane is yet to report who leads.
-    public private(set) var claims: Set<SessionKey> = []
+    internal private(set) var claims: Set<SessionKey> = []
+    // the pane of each claimed session whose takeover is on its way, until its next lead report
+    private var taking: [SessionKey: String] = [:]
     @ObservationIgnored private let connections: Connections
     @ObservationIgnored private let live: LiveSessions
     @ObservationIgnored private var showing: Set<PaneRef> = []
@@ -92,7 +96,15 @@ public final class SessionPanes {
 
     /// Has the first pane of `session` to report a follower take the lead, as the origin leads a session it starts.
     public func claimLead(of session: SessionKey) {
+        guard connections.link(of: session.machineId) == .connected else {
+            return
+        }
         claims.insert(session)
+    }
+
+    /// Whether this device is taking the lead of `session`: a Take control cover there would only flash.
+    public func isTakingLead(_ session: SessionKey) -> Bool {
+        claims.contains(session) || taking[session] != nil
     }
 
     /// Selects the pane `paneId` of `session`: the one every key goes to.
@@ -181,17 +193,50 @@ public final class SessionPanes {
                 hide(pane)
             }
 
-        // an unowned pane reattaches to lead by itself and reports again
-        case .paneLead(let pane, .follower?, _):
-            if claims.remove(SessionKey(pane)) != nil {
-                takeLead(pane)
-            }
+        case .paneLead(let pane, let role, _):
+            lead(pane, role)
 
-        case .paneLead(let pane, .leader?, _):
-            claims.remove(SessionKey(pane))
+        case .paneEnded(let pane, _):
+            release(pane)
 
         default:
             break
+        }
+    }
+
+    // an unowned pane reattaches to lead by itself and reports again
+    private func lead(_ pane: PaneRef, _ role: PaneRole?) {
+        let session = SessionKey(pane)
+        release(pane)
+        switch role {
+        case .follower?:
+            if claims.remove(session) != nil {
+                take(pane)
+            }
+
+        case .leader?:
+            claims.remove(session)
+
+        default:
+            break
+        }
+    }
+
+    private func release(_ pane: PaneRef) {
+        let session = SessionKey(pane)
+        if taking[session] == pane.paneId {
+            taking[session] = nil
+        }
+    }
+
+    private func take(_ pane: PaneRef) {
+        let session = SessionKey(pane)
+        taking[session] = pane.paneId
+        do {
+            try connections.core.takeLead(machineId: pane.machineId, sessionId: pane.sessionId, paneId: pane.paneId)
+        } catch {
+            // no takeover is coming to release the hold
+            taking[session] = nil
         }
     }
 
@@ -199,6 +244,10 @@ public final class SessionPanes {
     private func linked(_ machineId: String) {
         let now = connections.link(of: machineId)
         let before = links.updateValue(now, forKey: machineId)
+        if now != .connected {
+            claims = claims.filter { $0.machineId != machineId }
+            taking = taking.filter { $0.key.machineId != machineId }
+        }
         guard now == .connected, before != .connected else {
             return
         }
@@ -215,6 +264,7 @@ public final class SessionPanes {
         }
         focus = focus.filter { attached[$0.key.machineId]?.contains($0.key.sessionId) == true }
         claims = claims.filter { attached[$0.machineId]?.contains($0.sessionId) == true }
+        taking = taking.filter { attached[$0.key.machineId]?.contains($0.key.sessionId) == true }
     }
 
     private func isAttached(_ pane: PaneRef) -> Bool {
