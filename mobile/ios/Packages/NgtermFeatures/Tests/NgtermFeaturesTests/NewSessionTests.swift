@@ -119,6 +119,7 @@ internal struct NewSessionTests {
         test.core.failNext("attachSession", with: .Remote(reason: "the session is gone"))
         var opened: [String] = []
         await model.createAndOpen { opened.append($0) }?.value
+        await test.settled()
         #expect(opened.isEmpty)
         #expect(model.notice == "the session is gone")
         #expect(ids(model) == ["fake-1"])
