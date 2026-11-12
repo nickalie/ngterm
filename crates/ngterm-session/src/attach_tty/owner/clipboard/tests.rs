@@ -405,3 +405,245 @@ fn oversized_native_data_completes_with_invalid_data_instead_of_an_unencodable_r
     );
     assert!(relay.native_clipboard.pending.is_none());
 }
+
+fn supported() -> Relay {
+    let mut relay = Relay::new(None, GridSize { cols: 80, rows: 24 }, None);
+    relay.native_clipboard.supported = true;
+    relay
+}
+fn native(relay: &mut Relay, body: &str, now: Instant, fx: &mut Effects) {
+    relay.answer(Answer::ClipboardMime(Packet::parse(body.as_bytes()).unwrap()), now, fx);
+}
+fn pending_id(relay: &Relay) -> String {
+    relay.native_clipboard.pending.as_ref().unwrap().id.clone()
+}
+fn b64(bytes: impl AsRef<[u8]>) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+fn completed_status(fx: &Effects) -> Option<ClipboardStatus> {
+    match fx.outgoing.as_slice() {
+        [Outgoing::Answer(_, DelegatedReply::ClipboardMime { status, .. })] => Some(*status),
+        [] => None,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_native_operation_or_an_osc_52_read_in_flight_denies_the_next_request_without_asking() {
+    let now = Instant::now();
+    let mut relay = supported();
+    let mut fx = Effects::default();
+    relay.delegated(mime_read(1), now, &mut fx);
+    assert!(!fx.stdout.is_empty());
+    fx = Effects::default();
+    relay.delegated(mime_read(2), now, &mut fx);
+    assert!(fx.stdout.is_empty());
+    assert!(matches!(fx.outgoing.as_slice(), [Outgoing::Answer(request, DelegatedReply::Denied)] if request.id == 2));
+    assert_eq!(relay.native_clipboard.pending.as_ref().unwrap().request.id, 1);
+
+    let mut relay = supported();
+    relay.fences_work = Some(true);
+    let mut fx = Effects::default();
+    relay.delegated(
+        Delegated {
+            native_alias: None,
+            id: 1,
+            epoch: 1,
+            request: DelegatedRequest::ClipboardRead {
+                selection: "c".into(),
+                list_only: false,
+            },
+        },
+        now,
+        &mut fx,
+    );
+    assert_eq!(fx.stdout, b"\x1b]52;c;?\x1b\\");
+    fx = Effects::default();
+    relay.delegated(mime_read(2), now, &mut fx);
+    assert!(fx.stdout.is_empty());
+    assert!(matches!(fx.outgoing.as_slice(), [Outgoing::Answer(request, DelegatedReply::Denied)] if request.id == 2));
+}
+
+#[test]
+fn a_native_read_ignores_other_operations_and_unknown_statuses_and_a_bare_done_is_invalid() {
+    let now = Instant::now();
+    let mut relay = supported();
+    let mut fx = Effects::default();
+    relay.delegated(mime_read(1), now, &mut fx);
+    let id = pending_id(&relay);
+    native(
+        &mut relay,
+        &format!("5522;type=write:status=DONE:id={id}"),
+        now,
+        &mut fx,
+    );
+    native(
+        &mut relay,
+        &format!("5522;type=read:status=LATER:id={id}"),
+        now,
+        &mut fx,
+    );
+    assert_eq!(completed_status(&fx), None);
+    native(&mut relay, &format!("5522;type=read:status=DONE:id={id}"), now, &mut fx);
+    assert_eq!(completed_status(&fx), Some(ClipboardStatus::InvalidData));
+    assert!(relay.native_clipboard.pending.is_none());
+}
+
+#[test]
+fn native_read_chunks_of_one_type_join_and_unrequested_or_undecodable_parts_are_invalid() {
+    let now = Instant::now();
+    let mut relay = supported();
+    let mut fx = Effects::default();
+    relay.delegated(mime_read(1), now, &mut fx);
+    let id = pending_id(&relay);
+    let mime = b64("text/plain");
+    for packet in [
+        format!("5522;type=read:status=OK:id={id}"),
+        format!("5522;type=read:status=DATA:id={id}:mime={mime};{}", b64("multi")),
+        format!("5522;type=read:status=DATA:id={id}:mime={mime};{}", b64("part")),
+        format!("5522;type=read:status=DONE:id={id}"),
+    ] {
+        native(&mut relay, &packet, now, &mut fx);
+    }
+    assert!(
+        matches!(fx.outgoing.as_slice(), [Outgoing::Answer(_, DelegatedReply::ClipboardMime { contents, status: ClipboardStatus::Success, .. })]
+        if contents.len() == 1 && contents[0].mime == "text/plain" && contents[0].data == b"multipart")
+    );
+
+    for (mime, data) in [(b64("image/gif"), b64("GIF89a")), (b64("."), b64([0xff, 0xfe]))] {
+        let mut relay = supported();
+        let mut fx = Effects::default();
+        relay.delegated(mime_read(1), now, &mut fx);
+        let id = pending_id(&relay);
+        native(&mut relay, &format!("5522;type=read:status=OK:id={id}"), now, &mut fx);
+        native(
+            &mut relay,
+            &format!("5522;type=read:status=DATA:id={id}:mime={mime};{data}"),
+            now,
+            &mut fx,
+        );
+        assert!(
+            matches!(fx.outgoing.as_slice(), [Outgoing::Answer(_, DelegatedReply::ClipboardMime { contents, available, status: ClipboardStatus::InvalidData, .. })]
+            if contents.is_empty() && available.is_empty())
+        );
+    }
+}
+
+#[test]
+fn a_native_paste_registers_only_a_whole_live_announcement_of_one_token() {
+    let now = Instant::now();
+    let ok = |token: &str| format!("5522;type=read:status=OK:pw={}", b64(token));
+    let done = |token: &str| format!("5522;type=read:status=DONE:pw={}", b64(token));
+    let types = |token: &str, list: &[u8]| {
+        format!(
+            "5522;type=read:status=DATA:mime={}:pw={};{}",
+            b64("."),
+            b64(token),
+            b64(list)
+        )
+    };
+    let broken: [(Vec<String>, Instant); 5] = [
+        (vec![done("outer")], now),
+        (
+            vec![format!("5522;type=write:status=OK:pw={}", b64("outer")), done("outer")],
+            now,
+        ),
+        (vec![ok("outer"), done("other"), done("outer")], now),
+        (vec![ok("outer"), types("outer", &[0xff, 0xfe]), done("outer")], now),
+        (vec![ok("outer"), done("outer")], now + DELEGATION_WAIT),
+    ];
+    for (case, (packets, done_at)) in broken.into_iter().enumerate() {
+        let mut relay = supported();
+        let mut fx = Effects::default();
+        let last = packets.len() - 1;
+        for (index, packet) in packets.iter().enumerate() {
+            native(&mut relay, packet, if index == last { done_at } else { now }, &mut fx);
+        }
+        assert!(fx.outgoing.is_empty(), "{case}: {:?}", fx.outgoing);
+    }
+
+    let mut relay = supported();
+    let mut fx = Effects::default();
+    native(
+        &mut relay,
+        &format!("5522;type=read:status=OK:loc=primary:pw={}", b64("outer")),
+        now,
+        &mut fx,
+    );
+    native(&mut relay, &types("outer", b"text/plain image/png"), now, &mut fx);
+    native(
+        &mut relay,
+        &format!("5522;type=read:status=EPERM:pw={}", b64("outer")),
+        now,
+        &mut fx,
+    );
+    native(&mut relay, &done("outer"), now, &mut fx);
+    let [Outgoing::Paste(paste)] = fx.outgoing.as_slice() else {
+        panic!("{:?}", fx.outgoing);
+    };
+    assert_eq!(paste.selection, "p");
+    assert_eq!(paste.bridge.as_ref().unwrap().available, ["text/plain", "image/png"]);
+}
+
+#[test]
+fn only_the_newest_32_native_pastes_can_be_fetched() {
+    let now = Instant::now();
+    let mut relay = supported();
+    relay.reply_owner(true);
+    let mut fx = Effects::default();
+    for index in 0..33 {
+        let token = b64(format!("outer-{index}"));
+        native(
+            &mut relay,
+            &format!("5522;type=read:status=OK:pw={token}"),
+            now,
+            &mut fx,
+        );
+        native(
+            &mut relay,
+            &format!("5522;type=read:status=DONE:pw={token}"),
+            now,
+            &mut fx,
+        );
+    }
+    let bridges: Vec<_> = fx
+        .outgoing
+        .iter()
+        .map(|outgoing| match outgoing {
+            Outgoing::Paste(paste) => paste.bridge.as_ref().unwrap().id.clone(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(bridges.len(), 33);
+    for (bridge, fetched) in [(&bridges[0], false), (&bridges[1], true)] {
+        let mut request = mime_read(1);
+        if let DelegatedRequest::ClipboardReadMime { bridge: id, .. } = &mut request.request {
+            *id = Some(bridge.clone());
+        }
+        let mut fx = Effects::default();
+        relay.delegated(request, now, &mut fx);
+        assert_eq!(!fx.stdout.is_empty(), fetched);
+        assert_eq!(
+            matches!(fx.outgoing.as_slice(), [Outgoing::Answer(_, DelegatedReply::Denied)]),
+            !fetched
+        );
+    }
+}
+
+#[test]
+fn a_waiting_native_paste_never_shows_its_outer_token_in_debug_output() {
+    let mut relay = supported();
+    let mut fx = Effects::default();
+    let token = b"outer-secret-token";
+    native(
+        &mut relay,
+        &format!("5522;type=read:status=OK:pw={}", b64(token)),
+        Instant::now(),
+        &mut fx,
+    );
+    let shown = format!("{relay:?}");
+    assert!(shown.contains("Paste { id: "), "{shown}");
+    assert!(!shown.contains(&format!("{:?}", token.to_vec())), "{shown}");
+    assert!(!shown.contains("outer-secret-token"), "{shown}");
+}

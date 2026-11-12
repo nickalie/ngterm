@@ -536,7 +536,8 @@ fn every_query_gets_one_answer_with_two_clients_attached() -> TestResult {
     // the queries once both are attached
     open(gate.path(), QUERY_SET.len())?;
     one.expect(&pane, "PROBE-DONE");
-    two.drain(&pane);
+    // output reaches each client's queue in turn, so the second may not hold it yet when the first does
+    two.expect(&pane, "PROBE-DONE");
     let got = replies(&shown(&one.output));
     let facts = Facts::default();
     let expected = references(&facts, &QUERY_SET)?;
@@ -1231,5 +1232,78 @@ fn kitty_clipboard_content_paste_is_typed_for_a_current_follower_epoch() -> Test
         owner.delegated.is_empty(),
         "a follower content paste cannot read the owner clipboard"
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_lazy_paste_is_announced_with_its_types_and_malformed_bridges_or_unsafe_text_are_refused() -> TestResult {
+    use ngterm_session::protocol::{ClipboardPaste, ClipboardPasteBridge, ClipboardRepresentation};
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let queries = [b"\x1b[?5522h\x1b[5n".as_slice(), DSR];
+    let (pane, creator) = Pane::spawn(pane_config(
+        "lazy-paste",
+        dir.path(),
+        probe(&queries, &gated(gate.path(), 3000)),
+    ))?;
+    let shown_pane = format!("{pane:?}");
+    assert!(
+        shown_pane.starts_with(r#"Pane { name: "lazy-paste", pid: "#),
+        "{shown_pane}"
+    );
+    let mut owner = Viewer::new(creator, None)?;
+    go(gate.path(), 0)?;
+    owner.expect(&pane, "REPLY-0:");
+    let types = |count: usize| {
+        (0..count)
+            .map(|index| format!("application/type{index}"))
+            .collect::<Vec<_>>()
+    };
+    let bridged = |id: &str, available: Vec<String>| ClipboardPaste {
+        bridge: Some(ClipboardPasteBridge {
+            id: id.into(),
+            available,
+        }),
+        contents: Vec::new(),
+        text_source: false,
+        selection: "c".into(),
+        allow_unsafe: false,
+    };
+    let text = |data: &[u8]| ClipboardPaste {
+        bridge: None,
+        contents: vec![ClipboardRepresentation {
+            mime: "text/plain".into(),
+            data: data.to_vec(),
+        }],
+        text_source: true,
+        selection: "c".into(),
+        allow_unsafe: false,
+    };
+    for refused in [
+        bridged("", types(1)),
+        bridged(&"x".repeat(129), types(1)),
+        bridged("lazy", types(17)),
+        bridged("lazy", vec![String::new()]),
+        bridged("lazy", vec!["x".repeat(257)]),
+        bridged("lazy", vec!["text/plain extra".into()]),
+        text(b"rm -rf ~\n"),
+        text(b""),
+    ] {
+        assert!(!pane.clipboard_paste(owner.id(), owner.epoch, &refused)?, "{refused:?}");
+    }
+    assert!(pane.clipboard_paste(owner.id(), owner.epoch, &bridged("lazy", types(16)))?);
+    go(gate.path(), 1)?;
+    owner.expect(&pane, "PROBE-DONE");
+    let replies = replies(&server_text(&pane));
+    let announced = String::from_utf8_lossy(&replies[1]);
+    assert!(announced.starts_with("\x1b]5522;type=read:status=OK"), "{announced:?}");
+    assert!(
+        announced.contains(&base64((types(16).join(" ") + "\n").as_bytes())),
+        "{announced:?}"
+    );
+    assert!(!announced.contains("rm -rf"), "{announced:?}");
+    assert!(announced.ends_with("\x1b[0n"), "{announced:?}");
+    assert!(owner.delegated.is_empty(), "announcing a lazy paste reads no clipboard");
     Ok(())
 }

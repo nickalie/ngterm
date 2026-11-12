@@ -1051,3 +1051,83 @@ fn owner_content_paste_tokens_list_without_consumption_and_never_read_a_replacem
         }
     }
 }
+
+#[test]
+fn a_failed_owner_read_reaches_the_program_as_its_native_error_status() {
+    for (status, reply) in [
+        (ClipboardStatus::Unsupported, "ENOSYS"),
+        (ClipboardStatus::Busy, "EBUSY"),
+        (ClipboardStatus::IoError, "EIO"),
+        (ClipboardStatus::InvalidData, "EPERM"),
+        (ClipboardStatus::Denied, "EPERM"),
+    ] {
+        let (core, owner) = core(ReplyMetadata::default());
+        core.read(&read("text/plain", "token"));
+        let (id, epoch, _) = delegated(&owner);
+        assert!(core.lock().answer(
+            owner.subscription.id(),
+            id,
+            epoch,
+            Answer::Mime {
+                contents: Vec::new(),
+                available: Vec::new(),
+                remember: true,
+                status,
+            }
+        ));
+        assert_eq!(
+            core.outlet.take().concat(),
+            format!("\x1b]5522;type=read:status={reply}\x1b\\").into_bytes(),
+            "{status:?}"
+        );
+        let grants = core.lock().terminal.clipboard_grants();
+        assert!(
+            !grants.lock().unwrap().peek(b"token", vt::ClipboardDirection::Read),
+            "a failed read is never remembered"
+        );
+    }
+}
+
+#[test]
+fn a_lazy_listing_behind_a_legacy_write_is_answered_by_the_server_once_the_write_completes() {
+    let (core, owner) = core(ReplyMetadata::default());
+    core.read(b"\x1b[?5522h");
+    let token = lazy_paste(&core, &owner);
+    core.read(&[b"\x1b]52;c;aGk=\x07".as_slice(), &token_read(".", &token), b"\x1b[5n"].concat());
+    let (id, epoch, request) = delegated(&owner);
+    assert!(matches!(request, DelegatedRequest::ClipboardWrite { .. }));
+    assert!(core.outlet.take().is_empty(), "the listing waits for the write");
+    assert!(core.lock().answer(
+        owner.subscription.id(),
+        id,
+        epoch,
+        Answer::Write {
+            status: ClipboardStatus::Success,
+            remember: false
+        }
+    ));
+    let replies = String::from_utf8(core.outlet.take().concat()).unwrap();
+    let listing = STANDARD.encode(
+        (0..16)
+            .map(|index| format!("application/type{index}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+            + "\n",
+    );
+    assert!(replies.contains(&listing), "{replies:?}");
+    assert!(replies.ends_with("\x1b[0n"), "later queries still follow the listing");
+    no_delegation(&owner);
+}
+
+#[test]
+fn a_lazy_pastes_debug_output_never_shows_its_token() {
+    let (core, owner) = core(ReplyMetadata::default());
+    core.read(b"\x1b[?5522h");
+    let token = lazy_paste(&core, &owner);
+    let shown = format!("{:?}", core.lock().replies);
+    assert!(
+        shown.contains(r#"PasteBridge { id: Some("lazy-source"), consumed: false, .. }"#),
+        "{shown}"
+    );
+    assert!(!shown.contains(&format!("{token:?}")), "{shown}");
+}

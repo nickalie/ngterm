@@ -417,8 +417,8 @@ impl Relay {
     /// A delegated request: a clipboard read relayed to the outer terminal; denied when it answers no fence or another
     /// read is asked of it (module docs).
     pub fn delegated(&mut self, request: Delegated, now: Instant, fx: &mut Effects) {
-        if self.bridge_nonce.is_some() {
-            self.bridge_request(request, now, fx);
+        if let Some(nonce) = self.bridge_nonce.clone() {
+            self.bridge_request(nonce, request, now, fx);
             return;
         }
         if self.native_clipboard.supported

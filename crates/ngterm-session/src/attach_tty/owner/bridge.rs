@@ -30,14 +30,11 @@ impl Relay {
             .encode(),
         );
     }
-    pub(super) fn bridge_request(&mut self, request: Delegated, now: Instant, fx: &mut Effects) {
+    pub(super) fn bridge_request(&mut self, nonce: String, request: Delegated, now: Instant, fx: &mut Effects) {
         if self.bridge_pending.is_some() {
             fx.outgoing.push(Outgoing::Answer(request, DelegatedReply::Denied));
             return;
         }
-        let Some(nonce) = self.bridge_nonce.clone() else {
-            return;
-        };
         let id = self.bridge_next_id;
         let Some(next_id) = id.checked_add(1) else {
             fx.outgoing.push(Outgoing::Answer(request, DelegatedReply::Denied));

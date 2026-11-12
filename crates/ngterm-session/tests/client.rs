@@ -795,3 +795,53 @@ fn an_old_name_is_looked_up_only_where_a_listing_holds_it() -> TestResult {
     assert_eq!(Client::new(root.path().join("live")).legacy_stand_in(DAEMON), None);
     Ok(())
 }
+
+/// The library's writer pastes into the session's program and reloads its client's config: the program gets the
+/// pasted text as typed input, and the colour scheme report it subscribed to once the reply owner reloads.
+#[cfg(unix)]
+#[test]
+fn a_paste_and_a_config_reload_go_end_to_end_through_the_writer() -> TestResult {
+    use ngterm_session::protocol::{ClipboardPaste, ClipboardRepresentation};
+
+    let server = Server::start()?;
+    let program = "stty raw -echo min 0 time 50; \
+                   ask() { printf \"$1\"; r=$(dd bs=256 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n'); \
+                   printf '%s:%s\\r\\n' \"$2\" \"$r\"; }; \
+                   ask '\\033[?2031hpaste-ready\\r\\n' paste; ask 'reload-ready\\r\\n' reload; stty sane";
+    let metadata = ReplyMetadata {
+        color_scheme: Some(ColorScheme::Dark),
+        ..ReplyMetadata::default()
+    };
+    let Attachment { mut reader, writer, .. } = Client::new(server.directory()).attach(AttachRequest {
+        metadata: metadata.clone(),
+        ..request("paste", Some(support::script(program)))
+    })?;
+    read_until(&mut reader, |text| text.contains("paste-ready"))?;
+    writer.clipboard_paste(ClipboardPaste {
+        bridge: None,
+        contents: vec![ClipboardRepresentation {
+            mime: "text/plain".into(),
+            data: b"pasted".to_vec(),
+        }],
+        text_source: false,
+        selection: "c".into(),
+        allow_unsafe: false,
+    })?;
+    let text = read_until(&mut reader, |text| text.contains("reload-ready"))?;
+    assert_eq!(printed(&text, "paste"), hex(b"pasted"), "{text:?}");
+    writer.config_reloaded(metadata)?;
+    let mut bytes = Vec::new();
+    loop {
+        match reader.recv()? {
+            Some(AttachEvent::Output { data, .. }) => bytes.extend_from_slice(&data),
+            Some(AttachEvent::Exit(_)) => break,
+            Some(_) => {}
+            None => return Err("the stream ended without the exit".into()),
+        }
+    }
+    let text = shown(&bytes);
+    assert_eq!(printed(&text, "reload"), hex(b"\x1b[?997;1n"), "{text:?}");
+    drop(writer);
+    assert_eq!(server.stopped()?, StopReason::Idle);
+    Ok(())
+}

@@ -142,3 +142,6 @@ pub fn write_query(id: &str, request: &DelegatedRequest, token: &[u8]) -> Vec<u8
     bytes.extend_from_slice(b"\x1b]5522;type=wdata\x1b\\");
     bytes
 }
+
+#[cfg(test)]
+mod tests;

@@ -649,3 +649,19 @@ fn a_c_api_viewer_dispatches_apc_before_its_barrier_without_a_second_reply_at_st
         .collect();
     assert!(text.starts_with("after"));
 }
+
+#[test]
+fn a_programs_attach_bridge_envelope_never_leaves_the_filter() {
+    let mut out = Vec::new();
+    OutputFilter::new().feed(b"before\x1b]777;ngterm-\x01attach;Zm9yZ2Vk\x1b\\after", &mut out);
+    assert!(
+        !out.windows(b"ngterm-attach".len()).any(|part| part == b"ngterm-attach"),
+        "{:?}",
+        String::from_utf8_lossy(&out)
+    );
+    assert!(
+        out.starts_with(b"before") && out.ends_with(b"after"),
+        "{:?}",
+        String::from_utf8_lossy(&out)
+    );
+}

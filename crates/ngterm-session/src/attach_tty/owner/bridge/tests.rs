@@ -314,3 +314,82 @@ fn follower_and_initial_attaches_forward_both_content_pastes_and_lazy_bridges() 
     assert_eq!(fx.outgoing.len(), 2);
     assert!(matches!(&fx.outgoing[1], Outgoing::Paste(paste) if envelope.message == Message::Paste(paste.clone())));
 }
+
+#[test]
+fn a_second_viewer_request_is_denied_while_the_first_waits() {
+    let now = Instant::now();
+    let mut relay = relay();
+    let first = viewer_request(&mut relay, request(1), now);
+    let mut fx = Effects::default();
+    relay.delegated(request(2), now, &mut fx);
+    assert!(fx.stdout.is_empty());
+    assert!(matches!(
+        fx.outgoing.as_slice(),
+        [Outgoing::Answer(pending, DelegatedReply::Denied)] if pending.id == 2
+    ));
+    relay.bridge_answer(denied_reply(first), &mut fx);
+    assert!(matches!(
+        &fx.outgoing[1..],
+        [Outgoing::Answer(pending, DelegatedReply::Denied)] if pending.id == 1
+    ));
+}
+
+#[test]
+fn an_unanswered_viewer_request_is_denied_at_its_deadline_and_never_written_late() {
+    let now = Instant::now();
+    let mut relay = relay();
+    let mut fx = Effects::default();
+    relay.output(b"\x1b]0;title", &mut fx);
+    fx = Effects::default();
+    relay.delegated(request(1), now, &mut fx);
+    assert!(fx.stdout.is_empty(), "the request waits for the title's end");
+    relay.tick(now + DELEGATION_WAIT, &mut fx);
+    assert!(matches!(
+        fx.outgoing.as_slice(),
+        [Outgoing::Answer(pending, DelegatedReply::Denied)] if pending.id == 1
+    ));
+    assert!(fx.stdout.is_empty());
+    relay.output(b"\x07after", &mut fx);
+    assert!(
+        ngterm_core::attach_bridge::Decoder::default()
+            .feed(&fx.stdout)
+            .iter()
+            .all(|part| matches!(part, ngterm_core::attach_bridge::Part::Bytes(_))),
+        "the expired request never reaches the viewer"
+    );
+    relay.bridge_answer(
+        Envelope {
+            version: VERSION,
+            nonce: "connection".into(),
+            message: Message::Reply {
+                id: 1,
+                epoch: 7,
+                reply: DelegatedReply::Denied,
+            },
+        },
+        &mut fx,
+    );
+    assert_eq!(fx.outgoing.len(), 1);
+    assert!(relay.next_deadline().is_none());
+}
+
+#[test]
+fn viewer_messages_other_than_replies_and_pastes_complete_nothing() {
+    let now = Instant::now();
+    let mut relay = relay();
+    let request = viewer_request(&mut relay, request(1), now);
+    let mut fx = Effects::default();
+    for message in [Message::Hello, request.message.clone()] {
+        relay.bridge_answer(
+            Envelope {
+                version: VERSION,
+                nonce: request.nonce.clone(),
+                message,
+            },
+            &mut fx,
+        );
+    }
+    assert!(fx.outgoing.is_empty());
+    relay.bridge_answer(denied_reply(request), &mut fx);
+    assert_eq!(fx.outgoing.len(), 1);
+}
