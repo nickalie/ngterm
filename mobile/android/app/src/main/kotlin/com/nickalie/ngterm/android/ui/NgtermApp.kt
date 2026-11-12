@@ -56,6 +56,7 @@ import com.nickalie.ngterm.android.ui.settings.SettingsRoute
 import com.nickalie.ngterm.android.ui.terminal.ClipboardReadPrompt
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import com.nickalie.ngterm.android.ui.updates.UpdatePrompt
 import com.nickalie.ngterm.core.ffi.PaneRef
 import kotlinx.coroutines.flow.catch
 
@@ -85,12 +86,12 @@ private class SessionsUi(
 
 /**
  * The app over [graph]: the first run until it has a key, then [AdaptiveScaffold] over the top-level destinations,
- * with the host-key question, a program's clipboard read, the session on screen's ask and the notification permission
- * as sheets over whichever is shown. Sessions holds the attached sessions and the session view, and the rail and the
- * sidebar list the attached sessions on every destination; Settings sets them up and shows the loaded core's
- * [coreVersion], and an open session keeps the screen on when Settings asks for it. The
- * selected destination survives a configuration change. A notification's tap ([AppGraph.opens]) opens its session and
- * pane through the session view model, or the app's first destination.
+ * with the host-key question, a program's clipboard read, the session on screen's ask, the notification permission and
+ * the update sheet (an update notification's tap) as sheets over whichever is shown. Sessions holds the attached
+ * sessions and the session view, and the rail and the sidebar list the attached sessions on every destination;
+ * Settings sets them up and shows the loaded core's [coreVersion], and an open session keeps the screen on when
+ * Settings asks for it. The selected destination survives a configuration change. A notification's tap
+ * ([AppGraph.opens]) opens its session and pane through the session view model, or the app's first destination.
  */
 @Composable
 fun NgtermApp(
@@ -139,6 +140,7 @@ fun NgtermApp(
             ClipboardReadPrompt(graph)
             AskPrompt(graph)
             NotificationPermissionPrompt(graph)
+            UpdatePrompt(graph.updates)
         }
 
         else -> {

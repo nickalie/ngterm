@@ -10,6 +10,8 @@ import com.nickalie.ngterm.android.data.StoredMachine
 import com.nickalie.ngterm.android.ui.onboarding.ImportProblem
 import com.nickalie.ngterm.android.ui.onboarding.describe
 import com.nickalie.ngterm.android.ui.onboarding.toProblem
+import com.nickalie.ngterm.android.ui.updates.UpdateActions
+import com.nickalie.ngterm.android.update.UpdateState
 import com.nickalie.ngterm.core.ffi.KeyException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -70,6 +72,15 @@ data class SettingsActions(
     val onImport: () -> Unit,
     val onTurnOnNotifications: () -> Unit,
     val onRetry: () -> Unit,
+)
+
+/** Settings' Updates section: the [installed] version, where updating stands, and the automatic checks' switch. */
+data class UpdatesUi(
+    val installed: String,
+    val state: UpdateState,
+    val automatic: Boolean,
+    val actions: UpdateActions,
+    val onAutomatic: (Boolean) -> Unit,
 )
 
 /** Where making or bringing a key stands. */

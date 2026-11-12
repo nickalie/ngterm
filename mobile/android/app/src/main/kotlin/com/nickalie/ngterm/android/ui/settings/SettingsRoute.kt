@@ -33,6 +33,9 @@ import com.nickalie.ngterm.android.ui.components.ScreenExit
 import com.nickalie.ngterm.android.ui.onboarding.ImportKeyScreen
 import com.nickalie.ngterm.android.ui.onboarding.PublicKeyScreen
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import com.nickalie.ngterm.android.ui.updates.rememberUpdateActions
+import com.nickalie.ngterm.android.update.AppUpdates
+import kotlinx.coroutines.flow.catch
 
 private const val HOME = "home"
 private const val IMPORT = "import"
@@ -98,6 +101,7 @@ fun SettingsRoute(
                 keyWork = work,
                 actions = actions,
                 modifier = modifier,
+                updates = graph.updates?.let { rememberUpdatesUi(it) },
             )
         }
     }
@@ -170,6 +174,16 @@ private fun rememberSettingsActions(
             onRetry = model::retry,
         )
     }
+}
+
+// the Updates section over [updates]: until its store answers, the automatic checks show as on, their default
+@Composable
+private fun rememberUpdatesUi(updates: AppUpdates): UpdatesUi {
+    val state by updates.state.collectAsStateWithLifecycle()
+    val automaticFlow = remember(updates) { updates.automatic.catch { emit(true) } }
+    val automatic by automaticFlow.collectAsStateWithLifecycle(initialValue = true)
+    val actions = rememberUpdateActions(updates)
+    return UpdatesUi(updates.installed, state, automatic, actions, updates::setAutomatic)
 }
 
 // whether the system lets the app post notifications, read again on every resume

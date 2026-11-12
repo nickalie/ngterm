@@ -172,7 +172,9 @@ a sideloading tool or your own Xcode team), while the signed app comes through T
 (`minisign -Vm SHA256SUMS`, `gh attestation verify <file> --repo nickalie/ngterm`).
 
 To install the Android app, download the `.apk` on the device (or `adb install ngterm-<version>-android.apk`) and
-allow installs from that source when Android asks. Later releases install over it.
+allow installs from that source when Android asks. Later releases install over it: the app notifies you of a new
+release and installs it from Settings > Updates, after checking it against the release's signed `SHA256SUMS` and the
+installed app's signing key; Android asks you to allow installs from ngterm the first time.
 
 To release, set the workspace version and lockfile, commit, and push the matching tag (for example `v0.1.0`); the
 `release` workflow waits for the release reviewer's approval, then builds, signs, verifies and publishes every
@@ -804,7 +806,7 @@ design system is `mobile/android/DESIGN.md`.
 scripts/setup-android.sh [--check]    # the pinned toolchain (Android toolchain), then export the lines it prints
 scripts/build-android.sh [--profile release|debug] [--no-gradle] [GRADLE_TASK...]   # default: assembleDebug
 scripts/build-android.sh check assembleDebug   # lint, JVM/screenshot tests and coverage floors, as CI runs it
-scripts/build-android.sh :app:koverHtmlReportDebug :app:koverXmlReportDebug # one module's debug JVM coverage
+scripts/build-android.sh :app:koverHtmlReportDebugJvm :app:koverXmlReportDebugJvm # one module's debug JVM coverage
 scripts/build-android.sh :koverHtmlReportDebugJvm :koverXmlReportDebugJvm   # both modules, aggregated
 scripts/build-android.sh installDebug          # onto the device or emulator adb sees
 scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-headless behind a private sshd (Linux; python3 runs its fake agent)
@@ -812,7 +814,20 @@ scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-he
 
 `build-android.sh` builds `libngterm_mobile.so` for arm64-v8a and x86_64 through cargo-ndk, generates the Kotlin
 bindings from it and runs Gradle; everything it generates stays under `mobile/android/core/build/`. The debug APK is
-`mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
+`mobile/android/app/build/outputs/apk/github/debug/app-github-debug.apk`.
+
+The app comes in two distributions (product flavors): `github`, the APK GitHub releases carry and the one every debug
+task builds, and `play`, Google Play's, which has only a release build (`assemblePlayRelease`, `bundlePlayRelease`).
+The GitHub build updates itself from GitHub's releases (`app/src/github/`): at each launch and every twelve hours in
+the background (WorkManager, on a network connection, battery not low) it looks for the newest release above the
+installed version, skipping drafts, and prereleases unless the installed build is one, and notifies once per version
+unless the user said Not now to it. Install downloads the APK with the release's `SHA256SUMS` and
+`SHA256SUMS.minisig`, and hands it to Android's installer (a `PackageInstaller` session) only once the signature
+verifies with the key desktop builds trust (the mobile core's `release_checksum`, over
+`crates/ngterm-update/trust/minisign.pub`), the APK matches its checksum, and it is this app, newer and signed with the
+installed app's key. Settings > Updates checks by hand and turns the automatic checks off. Google Play forbids an app
+updating itself, so the Play build has none of it: no code, no `REQUEST_INSTALL_PACKAGES`, no WorkManager; `check`
+fails if its merged manifest holds any of them.
 
 `check` verifies each module's Kover line, instruction and branch coverage floors and writes HTML/XML reports for
 the debug JVM tests (including Robolectric screenshots), per module and aggregated at the root. Reports are under

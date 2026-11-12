@@ -110,8 +110,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends openssh-server
       - name: Android toolchain (build/pins.env)
         run: scripts/setup-android.sh | sed 's/^export //; s/"//g' >> "$GITHUB_ENV"
+      # check also proves Google Play's build holds no self-update (its manifest), and the Play build's code compiles
       - name: build and check (Spotless, detekt, Android Lint, unit and screenshot tests, coverage, debug APK)
-        run: scripts/build-android.sh check assembleDebug
+        run: scripts/build-android.sh check assembleDebug :app:compilePlayReleaseKotlin
       - name: upload JVM coverage (HTML and XML)
         if: success()
         uses: actions/upload-artifact@v7
@@ -125,7 +126,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ngterm-android-debug
-          path: mobile/android/app/build/outputs/apk/debug/*.apk
+          path: mobile/android/app/build/outputs/apk/github/debug/*.apk
           if-no-files-found: error
       # Gradle's reports and Roborazzi's comparison images when a check failed
       - name: upload the reports

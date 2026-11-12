@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- the update notification (the GitHub build's own) -->
+  <string name="channel_updates">App updates</string>
+  <string name="channel_updates_body">New versions of ngterm on GitHub</string>
+  <string name="notify_update_title">ngterm %1$s is available</string>
+  <string name="notify_update_body">Tap to see the update and install it.</string>
+</resources>

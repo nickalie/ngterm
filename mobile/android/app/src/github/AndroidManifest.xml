@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The GitHub build's self-update (update/): Google Play's build has none of it, as Play forbids an app updating
+     itself (the Play variant's check task fails on any of it) -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <!-- handing a downloaded, verified release to Android's installer -->
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+  <application>
+    <!-- Android's installer's answers about an update -->
+    <receiver
+        android:name=".update.InstallResultReceiver"
+        android:exported="false" />
+    <!-- the update notification's Not now -->
+    <receiver
+        android:name=".update.SkipUpdateReceiver"
+        android:exported="false" />
+  </application>
+
+</manifest>

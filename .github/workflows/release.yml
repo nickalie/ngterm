@@ -713,7 +713,8 @@ jobs:
           manifest="$(python3 scripts/release-artifacts.py manifest dist "$ARTIFACT_ID")"
           echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
 
-  # The Android APK, unsigned: android-sign signs it. The version name and code come from the version job.
+  # The Android APK, unsigned: android-sign signs it. The version name and code come from the version job. It is the
+  # `github` flavor, which updates itself from these releases; Google Play's flavor (`play`) has no self-update.
   android-build:
     needs: version
     if: contains(fromJSON(needs.version.outputs.platforms), 'android')
@@ -754,9 +755,10 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           VERSION_CODE: ${{ needs.version.outputs.android_version_code }}
         run: |
-          scripts/build-android.sh assembleRelease -Pngterm.versionName="$VERSION" -Pngterm.versionCode="$VERSION_CODE"
+          scripts/build-android.sh assembleGithubRelease -Pngterm.versionName="$VERSION" -Pngterm.versionCode="$VERSION_CODE"
           mkdir dist
-          cp mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk "dist/ngterm-$VERSION-android-unsigned.apk"
+          cp mobile/android/app/build/outputs/apk/github/release/app-github-release-unsigned.apk \
+            "dist/ngterm-$VERSION-android-unsigned.apk"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: upload
         with:

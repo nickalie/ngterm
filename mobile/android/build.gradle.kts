@@ -77,12 +77,13 @@ subprojects {
     plugins.withId("org.jetbrains.kotlinx.kover") {
         extensions.configure<KoverProjectExtension> {
             currentProject {
+                // :app's debug build is its GitHub flavor's (the Play flavor has no debug build); :core has no flavors
                 createVariant("debugJvm") {
-                    add("debug")
+                    add("debug", "githubDebug", optional = true)
                 }
             }
             reports {
-                variant("debug") {
+                variant("debugJvm") {
                     html { onCheck = true }
                     xml { onCheck = true }
                     verify {

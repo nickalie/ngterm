@@ -30,6 +30,9 @@ import com.nickalie.ngterm.android.service.LinkKeeper
 import com.nickalie.ngterm.android.service.LinkService
 import com.nickalie.ngterm.android.ui.chat.PaneChats
 import com.nickalie.ngterm.android.ui.session.SessionPanes
+import com.nickalie.ngterm.android.update.AppUpdates
+import com.nickalie.ngterm.android.update.UpdatesOwner
+import com.nickalie.ngterm.android.update.appUpdates
 import com.nickalie.ngterm.core.ffi.MobileCore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,11 +44,16 @@ import java.io.File
  * without the native library, never load the core), with what works beside the screens: the network's nudges, the
  * notifications ([Alerts]), the foreground service while sessions are attached ([LinkKeeper]), and the core's
  * connections closed while the app is in the background with nothing attached and no sign-in under way ([IdleKeeper]).
+ * Its [updates] (the GitHub build's) stand apart from the graph, so the background check and the installer's answers
+ * never start the core.
  */
 class NgtermApplication :
     Application(),
-    GraphOwner {
+    GraphOwner,
+    UpdatesOwner {
     override val graph: AppGraph by lazy { makeGraph() }
+
+    override val updates: AppUpdates? by lazy { appUpdates(this) }
 
     // counted from the start, before the graph is made by the first screen
     private lateinit var foreground: Foreground
@@ -106,6 +114,7 @@ class NgtermApplication :
             settings = settings,
             opens = OpenRequests(),
             online = network.online,
+            updates = updates,
         )
     }
 

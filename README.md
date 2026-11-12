@@ -73,7 +73,8 @@ Good to know before you start:
 
 ngterm downloads updates in the background and offers **Install Update** in the title bar, unless you turn that off in
 Settings ▸ General ▸ Updates. `.deb`, `.rpm`, Arch package and macOS `.pkg` installs ask for your password when you
-press it. To verify a download, see [release signing](docs/release-signing.md).
+press it. The Android app notifies you when a new release is out and installs it from Settings ▸ Updates. To verify a
+download, see [release signing](docs/release-signing.md).
 
 ## Get started
 

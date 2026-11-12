@@ -1,4 +1,8 @@
-// The ngterm Android app: Compose over the mobile core's binding (:core).
+// The ngterm Android app: Compose over the mobile core's binding (:core), in two distributions: `github`, the APK
+// GitHub releases carry, which updates itself from them (src/github), and `play`, Google Play's bundle, which Play
+// updates and which must hold no self-update (Play's policy), so it has neither that code nor its permission.
+import com.android.build.api.artifact.SingleArtifact
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -37,6 +41,17 @@ android {
         compose = true
     }
 
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            isDefault = true
+        }
+        create("play") {
+            dimension = "distribution"
+        }
+    }
+
     testOptions {
         unitTests {
             // Robolectric (Roborazzi's screenshots) renders with the app's resources
@@ -51,6 +66,33 @@ android {
         // Checks whose verdict changes with the calendar, not the code: a release elsewhere (a newer library, AGP or
         // Android) would break a pinned build. Upgrades are deliberate edits of gradle/libs.versions.toml.
         disable += setOf("OldTargetApi", "NewerVersionAvailable", "GradleDependency", "AndroidGradlePluginVersion")
+    }
+}
+
+androidComponents {
+    // Play's build exists only to be released there: its debug twin would double every test run
+    beforeVariants(selector().withFlavor("distribution" to "play").withBuildType("debug")) { it.enable = false }
+    onVariants(selector().withFlavor("distribution" to "play")) { variant ->
+        val name = variant.name.replaceFirstChar(Char::uppercase)
+        val check =
+            tasks.register<NoSelfUpdate>("check${name}NoSelfUpdate") {
+                manifest.set(variant.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+            }
+        tasks.named("check") { dependsOn(check) }
+    }
+}
+
+/** Fails when a Play build's merged manifest could install packages: Play forbids an app updating itself. */
+abstract class NoSelfUpdate : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val manifest: RegularFileProperty
+
+    @TaskAction
+    fun verify() {
+        val text = manifest.get().asFile.readText()
+        val found = listOf("REQUEST_INSTALL_PACKAGES", "androidx.work", ".update.").filter { it in text }
+        check(found.isEmpty()) { "the Play build's manifest holds self-update parts: ${found.joinToString()}" }
     }
 }
 
@@ -95,6 +137,7 @@ dependencies {
     implementation(libs.compose.material3.adaptive.navigation)
     implementation(libs.compose.material3.adaptive.navigation.suite)
     implementation(libs.markdown.renderer.m3)
+    "githubImplementation"(libs.androidx.work.runtime)
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 
@@ -107,6 +150,7 @@ dependencies {
     testImplementation(libs.roborazzi.junit.rule)
     testImplementation(platform(libs.compose.bom))
     testImplementation(libs.compose.ui.test.junit4)
+    testImplementation(libs.androidx.work.testing)
 
     androidTestImplementation(testFixtures(project(":core")))
     androidTestImplementation(libs.androidx.test.core)

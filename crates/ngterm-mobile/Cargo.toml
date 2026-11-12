@@ -44,6 +44,8 @@ russh.workspace = true
 zeroize.workspace = true
 thiserror.workspace = true
 uniffi.workspace = true
+# the Android app's self-update: a release's SHA256SUMS signature, as ngterm-update checks it
+minisign-verify.workspace = true
 # the far `ngtermctl agent`'s NDJSON chat events and JSON catalog
 serde_json.workspace = true
 

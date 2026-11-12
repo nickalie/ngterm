@@ -190,6 +190,16 @@ white on nothing, as Android masks it. The status glyphs are 16dp filled or stro
 | `ScreenFrame` | a screen of reading and filling in: an optional top row (Back or Close, the title as a heading, one action such as Save), then a scrolling column no wider than 640dp (520dp in the first run), centered, with the phone's or the tablet's gutter, padded for the bars, the cutout and the keyboard |
 | `Cover` | a veil over a pane that can't be used as it is (another device drives it, it is reattaching), with its action; it takes every touch, and the pane under it is hidden from TalkBack (`Modifier.underCover`); `icon = null` shows a spinner instead of a glyph |
 
+The update panel (`ui/updates/UpdatePanel.kt`, the GitHub build's alone) is Settings' Updates plate and the update
+sheet's content: one plate, `surfaceContainerLow` in Settings, the sheet itself in the sheet. Its state is a status
+glyph and a headline in the app's tones, so it adds no color: up to date is Online (healthy), a release on offer is
+Attention (it needs you), checking, downloading, verifying and installing are Connecting (on its way, the download's
+bar in that brass too), a failure is Error, and not checked yet is Idle. The step between the installed version and the
+offered one is mono (`0.2.3 → 0.3.0`), as versions are compared character by character; TalkBack reads it in words.
+Install is the one filled button; Release notes and Not now are text buttons, and Not now leaves once said. A failure
+says what failed in words (the signature, the checksum, the signing key, the installer's own message) and offers Try
+again for that step.
+
 Rules the components hold to:
 
 - Every screen has empty, loading, error and offline states, each with a next action. An empty screen invites the

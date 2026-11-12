@@ -23,6 +23,7 @@ import com.nickalie.ngterm.android.platform.KeystoreKeyVault
 import com.nickalie.ngterm.android.platform.PinnedHostKeys
 import com.nickalie.ngterm.android.ui.chat.PaneChats
 import com.nickalie.ngterm.android.ui.session.SessionPanes
+import com.nickalie.ngterm.android.update.AppUpdates
 import com.nickalie.ngterm.core.fake.FakeMobileCore
 import com.nickalie.ngterm.core.ffi.ClipboardPart
 import com.nickalie.ngterm.core.ffi.ClipboardWriteStatus
@@ -151,11 +152,13 @@ private class OffThreadHostKeys(
  * stores real DataStores, the vault sealing with a [SoftwareWrapper], the clock [now], the network [online] and the
  * clipboard's text [clipboard] set by the test. [scope] runs the connections' calls (the main thread's in UI tests);
  * [close] stops it. The chats rank their `/` menus with [rankCommands] (the native `filter_commands` isn't loaded).
+ * Its [AppGraph.updates] are the test's [updates], none by default.
  */
 class TestGraph(
     dir: File,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
     permissionAsked: Boolean = true,
+    updates: AppUpdates? = null,
 ) {
     val online = MutableStateFlow(true)
     var now = 1_000_000L
@@ -226,6 +229,7 @@ class TestGraph(
             settings = settings,
             opens = opens,
             online = online,
+            updates = updates,
         )
 
     /** Makes the app's first key, as the first run would. */

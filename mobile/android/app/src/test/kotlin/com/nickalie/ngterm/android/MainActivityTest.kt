@@ -14,6 +14,9 @@ import com.nickalie.ngterm.android.data.OpenTarget
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.data.ThemeChoice
 import com.nickalie.ngterm.android.platform.openIntent
+import com.nickalie.ngterm.android.ui.updates.FakeUpdates
+import com.nickalie.ngterm.android.update.ACTION_INSTALL_UPDATE
+import com.nickalie.ngterm.android.update.ACTION_SHOW_UPDATE
 import com.nickalie.ngterm.core.fake.FakePane
 import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.MobileEvent
@@ -98,6 +101,21 @@ class MainActivityTest {
         controller!!.pause().stop().destroy()
         launch(notificationIntent(target), Bundle())
         assertNull(test.opens.pending.value)
+    }
+
+    @Test
+    fun eachLaunchLetsTheUpdatesCheckAndTheirNotificationsIntentsReachThem() {
+        val updates = FakeUpdates()
+        test.close()
+        test = TestGraph(File(dir.root, "updates").apply { mkdirs() }, updates = updates)
+        ApplicationProvider.getApplicationContext<TestApplication>().testGraph = test.graph
+        launch(Intent(ACTION_SHOW_UPDATE))
+        controller!!.newIntent(Intent(ACTION_INSTALL_UPDATE))
+        assertEquals(listOf("appStarted", "opened:$ACTION_SHOW_UPDATE", "opened:$ACTION_INSTALL_UPDATE"), updates.calls)
+        // a recreated activity neither checks again nor replays its intent
+        controller!!.pause().stop().destroy()
+        launch(Intent(ACTION_SHOW_UPDATE), Bundle())
+        assertEquals(3, updates.calls.size)
     }
 
     @Test

@@ -30,6 +30,7 @@ import com.nickalie.ngterm.android.ui.components.SectionAction
 import com.nickalie.ngterm.android.ui.onboarding.Problem
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.StatusTone
+import com.nickalie.ngterm.android.ui.updates.UpdatePanel
 
 /** A notification kind's switch: its words. */
 private class AlertRow(
@@ -214,6 +215,28 @@ private fun KeyCard(
             TextButton(onClick = onShow) { Text(stringResource(R.string.settings_key_show)) }
             CopyButton(item.key.authorizedKey, label = stringResource(R.string.settings_key_copy))
         }
+    }
+}
+
+/**
+ * The app's own updates (the GitHub build's): where updating stands ([UpdatePanel]), and whether the app checks on
+ * its own.
+ */
+@Composable
+internal fun UpdatesSection(updates: UpdatesUi) {
+    SettingsSection(stringResource(R.string.settings_updates)) {
+        UpdatePanel(
+            installed = updates.installed,
+            state = updates.state,
+            actions = updates.actions,
+            modifier = Modifier.padding(vertical = NgtermTheme.spacing.sm),
+        )
+        SwitchRow(
+            label = stringResource(R.string.settings_update_automatic),
+            note = stringResource(R.string.settings_update_automatic_note),
+            checked = updates.automatic,
+            onCheckedChange = updates.onAutomatic,
+        )
     }
 }
 

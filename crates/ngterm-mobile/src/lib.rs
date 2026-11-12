@@ -21,7 +21,7 @@
 //! list, New Session and End Session), [`presentation`] (attached sessions' presentation streams and what they
 //! show), [`pane`] (shown panes: their attach, terminal, leadership, ends and clipboard reads), [`reconnect`] (keeping
 //! machines connected: lost connections, network changes, suspend and resume), [`rows`] (the packed row buffer a pane
-//! is drawn from), [`chat`] (the agent chat view: what each pane runs, the chat channels of the panes shown as a chat,
+//! is drawn from), [`release`] (verifying a GitHub release's checksums for the Android app's self-update), [`chat`] (the agent chat view: what each pane runs, the chat channels of the panes shown as a chat,
 //! their older pages and the agents' slash-command catalogs; the screen matchers and the actions that take the lead and
 //! answer the agent in its pane, [`chat::input`]).
 //!
@@ -53,6 +53,7 @@ pub mod keys;
 pub mod pane;
 pub mod presentation;
 pub mod reconnect;
+pub mod release;
 pub mod rows;
 pub mod sessions;
 pub mod transport;
@@ -73,4 +74,5 @@ pub use presentation::{
     AskReply, PresentationRole, RemoteAsk, RemoteAskButton, RemoteAskChoice, RemoteAskChoices, RemoteAskInput,
     RemoteHud, RemoteLayout, RemoteNotice, RemoteStatus, StreamState,
 };
+pub use release::{ReleaseError, release_checksum};
 pub use sessions::RemoteSession;

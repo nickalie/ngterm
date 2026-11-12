@@ -22,7 +22,8 @@ import kotlinx.coroutines.flow.catch
 /**
  * The app's one activity, edge to edge: the app's frame over the mobile core, whose version it loads first, in the
  * theme Settings sets (the system bars' icons follow its light or dark side). A notification's tap reaches it as an
- * intent naming the session and pane to open, which it hands to the frame.
+ * intent naming the session and pane to open, which it hands to the frame; an update notification's, to the updates.
+ * Each launch lets the updates check.
  */
 class MainActivity : ComponentActivity() {
     private val graph: AppGraph get() = (application as GraphOwner).graph
@@ -32,7 +33,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val version = coreVersion()
         // a recreated activity's intent was handled when it first arrived
-        if (savedInstanceState == null) opened(intent)
+        if (savedInstanceState == null) {
+            graph.updates?.appStarted()
+            opened(intent)
+        }
         setContent {
             val flow = remember { graph.settings.settings.catch { emit(AppSettings()) } }
             // nothing is drawn until the settings are read, so a pinned theme never flashes the system's first
@@ -58,5 +62,6 @@ class MainActivity : ComponentActivity() {
 
     private fun opened(intent: Intent?) {
         openTarget(intent)?.let(graph.opens::request)
+        graph.updates?.opened(intent)
     }
 }

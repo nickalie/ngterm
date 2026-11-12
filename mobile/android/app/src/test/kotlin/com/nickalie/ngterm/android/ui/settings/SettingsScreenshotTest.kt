@@ -19,6 +19,10 @@ import com.nickalie.ngterm.android.ui.WindowRule
 import com.nickalie.ngterm.android.ui.components.ScreenExit
 import com.nickalie.ngterm.android.ui.onboarding.PublicKeyScreen
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import com.nickalie.ngterm.android.ui.updates.UpdateActions
+import com.nickalie.ngterm.android.ui.updates.UpdateSheet
+import com.nickalie.ngterm.android.update.UpdateOffer
+import com.nickalie.ngterm.android.update.UpdateState
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -41,10 +45,15 @@ private val SampleSettings =
 
 private val NoSettingsActions = SettingsActions({}, { _, _ -> }, {}, {}, {}, {}, {}, {})
 
+private val SampleOffer = UpdateOffer("0.3.0", 38_200_000, "https://github.com/nickalie/ngterm/releases/tag/v0.3.0")
+
+private val NoUpdateActions = UpdateActions({}, {}, {}, {}, {})
+
 /**
  * Task 20's Settings rendered by Robolectric and compared with their goldens (src/test/screenshots/settings): its top
  * (the terminal's sample and controls), its foot (notifications turned off in the system, the clipboard, the keys and
- * the core's version) and a rotated key's public half with the switch to it, in the windows of
+ * the core's version), the GitHub build's Updates with a release on offer, the update sheet mid-download, and a
+ * rotated key's public half with the switch to it, in the windows of
  * [ScreensScreenshotTest]. The keys shown are made up.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
@@ -99,6 +108,28 @@ class SettingsScreenshotTest(
         }
         compose.onNodeWithText("Use for every machine").performScrollTo()
         compose.onRoot().captureRoboImage(golden("new_key"))
+    }
+
+    @Test
+    fun updates() {
+        show {
+            SettingsScreen(
+                state = SampleSettings,
+                coreVersion = "0.1.0",
+                notificationsOn = true,
+                keyWork = KeyWork(),
+                actions = NoSettingsActions,
+                updates = UpdatesUi("0.2.3", UpdateState.Available(SampleOffer), true, NoUpdateActions) {},
+            )
+        }
+        compose.onNodeWithText("Check automatically").performScrollTo()
+        compose.onRoot().captureRoboImage(golden("updates"))
+    }
+
+    @Test
+    fun updateSheet() {
+        show { UpdateSheet("0.2.3", UpdateState.Downloading(SampleOffer, 23_400_000), NoUpdateActions, onClose = {}) }
+        compose.onRoot().captureRoboImage(golden("update_sheet"))
     }
 
     companion object {

@@ -45,7 +45,7 @@ import kotlin.math.roundToInt
  * ([notificationsOn]: whether the system lets the app post them), the machines trusted with the clipboard, the keys
  * ([keyWork]: a rotation under way or failed), and the loaded core's [coreVersion]. While the stores are read it
  * shows a spinner; when they can't be, why with Retry. [wallpaperColors] offers the wallpaper's colors (Android 12
- * and later).
+ * and later). The [updates] section is the GitHub build's alone.
  */
 @Composable
 fun SettingsScreen(
@@ -56,6 +56,7 @@ fun SettingsScreen(
     actions: SettingsActions,
     modifier: Modifier = Modifier,
     wallpaperColors: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
+    updates: UpdatesUi? = null,
 ) {
     when (state) {
         SettingsUiState.Loading -> {
@@ -87,6 +88,7 @@ fun SettingsScreen(
                     NotificationsSection(state.alerts, notificationsOn, actions)
                     ClipboardSection(state.clipboard, actions.onRevokeClipboard)
                     KeysSection(state.keys, keyWork, actions)
+                    updates?.let { UpdatesSection(it) }
                     AboutSection(coreVersion)
                 }
             }

@@ -56,7 +56,8 @@
 
 ## Solution Overview
 
-- `android-build` also runs `bundleRelease`; the unsigned AAB travels with the APK and is never a release asset.
+- `android-build` also runs `bundlePlayRelease` (the `play` flavor, which has no self-update: Play forbids it); the
+  unsigned AAB travels with the APK and is never a release asset.
 - `android-sign` also signs the AAB (`jarsigner`, with the upload key). Without the upload key the AAB stays unsigned
   and `play-upload` skips with a notice (`optional` mode) or fails (`required` mode).
 - `play-upload` (publishing only, `environment: release`, needs `approve` and `android-verify` to succeed;
@@ -93,8 +94,8 @@
 **Files:**
 - Modify: `scripts/build-android.sh` (if needed), `scripts/sign-android.sh`, `.github/workflows/release.yml`
 
-- [ ] `android-build`: `bundleRelease` beside `assembleRelease`; the unsigned AAB in the artifact, never a release
-      asset
+- [ ] `android-build`: `bundlePlayRelease` beside `assembleGithubRelease`; the unsigned AAB in the artifact, never a
+      release asset
 - [ ] `sign-android.sh`: `jarsigner` for an AAB with the upload key (temp keystore removed on exit), verified
 - [ ] `android-sign`: signs the AAB with the upload key; without it, a notice or a failure by mode. Dry runs sign it
       with a throwaway key
