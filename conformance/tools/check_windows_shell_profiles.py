@@ -12,8 +12,12 @@ import os
 import shlex
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from agterm_conformance import winproc  # noqa: E402  (the harness's Windows process table, ctypes only)
 
 ap = argparse.ArgumentParser()
 ap.add_argument('stage', type=Path)
@@ -89,6 +93,27 @@ def ready():
     assert app.poll() is None, f'headless exited: {app.returncode}'
     values = sessions()
     return values if values and values[0].get('backedByLive') else None
+
+def namespace_processes():
+    """This check's namespace's session servers (`ngterm-session server <namespace>`, whether this check started one or
+    the headless host started it on demand) and every process under them (their sessions' shells and ConPTY hosts)."""
+    table = winproc.processes()
+    servers = []
+    for process in table:
+        if process.name.lower() != 'ngterm-session.exe':
+            continue
+        words = winproc.command_line(process.pid) or []
+        if len(words) >= 3 and words[1] == 'server' and os.path.normcase(words[2]) == os.path.normcase(str(namespace)):
+            servers.append(process)
+    return servers + winproc.descendants(servers, table)
+
+def stop_namespace(grace=10.0):
+    """Waits up to `grace` seconds for the namespace's server to exit by itself (it does once it holds no session and no
+    client), then ends what is left; the processes it had to end."""
+    deadline = time.monotonic() + grace
+    while (left := namespace_processes()) and time.monotonic() < deadline:
+        time.sleep(.2)
+    return [process for process in left if winproc.terminate(process)]
 
 def server_records():
     result = subprocess.run([server_path, 'list'], env=env, capture_output=True, text=True,
@@ -205,17 +230,23 @@ finally:
     if app and app.poll() is None:
         app.terminate()
         app.wait(timeout=10)
-    if server and server.poll() is None:
-        try:
-            listing = subprocess.run([server_path, 'list', '--short'], env=env, capture_output=True, text=True,
-                                     timeout=10, creationflags=flags)
-            names = listing.stdout.splitlines() if listing.returncode == 0 else []
-            if names:
-                subprocess.run([server_path, 'kill', '--force', *names], env=env, capture_output=True,
-                               timeout=15, creationflags=flags, check=True)
-        finally:
+    # The namespace's server may not be the one this check spawned (the headless host starts one on demand when it
+    # finds none), so its sessions are ended through whichever server answers, and every process left in the
+    # namespace after that is ended too.
+    try:
+        listing = subprocess.run([server_path, 'list', '--short'], env=env, capture_output=True, text=True,
+                                 timeout=10, creationflags=flags)
+        names = listing.stdout.splitlines() if listing.returncode == 0 else []
+        if names:
+            subprocess.run([server_path, 'kill', '--force', *names], env=env, capture_output=True,
+                           timeout=15, creationflags=flags)
+    finally:
+        if server and server.poll() is None:
             server.terminate()
             server.wait(timeout=10)
-    for log in logs:
-        log.close()
+        forced = stop_namespace()
+        if forced:
+            print('Ended processes left in the namespace:', ', '.join(f'{p.name} {p.pid}' for p in forced))
+        for log in logs:
+            log.close()
     print('Private test logs:', root)
