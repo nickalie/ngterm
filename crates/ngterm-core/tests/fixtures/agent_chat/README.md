@@ -10,8 +10,9 @@ the transcripts the `agent_chat` parsers read, the hook payloads `ngtermctl agen
 |---|---|---|
 | Claude Code | 2.1.317 | `claude-sonnet-5-5` (`--model sonnet`), `claude -p --model haiku` for the worker |
 | Codex CLI | 0.166.0 | `gpt-5.6-luna`, reasoning effort low, `model_reasoning_summary = "detailed"` |
+| Codex CLI | 0.167.2 | `gpt-6.1-sol` (Plan mode for the questions): the questions session only |
 
-Recorded on Linux on 2026-11-03.
+Recorded on Linux on 2026-11-03; the Codex 0.167.2 questions session on 2026-11-12.
 
 ## Layout
 
@@ -24,6 +25,7 @@ claude/projects/-home-user-project/      a Claude config dir's projects/ tree
 claude/hooks/NN-<Event>.json             every hook payload of those sessions, in firing order
 claude/hooks/NN-<Event>.env              the CLAUDE_* environment the hook saw
 codex/sessions/2026/11/03/rollout-….jsonl  a CODEX_HOME's sessions/ tree (see "Codex session")
+codex/sessions/2026/11/12/rollout-….jsonl  Codex 0.167.2's questions session (see "Codex questions session")
 codex/hooks/main/NN-<Event>.json(.env)   the main session's hook payloads (and its resume)
 codex/hooks/auto-review/…                a separate session run with Auto Review
 record/                                  the tools that made all this
@@ -55,6 +57,13 @@ a reply interrupted with Esc; `$greet-check please` (a skill); `/compact`; `/ren
 (continues in `01a1a303-e11f`); then the CLI exited and `codex resume 01a1a300-…` appended one more turn. The
 Auto Review session (`01a1a305-0669`, with `-c approvals_reviewer="auto_review"`) ran one network command that the
 guardian approved; the guardian's own rollout is `01a1a305-068c`.
+
+### Codex questions session (`01a1cfa1-2430`, Codex 0.167.2)
+
+In order: a network command run with `sandbox_permissions: "require_escalated"`, approved with `y` after its
+approval waited; Plan mode on, then a `request_user_input` with one question (answered `2`, Green); one with two
+questions (the first answered `3`, Large; the second `None of the above` with the note `hexagon please`). Its PTY
+capture is `codex-questions-44x36` (below).
 
 ## Settled facts
 
@@ -130,6 +139,16 @@ Where these differ from the plan, the plan was updated.
 - A Codex subagent is its own rollout; its `session_meta.source.subagent.thread_spawn.parent_thread_id` names the
   parent, and the parent's `CollabAgentToolCall.receiver_thread_ids` names it.
 - `codex resume` and `claude --resume` append to the same file.
+- Codex 0.167.2: a script that outlasts its first wait (here, a command whose approval was up) yields: the `exec`
+  call's `custom_tool_call_output` is the string `Script running with cell ID 1\nWall time 31.0 seconds\nOutput:\n`,
+  then the `CommandExecution` item completes, then the model calls `wait` (a `function_call`, arguments
+  `{"cell_id":"1",…}`) whose `function_call_output` is the usual `Script completed…` with the script's output.
+- Codex 0.167.2's `request_user_input` is a `function_call` with arguments `{"questions":[{"header","id","question",
+  "options":[{"label","description"}]}]}`, written as soon as the picker opens; its `function_call_output` is
+  `{"answers":{"<id>":{"answers":["Large"]},…}}` (keys in no particular order), a note typed on an option an extra
+  `"user_note: …"` answer (`["None of the above","user_note: hexagon please"]`). The picker's `None of the above` is
+  not among the options. A `retained_context` line (`verified_answer`) repeats the answers, and a turn that only asked
+  ends with an empty `final_answer` assistant message.
 
 **TUI input**
 
@@ -155,6 +174,13 @@ Where these differ from the plan, the plan was updated.
   `Esc to cancel · Tab to amend`. Codex's: `1. Yes, proceed (y)`, `2. Yes, and don't ask again for commands that
   start with \`…\` (p)`, `3. No, and tell Codex what to do differently (esc)`, footer `Press enter to confirm or esc
   to cancel`.
+- Codex 0.167.2's `request_user_input` picker (in place of the composer): a faint `Question 1/2 (2 unanswered)`, the
+  question, the numbered options (label, then the description in its own column) and a trailing `None of the
+  above` (`Optionally, add details in notes (tab)`), then hints (`tab to add notes`, `enter to submit answer`, or
+  `… | enter to submit all` on the last question, `←/→ to navigate questions`, `esc to interrupt`). Single-select
+  only. A digit picks that option and moves to the next question, or submits all on the last; ↑/↓ move the
+  highlight; Tab on the highlighted option opens its notes row (`› Add notes`, faint), where a paste lands; Enter
+  then submits that answer (all, on the last question); Esc interrupts.
 
 ## PTY captures
 
@@ -166,8 +192,15 @@ offset at which each state was on screen. Replaying `bin[..mark]` into a termina
 |---|---|---|
 | `idle` | the empty prompt | the empty prompt |
 | `working` | a turn in progress (`esc to interrupt`) | a turn in progress (`Working`) |
-| `question` | the `AskUserQuestion` picker | — (Codex has no picker) |
+| `question` | the `AskUserQuestion` picker | — (0.166 has no picker; see `codex-questions-44x36`) |
 | `permission` | a `Bash` permission dialog | a command approval |
+
+`codex-questions-44x36` is Codex 0.167.2 in the questions session, marked at: `idle`, `permission` (the escalated
+command's approval), `question` (the one-question picker), `question_picked` (after `2`: answered, idle again),
+`question2` (the two-question picker at 1/2), `question2_second` (after `3`: at 2/2), `question2_notes` (after Down,
+Down and Tab: `None of the above` highlighted, its notes row open), `question2_typed` (`hexagon please` pasted there)
+and `question2_done` (after Enter: submitted, idle). Its `working` mark was dropped: the approval was already up.
+The scratch dir shows truncated (`/tmp/claude-1000/…0000000/…/rec/project`), rewritten the same way.
 
 `claude-160x48` also marks `question_multi` (the multi-select question after the first answer) and
 `question_submit` (the review tab). The recorder ran in a scratch dir; the captures show it as

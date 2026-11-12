@@ -34,9 +34,8 @@ use serde_json::Value;
 
 use super::event::{DIFF_CAP, OUTPUT_CAP};
 use super::{
-    AgentKind, ChatEvent, EventBody, Line, NoticeKind, Out, Question, QuestionItem, QuestionOption, Tool, ToolKind,
-    ToolStatus, TranscriptParser, cap, compaction, decode_line, finish, non_empty, notice, str_at, tag, title_line,
-    unified, untitled_tool,
+    AgentKind, ChatEvent, EventBody, Line, NoticeKind, Out, Tool, ToolKind, ToolStatus, TranscriptParser, cap,
+    compaction, decode_line, finish, non_empty, notice, question, str_at, tag, title_line, unified, untitled_tool,
 };
 
 /// Line types the chat has no use for (Task 1's fixture README lists them).
@@ -594,39 +593,6 @@ fn edit_diff(name: &str, input: &Value) -> Option<String> {
         "Write" => Some(unified(path, "", str_at(input, "/content")?)),
         "NotebookEdit" => Some(unified(path, "", str_at(input, "/new_source")?)),
         _ => None,
-    }
-}
-
-/// An `AskUserQuestion` input's questions.
-pub(super) fn question(input: &Value) -> Question {
-    let questions = input
-        .get("questions")
-        .and_then(Value::as_array)
-        .map_or(&[][..], Vec::as_slice);
-    let questions = questions
-        .iter()
-        .map(|item| QuestionItem {
-            question: str_at(item, "/question").unwrap_or_default().to_owned(),
-            header: str_at(item, "/header").map(str::to_owned),
-            multi_select: item.get("multiSelect").and_then(Value::as_bool).unwrap_or(false),
-            options: item
-                .get("options")
-                .and_then(Value::as_array)
-                .map_or_else(Vec::new, |options| {
-                    options
-                        .iter()
-                        .map(|option| QuestionOption {
-                            label: str_at(option, "/label").unwrap_or_default().to_owned(),
-                            description: str_at(option, "/description").map(str::to_owned),
-                        })
-                        .collect()
-                }),
-        })
-        .collect();
-    Question {
-        questions,
-        status: ToolStatus::Running,
-        output: None,
     }
 }
 

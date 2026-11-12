@@ -100,7 +100,7 @@ pub enum EventBody {
         text: String,
     },
     Tool(Tool),
-    /// Claude's `AskUserQuestion`.
+    /// Claude's `AskUserQuestion`, Codex's `request_user_input`.
     Question(Question),
     /// A permission prompt waiting for the user.
     Approval(Approval),
@@ -177,7 +177,8 @@ pub enum ToolStatus {
     Error,
 }
 
-/// An `AskUserQuestion` call: its questions, and once answered, the answer the agent got.
+/// A question call (Claude's `AskUserQuestion`, Codex's `request_user_input`): its questions, and once answered, the
+/// answer the agent got.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Question {
@@ -188,7 +189,7 @@ pub struct Question {
     pub output: Option<String>,
 }
 
-/// One question of an `AskUserQuestion` call.
+/// One question of a question call.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuestionItem {

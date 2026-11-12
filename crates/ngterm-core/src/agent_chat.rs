@@ -190,6 +190,40 @@ fn unified(path: &str, old: &str, new: &str) -> String {
         .to_string()
 }
 
+/// A question tool's input (Claude's `AskUserQuestion`, Codex's `request_user_input`): its questions, open. Codex
+/// writes no `multiSelect`: its questions are single-select.
+pub(crate) fn question(input: &Value) -> Question {
+    let questions = input
+        .get("questions")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    let questions = questions
+        .iter()
+        .map(|item| QuestionItem {
+            question: str_at(item, "/question").unwrap_or_default().to_owned(),
+            header: str_at(item, "/header").map(str::to_owned),
+            multi_select: item.get("multiSelect").and_then(Value::as_bool).unwrap_or(false),
+            options: item
+                .get("options")
+                .and_then(Value::as_array)
+                .map_or_else(Vec::new, |options| {
+                    options
+                        .iter()
+                        .map(|option| QuestionOption {
+                            label: str_at(option, "/label").unwrap_or_default().to_owned(),
+                            description: str_at(option, "/description").map(str::to_owned),
+                        })
+                        .collect()
+                }),
+        })
+        .collect();
+    Question {
+        questions,
+        status: ToolStatus::Running,
+        output: None,
+    }
+}
+
 /// The text between `<name>` and `</name>`, trimmed.
 fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     let start = text.find(&format!("<{name}>"))? + name.len() + 2;

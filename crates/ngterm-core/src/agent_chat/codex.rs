@@ -1,5 +1,5 @@
-//! Codex's rollout (`<codex home>/sessions/YYYY/MM/DD/rollout-<time>-<thread id>.jsonl`, read as Codex CLI 0.166
-//! writes it): one JSON object per line, `type` naming it and `payload` holding it.
+//! Codex's rollout (`<codex home>/sessions/YYYY/MM/DD/rollout-<time>-<thread id>.jsonl`, read as Codex CLI 0.166 and
+//! 0.167 write it): one JSON object per line, `type` naming it and `payload` holding it.
 //!
 //! - `session_meta` names the thread (the conversation) and its cwd; `turn_context` carries the model.
 //! - `event_msg` `item_completed` items are the typed record: `UserMessage`, `AgentMessage`, `Reasoning` (its summary
@@ -16,6 +16,12 @@
 //!   the call runs takes the call's place (same id) with what it did; a call no item claims finishes with the script's
 //!   output (`Script completed…`, or `aborted by user…` when a prompt was denied). `function_call` lines (a tool run
 //!   outside code mode) read the same way.
+//! - A script that outlasts its first wait (a command waiting for its approval, a long one) yields: its output says
+//!   `Script running with cell ID N…` and the call runs on. A `wait` function call on that cell is plumbing and shows
+//!   no row: its output, once the script ended, finishes the call unless a tool item took the call's place.
+//! - `request_user_input` (Codex's question picker, Plan mode) is a question, not a tool: open until its output, whose
+//!   `answers` (keyed by each question's `id`; a note typed on an option as a `user_note: …` answer) complete it. A
+//!   turn that only asked ends with an empty assistant message, which shows nothing.
 //! - A spawned subagent's task runs on after `spawn_agent` returns, until its `<subagent_notification>` or a later
 //!   collab item reporting a final state for it (a `wait` or a `close_agent`).
 //! - A call still running when its turn ends (`task_complete`, `turn_aborted`) or when another turn starts (after a
@@ -32,12 +38,12 @@ use serde_json::Value;
 
 use super::event::{DIFF_CAP, OUTPUT_CAP};
 use super::{
-    AgentKind, ChatEvent, EventBody, Line, NoticeKind, Out, Tool, ToolKind, ToolStatus, TranscriptParser, cap,
-    compaction, decode_line, finish, non_empty, notice, str_at, tag, title_line, unified, untitled_tool,
+    AgentKind, ChatEvent, EventBody, Line, NoticeKind, Out, Question, Tool, ToolKind, ToolStatus, TranscriptParser,
+    cap, compaction, decode_line, finish, non_empty, notice, question, str_at, tag, title_line, unified, untitled_tool,
 };
 
 /// Line types the chat has no use for.
-pub const IGNORED: &[&str] = &["token_usage_record", "world_state"];
+pub const IGNORED: &[&str] = &["token_usage_record", "world_state", "retained_context"];
 
 /// `event_msg` types the chat has no use for.
 const IGNORED_EVENTS: &[&str] = &["token_count", "thread_settings_applied"];
@@ -56,6 +62,18 @@ const NO_RESULT: &str = "No result was recorded";
 
 /// What `exec`'s output starts with when the script ran to its end.
 const SCRIPT_COMPLETED: &str = "Script completed";
+
+/// What `exec`'s (or `wait`'s) output starts with when the script yielded before its end, followed by the cell's id.
+const SCRIPT_RUNNING: &str = "Script running with cell ID ";
+
+/// The code-mode tool that waits on a yielded script's cell.
+const WAIT: &str = "wait";
+
+/// The tool Codex asks the user questions with.
+const REQUEST_USER_INPUT: &str = "request_user_input";
+
+/// What a note typed on a picked option starts with among a question's answers.
+const USER_NOTE: &str = "user_note: ";
 
 /// Reads a Codex rollout, one line at a time.
 #[derive(Debug, Default)]
@@ -82,6 +100,12 @@ pub struct CodexParser {
     shown: HashSet<String>,
     /// Compactions shown so far, by turn.
     compactions: HashSet<String>,
+    /// Yielded scripts, by cell id: the call that started each.
+    cells: HashMap<String, String>,
+    /// `wait` calls with no output yet, by call id: the call that started the cell waited on, when it is known.
+    waits: HashMap<String, Option<String>>,
+    /// Questions shown so far, by call id, with each question's id (what its answers are keyed by).
+    questions: HashMap<String, (Question, Vec<String>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -266,6 +290,14 @@ impl CodexParser {
         let (gone, kept): (Vec<Call>, Vec<Call>) = std::mem::take(&mut self.calls).into_iter().partition(ended);
         self.calls = kept;
         for call in gone {
+            if let Some((asked, _)) = self.questions.get_mut(&call.id) {
+                if asked.status == ToolStatus::Running {
+                    asked.status = ToolStatus::Error;
+                    asked.output = Some(why.to_owned());
+                    out.push(call.id, EventBody::Question(asked.clone()));
+                }
+                continue;
+            }
             let is_task = self.agents.values().any(|task| *task == call.id);
             let Some(tool) = self.tools.get_mut(&call.id) else {
                 continue;
@@ -291,13 +323,7 @@ impl CodexParser {
         let id = str_at(item, "/id").map_or_else(|| out.line_id(), str::to_owned);
         match str_at(item, "/type").unwrap_or_default() {
             "UserMessage" => user_message(item, id, out),
-            "AgentMessage" => self.once(
-                id,
-                EventBody::Assistant {
-                    text: texts(item, "/content", "Text"),
-                },
-                out,
-            ),
+            "AgentMessage" => self.reply(id, texts(item, "/content", "Text"), out),
             "Reasoning" => {
                 let text = strings(item.get("summary_text")).join("\n");
                 self.once(id, EventBody::Thinking { text }, out);
@@ -334,6 +360,13 @@ impl CodexParser {
     fn once(&mut self, id: String, body: EventBody, out: &mut Out) {
         if self.shown.insert(id.clone()) {
             out.push(id, body);
+        }
+    }
+
+    /// An assistant message, unless it says nothing.
+    fn reply(&mut self, id: String, text: String, out: &mut Out) {
+        if !text.trim().is_empty() {
+            self.once(id, EventBody::Assistant { text }, out);
         }
     }
 
@@ -429,13 +462,7 @@ impl CodexParser {
         let id = str_at(payload, "/id").map_or_else(|| out.line_id(), str::to_owned);
         match str_at(payload, "/type").unwrap_or_default() {
             "message" => match str_at(payload, "/role").unwrap_or_default() {
-                "assistant" => self.once(
-                    id,
-                    EventBody::Assistant {
-                        text: texts(payload, "/content", "output_text"),
-                    },
-                    out,
-                ),
+                "assistant" => self.reply(id, texts(payload, "/content", "output_text"), out),
                 "user" => self.notification(&texts(payload, "/content", "input_text"), out),
                 _ => {}
             },
@@ -491,6 +518,19 @@ impl CodexParser {
         let script = str_at(payload, "/input")
             .or_else(|| str_at(payload, "/arguments"))
             .unwrap_or_default();
+        if name == WAIT
+            && let Some(cell) = cell_of(script)
+        {
+            self.waits.insert(id.to_owned(), self.cells.get(&cell).cloned());
+            return;
+        }
+        let turn = str_at(payload, "/internal_chat_message_metadata_passthrough/turn_id")
+            .map(str::to_owned)
+            .or_else(|| self.turn.clone());
+        if name == REQUEST_USER_INPUT {
+            self.ask(id, script, turn, out);
+            return;
+        }
         let mut names = called_tools(script);
         names.push(name);
         let kinds: Vec<ToolKind> = names.iter().copied().filter_map(tool_kind).collect();
@@ -509,9 +549,6 @@ impl CodexParser {
             diff: None,
             truncated: None,
         };
-        let turn = str_at(payload, "/internal_chat_message_metadata_passthrough/turn_id")
-            .map(str::to_owned)
-            .or_else(|| self.turn.clone());
         self.calls.push(Call {
             id: id.to_owned(),
             turn,
@@ -527,11 +564,25 @@ impl CodexParser {
     /// ended makes no event; one whose call is not in the window shows alone.
     fn call_output(&mut self, payload: &Value, out: &mut Out) {
         let Some(id) = str_at(payload, "/call_id") else { return };
-        let call = self
-            .calls
-            .iter()
-            .position(|call| call.id == id)
-            .map(|index| self.calls.remove(index));
+        if let Some(started) = self.waits.remove(id) {
+            if let Some(started) = started {
+                self.waited(&started, payload, out);
+            }
+            return;
+        }
+        let index = self.calls.iter().position(|call| call.id == id);
+        if let Some(cell) = yielded(payload) {
+            // the script runs on: a tool item or a `wait`'s output finishes the call
+            if index.is_some() {
+                self.cells.insert(cell, id.to_owned());
+            }
+            return;
+        }
+        let call = index.map(|index| self.calls.remove(index));
+        if self.questions.contains_key(id) {
+            self.answered(id, payload, out);
+            return;
+        }
         if call.as_ref().is_some_and(|call| call.claimed) || (call.is_none() && self.tools.contains_key(id)) {
             return;
         }
@@ -545,6 +596,124 @@ impl CodexParser {
         finish(&mut tool, status, &output);
         self.tools.insert(id.to_owned(), tool.clone());
         out.push(id, EventBody::Tool(tool));
+    }
+
+    /// The output of a `wait` on the cell call `started` yielded to: once the script ended, the call finishes with it,
+    /// unless a tool item took its place or its turn already ended it.
+    fn waited(&mut self, started: &str, payload: &Value, out: &mut Out) {
+        if yielded(payload).is_some() {
+            return;
+        }
+        self.cells.retain(|_, call| call != started);
+        let Some(index) = self.calls.iter().position(|call| call.id == started) else {
+            return;
+        };
+        if self.calls.remove(index).claimed {
+            return;
+        }
+        let (status, output) = call_result(payload, true);
+        if let Some(tool) = self.tools.get_mut(started) {
+            finish(tool, status, &output);
+            out.push(started, EventBody::Tool(tool.clone()));
+        }
+    }
+
+    /// A `request_user_input` call: an open question until its output.
+    fn ask(&mut self, id: &str, arguments: &str, turn: Option<String>, out: &mut Out) {
+        let input: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
+        let asked = question(&input);
+        let items = input.get("questions").and_then(Value::as_array);
+        let ids = items
+            .into_iter()
+            .flatten()
+            .map(|item| str_at(item, "/id").unwrap_or_default().to_owned())
+            .collect();
+        self.calls.push(Call {
+            id: id.to_owned(),
+            turn,
+            kinds: Vec::new(),
+            command: None,
+            claimed: false,
+        });
+        self.questions.insert(id.to_owned(), (asked.clone(), ids));
+        out.push(id, EventBody::Question(asked));
+    }
+
+    /// A question's output: the answers it got, one line per question, or failed with what Codex wrote instead. An
+    /// output after the question ended (its turn did) makes no event.
+    fn answered(&mut self, id: &str, payload: &Value, out: &mut Out) {
+        let Some((asked, ids)) = self.questions.get_mut(id) else {
+            return;
+        };
+        if asked.status != ToolStatus::Running {
+            return;
+        }
+        let text = match payload.get("output") {
+            Some(Value::String(text)) => text.clone(),
+            Some(output) => strings_at(output, "/text").concat(),
+            None => String::new(),
+        };
+        let parsed = serde_json::from_str::<Value>(&text).ok();
+        let (status, output) = match parsed.as_ref().and_then(|value| value.get("answers")?.as_object()) {
+            Some(answers) => (ToolStatus::Ok, answer_lines(asked, ids, answers)),
+            None => (ToolStatus::Error, text),
+        };
+        asked.status = status;
+        asked.output = Some(cap(&output, OUTPUT_CAP).0);
+        out.push(id, EventBody::Question(asked.clone()));
+    }
+}
+
+/// The answers a question call got, one line per question in the order asked (`Which size? → Large`), then any its
+/// questions don't name.
+fn answer_lines(asked: &Question, ids: &[String], answers: &serde_json::Map<String, Value>) -> String {
+    let named = asked
+        .questions
+        .iter()
+        .zip(ids)
+        .filter_map(|(item, id)| Some(answer_line(&item.question, answers.get(id)?)));
+    let others = answers
+        .iter()
+        .filter(|(id, _)| !ids.contains(id))
+        .map(|(id, answer)| answer_line(id, answer));
+    named.chain(others).collect::<Vec<_>>().join("\n")
+}
+
+/// One question's answer: `question → pick`, then `(note: …)` for a note typed on it.
+fn answer_line(question: &str, answer: &Value) -> String {
+    let given = strings(answer.get("answers"));
+    let (notes, picks): (Vec<&str>, Vec<&str>) = given.iter().partition(|given| given.starts_with(USER_NOTE));
+    let mut line = format!("{question} → {}", picks.join(", "));
+    for note in notes {
+        line.push_str(" (note: ");
+        line.push_str(&note[USER_NOTE.len()..]);
+        line.push(')');
+    }
+    line
+}
+
+/// The cell a yielded script runs on, from its output's first text: `Script running with cell ID 1…`.
+fn yielded(payload: &Value) -> Option<String> {
+    let output = payload.get("output")?;
+    let head = match output {
+        Value::String(text) => text.as_str(),
+        _ => strings_at(output, "/text").into_iter().next()?,
+    };
+    let cell: String = head
+        .strip_prefix(SCRIPT_RUNNING)?
+        .chars()
+        .take_while(char::is_ascii_alphanumeric)
+        .collect();
+    (!cell.is_empty()).then_some(cell)
+}
+
+/// The cell a `wait` call's JSON arguments name (`{"cell_id":"1",…}`).
+fn cell_of(arguments: &str) -> Option<String> {
+    let arguments: Value = serde_json::from_str(arguments).ok()?;
+    match arguments.get("cell_id")? {
+        Value::String(cell) => Some(cell.clone()),
+        Value::Number(cell) => Some(cell.to_string()),
+        _ => None,
     }
 }
 

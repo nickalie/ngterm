@@ -921,6 +921,8 @@ pub(crate) fn marked_drafts() -> Vec<String> {
         "Press enter to confirm",
         "Do you want to proceed?",
         "Ready to submit your answers?",
+        "enter to submit answer",
+        "enter to submit all",
     ]
     .iter()
     .flat_map(|mark| [format!("Explain {mark} here."), format!("What does this mean?\n{mark}")])
@@ -1190,4 +1192,116 @@ fn a_subject_keeps_its_whitespace_and_allows_only_the_wraps_a_screen_makes() {
     // a blank row ends the run: a command is not read across it
     let gap = subject_of(&[("touch", false), ("", false), ("x", false)]);
     assert!(!gap.asks("touch x"));
+}
+
+/// Codex 0.167.2 at 44x36 asking with `request_user_input`: one question, then two (README's PTY captures).
+pub(crate) const CODEX_QUESTIONS: &str = "codex-questions-44x36";
+
+/// What Codex's picker shows: (question, options as (number, text squeezed, cursor), position, notes).
+type CodexPicker = (String, Vec<(u8, String, bool)>, Option<(u8, u8)>, Option<String>);
+
+fn codex_picker(state: &str) -> CodexPicker {
+    let screen = Capture::load(CODEX_QUESTIONS).read(Agent::Codex, state);
+    let picker = picker(&screen);
+    assert!(!picker.cut && !picker.multi(), "{state}");
+    let options = picker
+        .options
+        .iter()
+        .map(|option| (option.number, squeeze(&option.text), option.cursor))
+        .collect();
+    (picker.question.clone(), options, picker.position, picker.notes.clone())
+}
+
+/// The question's options as Codex's picker lists them, `None of the above` last, the cursor on option `cursor`
+/// (0-based).
+fn listed(options: &[(&str, &str)], cursor: usize) -> Vec<(u8, String, bool)> {
+    options
+        .iter()
+        .chain([&("None of the above", "Optionally, add details in notes (tab)")])
+        .enumerate()
+        .map(|(at, (label, description))| {
+            let number = u8::try_from(at + 1).unwrap();
+            (number, squeeze(&format!("{label}{description}")), at == cursor)
+        })
+        .collect()
+}
+
+#[test]
+fn codexs_picker_yields_its_question_options_position_and_notes() {
+    let colors = [
+        ("Red", "Use red for the button."),
+        ("Green", "Use green for the button."),
+        ("Blue", "Use blue for the button."),
+    ];
+    assert_eq!(
+        codex_picker("question"),
+        (
+            "Which color should the button be?".to_owned(),
+            listed(&colors, 0),
+            Some((1, 1)),
+            None
+        )
+    );
+    let sizes = [
+        ("Small", "Use a small button."),
+        ("Medium", "Use a medium button."),
+        ("Large", "Use a large button."),
+    ];
+    assert_eq!(
+        codex_picker("question2"),
+        ("Which size?".to_owned(), listed(&sizes, 0), Some((1, 2)), None)
+    );
+    let shapes = [("Round", "Use a round button."), ("Square", "Use a square button.")];
+    assert_eq!(
+        codex_picker("question2_second"),
+        ("Which shape?".to_owned(), listed(&shapes, 0), Some((2, 2)), None)
+    );
+    // Tab on `None of the above`: its notes row, the placeholder faint, then the note pasted there
+    assert_eq!(
+        codex_picker("question2_notes"),
+        (
+            "Which shape?".to_owned(),
+            listed(&shapes, 2),
+            Some((2, 2)),
+            Some(String::new())
+        )
+    );
+    assert_eq!(codex_picker("question2_typed").3.as_deref(), Some("hexagon please"));
+}
+
+#[test]
+fn codexs_picker_is_never_its_users_message_holding_a_draft() {
+    let capture = Capture::load(CODEX_QUESTIONS);
+    // answered, the picker goes and the empty prompt is back
+    for state in ["question_picked", "question2_done"] {
+        assert_eq!(capture.read(Agent::Codex, state), empty(false), "{state}");
+    }
+    // the picker's header gone (scrolled off, or not drawn yet): the user's `›` message above it, with the picker's
+    // rows under it, is still no composer
+    for state in [
+        "question",
+        "question2",
+        "question2_second",
+        "question2_notes",
+        "question2_typed",
+    ] {
+        let term = capture.term();
+        term.feed(capture.at(state));
+        let lines = term.frame().lines();
+        let header = lines
+            .iter()
+            .position(|line| line.trim_start().starts_with("Question "))
+            .unwrap();
+        term.feed(format!("\x1b[{};1H\x1b[2K", header + 1).as_bytes());
+        assert_eq!(
+            Agent::Codex.read(&term.frame()),
+            Screen::Unknown,
+            "{state}:\n{}",
+            term.frame().lines().join("\n")
+        );
+    }
+    // nor is Claude's screen reader fooled by it
+    for state in ["question", "question2_notes"] {
+        assert_eq!(capture.read(Agent::Claude, state), Screen::Unknown, "{state}");
+    }
 }

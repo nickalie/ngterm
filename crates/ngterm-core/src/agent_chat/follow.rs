@@ -459,14 +459,14 @@ impl Spec {
 
     fn parser(&self) -> Parser {
         let kind = match (self.agent, &self.parent) {
-            (AgentKind::Claude, None) => Kind::Claude(ClaudeParser::new()),
-            (AgentKind::Claude, Some(parent)) => Kind::Claude(ClaudeParser::subagent(parent.clone())),
-            (AgentKind::Codex, None) => Kind::Codex(CodexParser::new()),
-            (AgentKind::Codex, Some(parent)) => Kind::Codex(CodexParser::subagent(parent.clone())),
+            (AgentKind::Claude, None) => Kind::Claude(Box::new(ClaudeParser::new())),
+            (AgentKind::Claude, Some(parent)) => Kind::Claude(Box::new(ClaudeParser::subagent(parent.clone()))),
+            (AgentKind::Codex, None) => Kind::Codex(Box::new(CodexParser::new())),
+            (AgentKind::Codex, Some(parent)) => Kind::Codex(Box::new(CodexParser::subagent(parent.clone()))),
         };
         let kind = match (kind, &self.source) {
-            (Kind::Claude(parser), Some(source)) => Kind::Claude(parser.source(source.clone())),
-            (Kind::Codex(parser), Some(source)) => Kind::Codex(parser.source(source.clone())),
+            (Kind::Claude(parser), Some(source)) => Kind::Claude(Box::new(parser.source(source.clone()))),
+            (Kind::Codex(parser), Some(source)) => Kind::Codex(Box::new(parser.source(source.clone()))),
             (kind, None) => kind,
         };
         Parser {
@@ -493,8 +493,8 @@ struct Parser {
 
 #[derive(Debug)]
 enum Kind {
-    Claude(ClaudeParser),
-    Codex(CodexParser),
+    Claude(Box<ClaudeParser>),
+    Codex(Box<CodexParser>),
 }
 
 impl Parser {

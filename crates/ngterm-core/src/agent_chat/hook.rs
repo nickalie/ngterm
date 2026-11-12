@@ -21,9 +21,9 @@ use std::path::{Component, Path, PathBuf};
 use ngterm_proto::{AgentApproval, AgentQuestion, AgentQuestionOption, AgentReport};
 use serde_json::Value;
 
-use super::claude::{question, tool_kind, tool_subject, tool_title};
+use super::claude::{tool_kind, tool_subject, tool_title};
 use super::event::OUTPUT_CAP;
-use super::{AgentKind, QuestionItem, QuestionOption, cap, non_empty, title_line};
+use super::{AgentKind, QuestionItem, QuestionOption, cap, non_empty, question, title_line};
 
 /// The tool whose permission prompt is a question.
 pub const QUESTION_TOOL: &str = "AskUserQuestion";

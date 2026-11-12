@@ -1,7 +1,8 @@
 //! What an agent's TUI shows in a pane, read from the rows of its terminal: the per-agent screen matchers the chat's
 //! actions check before they send a key ([`crate::chat::input`]). Each reads the bottom of the screen, where both TUIs
-//! keep their prompt and their dialogs, against the layout Claude Code 2.1.317 and Codex 0.166 draw (the PTY captures
-//! in `tests/fixtures/agent_screens`, described in `crates/ngterm-core/tests/fixtures/agent_chat/README.md`):
+//! keep their prompt and their dialogs, against the layout Claude Code 2.1.317 and Codex 0.166 (its question picker:
+//! 0.167.2) draw (the PTY captures in `tests/fixtures/agent_screens`, described in
+//! `crates/ngterm-core/tests/fixtures/agent_chat/README.md`):
 //!
 //! - **Claude's prompt**: a rule the screen's whole width, the input rows (the first one opening with `❯`), another
 //!   rule, then the footer; working while the footer says `esc to interrupt` or a spinner line (`✶ Pontificating…`)
@@ -28,6 +29,11 @@
 //! - **Codex's approval**: what it asks about (`Would you like to run the following command?`, the reason, then the
 //!   command as `$ curl …`), the numbered options (`›` marks the picked one), each ending with its key in parentheses
 //!   (`(y)`, `(p)`, `(esc)`), and as the last line `Press enter to confirm or esc to cancel`.
+//! - **Codex's `request_user_input` picker**: in place of the composer, a faint `Question 2/3 (1 unanswered)`, the
+//!   question, its numbered options (label, then the description in a column of its own, wrapped there; `›` marks
+//!   the highlighted one) ending with `None of the above`, the notes row when Tab opened it (`› Add notes`, faint, or
+//!   the note typed), then the hints, one saying `enter to submit answer` (`… all` on the last question). Those hints
+//!   are a dialog's words: the user's own `›` message above the picker is never read as a composer holding it.
 //!
 //! Anything else is [`Screen::Unknown`]: a dialog half drawn, scrolled away or quoted in a shell's output, another
 //! agent's screen, a follower's screen laid out for another grid. A prompt is only read as one when no dialog's marks
@@ -193,15 +199,21 @@ pub(crate) struct PickerOption {
     pub(crate) cursor: bool,
 }
 
-/// Claude's `AskUserQuestion` picker on screen, at one question's tab.
+/// A question picker on screen at one of its questions: Claude's `AskUserQuestion` at a question's tab, or Codex's
+/// `request_user_input`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Picker {
     /// The question's rows joined, a quote's bars left out.
     pub(crate) question: String,
-    /// Its options as numbered, `Type something.` included, `Chat about this` not.
+    /// Its options as numbered: Claude's with `Type something.`, `Chat about this` left out; Codex's with
+    /// `None of the above`.
     pub(crate) options: Vec<PickerOption>,
     /// The picker is taller than the screen: its top scrolled off, and `question` is what is left of it.
     pub(crate) cut: bool,
+    /// Codex's: the question shown and how many the call asks (`Question 2/3`).
+    pub(crate) position: Option<(u8, u8)>,
+    /// Codex's notes row under the options, while open (Tab): what it holds, empty while it shows its placeholder.
+    pub(crate) notes: Option<String>,
 }
 
 impl Picker {
@@ -251,13 +263,15 @@ pub(crate) fn fits(shown: &str, expected: &str) -> bool {
 }
 
 /// Words that only a dialog draws: a prompt is not read as one with any of them near it.
-const DIALOG_MARKS: [&str; 6] = [
+const DIALOG_MARKS: [&str; 8] = [
     "Esc to cancel",
     "esc to cancel",
     "Enter to select",
     "Press enter to confirm",
     "Do you want to proceed?",
     "Ready to submit your answers?",
+    "enter to submit answer",
+    "enter to submit all",
 ];
 
 /// The most rows under Codex's composer: its footer, or a popup it shows there.
@@ -585,7 +599,13 @@ fn claude_picker(rows: &Rows) -> Option<Picker> {
             }
         })
         .collect();
-    Some(Picker { question, options, cut })
+    Some(Picker {
+        question,
+        options,
+        cut,
+        position: None,
+        notes: None,
+    })
 }
 
 /// A multi-select option's box and the text after it: `[ ] Spanish` is unticked.
@@ -661,6 +681,9 @@ fn codex(rows: &Rows) -> Screen {
     if let Some(dialog) = codex_approval(rows) {
         return Screen::Permission(dialog);
     }
+    if let Some(picker) = codex_picker(rows) {
+        return Screen::Question(picker);
+    }
     codex_prompt(rows).map_or(Screen::Unknown, |(working, composer)| Screen::Prompt {
         working,
         composer,
@@ -698,6 +721,76 @@ fn codex_approval(rows: &Rows) -> Option<Dialog> {
             (from..start).map(|index| rows.subject_row(index)).collect()
         });
     (options.len() >= 2).then_some(Dialog { subject, options })
+}
+
+/// Codex's question picker: its `Question N/M` header (the last on screen), the question's rows, the numbered options,
+/// the notes row when open, then the hints (one saying `enter to submit`) as the screen's last rows.
+fn codex_picker(rows: &Rows) -> Option<Picker> {
+    let header = (0..rows.lines.len())
+        .rev()
+        .find(|index| question_position(rows.get(*index)).is_some())?;
+    let position = question_position(rows.get(header))?;
+    let question_end = run_end(rows, header + 1);
+    let question: Vec<&str> = (header + 1..question_end).map(|index| rows.get(index).trim()).collect();
+    if question.is_empty() {
+        return None;
+    }
+    let start = next_text(rows, question_end)?;
+    let end = run_end(rows, start);
+    let blocks = options(rows, start, end, CODEX_CURSOR)?;
+    let mut hints = next_text(rows, end)?;
+    let notes = if rows.get(hints).trim_start().starts_with(CODEX_CURSOR) {
+        let notes_end = run_end(rows, hints);
+        let typed = rows.typed(hints, notes_end);
+        hints = next_text(rows, notes_end)?;
+        Some(typed.strip_prefix(CODEX_CURSOR).unwrap_or(&typed).trim().to_owned())
+    } else {
+        None
+    };
+    let hints_end = run_end(rows, hints);
+    let submits = (hints..hints_end).any(|index| rows.get(index).contains(CODEX_SUBMIT));
+    if !submits || next_text(rows, hints_end).is_some() {
+        return None;
+    }
+    let options = blocks
+        .into_iter()
+        .map(|block| PickerOption {
+            number: block.number,
+            text: block.text,
+            checked: None,
+            cursor: block.cursor,
+        })
+        .collect();
+    Some(Picker {
+        question: question.join(" "),
+        options,
+        cut: false,
+        position: Some(position),
+        notes,
+    })
+}
+
+/// What one of the Codex picker's hints says: `enter to submit answer`, or `… all` on the last question.
+const CODEX_SUBMIT: &str = "enter to submit";
+
+/// `Question 2/3 (1 unanswered)`: the question shown and how many the call asks.
+fn question_position(line: &str) -> Option<(u8, u8)> {
+    let rest = line.trim_start().strip_prefix("Question ")?;
+    let (shown, count) = rest.split_whitespace().next()?.split_once('/')?;
+    let (shown, count): (u8, u8) = (shown.parse().ok()?, count.parse().ok()?);
+    (1..=count).contains(&shown).then_some((shown, count))
+}
+
+/// The first row from `from` on that is not blank.
+fn next_text(rows: &Rows, from: usize) -> Option<usize> {
+    (from..rows.lines.len()).find(|index| !rows.blank(*index))
+}
+
+/// Where the run of rows with text from `from` ends: the first blank row, or the screen's end.
+fn run_end(rows: &Rows, from: usize) -> usize {
+    (from..rows.lines.len())
+        .find(|index| rows.blank(*index))
+        .unwrap_or(rows.lines.len())
 }
 
 /// A Codex option's label and the key its `(…)` names: a letter, or `esc`.

@@ -155,7 +155,7 @@ async fn act<T: Transport>(
     let Some(attach) = lead(state, &on, timing).await? else {
         return Ok(AgentInputOutcome::LeadRefused);
     };
-    let mut plan = Plan::new(action);
+    let mut plan = Plan::new(action, agent);
     let mut sent: Option<Went> = None;
     let mut busy = 0;
     loop {

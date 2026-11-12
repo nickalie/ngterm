@@ -7,7 +7,10 @@ use serde_json::json;
 
 use super::support::{self, last, parse_bytes, tool};
 use crate::agent_chat::event::{MALFORMED, OUTPUT_CAP};
-use crate::agent_chat::{AgentKind, ChatEvent, CodexParser, EventBody, NoticeKind, ToolKind, ToolStatus};
+use crate::agent_chat::{
+    AgentKind, ChatEvent, CodexParser, EventBody, NoticeKind, Question, QuestionItem, QuestionOption, ToolKind,
+    ToolStatus,
+};
 
 const MAIN: &str = "rollout-2026-11-03T23-01-46-01a1a300-e2e3-76a1-abcf-961cbbb2eb3c";
 const MAIN_THREAD: &str = "01a1a300-e2e3-76a1-abcf-961cbbb2eb3c";
@@ -70,6 +73,245 @@ fn the_auto_review_rollout_matches_its_golden() {
 #[test]
 fn the_guardian_rollout_matches_its_golden() {
     golden_case(GUARDIAN, &parse_fixture(&mut CodexParser::new(), GUARDIAN));
+}
+
+/// Codex 0.167.2's rollout: an escalated command that waited for its approval, then two `request_user_input` calls.
+fn questions_path(extension: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "tests/fixtures/agent_chat/codex/sessions/2026/11/12/{QUESTIONS}.{extension}"
+    ))
+}
+
+const QUESTIONS: &str = "rollout-2026-11-12T15-00-06-01a1cfa1-2430-7c72-b0a1-d372f8a3b729";
+/// The escalated command's `exec` call, which yielded while its approval was up.
+const ESCALATED_CALL: &str = "call_2243cc81f50c4909b93bcca5308807c8";
+/// The `wait` on the escalated command's cell.
+const WAIT_CALL: &str = "call_e537b989df864723917a50fc751d41bb";
+const ONE_QUESTION: &str = "call_8b4c1d6affc34a70b4c4775cc27d69ec";
+const TWO_QUESTIONS: &str = "call_5d0478dc175b4264a25ef38086dd97ce";
+
+fn questions_events() -> Vec<ChatEvent> {
+    parse_bytes(
+        &mut CodexParser::new(),
+        &std::fs::read(questions_path("jsonl")).unwrap(),
+    )
+}
+
+#[test]
+fn the_questions_rollout_matches_its_golden() {
+    support::golden_case(&questions_path("golden.ndjson"), &questions_events());
+}
+
+fn question(event: &ChatEvent) -> &Question {
+    match &event.body {
+        EventBody::Question(question) => question,
+        other => panic!("not a question: {other:?}"),
+    }
+}
+
+#[test]
+fn an_escalated_command_is_one_row_its_item_completes() {
+    let events = questions_events();
+    assert_eq!(
+        history(&events, ESCALATED_CALL),
+        [(ToolStatus::Running, None), (ToolStatus::Ok, Some("HTTP/2 200 \r\n"))],
+        "the yielded script runs on until its CommandExecution"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !event.id.starts_with("exec-") && event.id != WAIT_CALL),
+        "no second row for the command, none for the wait"
+    );
+}
+
+#[test]
+fn request_user_input_is_a_question_its_answers_complete() {
+    let events = questions_events();
+    let asked: Vec<&ChatEvent> = events.iter().filter(|event| event.id == ONE_QUESTION).collect();
+    assert_eq!(asked.len(), 2);
+    let open = question(asked[0]);
+    assert_eq!((open.status, open.output.as_deref()), (ToolStatus::Running, None));
+    assert_eq!(
+        open.questions,
+        [QuestionItem {
+            question: "Which color should the button be?".into(),
+            header: Some("Button color".into()),
+            multi_select: false,
+            options: ["Red", "Green", "Blue"]
+                .map(|color| QuestionOption {
+                    label: color.into(),
+                    description: Some(format!("Use {} for the button.", color.to_lowercase())),
+                })
+                .to_vec(),
+        }]
+    );
+    let answered = question(asked[1]);
+    assert_eq!(
+        (answered.status, answered.output.as_deref()),
+        (ToolStatus::Ok, Some("Which color should the button be? → Green"))
+    );
+    let two = question(last(&events, TWO_QUESTIONS));
+    assert_eq!(
+        two.questions.iter().map(|item| item.options.len()).collect::<Vec<_>>(),
+        [3, 2],
+        "Codex's own None of the above is no option"
+    );
+    assert_eq!(
+        (two.status, two.output.as_deref()),
+        (
+            ToolStatus::Ok,
+            Some("Which size? → Large\nWhich shape? → None of the above (note: hexagon please)")
+        ),
+        "in the order asked, the note after its pick"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(&event.body, EventBody::Assistant { text } if text.is_empty())),
+        "the empty final answers after the questions show nothing"
+    );
+}
+
+fn yielded_output(call: &str) -> String {
+    line(
+        "response_item",
+        &json!({"type": "custom_tool_call_output", "call_id": call,
+                "output": "Script running with cell ID 7\nWall time 10.0 seconds\nOutput:\n"}),
+    )
+}
+
+fn wait_call(call: &str, cell_id: &serde_json::Value) -> String {
+    let arguments = json!({"cell_id": cell_id, "yield_time_ms": 1000}).to_string();
+    line(
+        "response_item",
+        &json!({"type": "function_call", "call_id": call, "name": "wait", "arguments": arguments}),
+    )
+}
+
+fn wait_output(call: &str, blocks: &[&str]) -> String {
+    let output: Vec<serde_json::Value> = blocks
+        .iter()
+        .map(|text| json!({"type": "input_text", "text": text}))
+        .collect();
+    line(
+        "response_item",
+        &json!({"type": "function_call_output", "call_id": call, "output": output}),
+    )
+}
+
+#[test]
+fn a_yielded_script_runs_on_until_a_wait_sees_it_end() {
+    let events = parse(&[
+        turn_started("t1"),
+        exec_call("c1", "t1", "text(await tools.web_search({query:\"rust\"}));"),
+        yielded_output("c1"),
+        wait_call("w1", &json!("7")),
+        wait_output(
+            "w1",
+            &["Script running with cell ID 7\nWall time 1.0 seconds\nOutput:\n"],
+        ),
+        wait_call("w2", &json!(7)),
+        wait_output("w2", &["Script completed\nWall time 0.1 seconds\nOutput:\n", "results"]),
+    ]);
+    assert_eq!(
+        history(&events, "c1"),
+        [(ToolStatus::Running, None), (ToolStatus::Ok, Some("results"))],
+        "a wait that sees it still running changes nothing"
+    );
+    assert_eq!(
+        events.iter().map(|event| event.id.as_str()).collect::<Vec<_>>(),
+        ["c1", "c1"],
+        "the waits make no row"
+    );
+}
+
+#[test]
+fn a_yielded_script_its_turn_ends_is_an_error_and_a_late_wait_changes_nothing() {
+    let events = parse(&[
+        turn_started("t1"),
+        exec_call("c1", "t1", &shell("sleep 600")),
+        yielded_output("c1"),
+        wait_call("w1", &json!("7")),
+        event_line(&json!({"type": "turn_aborted", "turn_id": "t1", "reason": "interrupted"})),
+        wait_output("w1", &["Script completed\nWall time 0.1 seconds\nOutput:\n", "late"]),
+        // a wait on a cell this window never saw yield
+        wait_call("w2", &json!("9")),
+        wait_output("w2", &["Script completed\nWall time 0.1 seconds\nOutput:\n", "other"]),
+    ]);
+    assert_eq!(
+        history(&events, "c1"),
+        [(ToolStatus::Running, None), (ToolStatus::Error, Some("Interrupted"))]
+    );
+    assert!(events.iter().all(|event| !event.id.starts_with('w')));
+}
+
+fn ask_call(call: &str, turn: &str) -> String {
+    let arguments = json!({"questions": [{"id": "size", "header": "Size", "question": "Which size?",
+                                          "options": [{"label": "Small", "description": "A small one."}]}]});
+    line(
+        "response_item",
+        &json!({"type": "function_call", "call_id": call, "name": "request_user_input",
+                "arguments": arguments.to_string(),
+                "internal_chat_message_metadata_passthrough": {"turn_id": turn}}),
+    )
+}
+
+fn ask_output(call: &str, output: &str) -> String {
+    line(
+        "response_item",
+        &json!({"type": "function_call_output", "call_id": call, "output": output}),
+    )
+}
+
+fn question_history(events: &[ChatEvent], id: &str) -> Vec<(ToolStatus, Option<String>)> {
+    events
+        .iter()
+        .filter(|event| event.id == id)
+        .map(|event| (question(event).status, question(event).output.clone()))
+        .collect()
+}
+
+#[test]
+fn a_question_its_turn_ends_is_an_error_and_a_late_answer_changes_nothing() {
+    let events = parse(&[
+        turn_started("t1"),
+        ask_call("q1", "t1"),
+        event_line(&json!({"type": "turn_aborted", "turn_id": "t1", "reason": "interrupted"})),
+        ask_output("q1", r#"{"answers":{"size":{"answers":["Small"]}}}"#),
+    ]);
+    assert_eq!(
+        question_history(&events, "q1"),
+        [
+            (ToolStatus::Running, None),
+            (ToolStatus::Error, Some("Interrupted".into()))
+        ]
+    );
+}
+
+#[test]
+fn a_question_output_with_no_answers_fails_with_its_text_and_unasked_answers_still_show() {
+    let events = parse(&[
+        turn_started("t1"),
+        ask_call("q1", "t1"),
+        ask_output("q1", "request_user_input was cancelled"),
+        ask_call("q2", "t1"),
+        ask_output(
+            "q2",
+            r#"{"answers":{"size":{"answers":["Small","user_note: tiny"]},"extra":{"answers":["x"]}}}"#,
+        ),
+    ]);
+    assert_eq!(
+        question_history(&events, "q1").last().unwrap(),
+        &(ToolStatus::Error, Some("request_user_input was cancelled".into()))
+    );
+    assert_eq!(
+        question_history(&events, "q2").last().unwrap(),
+        &(
+            ToolStatus::Ok,
+            Some("Which size? → Small (note: tiny)\nextra → x".into())
+        )
+    );
 }
 
 fn users(events: &[ChatEvent]) -> Vec<&str> {

@@ -3,8 +3,8 @@
 //! digits, Tab and Enter.
 
 use super::matchers::{
-    Capture, LIMIT_OPTIONS, LIMIT_QUESTION, PROJECT_DIR, Term, approval_of, asked, claude_file_dialog, file_approval,
-    limit_picker, marked_drafts, tricky_drafts, with_draft,
+    CODEX_QUESTIONS, Capture, LIMIT_OPTIONS, LIMIT_QUESTION, PROJECT_DIR, Term, approval_of, asked, claude_file_dialog,
+    file_approval, limit_picker, marked_drafts, tricky_drafts, with_draft,
 };
 use crate::api::PaneInputError;
 use crate::chat::input::{Action, AgentInputOutcome, Key, Next, Plan, QuestionAnswer, UNSAFE_PASTE, shown_subjects};
@@ -63,7 +63,7 @@ fn a_prompt_is_pasted_whole_then_entered_once_the_prompt_shows_it() {
         (lines.as_str(), "[Pasted text #1 +40 lines]"),
         (chars.as_str(), "[Pasted Content 1200 chars]"),
     ] {
-        let mut plan = Plan::new(Action::Prompt(text.to_owned()));
+        let mut plan = Plan::new(Action::Prompt(text.to_owned()), Agent::Claude);
         assert_eq!(step(&mut plan, &IDLE), send(Key::Paste(text.to_owned()), true));
         assert_eq!(
             step(&mut plan, &holding(shown, true)),
@@ -72,12 +72,12 @@ fn a_prompt_is_pasted_whole_then_entered_once_the_prompt_shows_it() {
         );
     }
     // a working agent takes a prompt too (queued by the TUI)
-    let mut plan = Plan::new(Action::Prompt("next".to_owned()));
+    let mut plan = Plan::new(Action::Prompt("next".to_owned()), Agent::Claude);
     assert_eq!(step(&mut plan, &WORKING), send(Key::Paste("next".to_owned()), true));
 
-    let mut plan = Plan::new(Action::Prompt("hi".to_owned()));
+    let mut plan = Plan::new(Action::Prompt("hi".to_owned()), Agent::Claude);
     assert_eq!(step(&mut plan, &dialog), Next::Done(AgentInputOutcome::DialogOpen));
-    let mut plan = Plan::new(Action::Prompt("hi".to_owned()));
+    let mut plan = Plan::new(Action::Prompt("hi".to_owned()), Agent::Claude);
     assert_eq!(
         step(&mut plan, &Screen::Unknown),
         Next::Done(AgentInputOutcome::NotOnScreen)
@@ -85,7 +85,7 @@ fn a_prompt_is_pasted_whole_then_entered_once_the_prompt_shows_it() {
 
     // a dialog that came up over the pasted text: no Enter, which would answer it (the actor ends the action
     // Unconfirmed once the confirm deadline passes)
-    let mut plan = Plan::new(Action::Prompt("hi".to_owned()));
+    let mut plan = Plan::new(Action::Prompt("hi".to_owned()), Agent::Claude);
     step(&mut plan, &IDLE);
     assert_eq!(step(&mut plan, &dialog), Next::Wait);
     assert_eq!(
@@ -105,7 +105,7 @@ fn a_paste_with_blank_lines_option_shaped_lines_or_long_lines_is_entered_once_sh
         let capture = Capture::load(name);
         // a paste quoting a dialog (its words, key hints, option rows) is the prompt's text, and is entered too
         for draft in tricky_drafts().into_iter().chain(marked_drafts()) {
-            let mut plan = Plan::new(Action::Prompt(draft.clone()));
+            let mut plan = Plan::new(Action::Prompt(draft.clone()), agent);
             assert_eq!(step(&mut plan, &IDLE), send(Key::Paste(draft.clone()), true));
             let (term, _) = with_draft(&capture, agent, "idle", &draft);
             assert_eq!(
@@ -122,7 +122,7 @@ fn a_draft_in_the_prompt_gets_nothing_and_a_paste_that_did_not_land_gets_no_ente
     // a draft left in the prompt at the terminal would go out with the prompt
     for draft in ["draft ", "/comp"] {
         for working in [false, true] {
-            let mut plan = Plan::new(Action::Prompt("new prompt".to_owned()));
+            let mut plan = Plan::new(Action::Prompt("new prompt".to_owned()), Agent::Claude);
             assert_eq!(
                 step(&mut plan, &holding(draft, working)),
                 Next::Done(AgentInputOutcome::NotOnScreen),
@@ -140,7 +140,7 @@ fn a_draft_in_the_prompt_gets_nothing_and_a_paste_that_did_not_land_gets_no_ente
         "[Pasted text #1 +40 lines] more",
         "draft [Pasted text #1 +40 lines]",
     ] {
-        let mut plan = Plan::new(Action::Prompt("new prompt".to_owned()));
+        let mut plan = Plan::new(Action::Prompt("new prompt".to_owned()), Agent::Claude);
         step(&mut plan, &IDLE);
         assert_eq!(step(&mut plan, &holding(shown, false)), Next::Wait, "{shown:?}");
         // the paste shows at last: the Enter goes, once
@@ -154,15 +154,15 @@ fn a_draft_in_the_prompt_gets_nothing_and_a_paste_that_did_not_land_gets_no_ente
 
 #[test]
 fn stop_is_escape_and_only_while_a_turn_runs() {
-    let mut plan = Plan::new(Action::Interrupt);
+    let mut plan = Plan::new(Action::Interrupt, Agent::Claude);
     assert_eq!(step(&mut plan, &WORKING), send(Key::Escape, false));
     assert_eq!(
-        Plan::new(Action::Interrupt).next(&IDLE),
+        Plan::new(Action::Interrupt, Agent::Claude).next(&IDLE),
         Next::Done(AgentInputOutcome::NotOnScreen)
     );
     let dialog = screen("codex-44x36", Agent::Codex, "permission");
     assert_eq!(
-        Plan::new(Action::Interrupt).next(&dialog),
+        Plan::new(Action::Interrupt, Agent::Codex).next(&dialog),
         Next::Done(AgentInputOutcome::DialogOpen)
     );
 }
@@ -172,7 +172,7 @@ fn an_approval_sends_its_options_key_and_looks_that_the_dialog_went() {
     let claude = screen("claude-100x40", Agent::Claude, "permission");
     let card = asked("claude-100x40");
     for (label, key) in [("Yes", Key::Digit(1)), ("No", Key::Digit(4))] {
-        let mut plan = Plan::new(Action::Approval(card.clone(), label.to_owned()));
+        let mut plan = Plan::new(Action::Approval(card.clone(), label.to_owned()), Agent::Claude);
         assert_eq!(step(&mut plan, &claude), send(key, true), "{label}");
         assert_eq!(step(&mut plan, &WORKING), Next::Done(AgentInputOutcome::Sent));
     }
@@ -185,19 +185,19 @@ fn an_approval_sends_its_options_key_and_looks_that_the_dialog_went() {
         ),
         ("No, and tell Codex what to do differently", Key::Escape),
     ] {
-        let mut plan = Plan::new(Action::Approval(asked("codex-160x48"), label.to_owned()));
+        let mut plan = Plan::new(Action::Approval(asked("codex-160x48"), label.to_owned()), Agent::Codex);
         assert_eq!(step(&mut plan, &codex), send(key, true), "{label}");
     }
 
     // the same dialog still up after the key: pending (the key is not sent again), then gone
-    let mut plan = Plan::new(Action::Approval(card.clone(), "Yes".to_owned()));
+    let mut plan = Plan::new(Action::Approval(card.clone(), "Yes".to_owned()), Agent::Claude);
     step(&mut plan, &claude);
     assert_eq!(step(&mut plan, &claude), Next::Wait);
     assert_eq!(step(&mut plan, &claude), Next::Wait);
     assert_eq!(step(&mut plan, &IDLE), Next::Done(AgentInputOutcome::Sent));
     // no such option, or no dialog: nothing goes
     for screen in [&claude, &IDLE, &Screen::Unknown] {
-        let mut plan = Plan::new(Action::Approval(card.clone(), "Maybe".to_owned()));
+        let mut plan = Plan::new(Action::Approval(card.clone(), "Maybe".to_owned()), Agent::Claude);
         assert_eq!(step(&mut plan, screen), Next::Done(AgentInputOutcome::NotOnScreen));
     }
 }
@@ -241,7 +241,7 @@ fn an_approval_goes_only_to_the_dialog_that_asks_about_the_cards_call() {
         ];
         for label in &labels {
             for card in &others {
-                let mut plan = Plan::new(Action::Approval(card.clone(), label.clone()));
+                let mut plan = Plan::new(Action::Approval(card.clone(), label.clone()), agent);
                 assert_eq!(
                     step(&mut plan, &dialog),
                     Next::Done(AgentInputOutcome::NotOnScreen),
@@ -251,7 +251,7 @@ fn an_approval_goes_only_to_the_dialog_that_asks_about_the_cards_call() {
             }
         }
         // the card's own call: its option's key goes
-        let mut plan = Plan::new(Action::Approval(own, labels[0].clone()));
+        let mut plan = Plan::new(Action::Approval(own, labels[0].clone()), agent);
         assert!(matches!(step(&mut plan, &dialog), Next::Send { .. }), "{name}");
     }
 }
@@ -276,7 +276,7 @@ fn a_file_tools_approval_goes_to_the_dialog_naming_its_path_relative_to_the_work
         (file.as_str(), file_approval("Edit", &file, None)),
     ] {
         let dialog = claude_file_dialog("Edit file", shown);
-        let mut plan = Plan::new(Action::Approval(card.clone(), "Yes".to_owned()));
+        let mut plan = Plan::new(Action::Approval(card.clone(), "Yes".to_owned()), Agent::Claude);
         assert_eq!(step(&mut plan, &dialog), send(Key::Digit(1), true), "{shown}: {card:?}");
     }
     // a dialog about another file, or one the card can't be told from: nothing goes, and the card is not answered
@@ -305,7 +305,7 @@ fn a_file_tools_approval_goes_to_the_dialog_naming_its_path_relative_to_the_work
             questions: Vec::new(),
         },
     ] {
-        let mut plan = Plan::new(Action::Approval(card.clone(), "Yes".to_owned()));
+        let mut plan = Plan::new(Action::Approval(card.clone(), "Yes".to_owned()), Agent::Claude);
         assert_eq!(
             step(&mut plan, &dialog),
             Next::Done(AgentInputOutcome::NotOnScreen),
@@ -440,11 +440,17 @@ fn varied(screen: &Screen, cursor: Option<u8>, checked: &[bool], typed: Option<T
 #[test]
 fn a_lone_question_is_answered_by_its_digit_or_by_typed_text() {
     let picker = screen("claude-44x36", Agent::Claude, "question");
-    let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&["Green"], None)]));
+    let mut plan = Plan::new(
+        Action::Question(vec![color()], vec![answer(&["Green"], None)]),
+        Agent::Claude,
+    );
     assert_eq!(step(&mut plan, &picker), send(Key::Digit(2), true));
     assert_eq!(step(&mut plan, &WORKING), Next::Done(AgentInputOutcome::Sent));
 
-    let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]));
+    let mut plan = Plan::new(
+        Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]),
+        Agent::Claude,
+    );
     assert_eq!(step(&mut plan, &picker), send(Key::Digit(3), true), "Type something.");
     let focused = varied(&picker, Some(3), &[], None);
     assert_eq!(step(&mut plan, &focused), send(Key::Paste("Blue".to_owned()), true));
@@ -452,18 +458,27 @@ fn a_lone_question_is_answered_by_its_digit_or_by_typed_text() {
     assert_eq!(step(&mut plan, &typed), send(Key::Enter, true));
     assert_eq!(step(&mut plan, &IDLE), Next::Done(AgentInputOutcome::Sent));
     // the text not shown in the row yet: no Enter until it is
-    let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]));
+    let mut plan = Plan::new(
+        Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]),
+        Agent::Claude,
+    );
     step(&mut plan, &picker);
     step(&mut plan, &focused);
     assert_eq!(step(&mut plan, &focused), Next::Wait);
     assert_eq!(step(&mut plan, &typed), send(Key::Enter, true));
     // the row not focused yet: no paste until it is
-    let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]));
+    let mut plan = Plan::new(
+        Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]),
+        Agent::Claude,
+    );
     step(&mut plan, &picker);
     assert_eq!(step(&mut plan, &picker), Next::Wait);
     assert_eq!(step(&mut plan, &focused), send(Key::Paste("Blue".to_owned()), true));
     // the picked option's digit went, the picker still up: pending, the digit not sent again
-    let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&["Green"], None)]));
+    let mut plan = Plan::new(
+        Action::Question(vec![color()], vec![answer(&["Green"], None)]),
+        Agent::Claude,
+    );
     step(&mut plan, &picker);
     assert_eq!(step(&mut plan, &picker), Next::Wait);
     assert_eq!(step(&mut plan, &Screen::Unknown), Next::Wait);
@@ -475,10 +490,13 @@ fn two_questions_go_tab_by_tab_toggling_boxes_then_submit_on_the_review() {
     let first = screen("claude-160x48", Agent::Claude, "question");
     let multi = screen("claude-160x48", Agent::Claude, "question_multi");
     let review = screen("claude-160x48", Agent::Claude, "question_submit");
-    let mut plan = Plan::new(Action::Question(
-        vec![style(), languages()],
-        vec![answer(&["Casual"], None), answer(&["Spanish", "German"], None)],
-    ));
+    let mut plan = Plan::new(
+        Action::Question(
+            vec![style(), languages()],
+            vec![answer(&["Casual"], None), answer(&["Spanish", "German"], None)],
+        ),
+        Agent::Claude,
+    );
     assert_eq!(step(&mut plan, &first), send(Key::Digit(2), true));
     assert_eq!(step(&mut plan, &multi), send(Key::Digit(1), true));
     let spanish = varied(&multi, None, &[true, false, false], None);
@@ -495,22 +513,31 @@ fn each_question_step_waits_for_its_screen_and_never_sends_a_key_twice() {
     let multi = screen("claude-160x48", Agent::Claude, "question_multi");
     let review = screen("claude-160x48", Agent::Claude, "question_submit");
     // a box that has not ticked yet is not toggled again: pending until it shows
-    let mut plan = Plan::new(Action::Question(vec![languages()], vec![answer(&["French"], None)]));
+    let mut plan = Plan::new(
+        Action::Question(vec![languages()], vec![answer(&["French"], None)]),
+        Agent::Claude,
+    );
     assert_eq!(step(&mut plan, &multi), send(Key::Digit(2), true));
     assert_eq!(step(&mut plan, &multi), Next::Wait);
     assert_eq!(step(&mut plan, &multi), Next::Wait);
     let french = varied(&multi, None, &[false, true, false], None);
     assert_eq!(step(&mut plan, &french), send(Key::Tab, true));
     // the first tab still up after its digit: the next tab is waited for, not answered on the old one
-    let mut plan = Plan::new(Action::Question(
-        vec![style(), languages()],
-        vec![answer(&["Casual"], None), answer(&["Spanish"], None)],
-    ));
+    let mut plan = Plan::new(
+        Action::Question(
+            vec![style(), languages()],
+            vec![answer(&["Casual"], None), answer(&["Spanish"], None)],
+        ),
+        Agent::Claude,
+    );
     assert_eq!(step(&mut plan, &first), send(Key::Digit(2), true));
     assert_eq!(step(&mut plan, &first), Next::Wait);
     assert_eq!(step(&mut plan, &multi), send(Key::Digit(1), true));
     // the review not up yet after the last Tab, then the review still up after its Enter: pending
-    let mut plan = Plan::new(Action::Question(vec![languages()], vec![answer(&[], None)]));
+    let mut plan = Plan::new(
+        Action::Question(vec![languages()], vec![answer(&[], None)]),
+        Agent::Claude,
+    );
     assert_eq!(step(&mut plan, &multi), send(Key::Tab, true));
     assert_eq!(step(&mut plan, &multi), Next::Wait);
     assert_eq!(step(&mut plan, &review), send(Key::Enter, true));
@@ -524,7 +551,10 @@ fn typed_text_may_follow_the_placeholder_or_take_its_place_and_a_draft_there_get
     let focused = varied(&picker, Some(3), &[], None);
     // the text in the placeholder's place, or a long paste's stand-in there
     for typed in [Typed::Instead("Blue"), Typed::Instead("[Pasted text #1 +3 lines]")] {
-        let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]));
+        let mut plan = Plan::new(
+            Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]),
+            Agent::Claude,
+        );
         step(&mut plan, &picker);
         step(&mut plan, &focused);
         let typed = varied(&picker, Some(3), &[], Some(typed));
@@ -532,7 +562,10 @@ fn typed_text_may_follow_the_placeholder_or_take_its_place_and_a_draft_there_get
         assert_eq!(step(&mut plan, &IDLE), Next::Done(AgentInputOutcome::Sent));
     }
     // something else in the row after the paste (or the paste half shown): no Enter
-    let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]));
+    let mut plan = Plan::new(
+        Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]),
+        Agent::Claude,
+    );
     step(&mut plan, &picker);
     step(&mut plan, &focused);
     assert_eq!(
@@ -542,7 +575,7 @@ fn typed_text_may_follow_the_placeholder_or_take_its_place_and_a_draft_there_get
     // a draft typed into the row at the terminal, after the placeholder or in its place: nothing goes
     for draft in [Typed::After("Gre"), Typed::Instead("Gre")] {
         for answered in [answer(&["Red"], None), answer(&[], Some("Blue"))] {
-            let mut plan = Plan::new(Action::Question(vec![color()], vec![answered]));
+            let mut plan = Plan::new(Action::Question(vec![color()], vec![answered]), Agent::Claude);
             assert_eq!(
                 step(&mut plan, &varied(&picker, None, &[], Some(draft))),
                 Next::Done(AgentInputOutcome::NotOnScreen)
@@ -560,10 +593,10 @@ fn a_wrapped_question_with_long_options_is_answered_at_any_height_that_shows_its
     // the question Claude Code 2.1.318 asked, its rows quoted with `│`; on a short screen its top scrolled off
     for rows in [40, 34, 30, 28] {
         let screen = Agent::Claude.read(&limit_picker(rows).frame());
-        let mut plan = Plan::new(Action::Question(
-            vec![limit()],
-            vec![answer(&["Statusline bridge"], None)],
-        ));
+        let mut plan = Plan::new(
+            Action::Question(vec![limit()], vec![answer(&["Statusline bridge"], None)]),
+            Agent::Claude,
+        );
         assert_eq!(step(&mut plan, &screen), send(Key::Digit(2), true), "{rows} rows");
         assert_eq!(
             step(&mut plan, &IDLE),
@@ -579,7 +612,10 @@ fn a_picker_whose_question_scrolled_off_is_answered_only_when_its_options_tell_i
     let usage = || answer(&["Usage API (Recommended)"], None);
     // another question of the call offers the same options: which one is on screen can't be told
     let twin = item("Where should Codex's limit come from?", false, &LIMIT_OPTIONS);
-    let mut plan = Plan::new(Action::Question(vec![limit(), twin], vec![usage(), usage()]));
+    let mut plan = Plan::new(
+        Action::Question(vec![limit(), twin], vec![usage(), usage()]),
+        Agent::Claude,
+    );
     assert_eq!(step(&mut plan, &short), Next::Done(AgentInputOutcome::NotOnScreen));
     // what is left of the question on screen must be its end
     let Screen::Question(mut picker) = Agent::Claude.read(&limit_picker(30).frame()) else {
@@ -587,7 +623,7 @@ fn a_picker_whose_question_scrolled_off_is_answered_only_when_its_options_tell_i
     };
     assert!(picker.cut);
     picker.question = "Where should the chat get Codex's weekly limit?".to_owned();
-    let mut plan = Plan::new(Action::Question(vec![limit()], vec![usage()]));
+    let mut plan = Plan::new(Action::Question(vec![limit()], vec![usage()]), Agent::Claude);
     assert_eq!(
         step(&mut plan, &Screen::Question(picker)),
         Next::Done(AgentInputOutcome::NotOnScreen)
@@ -604,7 +640,10 @@ fn a_multi_select_question_before_the_last_one_shows_next_under_its_free_text_ro
     };
     picker.options.last_mut().expect("its free-text row").text = "Type something Next".to_owned();
     let before_last = Screen::Question(picker);
-    let mut plan = Plan::new(Action::Question(vec![languages()], vec![answer(&["Spanish"], None)]));
+    let mut plan = Plan::new(
+        Action::Question(vec![languages()], vec![answer(&["Spanish"], None)]),
+        Agent::Claude,
+    );
     assert_eq!(step(&mut plan, &before_last), send(Key::Digit(1), true));
     let spanish = varied(&before_last, None, &[true, false, false], None);
     assert_eq!(step(&mut plan, &spanish), send(Key::Tab, true));
@@ -616,7 +655,10 @@ fn free_text_in_a_multi_select_question_goes_through_its_row_then_tab() {
     let review = screen("claude-160x48", Agent::Claude, "question_submit");
     // its digit, the paste, then Tab, whether the text followed the placeholder or took its place
     for typed in [Typed::After("Latin"), Typed::Instead("Latin")] {
-        let mut plan = Plan::new(Action::Question(vec![languages()], vec![answer(&[], Some("Latin"))]));
+        let mut plan = Plan::new(
+            Action::Question(vec![languages()], vec![answer(&[], Some("Latin"))]),
+            Agent::Claude,
+        );
         assert_eq!(step(&mut plan, &multi), send(Key::Digit(4), true));
         let focused = varied(&multi, Some(4), &[], None);
         assert_eq!(step(&mut plan, &focused), send(Key::Paste("Latin".to_owned()), true));
@@ -640,7 +682,10 @@ fn a_picker_at_another_question_gets_nothing() {
         (other, "other options"),
     ];
     for (asked, why) in cases {
-        let mut plan = Plan::new(Action::Question(vec![asked], vec![answer(&[], Some("x"))]));
+        let mut plan = Plan::new(
+            Action::Question(vec![asked], vec![answer(&[], Some("x"))]),
+            Agent::Claude,
+        );
         assert_eq!(
             step(&mut plan, &picker),
             Next::Done(AgentInputOutcome::NotOnScreen),
@@ -648,8 +693,241 @@ fn a_picker_at_another_question_gets_nothing() {
         );
     }
     let permission = screen("claude-160x48", Agent::Claude, "permission");
-    let mut plan = Plan::new(Action::Question(vec![style()], vec![answer(&["Formal"], None)]));
+    let mut plan = Plan::new(
+        Action::Question(vec![style()], vec![answer(&["Formal"], None)]),
+        Agent::Claude,
+    );
     assert_eq!(step(&mut plan, &permission), Next::Done(AgentInputOutcome::NotOnScreen));
+}
+
+fn codex(state: &str) -> Screen {
+    screen(CODEX_QUESTIONS, Agent::Codex, state)
+}
+
+/// Codex's single question, and the two it asked in one call, as the transcript gives them.
+fn colors() -> ChatQuestionItem {
+    item(
+        "Which color should the button be?",
+        false,
+        &[
+            ("Red", "Use red for the button."),
+            ("Green", "Use green for the button."),
+            ("Blue", "Use blue for the button."),
+        ],
+    )
+}
+
+const SIZES: [(&str, &str); 3] = [
+    ("Small", "Use a small button."),
+    ("Medium", "Use a medium button."),
+    ("Large", "Use a large button."),
+];
+
+fn sizes() -> ChatQuestionItem {
+    item("Which size?", false, &SIZES)
+}
+
+fn shapes() -> ChatQuestionItem {
+    item(
+        "Which shape?",
+        false,
+        &[("Round", "Use a round button."), ("Square", "Use a square button.")],
+    )
+}
+
+/// Codex's `picker` with its cursor on option `cursor` (0-based) and its notes row as `notes`.
+fn codex_varied(screen: &Screen, cursor: usize, notes: Option<&str>) -> Screen {
+    let Screen::Question(picker) = screen else {
+        panic!("not the picker")
+    };
+    let mut picker: Picker = picker.clone();
+    for (at, option) in picker.options.iter_mut().enumerate() {
+        option.cursor = at == cursor;
+    }
+    picker.notes = notes.map(str::to_owned);
+    Screen::Question(picker)
+}
+
+#[test]
+fn a_codex_question_is_answered_by_its_digit_and_done_once_the_picker_goes() {
+    let picker = codex("question");
+    let mut plan = Plan::new(
+        Action::Question(vec![colors()], vec![answer(&["Green"], None)]),
+        Agent::Codex,
+    );
+    assert_eq!(step(&mut plan, &picker), send(Key::Digit(2), true));
+    assert_eq!(step(&mut plan, &picker), Next::Wait, "the picker still up");
+    assert_eq!(
+        step(&mut plan, &codex("question_picked")),
+        Next::Done(AgentInputOutcome::Sent)
+    );
+}
+
+#[test]
+fn codex_questions_go_one_at_a_time_and_free_text_is_a_note_on_none_of_the_above() {
+    let mut plan = Plan::new(
+        Action::Question(
+            vec![sizes(), shapes()],
+            vec![answer(&["Large"], None), answer(&[], Some("hexagon please"))],
+        ),
+        Agent::Codex,
+    );
+    let first = codex("question2");
+    assert_eq!(step(&mut plan, &first), send(Key::Digit(3), true));
+    assert_eq!(step(&mut plan, &first), Next::Wait, "the first question still up");
+    // down to `None of the above` a row at a time, each move seen before the next
+    let second = codex("question2_second");
+    assert_eq!(step(&mut plan, &second), send(Key::Down, true));
+    assert_eq!(step(&mut plan, &second), Next::Wait, "the Down not seen yet");
+    let square = codex_varied(&second, 1, None);
+    assert_eq!(step(&mut plan, &square), send(Key::Down, true));
+    let none = codex_varied(&second, 2, None);
+    assert_eq!(step(&mut plan, &none), send(Key::Tab, true));
+    assert_eq!(step(&mut plan, &none), Next::Wait, "the notes row not open yet");
+    let notes = codex("question2_notes");
+    assert_eq!(
+        step(&mut plan, &notes),
+        send(Key::Paste("hexagon please".to_owned()), true)
+    );
+    assert_eq!(step(&mut plan, &notes), Next::Wait, "the note not shown yet");
+    let typed = codex("question2_typed");
+    assert_eq!(step(&mut plan, &typed), send(Key::Enter, true));
+    assert_eq!(step(&mut plan, &typed), Next::Wait);
+    assert_eq!(
+        step(&mut plan, &codex("question2_done")),
+        Next::Done(AgentInputOutcome::Sent)
+    );
+}
+
+#[test]
+fn free_text_on_an_earlier_codex_question_moves_on_with_its_enter() {
+    let (first, second) = (codex("question2"), codex("question2_second"));
+    let mut plan = Plan::new(
+        Action::Question(
+            vec![sizes(), shapes()],
+            vec![answer(&[], Some("huge")), answer(&["Round"], None)],
+        ),
+        Agent::Codex,
+    );
+    for (at, key) in [(0, Key::Down), (1, Key::Down), (2, Key::Down), (3, Key::Tab)] {
+        assert_eq!(step(&mut plan, &codex_varied(&first, at, None)), send(key, true));
+    }
+    assert_eq!(
+        step(&mut plan, &codex_varied(&first, 3, Some(""))),
+        send(Key::Paste("huge".to_owned()), true)
+    );
+    assert_eq!(
+        step(&mut plan, &codex_varied(&first, 3, Some("huge"))),
+        send(Key::Enter, true)
+    );
+    assert_eq!(step(&mut plan, &second), send(Key::Digit(1), true));
+}
+
+#[test]
+fn a_codex_move_or_note_that_does_not_land_as_sent_sends_nothing_more() {
+    let second = codex("question2_second");
+    let other = |plan: &mut Plan| {
+        step(plan, &codex("question2"));
+        step(plan, &second)
+    };
+    let new_plan = || {
+        Plan::new(
+            Action::Question(
+                vec![sizes(), shapes()],
+                vec![answer(&["Small"], None), answer(&[], Some("hexagon please"))],
+            ),
+            Agent::Codex,
+        )
+    };
+    // the cursor somewhere else than a row down: no second Down
+    let mut plan = new_plan();
+    assert_eq!(other(&mut plan), send(Key::Down, true));
+    assert_eq!(step(&mut plan, &codex_varied(&second, 2, None)), Next::Wait);
+    // the notes row opened holding someone's draft: no paste
+    let mut plan = new_plan();
+    other(&mut plan);
+    step(&mut plan, &codex_varied(&second, 1, None));
+    assert_eq!(step(&mut plan, &codex_varied(&second, 2, None)), send(Key::Tab, true));
+    assert_eq!(step(&mut plan, &codex_varied(&second, 2, Some("draft"))), Next::Wait);
+    // the note shown with more than was pasted: no Enter
+    let mut plan = new_plan();
+    other(&mut plan);
+    step(&mut plan, &codex_varied(&second, 1, None));
+    step(&mut plan, &codex_varied(&second, 2, None));
+    step(&mut plan, &codex("question2_notes"));
+    assert_eq!(
+        step(&mut plan, &codex_varied(&second, 2, Some("draft hexagon please"))),
+        Next::Wait
+    );
+}
+
+#[test]
+fn a_codex_question_not_on_screen_gets_nothing() {
+    let first = codex("question2");
+    let cases = [
+        // the picker at another question than the one to answer, or asking more or fewer than the call
+        (vec![shapes(), sizes()], "another question first"),
+        (vec![sizes()], "one question, the picker asking two"),
+        (
+            vec![sizes(), shapes(), colors()],
+            "three questions, the picker asking two",
+        ),
+        (vec![item("Which size?", false, &SIZES[..2]), shapes()], "other options"),
+        (vec![item("Which width?", false, &SIZES), shapes()], "another question"),
+        (
+            vec![item("Which size?", true, &SIZES), shapes()],
+            "a multi-select question",
+        ),
+    ];
+    for (items, why) in cases {
+        let answers = vec![answer(&[], Some("x")); items.len()];
+        let mut plan = Plan::new(Action::Question(items, answers), Agent::Codex);
+        assert_eq!(
+            step(&mut plan, &first),
+            Next::Done(AgentInputOutcome::NotOnScreen),
+            "{why}"
+        );
+    }
+    // a note being typed at the terminal: neither a digit nor a Down goes
+    for picked in [answer(&["Small"], None), answer(&[], Some("x"))] {
+        let mut plan = Plan::new(
+            Action::Question(vec![sizes(), shapes()], vec![picked, answer(&["Round"], None)]),
+            Agent::Codex,
+        );
+        assert_eq!(
+            step(&mut plan, &codex_varied(&first, 3, Some(""))),
+            Next::Done(AgentInputOutcome::NotOnScreen)
+        );
+    }
+    // Claude's way with a picker is not Codex's: a Claude plan finds no `Type something.` on it
+    let mut plan = Plan::new(
+        Action::Question(vec![colors()], vec![answer(&["Green"], None)]),
+        Agent::Claude,
+    );
+    assert_eq!(
+        step(&mut plan, &codex("question")),
+        Next::Done(AgentInputOutcome::NotOnScreen)
+    );
+    for state in ["idle", "permission", "question_picked"] {
+        let mut plan = Plan::new(
+            Action::Question(vec![colors()], vec![answer(&["Green"], None)]),
+            Agent::Codex,
+        );
+        assert_eq!(
+            step(&mut plan, &codex(state)),
+            Next::Done(AgentInputOutcome::NotOnScreen),
+            "{state}"
+        );
+    }
+}
+
+#[test]
+fn codexs_answers_fit_as_one_pick_or_free_text_alone() {
+    let fits = |answer: QuestionAnswer| Action::Question(vec![colors()], vec![answer]).check().is_ok();
+    assert!(fits(answer(&["Green"], None)));
+    assert!(fits(answer(&[], Some("teal"))));
+    assert!(!fits(answer(&["Green"], Some("teal"))), "a pick or a note");
+    assert!(!fits(answer(&[], None)));
 }
 
 #[test]
@@ -724,6 +1002,9 @@ fn the_keys_go_out_encoded_for_the_programs_modes() {
     );
     assert_eq!(wire(b"", &[Key::Escape]), b"\x1b");
     assert_eq!(wire(b"", &[Key::Digit(3), Key::Letter('y'), Key::Tab]), b"3y\t");
+    // Down as the cursor keys mode asks
+    assert_eq!(wire(b"", &[Key::Down]), b"\x1b[B");
+    assert_eq!(wire(b"\x1b[?1h", &[Key::Down]), b"\x1bOB");
     // under the Kitty keyboard protocol Codex pushes, Escape is unambiguous
     assert_eq!(wire(b"\x1b[>7u", &[Key::Escape]), b"\x1b[27u");
 

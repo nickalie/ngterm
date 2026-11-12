@@ -1,5 +1,6 @@
 //! The chat's actions on a pane's agent, as keys into its terminal: a prompt, Stop, an approval's answer and the
-//! answers to Claude's `AskUserQuestion`. Each runs as one sequence on the core's actor (`crate::actor::inputs`):
+//! answers to Claude's `AskUserQuestion` or Codex's `request_user_input`. Each runs as one sequence on the core's actor
+//! (`crate::actor::inputs`):
 //!
 //! 1. **Lead.** A pane that is not its session's leader claims the lead first (as Take control does) and waits for
 //!    the attach to report [`LeadRole::Leader`](ngterm_core::live::lead::LeadRole); a claim that reports another role,
@@ -53,6 +54,11 @@
 //!   through `Type something.` (its digit, then a paste, then Enter or Tab: the row must hold the text, after the
 //!   placeholder or in its place, or a paste's stand-in); the review tab's `1. Submit answers` takes Enter. A
 //!   `Type something.` row that holds text before the answer starts is someone's draft: nothing is sent.
+//! - **Codex's question** (`request_user_input`, single-select only): per question, the picker confirmed at it by
+//!   `Question N/M`, its text and options, notes closed; an option's digit picks it and moves on (submits all on the
+//!   last). Free text is `None of the above` with a note: Down a row at a time (each move seen before the next) to that
+//!   option, Tab opens its notes row, the paste goes once the row shows empty, and Enter once it shows the text (moves
+//!   on, or submits all on the last). Either way the end is the picker gone.
 
 use std::time::Duration;
 
@@ -184,6 +190,7 @@ pub(crate) enum Key {
     Enter,
     Escape,
     Tab,
+    Down,
     /// A paste of the text, bracketed as the program asked.
     Paste(String),
 }
@@ -220,6 +227,7 @@ impl Key {
             Self::Enter => press("enter", ""),
             Self::Escape => press("escape", ""),
             Self::Tab => press("tab", ""),
+            Self::Down => press("arrow_down", ""),
             Self::Paste(text) => {
                 match terminal.paste_if(
                     generation,
@@ -260,6 +268,10 @@ enum Asking {
     Focusing,
     /// The text went: the row should hold it.
     Typed,
+    /// Codex: a Down went from the option at this index (0-based) toward `None of the above`.
+    Moving(usize),
+    /// Codex: Tab went on `None of the above`: its notes row should be open, empty.
+    Noting,
 }
 
 /// The question being answered: which, where its answer stands, and which of its boxes were toggled.
@@ -303,14 +315,17 @@ enum Step {
 #[derive(Debug, Clone)]
 pub(crate) struct Plan {
     action: Action,
+    /// Whose screens the plan reads: a question is answered the way that agent's picker takes it.
+    agent: Agent,
     step: Step,
     sent: bool,
 }
 
 impl Plan {
-    pub(crate) fn new(action: Action) -> Self {
+    pub(crate) fn new(action: Action, agent: Agent) -> Self {
         Self {
             action,
+            agent,
             step: Step::Start,
             sent: false,
         }
@@ -412,6 +427,12 @@ impl Plan {
                 let Screen::Question(picker) = screen else {
                     return self.unmet();
                 };
+                if self.agent == Agent::Codex {
+                    if !codex_shows(picker, items, asked.index) {
+                        return self.unmet();
+                    }
+                    return self.ask_codex(items, answers, picker, asked);
+                }
                 let other = answers[asked.index].other.as_deref().map(str::trim);
                 if !shows(picker, &items[asked.index], asked.asking, other)
                     || (picker.cut && !told_apart(items, asked.index))
@@ -462,6 +483,49 @@ impl Plan {
                 let key = if item.multi_select { Key::Tab } else { Key::Enter };
                 self.move_on(items, asked.index, key)
             }
+            Asking::Moving(_) | Asking::Noting => self.unmet(),
+        }
+    }
+
+    /// The next key of Codex's question `asked`, which `picker` shows ([`codex_shows`]).
+    fn ask_codex(
+        &mut self,
+        items: &[ChatQuestionItem],
+        answers: &[QuestionAnswer],
+        picker: &Picker,
+        asked: Asked,
+    ) -> Next {
+        let (item, answer) = (&items[asked.index], &answers[asked.index]);
+        // `None of the above`, after the question's own options
+        let none = item.options.len();
+        let cursor = picker.options.iter().position(|option| option.cursor);
+        let notes = picker.notes.as_deref();
+        let other = answer.other.as_deref().map(str::trim);
+        match (asked.asking, notes, other) {
+            // with notes open before any key of this question went (someone typing one at the terminal), nothing
+            (Asking::Picking, None, _) => match answer.picked.first() {
+                Some(label) => self.move_on(items, asked.index, Key::Digit(digit_of(item, label))),
+                None => self.toward_notes(asked, cursor, none),
+            },
+            // each Down seen landing a row lower before the next goes
+            (Asking::Moving(from), None, _) if cursor == Some(from + 1) => self.toward_notes(asked, cursor, none),
+            (Asking::Noting, Some(""), Some(text)) if cursor == Some(none) => {
+                self.go(asked.at(Asking::Typed), Key::Paste(text.to_owned()))
+            }
+            (Asking::Typed, Some(shown), Some(text)) if cursor == Some(none) && holds_note(shown, text) => {
+                self.move_on(items, asked.index, Key::Enter)
+            }
+            _ => self.unmet(),
+        }
+    }
+
+    /// Toward Codex's `None of the above` (option `none`) from the highlighted option `cursor`: Down a row, or Tab to
+    /// open its notes once there.
+    fn toward_notes(&mut self, asked: Asked, cursor: Option<usize>, none: usize) -> Next {
+        match cursor {
+            Some(at) if at == none => self.go(asked.at(Asking::Noting), Key::Tab),
+            Some(at) if at < none => self.go(asked.at(Asking::Moving(at)), Key::Down),
+            _ => self.unmet(),
         }
     }
 
@@ -568,10 +632,42 @@ fn shows(picker: &Picker, item: &ChatQuestionItem, asking: Asking, other: Option
             (Asking::Picking, _) => untouched(&row),
             (Asking::Focusing, _) => row.starts_with(TYPING),
             (Asking::Typed, Some(text)) => row.contains(&squeeze(text)) || stand_in(&row).is_some(),
-            (Asking::Typed, None) => false,
+            (Asking::Typed, None) | (Asking::Moving(_) | Asking::Noting, _) => false,
         }
     });
     listed && picker.options.len() > item.options.len() && typing
+}
+
+/// `None of the above`, whitespace aside.
+const NONE_OF_THE_ABOVE: &str = "Noneoftheabove";
+
+/// Whether Codex's `picker` is at question `index` of `items`: `Question N/M` says so, the question reads as asked,
+/// and the options are the question's (label and description as the screen wraps them) and then `None of the above`.
+fn codex_shows(picker: &Picker, items: &[ChatQuestionItem], index: usize) -> bool {
+    let item = &items[index];
+    let position = (u8::try_from(index + 1).ok(), u8::try_from(items.len()).ok());
+    let at = picker
+        .position
+        .is_some_and(|(shown, count)| position == (Some(shown), Some(count)));
+    let listed = picker.options.len() == item.options.len() + 1
+        && item
+            .options
+            .iter()
+            .zip(&picker.options)
+            .all(|(option, shown)| fits(&shown.text, &listing(option)));
+    let none = picker
+        .options
+        .last()
+        .is_some_and(|shown| squeeze(&shown.text).starts_with(NONE_OF_THE_ABOVE));
+    let single = !item.multi_select && !picker.multi();
+    at && single && !picker.cut && fits(&picker.question, &item.question) && listed && none
+}
+
+/// Whether Codex's notes row, opened empty, holds `text` now: the text (wrapped where the screen likes), or a paste's
+/// stand-in for it.
+fn holds_note(shown: &str, text: &str) -> bool {
+    let shown = squeeze(shown);
+    shown == squeeze(text) || (stand_in(&shown) == Some(0) && shown.ends_with(']'))
 }
 
 /// An option as the picker lists it: its label, then its description.
