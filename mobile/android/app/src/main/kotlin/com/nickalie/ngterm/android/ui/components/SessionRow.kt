@@ -22,12 +22,8 @@ import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
- * A session in a machine's list: its [name], the note of what it is for ([context], one line), its agent's [status]
- * (an [AgentStatusBadge], or nothing for an idle one), and an Attached mark when this app has it attached. A
- * companion ([companionOf], its parent's name) says whose it is in place of its context; it sits indented under its
- * parent ([nested]) unless its parent isn't in the list above it. [selected] puts the bus bar on the
- * session on screen, where a list is also the navigation (the expanded sidebar). [menu], when given, ends the row (an
- * icon button opening the session's menu: Detach, End session).
+ * [nested] is separate from [companionOf] because Sessions indents a companion only under its attached parent, so one
+ * whose parent isn't attached never reads as another session's; a machine's list indents every companion.
  */
 @Composable
 fun SessionRow(

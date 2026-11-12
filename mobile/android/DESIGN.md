@@ -181,7 +181,7 @@ white on nothing, as Android masks it. The status glyphs are 16dp filled or stro
 | `BusBar` | the copper bar marking where you are |
 | `StatusGlyph`, `StatusBadge`, `AgentStatusBadge` | a status's glyph; glyph and word for an app tone; for an origin's status |
 | `MachineCard` | a machine: name, mono address, connection badge, and a summary slot for its sessions' status |
-| `SessionRow` | a session: name, context or companion line (a companion indented under its parent when the list shows that above it), status slot, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, Chat view, End session) |
+| `SessionRow` | a session: name, context or companion line (a machine's list indents every companion; Sessions only one under its attached parent), status slot, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, Chat view, End session) |
 | `SectionHeader` | a group's heading with an optional count and one text action |
 | `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it (busy while it runs: a small spinner, no taps); at most one quieter text-button action under it, for a retry after the fix the main one points to |
 | `Banner` | a strip about the whole screen while it stays usable, with an optional action and dismiss; announced politely |
