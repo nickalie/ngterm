@@ -25,6 +25,13 @@ impl ShellProfile {
             _ => None,
         }
     }
+
+    /// Whether a command line quoted for this profile's dialect runs its words literally: a CMD profile with delayed
+    /// expansion on (`/V:ON`) reads a `!NAME!` the quoting leaves in an argument as a variable.
+    #[must_use]
+    pub fn reads_quoted_argv(&self) -> bool {
+        self.direct_live() != Some(DirectShell::Cmd) || !delayed_expansion(self)
+    }
 }
 
 fn cmd_option(arg: &str) -> bool {

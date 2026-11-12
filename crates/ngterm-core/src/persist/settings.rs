@@ -616,6 +616,11 @@ impl SettingsStore {
         };
         settings.migrate_restore_mode();
         settings.migrate_legacy_theme(&crate::ghostty_config::theme_dirs(&crate::paths::ProcessEnv, None));
+        // a malformed default is dropped here, so Settings shows the shell new sessions really get
+        settings.default_shell_profile = settings
+            .default_shell_profile
+            .take()
+            .filter(crate::shell_profiles::ShellProfile::valid);
         settings
     }
 
@@ -758,6 +763,29 @@ mod tests {
             assert_eq!(settings.restore_mode, Some(expected), "{text}");
             assert_eq!(settings.restore_running_command, None, "{text}");
         }
+    }
+
+    #[test]
+    fn load_drops_a_malformed_default_shell_profile() {
+        let (_dir, store) = store();
+        seed(
+            &store,
+            r#"{"defaultShellProfile":{"id":"bash","name":"Bash","executable":"bin/bash"}}"#,
+        );
+        assert_eq!(store.load().default_shell_profile, None);
+        seed(
+            &store,
+            r#"{"defaultShellProfile":{"id":"bash","name":"Bash","executable":"C:/Git/bin/bash.exe"}}"#,
+        );
+        assert_eq!(
+            store.load().default_shell_profile,
+            Some(crate::shell_profiles::ShellProfile::new(
+                "bash",
+                "Bash",
+                "C:/Git/bin/bash.exe".to_owned(),
+                &[]
+            ))
+        );
     }
 
     #[test]

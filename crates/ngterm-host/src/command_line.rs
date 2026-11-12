@@ -75,9 +75,12 @@ impl ShellCommand {
     }
 
     /// `program` run with structured `args`, every one quoted as the platform quotes arguments, except `cmd.exe`'s
-    /// command text: args ending `… /S /C <line>` or `… /S /K <line>` (a CMD shell profile's creation command,
-    /// `ngterm_core::shell_profiles::direct::arguments`) pass `"<line>"` as written on Windows, as [`cmd`] does, since
-    /// the C runtime's quoting would escape its quotes as `\"`, which `cmd` does not read.
+    /// command text: args ending `… /C <line>` or `… /K <line>` (a CMD shell profile's creation command,
+    /// `ngterm_core::shell_profiles::direct::arguments`, or a hand-written profile such as
+    /// `/K "C:\…\VsDevCmd.bat" -arch=x64`) pass `"<line>"` as written on Windows, as [`cmd`] does, since the C
+    /// runtime's quoting would escape its quotes as `\"`, which `cmd` does not read. With `/S` `cmd` strips exactly
+    /// the outer quotes; without it, it keeps them only around one quoted executable path, which the quotes name as
+    /// the line did.
     ///
     /// [`cmd`]: ShellCommand::cmd
     #[must_use]
@@ -92,9 +95,7 @@ impl ShellCommand {
         let cmd_text = windows
             && name.eq_ignore_ascii_case(CMD_SHELL)
             && tail.is_some_and(|tail| {
-                tail >= 2
-                    && (args[tail - 1].eq_ignore_ascii_case("/C") || args[tail - 1].eq_ignore_ascii_case("/K"))
-                    && args[..tail - 1].iter().any(|arg| arg.eq_ignore_ascii_case("/S"))
+                tail >= 1 && (args[tail - 1].eq_ignore_ascii_case("/C") || args[tail - 1].eq_ignore_ascii_case("/K"))
             });
         let (args, raw_tail) = match tail.filter(|_| cmd_text) {
             Some(tail) => (args[..tail].to_vec(), Some(format!("\"{}\"", args[tail]))),
@@ -154,22 +155,27 @@ mod tests {
     fn a_cmd_argv_passes_its_command_text_as_written_on_windows() {
         let line = r#""C:\Program Files\x\VsDevCmd.bat" -arch=x64 & echo "a b""#;
         let words = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect::<Vec<_>>();
-        for (switch, program) in [
-            ("/K", r"C:\Windows\System32\cmd.exe"),
-            ("/c", "C:/Windows/System32/CMD.EXE"),
+        for (switches, program) in [
+            (&["/D", "/S", "/K"][..], r"C:\Windows\System32\cmd.exe"),
+            (&["/D", "/S", "/c"][..], "C:/Windows/System32/CMD.EXE"),
+            // a hand-written profile, as Windows Terminal's Developer Command Prompt spells it
+            (&["/k"][..], r"C:\Windows\System32\cmd.exe"),
+            (&["/D", "/C"][..], "cmd.exe"),
         ] {
-            let argv = words(&[program, "/D", "/S", switch, line]);
+            let mut argv = words(&[program]);
+            argv.extend(words(switches));
+            argv.push(line.to_owned());
             let shell = ShellCommand::argv_on(&argv[0], &argv[1..], true);
             assert_eq!(shell.program, PathBuf::from(program));
-            assert_eq!(shell.args, ["/D", "/S", switch]);
+            assert_eq!(shell.args, switches);
             assert_eq!(shell.raw_tail, Some(format!("\"{line}\"")));
             // Unix has no command text: every argument stays one argument
             let unix = ShellCommand::argv_on(&argv[0], &argv[1..], false);
-            assert_eq!((unix.args.len(), unix.raw_tail), (4, None));
+            assert_eq!((unix.args.len(), unix.raw_tail), (switches.len() + 1, None));
         }
-        // without /S, or with the line not last, or another program: plain arguments
+        // with the line not last, no line, or another program: plain arguments
         for argv in [
-            words(&["cmd.exe", "/D", "/K", line]),
+            words(&["cmd.exe", "/K"]),
             words(&["cmd.exe", "/S", "/K"]),
             words(&["cmd.exe", "/S", "/K", line, "extra"]),
             words(&[r"C:\Tools\tool.exe", "/S", "/C", line]),

