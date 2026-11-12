@@ -237,6 +237,8 @@ fun TerminalView(
     SideEffect {
         input.font = font
         input.keyboardRequest = softKeyboard::request
+        input.endComposition = { keyboard.endComposition(state) }
+        selection.endComposition = { keyboard.endComposition(state) }
         input.swipe = onSwipe
     }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
@@ -245,13 +247,11 @@ fun TerminalView(
     LaunchedEffect(state, viewSize, font) { gridFor(viewSize, font)?.let(state::resize) }
     val description = stringResource(R.string.terminal_description)
     val spoken = if (readAloud) rememberSpokenText(state) else null
-    val ground = palette.background
     val look = TerminalLook(palette.selectionBackground.toArgb(), focused)
     val knob = with(density) { KnobRadius.toPx() }
     // the gestures' coroutine outlives a pinch (a pinch is one of its gestures): it reads the handles' geometry here
     val handleFont by rememberUpdatedState(font)
     val handleKnob by rememberUpdatedState(knob)
-    val haptics = LocalHapticFeedback.current
     Box(modifier.onSizeChanged { viewSize = it }) {
         Spacer(
             Modifier
@@ -264,14 +264,14 @@ fun TerminalView(
                 .drawBehind {
                     // read here, so a new frame or composition draws again without composing again
                     state.drawn
-                    drawRect(ground)
+                    drawRect(palette.background)
                     val canvas = drawContext.canvas.nativeCanvas
                     painter.draw(canvas, state.screen, size, look)
                     composition.draw(canvas, state.composing, state, palette, size.width)
                 }.terminalGestures(
                     input = input,
                     selection = selection,
-                    haptics = haptics,
+                    haptics = LocalHapticFeedback.current,
                     handles = {
                         val width = viewSize.width.toFloat()
                         val spans = state.screen.selection

@@ -18,6 +18,7 @@ import com.nickalie.ngterm.core.ffi.PaneMouseAction
 import com.nickalie.ngterm.core.ffi.PaneMouseButton
 import com.nickalie.ngterm.core.ffi.PaneSendOutcome
 import com.nickalie.ngterm.core.ffi.PaneWheel
+import com.nickalie.ngterm.core.ffi.PaneWheelOutcome
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -50,6 +51,9 @@ class TerminalInput internal constructor(
 
     /** Gives the view the focus, and opens the soft keyboard when asked to (a tap; a mouse click doesn't). */
     internal var keyboardRequest: (show: Boolean) -> Unit = {}
+
+    /** Ends the input method's composition: the program is about to take a pointer event that can move its cursor. */
+    internal var endComposition: () -> Unit = {}
 
     /** Where a finger's sideways swipe goes (the session view's next or previous pane); `null`: a drag only scrolls. */
     internal var swipe: ((forward: Boolean) -> Unit)? = null
@@ -92,7 +96,9 @@ class TerminalInput internal constructor(
         position: Offset,
     ): Boolean {
         val at = panePixels(position)
-        return guarded { state.pane.mouse(PaneMouse(action, button, mods, at.x, at.y)) } == true
+        val taken = guarded { state.pane.mouse(PaneMouse(action, button, mods, at.x, at.y)) } == true
+        if (taken && (action != PaneMouseAction.MOTION || button != null)) endComposition()
+        return taken
     }
 
     /** The mouse moved with no button down: a program tracking every motion hears of each new cell. */
@@ -116,7 +122,8 @@ class TerminalInput internal constructor(
     ) {
         if (rows == 0 && columns == 0) return
         val at = panePixels(position)
-        guarded { state.pane.wheel(PaneWheel(rows, columns, mods, at.x, at.y)) }
+        val outcome = guarded { state.pane.wheel(PaneWheel(rows, columns, mods, at.x, at.y)) }
+        if (outcome == PaneWheelOutcome.REPORTED || outcome == PaneWheelOutcome.CURSOR_KEYS) endComposition()
         state.dirty()
     }
 
@@ -201,6 +208,9 @@ class TerminalSelection internal constructor(
     /** Where the right-click menu opens, in the view's pixels; `null` while it is closed. */
     var menuAt by mutableStateOf<Offset?>(null)
         internal set
+
+    /** Ends the input method's composition: a paste is about to reach the program. */
+    internal var endComposition: () -> Unit = {}
 
     /** Text the pane refused to paste as unsafe, waiting for the user's yes; `null` with none. */
     var unsafePaste by mutableStateOf<String?>(null)
@@ -295,6 +305,7 @@ class TerminalSelection internal constructor(
         menuAt = null
         unsafePaste = null
         if (touchSelection) clearSelection()
+        endComposition()
         val outcome = guarded { state.pane.paste(text, allowUnsafe) }
         if (outcome == PaneSendOutcome.UNSAFE) unsafePaste = text
     }

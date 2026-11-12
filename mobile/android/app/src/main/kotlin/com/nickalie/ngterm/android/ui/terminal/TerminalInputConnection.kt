@@ -3,8 +3,8 @@ package com.nickalie.ngterm.android.ui.terminal
 import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.icu.text.BreakIterator
 import android.text.InputType
-import android.text.Selection
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.BaseInputConnection
@@ -34,12 +34,13 @@ import androidx.compose.ui.input.key.KeyEvent as ComposeKeyEvent
  * The input method's connection to [terminal], the terminal it was opened for: everything it types reaches that
  * program as it is typed, so a program reading each key (a shell's completion, a TUI's `/` menu) sees each letter.
  * What it commits goes as typed text (line breaks as Enter); what it composes goes too, as the composition grows, and
- * a change to it (a conversion, a correction, a deletion in it) is made on the program's line with backspaces and the
- * new text: nothing of it waits outside the program, whose cursor is the only one. Its own text is only the
- * composition, so a deletion past it is the program's (backspace before it, delete after it); the keys it sends (Enter,
- * backspace) go as keys. A key (its own or one from elsewhere: [TerminalKeyboard.composition]), a line break or a
- * composed letter a sticky modifier turned into a chord ends the composition and restarts the input method, so it
- * never corrects text the program has moved past.
+ * a change to it (a conversion, a correction) is made on the program's line with backspaces and the new text, a whole
+ * character (grapheme cluster) at a time: nothing of it waits outside the program, whose cursor is the only one. A
+ * deletion it asks for is around the composition, which stays, as in the framework's editors (backspaces before it,
+ * deletes after it); the keys it sends (Enter, backspace) go as keys. A key (its own or one from elsewhere:
+ * [TerminalKeyboard.composition]), the pointer or a paste reaching the program, a line break or a composed letter a
+ * sticky modifier turned into a chord ends the composition and restarts the input method, so it never corrects text
+ * the program has moved past.
  *
  * It types only while [terminal] is the keyboard's target and until it is [close]d: what the input method sends to a
  * connection whose terminal is not (or no longer) the one selected lands nowhere, so it never reaches another program.
@@ -61,10 +62,10 @@ internal class TerminalInputConnection(
 
     private fun composed(): String = editable?.toString().orEmpty()
 
-    // makes the program's line end with [text] where it ended with [sent]: backspaces over what differs, then the rest
+    // line editors delete a letter with its marks (or a whole emoji) per backspace, so retype from its start
     private fun send(text: String) {
-        val kept = sent.commonPrefixWith(text).length
-        repeat(sent.codePointCount(kept, sent.length)) { keyboard.press(BACKSPACE, terminal) }
+        val kept = sent.characterStart(sent.commonPrefixWith(text).length)
+        repeat(sent.characterCount(kept)) { keyboard.press(BACKSPACE, terminal) }
         if (kept < text.length) keyboard.type(text.substring(kept), terminal)
         sent = text
     }
@@ -135,45 +136,32 @@ internal class TerminalInputConnection(
     override fun deleteSurroundingText(
         beforeLength: Int,
         afterLength: Int,
-    ): Boolean = delete(beforeLength, afterLength, codePoints = false)
+    ): Boolean = delete(beforeLength, afterLength)
 
     override fun deleteSurroundingTextInCodePoints(
         beforeLength: Int,
         afterLength: Int,
-    ): Boolean = delete(beforeLength, afterLength, codePoints = true)
+    ): Boolean = delete(beforeLength, afterLength)
 
-    // [beforeLength] and [afterLength] in UTF-16 units, or in code points: the part of the deletion the composition
-    // holds goes from it; the rest is the program's, a key press per character
+    // input methods expect the framework editors' deletion: around the composition, which stays
     private fun delete(
         beforeLength: Int,
         afterLength: Int,
-        codePoints: Boolean,
     ): Boolean {
         if (!live) return false
-        var before = beforeLength.coerceAtLeast(0)
-        var after = afterLength.coerceAtLeast(0)
-        val text = editable
-        if (!text.isNullOrEmpty()) {
-            val start = Selection.getSelectionStart(text).coerceIn(0, text.length)
-            val end = Selection.getSelectionEnd(text).coerceIn(start, text.length)
-            val (to, takenAfter) = text.step(end, after, forward = true, codePoints)
-            val (from, takenBefore) = text.step(start, before, forward = false, codePoints)
-            text.delete(end, to)
-            text.delete(from, start)
-            if (text.isEmpty()) removeComposingSpans(text)
-            before -= takenBefore
-            after -= takenAfter
-            update()
-        }
-        repeat(before) { keyboard.press(BACKSPACE, terminal) }
-        repeat(after) { keyboard.press(DELETE, terminal) }
+        val composition = sent
+        val around = beforeLength > 0 && composition.isNotEmpty()
+        if (around) send("")
+        repeat(beforeLength.coerceAtLeast(0)) { keyboard.press(BACKSPACE, terminal) }
+        if (around) send(composition)
+        repeat(afterLength.coerceAtLeast(0)) { keyboard.press(DELETE, terminal) }
         return true
     }
 
     override fun sendKeyEvent(event: KeyEvent): Boolean {
         if (!live) return false
         if (event.action == KeyEvent.ACTION_DOWN) end(restart = true)
-        keyboard.key(event, terminal, commitFirst = false)
+        keyboard.key(event, terminal, endFirst = false)
         return true
     }
 
@@ -185,30 +173,21 @@ internal class TerminalInputConnection(
     }
 
     private companion object {
-        // up to [count] characters (UTF-16 units, or code points) from [at] toward the end or the start: where that
-        // lands, and how many it took
-        fun CharSequence.step(
-            at: Int,
-            count: Int,
-            forward: Boolean,
-            codePoints: Boolean,
-        ): Pair<Int, Int> {
-            if (!codePoints) {
-                val taken = if (forward) minOf(count, length - at) else minOf(count, at)
-                return (if (forward) at + taken else at - taken) to taken
+        fun String.characterStart(index: Int): Int {
+            if (index >= length) return index
+            val characters = BreakIterator.getCharacterInstance().also { it.setText(this) }
+            return if (characters.isBoundary(index)) index else characters.preceding(index)
+        }
+
+        fun String.characterCount(from: Int): Int {
+            val characters = BreakIterator.getCharacterInstance().also { it.setText(this) }
+            var count = 0
+            var at = from
+            while (at < length) {
+                at = characters.following(at)
+                count += 1
             }
-            var index = at
-            var taken = 0
-            while (taken < count && (if (forward) index < length else index > 0)) {
-                index +=
-                    if (forward) {
-                        Character.charCount(Character.codePointAt(this, index))
-                    } else {
-                        -Character.charCount(Character.codePointBefore(this, index))
-                    }
-                taken += 1
-            }
-            return index to taken
+            return count
         }
 
         const val BACKSPACE = "backspace"

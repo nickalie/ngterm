@@ -1,6 +1,9 @@
 package com.nickalie.ngterm.android.ui.terminal
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.res.Configuration
+import android.icu.text.BreakIterator
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
@@ -23,11 +26,13 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.test.withKeysDown
 import androidx.compose.ui.unit.sp
@@ -35,6 +40,7 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.fake.FakeInput
 import com.nickalie.ngterm.core.ffi.PaneKey
 import com.nickalie.ngterm.core.ffi.PaneKeyAction
+import com.nickalie.ngterm.core.ffi.PaneWheelOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -167,7 +173,8 @@ class TerminalKeyboardTest {
         )
     }
 
-    // the program's input line as the pane's input builds it: typed text, and a backspace taking the last character
+    // the program's input line as a TUI builds it from the pane's input: typed and pasted text, and a backspace taking
+    // the last character with its marks (a grapheme cluster)
     private fun line(): String =
         pane.inputs.fold("") { line, input ->
             when {
@@ -175,8 +182,13 @@ class TerminalKeyboardTest {
                     line + input.text
                 }
 
+                input is FakeInput.Paste -> {
+                    line + input.text
+                }
+
                 input is FakeInput.Key && input.key.action == PaneKeyAction.PRESS && input.key.key == "backspace" -> {
-                    line.dropLast(if (line.isEmpty()) 0 else line.length - line.offsetByCodePoints(line.length, -1))
+                    val characters = BreakIterator.getCharacterInstance().also { it.setText(line) }
+                    line.take(if (line.isEmpty()) 0 else characters.preceding(line.length))
                 }
 
                 else -> {
@@ -215,6 +227,31 @@ class TerminalKeyboardTest {
         assertEquals("a line break ended the composition: the next one starts after it", "/clear the abc", line())
         compose.waitForIdle()
         assertEquals("nothing waits outside the program", "", state.composing)
+    }
+
+    @Test
+    fun aChangeInsideACharacterRetypesTheWholeCharacter() {
+        show()
+        focus()
+        val connection = connect()
+        connection.setComposingText("क", 1)
+        connection.setComposingText("का", 1)
+        assertTrue("a mark added to a letter is only typed", presses().isEmpty())
+        connection.setComposingText("कै", 1)
+        assertEquals("a vowel sign swapped keeps its letter", "कै", line())
+        connection.commitText("कै ", 1)
+        connection.setComposingText("e\u0301", 1)
+        connection.setComposingText("e\u0300", 1)
+        assertEquals("a combining accent swapped keeps its letter", "कै e\u0300", line())
+        connection.commitText("e\u0300 ", 1)
+        connection.setComposingText("a\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67", 1)
+        connection.setComposingText("a\uD83D\uDC68\u200D\uD83D\uDC69", 1)
+        assertEquals(
+            "an emoji sequence shortened is one character",
+            "कै e\u0300 a\uD83D\uDC68\u200D\uD83D\uDC69",
+            line(),
+        )
+        assertEquals("a backspace per changed character", List(3) { press("backspace") }, presses())
     }
 
     @Test
@@ -425,45 +462,84 @@ class TerminalKeyboardTest {
         pane.inputs.clear()
         key("Control").performClick()
         connection.setComposingText("c", 1)
-        connection.finishComposingText()
+        connection.setComposingText("", 1)
         compose.waitForIdle()
         assertEquals(
-            "a composition after the tap still gets the modifier",
+            "a composition after the tap still gets the modifier, and the chord ends it: nothing to take back",
             listOf(KeyMapping.forText("c", KeyMapping.CTRL)),
             presses(),
         )
+        connection.setComposingText("d", 1)
+        assertEquals(FakeInput.Typed("d"), pane.inputs.last())
     }
 
     @Test
-    fun aDeletionPastTheCompositionIsTheProgramsBackspace() {
+    fun aDeletionIsAroundTheCompositionAsInTheFrameworksEditors() {
         show()
         focus()
         val connection = connect()
         connection.commitText("xy", 1)
         connection.setComposingText("ab", 1)
         connection.deleteSurroundingText(1, 0)
-        assertEquals("xya", line())
-        connection.deleteSurroundingText(2, 0)
-        assertEquals("x", line())
+        assertEquals("the composition stays, the letter before it goes", "xab", line())
+        connection.commitText("abc", 1)
+        assertEquals("xabc", line())
+        connection.setComposingText("\uD83D\uDE00", 1)
+        connection.deleteSurroundingTextInCodePoints(0, 2)
+        assertEquals(List(2) { press("delete") }, presses().takeLast(2))
+        connection.setComposingText("\uD83D\uDE00!", 1)
+        assertEquals("the composition goes on", "xabc\uD83D\uDE00!", line())
         compose.waitForIdle()
         assertEquals("", state.composing)
-        assertEquals(List(3) { press("backspace") }, presses())
-        connection.setComposingText("q", 1)
-        assertEquals("the composition starts afresh after the deletion", "xq", line())
     }
 
     @Test
-    fun aDeletionInCodePointsTakesAWholeEmojiFromTheComposition() {
+    fun aTapThePointerSendsEndsTheComposition() {
         show()
         focus()
         val connection = connect()
-        connection.commitText("x", 1)
-        connection.setComposingText("a\uD83D\uDE00", 1)
-        connection.deleteSurroundingTextInCodePoints(1, 0)
-        assertEquals("xa", line())
-        connection.deleteSurroundingTextInCodePoints(2, 0)
-        assertEquals("one past the composition is the program's", "", line())
-        assertEquals(List(3) { press("backspace") }, presses())
+        connection.setComposingText("teh", 1)
+        pane.tracking = true
+        terminal.performTouchInput { click(center) }
+        compose.waitForIdle()
+        connection.commitText("the ", 1)
+        assertTrue(
+            "the click may have moved the cursor: nothing is taken back",
+            presses().none { it.key == "backspace" },
+        )
+        assertEquals("tehthe ", line())
+    }
+
+    @Test
+    fun aWheelTheProgramTakesEndsTheComposition() {
+        show()
+        focus()
+        val connection = connect()
+        connection.setComposingText("ab", 1)
+        terminal.performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        connection.setComposingText("a", 1)
+        assertEquals("a scroll of the view leaves the composition", "a", line())
+        pane.wheelOutcome = PaneWheelOutcome.CURSOR_KEYS
+        terminal.performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        connection.setComposingText("", 1)
+        assertEquals("cursor keys end it", "a", line())
+    }
+
+    @Test
+    fun aPasteEndsTheComposition() {
+        show()
+        focus()
+        val clipboard = RuntimeEnvironment.getApplication().getSystemService(ClipboardManager::class.java)
+        clipboard.setPrimaryClip(ClipData.newPlainText("test", "X"))
+        val connection = connect()
+        connection.setComposingText("helo", 1)
+        terminal.performTouchInput { longClick(center) }
+        compose.onNodeWithText("Paste").performClick()
+        compose.waitForIdle()
+        connection.commitText("hello", 1)
+        assertEquals("heloXhello", line())
     }
 
     @Test
@@ -475,7 +551,7 @@ class TerminalKeyboardTest {
         keyboard.target = first
         val connection = TerminalInputConnection(host, keyboard, first).also(keyboard.connections::bind)
         connection.setComposingText("vi", 1)
-        // the target moving on finishes the composition where it was typed, and ends the connection
+        assertEquals(listOf(FakeInput.Typed("vi")), pane.inputs.toList())
         keyboard.target = second
         assertEquals(listOf(FakeInput.Typed("vi")), pane.inputs.toList())
         connection.commitText("x", 1)

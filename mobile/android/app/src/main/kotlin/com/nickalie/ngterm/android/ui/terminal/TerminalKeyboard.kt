@@ -70,8 +70,8 @@ class TerminalKeyboard(
     /**
      * The terminal every key goes to; `null` while none can take them (keys then go nowhere, but the chords still
      * run). A lone terminal becomes it as it takes the focus ([selectsOnFocus]); the session view sets it to its
-     * selected pane. Moving it ends the input method's connection to the terminal it leaves: the composition waiting
-     * there is finished there first, and nothing the connection sends later lands anywhere.
+     * selected pane. Moving it ends the input method's connection to the terminal it leaves: its composition stays
+     * there, already the program's, and nothing the connection sends later lands anywhere.
      */
     var target: TerminalState?
         get() = selected
@@ -158,16 +158,16 @@ class TerminalKeyboard(
      * modifiers, after ending the input method's composition. Whether it was taken: a key with no name and no text
      * (Back, the volume) is the system's.
      */
-    fun key(event: KeyEvent): Boolean = key(event, target, commitFirst = true)
+    fun key(event: KeyEvent): Boolean = key(event, target, endFirst = true)
 
     /**
-     * [event] for [to]: as [key], from the input method's connection to [to] when [commitFirst] is false (it has
+     * [event] for [to]: as [key], from the input method's connection to [to] when [endFirst] is false (it has
      * ended its own composition).
      */
     internal fun key(
         event: KeyEvent,
         to: TerminalState?,
-        commitFirst: Boolean,
+        endFirst: Boolean,
     ): Boolean {
         val key = KeyMapping.fromEvent(event, layout)
         val target = to
@@ -191,7 +191,7 @@ class TerminalKeyboard(
             }
 
             else -> {
-                if (commitFirst) pending.endComposition()
+                if (endFirst) pending.endComposition()
                 pending.pressed(event, key, target, ::takeSticky)
                 true
             }
@@ -206,8 +206,8 @@ class TerminalKeyboard(
     }
 
     /**
-     * Text the input method committed to [to]: line breaks go as Enter, the rest as typed text; with a sticky
-     * modifier held, the first character goes as the key that types it, with the modifier.
+     * Text the input method committed or composed for [to]: line breaks go as Enter, the rest as typed text; with a
+     * sticky modifier held, the first character goes as the key that types it, with the modifier.
      */
     internal fun type(
         text: String,
@@ -250,8 +250,8 @@ class TerminalKeyboard(
 }
 
 /**
- * The input method's live connection to a terminal: one at a time, the one opened last. Ending one finishes its
- * composition in its own terminal first ([TerminalInputConnection.close]).
+ * The input method's live connection to a terminal: one at a time, the one opened last. Ending one ends its
+ * composition in its own terminal ([TerminalInputConnection.close]).
  */
 internal class InputConnections {
     private var connection: TerminalInputConnection? = null
@@ -436,6 +436,14 @@ private fun TerminalShortcuts.action(
         TerminalShortcut.NextSession -> nextSession
         TerminalShortcut.PreviousSession -> previousSession
     }
+
+/**
+ * The pointer or a paste is reaching [to]'s program, which can move its cursor: the input method's composition there
+ * ends, so the input method never corrects text somewhere else.
+ */
+internal fun TerminalKeyboard.endComposition(to: TerminalState) {
+    if (to === target) composition?.end()
+}
 
 /** A [TerminalKeyboard] kept across compositions. */
 @Composable
