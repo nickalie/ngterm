@@ -97,4 +97,18 @@ class UrlConnectionHttpTest {
         }
         assertEquals(1, chunks)
     }
+
+    @Test
+    fun aCancelledFetchReadsNothing() {
+        var body: ByteArray? = null
+        assertThrows(CancellationException::class.java) {
+            runBlocking {
+                coroutineScope {
+                    cancel()
+                    body = http.fetch(url("/big"), big.size.toLong())
+                }
+            }
+        }
+        assertEquals(null, body)
+    }
 }

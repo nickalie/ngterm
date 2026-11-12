@@ -3,8 +3,13 @@ package com.nickalie.ngterm.android.update
 import android.content.Intent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertArrayEquals
@@ -17,6 +22,7 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
 
 /** The GitHub build's updates over fake GitHub, APK checks, installer and notifications. */
 @RunWith(AndroidJUnit4::class)
@@ -265,6 +271,89 @@ class SelfUpdatesTest {
     }
 
     @Test
+    fun aDownloadCancelledInTheMiddleOfAReadNeitherComesBackNorInstalls() {
+        released("0.3.0")
+        val updates = rig.updates()
+        updates.check()
+        available(updates)
+        val read = CountDownLatch(1)
+        rig.http.stall = read
+        updates.install()
+        awaitState(updates) { it == UpdateState.Downloading(offer, offer.size / 2) }
+        updates.cancel()
+        read.countDown()
+        settle { rig.http.ended.get() == 1 }
+        settle { rig.downloads.listFiles().isNullOrEmpty() }
+        assertEquals(UpdateState.Available(offer), updates.state.value)
+        assertEquals(emptyList<File>(), rig.installed)
+        val fetched = rig.http.fetched.size
+        assertTrue(runBlocking { updates.checkInBackground() })
+        assertTrue(rig.http.fetched.size > fetched)
+    }
+
+    @Test
+    fun installAfterCancelWaitsForTheCancelledDownloadAndRunsOnce() {
+        released("0.3.0")
+        val updates = rig.updates()
+        updates.check()
+        available(updates)
+        val read = CountDownLatch(1)
+        rig.http.stall = read
+        updates.install()
+        awaitState(updates) { it == UpdateState.Downloading(offer, offer.size / 2) }
+        updates.cancel()
+        updates.install()
+        updates.install()
+        read.countDown()
+        awaitState(updates) { it == UpdateState.Installing(offer) }
+        settle { rig.http.ended.get() == 2 }
+        assertEquals(UpdateState.Installing(offer), updates.state.value)
+        val apk = rig.installed.single()
+        assertArrayEquals(apkBytes("0.3.0"), apk.readBytes())
+        assertTrue(rig.uncaught.isEmpty())
+    }
+
+    @Test
+    fun aBackgroundCheckStoppedByTheSystemLeavesTheUpdaterUsable() {
+        released("0.3.0")
+        val updates = rig.updates()
+        rig.http.fetchGate = CompletableDeferred()
+        val worker = CoroutineScope(Dispatchers.Default).launch { updates.checkInBackground() }
+        awaitState(updates) { it == UpdateState.Checking }
+        runBlocking { worker.cancelAndJoin() }
+        assertEquals(UpdateState.Idle, updates.state.value)
+        rig.http.fetchGate = null
+        updates.check()
+        available(updates)
+    }
+
+    @Test
+    fun aStoreThatCantBeReadOrWrittenStillChecksAnnouncesAndSkips() {
+        val broken = UpdateRig(dir.root, BrokenStore())
+        broken.http.releases(releaseJson("0.3.0"))
+        val updates = broken.updates()
+        updates.appStarted()
+        assertEquals(UpdateState.Available(offer), available(updates))
+        settle { broken.announced == listOf("0.3.0") }
+        assertEquals(listOf(true), broken.schedule)
+        assertTrue(runBlocking { updates.automatic.first() })
+        // the switch can't be stored, so the schedule stays as the switch still shows it
+        updates.setAutomatic(false)
+        updates.skip()
+        assertEquals(UpdateState.Available(offer, skipped = true), updates.state.value)
+        assertTrue(runBlocking { updates.checkInBackground() })
+        runBlocking {
+            broken.scope.coroutineContext[Job]!!
+                .children
+                .forEach { it.join() }
+        }
+        assertEquals(listOf(true), broken.schedule)
+        assertEquals(UpdateState.Available(offer, skipped = true), updates.state.value)
+        assertEquals(listOf("0.3.0"), broken.announced)
+        assertEquals(emptyList<Throwable>(), broken.uncaught)
+    }
+
+    @Test
     fun aDownloadThatCantBeStoredOrFailsWithoutWordsStillSaysSo() {
         released("0.3.0")
         val updates = rig.updates()
@@ -291,7 +380,7 @@ class SelfUpdatesTest {
         available(updates)
         rig.http.gate = CompletableDeferred()
         updates.install()
-        awaitState(updates) { it is UpdateState.Downloading }
+        settle { rig.http.fetched.any { it.endsWith("/SHA256SUMS.minisig") } }
         val fetched = rig.http.fetched.size
         assertTrue(runBlocking { updates.checkInBackground() })
         assertEquals(fetched, rig.http.fetched.size)

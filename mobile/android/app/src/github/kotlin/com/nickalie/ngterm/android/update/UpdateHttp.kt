@@ -41,6 +41,7 @@ class UrlConnectionHttp(
             val bytes = ByteArrayOutputStream()
             val buffer = ByteArray(CHUNK)
             while (true) {
+                currentCoroutineContext().ensureActive()
                 val read = body.read(buffer)
                 if (read < 0) break
                 bytes.write(buffer, 0, read)

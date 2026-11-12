@@ -30,8 +30,6 @@ class UpdateParts(
     val downloads: File,
     /** Shows Android's installer confirmation. */
     val launch: (Intent) -> Unit,
-    val releasesUrl: String = RELEASES_API,
-    val downloadBase: String = RELEASE_DOWNLOADS,
 )
 
 /**
@@ -39,7 +37,8 @@ class UpdateParts(
  * the installed version ([newestRelease]); the automatic one (at start, and [UpdateCheckWorker]'s) announces each
  * new version once, unless skipped. Install downloads the release's signed checksums and its APK, verifies them
  * ([UpdateVerifier]) and hands the APK to Android's installer, whose answers come back through [installResult].
- * State changes on [scope]; the network and the files are worked on [io].
+ * State changes on [scope]; the network and the files are worked on [io]. A download moves the state on only from
+ * what it set last, so once cancel took the state back it can't change it again.
  */
 class SelfUpdates(
     private val scope: CoroutineScope,
@@ -72,7 +71,7 @@ class SelfUpdates(
 
     override fun appStarted() {
         scope.launch {
-            if (!busy) withContext(io) { parts.downloads.deleteRecursively() }
+            if (!busy && job?.isActive != true) withContext(io) { parts.downloads.deleteRecursively() }
             if (parts.prefs.automatic.first()) {
                 parts.schedule.start()
                 if (!busy) runCheck(announce = true)
@@ -84,14 +83,14 @@ class SelfUpdates(
 
     override fun setAutomatic(on: Boolean) {
         scope.launch {
-            parts.prefs.setAutomatic(on)
+            if (!parts.prefs.setAutomatic(on)) return@launch
             if (on) parts.schedule.start() else parts.schedule.stop()
         }
     }
 
     override fun check() {
         if (busy) return
-        job = scope.launch { runCheck(announce = false) }
+        scope.launch { runCheck(announce = false) }
     }
 
     /** The background check; false when GitHub couldn't be read, for the work to be retried. */
@@ -105,8 +104,12 @@ class SelfUpdates(
         }
         if (busy) return
         val target = release.takeIf { now is UpdateState.Available || (now is UpdateState.Failed && now.offer != null) }
+        val previous = job
         job =
             scope.launch {
+                // a cancelled download may still be using the directory; a tap the state has moved on from is stale
+                previous?.join()
+                if (current.value != now) return@launch
                 if (target != null) {
                     download(target)
                 } else if (runCheck(announce = false)) {
@@ -116,9 +119,11 @@ class SelfUpdates(
     }
 
     override fun cancel() {
-        val now = current.value as? UpdateState.Downloading ?: return
+        while (true) {
+            val now = current.value as? UpdateState.Downloading ?: return
+            if (current.compareAndSet(now, UpdateState.Available(now.offer, now.offer.version == skipped))) break
+        }
         job?.cancel()
-        current.value = UpdateState.Available(now.offer, now.offer.version == skipped)
     }
 
     override fun skip() {
@@ -176,12 +181,22 @@ class SelfUpdates(
     }
 
     private suspend fun runCheck(announce: Boolean): Boolean {
+        val before = current.value
         current.value = UpdateState.Checking
+        return try {
+            findAndOffer(announce)
+        } catch (error: CancellationException) {
+            current.compareAndSet(UpdateState.Checking, before)
+            throw error
+        }
+    }
+
+    private suspend fun findAndOffer(announce: Boolean): Boolean {
         val found =
             try {
                 withContext(io) {
-                    val json = parts.http.fetch(parts.releasesUrl, METADATA_LIMIT).decodeToString()
-                    newestRelease(json, installedVersion, parts.downloadBase)
+                    val json = parts.http.fetch(RELEASES_API, METADATA_LIMIT).decodeToString()
+                    newestRelease(json, installedVersion)
                 }
             } catch (error: IOException) {
                 current.value = UpdateState.Failed(UpdateFailure.Check(error.reason()))
@@ -197,7 +212,7 @@ class SelfUpdates(
             return true
         }
         val offer = found.offer
-        skipped = parts.prefs.skipped()
+        skipped = parts.prefs.skipped() ?: skipped
         current.value = UpdateState.Available(offer, offer.version == skipped)
         if (announce && offer.version != skipped && parts.prefs.announced() != offer.version) {
             parts.notices.available(offer)
@@ -208,32 +223,35 @@ class SelfUpdates(
 
     private suspend fun download(target: ReleaseDownload) {
         val offer = target.offer
-        current.value = UpdateState.Downloading(offer, 0)
+        val stage = Stage(UpdateState.Downloading(offer, 0))
+        current.value = stage.shown
         parts.notices.clear()
-        try {
-            withContext(io) { fetchVerifyInstall(target) }
-        } catch (error: CancellationException) {
-            withContext(io + NonCancellable) { parts.downloads.deleteRecursively() }
-            throw error
-        } catch (error: VerifyException) {
-            fail(UpdateFailure.Verify(error.problem), offer)
-        } catch (error: IOException) {
-            val stage = current.value
-            val failure =
-                if (stage is UpdateState.Installing) {
-                    UpdateFailure.Install(
-                        error.reason(),
-                    )
+        val failure =
+            try {
+                withContext(io) { fetchVerifyInstall(target, stage) }
+                return
+            } catch (error: CancellationException) {
+                withContext(io + NonCancellable) { parts.downloads.deleteRecursively() }
+                throw error
+            } catch (error: VerifyException) {
+                UpdateFailure.Verify(error.problem)
+            } catch (error: IOException) {
+                if (stage.shown is UpdateState.Installing) {
+                    UpdateFailure.Install(error.reason())
                 } else {
                     UpdateFailure.Download(error.reason())
                 }
-            fail(failure, offer)
-        } catch (error: SecurityException) {
-            fail(UpdateFailure.Install(error.reason()), offer)
-        }
+            } catch (error: SecurityException) {
+                UpdateFailure.Install(error.reason())
+            }
+        current.compareAndSet(stage.shown, UpdateState.Failed(failure, offer))
+        withContext(io + NonCancellable) { parts.downloads.deleteRecursively() }
     }
 
-    private suspend fun fetchVerifyInstall(target: ReleaseDownload) {
+    private suspend fun fetchVerifyInstall(
+        target: ReleaseDownload,
+        stage: Stage,
+    ) {
         val offer = target.offer
         val dir = parts.downloads
         dir.deleteRecursively()
@@ -246,21 +264,22 @@ class SelfUpdates(
             val percent = received * PERCENT / offer.size
             if (percent != shown) {
                 shown = percent
-                current.value = UpdateState.Downloading(offer, received)
+                stage.moveTo(UpdateState.Downloading(offer, received))
             }
         }
-        current.value = UpdateState.Verifying(offer)
+        stage.moveTo(UpdateState.Verifying(offer))
         parts.verifier.verify(target, apk, manifest, signature)
-        current.value = UpdateState.Installing(offer)
+        stage.moveTo(UpdateState.Installing(offer))
         parts.installer.install(apk)
     }
 
-    private suspend fun fail(
-        failure: UpdateFailure,
-        offer: UpdateOffer,
+    private inner class Stage(
+        @Volatile var shown: UpdateState,
     ) {
-        current.value = UpdateState.Failed(failure, offer)
-        withContext(io) { parts.downloads.deleteRecursively() }
+        fun moveTo(next: UpdateState) {
+            if (!current.compareAndSet(shown, next)) throw CancellationException("the download was cancelled")
+            shown = next
+        }
     }
 
     private companion object {

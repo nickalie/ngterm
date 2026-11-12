@@ -1,18 +1,28 @@
 package com.nickalie.ngterm.android.update
 
 import android.content.Intent
+import androidx.datastore.core.CorruptionException
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import com.nickalie.ngterm.android.testStore
 import com.nickalie.ngterm.core.ffi.ReleaseException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
 
 const val APP_PACKAGE = "com.nickalie.ngterm.android"
 const val APP_KEY = "aa11"
@@ -46,12 +56,18 @@ fun releaseJson(
         """"html_url":"${RELEASE_PAGES}tag/v$version","assets":[$listed]}"""
 }
 
-/** [UpdateHttp] over canned bodies by URL; [gate] holds a download until completed, [failure] fails every read. */
+/**
+ * [UpdateHttp] over canned bodies by URL. [gate] holds a download until completed and [fetchGate] a fetch; [stall]
+ * blocks the next download halfway, deaf to cancellation as a socket read is; [failure] fails every read.
+ */
 class FakeHttp : UpdateHttp {
-    val bodies = mutableMapOf<String, ByteArray>()
-    val fetched = mutableListOf<String>()
+    val bodies = ConcurrentHashMap<String, ByteArray>()
+    val fetched = CopyOnWriteArrayList<String>()
     var failure: IOException? = null
     var gate: CompletableDeferred<Unit>? = null
+    var fetchGate: CompletableDeferred<Unit>? = null
+    var stall: CountDownLatch? = null
+    val ended = AtomicInteger()
 
     fun releases(vararg json: String) {
         bodies[RELEASES_API] = "[${json.joinToString(",")}]".toByteArray()
@@ -70,6 +86,7 @@ class FakeHttp : UpdateHttp {
         limit: Long,
     ): ByteArray {
         fetched += url
+        fetchGate?.await()
         failure?.let { throw it }
         return bodies[url] ?: throw IOException("GitHub answered 404")
     }
@@ -80,11 +97,19 @@ class FakeHttp : UpdateHttp {
         size: Long,
         progress: (Long) -> Unit,
     ) {
-        gate?.await()
-        val bytes = bodies[url] ?: throw IOException("GitHub answered 404")
-        progress(size / 2)
-        into.writeBytes(bytes)
-        progress(size)
+        try {
+            gate?.await()
+            val bytes = bodies[url] ?: throw IOException("GitHub answered 404")
+            progress(size / 2)
+            stall?.let { latch ->
+                stall = null
+                latch.await()
+            }
+            into.writeBytes(bytes)
+            progress(size)
+        } finally {
+            ended.incrementAndGet()
+        }
     }
 }
 
@@ -114,15 +139,17 @@ class FakeApks(
 /** The fakes behind a [SelfUpdates], with what it did to them. */
 class UpdateRig(
     root: File,
+    store: DataStore<Preferences> = testStore(root, "updates"),
 ) {
     val http = FakeHttp()
     val apks = FakeApks()
-    val prefs = UpdatePrefs(testStore(root, "updates"))
-    val installed = mutableListOf<File>()
-    val announced = mutableListOf<String>()
-    var cleared = 0
-    val schedule = mutableListOf<Boolean>()
-    val launched = mutableListOf<Intent>()
+    val prefs = UpdatePrefs(store)
+    val installed = CopyOnWriteArrayList<File>()
+    val announced = CopyOnWriteArrayList<String>()
+
+    @Volatile var cleared = 0
+    val schedule = CopyOnWriteArrayList<Boolean>()
+    val launched = CopyOnWriteArrayList<Intent>()
     var installFailure: Exception? = null
     val downloads = File(root, "downloads")
 
@@ -160,7 +187,14 @@ class UpdateRig(
             launch = { launched += it },
         )
 
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
+    /** What escaped the updater's coroutines, which on the app's scope would crash the app. */
+    val uncaught = CopyOnWriteArrayList<Throwable>()
+
+    val scope =
+        CoroutineScope(
+            SupervisorJob() + Dispatchers.Default.limitedParallelism(1) +
+                CoroutineExceptionHandler { _, error -> uncaught += error },
+        )
 
     fun updates() = SelfUpdates(scope, Dispatchers.IO, parts)
 }
@@ -170,3 +204,11 @@ fun awaitState(
     updates: AppUpdates,
     matching: (UpdateState) -> Boolean,
 ): UpdateState = runBlocking { withTimeout(5_000) { updates.state.first(matching) } }
+
+/** A store whose file can't be read or written, as a corrupt file or a full disk leaves it. */
+class BrokenStore : DataStore<Preferences> {
+    override val data: Flow<Preferences> = flow { throw CorruptionException("unreadable") }
+
+    override suspend fun updateData(transform: suspend (t: Preferences) -> Preferences): Preferences =
+        throw IOException("no space left on device")
+}

@@ -43,14 +43,13 @@ data class ReleaseDownload(
 fun newestRelease(
     json: String,
     installed: ReleaseVersion,
-    downloads: String = RELEASE_DOWNLOADS,
 ): ReleaseDownload? {
     val releases = JSONArray(json)
     return (0 until releases.length())
         .map { releases.getJSONObject(it) }
         .mapNotNull { release -> release.candidate(installed)?.let { it to release } }
         .sortedByDescending { it.first }
-        .firstNotNullOfOrNull { (version, release) -> release.download(version, downloads) }
+        .firstNotNullOfOrNull { (version, release) -> release.download(version) }
 }
 
 private fun JSONObject.candidate(installed: ReleaseVersion): ReleaseVersion? {
@@ -60,15 +59,12 @@ private fun JSONObject.candidate(installed: ReleaseVersion): ReleaseVersion? {
     return parsed.takeIf { !optBoolean("draft") && (!pre || installed.isPre) && it > installed }
 }
 
-private fun JSONObject.download(
-    version: ReleaseVersion,
-    downloads: String,
-): ReleaseDownload? {
+private fun JSONObject.download(version: ReleaseVersion): ReleaseDownload? {
     val assets = optJSONArray("assets") ?: return null
     val listed = (0 until assets.length()).map { assets.getJSONObject(it) }
     val find = { name: String, limit: Long ->
         listed.singleOrNull { it.optString("name") == name }?.takeIf { asset ->
-            asset.optString("browser_download_url") == "${downloads}v$version/$name" &&
+            asset.optString("browser_download_url") == "${RELEASE_DOWNLOADS}v$version/$name" &&
                 asset.optLong("size") in 1..limit
         }
     }
