@@ -6,7 +6,7 @@ import NgtermCore
 ///
 /// - Events upsert by id: a later event with an id already shown updates its row in place, the newest word winning. A
 ///   tool result whose call was outside the origin's window comes with no name or title, and keeps the ones its call
-///   gave.
+///   gave; a question's stays the question, answered.
 /// - An older page is folded on its own first, oldest to newest (the origin repeats an id there as it changed: a
 ///   tool's call, then its result), then goes in beneath the log: an id the log already holds keeps its place and what
 ///   the log's newer events said, the page filling in only what they left out.
@@ -152,17 +152,29 @@ public struct ChatLog: Equatable, Sendable {
         }
     }
 
-    // the newer word on an event wins; a tool result read without its call keeps the call's name, kind and title
+    // the newer word on an event wins; a tool result read without its call keeps the call's name, kind and title, or,
+    // for a question's, stays the question with the result's status and output
     internal static func merge(older: ChatBody, newer: ChatBody) -> ChatBody {
-        guard case .tool(let call) = older, case .tool(var result) = newer, result.name.isEmpty else {
+        guard case .tool(var result) = newer, result.name.isEmpty else {
             return newer
         }
-        result.name = call.name
-        result.kind = call.kind
-        if result.title.isEmpty {
-            result.title = call.title
+        switch older {
+        case .question(var question):
+            question.status = result.status
+            question.output = result.output
+            return .question(question: question)
+
+        case .tool(let call):
+            result.name = call.name
+            result.kind = call.kind
+            if result.title.isEmpty {
+                result.title = call.title
+            }
+            return .tool(tool: result)
+
+        default:
+            return newer
         }
-        return .tool(tool: result)
     }
 
     // what the list keeps of the events: what it shows, and no event its own subagent's

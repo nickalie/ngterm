@@ -9,6 +9,9 @@ import Observation
 /// handle, each claiming the lead first as the core does; reading never claims it. The prompt being written is the
 /// ``composer``'s, and a file it attaches goes to the machine on ``attach(name:size:read:)``.
 ///
+/// - A permission prompt that carries questions (Claude's `AskUserQuestion`, whose call its transcript holds only once
+///   answered) is a question card, not an approval: up until its `approval_done`, or until a row written after it asks
+///   the same.
 /// - An approval card comes up with the `approval` event and goes with its `approval_done` (or the next `approval`), or
 ///   when this device answered it; a dialog the core can't confirm as the card's leaves it up, its banner offering the
 ///   terminal. A question card comes up with a question still running and goes once it is answered, here, or when the
@@ -177,14 +180,19 @@ public final class ChatModel {
     }
 
     /// Sends the composer's text as a prompt, its ends trimmed, once at a time and not while a card waits; the field
-    /// lets it go once the agent has it, and keeps it when it was not sent.
+    /// lets it go as it goes, free for the next prompt, and takes it back when it was not sent.
     public func send() {
         let text = composer.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !snapshot.awaitsCard else {
             return
         }
         let field = composer
-        act(card: nil, onSent: { field.sent(text) }, call: { pane in try await pane.sendPrompt(text: text) })
+        act(
+            card: nil,
+            onStart: { field.sending() },
+            onUnsent: { field.unsent(text) },
+            call: { pane in try await pane.sendPrompt(text: text) }
+        )
     }
 
     /// Stop: interrupts the agent's turn (Escape), not while a card waits, as Escape would answer its dialog, nor once
@@ -338,8 +346,11 @@ public final class ChatModel {
     private func act(
         card: String?,
         goneIfNotOnScreen: Bool = false,
-        onSent: @escaping @MainActor () -> Void = {
-            // nothing more to do once it is sent
+        onStart: @MainActor () -> Void = {
+            // nothing goes with it
+        },
+        onUnsent: @escaping @MainActor () -> Void = {
+            // nothing to give back
         },
         call: @escaping @Sendable (any PaneClient) async throws -> AgentInputOutcome
     ) {
@@ -352,6 +363,7 @@ public final class ChatModel {
         }
         snapshot.isBusy = true
         snapshot.problem = nil
+        onStart()
         run { [weak self] in
             let problem: ChatProblem?
             do {
@@ -361,13 +373,13 @@ public final class ChatModel {
             } catch {
                 problem = .closed
             }
-            self?.acted(card: card, problem: problem, goneIfNotOnScreen: goneIfNotOnScreen, onSent: onSent)
+            self?.acted(card: card, problem: problem, goneIfNotOnScreen: goneIfNotOnScreen, onUnsent: onUnsent)
         }
     }
 
-    private func acted(card: String?, problem: ChatProblem?, goneIfNotOnScreen: Bool, onSent: () -> Void) {
-        if problem == nil {
-            onSent()
+    private func acted(card: String?, problem: ChatProblem?, goneIfNotOnScreen: Bool, onUnsent: () -> Void) {
+        if problem != nil {
+            onUnsent()
         }
         let isGone = problem == nil || (goneIfNotOnScreen && problem == .notOnScreen)
         if let card, isGone {

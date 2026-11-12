@@ -37,6 +37,8 @@ public struct ChatSnapshot: Equatable, Sendable {
     public internal(set) var isInterrupted = false
     // the questions whose picker was found answered or gone: their card stays down until the event says so
     internal var dismissed: Set<String> = []
+    // a question Claude's permission prompt asks before its transcript holds the call (written only once answered)
+    internal var prompted: OpenQuestion?
     // bumped by each reset, so a page asked for before it is dropped
     internal var epoch = 0
 
@@ -95,7 +97,17 @@ public struct ChatSnapshot: Equatable, Sendable {
         }
     }
 
+    private static func asks(_ body: ChatBody, _ questions: [ChatQuestionItem]) -> Bool {
+        guard case .question(let question) = body else {
+            return false
+        }
+        return question.questions == questions
+    }
+
     /// The chat with a batch of events taken in, in order: the rows a run of them makes go into the log at once.
+    ///
+    /// A row written after a permission prompt that asks the same questions takes over its card; an earlier one (the
+    /// question asked again) leaves it up.
     public func taking(_ events: [ChatEvent]) -> Self {
         var next = self
         var rows: [ChatEvent] = []
@@ -105,15 +117,11 @@ public struct ChatSnapshot: Equatable, Sendable {
                 next.isInterrupted = Self.interrupted(next.isInterrupted, after: event)
                 continue
             }
-            if !rows.isEmpty {
-                next.setLog(next.log.appending(rows))
-                rows = []
-            }
+            next.append(rows)
+            rows = []
             next.meta(event)
         }
-        if !rows.isEmpty {
-            next.setLog(next.log.appending(rows))
-        }
+        next.append(rows)
         return next
     }
 
@@ -157,13 +165,27 @@ public struct ChatSnapshot: Equatable, Sendable {
         if next.question?.id == id {
             next.dismissed.insert(id)
         }
-        next.question = next.log.openQuestion(dismissed: next.dismissed)
+        next.refreshQuestion()
         return next
+    }
+
+    private mutating func append(_ rows: [ChatEvent]) {
+        guard !rows.isEmpty else {
+            return
+        }
+        if let asked = prompted?.question.questions, rows.contains(where: { Self.asks($0.body, asked) }) {
+            prompted = nil
+        }
+        setLog(log.appending(rows))
     }
 
     private mutating func setLog(_ next: ChatLog) {
         log = next
-        question = next.openQuestion(dismissed: dismissed)
+        refreshQuestion()
+    }
+
+    private mutating func refreshQuestion() {
+        question = log.openQuestion(dismissed: dismissed) ?? prompted.flatMap { dismissed.contains($0.id) ? nil : $0 }
     }
 
     // an event that is no row: the conversation switched or named, the backlog read, a permission prompt up or done,
@@ -188,10 +210,21 @@ public struct ChatSnapshot: Equatable, Sendable {
         case .conversation(let agent, let id, let cwd, let model):
             conversation = ChatConversation(agent: agent, id: id, cwd: cwd, model: model)
 
+        case .approval(let approval) where !approval.questions.isEmpty:
+            prompted = OpenQuestion(
+                id: event.id,
+                question: ChatQuestion(questions: approval.questions, status: .running, output: nil)
+            )
+            refreshQuestion()
+
         case .approval(let approval):
             if self.approval?.id != event.id {
                 self.approval = ApprovalCard(id: event.id, approval: approval, labels: [])
             }
+
+        case .approvalDone where prompted?.id == event.id:
+            prompted = nil
+            refreshQuestion()
 
         case .approvalDone:
             if approval?.id == event.id {

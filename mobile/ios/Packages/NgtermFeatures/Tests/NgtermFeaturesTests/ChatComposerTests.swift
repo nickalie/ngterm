@@ -115,12 +115,23 @@ internal struct ChatComposerTests {
         #expect(composer.text == "\"/state/my shot.png\" ")
     }
 
-    @Test("a sent prompt lets the field go unless it holds something else; a kept draft fills only an empty one")
-    internal func sentAndRestored() {
+    @Test("a prompt on its way frees the field; one not sent comes back ahead of what was typed since")
+    internal func sendingAndUnsent() {
         let composer = composer()
         composer.edit("  Fix the guide ")
-        composer.sent("Fix the guide")
+        composer.sending()
         #expect(composer.text.isEmpty)
+        composer.unsent("Fix the guide")
+        #expect(composer.text == "Fix the guide")
+        composer.sending()
+        composer.edit("and the tests")
+        composer.unsent("Fix the guide")
+        #expect(composer.text == "Fix the guide\nand the tests")
+    }
+
+    @Test("a kept draft fills only an empty field")
+    internal func restored() {
+        let composer = composer()
         composer.restore("draft")
         #expect(composer.text == "draft")
         composer.restore("another")

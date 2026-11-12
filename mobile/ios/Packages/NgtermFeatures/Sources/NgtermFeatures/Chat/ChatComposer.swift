@@ -170,11 +170,14 @@ public final class ChatComposer {
         selection = TextSelection(insertionPoint: text.utf16.index(text.startIndex, offsetBy: offset))
     }
 
-    /// `sent` went to the agent: the field lets it go, unless it holds something else by now.
-    internal func sent(_ sent: String) {
-        if text.trimmingCharacters(in: .whitespacesAndNewlines) == sent {
-            set("")
-        }
+    /// The prompt is on its way: the field lets it go at once, free for the next one.
+    internal func sending() {
+        set("")
+    }
+
+    /// `prompt` wasn't sent: it comes back to the field, ahead of what was typed since.
+    internal func unsent(_ prompt: String) {
+        set(AskText.isBlank(text) ? prompt : prompt + "\n" + text)
     }
 
     /// Puts a `kept` text from before back in the field, unless the field holds something already.

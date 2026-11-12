@@ -9,7 +9,7 @@ import SwiftUI
 /// lines, then scrolls inside. Stop is the activity line's, over it. A file attached shows over the pill on its way,
 /// with Cancel, or why it stopped; its stored path goes into the prompt once it is there. While a card waits a line
 /// over the field says to answer it first, and Send holds; the field still takes a draft. While an action is on its way
-/// the field holds still and Send shows a spinner.
+/// Send shows a spinner, and the field keeps the keyboard: a prompt sent leaves it empty for the next one at once.
 ///
 /// A hardware keyboard: ⌘Return sends; while the `/` menu lists commands, Up and Down move its highlight and Return or
 /// Tab picks it; Escape closes the menu. Return alone is a line break.
@@ -77,7 +77,6 @@ internal struct ChatComposerView: View {
         .lineLimit(1...Self.maxLines)
         .font(.body)
         .textInputAutocapitalization(.sentences)
-        .disabled(snapshot.isBusy)
         .focused($isFieldFocused)
         .padding(.vertical, Spacing.medium)
         .frame(maxWidth: .infinity, alignment: .leading)

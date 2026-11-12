@@ -593,7 +593,8 @@ SF Pro. The behavior is Android's (`ui/chat/`); the look is the system's grounds
   inside. An approval ("Allow Bash?", the call's title in `chatCode`, its detail on a plate up to 160 pt tall, then the
   dialog's options, the first filled with `prominentAction()`, the rest outlined in the tint), with the agent's own
   answers standing in until the pane's screen is read. A question ("Claude Code asks", each question's header, radio
-  marks or checkboxes as the asks have them, a "Type an answer" row, **Send answers** once every question has one).
+  marks or checkboxes as the asks have them, a "Type an answer" row, **Send answers** once every question has one),
+  also for Claude's permission prompt that carries the questions before its transcript does, and for Codex's.
   While an answer is on its way the buttons hold and "Sending" shows under them.
 - **The activity line** (`ActivityStrip`), over the composer, on the ground and on one line: the connecting ring at 12
   pt, standing still, "Claude Code is working" while the agent works on a turn, else "Still running in the background"
@@ -611,8 +612,9 @@ SF Pro. The behavior is Android's (`ui/chat/`); the look is the system's grounds
   lines, then scrolling inside), and at its end one place that **Commands** (a `/` in the terminal's face, which starts
   a command and opens the menu) gives up to **Send** (`arrow.turn.down.left` in the tint) once there is text; the one
   leaving shrinks and fades as the other grows in (120 ms; a cut with Reduce Motion). Send takes the text with its ends
-  trimmed; the field lets it go once the agent has it. While an action is on its way the field holds still and Send is
-  a spinner ("Sending"). While a card waits, "Answer the card above first: a prompt now would go to its dialog." stands
+  trimmed; the field lets it go at once, keeping the keyboard, so the next prompt can be typed while this one is on its
+  way, and takes it back, ahead of anything typed since, when it wasn't sent. While an action is on its way Send is a
+  spinner ("Sending"). While a card waits, "Answer the card above first: a prompt now would go to its dialog." stands
   over the field and Send holds. A draft left in a chat that closes comes back to the pane's next chat of the same
   conversation.
 - **Attaching a file** (`AttachButton`, `UploadLine`, `ChatUploads`): the paperclip's menu offers **Photo or video**
