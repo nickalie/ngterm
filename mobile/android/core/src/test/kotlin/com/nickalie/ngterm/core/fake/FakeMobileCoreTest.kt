@@ -99,6 +99,22 @@ class FakeMobileCoreTest {
         }
 
     @Test
+    fun aDuplicateStandsRightAfterItsSourceOnItsOwnAndIsListed() =
+        runTest {
+            val events = mutableListOf<MobileEvent>()
+            val core = FakeMobileCore(sink = EventSinkOf(events))
+            core.connect(machine)
+            core.sessions["m1"] =
+                mutableListOf(fakeSession("p"), fakeSession("c", parent = "p"), fakeSession("q"))
+            val copy = core.duplicateSession("m1", "c")
+            assertEquals(null, copy.parent)
+            assertEquals(listOf("p", "c", copy.id, "q"), core.listSessions("m1").map { it.id })
+            assertEquals(MobileEvent.Tree("m1", core.listSessions("m1")), events[1])
+            val error = runCatching { core.duplicateSession("m1", "nope") }.exceptionOrNull()
+            assertTrue(error is MobileException.Remote)
+        }
+
+    @Test
     fun endingASessionTheMachineDoesNotHaveIsARemoteError() =
         runTest {
             val core = FakeMobileCore()

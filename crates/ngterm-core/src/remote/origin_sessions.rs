@@ -18,8 +18,8 @@ use uuid::Uuid;
 use super::attach::{ActionPanel, AttachFlow, PROGRESS_SECONDS, Placement, Step};
 use super::origin_replies::COMPANION_DEADLINE;
 use super::origin_replies::{
-    ListingWait, NEW_SESSION_ARGUMENTS, RESTORE_MODE_ARGUMENTS, WaitStep, check_restore_mode, end_failure,
-    end_session_arguments, session_created,
+    ListingWait, NEW_SESSION_ARGUMENTS, RESTORE_MODE_ARGUMENTS, WaitStep, check_restore_mode,
+    duplicate_session_arguments, end_failure, end_session_arguments, session_created,
 };
 use super::ssh::control_command;
 use super::tree::RemoteCommandResult;
@@ -59,7 +59,7 @@ impl CreateRequest {
     fn arguments(&self) -> Vec<&str> {
         match self {
             Self::New => NEW_SESSION_ARGUMENTS.to_vec(),
-            Self::Duplicate { origin, .. } => vec!["session", "duplicate", "--target", origin],
+            Self::Duplicate { origin, .. } => duplicate_session_arguments(origin).to_vec(),
         }
     }
 }

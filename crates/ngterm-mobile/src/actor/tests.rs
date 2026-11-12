@@ -423,6 +423,10 @@ fn session_commands_need_a_connection() {
         not_connected
     );
     assert_eq!(
+        block_on(core.duplicate_session("m1".to_owned(), PARENT.to_owned())).map(|_| ()),
+        not_connected
+    );
+    assert_eq!(
         block_on(core.end_session("m1".to_owned(), PARENT.to_owned())),
         not_connected
     );
@@ -463,6 +467,48 @@ fn a_remote_failure_names_the_machine_by_its_label() {
             reason: "the remote command failed on Studio".to_owned()
         })
     );
+}
+
+#[test]
+fn a_duplicate_answers_the_copy_and_its_listing_arrives_as_a_tree() {
+    use ngterm_core::remote::origin::OriginShell;
+    use ngterm_core::remote::origin_replies::{RESTORE_MODE_ARGUMENTS, duplicate_session_arguments};
+    use ngterm_core::remote::ssh::{control_tail, tree_tail};
+    let transport = FakeTransport::new();
+    let live = r#"{"ok": true, "result": {"restore": {"configured": "live", "requestedAtLaunch": "live",
+        "active": "live", "restartRequired": false}}}"#;
+    transport.script(
+        &control_tail(OriginShell::Posix, &RESTORE_MODE_ARGUMENTS),
+        crate::transport::fake::Script::ok(live),
+    );
+    transport.script(
+        &control_tail(OriginShell::Posix, &duplicate_session_arguments(PARENT)),
+        crate::transport::fake::Script::ok(&format!(r#"{{"ok": true, "result": {{"id": "{OTHER}"}}}}"#)),
+    );
+    let attachable = |id: &str| {
+        serde_json::json!({
+            "id": id, "name": id, "windowID": "w1", "windowName": "main", "workspaceID": "ws1",
+            "workspaceName": "work", "cwd": "/repo", "panes": [{"pane": "left", "daemon": "ngterm-live-0"}],
+        })
+    };
+    let body = serde_json::json!({"ok": true, "result": {"remote": {
+        "endpoint": {"executable": "/ngterm-session", "socketDirectory": "/tmp/ngterm-live-x"},
+        "sessions": [attachable(PARENT), attachable(OTHER)],
+    }}});
+    transport.script(
+        &tree_tail(OriginShell::Posix),
+        crate::transport::fake::Script::ok(&body.to_string()),
+    );
+    let (sink, events) = recorder();
+    let core = core(&transport, &sink);
+    block_on(core.connect(machine("m1", "box"))).expect("connected");
+
+    let copy = block_on(core.duplicate_session("m1".to_owned(), PARENT.to_owned())).expect("duplicated");
+
+    assert_eq!(copy.id, OTHER);
+    let (machine_id, sessions) = next_tree(&events);
+    assert_eq!(machine_id, "m1");
+    assert_eq!(ids(&sessions), [PARENT, OTHER]);
 }
 
 #[test]

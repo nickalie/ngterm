@@ -468,6 +468,27 @@ impl MobileCore {
         answer.await.unwrap_or(Err(MobileError::Stopped))
     }
 
+    /// Duplicate: `machine_id` copies its session `session_id` as desktop's Duplicate Session does (a fresh shell in
+    /// the source's focused directory, right after it, with a name of its own; a companion's copy stands on its own,
+    /// and companions are not copied), answered as [`MobileCore::create_session`] is. The machine selects the copy.
+    ///
+    /// # Errors
+    ///
+    /// As [`MobileCore::create_session`], with [`MobileError::Remote`] also for an id that is not a session's.
+    pub async fn duplicate_session(
+        &self,
+        machine_id: String,
+        session_id: String,
+    ) -> Result<RemoteSession, MobileError> {
+        let (reply, answer) = oneshot::channel();
+        self.actor.post(Command::DuplicateSession {
+            machine_id,
+            session_id,
+            reply,
+        })?;
+        answer.await.unwrap_or(Err(MobileError::Stopped))
+    }
+
     /// End Session: `machine_id` closes its session `session_id`, its programs and companions with it, with no undo
     /// (the app confirms first). When a listing of the machine is kept (one was read on this connection), the listing
     /// without it arrives as a [`MobileEvent::Tree`].

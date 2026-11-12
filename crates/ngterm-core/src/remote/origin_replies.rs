@@ -30,6 +30,13 @@ pub const RESTORE_MODE_ARGUMENTS: [&str; 2] = ["restore", "mode"];
 /// New Session's second line: the origin keeps its own selection, as the session is wanted here, not there.
 pub const NEW_SESSION_ARGUMENTS: [&str; 3] = ["session", "new", "--no-select"];
 
+/// Duplicate Session's second line: the origin duplicates `origin` in its current focused directory and selects the
+/// copy, as its own Duplicate does.
+#[must_use]
+pub fn duplicate_session_arguments(origin: &str) -> [&str; 4] {
+    ["session", "duplicate", "--target", origin]
+}
+
 /// End Session's line for the origin's session `origin`.
 #[must_use]
 pub fn end_session_arguments(origin: &str) -> [&str; 4] {

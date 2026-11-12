@@ -53,7 +53,9 @@ data class FakeCall(
  *   connect reports [MobileEvent.SignInRequested] and waits for [finishSignIn], which connects it once signed in and
  *   fails it ([SIGN_IN_UNFINISHED]) otherwise; a [disconnect] while it waits cancels it ([MobileException.Cancelled]);
  * - [listSessions] keeps what it answers as the machine's listing and also delivers it as a [MobileEvent.Tree];
- *   [createSession] does the same with the listing that has the new session;
+ *   [createSession] does the same with the listing that has the new session, and [duplicateSession] with the listing
+ *   that has the copy right after its source (a session of its own in the source's directory, named as a created one;
+ *   [MobileException.Remote] for a source the machine doesn't have);
  * - [endSession] ends a session of [sessions] whether listed or not ([MobileException.Remote] for one the machine
  *   doesn't have) and delivers a [MobileEvent.Tree] only when a listing is kept;
  * - [attachSession] and [showPane] take only a session of the machine's last listing ([MobileException.NotListed]
@@ -331,6 +333,21 @@ class FakeMobileCore(
         sessionsOf(machineId) += session
         keepListing(machineId)
         return session
+    }
+
+    override suspend fun duplicateSession(
+        machineId: String,
+        sessionId: String,
+    ): RemoteSession {
+        recordHeld("duplicateSession", machineId, sessionId)
+        val list = sessionsOf(machineId)
+        val at = list.indexOfFirst { it.id == sessionId }
+        if (at < 0) throw MobileException.Remote("no session $sessionId")
+        created += 1
+        val copy = list[at].copy(id = "fake-$created", name = "session $created", parent = null, context = null)
+        list.add(at + 1, copy)
+        keepListing(machineId)
+        return copy
     }
 
     override suspend fun endSession(

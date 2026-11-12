@@ -1,4 +1,4 @@
-//! A machine's sessions: listing them (`ngtermctl live tree`), New Session and End Session, run on the machine's
+//! A machine's sessions: listing them (`ngtermctl live tree`), New Session, Duplicate and End Session, run on the machine's
 //! connection as the lines desktop's Attach Remote runs over ssh ([`ngterm_core::remote::ssh`]'s tails), and read with
 //! the same decisions and strings ([`ngterm_core::remote::origin_replies`]).
 //!
@@ -8,6 +8,9 @@
 //!   of its own with `session new --no-select` (named, when the user gave a name), and it is listed every
 //!   [`PAUSE`] until the session is attachable or the
 //!   [`READY_BUDGET`](ngterm_core::remote::origin_replies::READY_BUDGET) runs out.
+//! - Duplicate is New Session with `session duplicate --target` as its second line, desktop's Duplicate Session of a
+//!   remote row: the machine copies its session's focused directory into a fresh shell after it, selected there. A
+//!   companion's copy is a session of its own, and a parent's companions are not copied.
 //! - End Session closes the session there (`session close --target`), with no undo.
 //!
 //! Each line runs once, never retried. A command that can't start (the connection is gone) fails with the transport's
@@ -27,7 +30,8 @@ use std::time::Duration;
 use ngterm_core::remote::origin::{self, OriginShell};
 use ngterm_core::remote::origin_replies::{
     COMPANION_DEADLINE, ListingWait, NEW_SESSION_ARGUMENTS, PAUSE, RESTORE_MODE_ARGUMENTS, WaitStep,
-    check_restore_mode, end_failure, end_session_arguments, pickable_sessions, read_remote_tree, session_created,
+    check_restore_mode, duplicate_session_arguments, end_failure, end_session_arguments, pickable_sessions,
+    read_remote_tree, session_created,
 };
 use ngterm_core::remote::ssh::{control_tail, tree_tail};
 use ngterm_core::remote::tree::{
@@ -227,11 +231,37 @@ pub async fn create<C: Connection>(
     connection: &C,
     host: &str,
     name: Option<&str>,
+    listing_starts: impl FnMut(),
+) -> Result<(ControlRemoteSession, ControlRemoteTree), String> {
+    make(connection, host, &new_session_arguments(name), listing_starts).await
+}
+
+/// Duplicate on `host` of its session `source`, as [`create`] answers.
+///
+/// # Errors
+///
+/// [`INVALID_REMOTE_SESSION`] for an id that is not one plain token, otherwise as [`create`].
+pub async fn duplicate<C: Connection>(
+    connection: &C,
+    host: &str,
+    source: &str,
+    listing_starts: impl FnMut(),
+) -> Result<(ControlRemoteSession, ControlRemoteTree), String> {
+    if !is_plain(source) {
+        return Err(INVALID_REMOTE_SESSION.to_owned());
+    }
+    make(connection, host, &duplicate_session_arguments(source), listing_starts).await
+}
+
+async fn make<C: Connection, S: AsRef<str>>(
+    connection: &C,
+    host: &str,
+    arguments: &[S],
     mut listing_starts: impl FnMut(),
 ) -> Result<(ControlRemoteSession, ControlRemoteTree), String> {
     let mode = control(connection, &RESTORE_MODE_ARGUMENTS).await?;
     check_restore_mode(&mode, host)?;
-    let created = control(connection, &new_session_arguments(name)).await?;
+    let created = control(connection, arguments).await?;
     let created = session_created(&created, host).map_err(phone_wording)?;
     let mut wait = ListingWait::new(created, now());
     loop {

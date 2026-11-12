@@ -101,6 +101,11 @@ pub(crate) enum Command {
         name: Option<String>,
         reply: oneshot::Sender<Result<RemoteSession, MobileError>>,
     },
+    DuplicateSession {
+        machine_id: String,
+        session_id: String,
+        reply: oneshot::Sender<Result<RemoteSession, MobileError>>,
+    },
     EndSession {
         machine_id: String,
         session_id: String,
@@ -418,36 +423,12 @@ async fn run<T: Transport>(
                 fingerprint,
                 trust,
             } => state.transport.answer_host_key(&machine_id, &fingerprint, trust),
-            Command::ListSessions { machine_id, reply } => {
-                spawn_on_machine(&state, machine_id, reply, list_sessions);
-            }
-            Command::CreateSession {
-                machine_id,
-                name,
-                reply,
-            } => spawn_on_machine(&state, machine_id, reply, |state, link, id| {
-                create_session(state, link, id, name)
-            }),
-            Command::EndSession {
-                machine_id,
-                session_id,
-                reply,
-            } => spawn_on_machine(&state, machine_id, reply, |state, link, id| {
-                end_session(state, link, id, session_id)
-            }),
-            Command::AttachSession {
-                machine_id,
-                session_id,
-                reply,
-            } => {
-                let _ = reply.send(attach_session(&state, &machine_id, &session_id));
-            }
-            Command::DetachSession { machine_id, session_id } => {
-                state.presentations.borrow_mut().detach(&machine_id, &session_id);
-                state.chats.borrow_mut().close_session(&machine_id, &session_id);
-                let events = state.panes.borrow_mut().hide_session(&machine_id, &session_id);
-                state.emit_all(events);
-            }
+            command @ (Command::ListSessions { .. }
+            | Command::CreateSession { .. }
+            | Command::DuplicateSession { .. }
+            | Command::EndSession { .. }
+            | Command::AttachSession { .. }
+            | Command::DetachSession { .. }) => session_command(&state, command),
             Command::AnswerAsk {
                 machine_id,
                 session_id,
@@ -480,6 +461,50 @@ async fn run<T: Transport>(
     let connections = std::mem::take(&mut *state.connections.borrow_mut());
     for link in connections.values() {
         link.connection.close();
+    }
+}
+
+/// A command about a machine's sessions: listing, New Session, Duplicate, End Session, attaching and detaching.
+fn session_command<T: Transport>(state: &Rc<State<T>>, command: Command) {
+    match command {
+        Command::ListSessions { machine_id, reply } => {
+            spawn_on_machine(state, machine_id, reply, list_sessions);
+        }
+        Command::CreateSession {
+            machine_id,
+            name,
+            reply,
+        } => spawn_on_machine(state, machine_id, reply, |state, link, id| {
+            create_session(state, link, id, name)
+        }),
+        Command::DuplicateSession {
+            machine_id,
+            session_id,
+            reply,
+        } => spawn_on_machine(state, machine_id, reply, |state, link, id| {
+            duplicate_session(state, link, id, session_id)
+        }),
+        Command::EndSession {
+            machine_id,
+            session_id,
+            reply,
+        } => spawn_on_machine(state, machine_id, reply, |state, link, id| {
+            end_session(state, link, id, session_id)
+        }),
+        Command::AttachSession {
+            machine_id,
+            session_id,
+            reply,
+        } => {
+            let _ = reply.send(attach_session(state, &machine_id, &session_id));
+        }
+        Command::DetachSession { machine_id, session_id } => {
+            state.presentations.borrow_mut().detach(&machine_id, &session_id);
+            state.chats.borrow_mut().close_session(&machine_id, &session_id);
+            let events = state.panes.borrow_mut().hide_session(&machine_id, &session_id);
+            state.emit_all(events);
+        }
+        _ => {}
     }
 }
 
@@ -916,6 +941,22 @@ async fn create_session<T: Transport>(
 ) -> Result<RemoteSession, MobileError> {
     let began = Cell::new(0);
     let (created, tree) = sessions::create(&*link.connection, &link.host, name.as_deref(), || {
+        began.set(state.ticket());
+    })
+    .await
+    .map_err(remote)?;
+    listed(&state, &link, machine_id, tree, began.get());
+    Ok(RemoteSession::from(&created))
+}
+
+async fn duplicate_session<T: Transport>(
+    state: Rc<State<T>>,
+    link: OnMachine<T::Connection>,
+    machine_id: String,
+    source: String,
+) -> Result<RemoteSession, MobileError> {
+    let began = Cell::new(0);
+    let (created, tree) = sessions::duplicate(&*link.connection, &link.host, &source, || {
         began.set(state.ticket());
     })
     .await

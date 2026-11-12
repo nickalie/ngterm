@@ -1,6 +1,6 @@
 use ngterm_core::remote::origin_replies::{
     self, NEW_SESSION_ARGUMENTS, NOT_ATTACHABLE, PAUSE, READY_BUDGET, RESTORE_MODE_ARGUMENTS, SESSION_NOUN,
-    end_session_arguments,
+    duplicate_session_arguments, end_session_arguments,
 };
 use ngterm_core::remote::ssh::{control_tail, tree_tail};
 use ngterm_core::remote::tree::{RemoteCommandResult, TREE_DEADLINE};
@@ -480,6 +480,86 @@ async fn create_stops_waiting_once_the_connection_is_gone() {
     );
     assert!(error.ends_with(ATTACH_FROM_LIST), "{error}");
     assert!(started.elapsed() < READY_BUDGET);
+}
+
+// MARK: - Duplicate
+
+fn duplicate_line(source: &str) -> String {
+    control_tail(
+        ngterm_core::remote::origin::OriginShell::Posix,
+        &duplicate_session_arguments(source),
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn duplicate_checks_live_duplicates_the_source_and_lists_until_the_copy_is_there() {
+    let transport = FakeTransport::new();
+    transport.script(&restore_line(), restore_mode("live"));
+    transport.script(&duplicate_line(PARENT), ok(&created_receipt()));
+    let parent = session(PARENT, "parent", None, None);
+    transport.script_sequence(
+        &tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+        vec![
+            listing(std::slice::from_ref(&parent)),
+            listing(&[parent.clone(), session(CREATED, "parent 2", None, None)]),
+        ],
+    );
+    let connection = connected(&transport).await;
+    let mut listings = 0;
+
+    let (copy, tree) = duplicate(&connection, HOST, PARENT, || listings += 1)
+        .await
+        .expect("duplicated");
+
+    assert_eq!((copy.id.as_str(), copy.name.as_str()), (CREATED, "parent 2"));
+    assert_eq!(tree.sessions.len(), 2);
+    assert_eq!(listings, 2);
+    assert_eq!(
+        commands(&transport),
+        [
+            restore_line(),
+            control_tail(
+                ngterm_core::remote::origin::OriginShell::Posix,
+                &["session", "duplicate", "--target", PARENT]
+            ),
+            tree_tail(ngterm_core::remote::origin::OriginShell::Posix),
+            tree_tail(ngterm_core::remote::origin::OriginShell::Posix)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn duplicate_failures_say_why_and_nothing_is_duplicated_off_live_sessions() {
+    let transport = FakeTransport::new();
+    transport.script(&restore_line(), restore_mode("off"));
+    let connection = connected(&transport).await;
+    let error = duplicate(&connection, HOST, PARENT, || {}).await.expect_err("not live");
+    assert!(
+        error.starts_with(&format!("{HOST} does not run live sessions")),
+        "{error}"
+    );
+    assert_eq!(commands(&transport), [restore_line()]);
+
+    let transport = FakeTransport::new();
+    transport.script(&restore_line(), restore_mode("live"));
+    transport.script(&duplicate_line(PARENT), refusal("no session matches"));
+    let connection = connected(&transport).await;
+    assert_eq!(
+        duplicate(&connection, HOST, PARENT, || {}).await.map(|_| ()),
+        Err("no session matches".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn duplicate_refuses_an_id_that_is_not_one_token_before_running_anything() {
+    let transport = FakeTransport::new();
+    let connection = connected(&transport).await;
+
+    assert_eq!(
+        duplicate(&connection, HOST, "a; b", || {}).await.map(|_| ()),
+        Err(INVALID_REMOTE_SESSION.to_owned())
+    );
+    assert!(transport.execs().is_empty());
 }
 
 // MARK: - End Session
