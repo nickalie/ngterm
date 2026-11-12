@@ -153,11 +153,25 @@ fn resolve_seed_in(
         }
     } else {
         let capture = session.take_pending_foreground(pane);
+        let mut foreground_input = policy.restore_initial_input(capture.as_deref());
+        // a replay is typed quoted for the shell; one that would expand `!NAME!` in it starts the plain shell
+        if foreground_input.is_some()
+            && session
+                .shell_profile_for(pane)
+                .is_some_and(|profile| !profile.reads_quoted_argv())
+        {
+            foreground_input = None;
+            tracing::warn!(
+                session = %session.id(),
+                pane = pane.as_str(),
+                "the pane's shell would expand variables in its captured program; it starts a plain shell"
+            );
+        }
         RestoreInputs {
             was_restored: session.was_restored,
             restore_enabled: policy.restore_enabled,
             had_foreground: capture.is_some(),
-            foreground_input: policy.restore_initial_input(capture.as_deref()),
+            foreground_input,
             initial_command,
             restore_override: session.take_pending_restore_override(pane),
             requested_wait: launch.wait,
@@ -600,6 +614,34 @@ mod tests {
         );
         live.direct_profile = Some(Box::new(plain));
         assert_eq!(live_creation_command(&copy, StatusPane::Left, &live), quoted);
+    }
+
+    /// A CMD profile with delayed expansion on would read a replayed argument's `!NAME!` as a variable: the rerun
+    /// starts the profile's plain shell, without the replay and without the creation command the capture preempts.
+    #[test]
+    fn a_delayed_expansion_cmd_profile_does_not_replay_a_captured_argv() {
+        use crate::shell_profiles::ShellProfile;
+        let captured = argv(&["curl", "https://x/?q=!TOKEN!"]);
+        let mut restored = session(Some("lazygit"), false, true);
+        restored.shell_profile = Some(ShellProfile::new(
+            "cmd",
+            "CMD",
+            "C:/Windows/System32/cmd.exe".into(),
+            &["/D", "/V:ON"],
+        ));
+        restored.restore.pending_foreground = Some(captured.clone());
+        let seed = resolve_seed(&mut restored, StatusPane::Left, &policy(true, &[]));
+        assert_eq!((seed.command, seed.initial_input), (None, None));
+        assert_eq!(restored.restore.pending_foreground, None, "consumed");
+        restored.shell_profile = Some(ShellProfile::new(
+            "cmd",
+            "CMD",
+            "C:/Windows/System32/cmd.exe".into(),
+            &["/D", "/V:ON", "/V:OFF"],
+        ));
+        restored.restore.pending_foreground = Some(captured.clone());
+        let seed = resolve_seed(&mut restored, StatusPane::Left, &policy(true, &[]));
+        assert_eq!(seed.initial_input, Some(PaneInput::Replay(captured)));
     }
 
     /// Where the creation command would not run (a captured job preempts it), an uncarried argv changes nothing.

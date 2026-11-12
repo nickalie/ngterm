@@ -364,13 +364,26 @@ pub(crate) fn extend_with_profile(
     env: &BTreeMap<String, String>,
     fold_case: bool,
 ) {
-    for (key, value) in env {
+    for (key, value) in profile_spellings(env, fold_case) {
         if fold_case {
             let folded = key.to_lowercase();
             base.retain(|other, _| other.to_lowercase() != folded);
         }
         base.insert(key.clone(), value.clone());
     }
+}
+
+/// The variables of a profile's `env` that reach a pane: where names ignore case (`fold_case`: Windows) one spelling
+/// of each name, the last in key order (`env` over `ENV`), as the session host's case-folding set would keep it.
+fn profile_spellings(env: &BTreeMap<String, String>, fold_case: bool) -> Vec<(&String, &String)> {
+    if !fold_case {
+        return env.iter().collect();
+    }
+    let mut kept: BTreeMap<String, (&String, &String)> = BTreeMap::new();
+    for (key, value) in env {
+        kept.insert(key.to_lowercase(), (key, value));
+    }
+    kept.into_values().collect()
 }
 
 /// Where names ignore case (`fold_case`: Windows), drops each spelling of a profile variable in `env` that the wrap
@@ -385,7 +398,8 @@ pub(crate) fn drop_profile_aliases(
     if !fold_case {
         return;
     }
-    for key in env.keys() {
+    // only the spelling `extend_with_profile` kept: a profile's other spelling of the name may be the one the wrap set
+    for (key, _) in profile_spellings(env, fold_case) {
         let folded = key.to_lowercase();
         let respelled = environment
             .keys()
@@ -633,6 +647,24 @@ mod tests {
         let mut unix = wrapped.clone();
         drop_profile_aliases(&mut unix, &profile, false);
         assert_eq!(unix, wrapped);
+    }
+
+    #[test]
+    fn a_profile_spelling_a_variable_twice_never_drops_the_wraps_own_where_names_ignore_case() {
+        // `ENV` sorts before `env`: the profile keeps `env`, the integration then sets its own `ENV`
+        let profile = variables(&[("ENV", "C:/profile/upper"), ("env", "C:/profile/lower")]);
+        let mut environment = variables(&[("HOME", "/home/me")]);
+        extend_with_profile(&mut environment, &profile, true);
+        assert_eq!(
+            environment,
+            variables(&[("HOME", "/home/me"), ("env", "C:/profile/lower")])
+        );
+        environment.insert("ENV".to_owned(), "/integration/ghostty.bash".to_owned());
+        drop_profile_aliases(&mut environment, &profile, true);
+        assert_eq!(
+            environment,
+            variables(&[("ENV", "/integration/ghostty.bash"), ("HOME", "/home/me")])
+        );
     }
 
     /// The shell line a wrapped pane's launch runs: [`live_attach`]'s attach as [`attach_line`] spells it.

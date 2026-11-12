@@ -587,8 +587,8 @@ Splitting and duplicating preserve it; changing the default affects only new ses
 an executable does not silently switch existing panes to another shell. Old snapshots without profiles retain the
 config/system behavior. A malformed profile in a snapshot or `settings.json` (a relative `executable`, an `env` name
 holding `=`) is dropped when read, and the pane starts the config/system shell. A `cmd.exe` profile whose `args`
-end in `/C <line>` or `/K <line>` (Windows Terminal's `/k "C:\…\VsDevCmd.bat" -arch=x64`) passes that line to `cmd`
-as written, with or without `/S`.
+end in `/C <line>` or `/K <line>` passes that line to `cmd` as written, with or without `/S`. The line is one `args`
+element, for example Windows Terminal's VsDevCmd line: `"args": ["/k", "\"C:\\…\\VsDevCmd.bat\" -arch=x64"]`.
 
 An explicit creation command (`ngtermctl session new --command`) runs through a CMD or WSL profile, with or without
 Live: `cmd <args> /S /C "<line>"` with the line as written, or `/bin/sh -lc <line>` inside the distribution. With
@@ -602,8 +602,9 @@ paths use forward slashes, including paths containing spaces; `CHERE_INVOKING=1`
 
 CMD and WSL run directly in the Windows session server's ConPTY. Reattaching preserves the running process,
 its directory and variables, including WSL's Linux shell. CMD preserves startup switches such as `/D`, `/Q`
-and `/V:OFF`. A CMD profile with `/V:ON` gets no replay of a captured command after a lost server: delayed expansion
-would read a `!NAME!` in its arguments as a variable. WSL preserves `--distribution`/`-d`, `--user`/`-u` and `--cd` argument pairs. WSL's `--cd` controls
+and `/V:OFF`. A CMD profile with `/V:ON`, with or without Live, replays no captured command (after a rerun relaunch
+or a lost server) and does not re-run a Duplicate as Companion copy's program: the pane starts the plain profile
+shell, because delayed expansion would read a `!NAME!` in their arguments as a variable. WSL preserves `--distribution`/`-d`, `--user`/`-u` and `--cd` argument pairs. WSL's `--cd` controls
 its Linux starting directory; otherwise WSL translates the Windows launch directory normally. Profiles with
 one-shot commands or management options (for example CMD `/C` or WSL `--shutdown`) open ordinary sessions,
 as the menu/settings indicate, rather than silently dropping their options.
