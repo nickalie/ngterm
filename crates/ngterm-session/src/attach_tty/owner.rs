@@ -35,7 +35,8 @@
 //!   The viewer supplies the nonce and accepts only matching envelopes. MIME contents, authoritative consent,
 //!   completion and lazy pastes travel through it. Reserved prefixes are suppressed both before and after output
 //!   filtering, before trusted relay injections are mixed in. Older endpoints use ordinary `attach`.
-//! - External terminals are probed with a list-only OSC 5522 read. Supported terminals get correlated
+//! - An attach without the bridge probes its terminal with a list-only OSC 5522 read; a bridge viewer's attach
+//!   skips it, as the bridge already carries every clipboard operation. Supported terminals get correlated
 //!   multipart reads/writes and complete writes only on their native status. An opaque server alias lets
 //!   the outer terminal remember consent; actual program passwords never enter permission events.
 //!   A native paste keeps its outer token here and registers only an opaque bridge and its types with the

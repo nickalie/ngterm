@@ -189,7 +189,7 @@ find "$TREE" -name '*.orig' -type f -exec rm -f {} +
 # mirror is fine and a wrong package is not. The check fetches into a scratch cache and the archive is copied as is:
 # Zig 0.17's `zig fetch` of a cache archive caches it wrapped in one more directory, which the build then hashes wrong.
 seed_zig_packages() {
-  local key archive package name fetched check
+  local key archive package name fetched check partial
   key="$(zig_packages_key)"
   archive="$BUILD_DIR/zig-packages.tar"
   if ! curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 -o "$archive" \
@@ -208,7 +208,12 @@ seed_zig_packages() {
     fetched="$(cd "$TREE" && ZIG_GLOBAL_CACHE_DIR="$check" "$ZIG_EXE" fetch "$(native_path "$package")")" \
       || die "zig cannot read $name from the Zig package mirror $key"
     [[ "$fetched" == "$name" ]] || die "the Zig package mirror $key holds $fetched under the name $name"
-    cp "$package" "$ZIG_CACHE/p/$name.tar.gz"
+    # The cache is shared by every worktree: a copy cut short must never sit under the name zig looks up.
+    partial="$(mktemp "$ZIG_CACHE/p/.$name.XXXXXX")"
+    if ! cp "$package" "$partial" || ! mv -f "$partial" "$ZIG_CACHE/p/$name.tar.gz"; then
+      rm -f "$partial"
+      die "cannot seed $name into the Zig cache $ZIG_CACHE"
+    fi
   done
 }
 

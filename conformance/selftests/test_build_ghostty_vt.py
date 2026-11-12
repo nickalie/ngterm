@@ -168,8 +168,10 @@ ZIG_0_17_FETCH = (
 )
 
 
-def seed(tmp_path: Path, packages: dict[str, bytes], zig_script: str) -> tuple[subprocess.CompletedProcess[str], Path]:
-    """seed_zig_packages over a file:// mirror of `packages`, with `zig_script` as zig."""
+def seed(
+    tmp_path: Path, packages: dict[str, bytes], zig_script: str, prelude: str = ""
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """seed_zig_packages over a file:// mirror of `packages`, with `zig_script` as zig and `prelude` run first."""
     stage = tmp_path / "stage"
     stage.mkdir()
     for name, content in packages.items():
@@ -185,6 +187,7 @@ def seed(tmp_path: Path, packages: dict[str, bytes], zig_script: str) -> tuple[s
     cache = tmp_path / "cache"
     done = bash(
         'native_path() { echo "$1"; }\nzig_packages_key() { echo k; }\ndie() { echo "$*" >&2; exit 1; }\n'
+        + prelude
         + functions("seed_zig_packages")
         + f'TREE="{tmp_path}/tree"; BUILD_DIR="{tmp_path}/build"; ZIG_CACHE="{cache}"; ZIG_EXE="{zig}"\n'
         + f'ZIG_PACKAGES_RELEASES="file://{tmp_path}/releases"; export ZIG_GLOBAL_CACHE_DIR="{cache}"\n'
@@ -199,6 +202,15 @@ def test_the_mirror_seeds_the_global_cache_with_its_archives_as_they_are(tmp_pat
     assert done.returncode == 0, done.stderr
     assert (cache / "p" / "pkg-1.0.0-AAAA.tar.gz").read_bytes() == b"first"
     assert (cache / "p" / "N-V-__8AABBBB.tar.gz").read_bytes() == b"second"
+    assert sorted(path.name for path in (cache / "p").iterdir()) == ["N-V-__8AABBBB.tar.gz", "pkg-1.0.0-AAAA.tar.gz"]
+
+
+def test_a_copy_cut_short_leaves_no_archive_under_the_name_zig_reads(tmp_path: Path) -> None:
+    cut_short = 'cp() { printf part > "$2"; return 1; }\n'
+    done, cache = seed(tmp_path, {"pkg-1.0.0-AAAA": b"first"}, ZIG_0_17_FETCH, cut_short)
+    assert done.returncode != 0
+    assert "cannot seed pkg-1.0.0-AAAA" in done.stderr
+    assert list((cache / "p").iterdir()) == []
 
 
 def test_a_mirror_archive_under_another_name_seeds_nothing(tmp_path: Path) -> None:
