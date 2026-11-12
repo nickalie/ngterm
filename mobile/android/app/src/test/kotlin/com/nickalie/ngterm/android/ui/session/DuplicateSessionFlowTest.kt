@@ -1,9 +1,14 @@
 package com.nickalie.ngterm.android.ui.session
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.test.assertAll
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isEnabled
+import androidx.compose.ui.test.isNotEnabled
 import androidx.compose.ui.test.isSelectable
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -149,6 +154,45 @@ class DuplicateSessionFlowTest : SessionViewFixture() {
         gate.complete(Unit)
         waitFor { !shows("Duplicating") }
         assertEquals(listOf(listOf("m1", "s1")), duplicates())
+    }
+
+    @Test
+    fun aCopyFinishingInTheFrameSessionsIsLeftWaitsInTheListWithoutTheLead() {
+        openSession()
+        layout.value = NavLayout.Rail
+        val gate = CompletableDeferred<Unit>().also { test.core.holds["duplicateSession"] = it }
+        duplicate()
+        compose.awaitText("Duplicating")
+        compose.mainClock.autoAdvance = false
+        compose.onNode(hasText("Settings") and isSelectable()).performClick()
+        gate.complete(Unit)
+        waitFor {
+            "fake-1" in
+                test.connections.attached.value["m1"]
+                    .orEmpty()
+        }
+        assertEquals(emptySet<SessionKey>(), test.graph.panes.claims.held.value)
+        compose.mainClock.autoAdvance = true
+        compose.onNode(hasText("Sessions") and isSelectable()).performClick()
+        compose.waitForIdle()
+        assertTrue(described("Pane 2 of 2"))
+    }
+
+    @Test
+    fun aDuplicateHoldsNewSessionOnAMachineWithNoSessions() {
+        test.seedMachine(testMachine(id = "m2", label = "build-02", host = "build-02.lan", keyId = test.seedKey().id))
+        openSession()
+        layout.value = NavLayout.Rail
+        val gate = CompletableDeferred<Unit>().also { test.core.holds["duplicateSession"] = it }
+        duplicate()
+        compose.awaitText("Duplicating")
+        compose.onNode(hasText("Machines") and isSelectable()).performClick()
+        compose.onNodeWithText("build-02").performClick()
+        compose.awaitText("No sessions on build-02")
+        compose.onAllNodesWithText("New session").assertCountEquals(2).assertAll(isNotEnabled())
+        gate.complete(Unit)
+        waitFor { test.graph.creates.underWay.value == null }
+        compose.onAllNodesWithText("New session").assertCountEquals(2).assertAll(isEnabled())
     }
 
     @Test

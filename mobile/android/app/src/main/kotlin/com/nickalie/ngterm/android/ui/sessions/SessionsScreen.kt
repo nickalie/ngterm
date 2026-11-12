@@ -284,6 +284,7 @@ private fun Empty(
                         actions.onNewSession,
                     ),
                 busy = starting,
+                enabled = !starting && !state.creating,
             )
         }
     }

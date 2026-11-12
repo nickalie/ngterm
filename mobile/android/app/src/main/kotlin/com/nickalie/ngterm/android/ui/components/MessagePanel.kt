@@ -32,11 +32,11 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
  * What a screen shows instead of its content: an [icon] in [tint], a [title] saying what is the case, a [body] saying
- * what to do about it, and the one [action] that does it ([busy]: under way, taking no taps), with at most one
- * quieter [secondary] one under it (a text button: Retry after the fix the main action points to). Every empty, error
- * and offline state is one of these, so no screen is ever blank and none leaves the user without a next step. Use
- * [EmptyState], [ErrorState] or [OfflineState]. The panel scrolls itself when its window is too short for it, so don't
- * put it in a vertical scroller.
+ * what to do about it, and the one [action] that does it ([busy]: under way, taking no taps; not [enabled]: held by
+ * work elsewhere), with at most one quieter [secondary] one under it (a text button: Retry after the fix the main
+ * action points to). Every empty, error and offline state is one of these, so no screen is ever blank and none leaves
+ * the user without a next step. Use [EmptyState], [ErrorState] or [OfflineState]. The panel scrolls itself when its
+ * window is too short for it, so don't put it in a vertical scroller.
  */
 @Composable
 fun MessagePanel(
@@ -48,6 +48,7 @@ fun MessagePanel(
     modifier: Modifier = Modifier,
     secondary: PanelAction? = null,
     busy: Boolean = false,
+    enabled: Boolean = !busy,
 ) {
     val spacing = NgtermTheme.spacing
     Column(
@@ -74,7 +75,7 @@ fun MessagePanel(
         )
         Button(
             onClick = action.onClick,
-            enabled = !busy,
+            enabled = enabled,
             modifier = Modifier.padding(top = spacing.sm),
             contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
         ) {
@@ -113,7 +114,10 @@ data class PanelAction(
     val onClick: () -> Unit,
 )
 
-/** Nothing here yet: [action] makes the first one (Add machine, New session), [busy] while it does. */
+/**
+ * Nothing here yet: [action] makes the first one (Add machine, New session), [busy] while it does, and takes no taps
+ * unless [enabled].
+ */
 @Composable
 fun EmptyState(
     @DrawableRes icon: Int,
@@ -122,8 +126,9 @@ fun EmptyState(
     action: PanelAction,
     modifier: Modifier = Modifier,
     busy: Boolean = false,
+    enabled: Boolean = !busy,
 ) {
-    MessagePanel(icon, MaterialTheme.colorScheme.primary, title, body, action, modifier, busy = busy)
+    MessagePanel(icon, MaterialTheme.colorScheme.primary, title, body, action, modifier, busy = busy, enabled = enabled)
 }
 
 /**

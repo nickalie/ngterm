@@ -111,27 +111,33 @@ fun NgtermApp(
 
         OnboardingStep.Done -> {
             var selected by rememberSaveable { mutableStateOf(MACHINES) }
+            val select =
+                remember(sessions) {
+                    { to: String ->
+                        selected = to
+                        if (to != SESSIONS) sessions.left()
+                    }
+                }
             val attached by sessions.state.collectAsStateWithLifecycle()
             val panes by sessions.panes.collectAsStateWithLifecycle()
             val failures by sessions.paneFailures.collectAsStateWithLifecycle()
             val notice by sessions.notice.collectAsStateWithLifecycle()
             val chats by sessions.chats.collectAsStateWithLifecycle()
-            val actions = remember(sessions) { AttachedActions.of(sessions, onOpenMachines = { selected = MACHINES }) }
+            val actions = remember(sessions) { AttachedActions.of(sessions, onOpenMachines = { select(MACHINES) }) }
             val target by graph.opens.pending.collectAsStateWithLifecycle()
             LaunchedEffect(target) {
                 target?.let { opened ->
-                    selected = goTo(opened, sessions, graph.connections.attached.value)
+                    select(goTo(opened, sessions, graph.connections.attached.value))
                     graph.opens.consume(opened)
                 }
             }
-            LaunchedEffect(selected) { if (selected != SESSIONS) sessions.left() }
             OnScreen(graph, if (selected == SESSIONS) attached.open else null)
             Frame(
                 graph = graph,
                 coreVersion = coreVersion,
                 layout = layout,
                 selected = selected,
-                onSelect = { selected = it },
+                onSelect = select,
                 sessions = SessionsUi(attached, panes, failures, notice, chats),
                 actions = actions,
                 modifier = modifier,
