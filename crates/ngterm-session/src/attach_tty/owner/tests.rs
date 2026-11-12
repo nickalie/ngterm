@@ -52,6 +52,26 @@ fn metadata_sent(fx: &Effects) -> Vec<&ReplyMetadata> {
 }
 
 #[test]
+fn a_bridge_viewers_probe_asks_its_terminal_no_clipboard_read() {
+    let probe_read = "5522;type=read";
+    let mut plain = Relay::new(Some("n".to_owned()), GRID, None);
+    let mut fx = Effects::default();
+    plain.start(true, Instant::now(), &mut fx);
+    assert!(String::from_utf8_lossy(&fx.stdout).contains(probe_read));
+    let mut bridged = Relay::new(Some("n".to_owned()), GRID, None);
+    bridged.enable_bridge(Some("n".to_owned()));
+    let mut fx = Effects::default();
+    bridged.start(true, Instant::now(), &mut fx);
+    let written = String::from_utf8_lossy(&fx.stdout);
+    assert!(!written.contains(probe_read), "{written:?}");
+    assert!(
+        written.contains("\x1b_Gi="),
+        "the rest of the probe still goes: {written:?}"
+    );
+    assert!(bridged.probing());
+}
+
+#[test]
 fn the_probe_asks_everything_once_and_its_fence_sends_the_metadata() {
     let mut palette: Vec<Answer> = (0..=255)
         .map(|index| Answer::Palette {

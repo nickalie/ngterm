@@ -130,12 +130,15 @@ fn colour_queries() -> Vec<u8> {
     bytes
 }
 
-/// The probe: the colours, the cell size, the appearance, Kitty graphics, then the fence.
-fn probe_queries() -> Vec<u8> {
+/// The probe: the colours, the cell size, the appearance, Kitty graphics, OSC 5522 support when `clipboard`, then the
+/// fence.
+fn probe_queries(clipboard: bool) -> Vec<u8> {
     let mut bytes = colour_queries();
     bytes.extend_from_slice(b"\x1b[16t\x1b[?996n");
     bytes.extend_from_slice(format!("\x1b_Gi={KITTY_PROBE_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\").as_bytes());
-    bytes.extend_from_slice(&super::clipboard::read_query(clipboard::PROBE_ID, "c", &[], true, &[]));
+    if clipboard {
+        bytes.extend_from_slice(&super::clipboard::read_query(clipboard::PROBE_ID, "c", &[], true, &[]));
+    }
     bytes.extend_from_slice(FENCE);
     bytes
 }
@@ -288,7 +291,8 @@ impl Relay {
         self.probe_started = Some(now);
         fx.stdout.extend_from_slice(SCHEME_REPORTS_ON);
         self.filter.after_reset(SCHEME_REPORTS_ON);
-        self.queue(probe_queries(), Some(Fence::Probe), now, fx);
+        // a bridge viewer's terminal would put the read to its app, holding the output, for nothing the bridge needs
+        self.queue(probe_queries(self.bridge_nonce.is_none()), Some(Fence::Probe), now, fx);
     }
 
     /// Whether the probe's fence is still awaited.
