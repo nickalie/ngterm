@@ -10,9 +10,10 @@ internal struct SessionsModelTests {
     private static let missingCli = "/bin/sh: 1: ngtermctl: not found"
 
     private let test = TestGraph()
+    private let windows = SessionWindows()
 
     private func model() -> SessionsModel {
-        SessionsModel(graph: test.graph, machineId: "m1")
+        SessionsModel(graph: test.graph, machineId: "m1", windows: windows)
     }
 
     // the machine m1, saved, with `sessions` there

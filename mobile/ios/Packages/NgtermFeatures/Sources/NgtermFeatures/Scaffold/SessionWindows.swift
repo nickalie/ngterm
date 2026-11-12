@@ -44,6 +44,11 @@ public final class SessionWindows {
         }
     }
 
+    /// Whether `session` has a window of its own, or a main window shows it.
+    public func isShown(_ session: SessionWindowID) -> Bool {
+        open.contains(session) || shownIn[session] != nil
+    }
+
     /// Where `session` is drawn, as the main window `scene` sees it: here only while `scene` holds it.
     internal func placement(of session: SessionWindowID, in scene: ObjectIdentifier) -> SessionPlacement {
         if open.contains(session) {

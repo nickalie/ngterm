@@ -37,12 +37,13 @@ internal struct SessionsSnapshotTests {
     }
 
     private let test = TestGraph()
+    private let windows = SessionWindows()
 
     // m1 saved and its connect under way (never run before the golden is taken), so the core's events about it count
     private func machine() throws -> SessionsModel {
         try test.seed(TestGraph.machine(keyId: "fake-key"))
         test.connections.connect(TestGraph.machine(keyId: "fake-key").core).cancel()
-        let model = SessionsModel(graph: test.graph, machineId: "m1")
+        let model = SessionsModel(graph: test.graph, machineId: "m1", windows: windows)
         // the screen's first listing is the test's to tell
         model.opened()?.cancel()
         return model

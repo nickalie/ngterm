@@ -173,8 +173,8 @@ public struct SessionsView: View {
             .onDisappear {
                 model.setShowing(false)
             }
-            .onChange(of: selection) {
-                model.openedElsewhere()
+            .onChange(of: selection) { _, shown in
+                model.windowShows(shown)
             }
             .sheet(isPresented: isNamingSession) {
                 if let newSession = model.newSession {

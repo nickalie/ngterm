@@ -465,9 +465,10 @@ session** is the toolbar's `+` while the machine is connected.
 - **New named session…** is the `+`'s long-press menu (`Menu` with a primary action): a sheet with a `Form`: the name
   (mono, optional: "build-01 names it when blank"), Cancel and Create in the toolbar. Create lands in the session as
   the `+` does, the sheet closing first. While the create runs, Create gives way to a spinner and the field holds
-  still; Cancel closes the sheet and the create goes on, its session only listed, nothing opened (its failure then
-  comes as the banner). What went wrong shows under the field, which keeps its text. The field isn't focused on its
-  own: a field being edited reports only its text's height to the accessibility audit, under 44 pt.
+  still; Cancel closes the sheet and the create goes on, its session only listed (unless a window opens it meanwhile),
+  nothing opened (its failure then comes as the banner). What went wrong shows under the field, which keeps its text.
+  The field isn't focused on its own: a field being edited reports only its text's height to the accessibility audit,
+  under 44 pt.
 - **A machine removed** while its sessions show takes the window back to the machines.
 
 ### The session (`Session/`)

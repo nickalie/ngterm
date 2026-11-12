@@ -40,9 +40,21 @@ extension Connections {
         if attached[machineId]?.contains(sessionId) != true {
             streamNames[key] = nil
         }
+        attaching[key, default: 0] += 1
+        defer {
+            attaching[key, default: 1] -= 1
+            if attaching[key] == 0 {
+                attaching[key] = nil
+            }
+        }
         try await core.attachSession(machineId: machineId, sessionId: sessionId)
         attached[machineId, default: []].insert(sessionId)
         renamed(machineId)
+    }
+
+    /// Whether an attach of `session` is under way.
+    public func isAttaching(_ session: SessionKey) -> Bool {
+        attaching[session] != nil
     }
 
     /// Attaches `sessionId` of `machineId` for a notification's tap once the machine is connected and lists it.

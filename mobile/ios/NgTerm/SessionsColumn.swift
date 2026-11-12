@@ -33,6 +33,6 @@ internal struct SessionsColumn: View {
     internal init(graph: AppGraph, machineId: String, scaffold: ScaffoldModel, machines: MachinesModel) {
         self.scaffold = scaffold
         self.machines = machines
-        _model = State(initialValue: SessionsModel(graph: graph, machineId: machineId))
+        _model = State(initialValue: SessionsModel(graph: graph, machineId: machineId, windows: scaffold.windows))
     }
 }

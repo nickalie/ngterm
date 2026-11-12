@@ -51,6 +51,8 @@ public final class Connections {
     @ObservationIgnored private var unlisted: Set<String> = []
     // the name each attached session's stream last said: it outranks its listing's while it stays attached
     @ObservationIgnored internal var streamNames: [SessionKey: String] = [:]
+    // the attaches under way, by session: several windows may attach one at once
+    @ObservationIgnored internal var attaching: [SessionKey: Int] = [:]
     // each machine's last listing as the core gave it: trees is it with the stream names over it, so a session that
     // stops being attached shows its listing's name again
     @ObservationIgnored private var listings: [String: [RemoteSession]] = [:]

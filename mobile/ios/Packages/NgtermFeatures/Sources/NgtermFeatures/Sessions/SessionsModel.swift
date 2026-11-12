@@ -23,6 +23,7 @@ public final class SessionsModel {
     /// What the screen should say in a banner, until it is dismissed.
     public internal(set) var notice: String?
     @ObservationIgnored private let graph: AppGraph
+    @ObservationIgnored private let windows: SessionWindows
     // which opening of the New session sheet is showing: a create answers only the sheet it began in
     @ObservationIgnored private var sheet = 0
     @ObservationIgnored private var isOpened = false
@@ -50,10 +51,11 @@ public final class SessionsModel {
         )
     }
 
-    /// The sessions of the machine `machineId` over `graph`.
-    public init(graph: AppGraph, machineId: String) {
+    /// The sessions of the machine `machineId` over `graph`, whose sessions every window shows as `windows` says.
+    public init(graph: AppGraph, machineId: String, windows: SessionWindows) {
         self.graph = graph
         self.machineId = machineId
+        self.windows = windows
     }
 
     /// The screen opened: the machine is listed afresh when it is connected, once per model.
@@ -78,9 +80,12 @@ public final class SessionsModel {
         self.isShowing = isShowing
     }
 
-    /// The window opened another session, so a create under way doesn't take its place.
-    public func openedElsewhere() {
-        opens += 1
+    /// The window shows `sessionId` now (`nil`: none); a session opened there keeps a create under way from taking its
+    /// place.
+    public func windowShows(_ sessionId: String?) {
+        if sessionId != nil {
+            opens += 1
+        }
     }
 
     /// Lists the sessions again (pull to refresh, or Retry after a failed listing); one under way already is enough.
@@ -116,7 +121,8 @@ public final class SessionsModel {
         newSession = nil
     }
 
-    /// Creates a session the machine names, then attaches, leads and opens it; a failure goes to ``notice``.
+    /// Creates a session the machine names and attaches it, then leads and opens it unless its screen was left or
+    /// another session opened meanwhile; a failure goes to ``notice``.
     @discardableResult
     @preconcurrency
     public func createAndOpen(then onOpen: @escaping @MainActor (String) -> Void) -> Task<Void, Never>? {
@@ -167,7 +173,7 @@ public final class SessionsModel {
                 }
             )
             let isAttached = graph.connections.attached[machineId]?.contains(session.id) == true
-            if !landed, sheet != mine, opens == began, isAttached {
+            if !landed, sheet != mine, isAttached, !isOpening(session.id) {
                 // cancelled during the attach: left as a Cancel before it would be, listed only
                 graph.connections.detach(machineId: machineId, sessionId: session.id)
             }
@@ -179,6 +185,12 @@ public final class SessionsModel {
 
     private func isWanted(_ began: Int) -> Bool {
         isShowing && opens == began
+    }
+
+    // any window shows it, or a tap anywhere is attaching it to open it
+    private func isOpening(_ sessionId: String) -> Bool {
+        windows.isShown(SessionWindowID(machineID: machineId, sessionID: sessionId))
+            || graph.connections.isAttaching(SessionKey(machineId: machineId, sessionId: sessionId))
     }
 
     private func createInSheet(name: String, sheet mine: Int) async -> RemoteSession? {
@@ -253,7 +265,7 @@ public final class SessionsModel {
     @discardableResult
     @preconcurrency
     public func attach(sessionId: String, then onAttached: @escaping @MainActor () -> Void) -> Task<Void, Never> {
-        openedElsewhere()
+        windowShows(sessionId)
         return Task {
             do {
                 try await graph.connections.attach(machineId: machineId, sessionId: sessionId)
