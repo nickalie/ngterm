@@ -425,7 +425,7 @@ impl Sidebar {
             let sidebar = sidebar.clone();
             move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                 if let Some(entity) = sidebar.upgrade() {
-                    entity.update(cx, |this, cx| this.footer_action(action, window, cx));
+                    entity.update(cx, |this, cx| this.footer_action(action.clone(), window, cx));
                 }
             }
         };
@@ -501,10 +501,14 @@ impl Sidebar {
         let sidebar = cx.entity().downgrade();
         footer_button("add-session", interface_glyph::NEW_SESSION, "New Session", look)
             .aria_label("Add session")
-            .menu(gpui_kit::Anchor::BottomLeft, move |popup: PopupMenu, _, _| {
-                popup
-                    .item(footer_item(&sidebar, "New Session", FooterAction::NewSession))
-                    .item(footer_item(&sidebar, "Open Directory…", FooterAction::OpenDirectory))
+            .menu(gpui_kit::Anchor::BottomLeft, move |popup: PopupMenu, _, cx| {
+                let mut popup = popup.item(footer_item(&sidebar, "New Session", FooterAction::NewSession));
+                if let Some(entity) = sidebar.upgrade() {
+                    for profile in &entity.read(cx).context.shell_profiles {
+                        popup = popup.item(shell_profile_item(&sidebar, profile));
+                    }
+                }
+                popup.item(footer_item(&sidebar, "Open Directory…", FooterAction::OpenDirectory))
             })
     }
 
@@ -577,12 +581,25 @@ fn menu_closed(sidebar: &WeakEntity<Sidebar>, menu: EntityId, cx: &mut App) {
     }
 }
 
+/// A shell choice, including whether it starts fresh rather than resuming a live process.
+fn shell_profile_item(
+    sidebar: &WeakEntity<Sidebar>,
+    profile: &ngterm_core::shell_profiles::ShellProfile,
+) -> PopupMenuItem {
+    let label = if profile.live_shell().is_some() {
+        profile.name.clone()
+    } else {
+        format!("{} (fresh shell)", profile.name)
+    };
+    footer_item(sidebar, label, FooterAction::ShellProfile(profile.clone()))
+}
+
 /// An item of the footer's add-session menu, running `action`.
-fn footer_item(sidebar: &WeakEntity<Sidebar>, label: &'static str, action: FooterAction) -> PopupMenuItem {
+fn footer_item(sidebar: &WeakEntity<Sidebar>, label: impl Into<SharedString>, action: FooterAction) -> PopupMenuItem {
     let sidebar = sidebar.clone();
     PopupMenuItem::new(label).on_click(move |_, window, cx| {
         if let Some(entity) = sidebar.upgrade() {
-            entity.update(cx, |this, cx| this.footer_action(action, window, cx));
+            entity.update(cx, |this, cx| this.footer_action(action.clone(), window, cx));
         }
     })
 }

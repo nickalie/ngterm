@@ -75,6 +75,7 @@ pub enum SettingsChange {
 /// The General page: Mouse, Sessions and Updates.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GeneralChange {
+    DefaultShellProfile(Option<crate::shell_profiles::ShellProfile>),
     AutoUpdate(bool),
     ScrollSpeed(f64),
     RightClickPaste(bool),
@@ -237,6 +238,11 @@ impl SettingsChange {
 impl GeneralChange {
     fn apply_to(self, settings: &mut AppSettings) -> Effect {
         match self {
+            Self::DefaultShellProfile(profile) => {
+                if profile.as_ref().is_none_or(crate::shell_profiles::ShellProfile::valid) {
+                    settings.default_shell_profile = profile;
+                }
+            }
             Self::AutoUpdate(on) => settings.auto_update = default_on(on),
             Self::ScrollSpeed(speed) => {
                 if let Some(speed) = stepped(speed, &SCROLL_SPEED_RANGE) {

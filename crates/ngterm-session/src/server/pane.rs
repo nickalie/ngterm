@@ -1162,7 +1162,7 @@ fn command(spec: &SessionSpec, env: &[(String, String)]) -> io::Result<ngterm_pt
         .argv
         .split_first()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "a session needs a program to run"))?;
-    let mut command = ngterm_pty::Command::new(program).args(args).env_clear();
+    let mut command = program_command(program, args).env_clear();
     for (key, value) in env {
         command = command.env(key, value);
     }
@@ -1170,6 +1170,23 @@ fn command(spec: &SessionSpec, env: &[(String, String)]) -> io::Result<ngterm_pt
         command = command.cwd(cwd);
     }
     Ok(command)
+}
+
+/// Structured /S /C or /S /K payloads have one raw cmd command tail. Escaping its quotes with backslashes
+/// (the ordinary Windows argv convention) changes what cmd executes.
+fn program_command(program: &str, args: &[String]) -> ngterm_pty::Command {
+    let mut command = ngterm_pty::Command::new(program);
+    let cmd = ngterm_core::command_restore::basename(program).eq_ignore_ascii_case("cmd.exe");
+    if cfg!(windows) && cmd && args.len() >= 3 {
+        let tail = args.len() - 1;
+        if args[tail - 2].eq_ignore_ascii_case("/S")
+            && (args[tail - 1].eq_ignore_ascii_case("/C") || args[tail - 1].eq_ignore_ascii_case("/K"))
+        {
+            command = command.args(&args[..tail]).raw_arg(format!("\"{}\"", args[tail]));
+            return command;
+        }
+    }
+    command.args(args)
 }
 
 /// The home directory of the environment `env`: `HOME`, or `USERPROFILE` on Windows.
@@ -1836,5 +1853,22 @@ mod tests {
     fn a_pre_epoch_clock_reads_as_zero() {
         assert_eq!(unix_seconds(SystemTime::UNIX_EPOCH), 0);
         assert_eq!(unix_seconds(SystemTime::UNIX_EPOCH + Duration::from_secs(5)), 5);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod cmd_profile_tests {
+    use super::program_command;
+
+    #[test]
+    fn cmd_payload_keeps_quotes_and_metacharacters_as_command_text() {
+        let line = "echo \"two words\" & echo done";
+        let args = ["/D", "/S", "/K", line].map(str::to_owned);
+        let command = program_command("C:/Windows/System32/cmd.exe", &args);
+        assert_eq!(command.args, ["/D", "/S", "/K"].map(std::ffi::OsString::from));
+        assert_eq!(command.raw_args, [std::ffi::OsString::from(format!("\"{line}\""))]);
+        let ordinary = program_command("C:/Tools/tool.exe", &args);
+        assert_eq!(ordinary.args.len(), 4);
+        assert!(ordinary.raw_args.is_empty());
     }
 }

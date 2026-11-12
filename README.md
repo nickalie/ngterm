@@ -26,6 +26,10 @@ dashboard.
 keep running, an agent in the middle of a task included. The next launch brings them back exactly as they were. Works
 with bash, zsh, fish and PowerShell.
 
+**Choose your Windows shell.** Select Git Bash, PowerShell, Command Prompt or an installed WSL distribution from
+the sidebar's **+** menu. Set **Settings ▸ General ▸ Default shell** for new sessions. Live sessions keep these
+shells running when the window closes. Existing sessions keep their selected profile.
+
 **Your work on any machine.** Attach a session running on another computer as a row in your own sidebar, status and
 notifications included. A server with no display can host sessions too.
 

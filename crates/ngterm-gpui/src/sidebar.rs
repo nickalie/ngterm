@@ -57,8 +57,9 @@ pub const EMPTY_FLAGGED: &str = "No flagged sessions.";
 pub const EMPTY_FLAGGED_ADD: &str = "Add Sessions…";
 
 /// What the footer's controls ask for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FooterAction {
+    ShellProfile(ngterm_core::shell_profiles::ShellProfile),
     NewWorkspace,
     NewSession,
     OpenDirectory,
@@ -573,6 +574,7 @@ impl Sidebar {
         match action {
             FooterAction::NewWorkspace => self.act(SidebarAction::NewWorkspace),
             FooterAction::NewSession => self.act(SidebarAction::NewSessionInCurrent),
+            FooterAction::ShellProfile(profile) => self.act(SidebarAction::NewSessionWithProfile(profile)),
             FooterAction::OpenDirectory => {
                 if let Some(workspace) = self.context.drop.current_workspace {
                     self.open_directory(workspace, window, cx);

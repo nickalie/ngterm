@@ -58,6 +58,7 @@ fn warn_uncarried(session: &Session, pane: StatusPane, dialect: ShellDialect) {
 /// other.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LaunchSeed {
+    pub shell_profile: Option<crate::shell_profiles::ShellProfile>,
     pub command: Option<String>,
     /// Typed into the login shell, quoted for it where the frontend knows which shell it runs.
     pub initial_input: Option<PaneInput>,
@@ -99,7 +100,12 @@ impl LaunchSeedPolicy {
 /// Pane `pane`'s seed, consuming the slots the launch armed for it (upstream's `LaunchSeedProvider.seed`). The scratch
 /// has none.
 pub fn resolve_seed(session: &mut Session, pane: StatusPane, policy: &LaunchSeedPolicy) -> LaunchSeed {
-    resolve_seed_in(session, pane, policy, ORDINARY_DIALECT)
+    let mut seed = resolve_seed_in(session, pane, policy, ORDINARY_DIALECT);
+    seed.shell_profile = match pane {
+        StatusPane::Right => session.split_shell_profile.clone(),
+        _ => session.shell_profile.clone(),
+    };
+    seed
 }
 
 /// [`resolve_seed`] with a copied argv quoted for `dialect`.
@@ -181,6 +187,7 @@ pub fn resolve_live_seed(
         &denylist,
     );
     LaunchSeed {
+        shell_profile: None,
         command: Some(settled(&attach_line(configuration, &attach))),
         initial_input: None,
         wait_after_command: session.pane_launch(pane).is_some_and(|launch| launch.wait),
@@ -198,7 +205,16 @@ fn live_creation_command(session: &Session, pane: StatusPane, configuration: &Co
         // no login shell: the attach runs no creation payload at all
         return launch.command.clone();
     };
-    let dialect = ShellDialect::of_shell(shell);
+    let dialect = if configuration
+        .direct_profile
+        .as_deref()
+        .and_then(crate::shell_profiles::ShellProfile::direct_live)
+        == Some(crate::shell_profiles::direct::DirectShell::Wsl)
+    {
+        ShellDialect::Posix
+    } else {
+        ShellDialect::of_shell(shell)
+    };
     creation_command(launch, dialect).unwrap_or_else(|Uncarried| {
         warn_uncarried(session, pane, dialect);
         None
@@ -310,6 +326,7 @@ mod tests {
 
     fn wrapped() -> Configuration {
         Configuration {
+            direct_profile: None,
             executable: "/bin/ngterm-session".to_owned(),
             session_host_executable: None,
             environment: [("SHELL", "/bin/zsh"), ("ZDOTDIR", "/bundle/zsh")]

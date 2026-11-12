@@ -2541,3 +2541,75 @@ fn a_config_reload_keeps_the_shell_the_launch_latched() {
     assert_eq!(shell(&fixture.core).as_deref(), Some("/opt/homebrew/bin/fish"));
     assert_eq!(fixture.core.live.shell(), Some("/opt/homebrew/bin/fish"));
 }
+
+#[test]
+fn a_live_profile_runs_its_own_bash_and_an_unsupported_profile_keeps_its_shell() {
+    use crate::shell_profiles::ShellProfile;
+    let mut live = live();
+    let bash = live.resources.path().join("shell-integration/bash");
+    std::fs::create_dir_all(&bash).unwrap();
+    std::fs::write(bash.join("ghostty.bash"), "").unwrap();
+    let profile = ShellProfile::new(
+        "git-bash",
+        "Git Bash",
+        "C:/Program Files/Git/bin/bash.exe".into(),
+        &["--login", "-i"],
+    );
+    let session = live.session;
+    live.fixture
+        .store_mut()
+        .unwrap()
+        .session_mut(session)
+        .unwrap()
+        .shell_profile = Some(profile.clone());
+    let token = uuid_string(live.left);
+    let seed = live.fixture.core.request_pane_spawn(session, &token).unwrap();
+    assert!(seed.live);
+    assert_eq!(seed.attach.unwrap().argv[0], profile.executable);
+    assert!(seed.env.contains(&("SHELL".into(), profile.executable)));
+
+    let cmd = ShellProfile::new(
+        "cmd",
+        "Command Prompt",
+        "C:/Windows/System32/cmd.exe".into(),
+        &["/C", "exit"],
+    );
+    live.fixture
+        .store_mut()
+        .unwrap()
+        .session_mut(session)
+        .unwrap()
+        .shell_profile = Some(cmd.clone());
+    let seed = live.fixture.core.request_pane_spawn(session, &token).unwrap();
+    assert!(!seed.live);
+    assert_eq!(seed.shell_profile, Some(cmd));
+    assert_eq!(seed.command, None);
+}
+
+#[test]
+fn cmd_and_wsl_profiles_attach_as_live_programs_with_their_exact_arguments() {
+    use crate::shell_profiles::ShellProfile;
+    for profile in [
+        ShellProfile::new("cmd", "CMD", "C:/Windows/System32/cmd.exe".into(), &["/D", "/Q"]),
+        ShellProfile::new(
+            "ubuntu",
+            "Ubuntu",
+            "C:/Windows/System32/wsl.exe".into(),
+            &["--distribution", "Ubuntu Dev", "--user", "tester"],
+        ),
+    ] {
+        let mut live = live();
+        live.fixture
+            .store_mut()
+            .unwrap()
+            .session_mut(live.session)
+            .unwrap()
+            .shell_profile = Some(profile.clone());
+        let token = uuid_string(live.left);
+        let seed = live.fixture.core.request_pane_spawn(live.session, &token).unwrap();
+        assert!(seed.live);
+        let argv = seed.attach.unwrap().argv;
+        assert_eq!(argv[0], profile.executable);
+        assert_eq!(argv[1..], profile.args);
+    }
+}

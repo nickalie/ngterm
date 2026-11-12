@@ -281,6 +281,12 @@ impl InterfaceElement {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
+    /// The default for new panes; a full profile keeps a removed installation from silently falling back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_shell_profile: Option<crate::shell_profiles::ShellProfile>,
+    /// User-defined profiles augment the detected Windows shells.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell_profiles: Option<Vec<crate::shell_profiles::ShellProfile>>,
     /// Check for stable releases and download them in the background; unset means enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_update: Option<bool>,

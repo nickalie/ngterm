@@ -62,6 +62,7 @@ pub mod restore;
 pub mod session_info;
 pub mod settings_model;
 pub mod shell_dialect;
+pub mod shell_profiles;
 pub mod sidebar_actions;
 pub mod sidebar_drop;
 pub mod sound_throttle;

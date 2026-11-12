@@ -225,6 +225,10 @@ pub struct WorkspaceSnapshot {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSnapshot {
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub shell_profile: Option<crate::shell_profiles::ShellProfile>,
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub split_shell_profile: Option<crate::shell_profiles::ShellProfile>,
     #[serde(serialize_with = "upper::uuid")]
     pub id: Uuid,
     #[serde(default, deserialize_with = "lossy", serialize_with = "upper::option")]

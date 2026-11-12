@@ -233,6 +233,7 @@ fn a_seed_runs_over_the_panes_own_environment() {
     let (library, window, ids) = three_sessions();
     let spec = PaneSpec::primary(window, library.store(window).unwrap(), ids[0]).unwrap();
     let seed = LaunchSeed {
+        shell_profile: None,
         command: Some("ngterm-session attach x".to_owned()),
         initial_input: Some(ngterm_core::command_restore::PaneInput::Line("ls".to_owned())),
         wait_after_command: false,

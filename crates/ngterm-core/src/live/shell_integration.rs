@@ -90,7 +90,10 @@ impl LoginShell {
     /// too ([`is_powershell`]).
     #[must_use]
     pub fn of(path: &str) -> Option<Self> {
-        match basename(path) {
+        match crate::command_restore::shell_name(basename(path))
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "zsh" => Some(Self::Zsh),
             "bash" => Some(Self::Bash),
             "fish" => Some(Self::Fish),
@@ -296,6 +299,14 @@ pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, enviro
             );
         }
     }
+    if shell == LoginShell::Bash && cfg!(windows) {
+        for key in ["ENV", "HISTFILE", "GHOSTTY_BASH_ENV", "GHOSTTY_RESOURCES_DIR"] {
+            if let Some(path) = environment.get_mut(key) {
+                *path = crate::shell_profiles::bash_path(path);
+            }
+        }
+        environment.insert("CHERE_INVOKING".to_owned(), "1".to_owned());
+    }
 }
 
 /// [`inject`] for a live pane's surface: fish gets only [`FISH_INTEGRATION_VARIABLE`], and `XDG_DATA_DIRS` stays the
@@ -395,6 +406,37 @@ pub fn setup_as(
     Some(line)
 }
 
+/// Integrate structured argv without reparsing a path or an argument containing whitespace or quotes.
+#[must_use]
+pub fn setup_profile(
+    force: Option<LoginShell>,
+    profile: &crate::shell_profiles::ShellProfile,
+    resources: &Path,
+    inherited: &Inherited,
+    environment: &mut BTreeMap<String, String>,
+) -> Option<Vec<String>> {
+    let shell = force.or_else(|| LoginShell::of(&profile.executable))?;
+    if !shell.is_bundled(resources) {
+        return None;
+    }
+    let (args, flags) = match shell {
+        LoginShell::Bash => {
+            let (args, flags) = bash_arguments(profile.args.iter().map(String::as_str))?;
+            (args.into_iter().map(str::to_owned).collect(), Some(flags))
+        }
+        LoginShell::Zsh | LoginShell::Fish => (profile.args.clone(), None),
+        LoginShell::Pwsh => return None,
+    };
+    inject(shell, resources, inherited, environment);
+    if let Some(BashFlags { inject, rcfile }) = flags {
+        environment.insert("GHOSTTY_BASH_INJECT".to_owned(), inject);
+        if let Some(rcfile) = rcfile {
+            environment.insert("GHOSTTY_BASH_RCFILE".to_owned(), rcfile);
+        }
+    }
+    Some(args)
+}
+
 /// What a bash command line's own flags hand to the integration.
 struct BashFlags {
     /// `GHOSTTY_BASH_INJECT`: `1`, then the startup files the user turned off.
@@ -404,8 +446,15 @@ struct BashFlags {
 
 /// Ghostty's `setupBash` walk over bash's arguments after `exe`: the POSIX-mode line and the flags for the
 /// integration, `None` when `--posix` or a short option with `c` rules the integration out.
-fn bash_command<'a>(exe: &'a str, mut words: impl Iterator<Item = &'a str>) -> Option<(String, BashFlags)> {
-    let mut line = vec![exe, "--posix"];
+fn bash_command<'a>(exe: &'a str, words: impl Iterator<Item = &'a str>) -> Option<(String, BashFlags)> {
+    let (args, flags) = bash_arguments(words)?;
+    let mut line = vec![exe];
+    line.extend(args);
+    Some((line.join(" "), flags))
+}
+
+fn bash_arguments<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(Vec<&'a str>, BashFlags)> {
+    let mut line = vec!["--posix"];
     let mut flags = BashFlags {
         inject: "1".to_owned(),
         rcfile: None,
@@ -431,7 +480,7 @@ fn bash_command<'a>(exe: &'a str, mut words: impl Iterator<Item = &'a str>) -> O
             other => line.push(other),
         }
     }
-    Some((line.join(" "), flags))
+    Some((line, flags))
 }
 
 /// One step of re-arming the integration before a replay's final shell: export the variable with this value, unset
@@ -555,13 +604,20 @@ mod tests {
             "pwsh.exe.bak",
             "/usr/bin/pwsh-preview",
             r"C:\Windows\System32\cmd.exe",
-            r"C:\pwsh\bash.exe",
             "powershell_ise.exe",
             ".exe",
         ] {
             assert_eq!(LoginShell::of(other), None, "{other}");
         }
         assert!(LoginShell::Pwsh.is_powershell() && !LoginShell::Fish.is_powershell());
+    }
+
+    #[test]
+    fn git_bash_is_known_by_its_windows_executable_name() {
+        for path in [r"C:\Program Files\Git\bin\bash.exe", "C:/Git/bin/BASH.EXE", "/bin/bash"] {
+            assert_eq!(LoginShell::of(path), Some(LoginShell::Bash));
+        }
+        assert_eq!(LoginShell::of("bash.exe.bak"), None);
     }
 
     #[test]
@@ -964,5 +1020,30 @@ mod tests {
             &mut environment,
         );
         assert_eq!((forced, environment), (None, BTreeMap::new()));
+    }
+}
+
+#[cfg(test)]
+mod structured_profile_tests {
+    use super::*;
+
+    #[test]
+    fn bash_profile_integration_preserves_argument_boundaries_and_startup_files() {
+        let resources = tempfile::tempdir().unwrap();
+        let loader = resources.path().join("shell-integration/bash/ghostty.bash");
+        std::fs::create_dir_all(loader.parent().unwrap()).unwrap();
+        std::fs::write(loader, "").unwrap();
+        let profile = crate::shell_profiles::ShellProfile::new(
+            "bash",
+            "Bash",
+            "/opt/with spaces/bash".into(),
+            &["--rcfile", "/home/a b/init.sh", "--noprofile", "-i"],
+        );
+        let mut env = BTreeMap::new();
+        let args = setup_profile(None, &profile, resources.path(), &Inherited::default(), &mut env).unwrap();
+        assert_eq!(args, ["--posix", "-i"]);
+        assert_eq!(env.get("GHOSTTY_BASH_RCFILE").unwrap(), "/home/a b/init.sh");
+        assert_eq!(env.get("GHOSTTY_BASH_INJECT").unwrap(), "1 --noprofile");
+        assert!(env.contains_key("ENV"));
     }
 }

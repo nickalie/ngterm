@@ -129,6 +129,7 @@ pub enum SidebarAction {
     NewWorkspace,
     /// Footer: New Session in the current workspace.
     NewSessionInCurrent,
+    NewSessionWithProfile(crate::shell_profiles::ShellProfile),
     /// Footer: the focus filter toggle.
     ToggleFocusFilter,
     /// Footer: the flagged view toggle.
@@ -154,6 +155,10 @@ impl Core {
         match action {
             SidebarAction::SelectSessions { active, selection } => self.select_from_sidebar(window, active, selection),
             SidebarAction::NewSession { workspace } => self.new_session_in(window, workspace),
+            SidebarAction::NewSessionWithProfile(profile) => {
+                let current = self.library().store(window).and_then(AppStore::current_workspace_id);
+                current.is_some_and(|workspace| self.new_session_with_profile(window, workspace, Some(profile)))
+            }
             SidebarAction::NewSessionInCurrent => {
                 let current = self.library().store(window).and_then(AppStore::current_workspace_id);
                 current.is_some_and(|workspace| self.new_session_in(window, workspace))
@@ -238,6 +243,15 @@ impl Core {
 
     /// New Session in `workspace` (upstream's `addNewSession`): the new-session directory and placement settings.
     fn new_session_in(&mut self, window: Uuid, workspace: Uuid) -> bool {
+        self.new_session_with_profile(window, workspace, None)
+    }
+
+    fn new_session_with_profile(
+        &mut self,
+        window: Uuid,
+        workspace: Uuid,
+        profile: Option<crate::shell_profiles::ShellProfile>,
+    ) -> bool {
         let home = self.library().home().to_owned();
         let settings = self.settings();
         let placement = match settings.effective_new_session_placement() {
@@ -250,13 +264,17 @@ impl Core {
         let current = store
             .active_session()
             .map(|session| session.local_working_directory(session.focused_cwd(), &home));
-        let cwd = settings.resolve_new_session_cwd(current.as_deref(), &home);
+        let selected = profile.as_ref().or(settings.default_shell_profile.as_ref());
+        let cwd = selected
+            .and_then(|profile| profile.starting_directory.clone())
+            .unwrap_or_else(|| settings.resolve_new_session_cwd(current.as_deref(), &home));
         let at = store.new_session_insertion_index(workspace, placement);
         let created = self.library_mut().store_mut(window).and_then(|store| {
             store.add_session(
                 workspace,
                 NewSession {
                     at,
+                    shell_profile: profile,
                     ..NewSession::at_cwd(cwd)
                 },
             )
@@ -394,6 +412,7 @@ fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool, tint_s
         SidebarAction::SelectSessions { .. }
         | SidebarAction::NewSession { .. }
         | SidebarAction::NewSessionInCurrent
+        | SidebarAction::NewSessionWithProfile(_)
         | SidebarAction::OpenDirectories { .. }
         | SidebarAction::Duplicate(_)
         | SidebarAction::NewCompanion(_)
@@ -813,6 +832,28 @@ mod tests {
         let before = f.order(one).len();
         assert!(f.act(SidebarAction::NewSessionInCurrent));
         assert_eq!(f.order(one).len(), before + 1);
+    }
+
+    #[test]
+    fn a_menu_profile_overrides_the_default_for_only_the_new_session() {
+        use crate::shell_profiles::ShellProfile;
+        let default = ShellProfile::new("pwsh", "PowerShell", "C:/Tools/pwsh.exe".into(), &[]);
+        let mut bash = ShellProfile::new("git-bash", "Git Bash", "C:/Git/bin/bash.exe".into(), &["-li"]);
+        bash.starting_directory = Some("C:/Projects with spaces".into());
+        let mut f = fixture(AppSettings {
+            default_shell_profile: Some(default.clone()),
+            ..AppSettings::default()
+        });
+        assert!(f.act(SidebarAction::NewSessionWithProfile(bash.clone())));
+        let session = f.store().active_session().unwrap();
+        assert_eq!(session.shell_profile.as_ref(), Some(&bash));
+        assert_eq!(session.effective_cwd(), "C:/Projects with spaces");
+        assert_eq!(f.core.settings().default_shell_profile.as_ref(), Some(&default));
+        assert!(f.act(SidebarAction::NewSessionInCurrent));
+        assert_eq!(
+            f.store().active_session().unwrap().shell_profile.as_ref(),
+            Some(&default)
+        );
     }
 
     #[test]

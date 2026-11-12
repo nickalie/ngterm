@@ -134,6 +134,26 @@ impl Core {
         let mut inputs = self.live.wrap.clone()?;
         inputs.pane_identity = identity;
         inputs.lead = lead;
+        if let Some(session) = self
+            .library
+            .all_open_sessions()
+            .into_iter()
+            .find(|session| session.pane_identity == identity || session.split_pane_identity == Some(identity))
+        {
+            let profile = if session.pane_identity == identity {
+                session.shell_profile.as_ref()
+            } else {
+                session.split_shell_profile.as_ref()
+            };
+            if let Some(profile) = profile {
+                // Ineligible profiles fall back to their own ordinary shell, never to PowerShell.
+                inputs.base_environment.extend(profile.env.clone());
+                if profile.direct_live().is_some() {
+                    return support::direct_configuration(&inputs, profile).ok();
+                }
+                inputs.command_shell = Some(profile.live_shell()?.to_owned());
+            }
+        }
         support::configuration(&inputs)
             .inspect_err(|rejection| {
                 tracing::error!(pane = %identity, reason = rejection.message(), "the live-session configuration failed");

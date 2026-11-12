@@ -68,6 +68,7 @@ pub struct LibraryEffects {
 /// The app-global owner of the window set.
 #[derive(Debug, Default)]
 pub struct WindowLibrary {
+    default_shell_profile: Option<crate::shell_profiles::ShellProfile>,
     /// The app-global, in-memory pane mailboxes, shared with every open store.
     pub(crate) messages: crate::messages::MessageBus,
     windows: Vec<WindowInfo>,
@@ -100,6 +101,14 @@ pub struct WindowLibrary {
 }
 
 impl WindowLibrary {
+    /// Apply a default to future sessions only. Existing panes retain their saved profiles.
+    pub fn set_default_shell_profile(&mut self, profile: Option<crate::shell_profiles::ShellProfile>) {
+        for store in self.stores.values_mut() {
+            store.default_shell_profile.clone_from(&profile);
+        }
+        self.default_shell_profile = profile;
+    }
+
     /// An empty library: no windows. A new window's first session starts in `home`.
     #[must_use]
     pub fn new(home: impl Into<String>) -> Self {
@@ -131,6 +140,7 @@ impl WindowLibrary {
         store.messages = self.messages.clone();
         store.home.clone_from(&self.home);
         store.set_flagged_layout(self.flagged_layout);
+        store.default_shell_profile.clone_from(&self.default_shell_profile);
         store
     }
 
@@ -381,6 +391,7 @@ impl WindowLibrary {
         store.recent_closed = self.recent_closed.share();
         store.messages = self.messages.clone();
         store.set_flagged_layout(self.flagged_layout);
+        store.default_shell_profile.clone_from(&self.default_shell_profile);
         self.stores.insert(id, store);
         self.index_dirty = true;
     }

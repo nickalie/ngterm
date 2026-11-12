@@ -532,8 +532,66 @@ is staged everywhere. Targets no machine runs natively are cross-built with `car
 headers from Linux).
 
 The live-session server works the same on all three ([Live sessions](#live-sessions)), each OS with its own detach and
-endpoint. A live session on Windows runs PowerShell, `pwsh.exe` (PowerShell 7) from `PATH`, else Windows
-PowerShell's `powershell.exe`, with ngterm's integration script.
+endpoint. A live session on Windows runs the pane's selected Git Bash, PowerShell, CMD or WSL profile. With no profile,
+it uses a supported `command` from `ghostty.conf`, then PowerShell (`pwsh.exe` from `PATH`, else Windows
+PowerShell's `powershell.exe`). PowerShell uses ngterm's integration; Git Bash uses Ghostty's Bash integration.
+
+### Windows shell profiles
+
+Settings ▸ General ▸ Default shell selects the profile for new local sessions and windows. The sidebar's **+**
+menu selects a profile for one new session. Discovery checks `PATH`, standard installation directories and Git for
+Windows' registry entries, without executing discovered programs. It offers PowerShell 7, Windows PowerShell,
+Git Bash and Command Prompt when their executables exist. Registered WSL distributions are read from the user's
+Lxss registry keys and offered separately; discovery never starts a distribution.
+
+`%LOCALAPPDATA%\ngterm\settings.json` accepts `shellProfiles` for portable or custom installations. Each entry has a
+stable `id`, display `name`, absolute `executable`, separate `args`, optional `env` and optional `startingDirectory`:
+
+```json
+{
+  "shellProfiles": [{
+    "id": "portable-git",
+    "name": "Portable Git Bash",
+    "executable": "D:/Tools/PortableGit/bin/bash.exe",
+    "args": ["--login", "-i"],
+    "env": {"CHERE_INVOKING": "1", "MSYSTEM": "MINGW64"},
+    "startingDirectory": "D:/Projects"
+  }]
+}
+```
+
+Merge these keys into the existing settings file while the app is closed. Custom entries override detected ones
+with the same id. Installed shells are detected once per app launch. The settings picker saves the complete selected object as `defaultShellProfile`; `null` selects
+Config / system default. The optional starting directory applies to sessions created from the sidebar and New
+Session action; an explicit CLI directory, a split's directory or a restored session's directory remains its own.
+
+Each primary/split pane saves a copy of its profile in its session snapshot (`shellProfile`/`splitShellProfile`).
+Splitting and duplicating preserve it; changing the default affects only new sessions. Removing a catalog entry or
+an executable does not silently switch existing panes to another shell. Old snapshots without profiles retain the
+config/system behavior. Explicit creation commands keep their existing execution semantics.
+
+Live uses the same executable and environment as the selected profile. Git Bash and PowerShell use injected
+integration and accept login/interactive flags (plus PowerShell's banner/stay-open flags). Git Bash integration
+paths use forward slashes, including paths containing spaces; `CHERE_INVOKING=1` keeps the pane's directory.
+
+CMD and WSL run directly in the Windows session server's ConPTY. Reattaching preserves the running process,
+its directory and variables, including WSL's Linux shell. CMD preserves startup switches such as `/D`, `/Q`
+and `/V:OFF`. WSL preserves `--distribution`/`-d`, `--user`/`-u` and `--cd` argument pairs. WSL's `--cd` controls
+its Linux starting directory; otherwise WSL translates the Windows launch directory normally. Profiles with
+one-shot commands or management options (for example CMD `/C` or WSL `--shutdown`) open ordinary sessions,
+as the menu/settings indicate, rather than silently dropping their options.
+
+CMD and WSL do not receive injected shell integration: automatic command markers and OSC directory updates
+depend on the shell's own configuration. WSL foreground Linux processes are not captured by the Windows
+process table for replay after the server itself ends. Live preserves them while the server and distribution
+remain running; it does not survive a Windows reboot or `wsl --shutdown`. Explicit WSL creation commands run
+through `/bin/sh -lc` in the selected distribution. A surviving daemon always reattaches to its original process.
+
+Focused checks: `cargo test -p ngterm-core --lib profile`, `cargo test -p ngterm-core --lib live`, and
+`cargo test -p ngterm-term --lib profile_tests`. Windows GUI smoke tests belong on CI or a throwaway VM: choose
+Git Bash, split/duplicate, change the default to PowerShell, then quit/reopen with Live enabled and verify that the
+existing Bash process and directory survive. Repeat with CMD and WSL, checking the session leader PID and a shell
+variable across host restarts; in WSL also check the Linux PID and distribution. Include a custom path with spaces.
 
 ### WPE WebKit
 

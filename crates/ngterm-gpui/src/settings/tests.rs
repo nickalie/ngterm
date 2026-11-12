@@ -1587,3 +1587,31 @@ fn the_interface_grid_keeps_the_info_picker_and_quick_terminal_size_visible(cx: 
             .is_interface_element_hidden(ngterm_core::persist::settings::InterfaceElement::WorkspaceIcons)
     );
 }
+
+#[test]
+fn the_shell_picker_preserves_a_saved_profile_after_its_catalog_entry_is_removed() {
+    let profile = ngterm_core::shell_profiles::ShellProfile::new(
+        "portable",
+        "Portable Git Bash",
+        "Z:/Missing/bash.exe".into(),
+        &["-li"],
+    );
+    let shown = snapshot(AppSettings {
+        default_shell_profile: Some(profile.clone()),
+        ..AppSettings::default()
+    });
+    let items = every_item(&shown);
+    let picker = picker_of(item(&items, "settings-shell-profile"));
+    assert_eq!(picker.label(), "Portable Git Bash");
+    assert_eq!(
+        picker.pick(picker.selected.unwrap()),
+        Some(SettingsChange::General(GeneralChange::DefaultShellProfile(Some(
+            profile
+        ))))
+    );
+    assert_eq!(
+        picker.pick(0),
+        Some(SettingsChange::General(GeneralChange::DefaultShellProfile(None)))
+    );
+    assert!(has(&shown, "settings-shell-profile-missing"));
+}

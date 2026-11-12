@@ -167,6 +167,7 @@ impl PaneSpec {
             live: None,
             painter: None,
             status_file: None,
+            shell_profile: None,
         }
     }
 

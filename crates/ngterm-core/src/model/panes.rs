@@ -66,6 +66,7 @@ impl AppStore {
         session.split.shown = shown;
         if shown && !session.split.exists {
             session.split.exists = true;
+            session.split_shell_profile.clone_from(&session.shell_profile);
             session.split_pane_identity = Some(Uuid::new_v4());
             session.split.focused = true;
         }
@@ -182,6 +183,7 @@ impl AppStore {
         session.split_pane_identity = None;
         session.split_restore = PaneRestore::default();
         session.split_launch = PaneLaunch::default();
+        session.split_shell_profile = None;
         session.search.clear();
         self.outbox.removed_watermarks.extend(removal);
         self.outbox.finalized_panes.extend(finalized);
@@ -442,6 +444,7 @@ fn swap_pane_fields(session: &mut Session) {
     std::mem::swap(&mut session.osc_title, &mut session.split_title);
     std::mem::swap(&mut session.restore, &mut session.split_restore);
     std::mem::swap(&mut session.launch, &mut session.split_launch);
+    std::mem::swap(&mut session.shell_profile, &mut session.split_shell_profile);
     let backgrounds = &mut session.pane_backgrounds;
     std::mem::swap(&mut backgrounds.left, &mut backgrounds.right);
     session.search.owner = session.search.owner.map(other_pane);
@@ -499,6 +502,7 @@ fn promote_split_survivor(session: &mut Session) {
     session.pane_identity = session.split_pane_identity.take().unwrap_or_else(Uuid::new_v4);
     session.split = SplitLayout::default();
     session.launch = std::mem::take(&mut session.split_launch);
+    session.shell_profile = session.split_shell_profile.take();
     session.current_cwd = session
         .split_cwd
         .take()

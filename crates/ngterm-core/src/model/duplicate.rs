@@ -73,19 +73,27 @@ impl Session {
 
 impl AppStore {
     /// Duplicates a session: a fresh shell in the same workspace, right after the source, rooted at the source's
-    /// focused-pane cwd. Only the directory carries over: an automatic name, no split, scratch, status, flag or
+    /// focused-pane cwd and shell profile. It gets an automatic name, no split, scratch, status, flag or
     /// command. Selected, as a new session is. `None` when no session matches.
     pub fn duplicate_session(&mut self, id: Uuid, home: &str) -> Option<Uuid> {
         let session = self.session(id)?;
         let cwd = session.local_working_directory(session.focused_cwd(), home);
+        let profile = if session.split.focused {
+            session.split_shell_profile.clone()
+        } else {
+            session.shell_profile.clone()
+        };
         let location = self.session_location(id)?;
-        self.add_session(
+        let copy = self.add_session(
             location.workspace,
             NewSession {
                 at: Some(location.index + 1),
+                shell_profile: profile.clone(),
                 ..NewSession::at_cwd(cwd)
             },
-        )
+        )?;
+        self.session_mut(copy)?.shell_profile = profile;
+        Some(copy)
     }
 
     /// Creates `copy` as a companion of `source`, after its group (a sibling of a companion source): each pane runs its
@@ -103,7 +111,12 @@ impl AppStore {
         home: &str,
     ) -> Result<Uuid, CompanionRefusal> {
         let slot = self.companion_slot(source, Some(copy.left.cwd.clone()), home)?;
+        let profiles = self
+            .session(source)
+            .map(|session| (session.shell_profile.clone(), session.split_shell_profile.clone()))
+            .ok_or(CompanionRefusal::NoSuchSession)?;
         let spec = NewSession {
+            shell_profile: profiles.0.clone(),
             at: Some(slot.index),
             select: copy.select,
             parent: Some(slot.parent),
@@ -133,6 +146,8 @@ impl AppStore {
             right.rebind(&ids);
         }
         if let Some(session) = self.session_mut(id) {
+            session.shell_profile = profiles.0;
+            session.split_shell_profile = profiles.1.filter(|_| session.split.exists);
             session.launch.command = copy.left.command;
             session.launch.argv = copy.left.argv;
             if let Some(right) = copy.right {
@@ -142,5 +157,23 @@ impl AppStore {
         }
         self.save();
         Ok(id)
+    }
+}
+
+#[cfg(test)]
+mod profile_regressions {
+    use crate::model::WindowLibrary;
+    use crate::shell_profiles::ShellProfile;
+
+    #[test]
+    fn duplicating_a_config_shell_does_not_adopt_a_later_default_profile() {
+        let mut library = WindowLibrary::new("/home/user");
+        let window = library.new_window(None);
+        let original = library.store(window).unwrap().selected_session_id().unwrap();
+        library.set_default_shell_profile(Some(ShellProfile::new("bash", "Bash", "/bin/bash".into(), &[])));
+        let store = library.store_mut(window).unwrap();
+        let copy = store.duplicate_session(original, "/home/user").unwrap();
+        assert_eq!(store.session(copy).unwrap().shell_profile, None);
+        assert_eq!(store.session(original).unwrap().shell_profile, None);
     }
 }
