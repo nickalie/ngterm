@@ -186,6 +186,12 @@ def test_a_kotlin_expression_body_after_a_generic_return_type_resolves(decl, nex
         ("fun cast(x: Any) = x as\n    String", 3),
         ("fun has(x: Int) = x !in\n    listOf(1)", 3),
         ("fun pick(c: Boolean) = if (c) 1 else\n    2", 3),
+        ("fun choose(c: Boolean, to: Int) = if (c) to else\n    run { 1 }", 3),
+        ("fun f(c: Boolean): Unit = if (c) return else\n    doIt()", 3),
+        ("fun pair(to: Int) = to to\n    1", 3),
+        ("fun pair(x: Int, to: Int) = x to to", 2),
+        ("fun both(and: Boolean, or: Boolean) = and or\n    or", 3),
+        ("fun x(and: Int) = 1 to and", 2),
     ],
 )
 def test_a_kotlin_expression_body_ending_in_a_word_stops_at_an_operand(decl, last):
@@ -228,6 +234,20 @@ def test_a_kotlin_delegating_constructor_without_a_body_runs_to_its_call():
         "kotlin",
     )
     assert (marker.name, marker.first, marker.last) == ("constructor", 3, 5)
+
+
+@pytest.mark.parametrize("comment", ["/* why */ ", "// why\n    "])
+def test_a_kotlin_delegating_constructor_body_after_a_comment_resolves(comment):
+    marker = only(
+        "class A(x: Int) {\n"
+        "    // e2e-coverage: off: why\n"
+        f"    constructor() : this(0) {comment}{{\n"
+        "        work()\n"
+        "    }\n"
+        "}\n",
+        "kotlin",
+    )
+    assert marker.last == marker.first + 2 + comment.count("\n")
 
 
 @pytest.mark.parametrize(

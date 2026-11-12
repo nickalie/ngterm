@@ -11,9 +11,9 @@ One comment form in Rust, Kotlin and Swift, on a line of its own:
 A function is what a coverage map counts as one: Rust `fn`; Kotlin `fun`, `constructor` and `init` blocks; Swift
 `func`, `init`, `deinit`, `subscript` and a computed `var`. Its body is its `{...}` group, or a Kotlin `= expression`
 that runs to the last line the expression continues on (a line ending in an operator, or followed by one starting with
-`.`, `?.`, `?:`, `&&`, `||`, `as` or `else`, continues it; a line ending in a word operator such as `to` or `and`
-continues it only when that word follows an operand, so `= to` ends at a parameter named `to`). A Kotlin secondary
-constructor with no `{...}` body runs to the end of its `this(...)` or `super(...)` call.
+`.`, `?.`, `?:`, `&&`, `||`, `as` or `else`, continues it; a line ending in `as`, `is`, `in` or `else` continues it,
+one ending in `to`, `and` or `or` only when that word follows an operand, so `= to` ends at a parameter named `to`).
+A Kotlin secondary constructor with no `{...}` body runs to the end of its `this(...)` or `super(...)` call.
 
 A marker with no reason, of an unknown kind, sharing its line with code, an `off-file` one below the file's first
 line, or a function marker with no function directly below it (or one with no body: a trait, interface or protocol
@@ -82,9 +82,12 @@ _ENDS_CONTINUING = frozenset({"=", ",", ".", "(", "[", "{", "+", "-", "*", "/", 
 _ENDS_CONTINUING_WORDS = frozenset({"as", "is", "in", "else", "to", "and", "or"})
 _STARTS_CONTINUING = frozenset({".", "?", "&", "|"})
 _STARTS_CONTINUING_WORDS = frozenset({"as", "else", "catch", "finally"})
-# Kotlin: words before a line-ending word operator that make that word an operand (`return to`), and the words that
-# start the next declaration on the following line, which a word operator never continues into.
-_NOT_OPERANDS = frozenset({"return", "throw", "else", "if", "when", "try", "in", "is", "as", "to", "and", "or"})
+# Kotlin: the word operators that are hard keywords (never an operand, so a line ending in one always continues), the
+# soft ones a name may share (`to`, `and`, `or`), the words before a soft one that make it an operand (`return to`),
+# and the words that start the next declaration on the following line, which a word operator never continues into.
+_HARD_WORDS = frozenset({"as", "is", "in", "else"})
+_SOFT_WORDS = frozenset({"to", "and", "or"})
+_NOT_OPERANDS = frozenset({"return", "throw", "if", "when", "try"}) | _HARD_WORDS
 _NOT_CONTINUING_WORDS = (_DECLARATIONS["kotlin"] - {"object"}) | _MODIFIERS["kotlin"]
 # Swift: the words of a protocol requirement's accessor list (`{ get set }`, `{ get async throws }`).
 _ACCESSOR_WORDS = frozenset({"get", "set", "async", "throws", "mutating", "nonmutating"})
@@ -432,8 +435,11 @@ class _Resolver:
         ):
             return None
         call = pairs[index + 1]
-        if call + 1 < len(toks) and toks[call + 1].text == "{":
-            return pairs[call + 1]
+        body = call + 1
+        while body < len(toks) and toks[body].kind == COMMENT:
+            body += 1
+        if body < len(toks) and toks[body].text == "{":
+            return pairs[body]
         return call
 
     def _expression_end(self, equals: int) -> int:
@@ -475,20 +481,33 @@ class _Resolver:
     def _word_operator(self, word: int, coming: Token) -> bool:
         """Whether the word at `word` (`to`, `and`, `as`, `else`...) is an infix operator that needs what follows,
         rather than an operand named like one (`= to`, `x.and`), or a last word before the next declaration."""
-        toks = self.toks
         if coming.kind == IDENT and coming.text in _NOT_CONTINUING_WORDS:
             return False
-        before = word - 1
-        while before >= 0 and toks[before].kind == COMMENT:
-            before -= 1
-        if before < 0:
+        if self.toks[word].text in _HARD_WORDS:
+            # a hard keyword is never an operand
+            return True
+        return self._ends_operand(self._before(word))
+
+    def _before(self, index: int) -> int:
+        """The index of the last non-comment token before `index`; -1 when there is none."""
+        index -= 1
+        while index >= 0 and self.toks[index].kind == COMMENT:
+            index -= 1
+        return index
+
+    def _ends_operand(self, index: int) -> bool:
+        """Whether the token at `index` ends an operand: a literal, `)`, `]`, `}`, or a name that is not a keyword;
+        a soft word operator (`to`, `and`, `or`) is a name only when no operand precedes it."""
+        if index < 0:
             return False
-        token = toks[before]
+        token = self.toks[index]
         if token.kind == LITERAL:
             return True
         if token.kind == PUNCT:
-            # `)`, `]` or `}` end an operand; `!` makes `!in` and `!is`
-            return token.text in ")]}" or (token.text == "!" and toks[word].text in ("in", "is"))
+            return token.text in ")]}"
+        if token.text in _SOFT_WORDS:
+            # `= to to`: the first `to` is an operand; `x to to`: it is the operator, and the second one its operand
+            return not self._ends_operand(self._before(index))
         return token.text not in _NOT_OPERANDS
 
     def _name(self, keyword: int) -> str:
