@@ -332,6 +332,18 @@ its lowest value; `--add` takes at least two summaries of one build (one run's l
 tolerance) and raises each floor to the batch's lowest, never lowering one; a crate new to the workspace is added, a
 removed one dropped. Raise the floors from CI runs of the same commit.
 
+A crate whose % moves between runs of one build has code the suite runs only on some timing. `coverage_diff.py` names
+it from two or more runs' `lcov.info` (the CI coverage artifacts of one commit): each crate's % per run and its spread,
+and each group of lines some runs hit and others missed, with the runs, the function and the source line:
+
+```sh
+.venv/bin/python conformance/tools/coverage_diff.py A/coverage/lcov.info B/coverage/lcov.info C/coverage/lcov.info \
+  --max-spread 0.1                                     # 0, 1 a crate's spread over 0.1 pt, 2 bad input
+```
+
+Fix such a line in the test or the harness (wait on a read-back of the state that runs it), not with a wider
+tolerance.
+
 ## Safety guards
 
 These runs share a machine with a live terminal (an installed ngterm, or an agterm), so the harness refuses a launch
