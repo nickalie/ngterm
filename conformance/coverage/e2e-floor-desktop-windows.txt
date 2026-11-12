@@ -7,15 +7,16 @@
 # --summary A/summary.md --summary B/summary.md ... (each floor raised to the batch's lowest; a new crate added, a gone
 # one dropped). Seeded from the per-crate minimum of three same-build CI runs.
 # The total first, then sorted by crate.
-total 0.00
-ngterm-app 8.81
+total 59.34
+ngterm-app 20.44
 ngterm-core 60.88
-ngterm-ctl 74.03
+ngterm-ctl 74.42
 ngterm-ghostty-vt 52.14
 ngterm-gpui 68.05
-ngterm-host 40.84
-ngterm-proto 77.77
-ngterm-pty 58.35
-ngterm-server 74.69
+ngterm-host 46.55
+ngterm-proto 79.44
+ngterm-pty 59.72
+ngterm-server 75.03
 ngterm-session 41.93
 ngterm-term 58.18
+ngterm-update 5.26
