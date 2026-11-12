@@ -466,6 +466,18 @@ with no fuzz) are recorded in [that directory's README](../build/patches/ghostty
 library stores as C API the app needs, the others change its logic for a fix or a parity behavior Rust cannot reach
 from outside, each with its reason, upstream status, remove-when condition and verification. A pin bump rebases them
 all and re-runs every verification, and drops a patch only once the pinned source has its behavior.
+The pin is Ghostty's `v1.4.0` release (`LIBGHOSTTY_VT_REV` holds its commit), built with Zig 0.17.0, whose
+optimize names changed (the build passes `-Doptimize=fast`, Zig 0.16's `ReleaseFast`) and whose `zig build` takes
+the vendored global cache from `ZIG_GLOBAL_CACHE_DIR` only. Its patches: 0002 (hosted Wuffs builds, the
+allocator-stub half), 0003 (the cursor hyperlink across a page replacement), 0004 (skipped cells unstyled, HTML only:
+the VT formatter steps over gaps itself since this release) and 0005 (clipboard callback metadata); 0001, the
+placement getters, is retired by the release's render-state image API. What this pin brought to the app: Kitty
+placements, placeholders included, are drawn from that render-state API; animations run on the library's
+`ghostty_kitty_graphics_animation_tick`; the session server cuts its Kitty reply barriers at `vt_write_until`
+boundaries, and cancelled or aborted APCs leave none; binary terminal snapshots carry Kitty images, placements and
+pixels, so an update handoff between builds of the same pin keeps them (the session server still loads no
+file/temp/shm media); and the Kitty clipboard protocol (OSC 5522) runs at full fidelity
+([The selection clipboard](#the-selection-clipboard), [Live sessions](#live-sessions)).
 `LIBGHOSTTY_VT_*` is the one Ghostty pin (the source archive's sha256 and the theme package's included): it follows
 the latest Ghostty release, not upstream agterm's `GHOSTTY_REV`, whose vt API lacks what the app needs. libghostty-vt is linked
 statically; staging takes the prefix's `share/` (the resources) only. `.cargo/config.toml` makes `scripts/pkg-config.sh`
@@ -713,6 +725,13 @@ panes keep a PTY of their own, and an instance with live sessions off starts no 
   with their terminals: the PTYs pass to the new server (descriptors on Linux and macOS; on Windows the ConPTY handles,
   only on the Windows builds the handoff was proven on). A failed handoff rolls back, the sessions stay with the old
   server, and the app offers the Live sessions reset.
+- Versions: a connection opens with a JSON control frame whose operations are stable (a new field is optional,
+  unknown ones are ignored), then speaks postcard messages of one protocol version (`PROTOCOL_VERSION` in
+  `crates/ngterm-session/src/protocol.rs`, which lists each bump: 5 since the Kitty clipboard's lazy attach paste
+  bridge). API and attach connections need the exact version and refuse any other with `protocol_mismatch`, so a
+  viewer or `ngterm-session attach` of another build upgrades to the server's; a control connection is taken at any
+  version, which is how a new build asks an older server for the handoff. The handoff sends binary terminal
+  snapshots only between equal libghostty-vt pins, else the formatter's VT replay.
 - Across the rename: a server from before the build took the name ngterm runs as `agterm-session`, its sessions named
   `agterm-<id>`; the handoff to `ngterm-session` renames them `ngterm-<id>`, so the panes find them. Their programs
   keep the environment they started with (`AGTERM_*`), and the shells among them keep reporting agent status

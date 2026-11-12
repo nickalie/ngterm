@@ -481,6 +481,15 @@ the release workspace without what links WPE WebKit, `ngterm-gpui` with its defa
 `ngterm-wpe`'s `ngterm-web` worker, so the staged app shows HTML overlays and the worker needs WPE WebKit
 (docs/development.md > WPE WebKit; the CI's is Arch's `wpewebkit`). `--stage DIR` runs a tree staged elsewhere instead.
 
+Ghostty pin. `LIBGHOSTTY_VT_REV` is Ghostty's `v1.4.0`, built with Zig 0.17.0 (`-Doptimize=fast`) and patched with
+0002, 0003, 0004 (HTML only) and 0005 (`build/patches/ghostty-vt/README.md`; 0001 is retired by the render-state image
+API). What it brought to the build: Kitty images drawn from the render-state API and animated by the library's
+tick, the session server's Kitty reply barriers at `vt_write_until` boundaries, Kitty images kept across an equal-pin
+update handoff, and the Kitty clipboard protocol (OSC 5522) per MIME type (docs/development.md > Native dependencies,
+The selection clipboard). The session server's message protocol is version 5: API and attach connections need the
+exact version, the JSON control layer (and with it the update handoff) takes any (docs/development.md > Live
+sessions).
+
 Staging. `scripts/stage.sh` assembles the tree the harness launches, `target/conformance-stage` by default:
 `bin/ngterm`, `bin/ngtermctl` (the harness takes it from beside `--bin`; upstream's CLI is `agtermctl`,
 and the CLI tests expect the adapter's name in usage lines), `bin/ngterm-web` (the Linux HTML worker beside the app)

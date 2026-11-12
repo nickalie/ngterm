@@ -6,8 +6,9 @@ its stamp, so a changed patch prepares a new tree and rebuilds the library. Each
 pristine tree (`a/` and `b/` labels), its header saying what it changes and where it comes from. A patch that changes a
 header is followed by `scripts/gen-ghostty-vt-bindings.sh` (its `--check` holds).
 
-The carried patches change library logic for fixes or parity behavior Rust cannot reach from outside (0002 to
-0004). Each records its reason, upstream status and remove-when verification, in the form of herdr's
+At the pin (Ghostty `v1.4.0`, Zig 0.17.0, built `-Doptimize=fast`) four patches are carried. 0002 to 0004 change
+library logic for fixes or parity behavior Rust cannot reach from outside; 0005 only exposes data the library already
+holds (the clipboard callback's effective password and protocol origin) as C API. Each records its reason, upstream status and remove-when verification, in the form of herdr's
 `vendor/libghostty-vt.patches.md`. A gap Rust can fill is filled in Rust, not here.
 
 Patch 0001 (placement-id namespaces and parent links) was retired at v1.4.0: the official render-state image API

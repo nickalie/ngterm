@@ -346,11 +346,11 @@ fn the_stamp_names_the_pinned_zig_and_its_cache() {
 
 #[test]
 fn the_pin_is_the_revision_and_a_digest_of_the_patches() {
-    let pins = "# pins\nLIBGHOSTTY_VT_ZIG_VERSION=\"0.17.0\"\nLIBGHOSTTY_VT_REV=\"81598385\"\n";
+    let pins = "# pins\nLIBGHOSTTY_VT_ZIG_VERSION=\"0.17.0\"\nLIBGHOSTTY_VT_REV=\"83fb9562\"\n";
     let stamp = "zig=/z\nversion-string=1.4.0\npatch=0001-a.patch 00ff\npatch=0002-b.patch 11ee\n";
     let pin = zig_build::pin(pins, stamp).unwrap();
     let (rev, digest) = pin.split_once(' ').unwrap();
-    assert_eq!(rev, "81598385");
+    assert_eq!(rev, "83fb9562");
     assert_eq!(digest.len(), 16);
     // the same patches give the same pin; another patch, another order or another revision a different one
     assert_eq!(zig_build::pin(pins, stamp).unwrap(), pin);
@@ -358,7 +358,7 @@ fn the_pin_is_the_revision_and_a_digest_of_the_patches() {
     assert_ne!(zig_build::pin(pins, &other_patch).unwrap(), pin);
     let reordered = "patch=0002-b.patch 11ee\npatch=0001-a.patch 00ff\n";
     assert_ne!(zig_build::pin(pins, reordered).unwrap(), pin);
-    let other_rev = pins.replace("81598385", "81598386");
+    let other_rev = pins.replace("83fb9562", "83fb9563");
     assert_ne!(zig_build::pin(&other_rev, stamp).unwrap(), pin);
     // the stamp's other lines do not count
     assert_eq!(zig_build::pin(pins, &stamp.replace("1.4.0", "9")).unwrap(), pin);
