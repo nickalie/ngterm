@@ -22,6 +22,8 @@ cd = _load("coverage_diff")
 
 # A legacy-mangled Rust symbol: ngterm_gpui::state::State::apply
 APPLY = "_ZN11ngterm_gpui5state5State5apply17h0123456789abcdefE"
+# a closure in it: ngterm_gpui::state::State::apply::{{closure}}
+APPLY_CLOSURE = "_ZN11ngterm_gpui5state5State5apply28_$u7b$$u7b$closure$u7d$$u7d$17h0123456789abcdefE"
 
 
 def lcov(files: dict[str, dict[int, int]], functions: dict[str, list[tuple[int, str]]] | None = None) -> str:
@@ -76,6 +78,19 @@ def test_a_line_hit_in_one_run_only_is_named_with_its_runs_and_function(
     assert "hit by 1, 3; missed by 2" in out
     assert "ngterm_gpui::state::State::apply" in out
     assert out.count("crates/ngterm-gpui/src/state.rs:") == 1
+
+
+def test_a_line_below_a_closure_names_the_closure_and_its_enclosing_function(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # lcov gives functions their start only: line 6 is in the closure starting on 3 or after it, in apply
+    functions = {GPUI: [(1, APPLY), (3, APPLY_CLOSURE)]}
+    a = write(tmp_path, "a.info", lcov({GPUI: {1: 1, 3: 1, 6: 1}}, functions))
+    b = write(tmp_path, "b.info", lcov({GPUI: {1: 1, 3: 1, 6: 0}}, functions))
+    _, out, _ = run(capsys, a, b)
+    assert (
+        "in `ngterm_gpui::state::State::apply::{{closure}}`, or after it in `ngterm_gpui::state::State::apply`" in out
+    )
 
 
 def test_adjacent_lines_with_another_pattern_split_the_group(
@@ -143,6 +158,27 @@ def test_the_source_line_is_quoted_from_the_repo(tmp_path: Path, capsys: pytest.
     assert "self.redraw();" in out
 
 
+def test_a_source_outside_the_repo_is_not_quoted(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    outside = tmp_path / "outside" / "local.rs"
+    outside.parent.mkdir()
+    outside.write_text("let secret = 1;\n", encoding="utf-8")
+    (tmp_path / "repo").mkdir()
+    for name in (str(outside), "../outside/local.rs"):
+        a = write(tmp_path, "a.info", lcov({name: {1: 1}}))
+        b = write(tmp_path, "b.info", lcov({name: {1: 0}}))
+        _, out, _ = run(capsys, a, b, "--repo", tmp_path / "repo")
+        assert "local.rs:1`" in out
+        assert "secret" not in out
+
+
+def test_test_names_blank_lines_and_a_bom_are_lcov(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    a = write(tmp_path, "a.info", "\ufeffTN:\n\n" + lcov({GPUI: {1: 1}}))
+    b = write(tmp_path, "b.info", "TN:suite\n" + lcov({GPUI: {1: 0}}) + "\n")
+    code, out, _ = run(capsys, a, b)
+    assert code == 0
+    assert "state.rs:1`" in out
+
+
 def test_the_report_goes_to_out(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     a = write(tmp_path, "a.info", lcov({GPUI: {1: 1}}))
     b = write(tmp_path, "b.info", lcov({GPUI: {1: 0}}))
@@ -159,12 +195,24 @@ def test_the_report_goes_to_out(tmp_path: Path, capsys: pytest.CaptureFixture[st
         (["a.info", "missing.info"], "missing.info"),
         (["a.info", "bad.info"], "bad.info:2"),
         (["a.info", "a.info", "--label", "one"], "--label"),
+        # no data is bad input, not a run that hit nothing: the gate must not pass on it
+        (["empty.info", "empty.info", "--max-spread", "0.1"], "empty.info: no SF record"),
+        (["a.info", "empty.info"], "empty.info: no SF record"),
+        (["a.info", "summary.info"], "summary.info:1"),
+        (["a.info", "truncated.info"], "truncated.info: the record of crates/ngterm-gpui/src/state.rs"),
+        (["a.info", "unclosed.info"], "unclosed.info:3"),
+        (["a.info", "junk.info"], "junk.info:3"),
     ],
 )
 def test_bad_input_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str], argv: list[str], message: str) -> None:
     write(tmp_path, "a.info", lcov({GPUI: {1: 1}}))
     write(tmp_path, "bad.info", f"SF:{GPUI}\nDA:one,1\nend_of_record\n")
-    code, _, err = run(capsys, *(arg if arg.startswith("--") or arg == "one" else tmp_path / arg for arg in argv))
+    write(tmp_path, "empty.info", "")
+    write(tmp_path, "summary.info", '{"data": [], "type": "llvm.coverage.json.export"}\n')
+    write(tmp_path, "truncated.info", lcov({GPUI: {1: 1, 2: 1}}).removesuffix("end_of_record\n"))
+    write(tmp_path, "unclosed.info", f"SF:{GPUI}\nDA:1,1\nSF:{CORE}\nDA:1,1\nend_of_record\n")
+    write(tmp_path, "junk.info", f"SF:{GPUI}\nDA:1,1\nnot lcov at all\nend_of_record\n")
+    code, _, err = run(capsys, *(tmp_path / arg if arg.endswith(".info") else arg for arg in argv))
     assert code == 2
     assert message in err
 
@@ -177,16 +225,30 @@ def test_bad_input_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str], a
          "core::ptr::drop_in_place<ngterm_core::model::Model>"),
         ("_RNvCs1234_4core3foo", "_RNvCs1234_4core3foo"),
         ("plain", "plain"),
+        # an escape no code point has stays mangled, not a crash
+        ("_ZN9$u110000$E", "_ZN9$u110000$E"),
+        ("_ZN7$ud800$E", "_ZN7$ud800$E"),
     ],
 )
 def test_legacy_rust_symbols_are_demangled(symbol: str, name: str) -> None:
     assert cd.demangle(symbol) == name
 
 
-@pytest.mark.skipif(not (shutil.which("c++filt") or shutil.which("llvm-cxxfilt")), reason="no c++filt on PATH")
-def test_v0_symbols_are_demangled_by_cxxfilt_without_disambiguators() -> None:
+@pytest.mark.parametrize("tool", ["c++filt", "llvm-cxxfilt"])
+def test_v0_symbols_are_demangled_by_cxxfilt_without_disambiguators(
+    tool: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = shutil.which(tool)
+    if not path:
+        pytest.skip(f"no {tool} on PATH")
+    # the tool demangle_all finds is this one, whichever comes first on PATH
+    monkeypatch.setattr(cd.shutil, "which", lambda name: path if name == tool else None)
     symbol = "_RNvNtCscNSrzPEvWDO_10ngterm_app8coverage13write_profile"
-    assert cd.demangle_all([symbol, APPLY]) == {
+    generic = "_ZN4core3ptr46drop_in_place$LT$ngterm_core..model..Model$GT$17h0123456789abcdefE"
+    # LLVM's demangler leaves legacy escapes as they are: the built-in one keeps those
+    assert cd.demangle_all([symbol, APPLY, generic, APPLY_CLOSURE]) == {
         symbol: "ngterm_app::coverage::write_profile",
         APPLY: "ngterm_gpui::state::State::apply",
+        generic: "core::ptr::drop_in_place<ngterm_core::model::Model>",
+        APPLY_CLOSURE: "ngterm_gpui::state::State::apply::{{closure}}",
     }

@@ -8,14 +8,15 @@ Reads the `lcov.info` of two or more runs of one build (`run-linux.sh --coverage
 
 - each workspace crate's line % per run and its spread (the highest run's % less the lowest's, in points);
 - the varying line groups: lines every run measures that some runs hit and others missed, grouped per file by runs of
-  neighbouring measured lines with the same pattern, each with the runs that hit it, the function it starts in and,
-  when the source is under `--repo`, its first line;
+  neighbouring measured lines with the same pattern, each with the runs that hit it, the function it starts in (lcov
+  has only a function's start: below a closure's start, the closure or the function around it) and, when the source
+  is under `--repo`, its first line;
 - lines only some runs measure (a build that differs between the runs, not timing).
 
 Files are compared by their path from `crates/` (or the whole path, `/` separated, outside it), so runs checked out
 on other roots or OSes line up. `--label` names the runs (one per LCOV, default 1, 2, ...). Exit 0, or 1 when a
-crate's spread is over `--max-spread` (each named on stderr), 2 on bad input (fewer than two runs, a missing or
-malformed file).
+crate's spread is over `--max-spread` (each named on stderr), 2 on bad input (fewer than two runs, a missing, empty,
+truncated or malformed file).
 """
 
 from __future__ import annotations
@@ -36,6 +37,9 @@ _HASH_SUFFIX = re.compile(r"::h[0-9a-f]{16}$")
 _DISAMBIGUATOR = re.compile(r"\[[0-9a-f]+\]")
 _ESCAPES = {"SP": "@", "BP": "*", "RF": "&", "LT": "<", "GT": ">", "LP": "(", "RP": ")", "C": ","}
 _ESCAPE = re.compile(r"\$([A-Z]+|u[0-9a-f]+)\$")
+# a record line inside an SF record: `DA:`, `FN:`, `FNDA:`, `LF:`, `BRDA:` and the like
+_RECORD = re.compile(r"^[A-Z]+:")
+_CLOSURE = re.compile(r"(\{\{closure\}\}|\{closure#\d+\})$")
 
 
 class InputError(Exception):
@@ -59,8 +63,9 @@ def repo_path(name: str) -> str:
 
 
 def read_lcov(path: Path) -> Run:
+    """One run's lcov; an empty, truncated or non-lcov file is an `InputError`, never an empty run."""
     try:
-        text = path.read_bytes().decode("utf-8")
+        text = path.read_bytes().decode("utf-8-sig")
     except (OSError, UnicodeDecodeError) as error:
         raise InputError(f"{path}: cannot read: {error}") from error
     run = Run()
@@ -68,10 +73,16 @@ def read_lcov(path: Path) -> Run:
     for number, line in enumerate(text.splitlines(), start=1):
         try:
             if line.startswith("SF:"):
+                if current is not None:
+                    raise ValueError
                 current = repo_path(line[3:])
                 run.lines.setdefault(current, {})
                 run.functions.setdefault(current, {})
-            elif current is None or line == "end_of_record":
+            elif current is None:
+                # between records: only a test name or a blank line
+                if line.strip() and not line.startswith("TN:"):
+                    raise ValueError
+            elif line == "end_of_record":
                 current = None
             elif line.startswith("DA:"):
                 line_number, count = (int(part) for part in line[3:].split(",")[:2])
@@ -80,13 +91,20 @@ def read_lcov(path: Path) -> Run:
             elif line.startswith("FN:"):
                 start, name = line[3:].split(",", 1)
                 run.functions[current].setdefault(int(start), name)
+            elif not _RECORD.match(line):
+                raise ValueError
         except ValueError:
             raise InputError(f"{path}:{number}: not an lcov record: {line!r}") from None
+    if current is not None:
+        raise InputError(f"{path}: the record of {current} has no end_of_record (a truncated file?)")
+    if not run.lines:
+        raise InputError(f"{path}: no SF record (an empty or non-lcov file?)")
     return run
 
 
 def demangle(symbol: str) -> str:
-    """A legacy-mangled Rust symbol (`_ZN...E`) as its path, hash dropped; any other symbol as it is."""
+    """A legacy-mangled Rust symbol (`_ZN...E`) as its path, hash dropped; any other symbol, or one with a malformed
+    escape, as it is."""
     if not symbol.startswith("_ZN") or not symbol.endswith("E"):
         return symbol
     body, parts = symbol[3:-1], []
@@ -101,14 +119,24 @@ def demangle(symbol: str) -> str:
     if parts and _HASH.match(parts[-1]):
         parts.pop()
 
-    def unescape(part: str) -> str:
-        part = part.replace("..", "::")
-        return _ESCAPE.sub(
-            lambda m: _ESCAPES.get(m.group(1)) or (chr(int(m.group(1)[1:], 16)) if m.group(1)[0] == "u" else m.group()),
-            part,
-        )
+    def char(escape: re.Match[str]) -> str:
+        code = escape.group(1)
+        if code in _ESCAPES:
+            return _ESCAPES[code]
+        if code[0] != "u":
+            return escape.group()
+        value = int(code[1:], 16)
+        if value > 0x10FFFF or 0xD800 <= value <= 0xDFFF:
+            raise ValueError(code)
+        return chr(value)
 
-    return "::".join(unescape(part.removeprefix("_")) if part.startswith("_$") else unescape(part) for part in parts)
+    def unescape(part: str) -> str:
+        return _ESCAPE.sub(char, part.replace("..", "::"))
+
+    try:
+        return "::".join(unescape(part.removeprefix("_")) if part.startswith("_$") else unescape(part) for part in parts)
+    except ValueError:
+        return symbol
 
 
 def crate_of(path: str, repo: Path, names: dict[str, str]) -> str:
@@ -159,35 +187,52 @@ def varying_groups(runs: Sequence[Run]) -> tuple[list[Group], list[tuple[str, in
 
 
 def demangle_all(symbols: Sequence[str]) -> dict[str, str]:
-    """Each symbol demangled: by `c++filt` or `llvm-cxxfilt` when one is on PATH (they know Rust's v0 scheme), else
-    by `demangle`; crate disambiguators (`[95244b09b13463f6]`) and legacy hashes dropped."""
-    unique = sorted(set(symbols))
-    names = [demangle(symbol) for symbol in unique]
+    """Each symbol demangled, crate disambiguators (`[95244b09b13463f6]`) and legacy hashes dropped: a legacy one
+    (`_ZN...E`) by `demangle`, the rest (Rust's v0 `_R...`) by `c++filt` or `llvm-cxxfilt` when one is on PATH; LLVM's
+    demangler leaves legacy escapes (`$LT$`, `..`) as they are, so it never gets those."""
+    names = {symbol: demangle(symbol) for symbol in set(symbols)}
+    rest = sorted(symbol for symbol, name in names.items() if name == symbol)
     tool = shutil.which("c++filt") or shutil.which("llvm-cxxfilt")
-    if tool and unique:
+    if tool and rest:
         try:
-            done = subprocess.run([tool], input="\n".join(unique) + "\n", capture_output=True, text=True, check=False)
+            done = subprocess.run([tool], input="\n".join(rest) + "\n", capture_output=True, text=True, check=False)
             lines = done.stdout.splitlines()
-            if done.returncode == 0 and len(lines) == len(unique):
-                names = lines
+            if done.returncode == 0 and len(lines) == len(rest):
+                names.update(zip(rest, lines, strict=True))
         except OSError:
             pass
-    return {symbol: _HASH_SUFFIX.sub("", _DISAMBIGUATOR.sub("", name)) for symbol, name in zip(unique, names, strict=True)}
+    return {symbol: _HASH_SUFFIX.sub("", _DISAMBIGUATOR.sub("", name)) for symbol, name in names.items()}
 
 
-def function_at(runs: Sequence[Run], path: str, line: int) -> str | None:
-    """The mangled name of the function starting closest above `line`."""
+def function_starts(runs: Sequence[Run], path: str) -> dict[int, str]:
+    """The mangled names of the functions in `path` by their start line, over all runs."""
     starts: dict[int, str] = {}
     for run in runs:
         for start, name in run.functions.get(path, {}).items():
             starts.setdefault(start, name)
-    before = [start for start in starts if start <= line]
-    return starts[max(before)] if before else None
+    return starts
+
+
+def function_at(starts: Mapping[int, str], readable: Mapping[str, str], line: int) -> str | None:
+    """Where `line` is, from the function starting closest above it. lcov gives a function its start only, so when
+    that one is a closure the line is in it or after it, in the closest function above it that is not a closure."""
+    before = sorted((start for start in starts if start <= line), reverse=True)
+    if not before:
+        return None
+    nearest = readable[starts[before[0]]]
+    if not _CLOSURE.search(nearest):
+        return f"in `{nearest}`"
+    outer = next((readable[starts[start]] for start in before if not _CLOSURE.search(readable[starts[start]])), None)
+    return f"in `{nearest}`" + (f", or after it in `{outer}`" if outer else "")
 
 
 def source_line(repo: Path, path: str, line: int) -> str | None:
+    """`path`'s line `line` when the file is under `repo`, else None (an absolute or `..` path quotes nothing)."""
     try:
-        lines = (repo / path).read_text(encoding="utf-8", errors="replace").splitlines()
+        source = (repo / path).resolve()
+        if not source.is_relative_to(repo.resolve()):
+            return None
+        lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
     return lines[line - 1].strip() if 0 < line <= len(lines) else None
@@ -230,8 +275,8 @@ def render(runs: Sequence[Run], labels: Sequence[str], repo: Path) -> tuple[str,
         out.append(f"| {crate} | " + " | ".join(cells) + f" | {spreads[crate]:.2f} |")
     groups, partial = varying_groups(runs)
     names: dict[str, str] = {}
-    functions = {id(group): function_at(runs, group.path, group.first) for group in groups}
-    readable = demangle_all([name for name in functions.values() if name])
+    starts = {path: function_starts(runs, path) for path in {group.path for group in groups}}
+    readable = demangle_all([name for names in starts.values() for name in names.values()])
     out += ["", f"## Varying line groups ({len(groups)}, {sum(group.lines for group in groups)} lines)", ""]
     if not groups:
         out.append("no line varies between the runs")
@@ -240,9 +285,9 @@ def render(runs: Sequence[Run], labels: Sequence[str], repo: Path) -> tuple[str,
         hit = ", ".join(label for label, ran in zip(labels, group.hit, strict=True) if ran)
         missed = ", ".join(label for label, ran in zip(labels, group.hit, strict=True) if not ran)
         line = f"- `{where}` ({group.lines} line{'s' if group.lines != 1 else ''}): hit by {hit}; missed by {missed}"
-        function = functions[id(group)]
+        function = function_at(starts[group.path], readable, group.first)
         if function:
-            line += f"; in `{readable[function]}`"
+            line += f"; {function}"
         text = source_line(repo, group.path, group.first)
         if text:
             line += f"\n  `{text}`"
