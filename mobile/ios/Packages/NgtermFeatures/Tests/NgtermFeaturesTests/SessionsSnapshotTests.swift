@@ -134,6 +134,20 @@ internal struct SessionsSnapshotTests {
         ScreenSnapshot.check(screen(try listed([])), named: "sessions-empty", variant: variant)
     }
 
+    @Test("New session under way: a spinner in the +'s place, over the list or no sessions", arguments: [false, true])
+    internal func creating(isEmpty: Bool) async throws {
+        defer { test.remove() }
+        let model = try listed(isEmpty ? [] : Self.sessions)
+        let gate = test.core.hold("createSession")
+        let creating = model.createAndOpen { _ in
+            // a golden opens nothing
+        }
+        let name = isEmpty ? "sessions-empty-creating" : "sessions-creating"
+        ScreenSnapshot.check(screen(model), named: name, variant: .light)
+        gate.open()
+        await creating?.value
+    }
+
     @Test("offline, a refresh that failed, and an End that failed")
     internal func banners() async throws {
         defer { test.remove() }

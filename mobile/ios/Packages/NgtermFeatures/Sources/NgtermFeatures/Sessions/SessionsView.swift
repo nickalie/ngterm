@@ -87,6 +87,27 @@ public struct SessionsView: View {
         }
     }
 
+    // the spinner takes the button's place so a second tap can't start another create
+    @ViewBuilder private var newSessionButton: some View {
+        if model.isCreating {
+            ProgressView()
+                .accessibilityLabel(String(localized: "Creating"))
+                .accessibilityIdentifier("creating-session")
+        } else {
+            Menu {
+                Button(String(localized: "New named session…"), systemImage: "character.cursor.ibeam") {
+                    model.openNewSession()
+                }
+                .accessibilityIdentifier("new-named-session")
+            } label: {
+                Label(String(localized: "New session"), systemImage: "plus")
+            } primaryAction: {
+                model.createAndOpen(then: onOpen)
+            }
+            .accessibilityIdentifier("new-session")
+        }
+    }
+
     private var problemActions: SessionsProblem.Actions {
         SessionsProblem.Actions(
             connect: model.connect,
@@ -127,14 +148,9 @@ public struct SessionsView: View {
                 ToolbarItem(placement: .principal) {
                     SessionsTitle(machine: state.machine)
                 }
-                if isConnected {
+                if hasNewSessionButton(state) {
                     ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            model.openNewSession()
-                        } label: {
-                            Label(String(localized: "New session"), systemImage: "plus")
-                        }
-                        .accessibilityIdentifier("new-session")
+                        newSessionButton
                     }
                 }
             }
@@ -154,7 +170,7 @@ public struct SessionsView: View {
             .sheet(isPresented: isCreating) {
                 if let newSession = model.newSession {
                     NewSessionSheet(machine: state.machine.title, state: newSession) { name in
-                        model.create(name: name)
+                        model.create(name: name, then: onOpen)
                     } onCancel: {
                         model.closeNewSession()
                     }
@@ -187,6 +203,17 @@ public struct SessionsView: View {
             }
     }
 
+    private func hasNewSessionButton(_ state: MachineSessions) -> Bool {
+        guard state.link == .connected else {
+            return false
+        }
+        // the empty state shows the create's progress itself
+        if model.isCreating, case .empty = SessionsBody(state) {
+            return false
+        }
+        return true
+    }
+
     @ViewBuilder
     private func content(_ state: MachineSessions) -> some View {
         let name = state.machine.title
@@ -196,6 +223,9 @@ public struct SessionsView: View {
 
         case .reading:
             StatePanel.loading(String(localized: "Reading the sessions on \(name)"))
+
+        case .empty where model.isCreating:
+            StatePanel.loading(String(localized: "Creating a session on \(name)"))
 
         case .empty(let failure):
             empty(state, failure: failure)
@@ -227,7 +257,7 @@ public struct SessionsView: View {
             title: String(localized: "No sessions on \(name)"),
             message: String(localized: "Start one here. It runs on \(name) and keeps running when you leave."),
             action: RowAction(String(localized: "New session")) {
-                model.openNewSession()
+                model.createAndOpen(then: onOpen)
             }
         )
         .background(Color(uiColor: .systemGroupedBackground))

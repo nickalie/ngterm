@@ -1,4 +1,3 @@
-import NgtermCore
 import NgtermCoreFakes
 import Testing
 
@@ -9,7 +8,6 @@ import Testing
 @Suite("a machine's sessions")
 internal struct SessionsModelTests {
     private static let missingCli = "/bin/sh: 1: ngtermctl: not found"
-    private static let refused = MobileError.Remote(reason: "build-01 does not run live sessions")
 
     private let test = TestGraph()
 
@@ -65,76 +63,6 @@ internal struct SessionsModelTests {
         model.connect()
         await Wait.until { ids(model) == ["s1"] }
         #expect(model.state?.link == .connected)
-    }
-
-    @Test("New session creates it, named or not, and closes the sheet")
-    internal func create() async throws {
-        defer { test.remove() }
-        try await connected()
-        let model = model()
-        model.openNewSession()
-        #expect(model.newSession == NewSessionState())
-        await model.create(name: "  api  ")?.value
-        #expect(model.newSession == nil)
-        model.openNewSession()
-        await model.create(name: " ")?.value
-        #expect(model.newSession == nil)
-        await test.settled()
-        #expect(model.state?.sessions.map(\.name) == ["api", "session 2"])
-        let names = test.core.calls.filter { $0.method == "createSession" }.map { $0.args[1] as? String }
-        #expect(names == ["api", nil])
-    }
-
-    @Test("a failed create stays in the sheet it began in")
-    internal func createFails() async throws {
-        defer { test.remove() }
-        try await connected()
-        let model = model()
-        model.openNewSession()
-        test.core.failNext("createSession", with: Self.refused)
-        await model.create(name: "api")?.value
-        #expect(model.newSession == NewSessionState(failure: "build-01 does not run live sessions"))
-        #expect(model.notice == nil)
-        model.closeNewSession()
-        #expect(model.newSession == nil)
-    }
-
-    @Test("a create whose sheet closed fails to the banner, and leaves a new sheet alone")
-    internal func createFailsAfterClose() async throws {
-        defer { test.remove() }
-        try await connected()
-        let model = model()
-        model.openNewSession()
-        test.core.failNext("createSession", with: Self.refused)
-        let gate = test.core.hold("createSession")
-        let creating = model.create(name: "api")
-        await gate.reached()
-        model.closeNewSession()
-        model.openNewSession()
-        gate.open()
-        await creating?.value
-        #expect(model.notice == "build-01 does not run live sessions")
-        // the sheet opened since is not the failed create's
-        #expect(model.newSession == NewSessionState())
-    }
-
-    @Test("a create whose sheet closed leaves a new sheet open when it lands")
-    internal func createLandsAfterClose() async throws {
-        defer { test.remove() }
-        try await connected()
-        let model = model()
-        model.openNewSession()
-        let gate = test.core.hold("createSession")
-        let creating = model.create(name: "api")
-        await gate.reached()
-        model.closeNewSession()
-        model.openNewSession()
-        gate.open()
-        await creating?.value
-        await test.settled()
-        #expect(model.state?.sessions.map(\.name) == ["api"])
-        #expect(model.newSession == NewSessionState())
-        #expect(model.notice == nil)
     }
 
     @Test("End session removes it, and a failure is a notice")

@@ -1,3 +1,4 @@
+import NgtermCore
 import NgtermCoreFakes
 import Testing
 
@@ -91,16 +92,49 @@ internal struct SessionPanesTests {
         #expect(world.core.calls.contains(FakeCall("hidePane", ["m1", "s1", "P2"])))
     }
 
-    @Test("a detached session's panes, failures and selection go")
+    @Test("a claimed session's first pane to report a follower takes the lead, once; others are left as they are")
+    internal func claimFollower() async throws {
+        defer { world.remove() }
+        try await world.attach(["s1", "s2"], of: ["s1", "s2"])
+        let other = PaneRef(machineId: "m1", sessionId: "s2", paneId: "P1")
+        await world.emit(.paneLead(pane: other, role: .follower, covered: true))
+        panes.claimLead(of: SessionWorld.key)
+        await world.emit(
+            .paneLead(pane: SessionWorld.pane("P1"), role: nil, covered: true),
+            .paneLead(pane: SessionWorld.pane("P1"), role: .unowned, covered: true)
+        )
+        #expect(!world.core.calls.contains { $0.method == "takeLead" })
+        await world.emit(
+            .paneLead(pane: SessionWorld.pane("P1"), role: .follower, covered: true),
+            .paneLead(pane: SessionWorld.pane("P2"), role: .follower, covered: true)
+        )
+        #expect(world.core.calls.filter { $0.method == "takeLead" } == [FakeCall("takeLead", ["m1", "s1", "P1"])])
+        #expect(panes.claims.isEmpty)
+    }
+
+    @Test("a claimed session whose pane leads already is left as it is")
+    internal func claimLeader() async throws {
+        defer { world.remove() }
+        try await world.attach()
+        panes.claimLead(of: SessionWorld.key)
+        await world.emit(.paneLead(pane: SessionWorld.pane("P1"), role: .leader, covered: false))
+        #expect(panes.claims.isEmpty)
+        await world.emit(.paneLead(pane: SessionWorld.pane("P1"), role: .follower, covered: true))
+        #expect(!world.core.calls.contains { $0.method == "takeLead" })
+    }
+
+    @Test("a detached session's panes, failures, selection and claim go")
     internal func detachDrops() async throws {
         defer { world.remove() }
         try await world.attach()
         await world.stream(SessionWorld.split("vertical"))
         await world.show("P1")
         panes.select("P2", of: SessionWorld.key)
+        panes.claimLead(of: SessionWorld.key)
         world.graph.connections.detach(machineId: "m1", sessionId: "s1")
         #expect(panes.shown.isEmpty)
         #expect(panes.focus.isEmpty)
+        #expect(panes.claims.isEmpty)
     }
 
     @Test("a pane whose session was detached while it was on its way is hidden again")

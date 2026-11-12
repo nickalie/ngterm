@@ -16,6 +16,8 @@ public final class SessionsModel {
     public private(set) var isRefreshing = false
     /// The sessions whose End is under way, by id.
     public private(set) var ending: Set<String> = []
+    /// Whether a one-tap New session is under way.
+    public private(set) var isCreating = false
     /// The New session sheet, or `nil` while it is closed.
     public private(set) var newSession: NewSessionState?
     /// What the screen should say in a banner, until it is dismissed.
@@ -101,34 +103,95 @@ public final class SessionsModel {
         newSession = nil
     }
 
-    /// Creates a session named `name` (blank: the machine names it); the sheet closes once it is listed.
+    /// Creates a session the machine names, then attaches, leads and opens it; a failure goes to ``notice``.
     @discardableResult
-    public func create(name: String) -> Task<Void, Never>? {
-        guard newSession?.isRunning != true else {
+    @preconcurrency
+    public func createAndOpen(then onOpen: @escaping @MainActor (String) -> Void) -> Task<Void, Never>? {
+        guard !isCreating, newSession?.isRunning != true else {
+            return nil
+        }
+        isCreating = true
+        return Task {
+            defer { isCreating = false }
+            let session: RemoteSession
+            do {
+                session = try await graph.connections.createSession(machineId: machineId, name: "")
+            } catch let error as MobileError {
+                notice = error.reason
+                return
+            } catch {
+                // cancelled: the core still creates it, and the listing shows it
+                return
+            }
+            await land(session.id, then: onOpen)
+        }
+    }
+
+    /// Creates a session named `name` from the sheet, then opens it as ``createAndOpen(then:)`` does.
+    @discardableResult
+    @preconcurrency
+    public func create(name: String, then onOpen: @escaping @MainActor (String) -> Void) -> Task<Void, Never>? {
+        guard newSession?.isRunning != true, !isCreating else {
             return nil
         }
         let mine = sheet
         newSession = NewSessionState(isRunning: true)
         return Task {
-            do {
-                _ = try await graph.connections.createSession(machineId: machineId, name: name)
+            // Cancel while it ran: the user chose not to land in it
+            guard let session = await createInSheet(name: name, sheet: mine), sheet == mine else {
+                return
+            }
+            // dismissed before navigating, not under it
+            await land(session.id) { sessionId in
                 if sheet == mine {
                     newSession = nil
                 }
-            } catch let error as MobileError {
-                // a sheet closed meanwhile has no one to tell: the failure goes to the banner
-                if sheet == mine {
-                    newSession = NewSessionState(failure: error.reason)
-                } else {
-                    notice = error.reason
-                }
-            } catch {
-                // the task was cancelled: the core still creates it, and its listing shows it
-                if sheet == mine {
-                    newSession = NewSessionState()
-                }
+                onOpen(sessionId)
+            }
+            if sheet == mine {
+                newSession = nil
             }
         }
+    }
+
+    private func createInSheet(name: String, sheet mine: Int) async -> RemoteSession? {
+        do {
+            return try await graph.connections.createSession(machineId: machineId, name: name)
+        } catch let error as MobileError {
+            // a sheet closed meanwhile has no one to tell: the failure goes to the banner
+            if sheet == mine {
+                newSession = NewSessionState(failure: error.reason)
+            } else {
+                notice = error.reason
+            }
+        } catch {
+            // the task was cancelled: the core still creates it, and its listing shows it
+            if sheet == mine {
+                newSession = NewSessionState()
+            }
+        }
+        return nil
+    }
+
+    private func land(_ sessionId: String, then onOpen: @MainActor (String) -> Void) async {
+        let connections = graph.connections
+        do {
+            do {
+                try await connections.attach(machineId: machineId, sessionId: sessionId)
+            } catch MobileError.NotListed {
+                // a listing that raced the create's may lack it
+                await connections.listSessions(machineId: machineId)
+                try await connections.attach(machineId: machineId, sessionId: sessionId)
+            }
+            try Task.checkCancellation()
+        } catch let error as MobileError {
+            notice = error.reason
+            return
+        } catch {
+            return
+        }
+        graph.panes.claimLead(of: SessionKey(machineId: machineId, sessionId: sessionId))
+        onOpen(sessionId)
     }
 
     /// Ends the session `sessionId` there, with no undo (the screen confirms first).

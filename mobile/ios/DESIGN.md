@@ -454,11 +454,18 @@ session** is the toolbar's `+` while the machine is connected.
   Safari's view, **Retry** under it), and a first listing that failed (**Retry**). Over the list or the empty state, a
   banner says the device is offline, and another that the list may be out of date (with Retry). An End or an attach
   that failed is a dismissible failed banner at the list's end.
-- **New session** is a sheet with a `Form`: the name (mono, optional: "build-01 names it when blank"), Cancel and
-  Create in the toolbar. While the create runs, Create gives way to a spinner and the field holds still; Cancel closes
-  the sheet and the create goes on (its failure then comes as the banner). What went wrong shows under the field,
-  which keeps its text. The field isn't focused on its own: a field being edited reports only its text's height to
-  the accessibility audit, under 44 pt.
+- **New session** lands in the session in one tap: the `+` (and the empty state's New session) creates one the
+  machine names, attaches it and opens it in this device's control. The origin's own window leads a session it
+  started, so the pane's first report as a follower takes the lead at once, with no Take control cover to tap; a pane
+  that leads already is left as it is. While the create runs, a spinner ("Creating") holds the `+`'s place, so a
+  second tap starts nothing; an empty list says "Creating a session on build-01" (`StatePanel.loading`) instead. A create or
+  an attach that fails is the failed banner at the list's end, and nothing opens.
+- **New named session…** is the `+`'s long-press menu (`Menu` with a primary action): a sheet with a `Form`: the name
+  (mono, optional: "build-01 names it when blank"), Cancel and Create in the toolbar. Create lands in the session as
+  the `+` does, the sheet closing first. While the create runs, Create gives way to a spinner and the field holds
+  still; Cancel closes the sheet and the create goes on, its session only listed, nothing opened (its failure then
+  comes as the banner). What went wrong shows under the field, which keeps its text. The field isn't focused on its
+  own: a field being edited reports only its text's height to the accessibility audit, under 44 pt.
 - **A machine removed** while its sessions show takes the window back to the machines.
 
 ### The session (`Session/`)

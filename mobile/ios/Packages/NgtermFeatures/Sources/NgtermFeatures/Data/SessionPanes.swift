@@ -31,6 +31,8 @@ public final class SessionPanes {
     public private(set) var focus: [SessionKey: String] = [:]
     /// The sessions showing their selected pane alone, where the window could show the origin's split.
     public private(set) var alone: Set<SessionKey> = []
+    /// The sessions just created here whose first pane is yet to report who leads.
+    public private(set) var claims: Set<SessionKey> = []
     @ObservationIgnored private let connections: Connections
     @ObservationIgnored private let live: LiveSessions
     @ObservationIgnored private var showing: Set<PaneRef> = []
@@ -86,6 +88,11 @@ public final class SessionPanes {
     public func takeLead(_ pane: PaneRef) {
         // a core that has stopped has nothing to lead
         try? connections.core.takeLead(machineId: pane.machineId, sessionId: pane.sessionId, paneId: pane.paneId)
+    }
+
+    /// Has the first pane of `session` to report a follower take the lead, as the origin leads a session it starts.
+    public func claimLead(of session: SessionKey) {
+        claims.insert(session)
     }
 
     /// Selects the pane `paneId` of `session`: the one every key goes to.
@@ -174,6 +181,15 @@ public final class SessionPanes {
                 hide(pane)
             }
 
+        // an unowned pane reattaches to lead by itself and reports again
+        case .paneLead(let pane, .follower?, _):
+            if claims.remove(SessionKey(pane)) != nil {
+                takeLead(pane)
+            }
+
+        case .paneLead(let pane, .leader?, _):
+            claims.remove(SessionKey(pane))
+
         default:
             break
         }
@@ -198,6 +214,7 @@ public final class SessionPanes {
             drop(pane)
         }
         focus = focus.filter { attached[$0.key.machineId]?.contains($0.key.sessionId) == true }
+        claims = claims.filter { attached[$0.machineId]?.contains($0.sessionId) == true }
     }
 
     private func isAttached(_ pane: PaneRef) -> Bool {
