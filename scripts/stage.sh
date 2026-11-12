@@ -105,6 +105,7 @@ verify_ghostty_resources "$DEST/share" >&2
 mkdir -p "$DEST/share/ngterm/shell-integration/pwsh"
 install -m644 "$NATIVE_ROOT/resources/shell-integration/pwsh/ngterm.ps1" \
   "$DEST/share/ngterm/shell-integration/pwsh/ngterm.ps1"
+cp -R "$NATIVE_ROOT/resources/shell-integration/wsl" "$DEST/share/ngterm/shell-integration/"
 # Trusted Markdown renderer, stylesheet and third-party notices.
 mkdir -p "$DEST/share/ngterm/markdown"
 cp -R "$NATIVE_ROOT/resources/markdown/." "$DEST/share/ngterm/markdown/"

@@ -1,0 +1,27 @@
+# Let the bundled Ghostty integration restore Bash startup files and install command markers.
+# Keep ENV quoted: the bundled loader's legacy export splits values containing spaces.
+__ngterm_wsl_env_set=${GHOSTTY_BASH_ENV+x}
+__ngterm_wsl_env=${GHOSTTY_BASH_ENV-}
+builtin unset GHOSTTY_BASH_ENV
+builtin source "$NGTERM_WSL_GHOSTTY/shell-integration/bash/ghostty.bash"
+if [[ -n $__ngterm_wsl_env_set && -z ${ENV+x} ]]; then
+    builtin export ENV="$__ngterm_wsl_env"
+fi
+builtin unset __ngterm_wsl_env_set __ngterm_wsl_env
+builtin unset NGTERM_WSL_GHOSTTY
+
+# WSL may have a different hostname from Windows. Report this pane's Linux directory
+# with the local authority; leave HOSTNAME and the user's prompt unchanged.
+__ngterm_wsl_pwd() {
+    local status=$?
+    case "$PWD" in
+        *[$'\001'-$'\037'$'\177']*) return "$status" ;;
+    esac
+    builtin printf '\e]7;kitty-shell-cwd://localhost%s\a' "$PWD"
+    return "$status"
+}
+if [[ $(builtin declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a '* ]]; then
+    PROMPT_COMMAND+=(__ngterm_wsl_pwd)
+else
+    PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND$'\n'}__ngterm_wsl_pwd"
+fi

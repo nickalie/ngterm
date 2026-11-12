@@ -252,7 +252,7 @@ impl Inputs {
 /// How a wrapped pane attaches to its daemon (upstream's `ZmxSupport.Configuration`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Configuration {
-    /// A CMD/WSL profile whose program and argv the server keeps alive without injected integration.
+    /// A CMD/WSL profile whose program and argv the server keeps alive.
     pub direct_profile: Option<Box<crate::shell_profiles::ShellProfile>>,
     pub executable: String,
     pub session_host_executable: Option<String>,
@@ -309,10 +309,9 @@ pub fn direct_configuration(
     if !is_executable_file(&executable) {
         return Err(LiveRejection::ExecutableUnavailable);
     }
-    if profile.direct_live().is_none() {
-        return Err(LiveRejection::UnsupportedLoginShell);
-    }
+    let kind = profile.direct_live().ok_or(LiveRejection::UnsupportedLoginShell)?;
     let mut configuration = base_configuration(inputs, &executable, &profile.executable);
+    crate::shell_profiles::integration::configure(kind, inputs, &mut configuration.environment);
     configuration.direct_profile = Some(Box::new(profile.clone()));
     Ok(configuration)
 }
@@ -480,7 +479,13 @@ fn creation_arguments<S: AsRef<str>>(
     denylist: &[S],
 ) -> Vec<String> {
     if let Some(profile) = &configuration.direct_profile {
-        return crate::shell_profiles::direct::arguments(profile, replaying, creation, denylist);
+        return crate::shell_profiles::direct::integrated_arguments(
+            profile,
+            replaying,
+            creation,
+            denylist,
+            &configuration.environment,
+        );
     }
     let environment = &configuration.environment;
     let Some((shell, kind)) = environment

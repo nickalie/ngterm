@@ -95,6 +95,11 @@ def server_records():
                             timeout=10, creationflags=flags, check=True)
     return [dict(item.split('=', 1) for item in line.split('\t')) for line in result.stdout.splitlines()]
 
+
+def same_directory(actual, expected):
+    return (os.path.normcase(actual) == os.path.normcase(expected)
+            if args.shell == 'cmd' else actual == expected)
+
 def probe(session_id, name, initialize=False):
     marker = home / (name + '.txt')
     if args.shell == 'cmd':
@@ -116,6 +121,9 @@ try:
     app = spawn(stage / 'bin/ngterm-headless.exe', ['--skip-agent-setup'], 'headless-first.log')
     first_session = eventually(ready)[0]
     first = probe(first_session['id'], 'first', True)
+    expected_cwd = os.environ['SystemRoot'] if args.shell == 'cmd' else '/'
+    eventually(lambda: same_directory(next(s for s in sessions() if s['id'] == first_session['id'])['cwd'], expected_cwd))
+    ctl('session', 'rename', 'profile smoke', '--target', first_session['id'])
     assert '|preserved' in first, first
     record = server_records()[0]
     assert record['pid'] != '-', record
@@ -159,7 +167,39 @@ try:
     ctl('session', 'type', '--target', added['id'], '--stdin',
         text=f"[System.IO.File]::WriteAllText('{marker}', $PSVersionTable.PSEdition)\r")
     assert eventually(lambda: (home / 'powershell.txt').read_text(encoding='utf-8')) == 'Desktop'
+    # A lost server must produce a usable fresh shell, not an endless reconnect or a Windows argv replay in WSL.
+    ctl('session', 'rename', 'cold restore smoke', '--target', first_session['id'])
+    eventually(lambda: any('cold restore smoke' in p.read_text(encoding='utf-8') for p in (state / 'windows').glob('*.json')))
+    app.terminate()
+    app.wait(timeout=10)
+    subprocess.run([server_path, 'kill', '--force', *[r['name'] for r in server_records()]],
+                   env=env, capture_output=True, timeout=15, creationflags=flags, check=True)
+    server.terminate()
+    server.wait(timeout=10)
+    server = spawn(server_path, ['server', str(namespace)], 'server-cold.log')
+    time.sleep(.5)
+    app = spawn(stage / 'bin/ngterm-headless.exe', ['--skip-agent-setup'], 'headless-cold.log')
+    eventually(ready)
+    fresh = probe(first_session['id'], 'cold')
+    assert '|preserved' not in fresh, fresh
+    assert expected_cwd.lower() in fresh.lower() if args.shell == 'cmd' else expected_cwd in fresh, fresh
+    eventually(lambda: same_directory(next(s for s in sessions() if s['id'] == first_session['id'])['cwd'], expected_cwd))
     print(f'PASS: {args.shell} Live preserves leader PID/cwd/variables and distribution across host restart; Ctrl+C and quoted restart commands work; new sessions use changed PowerShell default.')
+    print('PASS: reported cwd reaches the model; a lost private server restores a usable fresh shell in the recorded directory.')
+    if args.shell == 'wsl':
+        # End only this test pane's Linux shell while detached; never shut down the user's distribution.
+        ctl('session', 'type', '--target', first_session['id'], '--stdin',
+            text='(sleep 2; kill -KILL $$) >/dev/null 2>&1 &\r')
+        app.terminate()
+        app.wait(timeout=10)
+        time.sleep(3)
+        assert server.poll() is None
+        app = spawn(stage / 'bin/ngterm-headless.exe', ['--skip-agent-setup'], 'headless-linux-ended.log')
+        eventually(ready)
+        after_linux_exit = probe(first_session['id'], 'linux-ended')
+        assert after_linux_exit.split('|')[1] != fresh.split('|')[1], (fresh, after_linux_exit)
+        assert after_linux_exit.split('|')[2] == expected_cwd, after_linux_exit
+        print('PASS: a terminated private WSL shell is recreated while its Windows server stays running.')
     print('Leader PID:', record['pid'], 'Probe:', first)
 finally:
     if app and app.poll() is None:

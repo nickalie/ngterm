@@ -593,11 +593,31 @@ its Linux starting directory; otherwise WSL translates the Windows launch direct
 one-shot commands or management options (for example CMD `/C` or WSL `--shutdown`) open ordinary sessions,
 as the menu/settings indicate, rather than silently dropping their options.
 
-CMD and WSL do not receive injected shell integration: automatic command markers and OSC directory updates
-depend on the shell's own configuration. WSL foreground Linux processes are not captured by the Windows
-process table for replay after the server itself ends. Live preserves them while the server and distribution
-remain running; it does not survive a Windows reboot or `wsl --shutdown`. Explicit WSL creation commands run
-through `/bin/sh -lc` in the selected distribution. A surviving daemon always reattaches to its original process.
+Live CMD adds an OSC 7 directory report to `PROMPT`, preserving the inherited or profile-defined prompt text.
+Replacing `PROMPT` inside CMD replaces that integration too. This reports the directory at each prompt; it does
+not add command start/end markers. CMD has no equivalent of Bash/Zsh's command hooks, so complete command
+tracking would need a separate mechanism.
+
+Live WSL loads the bundled Ghostty integration into the distribution user's Bash or Zsh. Resource paths are
+translated with `wslpath` inside that distribution, without assuming `/mnt/c`, and are passed as separate argv
+values. Startup files, custom prompts, `ENV`, `ZDOTDIR`, and history settings remain in effect. Additional local
+OSC 7 reports identify Linux directories even when the distribution hostname differs from Windows. The last
+reported Linux directory is restored inside WSL when a fresh shell starts; an unavailable restored directory
+does not prevent startup. Other Linux shells, or missing/inaccessible integration resources, start normally
+without injected markers. No user startup files are edited and no helper is installed in the distribution.
+
+WSL foreground Linux processes are not captured by the Windows process table for replay after the server ends.
+Live preserves processes while the server and distribution remain running; it does not survive a Windows reboot
+or `wsl --shutdown`. Reopening after a lost server starts a fresh shell, without its old variables or process
+memory. Explicit WSL creation commands run through `/bin/sh -lc` in the selected distribution; explicit restart
+commands run as POSIX shell text before entering the integrated shell. A surviving daemon always reattaches to
+its original process.
+
+`python conformance/tools/check_windows_shell_profiles.py STAGE --shell cmd` (or `--shell wsl --distribution Ubuntu`)
+checks real ConPTY sessions, reported cwd, host reattachment, Ctrl+C, quoted restart commands, and fresh-shell
+recovery after stopping only its private server. `python conformance/tools/check_wsl_integration.py GHOSTTY_RESOURCES`
+checks Bash command markers, exit codes, startup files, history, prompt preservation and fallback in a WSL PTY;
+pass `--shell /bin/zsh` to check Zsh. Both use private test state; neither shuts down a distribution.
 
 Focused checks: `cargo test -p ngterm-core --lib profile`, `cargo test -p ngterm-core --lib live`, and
 `cargo test -p ngterm-term --lib profile_tests`. Windows GUI smoke tests belong on CI or a throwaway VM: choose
