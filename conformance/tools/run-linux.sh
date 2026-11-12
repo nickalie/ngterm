@@ -20,9 +20,10 @@
 # --workspace), stages into target/conformance-stage-cov, and gives every process of the build a pooled
 # LLVM_PROFILE_FILE in target/llvm-cov-target (agterm_conformance/llvm_profiles.py); a --stage not built so exits 2.
 # The processes the harness had to end past their exit are listed in DIR/lost-profiles.txt. After the suite
-# the profiles are merged, read against each staged program and joined into DIR/coverage (lcov.info, html/,
-# summary.md: line, region and function % per workspace crate, vendor/ and the -sys crates excluded); a run that left no profile, or a stage that
-# is not the instrumented build, exits 2 with the reason (agterm_conformance/code_coverage.py).
+# the profiles are merged and read against the desktop app's own programs into its e2e report in DIR/coverage
+# (agterm_conformance/code_coverage.py e2e --app desktop --platform linux: lcov.info, lcov-measured.info, summary.json
+# and summary.md, the total line % and its distance to 90%, the share the e2e-coverage markers exclude, per crate);
+# a run that left no profile, or a stage that is not the instrumented build, exits 2 with the reason.
 # Without the app's binary in the stage every test skips and parity reads 0%.
 # Writes report.md (with the ui ids a passing test exercised), junit.xml, pytest.log and nodeids.jsonl into DIR.
 # Exits with check_ratchet.py's status (0 holds, 1 broken, 2 no usable report), 1 when a run left an instance
@@ -263,8 +264,9 @@ if [[ -n "$coverage" ]]; then
     fi
 fi
 
-# --coverage: merge this run's profiles against the instrumented build (agterm_conformance/code_coverage.py) into
-# DIR/coverage; no profiles or a stage that is not that build exits 2 with the reason.
+# --coverage: the desktop app's e2e report of this run's profiles against the instrumented build
+# (agterm_conformance/code_coverage.py e2e) into DIR/coverage; no profiles or a stage that is not that build exits 2
+# with the reason.
 coverage_error=""
 if [[ -n "$coverage" ]]; then
     rm -rf "$out/coverage"
@@ -276,8 +278,9 @@ if [[ -n "$coverage" ]]; then
         llvm_cov_env="$(cargo llvm-cov show-env --sh 2>/dev/null)" \
             || { echo "code coverage: cargo llvm-cov show-env failed"; exit 2; }
         eval "$llvm_cov_env"
-        "$python" -m agterm_conformance.code_coverage --profiles "$cov_target" --stage-bin "$stage_bin" \
-            --release-dir "$cov_target/release" --repo "$repo" --out "$coverage_out" 2>&1 >/dev/null
+        "$python" -m agterm_conformance.code_coverage e2e --app desktop --platform linux \
+            --profiles "$cov_target" --stage-bin "$stage_bin" --release-dir "$cov_target/release" \
+            --repo "$repo" --out "$coverage_out" 2>&1 >/dev/null
     )"; then
         status=2
         echo "$coverage_error" >&2
@@ -335,7 +338,7 @@ if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)
         if [[ -z "$coverage_error" ]]; then
             cat "$out/coverage/summary.md"
             echo
-            echo "lcov: \`$out/coverage/lcov.info\`, html: \`$out/coverage/html/index.html\`"
+            echo "lcov: \`$out/coverage/lcov.info\`, after the markers: \`$out/coverage/lcov-measured.info\`"
         else
             echo "no report: ${coverage_error#code coverage: }"
         fi

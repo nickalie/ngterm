@@ -310,25 +310,32 @@ cargo-llvm-cov and the toolchain's `llvm-tools` component:
   start) writes a profile pooled per binary into `target/llvm-cov-target` (`agterm_conformance/llvm_profiles.py`); one
   the harness had to end past its exit (a kill, a SIGTERM without a quit, the Windows job's close) writes none and is
   listed in `DIR/lost-profiles.txt`, so a drop can be told from lost data;
-- report: the profiles merged and read against each staged program on its own, then joined: a line, region or
-  function counts as run when any program ran it (llvm-cov given several programs at once keeps the first record of a
-  function it meets, often a program's unused one, and drops the run's counts). Into `DIR/coverage/` (`lcov.info`,
-  `html/` from `cargo llvm-cov report` as a browsing aid only, `summary.md`: line, region and function % per workspace
-  crate and the total, `vendor/` and the `-sys` crates left out; `agterm_conformance/code_coverage.py`),
-  its table in `report.md`. A run that left no profile, or a stage that is not the instrumented build's, exits 2.
+- report: the desktop app's e2e line coverage on the runner's platform (`agterm_conformance/code_coverage.py e2e
+  --app desktop --platform linux|windows`): the profiles merged and read against each of the app's own programs
+  (`conformance/coverage/apps.toml`; `ngterm-headless` is another app's) on its own, then joined: a line or function
+  counts as run when any program ran it (llvm-cov given several programs at once keeps the first record of a function
+  it meets, often a program's unused one, and drops the run's counts). `vendor/` and the `-sys` crates are left out,
+  and the code the `// e2e-coverage: off` markers name (`agterm_conformance/e2e_exclusions.py`). Into
+  `DIR/coverage/`: `lcov.info` (the app's data before the markers, repo-relative: what a merge of jobs joins),
+  `lcov-measured.info` (after them: the gap lists), `summary.json` and `summary.md` (the total line % and its distance
+  to 90%, the excluded share, line % per workspace crate, the marker list), its text in `report.md`. A run that left
+  no profile, a stage that is not the instrumented build's or lacks one of the app's programs, or a bad marker exits
+  2.
 
 The runners still judge a coverage run's ratchet and exit with that verdict; the CI coverage jobs ignore its exit 1
 (instrumentation slows the app; the ids stay the normal run's) and judge the floors separately:
-`conformance/coverage-floor-linux.txt` and `coverage-floor-windows.txt` hold one `crate line%` per line, and
+`conformance/coverage/e2e-floor-desktop-linux.txt` and `e2e-floor-desktop-windows.txt` hold a `total line%` line,
+then one `crate line%` per line, and
 
 ```sh
 .venv/bin/python conformance/tools/check_coverage.py --summary DIR/coverage/summary.md \
-  --floor conformance/coverage-floor-linux.txt          # 0 holds, 1 a crate > 0.5 pt below its floor, 2 bad input
-.venv/bin/python conformance/tools/check_coverage.py --floor conformance/coverage-floor-linux.txt --add \
+  --floor conformance/coverage/e2e-floor-desktop-linux.txt  # 0 holds, 1 > 0.5 pt below a floor, 2 bad input
+.venv/bin/python conformance/tools/check_coverage.py --floor conformance/coverage/e2e-floor-desktop-linux.txt --add \
   --summary A/coverage/summary.md --summary B/coverage/summary.md   # raise the floors from a batch of runs
 ```
 
-names each crate more than 0.5 pt below its floor with both numbers. `--summary` repeats, and each crate is judged by
+names the total or each crate more than 0.5 pt below its floor with both numbers, and prints the total's distance to
+90%; `--min PCT` also fails a total under PCT with no tolerance. `--summary` repeats, and each crate is judged by
 its lowest value; `--add` takes at least two summaries of one build (one run's line % varies by more than the
 tolerance) and raises each floor to the batch's lowest, never lowering one; a crate new to the workspace is added, a
 removed one dropped. Raise the floors from CI runs of the same commit.
@@ -406,8 +413,8 @@ that could reach it:
   on the distribution's lavapipe, held by the ratchet, once per login shell (`conformance`, a matrix, every layer, the
   ui layer through `atspi`), each with `--must-pass live-any-shell`: bash, fish and zsh (the last two with
   `--must-pass live-sessions` too); the matrix's `coverage` entry runs the zsh leg's suite (the widest: the bash leg's
-  tests and the live ones) on the instrumented build (`--coverage`) and judges `coverage-floor-linux.txt` only, its
-  report and `coverage/` uploaded as `rust-linux-coverage-conformance`.
+  tests and the live ones) on the instrumented build (`--coverage`) and judges `coverage/e2e-floor-desktop-linux.txt`
+  only, its report uploaded as `rust-linux-coverage-conformance` and its `coverage/` as `e2e-coverage-desktop-linux`.
 - `cross-platform`'s `windows` job (`windows-2025`): the harness's Windows self-tests (the pipe transport, the client,
   the launch and stop, the UIA driver's mappings), then `tools/run-windows.sh` with `--must-pass live-any-shell` (the
   login shell is Windows PowerShell): protocol, cli, behaviors and ui (UI Automation and `SendInput`,
@@ -415,4 +422,5 @@ that could reach it:
   `rust-passing-windows.txt`. The
   staged tree is kept as an artifact, for a run on a Windows VM against the same build (`--stage DIR`).
   `coverage-windows` runs the same suite on the instrumented build (`run-windows.sh --coverage`) and judges
-  `coverage-floor-windows.txt` only, its report uploaded as `rust-windows-coverage-conformance`.
+  `coverage/e2e-floor-desktop-windows.txt` only, its report uploaded as `rust-windows-coverage-conformance` and its
+  `coverage/` as `e2e-coverage-desktop-windows`.

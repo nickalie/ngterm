@@ -6,8 +6,7 @@ Reads the per-crate table of `summary.md` (agterm_conformance/code_coverage.py w
 are read, `lines` always there, any other column ignored) and a floor file: `#` header comments, then one floor line
 per crate, sorted by crate, in one of two forms throughout the file:
 
-- `crate line%`: the line % alone (the suite's `conformance/coverage-floor-linux.txt`, `coverage-floor-windows.txt`,
-  the e2e floors);
+- `crate line%`: the line % alone (the e2e floors, `conformance/coverage/e2e-floor-<app>-<platform>.txt`);
 - `crate lines% functions% regions%`: the three of them (`scripts/unit-coverage-floor-linux.txt`).
 
 A file may open its floors with a `total` line: the table's total row is then judged like a crate (the e2e floors

@@ -259,8 +259,8 @@ def test_the_verdict_goes_to_the_job_summary(files, capsys, tmp_path, monkeypatc
 @pytest.mark.parametrize(
     "name, metrics",
     [
-        ("conformance/coverage-floor-linux.txt", ("lines",)),
-        ("conformance/coverage-floor-windows.txt", ("lines",)),
+        ("conformance/coverage/e2e-floor-desktop-linux.txt", ("lines",)),
+        ("conformance/coverage/e2e-floor-desktop-windows.txt", ("lines",)),
         ("scripts/unit-coverage-floor-linux.txt", ("lines", "functions", "regions")),
     ],
 )
@@ -270,6 +270,9 @@ def test_the_checked_in_floor_files_parse(name, metrics):
     assert floors.header, f"{path} has no header comment"
     assert floors.floors, f"{path} has no floor"
     assert floors.metrics == metrics
+    if name.startswith("conformance/coverage/e2e-floor-"):
+        # an app's e2e total is judged like a crate: its floor file holds it
+        assert next(iter(floors.floors)) == cc.TOTAL, f"{path} has no total floor"
 
 
 def test_runs_as_a_script(files):

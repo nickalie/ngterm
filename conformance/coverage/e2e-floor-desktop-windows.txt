@@ -1,0 +1,21 @@
+# E2E line coverage floors of the desktop app on Windows (conformance/tools/check_coverage.py): the total and the line %
+# per workspace crate of the instrumented suite run (tools/run-windows.sh --coverage, cross-platform.yml's
+# coverage-windows job). Its report reads the app's own programs alone
+# (agterm_conformance/code_coverage.py e2e, conformance/coverage/apps.toml).
+# A total or crate more than 0.5 pt below its floor fails the job. Raised, never lowered, from a batch of runs of one
+# build (one run's line % varies by more than the tolerance): check_coverage.py --floor THIS --add
+# --summary A/summary.md --summary B/summary.md ... (each floor raised to the batch's lowest; a new crate added, a gone
+# one dropped). Seeded from the per-crate minimum of three same-build CI runs.
+# The total first, then sorted by crate.
+total 0.00
+ngterm-app 8.81
+ngterm-core 60.88
+ngterm-ctl 74.03
+ngterm-ghostty-vt 52.14
+ngterm-gpui 68.05
+ngterm-host 40.84
+ngterm-proto 77.77
+ngterm-pty 58.35
+ngterm-server 74.69
+ngterm-session 41.93
+ngterm-term 58.18

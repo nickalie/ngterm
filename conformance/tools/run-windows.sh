@@ -13,7 +13,8 @@
 #                                         [-- PYTEST_ARGS...]
 #
 # The options are run-linux.sh's, --coverage included (an instrumented build in target\llvm-cov-target staged into
-# target\conformance-stage-cov, its profiles in target\llvm-cov-target, merged after the suite into DIR\coverage).
+# target\conformance-stage-cov, its profiles in target\llvm-cov-target, read after the suite into the desktop app's
+# e2e report on Windows in DIR\coverage).
 # The build needs the libghostty-vt prefix (scripts/build-ghostty-vt.sh) and the terminal fonts
 # (scripts/fetch-fonts.sh); its HTML overlays need the WebView2 runtime. The panes run Git for Windows' sh.exe (the
 # harness's CONFORMANCE_POSIX_SHELL, else the one beside git). Reports go to conformance/reports/rust-windows by
@@ -180,8 +181,9 @@ if [[ -n "$coverage" ]]; then
     fi
 fi
 
-# --coverage: merge this run's profiles against the instrumented build (agterm_conformance/code_coverage.py) into
-# DIR/coverage; no profiles or a stage that is not that build exits 2 with the reason.
+# --coverage: the desktop app's e2e report of this run's profiles against the instrumented build
+# (agterm_conformance/code_coverage.py e2e) into DIR/coverage; no profiles or a stage that is not that build exits 2
+# with the reason.
 coverage_error=""
 if [[ -n "$coverage" ]]; then
     rm -rf "$out/coverage"
@@ -193,8 +195,9 @@ if [[ -n "$coverage" ]]; then
         llvm_cov_env="$(cargo llvm-cov show-env --sh 2>/dev/null)" \
             || { echo "code coverage: cargo llvm-cov show-env failed"; exit 2; }
         eval "$llvm_cov_env"
-        "$python" -m agterm_conformance.code_coverage --profiles "$(win "$cov_target")" --stage-bin "$stage_bin" \
-            --release-dir "$(win "$cov_target/release")" --repo "$(win "$repo")" --out "$coverage_out" 2>&1 >/dev/null
+        "$python" -m agterm_conformance.code_coverage e2e --app desktop --platform windows \
+            --profiles "$(win "$cov_target")" --stage-bin "$stage_bin" --release-dir "$(win "$cov_target/release")" \
+            --repo "$(win "$repo")" --out "$coverage_out" 2>&1 >/dev/null
     )"; then
         status=2
         echo "$coverage_error" >&2
@@ -254,7 +257,8 @@ fi
         if [[ -z "$coverage_error" ]]; then
             cat "$out/coverage/summary.md"
             echo
-            echo "lcov: \`$(win "$out/coverage/lcov.info")\`, html: \`$(win "$out/coverage/html/index.html")\`"
+            echo "lcov: \`$(win "$out/coverage/lcov.info")\`, after the markers:" \
+                "\`$(win "$out/coverage/lcov-measured.info")\`"
         else
             echo "no report: ${coverage_error#code coverage: }"
         fi

@@ -374,10 +374,13 @@ jobs:
   # - bash, zsh and fish: `--must-pass agent-chat` too (the Rust-only agent record and `ngtermctl agent` behind the
   #   Android chat view), and `--must-pass kitty-clipboard` (a program's Rust-only Kitty clipboard protocol).
 # - coverage: the zsh entry again on an instrumented build (run-linux.sh --coverage: cargo-llvm-cov and the toolchain's
-#   llvm-tools), every layer, judged by conformance/coverage-floor-linux.txt (tools/check_coverage.py: line % per
-#   workspace crate) and nothing else: instrumentation slows the app, so the ratchet stays the entries above. zsh, as
-#   its run is the widest: it runs every test the bash one does, and the live tests besides (`live-sessions`). Its
-#   report (coverage/ with lcov.info and html/, traces/) is uploaded as rust-linux-coverage-conformance.
+#   llvm-tools), every layer, its report the desktop app's e2e line coverage on Linux (code_coverage.py e2e: the total,
+#   its distance to 90% and the share markers exclude, per crate), judged by
+#   conformance/coverage/e2e-floor-desktop-linux.txt (tools/check_coverage.py: the total and each crate) and nothing
+#   else: instrumentation slows the app, so the ratchet stays the entries above. zsh, as its run is the widest: it runs
+#   every test the bash one does, and the live tests besides (`live-sessions`). Its report (coverage/, traces/) is
+#   uploaded as rust-linux-coverage-conformance, and coverage/ alone (lcov.info: what a merge and the gap lists read)
+#   as e2e-coverage-desktop-linux.
   conformance:
     needs: linux
     runs-on: ubuntu-26.04
@@ -523,7 +526,14 @@ jobs:
         run: >-
           /opt/suite/bin/python conformance/tools/check_coverage.py
           --summary conformance/reports/${{ matrix.out }}/coverage/summary.md
-          --floor conformance/coverage-floor-linux.txt
+          --floor conformance/coverage/e2e-floor-desktop-linux.txt
+      - name: upload the e2e coverage
+        if: ${{ matrix.coverage && !cancelled() && hashFiles('conformance/reports/rust-linux-coverage/coverage/lcov.info') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-coverage-desktop-linux
+          path: conformance/reports/${{ matrix.out }}/coverage/
+          if-no-files-found: error
       - name: probes (terminal frame, web process, window chrome)
         if: matrix.shell == 'bash' && !matrix.coverage
         shell: bash

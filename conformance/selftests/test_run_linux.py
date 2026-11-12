@@ -699,36 +699,19 @@ PROFILE_WRITING_TEST = COVERAGE_PROBE_TEST.replace(
     '    (Path(app.env["LLVM_PROFILE_FILE"]).parent / "conformance-1_0.profraw").write_bytes(b"raw")\n',
 )
 
-# `cargo llvm-cov`: show-env exports a marker, report demands it (the runner evaluated show-env) and writes what each
-# format asks for, with one ngterm-core file in its summary.
+# `cargo llvm-cov show-env`: exports a marker the llvm tools below demand (the runner evaluated show-env).
 FAKE_CARGO = """
-import json
-import os
 import sys
-from pathlib import Path
 
 args = sys.argv[1:]
-if args[:2] == ["llvm-cov", "show-env"]:
-    print("export FAKE_LLVM_COV_ENV=1")
-    sys.exit(0)
-assert args[:2] == ["llvm-cov", "report"], args
-if os.environ.get("FAKE_LLVM_COV_ENV") != "1":
-    sys.exit("report outside show-env")
-if "--output-path" in args:
-    target = Path(args[args.index("--output-path") + 1])
-    lines = {"count": 8, "covered": 2, "percent": 25.0}
-    data = {"files": [{"filename": str(Path.cwd() / "crates/ngterm-core/src/lib.rs"),
-                       "summary": {"lines": lines, "regions": lines, "functions": lines}}]}
-    target.write_text(json.dumps({"data": [data]}) if "--json" in args else "TN:\\n")
-if "--html" in args:
-    (Path(args[args.index("--output-dir") + 1]) / "html").mkdir(parents=True, exist_ok=True)
+assert args[:2] == ["llvm-cov", "show-env"], args
+print("export FAKE_LLVM_COV_ENV=1")
 """
 
 
 # `llvm-profdata merge` and `llvm-cov export` (the report's own, `LLVM_PROFDATA` / `LLVM_COV`): both demand show-env's
-# marker; the export reads one ngterm-core file of 8 lines, regions and functions, 2 of each run.
+# marker; every program's export reads one ngterm-core file of 8 lines, 2 of them run.
 FAKE_LLVM = """
-import json
 import os
 import sys
 from pathlib import Path
@@ -739,15 +722,10 @@ if os.environ.get("FAKE_LLVM_COV_ENV") != "1":
 if args[0] == "merge":
     Path(args[args.index("-o") + 1]).write_bytes(b"merged")
     sys.exit(0)
-assert args[0] == "export", args
+assert args[:2] == ["export", "-format=lcov"], args
 source = str(Path.cwd() / "crates/ngterm-core/src/lib.rs")
-if "-format=lcov" in args:
-    lines = [f"DA:{line},{1 if line <= 2 else 0}" for line in range(1, 9)]
-    print("\\n".join([f"SF:{source}", *lines, "end_of_record"]))
-else:
-    functions = [{"name": f"f{line}", "count": 1 if line <= 2 else 0, "filenames": [source],
-                  "regions": [[line, 1, line, 9, 1 if line <= 2 else 0, 0, 0, 0]]} for line in range(1, 9)]
-    print(json.dumps({"data": [{"functions": functions}]}))
+lines = [f"DA:{line},{1 if line <= 2 else 0}" for line in range(1, 9)]
+print("\\n".join([f"SF:{source}", *lines, "end_of_record"]))
 """
 
 
@@ -767,11 +745,22 @@ def fake_cargo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return cargo
 
 
+# The desktop app's programs on Linux (conformance/coverage/apps.toml), whose coverage maps its e2e report reads.
+DESKTOP_PROGRAMS = ("ngterm", "ngtermctl", "ngterm-session", "ngterm-web")
+
+
 def built(stage: Path, target: Path) -> Path:
-    """The instrumented build's own binary of the staged app, where the report reads its coverage map."""
+    """The instrumented build's own binaries of the desktop app, staged and in its release directory, where the report
+    reads their coverage maps: the staged app's, and an instrumented stand-in for each other program. Returns the
+    app's."""
     release = target / "llvm-cov-target" / "release"
     release.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(stage / "bin" / "ngterm", release / "ngterm")
+    for name in DESKTOP_PROGRAMS:
+        staged = stage / "bin" / name
+        if not staged.exists():
+            staged.write_bytes(b"#!/bin/sh\nexit 0\n# LLVM Profile Error\n")
+            staged.chmod(0o755)
+        shutil.copy2(staged, release / name)
     return release / "ngterm"
 
 
@@ -826,11 +815,18 @@ def test_a_coverage_run_reports_code_and_catalog_coverage(
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     out = tmp_path / "report" / "coverage"
-    code = report.split("### code coverage\n", 1)[1].split("###", 1)[0]
-    assert "| ngterm-core | 25.00% (2/8) | 25.00% (2/8) | 25.00% (2/8) |" in code
-    assert f"lcov: `{out}/lcov.info`, html: `{out}/html/index.html`" in code
+    code = report.split("### code coverage\n", 1)[1].split("\n### catalog coverage", 1)[0]
+    # the desktop app's e2e report: its programs alone, the total's distance to 90% and the share markers exclude
+    assert "E2E line coverage of the `desktop` app on `linux`: the lines of its programs ngterm, ngtermctl, " \
+        "ngterm-session, ngterm-web " in code
+    assert "**Total: 25.00% of lines (2/8), 65.00 pt to 90%. Excluded by markers: 0.00% of lines (0/8).**" in code
+    assert "| ngterm-core | 25.00% (2/8) | 0.00% (0/8) |" in code
+    assert "| total | 25.00% (2/8) | 0.00% (0/8) |" in code
+    assert "### Exclusion markers" in code
+    assert f"lcov: `{out}/lcov.info`, after the markers: `{out}/lcov-measured.info`" in code
     assert (out / "summary.md").read_text() in report
-    assert (out / "lcov.info").is_file() and (out / "html").is_dir()
+    assert (out / "lcov.info").is_file() and (out / "lcov-measured.info").is_file()
+    assert json.loads((out / "summary.json").read_text())["app"] == "desktop"
     catalog = report.split("### catalog coverage\n", 1)[1]
     assert re.search(r"^ui ids exercised by a passing test: \d+/\d+ \(\d+\.\d%\)$", catalog, re.MULTILINE), catalog
 
@@ -913,3 +909,29 @@ def test_the_catalog_line_counts_against_the_runs_catalog(tmp_path: Path, stage:
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "### catalog coverage\n\nui ids exercised by a passing test: 1/1 (100.0%)\n" in report, report
+
+
+def test_a_coverage_run_on_a_stage_without_one_of_the_apps_programs_exits_2_naming_it(
+    tmp_path: Path, stage: Path, layers: Path, fake_cargo: Path
+) -> None:
+    instrument(stage / "bin" / "ngterm")
+    target = tmp_path / "target"
+    built(stage, target)
+    (target / "llvm-cov-target" / "release" / "ngterm-web").unlink()
+    (layers / "protocol" / "test_probe.py").write_text(PROFILE_WRITING_TEST)
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--coverage",
+        LAUNCH_PROBE=str(tmp_path / "launch.txt"), CARGO_TARGET_DIR=str(target), FAKE_TERM="quit",
+    )
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    reason = f"the desktop app's program ngterm-web is not in {target}/llvm-cov-target/release"
+    assert f"code coverage: {reason}" in completed.stderr
+    assert f"no report: {reason}" in report
+
+
+@pytest.mark.parametrize("runner, platform", [("run-linux.sh", "linux"), ("run-windows.sh", "windows")])
+def test_each_runner_reports_the_desktop_app_on_its_platform(runner: str, platform: str) -> None:
+    # run-windows.sh runs on Windows alone; its report call is read from the script
+    text = (SCRIPT.parent / runner).read_text()
+    calls = re.findall(r"-m agterm_conformance\.code_coverage( [^\n]*)", text)
+    assert calls == [f" e2e --app desktop --platform {platform} \\"], calls

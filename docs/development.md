@@ -1128,9 +1128,10 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   It renders on lavapipe from `scripts/fetch-lavapipe.sh`; the ui layer's instances run on X11, each on a private
   Xvfb, their accessibility trees on an a11y bus of the run's own, never the desktop's. A failed test leaves a trace
   (`--trace-mode`) under the report's `traces/`.
-- `run-linux.sh --coverage` runs the suite on an instrumented build and writes the code coverage report
-  (`coverage/lcov.info`, `html/`, `summary.md`), which `conformance/tools/check_coverage.py` holds against
-  `conformance/coverage-floor-linux.txt` (conformance/README.md > Code coverage). It is CI's job; run it locally only
+- `run-linux.sh --coverage` runs the suite on an instrumented build and writes the desktop app's e2e line coverage
+  report (`coverage/lcov.info`, `summary.md`: the total and its distance to 90%, per crate, the excluded share), which
+  `conformance/tools/check_coverage.py` holds against `conformance/coverage/e2e-floor-desktop-linux.txt`
+  (conformance/README.md > Code coverage). It is CI's job; run it locally only
   for a change to the coverage tooling.
 - `scripts/unit-coverage.sh OUT_DIR [-p CRATE]... [-- TEST_ARGS...]` measures what `cargo test` covers: one
   instrumented build and run of the workspace's tests (the -sys crates left out, and `ngterm-wpe` too outside Linux;
@@ -1199,7 +1200,7 @@ and the fix, and leaves everything else alone; its header says what it checks, a
   bash, fish and zsh), each with `--must-pass live-any-shell` and `--must-pass agent-chat`, the zsh and fish ones
   with `--must-pass live-sessions` and `--must-pass pages-survive`
   too; the bash one runs the app's process tests with the overlays on first, and a `coverage` entry runs the suite on
-  an instrumented build, judged by `conformance/coverage-floor-linux.txt` only; and `unit-coverage`, the workspace's
+  an instrumented build, judged by `conformance/coverage/e2e-floor-desktop-linux.txt` only; and `unit-coverage`, the workspace's
   `cargo test` under cargo-llvm-cov in the `wpe` job's Arch container (`scripts/unit-coverage.sh`), judged by
   `scripts/unit-coverage-floor-linux.txt`.
 - `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,
@@ -1213,7 +1214,7 @@ and the fix, and leaves everything else alone; its header says what it checks, a
   self-tests and the suite against the staged release build (`conformance/tools/run-windows.sh`, with `--must-pass
   live-any-shell`, as the runner's login shell is Windows PowerShell, and `--must-pass agent-chat`), held by `rust-passing-windows.txt`; the report
   and the stage are kept as artifacts; and `coverage-windows`, the suite on an instrumented build, judged by
-  `conformance/coverage-floor-windows.txt` only. The workflow also runs on pushes to `ci/**` branches, to check a
+  `conformance/coverage/e2e-floor-desktop-windows.txt` only. The workflow also runs on pushes to `ci/**` branches, to check a
   macOS or Windows form without a PR.
 - `android.yml` (path-filtered to the mobile core, the crates under it, `mobile/android/` and the Android scripts and
   pins; also on `ci/**` pushes): `app` sets up the pinned toolchain (`scripts/setup-android.sh`), runs
@@ -1240,7 +1241,8 @@ and the fix, and leaves everything else alone; its header says what it checks, a
 
 - `crates/`: the Cargo workspace (crate map in [AGENTS.md](../AGENTS.md)).
 - `conformance/`: the suite, its catalog of upstream's commands, the ratchet lists `rust-passing.txt` and
-  `rust-passing-windows.txt`, the code coverage floors `coverage-floor-linux.txt` and `coverage-floor-windows.txt`.
+  `rust-passing-windows.txt`; `coverage/`: the apps' programs for the e2e coverage report (`apps.toml`) and their
+  e2e floors (`e2e-floor-<app>-<platform>.txt`).
 - `build/`: `pins.env`, the ghostty-vt, gir, calloop, GPUI and portable-pty patches, the bundled skill's patches over
   upstream's.
 - `vendor/`: the patched GPUI, calloop and portable-pty crates, recreated by the vendor scripts (an edit there goes back into its
