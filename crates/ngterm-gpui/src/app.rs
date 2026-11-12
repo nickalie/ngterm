@@ -39,8 +39,9 @@ use crate::windows::{ConfigHost, Windows};
 /// way to a pane's program. macOS does not claim `private-primary`: a program's primary-selection write goes to the
 /// system pasteboard there. Every OS claims `agent-chat`, the Rust-only agent record and `ngtermctl agent` behind the
 /// Android chat view, which serve no UI, `pages-survive`, the Rust-only parking of a page whose presenter went until
-/// the next one is handed it, `kitty-clipboard`, a program's Kitty clipboard protocol, and `agterm-peer`, attaching
-/// an upstream agterm Mac's sessions.
+/// the next one is handed it, `kitty-clipboard`, a program's Kitty clipboard protocol, `agterm-peer`, attaching an
+/// upstream agterm Mac's sessions, and `shell-profiles`, the Rust-only shell profiles a pane runs in place of the login
+/// shell.
 #[cfg(not(any(windows, target_os = "macos")))]
 pub const CAPABILITIES: &[&str] = &[
     "posix-shell",
@@ -53,6 +54,7 @@ pub const CAPABILITIES: &[&str] = &[
     "pages-survive",
     "kitty-clipboard",
     "agterm-peer",
+    "shell-profiles",
 ];
 /// The capabilities of the Rust target profile this build implements on macOS (see Linux's above).
 #[cfg(target_os = "macos")]
@@ -66,6 +68,7 @@ pub const CAPABILITIES: &[&str] = &[
     "pages-survive",
     "kitty-clipboard",
     "agterm-peer",
+    "shell-profiles",
 ];
 /// The capabilities of the Rust target profile this build implements on Windows (see Linux's above).
 #[cfg(windows)]
@@ -79,6 +82,7 @@ pub const CAPABILITIES: &[&str] = &[
     "pages-survive",
     "kitty-clipboard",
     "agterm-peer",
+    "shell-profiles",
 ];
 
 /// The capabilities this host claims: the profile's, and the `live` ones by host ([`session_host::claims`]).
