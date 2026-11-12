@@ -2,12 +2,16 @@ package com.nickalie.ngterm.android.ui.session
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.awaitText
+import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.testMachine
+import com.nickalie.ngterm.android.ui.NavLayout
 import com.nickalie.ngterm.android.ui.NgtermApp
 import com.nickalie.ngterm.android.ui.terminal.SelectingPane
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
@@ -103,6 +107,47 @@ class DuplicateSessionFlowTest : SessionViewFixture() {
         compose.awaitText("Duplicating")
         gate.complete(Unit)
         landsInControl()
+        assertEquals(listOf(listOf("m1", "s1")), duplicates())
+    }
+
+    @Test
+    fun aCopyFinishingAfterSessionsWasLeftWaitsInTheListWithoutTheLead() {
+        openSession()
+        layout.value = NavLayout.Rail
+        val gate = CompletableDeferred<Unit>().also { test.core.holds["duplicateSession"] = it }
+        duplicate()
+        compose.awaitText("Duplicating")
+        compose.onNode(hasText("Settings") and isSelectable()).performClick()
+        compose.waitForIdle()
+        gate.complete(Unit)
+        waitFor {
+            "fake-1" in
+                test.connections.attached.value["m1"]
+                    .orEmpty()
+        }
+        compose.waitForIdle()
+        assertEquals(emptySet<SessionKey>(), test.graph.panes.claims.held.value)
+        compose.onNode(hasText("Sessions") and isSelectable()).performClick()
+        compose.waitForIdle()
+        assertTrue(described("Pane 2 of 2"))
+        assertTrue(!shows("Opening session 1"))
+    }
+
+    @Test
+    fun aDuplicateFromTheSessionViewHoldsTheMachinesScreen() {
+        openSession()
+        layout.value = NavLayout.Rail
+        val gate = CompletableDeferred<Unit>().also { test.core.holds["duplicateSession"] = it }
+        duplicate()
+        compose.awaitText("Duplicating")
+        compose.onNode(hasText("Machines") and isSelectable()).performClick()
+        compose.onNodeWithText("build-01").performClick()
+        compose.awaitText("Duplicating")
+        compose.onNodeWithText("New session").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("More options for docs-site").performClick()
+        compose.onNodeWithText("Duplicate session").assertIsNotEnabled()
+        gate.complete(Unit)
+        waitFor { !shows("Duplicating") }
         assertEquals(listOf(listOf("m1", "s1")), duplicates())
     }
 

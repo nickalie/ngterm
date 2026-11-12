@@ -8,6 +8,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.TestGraph
+import com.nickalie.ngterm.android.data.Create
 import com.nickalie.ngterm.android.data.FontChoice
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.SessionKey
@@ -482,6 +483,61 @@ class SessionViewModelTest {
                 ?.key,
         )
         assertEquals(emptySet<SessionKey>(), test.graph.panes.claims.held.value)
+    }
+
+    @Test
+    fun aDuplicateFinishingAfterTheDestinationWasLeftOpensNothingAndTakesNoLead() {
+        attached("s1")
+        val model = model()
+        model.open(key)
+        val gate = CompletableDeferred<Unit>().also { test.core.holds["duplicateSession"] = it }
+        model.duplicate(key)
+        eventually { test.core.calls.any { it.method == "duplicateSession" } }
+        model.left()
+        gate.complete(Unit)
+        eventually {
+            "fake-1" in
+                test.connections.attached.value["m1"]
+                    .orEmpty()
+        }
+        eventually {
+            model.state.value.sessions
+                .none { it.duplicating }
+        }
+        assertEquals(
+            key,
+            model.state.value.open
+                ?.key,
+        )
+        assertEquals(emptySet<SessionKey>(), test.graph.panes.claims.held.value)
+    }
+
+    @Test
+    fun aCreateUnderWayOnAMachinesScreenHoldsEveryDuplicateAndMarksItsSource() {
+        attached("s1")
+        val model = model()
+        val create = Create("m1", "s1")
+        assertTrue(test.graph.creates.begin(create))
+        eventually {
+            model.state.value.sessions
+                .single()
+                .duplicating
+        }
+        assertEquals(
+            false,
+            model.state.value.sessions
+                .single()
+                .canDuplicate,
+        )
+        model.duplicate(key)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(0, test.core.calls.count { it.method == "duplicateSession" })
+        test.graph.creates.end(create)
+        eventually {
+            model.state.value.sessions
+                .single()
+                .canDuplicate
+        }
     }
 
     @Test

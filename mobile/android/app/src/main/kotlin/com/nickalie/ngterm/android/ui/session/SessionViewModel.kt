@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.data.ChatViews
+import com.nickalie.ngterm.android.data.Create
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.LiveSession
 import com.nickalie.ngterm.android.data.SessionKey
@@ -39,7 +40,7 @@ data class AgentStatus(
  * whether its panes running an agent show as a chat ([chatView]: its own choice, else Settings'), whether this
  * device is [taking] its lead, its parent's name when it is a companion ([companionOf]), whether it is [nested]
  * under that parent, attached too and listed above it, whether its Duplicate is under way ([duplicating]), and
- * whether Duplicate takes a tap ([canDuplicate]: not while any is under way).
+ * whether Duplicate takes a tap ([canDuplicate]: not while any create is under way, from any screen).
  */
 data class AttachedSession(
     val key: SessionKey,
@@ -111,8 +112,11 @@ class SessionViewModel(
     private val openKey = MutableStateFlow<SessionKey?>(null)
     private val focus = MutableStateFlow<Map<SessionKey, String>>(emptyMap())
     private val notices = MutableStateFlow<String?>(null)
-    private val duplicating = MutableStateFlow<SessionKey?>(null)
     private val connections = graph.connections
+    private val creates = graph.creates
+
+    // a Duplicate opens its copy only if the view has not moved since it began (main thread)
+    private var moves = 0
 
     // the last name each session was seen with, for the gone state once the listing has dropped it (main thread)
     private val seen = mutableMapOf<SessionKey, AttachedSession>()
@@ -134,9 +138,9 @@ class SessionViewModel(
             graph.panes.live.sessions,
             openKey,
             focus,
-            combine(graph.chats.views, graph.chats.chatViews, graph.panes.claims.held, duplicating, ::Marks),
+            combine(graph.chats.views, graph.chats.chatViews, graph.panes.claims.held, creates.underWay, ::Marks),
         ) { listed, live, open, focus, marks ->
-            val groups = groups(listed, live, marks.chatViews, Doing(marks.taking, marks.duplicating), seen)
+            val groups = groups(listed, live, marks, seen)
             AttachedUiState(groups, open?.let { open(it, listed, groups, focus, marks.views) })
         }.catch { emit(AttachedUiState()) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, AttachedUiState())
@@ -190,13 +194,20 @@ class SessionViewModel(
     }
 
     /** Opens [key]'s session view. */
-    fun open(key: SessionKey) {
-        openKey.value = key
-    }
+    fun open(key: SessionKey) = view(key)
 
     /** Closes the session view: back to the list. */
-    fun close() {
-        openKey.value = null
+    fun close() = view(null)
+
+    /** The Sessions destination is no longer shown: a Duplicate under way leaves its copy in the list. */
+    fun left() {
+        moves++
+    }
+
+    private fun view(key: SessionKey?) {
+        if (openKey.value == key) return
+        openKey.value = key
+        moves++
     }
 
     /** Gives [paneId] of [key] the focus. */
@@ -239,7 +250,7 @@ class SessionViewModel(
 
     /** Detaches [key]: it goes on running there, and its view closes. */
     fun detach(key: SessionKey) {
-        if (openKey.value == key) openKey.value = null
+        if (openKey.value == key) view(null)
         connections.detach(key.machineId, key.sessionId)
     }
 
@@ -248,7 +259,7 @@ class SessionViewModel(
         viewModelScope.launch {
             try {
                 connections.endSession(key.machineId, key.sessionId)
-                if (openKey.value == key) openKey.value = null
+                if (openKey.value == key) view(null)
             } catch (error: MobileException) {
                 notices.value = error.reason()
             }
@@ -257,24 +268,25 @@ class SessionViewModel(
 
     /**
      * Duplicates [key] on its machine and opens the copy in control (its pane attaching rather than offering Take
-     * control), unless the view moved on meanwhile: the copy then stays attached in the list. One at a time.
+     * control), unless the view moved on meanwhile (another session, the list, another destination): the copy then
+     * stays attached in the list.
      */
     fun duplicate(key: SessionKey) {
-        if (duplicating.value != null) return
-        duplicating.value = key
-        val from = openKey.value
+        val create = Create(key.machineId, key.sessionId)
+        if (!creates.begin(create)) return
+        val at = moves
         viewModelScope.launch {
             try {
                 val copy = SessionKey(key.machineId, connections.duplicateSession(key.machineId, key.sessionId).id)
                 connections.attach(copy.machineId, copy.sessionId)
-                if (openKey.value == from) {
+                if (moves == at) {
                     graph.panes.claims.claim(copy)
-                    openKey.value = copy
+                    view(copy)
                 }
             } catch (error: MobileException) {
                 notices.value = error.reason()
             } finally {
-                duplicating.value = null
+                creates.end(create)
             }
         }
     }
@@ -289,13 +301,7 @@ private data class Marks(
     val views: Map<PaneRef, PaneView>,
     val chatViews: ChatViews,
     val taking: Set<SessionKey>,
-    val duplicating: SessionKey?,
-)
-
-// the sessions whose lead this device is taking, and the one whose Duplicate is under way
-private data class Doing(
-    val taking: Set<SessionKey>,
-    val duplicating: SessionKey?,
+    val create: Create?,
 )
 
 /** What the lists are made of: the saved machines, what is attached, each machine's listing and link. */
@@ -311,8 +317,7 @@ private data class Listed(
 private fun groups(
     listed: Listed,
     live: Map<SessionKey, LiveSession>,
-    chatViews: ChatViews,
-    doing: Doing,
+    marks: Marks,
     seen: MutableMap<SessionKey, AttachedSession>,
 ): List<AttachedGroup> =
     listed.machines.mapNotNull { machine ->
@@ -329,10 +334,10 @@ private fun groups(
                 val key = SessionKey(machine.id, id)
                 attached(key, machine, listed, live, seen)
                     .copy(
-                        chatView = chatViews.on(key),
-                        taking = key in doing.taking,
-                        duplicating = key == doing.duplicating,
-                        canDuplicate = doing.duplicating == null,
+                        chatView = marks.chatViews.on(key),
+                        taking = key in marks.taking,
+                        duplicating = marks.create == Create(machine.id, id),
+                        canDuplicate = marks.create == null,
                         companionOf = parent?.let { shown[it] ?: names[it] ?: it },
                         nested = parent in shown,
                     ).also { shown[id] = it.name }

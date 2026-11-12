@@ -124,6 +124,7 @@ fun NgtermApp(
                     graph.opens.consume(opened)
                 }
             }
+            LaunchedEffect(selected) { if (selected != SESSIONS) sessions.left() }
             OnScreen(graph, if (selected == SESSIONS) attached.open else null)
             Frame(
                 graph = graph,

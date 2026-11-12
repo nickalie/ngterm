@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.data.ChatViews
+import com.nickalie.ngterm.android.data.Create
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.data.StoredMachine
@@ -38,7 +39,7 @@ data class MachineSessions(
     val ending: Set<String> = emptySet(),
     // the session whose Duplicate is under way
     val duplicating: String? = null,
-    // a New session or a Duplicate is under way: neither takes another tap
+    // a create is under way, from any screen: neither New session nor Duplicate takes another tap
     val creating: Boolean = false,
     // whether each session's panes running an agent show as a chat
     val chatViews: ChatViews = ChatViews(),
@@ -66,7 +67,7 @@ data class NewSessionState(
 /**
  * A machine's sessions: its listing with each session's status and whether this app has it attached, refreshing it,
  * New session (named or not; the dialog's state lives here so a rotation keeps a create under way), Duplicate session
- * (one create at a time, landing as New session does), End session,
+ * (landing as New session does), End session,
  * attaching and detaching. [opened] lists the machine afresh. [notice] carries what a list can't show (a create, an
  * End or an attach that failed) for a snackbar.
  */
@@ -78,8 +79,6 @@ class SessionsViewModel(
     private val refreshing = MutableStateFlow(false)
     private val ending = MutableStateFlow<Set<String>>(emptySet())
     private val newSession = MutableStateFlow<NewSessionState?>(null)
-    private val starting = MutableStateFlow(false)
-    private val duplicating = MutableStateFlow<String?>(null)
     private val lands = MutableStateFlow<SessionKey?>(null)
     private val notices = MutableStateFlow<String?>(null)
 
@@ -115,12 +114,13 @@ class SessionsViewModel(
         val chatViews: ChatViews,
     )
 
-    private val underWay = combine(ending, duplicating, starting, ::UnderWay)
+    private val creates = graph.creates
+
+    private val underWay = combine(ending, creates.underWay, ::UnderWay)
 
     private data class UnderWay(
         val ending: Set<String>,
-        val duplicating: String?,
-        val starting: Boolean,
+        val create: Create?,
     )
 
     /** The screen's state. */
@@ -139,8 +139,8 @@ class SessionsViewModel(
                         offline = !online,
                         refreshing = refreshing,
                         ending = underWay.ending,
-                        duplicating = underWay.duplicating,
-                        creating = underWay.starting || underWay.duplicating != null,
+                        duplicating = underWay.create?.takeIf { it.machineId == machineId }?.source,
+                        creating = underWay.create != null,
                         chatViews = live.chatViews,
                     ),
                 )
@@ -151,7 +151,10 @@ class SessionsViewModel(
     /** The New session dialog, or null while it is closed. */
     val creating: StateFlow<NewSessionState?> = newSession.asStateFlow()
 
-    val busy: StateFlow<Boolean> = starting.asStateFlow()
+    val busy: StateFlow<Boolean> =
+        creates.underWay
+            .map { it == Create(machineId) }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val landing: StateFlow<SessionKey?> = lands.asStateFlow()
 
@@ -187,18 +190,16 @@ class SessionsViewModel(
         viewModelScope.launch { graph.machines.get(machineId)?.let { connections.connect(it.toCore()) } }
     }
 
-    private val busyCreating get() = starting.value || duplicating.value != null
-
     fun newSession() {
-        if (busyCreating) return
-        starting.value = true
+        val create = Create(machineId)
+        if (!creates.begin(create)) return
         viewModelScope.launch {
             try {
                 land(connections.createSession(machineId, "").id)
             } catch (error: MobileException) {
                 notices.value = error.reason()
             } finally {
-                starting.value = false
+                creates.end(create)
             }
         }
     }
@@ -216,10 +217,10 @@ class SessionsViewModel(
     }
 
     fun create(name: String) {
-        if (newSession.value?.running == true || busyCreating) return
+        val create = Create(machineId)
+        if (newSession.value?.running == true || !creates.begin(create)) return
         val mine = dialog
         newSession.value = NewSessionState(running = true)
-        starting.value = true
         viewModelScope.launch {
             try {
                 val id =
@@ -242,22 +243,22 @@ class SessionsViewModel(
                     notices.value = error.reason()
                 }
             } finally {
-                starting.value = false
+                creates.end(create)
             }
         }
     }
 
     /** Duplicates [sessionId] there and opens the copy in control, as New session does with the one it creates. */
     fun duplicate(sessionId: String) {
-        if (busyCreating) return
-        duplicating.value = sessionId
+        val create = Create(machineId, sessionId)
+        if (!creates.begin(create)) return
         viewModelScope.launch {
             try {
                 land(connections.duplicateSession(machineId, sessionId).id)
             } catch (error: MobileException) {
                 notices.value = error.reason()
             } finally {
-                duplicating.value = null
+                creates.end(create)
             }
         }
     }

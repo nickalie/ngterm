@@ -6,6 +6,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.TestGraph
+import com.nickalie.ngterm.android.data.Create
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.testMachine
@@ -22,6 +23,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -195,6 +197,25 @@ class SessionsViewModelTest {
         assertEquals(emptySet<SessionKey>(), test.graph.panes.claims.held.value)
         model.landed()
         assertEquals(setOf(SessionKey("m1", "fake-1")), test.graph.panes.claims.held.value)
+    }
+
+    @Test
+    fun aCreateUnderWayOnAnotherScreenHoldsNewSessionAndDuplicate() {
+        connected("s1", "s2")
+        val model = model()
+        val create = Create("m1", "s1")
+        assertTrue(test.graph.creates.begin(create))
+        val running = model.ready { it.creating }
+        assertEquals("s1", running.duplicating)
+        assertEquals(false, model.busy.value)
+        model.newSession()
+        model.duplicate("s2")
+        model.openNamedSession()
+        model.create("api")
+        test.graph.creates.end(create)
+        assertEquals(false, model.ready { !it.creating }.creating)
+        assertEquals(0, test.core.calls.count { it.method == "createSession" || it.method == "duplicateSession" })
+        assertNull(model.landing.value)
     }
 
     @Test

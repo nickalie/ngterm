@@ -342,16 +342,17 @@ machine is the subject: the list is quiet rows on the ground, not cards, since a
   control without the tap, the pane attaching meanwhile rather than flashing the cover); one that leads already is left as it is, and any later takeover is the user's to answer
   as usual. While the machine creates and lists it (up to 20 s) the button says Creating with a small spinner and
   takes no taps; a failed create or attach is a snackbar in the core's words, and the list stays (a session created
-  but not attached shows in it). Only this device's own New session claims the lead: a session opened from a row
-  keeps the Take control cover.
+  but not attached shows in it). Only this device's own New session or Duplicate claims the lead: a session opened
+  from a row keeps the Take control cover.
 - **Duplicate session** (every session's More menu: a machine's list, the attached list, the session view's bar) asks
   nothing: the machine copies the session as desktop's Duplicate does (a fresh shell in its focused directory, right
   after it, named by the machine; a companion's copy is a session of its own, and a parent's companions are not
   copied), and the copy lands as a one-tap New session's does: attached, opened, in control. While it runs the source
-  says "Duplicating" with a small spinner in place of its status (on a row, or in the bar's state line), and every
-  Duplicate session item and New session take no taps, one create at a time. A failure is a snackbar in the core's
-  words and the screen stays. From the session view the copy replaces the source in the view, unless the view has
-  moved on meanwhile: the copy then waits attached in the list and claims no lead.
+  says "Duplicating" with a small spinner in place of its status (on its row in either list, or in the bar's state
+  line), and every Duplicate session item and New session, on every screen, take no taps: one create at a time. A
+  failure is a snackbar in the core's words and the screen stays. From the Sessions destination the copy replaces the
+  source in the view, unless the view has moved on meanwhile (another session, the list, another destination): the
+  copy then waits attached in the list and claims no lead.
 - **New named session:** a long press on New session (TalkBack's action "New named session") opens a dialog over the
   list: one optional Name field ("Optional: build-01 names it when blank"), Create session and Cancel. While the
   machine creates and lists it the button says Creating with a spinner and the field holds still; Cancel closes the
