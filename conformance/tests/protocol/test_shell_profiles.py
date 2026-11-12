@@ -136,7 +136,10 @@ def test_a_default_whose_program_is_gone_shows_why_in_the_pane(launch):
     (first,) = session_ids(ctl.tree())
     ctl.wait_mounted(first, "left")
     path = re.escape(missing)
-    report = rf"(?s)cannot start the program:.*{path}.*failed to launch the requested command:\s+{path}"
+    # Windows' complaint is portable-pty's CreateProcessW error, which quotes the command line with `{:?}`: each
+    # backslash of the path arrives doubled there, and only Ghostty's report below shows the path as it is
+    complained = re.escape(missing.replace("\\", "\\\\")) if WINDOWS else path
+    report = rf"(?s)cannot start the program:.*{complained}.*failed to launch the requested command:\s+{path}"
     ctl.wait_text(first, report)
     ctl.wait_text(_new(ctl), report)
 
