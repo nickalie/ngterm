@@ -139,8 +139,11 @@ def test_a_default_whose_shell_is_gone_is_kept_and_flagged(launch, ui_for):
     )
     ctl = launch(settings=_settings(gone))
     ui = ui_for(ctl)
-    # its pane cannot start the program, so it never mounts: the window's one session is there all the same
-    ctl.wait_tree(lambda tree: len(session_ids(tree)) == 1)
+    # its pane cannot start the program: the window's one session is there all the same, and its pane says why
+    # (the exact report is test_shell_profiles.py's test_a_default_whose_program_is_gone_shows_why_in_the_pane)
+    (first,) = session_ids(ctl.wait_tree(lambda tree: len(session_ids(tree)) == 1))
+    ctl.wait_mounted(first, "left")
+    ctl.wait_text(first, r"(?s)cannot start the program:.*failed to launch the requested command")
     _open_general(ui)
     # never silently replaced by another shell: the picker keeps it, and the hint asks for another
     assert "no longer installed" in ui.text(ui.find("settings-shell-profile-missing", role="text"))
