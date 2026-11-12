@@ -68,14 +68,14 @@ class TerminalKeyboard(
 
     private var selected: TerminalState? by mutableStateOf(null)
 
-    /** The input method's connection opened last, which only types while its terminal is the target. */
+    /** The input method's open connections, each typing only while its terminal is the target. */
     internal val connections = InputConnections()
 
     /**
      * The terminal every key goes to; `null` while none can take them (keys then go nowhere, but the chords still
      * run). A lone terminal becomes it as it takes the focus ([selectsOnFocus]); the session view sets it to its
-     * selected pane. Moving it ends the input method's connection to the terminal it leaves: its composition is
-     * finished there, and nothing the connection sends later lands anywhere.
+     * selected pane. Moving it ends the input method's connections to the terminal it leaves: their composition is
+     * finished there, and nothing they send later lands anywhere.
      */
     var target: TerminalState?
         get() = selected
@@ -254,32 +254,29 @@ class TerminalKeyboard(
 }
 
 /**
- * The input method's live connection to a terminal: one at a time, the one opened last. Ending one ends its
- * composition in its own terminal ([TerminalInputConnection.close]).
+ * The input method's open connections to the terminals. A newer one never ends an older one: the system may open one
+ * and the input method keep typing on the one before (as it binds again), and it closes the one it lets go of itself.
+ * Ending one ends its composition in its own terminal ([TerminalInputConnection.close]).
  */
 internal class InputConnections {
-    private var connection: TerminalInputConnection? = null
+    private val open = mutableListOf<TerminalInputConnection>()
 
-    /** [opened] is the input method's connection now: one opened before is ended. */
+    /** [opened] is open now, beside those opened before. */
     fun bind(opened: TerminalInputConnection) {
-        if (opened === connection) return
-        connection?.let(::end)
-        connection = opened
+        open.removeAll { it.closed }
+        if (opened !in open) open += opened
     }
 
-    /** Ends the connection to [terminal], if there is one. */
-    fun release(terminal: TerminalState) {
-        connection?.takeIf { it.terminal === terminal }?.let(::end)
-    }
+    /** Ends the connections to [terminal]. */
+    fun release(terminal: TerminalState) = end { it.terminal === terminal }
 
-    /** The keyboard's target moves to [target]: a connection to another terminal ends, before it moves. */
-    fun leave(target: TerminalState?) {
-        connection?.takeIf { it.terminal !== target }?.let(::end)
-    }
+    /** The keyboard's target moves to [target]: the connections to another terminal end, before it moves. */
+    fun leave(target: TerminalState?) = end { it.terminal !== target }
 
-    private fun end(ended: TerminalInputConnection) {
-        if (connection === ended) connection = null
-        ended.close()
+    private fun end(which: (TerminalInputConnection) -> Boolean) {
+        val ended = open.filter(which)
+        open -= ended.toSet()
+        ended.forEach(TerminalInputConnection::close)
     }
 }
 

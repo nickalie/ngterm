@@ -57,7 +57,9 @@ internal class TerminalInputConnection(
     private val keyboard: TerminalKeyboard,
     val terminal: TerminalState,
 ) : BaseInputConnection(host, true) {
-    private var closed = false
+    /** Whether it has ended: nothing it is sent lands anywhere. */
+    var closed = false
+        private set
 
     // whether what the input method sends now reaches the terminal
     private val live get() = !closed && keyboard.target === terminal

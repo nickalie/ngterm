@@ -607,6 +607,25 @@ class TerminalCompositionTest {
         assertTrue("nothing crosses to the terminal targeted since", other.inputs.isEmpty())
     }
 
+    @Test
+    fun everyConnectionToATerminalEndsAsTheTargetLeavesIt() {
+        val other = SelectingPane()
+        val first = TerminalState(pane, EmptyCoroutineContext)
+        val second = TerminalState(other, EmptyCoroutineContext)
+        val host = View(RuntimeEnvironment.getApplication())
+        keyboard.target = first
+        val older = TerminalInputConnection(host, keyboard, first).also(keyboard.connections::bind)
+        val newer = TerminalInputConnection(host, keyboard, first).also(keyboard.connections::bind)
+        older.setComposingText("aकै", 1)
+        keyboard.target = second
+        keyboard.target = first
+        older.commitText("x", 1)
+        newer.commitText("y", 1)
+        assertEquals("the held word lands where it was typed, and nothing after", "aकै", line())
+        assertTrue(older.closed && newer.closed)
+        assertTrue(other.inputs.isEmpty())
+    }
+
     private companion object {
         const val STRIP = "Waiting to be typed:"
     }

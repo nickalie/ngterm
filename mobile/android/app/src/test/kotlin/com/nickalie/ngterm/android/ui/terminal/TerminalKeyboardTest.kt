@@ -174,6 +174,20 @@ class TerminalKeyboardTest {
     }
 
     @Test
+    fun theSoftKeyboardKeepsTypingOnTheConnectionItHoldsWhenTheSystemOpensAnother() {
+        show()
+        focus()
+        // an input method binding again (another one picked, then this one back) has the system open two connections
+        // in a row, and the input method may keep typing on the first: the system closes the one it lets go of
+        val kept = connect()
+        connect()
+        kept.commitText("ls", 1)
+        kept.setComposingText("-la", 1)
+        kept.finishComposingText()
+        assertEquals(listOf(FakeInput.Typed("ls"), FakeInput.Typed("-la")), pane.inputs.toList())
+    }
+
+    @Test
     fun theExtraKeysSendTheirKeys() {
         show()
         focus()
