@@ -66,7 +66,8 @@ class FakeHttp : UpdateHttp {
     var failure: IOException? = null
     var gate: CompletableDeferred<Unit>? = null
     var fetchGate: CompletableDeferred<Unit>? = null
-    var stall: CountDownLatch? = null
+
+    @Volatile var stall: CountDownLatch? = null
     val ended = AtomicInteger()
 
     fun releases(vararg json: String) {

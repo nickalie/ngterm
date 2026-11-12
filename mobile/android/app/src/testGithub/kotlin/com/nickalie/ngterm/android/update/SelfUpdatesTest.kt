@@ -329,6 +329,7 @@ class SelfUpdatesTest {
         rig.http.stall = first
         updates.install()
         awaitState(updates) { it == UpdateState.Downloading(offer, offer.size / 2) }
+        settle { rig.http.stall == null }
         updates.cancel()
         val second = CountDownLatch(1)
         rig.http.stall = second
