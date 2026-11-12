@@ -185,10 +185,11 @@ for patch in "$PATCHES"/*.patch; do
 done
 find "$TREE" -name '*.orig' -type f -exec rm -f {} +
 
-# Puts the mirror's packages into Zig's global cache and the tree's zig-pkg/, each checked against its name. See the
-# header for why a missing mirror is fine and a wrong package is not.
+# Puts the mirror's packages into Zig's global cache, each checked against its name. See the header for why a missing
+# mirror is fine and a wrong package is not. The check fetches into a scratch cache and the archive is copied as is:
+# Zig 0.17's `zig fetch` of a cache archive caches it wrapped in one more directory, which the build then hashes wrong.
 seed_zig_packages() {
-  local key archive package name fetched
+  local key archive package name fetched check
   key="$(zig_packages_key)"
   archive="$BUILD_DIR/zig-packages.tar"
   if ! curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 -o "$archive" \
@@ -199,12 +200,15 @@ seed_zig_packages() {
   echo "seeding libghostty-vt's Zig packages from the mirror $key..." >&2
   mkdir "$BUILD_DIR/zig-packages"
   tar --no-same-owner -xf "$archive" -C "$BUILD_DIR/zig-packages" || die "the Zig package mirror $key does not unpack"
+  mkdir -p "$BUILD_DIR/zig-packages-check" "$ZIG_CACHE/p"
+  check="$(native_path "$BUILD_DIR/zig-packages-check")"
   for package in "$BUILD_DIR"/zig-packages/*.tar.gz; do
     [[ -f "$package" ]] || die "the Zig package mirror $key holds no packages"
     name="$(basename "$package" .tar.gz)"
-    fetched="$(cd "$TREE" && "$ZIG_EXE" fetch "$(native_path "$package")")" \
+    fetched="$(cd "$TREE" && ZIG_GLOBAL_CACHE_DIR="$check" "$ZIG_EXE" fetch "$(native_path "$package")")" \
       || die "zig cannot read $name from the Zig package mirror $key"
     [[ "$fetched" == "$name" ]] || die "the Zig package mirror $key holds $fetched under the name $name"
+    cp "$package" "$ZIG_CACHE/p/$name.tar.gz"
   done
 }
 

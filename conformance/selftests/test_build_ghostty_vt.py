@@ -160,3 +160,49 @@ def test_a_stalled_zig_itself_is_stopped(tmp_path: Path) -> None:
     pid = int(pid_file.read_text())
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+ZIG_0_17_FETCH = (
+    '#!/bin/sh\nname="$(basename "$2" .tar.gz)"\nmkdir -p "$ZIG_GLOBAL_CACHE_DIR/p"\n'
+    'echo rewrapped > "$ZIG_GLOBAL_CACHE_DIR/p/$name.tar.gz"\necho "$name"\n'
+)
+
+
+def seed(tmp_path: Path, packages: dict[str, bytes], zig_script: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """seed_zig_packages over a file:// mirror of `packages`, with `zig_script` as zig."""
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    for name, content in packages.items():
+        (stage / f"{name}.tar.gz").write_bytes(content)
+    release = tmp_path / "releases" / "zig-packages-k"
+    release.mkdir(parents=True)
+    subprocess.run(["tar", "-cf", str(release / "zig-packages.tar"), "-C", str(stage), "."], check=True)
+    zig = tmp_path / "zig"
+    zig.write_text(zig_script)
+    zig.chmod(zig.stat().st_mode | stat.S_IEXEC)
+    for directory in ("tree", "build", "cache"):
+        (tmp_path / directory).mkdir()
+    cache = tmp_path / "cache"
+    done = bash(
+        'native_path() { echo "$1"; }\nzig_packages_key() { echo k; }\ndie() { echo "$*" >&2; exit 1; }\n'
+        + functions("seed_zig_packages")
+        + f'TREE="{tmp_path}/tree"; BUILD_DIR="{tmp_path}/build"; ZIG_CACHE="{cache}"; ZIG_EXE="{zig}"\n'
+        + f'ZIG_PACKAGES_RELEASES="file://{tmp_path}/releases"; export ZIG_GLOBAL_CACHE_DIR="{cache}"\n'
+        + "seed_zig_packages"
+    )
+    return done, cache
+
+
+def test_the_mirror_seeds_the_global_cache_with_its_archives_as_they_are(tmp_path: Path) -> None:
+    """Zig 0.17's fetch of a cache archive caches it rewrapped, which the build then hashes wrong."""
+    done, cache = seed(tmp_path, {"pkg-1.0.0-AAAA": b"first", "N-V-__8AABBBB": b"second"}, ZIG_0_17_FETCH)
+    assert done.returncode == 0, done.stderr
+    assert (cache / "p" / "pkg-1.0.0-AAAA.tar.gz").read_bytes() == b"first"
+    assert (cache / "p" / "N-V-__8AABBBB.tar.gz").read_bytes() == b"second"
+
+
+def test_a_mirror_archive_under_another_name_seeds_nothing(tmp_path: Path) -> None:
+    done, cache = seed(tmp_path, {"pkg-1.0.0-AAAA": b"first"}, "#!/bin/sh\necho pkg-1.0.0-OTHER\n")
+    assert done.returncode != 0
+    assert "holds pkg-1.0.0-OTHER under the name pkg-1.0.0-AAAA" in done.stderr
+    assert not (cache / "p" / "pkg-1.0.0-AAAA.tar.gz").exists()
