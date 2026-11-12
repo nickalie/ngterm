@@ -5,7 +5,8 @@
 
 use minisign_verify::{PublicKey, Signature};
 
-/// The key a release's checksum manifest must be signed with; empty means unsigned releases are taken as they are.
+/// The key a release's checksum manifest must be signed with. Unlike desktop, an empty one refuses every release:
+/// the app never installs an APK whose checksum no signature vouches for.
 const TRUSTED_KEY: &str = include_str!("../../ngterm-update/trust/minisign.pub");
 
 /// Why a release's checksums can't be trusted.
@@ -38,35 +39,31 @@ pub fn release_checksum(
     version: String,
     asset: String,
 ) -> Result<String, ReleaseError> {
-    let key = trusted_key(TRUSTED_KEY)?;
-    checksum(key.as_ref(), &manifest, &signature, &version, &asset)
+    checksum(&trusted_key(TRUSTED_KEY)?, &manifest, &signature, &version, &asset)
 }
 
-fn trusted_key(text: &str) -> Result<Option<PublicKey>, ReleaseError> {
-    if text.trim().is_empty() {
-        return Ok(None);
-    }
-    PublicKey::decode(text.trim_start())
-        .map(Some)
-        .map_err(|_| ReleaseError::Signature)
+fn trusted_key(text: &str) -> Result<PublicKey, ReleaseError> {
+    PublicKey::decode(text.trim()).map_err(|_| ReleaseError::Signature)
 }
 
 fn checksum(
-    key: Option<&PublicKey>,
+    key: &PublicKey,
     manifest: &[u8],
     signature: &[u8],
     version: &str,
     asset: &str,
 ) -> Result<String, ReleaseError> {
-    if let Some(key) = key {
-        let signature = std::str::from_utf8(signature).map_err(|_| ReleaseError::Signature)?;
-        let signature = Signature::decode(signature).map_err(|_| ReleaseError::Signature)?;
-        key.verify(manifest, &signature, false)
-            .map_err(|_| ReleaseError::Signature)?;
-        if signature.trusted_comment() != format!("ngterm v{version} SHA256SUMS") {
-            return Err(ReleaseError::Signature);
-        }
+    let signature = std::str::from_utf8(signature).map_err(|_| ReleaseError::Signature)?;
+    let signature = Signature::decode(signature).map_err(|_| ReleaseError::Signature)?;
+    key.verify(manifest, &signature, false)
+        .map_err(|_| ReleaseError::Signature)?;
+    if signature.trusted_comment() != format!("ngterm v{version} SHA256SUMS") {
+        return Err(ReleaseError::Signature);
     }
+    listed_checksum(manifest, asset)
+}
+
+fn listed_checksum(manifest: &[u8], asset: &str) -> Result<String, ReleaseError> {
     let missing = || ReleaseError::Checksum {
         asset: asset.to_owned(),
     };
@@ -99,7 +96,7 @@ mod tests {
         std::fs::read(format!("{FIXTURES}{name}")).unwrap()
     }
 
-    fn key(name: &str) -> Option<PublicKey> {
+    fn key(name: &str) -> PublicKey {
         trusted_key(&String::from_utf8(fixture(name)).unwrap()).unwrap()
     }
 
@@ -108,7 +105,7 @@ mod tests {
         let sums = fixture("SHA256SUMS");
         let signature = fixture("SHA256SUMS.minisig");
         assert_eq!(
-            checksum(key("test.pub").as_ref(), &sums, &signature, "0.2.0", ASSET).unwrap(),
+            checksum(&key("test.pub"), &sums, &signature, "0.2.0", ASSET).unwrap(),
             HASH
         );
     }
@@ -118,35 +115,35 @@ mod tests {
         let sums = fixture("SHA256SUMS");
         let signature = fixture("SHA256SUMS.minisig");
         let test = key("test.pub");
-        let refused = |key: Option<&PublicKey>, manifest: &[u8], signature: &[u8], version: &str| {
+        let refused = |key: &PublicKey, manifest: &[u8], signature: &[u8], version: &str| {
             assert_eq!(
                 checksum(key, manifest, signature, version, ASSET),
                 Err(ReleaseError::Signature)
             );
         };
-        refused(key("other.pub").as_ref(), &sums, &signature, "0.2.0");
-        refused(test.as_ref(), &sums, &fixture("wrong-key.minisig"), "0.2.0");
+        refused(&key("other.pub"), &sums, &signature, "0.2.0");
+        refused(&test, &sums, &fixture("wrong-key.minisig"), "0.2.0");
         let mut tampered = sums.clone();
         tampered[0] ^= 1;
-        refused(test.as_ref(), &tampered, &signature, "0.2.0");
-        refused(test.as_ref(), &sums, &fixture("other-release.minisig"), "0.2.0");
-        refused(test.as_ref(), &sums, &signature, "0.3.0");
-        refused(test.as_ref(), &sums, b"", "0.2.0");
-        refused(test.as_ref(), &sums, b"not a signature", "0.2.0");
-        refused(test.as_ref(), &sums, &[0xff, 0xfe], "0.2.0");
+        refused(&test, &tampered, &signature, "0.2.0");
+        refused(&test, &sums, &fixture("other-release.minisig"), "0.2.0");
+        refused(&test, &sums, &signature, "0.3.0");
+        refused(&test, &sums, b"", "0.2.0");
+        refused(&test, &sums, b"not a signature", "0.2.0");
+        refused(&test, &sums, &[0xff, 0xfe], "0.2.0");
     }
 
     #[test]
     fn an_asset_needs_exactly_one_well_formed_checksum() {
         let missing = |manifest: &str| {
             assert_eq!(
-                checksum(None, manifest.as_bytes(), b"", "0.2.0", "a.apk"),
+                listed_checksum(manifest.as_bytes(), "a.apk"),
                 Err(ReleaseError::Checksum { asset: "a.apk".into() })
             );
         };
         let hash = "AB".repeat(32);
         assert_eq!(
-            checksum(None, format!("{hash} *a.apk\n").as_bytes(), b"", "0.2.0", "a.apk").unwrap(),
+            listed_checksum(format!("{hash} *a.apk\n").as_bytes(), "a.apk").unwrap(),
             "ab".repeat(32)
         );
         missing("");
@@ -154,13 +151,13 @@ mod tests {
         missing(&format!("{hash}  a.apk\n{hash}  a.apk\n"));
         missing("abc  a.apk\n");
         missing(&format!("{}  a.apk\n", "g".repeat(64)));
-        assert!(checksum(None, &[0xff], b"", "0.2.0", "a.apk").is_err());
+        assert!(listed_checksum(&[0xff], "a.apk").is_err());
     }
 
     #[test]
     fn the_trusted_key_is_the_one_desktop_builds_trust() {
-        assert!(trusted_key(TRUSTED_KEY).unwrap().is_some());
-        assert!(trusted_key(" \n").unwrap().is_none());
+        assert!(trusted_key(TRUSTED_KEY).is_ok());
+        assert_eq!(trusted_key(" \n").err(), Some(ReleaseError::Signature));
         assert!(matches!(
             trusted_key("untrusted comment: x\nnot base64\n"),
             Err(ReleaseError::Signature)
