@@ -42,7 +42,7 @@ def live(adapter):
 
 
 @pytest.fixture(params=["plain", pytest.param("live", marks=LIVE_IN_ANY_SHELL)])
-def pane(request):
+def pane(request, adapter):
     """The instance, and whether its panes run in live sessions."""
     if request.param == "live":
         return request.getfixturevalue("live"), True

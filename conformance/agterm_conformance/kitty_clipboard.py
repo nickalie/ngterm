@@ -2,7 +2,9 @@
 `kitty-clipboard`).
 
 The pane's program is a probe: the harness's own Python running `PROBE`, which prints a marker line, writes the
-request (once a gate file exists, when given one), then echoes each line it reads. Where the program reads the
+request once the test has seen the marker (a gate file), then echoes each line it reads. The marker has the screen to
+itself: a write waiting for its prompt holds back the output that came in with it, and Windows' pseudoconsole hands
+the pane what a program wrote in one piece. Where the program reads the
 terminal's OSC answers (`osc-answers`), the reply arrives as the probe's input, which the terminal's line discipline
 echoes (a control character as `^` and its letter), so `session.text` reads it. Where a write lands in a clipboard of
 the instance's own (`private-primary`), Ghostty's `paste_from_selection` bound to a chord pastes it back into the
@@ -42,9 +44,8 @@ if os.name == "nt":
     if kernel32.GetConsoleMode(out, ctypes.byref(mode)):
         kernel32.SetConsoleMode(out, mode.value | 0x1 | 0x4)
 os.write(1, b"{MARKER}\\r\\n")
-if len(sys.argv) > 2:
-    while not os.path.exists(sys.argv[2]):
-        time.sleep(0.05)
+while not os.path.exists(sys.argv[2]):
+    time.sleep(0.05)
 with open(sys.argv[1], "rb") as request:
     os.write(1, request.read())
 for line in sys.stdin:
@@ -91,25 +92,27 @@ def configured(ctl: Any, lines: str) -> Iterator[None]:
         ctl.request("config.reload")
 
 
-def probe_command(directory: Path, request: str, gate: Path | None = None) -> str:
-    """The command line of a probe sending `request` (after `gate` exists, when given)."""
+def probe_command(directory: Path, request: str, gate: Path) -> str:
+    """The command line of a probe sending `request` once `gate` exists."""
     probe = directory / "kitty_probe.py"
     probe.write_text(PROBE, encoding="utf-8")
     path = directory / f"request-{uuid.uuid4().hex[:8]}.vt"
     path.write_bytes(request.encode())
-    words = [sys.executable, os.fspath(probe), os.fspath(path), *([os.fspath(gate)] if gate else [])]
+    words = [sys.executable, os.fspath(probe), os.fspath(path), os.fspath(gate)]
     if any(" " in word for word in words):
         raise ValueError(f"the probe's words go unquoted to every pane shell, so none may hold a space: {words}")
     return " ".join(words)
 
 
-def requesting(ctl: Any, directory: Path, request: str, live: bool = False, gate: Path | None = None) -> str:
-    """A session whose probe sends `request`, shown with its marker line."""
+def requesting(ctl: Any, directory: Path, request: str, live: bool = False) -> str:
+    """A session whose probe has sent `request`, after its marker line showed."""
+    gate = directory / f"go-{uuid.uuid4().hex[:8]}"
     sid = assert_ok(ctl.request("session.new", command=probe_command(directory, request, gate)))["id"]
     ctl.wait_mounted(sid, "left")
     if live:
         ctl.wait_tree(lambda tree: find_session(tree, sid).get(ctl.vocabulary.backed_key) is True)
     ctl.wait_text(sid, MARKER, all=True)
+    gate.touch()
     return sid
 
 
