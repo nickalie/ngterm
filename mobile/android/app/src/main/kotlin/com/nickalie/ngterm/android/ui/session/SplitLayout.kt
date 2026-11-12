@@ -56,14 +56,15 @@ import com.nickalie.ngterm.core.ffi.PaneSize
 
 /**
  * One pane of a session as the view places it: its [ref], its view's [state] once it is shown, what its events say
- * ([live]), and why it could not be shown ([failure]); [chatView] when it shows as a chat, with its [chat] once that
- * is open.
+ * ([live]), why it could not be shown ([failure]), and whether this device is [taking] its lead; [chatView] when it
+ * shows as a chat, with its [chat] once that is open.
  */
 data class PaneSpot(
     val ref: PaneRef,
     val state: TerminalState?,
     val live: PaneLive?,
     val failure: String?,
+    val taking: Boolean = false,
     val chatView: Boolean = false,
     val chat: ChatViewModel? = null,
 )
@@ -202,7 +203,7 @@ private fun FocusRequester.requestIfShown() {
 
 // what covers the slot: a chat only a failed show's, since reading a chat never takes control
 private fun PaneSpot.cover(): PaneCover? =
-    PaneCover.of(live, state != null, failure)?.takeIf { !chatView || it is PaneCover.Failed }
+    PaneCover.of(live, state != null, failure, taking)?.takeIf { !chatView || it is PaneCover.Failed }
 
 // a pane in chat view: its chat once open (the backlog's wait until then), and its terminal, not drawn, still given the
 // grid the slot would draw it at, so a chat action that takes control lays the program out for this device. A grid

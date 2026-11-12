@@ -186,6 +186,35 @@ fn a_cut_mid_sequence_is_restored() -> TestResult {
     Ok(())
 }
 
+/// A C1 CSI aborts the APC across PTY reads; the attach must replay the fresh CSI instead of the APC.
+#[cfg(unix)]
+#[test]
+fn an_attach_after_a_c1_restart_resumes_the_replacement_sequence() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let app = script("printf '\\033_hello\\2333'; read x; printf '1mRED\\033[0m done'; read y");
+    let (pane, creator) = Pane::spawn(config("c1-cut", dir.path(), app))?;
+    let mut first = Client::new(creator);
+    let deadline = Instant::now() + PATIENCE;
+    while pane.offset() < b"\x1b_hello\x9b3".len() as u64 {
+        assert!(Instant::now() < deadline, "the program never reached its C1 cut");
+        first.receive(Duration::from_millis(50));
+    }
+    let mut later = Client::attach(&pane)?;
+    later.receive(PATIENCE);
+    let Some(ClientEvent::Snapshot { data, .. }) = later.events.first() else {
+        panic!("no snapshot first: {:?}", later.events);
+    };
+    assert!(data.ends_with(b"\x1b[3"), "{data:?}");
+    type_line(&pane, "")?;
+    later.expect("done");
+    let shown = assert_converged(&pane, &mut later)?;
+    assert!(shown.rows.contains("38;5;1mRED"), "{:?}", shown.rows);
+    assert!(!shown.rows.contains("hello"));
+    type_line(&pane, "")?;
+    later.finish();
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn without_a_cut_an_attach_waits_then_fails_without_harm() -> TestResult {

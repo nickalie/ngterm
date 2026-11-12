@@ -146,6 +146,7 @@ impl Contract {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Attach { name: String, argv: Vec<String> },
+    AttachBridge { name: String, argv: Vec<String> },
     List { short: bool },
     Kill { names: Vec<String>, force: bool },
     Screen { name: String, all: bool },
@@ -161,6 +162,7 @@ impl Command {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Attach { .. } => "attach",
+            Self::AttachBridge { .. } => "attach-bridge",
             Self::List { .. } => "list",
             Self::Kill { .. } => "kill",
             Self::Screen { .. } => "screen",
@@ -191,12 +193,19 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     };
     let rest = rest.to_vec();
     match command.as_str() {
-        "attach" | "a" => {
+        "attach" | "a" | "attach-bridge" => {
             let (name, program) = rest.split_first().ok_or("attach needs a session name")?;
-            Ok(Command::Attach {
-                name: name.clone(),
-                argv: program.to_vec(),
-            })
+            if command == "attach-bridge" {
+                Ok(Command::AttachBridge {
+                    name: name.clone(),
+                    argv: program.to_vec(),
+                })
+            } else {
+                Ok(Command::Attach {
+                    name: name.clone(),
+                    argv: program.to_vec(),
+                })
+            }
         }
         "list" | "ls" | "l" => {
             let short = flags(&rest, &["--short"])?.contains(&"--short");
@@ -284,7 +293,8 @@ pub fn run(args: &[OsString]) -> ExitCode {
     };
     let contract = Contract::current();
     let code = match command {
-        Command::Attach { name, argv } => attach::run(&contract, &name, argv),
+        Command::Attach { name, argv } => attach::run(&contract, &name, argv, false),
+        Command::AttachBridge { name, argv } => attach::run(&contract, &name, argv, true),
         command => execute(
             &command,
             &contract,
@@ -389,7 +399,7 @@ fn api_command(
             };
             with_session(&client, &name, |api| api.print(&name, &data)).map(|()| EXIT_OK)
         }
-        Command::Attach { .. } | Command::Version | Command::Help => Ok(EXIT_OK),
+        Command::Attach { .. } | Command::AttachBridge { .. } | Command::Version | Command::Help => Ok(EXIT_OK),
     }
 }
 

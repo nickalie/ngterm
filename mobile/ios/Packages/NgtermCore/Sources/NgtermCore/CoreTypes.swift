@@ -39,8 +39,12 @@ public typealias ChatToolKind = NgtermCoreBindings.ChatToolKind
 public typealias ChatToolStatus = NgtermCoreBindings.ChatToolStatus
 /// How much of a limit is used, and when it resets.
 public typealias ChatUsage = NgtermCoreBindings.ChatUsage
+/// One representation of a clipboard value: its MIME type and bytes.
+public typealias ClipboardPart = NgtermCoreBindings.ClipboardPart
 /// The app's answer to a pane's clipboard read.
 public typealias ClipboardReply = NgtermCoreBindings.ClipboardReply
+/// How the app's write of a program's clipboard value ended.
+public typealias ClipboardWriteStatus = NgtermCoreBindings.ClipboardWriteStatus
 /// Why a key could not be made or imported.
 public typealias KeyError = NgtermCoreBindings.KeyError
 /// A private key in OpenSSH form, with the line for the machine's `authorized_keys` and its fingerprint.

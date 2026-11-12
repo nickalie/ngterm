@@ -1,10 +1,12 @@
 package com.nickalie.ngterm.android.data
 
+import com.nickalie.ngterm.core.fake.FakeCall
 import com.nickalie.ngterm.core.fake.FakeMobileCore
 import com.nickalie.ngterm.core.fake.fakeSession
+import com.nickalie.ngterm.core.ffi.ClipboardPart
+import com.nickalie.ngterm.core.ffi.ClipboardWriteStatus
 import com.nickalie.ngterm.core.ffi.Machine
 import com.nickalie.ngterm.core.ffi.MobileEvent
-import com.nickalie.ngterm.core.ffi.PaneClipboard
 import com.nickalie.ngterm.core.ffi.PaneEnd
 import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneRole
@@ -25,7 +27,10 @@ import org.junit.Test
 class LiveSessionsTest {
     private lateinit var core: FakeMobileCore
     private lateinit var connections: Connections
-    private val writes = mutableListOf<String?>()
+    private val writes = mutableListOf<List<ClipboardPart>>()
+
+    // what the device's clipboard says of each write
+    private var status: ClipboardWriteStatus? = ClipboardWriteStatus.DONE
     private val key = SessionKey("m1", "s1")
     private val pane = PaneRef("m1", "s1", "P1")
 
@@ -49,7 +54,10 @@ class LiveSessionsTest {
 
     private fun TestScope.live(): LiveSessions {
         connections = Connections(this, { 0L }) { sink -> FakeMobileCore(sink).also { core = it } }
-        return LiveSessions(backgroundScope, connections) { writes += it }
+        return LiveSessions(backgroundScope, connections) {
+            writes += it
+            checkNotNull(status) { "the clipboard service died" }
+        }
     }
 
     // m1 connected and listed, with s1 attached
@@ -124,14 +132,14 @@ class LiveSessionsTest {
             core.emit(MobileEvent.PaneLead(pane, PaneRole.FOLLOWER, true))
             core.emit(MobileEvent.PaneTitle(pane, "vim"))
             assertEquals(
-                PaneLive(PaneRole.FOLLOWER, covered = true, title = "vim"),
+                PaneLive(PaneRole.FOLLOWER, covered = true, title = "vim", leads = 1),
                 live.sessions.value[key]
                     ?.panes
                     ?.get("P1"),
             )
             core.emit(MobileEvent.PaneEnded(pane, PaneEnd.Lost("link down")))
             assertEquals(
-                PaneLive(PaneRole.FOLLOWER, covered = false, end = PaneEnd.Lost("link down"), title = "vim"),
+                PaneLive(PaneRole.FOLLOWER, covered = false, end = PaneEnd.Lost("link down"), title = "vim", leads = 1),
                 live.sessions.value[key]
                     ?.panes
                     ?.get("P1"),
@@ -142,6 +150,13 @@ class LiveSessionsTest {
                     ?.panes
                     ?.get("P1")
                     ?.end,
+            )
+            core.emit(MobileEvent.PaneLead(pane, null, true))
+            assertEquals(
+                PaneLive(covered = true, title = "vim", leads = 2),
+                live.sessions.value[key]
+                    ?.panes
+                    ?.get("P1"),
             )
         }
 
@@ -173,14 +188,54 @@ class LiveSessionsTest {
         }
 
     @Test
-    fun aProgramsWriteToTheStandardClipboardLandsAndTheOthersDont() =
+    fun aProgramsWriteLandsWithEveryPartAndItsStatusGoesBackToTheCore() =
         runTest {
             live()
-            core.emit(MobileEvent.ClipboardWrite(pane, PaneClipboard.STANDARD, "copied"))
-            core.emit(MobileEvent.ClipboardWrite(pane, PaneClipboard.PRIMARY, "primary"))
-            core.emit(MobileEvent.ClipboardWrite(pane, PaneClipboard.SELECTION, "selection"))
-            core.emit(MobileEvent.ClipboardWrite(pane, PaneClipboard.STANDARD, null))
+            val image = ClipboardPart("image/png", byteArrayOf(1, 2, 3))
+            core.emit(MobileEvent.ClipboardWrite(pane, 1u, listOf(part("text/plain", "copied"), image)))
             settle()
-            assertEquals(listOf("copied", null), writes)
+            status = ClipboardWriteStatus.UNSUPPORTED
+            core.emit(MobileEvent.ClipboardWrite(pane, 2u, listOf(ClipboardPart("application/x-a", byteArrayOf(0)))))
+            settle()
+            status = ClipboardWriteStatus.DONE
+            core.emit(MobileEvent.ClipboardWrite(pane, 3u, emptyList()))
+            settle()
+            assertEquals(
+                listOf(
+                    listOf(("text/plain" to "copied".toByteArray().toList()), image.key()),
+                    listOf("application/x-a" to listOf<Byte>(0)),
+                    emptyList(),
+                ),
+                writes.map { parts -> parts.map { it.key() } },
+            )
+            assertEquals(
+                listOf(
+                    FakeCall("completeClipboardWrite", listOf("m1", "s1", pane.paneId, 1uL, ClipboardWriteStatus.DONE)),
+                    FakeCall(
+                        "completeClipboardWrite",
+                        listOf("m1", "s1", pane.paneId, 2uL, ClipboardWriteStatus.UNSUPPORTED),
+                    ),
+                    FakeCall("completeClipboardWrite", listOf("m1", "s1", pane.paneId, 3uL, ClipboardWriteStatus.DONE)),
+                ),
+                core.calls.filter { it.method == "completeClipboardWrite" },
+            )
+        }
+
+    @Test
+    fun aWriterThatThrowsStillCompletesTheWriteAsFailed() =
+        runTest {
+            live()
+            status = null
+            core.emit(MobileEvent.ClipboardWrite(pane, 4u, listOf(part("text/plain", "copied"))))
+            settle()
+            assertEquals(
+                listOf(
+                    FakeCall(
+                        "completeClipboardWrite",
+                        listOf("m1", "s1", pane.paneId, 4uL, ClipboardWriteStatus.FAILED),
+                    ),
+                ),
+                core.calls.filter { it.method == "completeClipboardWrite" },
+            )
         }
 }

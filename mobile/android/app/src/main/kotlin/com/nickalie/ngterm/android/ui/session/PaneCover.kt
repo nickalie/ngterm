@@ -29,12 +29,13 @@ sealed interface PaneCover {
     companion object {
         /**
          * What covers a pane: its show [failure], no terminal yet ([hasTerminal] false), its attach's end, or its
-         * role's cover; `null` when it is the user's to use.
+         * role's cover (attaching while this device is [taking] its lead); `null` when it is the user's to use.
          */
         fun of(
             live: PaneLive?,
             hasTerminal: Boolean,
             failure: String?,
+            taking: Boolean = false,
         ): PaneCover? {
             val end = live?.end
             return when {
@@ -42,7 +43,7 @@ sealed interface PaneCover {
                 !hasTerminal -> Attaching
                 end is PaneEnd.Lost -> Reconnecting
                 end is PaneEnd.Exited -> Exited(end.code, end.signal)
-                live?.covered == true && live.role == PaneRole.FOLLOWER -> Follower
+                live?.covered == true && live.role == PaneRole.FOLLOWER && !taking -> Follower
                 live?.covered == true -> Attaching
                 else -> null
             }

@@ -1048,6 +1048,15 @@ impl Core {
         else {
             return false;
         };
+        let env = crate::attach_bridge::launch_nonce(&origin.endpoint, &lead)
+            .map(|nonce| {
+                vec![(
+                    crate::attach_bridge::VARIABLE.into(),
+                    crate::attach_bridge::variable(nonce),
+                )]
+            })
+            .unwrap_or_default();
+        // An absent decision removes the inherited variable in Host::prepare before applying these variables.
         // kept until the frontend reports the replacement installed or dropped, as a live pane's reattach
         self.begin_replacement_lead(&token, pane, lead, cover);
         self.remote.viewer.respawns.attach_started(pane, session);
@@ -1056,7 +1065,7 @@ impl Core {
             token,
             command,
             attach: None,
-            env: Vec::new(),
+            env,
             cwd: None,
             remote: true,
         });

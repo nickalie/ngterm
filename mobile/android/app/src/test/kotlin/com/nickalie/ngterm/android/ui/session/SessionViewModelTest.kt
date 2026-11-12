@@ -130,6 +130,39 @@ class SessionViewModelTest {
     }
 
     @Test
+    fun attachedCompanionsFollowTheirParentNestedOnlyUnderAnAttachedOne() {
+        val stored = testMachine(keyId = test.seedKey().id)
+        test.seedMachine(stored)
+        test.core.sessions["m1"] =
+            mutableListOf(
+                fakeSession("a", name = "api"),
+                fakeSession("b", name = "blog"),
+                fakeSession("ar", name = "api review", parent = "a"),
+                fakeSession("bd", name = "blog drafts", parent = "b"),
+            )
+        test.connections.connect(stored.toCore())
+        eventually { test.connections.trees.value["m1"] != null }
+        runBlocking { listOf("bd", "ar", "a").forEach { test.connections.attach("m1", it) } }
+        val model = model()
+        eventually { model.state.value.sessions.size == 3 }
+        assertEquals(
+            listOf(
+                Triple("api", null, false),
+                Triple("api review", "api", true),
+                Triple("blog drafts", "blog", false),
+            ),
+            model.state.value.sessions
+                .map { Triple(it.name, it.companionOf, it.nested) },
+        )
+        // the companion's line follows its parent's name as the stream renames it
+        test.core.emit(MobileEvent.SessionName("m1", "a", "api v2"))
+        eventually {
+            model.state.value.sessions[1]
+                .companionOf == "api v2"
+        }
+    }
+
+    @Test
     fun theStreamsClearOutranksTheListingsStatusAndContext() {
         val stored = testMachine(keyId = test.seedKey().id)
         test.seedMachine(stored)

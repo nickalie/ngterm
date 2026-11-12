@@ -583,3 +583,41 @@ fn packing_a_full_screen_cat() {
         percentiles(&mut pack_times),
     );
 }
+
+#[test]
+fn formatter_replay_keeps_mobile_link_flags_and_gap_vs_background_runs() {
+    let source = Term::new(20, 4);
+    source.feed(
+        concat!(
+            "\x1b]8;;https://example.com\x1b\\ab\x1b[5Gcd\x1b]8;;\x1b\\ plain\r\n",
+            "\x1b[44m\x1b[K\x1b[0m\r\n",
+            "CPU:\x1b[42m\x1b[K\x1b[48;2;1;2;3m\x1b[15G\x1b[3X\x1b[0m\x1b[19Gx",
+        )
+        .as_bytes(),
+    );
+    let vt = source
+        .pane
+        .format(ngterm_term::FormatRegion::Screen, ngterm_term::TextFormat::Vt, false)
+        .unwrap();
+    let replayed = Term::new(20, 4);
+    replayed.feed(vt.as_bytes());
+    let original = source.pack(0);
+    let restored = replayed.pack(0);
+    assert_eq!(restored.changed, original.changed);
+    let linked = restored.row(0);
+    for text in ["ab", "cd"] {
+        assert_eq!(
+            linked.run(text).attrs & CellFlags::HYPERLINK.bits(),
+            CellFlags::HYPERLINK.bits()
+        );
+    }
+    let gap = linked.run("  ");
+    assert_eq!((gap.column, gap.span, gap.background, gap.attrs), (2, 2, 0, 0));
+    assert_eq!(linked.run(" plain").attrs & CellFlags::HYPERLINK.bits(), 0);
+    let blue = restored.row(1).run(&" ".repeat(20));
+    assert_eq!((blue.column, blue.span), (0, 20));
+    assert_eq!(blue.background, set(source.frame().colors.palette[4]));
+    let rgb = restored.row(2).run("   ");
+    assert_eq!((rgb.column, rgb.span, rgb.background), (14, 3, 0xff01_0203));
+    assert!(restored.row(3).runs.is_empty(), "the final row stays blank");
+}

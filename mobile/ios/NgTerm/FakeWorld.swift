@@ -4,6 +4,8 @@
     import NgtermCoreFakes
     import NgtermFeatures
     import NgtermPlatform
+    import NgtermTerminal
+    import UIKit
 
     /// The world the app sees on the fake core (the UI tests): stores in a directory of the launch's own, keys and
     /// pins in memory, and hosts that ask what the tests walk through.
@@ -12,8 +14,9 @@
     /// - `signin.lan` offers ``signInHostKey`` and asks to sign in as Tailscale SSH does;
     /// - any other host connects at once;
     ///
-    /// and, when asked, a program in `docs-site` on `build-01` asks to read the clipboard as the app starts, and one in
-    /// `notes` after it: its question shows only once the first is answered; and, when asked, a machine `split`
+    /// and, when asked, a program in `docs-site` on `build-01` asks to read the clipboard as the app starts (from a
+    /// pasteboard of the launch's own holding a command, so no paste question of iOS's comes up), and one in `notes`
+    /// after it: its question shows only once the first is answered; and, when asked, a machine `split`
     /// (`split.lan`) is saved already, with a session `work` of two panes side by side (``FakeSessionWorld``), whose
     /// origin asks a question as it is attached, when asked too.
     ///
@@ -72,16 +75,43 @@
                 pins: pins,
                 stores: stores,
                 core: core,
-                notices: FakeNotices()
+                notices: FakeNotices(),
+                clipboard: clipboard(arguments: arguments)
             )
             if arguments.contains(CoreChoice.fakeClipboardReadArgument) {
                 let pane = PaneRef(machineId: "build-01", sessionId: "docs-site", paneId: "P1")
-                core.emit(.clipboardReadRequest(pane: pane, readId: 1, clipboard: .standard, listOnly: false))
+                core.emit(read(pane: pane, canRemember: true))
                 // another pane's first read, shown once the first is answered, so a test sees that it was
                 let next = PaneRef(machineId: "build-01", sessionId: "notes", paneId: "P2")
-                core.emit(.clipboardReadRequest(pane: next, readId: 1, clipboard: .standard, listOnly: false))
+                core.emit(read(pane: next, canRemember: false))
             }
             return graph
+        }
+
+        // a pasteboard of the launch's own holding a command, when programs ask to read the clipboard; else none
+        @MainActor
+        private static func clipboard(arguments: [String]) -> (any TerminalClipboard)? {
+            guard arguments.contains(CoreChoice.fakeClipboardReadArgument),
+                let pasteboard = UIPasteboard(name: UIPasteboard.Name("ngterm-fake-\(UUID().uuidString)"), create: true)
+            else {
+                return nil
+            }
+            pasteboard.string = "npm run deploy -- --prod"
+            return SystemClipboard(pasteboard)
+        }
+
+        // a program's read of the clipboard's text
+        private static func read(pane: PaneRef, canRemember: Bool) -> MobileEvent {
+            .clipboardReadRequest(
+                pane: pane,
+                readId: 1,
+                clipboard: .standard,
+                listOnly: false,
+                mimes: ["text/plain"],
+                list: false,
+                granted: false,
+                canRemember: canRemember
+            )
         }
     }
 #endif

@@ -361,7 +361,7 @@ private fun spot(
     session: AttachedSession,
 ): PaneSpot {
     val ref = PaneRef(key.machineId, key.sessionId, paneId)
-    return PaneSpot(ref, panes[ref], session.live.panes[paneId], failures[ref])
+    return PaneSpot(ref, panes[ref], session.live.panes[paneId], failures[ref], session.taking)
 }
 
 // the panes on screen: both halves of a [split], else the selected one (or the first)

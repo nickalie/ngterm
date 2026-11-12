@@ -1150,7 +1150,8 @@ fn split_divider_color_is_read_as_set_changed_and_removed() {
 
 #[test]
 fn refused_lines_change_nothing_and_unsupported_keys_are_ignored() {
-    let config = load("font-size = 20\nfont-size = big\nmacos-titlebar-style = tabs\n").config;
+    let config =
+        load("font-size = 20\nfont-size = big\nmacos-titlebar-style = tabs\ngtk-tabs-inverted = true\n").config;
     assert!((config.font.size - 20.0).abs() < f32::EPSILON);
     assert_eq!(config, load("font-size = 20\n").config);
 }

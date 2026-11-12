@@ -1,5 +1,6 @@
 package com.nickalie.ngterm.android.ui.sessions
 
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,13 +16,14 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -30,9 +32,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -70,20 +74,21 @@ fun SessionsScreen(
     actions: SessionActions,
     now: () -> Long,
     modifier: Modifier = Modifier,
+    starting: Boolean = false,
 ) {
     val connected = state.link == Link.Connected
     // the session whose End waits for its confirmation
     var confirming by rememberSaveable { mutableStateOf<String?>(null) }
     val asking = { id: String -> confirming = id }
     Column(modifier = modifier.fillMaxSize().safeDrawingPadding()) {
-        TopRow(state, actions, newSession = connected)
+        TopRow(state, actions, newSession = connected, starting = starting)
         PullToRefreshBox(
             isRefreshing = state.refreshing,
             onRefresh = if (connected) actions.onRefresh else actions.onConnect,
             modifier = Modifier.weight(1f).fillMaxWidth(),
             contentAlignment = Alignment.Center,
         ) {
-            Body(state, actions, asking, now)
+            Body(state, actions, asking, now, starting)
         }
         state.sessions?.firstOrNull { it.id == confirming }?.let { session ->
             EndSessionDialog(
@@ -104,6 +109,7 @@ private fun TopRow(
     state: MachineSessions,
     actions: SessionActions,
     newSession: Boolean,
+    starting: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val spacing = NgtermTheme.spacing
@@ -136,16 +142,52 @@ private fun TopRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        if (newSession) {
-            TextButton(onClick = actions.onNewSession) {
-                Icon(painterResource(R.drawable.ic_add), contentDescription = null, modifier = Modifier.size(18.dp))
-                Text(
-                    stringResource(R.string.machine_sessions_new),
-                    modifier = Modifier.padding(start = spacing.sm),
-                    maxLines = 1,
-                )
-            }
+        if (newSession) NewSessionButton(starting, actions.onNewSession, actions.onNewNamedSession)
+    }
+}
+
+// not a TextButton: that takes no long press, which opens the named dialog
+@Composable
+private fun NewSessionButton(
+    starting: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = ButtonDefaults.textButtonColors()
+    val content = if (starting) colors.disabledContentColor else colors.contentColor
+    Row(
+        modifier =
+            modifier
+                .minimumInteractiveComponentSize()
+                .heightIn(min = ButtonDefaults.MinHeight)
+                .clip(ButtonDefaults.textShape)
+                .combinedClickable(
+                    enabled = !starting,
+                    role = Role.Button,
+                    onLongClickLabel = stringResource(R.string.new_session_named),
+                    onLongClick = onLongClick,
+                    onClick = onClick,
+                ).padding(ButtonDefaults.TextButtonContentPadding),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(NgtermTheme.spacing.sm),
+    ) {
+        if (starting) {
+            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+        } else {
+            Icon(
+                painterResource(R.drawable.ic_add),
+                contentDescription = null,
+                tint = content,
+                modifier = Modifier.size(18.dp),
+            )
         }
+        Text(
+            text = stringResource(if (starting) R.string.new_session_creating else R.string.machine_sessions_new),
+            style = MaterialTheme.typography.labelLarge,
+            color = content,
+            maxLines = 1,
+        )
     }
 }
 
@@ -155,13 +197,14 @@ private fun Body(
     actions: SessionActions,
     onAskEnd: (String) -> Unit,
     now: () -> Long,
+    starting: Boolean,
 ) {
     val name = state.machine.title
     when (val body = state.body()) {
         SessionsBody.Connecting -> Waiting(stringResource(R.string.machine_sessions_connecting, name))
         SessionsBody.Reading -> Waiting(stringResource(R.string.machine_sessions_reading, name))
         is SessionsBody.Sessions -> Listing(state, body, actions, onAskEnd)
-        is SessionsBody.Empty -> Empty(state, body.failure, actions)
+        is SessionsBody.Empty -> Empty(state, body.failure, actions, starting)
         else -> Problem(name, body, actions, now)
     }
 }
@@ -216,6 +259,7 @@ private fun Empty(
     state: MachineSessions,
     failure: String?,
     actions: SessionActions,
+    starting: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val spacing = NgtermTheme.spacing
@@ -232,10 +276,11 @@ private fun Empty(
                 body = stringResource(R.string.machine_sessions_empty_body, name),
                 action =
                     PanelAction(
-                        stringResource(R.string.machine_sessions_new),
+                        stringResource(if (starting) R.string.new_session_creating else R.string.machine_sessions_new),
                         R.drawable.ic_add,
                         actions.onNewSession,
                     ),
+                busy = starting,
             )
         }
     }

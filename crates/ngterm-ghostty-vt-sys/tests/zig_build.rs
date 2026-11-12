@@ -22,11 +22,16 @@ fn repo_root() -> PathBuf {
 
 fn stamp() -> Stamp {
     Stamp {
-        zig: PathBuf::from("/vendor/zig-x86_64-linux-0.16.0/zig"),
-        zig_version: "0.16.0".to_owned(),
-        global_cache: PathBuf::from("/vendor/zig-cache-0.16.0"),
-        version_string: "1.3.2-dev".to_owned(),
+        zig: PathBuf::from("/vendor/zig-x86_64-linux-0.17.0/zig"),
+        zig_version: "0.17.0".to_owned(),
+        global_cache: PathBuf::from("/vendor/zig-cache-0.17.0"),
+        version_string: "1.4.0".to_owned(),
     }
+}
+
+/// The environment entry naming [`stamp`]'s global cache, which every build sets.
+fn global_cache() -> (OsString, OsString) {
+    ("ZIG_GLOBAL_CACHE_DIR".into(), "/vendor/zig-cache-0.17.0".into())
 }
 
 fn plan(out_dir: &Path, target: &str, macos: Option<&str>) -> Build {
@@ -122,14 +127,15 @@ fn android_builds_for_cargo_ndks_api_level_and_its_ndk() {
     );
     assert_eq!(
         android.env,
-        [(OsString::from("ANDROID_NDK_HOME"), ndk.as_os_str().to_owned())]
+        [
+            global_cache(),
+            (OsString::from("ANDROID_NDK_HOME"), ndk.as_os_str().to_owned())
+        ]
     );
     assert_eq!(android.archive, Path::new("/out/zig-out/lib/libghostty-vt.a"));
-    assert!(
-        zig_build::plan(&inputs("x86_64-unknown-linux-gnu"))
-            .unwrap()
-            .env
-            .is_empty()
+    assert_eq!(
+        zig_build::plan(&inputs("x86_64-unknown-linux-gnu")).unwrap().env,
+        [global_cache()]
     );
 }
 
@@ -187,7 +193,7 @@ fn ios_builds_for_its_deployment_target_on_device_and_simulator() {
         assert_eq!(build.archive, Path::new("/out/zig-out/lib/libghostty-vt.a"));
         assert_eq!(build.link_dir, Path::new("/out/lib"));
         assert_eq!(build.link_name, "ghostty-vt");
-        assert!(build.env.is_empty());
+        assert_eq!(build.env, [global_cache()]);
     }
 }
 
@@ -279,14 +285,11 @@ fn a_build_installs_and_caches_under_its_own_out_dir() {
         assert_eq!(after(&build.args, "--prefix"), out_dir.join("zig-out"));
         assert_eq!(after(&build.args, "--cache-dir"), out_dir.join("zig-cache"));
         // the one shared directory: Zig's global cache, from the stamp, never the user's own
-        assert_eq!(
-            after(&build.args, "--global-cache-dir"),
-            Path::new("/vendor/zig-cache-0.16.0")
-        );
+        assert_eq!(build.env, [global_cache()]);
         assert_eq!(build.archive, out_dir.join("zig-out/lib/libghostty-vt.a"));
         assert_eq!(build.link_dir, out_dir.join("zig-out/lib"));
         assert_eq!(build.link_name, "ghostty-vt");
-        assert_eq!(build.zig, Path::new("/vendor/zig-x86_64-linux-0.16.0/zig"));
+        assert_eq!(build.zig, Path::new("/vendor/zig-x86_64-linux-0.17.0/zig"));
         assert_eq!(build.source, Path::new("/vendor/ghostty-vt-0123456789abcdef/src"));
         assert_eq!(build.args[0], "build");
         let flags: Vec<String> = build
@@ -298,14 +301,13 @@ fn a_build_installs_and_caches_under_its_own_out_dir() {
         let expected = [
             "--prefix".to_owned(),
             "--cache-dir".to_owned(),
-            "--global-cache-dir".to_owned(),
             "-Demit-lib-vt=true".to_owned(),
             "-Demit-xcframework=false".to_owned(),
-            "-Doptimize=ReleaseFast".to_owned(),
+            "-Doptimize=fast".to_owned(),
             "-Dsimd=true".to_owned(),
             "-Dcpu=baseline".to_owned(),
             format!("-Dtarget={zig_target}"),
-            "-Dversion-string=1.3.2-dev".to_owned(),
+            "-Dversion-string=1.4.0".to_owned(),
             "-j10".to_owned(),
         ];
         assert_eq!(flags, expected);
@@ -328,27 +330,27 @@ fn apple_links_a_copy_of_the_archive_alone_and_msvc_its_static_archive() {
 
 #[test]
 fn the_stamp_names_the_pinned_zig_and_its_cache() {
-    let text = "# comment\nzig=/vendor/zig\nzig-version=0.16.0\nzig-global-cache=/vendor/zig-cache-0.16.0\n\
-                version-string=1.3.2-dev\npatch=0001-x.patch 00ff\n";
+    let text = "# comment\nzig=/vendor/zig\nzig-version=0.17.0\nzig-global-cache=/vendor/zig-cache-0.17.0\n\
+                version-string=1.4.0\npatch=0001-x.patch 00ff\n";
     let stamp = Stamp::parse(text).unwrap();
     assert_eq!(stamp.zig, Path::new("/vendor/zig"));
-    assert_eq!(stamp.zig_version, "0.16.0");
-    assert_eq!(stamp.global_cache, Path::new("/vendor/zig-cache-0.16.0"));
-    assert_eq!(stamp.version_string, "1.3.2-dev");
+    assert_eq!(stamp.zig_version, "0.17.0");
+    assert_eq!(stamp.global_cache, Path::new("/vendor/zig-cache-0.17.0"));
+    assert_eq!(stamp.version_string, "1.4.0");
     // `zig` is not read from `zig-version=` or `zig-global-cache=`
-    let missing = Stamp::parse("zig-version=0.16.0\nzig-global-cache=/c\nversion-string=1\n").unwrap_err();
+    let missing = Stamp::parse("zig-version=0.17.0\nzig-global-cache=/c\nversion-string=1\n").unwrap_err();
     assert!(missing.contains("no zig"), "{missing}");
-    let empty = Stamp::parse("zig=\nzig-version=0.16.0\nzig-global-cache=/c\nversion-string=1\n").unwrap_err();
+    let empty = Stamp::parse("zig=\nzig-version=0.17.0\nzig-global-cache=/c\nversion-string=1\n").unwrap_err();
     assert!(empty.contains("no zig"), "{empty}");
 }
 
 #[test]
 fn the_pin_is_the_revision_and_a_digest_of_the_patches() {
-    let pins = "# pins\nLIBGHOSTTY_VT_ZIG_VERSION=\"0.16.0\"\nLIBGHOSTTY_VT_REV=\"81598385\"\n";
-    let stamp = "zig=/z\nversion-string=1.3.2-dev\npatch=0001-a.patch 00ff\npatch=0002-b.patch 11ee\n";
+    let pins = "# pins\nLIBGHOSTTY_VT_ZIG_VERSION=\"0.17.0\"\nLIBGHOSTTY_VT_REV=\"83fb9562\"\n";
+    let stamp = "zig=/z\nversion-string=1.4.0\npatch=0001-a.patch 00ff\npatch=0002-b.patch 11ee\n";
     let pin = zig_build::pin(pins, stamp).unwrap();
     let (rev, digest) = pin.split_once(' ').unwrap();
-    assert_eq!(rev, "81598385");
+    assert_eq!(rev, "83fb9562");
     assert_eq!(digest.len(), 16);
     // the same patches give the same pin; another patch, another order or another revision a different one
     assert_eq!(zig_build::pin(pins, stamp).unwrap(), pin);
@@ -356,11 +358,11 @@ fn the_pin_is_the_revision_and_a_digest_of_the_patches() {
     assert_ne!(zig_build::pin(pins, &other_patch).unwrap(), pin);
     let reordered = "patch=0002-b.patch 11ee\npatch=0001-a.patch 00ff\n";
     assert_ne!(zig_build::pin(pins, reordered).unwrap(), pin);
-    let other_rev = pins.replace("81598385", "81598386");
+    let other_rev = pins.replace("83fb9562", "83fb9563");
     assert_ne!(zig_build::pin(&other_rev, stamp).unwrap(), pin);
     // the stamp's other lines do not count
-    assert_eq!(zig_build::pin(pins, &stamp.replace("1.3.2-dev", "9")).unwrap(), pin);
-    let missing = zig_build::pin("LIBGHOSTTY_VT_ZIG_VERSION=\"0.16.0\"\n", stamp).unwrap_err();
+    assert_eq!(zig_build::pin(pins, &stamp.replace("1.4.0", "9")).unwrap(), pin);
+    let missing = zig_build::pin("LIBGHOSTTY_VT_ZIG_VERSION=\"0.17.0\"\n", stamp).unwrap_err();
     assert!(missing.contains("LIBGHOSTTY_VT_REV"), "{missing}");
 }
 
@@ -404,7 +406,7 @@ fn a_missing_or_unprepared_prefix_names_the_script() {
     fs::write(missing.join("src/build.zig"), "").unwrap();
     fs::write(
         missing.join(zig_build::STAMP),
-        "zig=/z\nzig-version=0.16.0\nzig-global-cache=/c\nversion-string=1.3.2-dev\n",
+        "zig=/z\nzig-version=0.17.0\nzig-global-cache=/c\nversion-string=1.4.0\n",
     )
     .unwrap();
     assert_eq!(zig_build::prepared(&missing).unwrap().zig, Path::new("/z"));
@@ -597,8 +599,7 @@ fn the_prepared_prefix_configures_every_target_with_networking_off() {
             .arg(format!("-Dtarget={target}"))
             .arg("--cache-dir")
             .arg(scratch.path().join("local"))
-            .arg("--global-cache-dir")
-            .arg(scratch.path().join("global"))
+            .env("ZIG_GLOBAL_CACHE_DIR", scratch.path().join("global"))
             .current_dir(prefix.join(zig_build::SOURCE));
         for proxy in [
             "http_proxy",

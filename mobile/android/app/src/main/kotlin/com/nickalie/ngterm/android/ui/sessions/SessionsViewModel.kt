@@ -62,8 +62,8 @@ data class NewSessionState(
 /**
  * A machine's sessions: its listing with each session's status and whether this app has it attached, refreshing it,
  * New session (named or not; the dialog's state lives here so a rotation keeps a create under way), End session,
- * attaching and detaching. [opened] lists the machine afresh. [notice] carries what a list can't show (an End or an
- * attach that failed) for a snackbar.
+ * attaching and detaching. [opened] lists the machine afresh. [notice] carries what a list can't show (a create, an
+ * End or an attach that failed) for a snackbar.
  */
 @Suppress("TooManyFunctions") // a function per thing the screen does
 class SessionsViewModel(
@@ -73,6 +73,8 @@ class SessionsViewModel(
     private val refreshing = MutableStateFlow(false)
     private val ending = MutableStateFlow<Set<String>>(emptySet())
     private val newSession = MutableStateFlow<NewSessionState?>(null)
+    private val starting = MutableStateFlow(false)
+    private val lands = MutableStateFlow<SessionKey?>(null)
     private val notices = MutableStateFlow<String?>(null)
 
     // which opening of the New session dialog is showing (main thread): a create answers only the dialog it began in
@@ -133,6 +135,10 @@ class SessionsViewModel(
     /** The New session dialog, or null while it is closed. */
     val creating: StateFlow<NewSessionState?> = newSession.asStateFlow()
 
+    val busy: StateFlow<Boolean> = starting.asStateFlow()
+
+    val landing: StateFlow<SessionKey?> = lands.asStateFlow()
+
     /** What the screen should say once in a snackbar, until [noticeShown]. */
     val notice: StateFlow<String?> = notices.asStateFlow()
 
@@ -165,41 +171,74 @@ class SessionsViewModel(
         viewModelScope.launch { graph.machines.get(machineId)?.let { connections.connect(it.toCore()) } }
     }
 
-    /** Opens the New session dialog. */
-    fun openNewSession() {
+    fun newSession() {
+        if (starting.value) return
+        starting.value = true
+        viewModelScope.launch {
+            try {
+                land(connections.createSession(machineId, "").id)
+            } catch (error: MobileException) {
+                notices.value = error.reason()
+            } finally {
+                starting.value = false
+            }
+        }
+    }
+
+    fun openNamedSession() {
         if (newSession.value != null) return
         dialog += 1
         newSession.value = NewSessionState()
     }
 
-    /**
-     * Closes the New session dialog; a create under way goes on, its session shows in the list and its failure in the
-     * snackbar, and a dialog opened after it is not its.
-     */
+    /** A create under way goes on and still lands; its failure goes to the snackbar, not to a dialog opened later. */
     fun closeNewSession() {
         dialog += 1
         newSession.value = null
     }
 
-    /** Creates a session named [name] (blank: the machine names it); the dialog closes once it is listed. */
     fun create(name: String) {
-        if (newSession.value?.running == true) return
+        if (newSession.value?.running == true || starting.value) return
         val mine = dialog
         newSession.value = NewSessionState(running = true)
+        starting.value = true
         viewModelScope.launch {
             try {
-                connections.createSession(machineId, name)
+                val id =
+                    try {
+                        connections.createSession(machineId, name).id
+                    } catch (error: MobileException) {
+                        // a dialog closed meanwhile has no one to tell: the failure goes to the snackbar
+                        val reason = error.reason()
+                        if (dialog == mine) {
+                            newSession.update { it?.copy(running = false, failed = reason) }
+                        } else {
+                            notices.value = reason
+                        }
+                        return@launch
+                    }
                 if (dialog == mine) newSession.value = null
-            } catch (error: MobileException) {
-                // a dialog closed meanwhile has no one to tell: the failure goes to the snackbar
-                val reason = error.reason()
-                if (dialog == mine) {
-                    newSession.update { it?.copy(running = false, failed = reason) }
-                } else {
-                    notices.value = reason
+                try {
+                    land(id)
+                } catch (error: MobileException) {
+                    notices.value = error.reason()
                 }
+            } finally {
+                starting.value = false
             }
         }
+    }
+
+    private suspend fun land(sessionId: String) {
+        connections.attach(machineId, sessionId)
+        lands.value = SessionKey(machineId, sessionId)
+    }
+
+    // claimed only as it opens: a page left meanwhile never opens it, and must not take its lead later
+    fun landed() {
+        val key = lands.value ?: return
+        graph.panes.claims.claim(key)
+        lands.value = null
     }
 
     /** Ends the session [sessionId] there, with no undo (the screen confirms first). */

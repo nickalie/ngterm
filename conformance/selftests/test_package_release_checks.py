@@ -67,28 +67,42 @@ def test_terminal_must_not_link_the_engine(tree: Path, soname: str) -> None:
     assert f"ngterm needs web engine library: {soname}" in result.stderr
 
 
+@pytest.mark.parametrize("binary", BINARIES)
 @pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.parametrize("rpath", ["$ORIGIN/../lib", "/opt/ngterm/usr/lib", "/build/wpe/lib"])
-def test_worker_must_not_have_a_library_search_path(tree: Path, rpath: str, legacy: bool) -> None:
-    args = ["patchelf", "--set-rpath", rpath, tree / "usr/bin/ngterm-web"]
+def test_binaries_must_not_have_a_library_search_path(tree: Path, binary: str, rpath: str, legacy: bool) -> None:
+    args = ["patchelf", "--set-rpath", rpath, tree / "usr/bin" / binary]
     if legacy:
         args.insert(1, "--force-rpath")
     assert run(*args).returncode == 0
     result = check(tree)
     assert result.returncode != 0
-    assert f"ngterm-web must have no RPATH or RUNPATH: {rpath}" in result.stderr
+    assert f"{binary} must have no RPATH or RUNPATH: {rpath}" in result.stderr
 
 
-def test_preparation_relocates_the_app_without_resolving_the_worker(tree: Path) -> None:
+@pytest.mark.parametrize("bundled", ["usr/lib/libxkbcommon.so.0", "usr/lib/libglib-2.0.so.0", "usr/bin/helper.so"])
+def test_a_bundled_library_is_rejected(tree: Path, bundled: str) -> None:
+    # The app takes every library from the host: an older bundled copy is what crashed on the compositor's keymap.
+    path = tree / bundled
+    result = run("cc", "-shared", "-fPIC", "-x", "c", "-", "-o", path, input="int fixture(void) { return 7; }")
+    assert result.returncode == 0, result.stderr
+    result = check(tree)
+    assert result.returncode != 0
+    assert f"bundled library in app package: {bundled}" in result.stderr
+
+
+def test_preparation_strips_build_search_paths_without_resolving_the_worker(tree: Path) -> None:
     worker = tree / "usr/bin/ngterm-web"
     library = link_engine(tree, "ngterm-web", "libWPEWebKit-2.0.so.1")
     library.unlink()
     assert run("patchelf", "--set-rpath", "/build/wpe/lib", worker).returncode == 0
+    assert run("patchelf", "--set-rpath", "/build/target/release", tree / "usr/bin/ngterm").returncode == 0
     result = check(tree, "--prepare")
     assert result.returncode == 0, result.stderr
     assert run("patchelf", "--print-rpath", worker).stdout.strip() == ""
     assert run("patchelf", "--print-needed", worker).stdout.splitlines()[0] == "libWPEWebKit-2.0.so.1"
-    assert run("patchelf", "--print-rpath", tree / "usr/bin/ngterm").stdout.strip() == "$ORIGIN:$ORIGIN/../lib"
+    for name in BINARIES:
+        assert run("patchelf", "--print-rpath", tree / "usr/bin" / name).stdout.strip() == ""
     assert check(tree).returncode == 0
 
 
@@ -126,3 +140,14 @@ def test_native_packages_install_host_tools_and_offer_system_playback() -> None:
         assert not set(package["depends"]) & set(package["recommends"])
     assert {"wpewebkit>=2.54", "gst-plugins-base", "gst-plugins-good", "gst-plugins-bad", "gst-libav"} <= set(
         packages["archlinux"]["depends"])
+
+
+def test_rpm_requires_every_host_library() -> None:
+    # The rpm names host libraries by SONAME, so it must list each one the app and the runtime take from the host.
+    packages = yaml.safe_load((REPO / "packaging/linux/nfpm.yaml").read_text())["overrides"]
+    required = packages["rpm"]["depends"]
+    hosts = [line for line in (REPO / "packaging/linux/runtime-libraries.txt").read_text().splitlines()
+             if line and not line.startswith("#")]
+    assert {"libxkbcommon.so.0", "libglib-2.0.so.0", "libgio-2.0.so.0"} <= set(hosts)
+    missing = [name for name in hosts if not any(entry.startswith(f"{name}(") for entry in required)]
+    assert not missing, missing

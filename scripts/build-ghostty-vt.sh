@@ -153,6 +153,9 @@ ZIG_EXE="$(native_path "$ZIG_EXE")"
 ZIG_CACHE="$(ghostty_vt_zig_cache)"
 mkdir -p "$ZIG_CACHE"
 ZIG_CACHE="$(native_path "$ZIG_CACHE")"
+# Zig 0.17 takes the global cache from the environment only (it dropped `--global-cache-dir`): every zig run below
+# uses this one, never the user's own.
+export ZIG_GLOBAL_CACHE_DIR="$ZIG_CACHE"
 
 # both scratch dirs live in the vendor root, beside the final prefix, not in a shared /tmp
 BUILD_DIR="$(mktemp -d "$VENDOR_ROOT/.ghostty-vt-build.XXXXXX")"
@@ -199,7 +202,7 @@ seed_zig_packages() {
   for package in "$BUILD_DIR"/zig-packages/*.tar.gz; do
     [[ -f "$package" ]] || die "the Zig package mirror $key holds no packages"
     name="$(basename "$package" .tar.gz)"
-    fetched="$(cd "$TREE" && "$ZIG_EXE" fetch --global-cache-dir "$ZIG_CACHE" "$(native_path "$package")")" \
+    fetched="$(cd "$TREE" && "$ZIG_EXE" fetch "$(native_path "$package")")" \
       || die "zig cannot read $name from the Zig package mirror $key"
     [[ "$fetched" == "$name" ]] || die "the Zig package mirror $key holds $fetched under the name $name"
   done
@@ -236,8 +239,7 @@ configure_for_target() {
   cd "$TREE"
   export ANDROID_NDK_HOME
   ANDROID_NDK_HOME="$(native_path "$BUILD_DIR/android-ndk")"
-  exec "$ZIG_EXE" build --list-steps --cache-dir "$BUILD_DIR/zig-cache" --global-cache-dir "$ZIG_CACHE" \
-    -Demit-lib-vt=true -Dtarget="$1" >/dev/null
+  exec "$ZIG_EXE" build --list-steps --cache-dir "$BUILD_DIR/zig-cache" -Demit-lib-vt=true -Dtarget="$1" >/dev/null
 }
 
 # The packages: Zig fetches a lazy dependency only when a build's configure step asks for it, so each mapped target's
@@ -310,7 +312,7 @@ ZIG
 echo "encoding Ghostty's terminfo..." >&2
 (
   cd "$TREE"
-  "$ZIG_EXE" run --cache-dir "$BUILD_DIR/zig-cache" --global-cache-dir "$ZIG_CACHE" src/ngterm_terminfo.zig
+  "$ZIG_EXE" run --cache-dir "$BUILD_DIR/zig-cache" src/ngterm_terminfo.zig
 ) >"$BUILD_DIR/ghostty.terminfo"
 rm "$TREE/src/ngterm_terminfo.zig"
 [[ -s "$BUILD_DIR/ghostty.terminfo" ]] || die "Ghostty's terminfo encoder wrote nothing"

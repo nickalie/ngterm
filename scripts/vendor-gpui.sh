@@ -7,7 +7,8 @@
 #                  rasterized, tinted like a glyph (0003); `TextSystem::font_strikeout`, a face's OS/2 strikeout
 #                  metrics (0004); `aria_disabled` and `aria_has_popup`, an element's disabled state and popup for
 #                  assistive technology (E2E coverage Task 6, 0005); no accessibility node under an invisible
-#                  element, and a test window's accessibility a test can turn on (E2E coverage Task 7, 0006)
+#                  element, and a test window's accessibility a test can turn on (E2E coverage Task 7, 0006);
+#                  platform IME coordinate push recording in tests (0007)
 #   gpui-pre-wgpu  the renderer's side of external surfaces (dmabufs imported through wgpu-hal Vulkan, acquired from
 #                  the foreign queue family and copied on the GPU into a texture of its own; CPU pixels uploaded by
 #                  damaged rectangles) and the Vulkan device opened with VK_EXT_image_drm_format_modifier and
@@ -21,7 +22,12 @@
 #                  blur behind a blurred X11 window (Task 33, 0003); a new keymap reported as a keyboard layout
 #                  change on X11 and Wayland even when the effective layout keeps its name, so a changed layout list
 #                  reaches `on_keyboard_layout_change` (Task 29 of the upstream v0.38.1 sync, 0004); window bounds
-#                  published to AccessKit on initialization and geometry changes (E2E coverage Task 4, 0005)
+#                  published to AccessKit on initialization and geometry changes (E2E coverage Task 4, 0005); the
+#                  native key of a key with no symbols read on the effective layout, never `XKB_LAYOUT_INVALID`,
+#                  which libxkbcommon before 1.8 indexes out of bounds with (0006); outward IME rectangle rounding and
+#                  refresh sink tests, activation targets keyed by token request with launcher/portal token sink
+#                  tests (Ghostty v1.4.0 parity, 0007); per-MIME clipboard and primary selection reads, writes and
+#                  type listings for the Kitty clipboard protocol on Wayland and X11 (0008)
 #   gpui-pre-windows the native key behind each key event GPUI dispatches on Windows (its scan code, the layout's
 #                  unshifted character, the modifiers with Shift and those the layout used up, the text before Ctrl
 #                  transformations), which GPUI's `Keystroke` drops, for the terminal's physical-key bindings and the
@@ -74,7 +80,7 @@ case "${1:-}" in
   "") ;;
   --check) mode=check ;;
   --diff) mode='diff' ;;
-  -h | --help) sed -n '2,47s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  -h | --help) sed -n '2,53s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
   *) die "unknown argument: $1 (see --help)" ;;
 esac
 

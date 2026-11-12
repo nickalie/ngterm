@@ -199,6 +199,7 @@
   <string name="new_session_name_hint">Optional: %1$s names it when blank</string>
   <string name="new_session_create">Create session</string>
   <string name="new_session_creating">Creating</string>
+  <string name="new_session_named">New named session</string>
 
   <!-- ui/terminal -->
   <string name="terminal_description">Terminal</string>
@@ -207,8 +208,15 @@
   <string name="paste_unsafe_title">Paste text that can run a command?</string>
   <string name="paste_unsafe_body">It has a line break or a control character in it, so the program may take it as Enter and run it as soon as it lands.</string>
   <string name="clipboard_read_title">Let %1$s read your clipboard?</string>
-  <string name="clipboard_read_body">A program in %1$s on %2$s asks for the text you copied. It sees it only if you allow it.</string>
-  <string name="clipboard_read_list_body">A program in %1$s on %2$s asks what kind of content your clipboard holds. It doesn\'t see the text itself.</string>
+  <string name="clipboard_read_body">A program in %1$s on %2$s asks for what you copied. It sees this only if you allow it.</string>
+  <string name="clipboard_read_remember">Don\'t ask again for this program in this terminal</string>
+  <string name="clipboard_preview_reading">Reading your clipboard…</string>
+  <string name="clipboard_preview_none">Your clipboard holds none of the kinds of content the program asks for.</string>
+  <string name="clipboard_preview_none_listed">Your clipboard holds none of the kinds of content the program asks for. It sees only which kinds your clipboard holds.</string>
+  <string name="clipboard_preview_no_preview">No preview for this kind of content</string>
+  <string name="clipboard_preview_empty">Empty</string>
+  <string name="clipboard_preview_caption">%1$s, %2$s</string>
+  <string name="clipboard_preview_image">Copied image, %1$s</string>
   <string name="clipboard_read_allow">Allow</string>
   <string name="clipboard_read_always">Always allow on %1$s</string>
   <string name="clipboard_read_deny">Deny</string>

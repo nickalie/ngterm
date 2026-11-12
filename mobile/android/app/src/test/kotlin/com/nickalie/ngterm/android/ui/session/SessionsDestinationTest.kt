@@ -6,6 +6,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
@@ -153,6 +154,24 @@ class SessionsDestinationTest : SessionViewFixture() {
         )
         compose.onNodeWithText("Open machines").performClick()
         compose.awaitText("Add machine")
+    }
+
+    @Test
+    fun theAttachedListNestsACompanionUnderItsParentAndOpensIt() {
+        openSession()
+        test.core.sessions["m1"]?.add(fakeSession("s2", name = "docs review", parent = "s1"))
+        runBlocking {
+            test.connections.listSessions("m1")
+            test.connections.attach("m1", "s2")
+        }
+        compose.onNodeWithContentDescription("Back").performClick()
+        waitFor { !described("Escape") }
+        compose.awaitText("Companion of docs-site")
+        val parent = compose.onNodeWithText("docs-site", useUnmergedTree = true).getUnclippedBoundsInRoot()
+        val companion = compose.onNodeWithText("docs review", useUnmergedTree = true).getUnclippedBoundsInRoot()
+        assertTrue(companion.top > parent.top && companion.left > parent.left)
+        compose.onNodeWithText("docs review").performClick()
+        compose.awaitText("Opening docs review")
     }
 
     @Test

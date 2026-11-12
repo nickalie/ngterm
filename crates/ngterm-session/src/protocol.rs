@@ -67,8 +67,11 @@ pub const MAGIC: [u8; 4] = *b"AGLS";
 
 /// The protocol of this build's message frames. Bumped whenever a message type's postcard layout changes (2: the reply
 /// owner's [`AttachServerMessage::ReplyOwner`], its Kitty graphics answers by [`AttachServerMessage::KittyBarrier`] and
-/// [`AttachClientMessage::KittyComplete`], the colour scheme in [`ReplyMetadata`], the list-only clipboard read).
-pub const PROTOCOL_VERSION: u32 = 2;
+/// [`AttachClientMessage::KittyComplete`], the colour scheme in [`ReplyMetadata`], the list-only clipboard read;
+/// 3: [`AttachClientMessage::ConfigReload`] reports even unchanged colour schemes after a config reload;
+/// 4: binary MIME clipboard requests, native-write completions, and authoritative clipboard pastes;
+/// 5: lazy attach paste bridges and opaque native-terminal password aliases).
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// The size of a frame's header: magic, protocol, kind, length.
 pub const HEADER_LEN: usize = 16;
@@ -943,6 +946,9 @@ pub enum AttachClientMessage {
     Attach(AttachRequest),
     /// Input for the session's program.
     Input { data: Vec<u8> },
+    /// Paste generated on the authoritative terminal for this client epoch; lazy sources require the reply owner.
+    ClipboardPaste { epoch: u64, paste: ClipboardPaste },
+
     /// The client's grid changed; applied only while the client leads.
     Resize { size: GridSize },
     /// The client's facts for the replies the server gives on its behalf changed (they replace the earlier ones
@@ -963,6 +969,9 @@ pub enum AttachClientMessage {
     KittyComplete { id: u64, epoch: u64, data: Vec<u8> },
     /// Leave the session running and close the connection.
     Detach,
+    /// The client applied its config. Replace its reply facts and, while it owns replies and mode 2031 is on,
+    /// report the configured colour scheme once, even when the facts are unchanged.
+    ConfigReload(ReplyMetadata),
 }
 
 /// Attach to the session `name`.
@@ -1080,6 +1089,7 @@ pub enum AttachServerMessage {
     /// program's request came before it, the output after it waits for the answer, or for the request's end (denied
     /// when the owner changes, the client falls behind or leaves, or no answer comes within the server's deadline).
     DelegatedRequest {
+        native_alias: Option<ClipboardAlias>,
         id: u64,
         epoch: u64,
         request: DelegatedRequest,
@@ -1101,20 +1111,30 @@ pub enum LeadRole {
     Follower,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DelegatedRequest {
-    /// A program's clipboard read (OSC 52, or Kitty's OSC 5522) of `selection`: `c` the clipboard, `s` the selection
-    /// clipboard, `p` the primary selection. `list_only`: it asks only which types the clipboard holds (Kitty's `.`
-    /// target), which needs no consent; the program is never served the contents for it.
-    ClipboardRead { selection: String, list_only: bool },
+/// Opaque native-terminal password alias. Never put this in permission events or logs.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipboardAlias(pub String);
+impl std::fmt::Debug for ClipboardAlias {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ClipboardAlias { .. }")
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DelegatedReply {
-    /// The clipboard's text; `None` when it holds none (the program reads an empty clipboard).
-    Clipboard { text: Option<String> },
-    /// Refused by policy or by the user: the program reads an empty clipboard (OSC 52) or `EPERM` (OSC 5522).
-    Denied,
+pub use ngterm_core::clipboard_wire::{
+    ClipboardPaste, ClipboardPasteBridge, ClipboardRepresentation, ClipboardStatus, DelegatedReply, DelegatedRequest,
+};
+
+#[must_use]
+pub fn clipboard_engine_status(status: ClipboardStatus) -> ngterm_ghostty_vt::ClipboardWriteResult {
+    use ngterm_ghostty_vt::ClipboardWriteResult as Result;
+    match status {
+        ClipboardStatus::Success => Result::Success,
+        ClipboardStatus::Denied => Result::Denied,
+        ClipboardStatus::Unsupported => Result::Unsupported,
+        ClipboardStatus::Busy => Result::Busy,
+        ClipboardStatus::InvalidData => Result::InvalidData,
+        ClipboardStatus::IoError => Result::IoError,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

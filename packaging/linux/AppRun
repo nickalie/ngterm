@@ -2,6 +2,6 @@
 set -euo pipefail
 # Resolve /usr/bin/ngterm's symlink as well as an AppImage mount or an unpacked archive.
 root="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-# The app libraries use relative RUNPATHs. ngterm-web has none: its launcher
+# The app bundles no libraries. ngterm-web has no RUNPATH either: its launcher
 # selects the system engine or scopes a downloaded runtime to the worker.
 exec "$root/usr/bin/ngterm" "$@"

@@ -158,6 +158,7 @@ fn terminal_config(env: &dyn Env, resources: Option<&Path>) -> GhosttyConfig {
 fn install_live(core: &mut Core, runtime: &Runtime) {
     let directory = ngterm_core::live::socket_directory(&runtime.state_dir);
     let endpoint = ControlLiveEndpoint {
+        attach_bridge: Some(ngterm_core::attach_bridge::VERSION),
         executable: runtime.executable.to_string_lossy().into_owned(),
         socket_directory: directory.clone(),
     };

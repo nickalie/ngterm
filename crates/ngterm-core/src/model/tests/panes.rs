@@ -275,6 +275,7 @@ fn closing_the_split_hides_it_tears_it_down_and_drops_what_it_owned() {
     session.split_restore.foreground = Some(vec!["htop".to_owned()]);
     session.split_restore.pending_foreground = Some(vec!["htop".to_owned()]);
     session.split_launch = PaneLaunch {
+        attach_bridge: None,
         command: Some("'ssh' 'split-host'".to_owned()),
         wait: true,
         argv: Some(vec!["ssh".to_owned(), "split-host".to_owned()]),
@@ -373,6 +374,7 @@ fn a_promotion_carries_the_split_creation_command_and_restore_halves() {
     let session = get_mut(&mut store, id);
     session.launch.command = Some("ssh primary-host".to_owned());
     session.split_launch = PaneLaunch {
+        attach_bridge: None,
         command: Some("'ssh' 'split-host'".to_owned()),
         wait: true,
         argv: Some(vec!["ssh".to_owned(), "split-host".to_owned()]),
@@ -546,11 +548,13 @@ fn seeded_swap() -> (AppStore, Uuid, FakeSurfaceProbe, FakeSurfaceProbe) {
         pending_foreground: Some(vec!["right".to_owned(), "pending".to_owned()]),
     };
     session.launch = PaneLaunch {
+        attach_bridge: None,
         command: Some("left command".to_owned()),
         wait: false,
         argv: None,
     };
     session.split_launch = PaneLaunch {
+        attach_bridge: None,
         command: Some("right command".to_owned()),
         wait: true,
         argv: Some(vec!["right".to_owned(), "command".to_owned()]),

@@ -43,4 +43,11 @@ class PaneCoverTest {
         assertTrue(PaneCover.Attaching.veils)
         assertTrue(PaneCover.Failed("failed").veils)
     }
+
+    @Test
+    fun aFollowerWhoseLeadThisDeviceIsTakingIsAttaching() {
+        val follower = PaneLive(PaneRole.FOLLOWER, covered = true)
+        assertEquals(PaneCover.Attaching, PaneCover.of(follower, true, null, taking = true))
+        assertEquals(PaneCover.Failed("failed"), PaneCover.of(follower, true, "failed", taking = true))
+    }
 }

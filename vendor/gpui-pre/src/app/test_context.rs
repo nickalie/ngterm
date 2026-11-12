@@ -1060,6 +1060,11 @@ impl VisualTestContext {
         self.background_executor.run_until_parked();
     }
 
+    /// Cursor rectangles actually pushed to the platform IME, in order.
+    pub fn ime_positions(&self) -> Vec<Bounds<Pixels>> {
+        self.cx.test_window(self.window).ime_positions()
+    }
+
     /// Simulates assistive technology connecting to the window: from the next frame on, the window builds its
     /// accessibility tree and sends it to the platform, where [`Self::a11y_tree_update`] reads it (ngterm patch 0006).
     pub fn activate_a11y(&mut self) {

@@ -382,4 +382,43 @@ mod tests {
         let all = terminal.selection(PointTag::Viewport).unwrap();
         assert_eq!((all.start.y, all.end.y), (0, 1));
     }
+
+    /// Ghostty `PageList.zig`: tracked pins in erased history become garbage instead of moving to row zero.
+    #[test]
+    fn erasing_history_invalidates_its_tracked_ref_and_keeps_an_active_ref() {
+        let mut terminal = Terminal::new(80, 24).unwrap();
+        for _ in 0..34 {
+            terminal.vt_write(b"x\r\n");
+        }
+        let track = |point: Point| {
+            let mut raw = std::ptr::null_mut();
+            // SAFETY: the live terminal owns the tracked reference and the output is valid.
+            Error::check(unsafe {
+                ffi::ghostty_terminal_grid_ref_track(terminal.raw_shared(), point.raw(), &raw mut raw)
+            })
+            .unwrap();
+            crate::Handle::new(raw, ffi::ghostty_tracked_grid_ref_free).unwrap()
+        };
+        let history = track(Point::new(PointTag::History, 0, 5));
+        let active = track(Point::new(PointTag::Active, 0, 2));
+        terminal.vt_write(b"\x1b[3J");
+        let mut point = ffi::GhosttyPointCoordinate { x: 0, y: 0 };
+        let mut snapshot = empty_ref();
+        // SAFETY: the tracked handle belongs to this live terminal and survives its mutations.
+        assert!(!unsafe { ffi::ghostty_tracked_grid_ref_has_value(history.ptr()) });
+        // SAFETY: the handle is live and snapshot is a correctly sized output.
+        let snapshot_result = unsafe { ffi::ghostty_tracked_grid_ref_snapshot(history.ptr(), &raw mut snapshot) };
+        assert_eq!(snapshot_result, ffi::GHOSTTY_NO_VALUE);
+        // SAFETY: the handle is live and point is a valid output coordinate.
+        let history_result =
+            unsafe { ffi::ghostty_tracked_grid_ref_point(history.ptr(), PointTag::Screen.raw(), &raw mut point) };
+        assert_eq!(history_result, ffi::GHOSTTY_NO_VALUE);
+        // SAFETY: the tracked handle belongs to this live terminal and survives its mutations.
+        assert!(unsafe { ffi::ghostty_tracked_grid_ref_has_value(active.ptr()) });
+        // SAFETY: the handle is live and point is a valid output coordinate.
+        let active_result =
+            unsafe { ffi::ghostty_tracked_grid_ref_point(active.ptr(), PointTag::Screen.raw(), &raw mut point) };
+        assert_eq!(active_result, ffi::GHOSTTY_SUCCESS);
+        assert_eq!((point.x, point.y), (0, 2));
+    }
 }

@@ -73,6 +73,92 @@ fn input_round_trips_through_a_client_and_the_servers_terminal() -> TestResult {
     Ok(())
 }
 
+/// SIGWINCH (Unix), or the changed console dimensions (`ConPTY`), triggers output without test input.
+/// The alternate screen preserves a wrong wrap even if the terminal is subsequently resized.
+#[test]
+fn an_immediate_resize_redraw_uses_the_new_grid() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let program = if cfg!(windows) {
+        spec(&[
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            concat!(
+                "$e=[char]27; $b=[char]7; ",
+                "[Console]::Write($e+'[?1049h'+$e+'[2J'+$e+'[H'+$e+']2;ready'+$b); ",
+                "while ([Console]::WindowWidth -ne 100 -or [Console]::WindowHeight -ne 30) { ",
+                "Start-Sleep -Milliseconds 1 }; ",
+                "[Console]::Write($e+'[2J'+$e+'[11;99HXY'+$e+'[29;100H'+$e+']2;redrawn'+$b); ",
+                "Start-Sleep -Seconds 60"
+            ),
+        ])
+    } else {
+        spec(&[
+            "python3",
+            "-c",
+            r#"
+import os, signal
+signal.signal(signal.SIGWINCH, lambda *_: os.write(1, b"\x1b[2J\x1b[11;99HXY\x1b[29;100H\x1b]2;redrawn\x07"))
+os.write(1, b"\x1b[?1049h\x1b[2J\x1b[H\x1b]2;ready\x07")
+while True:
+    signal.pause()
+"#,
+        ])
+    };
+    let mut config = config("redraw", dir.path(), program);
+    config.size = GridSize { cols: 80, rows: 24 };
+    let (pane, creator) = Pane::spawn(config)?;
+    let mut client = Client::new(creator);
+    support::wait_for(
+        "the ready title",
+        || pane.with_terminal(|terminal| terminal.title()),
+        |title| title == "ready",
+    );
+    let size = GridSize { cols: 100, rows: 30 };
+    pane.resize(size);
+    support::wait_for(
+        "the redraw title",
+        || pane.with_terminal(|terminal| terminal.title()),
+        |title| title == "redrawn",
+    );
+    pane.with_terminal(assert_redraw)?;
+    // The resize event precedes the redraw bytes, so a viewer parses them at the new size too.
+    support::wait_for(
+        "the viewer redraw",
+        || {
+            client.receive(Duration::from_millis(20));
+            client.terminal.as_ref().map(ngterm_ghostty_vt::Terminal::title)
+        },
+        |title| title.as_deref() == Some("redrawn"),
+    );
+    let terminal = client.terminal.as_mut().ok_or("no viewer terminal")?;
+    assert_redraw(terminal)?;
+    let resize = client
+        .events
+        .iter()
+        .position(|event| matches!(event, ClientEvent::Resized { size: got, .. } if *got == size))
+        .ok_or("no resize event")?;
+    assert!(client.events[..resize].iter().all(|event| {
+        !matches!(event, ClientEvent::Output { data, .. } if data.windows(2).any(|pair| pair == b"XY"))
+    }));
+    Ok(())
+}
+
+fn assert_redraw(terminal: &mut ngterm_ghostty_vt::Terminal) -> TestResult {
+    use ngterm_ghostty_vt::{FormatOptions, Region};
+
+    assert_eq!((terminal.cols(), terminal.rows()), (100, 30));
+    let text = terminal
+        .format(Region::Screen, FormatOptions::default())?
+        .ok_or("no formatted redraw")?;
+    let text = String::from_utf8(text)?;
+    assert_eq!(text.lines().nth(10), Some(format!("{}XY", " ".repeat(98)).as_str()));
+    assert_eq!(terminal.cursor(), (99, 28));
+    Ok(())
+}
+
 #[test]
 fn a_resize_reaches_the_child_and_every_client_in_order() -> TestResult {
     let dir = tempfile::tempdir()?;

@@ -96,6 +96,13 @@ internal struct LiveMobileCoreCallsTests {
             readId: 1,
             reply: .deny
         )
+        try core.completeClipboardWrite(
+            machineId: "m1",
+            sessionId: "s1",
+            paneId: Self.paneId,
+            writeId: 1,
+            status: .done
+        )
         try core.closeChat(machineId: "m1", sessionId: "s1", paneId: Self.paneId)
         await #expect(throws: MobileError.NotConnected(machineId: "m1")) {
             _ = try await core.listSessions(machineId: "m1")

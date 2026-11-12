@@ -22,7 +22,7 @@ private const val PHONE_NIGHT = "w411dp-h891dp-night-xhdpi"
 
 /**
  * A machine's sessions in its other states (empty, reading, not connected, offline, unreachable, ngtermctl missing, a
- * failed refresh over the list) and the New session dialog, on a phone in light and dark.
+ * failed refresh over the list), a New session under way and the New session dialog, on a phone in light and dark.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -51,6 +51,14 @@ class SessionStatesScreenshotTest {
     @Test
     @Config(qualifiers = PHONE_NIGHT)
     fun emptyDark() = capture("machine_sessions_empty_dark") { SessionsSample(empty) }
+
+    @Test
+    @Config(qualifiers = PHONE)
+    fun creatingLight() = capture("machine_sessions_creating_light") { SessionsSample(empty, starting = true) }
+
+    @Test
+    @Config(qualifiers = PHONE_NIGHT)
+    fun creatingDark() = capture("machine_sessions_creating_dark") { SessionsSample(empty, starting = true) }
 
     @Test
     @Config(qualifiers = PHONE)

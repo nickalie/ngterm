@@ -14,6 +14,23 @@
 //!   the heading and message for the direction, Deny (Escape) and Allow (the default, Return), and the "Don't ask
 //!   again this session" check, which remembers the answer for the direction. A terminal with no window to ask in is
 //!   refused.
+//!
+//! The Kitty clipboard protocol (OSC 5522, Ghostty 83fb956's `Surface.zig` `kitty_read`/`kitty_write` and the GTK
+//! and macOS apprts) goes through the native clipboard per MIME type (`selection_clipboard.rs`) and its own consent:
+//!
+//! - A listing reads no data and never prompts. A read gathers each requested representation (at most four, in the
+//!   program's order, skipping the absent ones) and the listing when asked; a read with no types, or with nothing to
+//!   serve and no listing, never prompts either. `deny` refuses (EPERM), `allow` and a session grant from the core
+//!   (`granted`, Task 14's token grants) serve at once, `ask` prompts with a preview of exactly what would be disclosed.
+//!   After an Allow, Linux and Windows read the clipboard again (GTK reruns the read with the confirmation attached);
+//!   macOS serves the snapshot it showed.
+//! - A write puts every committed representation on the clipboard, an image-only one included; an empty transaction
+//!   clears it. It completes DONE only after the native write, EPERM when refused, ENOSYS where the OS has no such
+//!   clipboard, EIO when the clipboard refused it.
+//! - The Kitty prompt shows its "remember" check only for a request with a password, and an Allow with it checked asks
+//!   the core for a grant (`remember`); a denial is never remembered. The app-run per-direction memory stays OSC 52's
+//!   alone. The program's self-reported `name` is never shown: the prompt's words are fixed, and the preview shows
+//!   only the data.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -21,7 +38,12 @@ use std::rc::Rc;
 use gpui_kit::{App, ClipboardItem, Context, Global};
 use ngterm_core::clipboard_policy::{ClipboardAccess, ClipboardDecision, ClipboardPromptPolicy};
 use ngterm_core::ghostty_config::ClipboardAccess as ConfigAccess;
-use ngterm_term::{ClipboardAnswer, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, PaneEvent, ReadScope};
+use ngterm_term::{
+    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardPermissionScope, ClipboardReadRequest,
+    ClipboardWrite, ClipboardWriteResult, PaneEvent, ReadScope, WriteCompletion,
+};
+
+use super::selection_clipboard::{self, MimeFailure};
 
 use super::{Shared, Terminal};
 
@@ -32,6 +54,23 @@ const DENY: &str = "Deny";
 const ALLOW: &str = "Allow";
 /// The prompt's check, which remembers the answer for the session (upstream's suppression button).
 pub const REMEMBER: &str = "Don't ask again this session";
+/// The Kitty prompt's check, which asks for a grant for the program's password in this terminal.
+pub const KITTY_REMEMBER: &str = "Don't ask again for this program in this terminal";
+/// Whether an allowed Kitty read reads the clipboard again (GTK) rather than serving what the prompt showed (macOS).
+const REREAD_AFTER_ALLOW: bool = !cfg!(target_os = "macos");
+
+/// The Kitty prompt for `access`: the same words as OSC 52's, and the grant check only when the request can be
+/// remembered (it named a password).
+#[must_use]
+pub fn kitty_alert(access: ClipboardAccess, can_remember: bool) -> crate::modal::AlertSpec {
+    let mut spec = prompt_alert(access);
+    spec.checks = if can_remember {
+        vec![crate::modal::AlertCheck::new(KITTY_REMEMBER)]
+    } else {
+        Vec::new()
+    };
+    spec
+}
 
 /// The prompt for `access` (upstream's `presentPrompt`).
 #[must_use]
@@ -145,7 +184,7 @@ pub(super) fn handle(shared: &Rc<Shared>, event: &PaneEvent, cx: &mut Context<Te
             true
         }
         PaneEvent::ClipboardRead(read) => {
-            on_read(shared, *read, cx);
+            on_read(shared, read, cx);
             true
         }
         _ => false,
@@ -156,15 +195,20 @@ fn read_text(location: ClipboardLocation, cx: &App) -> Option<String> {
     super::selection_clipboard::read(location, cx).and_then(|item| item.text())
 }
 
-fn on_read(shared: &Rc<Shared>, read: ClipboardReadRequest, cx: &mut App) {
+fn on_read(shared: &Rc<Shared>, read: &ClipboardReadRequest, cx: &mut App) {
+    if read.permission_scope == ClipboardPermissionScope::Kitty {
+        kitty_read(shared, read, cx);
+        return;
+    }
+    let (id, location) = (read.id, read.location);
     let answer = move |shared: &Shared, allowed: bool, cx: &App| {
         let answer = if allowed {
-            ClipboardAnswer::Text(read_text(read.location, cx))
+            ClipboardAnswer::Text(read_text(location, cx))
         } else {
             ClipboardAnswer::Denied
         };
         if let Some(pane) = shared.pane() {
-            pane.answer_clipboard_read(read.id, answer);
+            pane.answer_clipboard_read(id, answer);
         }
     };
     if read.scope == ReadScope::ListOnly {
@@ -187,25 +231,235 @@ fn on_read(shared: &Rc<Shared>, read: ClipboardReadRequest, cx: &mut App) {
 }
 
 fn on_write(shared: &Rc<Shared>, write: &ClipboardWrite, cx: &mut App) {
-    let Some(text) = write
-        .contents
-        .iter()
-        .find(|content| content.mime == TEXT || content.mime.starts_with("text/plain;"))
-        .map(|content| String::from_utf8_lossy(&content.data).into_owned())
-    else {
+    if write.permission_scope == ClipboardPermissionScope::Kitty {
+        kitty_write(shared, write, cx);
+        return;
+    }
+    let text = if write.contents.is_empty() {
+        Some(String::new())
+    } else {
+        write
+            .contents
+            .iter()
+            .find(|content| content.mime == TEXT || content.mime.starts_with("text/plain;"))
+            .map(|content| String::from_utf8_lossy(&content.data).into_owned())
+    };
+    let Some(text) = text else {
+        complete_write(shared, write.id, ClipboardWriteResult::Unsupported);
         return;
     };
     let location = write.location;
+    let id = write.id;
+    let requester = Rc::clone(shared);
     let perform = move |allowed: bool, cx: &mut App| {
-        if !allowed {
-            return;
-        }
-        super::selection_clipboard::write(location, ClipboardItem::new_string(text), cx);
+        let status = if allowed {
+            super::selection_clipboard::write(location, ClipboardItem::new_string(text), cx);
+            ClipboardWriteResult::Success
+        } else {
+            ClipboardWriteResult::Denied
+        };
+        complete_write(&requester, id, status);
     };
     match shared.config().clipboard.write {
         ConfigAccess::Allow => perform(true, cx),
-        ConfigAccess::Deny => {}
+        ConfigAccess::Deny => perform(false, cx),
         ConfigAccess::Ask => request(ClipboardAccess::Write, shared, cx, Box::new(perform)),
+    }
+}
+
+/// Recovery replay (id zero) carries no request to complete.
+fn complete_write(shared: &Shared, id: u64, status: ClipboardWriteResult) {
+    complete_write_remembering(shared, id, status, false);
+}
+
+fn complete_write_remembering(shared: &Shared, id: u64, status: ClipboardWriteResult, remember: bool) {
+    if id != 0
+        && let Some(pane) = shared.pane()
+    {
+        pane.answer_clipboard_write(id, WriteCompletion { status, remember });
+    }
+}
+
+/// What a Kitty read found: the requested representations and, when asked, the listing.
+struct Snapshot {
+    contents: Vec<ClipboardContent>,
+    available: Vec<String>,
+}
+
+impl Snapshot {
+    fn answer(self, remember: bool) -> ClipboardAnswer {
+        ClipboardAnswer::Data {
+            contents: self.contents,
+            available: self.available,
+            remember,
+        }
+    }
+}
+
+/// The answer a failed native access gives the program (ENOSYS, EIO).
+fn failure_answer(failure: &MimeFailure) -> ClipboardAnswer {
+    match failure {
+        MimeFailure::Unsupported => ClipboardAnswer::Unsupported,
+        MimeFailure::Io(reason) => {
+            tracing::warn!(target: "ngterm::surface", %reason, "clipboard read failed");
+            ClipboardAnswer::IoError
+        }
+    }
+}
+
+/// Reads what a Kitty read asks for from `location`.
+fn gather(location: ClipboardLocation, mimes: &[String], list: bool, cx: &App) -> Result<Snapshot, ClipboardAnswer> {
+    let contents = if mimes.is_empty() {
+        Vec::new()
+    } else {
+        selection_clipboard::read_mimes(location, mimes, cx).map_err(|failure| failure_answer(&failure))?
+    };
+    let available = if list {
+        selection_clipboard::mime_types(location, cx).map_err(|failure| failure_answer(&failure))?
+    } else {
+        Vec::new()
+    };
+    Ok(Snapshot { contents, available })
+}
+
+fn kitty_read(shared: &Rc<Shared>, read: &ClipboardReadRequest, cx: &mut App) {
+    let (id, location) = (read.id, read.location);
+    let reply = move |shared: &Shared, answer: ClipboardAnswer| {
+        if let Some(pane) = shared.pane() {
+            pane.answer_clipboard_read(id, answer);
+        }
+    };
+    // deny refuses every Kitty read, a listing too (Ghostty's `kittyClipboardRead` checks it first): the listing is
+    // exempt only from the prompt
+    let policy = shared.config().clipboard.read;
+    if policy == ConfigAccess::Deny {
+        reply(shared, ClipboardAnswer::Denied);
+        return;
+    }
+    if read.scope == ReadScope::ListOnly {
+        let answer = gather(location, &[], true, cx).map_or_else(|answer| answer, |snapshot| snapshot.answer(false));
+        reply(shared, answer);
+        return;
+    }
+    let snapshot = match gather(location, &read.mimes, read.list, cx) {
+        Ok(snapshot) => snapshot,
+        Err(answer) => {
+            reply(shared, answer);
+            return;
+        }
+    };
+    let nothing_to_disclose = read.mimes.is_empty() || (snapshot.contents.is_empty() && !read.list);
+    if policy == ConfigAccess::Allow || read.granted || nothing_to_disclose {
+        reply(shared, snapshot.answer(false));
+        return;
+    }
+    let preview = snapshot.contents.clone();
+    let (mimes, list) = (read.mimes.clone(), read.list);
+    let requester = Rc::clone(shared);
+    let decided: KittyWaiter = Box::new(move |allowed, remember, cx| {
+        let answer = if !allowed {
+            ClipboardAnswer::Denied
+        } else if REREAD_AFTER_ALLOW {
+            gather(location, &mimes, list, cx).map_or_else(|answer| answer, |snapshot| snapshot.answer(remember))
+        } else {
+            snapshot.answer(remember)
+        };
+        reply(&requester, answer);
+    });
+    present_kitty(
+        ClipboardAccess::Read,
+        shared.key(),
+        read.can_remember,
+        &preview,
+        decided,
+        cx,
+    );
+}
+
+fn kitty_write(shared: &Rc<Shared>, write: &ClipboardWrite, cx: &mut App) {
+    let policy = shared.config().clipboard.write;
+    let (id, location) = (write.id, write.location);
+    if policy == ConfigAccess::Deny {
+        complete_write(shared, id, ClipboardWriteResult::Denied);
+        return;
+    }
+    let contents = write.contents.clone();
+    let requester = Rc::clone(shared);
+    let perform = move |allowed: bool, remember: bool, cx: &mut App| {
+        if !allowed {
+            complete_write(&requester, id, ClipboardWriteResult::Denied);
+            return;
+        }
+        let status = match selection_clipboard::write_mimes(location, contents, cx) {
+            Ok(()) => ClipboardWriteResult::Success,
+            Err(MimeFailure::Unsupported) => ClipboardWriteResult::Unsupported,
+            Err(MimeFailure::Io(reason)) => {
+                tracing::warn!(target: "ngterm::surface", %reason, "clipboard write failed");
+                ClipboardWriteResult::IoError
+            }
+        };
+        complete_write_remembering(
+            &requester,
+            id,
+            status,
+            remember && status == ClipboardWriteResult::Success,
+        );
+    };
+    if policy == ConfigAccess::Allow || write.granted {
+        perform(true, false, cx);
+        return;
+    }
+    present_kitty(
+        ClipboardAccess::Write,
+        shared.key(),
+        write.can_remember,
+        &write.contents,
+        Box::new(perform),
+        cx,
+    );
+}
+
+/// Runs once with whether the user allowed a Kitty request and whether they asked to remember it.
+type KittyWaiter = Box<dyn FnOnce(bool, bool, &mut App)>;
+
+/// Asks about one Kitty request over the requesting terminal's window, with the preview of `contents`; a terminal
+/// with no window to ask in is refused. Each request gets its own prompt (its own data); the window's alerts queue.
+fn present_kitty(
+    access: ClipboardAccess,
+    terminal: u64,
+    can_remember: bool,
+    contents: &[ClipboardContent],
+    decided: KittyWaiter,
+    cx: &mut App,
+) {
+    let spec = kitty_alert(access, can_remember);
+    let allow = spec.buttons.iter().position(|button| button.label.as_ref() == ALLOW);
+    let mut decided = Some(decided);
+    let shown = super::keyboard::window_of(terminal).and_then(|handle| {
+        handle
+            .update(cx, |_, window, cx| {
+                let preview = super::clipboard_preview::view(contents, access, cx);
+                let Some(decided) = decided.take() else {
+                    return;
+                };
+                crate::modal::open_alert_with(
+                    window,
+                    spec,
+                    Some(preview.into()),
+                    move |reply, _, cx| {
+                        let allowed = Some(reply.button) == allow;
+                        decided(allowed, allowed && can_remember && reply.checked, cx);
+                    },
+                    cx,
+                );
+            })
+            .ok()
+    });
+    if shown.is_none()
+        && let Some(decided) = decided.take()
+    {
+        tracing::info!(target: "ngterm::surface", terminal, "no window to ask in: clipboard access refused");
+        decided(false, false, cx);
     }
 }
 

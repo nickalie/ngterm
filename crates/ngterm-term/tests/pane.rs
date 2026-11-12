@@ -10,11 +10,14 @@
 
 mod support;
 
+#[path = "support/redraw.rs"]
+mod redraw;
+
 use std::time::{Duration, Instant};
 
 use ngterm_term::{
-    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardWrite, ColorScheme, GridSize, PaneCommand,
-    PaneConfig, PaneError, PaneEvent, Progress, ReadScope, Rgb,
+    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardWrite, ColorScheme, Frame, GridSize, Pane,
+    PaneCommand, PaneConfig, PaneError, PaneEvent, Progress, ReadScope, Rgb,
 };
 use support::{SIZE, TestResult, spawn, spawn_with, wait_events, wait_file, wait_file_containing, wait_text};
 
@@ -60,6 +63,11 @@ fn osc_sequences_and_bel_become_events_in_stream_order() {
             PaneEvent::Progress(Progress::Set(50)),
             PaneEvent::Bell,
             PaneEvent::ClipboardWrite(ClipboardWrite {
+                id: 1,
+                name: String::new(),
+                granted: false,
+                can_remember: false,
+                permission_scope: ngterm_term::ClipboardPermissionScope::Osc52,
                 location: ClipboardLocation::Primary,
                 contents: vec![ClipboardContent {
                     mime: "text/plain".to_owned(),
@@ -151,7 +159,7 @@ fn clipboard_round_trip(request: &str, answer: ClipboardAnswer, reply_len: usize
     let read = events
         .iter()
         .find_map(|event| match event {
-            PaneEvent::ClipboardRead(read) => Some(*read),
+            PaneEvent::ClipboardRead(read) => Some(read.clone()),
             _ => None,
         })
         .ok_or("no clipboard read")?;
@@ -262,6 +270,15 @@ fn the_exit_status_is_reported_after_the_last_output() {
         unreachable!("waited for it")
     };
     assert!(status.signal.is_some(), "{status:?}");
+}
+
+#[test]
+fn an_immediate_resize_redraw_uses_the_new_grid() -> TestResult {
+    let pane = redraw::spawn()?;
+    redraw::wait_title(&pane, "ready");
+    pane.resize(redraw::AFTER)?;
+    redraw::assert_redrawn(&pane);
+    Ok(())
 }
 
 #[test]
@@ -376,6 +393,26 @@ fn raw_input_without_echo_is_not_password_input() {
         !fixture.pane.password_input(),
         "a full-screen program reads raw keys, not a password"
     );
+}
+
+#[test]
+fn config_reload_report_reaches_the_pty_before_a_following_dsr_reply() {
+    let mut config = PaneConfig::new(SIZE);
+    config.color_scheme = ColorScheme::Dark;
+    let fixture = spawn_with(
+        concat!(
+            "stty raw -echo; printf '\\033[?2031hready'; ",
+            "while [ ! -e \"$DIR/go\" ]; do sleep 0.02; done; ",
+            "printf '\\033[5n'; dd bs=1 count=13 of=\"$DIR/reply\" 2>/dev/null; printf done; exec sleep 5"
+        ),
+        &config,
+    )
+    .unwrap();
+    wait_text(&fixture.pane, "ready");
+    fixture.pane.config_reloaded(ColorScheme::Dark);
+    std::fs::write(fixture.path("go"), b"").unwrap();
+    assert_eq!(wait_file(&fixture.path("reply"), 13), b"\x1b[?997;1n\x1b[0n");
+    wait_text(&fixture.pane, "done");
 }
 
 #[test]

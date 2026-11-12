@@ -48,6 +48,8 @@ uniffi.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+# the Kitty clipboard protocol's base64 packets the pane tests send and read back
+base64.workspace = true
 # block on the facade's async calls in tests
 futures-lite.workspace = true
 # New Session's waits on a paused clock

@@ -251,6 +251,7 @@ fn environment() -> Vec<(String, String)> {
 /// A live pane of a new session `name` running `/bin/sh -c script` on the server `server` of namespace `namespace`.
 fn live_pane(script: &str, server: &Path, namespace: &Path, name: &str, config: &PaneConfig) -> Pane {
     let session = ngterm_session::cli::Prepared {
+        bridge_nonce: None,
         directory: namespace.to_path_buf(),
         executable: server.to_path_buf(),
         name: name.to_owned(),

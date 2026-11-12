@@ -192,8 +192,14 @@ fn take_message(pane: &Pane, id: u64, message: AttachClientMessage) -> Result<bo
                 tracing::debug!(%err, "a live session's input was dropped");
             }
         }
+        AttachClientMessage::ClipboardPaste { epoch, paste } => {
+            if let Err(error) = pane.clipboard_paste(id, epoch, &paste) {
+                tracing::debug!(%error, "a live paste was refused");
+            }
+        }
         AttachClientMessage::Resize { size } => pane.resize_client(id, size),
         AttachClientMessage::Metadata(metadata) => pane.set_metadata(id, metadata),
+        AttachClientMessage::ConfigReload(metadata) => pane.config_reloaded(id, metadata),
         AttachClientMessage::DelegatedReply {
             id: request,
             epoch,
@@ -290,9 +296,20 @@ fn send_event(stream: &Stream, event: ClientEvent) -> Result<(), FramingError> {
         ClientEvent::ReplyOwner { owner, generation } => {
             send(stream, &AttachServerMessage::ReplyOwner { owner, generation })
         }
-        ClientEvent::Delegated { id, epoch, request } => {
-            send(stream, &AttachServerMessage::DelegatedRequest { id, epoch, request })
-        }
+        ClientEvent::Delegated {
+            id,
+            epoch,
+            request,
+            native_alias,
+        } => send(
+            stream,
+            &AttachServerMessage::DelegatedRequest {
+                id,
+                epoch,
+                request,
+                native_alias,
+            },
+        ),
         ClientEvent::KittyBarrier { id, epoch } => send(stream, &AttachServerMessage::KittyBarrier { id, epoch }),
         // handled by the writer itself
         ClientEvent::Overflowed { .. } | ClientEvent::Exit(_) => Ok(()),

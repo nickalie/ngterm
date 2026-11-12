@@ -1,3 +1,5 @@
+import Foundation
+import NgtermCore
 import NgtermCoreFakes
 import NgtermPlatform
 import NgtermTerminal
@@ -39,27 +41,38 @@ internal struct PromptSnapshotTests {
     @Test("a program asks to read the clipboard", arguments: ScreenVariant.allCases)
     internal func clipboardRead(variant: ScreenVariant) {
         let question = ClipboardReadQuestion(
-            listOnly: false,
+            canRemember: true,
             machine: "build-01",
             session: "docs-site",
-            onAllow: ScreenSnapshot.ignore,
-            onAlways: ScreenSnapshot.ignore,
+            preview: [
+                ClipboardPart(
+                    mime: "text/plain",
+                    data: Data("git push origin feature/clipboard\nnpm run deploy -- --prod".utf8)
+                ),
+                ClipboardPart(mime: "text/html", data: Data("<b>deploy</b>".utf8)),
+                ClipboardPart(mime: "image/png", data: ClipboardFixtures.redPNG),
+            ],
+            listed: false,
+            onAllow: ScreenSnapshot.ignoreChoice,
+            onAlways: ScreenSnapshot.ignoreChoice,
             onDeny: ScreenSnapshot.ignore
         )
         ScreenSnapshot.check(question, named: "clipboard-read", variant: variant)
     }
 
-    @Test("a program asks only what kinds the clipboard holds")
-    internal func clipboardList() {
+    @Test("a program asks for kinds of content the clipboard doesn't hold")
+    internal func clipboardNone() {
         let question = ClipboardReadQuestion(
-            listOnly: true,
+            canRemember: false,
             machine: "build-01",
             session: "docs-site",
-            onAllow: ScreenSnapshot.ignore,
-            onAlways: ScreenSnapshot.ignore,
+            preview: [],
+            listed: true,
+            onAllow: ScreenSnapshot.ignoreChoice,
+            onAlways: ScreenSnapshot.ignoreChoice,
             onDeny: ScreenSnapshot.ignore
         )
-        ScreenSnapshot.check(question, named: "clipboard-list", variant: .light)
+        ScreenSnapshot.check(question, named: "clipboard-none", variant: .light)
     }
 
     @Test("a changed host key stops the connection", arguments: ScreenVariant.allCases)

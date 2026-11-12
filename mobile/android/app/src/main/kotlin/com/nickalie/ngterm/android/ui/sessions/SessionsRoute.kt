@@ -23,10 +23,10 @@ import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.data.SessionKey
 
 /**
- * A machine's sessions, over its [SessionsViewModel]: the list, the New session dialog and the snackbar for what failed
- * out of sight (an End, an attach). It lists the machine afresh when it opens (not again on a rotation), and goes
- * [onBack] when the machine is removed meanwhile. [onReviewHostKey] opens the changed-key stop; tapping a session
- * attaches it and opens its view ([onOpenSession]).
+ * A machine's sessions, over its [SessionsViewModel]: the list, the New named session dialog and the snackbar for what
+ * failed out of sight (a create, an End, an attach). It lists the machine afresh when it opens (not again on a
+ * rotation), and goes [onBack] when the machine is removed meanwhile. [onReviewHostKey] opens the changed-key stop;
+ * tapping a session attaches it and opens its view ([onOpenSession]), as New session does with the one it creates.
  */
 @Composable
 fun SessionsRoute(
@@ -41,6 +41,8 @@ fun SessionsRoute(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val creating by viewModel.creating.collectAsStateWithLifecycle()
     val notice by viewModel.notice.collectAsStateWithLifecycle()
+    val busy by viewModel.busy.collectAsStateWithLifecycle()
+    val landing by viewModel.landing.collectAsStateWithLifecycle()
     var opened by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (!opened) {
@@ -51,6 +53,7 @@ fun SessionsRoute(
     val back by rememberUpdatedState(onBack)
     val review by rememberUpdatedState(onReviewHostKey)
     val openSession by rememberUpdatedState(onOpenSession)
+    OpenOnLanding(landing, viewModel::landed, onOpenSession)
     LaunchedEffect(state is SessionsUiState.Gone) {
         if (state is SessionsUiState.Gone) back()
     }
@@ -59,7 +62,8 @@ fun SessionsRoute(
         remember(viewModel) {
             SessionActions(
                 onBack = { back() },
-                onNewSession = viewModel::openNewSession,
+                onNewSession = viewModel::newSession,
+                onNewNamedSession = viewModel::openNamedSession,
                 onRefresh = viewModel::refresh,
                 onConnect = viewModel::connect,
                 onReviewHostKey = { review() },
@@ -79,7 +83,7 @@ fun SessionsRoute(
     Box(modifier = modifier.fillMaxSize()) {
         val ready = state as? SessionsUiState.Ready
         if (ready != null) {
-            SessionsScreen(ready.sessions, actions, now = graph.connections.clock)
+            SessionsScreen(ready.sessions, actions, now = graph.connections.clock, starting = busy)
             creating?.let {
                 NewSessionDialog(
                     machine = ready.sessions.machine.title,
@@ -90,5 +94,20 @@ fun SessionsRoute(
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
+    }
+}
+
+@Composable
+private fun OpenOnLanding(
+    landing: SessionKey?,
+    onLand: () -> Unit,
+    onOpenSession: (SessionKey) -> Unit,
+) {
+    val land by rememberUpdatedState(onLand)
+    val open by rememberUpdatedState(onOpenSession)
+    LaunchedEffect(landing) {
+        val key = landing ?: return@LaunchedEffect
+        land()
+        open(key)
     }
 }

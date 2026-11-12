@@ -143,6 +143,7 @@ fn reset_restart_child() {
     core.install_live_sessions(LiveInstall {
         host: Arc::new(ngterm_host::fakes::FakeSessionHost::new()),
         endpoint: ControlLiveEndpoint {
+            attach_bridge: None,
             executable: "/bin/false".into(),
             socket_directory: root.join("live").to_string_lossy().into_owned(),
         },

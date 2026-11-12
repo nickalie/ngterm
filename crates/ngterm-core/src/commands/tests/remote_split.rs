@@ -75,6 +75,7 @@ impl Remote {
             .surface
             .replace(Box::new(FakeSurface::new(wire(primary))));
         let endpoint = ControlLiveEndpoint {
+            attach_bridge: None,
             executable: "/ngterm-session".to_owned(),
             socket_directory: "/tmp/live".to_owned(),
         };
@@ -553,4 +554,52 @@ fn a_cached_origin_swap_is_applied_after_the_new_terminal_is_realized() {
     assert_eq!(session.pane_identity, remote.pane);
     assert_eq!(session.split_pane_identity, Some(primary));
     assert_eq!(session.split.axis, crate::model::SplitAxis::TopBottom);
+}
+
+#[test]
+fn a_remote_split_carries_the_exact_capability_and_nonce_of_its_attach() {
+    for (cached, capability) in [
+        (None, None),
+        (None, Some(crate::attach_bridge::VERSION)),
+        (Some(crate::attach_bridge::VERSION), None),
+        (Some(crate::attach_bridge::VERSION), Some(crate::attach_bridge::VERSION)),
+    ] {
+        let mut remote = Remote::new();
+        remote
+            .fixture
+            .store_mut()
+            .unwrap()
+            .session_mut(remote.row)
+            .unwrap()
+            .remote_presentation
+            .as_mut()
+            .unwrap()
+            .binding
+            .origin
+            .as_mut()
+            .unwrap()
+            .endpoint
+            .attach_bridge = cached;
+        let target = Uuid::from_u128(2);
+        let mut listing = Remote::listing(&[remote.origin_pane, target]);
+        let mut body: serde_json::Value = serde_json::from_str(&listing.stdout).unwrap();
+        if let Some(capability) = capability {
+            body["result"]["remote"]["endpoint"]["attachBridge"] = json!(capability);
+        }
+        listing.stdout = body.to_string();
+        remote.script([result(&json!({"ok":true})), listing]);
+        remote.request();
+        let seed = remote.spawn();
+        let expected = remote.fixture.core.live.leads.nonce(remote.pane).unwrap();
+        let nonce = seed
+            .env
+            .iter()
+            .find(|(key, _)| key == crate::attach_bridge::VARIABLE)
+            .and_then(|(_, value)| crate::attach_bridge::parse_variable(value));
+        assert_eq!(nonce, capability.map(|_| expected));
+        assert_eq!(
+            seed.command.as_ref().unwrap().contains("attach-bridge"),
+            capability.is_some()
+        );
+    }
 }

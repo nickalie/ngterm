@@ -5,11 +5,13 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.TestGraph
 import com.nickalie.ngterm.android.awaitText
@@ -79,23 +81,23 @@ class SessionsFlowTest {
     }
 
     @Test
-    fun createThenItAppearsThenEndItAndItIsGone() {
+    fun aNamedSessionFromALongPressOpensThenEndItAndItIsGone() {
         test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "build"))
         openMachine()
         compose.awaitText("On build-01")
         compose.onNodeWithText("build").assertExists()
-        compose.onNodeWithText("New session").performClick()
+        compose.onNodeWithText("New session").performTouchInput { longClick() }
         compose.onNodeWithText("New session on build-01").assertExists()
         compose.onNodeWithText("Name").performTextInput("api-refactor")
         compose.onNodeWithText("Create session").performClick()
-        compose.awaitText("api-refactor")
+        compose.awaitText("Opening api-refactor")
         gone("New session on build-01")
+        assertEquals(setOf("fake-1"), test.connections.attached.value["m1"])
         compose.onNodeWithContentDescription("More options for api-refactor").performClick()
         compose.onNodeWithText("End session").performClick()
         compose.onNodeWithText("End api-refactor?").assertExists()
         compose.onNode(hasText("End session") and hasAnyAncestor(isDialog())).performClick()
-        gone("api-refactor")
-        compose.onNodeWithText("build").assertExists()
+        compose.awaitText("Nothing attached")
         assertEquals(listOf("s1"), test.core.sessions["m1"]?.map { it.id })
     }
 

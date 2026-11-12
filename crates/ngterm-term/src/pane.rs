@@ -79,6 +79,8 @@ pub type Wake = Arc<dyn Fn() + Send + Sync>;
 /// How a pane starts.
 #[derive(Clone)]
 pub struct PaneConfig {
+    /// The expected per-launch nonce, only for viewers of a capability-advertising attach endpoint.
+    pub attach_bridge: Option<String>,
     pub size: GridSize,
     pub scrollback: ScrollbackLimits,
     pub colors: ThemeColors,
@@ -106,6 +108,7 @@ impl PaneConfig {
     #[must_use]
     pub fn new(size: GridSize) -> Self {
         Self {
+            attach_bridge: None,
             size,
             scrollback: ScrollbackLimits::default(),
             colors: ThemeColors::default(),
@@ -124,6 +127,7 @@ impl PaneConfig {
 impl std::fmt::Debug for PaneConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PaneConfig")
+            .field("attach_bridge", &self.attach_bridge)
             .field("size", &self.size)
             .field("scrollback", &self.scrollback)
             .field("colors", &self.colors)
@@ -191,6 +195,8 @@ pub(crate) struct Vt {
     pub(crate) pending_clear: bool,
     /// The placed Kitty images' pixels, copied on the IO thread after each batch (`kitty::Prefetch`).
     pub(crate) kitty: crate::kitty::Prefetch,
+    /// The terminal's one forward-only animation clock, shared by all its views.
+    kitty_animation: crate::kitty::Animation,
     /// Grows with every change of the program's screen: its output, a resize, a reset, a clear; not with the
     /// viewport's scroll, the selection or a search, which leave the screen as it was. An active-area read carries
     /// the generation it was made at (`ActiveScreen::generation`, with the `screen-read` feature).
@@ -240,10 +246,12 @@ fn write_slice(shared: &Shared, vt: &mut Vt, slice: &[u8]) {
 
 /// State shared by the pane and its threads.
 pub(crate) struct Shared {
+    pub(crate) bridge: Mutex<crate::bridge::Peer>,
     pub(crate) vt: Mutex<Vt>,
     capture: Arc<Mutex<Capture>>,
     published: Mutex<Arc<Frame>>,
     armed: ArmedSlot,
+    writes: Arc<Mutex<vt::DeferredClipboardWrites>>,
     /// Where the terminal's PTY writes go instead of the reply queue while a paste runs.
     pub(crate) divert: DivertSlot,
     pub(crate) search: Mutex<SearchSlot>,
@@ -269,7 +277,7 @@ pub(crate) struct Shared {
     /// pane's drop, which hangs the child up and so drops it.
     status_file: Mutex<Option<PathBuf>>,
     started: Instant,
-    /// Set once the IO worker fed the last of the output (or stopped).
+    /// Set once the IO worker fed the last of the output (or stopped); after EOF it still services animation wakes.
     eof: (Mutex<bool>, Condvar),
     /// Runs once at the start of the next paint, before it takes any lock (tests interleave a second view there).
     #[cfg(test)]
@@ -307,6 +315,10 @@ impl Shared {
     /// Queue bytes the terminal answers the program with (never refused; see [`ReplyOutlet`]).
     pub(crate) fn push_reply(&self, bytes: &[u8]) {
         self.replies.push_reply(bytes);
+    }
+
+    pub(crate) fn bridge_input(&self, bytes: &[u8]) -> Result<(), PaneError> {
+        self.replies.input(bytes)
     }
 
     /// Queue bytes the pane itself sends the program (never refused): a reply on a PTY, a live pane's input.
@@ -453,6 +465,7 @@ impl Pane {
         let worker = Worker {
             shared: Arc::clone(&shared),
             reads: Reads::Live(Arc::clone(&live)),
+            bridge_decoder: ngterm_core::attach_bridge::Decoder::default(),
             scanner: Scanner::default(),
             next_read: 0,
             child_exited: false,
@@ -500,6 +513,7 @@ impl Pane {
         let worker = Worker {
             shared: Arc::clone(&shared),
             reads: Reads::Painted,
+            bridge_decoder: ngterm_core::attach_bridge::Decoder::default(),
             scanner: Scanner::default(),
             next_read: 0,
             child_exited: false,
@@ -547,6 +561,7 @@ impl Pane {
         let worker = Worker {
             shared: Arc::clone(&shared),
             reads: Reads::Stream(Arc::clone(&gate)),
+            bridge_decoder: ngterm_core::attach_bridge::Decoder::default(),
             scanner: Scanner::default(),
             next_read: 0,
             child_exited: false,
@@ -653,7 +668,11 @@ impl Pane {
         drop(vt);
         match &self.io {
             #[cfg(feature = "local")]
-            Io::Pty { actor, .. } => actor.resize(size.pty()),
+            Io::Pty { actor, .. } => {
+                actor.resize(size.pty());
+                #[cfg(test)]
+                resize_tests::after_pty_resize();
+            }
             #[cfg(feature = "local")]
             Io::Live(live) => {
                 live.resize(size);
@@ -694,15 +713,20 @@ impl Pane {
     ///
     /// [`PaneError::Terminal`] when the library refuses the value.
     pub fn set_kitty_image_limit(&self, limit: u64) -> Result<(), PaneError> {
-        lock(&self.shared.vt)
-            .terminal
+        let mut vt = lock(&self.shared.vt);
+        vt.terminal
             .set_kitty_image_storage_limit(limit)
             .map_err(PaneError::terminal)?;
+        if limit == 0 {
+            self.shared.mailbox.animation_deadline(None);
+        }
+        drop(vt);
         #[cfg(feature = "local")]
         if let Io::Live(live) = &self.io {
             live.set_kitty_graphics(limit > 0);
             self.update_metadata();
         }
+        self.shared.wake();
         Ok(())
     }
 
@@ -744,6 +768,25 @@ impl Pane {
         }
     }
 
+    /// Finish applying a config update, reporting its scheme once while mode 2031 is on, even unchanged.
+    /// Call after the config's terminal changes. Unlike [`Self::set_color_scheme`], a reload is an event:
+    /// Ghostty's `termio/Termio.zig` `changeConfig` (#14834) reports directly on the outbound queue.
+    /// A live pane carries the event and its final facts to the server, which alone reports as reply owner.
+    pub fn config_reloaded(&self, scheme: ColorScheme) {
+        let vt = lock(&self.shared.vt);
+        self.shared.scheme.store(scheme == ColorScheme::Dark, Ordering::Release);
+        #[cfg(feature = "local")]
+        if let Io::Live(live) = &self.io {
+            drop(vt);
+            live.config_reloaded(live.metadata_of(&self.shared, scheme));
+            return;
+        }
+        // Keep the lock through enqueueing: replies to later output must follow this report.
+        if vt.terminal.mode(vt::Mode::COLOR_SCHEME_REPORT) {
+            self.shared.push_reply(scheme.engine().report());
+        }
+    }
+
     /// The color scheme the terminal answers queries with.
     #[must_use]
     pub fn color_scheme(&self) -> ColorScheme {
@@ -780,7 +823,21 @@ impl Pane {
         events
     }
 
-    /// Answer the clipboard read `id` ([`PaneEvent::ClipboardRead`]); an answer for any other id is ignored.
+    /// The live-session clipboard bridge, when this pane is attached to a session.
+    #[cfg(feature = "local")]
+    pub(crate) fn live_clipboard(&self) -> Option<&crate::session_io::Live> {
+        match &self.io {
+            Io::Live(live) => Some(live),
+            _ => None,
+        }
+    }
+
+    /// Complete a native clipboard write. The request id can be resolved only once.
+    pub fn answer_clipboard_write(&self, id: u64, completion: crate::WriteCompletion) {
+        self.answer_clipboard_read(id, ClipboardAnswer::Write(completion));
+    }
+
+    /// Answer a clipboard read, or a write with `ClipboardAnswer::Write`; other ids are ignored.
     pub fn answer_clipboard_read(&self, id: u64, answer: ClipboardAnswer) {
         match &self.io {
             #[cfg(feature = "local")]
@@ -871,6 +928,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
     kitty_graphics(&mut terminal, config.kitty_image_limit).map_err(PaneError::terminal)?;
     let capture = Arc::new(Mutex::new(Capture::new().map_err(PaneError::terminal)?));
     let armed: ArmedSlot = Arc::default();
+    let writes = Arc::default();
     let divert: DivertSlot = Arc::default();
     let replies = Arc::new(ReplyOutlet::default());
     let scheme: SchemeSlot = Arc::new(AtomicBool::new(config.color_scheme == ColorScheme::Dark));
@@ -882,6 +940,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
             replies: Arc::clone(&replies),
             capture: Arc::clone(&capture),
             armed: Arc::clone(&armed),
+            writes: Arc::clone(&writes),
             divert: Arc::clone(&divert),
             xtversion: format!("ghostty {}", vt::version()),
             scheme: Arc::clone(&scheme),
@@ -890,6 +949,10 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
     let colors = terminal.colors();
     let input = InputState::new().map_err(PaneError::terminal)?;
     Ok(Shared {
+        bridge: Mutex::new(crate::bridge::Peer {
+            expected_nonce: config.attach_bridge.clone(),
+            ..Default::default()
+        }),
         vt: Mutex::new(Vt {
             terminal,
             input,
@@ -900,12 +963,14 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
             word_boundaries: None,
             pending_clear: false,
             kitty: crate::kitty::Prefetch::default(),
+            kitty_animation: crate::kitty::Animation::new(Instant::now()),
             generation: 0,
             reflowed: false,
         }),
         capture,
         published: Mutex::new(Arc::new(Frame::default())),
         armed,
+        writes,
         divert,
         search: Mutex::new(SearchSlot::default()),
         search_wake: Condvar::new(),
@@ -975,17 +1040,29 @@ fn capture(shared: &Shared) -> Option<Arc<Frame>> {
     let mut capture = try_lock(&shared.capture)?;
     end_expired_hold(&mut vt, &mut capture);
     let mouse_shape = MouseShape::from_engine(vt.terminal.mouse_shape());
+    let held = &mut *vt;
+    let deadline = match held
+        .kitty_animation
+        .tick(&mut held.terminal, Instant::now(), capture.held())
+    {
+        Ok(deadline) => deadline,
+        Err(err) => {
+            tracing::warn!(%err, "ticking Kitty animations failed");
+            None
+        }
+    };
+    shared.mailbox.animation_deadline(deadline);
     if capture.held() {
         drop(vt);
     } else {
-        // the Kitty view is read while the terminal is held, with the state
         let held = &mut *vt;
-        capture.capture_kitty(held.terminal.kitty_graphics(), &held.kitty);
-        let pending = capture.state.begin_update(&mut vt.terminal);
-        // only the begin phase reads the terminal
+        let begun = capture.begin_update(&mut held.terminal, &held.kitty);
+        // Image geometry and pixels have been captured from the same begin phase under the VT lock.
         drop(vt);
-        if let Err(err) = pending.and_then(vt::PendingUpdate::end) {
-            tracing::warn!(%err, "capturing the terminal failed");
+        let result = begun.and_then(|(pending, kitty)| pending.end().map(|()| kitty));
+        match result {
+            Ok(kitty) => capture.finish_kitty(kitty),
+            Err(err) => tracing::warn!(%err, "capturing the terminal failed"),
         }
     }
     let mut published = lock(&shared.published);
@@ -1084,6 +1161,7 @@ impl Parts {
         let worker = Worker {
             shared: Arc::clone(&shared),
             reads: Reads::Actor(actor.clone()),
+            bridge_decoder: ngterm_core::attach_bridge::Decoder::default(),
             scanner: Scanner::default(),
             next_read: 0,
             child_exited: false,
@@ -1206,12 +1284,17 @@ pub(crate) fn report_exit(shared: &Shared, code: Option<u32>, signal: Option<Str
 
 /// Feed a read's dispatch byte alone with its answer armed, then disarm whatever the callback left, so an answer the
 /// terminal did not take can never serve a later read.
+#[cfg(all(test, feature = "local"))]
 fn dispatch(shared: &Shared, byte: u8, read: ReadCandidate, answer: ClipboardAnswer) {
+    dispatch_token(shared, byte, read, answer, Vec::new());
+}
+fn dispatch_token(shared: &Shared, byte: u8, read: ReadCandidate, answer: ClipboardAnswer, pw: Vec<u8>) {
     let mut vt = lock(&shared.vt);
     *lock(&shared.armed) = Some(ArmedRead {
         location: ClipboardLocation::from_engine(read.location),
         scope: read.scope,
         answer,
+        pw,
     });
     vt.terminal.vt_write(&[byte]);
     vt.changed();
@@ -1253,12 +1336,13 @@ impl Reads {
 }
 
 /// The IO worker: the program's output from the mailbox into the VT.
-struct Worker {
-    shared: Arc<Shared>,
+pub(crate) struct Worker {
+    bridge_decoder: ngterm_core::attach_bridge::Decoder,
+    pub(crate) shared: Arc<Shared>,
     /// Woken when the mailbox resumes the reads.
     reads: Reads,
     scanner: Scanner,
-    next_read: u64,
+    pub(crate) next_read: u64,
     /// A read was denied for the child's exit: every later one is denied without asking.
     child_exited: bool,
 }
@@ -1283,7 +1367,11 @@ impl Worker {
                         session_io::handle(live, &self.shared, mail);
                     }
                 }
-                Mail::Idle => self.expire_hold(),
+                Mail::Idle => self.expire_deadlines(),
+                Mail::Eof => {
+                    self.shared.mark_eof();
+                    self.shared.wake();
+                }
                 Mail::End => break,
             }
         }
@@ -1296,41 +1384,64 @@ impl Worker {
         lock(&self.shared.capture).hold_deadline()
     }
 
-    /// End a hold that outlived its deadline and wake the frontend to draw the live screen.
-    fn expire_hold(&self) {
+    /// End an expired hold and wake the frontend. An animation wake only requests a capture: ticking stays under
+    /// the VT lock immediately before that capture, never on held frames or repeatedly while a pane is hidden.
+    fn expire_deadlines(&self) {
         let mut vt = lock(&self.shared.vt);
         let mut capture = lock(&self.shared.capture);
-        if end_expired_hold(&mut vt, &mut capture) {
-            drop(capture);
-            drop(vt);
-            self.shared.wake();
-        }
+        end_expired_hold(&mut vt, &mut capture);
+        drop(capture);
+        drop(vt);
+        self.shared.wake();
     }
 
     /// Feed `bytes` to the VT, stopping at each clipboard read for its answer. `false` when the pane shut down. A live
     /// pane's reads are the server's to delegate: it does not stop at them.
     fn feed(&mut self, bytes: &[u8]) -> bool {
+        let enabled = lock(&self.shared.bridge).expected_nonce.is_some();
+        if !enabled {
+            return self.feed_terminal(bytes);
+        }
+        for part in self.bridge_decoder.feed(bytes) {
+            let ok = match part {
+                ngterm_core::attach_bridge::Part::Bytes(bytes) => self.feed_terminal(&bytes),
+                ngterm_core::attach_bridge::Part::Envelope(envelope) => self.bridge_envelope(envelope),
+            };
+            if !ok {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn feed_terminal(&mut self, bytes: &[u8]) -> bool {
         #[cfg(feature = "local")]
         if matches!(self.reads, Reads::Live(_)) {
-            self.write_vt(bytes);
-            return true;
+            return self.write_vt(bytes);
         }
         let mut start = 0;
         while let Some((offset, read)) = self.scanner.find(&bytes[start..]) {
             let dispatch = start + offset;
-            self.write_vt(&bytes[start..dispatch]);
-            let Some(answer) = self.park(read) else {
+            if !self.write_vt(&bytes[start..dispatch]) {
                 return false;
-            };
-            self.dispatch(bytes[dispatch], read, answer);
+            }
+            if read.scope == vt::ReadScope::Write {
+                if !self.write_vt(&bytes[dispatch..=dispatch]) {
+                    return false;
+                }
+            } else {
+                let Some(answer) = self.park(read) else {
+                    return false;
+                };
+                self.dispatch(bytes[dispatch], read, answer);
+            }
             start = dispatch + 1;
         }
-        self.write_vt(&bytes[start..]);
-        true
+        self.write_vt(&bytes[start..])
     }
 
     /// `vt_write` in slices, the VT lock taken per slice so paint and input get in between.
-    fn write_vt(&self, bytes: &[u8]) {
+    fn write_vt(&mut self, bytes: &[u8]) -> bool {
         for slice in bytes.chunks(VT_SLICE) {
             let mut vt = lock(&self.shared.vt);
             let started = Instant::now();
@@ -1341,7 +1452,67 @@ impl Worker {
             counters.vt_nanos.fetch_add(held, Ordering::Relaxed);
             counters.max_hold_nanos.fetch_max(held, Ordering::Relaxed);
             counters.bytes.fetch_add(slice.len() as u64, Ordering::Relaxed);
+            if !self.complete_writes() {
+                return false;
+            }
         }
+        true
+    }
+
+    fn complete_writes(&mut self) -> bool {
+        let writes = lock(&self.shared.writes).take();
+        for write in writes {
+            if write.origin == vt::ClipboardOrigin::Kitty && !write.has_acknowledgement() {
+                tracing::warn!("Kitty clipboard write has no acknowledgement template");
+            }
+            #[cfg(feature = "local")]
+            let recovery = matches!(self.reads, Reads::Live(_));
+            #[cfg(not(feature = "local"))]
+            let recovery = false;
+            self.next_read += 1;
+            let id = self.next_read;
+            self.shared.send(PaneEvent::ClipboardWrite(crate::ClipboardWrite {
+                id: if recovery { 0 } else { id },
+                location: ClipboardLocation::from_engine(write.location),
+                contents: write
+                    .contents
+                    .iter()
+                    .map(|content| crate::ClipboardContent {
+                        mime: content.mime.clone(),
+                        data: content.data.clone(),
+                    })
+                    .collect(),
+                name: write.name.clone(),
+                granted: write.granted,
+                can_remember: write.can_remember,
+                permission_scope: if write.origin == vt::ClipboardOrigin::Kitty {
+                    crate::ClipboardPermissionScope::Kitty
+                } else {
+                    crate::ClipboardPermissionScope::Osc52
+                },
+            }));
+            self.shared.wake();
+            if recovery {
+                continue;
+            }
+            let answer = self.wait_answer(id);
+            let completion = match answer {
+                Some(ClipboardAnswer::Write(completion)) => completion,
+                _ => crate::WriteCompletion {
+                    status: vt::ClipboardWriteResult::Denied,
+                    remember: false,
+                },
+            };
+            let terminal = lock(&self.shared.vt);
+            let grants = terminal.terminal.clipboard_grants();
+            if let Some(bytes) = write.complete(completion.status, completion.remember, &mut lock(&grants)) {
+                self.shared.replies.push_reply(&bytes);
+            }
+            if answer.is_none() {
+                return false;
+            }
+        }
+        true
     }
 
     /// Ask the frontend about a clipboard read and wait for its answer without the VT lock, ending expired holds
@@ -1353,14 +1524,37 @@ impl Worker {
         }
         self.next_read += 1;
         let id = self.next_read;
+        let details = self.scanner.read_details();
+        let grants = lock(&self.shared.vt).terminal.clipboard_grants();
+        let granted =
+            read.scope == vt::ReadScope::Data && lock(&grants).peek(&details.pw, vt::ClipboardDirection::Read);
         self.shared.send(PaneEvent::ClipboardRead(ClipboardReadRequest {
             id,
             location: ClipboardLocation::from_engine(read.location),
             scope: read.scope,
+            mimes: details.mimes,
+            list: details.list,
+            name: details.name,
+            granted,
+            can_remember: !details.pw.is_empty(),
+            permission_scope: if self.scanner.kitty_clipboard() {
+                crate::ClipboardPermissionScope::Kitty
+            } else {
+                crate::ClipboardPermissionScope::Osc52
+            },
         }));
         self.shared.wake();
+        self.wait_answer(id)
+    }
+
+    pub(crate) fn wait_answer(&mut self, id: u64) -> Option<ClipboardAnswer> {
+        if self.child_exited {
+            return Some(ClipboardAnswer::Denied);
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            match self.shared.mailbox.await_answer(id, self.hold_deadline()) {
+            let wake = self.hold_deadline().map_or(deadline, |hold| hold.min(deadline));
+            match self.shared.mailbox.await_answer(id, Some(wake)) {
                 Answer::Given(answer) => return Some(answer),
                 Answer::ChildExited => {
                     // keep processing the output instead of waiting on a prompt
@@ -1368,20 +1562,26 @@ impl Worker {
                     return Some(ClipboardAnswer::Denied);
                 }
                 Answer::Shutdown => return None,
-                Answer::Idle => self.expire_hold(),
+                Answer::Idle => {
+                    if Instant::now() >= deadline {
+                        return Some(ClipboardAnswer::Denied);
+                    }
+                    self.expire_deadlines();
+                }
             }
         }
     }
 
     fn dispatch(&self, byte: u8, read: ReadCandidate, answer: ClipboardAnswer) {
-        dispatch(&self.shared, byte, read, answer);
+        dispatch_token(&self.shared, byte, read, answer, self.scanner.read_details().pw);
     }
 
     /// After a batch: report color changes, count it, wake the frontend.
     fn after_batch(&self, filled: usize) {
         if filled > 0 {
             let mut vt = lock(&self.shared.vt);
-            // a new Kitty image's pixels are copied here, not on the thread that paints
+            // Prefetch new Kitty pixels for captures; a capture's animation tick or a mid-batch paint
+            // can still copy pixels on the paint thread under the VT lock.
             let held = &mut *vt;
             held.kitty.update(held.terminal.kitty_graphics());
             let colors = vt.terminal.colors();
@@ -1396,6 +1596,12 @@ impl Worker {
         self.shared.wake();
     }
 }
+
+#[cfg(all(test, feature = "local"))]
+mod resize_tests;
+
+#[cfg(test)]
+mod animation_tests;
 
 #[cfg(test)]
 #[cfg(feature = "local")]
@@ -1780,6 +1986,17 @@ mod tests {
                 ColorScheme::Dark => ngterm_session::protocol::ColorScheme::Dark,
             })
         );
+        for _ in 0..2 {
+            pane.config_reloaded(other);
+            assert_eq!(
+                live.take_posted_reload().color_scheme,
+                Some(match other {
+                    ColorScheme::Light => ngterm_session::protocol::ColorScheme::Light,
+                    ColorScheme::Dark => ngterm_session::protocol::ColorScheme::Dark,
+                })
+            );
+            assert_eq!(pane.shared.replies.queued(), 0, "the server alone reports");
+        }
     }
 
     #[test]

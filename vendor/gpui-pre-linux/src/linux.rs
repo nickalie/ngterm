@@ -1,4 +1,5 @@
 mod clipboard_html;
+mod clipboard_mime;
 mod dispatcher;
 mod display_connection;
 mod headless;
@@ -18,6 +19,10 @@ mod x11;
 mod xdg_desktop_portal;
 
 pub use clipboard_html::{ClipboardHtml, HTML_MIME_TYPE, with_clipboard_html};
+pub use clipboard_mime::{
+    ClipboardMimeError, ClipboardRepresentation, ClipboardTarget, clipboard_mime_types, is_text_mime,
+    read_clipboard_mimes, write_clipboard_representations,
+};
 #[cfg(any(feature = "wayland", feature = "x11"))]
 pub(crate) use clipboard_html::take_clipboard_html;
 pub use dispatcher::*;
@@ -61,5 +66,7 @@ pub fn current_platform(headless: bool) -> Rc<dyn gpui::Platform> {
 /// It starts windowed in the process's own environment, or headless if that names no allowed
 /// display server. Set another initial mode with [`gpui::Application::with_windowing`].
 pub fn linux_platform(allowed_modes: WindowingModes) -> Rc<dyn gpui::Platform> {
-    Rc::new(LinuxPlatform::new(allowed_modes))
+    let platform = Rc::new(LinuxPlatform::new(allowed_modes));
+    clipboard_mime::register(&platform);
+    platform
 }

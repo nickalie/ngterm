@@ -152,6 +152,17 @@
         }
 
         /// Records the call.
+        public func completeClipboardWrite(
+            machineId: String,
+            sessionId: String,
+            paneId: String,
+            writeId: UInt64,
+            status: ClipboardWriteStatus
+        ) throws {
+            try record("completeClipboardWrite", [machineId, sessionId, paneId, writeId, status])
+        }
+
+        /// Records the call.
         public func networkChanged() throws {
             try record("networkChanged", [])
         }

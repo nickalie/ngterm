@@ -148,6 +148,16 @@ fn resolve_seed_in(
         command: plan.command,
         initial_input: plan.initial_input,
         wait_after_command: plan.wait_after_command,
+        env: launch
+            .attach_bridge
+            .as_deref()
+            .map(|nonce| {
+                vec![(
+                    crate::attach_bridge::VARIABLE.into(),
+                    crate::attach_bridge::variable(nonce),
+                )]
+            })
+            .unwrap_or_default(),
         ..LaunchSeed::default()
     }
 }

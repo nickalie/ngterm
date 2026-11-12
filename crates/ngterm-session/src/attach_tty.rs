@@ -22,6 +22,7 @@ use std::sync::mpsc::Sender;
 
 use crate::protocol::GridSize;
 
+pub mod clipboard;
 pub mod filter;
 pub mod input;
 pub mod owner;

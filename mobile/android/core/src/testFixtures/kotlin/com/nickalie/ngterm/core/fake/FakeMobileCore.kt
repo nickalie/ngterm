@@ -4,6 +4,7 @@ import com.nickalie.ngterm.core.ffi.AgentCommand
 import com.nickalie.ngterm.core.ffi.AskReply
 import com.nickalie.ngterm.core.ffi.ChatEvent
 import com.nickalie.ngterm.core.ffi.ClipboardReply
+import com.nickalie.ngterm.core.ffi.ClipboardWriteStatus
 import com.nickalie.ngterm.core.ffi.EventSink
 import com.nickalie.ngterm.core.ffi.HostKeyStore
 import com.nickalie.ngterm.core.ffi.Machine
@@ -479,6 +480,14 @@ class FakeMobileCore(
         readId: ULong,
         reply: ClipboardReply,
     ) = record("answerClipboardRead", machineId, sessionId, paneId, readId, reply)
+
+    override fun completeClipboardWrite(
+        machineId: String,
+        sessionId: String,
+        paneId: String,
+        writeId: ULong,
+        status: ClipboardWriteStatus,
+    ) = record("completeClipboardWrite", machineId, sessionId, paneId, writeId, status)
 
     override fun answerHostKey(
         machineId: String,

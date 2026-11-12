@@ -141,6 +141,30 @@ def test_archive_has_only_selected_plugins_and_one_dependency_copy(checkout: Pat
     assert run("patchelf", "--print-rpath", plugins / "libgstplayback.so").stdout.strip() == "$ORIGIN:$ORIGIN/.."
 
 
+def test_a_host_librarys_own_dependencies_stay_on_the_host(checkout: Path) -> None:
+    # libz.so.1 is a declared host library; its fixture needs libhostdep.so.1, which no list names. Bundling that
+    # would hand the host's libz, and every host plugin sharing it, an older copy than they were built against.
+    # It also needs libengine-dependency.so.1, which the playback plugin needs itself: that one stays bundled, since
+    # another distribution's libz need not link it, or ship it under that name (Debian's libbz2.so.1.0).
+    lib = checkout / "system/usr/lib/fixture"
+    shared(lib / "libhostdep.so.1", "int hostdep(void) { return 3; }", "-Wl,-soname,libhostdep.so.1")
+    shared(lib / "libz.so.1",
+           "extern int hostdep(void); extern int dependency(void);"
+           " int zfixture(void) { return hostdep() + dependency(); }",
+           "-Wl,-soname,libz.so.1", f"-L{lib}", "-l:libhostdep.so.1", "-lengine-dependency", f"-Wl,-rpath,{lib}")
+    shared(lib / "gstreamer-1.0/libgstlibav.so", "extern int zfixture(void); int plugin(void) { return zfixture(); }",
+           f"-L{lib}", "-l:libz.so.1", f"-Wl,-rpath,{lib}")
+    result = package(checkout, checkout / "dist")
+    assert result.returncode == 0, result.stderr
+    archive = next((checkout / "dist").glob("*.tar.zst"))
+    listing = run("tar", "--zstd", "-tf", archive)
+    assert listing.returncode == 0, listing.stderr
+    names = {Path(entry).name for entry in listing.stdout.split()}
+    assert "libgstlibav.so" in names
+    assert not {name for name in names if name.startswith(("libz.", "libhostdep."))}
+    assert "libengine-dependency.so.1" in names
+
+
 @pytest.mark.parametrize("changed", ["allowlist", "hostlibs", "wrapper", "closure", "arch", "package"])
 def test_key_tracks_runtime_inputs(checkout: Path, changed: str) -> None:
     old = package(checkout, "--print-key")

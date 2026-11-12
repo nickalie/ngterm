@@ -8,6 +8,7 @@ import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.LiveSession
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.data.StoredMachine
+import com.nickalie.ngterm.android.data.families
 import com.nickalie.ngterm.android.data.reason
 import com.nickalie.ngterm.android.ui.chat.PaneView
 import com.nickalie.ngterm.core.ffi.MobileException
@@ -34,8 +35,10 @@ data class AgentStatus(
 
 /**
  * An attached session as the app shows it: its [machine]'s name, its [name], [context] and agent [status] (the stream's
- * when it has them, the machine's last listing's otherwise), its machine's [link], its stream's [live] state, and
- * whether its panes running an agent show as a chat ([chatView]: its own choice, else Settings').
+ * when it has them, the machine's last listing's otherwise), its machine's [link], its stream's [live] state,
+ * whether its panes running an agent show as a chat ([chatView]: its own choice, else Settings'), whether this
+ * device is [taking] its lead, its parent's name when it is a companion ([companionOf]), and whether it is [nested]
+ * under that parent, attached too and listed above it.
  */
 data class AttachedSession(
     val key: SessionKey,
@@ -46,9 +49,12 @@ data class AttachedSession(
     val link: Link,
     val live: LiveSession,
     val chatView: Boolean = ChatViews().default,
+    val taking: Boolean = false,
+    val companionOf: String? = null,
+    val nested: Boolean = false,
 )
 
-/** A machine's attached sessions, in its listing's order. */
+/** A machine's attached sessions, in its listing's order by family (a parent, then its companions under it). */
 data class AttachedGroup(
     val machineId: String,
     val machine: String,
@@ -124,9 +130,9 @@ class SessionViewModel(
             graph.panes.live.sessions,
             openKey,
             focus,
-            combine(graph.chats.views, graph.chats.chatViews, ::Pair),
-        ) { listed, live, open, focus, (views, chatViews) ->
-            val groups = groups(listed, live, chatViews, seen)
+            combine(graph.chats.views, graph.chats.chatViews, graph.panes.claims.held, ::Triple),
+        ) { listed, live, open, focus, (views, chatViews, taking) ->
+            val groups = groups(listed, live, chatViews, taking, seen)
             AttachedUiState(groups, open?.let { open(it, listed, groups, focus, views) })
         }.catch { emit(AttachedUiState()) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, AttachedUiState())
@@ -259,23 +265,34 @@ private data class Listed(
     val links: Map<String, Link>,
 )
 
-// each machine's attached sessions in its listing's order (any it no longer lists after), remembering in [seen] the
-// name each was last shown with
+// each machine's attached sessions in its listing's order by family (any it no longer lists after), remembering in
+// [seen] the name each was last shown with
 private fun groups(
     listed: Listed,
     live: Map<SessionKey, LiveSession>,
     chatViews: ChatViews,
+    taking: Set<SessionKey>,
     seen: MutableMap<SessionKey, AttachedSession>,
 ): List<AttachedGroup> =
     listed.machines.mapNotNull { machine ->
         val ids = listed.attached[machine.id].orEmpty()
         if (ids.isEmpty()) return@mapNotNull null
         val tree = listed.trees[machine.id].orEmpty()
-        val order = tree.map { it.id }.filter { it in ids } + ids.filter { id -> tree.none { it.id == id } }
+        val names = tree.associate { it.id to it.name }
+        val order =
+            families(tree).flatten().filter { it.id in ids }.map { it.id to it.parent } +
+                ids.filter { it !in names }.map { it to null }
+        val shown = mutableMapOf<String, String>()
         val sessions =
-            order.map { id ->
+            order.map { (id, parent) ->
                 val key = SessionKey(machine.id, id)
-                attached(key, machine, listed, live, seen).copy(chatView = chatViews.on(key))
+                attached(key, machine, listed, live, seen)
+                    .copy(
+                        chatView = chatViews.on(key),
+                        taking = key in taking,
+                        companionOf = parent?.let { shown[it] ?: names[it] ?: it },
+                        nested = parent in shown,
+                    ).also { shown[id] = it.name }
             }
         AttachedGroup(machine.id, machine.title, sessions)
     }

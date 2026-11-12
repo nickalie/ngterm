@@ -327,6 +327,7 @@ fn install_live(fixture: &mut Fixture, resources: &std::path::Path, login_shell:
     fixture.core.install_live_sessions(LiveInstall {
         host: Arc::new(FakeSessionHost::new()) as Arc<dyn SessionHost>,
         endpoint: ControlLiveEndpoint {
+            attach_bridge: None,
             executable: "/opt/ngterm/bin/ngterm-session".to_owned(),
             socket_directory: "/tmp/ngterm-live-test".to_owned(),
         },

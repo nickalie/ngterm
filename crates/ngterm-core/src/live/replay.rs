@@ -1081,6 +1081,126 @@ mod tests {
         );
     }
 
+    /// The OSC payloads in `output` (between `ESC ]` and a BEL or an ST), in order.
+    fn osc_payloads(output: &str) -> Vec<&str> {
+        output
+            .split("\u{1b}]")
+            .skip(1)
+            .map(|rest| rest.split(['\u{7}', '\u{1b}']).next().unwrap_or_default())
+            .collect()
+    }
+
+    /// A hostname with an OSC 52 of its own, and what a report carries in its place.
+    const HOSTILE_HOST: (&str, &str) = ("h\u{7}\u{1b}]52;c;SGVsbG8=\u{7}ost", "h]52;c;SGVsbG8=ost");
+
+    /// The PowerShell programs this host has: 7's `pwsh` on `PATH`, and on Windows its own Windows PowerShell 5.1 too.
+    fn powershells() -> Vec<std::path::PathBuf> {
+        let windows_powershell = cfg!(windows)
+            .then(|| {
+                std::env::split_paths(&std::env::var_os("PATH")?)
+                    .map(|dir| dir.join("powershell.exe"))
+                    .find(|path| path.is_file())
+            })
+            .flatten();
+        pwsh().into_iter().chain(windows_powershell).collect()
+    }
+
+    /// The PowerShell integration leaves the control characters (C0, DEL and C1) out of the host and the path it
+    /// reports (Ghostty's #14859 for its own shells), so a directory's name or the host cannot end the OSC 7 and write
+    /// the clipboard with an OSC 52 of its own; text stays as it is, a Unix name's backslashes included, and a Windows
+    /// path keeps its `/C:/...` form. The report is checked on a synthetic payload on every OS (Windows' file systems
+    /// refuse control characters in a name), and on Unix through the prompt in real directories so named too; under
+    /// PowerShell 7 and, on Windows, 5.1.
+    #[test]
+    fn the_powershell_integration_reports_a_hostile_directory_without_its_escape_sequences() {
+        let shells = powershells();
+        if shells.is_empty() {
+            eprintln!("SKIPPED: no pwsh on PATH");
+        }
+        for shell in shells {
+            reports_a_hostile_directory_safely(&shell);
+        }
+    }
+
+    fn reports_a_hostile_directory_safely(shell: &Path) {
+        let dir = tempfile::tempdir().unwrap();
+        // a C1 CSI too, which a UTF-8 terminal may take for one
+        let (synthetic, synthetic_expected) = if cfg!(windows) {
+            (
+                "C:\\x\\y\u{7}\u{1b}]52;c;SGVsbG8=\u{7}\u{9b}z",
+                "/C:/x/y]52;c;SGVsbG8=z",
+            )
+        } else {
+            ("/x\\y\u{7}\u{1b}]52;c;SGVsbG8=\u{7}\u{9b}z", "/x\\y]52;c;SGVsbG8=z")
+        };
+        let root = dir.path().canonicalize().unwrap();
+        // on Unix, real directories: one with raw ESC and BEL bytes, one with spaces and Unicode (PowerShell takes a
+        // backslash for a separator there and enters no directory so named, so the synthetic path carries that case)
+        let directories: &[(&str, &str)] = if cfg!(windows) {
+            &[]
+        } else {
+            &[
+                ("y\u{7}\u{1b}]52;c;SGVsbG8=\u{7}", "y]52;c;SGVsbG8="),
+                ("my dir \u{fc}\u{1f600}", "my dir \u{fc}\u{1f600}"),
+            ]
+        };
+        let mut command = Command::new(shell);
+        for (index, (name, _)) in directories.iter().enumerate() {
+            let path = root.join(name);
+            fs::create_dir_all(&path).unwrap();
+            command.env(format!("NGTERM_TEST_DIR{index}"), path);
+        }
+        let prompts = (0..directories.len())
+            .map(|index| {
+                format!(" ; Set-Location -LiteralPath $env:NGTERM_TEST_DIR{index} ; [System.Console]::Write((prompt))")
+            })
+            .collect::<Vec<_>>()
+            .concat();
+        // a profile's prompt that shows no path: PowerShell's default one writes the location as it is, which is the
+        // shell's own text, not the integration's
+        let script = format!(
+            "function global:prompt {{ 'PS> ' }} ; $env:NGTERM_PWSH_INTEGRATION = {} ; {PWSH_LOAD} ; \
+             [System.Console]::Write((& $global:__NgtermIntegration.CwdReport $env:NGTERM_TEST_HOST \
+             $env:NGTERM_TEST_PATH)) ; $global:__NgtermIntegration.HostName = $env:NGTERM_TEST_HOST{prompts}",
+            powershell_quoted(&integration_script().display().to_string())
+        );
+        let output = command
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &script])
+            .env("NGTERM_TEST_HOST", HOSTILE_HOST.0)
+            .env("NGTERM_TEST_PATH", synthetic)
+            .env_remove("GHOSTTY_SHELL_FEATURES")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let shell = shell.display();
+        assert!(output.status.success(), "{shell}: {output:?}");
+        assert!(output.stderr.is_empty(), "{shell}: {output:?}");
+        assert!(
+            !stdout.contains("\u{1b}]52"),
+            "{shell}: an OSC 52 got through: {stdout:?}"
+        );
+        let reports: Vec<&str> = osc_payloads(&stdout)
+            .into_iter()
+            .filter_map(|payload| payload.strip_prefix("7;"))
+            .collect();
+        let mut expected = vec![format!("kitty-shell-cwd://{}{synthetic_expected}", HOSTILE_HOST.1)];
+        for (_, reported) in directories {
+            expected.push(format!(
+                "kitty-shell-cwd://{}{}",
+                HOSTILE_HOST.1,
+                root.join(reported).display()
+            ));
+        }
+        assert_eq!(reports, expected, "{shell}: {stdout:?}");
+        for report in &expected {
+            assert!(
+                stdout.contains(&format!("\u{1b}]7;{report}\u{7}")),
+                "{shell}: not one OSC 7 ended by its BEL: {stdout:?}"
+            );
+        }
+    }
+
     /// Not a test of its own: the program the PowerShell replay test runs, which records its arguments after `--`
     /// and the variables the replay set, as JSON in the file [`RECORD`] names.
     #[test]

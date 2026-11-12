@@ -3,6 +3,7 @@ package com.nickalie.ngterm.android.ui.sessions
 import com.nickalie.ngterm.android.data.ChatViews
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.SessionKey
+import com.nickalie.ngterm.android.data.families
 import com.nickalie.ngterm.core.ffi.RemoteSession
 
 /** Where the far side's setup is explained: the README's section on running ngterm on a server. */
@@ -129,24 +130,6 @@ private fun MachineSessions.lines(listed: List<RemoteSession>): SessionsBody.Ses
     return SessionsBody.Sessions(mine.flatten(), others.flatten(), failure)
 }
 
-/**
- * [listed] by family: each session whose parent isn't listed (the core lists parents first, companions after them
- * all) heads one, in the listing's order, followed by its companions and theirs.
- */
-private fun families(listed: List<RemoteSession>): List<List<RemoteSession>> {
-    val ids = listed.mapTo(mutableSetOf()) { it.id }
-    val companions = listed.filter { it.parent in ids }.groupBy { it.parent }
-    val placed = mutableSetOf<String>()
-
-    fun family(head: RemoteSession): List<RemoteSession> =
-        if (placed.add(head.id)) listOf(head) + companions[head.id].orEmpty().flatMap(::family) else emptyList()
-
-    val heads = listed.filter { it.parent !in ids }.map(::family)
-    // a loop of parents has no head: its sessions stand alone, so none goes missing
-    val strays = listed.filter { it.id !in placed }.map { listOf(it) }
-    return heads + strays
-}
-
 /** What a machine's sessions screen does, as [SessionsViewModel] and the route do it. */
 data class SessionActions(
     val onBack: () -> Unit,
@@ -159,4 +142,5 @@ data class SessionActions(
     val onDetach: (String) -> Unit,
     val onEnd: (String) -> Unit,
     val onChatView: (String, Boolean) -> Unit = { _, _ -> },
+    val onNewNamedSession: () -> Unit = {},
 )

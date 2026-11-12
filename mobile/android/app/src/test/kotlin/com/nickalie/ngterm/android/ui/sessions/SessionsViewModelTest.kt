@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.TestGraph
 import com.nickalie.ngterm.android.data.Link
+import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.MobileException
@@ -117,11 +118,11 @@ class SessionsViewModelTest {
     fun newSessionCreatesItNamedOrNotAndClosesTheDialog() {
         connected()
         val model = model()
-        model.openNewSession()
+        model.openNamedSession()
         assertEquals(NewSessionState(), model.creating.value)
         model.create("  api  ")
         eventually { model.creating.value == null }
-        model.openNewSession()
+        model.openNamedSession()
         model.create(" ")
         eventually { model.creating.value == null }
         assertEquals(listOf("api", "session 2"), model.ready().sessions?.map { it.name })
@@ -130,13 +131,74 @@ class SessionsViewModelTest {
                 .filter { it.method == "createSession" }
                 .map { it.args[1] }
         assertEquals(listOf("api", null), names)
+        assertEquals(setOf("fake-1", "fake-2"), test.connections.attached.value["m1"])
+        assertEquals(SessionKey("m1", "fake-2"), model.landing.value)
+    }
+
+    @Test
+    fun newSessionInOneTapCreatesAttachesAndLandsTheSession() {
+        connected()
+        val model = model()
+        val gate = CompletableDeferred<Unit>().also { test.core.holds["createSession"] = it }
+        model.newSession()
+        eventually { test.core.calls.any { it.method == "createSession" } }
+        assertEquals(true, model.busy.value)
+        model.newSession()
+        model.create("api")
+        gate.complete(Unit)
+        eventually { model.landing.value != null }
+        assertEquals(SessionKey("m1", "fake-1"), model.landing.value)
+        assertEquals(setOf("fake-1"), test.connections.attached.value["m1"])
+        assertEquals(
+            listOf(null),
+            test.core.calls
+                .filter { it.method == "createSession" }
+                .map { it.args[1] },
+        )
+        assertEquals(false, model.busy.value)
+        assertNull(model.creating.value)
+        assertEquals(emptySet<SessionKey>(), test.graph.panes.claims.held.value)
+        model.landed()
+        assertNull(model.landing.value)
+        assertEquals(setOf(SessionKey("m1", "fake-1")), test.graph.panes.claims.held.value)
+    }
+
+    @Test
+    fun aFailedOneTapNewSessionIsANoticeAndLandsNothing() {
+        connected()
+        val model = model()
+        test.core.failNext("createSession", MobileException.Remote("build-01 does not run live sessions"))
+        model.newSession()
+        eventually { model.notice.value != null }
+        assertEquals("build-01 does not run live sessions", model.notice.value)
+        assertNull(model.landing.value)
+        assertEquals(false, model.busy.value)
+        test.core.failNext("attachSession", MobileException.Remote("no such session"))
+        model.newSession()
+        eventually { model.notice.value == "no such session" }
+        assertNull(model.landing.value)
+        assertEquals(listOf("session 1"), model.ready().sessions?.map { it.name })
+        assertNull(test.connections.attached.value["m1"])
+    }
+
+    @Test
+    fun aDialogCreateWhoseAttachFailsClosesTheDialogAndSaysWhy() {
+        connected()
+        val model = model()
+        model.openNamedSession()
+        test.core.failNext("attachSession", MobileException.Remote("no such session"))
+        model.create("api")
+        eventually { model.notice.value != null }
+        assertEquals("no such session", model.notice.value)
+        assertNull(model.creating.value)
+        assertNull(model.landing.value)
     }
 
     @Test
     fun aFailedCreateStaysInTheDialogItBeganIn() {
         connected()
         val model = model()
-        model.openNewSession()
+        model.openNamedSession()
         test.core.failNext("createSession", MobileException.Remote("build-01 does not run live sessions"))
         model.create("api")
         eventually { model.creating.value?.failed != null }
@@ -153,13 +215,13 @@ class SessionsViewModelTest {
     fun aCreateWhoseDialogClosedFailsToTheSnackbarAndLeavesANewDialogAlone() {
         connected()
         val model = model()
-        model.openNewSession()
+        model.openNamedSession()
         test.core.failNext("createSession", MobileException.Remote("build-01 does not run live sessions"))
         val gate = CompletableDeferred<Unit>().also { test.core.holds["createSession"] = it }
         model.create("api")
         eventually { test.core.calls.any { it.method == "createSession" } }
         model.closeNewSession()
-        model.openNewSession()
+        model.openNamedSession()
         gate.complete(Unit)
         eventually { model.notice.value != null }
         assertEquals("build-01 does not run live sessions", model.notice.value)
@@ -171,12 +233,12 @@ class SessionsViewModelTest {
     fun aCreateWhoseDialogClosedLeavesANewDialogOpenWhenItLands() {
         connected()
         val model = model()
-        model.openNewSession()
+        model.openNamedSession()
         val gate = CompletableDeferred<Unit>().also { test.core.holds["createSession"] = it }
         model.create("api")
         eventually { test.core.calls.any { it.method == "createSession" } }
         model.closeNewSession()
-        model.openNewSession()
+        model.openNamedSession()
         gate.complete(Unit)
         eventually { model.ready().sessions?.map { it.name } == listOf("api") }
         assertEquals(NewSessionState(), model.creating.value)

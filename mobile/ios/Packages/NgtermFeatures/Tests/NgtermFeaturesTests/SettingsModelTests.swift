@@ -17,7 +17,18 @@ internal struct SettingsModelTests {
     // a program on `machineId` reads the clipboard and the user allows it always
     private func trust(_ machineId: String) async {
         let pane = PaneRef(machineId: machineId, sessionId: "s1", paneId: "P1")
-        test.core.emit(.clipboardReadRequest(pane: pane, readId: 1, clipboard: .standard, listOnly: false))
+        test.core.emit(
+            .clipboardReadRequest(
+                pane: pane,
+                readId: 1,
+                clipboard: .standard,
+                listOnly: false,
+                mimes: ["text/plain"],
+                list: false,
+                granted: false,
+                canRemember: false
+            )
+        )
         await test.settled()
         let reads = test.graph.clipboardReads
         guard let read = reads.pending.first(where: { $0.pane == pane }) else {

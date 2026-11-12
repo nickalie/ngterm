@@ -10,12 +10,17 @@
 #[expect(dead_code, reason = "the file helpers serve the other test files")]
 mod support;
 
+#[path = "support/redraw.rs"]
+mod redraw;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ngterm_core::ghostty_config::GhosttyConfig;
-use ngterm_term::{ExitStatus, Frame, GridPoint, GridSize, Host, Launch, Pane, PaneConfig, PaneEvent, SelectionText};
+use ngterm_term::{
+    ExitStatus, Frame, GridPoint, GridSize, Host, Launch, Pane, PaneCommand, PaneConfig, PaneEvent, SelectionText,
+};
 use support::{SIZE, TestResult};
 
 /// How long a wait may take: Windows PowerShell can take seconds to start on a CI runner.
@@ -137,6 +142,15 @@ fn typed_input_round_trips_through_the_child() -> TestResult {
     ))?;
     pane.write(b"ping\r")?;
     wait_text(&pane, "got:ping");
+    Ok(())
+}
+
+#[test]
+fn an_immediate_resize_redraw_uses_the_new_grid() -> TestResult {
+    let pane = redraw::spawn()?;
+    redraw::wait_title(&pane, "ready");
+    pane.resize(redraw::AFTER)?;
+    redraw::assert_redrawn(&pane);
     Ok(())
 }
 

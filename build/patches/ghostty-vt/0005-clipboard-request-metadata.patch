@@ -1,0 +1,200 @@
+Subject: [PATCH] Expose clipboard request origin and effective password as data
+
+ngterm defers native writes outside its VT lock and keeps token grants in Rust.
+No callback lifetime, parser, grant or acknowledgement logic changes.
+
+--- a/src/terminal/clipboard.zig
++++ b/src/terminal/clipboard.zig
+@@ -1,4 +1,7 @@
+ const std = @import("std");
++
++/// The protocol that produced an external clipboard request.
++pub const Origin = enum(c_int) { kitty = 0, osc52 = 1, osc1337 = 2 };
+ 
+ /// The clipboard destination for a write.
+ pub const Location = enum(c_int) {
+@@ -80,6 +83,8 @@
+ /// Contents are borrowed and only valid for the duration of the callback.
+ /// An empty contents slice clears the destination.
+ pub const Write = struct {
++    pw: []const u8 = "",
++    origin: Origin = .osc52,
+     location: Location,
+     contents: []const Content,
+ 
+@@ -154,6 +159,8 @@
+ /// invalid afterwards. An embedder that needs user consent must block until
+ /// it has an answer; the VT stream waits with it.
+ pub const Read = struct {
++    pw: []const u8 = "",
++    origin: Origin = .osc52,
+     location: Location,
+ 
+     /// The MIME types the program wants, in order of preference. The
+--- a/src/terminal/osc.zig
++++ b/src/terminal/osc.zig
+@@ -52,6 +52,7 @@
+     /// clipboard contents are sent to the pty. Otherwise, the contents
+     /// are set on the clipboard.
+     clipboard_contents: struct {
++        origin: @import("clipboard.zig").Origin = .osc52,
+         kind: u8,
+         data: [:0]const u8,
+         terminator: Terminator = .st,
+--- a/src/terminal/osc/parsers/iterm2.zig
++++ b/src/terminal/osc/parsers/iterm2.zig
+@@ -131,6 +131,7 @@
+ 
+             parser.command = .{
+                 .clipboard_contents = .{
++                    .origin = .osc1337,
+                     .kind = 'c',
+                     .data = value,
+                 },
+--- a/src/terminal/stream.zig
++++ b/src/terminal/stream.zig
+@@ -467,6 +467,7 @@
+     };
+ 
+     pub const ClipboardContents = struct {
++        origin: @import("clipboard.zig").Origin = .osc52,
+         kind: u8,
+         data: []const u8,
+         terminator: osc.Terminator,
+@@ -2874,6 +2875,7 @@
+ 
+                 .clipboard_contents => |clip| {
+                     self.handler.vt(.clipboard_contents, .{
++                        .origin = clip.origin,
+                         .kind = clip.kind,
+                         .data = clip.data,
+                         .terminator = clip.terminator,
+--- a/src/terminal/stream_terminal.zig
++++ b/src/terminal/stream_terminal.zig
+@@ -789,6 +789,7 @@
+             .xtversion => self.reportXtversion(),
+             .request_xt_checksum => self.reportXtChecksum(value),
+             .clipboard_contents => self.clipboardContents(
++                value.origin,
+                 value.kind,
+                 value.data,
+                 value.terminator,
+@@ -1007,6 +1008,7 @@
+ 
+     fn clipboardContents(
+         self: *Handler,
++        origin: clipboard.Origin,
+         kind: u8,
+         data: []const u8,
+         terminator: osc.Terminator,
+@@ -1028,6 +1030,7 @@
+         // OSC 52 uses an empty payload to clear the selected clipboard.
+         if (data.len == 0) {
+             func(self, .{
++                .origin = origin,
+                 .location = location,
+                 .contents = &.{},
+                 .name = "",
+@@ -1060,6 +1063,7 @@
+             .data = decoded,
+         }};
+         func(self, .{
++            .origin = origin,
+             .location = location,
+             .contents = &contents,
+             .name = "",
+@@ -1278,6 +1282,8 @@
+             .name = meta.name,
+             .granted = granted,
+             .can_remember = pw.len > 0,
++            .pw = pw,
++            .origin = .kitty,
+             .reply_ctx = &state,
+             .reply_fn = &KittyClipboardReadState.reply,
+         });
+@@ -1557,6 +1563,8 @@
+             .name = committed.name,
+             .granted = granted,
+             .can_remember = pw.len > 0,
++            .pw = pw,
++            .origin = .kitty,
+             .reply_ctx = &reply_state,
+             .reply_fn = &KittyClipboardWriteReplyState.reply,
+         });
+--- a/src/terminal/c/terminal.zig
++++ b/src/terminal/c/terminal.zig
+@@ -120,6 +120,8 @@
+     /// Terminal-owned reply state; opaque to the embedder.
+     ctx: *const anyopaque,
+     reply: ClipboardWriteReplyFn,
++    pw: lib.String,
++    origin: clipboard.Origin,
+ };
+ 
+ /// The reply to a clipboard write request.
+@@ -165,6 +167,8 @@
+     /// Terminal-owned reply state; opaque to the embedder.
+     ctx: *const anyopaque,
+     reply: ClipboardReadReplyFn,
++    pw: lib.String,
++    origin: clipboard.Origin,
+ };
+ 
+ /// C function pointer type for replying to a clipboard read.
+@@ -514,6 +518,8 @@
+             .location = write.location,
+             .contents = if (contents.len > 0) contents.ptr else null,
+             .contents_len = contents.len,
++            .pw = .init(write.pw),
++            .origin = write.origin,
+             .name = .init(write.name),
+             .granted = write.granted,
+             .can_remember = write.can_remember,
+@@ -569,6 +575,8 @@
+             .mimes = if (mimes.len > 0) mimes.ptr else null,
+             .mimes_len = mimes.len,
+             .list = read.list,
++            .pw = .init(read.pw),
++            .origin = read.origin,
+             .name = .init(read.name),
+             .granted = read.granted,
+             .can_remember = read.can_remember,
+--- a/include/ghostty/vt/terminal.h
++++ b/include/ghostty/vt/terminal.h
+@@ -1020,6 +1020,12 @@
+   bool remember;
+ } GhosttyClipboardWriteReply;
+ 
++typedef enum GHOSTTY_ENUM_TYPED {
++  GHOSTTY_CLIPBOARD_ORIGIN_KITTY = 0,
++  GHOSTTY_CLIPBOARD_ORIGIN_OSC52 = 1,
++  GHOSTTY_CLIPBOARD_ORIGIN_OSC1337 = 2,
++} GhosttyClipboardOrigin;
++
+ typedef struct GhosttyClipboardWrite GhosttyClipboardWrite;
+ 
+ /**
+@@ -1092,6 +1098,11 @@
+ 
+   /** Answer the write; see the struct documentation. */
+   GhosttyClipboardWriteReplyFn reply;
++
++  /** Effective session password, empty without a program name. Borrowed. */
++  GhosttyString pw;
++  /** Protocol origin; never inferred from acknowledgement bytes. */
++  GhosttyClipboardOrigin origin;
+ };
+ 
+ /**
+@@ -1279,6 +1290,11 @@
+ 
+   /** Answer the read; see the struct documentation. */
+   GhosttyClipboardReadReplyFn reply;
++
++  /** Effective session password, empty without a program name. Borrowed. */
++  GhosttyString pw;
++  /** Protocol origin. */
++  GhosttyClipboardOrigin origin;
+ };
+ 
+ /**

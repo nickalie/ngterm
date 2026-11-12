@@ -15,6 +15,7 @@ import com.nickalie.ngterm.android.ui.terminal.TerminalState
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.Pane
 import com.nickalie.ngterm.core.ffi.PaneRef
+import com.nickalie.ngterm.core.ffi.PaneRole
 import com.nickalie.ngterm.core.ffi.PaneSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -56,6 +57,8 @@ class SessionPanes(
     private val failureState = MutableStateFlow<Map<PaneRef, String>>(emptyMap())
     private val showing = mutableSetOf<PaneRef>()
 
+    val claims = LeadClaims()
+
     // each machine's link as last seen, and how many times it came back: a show begun before the last return is stale
     private var links: Map<String, Link> = emptyMap()
     private val returns = mutableMapOf<String, Int>()
@@ -69,7 +72,10 @@ class SessionPanes(
     init {
         scope.launch {
             combine(connections.attached, live.sessions) { attached, sessions -> attached to sessions }
-                .collect { (attached, sessions) -> prune(attached, sessions) }
+                .collect { (attached, sessions) ->
+                    prune(attached, sessions)
+                    claims.settle(attached, sessions, ::takeLead)
+                }
         }
         scope.launch { connections.links.collect(::linked) }
         scope.launch {
@@ -200,6 +206,46 @@ class SessionPanes(
                 layout != null && pane.paneId !in layout.panes -> hide(pane)
             }
         }
+    }
+}
+
+/** A session created here opens in control: its first pane to report following takes the lead, once. */
+class LeadClaims {
+    private val pending = mutableSetOf<SessionKey>()
+
+    // the pane whose takeover is on its way, until its next lead report: a snapshot may skip the roles in between
+    private val taking = mutableMapOf<SessionKey, Pair<String, Int>>()
+    private val heldState = MutableStateFlow<Set<SessionKey>>(emptySet())
+
+    /** The sessions whose lead this device is taking: their Take control cover would only flash. */
+    val held: StateFlow<Set<SessionKey>> = heldState.asStateFlow()
+
+    fun claim(key: SessionKey) {
+        pending += key
+        heldState.value = pending + taking.keys
+    }
+
+    internal fun settle(
+        attached: Map<String, Set<String>>,
+        sessions: Map<SessionKey, LiveSession>,
+        takeLead: (PaneRef) -> Unit,
+    ) {
+        val gone = { key: SessionKey -> key.sessionId !in attached[key.machineId].orEmpty() }
+        pending.removeAll(gone)
+        taking.entries.removeAll { (key, claimed) ->
+            val (pane, leads) = claimed
+            gone(key) || sessions[key]?.panes?.get(pane)?.leads != leads
+        }
+        for (key in pending.toList()) {
+            val panes = sessions[key]?.panes.orEmpty()
+            val follower = panes.entries.firstOrNull { it.value.role == PaneRole.FOLLOWER }
+            if (follower != null) {
+                taking[key] = follower.key to follower.value.leads
+                takeLead(PaneRef(key.machineId, key.sessionId, follower.key))
+            }
+            if (follower != null || panes.values.any { it.role == PaneRole.LEADER }) pending -= key
+        }
+        heldState.value = pending + taking.keys
     }
 }
 

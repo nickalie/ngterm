@@ -137,3 +137,28 @@ fn mouse_reporting_reads_back() {
     fixture.pane.set_mouse_reporting(false);
     assert!(!fixture.pane.mouse_reporting());
 }
+
+#[test]
+fn untrimmed_vt_regions_keep_their_trailing_blank_rows() {
+    let fixture = spawn("printf 'one\\r\\ntwo'; exec sleep 5").unwrap();
+    wait_text(&fixture.pane, "two");
+    let pane = &fixture.pane;
+    assert_eq!(
+        pane.format(FormatRegion::Screen, TextFormat::Vt, false).unwrap(),
+        format!("one\r\ntwo{}", "\r\n".repeat(usize::from(support::SIZE.rows) - 2))
+    );
+    assert_eq!(
+        pane.format(FormatRegion::Screen, TextFormat::Vt, true).as_deref(),
+        Some("one\r\ntwo")
+    );
+    assert_eq!(
+        pane.format(FormatRegion::Screen, TextFormat::Plain, false).as_deref(),
+        Some("one\ntwo")
+    );
+    pane.select(GridPoint::viewport(0, 0), GridPoint::viewport(79, 4), false)
+        .unwrap();
+    assert_eq!(
+        pane.format(FormatRegion::Selection, TextFormat::Vt, false).as_deref(),
+        Some("one\r\ntwo\r\n\r\n\r\n")
+    );
+}

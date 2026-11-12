@@ -64,11 +64,56 @@ impl From<ClipboardLocation> for PaneClipboard {
     }
 }
 
+/// One representation of a clipboard value: its MIME type and bytes (text as UTF-8 under `text/plain`).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ClipboardPart {
+    pub mime: String,
+    pub data: Vec<u8>,
+}
+
+impl From<ngterm_term::ClipboardContent> for ClipboardPart {
+    fn from(content: ngterm_term::ClipboardContent) -> Self {
+        Self {
+            mime: content.mime,
+            data: content.data,
+        }
+    }
+}
+
+impl From<ClipboardPart> for ngterm_term::ClipboardContent {
+    fn from(part: ClipboardPart) -> Self {
+        Self {
+            mime: part.mime,
+            data: part.data,
+        }
+    }
+}
+
 /// The user's answer to a program's clipboard read.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum ClipboardReply {
-    /// Hand over the clipboard's text (`None`: it holds none).
-    Allow { text: Option<String> },
-    /// Refuse: the program reads an empty clipboard.
+    /// Hand over `contents`: each requested type the clipboard holds, under the name the request gave it (none: it
+    /// holds none of them), and `available`, the types it holds, when the request asked for them. `remember` keeps the
+    /// answer for the program in this terminal: the request's next reads are allowed unasked (honoured only when the
+    /// request could be remembered).
+    Allow {
+        contents: Vec<ClipboardPart>,
+        available: Vec<String>,
+        remember: bool,
+    },
+    /// Refuse: the program reads an empty clipboard (OSC 52) or is told it was refused (the Kitty protocol).
     Deny,
+}
+
+/// How the app's write of a program's clipboard value ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ClipboardWriteStatus {
+    /// The device's clipboard holds the value (or was cleared).
+    Done,
+    /// The user or the app's policy refused it.
+    Denied,
+    /// The device's clipboard keeps none of the value's types.
+    Unsupported,
+    /// The device's clipboard refused it.
+    Failed,
 }

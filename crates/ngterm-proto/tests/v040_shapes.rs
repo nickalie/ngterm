@@ -66,3 +66,15 @@ fn message_events_use_message_id_and_omit_an_absent_sender() {
     assert!(event.payload.body.is_none() && event.payload.from.is_none());
     assert_eq!(serde_json::to_value(event).unwrap(), wire);
 }
+
+#[test]
+fn attach_bridge_capability_is_additive_and_omitted_for_old_endpoints() {
+    let old = json!({"executable":"/session", "socketDirectory":"/live"});
+    let endpoint: ngterm_proto::ControlLiveEndpoint = serde_json::from_value(old.clone()).unwrap();
+    assert!(endpoint.attach_bridge.is_none());
+    assert_eq!(serde_json::to_value(endpoint).unwrap(), old);
+    let new = json!({"executable":"/session", "socketDirectory":"/live", "attachBridge":1});
+    let endpoint: ngterm_proto::ControlLiveEndpoint = serde_json::from_value(new.clone()).unwrap();
+    assert_eq!(endpoint.attach_bridge, Some(1));
+    assert_eq!(serde_json::to_value(endpoint).unwrap(), new);
+}

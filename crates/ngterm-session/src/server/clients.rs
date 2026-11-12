@@ -95,6 +95,7 @@ pub enum ClientEvent {
     ReplyOwner { owner: bool, generation: u32 },
     /// A request the client, as the reply owner, is to answer in its epoch `epoch` ([`super::replies`]).
     Delegated {
+        native_alias: Option<crate::protocol::ClipboardAlias>,
         id: u64,
         epoch: u64,
         request: DelegatedRequest,
@@ -261,8 +262,18 @@ impl Queue {
 
     /// Queue a delegated request in the client's current epoch; that epoch, `None` (nothing queued) once the queue
     /// overflowed or closed.
-    fn push_delegated(&mut self, id: u64, request: DelegatedRequest) -> Option<u64> {
-        self.push_in_epoch(|epoch| ClientEvent::Delegated { id, epoch, request })
+    fn push_delegated(
+        &mut self,
+        id: u64,
+        request: DelegatedRequest,
+        native_alias: Option<crate::protocol::ClipboardAlias>,
+    ) -> Option<u64> {
+        self.push_in_epoch(|epoch| ClientEvent::Delegated {
+            id,
+            epoch,
+            request,
+            native_alias,
+        })
     }
 
     /// Queue the event `make` builds around the client's current epoch; that epoch, `None` (nothing queued) once the
@@ -487,10 +498,16 @@ impl Clients {
 
     /// Queue the delegated request `id` for the client `client` in its current epoch; that epoch, `None` when it is
     /// not attached or its queue overflowed (it would not get the request before its resync).
-    pub fn delegate(&mut self, client: ClientId, id: u64, request: DelegatedRequest) -> Option<u64> {
+    pub(super) fn delegate(
+        &mut self,
+        client: ClientId,
+        id: u64,
+        request: DelegatedRequest,
+        alias: Option<crate::protocol::ClipboardAlias>,
+    ) -> Option<u64> {
         let slot = self.slot(client)?;
         let mut epoch = None;
-        slot.with(|queue| epoch = queue.push_delegated(id, request));
+        slot.with(|queue| epoch = queue.push_delegated(id, request, alias));
         epoch
     }
 
@@ -827,12 +844,16 @@ mod tests {
         };
         assert!(clients.reply_owner(1, true, 3));
         assert_eq!(clients.snapshot(1, 0, SIZE, Vec::new()), Some(1));
-        assert_eq!(clients.delegate(1, 7, request.clone()), Some(1), "asked in its epoch");
-        assert_eq!(clients.delegate(2, 8, request.clone()), None, "no such client");
+        assert_eq!(
+            clients.delegate(1, 7, request.clone(), None),
+            Some(1),
+            "asked in its epoch"
+        );
+        assert_eq!(clients.delegate(2, 8, request.clone(), None), None, "no such client");
         clients.output(0, b"abc");
         clients.output(3, b"de");
         assert_eq!(
-            clients.delegate(1, 9, request.clone()),
+            clients.delegate(1, 9, request.clone(), None),
             None,
             "behind: it would not get it"
         );
@@ -847,7 +868,11 @@ mod tests {
             ]
         );
         assert_eq!(clients.snapshot(1, 5, SIZE, Vec::new()), Some(2));
-        assert_eq!(clients.delegate(1, 10, request), Some(2), "asked in its new epoch");
+        assert_eq!(
+            clients.delegate(1, 10, request, None),
+            Some(2),
+            "asked in its new epoch"
+        );
         assert!(!clients.reply_owner(2, false, 4));
     }
 

@@ -237,3 +237,56 @@ fn a_stale_pane_overlay_close_keeps_its_local_replacement() {
         "the old job's generation no longer owns the slot"
     );
 }
+
+#[test]
+fn reconnect_replacements_rotate_the_expected_nonce_and_disable_it_for_old_endpoints() {
+    let (mut core, window, session) = core();
+    let pane = core.library().held_session(session).unwrap().pane_identity;
+    for (capability, nonce) in [
+        (Some(crate::attach_bridge::VERSION), "first"),
+        (Some(crate::attach_bridge::VERSION), "replacement"),
+        (None, "old"),
+    ] {
+        core.library_mut()
+            .store_mut(window)
+            .unwrap()
+            .session_mut(session)
+            .unwrap()
+            .remote_presentation
+            .as_mut()
+            .unwrap()
+            .binding
+            .origin = Some(crate::model::RemoteOrigin {
+            host: "origin".into(),
+            session_name: "remote".into(),
+            endpoint: ngterm_proto::ControlLiveEndpoint {
+                executable: "/session".into(),
+                socket_directory: "/live".into(),
+                attach_bridge: capability,
+            },
+        });
+        assert!(core.reattach_remote_pane(
+            session,
+            pane,
+            LeadAttachment {
+                nonce: nonce.into(),
+                claim: true
+            },
+            true
+        ));
+        let replacements = core.take_pane_replacements();
+        let [replacement] = replacements.as_slice() else {
+            panic!("{replacements:?}")
+        };
+        assert_eq!(
+            replacement
+                .env
+                .iter()
+                .find(|(key, _)| key == crate::attach_bridge::VARIABLE)
+                .and_then(|(_, value)| crate::attach_bridge::parse_variable(value)),
+            capability.map(|_| nonce)
+        );
+        assert_eq!(replacement.command.contains("attach-bridge"), capability.is_some());
+        core.pane_replaced(replacement);
+    }
+}

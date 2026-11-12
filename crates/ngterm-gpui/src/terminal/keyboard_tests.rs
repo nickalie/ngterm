@@ -65,10 +65,11 @@ fn candidate_rectangle_tracks_the_cursor_with_nonzero_element_origin(cx: &mut Te
     let bounds = Bounds::new(point(px(100.), px(200.)), size(px(640.), px(480.)));
     let rectangle =
         f.cx.update(|window, cx| view.update(cx, |view, cx| view.bounds_for_range(0..0, bounds, window, cx)));
-    assert_eq!(
-        rectangle,
-        Some(Bounds::new(point(px(152.), px(202.)), size(px(10.), px(21.))))
-    );
+    #[cfg(target_os = "linux")]
+    let expected = Bounds::new(point(px(157.), px(202.)), size(px(1.), px(21.)));
+    #[cfg(any(target_os = "macos", windows))]
+    let expected = Bounds::new(point(px(152.), px(202.)), size(px(10.), px(21.)));
+    assert_eq!(rectangle, Some(expected));
 }
 
 #[gpui_kit::test]
@@ -81,4 +82,41 @@ fn cursor_hiding_changes_with_mouse_configuration(cx: &mut TestAppContext) {
     });
     f.cx.run_until_parked();
     assert_eq!(f.cx.update(|_, cx| cx.cursor_hide_mode()), CursorHideMode::Never);
+}
+
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn candidate_rectangle_follows_surface_scale_and_enlarged_font_metrics(cx: &mut TestAppContext) {
+    let f = Fixture::new(cx, "printf 'ready'; exec cat", "font-size = 24\n");
+    let view = f.view.clone();
+    let element = Bounds::new(point(px(100.25), px(200.25)), size(px(640.), px(480.)));
+    // Fixed expectations from the test face: its doubled font uses 19x42, 24x52 and 38x83
+    // device-pixel cells. Font growth remains in those metrics; surface scale alone is divided out.
+    #[cfg(target_os = "linux")]
+    let cases = [
+        (1.0, (206., 202., 1., 43.)),
+        (1.25, (208., 202., 1., 43.)),
+        (2.0, (207., 202., 1., 43.)),
+    ];
+    // AppKit keeps the cell. Windows anchors its caret at this full cell's left edge, vertical middle.
+    #[cfg(any(target_os = "macos", windows))]
+    let cases = [
+        (1.0, (197.25, 202.25, 19., 42.)),
+        (1.25, (198.65, 202.65, 19.2, 41.6)),
+        (2.0, (197.75, 202.75, 19., 41.5)),
+    ];
+    for (scale, (x, y, width, height)) in cases {
+        f.cx.simulate_scale_factor_change(scale);
+        f.cx.run_until_parked();
+        let expected = Bounds::new(point(px(x), px(y)), size(px(width), px(height)));
+        for preedit in ["", "に", "日本"] {
+            let rectangle = f.cx.update(|window, cx| {
+                view.update(cx, |view, cx| {
+                    view.replace_and_mark_text_in_range(None, preedit, None, window, cx);
+                    view.bounds_for_range(0..preedit.encode_utf16().count(), element, window, cx)
+                })
+            });
+            assert_eq!(rectangle, Some(expected), "scale {scale}, preedit {preedit}");
+        }
+    }
 }

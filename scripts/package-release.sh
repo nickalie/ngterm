@@ -95,7 +95,7 @@ download() {
 case "$(host_os)" in
   linux)
     root="$work/ngterm"
-    mkdir -p "$root/usr/lib"
+    mkdir -p "$root/usr"
     cp -R "$stage/bin" "$stage/share" "$root/usr/"
     cp -R /usr/share/common-licenses "$root/usr/share/"
     cp "$NATIVE_ROOT/packaging/linux/apparmor/ngterm" "$root/usr/share/doc/ngterm/apparmor.profile.in"
@@ -104,22 +104,12 @@ case "$(host_os)" in
     mkdir -p "$root/usr/share/applications"
     cp "$NATIVE_ROOT/packaging/linux/com.nickalie.ngterm.desktop" "$root/usr/share/applications/"
     key="$(upper "$arch")"
-    sha_var="LINUXDEPLOY_${key}_SHA256"
-    download "https://github.com/linuxdeploy/linuxdeploy/releases/download/$LINUXDEPLOY_VERSION/linuxdeploy-$arch.AppImage" \
-      "$work/linuxdeploy.AppImage" "${!sha_var}"
-    chmod +x "$work/linuxdeploy.AppImage"
-    # Only the four app binaries bring libraries into the AppDir. The worker
-    # loads either the system's engine or a separately downloaded runtime.
-    deploy=(--appdir "$root" --desktop-file "$root/usr/share/applications/com.nickalie.ngterm.desktop"
-      --icon-file "$root/usr/share/icons/hicolor/256x256/apps/com.nickalie.ngterm.png")
-    for binary in ngterm ngtermctl ngterm-session ngterm-headless; do
-      deploy+=(--executable "$root/usr/bin/$binary")
-    done
-    # linuxdeploy also scans an existing AppDir. Keep the worker outside it
-    # until dependency collection has finished.
-    mv "$root/usr/bin/ngterm-web" "$work/ngterm-web"
-    env -u LD_LIBRARY_PATH APPIMAGE_EXTRACT_AND_RUN=1 "$work/linuxdeploy.AppImage" "${deploy[@]}"
-    mv "$work/ngterm-web" "$root/usr/bin/ngterm-web"
+    # The AppDir bundles no libraries: everything the app links is the host's
+    # (packaging/linux/runtime-libraries.txt), the copy the compositor, the GPU
+    # drivers and GIO's modules were built against; check-linux-package.py
+    # enforces it. appimagetool reads the desktop entry and icon at the root.
+    ln -s usr/share/applications/com.nickalie.ngterm.desktop "$root/com.nickalie.ngterm.desktop"
+    ln -s usr/share/icons/hicolor/scalable/apps/com.nickalie.ngterm.svg "$root/com.nickalie.ngterm.svg"
     install -m755 "$NATIVE_ROOT/packaging/linux/AppRun" "$root/AppRun"
     python3 "$NATIVE_ROOT/scripts/check-linux-package.py" --prepare "$root"
     "$root/usr/bin/ngterm" --build-identity

@@ -437,7 +437,7 @@ impl Viewer {
                 self.take_answers();
                 self.owner = owner.then_some(generation);
             }
-            ClientEvent::Delegated { id, epoch, request } => self.delegated.push((id, epoch, request)),
+            ClientEvent::Delegated { id, epoch, request, .. } => self.delegated.push((id, epoch, request)),
             ClientEvent::KittyBarrier { id, epoch } => {
                 self.barriers.push((id, epoch));
                 let answers = self.take_answers();
@@ -625,6 +625,39 @@ fn theme_colours_cell_size_and_appearance_come_from_the_owner_else_the_defaults(
     #[cfg(unix)]
     assert!(shown(&got[2]).contains("\x1b]11;rgb:fefe/dcdc/baba\x07"));
     assert!(shown(&got[2]).contains(&format!("\x1b[4;{};{}t", 20 * SIZE.rows, 10 * SIZE.cols)));
+    Ok(())
+}
+
+#[test]
+fn config_reload_reports_for_the_owner_alone_even_with_identical_metadata() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let spec = probe(&[b"\x1b[?2031h\x1b[5n", DSR], &gated(gate.path(), 1500));
+    let mut config = pane_config("reload", dir.path(), spec);
+    config.metadata = metadata();
+    let (pane, creator) = Pane::spawn(config)?;
+    let owner = creator.subscription.id();
+    let other = pane.try_attach(SIZE, None)?;
+    assert_eq!(pane.reply_owner().0, Some(owner));
+    go(gate.path(), 0)?;
+    server_expects(&pane, "REPLY-0:");
+    pane.config_reloaded(
+        other.subscription.id(),
+        ReplyMetadata {
+            color_scheme: Some(ColorScheme::Light),
+            ..metadata()
+        },
+    );
+    pane.config_reloaded(u64::MAX, metadata()); // detached clients cannot report either
+    pane.config_reloaded(owner, metadata());
+    go(gate.path(), 1)?;
+    let got = replies(&server_expects(&pane, "PROBE-DONE"));
+    assert_eq!(got[0], b"\x1b[0n");
+    assert_eq!(
+        got[1],
+        [DARK_REPORT, b"\x1b[0n"].concat(),
+        "one owner report before the DSR"
+    );
     Ok(())
 }
 
@@ -880,6 +913,74 @@ fn a_kitty_query_is_answered_before_the_queries_after_it() -> TestResult {
     Ok(())
 }
 
+/// Cancelled and aborted queries never run, so DA1 must not wait for a Kitty completion or timeout.
+#[cfg(unix)]
+#[test]
+fn cancelled_and_aborted_kitty_queries_do_not_open_barriers() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let queries: Vec<Vec<u8>> = [0x18, 0x1a, 0x9b, 0x80]
+        .into_iter()
+        .map(|exit| [b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA".as_slice(), &[exit], DA1].concat())
+        .collect();
+    let refs: Vec<&[u8]> = queries.iter().map(Vec::as_slice).collect();
+    let mut config = pane_config("kitty-cancel", dir.path(), probe(&refs, &gated(gate.path(), 3000)));
+    config.metadata = metadata();
+    config.kitty_wait = PATIENCE;
+    let (pane, creator) = Pane::spawn(config)?;
+    let mut owner = Viewer::new(creator, None)?;
+    open(gate.path(), queries.len())?;
+    owner.expect(&pane, "PROBE-DONE");
+    assert_eq!(
+        replies(&shown(&owner.output)),
+        vec![b"\x1b[?62;22;52c".to_vec(); queries.len()]
+    );
+    assert!(owner.barriers.is_empty());
+    assert!(owner.completed.is_empty());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn kitty_barriers_and_clipboard_consent_keep_their_stream_order() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let query = [KITTY_QUERY, CLIPBOARD_READ, KITTY_QUERY].concat();
+    let mut config = pane_config("kitty-consent", dir.path(), probe(&[&query], &gated(gate.path(), 3000)));
+    config.metadata = metadata();
+    config.kitty_wait = PATIENCE;
+    let (pane, creator) = Pane::spawn(config)?;
+    let mut owner = Viewer::new(creator, None)?;
+    go(gate.path(), 0)?;
+    owner.until(&pane, "clipboard consent after the first Kitty completion", |v| {
+        !v.delegated.is_empty()
+    });
+    assert_eq!(owner.barriers.len(), 1);
+    let (id, epoch, _) = owner.delegated[0].clone();
+    assert!(pane.answer(
+        owner.id(),
+        id,
+        epoch,
+        DelegatedReply::Clipboard {
+            text: Some("hi".to_owned())
+        }
+    ));
+    owner.expect(&pane, "PROBE-DONE");
+    assert_eq!(owner.barriers.len(), 2);
+    assert_eq!(
+        replies(&shown(&owner.output)),
+        [[
+            b"\x1b_Gi=31;OK\x1b\\".as_slice(),
+            b"\x1b[?62;22;52c",
+            b"\x1b]52;c;aGk=\x07",
+            b"\x1b_Gi=31;OK\x1b\\",
+            b"\x1b[?62;22;52c"
+        ]
+        .concat()]
+    );
+    Ok(())
+}
+
 /// The queries [`windows_conhost_record`] records, by name.
 #[cfg(windows)]
 const RECORDED: [(&str, &[u8]); 19] = [
@@ -963,4 +1064,172 @@ fn windows_version() -> String {
         .output()
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
         .unwrap_or_default()
+}
+
+#[cfg(unix)]
+#[test]
+fn kitty_clipboard_multipart_commit_waits_for_native_completion_on_the_owner() -> TestResult {
+    use ngterm_session::protocol::ClipboardStatus;
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let transaction = include_bytes!("../../ngterm-ghostty-vt/tests/data/clipboard/multipart.vt");
+    let extra = gated(gate.path(), 3000);
+    let (pane, creator) = Pane::spawn(pane_config(
+        "kitty-clipboard",
+        dir.path(),
+        probe(&[transaction], &extra),
+    ))?;
+    let mut owner = Viewer::new(creator, None)?;
+    let mut other = Viewer::new(pane.try_attach(SIZE, None)?, None)?;
+    go(gate.path(), 0)?;
+    owner.until(&pane, "the multipart write", |viewer| !viewer.delegated.is_empty());
+    other.drain(&pane);
+    assert!(other.delegated.is_empty());
+    assert!(replies(&server_text(&pane)).is_empty(), "the program is still waiting");
+    let (id, epoch, request) = owner.delegated[0].clone();
+    let DelegatedRequest::ClipboardWrite {
+        contents,
+        kitty: true,
+        can_remember: true,
+        ..
+    } = request
+    else {
+        panic!("expected a Kitty write");
+    };
+    assert_eq!(contents.len(), 4);
+    assert_eq!(
+        contents[2].data,
+        include_bytes!("../../ngterm-ghostty-vt/tests/data/clipboard/red.png")
+    );
+    assert_eq!(
+        contents[3].data,
+        include_bytes!("../../ngterm-ghostty-vt/tests/data/clipboard/arbitrary.bin")
+    );
+    assert!(!pane.answer(
+        other.id(),
+        id,
+        epoch,
+        DelegatedReply::ClipboardWrite {
+            status: ClipboardStatus::Success,
+            remember: true
+        }
+    ));
+    assert!(pane.answer(
+        owner.id(),
+        id,
+        epoch,
+        DelegatedReply::ClipboardWrite {
+            status: ClipboardStatus::Success,
+            remember: true
+        }
+    ));
+    assert!(!pane.answer(owner.id(), id, epoch, DelegatedReply::Denied));
+    owner.expect(&pane, "PROBE-DONE");
+    assert_eq!(
+        replies(&server_text(&pane)),
+        [b"\x1b]5522;type=write:status=DONE\x1b\\".to_vec()]
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_write_queued_after_owner_overflow_is_delegated_in_the_resync_epoch() -> TestResult {
+    use ngterm_session::protocol::ClipboardStatus;
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let mut config = pane_config(
+        "clipboard-overflow",
+        dir.path(),
+        probe(&[DSR], &gated(gate.path(), 3000)),
+    );
+    config.client_queue_limit = 32;
+    let (pane, creator) = Pane::spawn(config)?;
+    server_expects(&pane, "PROBE-READY");
+    // Leave the owner unread. Separate prints guarantee overflow even when the queue was empty.
+    pane.print(&[b'x'; 64])?;
+    pane.print(&[b'y'; 64])?;
+    pane.print(b"\x1b]52;s;\x07")?;
+    pane.resync(creator.subscription.id())?;
+    let mut owner = Viewer::new(creator, None)?;
+    owner.until(&pane, "a write retained through resync", |viewer| {
+        !viewer.delegated.is_empty()
+    });
+    let (id, epoch, request) = owner.delegated.remove(0);
+    assert!(epoch > 1);
+    assert_eq!(epoch, owner.epoch);
+    assert!(
+        matches!(request, DelegatedRequest::ClipboardWrite { selection, contents, kitty: false, .. }
+        if selection == "s" && contents.is_empty())
+    );
+    assert!(pane.answer(
+        owner.id(),
+        id,
+        epoch,
+        DelegatedReply::ClipboardWrite {
+            status: ClipboardStatus::Success,
+            remember: false,
+        }
+    ));
+    go(gate.path(), 0)?;
+    owner.expect(&pane, "PROBE-DONE");
+    assert_eq!(replies(&server_text(&pane)), [b"\x1b[0n".to_vec()]);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn kitty_clipboard_content_paste_is_typed_for_a_current_follower_epoch() -> TestResult {
+    use ngterm_session::protocol::{ClipboardPaste, ClipboardRepresentation};
+    let dir = tempfile::tempdir()?;
+    let gate = tempfile::tempdir()?;
+    let queries = [b"\x1b[?5522h\x1b[5n".as_slice(), DSR];
+    let (pane, creator) = Pane::spawn(pane_config(
+        "kitty-paste",
+        dir.path(),
+        probe(&queries, &gated(gate.path(), 3000)),
+    ))?;
+    let mut owner = Viewer::new(creator, None)?;
+    let other = pane.try_attach(SIZE, None)?;
+    go(gate.path(), 0)?;
+    owner.expect(&pane, "REPLY-0:");
+    let paste = ClipboardPaste {
+        bridge: None,
+        contents: vec![
+            ClipboardRepresentation {
+                mime: "text/plain".into(),
+                data: b"hello".to_vec(),
+            },
+            ClipboardRepresentation {
+                mime: "image/png".into(),
+                data: include_bytes!("../../ngterm-ghostty-vt/tests/data/clipboard/red.png").to_vec(),
+            },
+        ],
+        text_source: false,
+        selection: "c".into(),
+        allow_unsafe: false,
+    };
+    assert!(!pane.clipboard_paste(other.subscription.id(), owner.epoch + 1, &paste)?);
+    assert!(!pane.clipboard_paste(owner.id(), owner.epoch + 1, &paste)?);
+    assert!(pane.clipboard_paste(other.subscription.id(), owner.epoch, &paste)?);
+    assert!(pane.input(owner.id(), b"\x1b]5522;type=read:status=OK:pw=ZmFrZQ==\x1b\\")?);
+    assert!(!pane.with_terminal(|terminal| {
+        terminal
+            .clipboard_grants()
+            .lock()
+            .unwrap()
+            .peek(b"fake", vt::ClipboardDirection::Read)
+    }));
+    go(gate.path(), 1)?;
+    owner.expect(&pane, "PROBE-DONE");
+    let replies = replies(&server_text(&pane));
+    assert_eq!(
+        replies[1],
+        b"hello\x1b]5522;type=read:status=OK:pw=ZmFrZQ==\x1b\\\x1b[0n"
+    );
+    assert!(
+        owner.delegated.is_empty(),
+        "a follower content paste cannot read the owner clipboard"
+    );
+    Ok(())
 }

@@ -1,7 +1,9 @@
 package com.nickalie.ngterm.android.data
 
+import com.nickalie.ngterm.core.ffi.ClipboardPart
+import com.nickalie.ngterm.core.ffi.ClipboardWriteStatus
 import com.nickalie.ngterm.core.ffi.MobileEvent
-import com.nickalie.ngterm.core.ffi.PaneClipboard
+import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneEnd
 import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneRole
@@ -29,13 +31,14 @@ val PaneRef.session: SessionKey get() = SessionKey(machineId, sessionId)
 /**
  * A shown pane as its events left it: its [role] at the session (`null` until its attach reports one), whether it is
  * [covered] (a follower's, or one attaching again with nothing to show yet), how its attach [end]ed (`null` while it
- * runs), and the [title] its program set.
+ * runs), the [title] its program set, and how many lead reports (attaches and role changes) it has had in [leads].
  */
 data class PaneLive(
     val role: PaneRole? = null,
     val covered: Boolean = false,
     val end: PaneEnd? = null,
     val title: String? = null,
+    val leads: Int = 0,
 )
 
 /**
@@ -76,24 +79,28 @@ interface PaneFrames {
     fun attached()
 }
 
-/** The device's clipboard as a program sets it: [write] puts text on it (`null` clears it). */
-fun interface ClipboardSink {
-    fun write(text: String?)
+/**
+ * The device's clipboard as a program sets it: [write] puts what it can keep of [contents] on it (none clears it) and
+ * says how that went.
+ */
+fun interface ClipboardWriter {
+    fun write(contents: List<ClipboardPart>): ClipboardWriteStatus
 }
 
 /**
  * What the core tells the app about the attached sessions and their shown panes, kept per session in [sessions]: the
  * stream's state, status, context, layout and HUD, each pane's role, cover, end and title, and the agents the panes
  * run. A shown pane's frames
- * go to the [PaneFrames] [route]d to it, and a program's write to the standard clipboard goes to [clipboard] (in
- * [scope]); Android has no selection or primary clipboard, so a write to either is dropped. A detached session's
+ * go to the [PaneFrames] [route]d to it, and a program's clipboard write goes to [clipboard] (in [scope]), whose status
+ * the program learns once the clipboard took it or refused it (the core answers writes to the selection or primary
+ * clipboard, which Android has none of). A detached session's
  * state is let go. A stream that fails before the session was ever shown has the machine listed again, so a session
  * ended elsewhere since its listing leaves. Events arrive on the core's thread; [sessions] takes them from any.
  */
 class LiveSessions(
     private val scope: CoroutineScope,
     private val connections: Connections,
-    private val clipboard: ClipboardSink,
+    private val clipboard: ClipboardWriter,
 ) {
     private val state = MutableStateFlow<Map<SessionKey, LiveSession>>(emptyMap())
     private val frames = ConcurrentHashMap<PaneRef, PaneFrames>()
@@ -169,7 +176,7 @@ class LiveSessions(
             }
 
             is MobileEvent.PaneLead -> {
-                pane(event.pane) { copy(role = event.role, covered = event.covered) }
+                pane(event.pane) { copy(role = event.role, covered = event.covered, leads = leads + 1) }
             }
 
             is MobileEvent.PaneEnded -> {
@@ -177,7 +184,7 @@ class LiveSessions(
             }
 
             is MobileEvent.ClipboardWrite -> {
-                clipboardWrite(event.clipboard, event.text)
+                clipboardWrite(event)
             }
 
             is MobileEvent.PaneAgent -> {
@@ -201,11 +208,28 @@ class LiveSessions(
         }
     }
 
-    private fun clipboardWrite(
-        which: PaneClipboard,
-        text: String?,
-    ) {
-        if (which == PaneClipboard.STANDARD) scope.launch { clipboard.write(text) }
+    private fun clipboardWrite(event: MobileEvent.ClipboardWrite) {
+        scope.launch {
+            // a writer that throws still completes the write, as failed: the program is never left waiting
+            val status =
+                try {
+                    clipboard.write(event.contents)
+                } catch (_: RuntimeException) {
+                    ClipboardWriteStatus.FAILED
+                }
+            val pane = event.pane
+            try {
+                connections.core.completeClipboardWrite(
+                    pane.machineId,
+                    pane.sessionId,
+                    pane.paneId,
+                    event.writeId,
+                    status,
+                )
+            } catch (_: MobileException) {
+                // the core has stopped: no program is left waiting
+            }
+        }
     }
 
     private inline fun session(

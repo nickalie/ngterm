@@ -78,6 +78,8 @@ pub struct SplitLayout {
 /// `commandWait`, and their `split` twins).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PaneLaunch {
+    /// Transient nonce for the exact capability-gated attach command; never persisted as launch metadata.
+    pub attach_bridge: Option<String>,
     /// The command line the pane's process runs; the pane closes when it exits. Persisted, so a restored command
     /// session re-runs it in `rerun` launch mode.
     pub command: Option<String>,
@@ -203,6 +205,7 @@ mod tests {
     #[test]
     fn a_hold_needs_a_command() {
         let mut launch = PaneLaunch {
+            attach_bridge: None,
             command: None,
             wait: true,
             argv: None,

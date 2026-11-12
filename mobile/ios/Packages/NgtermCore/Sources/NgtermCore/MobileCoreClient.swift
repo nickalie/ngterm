@@ -80,6 +80,15 @@ public protocol MobileCoreClient: AnyObject, Sendable {
         reply: ClipboardReply
     ) throws
 
+    /// How the app's write `writeId` of a shown pane's program ended, once the clipboard took it or refused it.
+    func completeClipboardWrite(
+        machineId: String,
+        sessionId: String,
+        paneId: String,
+        writeId: UInt64,
+        status: ClipboardWriteStatus
+    ) throws
+
     /// Opens the chat of a shown pane whose origin announced an agent: its events arrive as
     /// ``MobileEvent/chat(pane:events:)``, what becomes of it as ``MobileEvent/chatState(pane:state:)``. Reading claims
     /// nothing; opening an open chat changes nothing.

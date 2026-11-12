@@ -605,6 +605,7 @@ mod tests {
 
     fn pane() -> PaneState {
         PaneState {
+            clipboard_alias_key: None,
             name: "s".to_owned(),
             pid: 42,
             created_at: 1_700_000_000,

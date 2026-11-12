@@ -54,8 +54,29 @@ def dependencies(path: Path, env: dict) -> list[tuple[str, Path]]:
             re.findall(r"\s+(\S+)\s+=>\s+(/\S+)", result.stdout)]
 
 
+def direct_needed(path: Path) -> list[str]:
+    """The DT_NEEDED entries of path itself, in order (ldd lists the whole transitive closure)."""
+    # binutils translates the label after the tag ("Shared library:"): read it untranslated, keyed on the tag alone.
+    output = run("readelf", "-d", "-W", path.resolve(), env={**os.environ, "LC_ALL": "C"})
+    return re.findall(r"\(NEEDED\)[^\[\n]*\[([^\]]+)\]", output)
+
+
 def host_allowed(allowed_file: Path) -> set[str]:
     return set(names(allowed_file)) | GLIBC
+
+
+def elf_files(root: Path, exclude: tuple[Path, ...]) -> list[Path]:
+    return sorted(path for path in root.rglob("*") if elf(path) and path not in exclude)
+
+
+def with_host_closure(allowed: set[str], host: set[Path], env: dict) -> set[str]:
+    """allowed plus every library the host libraries in host need: a host package brings its own dependency closure
+    (Wayland's libffi, GLib's libpcre2), and a process holds one copy of each SONAME, which those libraries were built
+    against."""
+    result = set(allowed)
+    for path in sorted(host):
+        result.update(name for name, _ in dependencies(path, env))
+    return result
 
 
 def patch_and_check(root: Path, library: Path, allowed_file: Path, *,
@@ -64,23 +85,27 @@ def patch_and_check(root: Path, library: Path, allowed_file: Path, *,
 
     exclude contains resolved paths skipped by both patching and the dependency
     closure check, including the rejection of undeclared host libraries.
-    Host packages bring their own dependency closure (Wayland's libffi, for
-    example). Preserve the release packager's rule permitting those dependencies.
     """
     root, library = root.resolve(), library.resolve()
-    files = sorted(path for path in root.rglob("*") if elf(path) and path not in exclude)
-    for path in files:
+    for path in elf_files(root, exclude):
         relative = os.path.relpath(library, path.parent)
         rpath = "$ORIGIN" if relative == "." else f"$ORIGIN:$ORIGIN/{relative}"
         subprocess.run(["patchelf", "--set-rpath", rpath, str(path)], check=True)
+    return check_host(root, allowed_file, exclude=exclude)
+
+
+def check_host(root: Path, allowed_file: Path, *, exclude: tuple[Path, ...] = ()) -> set[str]:
+    """The host libraries the ELFs under root (but those in exclude) need; reject one runtime-libraries.txt does not
+    declare, directly or as a declared library's own dependency."""
+    root = root.resolve()
+    files = elf_files(root, exclude)
     environment = os.environ.copy()
     environment.pop("LD_LIBRARY_PATH", None)
     needed = {path: dependencies(path, environment) for path in files}
     allowed = host_allowed(allowed_file)
     system = {resolved for entries in needed.values() for name, resolved in entries
               if name in allowed and not resolved.resolve().is_relative_to(root)}
-    for path in sorted(system):
-        allowed.update(name for name, _ in dependencies(path, environment))
+    allowed = with_host_closure(allowed, system, environment)
     external = set()
     for path, entries in needed.items():
         for name, resolved in entries:
@@ -119,14 +144,28 @@ def seeds(prefix: Path, system: Path, multiarch: str) -> dict[Path, Path]:
 def closure(inputs: dict[Path, Path], prefix: Path) -> dict[Path, Path]:
     environment = os.environ.copy()
     environment["LD_LIBRARY_PATH"] = str(prefix / "lib")
-    allowed = host_allowed(REPO / "packaging/linux/runtime-libraries.txt")
+    declared = host_allowed(REPO / "packaging/linux/runtime-libraries.txt")
+    # Walk direct DT_NEEDED edges, stopping at declared host libraries: what only a host library needs stays the
+    # host's (a bundled older copy would be the one it and every host plugin the engine loads, GPU drivers and PKCS#11
+    # modules, bind to), while whatever a bundled library needs itself is bundled even when a host library of the
+    # build machine needs it too, since another distribution may not ship that SONAME (Debian's libbz2.so.1.0 is
+    # Fedora's libbz2.so.1).
     found = dict(inputs)
-    for path in inputs:
-        if not elf(path.resolve()):
+    queue = [path for path in inputs if elf(path.resolve())]
+    visited: set[Path] = set()
+    while queue:
+        path = queue.pop()
+        if path.resolve() in visited:
             continue
-        for name, resolved in dependencies(path, environment):
-            if name not in allowed:
-                found.setdefault(resolved, Path("lib") / name)
+        visited.add(path.resolve())
+        resolved = dict(dependencies(path, environment))
+        for name in direct_needed(path):
+            if name in declared:
+                continue
+            if name not in resolved:
+                raise ValueError(f"unresolved dependency {name}: {path}")
+            found.setdefault(resolved[name], Path("lib") / name)
+            queue.append(resolved[name])
     return found
 
 

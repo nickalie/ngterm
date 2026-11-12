@@ -188,6 +188,7 @@ fn answers_go_back_only_in_the_current_epoch() -> TestResult {
         begin(1, 0),
         end(1),
         Step::Send(AttachServerMessage::DelegatedRequest {
+            native_alias: None,
             id: 5,
             epoch: 1,
             request: clipboard(),
@@ -233,6 +234,7 @@ fn answers_go_back_only_in_the_current_epoch() -> TestResult {
         "a barrier of a superseded epoch is not completed"
     );
     let stale = Delegated {
+        native_alias: None,
         id: 5,
         epoch: 1,
         request: clipboard(),
@@ -677,6 +679,7 @@ fn a_request_of_a_superseded_epoch_is_skipped_by_the_reader() -> TestResult {
         end(2),
         Step::Send(AttachServerMessage::KittyBarrier { id: 1, epoch: 1 }),
         Step::Send(AttachServerMessage::DelegatedRequest {
+            native_alias: None,
             id: 2,
             epoch: 1,
             request: clipboard(),

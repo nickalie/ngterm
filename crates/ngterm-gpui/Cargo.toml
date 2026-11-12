@@ -81,7 +81,7 @@ xkbcommon.workspace = true
 wry = { workspace = true, optional = true }
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = ["NSSound", "NSGraphics", "NSPasteboard"] }
-objc2-foundation = { workspace = true, features = ["NSString"] }
+objc2-foundation = { workspace = true, features = ["NSArray", "NSData", "NSString"] }
 objc2-core-foundation = { workspace = true, features = ["CFArray", "CFBase", "CFDictionary", "CFNumber", "CFString"] }
 
 # the single instance's pipe (`instance/windows.rs`), owner-only like the control socket's, its SDDL in the UTF-16
@@ -106,8 +106,11 @@ windows-sys = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Console",
+    "Win32_System_DataExchange",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
     "Win32_System_Power",
     "Win32_System_Registry",
     "Win32_System_SystemServices",
@@ -140,6 +143,8 @@ windows-core = { workspace = true, optional = true }
 embed-resource.workspace = true
 
 [dev-dependencies]
+# the Kitty clipboard tests' OSC 5522 requests and replies (src/terminal/clipboard_tests.rs)
+base64.workspace = true
 ngterm-host = { workspace = true, features = ["fakes"] }
 # the updater's tests check for, download and stage a local release (src/updater.rs)
 ngterm-update = { workspace = true, features = ["fakes"] }

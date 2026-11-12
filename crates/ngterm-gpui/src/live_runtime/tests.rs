@@ -43,6 +43,7 @@ pub(crate) fn live_core(state_dir: &Path) -> Core {
     core.install_live_sessions(LiveInstall {
         host: Arc::clone(&host) as Arc<dyn SessionHost>,
         endpoint: ControlLiveEndpoint {
+            attach_bridge: None,
             executable: "/opt/ngterm/bin/ngterm-session".to_owned(),
             socket_directory: "/tmp/ngterm-live-test".to_owned(),
         },

@@ -1,13 +1,15 @@
 //! The binary snapshot codec (`snapshot.h`): a terminal's whole state (screens, history, modes, colors, the unfinished
-//! VT input) encoded into one CRC-checked record stream, and decoded into a new terminal in one call or incrementally.
+//! VT input, Kitty images and placements) encoded into one CRC-checked record stream, and decoded into a new terminal
+//! in one call or incrementally.
 //!
 //! The format is versioned (version 1) without a compatibility promise across library revisions, so both ends must
 //! run the same `LIBGHOSTTY_VT_REV`; across a pin change the formatter's VT output is the portable form.
 //!
 //! An incremental decode ([`Terminal::restore_snapshot`]) returns the terminal at the stream's READY marker, which is
-//! enough to render it and feed it live input; the older history then arrives a page at a time through
-//! [`Terminal::restore_history_page`]. The decoder borrows the terminal it returned until the FINISH marker, so the
-//! terminal owns it meanwhile (and drops it first): it cannot outlive the terminal or restore into another one.
+//! enough to render text and feed it live input; image pixels and older history then arrive through
+//! [`Terminal::restore_snapshot_step`] (or [`Terminal::restore_history_page`], which drains image steps). The decoder
+//! borrows the terminal it returned until FINISH, so the terminal owns it meanwhile (and drops it first): it cannot
+//! outlive the terminal or restore into another one.
 
 use crate::{Error, Handle, Terminal, ffi, raw_slice};
 
@@ -22,6 +24,8 @@ pub struct SnapshotOptions {
     pub retain_continuation: bool,
     /// Compress each history page as it is restored, so the decode never holds more than one page uncompressed.
     pub compress_history: bool,
+    /// Kitty image storage budget in bytes per screen; `None` keeps the library default, `Some(0)` disables images.
+    pub kitty_image_storage_limit: Option<u64>,
 }
 
 /// The history rows a snapshot declares, known once its READY marker validated (advisory: rows that cannot be
@@ -44,6 +48,49 @@ pub struct HistoryPage {
     pub remaining: u32,
 }
 
+/// One image's or animation frame's restored pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SnapshotImage {
+    pub alternate: bool,
+    pub image_id: u32,
+    /// Kitty frame number: 1 is the base image.
+    pub frame: u32,
+    /// Bytes attached; zero when the image was evicted, deleted or replaced since READY.
+    pub bytes: usize,
+}
+
+/// One incremental decode step; only FINISH (returned as `None`) ends restoration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SnapshotStep {
+    Page(HistoryPage),
+    Image(SnapshotImage),
+}
+
+/// Image totals restored at READY, before pixel payloads arrive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SnapshotImageStorage {
+    pub images: u32,
+    pub pending_bytes: u64,
+}
+
+/// Per-screen image totals declared at READY (not live storage counters).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SnapshotImages {
+    pub primary: SnapshotImageStorage,
+    /// `None` when the snapshot has no alternate screen.
+    pub alternate: Option<SnapshotImageStorage>,
+}
+
+// Each invocation pairs a snapshot.h key with its documented output type. The decoder must be live.
+macro_rules! data {
+    ($decoder:expr, $key:ident, $ty:ty) => {{
+        let mut value: $ty = Default::default();
+        // SAFETY: the caller holds a live decoder; the key and output type match snapshot.h.
+        Error::check(unsafe { ffi::ghostty_snapshot_decoder_get($decoder, ffi::$key, (&raw mut value).cast()) })
+            .map(|()| value)
+    }};
+}
+
 /// A decoder between READY and FINISH, with the bytes it reads.
 pub(crate) struct PendingHistory {
     // Fields drop in declaration order: the decoder, which borrows the source, goes first.
@@ -60,7 +107,7 @@ impl std::fmt::Debug for PendingHistory {
 }
 
 impl Terminal {
-    /// Encode the whole terminal: screens, history, state and the unfinished VT input.
+    /// Encode the whole terminal: screens, history, state, Kitty graphics and unfinished VT input.
     ///
     /// # Errors
     ///
@@ -101,7 +148,7 @@ impl Terminal {
     }
 
     /// Decode a snapshot through its READY marker into a new terminal (no effects installed), ready to render and to
-    /// take live input; its history stays pending for [`Terminal::restore_history_page`].
+    /// take live input; image pixels and history stay pending for [`Terminal::restore_snapshot_step`].
     ///
     /// # Errors
     ///
@@ -121,7 +168,7 @@ impl Terminal {
         Ok(terminal)
     }
 
-    /// Whether a snapshot's history is still being restored ([`Terminal::restore_snapshot`]).
+    /// Whether snapshot history or image pixels are still being restored ([`Terminal::restore_snapshot`]).
     #[must_use]
     pub fn history_pending(&self) -> bool {
         self.history.is_some()
@@ -144,14 +191,56 @@ impl Terminal {
         })
     }
 
+    /// The per-screen image counts and pending pixel bytes at READY; unavailable after FINISH.
+    #[must_use]
+    pub fn snapshot_images(&self) -> Option<SnapshotImages> {
+        let decoder = self.history.as_ref()?.decoder.ptr();
+        Some(SnapshotImages {
+            primary: SnapshotImageStorage {
+                images: data!(decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_IMAGES_PRIMARY, u32).ok()?,
+                pending_bytes: data!(decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_PENDING_BYTES_PRIMARY, u64).ok()?,
+            },
+            alternate: data!(decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_IMAGES_ALTERNATE, u32)
+                .ok()
+                .and_then(|images| {
+                    Some(SnapshotImageStorage {
+                        images,
+                        pending_bytes: data!(
+                            decoder,
+                            GHOSTTY_SNAPSHOT_DECODER_DATA_KITTY_PENDING_BYTES_ALTERNATE,
+                            u64
+                        )
+                        .ok()?,
+                    })
+                }),
+        })
+    }
+
     /// Restore the next history page of the snapshot this terminal came from; `None` once its FINISH marker
-    /// validated (or when none is pending). The terminal may be rendered, resized and written between pages.
+    /// validated (or when none is pending). Drains image payloads along the way without returning them as pages.
+    /// The terminal may be rendered, resized and written between pages.
     ///
     /// # Errors
     ///
     /// [`Error::InvalidValue`] for malformed, corrupt or truncated data, [`Error::OutOfMemory`] when a page cannot be
     /// allocated. The decode ends there: the terminal keeps the history restored so far, and nothing is pending.
     pub fn restore_history_page(&mut self) -> Result<Option<HistoryPage>, Error> {
+        loop {
+            match self.restore_snapshot_step()? {
+                Some(SnapshotStep::Image(_)) => {}
+                Some(SnapshotStep::Page(page)) => return Ok(Some(page)),
+                None => return Ok(None),
+            }
+        }
+    }
+
+    /// Restore one history page or one image payload. `None` means FINISH validated (or no decode is pending).
+    /// Live input, resizing and rendering are allowed between steps; image payloads may arrive between pages.
+    ///
+    /// # Errors
+    ///
+    /// As [`Terminal::restore_history_page`]; an error ends restoration and keeps state restored so far.
+    pub fn restore_snapshot_step(&mut self) -> Result<Option<SnapshotStep>, Error> {
         let Some(pending) = self.history.as_ref() else {
             return Ok(None);
         };
@@ -160,7 +249,13 @@ impl Terminal {
         // serializes the call with every other use of the terminal.
         let result = unsafe { ffi::ghostty_snapshot_decoder_next(decoder) };
         match result {
-            ffi::GHOSTTY_SUCCESS => Ok(Some(progress(decoder))),
+            ffi::GHOSTTY_SUCCESS => match progress(decoder) {
+                Ok(step) => Ok(Some(step)),
+                Err(error) => {
+                    self.history = None;
+                    Err(error)
+                }
+            },
             ffi::GHOSTTY_NO_VALUE => {
                 self.history = None;
                 Ok(None)
@@ -194,6 +289,16 @@ fn decoder(bytes: &[u8], options: SnapshotOptions) -> Result<Handle<ffi::Ghostty
             )
         })?;
     }
+    if let Some(limit) = options.kitty_image_storage_limit {
+        // SAFETY: the live decoder has not started; the option reads a uint64_t during this call.
+        Error::check(unsafe {
+            ffi::ghostty_snapshot_decoder_set(
+                decoder.ptr(),
+                ffi::GHOSTTY_SNAPSHOT_DECODER_OPT_KITTY_IMAGE_STORAGE_LIMIT,
+                (&raw const limit).cast(),
+            )
+        })?;
+    }
     for (option, value) in [
         (
             ffi::GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION,
@@ -210,40 +315,32 @@ fn decoder(bytes: &[u8], options: SnapshotOptions) -> Result<Handle<ffi::Ghostty
     Ok(decoder)
 }
 
-/// The page `next` just restored.
-fn progress(decoder: ffi::GhosttySnapshotDecoder) -> HistoryPage {
-    // `next` just succeeded, so the progress keys hold values of their documented types; on a failure the defaults stay
-    let mut screen: ffi::GhosttyTerminalScreen = ffi::GHOSTTY_TERMINAL_SCREEN_PRIMARY;
-    // SAFETY: the decoder is live; `PROGRESS_SCREEN` writes a `GhosttyTerminalScreen`.
-    unsafe {
-        ffi::ghostty_snapshot_decoder_get(
-            decoder,
-            ffi::GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_SCREEN,
-            (&raw mut screen).cast(),
-        )
-    };
-    let mut rows: usize = 0;
-    // SAFETY: as above; `PROGRESS_ROWS` writes a `size_t`.
-    unsafe {
-        ffi::ghostty_snapshot_decoder_get(
-            decoder,
-            ffi::GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_ROWS,
-            (&raw mut rows).cast(),
-        )
-    };
-    let mut remaining: u32 = 0;
-    // SAFETY: as above; `PROGRESS_REMAINING` writes a `uint32_t`.
-    unsafe {
-        ffi::ghostty_snapshot_decoder_get(
-            decoder,
-            ffi::GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_REMAINING,
-            (&raw mut remaining).cast(),
-        )
-    };
-    HistoryPage {
-        alternate: screen == ffi::GHOSTTY_TERMINAL_SCREEN_ALTERNATE,
-        rows,
-        remaining,
+/// Read the kind before any kind-specific values; page getters have `NO_VALUE` on image steps.
+fn progress(decoder: ffi::GhosttySnapshotDecoder) -> Result<SnapshotStep, Error> {
+    let kind = data!(
+        decoder,
+        GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_KIND,
+        ffi::GhosttySnapshotDecoderProgressKind
+    )?;
+    let screen = data!(
+        decoder,
+        GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_SCREEN,
+        ffi::GhosttyTerminalScreen
+    )?;
+    let alternate = screen == ffi::GHOSTTY_TERMINAL_SCREEN_ALTERNATE;
+    match kind {
+        ffi::GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_PAGE => Ok(SnapshotStep::Page(HistoryPage {
+            alternate,
+            rows: data!(decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_ROWS, usize)?,
+            remaining: data!(decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_REMAINING, u32)?,
+        })),
+        ffi::GHOSTTY_SNAPSHOT_DECODER_PROGRESS_KIND_IMAGE => Ok(SnapshotStep::Image(SnapshotImage {
+            alternate,
+            image_id: data!(decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_IMAGE_ID, u32)?,
+            frame: data!(decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_IMAGE_FRAME, u32)?,
+            bytes: data!(decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_PROGRESS_IMAGE_BYTES, usize)?,
+        })),
+        _ => Err(Error::InvalidValue),
     }
 }
 
@@ -291,6 +388,7 @@ mod tests {
             max_continuation_bytes: Some(1024),
             retain_continuation: true,
             compress_history: false,
+            kitty_image_storage_limit: None,
         };
         let mut restored = Terminal::decode_snapshot(&bytes, options).unwrap();
         assert!(!restored.history_pending());
@@ -427,4 +525,65 @@ mod tests {
             original.format(Region::Screen, plain).unwrap()
         );
     }
+
+    #[derive(Clone, Default)]
+    struct Answers(std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>);
+
+    impl crate::Effects for Answers {
+        fn write_pty(&mut self, data: &[u8]) {
+            self.0.lock().unwrap().push(data.to_vec());
+        }
+        fn title_changed(&mut self, title: &str) {
+            self.0.lock().unwrap().push(title.as_bytes().to_vec());
+        }
+    }
+
+    /// Ghostty `snapshot/snapshot.zig`: every cut of an aborted APC resumes without replaying an effect.
+    #[test]
+    fn binary_snapshots_resume_every_c1_restart_cut_without_repeating_effects() {
+        for corpus in [
+            b"\x1b_hello\x9b31mtext".as_slice(),
+            b"\x1b_Ga=q\x90$qm\x1b\\text",
+            b"\x1b_hello\x9d2;title\x07text",
+        ] {
+            for cut in 0..=corpus.len() {
+                let mut source = Terminal::new(20, 4).unwrap();
+                source.set_continuation_limit(4096).unwrap();
+                let source_effects = Answers::default();
+                source.set_effects(Box::new(source_effects.clone())).unwrap();
+                source.vt_write(&corpus[..cut]);
+                let mut restored =
+                    Terminal::decode_snapshot(&source.encode_snapshot().unwrap(), SnapshotOptions::default()).unwrap();
+                let restored_effects = Answers::default();
+                restored.set_effects(Box::new(restored_effects.clone())).unwrap();
+                source_effects.0.lock().unwrap().clear();
+                source.vt_write(&corpus[cut..]);
+                restored.vt_write(&corpus[cut..]);
+                assert_eq!(screen(&mut source), screen(&mut restored), "{corpus:?} cut {cut}");
+                assert_eq!(source.cursor(), restored.cursor());
+                assert_eq!(source.title(), restored.title());
+                assert_eq!(
+                    *source_effects.0.lock().unwrap(),
+                    *restored_effects.0.lock().unwrap(),
+                    "effects at {cut} of {corpus:?}"
+                );
+            }
+        }
+    }
+
+    /// A multi-row max-width page has enough spare memory to overflow a u16 row count when narrowed.
+    #[test]
+    fn a_decoded_wide_multi_row_page_can_be_narrowed() {
+        let mut source = Terminal::new(u16::MAX, 215).unwrap();
+        source.vt_write(b"a\x1b[215;1Hz");
+        let mut restored =
+            Terminal::decode_snapshot(&source.encode_snapshot().unwrap(), SnapshotOptions::default()).unwrap();
+        restored.resize(2, 215, 8, 16).unwrap();
+        assert_eq!((restored.cols(), restored.rows()), (2, 215));
+        assert_eq!(restored.active_row(0).unwrap().cells[0].text, "a");
+        assert_eq!(restored.active_row(214).unwrap().cells[0].text, "z");
+    }
 }
+
+#[cfg(test)]
+mod kitty_tests;

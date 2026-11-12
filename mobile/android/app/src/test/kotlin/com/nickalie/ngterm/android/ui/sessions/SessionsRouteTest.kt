@@ -9,10 +9,12 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.lifecycle.ViewModelProvider
 import com.nickalie.ngterm.android.TestGraph
 import com.nickalie.ngterm.android.awaitText
@@ -248,7 +250,7 @@ class SessionsRouteTest {
         compose.awaitText("The list may be out of date: refresh refused")
         compose.onNodeWithText("Retry").performClick()
         gone("The list may be out of date: refresh refused")
-        compose.onAllNodesWithText("New session")[1].performClick()
+        compose.onAllNodesWithText("New session")[0].performTouchInput { longClick() }
         compose.awaitText("New session on build-01")
         compose.onNodeWithText("Cancel").performClick()
         gone("New session on build-01")

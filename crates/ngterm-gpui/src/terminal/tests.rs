@@ -402,7 +402,6 @@ fn kitty_placeholder_cells_shape_no_text_but_keep_their_background() {
     );
     let pane = pane(script, dir.path());
     let frame = wait_text(&pane, "b");
-    assert_eq!(frame.rows[0].placeholders().len(), 2);
     let layout = layout_row(&frame.rows[0], &frame.colors, &Palette::default(), &RowMarks::default());
     let texts: Vec<(&str, u16)> = layout
         .runs

@@ -6,7 +6,8 @@
 //! Tracking is off until [`Terminal::set_continuation_limit`] turns it on, and it only covers input written after
 //! that: turned on mid-sequence, or past its byte limit, the current continuation is [`Continuation::Unavailable`] until
 //! a later write reaches ground or starts a fresh sequence. Capture never truncates or invents one: a caller that gets
-//! `Unavailable` waits for the next cut instead.
+//! `Unavailable` waits for the next cut instead. C1 introducers that abort a sequence restart the suffix in
+//! their canonical seven-bit `ESC` form; high bytes inside string payloads remain data.
 //!
 //! [`Terminal::replay_continuation`] feeds a captured continuation into a terminal holding the rest of the state (a
 //! fresh one restored from the formatter's output, say): the original fed a suffix and the restored one fed the same
@@ -255,5 +256,33 @@ mod tests {
         assert_eq!(terminal.continuation(), Ok(Continuation::Unavailable));
         terminal.vt_write(b"\x07\x1b[1");
         assert_eq!(bytes(&terminal), b"\x1b[1");
+    }
+
+    /// Ghostty `stream_continuation.zig`: only a C1 that starts a new sequence restarts the suffix.
+    #[test]
+    fn c1_introducers_restart_aborted_sequences_in_canonical_form() {
+        let cases: &[(&[u8], &[u8])] = &[
+            (b"\x1b_hello\x9b", b"\x1b["),
+            (b"\x1b_hello\x9b1;2", b"\x1b[1;2"),
+            (b"\x1b_hello\x90q", b"\x1bPq"),
+            (b"\x1b_hello\x9d2;t", b"\x1b]2;t"),
+            (b"\x1b[1\x9fx", b"\x1b_x"),
+            (b"\x1b[1\x9b2", b"\x1b[2"),
+            (b"\x1b\x98", b"\x1bX"),
+            (b"\x1b[1\x9e", b"\x1b^"),
+            (b"\x1b]2;\x9b", b"\x1b]2;\x9b"),
+            (b"\x1bPq\x9b", b"\x1bPq\x9b"),
+            (b"\x1b_a\x9fb", b"\x1b_a\x9fb"),
+        ];
+        for &(input, expected) in cases {
+            let mut terminal = tracked();
+            terminal.vt_write(input);
+            assert_eq!(bytes(&terminal), expected, "{input:?}");
+        }
+        let mut terminal = tracked();
+        for chunk in [b"\x1b_hello".as_slice(), b"\x9b", b"3"] {
+            terminal.vt_write(chunk);
+        }
+        assert_eq!(bytes(&terminal), b"\x1b[3");
     }
 }

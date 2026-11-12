@@ -459,6 +459,7 @@ pub(crate) fn unexpected(request: &'static str, got: &ApiResponse) -> ClientErro
 #[derive(Debug, PartialEq, Eq)]
 #[must_use = "a delegated request waits for its answer until the server's deadline"]
 pub struct Delegated {
+    pub native_alias: Option<crate::protocol::ClipboardAlias>,
     pub id: u64,
     /// The epoch it was sent in.
     pub epoch: u64,
@@ -673,6 +674,17 @@ impl AttachWriter {
         self.send(&AttachClientMessage::Input { data: data.to_vec() })
     }
 
+    /// Generate a paste on the server's terminal in this attach's epoch.
+    ///
+    /// # Errors
+    /// The attach disconnected or the message could not be written.
+    pub fn clipboard_paste(&self, paste: crate::protocol::ClipboardPaste) -> Result<(), ClientError> {
+        self.send(&AttachClientMessage::ClipboardPaste {
+            epoch: self.epoch(),
+            paste,
+        })
+    }
+
     /// The client's grid; the session takes it while the client leads.
     ///
     /// # Errors
@@ -691,6 +703,15 @@ impl AttachWriter {
         self.send(&AttachClientMessage::Metadata(metadata))
     }
 
+    /// The client applied its config: replace its reply facts and request the mode 2031 report as reply owner.
+    ///
+    /// # Errors
+    ///
+    /// The write failed.
+    pub fn config_reloaded(&self, metadata: ReplyMetadata) -> Result<(), ClientError> {
+        self.send(&AttachClientMessage::ConfigReload(metadata))
+    }
+
     /// Answers `request`; false, sending nothing, when its epoch is no longer the stream's current one.
     ///
     /// # Errors
@@ -701,7 +722,7 @@ impl AttachWriter {
         reason = "the request is taken so it is answered once"
     )]
     pub fn answer(&self, request: Delegated, reply: DelegatedReply) -> Result<bool, ClientError> {
-        let Delegated { id, epoch, request: _ } = request;
+        let Delegated { id, epoch, .. } = request;
         if epoch != self.epoch() {
             return Ok(false);
         }
@@ -829,11 +850,21 @@ impl StreamState {
                 }
                 AttachEvent::KittyBarrier(Barrier { id, epoch })
             }
-            AttachServerMessage::DelegatedRequest { id, epoch, request } => {
+            AttachServerMessage::DelegatedRequest {
+                id,
+                epoch,
+                request,
+                native_alias,
+            } => {
                 if !self.current(epoch, "a delegated request")? {
                     return Ok(None);
                 }
-                AttachEvent::Delegated(Delegated { id, epoch, request })
+                AttachEvent::Delegated(Delegated {
+                    native_alias,
+                    id,
+                    epoch,
+                    request,
+                })
             }
             AttachServerMessage::Refused { reason, message } => {
                 return Err(broken(format_args!(
