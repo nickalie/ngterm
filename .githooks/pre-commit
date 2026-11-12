@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Refuses a commit whose staged Rust is not as `cargo fmt --all` (CI's format check) would leave it. It checks the
+# staged contents of the staged *.rs files of the workspace's packages, not the working tree and not the whole tree.
+#
+# Enable once per clone (every worktree of it shares the setting): git config core.hooksPath .githooks
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+staged=()
+while IFS= read -r -d '' file; do
+  staged+=("$file")
+done < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.rs')
+((${#staged[@]})) || exit 0
+
+fail() {
+  printf 'pre-commit: %s\n' "$@" >&2
+  exit 1
+}
+command -v cargo >/dev/null || fail "Rust files are staged but cargo is not on PATH"
+command -v rustfmt >/dev/null || fail "Rust files are staged but rustfmt is not installed: rustup component add rustfmt"
+
+# The workspace's package directories, relative to its root: vendored crates outside the workspace are not formatted.
+metadata="$(cargo metadata --no-deps --offline --format-version 1)" || fail "cargo metadata failed"
+workspace_root="$(grep -o '"workspace_root":"[^"]*"' <<<"$metadata" | head -n 1 | cut -d '"' -f 4)"
+packages=()
+while IFS= read -r manifest; do
+  dir="${manifest%Cargo.toml}"
+  dir="${dir#"$workspace_root"}"
+  dir="${dir//\\\\//}"
+  dir="${dir#/}"
+  packages+=("${dir%/}")
+done < <(grep -o '"manifest_path":"[^"]*"' <<<"$metadata" | cut -d '"' -f 4)
+
+in_workspace() {
+  local package
+  for package in "${packages[@]}"; do
+    [[ -z "$package" || "$1" == "$package"/* ]] && return 0
+  done
+  return 1
+}
+
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+unformatted=()
+for file in "${staged[@]}"; do
+  in_workspace "$file" || continue
+  git cat-file blob ":$file" >"$scratch/staged.rs"
+  # from the file's own directory, so the nearest rustfmt.toml applies as it does when cargo fmt formats the file
+  dir="$(dirname "$file")"
+  [[ -d "$dir" ]] || dir=.
+  if ! (cd "$dir" && rustfmt --emit stdout <"$scratch/staged.rs" >"$scratch/formatted.rs" 2>"$scratch/error"); then
+    fail "rustfmt could not format the staged $file:" "$(cat "$scratch/error")"
+  fi
+  if ! cmp -s "$scratch/staged.rs" "$scratch/formatted.rs"; then
+    unformatted+=("$file")
+    diff -u --label "a/$file" --label "b/$file" "$scratch/staged.rs" "$scratch/formatted.rs" >&2 || true
+  fi
+done
+
+((${#unformatted[@]} == 0)) || {
+  printf 'pre-commit: these staged Rust files are not formatted as cargo fmt leaves them:\n' >&2
+  printf '  %s\n' "${unformatted[@]}" >&2
+  printf 'Fix: cargo fmt --all && git add' >&2
+  printf ' %q' "${unformatted[@]}" >&2
+  printf '\n' >&2
+  exit 1
+}

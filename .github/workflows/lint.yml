@@ -1,9 +1,10 @@
 # The workflows and the scripts, linted by scripts/lint.sh: actionlint over .github/workflows/ (each `run:` block
-# through shellcheck), shellcheck over scripts/*.sh and scripts/lib/*.sh, both at the versions
-# packaging/release/pins.env pins and checksum-verified, then each scripts/*.py `--self-test`.
+# through shellcheck), shellcheck over scripts/*.sh, scripts/lib/*.sh and .githooks/*, both at the versions
+# packaging/release/pins.env pins and checksum-verified, then each scripts/*.py `--self-test` and the pre-commit
+# hook's test.
 #
-# Path-filtered to what it reads: the workflows and actionlint's settings, the scripts, shellcheck's settings and the
-# pins. Pushes to a `ci/**` branch run it too, and it can be run by hand.
+# Path-filtered to what it reads: the workflows and actionlint's settings, the scripts, the Git hooks, shellcheck's
+# settings and the pins. Pushes to a `ci/**` branch run it too, and it can be run by hand.
 name: lint
 
 on:
@@ -14,6 +15,7 @@ on:
       - scripts/*.sh
       - scripts/lib/*.sh
       - scripts/*.py
+      - .githooks/**
       - .shellcheckrc
       - packaging/release/pins.env
   push:

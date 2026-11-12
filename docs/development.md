@@ -1165,6 +1165,13 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 - Lint rules: `[workspace.lints]` in `Cargo.toml` (clippy `all` + `pedantic`, the complexity and robustness lints
   denied) with the thresholds in `clippy.toml`; the only exception is a reasoned outer `#[expect]` on one item.
 
+### Git hooks
+
+`.githooks/` holds the repository's Git hooks; `git config core.hooksPath .githooks` turns them on once per clone, for
+every worktree of it. The pre-commit hook refuses a commit whose staged Rust `cargo fmt` would change, prints the diff
+and the fix, and leaves everything else alone; its header says what it checks, and `scripts/test-pre-commit-hook.sh`
+(run by `scripts/lint.sh`) tests it.
+
 ## CI
 
 - `release.yml`: tag-triggered and manual release packaging, with Linux x86_64/aarch64, Windows x86_64, and macOS
@@ -1222,10 +1229,10 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 - `windows-installer.yml` (the same triggers, and by hand): the release build staged, the MSI built from it with the
   pinned WiX and one of the next patch version, then `scripts/check-msi.ps1` installs, checks, upgrades and
   uninstalls it on the runner; the MSI is kept as the `ngterm-msi` artifact.
-- `lint.yml` (path-filtered to the workflows, the scripts, their linters' settings and `packaging/release/pins.env`;
-  also on `ci/**` pushes): `scripts/lint.sh`, which runs actionlint over the workflows and shellcheck over
-  `scripts/*.sh`, `scripts/lib/*.sh` and every `run:` block, both pinned and checksum-verified. Run it locally the
-  same way.
+- `lint.yml` (path-filtered to the workflows, the scripts, the Git hooks, their linters' settings and
+  `packaging/release/pins.env`; also on `ci/**` pushes): `scripts/lint.sh`, which runs actionlint over the workflows
+  and shellcheck over `scripts/*.sh`, `scripts/lib/*.sh`, `.githooks/*` and every `run:` block, both pinned and
+  checksum-verified, then the scripts' self-tests and the pre-commit hook's test. Run it locally the same way.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
 - `reference-macos.yml`: the suite against upstream's macOS release.
 
@@ -1238,6 +1245,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   upstream's.
 - `vendor/`: the patched GPUI, calloop and portable-pty crates, recreated by the vendor scripts (an edit there goes back into its
   patch).
+- `.githooks/`: the repository's Git hooks ([Git hooks](#git-hooks)).
 - `scripts/`: native builds, staging, `run-gpui-dev.sh`, the lint report, the Linux web engine runtime's packaging, the
   AppArmor profile installer, the Windows installer's build and check, the Windows smoke checks.
 - `mobile/android`, `mobile/ios`: the mobile apps over `crates/ngterm-mobile`, each with its `DESIGN.md`.

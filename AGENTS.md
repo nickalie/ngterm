@@ -98,6 +98,9 @@ suite run; a check the change can't affect is skipped, and so is waiting on CI u
 step. Reviews (revmux and similar) scale the same way. Fix every verified revmux finding before finishing.
 docs/development.md > Test has the commands and how to scope them.
 
+Commit with the repository's Git hooks on (docs/development.md > Git hooks), never around them: the pre-commit hook
+keeps unformatted Rust out of every commit.
+
 ## What CI enforces
 
 - The ratchet (`conformance/rust-passing.txt`): a listed id that goes red fails CI. Treat a flaky test as a bug in
