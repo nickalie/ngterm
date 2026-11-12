@@ -11,9 +11,18 @@ from agterm_conformance.match import find_session, sessions
 from agterm_conformance.plugin import Cli
 from agterm_conformance.wait import wait_text, wait_until
 
-pytestmark = pytest.mark.requires(
-    "agterm-peer", reason="attaching an upstream agterm Mac is the Rust build's extension; agterm attaches only agterm"
-)
+pytestmark = [
+    pytest.mark.requires(
+        "agterm-peer",
+        reason="attaching an upstream agterm Mac is the Rust build's extension; agterm attaches only agterm",
+    ),
+    # the loopback machine's sshd is POSIX only; Windows lacks this claim, so `--must-pass agterm-peer` excuses the skip
+    # there and holds the Windows viewer to test_agterm_peer_windows.py instead
+    pytest.mark.requires(
+        "posix-command-line",
+        reason="a Windows viewer runs a remote pane's attach through viewer-run, not as a /bin/sh line",
+    ),
+]
 
 
 @pytest.fixture

@@ -11,12 +11,14 @@ CONFORMANCE = Path(__file__).parents[1]
 PACKAGE = CONFORMANCE / "agterm_conformance"
 # Every socket connect the harness makes, by file and enclosing function. The client's re-check the root on
 # each connect, through the transport's `connect` (an AF_UNIX socket, or the named pipe the path names on Windows),
-# which nothing else calls; `wait_for_unix_socket` probes the compositor and bus sockets its callers checked.
+# which nothing else calls; `wait_for_unix_socket` probes the compositor and bus sockets its callers checked;
+# `loopback_ssh._banner` reads the banner of the loopback sshd the harness started, on 127.0.0.1 and its own port.
 CONNECT_SITES = {
     ("client.py", "_open_stream"),
     ("client.py", "_exchange"),
     ("transport.py", "connect"),
     ("impls/base.py", "wait_for_unix_socket"),
+    ("loopback_ssh.py", "_banner"),
 }
 CONNECT_CALLS = {"connect", "connect_ex", "create_connection", "urlopen"}
 

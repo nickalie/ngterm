@@ -372,7 +372,9 @@ jobs:
   #   sessions) and `--must-pass live-any-shell`, and `--must-pass pages-survive` (the Rust-only parking of a page whose
   #   presenter went, whose tests need Live sessions).
   # - bash, zsh and fish: `--must-pass agent-chat` too (the Rust-only agent record and `ngtermctl agent` behind the
-  #   Android chat view), and `--must-pass kitty-clipboard` (a program's Rust-only Kitty clipboard protocol).
+  #   Android chat view), `--must-pass kitty-clipboard` (a program's Rust-only Kitty clipboard protocol), and
+  #   `--must-pass agterm-peer` (the Rust-only attach of an upstream agterm Mac, whose tests reach a loopback sshd:
+  #   openssh below).
 # - coverage: the zsh entry again on an instrumented build (run-linux.sh --coverage: cargo-llvm-cov and the toolchain's
 #   llvm-tools), every layer, its report the desktop app's e2e line coverage on Linux (code_coverage.py e2e: the total,
 #   its distance to 90% and the share markers exclude, per crate), judged by
@@ -391,17 +393,18 @@ jobs:
         include:
           - shell: bash
             out: rust-linux
-            must-pass: --must-pass live-any-shell --must-pass agent-chat --must-pass kitty-clipboard
+            must-pass: >-
+              --must-pass live-any-shell --must-pass agent-chat --must-pass kitty-clipboard --must-pass agterm-peer
           - shell: zsh
             out: rust-linux-zsh
             must-pass: >-
               --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
-              --must-pass kitty-clipboard
+              --must-pass kitty-clipboard --must-pass agterm-peer
           - shell: fish
             out: rust-linux-fish
             must-pass: >-
               --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
-              --must-pass kitty-clipboard
+              --must-pass kitty-clipboard --must-pass agterm-peer
           - shell: zsh
             out: rust-linux-coverage
             coverage: true
@@ -439,7 +442,7 @@ jobs:
             curl xz patch ncurses fontconfig ttf-dejavu procps-ng \
             weston dbus xorg-server-xvfb mesa vulkan-swrast \
             pixman libinput libevdev libdrm cairo pango libpng hwdata seatd lcms2 \
-            python zsh fish at-spi2-core gobject-introspection cairo pkgconf gcc
+            python zsh fish at-spi2-core gobject-introspection cairo pkgconf gcc openssh
       - uses: actions/checkout@v7
       # the runner owns the workspace, the container runs as root: without this git refuses the checkout, and
       # run-linux.sh reads the build's commit from it

@@ -274,8 +274,11 @@ every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and every conformance job
 origin for in its own suite. Its tests (`tests/*/test_agterm_peer*.py`) run the instance's real ssh against a loopback
 `sshd` (`agterm_conformance/loopback_ssh.py`) whose far side answers as agterm v0.41.1 does, from upstream's sources and
 fixtures (`agterm_conformance/fake_agterm.py`: `agtermctl zmx tree|present`, the session commands, the bundled zmx's
-attach); they skip with the reason on a host without OpenSSH's server, and fail under `CI`. The Windows viewer's
-argument list is tested on Windows alone. The build claims it on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`).
+attach); they skip with the reason on a host without OpenSSH's server, and fail under `CI`. They require
+`posix-command-line` too, as Windows runs no unprivileged `sshd`; the Windows viewer's argument list
+(`test_agterm_peer_windows.py`, which requires `cmd-command-line`) is tested on Windows alone. The build claims it on
+every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and every conformance job that judges the ratchet runs with
+`--must-pass agterm-peer`: the three Linux legs, whose container carries `openssh`, and Windows' `windows` job.
 
 ### Commands
 

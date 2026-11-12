@@ -5,8 +5,9 @@ The server (`LoopbackMachine`) listens on 127.0.0.1 alone on a free port, takes 
 reads only the files written here (its config, host key, `authorized_keys`), never the account's `~/.ssh` or the
 system's sshd configuration. Every login runs the machine's forced command, which hands the client's command to the
 account's login shell as sshd itself would, but with the machine's own HOME and the bare PATH sshd gives a command:
-what that HOME's `.local/bin` holds is what the far side has installed. It is ported from the mobile e2e test's support
-code (`crates/ngterm-mobile/tests/support/sshd.rs`).
+what that HOME's `.local/bin` holds is what the far side has installed. sshd gives the machine's HOME to the login shell
+that starts the forced command as well, so that shell reads the machine's startup files, not the account's. It is
+ported from the mobile e2e test's support code (`crates/ngterm-mobile/tests/support/sshd.rs`).
 
 The client side (`SshClient`) is a directory holding an `ssh` first on the instance's PATH: OpenSSH reads the account's
 `~/.ssh` from the password database, not from HOME, so the isolated HOME alone cannot hold its config. The stand-in runs
@@ -92,7 +93,7 @@ def _account():
     return pwd.getpwuid(os.getuid())
 
 
-def _config_word(path: Path) -> str:
+def _config_word(path: Path | str) -> str:
     text = os.fspath(path)
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -220,6 +221,9 @@ class LoopbackMachine:
             "X11Forwarding no\n"
             "PrintMotd no\n"
             "UsePAM no\n"
+            # the login shell sshd starts the forced command with reads its startup files from HOME (fish's
+            # config.fish, zsh's .zshenv, bash's .bashrc over ssh): this machine's, never the account's own
+            f"SetEnv {_config_word(f'HOME={os.fspath(self.home)}')}\n"
             f"ForceCommand {force}\n"
             "LogLevel VERBOSE\n"
         )

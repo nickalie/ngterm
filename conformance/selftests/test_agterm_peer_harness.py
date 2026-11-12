@@ -25,6 +25,8 @@ def test_the_sshd_config_listens_on_loopback_alone_and_takes_keys_only(tmp_path)
     assert {"PermitUserRC no", "PermitUserEnvironment no"} <= set(lines)
     assert f'AuthorizedKeysFile "{tmp_path / "ak"}"' in lines
     assert f"ForceCommand {tmp_path / 'force'}" in lines
+    # the shell sshd starts the forced command with reads the machine's startup files, not the account's
+    assert f'SetEnv "HOME={machine.home}"' in lines
 
 
 COMMAND = """'/bin/sh' '-c' 'echo "$HOME"; echo "$PATH"; echo "${LEAK:-none}"'"""

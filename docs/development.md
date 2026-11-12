@@ -1224,7 +1224,8 @@ and the fix, and leaves everything else alone; its header says what it checks, a
   (clippy, tests and the bindings' regeneration check of the WPE crates on Arch's `wpewebkit`, then the app with its
   overlays, see [WPE WebKit](#wpe-webkit)), then the staged build (HTML overlays on) under the suite in the `wpe`
   job's Arch container, on its lavapipe, held by `rust-passing.txt`, once per login shell (`conformance`, a matrix:
-  bash, fish and zsh), each with `--must-pass live-any-shell` and `--must-pass agent-chat`, the zsh and fish ones
+  bash, fish and zsh), each with `--must-pass live-any-shell`, `--must-pass agent-chat` and `--must-pass agterm-peer`
+  (OpenSSH in the container for its loopback `sshd`), the zsh and fish ones
   with `--must-pass live-sessions` and `--must-pass pages-survive`
   too; the bash one runs the app's process tests with the overlays on first, and a `coverage` entry runs the suite on
   an instrumented build, judged by `conformance/coverage/e2e-floor-desktop-linux.txt` only; and `unit-coverage`, the workspace's
@@ -1239,7 +1240,8 @@ and the fix, and leaves everything else alone; its header says what it checks, a
   vendored portable-pty's Windows patch tests and builds the app: `ngterm-gpui`'s clippy and tests without and with
   its HTML overlays (WebView2, which the runner image carries). Beside it, `windows`: the harness's Windows
   self-tests and the suite against the staged release build (`conformance/tools/run-windows.sh`, with `--must-pass
-  live-any-shell`, as the runner's login shell is Windows PowerShell, and `--must-pass agent-chat`), held by `rust-passing-windows.txt`; the report
+  live-any-shell`, as the runner's login shell is Windows PowerShell, `--must-pass agent-chat` and `--must-pass
+  agterm-peer`), held by `rust-passing-windows.txt`; the report
   and the stage are kept as artifacts; and `coverage-windows`, the suite on an instrumented build, judged by
   `conformance/coverage/e2e-floor-desktop-windows.txt` only. The workflow also runs on pushes to `ci/**` branches, to check a
   macOS or Windows form without a PR.

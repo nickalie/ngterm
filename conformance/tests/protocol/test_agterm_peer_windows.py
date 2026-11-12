@@ -23,11 +23,10 @@ pytestmark = [
         "agterm-peer",
         reason="attaching an upstream agterm Mac is the Rust build's extension; agterm attaches only agterm",
     ),
+    # Windows alone claims it, so elsewhere the test skips as the build's divergence, which `--must-pass agterm-peer`
+    # excuses (a plain platform skip would fail it)
     pytest.mark.requires(
         "cmd-command-line", reason="a Unix viewer runs a remote pane's attach as a /bin/sh line, not through viewer-run"
-    ),
-    pytest.mark.skipif(
-        sys.platform != "win32", reason="the Windows viewer's ssh.exe argument list exists on Windows only"
     ),
 ]
 

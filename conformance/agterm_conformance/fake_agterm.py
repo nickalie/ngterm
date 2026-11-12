@@ -196,6 +196,9 @@ def present(machine: Machine, state, session_id: str) -> int:
     lock = threading.Lock()
     revision = [0]
     done = threading.Event()
+    # set once hello and the snapshot are out: agterm's stream sends nothing else before them, and a viewer drops a
+    # frame that comes before its hello (a HUD before the snapshot would be cleared by it)
+    greeted = threading.Event()
 
     def send(kind: str, **payload) -> None:
         with lock:
@@ -208,7 +211,6 @@ def present(machine: Machine, state, session_id: str) -> int:
                 done.set()
 
     def reader() -> None:
-        greeted = False
         for line in sys.stdin:
             line = line.strip()
             if not line:
@@ -217,7 +219,7 @@ def present(machine: Machine, state, session_id: str) -> int:
                 log.write(line + "\n")
             frame = json.loads(line)
             kind = frame.get("kind")
-            if not greeted:
+            if not greeted.is_set():
                 if kind != "hello":
                     break  # `PresentationStream.receive`: a stream that did not open with hello is closed
                 hello = frame["hello"]
@@ -228,7 +230,7 @@ def present(machine: Machine, state, session_id: str) -> int:
                 snapshot = dict(current.get("snapshot", {}))
                 snapshot.setdefault("layout", _layout(current))
                 send("snapshot", snapshot=snapshot)
-                greeted = True
+                greeted.set()
             elif kind == "ping":
                 send("ack")
             elif kind == "presenter.acquire":
@@ -238,6 +240,10 @@ def present(machine: Machine, state, session_id: str) -> int:
     threading.Thread(target=reader, daemon=True).start()
     last_ping = time.monotonic()
     while not done.wait(PUSH_POLL):
+        if not greeted.is_set():
+            # what a test pushes meanwhile stays in the file, from `offset`, until the handshake is out
+            last_ping = time.monotonic()
+            continue
         with open(push, "rb") as pending:
             pending.seek(offset)
             chunk = pending.read()

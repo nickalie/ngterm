@@ -1,6 +1,7 @@
 # The conformance ratchet: pytest node ids the Rust build passes, one per line, verbatim and sorted.
 # tools/check_ratchet.py fails a run in which a listed id fails, errors or skips (a host-dependent skip excepted).
 # Add newly passing ids with `tools/check_ratchet.py --report <nodeid report> --add`.
+tests/behaviors/test_agterm_peer_relaunch.py::test_a_relaunch_attaches_pinned_and_detected_agterm_rows_again
 tests/behaviors/test_hooks.py::test_a_hook_runs_once_per_event_in_event_order
 tests/behaviors/test_hooks.py::test_an_edit_takes_effect_only_on_reload
 tests/behaviors/test_hooks.py::test_app_launched_runs_its_hook_once_per_launch
@@ -190,6 +191,21 @@ tests/protocol/test_addressing.py::test_undecodable_request_is_refused[unknown-c
 tests/protocol/test_addressing.py::test_unresolved_target[session.select--no such session: ]
 tests/protocol/test_addressing.py::test_unresolved_target[session.select-zzz-no such session: zzz]
 tests/protocol/test_addressing.py::test_unresolved_target[workspace.select-zzz-no such workspace: zzz]
+tests/protocol/test_agterm_peer.py::test_a_daemon_gone_before_the_attach_prints_the_gone_line_and_hands_back_no_shell
+tests/protocol/test_agterm_peer.py::test_a_host_running_both_apps_answers_with_ngterm_unless_pinned_to_agterm
+tests/protocol/test_agterm_peer.py::test_a_notification_from_the_agterm_session_reaches_the_viewer
+tests/protocol/test_agterm_peer.py::test_a_session_whose_daemons_are_gone_is_not_listed
+tests/protocol/test_agterm_peer.py::test_agterm_pin_reaches_agterm_and_ngterm_pin_refuses_a_mac_without_ngterm
+tests/protocol/test_agterm_peer.py::test_an_agterm_hud_shows_on_the_attached_row
+tests/protocol/test_agterm_peer.py::test_an_attached_agterm_split_arrives_split_with_both_panes_attached
+tests/protocol/test_agterm_peer.py::test_an_empty_agterm_listing_names_the_app
+tests/protocol/test_agterm_peer.py::test_an_overlay_agterm_hands_over_runs_its_job_through_agtermctl
+tests/protocol/test_agterm_peer.py::test_attach_refuses_a_session_the_mac_no_longer_lists
+tests/protocol/test_agterm_peer.py::test_live_attach_runs_each_pane_through_the_macs_own_zmx
+tests/protocol/test_agterm_peer.py::test_live_tree_json_stamps_the_agterm_peer_on_the_endpoint
+tests/protocol/test_agterm_peer.py::test_live_tree_lists_an_agterm_macs_sessions_under_a_header_naming_what_it_lacks
+tests/protocol/test_agterm_peer.py::test_the_listing_runs_ssh_with_the_destination_alone
+tests/protocol/test_agterm_peer.py::test_the_presentation_stream_opens_with_agterms_cli_and_mirrors_its_frames
 tests/protocol/test_ask_pick.py::test_a_form_needs_no_buttons
 tests/protocol/test_ask_pick.py::test_ask_refusals[align]
 tests/protocol/test_ask_pick.py::test_ask_refusals[blank-title]
@@ -1045,6 +1061,12 @@ tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.rename
 tests/protocol/test_workspace.py::test_unknown_workspace_target[workspace.select-args0]
 tests/protocol/test_workspace.py::test_workspace_tint_colors_only_its_row
 tests/protocol/test_workspace.py::test_workspace_tint_takes_a_hex
+tests/ui/test_agterm_peer_ui.py::test_an_ask_from_the_agterm_session_is_drawn_here_and_its_answer_goes_back
+tests/ui/test_agterm_peer_ui.py::test_attach_remote_lists_the_agterm_macs_sessions_and_attaches_the_chosen_one
+tests/ui/test_agterm_peer_ui.py::test_duplicate_session_on_a_remote_row_duplicates_it_on_the_mac
+tests/ui/test_agterm_peer_ui.py::test_new_session_on_the_mac_creates_it_with_agtermctl_and_attaches_it
+tests/ui/test_agterm_peer_ui.py::test_the_remote_rows_menu_ends_the_session_on_the_mac_after_confirming
+tests/ui/test_agterm_peer_ui.py::test_the_title_bar_names_the_host_and_badges_agterm_with_what_it_lacks
 tests/ui/test_dialogs.py::test_ask_button_answers_the_ask
 tests/ui/test_dialogs.py::test_ask_form_fields_answer_with_their_input
 tests/ui/test_dialogs.py::test_command_palette_opens_from_the_menu_and_escape_closes_it
