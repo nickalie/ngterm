@@ -3,7 +3,11 @@ package com.nickalie.ngterm.android.ui.terminal
 import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.icu.lang.UCharacter
+import android.icu.lang.UProperty
+import android.icu.lang.UScript
 import android.icu.text.BreakIterator
+import android.os.Build
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
@@ -11,6 +15,7 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import androidx.annotation.RequiresApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusEventModifierNode
 import androidx.compose.ui.focus.FocusRequester
@@ -33,14 +38,18 @@ import androidx.compose.ui.input.key.KeyEvent as ComposeKeyEvent
 /**
  * The input method's connection to [terminal], the terminal it was opened for: everything it types reaches that
  * program as it is typed, so a program reading each key (a shell's completion, a TUI's `/` menu) sees each letter.
- * What it commits goes as typed text (line breaks as Enter); what it composes goes too, as the composition grows, and
- * a change to it (a conversion, a correction) is made on the program's line with backspaces and the new text, a whole
- * character (grapheme cluster) at a time: nothing of it waits outside the program, whose cursor is the only one. A
- * deletion it asks for is around the composition, which stays, as in the framework's editors (backspaces before it,
- * deletes after it); the keys it sends (Enter, backspace) go as keys. A key (its own or one from elsewhere:
- * [TerminalKeyboard.composition]), the pointer or a paste reaching the program, a line break or a composed letter a
- * sticky modifier turned into a chord ends the composition and restarts the input method, so it never corrects text
- * the program has moved past.
+ * What it commits goes as typed text (line breaks as Enter). What it composes goes as the composition grows, as far as
+ * a backspace takes each character back alone in every line editor (one with no marks, joins or parts, as typed
+ * letters are); from the first character a backspace may not (a letter with its marks, a conjunct, an emoji sequence)
+ * the rest is held at the cursor ([TerminalState.composing]) and typed when the composition ends, so a change to the
+ * composition (a conversion, a correction) is made on the program's line with backspaces only over such characters,
+ * and comes out the same whether the program deletes by grapheme cluster (Claude Code, Codex), by code point with its
+ * marks (readline) or by code point (a terminal's own line editing). A deletion it asks for is around the
+ * composition, which stays, as in the framework's editors (backspaces before it, deletes after it); the keys it sends
+ * (Enter, backspace) go as keys. A key (its own or one from elsewhere: [TerminalKeyboard.composition]), the pointer or
+ * a paste reaching the program, a line break or a composed letter a sticky modifier turned into a chord ends the
+ * composition and restarts the input method, so it never corrects text the program has moved past; a held part goes
+ * first, where it was typed.
  *
  * It types only while [terminal] is the keyboard's target and until it is [close]d: what the input method sends to a
  * connection whose terminal is not (or no longer) the one selected lands nowhere, so it never reaches another program.
@@ -58,34 +67,54 @@ internal class TerminalInputConnection(
     // the composition as the program has it: the end of its line, where its cursor is
     private var sent = ""
 
-    private val pending = PendingComposition { end(restart = true) }
+    // the rest of the composition, from the first character a backspace may not take back alone
+    private var held = ""
+
+    private val pending =
+        object : PendingComposition {
+            override val holds get() = held.isNotEmpty()
+
+            override fun end() = this@TerminalInputConnection.end(restart = true)
+        }
 
     private fun composed(): String = editable?.toString().orEmpty()
 
-    // line editors delete a letter with its marks (or a whole emoji) per backspace, so retype from its start
-    private fun send(text: String) {
-        val kept = sent.characterStart(sent.commonPrefixWith(text).length)
-        repeat(sent.characterCount(kept)) { keyboard.press(BACKSPACE, terminal) }
-        if (kept < text.length) keyboard.type(text.substring(kept), terminal)
-        sent = text
+    // line editors disagree on what a backspace takes beyond a lone letter, so the rest waits for the composition's end
+    private fun send(
+        text: String,
+        whole: Boolean,
+    ) {
+        val ready = if (whole) text else text.substring(0, text.lettersAlone())
+        val kept = sent.commonPrefixWith(ready).length
+        repeat(sent.codePointCount(kept, sent.length)) { keyboard.press(BACKSPACE, terminal) }
+        if (kept < ready.length) keyboard.type(ready.substring(kept), terminal)
+        sent = ready
+        hold(text.substring(ready.length))
+    }
+
+    private fun hold(text: String) {
+        if (terminal.composing == held) terminal.composing = text
+        held = text
     }
 
     // the composition, as it now stands, onto the program's line
     private fun update() {
         val text = composed()
-        if (text == sent) return
-        val chord = keyboard.holdsSticky
-        send(text)
+        if (text == sent + held) return
+        val ends = keyboard.holdsSticky || '\n' in text
+        send(text, whole = ends)
         when {
-            chord || '\n' in text -> end(restart = true)
+            ends -> end(restart = true)
             text.isNotEmpty() -> keyboard.composition = pending
             keyboard.composition === pending -> keyboard.composition = null
         }
     }
 
-    // forgets the composition, which the program already has; [restart] tells the input method to forget it too
+    // the held part goes where it was typed; [restart] tells the input method to forget the composition too
     private fun end(restart: Boolean) {
-        val waiting = sent.isNotEmpty() || composed().isNotEmpty()
+        val waiting = sent.isNotEmpty() || held.isNotEmpty() || composed().isNotEmpty()
+        if (live && held.isNotEmpty()) keyboard.type(held, terminal)
+        hold("")
         editable?.let { text ->
             removeComposingSpans(text)
             text.clear()
@@ -98,8 +127,8 @@ internal class TerminalInputConnection(
     /** Ends this connection: its composition stays where it was typed, and nothing sent afterwards lands anywhere. */
     fun close() {
         if (closed) return
-        closed = true
         end(restart = true)
+        closed = true
     }
 
     override fun closeConnection() {
@@ -112,7 +141,7 @@ internal class TerminalInputConnection(
         newCursorPosition: Int,
     ): Boolean {
         if (!live) return false
-        send(text?.toString().orEmpty())
+        send(text?.toString().orEmpty(), whole = true)
         end(restart = false)
         return true
     }
@@ -149,11 +178,10 @@ internal class TerminalInputConnection(
         afterLength: Int,
     ): Boolean {
         if (!live) return false
-        val composition = sent
-        val around = beforeLength > 0 && composition.isNotEmpty()
-        if (around) send("")
+        val around = beforeLength > 0 && sent.isNotEmpty()
+        if (around) send("", whole = false)
         repeat(beforeLength.coerceAtLeast(0)) { keyboard.press(BACKSPACE, terminal) }
-        if (around) send(composition)
+        if (around) send(composed(), whole = false)
         repeat(afterLength.coerceAtLeast(0)) { keyboard.press(DELETE, terminal) }
         return true
     }
@@ -173,22 +201,46 @@ internal class TerminalInputConnection(
     }
 
     private companion object {
-        fun String.characterStart(index: Int): Int {
-            if (index >= length) return index
+        // nothing a grapheme editor could join to what is before it, nor a mark a code point editor would leave alone
+        fun Int.alone(): Boolean =
+            UCharacter.getIntPropertyValue(this, UProperty.GRAPHEME_CLUSTER_BREAK) in ALONE_BREAKS &&
+                UScript.getScript(this) !in CONJUNCT_SCRIPTS &&
+                Character.getType(this) != Character.OTHER_SYMBOL.toInt() &&
+                !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && pictographic())
+
+        @RequiresApi(Build.VERSION_CODES.Q)
+        fun Int.pictographic() = UCharacter.hasBinaryProperty(this, UProperty.EXTENDED_PICTOGRAPHIC)
+
+        // held text starts a whole character, so it reads right at the cursor
+        fun String.lettersAlone(): Int {
             val characters = BreakIterator.getCharacterInstance().also { it.setText(this) }
-            return if (characters.isBoundary(index)) index else characters.preceding(index)
+            var at = 0
+            while (at < length) {
+                val next = characters.following(at)
+                val letter = codePointAt(at)
+                if (next != at + Character.charCount(letter) || !letter.alone()) return at
+                at = next
+            }
+            return at
         }
 
-        fun String.characterCount(from: Int): Int {
-            val characters = BreakIterator.getCharacterInstance().also { it.setText(this) }
-            var count = 0
-            var at = from
-            while (at < length) {
-                at = characters.following(at)
-                count += 1
-            }
-            return count
-        }
+        val ALONE_BREAKS =
+            setOf(
+                UCharacter.GraphemeClusterBreak.OTHER,
+                UCharacter.GraphemeClusterBreak.LV,
+                UCharacter.GraphemeClusterBreak.LVT,
+            )
+
+        // the scripts whose conjuncts a grapheme editor keeps whole (Unicode's Indic_Conjunct_Break)
+        val CONJUNCT_SCRIPTS =
+            setOf(
+                UScript.BENGALI,
+                UScript.DEVANAGARI,
+                UScript.GUJARATI,
+                UScript.MALAYALAM,
+                UScript.ORIYA,
+                UScript.TELUGU,
+            )
 
         const val BACKSPACE = "backspace"
         const val DELETE = "delete"
@@ -378,7 +430,7 @@ private class TerminalTextInputNode(
 }
 
 /**
- * Draws a hardware dead key's accent waiting at a terminal's cursor: on the terminal's ground in its text color,
+ * Draws what waits at a terminal's cursor ([TerminalState.composing]): on the terminal's ground in its text color,
  * underlined in the cursor's color, moved left as far as it needs to fit the view.
  */
 internal class CompositionPainter(

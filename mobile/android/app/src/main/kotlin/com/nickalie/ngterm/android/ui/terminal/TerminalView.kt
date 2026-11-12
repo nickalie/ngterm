@@ -90,7 +90,10 @@ class TerminalState(
     /** The font the view draws in, as Settings picks it. */
     var face by mutableStateOf(face)
 
-    /** A hardware dead key's accent, drawn at the cursor until the next key takes it; empty for none. */
+    /**
+     * What waits at the cursor, drawn there: a hardware dead key's accent until the next key takes it, or the part of
+     * the input method's composition held until it ends; empty for none.
+     */
     var composing by mutableStateOf("")
         internal set
 
@@ -237,8 +240,7 @@ fun TerminalView(
     SideEffect {
         input.font = font
         input.keyboardRequest = softKeyboard::request
-        input.endComposition = { keyboard.endComposition(state) }
-        selection.endComposition = { keyboard.endComposition(state) }
+        keyboard.endsCompositionsFor(state, input, selection)
         input.swipe = onSwipe
     }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }

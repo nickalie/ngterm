@@ -39,10 +39,14 @@ class TerminalShortcuts(
 )
 
 /**
- * An input method's composition in progress, already on the program's line: a key from elsewhere (the extra-keys row,
- * a hardware key) ends it first, so the input method starts afresh after the key instead of correcting text before it.
+ * An input method's composition in progress, on the program's line but for what it [holds] at the cursor: a key from
+ * elsewhere (the extra-keys row, a hardware key) ends it first, so the input method starts afresh after the key
+ * instead of correcting text before it.
  */
-internal fun interface PendingComposition {
+internal interface PendingComposition {
+    /** Whether part of it waits at the cursor, to be typed as it ends. */
+    val holds: Boolean
+
     fun end()
 }
 
@@ -70,8 +74,8 @@ class TerminalKeyboard(
     /**
      * The terminal every key goes to; `null` while none can take them (keys then go nowhere, but the chords still
      * run). A lone terminal becomes it as it takes the focus ([selectsOnFocus]); the session view sets it to its
-     * selected pane. Moving it ends the input method's connection to the terminal it leaves: its composition stays
-     * there, already the program's, and nothing the connection sends later lands anywhere.
+     * selected pane. Moving it ends the input method's connection to the terminal it leaves: its composition is
+     * finished there, and nothing the connection sends later lands anywhere.
      */
     var target: TerminalState?
         get() = selected
@@ -438,11 +442,19 @@ private fun TerminalShortcuts.action(
     }
 
 /**
- * The pointer or a paste is reaching [to]'s program, which can move its cursor: the input method's composition there
+ * The pointer or a paste reached [to]'s program, which can move its cursor: the input method's composition there
  * ends, so the input method never corrects text somewhere else.
  */
 internal fun TerminalKeyboard.endComposition(to: TerminalState) {
     if (to === target) composition?.end()
+}
+
+/**
+ * The pointer or a paste may reach [to]'s program: a composition there holding part of itself at the cursor ends
+ * first, so that part is typed where it was composed.
+ */
+internal fun TerminalKeyboard.endHeldComposition(to: TerminalState) {
+    if (to === target && composition?.holds == true) composition?.end()
 }
 
 /** A [TerminalKeyboard] kept across compositions. */

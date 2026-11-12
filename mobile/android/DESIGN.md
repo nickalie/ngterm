@@ -497,9 +497,11 @@ sideways or wider (48dp a key or more): one line of sixteen
   text with no suggestions, autocorrect, automatic capitals or learning (it types commands and passwords), and Enter
   as a key. Every letter goes to the program as it is typed, so a shell's completion or a TUI's `/` menu follows each
   one: a word the keyboard composes (a swiped word, a CJK reading, voice) goes as it grows, and a change to it (a
-  conversion, a correction, a backspace in it) is made on the program's line, with backspaces and the new text, a
-  whole character (a letter with its marks, an emoji) at a time, as line editors delete. Nothing of it waits outside
-  the program: the program's cursor is the only cursor. Backspace past it is the program's.
+  conversion, a correction, a backspace in it) is made on the program's line, with backspaces and the new text. Line
+  editors take different amounts back on a backspace over a letter with its marks, a conjunct or an emoji sequence
+  (Claude Code and Codex the whole character, readline the last letter with its marks, the terminal's own line editing
+  one code point), so a composition goes only as far as its first such character; from there it waits at the cursor
+  as a dead key's accent does, and goes when the word is done. Backspace past it is the program's.
 - **The row** sits under the terminal, over the keyboard, whenever no hardware keyboard is attached and Settings hasn't
   hidden it (it shows with the keyboard closed too: the arrows and Esc work a pager or a menu without it). Two lines of
   eight on a phone held upright: Ctrl and Alt by Tab under the thumb, the arrows an inverted T with Home and End over
@@ -523,7 +525,7 @@ sideways or wider (48dp a key or more): one line of sixteen
   next pane, Ctrl+Shift+Up and Down to the previous and next session (the session view's to wire; a chord with nowhere
   to go is the program's).
 - **Order:** a key from the row or a hardware key, a paste, or a tap, click or wheel the program takes while the soft
-  keyboard is composing ends the composition (its letters are already the program's), so the keyboard starts afresh
+  keyboard is composing ends the composition (what waits at the cursor goes first), so the keyboard starts afresh
   after it rather than correcting text before it or where the cursor was. A mouse click gives the terminal the focus
   without opening the soft keyboard; a tap opens it.
 
@@ -634,8 +636,8 @@ compact                            medium (rail open)               expanded
   keys. The input focus follows the selection, never the reverse. While the soft keyboard is up or a hardware keyboard
   is attached, the pane selected takes the focus once its terminal is there, so typing goes on in it; with the soft
   keyboard down, a pane the selection left lets the focus go without the keyboard opening, and the next touch on a
-  pane focuses it. Selecting another pane ends a word the soft keyboard is composing in the pane it was typed in,
-  where it already is. Until the selected pane's terminal is there (on its way, or it couldn't be shown) the keys go nowhere,
+  pane focuses it. Selecting another pane ends a word the soft keyboard is composing in the pane it was typed in, and
+  finishes it there. Until the selected pane's terminal is there (on its way, or it couldn't be shown) the keys go nowhere,
   but the chords still move between panes and sessions.
 - **The attached sessions in the rail and the sidebar:** the sidebar groups them by machine (the machine's name as a
   `SectionHeader`, then a `SessionRow` each with its status, the bus bar on the one open), companions indented as in

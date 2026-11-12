@@ -52,7 +52,10 @@ class TerminalInput internal constructor(
     /** Gives the view the focus, and opens the soft keyboard when asked to (a tap; a mouse click doesn't). */
     internal var keyboardRequest: (show: Boolean) -> Unit = {}
 
-    /** Ends the input method's composition: the program is about to take a pointer event that can move its cursor. */
+    /** Ends a composition holding part of itself: the program may take a pointer event that can move its cursor. */
+    internal var endHeldComposition: () -> Unit = {}
+
+    /** Ends the input method's composition: the program took a pointer event that can move its cursor. */
     internal var endComposition: () -> Unit = {}
 
     /** Where a finger's sideways swipe goes (the session view's next or previous pane); `null`: a drag only scrolls. */
@@ -96,8 +99,10 @@ class TerminalInput internal constructor(
         position: Offset,
     ): Boolean {
         val at = panePixels(position)
+        val moves = action != PaneMouseAction.MOTION || button != null
+        if (moves) endHeldComposition()
         val taken = guarded { state.pane.mouse(PaneMouse(action, button, mods, at.x, at.y)) } == true
-        if (taken && (action != PaneMouseAction.MOTION || button != null)) endComposition()
+        if (taken && moves) endComposition()
         return taken
     }
 
@@ -122,6 +127,7 @@ class TerminalInput internal constructor(
     ) {
         if (rows == 0 && columns == 0) return
         val at = panePixels(position)
+        endHeldComposition()
         val outcome = guarded { state.pane.wheel(PaneWheel(rows, columns, mods, at.x, at.y)) }
         if (outcome == PaneWheelOutcome.REPORTED || outcome == PaneWheelOutcome.CURSOR_KEYS) endComposition()
         state.dirty()
@@ -209,7 +215,10 @@ class TerminalSelection internal constructor(
     var menuAt by mutableStateOf<Offset?>(null)
         internal set
 
-    /** Ends the input method's composition: a paste is about to reach the program. */
+    /** Ends a composition holding part of itself: a paste may reach the program. */
+    internal var endHeldComposition: () -> Unit = {}
+
+    /** Ends the input method's composition: a paste reached the program. */
     internal var endComposition: () -> Unit = {}
 
     /** Text the pane refused to paste as unsafe, waiting for the user's yes; `null` with none. */
@@ -305,8 +314,9 @@ class TerminalSelection internal constructor(
         menuAt = null
         unsafePaste = null
         if (touchSelection) clearSelection()
-        endComposition()
+        endHeldComposition()
         val outcome = guarded { state.pane.paste(text, allowUnsafe) }
+        if (outcome == PaneSendOutcome.WRITTEN) endComposition()
         if (outcome == PaneSendOutcome.UNSAFE) unsafePaste = text
     }
 
@@ -333,4 +343,16 @@ class TerminalSelection internal constructor(
         // a single, a double (word) and a triple (line) click, then round again
         const val CLICK_KINDS = 3
     }
+}
+
+// the pointer and a paste reach the program around the keyboard's composition: it ends as they go
+internal fun TerminalKeyboard.endsCompositionsFor(
+    state: TerminalState,
+    input: TerminalInput,
+    selection: TerminalSelection,
+) {
+    input.endHeldComposition = { endHeldComposition(state) }
+    input.endComposition = { endComposition(state) }
+    selection.endHeldComposition = { endHeldComposition(state) }
+    selection.endComposition = { endComposition(state) }
 }
