@@ -40,7 +40,7 @@ _LIFETIME = re.compile(r"'(?:r#)?[^\W\d]\w*")
 _NUMBER = re.compile(r"\d\w*(?:\.\d\w*)?")
 _SPACE = re.compile(r"\s+")
 
-IDENT, LITERAL, LIFETIME, PUNCT = "ident", "literal", "lifetime", "punct"
+IDENT, LITERAL, LIFETIME, PUNCT, COMMENT = "ident", "literal", "lifetime", "punct", "comment"
 _OPEN = {"(": ")", "[": "]", "{": "}"}
 _CLOSE = {")", "]", "}"}
 
@@ -103,19 +103,24 @@ def _literal_end(source: str, at: int) -> int | None:
     return None
 
 
-def tokens(source: str) -> list[Token]:
-    """`source`'s tokens, comments and whitespace left out."""
+def tokens(source: str, comments: bool = False) -> list[Token]:
+    """`source`'s tokens, whitespace left out, and comments too unless `comments` (then each is a COMMENT token: a line
+    comment without its newline, a block comment whole)."""
     out: list[Token] = []
     i, line, size = 0, 1, len(source)
     while i < size:
         char = source[i]
         if char.isspace():
             end = _SPACE.match(source, i).end()  # type: ignore[union-attr]
-        elif source.startswith("//", i):
-            newline = source.find("\n", i)
-            end = size if newline < 0 else newline
-        elif source.startswith("/*", i):
-            end = _skip_block_comment(source, i)
+        elif source.startswith(("//", "/*"), i):
+            if source.startswith("//", i):
+                newline = source.find("\n", i)
+                end = size if newline < 0 else newline
+            else:
+                end = _skip_block_comment(source, i)
+            if comments:
+                text = source[i:end]
+                out.append(Token(COMMENT, text, line, line + text.count("\n")))
         else:
             end, kind = _token_end(source, i)
             text = source[i:end]

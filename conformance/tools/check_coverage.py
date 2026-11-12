@@ -2,14 +2,19 @@
 """Check a run's code coverage against the floors: no crate's coverage may drop below its floor.
 
 Reads the per-crate table of `summary.md` (agterm_conformance/code_coverage.py writes it into a `--coverage` run's
-`DIR/coverage`, scripts/unit-coverage.sh into its OUT_DIR) and a floor file: `#` header comments, then one floor line
+`DIR/coverage`, its `e2e` mode into its `--out`, scripts/unit-coverage.sh into its OUT_DIR; the table's metric columns
+are read, `lines` always there, any other column ignored) and a floor file: `#` header comments, then one floor line
 per crate, sorted by crate, in one of two forms throughout the file:
 
-- `crate line%`: the line % alone (the suite's `conformance/coverage-floor-linux.txt`, `coverage-floor-windows.txt`);
+- `crate line%`: the line % alone (the suite's `conformance/coverage-floor-linux.txt`, `coverage-floor-windows.txt`,
+  the e2e floors);
 - `crate lines% functions% regions%`: the three of them (`scripts/unit-coverage-floor-linux.txt`).
 
-A crate more than TOLERANCE points below its floor in any of them breaks the floors and is named with the metric and
-both numbers. A crate the summary measures but the file lacks is new to the workspace; one the file lists but the
+A file may open its floors with a `total` line: the table's total row is then judged like a crate (the e2e floors
+hold each app's total so). Without one the total is neither judged nor added. A crate more than TOLERANCE points below
+its floor in any of them breaks the floors and is named with the metric and both numbers. `--min PCT` also fails a
+total line % under PCT, with no tolerance (an app whose total floor has reached the target: it never goes back
+under). The total line % and its distance to TARGET are printed with the verdict. A crate the summary measures but the file lacks is new to the workspace; one the file lists but the
 summary lacks is gone from it: neither breaks. `--summary` may repeat: each crate's metric is judged by its lowest
 measurement. A crate with no lines (an n/a cell) is neither judged nor added. Appends a markdown summary to
 `$GITHUB_STEP_SUMMARY` when it is set. Exit 0: holds, 1: broken, 2: usage error or a malformed input file.
@@ -36,6 +41,11 @@ from pathlib import Path
 TOLERANCE = 0.5
 # The fewest summaries `--add` raises the floors from: a batch's minimum, not one run's luck.
 MIN_ADD_SUMMARIES = 2
+# The line % every app's e2e total aims for; the verdict shows the distance to it.
+TARGET = 90.0
+# The table's total row, and the floor that holds it.
+TOTAL = "total"
+METRICS = ("lines", "functions", "regions")
 # Below this a difference of two percentages is float noise, not a drop (floors keep two decimals).
 _EPSILON = 1e-9
 # The metrics a floor line holds, by its number of values, in the file's column order.
@@ -70,15 +80,23 @@ class Verdict:
     gone: list[str] = field(default_factory=list)
     judged: int = 0
     broken: set[str] = field(default_factory=set)
+    # `--min`'s break: the total line % under it
+    under_min: str | None = None
+    # its BROKEN line
+    breaks_min: str = ""
+    # the total line % and its distance to TARGET
+    total: str | None = None
 
     @property
     def holds(self) -> bool:
-        return not self.breaks
+        return not self.breaks and self.under_min is None
 
     def line(self) -> str:
         judged = self.judged
-        if not self.holds:
+        if self.breaks:
             return f"coverage floors broken: {len(self.broken)} crate(s) of {judged} below their floor"
+        if self.under_min is not None:
+            return f"coverage under the minimum: {self.under_min}"
         notes = [f"{len(self.new)} new", f"{len(self.gone)} gone"]
         return f"coverage floors hold: {judged} crate(s) judged ({', '.join(notes)})"
 
@@ -87,9 +105,9 @@ def _cells(line: str) -> list[str]:
     return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
 
-def read_summary(path: Path) -> dict[str, Coverage]:
-    """Each crate's % per metric from summary.md's table; a crate with an n/a cell (no lines) and the total row left
-    out."""
+def read_summary(path: Path, needs: tuple[str, ...] = ()) -> dict[str, Coverage]:
+    """Each crate's % per metric from summary.md's table, and the total row's as TOTAL; a row with an n/a cell (no
+    lines) left out. Refuses a table without a metric of `needs`."""
     try:
         text = path.read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError) as error:
@@ -103,29 +121,30 @@ def read_summary(path: Path) -> dict[str, Coverage]:
     if not _SEPARATOR.match(separator):
         raise InputError(f"{path}:{start + 2}: no separator row under the table's header: {separator!r}")
     columns = _cells(lines[start])[1:]
-    lacking = [metric for metric in FORMS[3] if metric not in columns]
+    lacking = [metric for metric in needs if metric not in columns]
     if lacking:
-        raise InputError(f"{path}:{start + 1}: the table has no {', '.join(lacking)} column")
+        raise InputError(f"{path}:{start + 1}: the table has no {' or '.join(lacking)} column, which the floors need")
+    metrics = [index for index, column in enumerate(columns) if column in METRICS]
     crates: dict[str, Coverage] = {}
     total = False
     for number, line in enumerate(lines[start + 2 :], start=start + 3):
         if not line.startswith("|"):
             break
         name, *cells = _cells(line)
-        matches = [_CELL.match(cell) for cell in cells]
+        matches = [_CELL.match(cells[index]) if index < len(cells) else None for index in metrics]
         if not _NAME.match(name) or len(cells) != len(columns) or None in matches:
             raise InputError(f"{path}:{number}: not a crate row: {line!r}")
-        if name == "total":
-            total = True
-            break
         if name in crates:
             raise InputError(f"{path}:{number}: a second row for {name}")
         counts = [match.groups() for match in matches if match is not None and match.group(1) is not None]
-        if len(counts) == len(columns):
+        if len(counts) == len(metrics):
             crates[name] = {
-                metric: 100.0 * int(covered) / int(count) if int(count) else 0.0
-                for metric, (covered, count) in zip(columns, counts)
+                columns[index]: 100.0 * int(covered) / int(count) if int(count) else 0.0
+                for index, (covered, count) in zip(metrics, counts)
             }
+        if name == TOTAL:
+            total = True
+            break
     if not total:
         raise InputError(f"{path}: the table has no total row (a truncated summary)")
     return crates
@@ -155,7 +174,9 @@ def parse_floors(text: str, path: Path) -> Floors:
         metrics = FORMS[len(values)]
         if name in floors:
             raise InputError(f"{where}: a second floor for {name}")
-        if floors and name < list(floors)[-1]:
+        if name == TOTAL and floors:
+            raise InputError(f"{where}: the total floor goes first")
+        if floors and list(floors)[-1] != TOTAL and name < list(floors)[-1]:
             raise InputError(f"{where}: out of order (the crates are sorted): {name}")
         floors[name] = tuple(_percent(value, where) for value in values)
     return Floors(header, floors, metrics)
@@ -204,9 +225,25 @@ def judge(measured: dict[str, Coverage], floors: Floors) -> Verdict:
     verdict.new = [
         f"{name}: {_described(floors.metrics, [now[metric] for metric in floors.metrics])}"
         for name, now in measured.items()
-        if name not in floors.floors
+        if name not in floors.floors and name != TOTAL
     ]
+    if TOTAL in measured:
+        now = measured[TOTAL]["lines"]
+        distance = f"{TARGET - now:.2f} pt to {TARGET:.0f}%" if now + _EPSILON < TARGET else f"at or above {TARGET:.0f}%"
+        verdict.total = f"total: {now:.2f}% of lines, {distance}"
     return verdict
+
+
+def judge_min(measured: dict[str, Coverage], minimum: float, verdict: Verdict) -> None:
+    """Fails a total line % under `minimum` (`--min`), naming both numbers."""
+    if TOTAL not in measured:
+        raise InputError(f"the summary has no total line % to hold against --min {minimum:.2f}")
+    now = measured[TOTAL]["lines"]
+    if minimum - now > _EPSILON:
+        verdict.under_min = f"total {now:.2f}% of lines, --min {minimum:.2f}%"
+        verdict.breaks_min = (
+            f"total: {now:.2f}% of lines, under --min {minimum:.2f}% ({minimum - now:.2f} pt below)"
+        )
 
 
 def lowest(batch: list[dict[str, Coverage]]) -> tuple[dict[str, Coverage], set[str]]:
@@ -225,6 +262,8 @@ def raised(measured: dict[str, Coverage], floors: Floors, everywhere: set[str] |
     """The floors after a batch: each crate every summary measures raised to its lowest % (two places, down), never
     lowered, and added when new; a crate only some summaries measure keeps its floor; one none measures dropped."""
     everywhere = set(measured) if everywhere is None else everywhere
+    if TOTAL not in floors.floors:
+        everywhere = everywhere - {TOTAL}
     merged = {name: values for name, values in floors.floors.items() if name in measured}
     for name in everywhere:
         old = floors.floors.get(name, (0.0,) * len(floors.metrics))
@@ -232,7 +271,8 @@ def raised(measured: dict[str, Coverage], floors: Floors, everywhere: set[str] |
             max(floor, math.floor(measured[name][metric] * 100 + _EPSILON) / 100)
             for metric, floor in zip(floors.metrics, old)
         )
-    return Floors(floors.header, dict(sorted(merged.items())), floors.metrics)
+    ordered = sorted(merged.items(), key=lambda item: (item[0] != TOTAL, item[0]))
+    return Floors(floors.header, dict(ordered), floors.metrics)
 
 
 def render_floors(floors: Floors) -> str:
@@ -244,17 +284,23 @@ def render_floors(floors: Floors) -> str:
 def print_verdict(verdict: Verdict) -> None:
     for line in verdict.breaks:
         print(f"BROKEN {line}")
+    if verdict.under_min is not None:
+        print(f"BROKEN {verdict.breaks_min}")
     for line in verdict.new:
         print(f"new, no floor yet: {line}")
     for line in verdict.gone:
         print(f"gone from the run, floor dropped by --add: {line}")
+    if verdict.total is not None:
+        print(verdict.total)
     print(verdict.line())
 
 
 def summary_markdown(verdict: Verdict) -> str:
     parts = ["### Coverage floors", "", f"**{verdict.line()}**", ""]
+    if verdict.total is not None:
+        parts += [verdict.total, ""]
     for title, lines in (
-        ("Below their floor", verdict.breaks),
+        ("Below their floor", verdict.breaks + ([verdict.breaks_min] if verdict.under_min is not None else [])),
         ("New, no floor yet", verdict.new),
         ("Gone from the run", verdict.gone),
     ):
@@ -272,18 +318,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--add", action="store_true",
                         help=f"raise the floors to the batch's lowest, add new crates (at least {MIN_ADD_SUMMARIES} "
                              "--summary of the same build)")
+    parser.add_argument("--min", type=str, metavar="PCT",
+                        help="fail a total line %% under PCT, with no tolerance (an app whose total floor reached it)")
     args = parser.parse_args(argv)
+    minimum = None
+    if args.min is not None:
+        try:
+            minimum = _percent(args.min, "--min")
+        except InputError as error:
+            print(f"check_coverage: {error}", file=sys.stderr)
+            return 2
     if args.add and len(args.summary) < MIN_ADD_SUMMARIES:
         print(f"check_coverage: --add needs at least {MIN_ADD_SUMMARIES} --summary of the same build (one run's "
               "% varies by more than the tolerance)", file=sys.stderr)
         return 2
     try:
-        measured, everywhere = lowest([read_summary(path) for path in args.summary])
         floors = read_floors(args.floor)
+        measured, everywhere = lowest([read_summary(path, floors.metrics) for path in args.summary])
+        verdict = judge(measured, floors)
+        if minimum is not None:
+            judge_min(measured, minimum, verdict)
     except InputError as error:
         print(f"check_coverage: {error}", file=sys.stderr)
         return 2
-    verdict = judge(measured, floors)
     print_verdict(verdict)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

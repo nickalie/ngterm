@@ -1,0 +1,29 @@
+# Each app's code per platform for the e2e coverage report (agterm_conformance/code_coverage.py e2e).
+#
+# A `[app.platform]` table per app and platform:
+# - binaries: the programs (or the shared library) whose coverage maps count, as the platform's build names them
+#   (a Windows `.exe` is found without its suffix). Only these maps are read: another app's programs never count.
+#   A program's map holds every function of each workspace crate it links a part of, run or not (llvm-cov export,
+#   2026-11-12): code of a shared crate that only another app calls counts in this app's denominator too;
+# - modules (optional): the rows of non-Rust code, `name = "repo-relative path prefix"`; Rust files count in their
+#   workspace crate's row;
+# - exclude (optional): regular expressions searched in each repo-relative path with a leading `/` (generated
+#   bindings, a variant's test fakes); `vendor/` and the `-sys` crates are always left out.
+#
+# Code the platform's build compiles out is in no map, so it is out of that platform's number. Android and iOS come
+# with their report adapters (docs/plans/20261112-e2e-coverage-90.md, Tasks 40 and 46).
+
+[desktop.linux]
+binaries = ["ngterm", "ngtermctl", "ngterm-session", "ngterm-web"]
+
+[desktop.windows]
+binaries = ["ngterm", "ngtermctl", "ngterm-session"]
+
+[desktop.macos]
+binaries = ["ngterm", "ngtermctl", "ngterm-session"]
+
+[headless.linux]
+binaries = ["ngterm-headless", "ngtermctl", "ngterm-session"]
+
+[headless.macos]
+binaries = ["ngterm-headless", "ngtermctl", "ngterm-session"]

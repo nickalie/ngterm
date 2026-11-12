@@ -233,8 +233,6 @@ def test_a_missing_floor_file_exits_2(files, capsys):
             "| crate | lines | regions | functions |\n|---|---:|---:|---:|\n| ngterm-core | 50.00% (1/2) |\n",
             "not a crate row",
         ),
-        ("| crate | lines | regions |\n|---|---:|---:|\n| total | 50.00% (1/2) | 50.00% (1/2) |\n",
-         "no functions column"),
         ("| crate | lines | regions | functions |\n|---|---:|---:|---:|\n| ngterm-core | half |\n", "not a crate row"),
     ],
 )
@@ -381,3 +379,132 @@ def test_a_malformed_three_column_floor_file_exits_2(files, capsys, floors, mess
     code, _, err = check(capsys, summary, floor)
     assert code == 2
     assert message in err and str(floor) in err
+
+
+# The e2e report's summaries (code_coverage.py e2e): line % alone, a `total` floor and `--min`.
+E2E = "# e2e floors\n# total, then crate line%\n"
+
+
+def e2e_summary(rows: dict[str, tuple[int, int]], excluded: int = 0) -> str:
+    """An e2e summary.md as code_coverage.render_e2e writes it: rows of (covered, count), each with `excluded` lines."""
+    from agterm_conformance import code_coverage
+
+    build = code_coverage.AppBuild(("ngterm",))
+    table = {name: code_coverage.E2ERow(count, covered, excluded) for name, (covered, count) in rows.items()}
+    return code_coverage.render_e2e("desktop", "linux", build, table, [])
+
+
+def write_e2e(summary: Path, floor: Path, rows: dict[str, tuple[int, int]], floors: str) -> None:
+    summary.write_text(e2e_summary(rows, excluded=7), encoding="utf-8")
+    floor.write_text(E2E + floors, encoding="utf-8")
+
+
+def test_an_e2e_summary_is_judged_by_its_line_column_alone(files, capsys):
+    summary, floor = files
+    write_e2e(summary, floor, {"ngterm-core": (5000, 10000), "ngterm-gpui": (10, 100)}, "ngterm-core 60.00\n")
+    code, out, _ = check(capsys, summary, floor)
+    assert code == 1
+    assert "BROKEN ngterm-core: 50.00%, floor 60.00% (10.00 pt below, more than 0.5 pt)" in out
+
+
+def test_the_total_floor_is_judged_like_a_crate(files, capsys):
+    summary, floor = files
+    write_e2e(summary, floor, {"ngterm-core": (5000, 10000), "ngterm-gpui": (5000, 10000)},
+              "total 51.00\nngterm-core 50.00\n")
+    code, out, _ = check(capsys, summary, floor)
+    assert code == 1
+    assert "BROKEN total: 50.00%, floor 51.00% (1.00 pt below, more than 0.5 pt)" in out
+    assert "coverage floors broken: 1 crate(s) of 2 below their floor" in out
+    assert "new, no floor yet: ngterm-gpui: 50.00%" in out and "new, no floor yet: total" not in out
+
+
+def test_add_raises_the_total_floor_and_keeps_it_first(files, capsys):
+    summary, floor = files
+    write_e2e(summary, floor, {"ngterm-core": (6000, 10000), "ngterm-app": (7000, 10000)}, "total 10.00\n")
+    assert check(capsys, summary, floor, "--add")[0] == 0
+    assert floor.read_text(encoding="utf-8") == E2E + "total 65.00\nngterm-app 70.00\nngterm-core 60.00\n"
+
+
+def test_add_never_adds_a_total_to_a_file_without_one(files, capsys):
+    summary, floor = files
+    write_e2e(summary, floor, {"ngterm-core": (6000, 10000)}, "ngterm-core 50.00\n")
+    assert check(capsys, summary, floor, "--add")[0] == 0
+    assert floor.read_text(encoding="utf-8") == E2E + "ngterm-core 60.00\n"
+
+
+def test_a_total_floor_below_the_first_line_is_refused(files, capsys):
+    summary, floor = files
+    write_e2e(summary, floor, {"ngterm-core": (1, 2)}, "ngterm-core 50.00\ntotal 50.00\n")
+    code, _, err = check(capsys, summary, floor)
+    assert code == 2
+    assert "the total floor goes first" in err and str(floor) in err
+
+
+def test_min_fails_a_total_under_it_naming_both_numbers(files, capsys):
+    summary, floor = files
+    write_e2e(summary, floor, {"ngterm-core": (8520, 10000)}, "total 85.00\n")
+    code, out, _ = check(capsys, summary, floor, "--min", "90")
+    assert code == 1
+    assert "BROKEN total: 85.20% of lines, under --min 90.00% (4.80 pt below)" in out
+    assert "coverage under the minimum: total 85.20% of lines, --min 90.00%" in out
+
+
+def test_min_holds_at_the_minimum_and_judges_the_batchs_lowest_total(files, capsys, tmp_path):
+    summary, floor = files
+    write_e2e(summary, floor, {"ngterm-core": (9000, 10000)}, "total 89.00\n")
+    assert check(capsys, summary, floor, "--min", "90")[0] == 0
+    batch = []
+    for number, covered in enumerate((9100, 8999)):
+        path = tmp_path / f"e2e-{number}.md"
+        path.write_text(e2e_summary({"ngterm-core": (covered, 10000)}), encoding="utf-8")
+        batch.append(path)
+    code, out, _ = check(capsys, summary, floor, "--min", "90", batch=batch)
+    assert code == 1
+    assert "BROKEN total: 89.99% of lines, under --min 90.00% (0.01 pt below)" in out
+
+
+def test_min_skips_add(files, capsys):
+    summary, floor = files
+    write_e2e(summary, floor, {"ngterm-core": (8000, 10000)}, "total 70.00\n")
+    code, _, err = check(capsys, summary, floor, "--min", "90", "--add")
+    assert code == 1
+    assert "--add skipped" in err
+    assert floor.read_text(encoding="utf-8") == E2E + "total 70.00\n"
+
+
+@pytest.mark.parametrize("value", ["101", "-1", "nan", "ninety"])
+def test_a_min_out_of_range_exits_2(files, capsys, value):
+    summary, floor = files
+    write_e2e(summary, floor, {"ngterm-core": (1, 2)}, "")
+    code, _, err = check(capsys, summary, floor, "--min", value)
+    assert code == 2
+    assert "--min" in err
+
+
+def test_the_total_and_its_distance_to_90_are_always_printed(files, capsys, tmp_path, monkeypatch):
+    summary, floor = files
+    write_e2e(summary, floor, {"ngterm-core": (6120, 10000)}, "")
+    job = tmp_path / "step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(job))
+    code, out, _ = check(capsys, summary, floor)
+    assert code == 0
+    assert "total: 61.20% of lines, 28.80 pt to 90%" in out
+    assert "total: 61.20% of lines, 28.80 pt to 90%" in job.read_text(encoding="utf-8")
+
+
+def test_floors_of_a_metric_the_summary_lacks_exit_2(files, capsys):
+    summary, floor = files
+    summary.write_text(e2e_summary({"ngterm-core": (1, 2)}), encoding="utf-8")
+    floor.write_text(THREE + "ngterm-core 1.00 2.00 3.00\n", encoding="utf-8")
+    code, _, err = check(capsys, summary, floor)
+    assert code == 2
+    assert "no functions or regions column, which the floors need" in err
+
+
+def test_an_e2e_summary_with_no_total_numbers_cannot_take_min(files, capsys):
+    summary, floor = files
+    summary.write_text(e2e_summary({"ngterm-core": (0, 0)}), encoding="utf-8")
+    floor.write_text(E2E, encoding="utf-8")
+    code, _, err = check(capsys, summary, floor, "--min", "90")
+    assert code == 2
+    assert "no total line % to hold against --min" in err
