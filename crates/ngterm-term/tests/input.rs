@@ -173,6 +173,31 @@ fn the_mouse_reports_only_once_a_program_asks() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn the_extra_buttons_report_the_codes_ghostty_gives_them() -> TestResult {
+    let fixture = recorder("\\033[?1000h\\033[?1006h")?;
+    let at = |action, button| MouseInput {
+        action,
+        button: Some(button),
+        mods: Mods::empty(),
+        x: 8.0 * 2.0 + 1.0,
+        y: 16.0 + 1.0,
+    };
+    assert!(fixture.pane.mouse(&at(MouseAction::Press, MouseButton::Seven))?);
+    for button in [MouseButton::Eight, MouseButton::Nine] {
+        assert!(fixture.pane.mouse(&at(MouseAction::Press, button))?);
+        assert!(fixture.pane.mouse(&at(MouseAction::Release, button))?);
+    }
+    // Ghostty's encoder has no code for buttons ten and eleven
+    for button in [MouseButton::Ten, MouseButton::Eleven] {
+        assert!(!fixture.pane.mouse(&at(MouseAction::Press, button))?);
+        assert!(!fixture.pane.mouse(&at(MouseAction::Release, button))?);
+    }
+    let expected = b"\x1b[<67;3;2M\x1b[<128;3;2M\x1b[<128;3;2m\x1b[<129;3;2M\x1b[<129;3;2m";
+    assert_eq!(received(&fixture, expected), expected);
+    Ok(())
+}
+
 /// A wheel turn of `rows` steps at cell (2, 1) of the unpadded 8x16 grid.
 fn wheel(rows: isize) -> WheelInput {
     WheelInput {

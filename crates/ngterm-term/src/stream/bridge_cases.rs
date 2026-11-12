@@ -486,3 +486,325 @@ fn follower_and_reattaching_relays_forward_lazy_pastes_and_fetch_the_viewers_lat
         );
     }
 }
+
+fn request(fixture: &Fixture, id: u64, request: DelegatedRequest) {
+    fixture
+        .feed
+        .deliver(&envelope("connection", Message::Request { id, epoch: 1, request }).encode());
+}
+
+fn reply(fixture: &Fixture) -> (u64, DelegatedReply) {
+    let Message::Reply { id, reply, .. } = outgoing(fixture).message else {
+        panic!("expected a reply")
+    };
+    (id, reply)
+}
+
+fn clipboard_write(selection: &str, kitty: bool) -> DelegatedRequest {
+    DelegatedRequest::ClipboardWrite {
+        selection: selection.into(),
+        contents: vec![ngterm_core::clipboard_wire::ClipboardRepresentation {
+            mime: "text/plain".into(),
+            data: b"copied".to_vec(),
+        }],
+        name: String::new(),
+        granted: false,
+        can_remember: false,
+        kitty,
+    }
+}
+
+#[test]
+fn the_frontends_clipboard_failures_reach_the_viewer_as_their_wire_status() {
+    let fixture = peer();
+    for (id, answer, status) in [
+        (0, ClipboardAnswer::Unsupported, ClipboardStatus::Unsupported),
+        (1, ClipboardAnswer::Busy, ClipboardStatus::Busy),
+        (2, ClipboardAnswer::IoError, ClipboardStatus::IoError),
+    ] {
+        request(&fixture, id, read(None, vec!["text/plain".into()]));
+        let PaneEvent::ClipboardRead(read) = fixture.event(|event| matches!(event, PaneEvent::ClipboardRead(_))) else {
+            unreachable!()
+        };
+        fixture.pane.answer_clipboard_read(read.id, answer);
+        assert_eq!(
+            reply(&fixture),
+            (
+                id,
+                DelegatedReply::ClipboardMime {
+                    contents: Vec::new(),
+                    available: Vec::new(),
+                    remember: false,
+                    status
+                }
+            )
+        );
+    }
+    for (id, result, status) in [
+        (10, ClipboardWriteResult::Success, ClipboardStatus::Success),
+        (11, ClipboardWriteResult::Unsupported, ClipboardStatus::Unsupported),
+        (12, ClipboardWriteResult::Busy, ClipboardStatus::Busy),
+        (13, ClipboardWriteResult::InvalidData, ClipboardStatus::InvalidData),
+        (14, ClipboardWriteResult::IoError, ClipboardStatus::IoError),
+    ] {
+        request(&fixture, id, clipboard_write("s", false));
+        let PaneEvent::ClipboardWrite(write) = fixture.event(|event| matches!(event, PaneEvent::ClipboardWrite(_)))
+        else {
+            unreachable!()
+        };
+        assert_eq!(write.permission_scope, ClipboardPermissionScope::Osc52);
+        assert_eq!(write.location, ClipboardLocation::Selection);
+        fixture.pane.answer_clipboard_write(
+            write.id,
+            WriteCompletion {
+                status: result,
+                remember: true,
+            },
+        );
+        assert_eq!(
+            reply(&fixture),
+            (id, DelegatedReply::ClipboardWrite { status, remember: true })
+        );
+    }
+}
+
+#[test]
+fn a_kitty_listing_asks_the_frontend_for_types_only() {
+    let fixture = peer();
+    request(
+        &fixture,
+        1,
+        DelegatedRequest::ClipboardReadMime {
+            bridge: None,
+            selection: "p".into(),
+            mimes: Vec::new(),
+            list: true,
+            name: String::new(),
+            granted: false,
+            can_remember: false,
+        },
+    );
+    let PaneEvent::ClipboardRead(read) = fixture.event(|event| matches!(event, PaneEvent::ClipboardRead(_))) else {
+        unreachable!()
+    };
+    assert_eq!(read.scope, crate::ReadScope::ListOnly);
+    assert_eq!(read.location, ClipboardLocation::Primary);
+    assert!(read.list && read.mimes.is_empty());
+    assert_eq!(read.permission_scope, ClipboardPermissionScope::Kitty);
+}
+
+/// Paste `count` one-type values lazily; each paste's bridge id and its type.
+fn lazy_pastes(fixture: &Fixture, count: u8) -> Vec<(String, ClipboardContent)> {
+    (0..count)
+        .map(|index| {
+            let content = ClipboardContent {
+                mime: format!("application/type{index}"),
+                data: vec![index],
+            };
+            fixture
+                .pane
+                .paste_contents(
+                    std::slice::from_ref(&content),
+                    PasteSource::Clipboard,
+                    ClipboardLocation::Standard,
+                    false,
+                )
+                .unwrap();
+            let Message::Paste(paste) = outgoing(fixture).message else {
+                panic!("a paste was expected");
+            };
+            (paste.bridge.unwrap().id, content)
+        })
+        .collect()
+}
+
+fn fetch(bridge: &str, mimes: Vec<String>, list: bool) -> DelegatedRequest {
+    DelegatedRequest::ClipboardReadMime {
+        bridge: Some(bridge.into()),
+        selection: "c".into(),
+        mimes,
+        list,
+        name: String::new(),
+        granted: false,
+        can_remember: false,
+    }
+}
+
+#[test]
+fn lazy_pastes_list_their_types_keep_the_latest_thirty_two_and_expire() {
+    let fixture = peer();
+    fixture.feed.deliver(b"\x1b[?5522h\x1b[5n");
+    fixture.sent_until(b"\x1b[0n");
+    let pastes = lazy_pastes(&fixture, 33);
+    // the oldest is gone once 32 newer ones wait
+    request(&fixture, 1, fetch(&pastes[0].0, vec![pastes[0].1.mime.clone()], false));
+    assert_eq!(reply(&fixture), (1, DelegatedReply::Denied));
+    // a listing serves the types and keeps the paste for its data
+    let (bridge, content) = &pastes[32];
+    request(&fixture, 2, fetch(bridge, Vec::new(), true));
+    assert_eq!(
+        reply(&fixture),
+        (
+            2,
+            DelegatedReply::ClipboardMime {
+                contents: Vec::new(),
+                available: vec![content.mime.clone()],
+                remember: false,
+                status: ClipboardStatus::Success,
+            }
+        )
+    );
+    request(&fixture, 3, fetch(bridge, vec![content.mime.clone()], false));
+    let (
+        3,
+        DelegatedReply::ClipboardMime {
+            contents, available, ..
+        },
+    ) = reply(&fixture)
+    else {
+        panic!("expected the paste's data");
+    };
+    assert_eq!(contents[0].data, content.data);
+    assert!(available.is_empty());
+    // a paste nobody fetched within 30 seconds is denied
+    let (bridge, content) = &pastes[1];
+    for (id, _, pasted) in &mut lock(&fixture.pane.shared().bridge).pastes {
+        if id == bridge {
+            *pasted = Instant::now().checked_sub(Duration::from_secs(31)).unwrap();
+        }
+    }
+    request(&fixture, 4, fetch(bridge, vec![content.mime.clone()], false));
+    assert_eq!(reply(&fixture), (4, DelegatedReply::Denied));
+    assert!(
+        !fixture
+            .pane
+            .take_events()
+            .iter()
+            .any(|event| matches!(event, PaneEvent::ClipboardRead(_))),
+        "no fetch asks the frontend"
+    );
+}
+
+#[test]
+fn a_text_paste_to_primary_goes_whole_over_the_bridge() {
+    let fixture = peer();
+    fixture
+        .pane
+        .paste("primary", PasteSource::Text, ClipboardLocation::Primary, true)
+        .unwrap();
+    let Message::Paste(paste) = outgoing(&fixture).message else {
+        panic!("a paste was expected");
+    };
+    assert_eq!(paste.selection, "p");
+    assert!(paste.text_source && paste.allow_unsafe && paste.bridge.is_none());
+    assert_eq!(paste.contents[0].data, b"primary");
+}
+
+#[test]
+fn a_reply_the_full_input_queue_refuses_is_replaced_by_its_status() {
+    let fixture = stream(PaneConfig {
+        attach_bridge: Some("connection".into()),
+        write_limit: 8,
+        ..PaneConfig::new(SIZE)
+    });
+    fixture.feed.deliver(&envelope("connection", Message::Hello).encode());
+    fixture.pane.write(b"queued").unwrap();
+    request(&fixture, 1, clipboard_write("c", true));
+    let PaneEvent::ClipboardWrite(write) = fixture.event(|event| matches!(event, PaneEvent::ClipboardWrite(_))) else {
+        unreachable!()
+    };
+    fixture.pane.answer_clipboard_write(
+        write.id,
+        WriteCompletion {
+            status: ClipboardWriteResult::Success,
+            remember: true,
+        },
+    );
+    request(
+        &fixture,
+        2,
+        DelegatedRequest::ClipboardRead {
+            selection: "c".into(),
+            list_only: false,
+        },
+    );
+    let PaneEvent::ClipboardRead(read) = fixture.event(|event| matches!(event, PaneEvent::ClipboardRead(_))) else {
+        unreachable!()
+    };
+    assert_eq!(read.permission_scope, ClipboardPermissionScope::Osc52);
+    fixture
+        .pane
+        .answer_clipboard_read(read.id, ClipboardAnswer::Text(Some("copied".into())));
+    // both replies were tried before the queued input leaves
+    fixture.feed.deliver(b"replied");
+    fixture.screen_until("replied");
+    let mut decoder = Decoder::default();
+    let mut parts = Vec::new();
+    while parts.len() < 3 {
+        let Ok(Some(Outgoing::Bytes(bytes))) = fixture.out.next(Some(DEADLINE)) else {
+            panic!("sent only {parts:?}");
+        };
+        parts.extend(decoder.feed(&bytes).into_iter().map(|part| match part {
+            Part::Bytes(bytes) => Err(bytes),
+            Part::Envelope(envelope) => Ok(envelope.message),
+        }));
+    }
+    assert_eq!(
+        parts,
+        [
+            Err(b"queued".to_vec()),
+            Ok(Message::Reply {
+                id: 1,
+                epoch: 1,
+                reply: DelegatedReply::ClipboardWrite {
+                    status: ClipboardStatus::Busy,
+                    remember: false
+                }
+            }),
+            Ok(Message::Reply {
+                id: 2,
+                epoch: 1,
+                reply: DelegatedReply::Denied
+            }),
+        ]
+    );
+}
+
+#[test]
+fn a_viewers_own_replies_and_pastes_are_not_requests() {
+    let fixture = peer();
+    fixture.feed.deliver(
+        &envelope(
+            "connection",
+            Message::Reply {
+                id: 1,
+                epoch: 1,
+                reply: DelegatedReply::Denied,
+            },
+        )
+        .encode(),
+    );
+    fixture.feed.deliver(b"after");
+    fixture.screen_until("after");
+    assert!(
+        fixture
+            .pane
+            .take_events()
+            .iter()
+            .all(|event| !matches!(event, PaneEvent::ClipboardRead(_) | PaneEvent::ClipboardWrite(_)))
+    );
+    assert_eq!(fixture.out.next(Some(Duration::from_millis(10))), Ok(None));
+}
+
+#[test]
+fn a_pane_dropped_while_a_bridge_read_waits_sends_no_reply() {
+    let fixture = peer();
+    request(&fixture, 1, read(None, vec!["text/plain".into()]));
+    fixture.event(|event| matches!(event, PaneEvent::ClipboardRead(_)));
+    let Fixture { pane, out, .. } = fixture;
+    drop(pane);
+    assert!(!matches!(
+        out.next(Some(Duration::from_millis(10))),
+        Ok(Some(Outgoing::Bytes(_)))
+    ));
+}

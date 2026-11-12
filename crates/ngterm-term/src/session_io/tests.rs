@@ -218,6 +218,77 @@ fn input_waits_within_the_write_limit_and_none_is_taken_after_leaving() {
 }
 
 #[test]
+fn a_paste_is_queued_whole_for_the_server_to_encode_within_the_write_limit() {
+    let contents = [
+        crate::ClipboardContent {
+            mime: "text/plain".into(),
+            data: b"0123456789".to_vec(),
+        },
+        crate::ClipboardContent {
+            mime: "image/png".into(),
+            data: vec![0, 255],
+        },
+    ];
+    let live = Live::new(ReadPause::new(), 8, true);
+    live.paste(&contents, crate::PasteSource::Text, ClipboardLocation::Standard, true)
+        .unwrap();
+    assert_eq!(live.queued(), 12, "an empty queue takes a paste whole");
+    assert_eq!(
+        live.paste(
+            &contents,
+            crate::PasteSource::Clipboard,
+            ClipboardLocation::Primary,
+            false
+        ),
+        Err(PaneError::Backpressure)
+    );
+    for location in [ClipboardLocation::Selection, ClipboardLocation::Primary] {
+        lock(&live.outbox).input = 0;
+        live.paste(&contents[..1], crate::PasteSource::Clipboard, location, false)
+            .unwrap();
+    }
+    let pastes: Vec<_> = lock(&live.outbox)
+        .queue
+        .drain(..)
+        .map(|message| {
+            let Message::Paste {
+                contents,
+                text_source,
+                selection,
+                allow_unsafe,
+            } = message
+            else {
+                panic!("not a paste: {message:?}");
+            };
+            let contents: Vec<_> = contents
+                .into_iter()
+                .map(|content| (content.mime, content.data))
+                .collect();
+            (contents, text_source, selection, allow_unsafe)
+        })
+        .collect();
+    let text = ("text/plain".to_owned(), b"0123456789".to_vec());
+    assert_eq!(
+        pastes,
+        [
+            (
+                vec![text.clone(), ("image/png".to_owned(), vec![0, 255])],
+                true,
+                "c".to_owned(),
+                true
+            ),
+            (vec![text.clone()], false, "s".to_owned(), false),
+            (vec![text], false, "p".to_owned(), false),
+        ]
+    );
+    live.leave();
+    assert_eq!(
+        live.paste(&contents, crate::PasteSource::Text, ClipboardLocation::Standard, false),
+        Err(PaneError::Closed)
+    );
+}
+
+#[test]
 fn facts_are_sent_only_when_they_change_and_an_unknown_answer_is_dropped() {
     let live = Live::new(ReadPause::new(), 1024, true);
     let facts = ReplyMetadata {

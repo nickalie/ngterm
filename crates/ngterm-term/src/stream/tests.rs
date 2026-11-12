@@ -122,6 +122,58 @@ fn output_reaches_the_screen_and_the_terminal_answers_through_the_channel() {
 }
 
 #[test]
+fn progress_and_program_status_reports_become_events_in_order() {
+    use crate::{ProgramNeed, ProgramState, ProgramStatus, Progress};
+    let fixture = stream(PaneConfig::new(SIZE));
+    fixture.feed.deliver(
+        concat!(
+            "\x1b]9;4;2;30\x07\x1b]9;4;3\x07\x1b]9;4;4;70\x07",
+            "\x1b]7501;state=error:id=job:app=make:msg=ZmFpbGVk\x07",
+            "\x1b]7501;state=blocked:kind=question:progress=40\x07",
+            "\x1b]7501;state=blocked:kind=auth:title=SGk=\x07done",
+        )
+        .as_bytes(),
+    );
+    fixture.screen_until("done");
+    let events: Vec<_> = fixture
+        .pane
+        .take_events()
+        .into_iter()
+        .filter(|event| matches!(event, PaneEvent::Progress(_) | PaneEvent::ProgramStatus(_)))
+        .collect();
+    let status = |state, need, progress, id: &str, app: &str, title: &str, message: &str| {
+        PaneEvent::ProgramStatus(ProgramStatus {
+            state,
+            need,
+            progress,
+            id: id.into(),
+            app: app.into(),
+            title: title.into(),
+            message: message.into(),
+        })
+    };
+    assert_eq!(
+        events,
+        [
+            PaneEvent::Progress(Progress::Error(Some(30))),
+            PaneEvent::Progress(Progress::Indeterminate),
+            PaneEvent::Progress(Progress::Pause(Some(70))),
+            status(
+                ProgramState::Error,
+                ProgramNeed::None,
+                None,
+                "job",
+                "make",
+                "",
+                "failed"
+            ),
+            status(ProgramState::Blocked, ProgramNeed::Question, Some(40), "", "", "", ""),
+            status(ProgramState::Blocked, ProgramNeed::Auth, None, "", "", "Hi", ""),
+        ]
+    );
+}
+
+#[test]
 fn input_and_resizes_go_out_in_order() {
     let fixture = stream(PaneConfig::new(SIZE));
     fixture.pane.write(b"ls\r").unwrap();

@@ -286,3 +286,20 @@ fn every_native_write_status_uses_the_matching_protocol_acknowledgement() {
         );
     }
 }
+
+#[test]
+fn every_native_read_failure_reaches_the_program_as_its_status() {
+    let fixture = stream(PaneConfig::new(SIZE));
+    for (answer, wire) in [
+        (ClipboardAnswer::Unsupported, "ENOSYS"),
+        (ClipboardAnswer::Busy, "EBUSY"),
+        (ClipboardAnswer::IoError, "EIO"),
+        (ClipboardAnswer::Denied, "EPERM"),
+    ] {
+        fixture.feed.deliver(&query("text/plain", ""));
+        let requested = read(&fixture);
+        fixture.pane.answer_clipboard_read(requested.id, answer);
+        let sent = fixture.sent_until(format!("status={wire}").as_bytes());
+        assert!(!String::from_utf8(sent).unwrap().contains("DATA"));
+    }
+}

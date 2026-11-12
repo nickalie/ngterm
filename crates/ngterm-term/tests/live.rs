@@ -788,3 +788,38 @@ fn a_live_panes_multipart_clipboard_write_is_delegated_once_and_completed_native
     );
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn a_live_panes_paste_reaches_its_sessions_program() -> TestResult {
+    let live = Live::new()?;
+    let pane = live.pane(&live.configuration()?)?;
+    wait_frame(&pane, prompt_painted);
+    // the server encodes the paste for its own terminal's modes, so the shell's line takes it as typed
+    let pasted = pane.paste(
+        "echo pasted-\"\"text",
+        ngterm_term::PasteSource::Clipboard,
+        ngterm_term::ClipboardLocation::Standard,
+        false,
+    )?;
+    assert_eq!(pasted, ngterm_term::Paste::Written);
+    wait_text(&pane, "echo pasted-\"\"text");
+    pane.write(b"\r")?;
+    wait_text(&pane, "pasted-text");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_live_panes_config_reload_reports_its_scheme_to_a_program_that_asked() -> TestResult {
+    let live = Live::new()?;
+    let pane = live.pane(&live.configuration()?)?;
+    wait_frame(&pane, prompt_painted);
+    ask(&live, &pane, "\\033[?2031hreports-on", 9)?;
+    wait_text(&pane, "reports-on");
+    // a reload reports the scheme even when it did not change
+    pane.config_reloaded(ngterm_term::ColorScheme::Light);
+    wait_text(&pane, "reply:^[[?997;2n");
+    wait_text(&pane, "NODUP");
+    Ok(())
+}
