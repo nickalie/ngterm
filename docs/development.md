@@ -584,7 +584,8 @@ Session action; an explicit CLI directory, a split's directory or a restored ses
 
 Each primary/split pane saves a copy of its profile in its session snapshot (`shellProfile`/`splitShellProfile`).
 Splitting and duplicating preserve it; changing the default affects only new sessions. Removing a catalog entry or
-an executable does not silently switch existing panes to another shell. Old snapshots without profiles retain the
+an executable does not silently switch existing panes to another shell: a pane whose profile's executable is gone
+shows why it could not start above Ghostty's "failed to launch" report, and closes on a key. Old snapshots without profiles retain the
 config/system behavior. A malformed profile in a snapshot or `settings.json` (a relative `executable`, an `env` name
 holding `=`) is dropped when read, and the pane starts the config/system shell. A `cmd.exe` profile whose `args`
 end in `/C <line>` or `/K <line>` passes that line to `cmd` as written, with or without `/S`. The line is one `args`

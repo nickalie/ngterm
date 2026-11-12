@@ -747,8 +747,9 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// As [`Pane::spawn`] (`/bin/sh` itself could not start; a command that is not found ends with status 127
-    /// instead, 1 under `cmd.exe`, reported through [`crate::PaneEvent::Exited`]).
+    /// As [`Pane::spawn`] (no PTY could be opened, or `/bin/sh` itself could not start), except that a program that
+    /// cannot start does not fail the launch: the pane shows why and ends with status 1, reported through
+    /// [`crate::PaneEvent::Exited`] (a command that is not found ends with status 127 instead, 1 under `cmd.exe`).
     pub fn launch(launch: &Launch, host: &Host, config: &PaneConfig) -> Result<Self, PaneError> {
         let prepared = host.prepare(launch, &ProcessEnv);
         let input = prepared.initial_input.unwrap_or_default();
@@ -778,14 +779,34 @@ impl Pane {
                 let session = crate::session_io::resolve(attach, &prepared.command, env, current_dir);
                 Self::attach_live(session, &config)?
             }
-            (None, None) => Self::spawn(&prepared.command, &config)?,
+            (None, None) => match Self::spawn(&prepared.command, &config) {
+                Ok(pane) => pane,
+                Err(error @ PaneError::Spawn(_)) => return Self::failed_start(&error, &config),
+                Err(error) => return Err(error),
+            },
         };
         if !input.is_empty() {
             pane.write(&input)?;
         }
         Ok(pane)
     }
+
+    /// A pane whose program could not start (a profile's shell that is gone): it shows `error` as the program's own
+    /// complaint and ends as a program that failed at once, under the launch's exit policy, as libghostty's surface
+    /// ends when its child's `exec` fails (`Command.zig` writes why and exits 1; `Surface.zig` reports the abnormal
+    /// exit). No PTY and no child: a stream pane nothing feeds after this.
+    fn failed_start(error: &PaneError, config: &PaneConfig) -> Result<Self, PaneError> {
+        tracing::warn!(%error, "a pane's program did not start");
+        let (pane, feed, _out) = Self::stream(config)?;
+        feed.deliver(format!("{error}\r\n").as_bytes());
+        feed.end_of_output();
+        feed.exited(Some(FAILED_START_STATUS), None);
+        Ok(pane)
+    }
 }
+
+/// The status a program that could not start ends with: libghostty's child exits 1 after a failed `exec`.
+const FAILED_START_STATUS: u32 = 1;
 
 #[cfg(test)]
 mod tests {

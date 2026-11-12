@@ -8,9 +8,10 @@ the read-back of a pane's are `agterm_conformance.shell_profiles`'."""
 
 import itertools
 import json
+import re
 
 import pytest
-from agterm_conformance.impls.base import posix_shell
+from agterm_conformance.impls.base import WINDOWS, posix_shell
 from agterm_conformance.match import assert_ok, find_session, session_ids
 from agterm_conformance.shell_profiles import (
     ALPHA,
@@ -123,6 +124,21 @@ def test_a_malformed_default_starts_the_configured_shell(launch, malformed):
     ctl.wait_mounted(first, "left")
     assert shell_of(ctl, first) == NO_PROFILE
     assert shell_of(ctl, _new(ctl)) == NO_PROFILE
+
+
+@SHELL_PROFILES
+@pytest.mark.covers("session.new")
+def test_a_default_whose_program_is_gone_shows_why_in_the_pane(launch):
+    # an uninstalled shell: the profile is well formed, its program cannot start, and the pane says so (libghostty's
+    # failure report under the start's own complaint) instead of staying blank
+    missing = r"C:\ngterm-qa-missing\sh.exe" if WINDOWS else "/ngterm-qa-missing/sh"
+    ctl = launch(settings=_settings(_profile("gone", executable=missing)))
+    (first,) = session_ids(ctl.tree())
+    ctl.wait_mounted(first, "left")
+    path = re.escape(missing)
+    report = rf"(?s)cannot start the program:.*{path}.*failed to launch the requested command:\s+{path}"
+    ctl.wait_text(first, report)
+    ctl.wait_text(_new(ctl), report)
 
 
 @SHELL_PROFILES

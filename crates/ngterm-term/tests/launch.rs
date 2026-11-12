@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use ngterm_core::command_restore::PaneInput;
 use ngterm_core::ghostty_config::GhosttyConfig;
+use ngterm_core::shell_profiles::ShellProfile;
 use ngterm_term::{ExitStatus, Host, Launch, Pane, PaneConfig, PaneEvent, TextRegion};
 use support::{DEADLINE, SIZE, TestResult, wait_events, wait_text};
 
@@ -253,6 +254,34 @@ fn a_command_that_is_not_found_holds_on_the_failure_report() -> TestResult {
     let status = exit_of(&pane);
     assert_eq!((status.code, status.held), (1, true));
     wait_text(&pane, "/bin/sh -c false");
+    Ok(())
+}
+
+#[test]
+fn a_profile_whose_program_is_gone_shows_why_and_holds_on_the_failure_report() -> TestResult {
+    let missing = "/ngterm-no-such-dir/sh";
+    let gone = Launch {
+        shell_profile: Some(ShellProfile::new("gone", "Gone", missing.to_owned(), &["-l"])),
+        initial_input: Some(PaneInput::Line("echo never".to_owned())),
+        ..launch(None)
+    };
+    let pane = Pane::launch(&gone, &host("/bin/sh", None), &PaneConfig::new(SIZE))?;
+    assert_eq!(pane.pid(), None);
+    let status = exit_of(&pane);
+    assert_eq!((status.code, status.held), (1, true));
+    let text = screen(&pane);
+    // the start's own complaint, then libghostty's report naming the program below a rule
+    let complaint = text.find("cannot start the program:").expect("the complaint");
+    assert!(text[complaint..].lines().next().is_some_and(|line| line.contains(missing)), "{text}");
+    for line in [
+        "Ghostty failed to launch the requested command:",
+        &format!("{missing} -l"),
+        "Exit Code: 1",
+        "Press any key to close the window.",
+    ] {
+        assert!(text.contains(line), "{line} missing from:\n{text}");
+    }
+    assert!(text.contains('\u{2501}'), "{text}");
     Ok(())
 }
 
