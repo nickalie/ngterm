@@ -37,6 +37,22 @@ internal struct FakeMobileCoreChatTests {
         #expect(core.openChats.isEmpty)
     }
 
+    @Test("a chat opening delivers its pane's catch-up; a pane's chat action waits for its origin's reply")
+    internal func catchUpAndReply() async throws {
+        let core = try await Self.shown()
+        let event = ChatEvent(id: "u1", cursor: 0, parent: nil, body: .user(text: "hi", images: 0))
+        core.chatEvents[Self.pane] = [event]
+        try await core.openChat(machineId: "m1", sessionId: "s1", paneId: "p1")
+        #expect(core.emitted.last == .chat(pane: Self.pane, events: [event]))
+        let handle = try await core.showPane(machineId: "m1", sessionId: "s1", paneId: "p1", size: Self.size)
+        let fake = try #require(handle as? FakePane)
+        fake.frames = { _ in Data() }
+        let replied = Mutex<[FakeAction]>([])
+        fake.onAction = { action in replied.withLock { $0.append(action) } }
+        #expect(try await fake.sendPrompt(text: "go") == .sent)
+        #expect(replied.withLock { $0 } == [.prompt("go")])
+    }
+
     @Test("an open chat's older pages come in turn, then none; the agent's commands are the test's")
     internal func pagesAndCommands() async throws {
         let core = try await Self.shown()

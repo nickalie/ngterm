@@ -94,6 +94,119 @@ internal struct ChatModelTests {
         #expect(chat.snapshot.question == nil)
     }
 
+    @Test("a question its prompt asks before the transcript holds it is a question card, not an approval")
+    internal func promptQuestion() async throws {
+        defer { world.remove() }
+        let (chat, pane) = try await live()
+        await world.chat(ChatSamples.event("approval-1", .approval(approval: ChatSamples.asked)))
+        #expect(chat.snapshot.approval == nil)
+        #expect(chat.snapshot.log.isEmpty)
+        let card = try #require(chat.snapshot.question)
+        #expect(card.id == "approval-1")
+        #expect(card.question.questions == ChatSamples.shells().questions)
+        let answers = [QuestionAnswer(picked: ["fish"], other: nil)]
+        chat.answerQuestion(id: "approval-1", answers: answers)
+        await Wait.until { !chat.snapshot.isBusy }
+        #expect(pane.actions.last == .question(card.question, answers: answers))
+        #expect(chat.snapshot.question == nil)
+        // the transcript writes the answered call; the prompt ends after it
+        await world.chat(
+            ChatSamples.event("toolu_q", ChatSamples.question(.ok)),
+            ChatSamples.event("approval-1", .approvalDone(approval: ChatSamples.asked))
+        )
+        #expect(chat.snapshot.items.map(\.key) == ["e:toolu_q"])
+        #expect(chat.snapshot.question == nil)
+    }
+
+    @Test("a prompt's question answered elsewhere goes with its prompt, or with the transcript's row that asks it")
+    internal func promptQuestionAnsweredElsewhere() async throws {
+        defer { world.remove() }
+        let (chat, _) = try await live()
+        await world.chat(ChatSamples.event("approval-1", .approval(approval: ChatSamples.asked)))
+        #expect(chat.snapshot.question?.id == "approval-1")
+        await world.chat(ChatSamples.event("approval-1", .approvalDone(approval: ChatSamples.asked)))
+        #expect(chat.snapshot.question == nil)
+        await world.chat(ChatSamples.event("approval-2", .approval(approval: ChatSamples.asked)))
+        #expect(chat.snapshot.question?.id == "approval-2")
+        // an agent that writes the running call: its row is the card, and no second one stands behind it
+        await world.chat(ChatSamples.event("toolu_q", ChatSamples.question()))
+        #expect(chat.snapshot.question?.id == "toolu_q")
+        chat.answerQuestion(id: "toolu_q", answers: [QuestionAnswer(picked: ["bash"], other: nil)])
+        await Wait.until { !chat.snapshot.isBusy }
+        #expect(chat.snapshot.question == nil)
+    }
+
+    @Test("a question asked again is a card, though an earlier row asked the same")
+    internal func questionAskedAgain() async throws {
+        defer { world.remove() }
+        let (chat, _) = try await live()
+        await world.chat(ChatSamples.event("u1", ChatSamples.user("pick one")))
+        await world.chat(ChatSamples.event("approval-1", .approval(approval: ChatSamples.asked)))
+        await world.chat(
+            ChatSamples.event("toolu_q1", ChatSamples.question(.ok)),
+            ChatSamples.event("approval-1", .approvalDone(approval: ChatSamples.asked))
+        )
+        #expect(chat.snapshot.question == nil)
+        await world.chat(ChatSamples.event("approval-2", .approval(approval: ChatSamples.asked)))
+        #expect(chat.snapshot.question?.id == "approval-2")
+        // an older page bringing the same question answered long ago leaves the card up
+        world.core.olderPages[ChatWorld.pane] = [[ChatSamples.event("toolu_q0", ChatSamples.question(.ok))]]
+        chat.loadOlder()
+        await Wait.until { chat.snapshot.items.count == 3 }
+        #expect(chat.snapshot.question?.id == "approval-2")
+        await world.chat(ChatSamples.event("toolu_q2", ChatSamples.question(.ok)))
+        #expect(chat.snapshot.question == nil)
+    }
+
+    @Test("cards answered while the link was down go with the catch-up's ends; the composer's Send is free again")
+    internal func cardsEndedAfterReconnect() async throws {
+        defer { world.remove() }
+        let (chat, pane) = try await live()
+        await world.chat(
+            ChatSamples.event("approval-1", .approval(approval: ChatSamples.approval)),
+            ChatSamples.event("approval-2", .approval(approval: ChatSamples.asked))
+        )
+        #expect(chat.snapshot.approval?.id == "approval-1")
+        #expect(chat.snapshot.question?.id == "approval-2")
+        await world.world.emit(.chatState(pane: ChatWorld.pane, state: .reconnecting))
+        #expect(chat.snapshot.phase == .reconnecting)
+        // the core ends the prompts its catch-up no longer names
+        await world.chat(
+            ChatSamples.event("toolu_q", ChatSamples.question(.ok)),
+            ChatSamples.event("approval-1", .approvalDone(approval: ChatSamples.approval)),
+            ChatSamples.event("approval-2", .approvalDone(approval: ChatSamples.asked)),
+            ChatSamples.event("live", .live)
+        )
+        #expect(chat.snapshot.phase == .live)
+        #expect(!chat.snapshot.awaitsCard)
+        chat.composer.edit("next")
+        chat.send()
+        await Wait.until { !chat.snapshot.isBusy }
+        #expect(pane.actions == [.prompt("next")])
+    }
+
+    @Test("a prompt on its way frees the field for the next one; one refused comes back ahead of it")
+    internal func typingWhileSending() async throws {
+        defer { world.remove() }
+        let (chat, pane) = try await live()
+        let gate = FakeGate<Void>()
+        pane.gate = gate
+        chat.composer.edit("Fix the guide")
+        chat.send()
+        #expect(chat.snapshot.isBusy)
+        #expect(chat.composer.text.isEmpty, "the field is free while the prompt is on its way")
+        chat.composer.edit("and the tests")
+        gate.open()
+        await Wait.until { !chat.snapshot.isBusy }
+        #expect(pane.actions == [.prompt("Fix the guide")])
+        #expect(chat.composer.text == "and the tests")
+        pane.outcome = .dialogOpen
+        chat.send()
+        await Wait.until { !chat.snapshot.isBusy }
+        #expect(chat.composer.text == "and the tests", "a prompt that wasn't sent stays")
+        #expect(chat.snapshot.problem == .dialogOpen)
+    }
+
     @Test("Stop interrupts a turn the agent works on, and not one interrupted already")
     internal func stop() async throws {
         defer { world.remove() }

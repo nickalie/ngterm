@@ -48,7 +48,8 @@
     ///   disconnect (its machine's) hide panes, and ``shownPanes`` lists those still shown. A new pane is
     ///   ``paneFactory``'s, a ``FakePane`` by default;
     /// - ``openChat(machineId:sessionId:paneId:)`` takes only a shown pane (``MobileError/Remote(reason:)`` with
-    ///   ``notShown`` otherwise) and ``openChats`` lists the chats open; a close, and hiding the pane, close one.
+    ///   ``notShown`` otherwise), delivering the pane's ``chatEvents`` as it opens, and ``openChats`` lists the chats
+    ///   open; a close, and hiding the pane, close one.
     ///   ``loadOlder(machineId:sessionId:paneId:)`` answers a chat's next page of ``olderPages`` (empty once none is
     ///   left; ``notOpen`` for a chat not open), and ``agentCommands(machineId:sessionId:paneId:)`` the pane's
     ///   ``catalogs`` entry (``MobileError/Remote(reason:)`` for a pane with none, as an origin without a catalog
@@ -159,6 +160,12 @@
         /// The chats open and not closed since.
         public var openChats: Set<PaneRef> {
             state.withLock { $0.chats }
+        }
+
+        /// What each pane's chat says as it opens, by pane: its catch-up, as the origin's would.
+        public var chatEvents: [PaneRef: [ChatEvent]] {
+            get { state.withLock { $0.chatEvents } }
+            set { state.withLock { $0.chatEvents = newValue } }
         }
 
         /// Each pane's older pages, newest first, which a load of older events hands out in turn.

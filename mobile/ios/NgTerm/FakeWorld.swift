@@ -18,7 +18,8 @@
     /// pasteboard of the launch's own holding a command, so no paste question of iOS's comes up), and one in `notes`
     /// after it: its question shows only once the first is answered; and, when asked, a machine `split`
     /// (`split.lan`) is saved already, with a session `work` of two panes side by side (``FakeSessionWorld``), whose
-    /// origin asks a question as it is attached, when asked too.
+    /// origin asks a question as it is attached, and whose first pane runs Claude Code (``FakeChatWorld``), each when
+    /// asked too.
     ///
     /// Notifications go to memory (``FakeNotices``), and the question about notifying counts as asked unless the
     /// launch asks for it.
@@ -40,7 +41,7 @@
         /// The app's graph over the fake core, as the launch arguments ask.
         ///
         /// The `arguments` are ``CoreChoice``'s: a key already, two programs asking to read the clipboard, `split` with
-        /// its session and its question, the question about notifying left to ask.
+        /// its session, its question and its agent, the question about notifying left to ask.
         @MainActor
         internal static func graph(arguments: [String]) -> AppGraph {
             let directory = FileManager.default.temporaryDirectory.appending(
@@ -61,7 +62,8 @@
                     machines,
                     core: core,
                     keyId: key.id,
-                    asks: arguments.contains(CoreChoice.fakeAskArgument)
+                    asks: arguments.contains(CoreChoice.fakeAskArgument),
+                    chats: arguments.contains(CoreChoice.fakeChatArgument)
                 )
             }
             let stores = GraphStores(directory: directory)

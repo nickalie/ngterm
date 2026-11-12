@@ -48,6 +48,8 @@
         internal var paneFactory: FakeMobileCore.PaneFactory
         // the chats open
         internal var chats: Set<PaneRef> = []
+        // what each pane's chat says as it opens
+        internal var chatEvents: [PaneRef: [ChatEvent]] = [:]
         // each pane's older pages, newest first, which loadOlder hands out in turn
         internal var olderPages: [PaneRef: [[ChatEvent]]] = [:]
         // each pane's agent commands

@@ -20,6 +20,16 @@ internal enum ChatSamples {
         questions: []
     )
 
+    /// Claude's `AskUserQuestion` as its permission prompt carries it, before its transcript holds the call.
+    internal static let asked = ChatApproval(
+        tool: "AskUserQuestion",
+        title: "Which shell should the guide use?",
+        detail: nil,
+        toolUseId: "toolu_q",
+        cwd: "/home/user/project",
+        questions: shells().questions
+    )
+
     /// The event `id` saying `body`.
     internal static func event(_ id: String, _ body: ChatBody) -> ChatEvent {
         ChatEvent(id: id, cursor: 0, parent: nil, body: body)

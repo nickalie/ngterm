@@ -19,7 +19,8 @@
     ///
     /// The chat's actions (``sendPrompt(text:)``, ``interrupt()``, ``answerApproval(approval:label:)``,
     /// ``answerQuestion(question:answers:)``) are kept in ``actions`` and answer ``outcome``, or throw ``actionError``
-    /// when set; the next one waits at ``gate`` once taken, while a test holds one on its way.
+    /// when set; the next one waits at ``gate`` once taken, while a test holds one on its way, then at ``onAction``,
+    /// a fake origin's reply to it.
     /// ``approvalLabels()`` answers ``labels``. A pane with no ``frames`` throws ``PaneInputError/Closed`` for these
     /// too.
     public final class FakePane: PaneClient {
@@ -40,6 +41,7 @@
             var actionError: PaneInputError?
             var labels: [String] = []
             var gate: FakeGate<Void>?
+            var onAction: (@Sendable (FakeAction) async -> Void)?
             var actions: [FakeAction] = []
         }
 
@@ -118,6 +120,12 @@
         public var gate: FakeGate<Void>? {
             get { state.withLock { $0.gate } }
             set { state.withLock { $0.gate = newValue } }
+        }
+
+        /// Runs with each chat action taken, before it answers: what the agent does with it.
+        public var onAction: (@Sendable (FakeAction) async -> Void)? {
+            get { state.withLock { $0.onAction } }
+            set { state.withLock { $0.onAction = newValue } }
         }
 
         /// The chat actions taken, in order.
@@ -276,7 +284,8 @@
         }
 
         private func act(_ action: FakeAction) async throws -> AgentInputOutcome {
-            let taken: Result<(FakeGate<Void>?, AgentInputOutcome), PaneInputError> = state.withLock { state in
+            typealias Taken = (FakeGate<Void>?, (@Sendable (FakeAction) async -> Void)?, AgentInputOutcome)
+            let taken: Result<Taken, PaneInputError> = state.withLock { state in
                 guard state.frames != nil else {
                     return .failure(.Closed)
                 }
@@ -285,10 +294,11 @@
                 }
                 state.actions.append(action)
                 defer { state.gate = nil }
-                return .success((state.gate, state.outcome))
+                return .success((state.gate, state.onAction, state.outcome))
             }
-            let (held, answer) = try taken.get()
+            let (held, reply, answer) = try taken.get()
             await held?.wait()
+            await reply?(action)
             return answer
         }
 

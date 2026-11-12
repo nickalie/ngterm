@@ -170,4 +170,19 @@ internal struct ChatLogTests {
         #expect(Self.rows(log.items) == ["--", "v0", "v1"])
         #expect(log.items.first?.key == "divider")
     }
+
+    @Test("a question's result read without its call keeps the row a question, answered")
+    internal func questionResult() {
+        let log = ChatLog()
+            .appending([Samples.event("q1", Samples.question())])
+            .appending([Samples.event("q1", Samples.tool("", "", .ok, kind: .other, output: "fish"))])
+        guard case .question(let question) = Self.body(log, "q1") else {
+            Issue.record("the row is no question: \(String(describing: Self.body(log, "q1")))")
+            return
+        }
+        #expect(question.status == .ok)
+        #expect(question.output == "fish")
+        #expect(question.questions == Samples.shells().questions)
+        #expect(log.openQuestion(dismissed: []) == nil)
+    }
 }

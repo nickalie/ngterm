@@ -4,7 +4,7 @@
 
     // The fake core's chats: opening and closing them, their older pages, the agents' commands and the uploads.
     extension FakeMobileCore {
-        /// Opens the chat of a shown pane.
+        /// Opens the chat of a shown pane, delivering its ``chatEvents``.
         nonisolated(nonsending) public func openChat(
             machineId: String,
             sessionId: String,
@@ -20,6 +20,9 @@
                         throw MobileError.Remote(reason: Self.notShown)
                     }
                     state.chats.insert(ref)
+                    if let events = state.chatEvents[ref], !events.isEmpty {
+                        emit(.chat(pane: ref, events: events), in: &state)
+                    }
                 }
             }
         }
