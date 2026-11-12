@@ -682,6 +682,30 @@ fn an_agterm_rows_host_carries_the_apps_badge(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("titlebar-peer").is_none(), "a local row has no badge");
 }
 
+#[test]
+fn the_host_and_the_peer_badge_read_as_text_the_badge_described_by_what_it_lacks() {
+    use gpui_kit::{Element as _, Role, accesskit::Node};
+    let host = Titlebar::host_name("a-very-long-remote-host-name.example.internal");
+    assert_eq!(host.a11y_role(), Some(Role::Label));
+    let mut node = Node::new(Role::Label);
+    host.write_a11y_info(&mut node);
+    assert_eq!(node.value(), Some("a-very-long-remote-host-name.example.internal"));
+    let lacks = ngterm_core::remote::peer::limits_note(ngterm_core::remote::peer::RemotePeer::Agterm)
+        .expect("agterm lacks some of ngterm's features");
+    let composition = TitlebarComposition {
+        host: Some("studio".to_owned()),
+        peer: Some("agterm".to_owned()),
+        peer_note: Some(lacks.clone()),
+        ..TitlebarComposition::default()
+    };
+    let badge = Titlebar::peer_badge(&composition, colors()).expect("an agterm row has a badge");
+    assert_eq!(badge.a11y_role(), Some(Role::Label));
+    let mut node = Node::new(Role::Label);
+    badge.write_a11y_info(&mut node);
+    assert_eq!(node.value(), Some("agterm"));
+    assert_eq!(node.description(), Some(lacks.as_str()));
+}
+
 /// A primary press on the bar may become a window move and its release ends it; a secondary press under the window
 /// manager's own title bar opens no menu of the bar's. Windows has no such title bar: the bar draws the controls
 /// there ([`draws_controls`]), and its secondary press opens the system menu, which GPUI's test window cannot show.

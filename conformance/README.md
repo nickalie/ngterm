@@ -108,7 +108,8 @@ the reference gate excuses them; an unsupported capability is a recorded diverge
 
 An element's ui id is the app's accessibility author id (AccessKit's, read as AT-SPI's `AccessibleId` and UIA's
 `AutomationId`). Tests find elements by id (`find`, `all`, `count`, `absent`; only `find` filters, by `role=`, `value=`,
-`enabled=` and `name=`, a string or a compiled regex; the waits dump the inventory on timeout) and act on snapshots:
+`enabled=`, `description=` (AT-SPI's description, UIA's `FullDescription`, AppKit's `AXHelp`) and `name=`, a string or a
+compiled regex; the waits dump the inventory on timeout) and act on snapshots:
 
 - `click` is the accessibility press; `press` posts key chords, `type_text` any printable text through the OS's text
   input; `text`, `set_text`, `focus`, `hover`, `menu`, `menu_item` and `tab` read, write and open what they name;

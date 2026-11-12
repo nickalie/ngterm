@@ -45,7 +45,7 @@ def _props(**named):
         "toggle_available": uia.IS_TOGGLE_AVAILABLE, "toggle": uia.TOGGLE_STATE,
         "selection_available": uia.IS_SELECTION_ITEM_AVAILABLE, "selected": uia.SELECTION_ITEM_IS_SELECTED,
         "range_available": uia.IS_RANGE_VALUE_AVAILABLE, "range": uia.RANGE_VALUE_VALUE,
-        "expand_available": uia.IS_EXPAND_COLLAPSE_AVAILABLE,
+        "expand_available": uia.IS_EXPAND_COLLAPSE_AVAILABLE, "description": uia.FULL_DESCRIPTION,
     }  # fmt: skip
     return {ids[key]: value for key, value in named.items()}
 
@@ -53,20 +53,23 @@ def _props(**named):
 @pytest.mark.parametrize(
     ("props", "expected"),
     [
-        (_props(control_type=50000, id="add", name="Add", enabled=True), ("add", "button", "Add", None, True)),
-        (_props(control_type=50000, id="menu", expand_available=True), ("menu", "menu-button", None, None, None)),
+        (_props(control_type=50000, id="add", name="Add", enabled=True), ("add", "button", "Add", None, True, None)),
+        (_props(control_type=50000, id="menu", expand_available=True), ("menu", "menu-button", None, None, None, None)),
         (_props(control_type=50000, id="split-toggle", value_available=True, value="none", enabled=False),
-         ("split-toggle", "button", None, "none", False)),
-        (_props(control_type=50002, id="c", toggle_available=True, toggle=1), ("c", "checkbox", None, 1, None)),
-        (_props(control_type=50002, id="c", toggle_available=True, toggle=0), ("c", "checkbox", None, 0, None)),
-        (_props(control_type=50013, id="r", selection_available=True, selected=True), ("r", "radio", None, 1, None)),
+         ("split-toggle", "button", None, "none", False, None)),
+        (_props(control_type=50002, id="c", toggle_available=True, toggle=1), ("c", "checkbox", None, 1, None, None)),
+        (_props(control_type=50002, id="c", toggle_available=True, toggle=0), ("c", "checkbox", None, 0, None, None)),
+        (_props(control_type=50013, id="r", selection_available=True, selected=True),
+         ("r", "radio", None, 1, None, None)),
         (_props(control_type=50004, id="f", value_available=True, value="typed"),
-         ("f", "text-field", None, "typed", None)),
+         ("f", "text-field", None, "typed", None, None)),
         (_props(control_type=50004, id="f", value_available=True, value="path", read_only=True),
-         ("f", "text", None, "path", None)),
-        (_props(control_type=50020, id="t", name="Hello"), ("t", "text", "Hello", "Hello", None)),
-        (_props(control_type=50015, id="s", range_available=True, range=3.0), ("s", "slider", None, 3.0, None)),
-        (_props(control_type=50025, id="", name=""), (None, "other", None, None, None)),
+         ("f", "text", None, "path", None, None)),
+        (_props(control_type=50020, id="t", name="Hello"), ("t", "text", "Hello", "Hello", None, None)),
+        (_props(control_type=50020, name="agterm", description="Attached from agterm"),
+         (None, "text", "agterm", "agterm", None, "Attached from agterm")),
+        (_props(control_type=50015, id="s", range_available=True, range=3.0), ("s", "slider", None, 3.0, None, None)),
+        (_props(control_type=50025, id="", name=""), (None, "other", None, None, None, None)),
     ],
 )
 def test_snapshot_values_read_the_portable_vocabulary(props, expected):

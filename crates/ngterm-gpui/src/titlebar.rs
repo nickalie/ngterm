@@ -710,13 +710,7 @@ impl Titlebar {
                 .max_w(HOST_CEILING)
                 .text_color(dim)
                 .child(icon(interface_glyph::REMOTE_HOST, dim, glyph - px(2.)))
-                .child(
-                    div()
-                        .whitespace_nowrap()
-                        .overflow_hidden()
-                        .text_ellipsis_middle()
-                        .child(middle_ellipsis(host, 30)),
-                )
+                .child(Self::host_name(host))
                 .children(Self::peer_badge(composition, colors))
         });
         let tail = (!composition.tail.is_empty()).then(|| {
@@ -764,14 +758,29 @@ impl Titlebar {
             .children(subtitle)
     }
 
+    /// The remote host cut in the middle, read by assistive technology as text whose value is the whole host.
+    fn host_name(host: &str) -> Stateful<Div> {
+        div()
+            .id("titlebar-host-name")
+            .role(gpui_kit::Role::Label)
+            .aria_value(host.to_owned())
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .text_ellipsis_middle()
+            .child(middle_ellipsis(host, 30))
+    }
+
     /// The app on the host's side when it is not ngterm: its name in the host's dimmed ink inside a hairline outline,
-    /// and on hover what it lacks.
+    /// and on hover what it lacks; assistive technology reads it as text valued with the name, described by the note.
     fn peer_badge(composition: &TitlebarComposition, colors: ChromeColors) -> Option<Stateful<Div>> {
         let name = composition.peer.clone()?;
         let note = composition.peer_note.clone().unwrap_or_default();
         Some(
             div()
                 .id("titlebar-peer")
+                .role(gpui_kit::Role::Label)
+                .aria_value(name.clone())
+                .aria_description(note.clone())
                 .debug_selector(|| "titlebar-peer".to_owned())
                 .flex_shrink_0()
                 .px(px(4.))

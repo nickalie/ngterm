@@ -53,8 +53,10 @@ def test_snapshot_reads_portable_values():
         def get_interfaces(self): return []
         def get_accessible_id(self): return 'check'
         def get_name(self): return 'A checkbox'
+        def get_description(self): return ''
     el = driver.snapshot(Handle())
-    assert (el.ui_id, el.role, el.name, el.value, el.enabled) == ('check', 'checkbox', 'A checkbox', 1, True)
+    assert (el.ui_id, el.role, el.name, el.value, el.enabled, el.description) == (
+        'check', 'checkbox', 'A checkbox', 1, True, None)
     handle = Handle()
     handle.get_role_name = lambda: 'text'
     handle.get_interfaces = lambda: ['Text', 'EditableText']
@@ -76,6 +78,9 @@ def test_snapshot_reads_portable_values():
     handle.get_interfaces = lambda: []
     handle.get_name = lambda: '2'
     assert (driver.snapshot(handle).role, driver.snapshot(handle).value) == ('text', '2')
+    # a label described by its hover note
+    handle.get_description = lambda: 'Attached from agterm'
+    assert driver.snapshot(handle).description == 'Attached from agterm'
     handle.get_name = lambda: ''
     assert driver.snapshot(handle).value is None
 

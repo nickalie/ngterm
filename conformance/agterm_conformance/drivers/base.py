@@ -86,6 +86,8 @@ class Element:
     value: Any = None
     enabled: bool | None = None
     handle: Any = field(default=None, compare=False, repr=False)
+    # what assistive technology announces after the name and value, such as a badge's hover note
+    description: str | None = None
 
     def matches(self, attrs: Mapping[str, Any]) -> bool:
         return all(
@@ -143,6 +145,8 @@ def _describe(element: Element) -> str:
         parts.append(f"value={element.value!r}"[:80])
     if element.enabled is False:
         parts.append("disabled")
+    if element.description:
+        parts.append(f"description={element.description!r}")
     return f"{element.ui_id}({' '.join(parts)})"
 
 

@@ -49,11 +49,12 @@ RANGE_VALUE_VALUE = 30047
 EXPAND_COLLAPSE_STATE = 30070
 SELECTION_ITEM_IS_SELECTED = 30079
 TOGGLE_STATE = 30086
+FULL_DESCRIPTION = 30159
 CACHED_PROPERTIES = (
     RUNTIME_ID, CONTROL_TYPE, NAME, IS_ENABLED, AUTOMATION_ID, NATIVE_WINDOW_HANDLE, IS_EXPAND_COLLAPSE_AVAILABLE,
     IS_INVOKE_AVAILABLE, IS_RANGE_VALUE_AVAILABLE, IS_SELECTION_ITEM_AVAILABLE, IS_TOGGLE_AVAILABLE,
     IS_VALUE_AVAILABLE, VALUE_VALUE, VALUE_IS_READ_ONLY, RANGE_VALUE_VALUE, EXPAND_COLLAPSE_STATE,
-    SELECTION_ITEM_IS_SELECTED, TOGGLE_STATE,
+    SELECTION_ITEM_IS_SELECTED, TOGGLE_STATE, FULL_DESCRIPTION,
 )  # fmt: skip
 # UIA pattern ids.
 INVOKE_PATTERN = 10000
@@ -204,8 +205,11 @@ def plain(value: Any) -> Any:
     return None
 
 
-def snapshot_values(props: Mapping[int, Any]) -> tuple[str | None, str, str | None, Any, bool | None]:
-    """(ui_id, role, name, value, enabled) of one element from its UIA properties, as the portable vocabulary."""
+def snapshot_values(
+    props: Mapping[int, Any],
+) -> tuple[str | None, str, str | None, Any, bool | None, str | None]:
+    """(ui_id, role, name, value, enabled, description) of one element from its UIA properties, as the portable
+    vocabulary."""
     control_type = props.get(CONTROL_TYPE)
     role = CONTROL_TYPES.get(control_type, "other") if isinstance(control_type, int) else "other"
     if role == "button" and props.get(IS_EXPAND_COLLAPSE_AVAILABLE):
@@ -231,7 +235,8 @@ def snapshot_values(props: Mapping[int, Any]) -> tuple[str | None, str, str | No
         # AccessKit names a label after its text (its label comes from its value): the text is the name.
         value = name
     enabled = props.get(IS_ENABLED)
-    return (props.get(AUTOMATION_ID) or None, role, name, value, None if enabled is None else bool(enabled))
+    enabled = None if enabled is None else bool(enabled)
+    return (props.get(AUTOMATION_ID) or None, role, name, value, enabled, props.get(FULL_DESCRIPTION) or None)
 
 
 @dataclass(eq=False)
@@ -357,8 +362,8 @@ class UiaDriver(Driver):
 
     @staticmethod
     def snapshot(node: Node) -> Element:
-        ui_id, role, name, value, enabled = snapshot_values(node.props)
-        return Element(ui_id, role, name, value, enabled, node)
+        ui_id, role, name, value, enabled, description = snapshot_values(node.props)
+        return Element(ui_id, role, name, value, enabled, node, description)
 
     def _all_elements(self) -> list[Element]:
         return [self.snapshot(node) for node in self._nodes()]

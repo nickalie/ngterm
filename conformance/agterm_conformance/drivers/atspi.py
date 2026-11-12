@@ -150,7 +150,7 @@ class AtspiDriver(Driver):
             # A static label without text runs exposes its text only as its name (AccessKit's label from value).
             value = handle.get_name() or None
         return Element(handle.get_accessible_id() or None, role, handle.get_name() or None, value,
-                       state.contains(self.atspi.StateType.ENABLED), handle)
+                       state.contains(self.atspi.StateType.ENABLED), handle, handle.get_description() or None)
 
     def _all_elements(self):
         return self._read(lambda: [self.snapshot(handle) for handle in self.walk()])

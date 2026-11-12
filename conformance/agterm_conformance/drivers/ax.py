@@ -57,7 +57,7 @@ MENU_BAR_ROLE = "AXMenuBar"
 TAB_ROLES = frozenset({"AXButton", "AXRadioButton", "AXToolbarButton"})
 # What an element shows rather than where it sits: some SwiftUI elements (Settings' grouped forms) fail these reads
 # outright and for good, which says nothing about the tree, so such a read counts as no value.
-DISPLAY_ATTRIBUTES = frozenset({"AXTitle", "AXDescription", "AXValue", "AXEnabled"})
+DISPLAY_ATTRIBUTES = frozenset({"AXTitle", "AXDescription", "AXValue", "AXEnabled", "AXHelp"})
 MAX_DEPTH = 64
 MESSAGING_TIMEOUT = 2.0
 
@@ -148,6 +148,8 @@ class AxDriver(Driver):
             value=_plain(self.attribute(handle, "AXValue")),
             enabled=None if enabled is None else bool(enabled),
             handle=handle,
+            # AccessKit's description is AppKit's help
+            description=_plain(self.attribute(handle, "AXHelp")) or None,
         )
 
     def _elements(self, ui_id: str) -> list[Element]:
