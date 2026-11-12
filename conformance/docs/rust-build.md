@@ -245,10 +245,12 @@ that goes branches on the claim. They need Live sessions too, so the zsh and fis
 `kitty-clipboard`: a program's Kitty clipboard protocol (OSC 5522), which Ghostty took up after upstream's pin
 (docs/development.md > The selection clipboard). Its tests are in `tests/protocol/test_kitty_clipboard.py` and
 `tests/ui/test_kitty_clipboard_prompt.py` (helpers in `agterm_conformance/kitty_clipboard.py`): the pane `cat`s the program's
-request and the terminal echoes the reply into the pane, a write with text, HTML and an image refused under
-`clipboard-write = deny`, a read refused under `clipboard-read = deny`, a listing answered without a prompt, and a
-write under `ask` answered only once its prompt is (Escape denies it), each in a plain pane and in a Live one
-(`LIVE_IN_ANY_SHELL`), whose request reaches the app through the session server. No test writes the desktop clipboard.
+request and the terminal echoes the reply into the pane: a write with text, HTML and an image refused under
+`clipboard-write = deny`, a read refused under `clipboard-read = deny`, a listing answered without a prompt, a write and
+a read under `ask` answered only once their prompt is (Escape denies it), and an allowed write read back, each in a
+plain pane and in a Live one (`LIVE_IN_ANY_SHELL`), whose request reaches the app through the session server. A write
+that goes through targets the selection clipboard (`loc=primary`), the instance's own on every OS, so no test writes
+the desktop clipboard; the protocol layer's headless weston has no primary selection, so those are the ui layer's.
 The build claims it on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and every conformance job that judges
 the ratchet runs with `--must-pass kitty-clipboard`: the three Linux legs and Windows' `windows` job.
 

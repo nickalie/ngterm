@@ -478,6 +478,12 @@ tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args2-no custom comm
 tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args3-no custom command named  plain]
 tests/protocol/test_keymap_hooks.py::test_run_refusals[zzz-args4-no such session: zzz]
 tests/protocol/test_keymap_hooks.py::test_run_starts_the_command_for_the_addressed_session
+tests/protocol/test_kitty_clipboard.py::test_a_denied_read_is_refused[live]
+tests/protocol/test_kitty_clipboard.py::test_a_denied_read_is_refused[plain]
+tests/protocol/test_kitty_clipboard.py::test_a_denied_write_is_refused[live]
+tests/protocol/test_kitty_clipboard.py::test_a_denied_write_is_refused[plain]
+tests/protocol/test_kitty_clipboard.py::test_a_listing_is_answered_without_a_prompt[live]
+tests/protocol/test_kitty_clipboard.py::test_a_listing_is_answered_without_a_prompt[plain]
 tests/protocol/test_live_any_shell.py::test_a_live_pane_in_the_login_shell_reports_its_cwd_and_survives_the_relaunch
 tests/protocol/test_live_any_shell.py::test_a_live_pane_keeps_the_configs_xdg_data_dirs
 tests/protocol/test_live_any_shell.py::test_an_ended_live_command_closes_its_pane
@@ -1053,6 +1059,12 @@ tests/ui/test_html_overlay.py::test_find_with_a_page_over_the_other_pane_searche
 tests/ui/test_html_overlay.py::test_page_strip_hide_hides_its_own_pane
 tests/ui/test_html_overlay.py::test_the_page_strip_offers_hide_only_while_the_overlays_button_is_on
 tests/ui/test_html_overlay.py::test_url_page_offers_to_copy_its_link
+tests/ui/test_kitty_clipboard_prompt.py::test_an_allowed_write_reads_back_from_the_selection_clipboard[live]
+tests/ui/test_kitty_clipboard_prompt.py::test_an_allowed_write_reads_back_from_the_selection_clipboard[plain]
+tests/ui/test_kitty_clipboard_prompt.py::test_an_asked_read_waits_for_the_prompt_and_escape_denies_it[live]
+tests/ui/test_kitty_clipboard_prompt.py::test_an_asked_read_waits_for_the_prompt_and_escape_denies_it[plain]
+tests/ui/test_kitty_clipboard_prompt.py::test_an_asked_write_waits_for_the_prompt_and_escape_denies_it[live]
+tests/ui/test_kitty_clipboard_prompt.py::test_an_asked_write_waits_for_the_prompt_and_escape_denies_it[plain]
 tests/ui/test_live.py::test_a_pane_another_client_leads_is_covered
 tests/ui/test_pane_input.py::test_typed_text_reaches_the_selected_pane_and_moves_its_cursor
 tests/ui/test_pointer.py::test_a_hex_tinted_rows_menu_lists_its_custom_entry
