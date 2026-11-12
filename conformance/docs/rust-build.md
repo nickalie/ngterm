@@ -117,6 +117,7 @@ share is asserted directly, with no capability.
 | `agent-chat` |  | Rust-only: the agent record behind the Android chat view: `ngtermctl agent hook` keeps a pane's Claude Code or Codex conversation from its hook payload, `agent.get` reads it back, `ngtermctl agent chat` streams its transcript as chat events, `ngtermctl agent commands` lists the agent's slash commands and `ngtermctl agent upload` stores a file the chat attaches |
 | `pages-survive` |  | Rust-only: an HTML page lives until it is closed: a page handed to the viewer presenting a session is parked, its slot reserved and its outcome pending, when that presenter or its page helper goes, and handed again to the next presenter that speaks pages |
 | `kitty-clipboard` |  | Rust-only: a program's Kitty clipboard protocol (OSC 5522) reads and writes per MIME type, refused under `clipboard-read`/`clipboard-write = deny`, asked about with a preview of their data under `ask`, a listing answered without a prompt, in a plain pane and in a Live one through the session server |
+| `agterm-peer` |  | Rust-only: a Mac running upstream agterm is a remote origin too: `live tree HOST` and `live attach HOST ID` reach its `agtermctl zmx`, its panes attach through its own zmx, `agterm:HOST` and `ngterm:HOST` pin the app, and the listing and the title bar name what agterm lacks |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
@@ -158,7 +159,8 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
   extension (below);
 - `pages-survive`: on every OS, a page handed to a presenter parked on its presenter's loss and handed to the next, a
   Rust-only extension (below);
-- `kitty-clipboard`: on every OS, a program's Kitty clipboard protocol (OSC 5522), a Rust-only extension (below).
+- `kitty-clipboard`: on every OS, a program's Kitty clipboard protocol (OSC 5522), a Rust-only extension (below);
+- `agterm-peer`: on every OS, attaching an upstream agterm Mac's live sessions, a Rust-only extension (below).
 
 It does not claim:
 
@@ -267,6 +269,13 @@ A write that goes through targets the selection clipboard (`loc=primary`), so no
 the protocol layer's headless weston has no primary selection, so those are the ui layer's. The build claims it on
 every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and every conformance job that judges the ratchet runs with
 `--must-pass kitty-clipboard`: the three Linux legs and Windows' `windows` job.
+
+`agterm-peer`: a viewer attaches the live sessions of a Mac running upstream agterm, which the reference cannot be an
+origin for in its own suite. Its tests (`tests/*/test_agterm_peer*.py`) run the instance's real ssh against a loopback
+`sshd` (`agterm_conformance/loopback_ssh.py`) whose far side answers as agterm v0.41.1 does, from upstream's sources and
+fixtures (`agterm_conformance/fake_agterm.py`: `agtermctl zmx tree|present`, the session commands, the bundled zmx's
+attach); they skip with the reason on a host without OpenSSH's server, and fail under `CI`. The Windows viewer's
+argument list is tested on Windows alone. The build claims it on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`).
 
 ### Commands
 

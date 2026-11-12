@@ -189,6 +189,9 @@ CAPABILITIES: Mapping[str, str] = {
     "kitty-clipboard": "Rust-only: a program's Kitty clipboard protocol (OSC 5522) reads and writes per MIME type, "
     "refused under `clipboard-read`/`clipboard-write = deny`, asked about with a preview of their data under `ask`, a "
     "listing answered without a prompt, in a plain pane and in a Live one through the session server",
+    "agterm-peer": "Rust-only: a Mac running upstream agterm is a remote origin too: `live tree HOST` and `live attach "
+    "HOST ID` reach its `agtermctl zmx`, its panes attach through its own zmx, `agterm:HOST` and `ngterm:HOST` pin the "
+    "app, and the listing and the title bar name what agterm lacks",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
     "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",
@@ -657,10 +660,14 @@ class Adapter:
         private_install: bool = False,
         pane_shell: str | None = None,
         ui: Any = None,
+        path_prefix: Sequence[os.PathLike[str] | str] = (),
     ) -> Instance:
         """`settings` seeds `<state>/settings.json`, which every implementation reads at launch (`restoreMode`, ...).
         `ui` is the run-wide A11yRun selecting private Xvfb (headless only); Instance.ui keeps its X11Context.
         `pane_shell` names the shell the panes run by its full path (`ghostty_config`), kept by relaunches.
+
+        `path_prefix` puts directories ahead of the instance's PATH, kept by relaunches: an outside program's
+        stand-in or set-up (a loopback machine's `ssh`).
 
         `first_run` leaves out the prior-state marker and asks for the welcome dialog an isolated launch suppresses.
         The dialog is modal and holds the socket unanswered, so such a launch returns without waiting for it: the
@@ -676,6 +683,8 @@ class Adapter:
         session_bus: subprocess.Popen[bytes] | None = None
         try:
             env = self.build_env(root, app_id)
+            if path_prefix:
+                env["PATH"] = os.pathsep.join([*map(os.fspath, path_prefix), env["PATH"]])
             if first_run:
                 self.first_run_env(env)
             check_launch_env(

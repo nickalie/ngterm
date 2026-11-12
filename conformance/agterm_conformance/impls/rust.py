@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -118,8 +118,11 @@ class RustAdapter(Adapter):
         private_install: bool = False,
         pane_shell: str | None = None,
         ui: Any = None,
+        path_prefix: Sequence[os.PathLike[str] | str] = (),
     ) -> Instance:
-        instance = super().launch(timeout, app_id, settings, first_run, private_install, pane_shell, ui=ui)
+        instance = super().launch(
+            timeout, app_id, settings, first_run, private_install, pane_shell, ui=ui, path_prefix=path_prefix
+        )
         return instance if first_run else self._profiled(instance)
 
     def serving(self, instance: Instance, timeout: float = LAUNCH_TIMEOUT) -> Instance:
