@@ -58,6 +58,8 @@ class SelfUpdates(
     private var confirm: Intent? = null
     private var job: Job? = null
 
+    @Volatile private var queued = false
+
     override val state: StateFlow<UpdateState> = current.asStateFlow()
     override val automatic: Flow<Boolean> = parts.prefs.automatic
     override val prompt: StateFlow<Boolean> = showing.asStateFlow()
@@ -102,13 +104,18 @@ class SelfUpdates(
             confirm?.let(parts.launch)
             return
         }
-        if (busy) return
+        if (busy || queued) return
         val target = release.takeIf { now is UpdateState.Available || (now is UpdateState.Failed && now.offer != null) }
         val previous = job
+        queued = true
         job =
             scope.launch {
                 // a cancelled download may still be using the directory; a tap the state has moved on from is stale
-                previous?.join()
+                try {
+                    previous?.join()
+                } finally {
+                    queued = false
+                }
                 if (current.value != now) return@launch
                 if (target != null) {
                     download(target)

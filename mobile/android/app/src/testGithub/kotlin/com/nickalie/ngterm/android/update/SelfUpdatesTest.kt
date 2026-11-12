@@ -53,6 +53,12 @@ class SelfUpdatesTest {
             }
         }
 
+    /** The APK the installer got, which it gets just after the state says Installing. */
+    private fun handedOver(): File {
+        settle { rig.installed.isNotEmpty() }
+        return rig.installed.single()
+    }
+
     @Test
     fun aStartCheckAnnouncesANewVersionOnceAndKeepsTheBackgroundChecks() {
         released("0.3.0", "0.2.3")
@@ -155,7 +161,7 @@ class SelfUpdatesTest {
         available(updates)
         updates.install()
         awaitState(updates) { it == UpdateState.Installing(offer) }
-        val apk = rig.installed.single()
+        val apk = handedOver()
         assertEquals("ngterm-0.3.0-android.apk", apk.name)
         assertArrayEquals(apkBytes("0.3.0"), apk.readBytes())
         assertTrue(rig.http.fetched.any { it.endsWith("/SHA256SUMS.minisig") })
@@ -187,7 +193,7 @@ class SelfUpdatesTest {
         updates.opened(Intent(ACTION_INSTALL_UPDATE))
         assertTrue(updates.prompt.value)
         awaitState(updates) { it is UpdateState.Installing }
-        assertEquals(1, rig.installed.size)
+        handedOver()
         updates.promptClosed()
         assertFalse(updates.prompt.value)
     }
@@ -308,7 +314,36 @@ class SelfUpdatesTest {
         awaitState(updates) { it == UpdateState.Installing(offer) }
         settle { rig.http.ended.get() == 2 }
         assertEquals(UpdateState.Installing(offer), updates.state.value)
-        val apk = rig.installed.single()
+        val apk = handedOver()
+        assertArrayEquals(apkBytes("0.3.0"), apk.readBytes())
+        assertTrue(rig.uncaught.isEmpty())
+    }
+
+    @Test
+    fun cancelAfterInstallsQueuedBehindACancelledDownloadStopsTheOneThatRuns() {
+        released("0.3.0")
+        val updates = rig.updates()
+        updates.check()
+        available(updates)
+        val first = CountDownLatch(1)
+        rig.http.stall = first
+        updates.install()
+        awaitState(updates) { it == UpdateState.Downloading(offer, offer.size / 2) }
+        updates.cancel()
+        val second = CountDownLatch(1)
+        rig.http.stall = second
+        updates.install()
+        updates.install()
+        first.countDown()
+        awaitState(updates) { it == UpdateState.Downloading(offer, offer.size / 2) }
+        updates.cancel()
+        updates.install()
+        second.countDown()
+        awaitState(updates) { it == UpdateState.Installing(offer) }
+        settle { rig.http.ended.get() == 3 }
+        // a download the cancel missed would empty the directory only after its read ends
+        runBlocking { delay(200) }
+        val apk = handedOver()
         assertArrayEquals(apkBytes("0.3.0"), apk.readBytes())
         assertTrue(rig.uncaught.isEmpty())
     }
