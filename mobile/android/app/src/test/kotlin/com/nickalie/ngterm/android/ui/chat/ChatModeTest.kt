@@ -1,10 +1,15 @@
 package com.nickalie.ngterm.android.ui.chat
 
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.nickalie.ngterm.android.data.SessionChatViews
+import com.nickalie.ngterm.android.testStore
 import com.nickalie.ngterm.android.ui.session.OpenSession
 import com.nickalie.ngterm.android.ui.session.SessionViewModel
 import com.nickalie.ngterm.core.fake.FakeCall
@@ -13,8 +18,13 @@ import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.RemoteLayout
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -29,6 +39,26 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
+
+private val VIEWS_KEY = stringPreferencesKey("session_chat_views")
+
+// a store whose writes each wait for a [release], in order
+private class GatedStore(
+    private val store: DataStore<Preferences>,
+) : DataStore<Preferences> {
+    private val gate = Channel<Unit>(Channel.UNLIMITED)
+
+    override val data: Flow<Preferences> get() = store.data
+
+    override suspend fun updateData(transform: suspend (t: Preferences) -> Preferences): Preferences {
+        gate.receive()
+        return store.updateData(transform)
+    }
+
+    fun release() {
+        gate.trySend(Unit)
+    }
+}
 
 /** Which view a pane running an agent shows, and the chats that follow from it ([PaneChats], [SessionViewModel]). */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -207,6 +237,38 @@ class ChatModeTest {
         // once the store takes writes again, setting it back lands there and follows the default
         model.setChatView(bed.key, true)
         eventually { bed.view("p1") == PaneView.Chat }
+    }
+
+    @Test
+    fun anEarlierChoiceLandingAfterALaterTapLeavesTheLaterOneShown() {
+        val gated = GatedStore(testStore(dir.newFolder("gated"), "session_chat_views"))
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        try {
+            val chats =
+                PaneChats(
+                    scope,
+                    bed.test.connections,
+                    bed.test.live,
+                    bed.test.panes.shown,
+                    SessionChatViews(gated, bed.test.settings.settings),
+                ) { _, items -> items }
+            eventually { chats.chatViews.value.default }
+            chats.setChatView(bed.key, false)
+            chats.setChatView(bed.key, true)
+            // the first tap's write lands after the second tap: the store reads Off for a moment
+            gated.release()
+            eventually {
+                runBlocking { gated.data.first() }.let { SessionChatViews.decode(it[VIEWS_KEY]) } ==
+                    listOf(bed.key to false)
+            }
+            Thread.sleep(100)
+            assertTrue(chats.chatViews.value.on(bed.key))
+            gated.release()
+            eventually { runBlocking { gated.data.first() }[VIEWS_KEY] == "[]" }
+            assertTrue(chats.chatViews.value.on(bed.key))
+        } finally {
+            scope.cancel()
+        }
     }
 
     @Test

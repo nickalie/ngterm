@@ -117,6 +117,7 @@ object ChatSamples {
                     "rm -rf build && npm run build",
                     "toolu_9",
                     "/home/user/project",
+                    emptyList(),
                 ),
             labels =
                 listOf(

@@ -360,6 +360,50 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun aQuestionItsPromptAsksBeforeTheTranscriptHoldsItIsAQuestionCardNotAnApproval() {
+        emit(event("approval-1", ChatBody.Approval(askedApproval)), live)
+        assertNull(state().approval)
+        assertTrue(state().log.isEmpty)
+        val card = state().question!!
+        assertEquals("approval-1" to asked, card.id to card.question.questions)
+        chat.answerQuestion("approval-1", listOf(QuestionAnswer(listOf("Postgres"), null)))
+        assertEquals(
+            FakeAction.Question(card.question, listOf(QuestionAnswer(listOf("Postgres"), null))),
+            pane.actions.last(),
+        )
+        assertNull(state().question)
+        // the transcript writes the answered call; the prompt ends after it
+        emit(event("toolu_q", question(ChatToolStatus.OK)), event("approval-1", ChatBody.ApprovalDone(askedApproval)))
+        assertEquals(listOf("toolu_q"), rows())
+        assertNull(state().question)
+    }
+
+    @Test
+    fun aPromptQuestionAnsweredElsewhereGoesWithItsPromptOrTheTranscriptsRow() {
+        emit(event("approval-1", ChatBody.Approval(askedApproval)))
+        assertEquals("approval-1", state().question?.id)
+        emit(event("approval-1", ChatBody.ApprovalDone(askedApproval)))
+        assertNull(state().question)
+
+        emit(event("approval-2", ChatBody.Approval(askedApproval)))
+        assertEquals("approval-2", state().question?.id)
+        // an agent that writes the running call: its row is the card, and no second one stands behind it
+        emit(event("toolu_q", question()))
+        assertEquals("toolu_q", state().question?.id)
+        chat.answerQuestion("toolu_q", listOf(QuestionAnswer(listOf("Postgres"), null)))
+        assertNull(state().question)
+    }
+
+    @Test
+    fun aQuestionsResultReadWithoutItsCallKeepsTheRowAQuestion() {
+        emit(event("q1", question()))
+        emit(event("q1", tool("", "", ChatToolStatus.OK, ChatToolKind.OTHER, "Postgres")))
+        val body = entry("q1").body as ChatBody.Question
+        assertEquals(ChatToolStatus.OK to "Postgres", body.question.status to body.question.output)
+        assertNull(state().question)
+    }
+
+    @Test
     fun aQuestionCardComesUpWhileItRunsAndGoesOnceAnswered() {
         emit(event("q1", question()))
         val card = state().question!!

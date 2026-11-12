@@ -111,21 +111,22 @@ val live = event("live", ChatBody.Live)
 
 val reset = event("reset", ChatBody.Reset)
 
-val approval = ChatApproval("Bash", "rm -rf build", "Remove the build directory", "toolu_1", null)
+val approval = ChatApproval("Bash", "rm -rf build", "Remove the build directory", "toolu_1", null, emptyList())
+
+/** The one question of [question]. */
+val asked =
+    listOf(
+        ChatQuestionItem(
+            "Which database?",
+            "Database",
+            false,
+            listOf(ChatQuestionOption("Postgres", null), ChatQuestionOption("SQLite", "One file")),
+        ),
+    )
 
 /** A one-question `AskUserQuestion` in [status]. */
 fun question(status: ChatToolStatus = ChatToolStatus.RUNNING): ChatBody =
-    ChatBody.Question(
-        ChatQuestion(
-            listOf(
-                ChatQuestionItem(
-                    "Which database?",
-                    "Database",
-                    false,
-                    listOf(ChatQuestionOption("Postgres", null), ChatQuestionOption("SQLite", "One file")),
-                ),
-            ),
-            status,
-            if (status == ChatToolStatus.RUNNING) null else "Postgres",
-        ),
-    )
+    ChatBody.Question(ChatQuestion(asked, status, if (status == ChatToolStatus.RUNNING) null else "Postgres"))
+
+/** Claude's `AskUserQuestion` permission prompt for [question], fired before its transcript holds the call. */
+val askedApproval = ChatApproval("AskUserQuestion", "AskUserQuestion", null, null, "/home/user/project", asked)

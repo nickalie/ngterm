@@ -7,6 +7,7 @@ import com.nickalie.ngterm.core.ffi.ChatApproval
 import com.nickalie.ngterm.core.ffi.ChatBody
 import com.nickalie.ngterm.core.ffi.ChatEvent
 import com.nickalie.ngterm.core.ffi.ChatNoticeKind
+import com.nickalie.ngterm.core.ffi.ChatQuestion
 import com.nickalie.ngterm.core.ffi.ChatState
 import com.nickalie.ngterm.core.ffi.ChatToolStatus
 import com.nickalie.ngterm.core.ffi.MobileCoreInterface
@@ -133,6 +134,9 @@ data class ChatUiState(
     internal val interrupted: Boolean = false,
     // the questions whose picker was found answered or gone: their card stays down until the event says so
     internal val dismissed: Set<String> = emptySet(),
+    // a question the agent's permission prompt asks before its transcript holds it (Claude Code writes the call only
+    // once it is answered): the card until the transcript's own row or the prompt's end
+    internal val prompted: OpenQuestion? = null,
     // bumped by each reset, so a page asked for before it is dropped
     internal val epoch: Int = 0,
 ) {
@@ -155,6 +159,8 @@ data class ChatUiState(
  * The prompt being written is the [composer]'s, its `/` menu listing the agent's commands ranked by [filter], a file
  * it attaches going to the machine on [attach]; whether the agent works on a turn comes from [working].
  *
+ * - A permission prompt that carries questions (Claude's `AskUserQuestion`, whose call its transcript holds only once
+ *   answered) is a question card, not an approval: up until its `approval_done`, while no row of the log asks the same.
  * - An approval card comes up with the `approval` event and goes with its `approval_done` (or the next `approval`),
  *   or when this device answered it; a dialog the core can't confirm as the card's (another call's, or one it can't
  *   tell apart) leaves it up, its banner offering the terminal. A question card comes up with a question still
@@ -436,11 +442,11 @@ private fun ChatUiState.taking(events: List<ChatEvent>): ChatUiState {
             state = state.copy(interrupted = state.interrupted.after(event))
             continue
         }
-        if (rows.isNotEmpty()) state = state.withLog(state.log.append(rows))
+        if (rows.isNotEmpty()) state = state.copy(log = state.log.append(rows)).asking()
         rows.clear()
         state = state.meta(event)
     }
-    return if (rows.isEmpty()) state else state.withLog(state.log.append(rows))
+    return if (rows.isEmpty()) state else state.copy(log = state.log.append(rows)).asking()
 }
 
 // whether the main conversation's last turn stays interrupted after a row: an interrupt notice ends it; the agent at
@@ -496,11 +502,11 @@ private fun ChatUiState.meta(event: ChatEvent): ChatUiState =
         }
 
         is ChatBody.Approval -> {
-            if (approval?.id == event.id) this else copy(approval = ApprovalCard(event.id, body.approval))
+            prompt(event.id, body.approval, up = true)
         }
 
         is ChatBody.ApprovalDone -> {
-            if (approval?.id == event.id) copy(approval = null) else this
+            prompt(event.id, body.approval, up = false)
         }
 
         is ChatBody.Account -> {
@@ -512,7 +518,41 @@ private fun ChatUiState.meta(event: ChatEvent): ChatUiState =
         }
     }
 
-private fun ChatUiState.withLog(log: ChatLog) = copy(log = log, question = log.openQuestion(dismissed))
+// a permission prompt [id] [up] (its questions' card, or an approval card), or answered (its card goes)
+private fun ChatUiState.prompt(
+    id: String,
+    asked: ChatApproval,
+    up: Boolean,
+): ChatUiState =
+    when {
+        !up && id == prompted?.id -> {
+            copy(prompted = null).asking()
+        }
+
+        !up -> {
+            if (approval?.id == id) copy(approval = null) else this
+        }
+
+        asked.questions.isNotEmpty() -> {
+            copy(prompted = OpenQuestion(id, ChatQuestion(asked.questions, ChatToolStatus.RUNNING, null))).asking()
+        }
+
+        approval?.id == id -> {
+            this
+        }
+
+        else -> {
+            copy(approval = ApprovalCard(id, asked))
+        }
+    }
+
+// the question card: the log's open question, else the one a permission prompt asks while no row asks it
+private fun ChatUiState.asking(): ChatUiState {
+    val shown =
+        log.openQuestion(dismissed)
+            ?: prompted?.takeIf { it.id !in dismissed && !log.asks(it.question.questions) }
+    return copy(question = shown)
+}
 
 // an older page in above the rows, the top row it leaves in place held there: a placeholder whose task the page
 // brought moves up to the task's place, so the first row the page didn't move is the anchor
@@ -524,14 +564,14 @@ private fun ChatUiState.withPage(page: List<ChatEvent>): ChatUiState {
     val shown = items.filter { it !is ChatItem.Divider }
     val top =
         shown.firstOrNull { it !is ChatItem.Subagent || it.key in waiting } ?: shown.firstOrNull { it.key in rows }
-    return withLog(next).copy(older = OlderPages.More, anchor = top?.key)
+    return copy(log = next).asking().copy(older = OlderPages.More, anchor = top?.key)
 }
 
 // the card [id] answered, here or elsewhere
 private fun ChatUiState.without(id: String): ChatUiState {
     val approval = approval?.takeIf { it.id != id }
     val dismissed = if (question?.id == id) dismissed + id else dismissed
-    return copy(approval = approval, dismissed = dismissed, question = log.openQuestion(dismissed))
+    return copy(approval = approval, dismissed = dismissed).asking()
 }
 
 private fun problem(outcome: AgentInputOutcome): ChatProblem? =

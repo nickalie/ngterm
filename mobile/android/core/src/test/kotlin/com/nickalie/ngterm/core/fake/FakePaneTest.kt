@@ -37,7 +37,7 @@ class FakePaneTest {
                     output = null,
                 )
             val answers = listOf(QuestionAnswer(picked = listOf("Red"), other = null))
-            val approval = ChatApproval("Bash", "touch picked.txt", "touch picked.txt", null, null)
+            val approval = ChatApproval("Bash", "touch picked.txt", "touch picked.txt", null, null, emptyList())
 
             assertEquals(AgentInputOutcome.SENT, pane.sendPrompt("/compact keep it short"))
             assertEquals(AgentInputOutcome.SENT, pane.interrupt())

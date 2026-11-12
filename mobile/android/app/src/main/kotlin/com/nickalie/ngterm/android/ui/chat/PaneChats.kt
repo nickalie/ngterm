@@ -60,9 +60,10 @@ class PaneChats(
     private val holds = MutableStateFlow<Map<PaneRef, Hold>>(emptyMap())
     private val chatViewState = MutableStateFlow(ChatViews())
 
-    // the sessions' choices the store could not keep (`null`: one set back to the default), over what it reads until
-    // the process ends or a later write of the same session lands
-    private val unsaved = MutableStateFlow<Map<SessionKey, Boolean?>>(emptyMap())
+    // the sessions' choices laid over what the store reads until it reads them too, so an earlier write landing after
+    // a later tap never shows through; one the store could not keep holds until the process ends or a later choice
+    private val choices = MutableStateFlow<Map<SessionKey, Choice>>(emptyMap())
+    private var lastChoice = 0L
     private val viewState = MutableStateFlow<Map<PaneRef, PaneView>>(emptyMap())
     private val chatState = MutableStateFlow<Map<PaneRef, ChatViewModel>>(emptyMap())
     private val sessions = live.sessions
@@ -84,9 +85,9 @@ class PaneChats(
         scope.launch {
             combine(
                 sessionViews.views.catch { /* each source stands in for itself (SessionChatViews): none comes */ },
-                unsaved,
-                ::withUnsaved,
-            ).collect { chatViewState.value = it }
+                choices,
+                ::Pair,
+            ).collect { (views, laid) -> chatViewState.value = withChoices(views, settle(views, laid)) }
         }
         scope.launch { sessions.collect(::keepHolds) }
         scope.launch {
@@ -118,17 +119,16 @@ class PaneChats(
         on: Boolean,
     ) {
         val default = chatViewState.value.default
+        val choice = Choice(on.takeIf { on != default }, ++lastChoice)
+        choices.update { it + (key to choice) }
         // at once, so the views follow the tap rather than the store's write
-        chatViewState.update { views ->
-            views.copy(sessions = if (on == default) views.sessions - key else views.sessions + (key to on))
-        }
+        chatViewState.update { withChoices(it, mapOf(key to choice)) }
         scope.launch {
             try {
                 sessionViews.set(key, on, default)
-                unsaved.update { it - key }
+                choices.update { now -> if (now[key] == choice) now + (key to choice.copy(landed = true)) else now }
             } catch (_: IOException) {
                 // the store can't be written: the choice holds over what it reads until the app's process ends
-                unsaved.update { it + (key to on.takeIf { on != default }) }
             }
         }
     }
@@ -139,6 +139,17 @@ class PaneChats(
      */
     fun reveal(pane: PaneRef) {
         chatState.value[pane]?.showEnd()
+    }
+
+    // the choices still laid over [views]: a landed one goes once the store reads it too
+    private fun settle(
+        views: ChatViews,
+        laid: Map<SessionKey, Choice>,
+    ): Map<SessionKey, Choice> {
+        val read = laid.filter { (key, choice) -> choice.landed && views.sessions[key] == choice.on }
+        if (read.isEmpty()) return laid
+        choices.update { now -> now.filter { (key, choice) -> read[key] != choice } }
+        return laid - read.keys
     }
 
     // a pane whose agent left holds nothing: its next agent starts in chat view
@@ -273,13 +284,20 @@ private fun views(
             }
         }.toMap()
 
-// [views] with the choices the store could not keep laid over its own: `null` drops one
-private fun withUnsaved(
+// a session's choice of tap [seq]: [on], or `null` for the default again; [landed] once the store took it
+private data class Choice(
+    val on: Boolean?,
+    val seq: Long,
+    val landed: Boolean = false,
+)
+
+// [views] with [choices] laid over its own
+private fun withChoices(
     views: ChatViews,
-    unsaved: Map<SessionKey, Boolean?>,
+    choices: Map<SessionKey, Choice>,
 ): ChatViews {
-    if (unsaved.isEmpty()) return views
+    if (choices.isEmpty()) return views
     val sessions = views.sessions.toMutableMap()
-    for ((key, on) in unsaved) if (on == null) sessions.remove(key) else sessions[key] = on
+    for ((key, choice) in choices) if (choice.on == null) sessions.remove(key) else sessions[key] = choice.on
     return views.copy(sessions = sessions)
 }

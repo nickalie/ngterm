@@ -3,6 +3,7 @@ package com.nickalie.ngterm.android.ui.chat
 import com.nickalie.ngterm.core.ffi.ChatBody
 import com.nickalie.ngterm.core.ffi.ChatEvent
 import com.nickalie.ngterm.core.ffi.ChatQuestion
+import com.nickalie.ngterm.core.ffi.ChatQuestionItem
 import com.nickalie.ngterm.core.ffi.ChatTool
 import com.nickalie.ngterm.core.ffi.ChatToolStatus
 
@@ -99,6 +100,10 @@ class ChatLog private constructor(
                     ?.takeIf { it.question.status == ChatToolStatus.RUNNING && id !in dismissed }
                     ?.let { OpenQuestion(id, it.question) }
             }
+
+    /** Whether a row asks [questions], answered or not. */
+    fun asks(questions: List<ChatQuestionItem>): Boolean =
+        bodies.values.any { it is ChatBody.Question && it.question.questions == questions }
 
     /**
      * The conversation's own tool calls with no result yet, oldest first: a command or a subagent still on its way,
@@ -249,18 +254,30 @@ private fun ChatBody.listed(): Boolean =
         else -> false
     }
 
-// the newer word on an event wins; a tool result read without its call keeps the call's name, kind and title
+// the newer word on an event wins; a tool result read without its call keeps the call's name, kind and title, or,
+// for a question's, stays the question with the result's status and output
 private fun merge(
     older: ChatBody,
     newer: ChatBody,
 ): ChatBody {
-    if (older !is ChatBody.Tool || newer !is ChatBody.Tool || newer.tool.name.isNotEmpty()) return newer
-    val call = older.tool
-    return ChatBody.Tool(
-        newer.tool.copy(
-            name = call.name,
-            kind = call.kind,
-            title = newer.tool.title.ifEmpty { call.title },
-        ),
-    )
+    val result = (newer as? ChatBody.Tool)?.tool?.takeIf { it.name.isEmpty() } ?: return newer
+    return when (older) {
+        is ChatBody.Question -> {
+            ChatBody.Question(older.question.copy(status = result.status, output = result.output))
+        }
+
+        is ChatBody.Tool -> {
+            ChatBody.Tool(
+                result.copy(
+                    name = older.tool.name,
+                    kind = older.tool.kind,
+                    title = result.title.ifEmpty { older.tool.title },
+                ),
+            )
+        }
+
+        else -> {
+            newer
+        }
+    }
 }
