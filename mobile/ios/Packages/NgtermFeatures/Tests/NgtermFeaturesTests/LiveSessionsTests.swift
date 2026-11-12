@@ -1,3 +1,4 @@
+import Foundation
 import NgtermCore
 import NgtermCoreFakes
 import NgtermPlatform
@@ -158,16 +159,23 @@ internal struct LiveSessionsTests {
         #expect(frames.seen == ["dirty", "attached"])
     }
 
-    @Test("a program's write to the standard clipboard goes to the device's, and one to another clipboard is dropped")
+    @Test("a program's write goes to the device's clipboard with every part, and its status back to the core")
     internal func clipboardWrite() async {
         defer { test.remove() }
+        let image = ClipboardPart(mime: "image/png", data: Data([1, 2, 3]))
+        let text = ClipboardPart(mime: "text/plain", data: Data("copied".utf8))
         await emit(
-            .clipboardWrite(pane: pane, clipboard: .standard, text: "copied"),
-            .clipboardWrite(pane: pane, clipboard: .selection, text: "selected"),
-            .clipboardWrite(pane: pane, clipboard: .primary, text: "primary"),
-            .clipboardWrite(pane: pane, clipboard: .standard, text: nil)
+            .clipboardWrite(pane: pane, writeId: 1, contents: [text, image]),
+            .clipboardWrite(pane: pane, writeId: 2, contents: [])
         )
-        #expect(test.clipboard.writes == ["copied", nil])
+        #expect(test.clipboard.partWrites == [[text, image], []])
+        let completed = test.core.calls.filter { $0.method == "completeClipboardWrite" }
+        #expect(
+            completed == [
+                FakeCall("completeClipboardWrite", ["m1", "s1", pane.paneId, UInt64(1), ClipboardWriteStatus.done]),
+                FakeCall("completeClipboardWrite", ["m1", "s1", pane.paneId, UInt64(2), ClipboardWriteStatus.done]),
+            ]
+        )
     }
 
     @Test("a detached session's state goes")

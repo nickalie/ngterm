@@ -17,10 +17,13 @@ internal final class ClipboardReadTests: XCTestCase {
         let app = launch()
         XCTAssertTrue(FakeApp.element(containing: "A program in docs-site on build-01", in: app).exists)
         XCTAssertTrue(app.buttons["clipboard-always"].label.contains("build-01"))
+        FakeApp.expect(app.staticTexts["npm run deploy -- --prod"], "what the read would hand over")
+        XCTAssertTrue(app.switches["clipboard-remember"].exists)
         try FakeApp.auditSheet(app)
         app.buttons["clipboard-deny"].tap()
         XCTAssertTrue(app.staticTexts["Let docs-site read your clipboard?"].waitForNonExistence(timeout: 10))
         FakeApp.expect(app.staticTexts["Let notes read your clipboard?"], "the next read's question")
+        XCTAssertFalse(app.switches["clipboard-remember"].exists, "a read with no password keeps no grant")
     }
 
     @MainActor

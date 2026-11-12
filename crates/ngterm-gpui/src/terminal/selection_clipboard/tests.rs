@@ -284,35 +284,6 @@ fn part(mime: &str, data: &[u8]) -> ngterm_term::ClipboardContent {
     }
 }
 
-#[test]
-fn a_write_keeps_one_text_part_named_text_plain_where_it_stood() {
-    let canonical = super::canonical_text;
-    assert_eq!(
-        canonical(vec![
-            part("image/png", b"png"),
-            part("UTF8_STRING", b"a"),
-            part("TEXT", b"b")
-        ]),
-        [part("image/png", b"png"), part("text/plain", b"a")],
-        "the first alias is relabelled, the others dropped"
-    );
-    assert_eq!(
-        canonical(vec![
-            part("text/plain;charset=utf-8", b"alias"),
-            part("text/html", b"<b>"),
-            part("text/plain", b"exact"),
-            part("STRING", b"latin"),
-        ]),
-        [part("text/html", b"<b>"), part("text/plain", b"exact")],
-        "an exact text/plain part wins over any alias"
-    );
-    assert_eq!(
-        canonical(vec![part("text/html", b"<b>"), part("image/png", b"png")]),
-        [part("text/html", b"<b>"), part("image/png", b"png")]
-    );
-    assert!(canonical(Vec::new()).is_empty());
-}
-
 #[gpui_kit::test]
 fn an_alias_only_write_stores_text_that_every_text_name_and_a_paste_read(cx: &mut TestAppContext) {
     let text = "héllo 🐈".as_bytes();

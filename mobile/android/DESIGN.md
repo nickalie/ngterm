@@ -416,16 +416,34 @@ learn, and nothing drawn until a gesture asks for it.
   in mono on a `surfaceContainerLow` plate (its first six lines), then Cancel and Paste (the toolbar's word). Safe
   text pastes without asking.
 
-### A program reads the clipboard (`ui/terminal/TerminalPrompts.kt`, `data/ClipboardReads.kt`)
+### A program reads the clipboard (`ui/terminal/TerminalPrompts.kt`, `ClipboardPreview.kt`, `data/ClipboardReads.kt`)
 
-A program's OSC 52 read waits for the user, as Ghostty's `clipboard-read = ask`. It is a sheet over whatever is on
-screen, the same shape as the first connect's: the attention diamond, "Let docs-site read your clipboard?", what the
-program would see and from where ("A program in docs-site on build-01 asks for the text you copied. It sees it only
-if you allow it."; a read that only lists what kinds the clipboard holds says so), then **Allow** (filled), **Always
-allow on build-01** (outlined) and **Deny**. Swiping the sheet away denies. Reads queue and show one at a time; a read
-the core gives up on (its pane hidden, detached, lost or exited) closes its sheet. "Always" is the app's to keep, per
-machine (`ClipboardTrust`, which Settings lists), and answers that machine's later reads at once. In the background
-Android lets no app read the clipboard, so an always-allowed read then gets an empty one.
+A program's read (OSC 52, or the Kitty clipboard protocol's OSC 5522) waits for the user, as Ghostty's
+`clipboard-read = ask`. It is a sheet over whatever is on screen, the same shape as the first connect's: the attention
+diamond, "Let docs-site read your clipboard?", from where ("A program in docs-site on build-01 asks for what you
+copied. It sees this only if you allow it."), then what it would see, then **Allow** (filled), **Always allow on
+build-01** (outlined) and **Deny**. Swiping the sheet away denies. Reads queue and show one at a time; a read the core
+gives up on (its pane hidden, detached, lost or exited) closes its sheet.
+
+- **The preview** is Ghostty's GTK confirmation in the app's terms: one page per type the read asks for and the
+  clipboard holds, picked with a filter chip named by its MIME type in mono (no chips for one page), on a
+  `surfaceContainerLow` plate. An image shows fitted, at most 200dp tall; valid UTF-8 shows as text in mono, scrolling
+  inside the plate past 160dp (the first 64 KiB of its UTF-8, the rest counted); other data says "No preview for this kind of
+  content"; an empty part says "Empty". Under the plate, the page's size ("73 bytes", "2.0 kB"), after its type when
+  there is one page. The clipboard is read when the sheet comes up ("Reading your clipboard…" until then, with Allow
+  and Always disabled), and Allow hands over exactly what was shown. A clipboard holding none of the types says so.
+- **Don't ask again for this program in this terminal**, a switch row under the preview, shows only for a read that
+  can keep a grant (the Kitty protocol's password); with it on, Allow (or Always) asks the core for that grant. A
+  program holding one is answered unasked.
+- A listing of the types, or a read asking for no type, discloses no data and never asks.
+- "Always" is the app's to keep, per machine (`ClipboardTrust`, which Settings lists), and answers that machine's later
+  reads at once. In the background Android lets no app read the clipboard, so an always-allowed read then gets an
+  empty one.
+
+A program's write isn't asked about (Ghostty's `clipboard-write = allow`): its text, HTML and first image land on the
+clipboard as one clip (an image through the app's own content URI, replaced by the next write; HTML with its text, as
+Android's clips carry it), and the program learns the outcome only once the clipboard took it. A write of none of those
+types is refused as unsupported, and only a write with nothing in it clears.
 
 ### Keyboard (`ui/terminal/KeyMapping.kt`, `TerminalKeyboard.kt`, `TerminalInputConnection.kt`, `ExtraKeysRow.kt`)
 

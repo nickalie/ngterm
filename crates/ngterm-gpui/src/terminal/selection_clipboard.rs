@@ -32,7 +32,7 @@ mod tests;
 mod windows;
 
 use gpui_kit::{App, ClipboardItem};
-use ngterm_term::{ClipboardContent, ClipboardLocation};
+use ngterm_term::{ClipboardContent, ClipboardLocation, clipboard_mime};
 
 /// Why a per-MIME access did not happen.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +59,7 @@ pub(super) fn mime_types(location: ClipboardLocation, cx: &App) -> Result<Vec<St
         Store::System => system::mime_types(cx),
         Store::Selection => selection_mimes::mime_types(cx),
     }?;
-    types.truncate(16);
+    types.truncate(clipboard_mime::MAX_LISTED_TYPES);
     Ok(types)
 }
 
@@ -79,46 +79,14 @@ pub(super) fn read_mimes(
     })
 }
 
-/// The shared read contract over a store's own `read`: the first four distinct names, each text alias asked of the
-/// store as `text/plain` (once), every answer relabelled with the name it was asked under.
+/// The shared read contract over a store's own `read` (`ngterm_term::clipboard_mime::read_through`): the first four
+/// distinct names, each text alias asked of the store as `text/plain` (once), every answer relabelled with the name it
+/// was asked under.
 fn read_through(
     mimes: &[String],
     read: impl FnOnce(&[String]) -> Result<Vec<ClipboardContent>, MimeFailure>,
 ) -> Result<Vec<ClipboardContent>, MimeFailure> {
-    let mut wanted: Vec<String> = Vec::new();
-    for mime in mimes {
-        if wanted.len() < 4 && !wanted.contains(mime) {
-            wanted.push(mime.clone());
-        }
-    }
-    let mut sources = Vec::new();
-    for mime in &wanted {
-        let source = text_source(mime).to_owned();
-        if !sources.contains(&source) {
-            sources.push(source);
-        }
-    }
-    let contents = read(&sources)?;
-    Ok(wanted
-        .into_iter()
-        .filter_map(|mime| {
-            contents
-                .iter()
-                .find(|content| content.mime == text_source(&mime))
-                .map(|content| ClipboardContent {
-                    mime,
-                    data: content.data.clone(),
-                })
-        })
-        .collect())
-}
-
-/// Ghostty's `terminal.clipboard.isTextMime` names the clipboard's text on every platform.
-fn text_source(mime: &str) -> &str {
-    match mime {
-        "text/plain" | "text/plain;charset=utf-8" | "UTF8_STRING" | "TEXT" | "STRING" => "text/plain",
-        _ => mime,
-    }
+    clipboard_mime::read_through(mimes, read)
 }
 
 /// Replaces what the store of `location` holds with exactly `contents`; none clears it.
@@ -143,31 +111,7 @@ fn write_through(
     contents: Vec<ClipboardContent>,
     write: impl FnOnce(Vec<ClipboardContent>) -> Result<(), MimeFailure>,
 ) -> Result<(), MimeFailure> {
-    write(canonical_text(contents))
-}
-
-/// `contents` with one text part, named `text/plain`, where it stood: an exact `text/plain` part wins, else the
-/// first alias part (Ghostty's text names, [`text_source`]) is relabelled; the other text parts are dropped.
-fn canonical_text(contents: Vec<ClipboardContent>) -> Vec<ClipboardContent> {
-    let is_text = |content: &ClipboardContent| text_source(&content.mime) == "text/plain";
-    let kept = contents
-        .iter()
-        .position(|content| content.mime == "text/plain")
-        .or_else(|| contents.iter().position(is_text));
-    contents
-        .into_iter()
-        .enumerate()
-        .filter_map(|(index, mut content)| {
-            if !is_text(&content) {
-                Some(content)
-            } else if Some(index) == kept {
-                content.mime = "text/plain".into();
-                Some(content)
-            } else {
-                None
-            }
-        })
-        .collect()
+    write(clipboard_mime::canonical_text(contents))
 }
 
 /// The text a set of representations carries as a GPUI item (`text/plain`), for the stores that keep items.

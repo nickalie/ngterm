@@ -14,6 +14,11 @@ public enum ScreenSnapshot {
         // a golden presses nothing
     }
 
+    /// What a golden's buttons that pass a choice do: nothing.
+    public static let ignoreChoice: @MainActor (Bool) -> Void = { _ in
+        // a golden presses nothing
+    }
+
     // how alike a pixel must be to its golden's: text antialiasing differs a little between runs
     private static let perceptualPrecision: Float = 0.98
 

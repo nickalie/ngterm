@@ -68,7 +68,7 @@ pub use chat::{
     ChatQuestionOption, ChatState, ChatTool, ChatToolKind, ChatToolStatus, ChatUsage, UploadCancel, filter_commands,
 };
 pub use keys::{KeyError, KeyPair};
-pub use pane::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};
+pub use pane::{ClipboardPart, ClipboardReply, ClipboardWriteStatus, PaneClipboard, PaneEnd, PaneRef, PaneRole};
 pub use presentation::{
     AskReply, PresentationRole, RemoteAsk, RemoteAskButton, RemoteAskChoice, RemoteAskChoices, RemoteAskInput,
     RemoteHud, RemoteLayout, RemoteNotice, RemoteStatus, StreamState,

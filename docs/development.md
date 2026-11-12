@@ -670,6 +670,12 @@ previews what would be disclosed or written (one page per type on Linux and Wind
 macOS) and offers a grant for the program's password in that terminal; OSC 52's "Don't ask again this session" stays
 OSC 52's.
 
+The Android and iOS apps take a program's reads and writes the same way, per MIME type, on the device's one clipboard:
+it keeps text, HTML and images (Android's clip with its image behind the app's content URI, iOS's pasteboard item),
+the read's prompt previews what would be disclosed (a page per type on Android, the text and first image on iOS) and
+offers the same grant, and a write completes only once the clipboard took it. Each app's design system has the
+details (`mobile/android/DESIGN.md`, `mobile/ios/DESIGN.md`).
+
 The values mean what they mean in Ghostty at `LIBGHOSTTY_VT_REV`, not in the older libghostty upstream links, so two
 differ from upstream's: upstream's docs give `copy-on-select = clipboard` for "as well", which there meant both
 clipboards and here means the system clipboard only (`both` is the "as well"); and an explicit `copy-on-select = true`

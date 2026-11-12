@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::api::{EventSink, Machine, MachineState, MobileCore, MobileEvent, Pane, PaneInputError, PaneSize};
 use crate::chat::input::InputTiming;
-use crate::pane::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};
+use crate::pane::{ClipboardReply, PaneEnd, PaneRef, PaneRole};
 use crate::transport::fake::{FakeTransport, Opened, Script};
 use crate::transport::russh::CONNECTION_LOST;
 use crate::transport::{ChannelEnd, ChannelInput, ChannelPeer};
@@ -255,7 +255,7 @@ pub(super) fn contains(bytes: &[u8], needle: &[u8]) -> bool {
     bytes.windows(needle.len()).any(|window| window == needle)
 }
 
-fn position(bytes: &[u8], needle: &[u8]) -> usize {
+pub(super) fn position(bytes: &[u8], needle: &[u8]) -> usize {
     bytes.windows(needle.len()).position(|window| window == needle).unwrap()
 }
 
@@ -704,158 +704,14 @@ fn the_gone_guards_line_with_the_session_still_listed_is_a_plain_exit() {
     );
 }
 
-/// A clipboard read's request event: its id, after the read's bytes are delivered.
-fn read_request(fixture: &Fixture, peer: &ChannelPeer) -> u64 {
-    send(peer, b"\x1b]52;c;?\x07");
-    fixture.next(|event| match event {
-        MobileEvent::ClipboardReadRequest {
-            pane,
-            read_id,
-            clipboard,
-            list_only,
-        } => {
-            assert_eq!(
-                (pane, clipboard, list_only),
-                (reference(), PaneClipboard::Standard, false)
-            );
-            Some(read_id)
-        }
-        _ => None,
-    })
-}
-
 #[test]
-fn a_clipboard_read_holds_the_output_until_allowed_or_denied_and_detaching_denies_it() {
-    let mut fixture = Fixture::connected();
-    let pane = fixture.show();
-    let mut opened = fixture.attach();
-    let answer = |read_id: u64, reply: ClipboardReply| {
-        let reference = reference();
-        let core = &fixture.core;
-        core.answer_clipboard_read(
-            reference.machine_id,
-            reference.session_id,
-            reference.pane_id,
-            read_id,
-            reply,
-        )
-        .unwrap();
-    };
-
-    let first = read_request(&fixture, &opened.peer);
-    send(&opened.peer, b"\x1b[6n");
-    thread::sleep(QUIET);
-    assert!(opened.peer.try_input().is_none(), "the output waits for the answer");
-    answer(
-        first,
-        ClipboardReply::Allow {
-            text: Some("hi".to_owned()),
-        },
-    );
-    let (bytes, _) = inputs_until(&mut opened.peer, |bytes, _| contains(bytes, b"R"));
-    assert!(
-        contains(&bytes, b"aGk="),
-        "the text goes back: {:?}",
-        String::from_utf8_lossy(&bytes)
-    );
-    assert!(
-        position(&bytes, b"aGk=") < position(&bytes, b"\x1b[1;1R"),
-        "then the held output runs"
-    );
-
-    let second = read_request(&fixture, &opened.peer);
-    assert_ne!(second, first);
-    send(&opened.peer, b"\x1b[6n");
-    answer(second, ClipboardReply::Deny);
-    let (bytes, _) = inputs_until(&mut opened.peer, |bytes, _| contains(bytes, b"R"));
-    assert!(contains(&bytes, b"]52;"), "an empty clipboard goes back");
-    assert!(!contains(&bytes, b"aGk="));
-
-    let third = read_request(&fixture, &opened.peer);
-    fixture
-        .core
-        .detach_session(MACHINE.to_owned(), SESSION.to_owned())
-        .unwrap();
-    let dismissed = fixture.next(|event| match event {
-        MobileEvent::ClipboardReadDismiss { read_id, .. } => Some(read_id),
-        _ => None,
-    });
-    assert_eq!(dismissed, third);
-    let (bytes, others) = inputs_until(&mut opened.peer, |_, others| others.contains(&ChannelInput::Close));
-    assert!(
-        contains(&bytes, b"]52;"),
-        "the read is denied before the channel closes"
-    );
-    assert_eq!(others, [ChannelInput::Close]);
-    assert_eq!(
-        pane.type_text("x".to_owned()),
-        Err(PaneInputError::Closed),
-        "the handle is dead"
-    );
-    assert!(fixture.quiet().is_empty(), "nothing more about the pane");
-}
-
-#[test]
-fn the_bell_and_clipboard_writes_reach_the_app_with_the_clipboard_they_name() {
+fn the_bell_reaches_the_app_for_its_pane() {
     let mut fixture = Fixture::connected();
     let _pane = fixture.show();
     let opened = fixture.attach();
 
     send(&opened.peer, b"\x07");
     fixture.next(|event| matches!(event, MobileEvent::Bell { pane } if pane == reference()).then_some(()));
-
-    let written = |fixture: &Fixture| {
-        fixture.next(|event| match event {
-            MobileEvent::ClipboardWrite { pane, clipboard, text } if pane == reference() => Some((clipboard, text)),
-            _ => None,
-        })
-    };
-    // `hello`, `hi` and `yo`, base64
-    send(&opened.peer, b"\x1b]52;c;aGVsbG8=\x07");
-    assert_eq!(written(&fixture), (PaneClipboard::Standard, Some("hello".to_owned())));
-    send(&opened.peer, b"\x1b]52;p;aGk=\x07");
-    assert_eq!(written(&fixture), (PaneClipboard::Primary, Some("hi".to_owned())));
-    send(&opened.peer, b"\x1b]52;s;eW8=\x07");
-    assert_eq!(written(&fixture), (PaneClipboard::Selection, Some("yo".to_owned())));
-}
-
-#[test]
-fn clipboard_write_completion_unblocks_output_and_nontext_never_clears() {
-    let mut fixture = Fixture::connected();
-    let _pane = fixture.show();
-    let mut opened = fixture.attach();
-    for (location, mime, expected_status, expected_text) in [
-        ("clipboard", "dGV4dC9wbGFpbg==", "DONE", Some("hi")),
-        ("primary", "dGV4dC9wbGFpbg==", "ENOSYS", Some("hi")),
-        ("clipboard", "aW1hZ2UvcG5n", "ENOSYS", None),
-    ] {
-        send(&opened.peer, format!(
-            "\x1b]5522;type=write:loc={location}\x1b\\\x1b]5522;type=wdata:mime={mime};aGk=\x1b\\\x1b]5522;type=wdata\x1b\\\x1b[5n"
-        ).as_bytes());
-        let (bytes, _) = inputs_until(&mut opened.peer, |bytes, _| contains(bytes, b"\x1b[0n"));
-        assert_eq!(
-            bytes,
-            format!("\x1b]5522;type=write:status={expected_status}\x1b\\\x1b[0n").as_bytes()
-        );
-        let writes: Vec<_> = fixture
-            .quiet()
-            .into_iter()
-            .filter_map(|event| match event {
-                MobileEvent::ClipboardWrite { text, .. } => Some(text),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            writes,
-            expected_text
-                .map(|text| vec![Some(text.to_owned())])
-                .unwrap_or_default()
-        );
-    }
-    send(&opened.peer, b"\x1b]52;c;\x07\x1b[5n");
-    let (bytes, _) = inputs_until(&mut opened.peer, |bytes, _| contains(bytes, b"\x1b[0n"));
-    assert_eq!(bytes, b"\x1b[0n");
-    fixture.next(|event| matches!(event, MobileEvent::ClipboardWrite { text: None, .. }).then_some(()));
 }
 
 #[test]
@@ -890,8 +746,21 @@ fn commands_about_a_pane_not_shown_change_nothing() {
         PANE.to_owned(),
         99,
         ClipboardReply::Allow {
-            text: Some("secret".to_owned()),
+            contents: vec![crate::ClipboardPart {
+                mime: "text/plain".to_owned(),
+                data: b"secret".to_vec(),
+            }],
+            available: Vec::new(),
+            remember: false,
         },
+    )
+    .unwrap();
+    core.complete_clipboard_write(
+        MACHINE.to_owned(),
+        SESSION.to_owned(),
+        PANE.to_owned(),
+        99,
+        crate::ClipboardWriteStatus::Done,
     )
     .unwrap();
 

@@ -7,6 +7,7 @@ import com.nickalie.ngterm.core.fake.FakeCall
 import com.nickalie.ngterm.core.fake.FakeMobileCore
 import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.AskReply
+import com.nickalie.ngterm.core.ffi.ClipboardWriteStatus
 import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.RemoteAskInput
@@ -58,7 +59,7 @@ class AlertsTest {
     private suspend fun TestScope.attached() {
         connections = Connections(this, { 0L }) { s -> FakeMobileCore(s).also { core = it } }
         asks = Asks(backgroundScope, connections)
-        val live = LiveSessions(backgroundScope, connections) {}
+        val live = LiveSessions(backgroundScope, connections) { ClipboardWriteStatus.DONE }
         Alerts(backgroundScope, connections, asks, flowOf(listOf(testMachine())), enabled, sink, live.sessions)
         core.sessions["m1"] =
             mutableListOf(fakeSession("s1", name = "docs-site").copy(context = "Rewrite the install guide"))

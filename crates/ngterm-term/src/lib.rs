@@ -55,6 +55,7 @@ mod active;
 #[cfg(feature = "local")]
 mod bench;
 mod bridge;
+pub mod clipboard_mime;
 mod effects;
 mod exit;
 mod gesture;

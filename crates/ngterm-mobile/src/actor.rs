@@ -31,6 +31,8 @@ mod inputs;
 #[cfg(test)]
 mod chat_tests;
 #[cfg(test)]
+mod clipboard_tests;
+#[cfg(test)]
 mod input_tests;
 #[cfg(test)]
 mod pane_tests;
@@ -62,7 +64,7 @@ use crate::api::{
 };
 use crate::chat::input::{Action, AgentInputOutcome, InputTiming};
 use crate::chat::{AgentCommand, ChatEvent, ChatKey, Chats, UploadCancel};
-use crate::pane::{self, ClipboardReply, GoneCheck, Note, PaneRef, Panes, Target};
+use crate::pane::{self, ClipboardReply, ClipboardWriteStatus, GoneCheck, Note, PaneRef, Panes, Target};
 use crate::presentation::{self, AskReply, ChannelLinks, LinkEvent, Presentations, Reporter};
 use crate::reconnect::Retry;
 use crate::sessions::{self, RemoteSession};
@@ -132,6 +134,11 @@ pub(crate) enum Command {
         pane: PaneRef,
         read_id: u64,
         reply: ClipboardReply,
+    },
+    CompleteClipboardWrite {
+        pane: PaneRef,
+        write_id: u64,
+        status: ClipboardWriteStatus,
     },
     OpenChat {
         pane: PaneRef,
@@ -1043,6 +1050,10 @@ fn pane_command<T: Transport>(state: &Rc<State<T>>, command: Command) {
         Command::AnswerClipboardRead { pane, read_id, reply } => {
             let Some(id) = pane_uuid(&pane) else { return };
             state.panes.borrow_mut().answer_read(&pane, id, read_id, reply);
+        }
+        Command::CompleteClipboardWrite { pane, write_id, status } => {
+            let Some(id) = pane_uuid(&pane) else { return };
+            state.panes.borrow_mut().complete_write(&pane, id, write_id, status);
         }
         // The loop handles every other command itself.
         _ => {}

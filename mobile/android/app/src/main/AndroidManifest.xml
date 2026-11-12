@@ -47,6 +47,14 @@
           android:value="Keeps the ssh sessions of attached remote terminals connected, so their programs' questions and output reach the user while the app is in the background." />
     </service>
 
+    <!-- the image a program put on the clipboard, which Android's clipboard hands other apps as a content URI; the
+         clipboard grants each reader its own read permission -->
+    <provider
+        android:name=".platform.ClipboardFiles"
+        android:authorities="${applicationId}.clipboard"
+        android:exported="false"
+        android:grantUriPermissions="true" />
+
     <!-- an ask's notification actions and inline replies -->
     <receiver
         android:name=".platform.AskActionReceiver"
