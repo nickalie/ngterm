@@ -10,7 +10,7 @@
 //! iOS simulator a target of its own) and Android's API level with the NDK cargo-ndk links with, the CPU is `baseline`
 //! (never the build host's), and the optimize mode and SIMD are fixed.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// The prefix's stamp, relative to the prefix: its inputs as `name=value` lines (`scripts/build-ghostty-vt.sh`).
@@ -37,6 +37,14 @@ pub const ZIG_TARGETS: [(&str, &str); 12] = [
     ("aarch64-apple-ios-sim", "aarch64-ios-simulator"),
 ];
 
+/// Forward an explicit libc description to the build runner as well as the compiler. Translate-C dependencies
+/// read `b.libc_file`; the compiler's `ZIG_LIBC` environment alone does not set that build option.
+pub fn libc_args(path: Option<&OsStr>) -> Vec<OsString> {
+    path.filter(|path| !path.is_empty())
+        .map(|path| vec!["--libc".into(), path.to_owned()])
+        .unwrap_or_default()
+}
+
 /// The glibc a Linux gnu build targets, the libghostty build's floor: one archive serves every supported distribution.
 pub const GLIBC_FLOOR: &str = "2.39";
 
@@ -57,7 +65,8 @@ pub const RERUN_FILES: [&str; 7] = [
 /// `script.rs`), the vendor root (`NGTERM_VENDOR`, else under `HOME`), the macOS and iOS deployment targets, Android's
 /// API level (`ANDROID_PLATFORM`) and what picks the NDK: `ANDROID_NDK_HOME`, cargo-ndk's sysroot ([`android_ndk`]) and
 /// the SDK roots Ghostty's build searches when neither is set.
-pub const RERUN_ENV: [&str; 10] = [
+pub const RERUN_ENV: [&str; 11] = [
+    "ZIG_LIBC",
     "NGTERM_GHOSTTY_VT_PREFIX",
     "NGTERM_VENDOR",
     "HOME",

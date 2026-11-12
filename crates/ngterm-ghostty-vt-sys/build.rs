@@ -78,8 +78,13 @@ fn build() -> Result<(), String> {
         jobs: jobs.as_deref(),
     })?;
 
+    let libc = std::env::var_os("ZIG_LIBC").filter(|path| !path.is_empty());
+    if let Some(path) = &libc {
+        println!("cargo::rerun-if-changed={}", Path::new(path).display());
+    }
     let status = Command::new(&build.zig)
         .args(&build.args)
+        .args(zig_build::libc_args(libc.as_deref()))
         .current_dir(&build.source)
         .envs(build.env.iter().map(|(name, value)| (name, value)))
         // an install never goes below a staging root a packaging environment may have exported
