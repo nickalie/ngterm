@@ -257,10 +257,11 @@ whose request reaches the app through the session server. Two ways show what hap
 - the reply, echoed into the pane, where the program reads OSC answers (`osc-answers`; Windows' pseudoconsole drops
   them): a write with text, HTML and an image refused under `clipboard-write = deny`, a read refused under
   `clipboard-read = deny`, a listing answered without a prompt, a write and a read under `ask` answered only once
-  their prompt is (Escape denies it), and an allowed write read back;
+  their prompt is (Escape denies it), and an allowed write read back. The two read cases read what a write put on the
+  selection clipboard, so they need `private-primary` too, and macOS runs only the asked write;
 - the selection clipboard, pasted back into the probe with Ghostty's `paste_from_selection`, where it is the
   instance's own (`private-primary`; macOS sends a program's primary to the system pasteboard): an allowed write, and
-  a write under `ask` that lands once Return allows its prompt.
+  a write under `ask` that lands only once Return allows its prompt.
 
 A write that goes through targets the selection clipboard (`loc=primary`), so no test writes the desktop clipboard;
 the protocol layer's headless weston has no primary selection, so those are the ui layer's. The build claims it on

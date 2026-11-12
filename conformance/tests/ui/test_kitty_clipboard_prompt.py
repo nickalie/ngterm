@@ -8,9 +8,10 @@ Deny, Return with Allow, its default. A key pressed before it opens reaches the 
 reading. Two ways to see what happened:
 
 - the reply, which the probe echoes where it reads OSC answers (`osc-answers`, not Windows): a request is answered
-  only once its prompt is;
+  only once its prompt is; a read reads what a write put on the selection clipboard, so it needs `private-primary`
+  too;
 - the selection clipboard, where it is the instance's own (`private-primary`, not macOS): an allowed write's text
-  pasted back into the probe with Ghostty's `paste_from_selection`.
+  pasted back into the probe with Ghostty's `paste_from_selection`, an asked write's only once its prompt allows it.
 
 Only the selection clipboard (`loc=primary`) is written, so with `private-primary` the desktop clipboard never is; the
 protocol layer's headless compositor has no primary selection."""
@@ -20,10 +21,10 @@ import time
 import uuid
 
 import pytest
+from agterm_conformance.ghostty_config import configured
 from agterm_conformance.kitty_clipboard import (
     PASTE_CHORD,
     PASTE_SELECTION,
-    configured,
     joined_text,
     payload,
     read_request,
@@ -55,6 +56,8 @@ pytestmark = [KITTY_CLIPBOARD]
 PANES = pytest.mark.parametrize("live", [False, pytest.param(True, marks=LIVE_IN_ANY_SHELL)], ids=["plain", "live"])
 
 PRESS_EVERY = 0.5
+# Long enough for a request answered without its prompt to show its answer.
+UNANSWERED_FOR = 1.5
 
 
 def _launch(launch, live):
@@ -75,6 +78,18 @@ def _pressing(ui, chords, done):
     wait_until(check)
 
 
+def _unanswered(what, done, press=lambda: None):
+    """`done` false for `UNANSWERED_FOR` from the request on, `press` run every `PRESS_EVERY` meanwhile."""
+    pressed = -PRESS_EVERY
+    until = time.monotonic() + UNANSWERED_FOR
+    while time.monotonic() < until:
+        if time.monotonic() - pressed >= PRESS_EVERY:
+            press()
+            pressed = time.monotonic()
+        assert not done(), f"{what} before its prompt was answered"
+        time.sleep(0.1)
+
+
 def _written(ctl, directory, text, live):
     """`text` written to the selection clipboard by a program, its write allowed, as its reply says."""
     writer = requesting(ctl, directory, write_transaction(text, "primary"), live)
@@ -91,7 +106,7 @@ def _denied_at_the_prompt(ctl, ui, sid, kind):
     def answered():
         return any_reply.search(assert_ok(ctl.request("session.text", sid, all=True))["text"]) is not None
 
-    assert not answered(), f"the {kind} was answered before its prompt"
+    _unanswered(f"the {kind} was answered", answered)
     _pressing(ui, ["escape"], answered)
     wait_reply(ctl, sid, f"type={kind}:status=EPERM")
 
@@ -162,6 +177,11 @@ def test_an_asked_write_lands_once_return_allows_its_prompt(launch, ui_for, tmp_
     with configured(ctl, "clipboard-write = ask\n" + PASTE_SELECTION):
         sid = requesting(ctl, tmp_path, write_transaction(text, "primary"), live)
         try:
-            _pressing(ui, ["return", PASTE_CHORD], lambda: text in joined_text(ctl, sid))
+
+            def landed():
+                return text in joined_text(ctl, sid)
+
+            _unanswered("the write landed", landed, lambda: ui.press(PASTE_CHORD))
+            _pressing(ui, ["return", PASTE_CHORD], landed)
         finally:
             ctl.request("session.close", sid)

@@ -2,7 +2,8 @@
 `kitty-clipboard`).
 
 The pane's program is a probe: the harness's own Python running `PROBE`, which prints a marker line, writes the
-request once the test has seen the marker (a gate file), then echoes each line it reads. The marker has the screen to
+request once the test has seen the marker (a gate file), tells the test it has (a second file), then echoes each line
+it reads. The marker has the screen to
 itself: a write waiting for its prompt holds back the output that came in with it, and Windows' pseudoconsole hands
 the pane what a program wrote in one piece. Where the program reads the
 terminal's OSC answers (`osc-answers`), the reply arrives as the probe's input, which the terminal's line discipline
@@ -14,12 +15,10 @@ probe, whose input is echoed. The command line is the probe's words alone, unquo
 from __future__ import annotations
 
 import base64
-import contextlib
 import os
 import re
 import sys
 import uuid
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +47,7 @@ while not os.path.exists(sys.argv[2]):
     time.sleep(0.05)
 with open(sys.argv[1], "rb") as request:
     os.write(1, request.read())
+open(sys.argv[3], "w").close()
 for line in sys.stdin:
     os.write(1, line.encode())
 """
@@ -78,27 +78,13 @@ def read_request(*mimes: str, location: str | None = None) -> str:
     return _osc("type=read" + (f":loc={location}" if location else "") + f";{_b64(' '.join(mimes))}")
 
 
-@contextlib.contextmanager
-def configured(ctl: Any, lines: str) -> Iterator[None]:
-    """`lines` added to the instance's ghostty config, the config put back afterwards."""
-    path = ctl.instance.state_dir / "config" / "ghostty.conf"
-    original = path.read_text(encoding="utf-8")
-    path.write_text(original.rstrip("\n") + "\n" + lines, encoding="utf-8")
-    try:
-        assert assert_ok(ctl.request("config.reload")) == {"count": 0}
-        yield
-    finally:
-        path.write_text(original, encoding="utf-8")
-        ctl.request("config.reload")
-
-
-def probe_command(directory: Path, request: str, gate: Path) -> str:
-    """The command line of a probe sending `request` once `gate` exists."""
+def probe_command(directory: Path, request: str, gate: Path, sent: Path) -> str:
+    """The command line of a probe sending `request` once `gate` exists, then creating `sent`."""
     probe = directory / "kitty_probe.py"
     probe.write_text(PROBE, encoding="utf-8")
     path = directory / f"request-{uuid.uuid4().hex[:8]}.vt"
     path.write_bytes(request.encode())
-    words = [sys.executable, os.fspath(probe), os.fspath(path), os.fspath(gate)]
+    words = [sys.executable, os.fspath(probe), os.fspath(path), os.fspath(gate), os.fspath(sent)]
     if any(" " in word for word in words):
         raise ValueError(f"the probe's words go unquoted to every pane shell, so none may hold a space: {words}")
     return " ".join(words)
@@ -106,13 +92,16 @@ def probe_command(directory: Path, request: str, gate: Path) -> str:
 
 def requesting(ctl: Any, directory: Path, request: str, live: bool = False) -> str:
     """A session whose probe has sent `request`, after its marker line showed."""
-    gate = directory / f"go-{uuid.uuid4().hex[:8]}"
-    sid = assert_ok(ctl.request("session.new", command=probe_command(directory, request, gate)))["id"]
+    run = uuid.uuid4().hex[:8]
+    gate = directory / f"go-{run}"
+    sent = directory / f"sent-{run}"
+    sid = assert_ok(ctl.request("session.new", command=probe_command(directory, request, gate, sent)))["id"]
     ctl.wait_mounted(sid, "left")
     if live:
         ctl.wait_tree(lambda tree: find_session(tree, sid).get(ctl.vocabulary.backed_key) is True)
     ctl.wait_text(sid, MARKER, all=True)
     gate.touch()
+    wait_until(sent.exists)
     return sid
 
 

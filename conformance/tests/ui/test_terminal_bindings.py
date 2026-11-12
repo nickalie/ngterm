@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 
 import pytest
+from agterm_conformance.ghostty_config import configured
 from agterm_conformance.match import assert_ok
 from agterm_conformance.wait import wait_until
 
@@ -30,20 +31,6 @@ BINDS = (
     f"keybind = {SELECT_ALL}=select_all\n"
     f"keybind = {WRITE_SELECTION}=write_selection_file:paste\n"
 )
-
-
-@contextlib.contextmanager
-def _bound(ctl, binds):
-    """`binds` in force, the instance's config put back afterwards."""
-    path = ctl.instance.state_dir / "config" / "ghostty.conf"
-    original = path.read_text(encoding="utf-8")
-    path.write_text(original.rstrip("\n") + "\n" + binds, encoding="utf-8")
-    try:
-        assert assert_ok(ctl.request("config.reload")) == {"count": 0}
-        yield
-    finally:
-        path.write_text(original, encoding="utf-8")
-        ctl.request("config.reload")
 
 
 @contextlib.contextmanager
@@ -65,7 +52,7 @@ def _cat(ctl):
 @pytest.fixture
 def cat(ctl):
     """`cat` with the chords of `BINDS` bound."""
-    with _bound(ctl, BINDS), _cat(ctl) as sid:
+    with configured(ctl, BINDS), _cat(ctl) as sid:
         yield sid
 
 
@@ -194,7 +181,7 @@ def _at_bottom(ctl, sid, last):
 @pytest.mark.covers("session.type", "session.text", "config.reload", "behavior:pane.binding-actions")
 def test_text_types_its_decoded_bytes_into_the_program(ctl, ui):
     # `text:` takes a Zig string literal: `\x41` is `A`, `\r` the Return `cat` reads a line at
-    with _bound(ctl, f"keybind = {CLEAR}=text:bound\\x41text\\r\n"), _cat(ctl) as sid:
+    with configured(ctl, f"keybind = {CLEAR}=text:bound\\x41text\\r\n"), _cat(ctl) as sid:
         ui.press(CLEAR)
         ctl.wait_text(sid, r"boundAtext\s+boundAtext", all=True)
 
@@ -206,7 +193,7 @@ def test_adjust_selection_moves_the_selections_end(ctl, ui):
         f"keybind = {CLEAR}=adjust_selection:up\n"
         f"keybind = {WRITE_SELECTION}=write_selection_file:paste\n"
     )
-    with _bound(ctl, binds), _cat(ctl) as sid:
+    with configured(ctl, binds), _cat(ctl) as sid:
         _line(ctl, sid, "kept-line")
         _line(ctl, sid, "last-line")
         # select_all ends on the last character written, `cat`'s copy of the last line; up moves that end a row up,
@@ -226,7 +213,7 @@ def test_scroll_actions_move_the_viewport(ctl, ui):
         f"keybind = {select}=select_all\n"
         f"keybind = {to_selection}=scroll_to_selection\n"
     )
-    with _bound(ctl, binds), _cat(ctl) as sid:
+    with configured(ctl, binds), _cat(ctl) as sid:
         last = _scrollback(ctl, sid)
         ui.press(top)
         _shows(ctl, sid, 0)

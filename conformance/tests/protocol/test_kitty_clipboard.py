@@ -11,7 +11,8 @@ headless compositor has no primary selection, so an allowed write is the ui laye
 import uuid
 
 import pytest
-from agterm_conformance.kitty_clipboard import configured, read_request, requesting, wait_reply, write_transaction
+from agterm_conformance.ghostty_config import configured
+from agterm_conformance.kitty_clipboard import read_request, requesting, wait_reply, write_transaction
 from agterm_conformance.match import assert_ok
 from agterm_conformance.plugin import Ctl
 
