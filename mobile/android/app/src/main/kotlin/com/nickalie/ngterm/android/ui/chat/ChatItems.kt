@@ -3,7 +3,6 @@ package com.nickalie.ngterm.android.ui.chat
 import com.nickalie.ngterm.core.ffi.ChatBody
 import com.nickalie.ngterm.core.ffi.ChatEvent
 import com.nickalie.ngterm.core.ffi.ChatQuestion
-import com.nickalie.ngterm.core.ffi.ChatQuestionItem
 import com.nickalie.ngterm.core.ffi.ChatTool
 import com.nickalie.ngterm.core.ffi.ChatToolStatus
 
@@ -100,10 +99,6 @@ class ChatLog private constructor(
                     ?.takeIf { it.question.status == ChatToolStatus.RUNNING && id !in dismissed }
                     ?.let { OpenQuestion(id, it.question) }
             }
-
-    /** Whether a row asks [questions], answered or not. */
-    fun asks(questions: List<ChatQuestionItem>): Boolean =
-        bodies.values.any { it is ChatBody.Question && it.question.questions == questions }
 
     /**
      * The conversation's own tool calls with no result yet, oldest first: a command or a subagent still on its way,

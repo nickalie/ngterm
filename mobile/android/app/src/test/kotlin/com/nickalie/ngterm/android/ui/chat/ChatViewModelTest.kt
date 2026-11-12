@@ -395,6 +395,23 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun aQuestionAskedAgainIsACardThoughAnEarlierRowAskedTheSame() {
+        emit(event("u1", user("pick one")), live)
+        emit(event("approval-1", ChatBody.Approval(askedApproval)))
+        emit(event("toolu_q1", question(ChatToolStatus.OK)), event("approval-1", ChatBody.ApprovalDone(askedApproval)))
+        assertNull(state().question)
+
+        emit(event("approval-2", ChatBody.Approval(askedApproval)))
+        assertEquals("approval-2", state().question?.id)
+        // an older page bringing the same question answered long ago leaves the card up
+        pages(listOf(event("toolu_q0", question(ChatToolStatus.OK))))
+        chat.loadOlder()
+        assertEquals("approval-2", state().question?.id)
+        emit(event("toolu_q2", question(ChatToolStatus.OK)))
+        assertNull(state().question)
+    }
+
+    @Test
     fun aQuestionsResultReadWithoutItsCallKeepsTheRowAQuestion() {
         emit(event("q1", question()))
         emit(event("q1", tool("", "", ChatToolStatus.OK, ChatToolKind.OTHER, "Postgres")))

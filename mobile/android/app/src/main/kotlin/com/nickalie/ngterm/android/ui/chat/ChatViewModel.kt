@@ -160,7 +160,8 @@ data class ChatUiState(
  * it attaches going to the machine on [attach]; whether the agent works on a turn comes from [working].
  *
  * - A permission prompt that carries questions (Claude's `AskUserQuestion`, whose call its transcript holds only once
- *   answered) is a question card, not an approval: up until its `approval_done`, while no row of the log asks the same.
+ *   answered) is a question card, not an approval: up until its `approval_done`, or until a row written after it asks
+ *   the same.
  * - An approval card comes up with the `approval` event and goes with its `approval_done` (or the next `approval`),
  *   or when this device answered it; a dialog the core can't confirm as the card's (another call's, or one it can't
  *   tell apart) leaves it up, its banner offering the terminal. A question card comes up with a question still
@@ -432,21 +433,30 @@ class ChatViewModel internal constructor(
     }
 }
 
-// a batch of events into the chat's state: the rows a run of them makes go into the log at once
+// a batch of events into the chat's state: the rows a run of them makes go into the log at once. A row written after
+// the prompt that asks the same takes over its card; an earlier one asking the same (a question repeated) leaves it up.
 private fun ChatUiState.taking(events: List<ChatEvent>): ChatUiState {
     var state = this
     val rows = mutableListOf<ChatEvent>()
+
+    fun flush() {
+        if (rows.isEmpty()) return
+        val asked = state.prompted?.question?.questions
+        val written = rows.any { (it.body as? ChatBody.Question)?.question?.questions == asked }
+        state = state.copy(log = state.log.append(rows), prompted = state.prompted.takeUnless { written }).asking()
+        rows.clear()
+    }
     for (event in events) {
         if (event.body.isRow()) {
             rows += event
             state = state.copy(interrupted = state.interrupted.after(event))
             continue
         }
-        if (rows.isNotEmpty()) state = state.copy(log = state.log.append(rows)).asking()
-        rows.clear()
+        flush()
         state = state.meta(event)
     }
-    return if (rows.isEmpty()) state else state.copy(log = state.log.append(rows)).asking()
+    flush()
+    return state
 }
 
 // whether the main conversation's last turn stays interrupted after a row: an interrupt notice ends it; the agent at
@@ -546,11 +556,11 @@ private fun ChatUiState.prompt(
         }
     }
 
-// the question card: the log's open question, else the one a permission prompt asks while no row asks it
+// the question card: the log's open question, else the one a permission prompt asks
 private fun ChatUiState.asking(): ChatUiState {
     val shown =
         log.openQuestion(dismissed)
-            ?: prompted?.takeIf { it.id !in dismissed && !log.asks(it.question.questions) }
+            ?: prompted?.takeIf { it.id !in dismissed }
     return copy(question = shown)
 }
 
