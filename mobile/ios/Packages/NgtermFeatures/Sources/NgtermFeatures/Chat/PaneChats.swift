@@ -247,7 +247,7 @@ public final class PaneChats {
     }
 
     private func close(_ chat: ChatModel) {
-        let text = chat.composer.text
+        let text = chat.composer.draft
         if let conversation = chat.snapshot.conversation?.id, !AskText.isBlank(text) {
             drafts[chat.pane] = Draft(conversation: conversation, text: text)
         }

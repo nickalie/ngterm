@@ -196,10 +196,12 @@ internal struct ChatModelTests {
         #expect(chat.snapshot.isBusy)
         #expect(chat.composer.text.isEmpty, "the field is free while the prompt is on its way")
         chat.composer.edit("and the tests")
+        #expect(chat.composer.draft == "Fix the guide\nand the tests", "a chat closed now keeps the prompt on its way")
         gate.open()
         await Wait.until { !chat.snapshot.isBusy }
         #expect(pane.actions == [.prompt("Fix the guide")])
         #expect(chat.composer.text == "and the tests")
+        #expect(chat.composer.draft == "and the tests")
         pane.outcome = .dialogOpen
         chat.send()
         await Wait.until { !chat.snapshot.isBusy }

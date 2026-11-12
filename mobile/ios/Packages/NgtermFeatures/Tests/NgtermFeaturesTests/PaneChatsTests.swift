@@ -131,4 +131,25 @@ internal struct PaneChatsTests {
         await world.chat(ChatSamples.event("conv", ChatSamples.conversation))
         await Wait.until { world.chat?.composer.text == "half a prompt" }
     }
+
+    @Test("a prompt on its way when its chat closes comes back with the draft, ahead of what was typed since")
+    internal func draftKeepsPromptOnItsWay() async throws {
+        defer { world.remove() }
+        try await world.open()
+        await world.chat(ChatSamples.event("conv", ChatSamples.conversation), ChatSamples.event("live", .live))
+        let pane = try #require(world.fakePane)
+        let gate = FakeGate<Void>()
+        pane.gate = gate
+        pane.outcome = .dialogOpen
+        world.chat?.composer.edit("Fix the guide")
+        world.chat?.send()
+        world.chat?.composer.edit("and the tests")
+        chats.pick(ChatWorld.pane, .terminal)
+        await Wait.until { world.chat == nil }
+        gate.open()
+        chats.pick(ChatWorld.pane, .chat)
+        await Wait.until { world.chat != nil }
+        await world.chat(ChatSamples.event("conv", ChatSamples.conversation))
+        await Wait.until { world.chat?.composer.text == "Fix the guide\nand the tests" }
+    }
 }

@@ -616,7 +616,7 @@ SF Pro. The behavior is Android's (`ui/chat/`); the look is the system's grounds
   way, and takes it back, ahead of anything typed since, when it wasn't sent. While an action is on its way Send is a
   spinner ("Sending"). While a card waits, "Answer the card above first: a prompt now would go to its dialog." stands
   over the field and Send holds. A draft left in a chat that closes comes back to the pane's next chat of the same
-  conversation.
+  conversation, a prompt still on its way then ahead of it.
 - **Attaching a file** (`AttachButton`, `UploadLine`, `ChatUploads`): the paperclip's menu offers **Photo or video**
   (the system's photo picker, in its compatible encoding, so a HEIC photo goes as JPEG) and **File** (the document
   picker, any type); neither asks for a permission. The file goes to the pane's machine (`ngtermctl agent upload`, 32

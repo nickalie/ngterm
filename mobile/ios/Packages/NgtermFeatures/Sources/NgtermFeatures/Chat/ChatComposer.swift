@@ -30,12 +30,23 @@ public final class ChatComposer {
     // the catalog asked for last: an answer to an earlier ask (a conversation since) is dropped
     @ObservationIgnored private var asking: Task<Void, Never>?
     @ObservationIgnored private var asks = 0
+    // the prompt sent last while it is on its way, else nil
+    @ObservationIgnored private var onItsWay: String?
     // the last ranking, kept while neither the query nor the catalog changes
     @ObservationIgnored private var ranked: (query: String, from: [AgentCommand], to: [AgentCommand])?
 
     /// What follows the `/` while the text opens the menu (Escape aside), else `nil`.
     public var query: String? {
         Self.slashQuery(text)
+    }
+
+    /// What a chat that closes now leaves as its draft: the prompt still on its way (its send may yet fail), ahead of
+    /// what the field holds.
+    internal var draft: String {
+        guard let onItsWay else {
+            return text
+        }
+        return AskText.isBlank(text) ? onItsWay : onItsWay + "\n" + text
     }
 
     /// The menu as it shows now, or `nil` while it is closed.
@@ -170,14 +181,19 @@ public final class ChatComposer {
         selection = TextSelection(insertionPoint: text.utf16.index(text.startIndex, offsetBy: offset))
     }
 
-    /// The prompt is on its way: the field lets it go at once, free for the next one.
-    internal func sending() {
+    /// `prompt` is on its way: the field lets it go at once, free for the next one.
+    internal func sending(_ prompt: String) {
+        onItsWay = prompt
         set("")
     }
 
-    /// `prompt` wasn't sent: it comes back to the field, ahead of what was typed since.
-    internal func unsent(_ prompt: String) {
-        set(AskText.isBlank(text) ? prompt : prompt + "\n" + text)
+    /// The prompt on its way landed, `sent` or not: one that wasn't comes back to the field, ahead of what was typed
+    /// since.
+    internal func landed(sent: Bool) {
+        if !sent {
+            set(draft)
+        }
+        onItsWay = nil
     }
 
     /// Puts a `kept` text from before back in the field, unless the field holds something already.

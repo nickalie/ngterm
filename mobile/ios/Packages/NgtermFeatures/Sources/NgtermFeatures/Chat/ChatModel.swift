@@ -12,11 +12,11 @@ import Observation
 /// - A permission prompt that carries questions (Claude's `AskUserQuestion`, whose call its transcript holds only once
 ///   answered) is a question card, not an approval: up until its `approval_done`, or until a row written after it asks
 ///   the same.
-/// - An approval card comes up with the `approval` event and goes with its `approval_done` (or the next `approval`), or
-///   when this device answered it; a dialog the core can't confirm as the card's leaves it up, its banner offering the
-///   terminal. A question card comes up with a question still running and goes once it is answered, here, or when the
-///   core finds its picker no longer on screen. A tap answers the card it was drawn on: one another card replaced
-///   meanwhile sends nothing.
+/// - An approval card comes up with the `approval` event and goes with its `approval_done` (or the next `approval` that
+///   asks no questions), or when this device answered it; a dialog the core can't confirm as the card's leaves it up,
+///   its banner offering the terminal. A question card comes up with a question still running and goes once it is
+///   answered, here, or when the core finds its picker no longer on screen. A tap answers the card it was drawn on: one
+///   another card replaced meanwhile sends nothing.
 /// - A `reset` drops what was shown and starts the new conversation under a divider.
 @preconcurrency
 @MainActor
@@ -189,8 +189,8 @@ public final class ChatModel {
         let field = composer
         act(
             card: nil,
-            onStart: { field.sending() },
-            onUnsent: { field.unsent(text) },
+            onStart: { field.sending(text) },
+            onDone: { field.landed(sent: $0) },
             call: { pane in try await pane.sendPrompt(text: text) }
         )
     }
@@ -349,7 +349,7 @@ public final class ChatModel {
         onStart: @MainActor () -> Void = {
             // nothing goes with it
         },
-        onUnsent: @escaping @MainActor () -> Void = {
+        onDone: @escaping @MainActor (_ sent: Bool) -> Void = { _ in
             // nothing to give back
         },
         call: @escaping @Sendable (any PaneClient) async throws -> AgentInputOutcome
@@ -373,14 +373,12 @@ public final class ChatModel {
             } catch {
                 problem = .closed
             }
-            self?.acted(card: card, problem: problem, goneIfNotOnScreen: goneIfNotOnScreen, onUnsent: onUnsent)
+            self?.acted(card: card, problem: problem, goneIfNotOnScreen: goneIfNotOnScreen, onDone: onDone)
         }
     }
 
-    private func acted(card: String?, problem: ChatProblem?, goneIfNotOnScreen: Bool, onUnsent: () -> Void) {
-        if problem != nil {
-            onUnsent()
-        }
+    private func acted(card: String?, problem: ChatProblem?, goneIfNotOnScreen: Bool, onDone: (Bool) -> Void) {
+        onDone(problem == nil)
         let isGone = problem == nil || (goneIfNotOnScreen && problem == .notOnScreen)
         if let card, isGone {
             snapshot = snapshot.without(card: card)
