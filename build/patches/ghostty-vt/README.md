@@ -6,9 +6,10 @@ its stamp, so a changed patch prepares a new tree and rebuilds the library. Each
 pristine tree (`a/` and `b/` labels), its header saying what it changes and where it comes from. A patch that changes a
 header is followed by `scripts/gen-ghostty-vt-bindings.sh` (its `--check` holds).
 
-At the pin (Ghostty `v1.4.0`, Zig 0.17.0, built `-Doptimize=fast`) four patches are carried. 0002 to 0004 change
+At the pin (Ghostty `v1.4.0`, Zig 0.17.0, built `-Doptimize=fast`) five patches are carried. 0002 to 0004 change
 library logic for fixes or parity behavior Rust cannot reach from outside; 0005 only exposes data the library already
-holds (the clipboard callback's effective password and protocol origin) as C API. Each records its reason, upstream status and remove-when verification, in the form of herdr's
+holds (the clipboard callback's effective password and protocol origin) as C API. 0006 forwards an explicit SDK
+description to Wuffs' C translator. Each records its reason, upstream status and remove-when verification, in the form of herdr's
 `vendor/libghostty-vt.patches.md`. A gap Rust can fill is filled in Rust, not here.
 
 Patch 0001 (placement-id namespaces and parent links) was retired at v1.4.0: the official render-state image API
@@ -67,13 +68,9 @@ of that archive fail without the patch. Its check builds what it changes: a host
 SIMD off. Run at this pin, the patched tree's archive defines neither symbol (it only references them); at the
 previous pin, with the hunk reverted, it defined both as weak (`W calloc`, `W free`).
 
-not carried: herdr's other half, `pkg/wuffs/build.zig` forwarding the build's `--libc` file to Wuffs' translate-c step
-(a `windows-msvc` build that names its SDK with `--libc` needs it), is a recorded scope reduction at this pin, not an
-upstream fix: Zig 0.17 runs `build.zig` in a configurer process that never sees `--libc` (`std.Build` has no
-`libc_file`; the maker hands it to compile steps only at make time), so the hunk has no form, and ngterm never passes
-a `--libc` file (its builds find the SDK themselves). Should an explicit-SDK build be needed, restore it as an
-explicit `-D` option threaded to both Wuffs dependency sites (`src/build/GhosttyZig.zig`, `src/build/SharedDeps.zig`)
-and given beside `--libc`; reading `ZIG_LIBC` instead would be a different input, not this forwarding.
+The old `pkg/wuffs/build.zig` half, forwarding `b.libc_file` to Wuffs' translator, cannot be carried unchanged:
+Zig 0.17 runs `build.zig` in a configurer that never sees `--libc`, and `std.Build` has no `libc_file`. Patch 0006
+restores explicit-SDK support with a separate `-Dlibc-file` option passed beside `--libc`.
 
 remove when: the pinned source exports no allocator stubs on hosted targets, and the check below passes without this
 patch.
@@ -218,3 +215,40 @@ Reviewed against the pin and against what ngterm uses (herdr's `vendor/libghostt
   uploads through a multiplexer without decoding. ngterm decodes and draws images itself (the frontend's PNG decoder
   through `sys.h`), and the session server's VT runs with image media off (plan Task 16), so nothing would retain or
   forward the encoded bytes.
+
+## 0006 explicit libc description for Wuffs translation
+
+status: active
+
+patch: `build/patches/ghostty-vt/0006-explicit-libc-for-wuffs.patch`
+
+origin: original ngterm build adaptation; restores the explicit-SDK behavior formerly carried with 0002
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+base: `LIBGHOSTTY_VT_REV` `83fb95624b0439ee660c2679b43b38c8b63769cd` (v1.4.0)
+
+files:
+
+- `src/build/Config.zig`
+- `src/build/GhosttyZig.zig`
+- `src/build/SharedDeps.zig`
+- `pkg/wuffs/build.zig`
+
+reason: A Windows MSVC build with an explicit SDK can compile C with `--libc`, but Wuffs' external C translator
+still cannot locate the SDK headers. Zig 0.17's configurer cannot read `--libc`. The patch accepts `-Dlibc-file`
+and forwards it through both Wuffs dependency sites to the translator's direct libc-file input. Cargo passes
+the same nonempty `ZIG_LIBC` path to both options; the Zig patch itself does not read the environment. Without
+the option the existing translation behavior, including Darwin SDK detection, stays unchanged.
+
+remove when: the pinned build forwards an explicit libc description to Wuffs' translator itself, and a native
+build with an unregistered SDK succeeds without this patch (adjust the Cargo arguments to that build's interface).
+
+verification: prepare the tree with `scripts/build-ghostty-vt.sh`, then run
+`cargo test -p ngterm-ghostty-vt-sys --test zig_build --test link` with a portable MSVC/Windows SDK on `PATH`
+and in `INCLUDE`/`LIB`, and `ZIG_LIBC` naming its libc description in a path containing spaces. This builds and
+links the real archive; without the forwarding Wuffs translation fails on missing standard C headers. The argument
+test covers unset, empty and spaced paths; the offline configuration test also exercises all mapped targets
+available on the host without the new option. No C headers or generated bindings change.

@@ -5,8 +5,8 @@ From herdr (https://github.com/herdrdev/herdr, HERDR_REV 143bf5f, Apache-2.0):
 vendor/patches/libghostty-vt/0004-fix-hosted-wuffs-builds.patch, modified: its paths rebased off
 vendor/libghostty-vt/, and only its pkg/wuffs/src/main.zig half carried. Its pkg/wuffs/build.zig half (the build's
 --libc file forwarded to Wuffs' translate-c step) has no form under Zig 0.17, whose build.zig runs in a configurer
-process that never sees --libc, and ngterm passes no --libc file: build/patches/ghostty-vt/README.md records the
-scope reduction and how to restore it. Reason and remove-when: that README.
+process that never sees --libc. Patch 0006 restores explicit-SDK support with a separate build option.
+Reason and remove-when: build/patches/ghostty-vt/README.md.
 
 pkg/wuffs/src/main.zig: the weak calloc/free stubs are exported for freestanding targets only, so on a hosted target
 with libc unlinked (a build with SIMD off) they never stand in for the embedding executable's libc. The guard reads

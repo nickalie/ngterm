@@ -551,8 +551,11 @@ PowerShell's `powershell.exe`, with ngterm's integration script.
 
 A portable MSVC/SDK layout can be used without registering it system-wide: put its compiler and SDK tools on the
 build process's `PATH`, set `INCLUDE`/`LIB`, and set `ZIG_LIBC` to an absolute Zig libc description file naming its
-headers and libraries. The Ghostty build forwards this as `zig build --libc`, so its Translate-C dependencies use
-the same SDK. No native-library overrides or stubs are needed.
+headers and libraries. Start from the pinned Zig's `zig libc` output so all required fields are present (Zig 0.17
+requires `darwin_sdk_dir=`, even when empty on Windows). The Ghostty build forwards the file as both `--libc` for
+compilation and `-Dlibc-file` for Wuffs' C translation, so both use the same SDK. Unset or empty `ZIG_LIBC` adds
+no extra build arguments. Cargo tracks changes to the variable and the referenced file. No native-library
+overrides or stubs are needed.
 
 ### WPE WebKit
 

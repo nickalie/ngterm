@@ -37,11 +37,15 @@ pub const ZIG_TARGETS: [(&str, &str); 12] = [
     ("aarch64-apple-ios-sim", "aarch64-ios-simulator"),
 ];
 
-/// Forward an explicit libc description to the build runner as well as the compiler. Translate-C dependencies
-/// read `b.libc_file`; the compiler's `ZIG_LIBC` environment alone does not set that build option.
+/// Forward an explicit libc description to Zig's compiler and Ghostty's Wuffs translator. Zig 0.17's
+/// configurer cannot read `--libc`, so the patched Ghostty build also needs `-Dlibc-file`.
 pub fn libc_args(path: Option<&OsStr>) -> Vec<OsString> {
     path.filter(|path| !path.is_empty())
-        .map(|path| vec!["--libc".into(), path.to_owned()])
+        .map(|path| {
+            let mut option = OsString::from("-Dlibc-file=");
+            option.push(path);
+            vec!["--libc".into(), path.to_owned(), option]
+        })
         .unwrap_or_default()
 }
 

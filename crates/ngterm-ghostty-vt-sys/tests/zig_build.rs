@@ -622,11 +622,15 @@ fn the_prepared_prefix_configures_every_target_with_networking_off() {
 }
 
 #[test]
-fn an_explicit_libc_description_reaches_the_build_runner_as_one_path() {
+fn an_explicit_libc_description_reaches_the_compiler_and_translator_as_one_path() {
     let path = std::ffi::OsStr::new(r"C:\SDK with spaces\libc.txt");
     assert_eq!(
         zig_build::libc_args(Some(path)),
-        vec![OsString::from("--libc"), path.to_owned()]
+        vec![
+            OsString::from("--libc"),
+            path.to_owned(),
+            OsString::from(r"-Dlibc-file=C:\SDK with spaces\libc.txt"),
+        ]
     );
     assert!(zig_build::libc_args(None).is_empty());
     assert!(zig_build::libc_args(Some(std::ffi::OsStr::new(""))).is_empty());
