@@ -74,6 +74,12 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
 Upstream syncs and pin bumps: use the `agterm-upstream-sync` skill; a Ghostty pin bump (`LIBGHOSTTY_VT_*`), with the
 ports that keep the terminal's behavior and rendering Ghostty's: the `libghostty-sync` skill.
 
+## Code comments
+
+- No comments by default: the code explains itself through its names and structure.
+- A comment says why, not what, in one short line, and only where the code can't say it.
+- License headers, lint and tool directives, and the doc comments a public API or docs build needs are exempt.
+
 ## Testing
 
 - New code ships with tests that would fail if it broke.
