@@ -39,11 +39,11 @@ class TerminalShortcuts(
 )
 
 /**
- * An input method's composition in progress: a key from elsewhere (the extra-keys row, a hardware key) commits it
- * first, so the program gets the text before the key, in the order it was typed.
+ * An input method's composition in progress, already on the program's line: a key from elsewhere (the extra-keys row,
+ * a hardware key) ends it first, so the input method starts afresh after the key instead of correcting text before it.
  */
 internal fun interface PendingComposition {
-    fun commit()
+    fun end()
 }
 
 /**
@@ -98,7 +98,7 @@ class TerminalKeyboard(
     internal val chords = HeldChords()
     private val pending = PendingInput(layout)
 
-    /** The input method's composition waiting to commit, which a key from elsewhere commits first. */
+    /** The input method's composition in progress, which a key from elsewhere ends first. */
     internal var composition: PendingComposition?
         get() = pending.composition
         set(value) {
@@ -113,12 +113,12 @@ class TerminalKeyboard(
         }
 
     /**
-     * A tap on [modifier]'s key: off to once, once to locked, locked to off. What waits (the input method's
-     * composition, a held accent) was typed before the tap, so it goes first, under the modifiers as they stood.
+     * A tap on [modifier]'s key: off to once, once to locked, locked to off. What waits was typed before the
+     * tap: the input method's composition ends there and a held accent goes first, under the modifiers as they stood.
      * Returns where it stands now.
      */
     fun toggle(modifier: StickyModifier): Sticky {
-        target?.let(pending::commitBefore) ?: pending.commitComposition()
+        target?.let(pending::commitBefore) ?: pending.endComposition()
         val next =
             when (sticky(modifier)) {
                 Sticky.Off -> Sticky.Once
@@ -139,6 +139,9 @@ class TerminalKeyboard(
         }
     }
 
+    /** Whether a sticky modifier waits for the next key. */
+    internal val holdsSticky get() = ctrl != Sticky.Off || alt != Sticky.Off
+
     /** The sticky modifiers' bits for a key pressed now; a modifier armed once lets go with it. */
     private fun takeSticky(): Int {
         var bits = 0
@@ -152,14 +155,14 @@ class TerminalKeyboard(
 
     /**
      * A key event from a hardware keyboard: an app chord runs, any other key goes to the target with the sticky
-     * modifiers, after the input method's composition. Whether it was taken: a key with no name and no text (Back,
-     * the volume) is the system's.
+     * modifiers, after ending the input method's composition. Whether it was taken: a key with no name and no text
+     * (Back, the volume) is the system's.
      */
     fun key(event: KeyEvent): Boolean = key(event, target, commitFirst = true)
 
     /**
      * [event] for [to]: as [key], from the input method's connection to [to] when [commitFirst] is false (it has
-     * committed its own composition).
+     * ended its own composition).
      */
     internal fun key(
         event: KeyEvent,
@@ -188,14 +191,14 @@ class TerminalKeyboard(
             }
 
             else -> {
-                if (commitFirst) pending.commitComposition()
+                if (commitFirst) pending.endComposition()
                 pending.pressed(event, key, target, ::takeSticky)
                 true
             }
         }
     }
 
-    /** Text from the extra-keys row: as [type] for the target, after the input method's composition. */
+    /** Text from the extra-keys row: as [type] for the target, after ending the input method's composition. */
     fun type(text: String) {
         val target = target ?: return
         pending.commitBefore(target)
@@ -211,8 +214,7 @@ class TerminalKeyboard(
         to: TerminalState,
     ) {
         var rest = text
-        val held = ctrl != Sticky.Off || alt != Sticky.Off
-        if (held && rest.isNotEmpty() && !rest.startsWith('\n')) {
+        if (holdsSticky && rest.isNotEmpty() && !rest.startsWith('\n')) {
             val first = rest.substring(0, rest.offsetByCodePoints(0, 1))
             to.pressKey(KeyMapping.forText(first, takeSticky()))
             rest = rest.substring(first.length)
@@ -226,7 +228,7 @@ class TerminalKeyboard(
 
     /**
      * Presses and lets go of the key Ghostty names [name] on the target, with the sticky modifiers (the extra keys),
-     * after the input method's composition.
+     * after ending the input method's composition.
      */
     fun press(name: String) {
         val target = target ?: return
@@ -326,7 +328,7 @@ internal class HeldChords {
 /**
  * What waits for the next key: the input method's [composition], and a hardware dead key's accent, shown at the
  * cursor of the terminal it was typed into. The next hardware key combines with the accent ([pressed]); a key from
- * elsewhere commits both first ([commitBefore]).
+ * elsewhere ends the composition and types the accent first ([commitBefore]).
  */
 private class PendingInput(
     private val layout: KeyLayout,
@@ -366,18 +368,18 @@ private class PendingInput(
         target.key(key.copy(mods = mods.toUByte(), text = text))
     }
 
-    /** A key from elsewhere than the hardware keyboard is coming to [target]: the composition and accent go first. */
+    /** A key from elsewhere than the hardware keyboard is coming to [target]: the composition ends, the accent goes. */
     fun commitBefore(target: TerminalState) {
-        commitComposition()
+        endComposition()
         val held = takeAccent(target)
         if (held != 0) target.type(accentText(held))
     }
 
-    /** Commits the input method's composition, if one waits. */
-    fun commitComposition() {
+    /** Ends the input method's composition, if one is in progress. */
+    fun endComposition() {
         val waiting = composition ?: return
         composition = null
-        waiting.commit()
+        waiting.end()
     }
 
     private fun holdAccent(

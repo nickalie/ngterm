@@ -28,7 +28,7 @@ import kotlin.coroutines.EmptyCoroutineContext
 
 /**
  * The keyboard's chrome (src/test/screenshots/terminal): the extra-keys row under a terminal on a phone, with Ctrl
- * held for the next key, Alt locked and an input method's composition at the cursor, dark and light; the row at font
+ * held for the next key, Alt locked and a dead key's accent at the cursor, dark and light; the row at font
  * scale 2; and the row in one line on a phone held sideways.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -55,7 +55,7 @@ class TerminalKeyboardScreenshotTest {
                 val state = remember { TerminalState(pane, EmptyCoroutineContext) }
                 DisposableEffect(Unit) {
                     pane.onWake = state::dirty
-                    state.composing = COMPOSING
+                    state.composing = ACCENT
                     onDispose { pane.onWake = null }
                 }
                 Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -98,7 +98,7 @@ class TerminalKeyboardScreenshotTest {
 
     private companion object {
         val TERMINAL_HEIGHT = 240.dp
-        const val COMPOSING = "日本語"
+        const val ACCENT = "´"
         val SHELL =
             listOf(
                 "nick@build-01:~/api$ git status --short",

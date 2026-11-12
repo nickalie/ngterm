@@ -31,12 +31,15 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.input.key.KeyEvent as ComposeKeyEvent
 
 /**
- * The input method's connection to [terminal], the terminal it was opened for: what it commits goes to that program
- * as typed text (line breaks as Enter), what it composes waits at the cursor ([TerminalState.composing]) until it
- * commits, and the keys it sends (Enter, backspace) go as keys, after the composition. Its own text is only the
- * composition: once committed nothing is left in it, so a deletion past the composition is the program's (backspace
- * before it, delete after it). While a composition waits, a key from elsewhere commits it first and restarts the
- * input method ([TerminalKeyboard.composition]).
+ * The input method's connection to [terminal], the terminal it was opened for: everything it types reaches that
+ * program as it is typed, so a program reading each key (a shell's completion, a TUI's `/` menu) sees each letter.
+ * What it commits goes as typed text (line breaks as Enter); what it composes goes too, as the composition grows, and
+ * a change to it (a conversion, a correction, a deletion in it) is made on the program's line with backspaces and the
+ * new text: nothing of it waits outside the program, whose cursor is the only one. Its own text is only the
+ * composition, so a deletion past it is the program's (backspace before it, delete after it); the keys it sends (Enter,
+ * backspace) go as keys. A key (its own or one from elsewhere: [TerminalKeyboard.composition]), a line break or a
+ * composed letter a sticky modifier turned into a chord ends the composition and restarts the input method, so it
+ * never corrects text the program has moved past.
  *
  * It types only while [terminal] is the keyboard's target and until it is [close]d: what the input method sends to a
  * connection whose terminal is not (or no longer) the one selected lands nowhere, so it never reaches another program.
@@ -51,44 +54,51 @@ internal class TerminalInputConnection(
     // whether what the input method sends now reaches the terminal
     private val live get() = !closed && keyboard.target === terminal
 
-    // what a key from elsewhere does with the composition waiting here: commits it and tells the input method
-    private val pending =
-        PendingComposition {
-            finishComposingText()
-            host.context.getSystemService(InputMethodManager::class.java)?.restartInput(host)
-        }
+    // the composition as the program has it: the end of its line, where its cursor is
+    private var sent = ""
+
+    private val pending = PendingComposition { end(restart = true) }
 
     private fun composed(): String = editable?.toString().orEmpty()
 
-    // the composition, as it now stands, at the terminal's cursor and waiting for a key from elsewhere
-    private fun show() {
+    // makes the program's line end with [text] where it ended with [sent]: backspaces over what differs, then the rest
+    private fun send(text: String) {
+        val kept = sent.commonPrefixWith(text).length
+        repeat(sent.codePointCount(kept, sent.length)) { keyboard.press(BACKSPACE, terminal) }
+        if (kept < text.length) keyboard.type(text.substring(kept), terminal)
+        sent = text
+    }
+
+    // the composition, as it now stands, onto the program's line
+    private fun update() {
         val text = composed()
-        terminal.composing = text
-        if (text.isNotEmpty()) {
-            keyboard.composition = pending
-        } else if (keyboard.composition === pending) {
-            keyboard.composition = null
+        if (text == sent) return
+        val chord = keyboard.holdsSticky
+        send(text)
+        when {
+            chord || '\n' in text -> end(restart = true)
+            text.isNotEmpty() -> keyboard.composition = pending
+            keyboard.composition === pending -> keyboard.composition = null
         }
     }
 
-    private fun clear() {
+    // forgets the composition, which the program already has; [restart] tells the input method to forget it too
+    private fun end(restart: Boolean) {
+        val waiting = sent.isNotEmpty() || composed().isNotEmpty()
         editable?.let { text ->
             removeComposingSpans(text)
             text.clear()
         }
-        show()
+        sent = ""
+        if (keyboard.composition === pending) keyboard.composition = null
+        if (restart && waiting) host.context.getSystemService(InputMethodManager::class.java)?.restartInput(host)
     }
 
-    /**
-     * Ends this connection: its composition is finished into its terminal while that is still the target (dropped
-     * otherwise), and nothing it is sent afterwards lands anywhere.
-     */
+    /** Ends this connection: its composition stays where it was typed, and nothing sent afterwards lands anywhere. */
     fun close() {
         if (closed) return
-        val waiting = composed().isNotEmpty()
-        finishComposingText()
         closed = true
-        if (waiting) host.context.getSystemService(InputMethodManager::class.java)?.restartInput(host)
+        end(restart = true)
     }
 
     override fun closeConnection() {
@@ -101,8 +111,8 @@ internal class TerminalInputConnection(
         newCursorPosition: Int,
     ): Boolean {
         if (!live) return false
-        clear()
-        keyboard.type(text?.toString().orEmpty(), terminal)
+        send(text?.toString().orEmpty())
+        end(restart = false)
         return true
     }
 
@@ -112,15 +122,13 @@ internal class TerminalInputConnection(
     ): Boolean {
         if (!live) return false
         super.setComposingText(text, newCursorPosition)
-        show()
+        update()
         return true
     }
 
     override fun finishComposingText(): Boolean {
-        val pending = composed()
         super.finishComposingText()
-        clear()
-        if (pending.isNotEmpty() && live) keyboard.type(pending, terminal)
+        end(restart = false)
         return true
     }
 
@@ -155,7 +163,7 @@ internal class TerminalInputConnection(
             if (text.isEmpty()) removeComposingSpans(text)
             before -= takenBefore
             after -= takenAfter
-            show()
+            update()
         }
         repeat(before) { keyboard.press(BACKSPACE, terminal) }
         repeat(after) { keyboard.press(DELETE, terminal) }
@@ -164,14 +172,14 @@ internal class TerminalInputConnection(
 
     override fun sendKeyEvent(event: KeyEvent): Boolean {
         if (!live) return false
-        if (event.action == KeyEvent.ACTION_DOWN && composed().isNotEmpty()) finishComposingText()
+        if (event.action == KeyEvent.ACTION_DOWN) end(restart = true)
         keyboard.key(event, terminal, commitFirst = false)
         return true
     }
 
     override fun performEditorAction(actionCode: Int): Boolean {
         if (!live) return false
-        if (composed().isNotEmpty()) finishComposingText()
+        end(restart = true)
         keyboard.press(ENTER, terminal)
         return true
     }
@@ -322,7 +330,7 @@ private class TerminalTextInputNode(
             if (focused) request.onWanted = startWanted
         }
         if (keyboard === this.keyboard && state === this.state) return
-        // the old connection is bound to the old terminal: closing it commits its composition there
+        // the old connection is bound to the old terminal: closing it ends its composition there
         stop()
         this.keyboard = keyboard
         this.state = state
@@ -391,8 +399,8 @@ private class TerminalTextInputNode(
 }
 
 /**
- * Draws the input method's composition at a terminal's cursor: on the terminal's ground in its text color, underlined
- * in the cursor's color, moved left as far as it needs to fit the view.
+ * Draws a hardware dead key's accent waiting at a terminal's cursor: on the terminal's ground in its text color,
+ * underlined in the cursor's color, moved left as far as it needs to fit the view.
  */
 internal class CompositionPainter(
     private val font: TerminalFont,

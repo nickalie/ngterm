@@ -495,9 +495,10 @@ sideways or wider (48dp a key or more): one line of sixteen
 
 - **The soft keyboard:** a tap on the terminal gives it the focus and opens the keyboard. The terminal asks for plain
   text with no suggestions, autocorrect, automatic capitals or learning (it types commands and passwords), and Enter
-  as a key. What the keyboard commits goes to the program at once; a composition (a CJK input method's, a dead key's,
-  a swiped word) waits at the cursor in the terminal's font, on its ground, underlined 2dp in the cursor's copper,
-  and goes when it commits. Backspace with nothing composed is the program's.
+  as a key. Every letter goes to the program as it is typed, so a shell's completion or a TUI's `/` menu follows each
+  one: a word the keyboard composes (a swiped word, a CJK reading, voice) goes as it grows, and a change to it (a
+  conversion, a correction, a backspace in it) is made on the program's line, with backspaces and the new text.
+  Nothing of it waits outside the program: the program's cursor is the only cursor. Backspace past it is the program's.
 - **The row** sits under the terminal, over the keyboard, whenever no hardware keyboard is attached and Settings hasn't
   hidden it (it shows with the keyboard closed too: the arrows and Esc work a pager or a menu without it). Two lines of
   eight on a phone held upright: Ctrl and Alt by Tab under the thumb, the arrows an inverted T with Home and End over
@@ -514,14 +515,14 @@ sideways or wider (48dp a key or more): one line of sixteen
   and a once-held one lets go after it.
 - **A hardware keyboard** types straight into the focused terminal, and the row stands aside. It types what its
   layout types: AltGr's characters (German AltGr+Q is `@`) are text, not Alt chords, and a dead key's accent waits at
-  the cursor like a composition until the next key takes it (`´` then `e` is `é`; a space, the same accent again, or a
+  the cursor (in the terminal's font, on its ground, underlined 2dp in the cursor's copper) until the next key takes it (`´` then `e` is `é`; a space, the same accent again, or a
   key it doesn't go on types the accent itself first). Its chords are desktop's Linux ones, by the character the
   layout types: Ctrl+= (or Ctrl++) and Ctrl+- step the text size a whole sp (8-32), Ctrl+0 puts it back to the size
   Settings sets (on Dvorak, Ctrl+[ and Ctrl+] stay the program's); Ctrl+Shift+Left and Right go to the previous and
   next pane, Ctrl+Shift+Up and Down to the previous and next session (the session view's to wire; a chord with nowhere
   to go is the program's).
-- **Order:** a key from the row or a hardware key while the soft keyboard is composing commits the composition first,
-  so the program gets the text before the key. A mouse click gives the terminal the focus without opening the soft
+- **Order:** a key from the row or a hardware key while the soft keyboard is composing ends the composition (its
+  letters are already the program's), so the keyboard starts afresh after the key rather than correcting text before it. A mouse click gives the terminal the focus without opening the soft
   keyboard; a tap opens it.
 
 ### The session view (`ui/session/`)

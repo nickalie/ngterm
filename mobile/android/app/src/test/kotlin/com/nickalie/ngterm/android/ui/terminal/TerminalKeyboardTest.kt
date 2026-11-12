@@ -167,26 +167,83 @@ class TerminalKeyboardTest {
         )
     }
 
+    // the program's input line as the pane's input builds it: typed text, and a backspace taking the last character
+    private fun line(): String =
+        pane.inputs.fold("") { line, input ->
+            when {
+                input is FakeInput.Typed -> {
+                    line + input.text
+                }
+
+                input is FakeInput.Key && input.key.action == PaneKeyAction.PRESS && input.key.key == "backspace" -> {
+                    line.dropLast(if (line.isEmpty()) 0 else line.length - line.offsetByCodePoints(line.length, -1))
+                }
+
+                else -> {
+                    line
+                }
+            }
+        }
+
     @Test
-    fun aCompositionWaitsAtTheCursorUntilItCommits() {
+    fun eachLetterReachesTheProgramAsTheKeyboardComposesIt() {
+        show()
+        focus()
+        val connection = connect()
+        connection.commitText("/", 1)
+        connection.setComposingText("c", 1)
+        assertEquals("/c", line())
+        connection.setComposingText("cl", 1)
+        connection.setComposingText("cle", 1)
+        assertEquals("/cle", line())
+        connection.setComposingText("cl", 1)
+        assertEquals("a backspace in the word is the program's", "/cl", line())
+        connection.setComposingText("clear", 1)
+        connection.commitText("clear", 1)
+        connection.commitText(" ", 1)
+        assertEquals("/clear ", line())
+        connection.setComposingText("teh", 1)
+        connection.commitText("the ", 1)
+        assertEquals("a word the keyboard replaces is retyped in place", "/clear the ", line())
+        connection.setComposingText("a😀", 1)
+        connection.setComposingText("a", 1)
+        assertEquals("/clear the a", line())
+        connection.setComposingText("a\nb", 1)
+        assertEquals("/clear the ab", line())
+        assertEquals(press("enter"), presses().last())
+        connection.setComposingText("c", 1)
+        assertEquals("a line break ended the composition: the next one starts after it", "/clear the abc", line())
+        compose.waitForIdle()
+        assertEquals("nothing waits outside the program", "", state.composing)
+    }
+
+    @Test
+    fun aCompositionReachesTheProgramAsItChanges() {
         show()
         focus()
         val connection = connect()
         connection.setComposingText("ni", 1)
-        compose.waitForIdle()
-        assertEquals("ni", state.composing)
+        assertEquals("ni", line())
         connection.setComposingText("に", 1)
-        compose.waitForIdle()
-        assertEquals("に", state.composing)
-        assertTrue("nothing reaches the program while composing", pane.inputs.isEmpty())
+        assertEquals("a conversion replaces the reading on the program's line", "に", line())
         connection.commitText("日本", 1)
-        compose.waitForIdle()
-        assertEquals("", state.composing)
+        assertEquals("日本", line())
         connection.setComposingText("語", 1)
         connection.finishComposingText()
+        connection.commitText("!", 1)
         compose.waitForIdle()
-        assertEquals(listOf(FakeInput.Typed("日本"), FakeInput.Typed("語")), pane.inputs.toList())
+        assertEquals("日本語!", line())
         assertEquals("", state.composing)
+        assertEquals(
+            listOf(
+                FakeInput.Typed("ni"),
+                FakeInput.Typed("に"),
+                FakeInput.Typed("日本"),
+                FakeInput.Typed("語"),
+                FakeInput.Typed("!"),
+            ),
+            pane.inputs.filterIsInstance<FakeInput.Typed>(),
+        )
     }
 
     @Test
@@ -382,15 +439,17 @@ class TerminalKeyboardTest {
         show()
         focus()
         val connection = connect()
+        connection.commitText("xy", 1)
         connection.setComposingText("ab", 1)
         connection.deleteSurroundingText(1, 0)
-        compose.waitForIdle()
-        assertEquals("a", state.composing)
-        assertTrue("the composition held what was deleted", pane.inputs.isEmpty())
-        connection.deleteSurroundingText(3, 0)
+        assertEquals("xya", line())
+        connection.deleteSurroundingText(2, 0)
+        assertEquals("x", line())
         compose.waitForIdle()
         assertEquals("", state.composing)
-        assertEquals(listOf(press("backspace"), press("backspace")), presses())
+        assertEquals(List(3) { press("backspace") }, presses())
+        connection.setComposingText("q", 1)
+        assertEquals("the composition starts afresh after the deletion", "xq", line())
     }
 
     @Test
@@ -398,14 +457,13 @@ class TerminalKeyboardTest {
         show()
         focus()
         val connection = connect()
+        connection.commitText("x", 1)
         connection.setComposingText("a\uD83D\uDE00", 1)
         connection.deleteSurroundingTextInCodePoints(1, 0)
-        compose.waitForIdle()
-        assertEquals("a", state.composing)
+        assertEquals("xa", line())
         connection.deleteSurroundingTextInCodePoints(2, 0)
-        compose.waitForIdle()
-        assertEquals("", state.composing)
-        assertEquals("one past the composition is the program's", listOf(press("backspace")), presses())
+        assertEquals("one past the composition is the program's", "", line())
+        assertEquals(List(3) { press("backspace") }, presses())
     }
 
     @Test

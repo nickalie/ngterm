@@ -90,7 +90,7 @@ class TerminalState(
     /** The font the view draws in, as Settings picks it. */
     var face by mutableStateOf(face)
 
-    /** The input method's composition, drawn at the cursor until it commits; empty for none. */
+    /** A hardware dead key's accent, drawn at the cursor until the next key takes it; empty for none. */
     var composing by mutableStateOf("")
         internal set
 
@@ -207,7 +207,7 @@ fun rememberTerminalState(pane: PaneInterface): TerminalState = remember(pane) {
  * It takes the pointer as [terminalGestures] says: scrolling, selecting with handles and a toolbar, pinching the text
  * size, the mouse and its right-click menu, and clicks a program tracking the mouse asks for ([TerminalOverlays]).
  * A tap gives it the focus and opens the soft keyboard (a mouse click only the focus): with the focus, the input
- * method and a hardware keyboard type into it through [keyboard], and a composition waits at the cursor.
+ * method and a hardware keyboard type into it through [keyboard], and a dead key's accent waits at the cursor.
  * [focusRequester] lets its host give it the focus (the session view, as the focused pane moves). With [readAloud]
  * TalkBack reads its screen's text; [onSwipe] takes a finger's sideways swipe (next pane: leftward), which otherwise
  * scrolls like any drag.
@@ -359,7 +359,7 @@ fun gridFor(
     )
 }
 
-/** The composition's underline at the cursor. */
+/** The held accent's underline at the cursor. */
 private val CompositionUnderline = 2.dp
 
 /** The most columns or rows a grid has (the pane's sizes are 16-bit). */
