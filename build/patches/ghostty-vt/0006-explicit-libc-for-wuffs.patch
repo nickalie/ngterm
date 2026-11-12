@@ -1,0 +1,66 @@
+ngterm: forward an explicit libc description to Wuffs under Zig 0.17
+
+Original ngterm build adaptation for LIBGHOSTTY_VT_REV (Ghostty v1.4.0).
+Zig's configurer never sees --libc. Accept -Dlibc-file alongside it and
+forward the option through both Wuffs dependency sites to translate-c.
+Without the option, retain translate-c's existing SDK detection.
+Reason, upstream status and remove-when: build/patches/ghostty-vt/README.md.
+Applied by scripts/build-ghostty-vt.sh. No header changes.
+
+--- a/src/build/Config.zig
++++ b/src/build/Config.zig
+@@ -19,6 +19,8 @@
+ /// Standard build configuration options.
+ optimize: std.lang.Optimize,
+ target: std.Build.ResolvedTarget,
++/// Explicit libc description for Wuffs translation (also pass --libc to Zig).
++libc_file: ?[]const u8 = null,
+ xcframework_target: XCFrameworkTarget = .universal,
+ wasm_target: WasmTarget,
+ 
+@@ -181,6 +183,7 @@
+         .wasm_target = wasm_target,
+         .is_dep = is_dep,
+         .env = env,
++        .libc_file = b.option([]const u8, "libc-file", "Libc file for Wuffs translation; also pass --libc to Zig."),
+     };
+ 
+     //---------------------------------------------------------------
+--- a/src/build/GhosttyZig.zig
++++ b/src/build/GhosttyZig.zig
+@@ -148,6 +148,7 @@
+         if (b.lazyDependency("wuffs", .{
+             .target = cfg.target,
+             .optimize = cfg.optimize,
++            .@"libc-file" = cfg.libc_file,
+         })) |dep| {
+             vt.addImport("wuffs", dep.module("wuffs"));
+         }
+--- a/src/build/SharedDeps.zig
++++ b/src/build/SharedDeps.zig
+@@ -523,6 +523,7 @@
+     if (b.lazyDependency("wuffs", .{
+         .target = target,
+         .optimize = optimize,
++        .@"libc-file" = self.config.libc_file,
+     })) |dep| {
+         step.root_module.addImport("wuffs", dep.module("wuffs"));
+     }
+--- a/pkg/wuffs/build.zig
++++ b/pkg/wuffs/build.zig
+@@ -18,6 +18,7 @@
+ pub fn build(b: *std.Build) !void {
+     const target = b.standardTargetOptions(.{});
+     const optimize = b.standardOptimizeOption(.{});
++    const libc_file = b.option([]const u8, "libc-file", "Explicit libc description for C translation.");
+ 
+     const module = b.addModule("wuffs", .{
+         .root_source_file = b.path("src/main.zig"),
+@@ -87,6 +88,7 @@
+             .optimize = optimize,
+             .include_paths = include_paths,
+             .link_libc = windows,
++            .libc_file = if (libc_file) |path| .{ .direct = .{ .cwd_relative = path } } else .detect_darwin,
+             .extra_args = macro_flags,
+         });
+ 
