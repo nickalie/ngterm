@@ -808,7 +808,7 @@ scripts/build-android.sh [--profile release|debug] [--no-gradle] [GRADLE_TASK...
 scripts/build-android.sh check assembleDebug   # lint, JVM/screenshot tests and coverage floors, as CI runs it
 scripts/build-android.sh :app:koverHtmlReportDebugJvm :app:koverXmlReportDebugJvm # one module's debug JVM coverage
 scripts/build-android.sh :koverHtmlReportDebugJvm :koverXmlReportDebugJvm   # both modules, aggregated
-scripts/build-android.sh installDebug          # onto the device or emulator adb sees
+scripts/build-android.sh installGithubDebug    # onto the device or emulator adb sees
 scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-headless behind a private sshd (Linux; python3 runs its fake agent)
 ```
 

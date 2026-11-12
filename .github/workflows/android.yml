@@ -10,7 +10,7 @@
 # against a staged ngterm-headless behind an unprivileged sshd (scripts/test-mobile-e2e.sh; with CI set, a missing
 # sshd fails it rather than skipping).
 #
-# `emulator`: the instrumented tests (connectedDebugAndroidTest) on the phone and then the tablet AVD
+# `emulator`: :app's instrumented tests (connectedGithubDebugAndroidTest) on the phone and then the tablet AVD
 # setup-android.sh creates (reactivecircus/android-emulator-runner on KVM, which reuses them: force-avd-creation off).
 # TerminalFrameTimeTest runs there too: it checks only that frames came, and its numbers (logcat, tag TerminalFrames)
 # are a software-rendered emulator's, for reading, not a gate.
@@ -197,7 +197,7 @@ jobs:
             echo "tablet-device=$ANDROID_AVD_TABLET_DEVICE"
           } >> "$GITHUB_OUTPUT"
       - name: build the app and its instrumented tests
-        run: scripts/build-android.sh assembleDebug assembleDebugAndroidTest
+        run: scripts/build-android.sh assembleDebug :app:assembleGithubDebugAndroidTest
       - name: instrumented tests on the phone
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -208,7 +208,7 @@ jobs:
           profile: ${{ steps.pins.outputs.phone-device }}
           force-avd-creation: false
           working-directory: mobile/android
-          script: ./gradlew connectedDebugAndroidTest
+          script: ./gradlew :app:connectedGithubDebugAndroidTest
       - name: instrumented tests on the tablet
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -219,7 +219,7 @@ jobs:
           profile: ${{ steps.pins.outputs.tablet-device }}
           force-avd-creation: false
           working-directory: mobile/android
-          script: ./gradlew connectedDebugAndroidTest
+          script: ./gradlew :app:connectedGithubDebugAndroidTest
       - name: upload the instrumented test reports
         if: failure()
         uses: actions/upload-artifact@v7
