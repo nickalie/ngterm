@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The test keyboard's metadata (AndroidManifest.xml): no settings, one plain keyboard subtype. -->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android">
+  <subtype
+    android:imeSubtypeMode="keyboard"
+    android:imeSubtypeLocale="en_US" />
+</input-method>

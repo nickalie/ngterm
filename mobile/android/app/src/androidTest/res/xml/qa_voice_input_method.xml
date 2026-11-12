@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The voice-typing stand-in's metadata (AndroidManifest.xml): a voice subtype, as Google voice typing has. -->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android">
+  <subtype
+    android:imeSubtypeMode="voice"
+    android:imeSubtypeLocale="en_US" />
+</input-method>

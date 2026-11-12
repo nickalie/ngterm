@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The instrumented tests' own input methods (e2e/QaKeyboards.kt): a soft keyboard whose keys a test taps, and a
+  voice-typing stand-in it switches to and back from, as Gboard's mic key does. They live in the test APK, so only a
+  test enables them (`ime enable`), and they go when the test APK is uninstalled.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <application>
+    <service
+      android:name="com.nickalie.ngterm.android.e2e.QaKeyboard"
+      android:exported="true"
+      android:label="QA keyboard"
+      android:permission="android.permission.BIND_INPUT_METHOD">
+      <intent-filter>
+        <action android:name="android.view.InputMethod" />
+      </intent-filter>
+      <meta-data
+        android:name="android.view.im"
+        android:resource="@xml/qa_input_method" />
+    </service>
+    <service
+      android:name="com.nickalie.ngterm.android.e2e.QaVoiceTyping"
+      android:exported="true"
+      android:label="QA voice typing"
+      android:permission="android.permission.BIND_INPUT_METHOD">
+      <intent-filter>
+        <action android:name="android.view.InputMethod" />
+      </intent-filter>
+      <meta-data
+        android:name="android.view.im"
+        android:resource="@xml/qa_voice_input_method" />
+    </service>
+  </application>
+</manifest>

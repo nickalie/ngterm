@@ -821,6 +821,7 @@ scripts/build-android.sh :app:koverHtmlReportDebugJvm :app:koverXmlReportDebugJv
 scripts/build-android.sh :koverHtmlReportDebugJvm :koverXmlReportDebugJvm   # both modules, aggregated
 scripts/build-android.sh installGithubDebug    # onto the device or emulator adb sees
 scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-headless behind a private sshd (Linux; python3 runs its fake agent)
+scripts/test-android-e2e.sh [TEST...]  # the app on the device adb sees, against a real ngterm-headless behind a private sshd (Linux)
 ```
 
 `build-android.sh` builds `libngterm_mobile.so` for arm64-v8a and x86_64 through cargo-ndk, generates the Kotlin
@@ -1220,7 +1221,8 @@ and the fix, and leaves everything else alone; its header says what it checks, a
   pins; also on `ci/**` pushes): `app` sets up the pinned toolchain (`scripts/setup-android.sh`), runs
   `scripts/build-android.sh check assembleDebug` (Spotless, detekt, Android Lint, the JVM unit and Roborazzi screenshot
   tests) and keeps the debug APK as the `ngterm-android-debug` artifact, then runs `scripts/test-mobile-e2e.sh` behind
-  the runner's `sshd`; `emulator` runs the instrumented tests on the phone and tablet AVDs (KVM).
+  the runner's `sshd`; `emulator` runs the instrumented tests on the phone and tablet AVDs (KVM), where the app's
+  real-machine e2e tests (`e2e` package, `scripts/test-android-e2e.sh`) skip, having no machine.
 - `ios.yml` (path-filtered to the mobile core, the crates under it, `mobile/ios/`, the shared fonts and the iOS
   scripts and pins; also on `ci/**` pushes), on the `xcode-27` image, three jobs side by side: `lint` (the core's Rust
   tests in the phone simulator, then `scripts/build-ios.sh lint`), `test` (`build-ios.sh test`, keeping the result
