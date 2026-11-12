@@ -29,13 +29,14 @@ val PaneRef.session: SessionKey get() = SessionKey(machineId, sessionId)
 /**
  * A shown pane as its events left it: its [role] at the session (`null` until its attach reports one), whether it is
  * [covered] (a follower's, or one attaching again with nothing to show yet), how its attach [end]ed (`null` while it
- * runs), and the [title] its program set.
+ * runs), the [title] its program set, and how many lead reports (attaches and role changes) it has had in [leads].
  */
 data class PaneLive(
     val role: PaneRole? = null,
     val covered: Boolean = false,
     val end: PaneEnd? = null,
     val title: String? = null,
+    val leads: Int = 0,
 )
 
 /**
@@ -169,7 +170,7 @@ class LiveSessions(
             }
 
             is MobileEvent.PaneLead -> {
-                pane(event.pane) { copy(role = event.role, covered = event.covered) }
+                pane(event.pane) { copy(role = event.role, covered = event.covered, leads = leads + 1) }
             }
 
             is MobileEvent.PaneEnded -> {

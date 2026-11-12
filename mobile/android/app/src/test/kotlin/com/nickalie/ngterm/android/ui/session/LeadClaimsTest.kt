@@ -15,21 +15,26 @@ class LeadClaimsTest {
     private val taken = mutableListOf<PaneRef>()
     private val claims = LeadClaims()
 
+    private var leads = 0
+
     private fun settle(
         role: PaneRole?,
         on: Map<String, Set<String>> = attached,
-    ) = claims.settle(on, mapOf(key to LiveSession(panes = mapOf("P1" to PaneLive(role, covered = true))))) {
-        taken += it
+        reports: Int = 1,
+    ) {
+        leads += reports
+        val pane = PaneLive(role, covered = true, leads = leads)
+        claims.settle(on, mapOf(key to LiveSession(panes = mapOf("P1" to pane)))) { taken += it }
     }
 
     @Test
-    fun aFollowerTakesTheLeadOnceAndIsHeldUntilItStopsFollowing() {
+    fun aFollowerTakesTheLeadOnceAndIsHeldUntilItsNextLeadReport() {
         claims.claim(key)
         assertEquals(setOf(key), claims.held.value)
         settle(null)
         assertEquals(setOf(key), claims.held.value)
         settle(PaneRole.FOLLOWER)
-        settle(PaneRole.FOLLOWER)
+        settle(PaneRole.FOLLOWER, reports = 0)
         assertEquals(listOf(PaneRef("m1", "s1", "P1")), taken)
         assertEquals(setOf(key), claims.held.value)
         settle(null)
@@ -37,6 +42,16 @@ class LeadClaimsTest {
         settle(PaneRole.FOLLOWER)
         assertEquals(1, taken.size)
         assertEquals(emptySet<SessionKey>(), claims.held.value)
+    }
+
+    @Test
+    fun aTakeoverWhoseReportsTheSnapshotsSkippedIsReleasedOnItsNextFollowerReport() {
+        claims.claim(key)
+        settle(PaneRole.FOLLOWER)
+        // the takeover attached and led, and another device took the pane back, between two snapshots
+        settle(PaneRole.FOLLOWER, reports = 3)
+        assertEquals(emptySet<SessionKey>(), claims.held.value)
+        assertEquals(1, taken.size)
     }
 
     @Test

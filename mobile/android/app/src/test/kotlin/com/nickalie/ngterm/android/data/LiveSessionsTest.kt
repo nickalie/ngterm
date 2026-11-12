@@ -124,14 +124,14 @@ class LiveSessionsTest {
             core.emit(MobileEvent.PaneLead(pane, PaneRole.FOLLOWER, true))
             core.emit(MobileEvent.PaneTitle(pane, "vim"))
             assertEquals(
-                PaneLive(PaneRole.FOLLOWER, covered = true, title = "vim"),
+                PaneLive(PaneRole.FOLLOWER, covered = true, title = "vim", leads = 1),
                 live.sessions.value[key]
                     ?.panes
                     ?.get("P1"),
             )
             core.emit(MobileEvent.PaneEnded(pane, PaneEnd.Lost("link down")))
             assertEquals(
-                PaneLive(PaneRole.FOLLOWER, covered = false, end = PaneEnd.Lost("link down"), title = "vim"),
+                PaneLive(PaneRole.FOLLOWER, covered = false, end = PaneEnd.Lost("link down"), title = "vim", leads = 1),
                 live.sessions.value[key]
                     ?.panes
                     ?.get("P1"),
@@ -142,6 +142,13 @@ class LiveSessionsTest {
                     ?.panes
                     ?.get("P1")
                     ?.end,
+            )
+            core.emit(MobileEvent.PaneLead(pane, null, true))
+            assertEquals(
+                PaneLive(covered = true, title = "vim", leads = 2),
+                live.sessions.value[key]
+                    ?.panes
+                    ?.get("P1"),
             )
         }
 

@@ -213,8 +213,8 @@ class SessionPanes(
 class LeadClaims {
     private val pending = mutableSetOf<SessionKey>()
 
-    // the pane whose takeover is on its way, until it stops reporting following
-    private val taking = mutableMapOf<SessionKey, String>()
+    // the pane whose takeover is on its way, until its next lead report: a snapshot may skip the roles in between
+    private val taking = mutableMapOf<SessionKey, Pair<String, Int>>()
     private val heldState = MutableStateFlow<Set<SessionKey>>(emptySet())
 
     /** The sessions whose lead this device is taking: their Take control cover would only flash. */
@@ -232,15 +232,16 @@ class LeadClaims {
     ) {
         val gone = { key: SessionKey -> key.sessionId !in attached[key.machineId].orEmpty() }
         pending.removeAll(gone)
-        taking.entries.removeAll { (key, pane) ->
-            gone(key) || sessions[key]?.panes?.get(pane)?.role != PaneRole.FOLLOWER
+        taking.entries.removeAll { (key, claimed) ->
+            val (pane, leads) = claimed
+            gone(key) || sessions[key]?.panes?.get(pane)?.leads != leads
         }
         for (key in pending.toList()) {
             val panes = sessions[key]?.panes.orEmpty()
-            val follower = panes.entries.firstOrNull { it.value.role == PaneRole.FOLLOWER }?.key
+            val follower = panes.entries.firstOrNull { it.value.role == PaneRole.FOLLOWER }
             if (follower != null) {
-                taking[key] = follower
-                takeLead(PaneRef(key.machineId, key.sessionId, follower))
+                taking[key] = follower.key to follower.value.leads
+                takeLead(PaneRef(key.machineId, key.sessionId, follower.key))
             }
             if (follower != null || panes.values.any { it.role == PaneRole.LEADER }) pending -= key
         }
