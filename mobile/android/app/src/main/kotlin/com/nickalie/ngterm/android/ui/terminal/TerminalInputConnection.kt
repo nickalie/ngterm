@@ -33,19 +33,19 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.input.key.KeyEvent as ComposeKeyEvent
 
 /**
- * The input method's connection to [terminal], the terminal it was opened for: everything it types reaches that
- * program as it is typed, so a program reading each key (a shell's completion, a TUI's `/` menu) sees each letter.
- * What it commits goes as typed text (line breaks as Enter). What it composes goes as the composition grows, as far as
- * a backspace takes each character back alone in every line editor (one with no marks, joins or parts, as typed
- * letters are); from the first character a backspace may not (a letter with its marks, a conjunct, an emoji sequence)
- * the rest is held at the cursor ([TerminalState.composing]) and typed when the composition ends, so a change to the
- * composition (a conversion, a correction) is made on the program's line with backspaces only over such characters,
- * and comes out the same whether the program deletes by grapheme cluster (Claude Code, Codex), by code point with its
- * marks (readline) or by code point (a terminal's own line editing). A deletion it asks for is around the
- * composition, which stays, as in the framework's editors (backspaces before it, deletes after it); the keys it sends
- * (Enter, backspace) go as keys. A key (its own or one from elsewhere: [TerminalKeyboard.composition]), the pointer or
- * a paste reaching the program, a line break or a composed letter a sticky modifier turned into a chord ends the
- * composition and restarts the input method, so it never corrects text the program has moved past. A held part goes
+ * The input method's connection to [terminal], the terminal it was opened for: everything it types reaches that program
+ * as it is typed, so a program reading each key (a shell's completion, a TUI's `/` menu) sees each letter. What it
+ * commits goes as typed text (line breaks as Enter). What it composes goes as the composition grows, as far as a
+ * backspace takes each character back alone in every line editor (one with no marks, joins or parts, as typed letters
+ * are); from the first character a backspace may not (a letter with its marks, a conjunct, an emoji sequence) the rest
+ * is held ([TerminalState.composing], shown in the [CompositionStrip]) and typed when the composition ends, so a change
+ * to the composition (a conversion, a correction) is made on the program's line with backspaces only over such
+ * characters, and comes out the same whether the program deletes by grapheme cluster (Claude Code, Codex), by code
+ * point with its marks (readline) or by code point (a terminal's own line editing). A deletion it asks for is around
+ * the composition, which stays, as in the framework's editors (backspaces before it, deletes after it); the keys it
+ * sends (Enter, backspace) go as keys. A key (its own or one from elsewhere: [TerminalKeyboard.composition]), the
+ * pointer or a paste reaching the program, a line break or a composed letter a sticky modifier turned into a chord ends
+ * the composition and restarts the input method, so it never corrects text the program has moved past. A held part goes
  * first, where it was typed: a pointer press, drag or wheel turn or a paste types it and ends the composition before
  * reaching the program, whether the program then takes it or not (a scroll of the view too).
  *
@@ -209,7 +209,7 @@ internal class TerminalInputConnection(
         @RequiresApi(Build.VERSION_CODES.Q)
         fun Int.pictographic() = UCharacter.hasBinaryProperty(this, UProperty.EXTENDED_PICTOGRAPHIC)
 
-        // held text starts a whole character, so it reads right at the cursor
+        // held text starts a whole character, never a mark split from its letter
         fun String.lettersAlone(): Int {
             val characters = BreakIterator.getCharacterInstance().also { it.setText(this) }
             var at = 0
@@ -229,9 +229,7 @@ internal class TerminalInputConnection(
                 UCharacter.GraphemeClusterBreak.LVT,
             )
 
-        // the scripts of Unicode 18.0's Indic_Conjunct_Break consonants (DerivedCoreProperties.txt), whose conjuncts a
-        // grapheme editor keeps whole: a list, as the device's ICU may predate the program's Unicode and only API 37
-        // exposes the property; script codes are fixed numbers, so a newer one just matches nothing on an older ICU
+        // Indic_Conjunct_Break scripts listed by hand: the device's ICU may predate the program's Unicode
         @SuppressLint("InlinedApi")
         val CONJUNCT_SCRIPTS =
             setOf(

@@ -44,7 +44,7 @@ class TerminalShortcuts(
  * instead of correcting text before it.
  */
 internal interface PendingComposition {
-    /** Whether part of it waits at the cursor, to be typed as it ends. */
+    /** Whether part of it waits to be typed as it ends. */
     val holds: Boolean
 
     fun end()

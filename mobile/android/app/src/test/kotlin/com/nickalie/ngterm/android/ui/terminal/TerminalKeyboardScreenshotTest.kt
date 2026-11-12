@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -28,7 +29,7 @@ import kotlin.coroutines.EmptyCoroutineContext
 
 /**
  * The keyboard's chrome (src/test/screenshots/terminal): the extra-keys row under a terminal on a phone, with Ctrl
- * held for the next key, Alt locked and a dead key's accent at the cursor, dark and light; the row at font
+ * held for the next key, Alt locked and a dead key's accent waiting in the strip, dark and light; the row at font
  * scale 2; and the row in one line on a phone held sideways.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -55,11 +56,15 @@ class TerminalKeyboardScreenshotTest {
                 val state = remember { TerminalState(pane, EmptyCoroutineContext) }
                 DisposableEffect(Unit) {
                     pane.onWake = state::dirty
+                    keyboard.target = state
                     state.composing = ACCENT
                     onDispose { pane.onWake = null }
                 }
                 Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                    TerminalView(state, Modifier.fillMaxWidth().height(TERMINAL_HEIGHT), keyboard = keyboard)
+                    Box(Modifier.fillMaxWidth().height(TERMINAL_HEIGHT)) {
+                        TerminalView(state, Modifier.fillMaxSize(), keyboard = keyboard)
+                        CompositionStrip(keyboard, Modifier.align(Alignment.BottomEnd).padding(8.dp))
+                    }
                     ExtraKeysRow(keyboard)
                 }
             }

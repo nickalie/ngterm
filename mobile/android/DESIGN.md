@@ -500,10 +500,24 @@ sideways or wider (48dp a key or more): one line of sixteen
   conversion, a correction, a backspace in it) is made on the program's line, with backspaces and the new text. Line
   editors take different amounts back on a backspace over a letter with its marks, a conjunct or an emoji sequence
   (Claude Code and Codex the whole character, readline the last letter with its marks, the terminal's own line editing
-  one code point), so a composition goes only as far as its first such character; from there it waits at the cursor
-  as a dead key's accent does, and goes when the word is done. It waits where the terminal will put it: from the
-  cursor on, each character covering its own cells, onto the next row at the right edge (the screen moving up a row
-  when that is past the last), never over the text before it. Backspace past it is the program's.
+  one code point), so a composition goes only as far as its first such character; from there it waits in the strip
+  (below) as a dead key's accent does, and goes when the word is done, landing at the cursor. Backspace past it is the
+  program's.
+- **The strip** (`CompositionStrip`) shows what waits to be typed, and only while something does: a word the soft
+  keyboard holds, or a dead key's accent. Plain letters never wait, so typing Latin never shows it. It is a one-line
+  chip off the grid, floating over the panes' bottom edge at the trailing side, 8dp in from the edge and over the row
+  (or over the keyboard with no row): the text in the terminal's face at 18 sp, underlined 2dp in copper as an input
+  method's text is until it goes, on `surfaceContainerHigh` with a 1dp `outlineVariant` edge (it floats over text of
+  any color) and a 12dp radius. It hugs its text; a word past the width scrolls in it, its end in view.
+
+  | First pass | Why it was wrong | Revised to |
+  |---|---|---|
+  | The held text drawn on the grid at the cursor, as the terminal will place it | the app can't know the program's widths, wraps and line editing, so each attempt covered text or moved touches and the selection off the cells | a chip off the grid: the terminal shows only what the program has, and the text lands where the program puts it |
+  | A full-width bar between the panes and the row | the pane shrinks while it shows, so the program is resized and redraws on every held word | a chip floating over the panes' edge: the grid never changes size |
+  | A label ("Composing") in front of the text | a word to read for something the copper underline already says | the text alone, underlined |
+
+  TalkBack reads it as "Waiting to be typed:" and the text; it is no live region, since the keyboard speaks each key
+  already.
 - **The row** sits under the terminal, over the keyboard, whenever no hardware keyboard is attached and Settings hasn't
   hidden it (it shows with the keyboard closed too: the arrows and Esc work a pager or a menu without it). Two lines of
   eight on a phone held upright: Ctrl and Alt by Tab under the thumb, the arrows an inverted T with Home and End over
@@ -519,16 +533,16 @@ sideways or wider (48dp a key or more): one line of sixteen
   the row, the soft keyboard (the character's key on a US layout: Ctrl and a typed `c` is Ctrl+C) or a hardware key,
   and a once-held one lets go after it.
 - **A hardware keyboard** types straight into the focused terminal, and the row stands aside. It types what its
-  layout types: AltGr's characters (German AltGr+Q is `@`) are text, not Alt chords, and a dead key's accent waits at
-  the cursor (in the terminal's font, on its ground, underlined 2dp in the cursor's copper) until the next key takes it (`´` then `e` is `é`; a space, the same accent again, or a
-  key it doesn't go on types the accent itself first). Its chords are desktop's Linux ones, by the character the
+  layout types: AltGr's characters (German AltGr+Q is `@`) are text, not Alt chords, and a dead key's accent waits in
+  the strip until the next key takes it (`´` then `e` is `é`; a space, the same accent again, or a key it doesn't go on
+  types the accent itself first). Its chords are desktop's Linux ones, by the character the
   layout types: Ctrl+= (or Ctrl++) and Ctrl+- step the text size a whole sp (8-32), Ctrl+0 puts it back to the size
   Settings sets (on Dvorak, Ctrl+[ and Ctrl+] stay the program's); Ctrl+Shift+Left and Right go to the previous and
   next pane, Ctrl+Shift+Up and Down to the previous and next session (the session view's to wire; a chord with nowhere
   to go is the program's).
 - **Order:** a key from the row or a hardware key, a paste that goes in, or a tap, click or wheel the program takes
   while the soft keyboard is composing ends the composition, so the keyboard starts afresh after it rather than
-  correcting text before it or where the cursor was. What waits at the cursor goes first, before any paste, tap, click,
+  correcting text before it or where the cursor was. What waits in the strip goes first, before any paste, tap, click,
   drag or scroll, a scroll of the view included (where the wheel goes is only known once the program has it), so it
   lands where it was typed. A mouse click gives the terminal the focus without opening the soft keyboard; a tap opens
   it.
@@ -632,7 +646,8 @@ compact                            medium (rail open)               expanded
   other for that session alone, kept on this device (`SessionChatViews`, the newest 256 sessions); one set back to
   Settings' value follows Settings again. The menu closes on the tap.
 - **The keyboard:** one `TerminalKeyboard` for the view, shared by every pane and the extra-keys row, so a held Ctrl
-  stays as the selection moves; the row sits under the panes over the soft keyboard, and steps aside while every pane
+  stays as the selection moves; the row sits under the panes over the soft keyboard (the strip floats over the panes'
+  bottom edge, so a held word never resizes a pane), and steps aside while every pane
   on screen shows its chat (The chat, below). Ctrl+Shift+Left and Right go to
   the previous and next pane, Ctrl+Shift+Up and Down to the previous and next attached session.
 - **One selected pane:** each session has one selected pane, the one a tab, a swipe, a chord or a touch on a pane

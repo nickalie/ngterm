@@ -331,7 +331,7 @@ class TerminalKeyboardTest {
     fun aDeadKeyHoldsItsAccentForTheNextKey() {
         val german = hardware(TestLayout.German)
         german.key(KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_EQUALS, 0, 0))
-        assertEquals("the accent waits at the cursor", "´", state.composing)
+        assertEquals("the accent waits", "´", state.composing)
         german.key(KeyEvent(0L, 0L, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_EQUALS, 0, 0))
         german.stroke(KeyEvent.KEYCODE_E)
         assertEquals("", state.composing)

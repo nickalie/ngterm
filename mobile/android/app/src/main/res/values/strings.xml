@@ -225,6 +225,7 @@
 
   <!-- ui/terminal: the extra-keys row, as TalkBack reads its keys -->
   <string name="extra_keys_description">Extra keys</string>
+  <string name="composition_strip_description">Waiting to be typed: %1$s</string>
   <string name="key_escape">Escape</string>
   <string name="key_tab">Tab</string>
   <string name="key_ctrl">Control</string>

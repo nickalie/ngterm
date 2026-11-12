@@ -37,7 +37,6 @@ import androidx.compose.ui.semantics.text
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.TextUnit
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
 import com.nickalie.ngterm.android.R
@@ -91,8 +90,9 @@ class TerminalState(
     var face by mutableStateOf(face)
 
     /**
-     * What waits at the cursor, drawn there: a hardware dead key's accent until the next key takes it, or the part of
-     * the input method's composition held until it ends; empty for none.
+     * What waits to be typed at the cursor, shown in the [CompositionStrip] and never on the grid: a hardware dead
+     * key's accent until the next key takes it, or the part of the input method's composition held until it ends;
+     * empty for none.
      */
     var composing by mutableStateOf("")
         internal set
@@ -210,7 +210,7 @@ fun rememberTerminalState(pane: PaneInterface): TerminalState = remember(pane) {
  * It takes the pointer as [terminalGestures] says: scrolling, selecting with handles and a toolbar, pinching the text
  * size, the mouse and its right-click menu, and clicks a program tracking the mouse asks for ([TerminalOverlays]).
  * A tap gives it the focus and opens the soft keyboard (a mouse click only the focus): with the focus, the input
- * method and a hardware keyboard type into it through [keyboard], and a dead key's accent waits at the cursor.
+ * method and a hardware keyboard type into it through [keyboard].
  * [focusRequester] lets its host give it the focus (the session view, as the focused pane moves). With [readAloud]
  * TalkBack reads its screen's text; [onSwipe] takes a finger's sideways swipe (next pane: leftward), which otherwise
  * scrolls like any drag.
@@ -235,8 +235,6 @@ fun TerminalView(
     val ownFocus = remember { FocusRequester() }
     val focus = focusRequester ?: ownFocus
     val softKeyboard = rememberSoftKeyboardRequest(focus)
-    val underline = with(density) { CompositionUnderline.toPx() }
-    val composition = remember(painter, underline) { CompositionPainter(painter, font, underline) }
     SideEffect {
         input.font = font
         input.keyboardRequest = softKeyboard::request
@@ -264,10 +262,10 @@ fun TerminalView(
                 .focusable()
                 .clipToBounds()
                 .drawBehind {
-                    // read here, so a new frame or composition draws again without composing again
+                    // read here, so a new frame draws again without composing again
                     state.drawn
                     drawRect(palette.background)
-                    composition.draw(drawContext.canvas.nativeCanvas, state, size, look, palette)
+                    painter.draw(drawContext.canvas.nativeCanvas, state.screen, size, look)
                 }.terminalGestures(
                     input = input,
                     selection = selection,
@@ -358,9 +356,6 @@ fun gridFor(
         cellHeight = font.cellHeight.toUInt(),
     )
 }
-
-/** The held accent's underline at the cursor. */
-private val CompositionUnderline = 2.dp
 
 /** The most columns or rows a grid has (the pane's sizes are 16-bit). */
 private const val MAX_CELLS = 0xFFFF

@@ -10,12 +10,14 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.input.key.Key
@@ -98,7 +100,10 @@ class TerminalCompositionTest {
                     onDispose { pane.onWake = null }
                 }
                 Column(Modifier.fillMaxSize()) {
-                    TerminalView(state, Modifier.weight(1f).fillMaxWidth(), keyboard = keyboard)
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        TerminalView(state, Modifier.fillMaxSize(), keyboard = keyboard)
+                        CompositionStrip(keyboard, Modifier.align(Alignment.BottomEnd))
+                    }
                     ExtraKeysRow(keyboard)
                 }
             }
@@ -126,6 +131,8 @@ class TerminalCompositionTest {
     ) = KeyMapping.named(name, mods)
 
     private fun key(name: String) = compose.onNodeWithContentDescription(name)
+
+    private fun strip(text: String) = compose.onNodeWithContentDescription("$STRIP $text")
 
     /** How a program's line editor takes back the last character on a backspace. */
     private enum class Erase {
@@ -231,7 +238,7 @@ class TerminalCompositionTest {
         connection.setComposingText("क", 1)
         connection.setComposingText("का", 1)
         connection.setComposingText("कै", 1)
-        assertEquals("a letter and its signs wait at the cursor", "" to "कै", line() to state.composing)
+        assertEquals("a letter and its signs wait", "" to "कै", line() to state.composing)
         connection.setComposingText("कि", 1)
         connection.commitText("कि ", 1)
         connection.setComposingText("क्ष", 1)
@@ -262,11 +269,39 @@ class TerminalCompositionTest {
     }
 
     @Test
+    fun aHeldWordWaitsInTheStripAndLandsAtTheCursorWhenDone() {
+        show()
+        focus()
+        val connection = connect()
+        connection.commitText("echo ", 1)
+        connection.setComposingText("नमस्ते", 1)
+        val held = state.composing
+        assertTrue("part of the word waits", held.isNotEmpty())
+        assertEquals("echo नमस्ते", line() + held)
+        strip(held).assertExists()
+        connection.finishComposingText()
+        compose.waitForIdle()
+        assertEquals("it lands after what was typed", "echo नमस्ते" to "", line() to state.composing)
+        strip(held).assertDoesNotExist()
+    }
+
+    @Test
+    fun plainLettersShowNoStrip() {
+        show()
+        focus()
+        val connection = connect()
+        connection.setComposingText("hello", 1)
+        compose.waitForIdle()
+        assertEquals("hello" to "", line() to state.composing)
+        compose.onNodeWithContentDescription(STRIP, substring = true).assertDoesNotExist()
+    }
+
+    @Test
     fun aConsonantAfterAViramaWaitsInEveryConjunctScript() {
         show()
         focus()
         val connection = connect()
-        // Myanmar and Khmer, two of the scripts whose conjuncts joined grapheme clusters in Unicode 16
+        // Myanmar and Khmer, two scripts a newer Indic_Conjunct_Break added
         var typed = ""
         for ((virama, first, second) in listOf(Triple("က္", "က", "ခ"), Triple("ក្", "ក", "ខ"))) {
             connection.commitText(virama, 1)
@@ -572,5 +607,9 @@ class TerminalCompositionTest {
         connection.closeConnection()
         assertEquals(listOf(FakeInput.Typed("vi")), pane.inputs.toList())
         assertTrue("nothing crosses to the terminal targeted since", other.inputs.isEmpty())
+    }
+
+    private companion object {
+        const val STRIP = "Waiting to be typed:"
     }
 }

@@ -49,6 +49,7 @@ import com.nickalie.ngterm.android.ui.chat.ChatViewModel
 import com.nickalie.ngterm.android.ui.chat.PaneView
 import com.nickalie.ngterm.android.ui.components.ErrorState
 import com.nickalie.ngterm.android.ui.components.PanelAction
+import com.nickalie.ngterm.android.ui.terminal.CompositionStrip
 import com.nickalie.ngterm.android.ui.terminal.ExtraKeysRow
 import com.nickalie.ngterm.android.ui.terminal.TerminalKeyboard
 import com.nickalie.ngterm.android.ui.terminal.TerminalShortcuts
@@ -62,16 +63,16 @@ import com.nickalie.ngterm.core.ffi.PaneSize
 import com.nickalie.ngterm.core.ffi.StreamState
 
 /**
- * An attached session, live: its bar (name, status, context, the pane switcher, Detach and End session), the
- * origin's HUD, its panes, and the extra keys over the soft keyboard. A phone ([compact]) shows the [focused] pane
- * alone and a swipe across it moves to the next or previous one; wider windows show the origin's split, or the
- * [focused] pane [alone] once a pane tab asked for it ([tabTapAlone], through [SessionViewActions.onAlone]). The shown
- * panes' states are [panes] (by pane), and why one could not be shown [failures]. One [keyboard] serves every pane
- * and the extra keys, laid out as Settings' [extraKeys] says; its chords move between the panes and the sessions.
- * [views] says how each pane running an agent shows (by pane id), and the bar switches the selected one's; a pane in
- * chat view draws its open chat from [chats] (by pane) in its terminal's place. The extra keys type into no chat, and
- * step aside while every pane on screen is one; its terminal's grid then still leaves them their room, so switching
- * between the chat and the terminal never resizes the pane.
+ * An attached session, live: its bar (name, status, context, the pane switcher, Detach and End session), the origin's
+ * HUD, its panes, what waits to be typed ([CompositionStrip]) over their bottom edge, and the extra keys over the soft
+ * keyboard. A phone ([compact]) shows the [focused] pane alone and a swipe across it moves to the next or previous one;
+ * wider windows show the origin's split, or the [focused] pane [alone] once a pane tab asked for it ([tabTapAlone],
+ * through [SessionViewActions.onAlone]). The shown panes' states are [panes] (by pane), and why one could not be shown
+ * [failures]. One [keyboard] serves every pane and the extra keys, laid out as Settings' [extraKeys] says; its chords
+ * move between the panes and the sessions. [views] says how each pane running an agent shows (by pane id), and the bar
+ * switches the selected one's; a pane in chat view draws its open chat from [chats] (by pane) in its terminal's place.
+ * The extra keys type into no chat, and step aside while every pane on screen is one; its terminal's grid then still
+ * leaves them their room, so switching between the chat and the terminal never resizes the pane.
  *
  * The [focused] pane is the selected one, the only one anything typed reaches: a tab, a swipe, a chord and a touch
  * on a pane ask [SessionViewActions.onFocus] to select it, and the keyboard's target and the input focus follow the
@@ -147,6 +148,8 @@ fun SessionScreen(
                         )
                     }
                 Panes(session, spots, focused, compact, splittable && !alone, paneActions, move, reserve)
+                // over the panes rather than beside them, so a held word never resizes the terminal
+                CompositionStrip(keyboard, Modifier.align(Alignment.BottomEnd).padding(NgtermTheme.spacing.sm))
             }
             if (!chatsOnly) ExtraKeysRow(keyboard, layout = extraKeys)
         }
