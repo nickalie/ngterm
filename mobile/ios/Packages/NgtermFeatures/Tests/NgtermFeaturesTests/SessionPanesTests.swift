@@ -188,6 +188,64 @@ internal struct SessionPanesTests {
         #expect(!panes.isTakingLead(SessionWorld.key))
     }
 
+    @Test("a takeover whose pane ends, or whose session is detached, holds Take control back no more")
+    internal func claimReleased() async throws {
+        defer { world.remove() }
+        try await connectedUnreported()
+        panes.claimLead(of: SessionWorld.key)
+        await world.emit(.paneLead(pane: SessionWorld.pane("P1"), role: .follower, covered: true))
+        await world.emit(.paneEnded(pane: SessionWorld.pane("P1"), end: .exited(code: 0, signal: nil)))
+        #expect(!panes.isTakingLead(SessionWorld.key))
+
+        panes.claimLead(of: SessionWorld.key)
+        await world.emit(.paneLead(pane: SessionWorld.pane("P1"), role: .follower, covered: true))
+        #expect(panes.isTakingLead(SessionWorld.key))
+        world.graph.connections.detach(machineId: "m1", sessionId: "s1")
+        #expect(!panes.isTakingLead(SessionWorld.key))
+    }
+
+    // the session's stream connected with the split of P1 and P2 shown, and no lead reported yet
+    private func splitUnreported() async throws {
+        try await world.attach()
+        await world.emit(
+            .sessionConnection(machineId: "m1", sessionId: "s1", state: .connected),
+            .sessionLayout(machineId: "m1", sessionId: "s1", layout: SessionWorld.split("vertical"))
+        )
+        await world.show("P1", "P2")
+    }
+
+    @Test("a takeover whose pane the layout drops lets the other panes offer Take control")
+    internal func claimPaneDropped() async throws {
+        defer { world.remove() }
+        try await splitUnreported()
+        panes.claimLead(of: SessionWorld.key)
+        await world.emit(.paneLead(pane: SessionWorld.pane("P1"), role: .follower, covered: true))
+        #expect(panes.isTakingLead(SessionWorld.key))
+        let alone = SessionWorld.layout(["P2"], axis: nil, shown: true)
+        await world.emit(
+            .sessionLayout(machineId: "m1", sessionId: "s1", layout: alone),
+            .paneLead(pane: SessionWorld.pane("P2"), role: .follower, covered: true)
+        )
+        #expect(!panes.isTakingLead(SessionWorld.key))
+        #expect(cover() == .follower)
+    }
+
+    @Test("a late follower report of a pane the layout dropped leaves the claim to a pane still there")
+    internal func claimLateReport() async throws {
+        defer { world.remove() }
+        try await splitUnreported()
+        panes.claimLead(of: SessionWorld.key)
+        let alone = SessionWorld.layout(["P2"], axis: nil, shown: true)
+        await world.emit(
+            .sessionLayout(machineId: "m1", sessionId: "s1", layout: alone),
+            .paneLead(pane: SessionWorld.pane("P1"), role: .follower, covered: true)
+        )
+        #expect(!world.core.calls.contains { $0.method == "takeLead" })
+        #expect(panes.isTakingLead(SessionWorld.key))
+        await world.emit(.paneLead(pane: SessionWorld.pane("P2"), role: .follower, covered: true))
+        #expect(world.core.calls.filter { $0.method == "takeLead" } == [FakeCall("takeLead", ["m1", "s1", "P2"])])
+    }
+
     @Test("a claimed session whose pane leads already is left as it is")
     internal func claimLeader() async throws {
         defer { world.remove() }

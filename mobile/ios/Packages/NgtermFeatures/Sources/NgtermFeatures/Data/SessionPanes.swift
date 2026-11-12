@@ -187,10 +187,14 @@ public final class SessionPanes {
             linked(machineId)
 
         case .sessionLayout(let machineId, let sessionId, let layout):
-            // a pane the layout no longer has is hidden
+            // a pane the layout no longer has is hidden, and reports nothing more to release its takeover
             for pane in shown.keys
             where pane.machineId == machineId && pane.sessionId == sessionId && !layout.panes.contains(pane.paneId) {
                 hide(pane)
+            }
+            let session = SessionKey(machineId: machineId, sessionId: sessionId)
+            if let pane = taking[session], !layout.panes.contains(pane) {
+                taking[session] = nil
             }
 
         case .paneLead(let pane, let role, _):
@@ -208,6 +212,10 @@ public final class SessionPanes {
     private func lead(_ pane: PaneRef, _ role: PaneRole?) {
         let session = SessionKey(pane)
         release(pane)
+        // a late report of a pane the layout dropped leaves the claim to a pane still there
+        if let layout = live.sessions[session]?.layout, !layout.panes.contains(pane.paneId) {
+            return
+        }
         switch role {
         case .follower:
             if claims.remove(session) != nil {
