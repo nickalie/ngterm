@@ -568,6 +568,8 @@ APPS_FILE = Path("conformance/coverage/apps.toml")
 E2E_TARGET = 90.0
 _APP_KEYS = frozenset({"binaries", "modules", "exclude"})
 _PROGRAM = re.compile(r"^[A-Za-z0-9_.+-]+$")
+# A module's name is a row of the report: the names tools/check_coverage.py reads, the total's own left out.
+_MODULE = re.compile(r"^[A-Za-z0-9_-]+$")
 _DRIVE = re.compile(r"^[A-Za-z]:/")
 # The word a marker's function is named with in the summary, by language.
 _FUNCTION_WORD = {"rust": "fn", "kotlin": "fun", "swift": "func"}
@@ -626,6 +628,10 @@ def load_apps(path: Path) -> dict[tuple[str, str], AppBuild]:
                 isinstance(prefix, str) and prefix for prefix in modules.values()
             ):
                 raise ReportError(f"{where}: modules: not a table of path prefixes")
+            for module in modules:
+                if not _MODULE.match(module) or module == "total":
+                    raise ReportError(f"{where}: modules: {module!r} is not a row name (letters, digits, `_`, `-`; "
+                                      "not `total`)")
             exclude = entry.get("exclude", [])
             if not isinstance(exclude, list) or not all(isinstance(pattern, str) for pattern in exclude):
                 raise ReportError(f"{where}: exclude: not a list of regular expressions")
@@ -858,7 +864,7 @@ def e2e_report(
     texts = []
     for path in lcov:
         try:
-            texts.append(path.read_text(encoding="utf-8"))
+            texts.append((path, path.read_text(encoding="utf-8")))
         except (OSError, UnicodeDecodeError) as error:
             raise ReportError(f"cannot read the lcov file {path}: {error}") from None
     jobs = []
@@ -878,8 +884,11 @@ def e2e_report(
             for name, join in joined.items():
                 _absorb(raw.setdefault(name, FileJoin()), join)
             warnings += notes
-    for text in texts:
-        join_lcov(raw, text)
+    for path, text in texts:
+        try:
+            join_lcov(raw, text)
+        except ValueError as error:
+            raise ReportError(f"{path}: not lcov: {error}") from None
     names: dict[str, str] = {}
     files: dict[str, tuple[str, FileJoin]] = {}
     for name, join in raw.items():

@@ -249,15 +249,18 @@ def missing_cases(tmp_path: Path, repo: Path) -> dict[str, tuple[list[str], str]
             ["--lcov", str(tmp_path / "empty.info")],
             "no line of the headless app's code in the inputs",
         ),
+        "malformed lcov": (["--lcov", str(tmp_path / "bad.info")], f"{tmp_path / 'bad.info'}: not lcov:"),
     }
 
 
 @pytest.mark.parametrize("case", ["no input", "missing lcov", "unknown app", "no profiles", "profiles without a build",
-                                  "missing program", "missing apps file", "nothing measured"])
+                                  "missing program", "missing apps file", "nothing measured",
+                                  "malformed lcov"])
 def test_a_missing_input_exits_2(tmp_path, repo, capsys, monkeypatch, case):
     for override in ("LLVM_COV", "LLVM_PROFDATA"):
         monkeypatch.delenv(override, raising=False)
     (tmp_path / "empty.info").write_text("")
+    (tmp_path / "bad.info").write_text("SF:crates/a/src/lib.rs\nDA:12\nend_of_record\n")
     (tmp_path / "x.profraw").write_bytes(b"raw")
     args, message = missing_cases(tmp_path, repo)[case]
     base = {"--app": "headless", "--platform": "linux", "--repo": str(repo), "--out": str(tmp_path / "out")}
@@ -299,6 +302,8 @@ def test_a_windows_program_is_found_by_its_exe(tmp_path, repo, rust_inputs):
         ("[headless.linux]\nbinaries = [1]\n", "binaries: not a list of names"),
         ("[headless.linux]\nbinary = []\n", "unknown key binary"),
         ("[headless.linux]\nmodules = { a = 1 }\n", "modules: not a table of path prefixes"),
+        ("[headless.linux]\nmodules = { \"android.app\" = \"a/\" }\n", "modules: 'android.app' is not a row name"),
+        ("[headless.linux]\nmodules = { total = \"a/\" }\n", "modules: 'total' is not a row name"),
         ("[headless.linux]\nexclude = ['(']\n", "exclude: not a regular expression"),
         ("[headless]\nlinux = 1\n", "not a table"),
         ("[headless.linux\n", "not TOML"),

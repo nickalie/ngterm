@@ -160,6 +160,44 @@ def test_a_kotlin_one_line_expression_body_is_its_line():
     assert (marker.first, marker.last) == (2, 2)
 
 
+@pytest.mark.parametrize(
+    "decl",
+    [
+        "fun ids(): List<Int> = listOf(1, 2)",
+        "fun map(): Map<String, List<Int>> = mapOf()",
+        "fun <T> pick(x: T): T where T : Comparable<T> = x",
+        "fun f(): (Int) -> Int = { it }",
+    ],
+)
+@pytest.mark.parametrize("next_line", ["fun g() {}\n}", "val y = run { 1 }\n}", "}"])
+def test_a_kotlin_expression_body_after_a_generic_return_type_resolves(decl, next_line):
+    marker = only(f"class A {{\n// e2e-coverage: off: why\n{decl}\n{next_line}\n", "kotlin")
+    assert (marker.first, marker.last) == (3, 3)
+
+
+@pytest.mark.parametrize(
+    "decl, last",
+    [
+        ("fun identity(to: Int) = to", 2),
+        ("fun both(and: Boolean) = and", 2),
+        ("fun either(x: Int, or: Int) = x + or", 2),
+        ("fun member(x: Pair<Int, Int>) = x.to", 2),
+        ("fun pair(x: Int) = x to\n    1", 3),
+        ("fun cast(x: Any) = x as\n    String", 3),
+        ("fun has(x: Int) = x !in\n    listOf(1)", 3),
+        ("fun pick(c: Boolean) = if (c) 1 else\n    2", 3),
+    ],
+)
+def test_a_kotlin_expression_body_ending_in_a_word_stops_at_an_operand(decl, last):
+    marker = only(f"// e2e-coverage: off: why\n{decl}\nfun uncovered(): Int {{ return 0 }}\n", "kotlin")
+    assert (marker.first, marker.last) == (2, last)
+
+
+def test_a_kotlin_word_operator_never_continues_into_the_next_declaration():
+    marker = only("// e2e-coverage: off: why\nfun a(x: Int) = x to\nprivate fun b() = 2\n", "kotlin")
+    assert marker.last == 2
+
+
 def test_a_kotlin_constructor_and_init_block_resolve():
     markers = find_markers(
         "class A(x: Int) {\n"
@@ -176,6 +214,20 @@ def test_a_kotlin_constructor_and_init_block_resolve():
     assert [(marker.name, marker.first, marker.last) for marker in markers] == [
         ("constructor", 3, 4), ("init", 6, 7)
     ]
+
+
+def test_a_kotlin_delegating_constructor_without_a_body_runs_to_its_call():
+    marker = only(
+        "class A(x: Int) {\n"
+        "    // e2e-coverage: off: why\n"
+        "    constructor(s: String) : this(\n"
+        "        s.length,\n"
+        "    )\n"
+        "    fun after() {}\n"
+        "}\n",
+        "kotlin",
+    )
+    assert (marker.name, marker.first, marker.last) == ("constructor", 3, 5)
 
 
 @pytest.mark.parametrize(
@@ -236,10 +288,24 @@ def test_swift_initializers_subscripts_and_computed_properties_resolve(decl, nam
     assert (marker.name, marker.first, marker.last) == (name, 2, 1 + decl.count("\n") + 1)
 
 
+@pytest.mark.parametrize("op", ["<", "<=", "<<", "<<=", "==", "+"])
+def test_a_swift_operator_function_is_named_by_its_operator(op):
+    marker = only(f"// e2e-coverage: off: why\nstatic func {op} (lhs: A, rhs: A) -> Bool {{\n}}\n", "swift")
+    assert marker.name == op
+
+
+def test_a_generic_swift_operator_function_is_named_by_its_operator():
+    marker = only("// e2e-coverage: off: why\nstatic func < <T>(lhs: T, rhs: T) -> Bool {\n}\n", "swift")
+    assert marker.name == "<"
+
+
 @pytest.mark.parametrize(
     "source, message",
     [
         ("protocol P {\n    // e2e-coverage: off: why\n    func a()\n    func b()\n}\n", "has no body"),
+        ("protocol P {\n    // e2e-coverage: off: why\n    var x: Int { get set }\n}\n", "has no body"),
+        ("protocol P {\n    // e2e-coverage: off: why\n    var x: Int { get async throws(E) }\n}\n", "has no body"),
+        ("protocol P {\n    // e2e-coverage: off: why\n    subscript(i: Int) -> Int { get }\n}\n", "has no body"),
         ("// e2e-coverage: off: why\nvar stored: Int = 1\n", "has no body"),
         ("// e2e-coverage: off: why\nstruct S {}\n", "no function directly below"),
     ],

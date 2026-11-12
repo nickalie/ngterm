@@ -11,11 +11,13 @@ One comment form in Rust, Kotlin and Swift, on a line of its own:
 A function is what a coverage map counts as one: Rust `fn`; Kotlin `fun`, `constructor` and `init` blocks; Swift
 `func`, `init`, `deinit`, `subscript` and a computed `var`. Its body is its `{...}` group, or a Kotlin `= expression`
 that runs to the last line the expression continues on (a line ending in an operator, or followed by one starting with
-`.`, `?.`, `?:`, `&&`, `||`, `as` or `else`, continues it).
+`.`, `?.`, `?:`, `&&`, `||`, `as` or `else`, continues it; a line ending in a word operator such as `to` or `and`
+continues it only when that word follows an operand, so `= to` ends at a parameter named `to`). A Kotlin secondary
+constructor with no `{...}` body runs to the end of its `this(...)` or `super(...)` call.
 
 A marker with no reason, of an unknown kind, sharing its line with code, an `off-file` one below the file's first
 line, or a function marker with no function directly below it (or one with no body: a trait, interface or protocol
-requirement) is refused: `find_markers` raises MarkerError naming each such marker's file and line. A marker inside a
+requirement, a Swift `{ get set }` included) is refused: `find_markers` raises MarkerError naming each such marker's file and line. A marker inside a
 string, a block comment or a doc comment (`///`, `//!`) is text, not a marker: the sources are read by a lexer that
 knows each language's comments (nested block comments too) and literals (Rust's raw strings, Kotlin's `${...}`
 templates and raw strings, Swift's `\\(...)` interpolations and `#"..."#` raw strings). Rust's is rust_test_code.py's.
@@ -80,6 +82,12 @@ _ENDS_CONTINUING = frozenset({"=", ",", ".", "(", "[", "{", "+", "-", "*", "/", 
 _ENDS_CONTINUING_WORDS = frozenset({"as", "is", "in", "else", "to", "and", "or"})
 _STARTS_CONTINUING = frozenset({".", "?", "&", "|"})
 _STARTS_CONTINUING_WORDS = frozenset({"as", "else", "catch", "finally"})
+# Kotlin: words before a line-ending word operator that make that word an operand (`return to`), and the words that
+# start the next declaration on the following line, which a word operator never continues into.
+_NOT_OPERANDS = frozenset({"return", "throw", "else", "if", "when", "try", "in", "is", "as", "to", "and", "or"})
+_NOT_CONTINUING_WORDS = (_DECLARATIONS["kotlin"] - {"object"}) | _MODIFIERS["kotlin"]
+# Swift: the words of a protocol requirement's accessor list (`{ get set }`, `{ get async throws }`).
+_ACCESSOR_WORDS = frozenset({"get", "set", "async", "throws", "mutating", "nonmutating"})
 # An `=` with one of these before it is part of a comparison or a compound assignment, not an assignment.
 _NOT_ASSIGNMENT = frozenset({"=", "!", "<", ">", "+", "-", "*", "/", "%", "&", "|", "^"})
 
@@ -356,12 +364,17 @@ class _Resolver:
     def _body_end(self, keyword: int) -> int | None:
         """The index of the last token of the function's body, or None when it has none."""
         toks, pairs, language = self.toks, self.pairs, self.language
-        index = keyword + 1
+        index, angles, closed = keyword + 1, 0, -1
         while index < len(toks):
             token = toks[index]
             if token.kind == PUNCT:
                 if token.text == "{":
-                    return pairs[index]
+                    return None if self._accessors_only(keyword, index) else pairs[index]
+                if token.text == "<":
+                    angles += 1
+                elif token.text == ">" and angles and toks[index - 1].text != "-":
+                    # closes a generic type (`List<Int>`), not part of `>=`
+                    angles, closed = angles - 1, index
                 if token.text in ("(", "["):
                     index = pairs[index] + 1
                     continue
@@ -369,8 +382,10 @@ class _Resolver:
                     return None
                 if token.text == "@" and language != "rust":
                     return None
-                if token.text == "=" and language != "rust" and self._assignment(index):
+                if token.text == "=" and language != "rust" and self._assignment(index, closed == index - 1):
                     return self._expression_end(index) if language == "kotlin" else None
+            elif token.kind == IDENT and (delegation := self._delegation_end(keyword, index)) is not None:
+                return delegation
             elif token.kind == IDENT and index > keyword + 1 and token.text in _DECLARATIONS[language]:
                 return None
             elif token.kind == IDENT and token.text in _MODIFIERS[language] and language != "rust":
@@ -379,11 +394,47 @@ class _Resolver:
             index += 1
         return None
 
-    def _assignment(self, index: int) -> bool:
+    def _assignment(self, index: int, after_generic: bool) -> bool:
+        """Whether the `=` at `index` assigns; `after_generic`: the `>` before it closes a generic type."""
         toks = self.toks
         before = toks[index - 1].text if index > 0 else ""
         after = toks[index + 1].text if index + 1 < len(toks) else ""
-        return before not in _NOT_ASSIGNMENT and after not in ("=", ">")
+        return (after_generic or before not in _NOT_ASSIGNMENT) and after not in ("=", ">")
+
+    def _accessors_only(self, keyword: int, brace: int) -> bool:
+        """Whether the Swift `{...}` at `brace` after a `var` or `subscript` is a requirement's accessor list."""
+        toks = self.toks
+        if self.language != "swift" or toks[keyword].text not in ("var", "subscript"):
+            return False
+        index, close, words = brace + 1, self.pairs[brace], 0
+        while index < close:
+            token = toks[index]
+            if token.text == "(" and toks[index - 1].text == "throws":  # typed throws: `throws(E)`
+                index = self.pairs[index] + 1
+                continue
+            if token.kind != IDENT or token.text not in _ACCESSOR_WORDS:
+                return False
+            words += token.text in ("get", "set")
+            index += 1
+        return words > 0
+
+    def _delegation_end(self, keyword: int, index: int) -> int | None:
+        """The last token of a Kotlin secondary constructor whose `this(...)` or `super(...)` call is at `index`:
+        its body's `}`, or the call's `)` when it has no body; None when no such call is there."""
+        toks, pairs = self.toks, self.pairs
+        if (
+            self.language != "kotlin"
+            or toks[keyword].text != "constructor"
+            or toks[index].text not in ("this", "super")
+            or toks[index - 1].text != ":"
+            or index + 1 >= len(toks)
+            or toks[index + 1].text != "("
+        ):
+            return None
+        call = pairs[index + 1]
+        if call + 1 < len(toks) and toks[call + 1].text == "{":
+            return pairs[call + 1]
+        return call
 
     def _expression_end(self, equals: int) -> int:
         """The index of the last token of the Kotlin expression body after the `=` at `equals`."""
@@ -404,21 +455,41 @@ class _Resolver:
                 coming = toks[following]
             if ending.text == ";":
                 return last - 1
-            if coming.line > ending.end and not self._continues(ending, coming):
+            if coming.line > ending.end and not self._continues(last, coming):
                 return last
             index = following
 
-    @staticmethod
-    def _continues(ending: Token, coming: Token) -> bool:
+    def _continues(self, last: int, coming: Token) -> bool:
+        """Whether the expression whose line ends with the token at `last` goes on at `coming`, on a later line."""
+        ending = self.toks[last]
         if coming.kind == COMMENT:
             return True
         if ending.kind == PUNCT and ending.text in _ENDS_CONTINUING:
             return True
-        if ending.kind == IDENT and ending.text in _ENDS_CONTINUING_WORDS:
-            return True
         if coming.kind == PUNCT and coming.text in _STARTS_CONTINUING:
             return True
-        return coming.kind == IDENT and coming.text in _STARTS_CONTINUING_WORDS
+        if coming.kind == IDENT and coming.text in _STARTS_CONTINUING_WORDS:
+            return True
+        return ending.kind == IDENT and ending.text in _ENDS_CONTINUING_WORDS and self._word_operator(last, coming)
+
+    def _word_operator(self, word: int, coming: Token) -> bool:
+        """Whether the word at `word` (`to`, `and`, `as`, `else`...) is an infix operator that needs what follows,
+        rather than an operand named like one (`= to`, `x.and`), or a last word before the next declaration."""
+        toks = self.toks
+        if coming.kind == IDENT and coming.text in _NOT_CONTINUING_WORDS:
+            return False
+        before = word - 1
+        while before >= 0 and toks[before].kind == COMMENT:
+            before -= 1
+        if before < 0:
+            return False
+        token = toks[before]
+        if token.kind == LITERAL:
+            return True
+        if token.kind == PUNCT:
+            # `)`, `]` or `}` end an operand; `!` makes `!in` and `!is`
+            return token.text in ")]}" or (token.text == "!" and toks[word].text in ("in", "is"))
+        return token.text not in _NOT_OPERANDS
 
     def _name(self, keyword: int) -> str:
         """The function's name: Rust's and Swift's word after the keyword, Kotlin's last word before its parameters
@@ -437,9 +508,14 @@ class _Resolver:
         after = toks[keyword + 1] if keyword + 1 < len(toks) else None
         if after is not None and after.kind == IDENT:
             return after.text.removeprefix("r#").strip("`")
-        operator = ""
+        # an operator: its punctuation up to the parameters; a `<` followed by a name opens the generic parameters
+        # (`static func < <T>(`), since tokens keep no columns to tell `< <` from `<<`
+        operator, generic = "", False
         for token in toks[keyword + 1 :]:
-            if token.kind != PUNCT or token.text in ("(", "<"):
+            if token.kind != PUNCT or token.text == "(":
+                generic = token.kind == IDENT
                 break
             operator += token.text
+        if generic and len(operator) > 1 and operator.endswith("<"):
+            operator = operator[:-1]
         return operator or word
