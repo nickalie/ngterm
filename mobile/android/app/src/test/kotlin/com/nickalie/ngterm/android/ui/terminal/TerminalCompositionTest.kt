@@ -47,6 +47,7 @@ import com.nickalie.ngterm.core.ffi.PaneWheelOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -56,6 +57,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import java.lang.ref.WeakReference
 import kotlin.coroutines.EmptyCoroutineContext
 
 /**
@@ -626,7 +628,49 @@ class TerminalCompositionTest {
         assertTrue(other.inputs.isEmpty())
     }
 
+    @Test
+    fun aCompositionLeftOnAnotherConnectionLandsBeforeWhatTheNextOneSends() {
+        val first = TerminalState(pane, EmptyCoroutineContext)
+        val host = View(RuntimeEnvironment.getApplication())
+        keyboard.target = first
+        val older = TerminalInputConnection(host, keyboard, first).also(keyboard.connections::bind)
+        val newer = TerminalInputConnection(host, keyboard, first).also(keyboard.connections::bind)
+        older.setComposingText("aकै", 1)
+        newer.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+        newer.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+        val enter = pane.inputs.indexOfFirst { it is FakeInput.Key && it.key.key == "enter" }
+        val typed = { inputs: List<FakeInput> ->
+            inputs.filterIsInstance<FakeInput.Typed>().joinToString("") { it.text }
+        }
+        assertEquals("the held word lands before Enter", "aकै", typed(pane.inputs.take(enter)))
+        older.closeConnection()
+        assertEquals("nothing lands after it", "" to "", typed(pane.inputs.drop(enter)) to first.composing)
+    }
+
+    @Test
+    fun aConnectionTheSystemDropsUnclosedIsNotKept() {
+        keyboard.target = TerminalState(pane, EmptyCoroutineContext)
+        val dropped = unheldConnection(requireNotNull(keyboard.target))
+        collect(dropped)
+        assertNull("the keyboard holds no connection only it still knows", dropped.get())
+    }
+
+    private fun unheldConnection(terminal: TerminalState) =
+        WeakReference(
+            TerminalInputConnection(View(RuntimeEnvironment.getApplication()), keyboard, terminal)
+                .also(keyboard.connections::bind),
+        )
+
+    // the only way to see a reference let go of is a collection
+    @Suppress("ExplicitGarbageCollectionCall")
+    private fun collect(reference: WeakReference<*>) {
+        repeat(GC_TRIES) {
+            if (reference.get() != null) System.gc()
+        }
+    }
+
     private companion object {
         const val STRIP = "Waiting to be typed:"
+        const val GC_TRIES = 20
     }
 }

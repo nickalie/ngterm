@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.sp
 import com.nickalie.ngterm.core.ffi.PaneKey
 import com.nickalie.ngterm.core.ffi.PaneKeyAction
+import java.lang.ref.WeakReference
 
 /** A sticky modifier of the extra-keys row, with its bit in the pane's modifiers. */
 enum class StickyModifier(
@@ -47,7 +48,11 @@ internal interface PendingComposition {
     /** Whether part of it waits to be typed as it ends. */
     val holds: Boolean
 
-    fun end()
+    /**
+     * Ends it: a held part is typed where it was composed. [restart] tells the input method to forget it too; not when
+     * the input method has moved on to another connection.
+     */
+    fun end(restart: Boolean = true)
 }
 
 /**
@@ -256,15 +261,17 @@ class TerminalKeyboard(
 /**
  * The input method's open connections to the terminals. A newer one never ends an older one: the system may open one
  * and the input method keep typing on the one before (as it binds again), and it closes the one it lets go of itself.
- * Ending one ends its composition in its own terminal ([TerminalInputConnection.close]).
+ * Ending one ends its composition in its own terminal ([TerminalInputConnection.close]). They are held weakly, as
+ * Compose holds them: one the system drops unclosed is never sent anything again, and goes; one with a composition in
+ * progress stays, held by the keyboard ([TerminalKeyboard.composition]).
  */
 internal class InputConnections {
-    private val open = mutableListOf<TerminalInputConnection>()
+    private val open = mutableListOf<WeakReference<TerminalInputConnection>>()
 
     /** [opened] is open now, beside those opened before. */
     fun bind(opened: TerminalInputConnection) {
-        open.removeAll { it.closed }
-        if (opened !in open) open += opened
+        open.removeAll { it.get()?.closed != false }
+        if (open.none { it.get() === opened }) open += WeakReference(opened)
     }
 
     /** Ends the connections to [terminal]. */
@@ -274,8 +281,8 @@ internal class InputConnections {
     fun leave(target: TerminalState?) = end { it.terminal !== target }
 
     private fun end(which: (TerminalInputConnection) -> Boolean) {
-        val ended = open.filter(which)
-        open -= ended.toSet()
+        val ended = open.mapNotNull { it.get() }.filter(which)
+        open.removeAll { reference -> reference.get().let { it == null || ended.any { one -> one === it } } }
         ended.forEach(TerminalInputConnection::close)
     }
 }

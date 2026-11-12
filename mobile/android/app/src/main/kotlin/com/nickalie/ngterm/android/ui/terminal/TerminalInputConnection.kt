@@ -51,6 +51,7 @@ import androidx.compose.ui.input.key.KeyEvent as ComposeKeyEvent
  *
  * It types only while [terminal] is the keyboard's target and until it is [close]d: what the input method sends to a
  * connection whose terminal is not (or no longer) the one selected lands nowhere, so it never reaches another program.
+ * What it is sent first ends a composition another connection still holds, where that one was typed.
  */
 internal class TerminalInputConnection(
     private val host: View,
@@ -64,6 +65,15 @@ internal class TerminalInputConnection(
     // whether what the input method sends now reaches the terminal
     private val live get() = !closed && keyboard.target === terminal
 
+    // whether what the input method sends now reaches the terminal, after a composition another connection holds:
+    // the input method types on one connection at a time, so it moved on from that one, and its composition ends first
+    // where it was typed (without restarting the input method, which is on this one now)
+    private fun takes(): Boolean {
+        if (!live) return false
+        keyboard.composition?.takeIf { it !== pending }?.end(restart = false)
+        return true
+    }
+
     // the composition as the program has it: the end of its line, where its cursor is
     private var sent = ""
 
@@ -74,7 +84,7 @@ internal class TerminalInputConnection(
         object : PendingComposition {
             override val holds get() = held.isNotEmpty()
 
-            override fun end() = this@TerminalInputConnection.end(restart = true)
+            override fun end(restart: Boolean) = this@TerminalInputConnection.end(restart)
         }
 
     private fun composed(): String = editable?.toString().orEmpty()
@@ -140,7 +150,7 @@ internal class TerminalInputConnection(
         text: CharSequence?,
         newCursorPosition: Int,
     ): Boolean {
-        if (!live) return false
+        if (!takes()) return false
         send(text?.toString().orEmpty(), whole = true)
         end(restart = false)
         return true
@@ -150,7 +160,7 @@ internal class TerminalInputConnection(
         text: CharSequence?,
         newCursorPosition: Int,
     ): Boolean {
-        if (!live) return false
+        if (!takes()) return false
         super.setComposingText(text, newCursorPosition)
         update()
         return true
@@ -177,7 +187,7 @@ internal class TerminalInputConnection(
         beforeLength: Int,
         afterLength: Int,
     ): Boolean {
-        if (!live) return false
+        if (!takes()) return false
         val around = beforeLength > 0 && sent.isNotEmpty()
         if (around) send("", whole = false)
         repeat(beforeLength.coerceAtLeast(0)) { keyboard.press(BACKSPACE, terminal) }
@@ -187,14 +197,14 @@ internal class TerminalInputConnection(
     }
 
     override fun sendKeyEvent(event: KeyEvent): Boolean {
-        if (!live) return false
+        if (!takes()) return false
         if (event.action == KeyEvent.ACTION_DOWN) end(restart = true)
         keyboard.key(event, terminal, endFirst = false)
         return true
     }
 
     override fun performEditorAction(actionCode: Int): Boolean {
-        if (!live) return false
+        if (!takes()) return false
         end(restart = true)
         keyboard.press(ENTER, terminal)
         return true
