@@ -124,6 +124,8 @@ share is asserted directly, with no capability.
 | `posix-command-line` | yes | a command line (an overlay's program, a scratch pane's command, a hook, a custom command) runs through `/bin/sh -c`, so a test's POSIX line runs as written; Windows runs it through `cmd.exe` |
 | `cmd-command-line` |  | Rust-only, Windows: a command line (an overlay's program, a scratch pane's command, a hook, a custom command) runs as `cmd.exe`'s command text (`%ComSpec% /D /S /C`), so a test's `cmd` line runs as written where `posix-command-line` is not claimed |
 | `untitled-panes` | yes | a pane has no title until a program sets one; Windows' console host titles each pane with its program's path |
+| `osc-answers` | yes | a pane's program reads the terminal's OSC answers; Windows' pseudoconsole lets DCS and CSI answers through to it and drops OSC and APC ones |
+| `private-primary` |  | a program's write to the primary selection lands in a clipboard of the instance's own, which Ghostty's `paste_from_selection` pastes: the primary selection of its own display on Linux, ngterm's app-wide selection buffer on Windows; macOS sends it to the system pasteboard, as upstream's OSC 52 `p` |
 | `windows-shells` |  | Rust-only, Windows: a pane runs PowerShell or `cmd.exe` as its shell (the config's `command`), and a rerun restore types a captured program's replay, and a pinned line, as that shell reads them |
 | `ui-string-values` | yes | an element's string accessibility value is readable: a button's state (`split-toggle`'s `none`), an image's tint, a row's name beside its label (AX's AXValue, UIA's ValuePattern); AT-SPI carries none for them (AccessKit exposes Text on labels and text fields only, Value only as a number), so the Linux build's tests read that state back through the protocol |
 
@@ -137,6 +139,10 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `hidden-split-holds-focus`: upstream's documented model contract (`control-api.md`, "works shown or hidden; read
   `splitFocused`", and `AppStorePaneTests`); macOS's reversion is an AppKit first-responder effect;
 - `posix-command-line`, `untitled-panes`: on Linux and macOS, as upstream; not on Windows (below);
+- `osc-answers`: on Linux and macOS; not on Windows, whose pseudoconsole drops the OSC answers on their way to a pane's
+  program (`ngterm-session`'s `server::replies` > Windows records what it lets through);
+- `private-primary`: on Linux and Windows; not on macOS, where a program's primary-selection write goes to the system
+  pasteboard;
 - `cmd-command-line`: on Windows, where a command line (an overlay's program, a scratch pane's command, a hook, a
   custom command) is `cmd`'s (below);
 - `windows-shells`: on Windows, where a pane's shell may be PowerShell or `cmd.exe` and a rerun restore types its
@@ -244,15 +250,22 @@ that goes branches on the claim. They need Live sessions too, so the zsh and fis
 
 `kitty-clipboard`: a program's Kitty clipboard protocol (OSC 5522), which Ghostty took up after upstream's pin
 (docs/development.md > The selection clipboard). Its tests are in `tests/protocol/test_kitty_clipboard.py` and
-`tests/ui/test_kitty_clipboard_prompt.py` (helpers in `agterm_conformance/kitty_clipboard.py`): the pane `cat`s the program's
-request and the terminal echoes the reply into the pane: a write with text, HTML and an image refused under
-`clipboard-write = deny`, a read refused under `clipboard-read = deny`, a listing answered without a prompt, a write and
-a read under `ask` answered only once their prompt is (Escape denies it), and an allowed write read back, each in a
-plain pane and in a Live one (`LIVE_IN_ANY_SHELL`), whose request reaches the app through the session server. A write
-that goes through targets the selection clipboard (`loc=primary`), the instance's own on every OS, so no test writes
-the desktop clipboard; the protocol layer's headless weston has no primary selection, so those are the ui layer's.
-The build claims it on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and every conformance job that judges
-the ratchet runs with `--must-pass kitty-clipboard`: the three Linux legs and Windows' `windows` job.
+`tests/ui/test_kitty_clipboard_prompt.py`. The pane's program is a probe (`agterm_conformance/kitty_clipboard.py`) that
+sends the request and echoes its input, and each case runs in a plain pane and in a Live one (`LIVE_IN_ANY_SHELL`),
+whose request reaches the app through the session server. Two ways show what happened:
+
+- the reply, echoed into the pane, where the program reads OSC answers (`osc-answers`; Windows' pseudoconsole drops
+  them): a write with text, HTML and an image refused under `clipboard-write = deny`, a read refused under
+  `clipboard-read = deny`, a listing answered without a prompt, a write and a read under `ask` answered only once
+  their prompt is (Escape denies it), and an allowed write read back;
+- the selection clipboard, pasted back into the probe with Ghostty's `paste_from_selection`, where it is the
+  instance's own (`private-primary`; macOS sends a program's primary to the system pasteboard): an allowed write, and
+  a write under `ask` that lands once Return allows its prompt.
+
+A write that goes through targets the selection clipboard (`loc=primary`), so no test writes the desktop clipboard;
+the protocol layer's headless weston has no primary selection, so those are the ui layer's. The build claims it on
+every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and every conformance job that judges the ratchet runs with
+`--must-pass kitty-clipboard`: the three Linux legs and Windows' `windows` job.
 
 ### Commands
 

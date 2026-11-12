@@ -35,26 +35,43 @@ use crate::windows::{ConfigHost, Windows};
 /// `untitled-panes` (the console host titles each pane with its program's path); it claims `cmd-command-line`, a
 /// hook's, a custom command's, an overlay program's and a scratch command's line run as `cmd`'s command text, and
 /// `windows-shells`, a pane running PowerShell or `cmd.exe` gets a rerun's replay quoted for it
-/// (`ngterm_core::shell_dialect`). Every OS claims `agent-chat`, the Rust-only agent record and `ngtermctl agent`
-/// behind the Android chat view, which serve no UI, `pages-survive`, the Rust-only parking of a page whose
-/// presenter went until the next one is handed it, and `kitty-clipboard`, a program's Kitty clipboard protocol.
-#[cfg(not(windows))]
+/// (`ngterm_core::shell_dialect`). Nor does it claim `osc-answers`: its pseudoconsole drops the OSC answers on their
+/// way to a pane's program. macOS does not claim `private-primary`: a program's primary-selection write goes to the
+/// system pasteboard there. Every OS claims `agent-chat`, the Rust-only agent record and `ngtermctl agent` behind the
+/// Android chat view, which serve no UI, `pages-survive`, the Rust-only parking of a page whose presenter went until
+/// the next one is handed it, and `kitty-clipboard`, a program's Kitty clipboard protocol.
+#[cfg(not(any(windows, target_os = "macos")))]
 pub const CAPABILITIES: &[&str] = &[
     "posix-shell",
     "hidden-split-holds-focus",
     "posix-command-line",
     "untitled-panes",
+    "osc-answers",
+    "private-primary",
     "agent-chat",
     "pages-survive",
     "kitty-clipboard",
 ];
-/// The capabilities of the Rust target profile this build implements on Windows (see the other OSes' above).
+/// The capabilities of the Rust target profile this build implements on macOS (see Linux's above).
+#[cfg(target_os = "macos")]
+pub const CAPABILITIES: &[&str] = &[
+    "posix-shell",
+    "hidden-split-holds-focus",
+    "posix-command-line",
+    "untitled-panes",
+    "osc-answers",
+    "agent-chat",
+    "pages-survive",
+    "kitty-clipboard",
+];
+/// The capabilities of the Rust target profile this build implements on Windows (see Linux's above).
 #[cfg(windows)]
 pub const CAPABILITIES: &[&str] = &[
     "posix-shell",
     "hidden-split-holds-focus",
     "cmd-command-line",
     "windows-shells",
+    "private-primary",
     "agent-chat",
     "pages-survive",
     "kitty-clipboard",

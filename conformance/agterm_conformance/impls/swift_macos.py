@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 PARITY_LEVEL = "0.41.1"
 BASE_CAPABILITIES = frozenset(
     {
-        "posix-shell", "posix-command-line", "untitled-panes", "window-geometry", "window-minimize",
+        "posix-shell", "posix-command-line", "untitled-panes", "osc-answers", "window-geometry", "window-minimize",
         "sidebar-min-width", "ui-string-values",
     }
 )  # fmt: skip

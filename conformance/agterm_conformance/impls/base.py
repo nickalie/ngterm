@@ -201,6 +201,11 @@ CAPABILITIES: Mapping[str, str] = {
     "where `posix-command-line` is not claimed",
     "untitled-panes": "a pane has no title until a program sets one; Windows' console host titles each pane with its "
     "program's path",
+    "osc-answers": "a pane's program reads the terminal's OSC answers; Windows' pseudoconsole lets DCS and CSI answers "
+    "through to it and drops OSC and APC ones",
+    "private-primary": "a program's write to the primary selection lands in a clipboard of the instance's own, which "
+    "Ghostty's `paste_from_selection` pastes: the primary selection of its own display on Linux, ngterm's app-wide "
+    "selection buffer on Windows; macOS sends it to the system pasteboard, as upstream's OSC 52 `p`",
     "windows-shells": "Rust-only, Windows: a pane runs PowerShell or `cmd.exe` as its shell (the config's `command`), "
     "and a rerun restore types a captured program's replay, and a pinned line, as that shell reads them",
     "ui-string-values": "an element's string accessibility value is readable: a button's state (`split-toggle`'s "

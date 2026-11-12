@@ -1,10 +1,12 @@
 """A program's Kitty clipboard protocol (OSC 5522) requests under `clipboard-read` and `clipboard-write`: a Rust-only
 extension (capability `kitty-clipboard`, conformance/docs/rust-build.md > Rust-only extensions).
 
-Each pane echoes the reply its program gets (agterm_conformance/kitty_clipboard.py). A Live pane's request goes
-through the session server to the app as its bridge viewer and the reply back the same way. Every request here is
-refused or reads nothing, so the desktop clipboard is never written; an allowed write is the ui layer's
-(tests/ui/test_kitty_clipboard_prompt.py), whose display has a selection clipboard."""
+The pane's probe echoes the reply its program gets (agterm_conformance/kitty_clipboard.py), so these tests need a
+program that reads the terminal's OSC answers (`osc-answers`): Windows' pseudoconsole drops them on their way in. A
+Live pane's request goes through the session server to the app as its bridge viewer and the reply back the same way.
+Every request here is refused or reads nothing, so the desktop clipboard is never written; the protocol layer's
+headless compositor has no primary selection, so an allowed write is the ui layer's
+(tests/ui/test_kitty_clipboard_prompt.py)."""
 
 import uuid
 
@@ -16,13 +18,16 @@ from agterm_conformance.plugin import Ctl
 KITTY_CLIPBOARD = pytest.mark.requires(
     "kitty-clipboard", reason="a Rust-only extension: the Kitty clipboard protocol of Ghostty 1.4, after upstream's pin"
 )
+OSC_ANSWERS = pytest.mark.requires(
+    "osc-answers", reason="the program reads its reply, an OSC answer, which Windows' pseudoconsole drops"
+)
 LIVE_IN_ANY_SHELL = pytest.mark.requires(
     "live-sessions",
     "live-any-shell",
     any=True,
     reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell",
 )
-pytestmark = [KITTY_CLIPBOARD]
+pytestmark = [KITTY_CLIPBOARD, OSC_ANSWERS]
 
 
 @pytest.fixture(scope="module")
