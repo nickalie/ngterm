@@ -47,8 +47,9 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
  * The attached sessions as the Sessions destination lists them when none is open: a heading per machine, then a row
- * per session with its status and a menu (Detach, Chat view through [onChatView], End session: [onEnd] confirms
- * first). Tapping a row opens it ([onOpen]). [contentPadding] keeps the list clear of the bars.
+ * per session, its companions indented under it as a machine's sessions shows them, with its status and a menu
+ * (Detach, Chat view through [onChatView], End session: [onEnd] confirms first). Tapping a row opens it ([onOpen]).
+ * [contentPadding] keeps the list clear of the bars.
  */
 @Composable
 fun AttachedList(
@@ -73,6 +74,8 @@ fun AttachedList(
                     name = session.name,
                     onClick = { onOpen(session.key) },
                     context = session.context,
+                    companionOf = session.companionOf,
+                    nested = session.nested,
                     menu = {
                         SessionMenu(
                             name = session.name,
@@ -89,8 +92,8 @@ fun AttachedList(
 }
 
 /**
- * The attached sessions in the sidebar (and the open rail): a heading per machine, a row per session with its status,
- * the bus bar on the [open] one. Tapping a row opens it ([onOpen]).
+ * The attached sessions in the sidebar (and the open rail): a heading per machine, a row per session with its status
+ * and its companions indented under it, the bus bar on the [open] one. Tapping a row opens it ([onOpen]).
  */
 @Composable
 fun ColumnScope.SidebarSessions(
@@ -108,6 +111,8 @@ fun ColumnScope.SidebarSessions(
                     onClick = { onOpen(session.key) },
                     context = session.context,
                     selected = session.key == open,
+                    companionOf = session.companionOf,
+                    nested = session.nested,
                 ) { Status(session) }
             }
         }

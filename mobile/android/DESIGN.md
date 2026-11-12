@@ -181,7 +181,7 @@ white on nothing, as Android masks it. The status glyphs are 16dp filled or stro
 | `BusBar` | the copper bar marking where you are |
 | `StatusGlyph`, `StatusBadge`, `AgentStatusBadge` | a status's glyph; glyph and word for an app tone; for an origin's status |
 | `MachineCard` | a machine: name, mono address, connection badge, and a summary slot for its sessions' status |
-| `SessionRow` | a session: name, context or companion line, status slot, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, Chat view, End session) |
+| `SessionRow` | a session: name, context or companion line (a companion indented under its parent when the list shows that above it), status slot, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, Chat view, End session) |
 | `SectionHeader` | a group's heading with an optional count and one text action |
 | `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it (busy while it runs: a small spinner, no taps); at most one quieter text-button action under it, for a retry after the fix the main one points to |
 | `Banner` | a strip about the whole screen while it stays usable, with an optional action and dismiss; announced politely |
@@ -538,7 +538,10 @@ compact                            medium (rail open)               expanded
 
 - **Where it lives:** under Sessions. With nothing open, Sessions lists what is attached, grouped by machine (a
   `SectionHeader` per machine, a `SessionRow` per session with its status and a menu: Detach, Chat view, End session), or the
-  empty state pointing to Machines. Tapping a session opens its view. On a phone the view is a screen of its own over
+  empty state pointing to Machines. The rows are the tree a machine's sessions shows, kept to what is attached: in the
+  machine's order by family, an attached companion indented under its attached parent with "Companion of …" as its
+  line. A companion whose parent isn't attached keeps that line but stands unindented in its family's place, so it
+  never reads as another session's. There is nothing to expand or collapse, as on a machine's list. Tapping a session opens its view. On a phone the view is a screen of its own over
   the list (Back returns to it) and the bottom bar steps aside, so the terminal has the whole height; from the medium
   width up it is the content beside the rail or the sidebar, which list the attached sessions (below).
 - **The bar** (`surfaceContainer`, under the status bar): Back on a phone; the session's name (titleMedium) over its
@@ -612,8 +615,8 @@ compact                            medium (rail open)               expanded
   typed in. Until the selected pane's terminal is there (on its way, or it couldn't be shown) the keys go nowhere,
   but the chords still move between panes and sessions.
 - **The attached sessions in the rail and the sidebar:** the sidebar groups them by machine (the machine's name as a
-  `SectionHeader`, then a `SessionRow` each with its status, the bus bar on the one open). The rail, collapsed, gives
-  each a 64dp cell, its status glyph over its name cut to fit; opened, the sidebar's rows. Either opens the session
+  `SectionHeader`, then a `SessionRow` each with its status, the bus bar on the one open), companions indented as in
+  the list. The rail, collapsed, gives each a 64dp cell in the same order, its status glyph over its name cut to fit; opened, the sidebar's rows. Either opens the session
   under Sessions.
 - **State:** the open session, the focused pane of each session, the shown panes, each pane's view and its open chat
   live in the app's process, not the screen, so rotation, folding, a size-class change or a trip to another

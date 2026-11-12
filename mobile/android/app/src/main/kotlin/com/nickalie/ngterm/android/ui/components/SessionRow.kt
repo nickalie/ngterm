@@ -23,8 +23,9 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
  * A session in a machine's list: its [name], the note of what it is for ([context], one line), its agent's [status]
- * (an [AgentStatusBadge], or nothing for an idle one), and an Attached mark when this app has it attached. A page
- * companion ([companionOf], its parent's name) sits indented under its parent. [selected] puts the bus bar on the
+ * (an [AgentStatusBadge], or nothing for an idle one), and an Attached mark when this app has it attached. A
+ * companion ([companionOf], its parent's name) says whose it is in place of its context; it sits indented under its
+ * parent ([nested]) unless its parent isn't in the list above it. [selected] puts the bus bar on the
  * session on screen, where a list is also the navigation (the expanded sidebar). [menu], when given, ends the row (an
  * icon button opening the session's menu: Detach, End session).
  */
@@ -37,6 +38,7 @@ fun SessionRow(
     attached: Boolean = false,
     selected: Boolean = false,
     companionOf: String? = null,
+    nested: Boolean = companionOf != null,
     menu: (@Composable () -> Unit)? = null,
     status: @Composable () -> Unit = {},
 ) {
@@ -52,7 +54,7 @@ fun SessionRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BusBar(active = selected)
-        Box(Modifier.width(if (companionOf != null) spacing.xxl + spacing.sm else spacing.md))
+        Box(Modifier.width(if (nested) spacing.xxl + spacing.sm else spacing.md))
         Column(
             modifier = Modifier.weight(1f).padding(vertical = spacing.sm),
             verticalArrangement = Arrangement.spacedBy(spacing.xxs),

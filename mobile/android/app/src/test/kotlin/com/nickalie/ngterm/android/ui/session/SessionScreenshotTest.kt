@@ -58,7 +58,8 @@ private class SessionWindowRule(
  * The session view (src/test/screenshots/session) in the app's frame at the three widths: a phone (one pane at a
  * time, the bar stepped aside), a medium window (the rail of attached sessions) and an expanded one (the sidebar of
  * machines and their sessions beside the split). Each shows one pane with the HUD, two panes side by side and
- * stacked, a hidden split, a follower's cover and a reconnecting pane.
+ * stacked, a hidden split, a follower's cover and a reconnecting pane; and with none open, the attached sessions as a
+ * tree, a companion under its parent.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -88,61 +89,70 @@ class SessionScreenshotTest(
     ) {
         val live = LiveSession(StreamState.Connected, null, CONTEXT, layout, hud, panes)
         val session = AttachedSession(key, "build-01", "docs-site", CONTEXT, Waiting, Link.Connected, live)
-        val groups =
-            listOf(
-                AttachedGroup(
-                    "m1",
-                    "build-01",
-                    listOf(
-                        session,
-                        session.copy(
-                            key = SessionKey("m1", "s2"),
-                            name = "api-refactor",
-                            context = null,
-                            status = Working,
-                        ),
-                    ),
-                ),
-                AttachedGroup(
-                    "m2",
-                    "nas",
-                    listOf(
-                        session.copy(
-                            key = SessionKey("m2", "s3"),
-                            machine = "nas",
-                            name = "backup",
-                            context = null,
-                            status = null,
-                        ),
-                    ),
-                ),
+        val groups = groups(session)
+        frame(groups, key) {
+            SessionScreen(
+                session = session,
+                focused = layout.primary,
+                panes = rememberStates(layout.panes),
+                failures = emptyMap(),
+                compact = navLayout == NavLayout.Bar,
+                actions = actions(navLayout == NavLayout.Bar),
             )
+        }
+        compose.waitForIdle()
+        open?.invoke()
+        compose.onRoot().captureRoboImage("src/test/screenshots/session/${scene}_$window.png")
+    }
+
+    private fun frame(
+        groups: List<AttachedGroup>,
+        open: SessionKey?,
+        content: @Composable () -> Unit,
+    ) {
         compose.setContent {
             NgtermTheme(darkTheme = window.name.endsWith("dark")) {
-                val states = rememberStates(layout.panes)
                 AdaptiveScaffold(
                     destinations = AppDestinations,
                     selected = "sessions",
                     onSelect = {},
                     layout = navLayout,
-                    navigationVisible = false,
-                    railContent = { expanded -> RailSessions(groups, key, expanded, {}) },
-                    sidebarContent = { SidebarSessions(groups, key, {}) },
-                ) {
-                    SessionScreen(
-                        session = session,
-                        focused = layout.primary,
-                        panes = states,
-                        failures = emptyMap(),
-                        compact = navLayout == NavLayout.Bar,
-                        actions = actions(navLayout == NavLayout.Bar),
-                    )
-                }
+                    navigationVisible = open == null,
+                    railContent = { expanded -> RailSessions(groups, open, expanded, {}) },
+                    sidebarContent = { SidebarSessions(groups, open, {}) },
+                    content = content,
+                )
             }
         }
-        compose.waitForIdle()
-        open?.invoke()
-        compose.onRoot().captureRoboImage("src/test/screenshots/session/${scene}_$window.png")
+    }
+
+    // build-01's docs-site and api-refactor, nas's backup; [companions] adds api-refactor's companion under it and a
+    // companion whose parent isn't attached
+    private fun groups(
+        session: AttachedSession,
+        companions: Boolean = false,
+    ): List<AttachedGroup> {
+        val api =
+            session.copy(key = SessionKey("m1", "s2"), name = "api-refactor", context = null, status = Working)
+        val review =
+            api.copy(
+                key = SessionKey("m1", "s4"),
+                name = "api-refactor review",
+                companionOf = "api-refactor",
+                nested = true,
+            )
+        val drafts =
+            session.copy(key = SessionKey("m1", "s5"), name = "release notes", status = null, companionOf = "changelog")
+        val backup =
+            session.copy(
+                key = SessionKey("m2", "s3"),
+                machine = "nas",
+                name = "backup",
+                context = null,
+                status = null,
+            )
+        val built = if (companions) listOf(session, api, review, drafts) else listOf(session, api)
+        return listOf(AttachedGroup("m1", "build-01", built), AttachedGroup("m2", "nas", listOf(backup)))
     }
 
     // a pane per id, drawing a few lines of its own, woken as the view sizes it
@@ -211,6 +221,18 @@ class SessionScreenshotTest(
             compose.onNodeWithContentDescription("Show navigation labels").performClick()
             compose.waitForIdle()
         }
+    }
+
+    @Test
+    fun attachedTree() {
+        val live = LiveSession(StreamState.Connected, null, CONTEXT, RemoteLayout(listOf("P1"), "P1", null, false))
+        val groups = groups(AttachedSession(key, "build-01", "docs-site", CONTEXT, Waiting, Link.Connected, live), true)
+        val none = AttachedActions({}, {}, { _, _ -> }, { _, _ -> }, { _, _ -> }, {}, {}, {}, {}, {})
+        frame(groups, open = null) {
+            SessionsDestination(AttachedUiState(groups), emptyMap(), emptyMap(), navLayout == NavLayout.Bar, null, none)
+        }
+        compose.waitForIdle()
+        compose.onRoot().captureRoboImage("src/test/screenshots/session/attached_tree_$window.png")
     }
 
     @Test
