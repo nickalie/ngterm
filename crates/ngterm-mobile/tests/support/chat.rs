@@ -12,7 +12,8 @@ use ngterm_mobile::{
 use serde_json::Value;
 
 use crate::agent::{
-    APPROVAL_COMMAND, AWAY_COMMAND, CONVERSATION, FIRST_PROMPT, FakeAgent, QUESTION_CALL, State, question_input,
+    APPROVAL_COMMAND, AWAY_COMMAND, CODEX_COMMAND, CODEX_PICK, CODEX_QUESTION, CODEX_THREAD, CONVERSATION,
+    FIRST_PROMPT, FakeAgent, FakeCodex, QUESTION_CALL, State, question_input,
 };
 use crate::machine::World;
 use crate::phone::{Client, MACHINE_ID, block_on, enter};
@@ -70,6 +71,7 @@ impl Scene<'_> {
         self.approval_away(&agent);
         self.question(&agent);
         self.end();
+        self.codex();
     }
 
     fn act(&mut self, text: &str) -> AgentInputOutcome {
@@ -227,8 +229,12 @@ impl Scene<'_> {
     /// Reports `payload` through the agent's `PermissionRequest` hook and sets the pane `blocked`, as Claude Code's
     /// hooks do when its dialog opens.
     fn ask(&self, payload: &str) {
+        self.ask_as("claude", payload);
+    }
+
+    fn ask_as(&self, agent: &str, payload: &str) {
         let hook = [
-            &["agent", "hook", "claude", "PermissionRequest"][..],
+            &["agent", "hook", agent, "PermissionRequest"][..],
             &self.pane_arguments(),
         ]
         .concat();
@@ -355,6 +361,94 @@ impl Scene<'_> {
         self.wait_done(&id);
     }
 
+    /// Codex in the pane: its approval answered from the phone, then its plan-mode question, shown from the rollout and
+    /// answered on its picker; then it exits.
+    fn codex(&mut self) {
+        let codex = FakeCodex::prepare(self.world, self.session, self.pane);
+        self.first.drain();
+        let agents = self.first.seen.agents.len();
+        let pane = self.first.terminal.clone().expect("the phone's pane");
+        assert!(pane.type_text(codex.command_line()).expect("type"));
+        assert!(pane.key(enter()).expect("press enter"));
+        let announced = (
+            self.pane.to_owned(),
+            Some("codex".to_owned()),
+            Some(CODEX_THREAD.to_owned()),
+        );
+        self.first.wait("Codex announced", |seen| {
+            seen.agents[agents..].last() == Some(&announced)
+        });
+        self.first.drain();
+        let lives = count_lives(&self.first.seen.chat);
+        block_on(
+            self.first
+                .core
+                .open_chat(MACHINE_ID.to_owned(), self.session.to_owned(), self.pane.to_owned()),
+        )
+        .expect("open Codex's chat");
+        self.first
+            .wait("Codex's backlog", |seen| count_lives(&seen.chat) > lives);
+
+        codex.show(State::Permission);
+        self.first.wait_screen("Would you like to run");
+        self.ask_as("codex", &codex.permission_payload());
+        let (id, card) = self.approval_card(CODEX_COMMAND);
+        let labels = block_on(pane.approval_labels()).expect("the dialog's labels");
+        assert!(labels.iter().any(|label| label == "Yes, proceed"), "{labels:?}");
+        let outcome = block_on(pane.answer_approval(card, "Yes, proceed".to_owned())).expect("answer the approval");
+        assert_eq!(outcome, AgentInputOutcome::Sent);
+        self.first.wait("the approved command's result", |seen| {
+            seen.chat.iter().any(|event| {
+                matches!(&event.body, ChatBody::Tool { tool }
+                    if tool.title == CODEX_COMMAND && tool.status == ChatToolStatus::Ok)
+            })
+        });
+        self.status("active");
+        self.wait_done(&id);
+
+        codex.show(State::Question);
+        let open = |event: &ChatEvent| match &event.body {
+            ChatBody::Question { question }
+                if question.status == ChatToolStatus::Running
+                    && question
+                        .questions
+                        .first()
+                        .is_some_and(|item| item.question == CODEX_QUESTION) =>
+            {
+                Some((event.id.clone(), question.clone()))
+            }
+            _ => None,
+        };
+        self.first.wait("Codex's question", |seen| {
+            seen.chat.iter().any(|event| open(event).is_some())
+        });
+        let (id, question) = self.first.seen.chat.iter().find_map(open).expect("the question");
+        let answers = vec![QuestionAnswer {
+            picked: vec![CODEX_PICK.to_owned()],
+            other: None,
+        }];
+        let outcome = block_on(pane.answer_question(question, answers)).expect("answer the question");
+        assert_eq!(outcome, AgentInputOutcome::Sent);
+        self.first.wait("Codex's answered question", |seen| {
+            seen.chat.iter().any(|event| {
+                event.id == id
+                    && matches!(&event.body, ChatBody::Question { question }
+                        if question.status == ChatToolStatus::Ok
+                            && question.output.as_deref().is_some_and(|output| output.contains(CODEX_PICK)))
+            })
+        });
+
+        self.first.drain();
+        let (agents, states) = (self.first.seen.agents.len(), self.first.seen.chat_states.len());
+        codex.show(State::Exit);
+        let cleared = (self.pane.to_owned(), None, None);
+        self.first
+            .wait("Codex cleared", |seen| seen.agents[agents..].last() == Some(&cleared));
+        self.first.wait("Codex's chat ended", |seen| {
+            seen.chat_states[states..].contains(&ChatState::Ended)
+        });
+    }
+
     /// The agent exits, leaving the shell in the foreground: the origin clears the record, the phone hears the pane
     /// runs no agent and the chat ends.
     fn end(&mut self) {
@@ -369,6 +463,10 @@ impl Scene<'_> {
             seen.chat_states[states..].contains(&ChatState::Ended)
         });
     }
+}
+
+fn count_lives(events: &[ChatEvent]) -> usize {
+    events.iter().filter(|event| event.body == ChatBody::Live).count()
 }
 
 /// The questions of an `AskUserQuestion` input, as the chat names them.

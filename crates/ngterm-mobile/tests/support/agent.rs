@@ -35,6 +35,10 @@ const CLAUDE_FIXTURES: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../ngterm-core/tests/fixtures/agent_chat/claude"
 );
+const CODEX_FIXTURES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../ngterm-core/tests/fixtures/agent_chat/codex"
+);
 const SCREENS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/agent_screens");
 const PROGRAM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/fake_agent.py");
 
@@ -56,8 +60,36 @@ pub(crate) enum State {
     Idle,
     /// A turn in progress: a prompt sent now is absorbed into it.
     Working,
-    /// The `AskUserQuestion` picker of [`FakeAgent::question`].
+    /// A question's picker: Claude's `AskUserQuestion` of [`question_input`]; Codex's `request_user_input`, its call
+    /// appended to the rollout as the picker opens.
     Question,
+    /// Codex's approval dialog for [`CODEX_COMMAND`].
+    Permission,
+    /// The program exits, as the agent's own `/exit` ends it.
+    Exit,
+}
+
+impl State {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Working => "working",
+            Self::Question => "question",
+            Self::Permission => "permission",
+            Self::Exit => "exit",
+        }
+    }
+}
+
+/// Moves the running program to `state` through its `control` file and a `SIGUSR1` to the pid in `pid`.
+fn signal(control: &Path, pid: &Path, state: State) {
+    fs::write(control, state.name()).expect("write the fake agent's state");
+    let pid = fs::read_to_string(pid).expect("the fake agent's pid");
+    let signalled = std::process::Command::new("kill")
+        .args(["-USR1", pid.trim()])
+        .status()
+        .expect("signal the fake agent");
+    assert!(signalled.success(), "the fake agent is not running");
 }
 
 impl FakeAgent {
@@ -88,6 +120,8 @@ impl FakeAgent {
         let control = directory.join("state");
         let pid = directory.join("pid");
         let settings = json!({
+            "agent": "claude",
+            "capture": "claude",
             "transcript": transcript,
             "backlog": backlog_path,
             "payload": payload,
@@ -115,18 +149,7 @@ impl FakeAgent {
 
     /// Moves the running program to `state`, which it draws at once.
     pub(crate) fn show(&self, state: State) {
-        let name = match state {
-            State::Idle => "idle",
-            State::Working => "working",
-            State::Question => "question",
-        };
-        fs::write(&self.control, name).expect("write the fake agent's state");
-        let pid = fs::read_to_string(&self.pid).expect("the fake agent's pid");
-        let signalled = std::process::Command::new("kill")
-            .args(["-USR1", pid.trim()])
-            .status()
-            .expect("signal the fake agent");
-        assert!(signalled.success(), "the fake agent is not running");
+        signal(&self.control, &self.pid, state);
     }
 
     /// The `PermissionRequest` Claude Code fires for [`FakeAgent::question`] as its picker opens.
@@ -139,17 +162,7 @@ impl FakeAgent {
 
     /// The line that starts the program in a pane's shell: the system's `python3`, by its path.
     pub(crate) fn command_line(&self) -> String {
-        let python = ["/usr/bin/python3", "/bin/python3"]
-            .into_iter()
-            .map(Path::new)
-            .find(|path| path.exists())
-            .expect("the fake agent runs on python3, in /usr/bin or /bin (the pane's PATH)");
-        format!(
-            "{} {} {}",
-            quoted(&python.display().to_string()),
-            quoted(PROGRAM),
-            quoted(&self.config.display().to_string())
-        )
+        program_line(&self.config)
     }
 
     /// Appends `count` generated turns of `batch` to the transcript, as the agent writes them; their events' ids.
@@ -187,6 +200,124 @@ pub(crate) fn question_input() -> Value {
         "multiSelect": false,
         "options": [{ "label": "Red", "description": "Red" }, { "label": "Green", "description": "Green" }],
     }] })
+}
+
+/// The recorded Codex 0.167.2 rollout the fake Codex replays, and its thread id.
+const CODEX_ROLLOUT: &str = "rollout-2026-11-12T15-00-06-01a1cfa1-2430-7c72-b0a1-d372f8a3b729.jsonl";
+pub(crate) const CODEX_THREAD: &str = "01a1cfa1-2430-7c72-b0a1-d372f8a3b729";
+/// The command of the rollout's escalated call, which its capture's approval dialog asks about.
+pub(crate) const CODEX_COMMAND: &str = "curl -sI https://example.com | head -1";
+/// What the rollout's `request_user_input` asks, and the option the fake's picker takes (its digit 2).
+pub(crate) const CODEX_QUESTION: &str = "Which color should the button be?";
+pub(crate) const CODEX_PICK: &str = "Green";
+/// The recorded `PermissionRequest` of Codex's network command.
+const CODEX_PERMISSION: &str = "25-PermissionRequest.json";
+
+/// A stand-in Codex 0.167.2 (`fake_agent.py` with `agent` `codex`): the recorded rollout up to its escalated call
+/// written at start, the rest appended as the phone answers its approval and its question.
+pub(crate) struct FakeCodex {
+    /// The rollout the program writes: `<private home>/.codex/sessions/…`.
+    transcript: PathBuf,
+    config: PathBuf,
+    control: PathBuf,
+    pid: PathBuf,
+}
+
+impl FakeCodex {
+    /// Writes the backlog, the `SessionStart` payload and the config for a fake Codex in `session`'s pane `pane`.
+    pub(crate) fn prepare(world: &World, session: &str, pane: &str) -> Self {
+        let directory = world.work.join("codex");
+        fs::create_dir_all(&directory).expect("create the fake Codex's directory");
+        let transcript = world
+            .headless
+            .private
+            .home
+            .join(".codex/sessions/2026/11/12")
+            .join(CODEX_ROLLOUT);
+        let recorded = fs::read_to_string(
+            Path::new(CODEX_FIXTURES)
+                .join("sessions/2026/11/12")
+                .join(CODEX_ROLLOUT),
+        )
+        .expect("read the recorded rollout");
+        let lines: Vec<&str> = recorded.lines().collect();
+        // by the rollout's own order: the escalated call is line 15, the plan-mode question's call line 37
+        let group = |range: std::ops::RangeInclusive<usize>| lines[range].to_vec();
+        let backlog = directory.join("backlog.jsonl");
+        fs::write(&backlog, group(0..=15).join("\n") + "\n").expect("write the backlog");
+        let mut start: Value = serde_json::from_str(
+            &fs::read_to_string(Path::new(CODEX_FIXTURES).join("hooks/main/01-SessionStart.json"))
+                .expect("read the SessionStart payload"),
+        )
+        .expect("a payload");
+        start["transcript_path"] = json!(transcript);
+        start["session_id"] = json!(CODEX_THREAD);
+        let payload = directory.join("session-start.json");
+        fs::write(&payload, start.to_string()).expect("write the payload");
+        let config = directory.join("config.json");
+        let control = directory.join("state");
+        let pid = directory.join("pid");
+        let settings = json!({
+            "agent": "codex",
+            "capture": "codex-questions",
+            "transcript": transcript,
+            "backlog": backlog,
+            "payload": payload,
+            "screens": SCREENS,
+            "ngtermctl": world.headless.private.stage.join("bin/ngtermctl"),
+            "socket": world.headless.socket(),
+            "target": session,
+            "pane_id": pane,
+            "control": control,
+            "pid": pid,
+            "groups": { "approve": group(16..=28), "ask": group(29..=37), "answer": group(38..=45) },
+        });
+        fs::write(&config, settings.to_string()).expect("write the config");
+        Self {
+            transcript,
+            config,
+            control,
+            pid,
+        }
+    }
+
+    /// The line that starts the program in a pane's shell.
+    pub(crate) fn command_line(&self) -> String {
+        program_line(&self.config)
+    }
+
+    /// Moves the running program to `state`, which it draws at once.
+    pub(crate) fn show(&self, state: State) {
+        signal(&self.control, &self.pid, state);
+    }
+
+    /// The `PermissionRequest` Codex fires for [`CODEX_COMMAND`].
+    pub(crate) fn permission_payload(&self) -> String {
+        let mut payload: Value = serde_json::from_str(
+            &fs::read_to_string(Path::new(CODEX_FIXTURES).join("hooks/main").join(CODEX_PERMISSION))
+                .expect("read the PermissionRequest payload"),
+        )
+        .expect("a payload");
+        payload["session_id"] = json!(CODEX_THREAD);
+        payload["transcript_path"] = json!(self.transcript);
+        payload["tool_input"]["command"] = json!(CODEX_COMMAND);
+        payload.to_string()
+    }
+}
+
+/// The line that starts `fake_agent.py` on `config` in a pane's shell: the system's `python3`, by its path.
+fn program_line(config: &Path) -> String {
+    let python = ["/usr/bin/python3", "/bin/python3"]
+        .into_iter()
+        .map(Path::new)
+        .find(|path| path.exists())
+        .expect("the fake agent runs on python3, in /usr/bin or /bin (the pane's PATH)");
+    format!(
+        "{} {} {}",
+        quoted(&python.display().to_string()),
+        quoted(PROGRAM),
+        quoted(&config.display().to_string())
+    )
 }
 
 fn recorded_transcript() -> PathBuf {

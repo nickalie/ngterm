@@ -23,8 +23,14 @@ would, so the origin's agent record, `ngtermctl agent chat` and the phone's chat
   `question` input, whose call Claude Code writes only once it is answered: a digit picks that option of its first
   question, writes the call and its result, and goes back to idle.
 
-Usage: fake_agent.py CONFIG.json (the keys: transcript, backlog, payload, user_template, screens, ngtermctl, socket,
-target, pane_id, control, pid, question).
+- With `agent` `codex` it stands in for Codex 0.167.2 instead: it reports through `agent hook codex`, draws the
+  recorded `codex-questions` capture, and appends the recorded rollout's line `groups` as Codex wrote them:
+  `permission` shows the approval dialog, where `y` (Yes, proceed) appends `approve` and goes back to idle;
+  `question` appends `ask` (the `request_user_input` call) and shows its picker, where `2` (Green) appends `answer`.
+  `exit` ends it, as Claude's `/exit` does.
+
+Usage: fake_agent.py CONFIG.json (the keys: agent, capture, transcript, backlog, payload, user_template, screens,
+ngtermctl, socket, target, pane_id, control, pid, question, groups).
 """
 
 import codecs
@@ -52,24 +58,21 @@ PASTE_START = "\x1b[200~"
 PASTE_END = "\x1b[201~"
 
 
-STATES = ("idle", "working", "question")
-
-
-def load_captures(directory):
-    """{(cols, rows): {state: (the capture's bytes up to the state's mark, the cursor's (row, col) where it parks it)}}."""
+def load_captures(directory, prefix):
+    """{(cols, rows): {state: (the capture's bytes up to the state's mark, the cursor's (row, col) where it parks it)}}
+    of the captures named `<prefix>-<cols>x<rows>`."""
     captures = {}
     for name in sorted(os.listdir(directory)):
-        if not (name.startswith("claude-") and name.endswith(".marks.json")):
+        grid = name[len(prefix) + 1 : -len(".marks.json")] if name.endswith(".marks.json") else ""
+        if not (name.startswith(prefix + "-") and re.fullmatch(r"\d+x\d+", grid)):
             continue
         with open(os.path.join(directory, name), encoding="utf-8") as file:
             marks = json.load(file)
         with open(os.path.join(directory, name[: -len(".marks.json")] + ".bin"), "rb") as file:
             recorded = file.read()
         screens = {}
-        for state in STATES:
-            if state not in marks["marks"]:
-                continue
-            drawn = recorded[: marks["marks"][state]]
+        for state, mark in marks["marks"].items():
+            drawn = recorded[:mark]
             row, col = re.findall(rb"\x1b\[(\d+);(\d+)H", drawn)[-1]
             screens[state] = (drawn, (int(row), int(col)))
         captures[(marks["cols"], marks["rows"])] = screens
@@ -80,7 +83,7 @@ def report(config):
     """Pipes the SessionStart payload to `ngtermctl agent hook`, addressed and aimed at the socket explicitly."""
     env = {key: value for key, value in os.environ.items() if not key.startswith("NGTERM_")}
     command = [
-        config["ngtermctl"], "agent", "hook", "claude", "SessionStart",
+        config["ngtermctl"], "agent", "hook", config["agent"], "SessionStart",
         "--target", config["target"], "--pane", "primary", "--pane-id", config["pane_id"],
         "--socket", config["socket"],
     ]
@@ -156,6 +159,8 @@ class Agent:
         self.history = []
         self.parent = None
         self.state = "idle"
+        # what the control file said when last read: a resize's wake reads it again, and only a new word moves
+        self.asked = ""
 
     def size(self):
         size = os.get_terminal_size(sys.stdout.fileno())
@@ -241,8 +246,23 @@ class Agent:
         self.append([call, result])
         self.state = "idle"
 
+    def group(self, name):
+        """Appends the recorded rollout lines of group `name`."""
+        with open(self.config["transcript"], "a", encoding="utf-8") as file:
+            file.write("".join(line + "\n" for line in self.config["groups"][name]))
+
+    def codex(self, action, value):
+        """Codex's dialogs: the approval's `y`, the picker's `2`; anything else is left to the screen as it is."""
+        if action == "text" and (self.state, value) in (("permission", "y"), ("question", "2")):
+            self.group("approve" if self.state == "permission" else "answer")
+            self.state = "idle"
+        self.draw()
+        return True
+
     def handle(self, action, value):
         """Applies one input action; False once the agent should exit."""
+        if self.config["agent"] == "codex":
+            return self.codex(action, value)
         if self.state == "question":
             if action == "text" and value.isdigit():
                 self.answer(int(value))
@@ -266,7 +286,8 @@ class Agent:
             ready, _, _ = select.select([stdin, wake], [], [])
             if wake in ready:
                 os.read(wake, 512)
-                self.take_control()
+                if not self.take_control():
+                    return
                 self.draw()
             if stdin in ready:
                 data = os.read(stdin, 65536)
@@ -276,16 +297,23 @@ class Agent:
                     if not self.handle(action, value):
                         return
 
-
     def take_control(self):
-        """The state the test asked for, if it names one."""
+        """Moves to the state the test asked for, if it names one; False when it asked the program to exit."""
         try:
             with open(self.config["control"], encoding="utf-8") as file:
                 state = file.read().strip()
         except FileNotFoundError:
-            return
-        if state in STATES:
+            return True
+        if state == self.asked:
+            return True
+        self.asked = state
+        if state == "exit":
+            return False
+        if state == "question" and self.config["agent"] == "codex":
+            self.group("ask")
+        if state:
             self.state = state
+        return True
 
 
 QUESTION_CALL = "toolu_e2e_question"
@@ -304,7 +332,7 @@ def out(data):
 def main():
     with open(sys.argv[1], encoding="utf-8") as file:
         config = json.load(file)
-    captures = load_captures(config["screens"])
+    captures = load_captures(config["screens"], config["capture"])
     os.makedirs(os.path.dirname(config["transcript"]), exist_ok=True)
     shutil.copyfile(config["backlog"], config["transcript"])
     report(config)

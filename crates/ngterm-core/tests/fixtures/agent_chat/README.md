@@ -112,7 +112,10 @@ Where these differ from the plan, the plan was updated.
   want to proceed with this tool use…") then a user text `[Request interrupted by user for tool use]`. Esc mid-reply
   writes `[Request interrupted by user]`.
 - **`AskUserQuestion` fires `PermissionRequest`** (`tool_name: AskUserQuestion`, the questions in `tool_input`) and a
-  `permission_prompt` notification: the approval candidate must not become a second card next to the question.
+  `permission_prompt` notification. Claude Code 2.1.322 (checked on 2026-11-12) writes the call to its transcript
+  only once it is answered, call and result together, often with the thinking and text lines before it: the
+  candidate, carrying the questions, is what shows the question while the picker waits (a question card, never a
+  second approval card).
 
 **Transcripts**
 
@@ -126,7 +129,13 @@ Where these differ from the plan, the plan was updated.
   `isCompactSummary: true` holding the summary.
 - Claude writes many bookkeeping line types the chat ignores: `mode`, `permission-mode`, `session-owner`,
   `atis-latch`, `file-history-snapshot`, `file-history-delta`, `attachment`, `api-request*`, `last-prompt`,
-  `ai-title`, `tools-used`, `queue-operation`, `system` (`stop_hook_summary`, `turn_duration`).
+  `ai-title`, `tools-used`, `queue-operation`, `system` (`stop_hook_summary`, `turn_duration`), and from 2.1.319 on
+  `agent-name` and `continued-in`.
+- A prompt sent while Claude works (2.1.319 on) is queued (`queue-operation` `enqueue`), then usually taken into the
+  running turn (`remove`, `reason: absorbed_mid_turn`) and recorded only as an `attachment` of type `queued_command`
+  (`prompt`, `origin.kind` `human`, `peer` for another agent's message, `task-notification` for a background task's
+  end), never as a `user` line; one still queued when the turn ends becomes an ordinary `user` line
+  (`promptSource: queued`).
 - Codex 0.166 runs every tool through code mode: each `response_item` `custom_tool_call` is named `exec` and holds
   JavaScript (`tools.exec_command({cmd: …})`, `apply_patch`, `spawn_agent`, …), and its `custom_tool_call_output`
   is the script's output. The typed record is the `event_msg` `item_completed` items: `UserMessage`,
