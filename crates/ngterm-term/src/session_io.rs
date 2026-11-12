@@ -46,16 +46,15 @@ use ngterm_session::client::{
     AttachEvent, AttachReader, AttachWriter, Attachment, Barrier, Client, ClientError, Delegated,
 };
 use ngterm_session::protocol::{
-    self as wire, AttachRequest, DelegatedReply, DelegatedRequest, ExitStatus, LeadRole, Managed, ReplyMetadata,
-    SessionSpec,
+    self as wire, AttachRequest, DelegatedReply, ExitStatus, LeadRole, Managed, ReplyMetadata, SessionSpec,
 };
 use ngterm_session::server::spawn::StartOptions;
 use ngterm_session::server::{lead, snapshot};
 
-use crate::effects::{ClipboardAnswer, ClipboardLocation, ClipboardReadRequest, ColorScheme, PaneEvent};
+use crate::effects::{ClipboardAnswer, ClipboardLocation, ColorScheme, PaneEvent};
 use crate::mailbox::ReadPause;
 use crate::pane::{Shared, lock};
-use crate::{GridSize, PaneCommand, PaneError, ReadScope};
+use crate::{GridSize, PaneCommand, PaneError};
 
 /// How long the reader waits on the mailbox's resume before it looks again (a resume wakes it at once).
 const PAUSE_POLL: Duration = Duration::from_millis(100);
@@ -129,8 +128,15 @@ pub(crate) enum LiveMail {
 #[derive(Debug)]
 enum Message {
     Input(Vec<u8>),
+    Paste {
+        contents: Vec<wire::ClipboardRepresentation>,
+        text_source: bool,
+        selection: String,
+        allow_unsafe: bool,
+    },
     Resize(wire::GridSize),
     Metadata(ReplyMetadata),
+    ConfigReload(ReplyMetadata),
     Answer {
         request: Delegated,
         reply: DelegatedReply,
@@ -159,9 +165,12 @@ impl Outbox {
     fn take(&mut self) -> Option<(Message, u64, AttachWriter)> {
         let (connection, writer) = self.writer.clone()?;
         let message = self.queue.pop_front()?;
-        if let Message::Input(data) = &message {
-            self.input = self.input.saturating_sub(data.len());
-        }
+        let bytes = match &message {
+            Message::Input(data) => data.len(),
+            Message::Paste { contents, .. } => contents.iter().map(|content| content.data.len()).sum(),
+            _ => 0,
+        };
+        self.input = self.input.saturating_sub(bytes);
         Some((message, connection, writer))
     }
 }
@@ -233,6 +242,43 @@ impl Live {
         self.post(Message::Input(data.to_vec()));
     }
 
+    pub(crate) fn paste(
+        &self,
+        contents: &[crate::ClipboardContent],
+        source: crate::PasteSource,
+        location: ClipboardLocation,
+        allow_unsafe: bool,
+    ) -> Result<(), PaneError> {
+        let bytes = contents.iter().map(|content| content.data.len()).sum::<usize>();
+        let mut outbox = lock(&self.outbox);
+        if outbox.closed {
+            return Err(PaneError::Closed);
+        }
+        if outbox.input != 0 && outbox.input.saturating_add(bytes) > self.write_limit {
+            return Err(PaneError::Backpressure);
+        }
+        outbox.input += bytes;
+        outbox.queue.push_back(Message::Paste {
+            contents: contents
+                .iter()
+                .map(|content| wire::ClipboardRepresentation {
+                    mime: content.mime.clone(),
+                    data: content.data.clone(),
+                })
+                .collect(),
+            text_source: source == crate::PasteSource::Text,
+            selection: match location {
+                ClipboardLocation::Standard => "c",
+                ClipboardLocation::Selection => "s",
+                ClipboardLocation::Primary => "p",
+            }
+            .into(),
+            allow_unsafe,
+        });
+        self.outbox_changed.notify_all();
+        Ok(())
+    }
+
     /// Input bytes queued and not sent yet.
     pub(crate) fn queued(&self) -> usize {
         lock(&self.outbox).input
@@ -252,6 +298,13 @@ impl Live {
         last.clone_from(&metadata);
         drop(last);
         self.post(Message::Metadata(metadata));
+    }
+
+    /// A config reload is an event even when its facts are identical. Send both together so a changed scheme
+    /// produces one report at the server, and keep the facts for a later reconnect.
+    pub(crate) fn config_reloaded(&self, metadata: ReplyMetadata) {
+        lock(&self.metadata).clone_from(&metadata);
+        self.post(Message::ConfigReload(metadata));
     }
 
     pub(crate) fn set_kitty_graphics(&self, shown: bool) {
@@ -287,10 +340,7 @@ impl Live {
         let Some((request, connection)) = lock(&self.pending).remove(&id) else {
             return;
         };
-        let reply = match answer {
-            ClipboardAnswer::Text(text) => DelegatedReply::Clipboard { text },
-            ClipboardAnswer::Denied => DelegatedReply::Denied,
-        };
+        let reply = crate::bridge::answer_reply(answer);
         self.post(Message::Answer {
             request,
             reply,
@@ -392,8 +442,21 @@ impl Live {
 fn send(writer: &AttachWriter, connection: u64, message: Message) -> Result<(), ClientError> {
     match message {
         Message::Input(data) => writer.input(&data),
+        Message::Paste {
+            contents,
+            text_source,
+            selection,
+            allow_unsafe,
+        } => writer.clipboard_paste(wire::ClipboardPaste {
+            bridge: None,
+            contents,
+            text_source,
+            selection,
+            allow_unsafe,
+        }),
         Message::Resize(size) => writer.resize(size),
         Message::Metadata(metadata) => writer.metadata(metadata),
+        Message::ConfigReload(metadata) => writer.config_reloaded(metadata),
         Message::Answer {
             request,
             reply,
@@ -429,24 +492,16 @@ pub(crate) fn handle(live: &Live, shared: &Shared, mail: LiveMail) {
             });
         }
         LiveMail::Delegated { request, connection } => {
-            let DelegatedRequest::ClipboardRead { selection, list_only } = &request.request;
-            let location = match selection.as_str() {
-                "s" => ClipboardLocation::Selection,
-                "p" => ClipboardLocation::Primary,
-                _ => ClipboardLocation::Standard,
-            };
-            let scope = if *list_only {
-                ReadScope::ListOnly
-            } else {
-                ReadScope::Data
-            };
             let id = live.next_read.fetch_add(1, Ordering::AcqRel) + 1;
+            let event = delegated_event(id, &request.request);
             lock(&live.pending).insert(id, (request, connection));
-            shared.send(PaneEvent::ClipboardRead(ClipboardReadRequest { id, location, scope }));
+            shared.send(event);
             shared.wake();
         }
     }
 }
+
+use crate::bridge::delegated_event;
 
 /// Keep `data`, a reply of the pane's terminal, in `answers` when it is a Kitty graphics answer: the only replies a
 /// live pane's terminal sends.
@@ -547,6 +602,7 @@ impl Reader {
         let mailbox = self.shared.mailbox();
         // a reattach's first snapshot starts over from a fresh terminal, as a resync's does
         let mut reset = connection > 1;
+        let mut output_filter = ngterm_session::attach_tty::filter::OutputFilter::clipboard_only();
         loop {
             let event = match reader.recv() {
                 Ok(Some(event)) => event,
@@ -557,19 +613,39 @@ impl Reader {
             };
             match event {
                 AttachEvent::SnapshotBegin { .. } => {
+                    let mut filtered = Vec::new();
+                    output_filter.delegated_clipboards(false, &mut filtered);
                     if std::mem::take(&mut reset) {
-                        mailbox.deliver(snapshot::RESYNC_RESET);
+                        output_filter.feed(snapshot::RESYNC_RESET, &mut filtered);
+                    }
+                    mailbox.deliver(&filtered);
+                }
+                AttachEvent::Output { data, .. } => {
+                    let mut filtered = Vec::new();
+                    output_filter.delegated_clipboards(true, &mut filtered);
+                    output_filter.feed(&data, &mut filtered);
+                    mailbox.deliver(&filtered);
+                    if !self.live.wait_resumed() {
+                        return Ended::Left;
                     }
                 }
-                AttachEvent::SnapshotChunk(data) | AttachEvent::Output { data, .. } => {
-                    mailbox.deliver(&data);
+                AttachEvent::SnapshotChunk(data) => {
+                    // Recovery values pass through without another completion; the filter also follows
+                    // the snapshot's parser continuation before ordinary output resumes.
+                    let mut filtered = Vec::new();
+                    output_filter.delegated_clipboards(false, &mut filtered);
+                    output_filter.feed(&data, &mut filtered);
+                    mailbox.deliver(&filtered);
                     if !self.live.wait_resumed() {
                         return Ended::Left;
                     }
                 }
                 AttachEvent::SnapshotEnd => mailbox.deliver_live(LiveMail::SnapshotEnd),
                 AttachEvent::ReplyOwner { .. } => mailbox.deliver_live(LiveMail::Owner),
-                AttachEvent::KittyBarrier(barrier) => mailbox.deliver_live(LiveMail::Barrier { barrier, connection }),
+                AttachEvent::KittyBarrier(barrier) => {
+                    mailbox.deliver(output_filter.apc_dispatch_prefix());
+                    mailbox.deliver_live(LiveMail::Barrier { barrier, connection });
+                }
                 AttachEvent::Delegated(request) => mailbox.deliver_live(LiveMail::Delegated { request, connection }),
                 AttachEvent::Role { role: told, generation } => {
                     *role = Some(told);

@@ -96,12 +96,14 @@ impl Core {
             Some(&lead),
         )
         .map_err(|_| missing)?;
+        let bridge = crate::attach_bridge::launch_nonce(&origin.endpoint, &lead).map(str::to_owned);
         let store = self.library_mut().store_for_session_mut(id).ok_or(missing)?;
         store.set_split_visibility(id, true, axis);
         let session = store.session_mut(id).ok_or(missing)?;
         let pane = session.split_pane_identity.ok_or(missing)?;
         session.split.focused = focused;
         session.split_launch = PaneLaunch {
+            attach_bridge: bridge,
             command: Some(command),
             wait: true,
             ..PaneLaunch::default()
@@ -294,11 +296,10 @@ impl Core {
             .remote_presentation()
             .ok_or("the origin binding was lost")?
             .binding;
-        if binding
-            .origin
-            .as_ref()
-            .is_none_or(|origin| origin.endpoint != tree.endpoint)
-        {
+        if binding.origin.as_ref().is_none_or(|origin| {
+            origin.endpoint.executable != tree.endpoint.executable
+                || origin.endpoint.socket_directory != tree.endpoint.socket_directory
+        }) {
             return Err("the origin endpoint changed; reattach the remote session".to_owned());
         }
         let Some(remote) = tree.sessions.iter().find(|remote| remote.id == target.origin) else {
@@ -335,6 +336,7 @@ impl Core {
             session,
             role,
             PaneLaunch {
+                attach_bridge: crate::attach_bridge::launch_nonce(&tree.endpoint, &lead).map(str::to_owned),
                 command: Some(command),
                 wait: true,
                 ..PaneLaunch::default()

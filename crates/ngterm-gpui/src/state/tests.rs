@@ -1850,6 +1850,7 @@ fn presented_state() -> (AppState, Uuid, Presenter, tempfile::TempDir) {
     state.core.install_live_sessions(ngterm_core::LiveInstall {
         host: Arc::new(ngterm_host::fakes::FakeSessionHost::new()),
         endpoint: ngterm_proto::ControlLiveEndpoint {
+            attach_bridge: None,
             executable: "ngterm-session".into(),
             socket_directory: dir.path().to_string_lossy().into_owned(),
         },

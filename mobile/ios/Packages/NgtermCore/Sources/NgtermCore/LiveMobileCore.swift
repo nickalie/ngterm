@@ -130,6 +130,23 @@ public final class LiveMobileCore: MobileCoreClient {
         )
     }
 
+    /// Completes a shown pane's clipboard write (api.rs's `complete_clipboard_write`).
+    public func completeClipboardWrite(
+        machineId: String,
+        sessionId: String,
+        paneId: String,
+        writeId: UInt64,
+        status: ClipboardWriteStatus
+    ) throws {
+        try core.completeClipboardWrite(
+            machineId: machineId,
+            sessionId: sessionId,
+            paneId: paneId,
+            writeId: writeId,
+            status: status
+        )
+    }
+
     /// Opens a shown pane's chat (api.rs's `open_chat`).
     nonisolated(nonsending) public func openChat(machineId: String, sessionId: String, paneId: String) async throws {
         try await abandoningOnCancel { [core] in

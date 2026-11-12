@@ -296,6 +296,7 @@ impl TerminalView {
             snapshot.frame
         });
         self.painted.clone_from(&frame);
+        self.sync_ime_coordinates(bounds, focused, window);
         let images = self.prepare_images(frame.as_deref(), &metrics, window, cx);
         // the blink follows the frame being drawn, not the one drawn before (a program may just have asked for it)
         self.sync_blink(focused, cx);

@@ -87,6 +87,13 @@ fn command_lines_parse_as_zmx_spells_them() {
             argv: vec!["/bin/sh".to_owned(), "-c".to_owned(), "exit 1".to_owned()]
         })
     );
+    assert_eq!(
+        parse(&args(&["attach-bridge", "s"])),
+        Ok(Command::AttachBridge {
+            name: "s".into(),
+            argv: Vec::new()
+        })
+    );
     assert_eq!(parse(&args(&["list"])), Ok(Command::List { short: false }));
     assert_eq!(parse(&args(&["ls", "--short"])), Ok(Command::List { short: true }));
     assert_eq!(

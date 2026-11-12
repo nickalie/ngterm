@@ -587,9 +587,16 @@ impl Panes {
         let ran = cell.ran.get();
         let events = pane.take_events();
         for event in &events {
-            // no clipboard here: a program's read is denied at once, as a waiting one holds the session's output
-            if let PaneEvent::ClipboardRead(read) = event {
-                pane.answer_clipboard_read(read.id, ClipboardAnswer::Denied);
+            match event {
+                PaneEvent::ClipboardRead(read) => pane.answer_clipboard_read(read.id, ClipboardAnswer::Denied),
+                PaneEvent::ClipboardWrite(write) => pane.answer_clipboard_write(
+                    write.id,
+                    ngterm_term::WriteCompletion {
+                        status: ngterm_term::ClipboardWriteResult::Unsupported,
+                        remember: false,
+                    },
+                ),
+                _ => {}
             }
         }
         events

@@ -18,14 +18,17 @@
 //!   whose latest counts are kept for a pane shown later);
 //!   an exit 1 after the gone guard's [`SESSION_GONE`] line is checked against a fresh listing, and a session no
 //!   longer listed is *gone*: final.
-//! - **Clipboard reads** (OSC 52) stop the pane's output until answered: each raises
-//!   [`MobileEvent::ClipboardReadRequest`] under an id of the core's own, answered through
-//!   [`crate::MobileCore::answer_clipboard_read`]. Hiding the pane, losing its link or its program's exit deny any read
-//!   still open and dismiss it ([`MobileEvent::ClipboardReadDismiss`]).
+//! - **Clipboard reads and writes** (OSC 52, the Kitty protocol's OSC 5522) stop the pane's output until answered:
+//!   each raises [`MobileEvent::ClipboardReadRequest`] or [`MobileEvent::ClipboardWrite`] under an id of the core's
+//!   own, answered through [`crate::MobileCore::answer_clipboard_read`] or
+//!   [`crate::MobileCore::complete_clipboard_write`] (`clipboard.rs` has their MIME contract). Hiding the pane, losing
+//!   its link or its program's exit deny any read still open and dismiss it ([`MobileEvent::ClipboardReadDismiss`]),
+//!   and refuse the writes still waiting.
 //! - **A pane shown with no grid** (0 columns or rows) waits without a terminal and attaches once the view gives it
 //!   one ([`crate::api::Pane::resize`]).
 //! - **Kitty images** are off (`kitty_image_limit` 0): the attach client's probe reports no support.
 
+mod clipboard;
 mod records;
 #[cfg(test)]
 mod tests;
@@ -44,15 +47,15 @@ use ngterm_core::remote::reconnect::retry_delay;
 use ngterm_core::remote::respawn::{Mark, RemoteRespawnBook};
 use ngterm_core::remote::ssh::{SESSION_GONE, attach_tail};
 use ngterm_proto::ControlLiveEndpoint;
-use ngterm_term::{
-    ClipboardAnswer, ClipboardReadRequest, ClipboardWrite, GridSize, Outgoing, PaneConfig, PaneEvent, ReadScope,
-    StreamFeed, StreamOut, Wake,
-};
+use ngterm_term::{ClipboardAnswer, GridSize, Outgoing, PaneConfig, PaneEvent, StreamFeed, StreamOut, Wake};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 use uuid::Uuid;
 
-pub use self::records::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};
+use self::clipboard::{Read, Write};
+pub use self::records::{
+    ClipboardPart, ClipboardReply, ClipboardWriteStatus, PaneClipboard, PaneEnd, PaneRef, PaneRole,
+};
 use crate::api::{MobileError, MobileEvent, PaneSlot};
 use crate::presentation::Respawns;
 use crate::transport::{Channel, ChannelEnd, ChannelOutput, ChannelReader, ChannelWriter, Connection, TransportError};
@@ -183,13 +186,6 @@ impl<C> Drop for Attachment<C> {
     }
 }
 
-/// A clipboard read waiting for the user: the core's id, and the terminal's.
-#[derive(Debug, Clone, Copy)]
-struct Read {
-    id: u64,
-    terminal: u64,
-}
-
 /// One shown pane.
 struct Shown<C> {
     /// Names the pane as long as it is shown, across its attaches.
@@ -212,6 +208,7 @@ struct Shown<C> {
     lead: Option<LeadState>,
     attachment: Option<Attachment<C>>,
     reads: Vec<Read>,
+    writes: Vec<Write>,
     /// Links lost in a row on a connection still up, which set the wait before the next attach.
     losses: u32,
     retry: Option<AbortHandle>,
@@ -228,14 +225,19 @@ impl<C> Shown<C> {
         self.event(|pane| MobileEvent::PaneLead { pane, role, covered })
     }
 
-    /// Ends the current attach, if any: its threads stop, its pending retry is off, and the clipboard reads still
-    /// open are denied and dismissed.
+    /// Ends the current attach, if any: its threads stop, its pending retry is off, the clipboard reads still open are
+    /// denied and dismissed, and the writes still waiting refused.
     fn leave(&mut self) -> Vec<MobileEvent> {
         if let Some(retry) = self.retry.take() {
             retry.abort();
         }
         self.attachment = None;
         let terminal = self.slot.terminal();
+        for write in std::mem::take(&mut self.writes) {
+            if let Some(terminal) = &terminal {
+                terminal.answer_clipboard_write(write.terminal, clipboard::completion(ClipboardWriteStatus::Denied));
+            }
+        }
         let reads = std::mem::take(&mut self.reads);
         reads
             .into_iter()
@@ -274,7 +276,8 @@ pub(crate) struct Panes<C> {
     notes: Notes,
     /// The last attach key, and the last shown pane's id, taken from one counter.
     last_key: u64,
-    last_read: u64,
+    /// The last clipboard read's or write's id.
+    last_clipboard: u64,
 }
 
 impl<C: Connection> Panes<C> {
@@ -285,7 +288,7 @@ impl<C: Connection> Panes<C> {
             counts: HashMap::new(),
             notes,
             last_key: 0,
-            last_read: 0,
+            last_clipboard: 0,
         }
     }
 
@@ -338,6 +341,7 @@ impl<C: Connection> Panes<C> {
             lead: None,
             attachment: None,
             reads: Vec::new(),
+            writes: Vec::new(),
             losses: 0,
             retry: None,
         });
@@ -554,12 +558,31 @@ impl<C: Connection> Panes<C> {
             return;
         };
         let read = shown.reads.remove(at);
-        let answer = match reply {
-            ClipboardReply::Allow { text } => ClipboardAnswer::Text(text),
-            ClipboardReply::Deny => ClipboardAnswer::Denied,
-        };
+        let terminal_id = read.terminal;
+        let answer = clipboard::answer(read, reply);
         if let Some(terminal) = shown.slot.terminal() {
-            terminal.answer_clipboard_read(read.terminal, answer);
+            terminal.answer_clipboard_read(terminal_id, answer);
+        }
+    }
+
+    /// How the app's clipboard write `write_id` of a shown pane ended; a write no longer open is dropped.
+    pub(crate) fn complete_write(
+        &mut self,
+        reference: &PaneRef,
+        pane: Uuid,
+        write_id: u64,
+        status: ClipboardWriteStatus,
+    ) {
+        let Some(index) = self.find(&reference.machine_id, &reference.session_id, pane) else {
+            return;
+        };
+        let shown = &mut self.shown[index];
+        let Some(at) = shown.writes.iter().position(|write| write.id == write_id) else {
+            return;
+        };
+        let write = shown.writes.remove(at);
+        if let Some(terminal) = shown.slot.terminal() {
+            terminal.answer_clipboard_write(write.terminal, clipboard::completion(status));
         }
     }
 
@@ -628,7 +651,9 @@ impl<C: Connection> Panes<C> {
             // An actor that is gone has nothing left to draw.
             let _ = wake_notes.send(Note::News(key));
         });
-        let (terminal, feed, out) = match ngterm_term::Pane::stream(&config(built, wake)) {
+        let mut config = config(built, wake);
+        config.attach_bridge = ngterm_core::attach_bridge::launch_nonce(&shown.endpoint, &lead).map(str::to_owned);
+        let (terminal, feed, out) = match ngterm_term::Pane::stream(&config) {
             Ok(made) => made,
             Err(error) => {
                 // tried again on the backoff, in case memory is freed since
@@ -843,41 +868,26 @@ impl<C: Connection> Panes<C> {
             }
             PaneEvent::Title(title) => events.push(shown.event(|pane| MobileEvent::PaneTitle { pane, title })),
             PaneEvent::Bell => events.push(shown.event(|pane| MobileEvent::Bell { pane })),
-            PaneEvent::ClipboardWrite(write) => events.push(clipboard_write(shown, write)),
+            PaneEvent::ClipboardWrite(write) => {
+                self.last_clipboard += 1;
+                if let Some((pending, event)) = clipboard::write(shown.reference.clone(), self.last_clipboard, &write) {
+                    shown.writes.push(pending);
+                    events.push(event);
+                } else if let Some(terminal) = shown.slot.terminal() {
+                    let status = clipboard::completion(ClipboardWriteStatus::Unsupported);
+                    terminal.answer_clipboard_write(write.id, status);
+                }
+            }
             PaneEvent::ClipboardRead(request) => {
-                self.last_read += 1;
-                events.push(clipboard_read(shown, self.last_read, request));
+                self.last_clipboard += 1;
+                let (read, event) = clipboard::read(shown.reference.clone(), self.last_clipboard, &request);
+                shown.reads.push(read);
+                events.push(event);
             }
             _ => {}
         }
         None
     }
-}
-
-fn clipboard_write<C>(shown: &Shown<C>, write: ClipboardWrite) -> MobileEvent {
-    let text = write
-        .contents
-        .into_iter()
-        .find(|content| content.mime.starts_with("text/plain"))
-        .map(|content| String::from_utf8_lossy(&content.data).into_owned());
-    shown.event(|pane| MobileEvent::ClipboardWrite {
-        pane,
-        clipboard: write.location.into(),
-        text,
-    })
-}
-
-fn clipboard_read<C>(shown: &mut Shown<C>, id: u64, request: ClipboardReadRequest) -> MobileEvent {
-    shown.reads.push(Read {
-        id,
-        terminal: request.id,
-    });
-    shown.event(|pane| MobileEvent::ClipboardReadRequest {
-        pane,
-        read_id: id,
-        clipboard: request.location.into(),
-        list_only: request.scope == ReadScope::ListOnly,
-    })
 }
 
 /// The last bytes of a channel's output, enough to hold the gone guard's line and what the attach client writes after

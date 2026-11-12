@@ -21,7 +21,18 @@ internal struct SettingsSnapshotTests {
         try test.seed(TestGraph.machine(keyId: made.id))
         try test.seed(TestGraph.machine(id: "m2", label: "nas", host: "nas.lan", keyId: made.id))
         let pane = PaneRef(machineId: "m2", sessionId: "s1", paneId: "P1")
-        test.core.emit(.clipboardReadRequest(pane: pane, readId: 1, clipboard: .standard, listOnly: false))
+        test.core.emit(
+            .clipboardReadRequest(
+                pane: pane,
+                readId: 1,
+                clipboard: .standard,
+                listOnly: false,
+                mimes: ["text/plain"],
+                list: false,
+                granted: false,
+                canRemember: false
+            )
+        )
         await test.settled()
         let reads = test.graph.clipboardReads
         reads.allowAlways(try #require(reads.pending.first))

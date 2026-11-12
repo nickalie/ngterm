@@ -9,7 +9,8 @@
 #   input starts, C when a command line is accepted (through PSReadLine, when it is loaded), D with the last command's
 #   status before the next prompt;
 # - OSC 7 with the working directory, in Ghostty's kitty-shell-cwd form; a Windows path is written with `/` after a
-#   leading one (`/C:/Users/me`);
+#   leading one (`/C:/Users/me`), any other path as it is; control characters are left out of the host and the path,
+#   as Ghostty's integrations do (#14859), so a directory's name cannot end the report and start a sequence of its own;
 # - with `title` in GHOSTTY_SHELL_FEATURES: the directory as the title at the prompt, the command line while it runs;
 # - with `cursor` there: a blinking bar cursor at the prompt (a steady one with `cursor:steady`), the default shape
 #   back while a command runs;
@@ -44,6 +45,19 @@ $global:__NgtermIntegration = & {
         Cursor   = $cursor
         # the host name the terminal compares with its own: Windows' computer name, gethostname elsewhere
         HostName = if ($env:OS -eq 'Windows_NT') { $env:COMPUTERNAME } else { [System.Net.Dns]::GetHostName() }
+        # the OSC 7 report of the file system path $path on the host $hostName, without their control characters
+        # (C0, DEL and C1): a raw ESC or BEL in a directory's name would end the report early, and what follows would
+        # reach the terminal as a sequence of its own, an OSC 52 clipboard write say. Text is written as it is, a
+        # backslash in a Unix name included; only a Windows path turns its separators into `/`, after a leading one.
+        CwdReport = {
+            param([string] $hostName, [string] $path)
+            $path = $path -replace '\p{Cc}', ''
+            if ($env:OS -eq 'Windows_NT') {
+                $path = $path.Replace('\', '/')
+                if (-not $path.StartsWith('/')) { $path = "/$path" }
+            }
+            "$([char]27)]7;kitty-shell-cwd://$($hostName -replace '\p{Cc}', '')$path$([char]7)"
+        }
     }
 }
 
@@ -67,9 +81,7 @@ function global:prompt {
     }
     $location = $ExecutionContext.SessionState.Path.CurrentLocation
     if ($location.Provider.Name -eq 'FileSystem') {
-        $path = $location.ProviderPath.Replace('\', '/')
-        if (-not $path.StartsWith('/')) { $path = "/$path" }
-        $marks += "$esc]7;kitty-shell-cwd://$($state.HostName)$path$bel"
+        $marks += & $state.CwdReport $state.HostName $location.ProviderPath
     }
     if ($state.Title) {
         $title = $location.Path
@@ -77,7 +89,7 @@ function global:prompt {
             ($title.Length -eq $HOME.Length -or '\/'.Contains($title[$HOME.Length]))) {
             $title = '~' + $title.Substring($HOME.Length)
         }
-        $marks += "$esc]2;$($title -replace '[\x00-\x1f\x7f]', '')$bel"
+        $marks += "$esc]2;$($title -replace '\p{Cc}', '')$bel"
     }
     if ($state.Cursor) { $marks += "$esc[$($state.Cursor) q" }
     # the prompt starts here, before the wrapped prompt runs: what it writes to the host itself (Write-Host) comes out
@@ -89,7 +101,7 @@ function global:prompt {
     $text = if ($state.Prompt) {
         -join @(& $state.Prompt)
     } else {
-        "PS $location$('>' * ($NestedPromptLevel + 1)) "
+        "PS $($location -replace '\p{Cc}', '')$('>' * ($NestedPromptLevel + 1)) "
     }
     if ($null -ne $exitCode) { $global:LASTEXITCODE = $exitCode }
     "$text$esc]133;B$bel"
@@ -104,7 +116,7 @@ if ($global:__NgtermIntegration.ReadLine) {
         $marks = ''
         if ($state.Cursor) { $marks += "$esc[0 q" }
         if ($line.Trim()) {
-            if ($state.Title) { $marks += "$esc]2;$($line -replace '[\x00-\x1f\x7f]', '')$bel" }
+            if ($state.Title) { $marks += "$esc]2;$($line -replace '\p{Cc}', '')$bel" }
             $marks += "$esc]133;C$bel"
             $state.Running = $true
         }

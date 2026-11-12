@@ -1,0 +1,62 @@
+Record platform IME coordinate pushes in the GPUI test window.
+
+VisualTestContext::ime_positions exposes the actual update_ime_position sink, so
+terminal focus-switch and output regressions check delivery to the platform.
+
+diff -ruN a/src/app/test_context.rs b/src/app/test_context.rs
+--- a/src/app/test_context.rs
++++ b/src/app/test_context.rs
+@@ -1060,6 +1060,11 @@
+         self.background_executor.run_until_parked();
+     }
+ 
++    /// Cursor rectangles actually pushed to the platform IME, in order.
++    pub fn ime_positions(&self) -> Vec<Bounds<Pixels>> {
++        self.cx.test_window(self.window).ime_positions()
++    }
++
+     /// Simulates assistive technology connecting to the window: from the next frame on, the window builds its
+     /// accessibility tree and sends it to the platform, where [`Self::a11y_tree_update`] reads it (ngterm patch 0006).
+     pub fn activate_a11y(&mut self) {
+diff -ruN a/src/platform/test/window.rs b/src/platform/test/window.rs
+--- a/src/platform/test/window.rs
++++ b/src/platform/test/window.rs
+@@ -53,6 +53,7 @@
+     input_handler: Option<PlatformInputHandler>,
+     text_input_configurations: Vec<TextInputConfiguration>,
+     text_input_state_changes: Vec<TextInputStateChange>,
++    ime_positions: Vec<Bounds<Pixels>>,
+     is_fullscreen: bool,
+     scale_factor: f32,
+     appearance: WindowAppearance,
+@@ -131,6 +132,7 @@
+             input_handler: None,
+             text_input_configurations: Vec::new(),
+             text_input_state_changes: Vec::new(),
++            ime_positions: Vec::new(),
+             is_fullscreen: false,
+             // Preserve the test platform's historical 2x default.
+             scale_factor: 2.0,
+@@ -230,6 +232,11 @@
+         self.0.lock().text_input_state_changes.clone()
+     }
+ 
++    /// Cursor rectangles actually pushed to the platform IME.
++    pub fn ime_positions(&self) -> Vec<Bounds<Pixels>> {
++        self.0.lock().ime_positions.clone()
++    }
++
+     pub fn simulate_resize(&mut self, size: Size<Pixels>) {
+         let scale_factor = self.scale_factor();
+         let mut lock = self.0.lock();
+@@ -617,7 +624,9 @@
+         state.start_external_drag_result
+     }
+ 
+-    fn update_ime_position(&self, _bounds: Bounds<Pixels>) {}
++    fn update_ime_position(&self, bounds: Bounds<Pixels>) {
++        self.0.lock().ime_positions.push(bounds);
++    }
+ 
+     fn gpu_specs(&self) -> Option<GpuSpecs> {
+         None

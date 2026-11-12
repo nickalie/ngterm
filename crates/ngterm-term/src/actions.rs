@@ -4,7 +4,7 @@
 //!
 //! `clear_screen` has no counterpart in libghostty-vt's API, so it is written as VT sequences into the terminal (not
 //! the program), at a point where the parser is at ground: at once when it is, else by the IO thread at the next
-//! ground point of the program's output (`vt_write_until_ground`), so a sequence the program is in the middle of is
+//! ground point of the program's output (`vt_write_until` with the ground boundary), so a sequence the program is in the middle of is
 //! never cut. Not at a prompt Ghostty removes the rows above the cursor (`eraseActive`, the cursor following its row
 //! to the top); here `CSI n S` moves them up (`scrollUp` keeps the cursor's place and pending wrap), `CSI 3 J` drops
 //! them with the scrollback, and `CSI n A` takes the cursor back to its row. A documented approximation (plan > Task

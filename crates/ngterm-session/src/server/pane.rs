@@ -359,6 +359,7 @@ impl State {
     /// Forget the clients whose subscription was dropped, and their part in the lead.
     pub(super) fn prune(&mut self) {
         for id in self.clients.prune() {
+            self.fell_behind(id);
             let change = self.lead.detach(id);
             self.tell(&change.notices);
         }
@@ -717,6 +718,7 @@ impl Pane {
                 recover(&state, id, &mut data);
                 let (offset, size) = (state.offset, state.size);
                 state.clients.snapshot(id, offset, size, data);
+                state.resume_clipboards();
                 self.release(state);
                 Ok(())
             }
@@ -730,6 +732,7 @@ impl Pane {
     /// Detach the client `id` under the pane's lock, already held, and let go of it.
     fn disconnect(&self, mut state: MutexGuard<'_, State>, id: ClientId) {
         state.clients.detach(id);
+        state.fell_behind(id);
         let change = state.lead.detach(id);
         state.tell(&change.notices);
         self.release(state);
@@ -747,6 +750,7 @@ impl Pane {
     pub fn detach(&self, id: ClientId) -> bool {
         let mut state = self.core.lock();
         let attached = state.clients.detach(id);
+        state.fell_behind(id);
         let change = state.lead.detach(id);
         state.tell(&change.notices);
         attached
@@ -786,6 +790,69 @@ impl Pane {
             return Ok(false);
         }
         self.actor.write_input(data)?;
+        Ok(true)
+    }
+
+    /// Paste on the authoritative VT for a current client epoch; lazy reads return to that source client.
+    ///
+    /// # Errors
+    /// The actor refused to queue the paste.
+    pub fn clipboard_paste(
+        &self,
+        id: ClientId,
+        epoch: u64,
+        paste: &crate::protocol::ClipboardPaste,
+    ) -> Result<bool, WriteError> {
+        let mut state = self.core.lock();
+        state.prune();
+        if !state.paste_client(id, epoch) || state.exit.is_some() {
+            return Ok(false);
+        }
+        if paste.bridge.as_ref().is_some_and(|bridge| {
+            bridge.id.is_empty()
+                || bridge.id.len() > 128
+                || bridge.available.len() > 16
+                || bridge.available.iter().any(|mime| {
+                    mime.is_empty() || mime.len() > 256 || mime.bytes().any(|byte| byte.is_ascii_whitespace())
+                })
+        }) {
+            return Ok(false);
+        }
+        let placeholders: Vec<_> = paste
+            .bridge
+            .as_ref()
+            .map(|bridge| {
+                bridge
+                    .available
+                    .iter()
+                    .map(|mime| crate::protocol::ClipboardRepresentation {
+                        mime: mime.clone(),
+                        data: Vec::new(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let contents: Vec<_> = if paste.bridge.is_some() {
+            &placeholders
+        } else {
+            &paste.contents
+        }
+        .iter()
+        .map(|content| vt::ClipboardContent {
+            mime: content.mime.clone(),
+            data: content.data.clone(),
+        })
+        .collect();
+        // A contents-only follower cannot service later reads through the owner's clipboard.
+        let text_source = paste.text_source || (paste.bridge.is_none() && state.replies.owner() != Some(id));
+        let bytes = state.paste_bytes(&contents, text_source, &paste.selection, paste.allow_unsafe);
+        let Some(bytes) = bytes else {
+            return Ok(false);
+        };
+        self.actor.write_input(&bytes)?;
+        state.register_paste_bridge(id, epoch, paste.bridge.as_ref(), &bytes);
+        let grants = state.terminal.clipboard_grants();
+        grants.lock().unwrap_or_else(PoisonError::into_inner).pasted(&bytes);
         Ok(true)
     }
 
@@ -892,6 +959,16 @@ impl Pane {
         self.release(state);
     }
 
+    /// Apply the attached client's config facts and send one mode 2031 report when it owns replies.
+    pub fn config_reloaded(&self, id: ClientId, metadata: ReplyMetadata) {
+        let mut state = self.core.lock();
+        if state.exit.is_some() {
+            return;
+        }
+        state.reload_config(id, metadata);
+        self.release(state);
+    }
+
     /// The client `id`'s answer to the delegated request `request`, given in its epoch `epoch`: it ends the clipboard
     /// read waiting for it, and the output held behind that read goes on. Whether it was taken: dropped unless that
     /// read was sent to this client in that epoch, still waits (no denial ended it: the owner changing, a deadline)
@@ -984,16 +1061,11 @@ impl Pane {
         }
         // the terminal's replies to bytes the program never printed are dropped
         self.core.outlet.discard(true);
-        state.terminal.vt_write(data);
+        state.feed(data, true);
         self.core.outlet.discard(false);
-        // the clipboard-read scanner follows the terminal's parser
-        let kitty = state.replies.observe(data);
-        // a clipboard write printed is kept for a client that falls behind on it, as the program's are
-        state.advance(data);
-        if kitty {
-            // the owner's terminal answers the printed Kitty commands too: a barrier takes those answers, dropped
-            state.barrier(true);
-        }
+        // The consent scanner follows printed input without delegating its reads.
+        state.replies.observe_print(data);
+        state.delegate_printed_writes();
         self.release(state);
         Ok(())
     }
@@ -1688,7 +1760,7 @@ mod tests {
     use crate::server::clients::ClientEvent;
 
     /// A pane's state with no program (none is needed to feed it), its creator owning the replies with `metadata`.
-    fn core(metadata: ReplyMetadata) -> (Arc<Core>, Attached) {
+    pub(super) fn core(metadata: ReplyMetadata) -> (Arc<Core>, Attached) {
         let spec = SessionSpec {
             argv: vec!["none".to_owned()],
             env: Vec::new(),
@@ -1715,6 +1787,49 @@ mod tests {
         // a read after it: its answer goes behind the report
         assert!(core.read(b"\x1b[5n").is_empty());
         assert_eq!(core.outlet.take(), [b"\x1b[?997;1n".to_vec(), b"\x1b[0n".to_vec()]);
+    }
+
+    #[test]
+    fn config_reload_reports_once_under_the_lock_before_later_output() {
+        for scheme in [ColorScheme::Dark, ColorScheme::Light] {
+            let metadata = ReplyMetadata {
+                color_scheme: Some(scheme),
+                ..ReplyMetadata::default()
+            };
+            let (core, creator) = core(metadata.clone());
+            let owner = creator.subscription.id();
+            core.lock().reload_config(owner, metadata.clone());
+            assert!(core.outlet.take().is_empty(), "mode 2031 off");
+            assert!(core.read(b"\x1b[?2031h").is_empty());
+            let report: &[u8] = if scheme == ColorScheme::Dark {
+                b"\x1b[?997;1n"
+            } else {
+                b"\x1b[?997;2n"
+            };
+            for _ in 0..2 {
+                core.lock().reload_config(owner, metadata.clone());
+                assert!(core.read(b"\x1b[5n").is_empty());
+                assert_eq!(core.outlet.take(), [report.to_vec(), b"\x1b[0n".to_vec()]);
+            }
+            let other = if scheme == ColorScheme::Dark {
+                ColorScheme::Light
+            } else {
+                ColorScheme::Dark
+            };
+            core.lock().reload_config(
+                owner,
+                ReplyMetadata {
+                    color_scheme: Some(other),
+                    ..metadata
+                },
+            );
+            let report: &[u8] = if other == ColorScheme::Dark {
+                b"\x1b[?997;1n"
+            } else {
+                b"\x1b[?997;2n"
+            };
+            assert_eq!(core.outlet.take(), [report.to_vec()], "changed scheme reported once");
+        }
     }
 
     #[test]
@@ -1758,6 +1873,55 @@ mod tests {
         let next = id + 1;
         assert!(!core.lock().complete(owner, next, epoch, b"\x1b[c"));
         assert_eq!(core.outlet.take(), [b"\x1b[?62;22;52c".to_vec()]);
+    }
+
+    #[test]
+    fn cancelled_kitty_commands_never_hold_later_replies_at_any_split() {
+        for exit in [0x18, 0x1a, 0x9b, 0x80] {
+            let input = [b"\x1b_Ga=q,i=31,s=1,v=1,t=d,f=24;AAAA".as_slice(), &[exit], b"\x1b[c"].concat();
+            for split in 0..=input.len() {
+                let (core, creator) = core(ReplyMetadata {
+                    kitty_graphics: true,
+                    ..ReplyMetadata::default()
+                });
+                core.read(&input[..split]);
+                core.read(&input[split..]);
+                assert_eq!(
+                    core.outlet.take().concat(),
+                    b"\x1b[?62;22;52c",
+                    "exit {exit}, split {split}"
+                );
+                while let Ok(event) = creator.subscription.recv_timeout(Duration::ZERO) {
+                    assert!(!matches!(event, ClientEvent::KittyBarrier { .. }));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn printed_kitty_commands_open_discard_barriers_only_when_dispatched() {
+        let (core, creator) = core(ReplyMetadata {
+            kitty_graphics: true,
+            ..ReplyMetadata::default()
+        });
+        let mut state = core.lock();
+        let cancelled = b"\x1b_Ga=q,i=31,s=1,v=1,t=d,f=24;AAAA\x18";
+        state.feed(cancelled, true);
+        state.replies.observe_print(cancelled);
+        assert_eq!(state.replies.deadline(), None);
+        let query = b"\x1b_Ga=q,i=31,s=1,v=1,t=d,f=24;AAAA\x1b\\";
+        state.feed(query, true);
+        state.replies.observe_print(query);
+        let mut barriers = Vec::new();
+        while let Ok(event) = creator.subscription.recv_timeout(Duration::ZERO) {
+            if let ClientEvent::KittyBarrier { id, epoch } = event {
+                barriers.push((id, epoch));
+            }
+        }
+        assert_eq!(barriers.len(), 1);
+        let (id, epoch) = barriers[0];
+        assert!(state.complete(creator.subscription.id(), id, epoch, b"\x1b_Gi=31;OK\x1b\\"));
+        assert!(core.outlet.take().is_empty(), "printed answers are discarded");
     }
 
     fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -1872,3 +2036,6 @@ mod cmd_profile_tests {
         assert!(ordinary.raw_args.is_empty());
     }
 }
+#[cfg(test)]
+#[path = "clipboard_tests.rs"]
+mod clipboard_tests;

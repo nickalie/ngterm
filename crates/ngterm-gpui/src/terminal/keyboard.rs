@@ -154,6 +154,8 @@ pub(super) struct KeyState {
     /// Whether the view held its active window's keyboard when last seen, for the keyboard-layout lock
     /// (`crate::input_source`), which re-evaluates on each change.
     held: Option<bool>,
+    /// The focused view's last laid-out candidate rectangle, including element origin and metrics.
+    ime_bounds: Option<Bounds<Pixels>>,
     subscriptions: Vec<Subscription>,
 }
 
@@ -349,6 +351,9 @@ impl TerminalView {
         }
         if self.keys.held.replace(focused) != Some(focused) {
             crate::input_source::request_refresh(cx);
+            if focused {
+                window.invalidate_character_coordinates();
+            }
         }
         if self.report_focus(focused) {
             cx.notify();
@@ -404,7 +409,21 @@ impl TerminalView {
         }
     }
 
-    /// The cursor's cell in window coordinates, for the input method's candidate window.
+    /// Push changed geometry after layout, including cursor motion from output before composition starts.
+    /// GPUI resolves the current input handler on the next frame, after this frame installs it.
+    pub(super) fn sync_ime_coordinates(&mut self, element: Bounds<Pixels>, focused: bool, window: &Window) {
+        let bounds = focused.then(|| self.cursor_bounds(element)).flatten();
+        if self.keys.ime_bounds != bounds {
+            self.keys.ime_bounds = bounds;
+            if bounds.is_some() {
+                window.invalidate_character_coordinates();
+            }
+        }
+    }
+
+    /// The candidate rectangle in window coordinates. Linux follows Ghostty's GTK `updateImePosition`
+    /// (83fb956): cell midpoint, one pixel wide, full cell height snapped outward. The native
+    /// `AppKit` and Windows caret paths keep the full cell.
     fn cursor_bounds(&self, element: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
         let frame = self.painted.as_ref()?;
         let position = frame.cursor.position?;
@@ -418,10 +437,21 @@ impl TerminalView {
         };
         let x = laid.padding.left + u32::from(position.column) * metrics.cell_width;
         let y = laid.padding.top + u32::from(position.row) * metrics.cell_height;
-        Some(Bounds::new(
+        let cell = Bounds::new(
             element.origin + point(to_px(x), to_px(y)),
             size(to_px(metrics.cell_width), to_px(metrics.cell_height)),
-        ))
+        );
+        #[cfg(target_os = "linux")]
+        {
+            let top = f32::from(cell.origin.y).floor();
+            let bottom = f32::from(cell.bottom()).ceil();
+            Some(Bounds::new(
+                point(px(f32::from(cell.origin.x + cell.size.width / 2.0).floor()), px(top)),
+                size(px(1.0), px((bottom - top).max(1.0))),
+            ))
+        }
+        #[cfg(not(target_os = "linux"))]
+        Some(cell)
     }
 }
 

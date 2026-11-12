@@ -387,6 +387,86 @@ fn a_live_powershell_reports_its_directory_reads_its_foreground_and_replays_a_pr
     Ok(())
 }
 
+/// A hostname with an OSC 52 of its own, and what the integration's report carries in its place.
+const HOSTILE_HOST: (&str, &str) = ("h\u{7}\u{1b}]52;c;SGVsbG8=\u{7}ost", "h]52;c;SGVsbG8=ost");
+
+/// A live PowerShell in a directory whose name carries an OSC 52 (on Unix: a raw BEL ends the report early, then the
+/// clipboard write; Windows' file systems refuse such a name), and on a host so named, reports its directory and its
+/// title without the control characters (Ghostty's #14859 for its own shells), so no OSC 52 reaches the terminal. The
+/// profile's prompt shows no path: PowerShell's default one writes the location as it is, which is the shell's own
+/// text, not the integration's.
+#[test]
+fn a_live_powershell_in_a_hostile_directory_lets_no_clipboard_write_through() -> TestResult {
+    let Some(shell) = pwsh()? else {
+        eprintln!("SKIPPED: no pwsh on PATH");
+        return Ok(());
+    };
+    let dir = tempfile::tempdir()?;
+    let resources = staged_resources(dir.path())?;
+    let mut environment = session_environment(dir.path(), &resources)?;
+    environment.insert("NGTERM_TEST_HOST".to_owned(), HOSTILE_HOST.0.to_owned());
+    let work = dir.path().canonicalize()?.join("work");
+    #[cfg(windows)]
+    let work = PathBuf::from(work.display().to_string().trim_start_matches(r"\\?\"));
+    let (cwd, reported) = if cfg!(windows) {
+        (work.join("work dir"), work.join("work dir"))
+    } else {
+        let profile = Path::new(&environment["XDG_CONFIG_HOME"]).join("powershell");
+        fs::create_dir_all(&profile)?;
+        fs::write(
+            profile.join("Microsoft.PowerShell_profile.ps1"),
+            "function prompt { 'PS> ' }\n",
+        )?;
+        (
+            work.join("y\u{7}\u{1b}]52;c;SGVsbG8=\u{7}"),
+            work.join("y]52;c;SGVsbG8="),
+        )
+    };
+    fs::create_dir_all(&cwd)?;
+
+    let spec = session(LoginShell::Pwsh.login_arguments(&shell), &environment, &cwd);
+    let (pane, creator) = Pane::spawn(config("pwsh-hostile", dir.path(), spec))?;
+    let mut client = Client::new(creator);
+    if cfg!(windows) {
+        wait_for_directory(&pane, &cwd);
+    } else {
+        // no such directory: the name without its control bytes
+        wait_for(
+            "the reported directory",
+            || pane.with_terminal(|terminal| terminal.pwd()),
+            |pwd| reported_directory(pwd).as_deref() == Some(reported.as_path()),
+        );
+    }
+    let title_end = reported
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_owned();
+    wait_for(
+        "the title",
+        || pane.with_terminal(|terminal| terminal.title()),
+        |title| title.ends_with(&title_end),
+    );
+    // the host's name too, at the next prompt
+    type_at_prompt(
+        &pane,
+        &mut client,
+        1,
+        "$global:__NgtermIntegration.HostName = $env:NGTERM_TEST_HOST",
+    )?;
+    expect_raw(
+        &mut client,
+        format!("\u{1b}]7;kitty-shell-cwd://{}/", HOSTILE_HOST.1).as_bytes(),
+    );
+    assert!(
+        !client.output.windows(4).any(|window| window == b"\x1b]52"),
+        "an OSC 52 got through: {:?}",
+        String::from_utf8_lossy(&client.output)
+    );
+    pane.kill(true)?;
+    Ok(())
+}
+
 /// A replay whose program is interrupted with Ctrl+C (#773) still leaves the integrated prompt: the integration loads
 /// before the program, and `-NoExit` keeps the shell once Ctrl+C stopped the rest of the `-Command` script. The Ctrl+C
 /// is typed into the pane as the terminal sends it: on Unix the line discipline signals the foreground group (the

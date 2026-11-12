@@ -21,7 +21,7 @@ use crate::render::{Colors, Cursor, CursorPosition, Frame, grid_row, rgb};
 #[derive(Debug, Clone)]
 pub struct ActiveScreen {
     /// The active area's rows top to bottom, the cursor where it stands in them (visible as DECTCEM says) and the
-    /// colors the cells resolve against. No row carries a selection or Kitty placeholders, the frame no Kitty images,
+    /// colors the cells resolve against. No row carries a selection, the frame no Kitty images,
     /// and its `seq` is 0: it is no paint's frame.
     pub frame: Frame,
     /// The screen generation the rows were read at: [`Pane::key_if`] and [`Pane::paste_if`] send only while the

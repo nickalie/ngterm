@@ -468,3 +468,59 @@ fn replacing_the_effects_drops_the_old_handler() {
     terminal.vt_write(b"\x07");
     assert_eq!(take(&new), [Seen::Bell]);
 }
+
+/// Ghostty `osc/parsers/program_status.zig`: malformed ids must never fall back to the root record.
+#[test]
+fn program_status_ids_are_validated_before_delivering_a_callback() {
+    let (mut terminal, seen) = terminal(Recorder::default()).unwrap();
+    let invalid = [
+        String::new(),
+        "/".to_owned(),
+        "a/".to_owned(),
+        "/a".to_owned(),
+        "a//b".to_owned(),
+        "a,b".to_owned(),
+        "a=b".to_owned(),
+        "a@b".to_owned(),
+        "a b".to_owned(),
+        "a%20b".to_owned(),
+        "a".repeat(33),
+        "a/b/c/d/e/f/g/h/i".to_owned(),
+        format!("{}a", format!("{}/", "a".repeat(31)).repeat(4)),
+    ];
+    for terminator in ["\x07", "\x1b\\"] {
+        for id in &invalid {
+            for tail in ["", ":id=a"] {
+                terminal.vt_write(format!("\x1b]7501;state=clear:id={id}{tail}{terminator}").as_bytes());
+                assert!(take(&seen).is_empty(), "id {id:?}, tail {tail:?}");
+            }
+        }
+        for id in [
+            "a".to_owned(),
+            "build/test".to_owned(),
+            "A-Z_0.9+".to_owned(),
+            "a".repeat(32),
+            "a/b/c/d/e/f/g/h".to_owned(),
+        ] {
+            terminal.vt_write(format!("\x1b]7501;state=clear:id={id}{terminator}").as_bytes());
+            let reports = take(&seen);
+            assert!(
+                matches!(reports.as_slice(), [Seen::Status(status)] if status.id == id),
+                "{reports:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn program_status_limits_count_disallowed_bytes_too() {
+    let (mut terminal, seen) = terminal(Recorder::default()).unwrap();
+    for terminator in ["\x07", "\x1b\\"] {
+        for (key, limit) in [("app", 32), ("title", 256), ("msg", 2732)] {
+            for value in ["a".repeat(limit + 1), format!("@{}", "a".repeat(limit))] {
+                terminal.vt_write(format!("\x1b]7501;state=idle:{key}={value}{terminator}").as_bytes());
+                assert!(take(&seen).is_empty(), "{key} over {limit}");
+            }
+        }
+    }
+}

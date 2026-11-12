@@ -6,8 +6,9 @@
 //!
 //! Recognized, as Ghostty and xterm send them (`ctlseqs`): DA1's answer `CSI ? … c` (the client's fence), OSC 10, 11
 //! and 12 and OSC 4 colours (`rgb:r/g/b` with 1 to 4 hex digits per channel, or `#` hex), an OSC 52 clipboard's
-//! base64, `CSI ? 997 ; 1|2 n` (dark or light), the cell size `CSI 6 ; h ; w t`, and Kitty graphics answers
-//! (`ESC _ G … ESC \`). Dropped: other OSC, DCS, SOS, PM and APC strings, DA2 and DA3
+//! base64, native OSC 5522 packets and private attach bridge envelopes, `CSI ? 997 ; 1|2 n` (dark or light),
+//! the cell size `CSI 6 ; h ; w t`, and Kitty graphics answers (`ESC _ G … ESC \`). Dropped: other OSC, DCS, SOS, PM
+//! and APC strings, DA2 and DA3
 //! answers (`CSI > … c`, `CSI = … c`), DSR answers and reports (`CSI … n`), DECRPM (`CSI … $ y`), the Kitty keyboard
 //! flags (`CSI ? … u`) and every other `t` report (`CSI 48 ; … t`). Keys, mouse and focus reports pass (a CPR-shaped
 //! `CSI … R` is a function key: the outer terminal is never asked for the cursor), and so does a bracketed paste,
@@ -37,6 +38,11 @@
 //! read is asked. A control inside the framing (a C0 byte but the BEL, DEL, an ESC that does not start the ST: the
 //! user's key, as base64 holds none) drops the framed bytes untyped, leaves the read asked, and is read on its own:
 //! Ctrl+\ still detaches, Enter still reaches the program. Collected clipboard bytes are never replayed as keys.
+//!
+//! Native OSC 5522 packets and private attach bridge envelopes are framed once the complete prefix
+//! (`ESC ] 5522 ;` or `ESC ] 777 ; ngterm-attach ;`) arrives, including unsolicited and late packets.
+//! Shorter prefixes remain ordinary cut sequences with the quiet timeout above. A malformed or oversized
+//! native/bridge frame produces no answer; a malformed OSC 52 frame still completes its asked read with `None`.
 //!
 //! What is left: a header cut before its `52` (`ESC ]`, a key, or `ESC ] 5`, answer-shaped) is held as any other cut
 //! sequence, so a pause there past its wait types it, and the rest of the answer after it; and a control that is
@@ -83,15 +89,27 @@ pub enum Answer {
     /// DA1's answer: everything the outer terminal answered before it is in.
     PrimaryAttributes,
     /// OSC 10, 11 or 12; `None` for a colour it did not read.
-    Dynamic { which: Dynamic, color: Option<Rgb> },
+    Dynamic {
+        which: Dynamic,
+        color: Option<Rgb>,
+    },
     /// OSC 4.
-    Palette { index: u8, color: Option<Rgb> },
+    Palette {
+        index: u8,
+        color: Option<Rgb>,
+    },
     /// OSC 52: the clipboard's bytes; `None` for a payload that is not base64.
     Clipboard(Option<Vec<u8>>),
+    /// A multipart OSC 5522 packet, including unsolicited paste events.
+    ClipboardMime(super::clipboard::Packet),
+    Bridge(ngterm_core::attach_bridge::Envelope),
     /// `CSI ? 997 ; Ps n`, answering `CSI ? 996 n` or reporting a change under mode 2031.
     ColorScheme(ColorScheme),
     /// `CSI 6 ; h ; w t`: one cell, in pixels.
-    CellSize { width: u32, height: u32 },
+    CellSize {
+        width: u32,
+        height: u32,
+    },
     /// A Kitty graphics answer, whole (`ESC _ G … ESC \`).
     Kitty(Vec<u8>),
 }
@@ -138,9 +156,10 @@ enum Kind {
     Detach,
 }
 
-/// The OSC 52 answer being read in its framing (module docs).
+/// The OSC 52, OSC 5522 or private bridge frame being read in its framing (module docs).
 #[derive(Debug)]
 struct ClipboardFrame {
+    native: bool,
     /// What follows its `ESC ]` so far; `None` past [`STRING_LIMIT`], its bytes discarded up to its end.
     content: Option<Vec<u8>>,
 }
@@ -168,7 +187,7 @@ pub struct InputParser {
     detach_key: bool,
     /// An OSC 52 answer is due ([`InputParser::set_clipboard_due`]).
     clipboard_due: bool,
-    /// The OSC 52 answer being read.
+    /// The OSC 52, OSC 5522 or private bridge frame being read.
     clipboard: Option<ClipboardFrame>,
 }
 
@@ -196,7 +215,7 @@ impl InputParser {
         !self.held.is_empty() || self.clipboard.is_some()
     }
 
-    /// What the cut sequence held may be; `None` for none, or for a cut end of a bracketed paste or of a framed OSC 52
+    /// What the cut sequence held may be; `None` for none, or for a cut end of a bracketed paste or of a framed clipboard
     /// answer, which waits for the rest however long it takes.
     #[must_use]
     pub fn held(&self) -> Option<Held> {
@@ -248,11 +267,8 @@ impl InputParser {
                 at += run;
                 continue;
             }
-            if self.clipboard_due && clipboard_header(rest) {
-                self.clipboard = Some(ClipboardFrame {
-                    content: Some(b"52".to_vec()),
-                });
-                at += CLIPBOARD_HEADER.len();
+            if let Some(consumed) = self.begin_clipboard(rest) {
+                at += consumed;
                 continue;
             }
             match self.sequence(rest) {
@@ -272,8 +288,26 @@ impl InputParser {
         tokens
     }
 
+    fn begin_clipboard(&mut self, bytes: &[u8]) -> Option<usize> {
+        let (content, consumed, native) = if bytes.starts_with(ngterm_core::attach_bridge::PREFIX) {
+            let prefix = ngterm_core::attach_bridge::PREFIX;
+            (prefix[2..prefix.len() - 1].to_vec(), prefix.len() - 1, true)
+        } else if bytes.starts_with(b"\x1b]5522;") {
+            (b"5522".to_vec(), 6, true)
+        } else if self.clipboard_due && clipboard_header(bytes) {
+            (b"52".to_vec(), CLIPBOARD_HEADER.len(), false)
+        } else {
+            return None;
+        };
+        self.clipboard = Some(ClipboardFrame {
+            native,
+            content: Some(content),
+        });
+        Some(consumed)
+    }
+
     /// The cut sequence held, given up once the input stayed quiet: dropped when it may be an answer and one is due
-    /// (`answer_due`), else input (module docs). A cut end of a bracketed paste or of a framed OSC 52 answer stays
+    /// (`answer_due`), else input (module docs). A cut end of a bracketed paste or of a framed clipboard answer stays
     /// held.
     pub fn flush(&mut self, answer_due: bool) -> Vec<Token> {
         let mut tokens = Vec::new();
@@ -326,12 +360,14 @@ impl InputParser {
                 return at;
             }
         };
-        let data = self
-            .clipboard
-            .take()
-            .and_then(|frame| frame.content)
-            .and_then(|content| clipboard_data(&content));
-        tokens.push(Token::Answer(Answer::Clipboard(data)));
+        let frame = self.clipboard.take();
+        let native = frame.as_ref().is_some_and(|frame| frame.native);
+        let content = frame.and_then(|frame| frame.content);
+        if let Some(answer) = content.as_deref().and_then(osc) {
+            tokens.push(Token::Answer(answer));
+        } else if !native {
+            tokens.push(Token::Answer(Answer::Clipboard(None)));
+        }
         at + terminator
     }
 
@@ -498,15 +534,6 @@ fn clipboard_header(bytes: &[u8]) -> bool {
     bytes.starts_with(CLIPBOARD_HEADER) && bytes.get(CLIPBOARD_HEADER.len()).is_none_or(|byte| *byte == b';')
 }
 
-/// The clipboard's bytes in a framed OSC 52 answer's content (`52;<selection>;<base64>`); `None` for one that is not
-/// so.
-fn clipboard_data(content: &[u8]) -> Option<Vec<u8>> {
-    match osc(content) {
-        Some(Answer::Clipboard(data)) => data,
-        _ => None,
-    }
-}
-
 /// What a whole string is: an answer the client reads, or one dropped.
 fn classify_string(kind: u8, content: &[u8], whole: &[u8]) -> Kind {
     match kind {
@@ -517,6 +544,12 @@ fn classify_string(kind: u8, content: &[u8], whole: &[u8]) -> Kind {
 }
 
 fn osc(content: &[u8]) -> Option<Answer> {
+    if content.starts_with(ngterm_core::attach_bridge::BODY_PREFIX) {
+        return ngterm_core::attach_bridge::Envelope::decode(content).map(Answer::Bridge);
+    }
+    if content.starts_with(b"5522;") {
+        return super::clipboard::Packet::parse(content).map(Answer::ClipboardMime);
+    }
     let mut fields = content.split(|byte| *byte == b';');
     let number = fields.next()?;
     let rest: Vec<&[u8]> = fields.collect();

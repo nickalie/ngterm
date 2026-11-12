@@ -23,7 +23,7 @@ use crate::actor::{Actor, Command};
 use crate::chat::input::InputTiming;
 use crate::chat::{AgentCommand, ChatEvent, ChatState, UploadCancel};
 use crate::keys::{self, KeyError, KeyPair};
-use crate::pane::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};
+use crate::pane::{ClipboardPart, ClipboardReply, ClipboardWriteStatus, PaneClipboard, PaneEnd, PaneRef, PaneRole};
 use crate::presentation::{
     AskReply, PresentationRole, RemoteAsk, RemoteHud, RemoteLayout, RemoteNotice, RemoteStatus, StreamState,
 };
@@ -199,19 +199,31 @@ pub enum MobileEvent {
     PaneEnded { pane: PaneRef, end: PaneEnd },
     /// A shown pane's program rang the bell.
     Bell { pane: PaneRef },
-    /// A shown pane's program set the clipboard (`None` clears it).
+    /// A shown pane's program sets the device's clipboard to `contents`, every representation of one value (text as
+    /// `text/plain`, at most once; none: clear it). The app keeps the types its clipboard can hold and answers
+    /// [`MobileCore::complete_clipboard_write`] with `write_id` once the clipboard holds it (or refused it): the
+    /// program's output waits for that answer. A write to another clipboard than the standard one (the device has
+    /// none) is answered by the core and never reaches the app.
     ClipboardWrite {
         pane: PaneRef,
-        clipboard: PaneClipboard,
-        text: Option<String>,
+        write_id: u64,
+        contents: Vec<ClipboardPart>,
     },
-    /// A shown pane's program asks to read the clipboard (`list_only`: only which kinds it holds): its output waits
-    /// for [`MobileCore::answer_clipboard_read`].
+    /// A shown pane's program asks to read the clipboard: its output waits for [`MobileCore::answer_clipboard_read`].
+    /// `mimes` are the types it wants (at most four, in its order of preference, text as `text/plain`; OSC 52 asks for
+    /// text alone), and `list` whether it also wants the types the clipboard holds. `list_only` (the Kitty protocol's
+    /// listing) and a read with no `mimes` disclose no data, so they need no consent; `granted` says a grant the
+    /// program holds in this terminal (the Kitty protocol's password) already allows it; `can_remember` that an Allow
+    /// may keep such a grant.
     ClipboardReadRequest {
         pane: PaneRef,
         read_id: u64,
         clipboard: PaneClipboard,
         list_only: bool,
+        mimes: Vec<String>,
+        list: bool,
+        granted: bool,
+        can_remember: bool,
     },
     /// A clipboard read was denied without the user's answer (the pane hidden, its link lost, its program ended):
     /// take its prompt down.
@@ -633,6 +645,30 @@ impl MobileCore {
             pane_id,
         };
         self.actor.post(Command::AnswerClipboardRead { pane, read_id, reply })
+    }
+
+    /// How the app's write `write_id` of a shown pane's program (a [`MobileEvent::ClipboardWrite`]) ended, once the
+    /// device's clipboard took it or refused it; the program learns it (the Kitty protocol's DONE, EPERM, ENOSYS or
+    /// EIO) and its output goes on. An answer to a write no longer open is dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn complete_clipboard_write(
+        &self,
+        machine_id: String,
+        session_id: String,
+        pane_id: String,
+        write_id: u64,
+        status: ClipboardWriteStatus,
+    ) -> Result<(), MobileError> {
+        let pane = PaneRef {
+            machine_id,
+            session_id,
+            pane_id,
+        };
+        self.actor
+            .post(Command::CompleteClipboardWrite { pane, write_id, status })
     }
 }
 

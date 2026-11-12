@@ -1,4 +1,4 @@
-//! [`RenderState`]: an owned `GhosttyRenderState` with its row iterator and row cells, read through [`Rows`].
+//! [`RenderState`]: an owned `GhosttyRenderState` with reusable row, cell and image iterators.
 
 use std::marker::PhantomData;
 use std::ptr::NonNull;
@@ -76,6 +76,7 @@ pub struct RenderState {
     // in declaration order: the cells and the iterator go before the state they read.
     cells: Handle<ffi::GhosttyRenderStateRowCellsImpl>,
     rows: Handle<ffi::GhosttyRenderStateRowIteratorImpl>,
+    images: Handle<ffi::GhosttyRenderStateImageIteratorImpl>,
     raw: Handle<ffi::GhosttyRenderStateImpl>,
     // False after a failed update or begin: the C capture may claim rows its storage does not hold.
     valid: bool,
@@ -107,7 +108,9 @@ impl RenderState {
         // SAFETY: as above, for the row cells.
         Error::check(unsafe { ffi::ghostty_render_state_row_cells_new(std::ptr::null(), &raw mut cells) })?;
         let cells = Handle::new(cells, ffi::ghostty_render_state_row_cells_free)?;
+        let images = crate::render_images::new_iterator()?;
         Ok(Self {
+            images,
             cells,
             rows,
             raw,
@@ -218,6 +221,41 @@ impl RenderState {
         })
     }
 
+    /// The resolved image placements. Unknown protocols are skipped. Like rows, these borrow the capture.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoValue`] after an incomplete or failed update, or the library's iterator error.
+    pub fn images(&mut self) -> Result<crate::RenderImages<'_>, Error> {
+        if !self.valid {
+            return Err(Error::NoValue);
+        }
+        self.images_inner()
+    }
+
+    fn images_inner(&mut self) -> Result<crate::RenderImages<'_>, Error> {
+        crate::render_images::images(self.raw.ptr(), &mut self.images)
+    }
+
+    /// Equality token for the resolved placement list, independent of the Kitty storage generation.
+    #[must_use]
+    pub fn image_placements_generation(&self) -> Option<u64> {
+        self.valid.then(|| self.images_generation_inner()).flatten()
+    }
+
+    fn images_generation_inner(&self) -> Option<u64> {
+        let mut generation = 0u64;
+        // SAFETY: the live state's key writes a uint64_t, including during a successful begin phase.
+        let result = unsafe {
+            ffi::ghostty_render_state_get(
+                self.raw.ptr(),
+                ffi::GHOSTTY_RENDER_STATE_DATA_IMAGE_PLACEMENTS_GENERATION,
+                (&raw mut generation).cast(),
+            )
+        };
+        (result == ffi::GHOSTTY_SUCCESS).then_some(generation)
+    }
+
     /// Capture the terminal from inside [`Effects::render_hold`](crate::Effects::render_hold) (both phases), as
     /// `terminal.h` asks when a hold begins.
     ///
@@ -314,6 +352,21 @@ pub struct PendingUpdate<'a> {
 }
 
 impl PendingUpdate<'_> {
+    /// Resolved placements from the successful begin phase. Read their pixels under the same terminal lock.
+    ///
+    /// # Errors
+    ///
+    /// The library's iterator error.
+    pub fn images(&mut self) -> Result<crate::RenderImages<'_>, Error> {
+        self.state.images_inner()
+    }
+
+    /// Equality token for the begin phase's resolved placement list.
+    #[must_use]
+    pub fn image_placements_generation(&self) -> Option<u64> {
+        self.state.images_generation_inner()
+    }
+
     /// Complete the capture with render-state memory only (safe while the terminal is being written).
     ///
     /// # Errors
@@ -522,6 +575,8 @@ mod tests {
         assert_eq!(state.record(Err(Error::OutOfMemory)), Err(Error::OutOfMemory));
         assert_eq!(state.size(), (0, 0));
         assert_eq!(state.rows().err(), Some(Error::NoValue));
+        assert_eq!(state.images().err(), Some(Error::NoValue));
+        assert_eq!(state.image_placements_generation(), None);
         state.update(&mut terminal).unwrap();
         assert_eq!(state.size(), (10, 2));
         assert_eq!(screen(&mut state), ["kept", ""]);
@@ -552,6 +607,8 @@ mod tests {
         std::mem::forget(state.begin_update(&mut terminal).unwrap());
         assert_eq!(state.size(), (0, 0));
         assert_eq!(state.rows().err(), Some(Error::NoValue));
+        assert_eq!(state.images().err(), Some(Error::NoValue));
+        assert_eq!(state.image_placements_generation(), None);
         assert!(state.colors().is_none());
         assert!(state.cursor().is_none());
         // a complete update (two-phase, ended by dropping the guard) makes it readable again

@@ -181,7 +181,7 @@ white on nothing, as Android masks it. The status glyphs are 16dp filled or stro
 | `BusBar` | the copper bar marking where you are |
 | `StatusGlyph`, `StatusBadge`, `AgentStatusBadge` | a status's glyph; glyph and word for an app tone; for an origin's status |
 | `MachineCard` | a machine: name, mono address, connection badge, and a summary slot for its sessions' status |
-| `SessionRow` | a session: name, context or companion line, status slot, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, Chat view, End session) |
+| `SessionRow` | a session: name, context or companion line (a machine's list indents every companion; Sessions only one under its attached parent), status slot, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, Chat view, End session) |
 | `SectionHeader` | a group's heading with an optional count and one text action |
 | `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it (busy while it runs: a small spinner, no taps); at most one quieter text-button action under it, for a retry after the fix the main one points to |
 | `Banner` | a strip about the whole screen while it stays usable, with an optional action and dismiss; announced politely |
@@ -416,16 +416,34 @@ learn, and nothing drawn until a gesture asks for it.
   in mono on a `surfaceContainerLow` plate (its first six lines), then Cancel and Paste (the toolbar's word). Safe
   text pastes without asking.
 
-### A program reads the clipboard (`ui/terminal/TerminalPrompts.kt`, `data/ClipboardReads.kt`)
+### A program reads the clipboard (`ui/terminal/TerminalPrompts.kt`, `ClipboardPreview.kt`, `data/ClipboardReads.kt`)
 
-A program's OSC 52 read waits for the user, as Ghostty's `clipboard-read = ask`. It is a sheet over whatever is on
-screen, the same shape as the first connect's: the attention diamond, "Let docs-site read your clipboard?", what the
-program would see and from where ("A program in docs-site on build-01 asks for the text you copied. It sees it only
-if you allow it."; a read that only lists what kinds the clipboard holds says so), then **Allow** (filled), **Always
-allow on build-01** (outlined) and **Deny**. Swiping the sheet away denies. Reads queue and show one at a time; a read
-the core gives up on (its pane hidden, detached, lost or exited) closes its sheet. "Always" is the app's to keep, per
-machine (`ClipboardTrust`, which Settings lists), and answers that machine's later reads at once. In the background
-Android lets no app read the clipboard, so an always-allowed read then gets an empty one.
+A program's read (OSC 52, or the Kitty clipboard protocol's OSC 5522) waits for the user, as Ghostty's
+`clipboard-read = ask`. It is a sheet over whatever is on screen, the same shape as the first connect's: the attention
+diamond, "Let docs-site read your clipboard?", from where ("A program in docs-site on build-01 asks for what you
+copied. It sees this only if you allow it."), then what it would see, then **Allow** (filled), **Always allow on
+build-01** (outlined) and **Deny**. Swiping the sheet away denies. Reads queue and show one at a time; a read the core
+gives up on (its pane hidden, detached, lost or exited) closes its sheet.
+
+- **The preview** is Ghostty's GTK confirmation in the app's terms: one page per type the read asks for and the
+  clipboard holds, picked with a filter chip named by its MIME type in mono (no chips for one page), on a
+  `surfaceContainerLow` plate. An image shows fitted, at most 200dp tall; valid UTF-8 shows as text in mono, scrolling
+  inside the plate past 160dp (the first 64 KiB of its UTF-8, the rest counted); other data says "No preview for this kind of
+  content"; an empty part says "Empty". Under the plate, the page's size ("73 bytes", "2.0 kB"), after its type when
+  there is one page. The clipboard is read when the sheet comes up ("Reading your clipboard…" until then, with Allow
+  and Always disabled), and Allow hands over exactly what was shown. A clipboard holding none of the types says so.
+- **Don't ask again for this program in this terminal**, a switch row under the preview, shows only for a read that
+  can keep a grant (the Kitty protocol's password); with it on, Allow (or Always) asks the core for that grant. A
+  program holding one is answered unasked.
+- A listing of the types, or a read asking for no type, discloses no data and never asks.
+- "Always" is the app's to keep, per machine (`ClipboardTrust`, which Settings lists), and answers that machine's later
+  reads at once. In the background Android lets no app read the clipboard, so an always-allowed read then gets an
+  empty one.
+
+A program's write isn't asked about (Ghostty's `clipboard-write = allow`): its text, HTML and first image land on the
+clipboard as one clip (an image through the app's own content URI, replaced by the next write; HTML with its text, as
+Android's clips carry it), and the program learns the outcome only once the clipboard took it. A write of none of those
+types is refused as unsupported, and only a write with nothing in it clears.
 
 ### Keyboard (`ui/terminal/KeyMapping.kt`, `TerminalKeyboard.kt`, `TerminalInputConnection.kt`, `ExtraKeysRow.kt`)
 
@@ -520,7 +538,10 @@ compact                            medium (rail open)               expanded
 
 - **Where it lives:** under Sessions. With nothing open, Sessions lists what is attached, grouped by machine (a
   `SectionHeader` per machine, a `SessionRow` per session with its status and a menu: Detach, Chat view, End session), or the
-  empty state pointing to Machines. Tapping a session opens its view. On a phone the view is a screen of its own over
+  empty state pointing to Machines. The rows are the tree a machine's sessions shows, kept to what is attached: in the
+  machine's order by family, an attached companion indented under its attached parent with "Companion of …" as its
+  line. A companion whose parent isn't attached keeps that line but stands unindented in its family's place, so it
+  never reads as another session's. There is nothing to expand or collapse, as on a machine's list. Tapping a session opens its view. On a phone the view is a screen of its own over
   the list (Back returns to it) and the bottom bar steps aside, so the terminal has the whole height; from the medium
   width up it is the content beside the rail or the sidebar, which list the attached sessions (below).
 - **The bar** (`surfaceContainer`, under the status bar): Back on a phone; the session's name (titleMedium) over its
@@ -594,8 +615,8 @@ compact                            medium (rail open)               expanded
   typed in. Until the selected pane's terminal is there (on its way, or it couldn't be shown) the keys go nowhere,
   but the chords still move between panes and sessions.
 - **The attached sessions in the rail and the sidebar:** the sidebar groups them by machine (the machine's name as a
-  `SectionHeader`, then a `SessionRow` each with its status, the bus bar on the one open). The rail, collapsed, gives
-  each a 64dp cell, its status glyph over its name cut to fit; opened, the sidebar's rows. Either opens the session
+  `SectionHeader`, then a `SessionRow` each with its status, the bus bar on the one open), companions indented as in
+  the list. The rail, collapsed, gives each a 64dp cell in the same order, its status glyph over its name cut to fit; opened, the sidebar's rows. Either opens the session
   under Sessions.
 - **State:** the open session, the focused pane of each session, the shown panes, each pane's view and its open chat
   live in the app's process, not the screen, so rotation, folding, a size-class change or a trip to another

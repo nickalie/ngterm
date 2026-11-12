@@ -1,5 +1,6 @@
 //! The link test: the archive the build script built links with nothing beside it, and reports the build the script
-//! asked for (`-Doptimize=ReleaseFast`, `-Dsimd=true`, the default feature set).
+//! asked for (`-Doptimize=fast`, which `build_info` reports as `GHOSTTY_OPTIMIZE_RELEASE_FAST`, `-Dsimd=true`, the
+//! default feature set).
 
 use ngterm_ghostty_vt_sys as sys;
 

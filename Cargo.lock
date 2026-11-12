@@ -5352,7 +5352,9 @@ version = "0.2.3"
 dependencies = [
  "base64 0.23.1",
  "bitflags 2.13.2",
+ "libc",
  "ngterm-ghostty-vt-sys",
+ "tempfile",
 ]
 
 [[package]]
@@ -5368,6 +5370,7 @@ version = "0.2.3"
 dependencies = [
  "ashpd",
  "async-channel",
+ "base64 0.23.1",
  "cosmic-text",
  "embed-resource",
  "fancy-regex",
@@ -5455,6 +5458,7 @@ version = "0.2.3"
 name = "ngterm-mobile"
 version = "0.2.3"
 dependencies = [
+ "base64 0.23.1",
  "futures-lite",
  "ngterm-core",
  "ngterm-proto",
@@ -5525,6 +5529,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "signal-hook",
  "tempfile",
  "thiserror 2.0.20",

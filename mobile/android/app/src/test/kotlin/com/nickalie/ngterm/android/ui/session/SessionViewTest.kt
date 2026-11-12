@@ -25,13 +25,14 @@ import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.withKeysDown
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.nickalie.ngterm.android.data.key
+import com.nickalie.ngterm.android.data.part
 import com.nickalie.ngterm.android.ui.NavLayout
 import com.nickalie.ngterm.core.fake.FakeInput
 import com.nickalie.ngterm.core.ffi.ChatBody
 import com.nickalie.ngterm.core.ffi.ChatEvent
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
-import com.nickalie.ngterm.core.ffi.PaneClipboard
 import com.nickalie.ngterm.core.ffi.PaneEnd
 import com.nickalie.ngterm.core.ffi.PaneKeyAction
 import com.nickalie.ngterm.core.ffi.PaneRole
@@ -392,9 +393,14 @@ class SessionViewTest : SessionViewFixture() {
     @Test
     fun aProgramsClipboardWriteReachesTheDevicesClipboard() {
         openSession()
-        test.core.emit(MobileEvent.ClipboardWrite(p1, PaneClipboard.STANDARD, "copied text"))
-        waitFor { test.clipboardWrites.isNotEmpty() }
-        assertEquals(listOf("copied text"), test.clipboardWrites.toList())
+        test.core.emit(MobileEvent.ClipboardWrite(p1, 1u, listOf(part("text/plain", "copied text"))))
+        waitFor { test.core.calls.any { it.method == "completeClipboardWrite" } }
+        assertEquals(
+            listOf(listOf("text/plain" to "copied text".toByteArray().toList())),
+            test.clipboardWrites.map { parts ->
+                parts.map { it.key() }
+            },
+        )
     }
 
     @Test

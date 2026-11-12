@@ -225,6 +225,7 @@ fn every_attach_client_message_round_trips() {
         },
         AttachClientMessage::Resize { size: size() },
         AttachClientMessage::Metadata(metadata()),
+        AttachClientMessage::ConfigReload(metadata()),
         AttachClientMessage::DelegatedReply {
             id: 3,
             epoch: 2,
@@ -326,6 +327,7 @@ fn every_reply_message_round_trips() {
     let mut messages = Vec::new();
     for (id, selection, list_only) in [(3, "c", false), (4, "s", false), (5, "p", true)] {
         messages.push(AttachServerMessage::DelegatedRequest {
+            native_alias: None,
             id,
             epoch: id - 1,
             request: DelegatedRequest::ClipboardRead {
@@ -477,6 +479,32 @@ fn a_version_mismatch_is_refused_with_its_message() {
     );
     assert_eq!(check_hello(Role::Api, PROTOCOL_VERSION), Ok(()));
     assert_eq!(check_hello(Role::Attach, PROTOCOL_VERSION), Ok(()));
+}
+
+#[test]
+fn api_and_attach_refuse_older_and_newer_protocols_before_decoding_postcard() {
+    for protocol in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
+        for role in [Role::Api, Role::Attach] {
+            let hello = Control::Hello(Hello {
+                role,
+                build: "other".into(),
+                capabilities: vec![],
+            });
+            let mut bytes = Vec::new();
+            write_control(&mut bytes, &hello).unwrap();
+            bytes[4..8].copy_from_slice(&protocol.to_le_bytes());
+            // An undecodable postcard body follows: negotiation must refuse using only the stable hello.
+            bytes.extend(raw_frame(protocol, 2, &[0xff]));
+            let mut input = bytes.as_slice();
+            let frame = read_frame(&mut input).unwrap();
+            let Control::Hello(hello) = frame.control().unwrap() else {
+                panic!("not hello")
+            };
+            let refusal = welcome(&hello, frame.protocol, "server", &[]).error.unwrap();
+            assert_eq!(refusal.code, ErrorCode::ProtocolMismatch);
+            assert!(!input.is_empty(), "postcard bytes were not consumed");
+        }
+    }
 }
 
 #[test]
@@ -1053,4 +1081,127 @@ fn the_api_replies_are_the_session_hosts_types_field_for_field() {
         }
     );
     assert_eq!(ngterm_host::ProcessRecord::from(process), record);
+}
+
+#[test]
+fn clipboard_mime_permission_completion_and_paste_round_trip_binary_bytes() {
+    use ngterm_session::protocol::{ClipboardPaste, ClipboardRepresentation, ClipboardStatus};
+    let contents = vec![ClipboardRepresentation {
+        mime: "application/octet-stream".into(),
+        data: (0..=255).cycle().take(4097).collect(),
+    }];
+    let requests = [
+        DelegatedRequest::ClipboardReadMime {
+            bridge: None,
+            selection: "p".into(),
+            mimes: vec!["image/png".into(), "text/html".into()],
+            list: true,
+            name: "untrusted".into(),
+            granted: true,
+            can_remember: true,
+        },
+        DelegatedRequest::ClipboardWrite {
+            selection: "c".into(),
+            contents: contents.clone(),
+            name: "untrusted".into(),
+            granted: false,
+            can_remember: true,
+            kitty: true,
+        },
+        DelegatedRequest::ClipboardWrite {
+            selection: "c".into(),
+            contents: Vec::new(),
+            name: String::new(),
+            granted: false,
+            can_remember: false,
+            kitty: false,
+        },
+    ];
+    for request in requests {
+        roundtrip_message(&AttachServerMessage::DelegatedRequest {
+            native_alias: None,
+            id: 1,
+            epoch: 2,
+            request,
+        })
+        .unwrap();
+    }
+    for status in [
+        ClipboardStatus::Success,
+        ClipboardStatus::Denied,
+        ClipboardStatus::Unsupported,
+        ClipboardStatus::Busy,
+        ClipboardStatus::InvalidData,
+        ClipboardStatus::IoError,
+    ] {
+        for reply in [
+            DelegatedReply::ClipboardWrite { status, remember: true },
+            DelegatedReply::ClipboardMime {
+                contents: contents.clone(),
+                available: vec!["application/octet-stream".into()],
+                remember: true,
+                status,
+            },
+        ] {
+            roundtrip_message(&AttachClientMessage::DelegatedReply { id: 1, epoch: 2, reply }).unwrap();
+        }
+    }
+    roundtrip_message(&AttachClientMessage::ClipboardPaste {
+        epoch: 2,
+        paste: ClipboardPaste {
+            bridge: None,
+            contents,
+            text_source: false,
+            selection: "p".into(),
+            allow_unsafe: true,
+        },
+    })
+    .unwrap();
+}
+
+#[test]
+fn lazy_paste_registration_fetch_and_native_alias_round_trip_without_outer_tokens() {
+    use ngterm_session::protocol::{ClipboardAlias, ClipboardPaste, ClipboardPasteBridge};
+    roundtrip_message(&AttachClientMessage::ClipboardPaste {
+        epoch: 8,
+        paste: ClipboardPaste {
+            bridge: Some(ClipboardPasteBridge {
+                id: "opaque-bridge".into(),
+                available: (0..16).map(|index| format!("application/type{index}")).collect(),
+            }),
+            contents: Vec::new(),
+            text_source: false,
+            selection: "c".into(),
+            allow_unsafe: false,
+        },
+    })
+    .unwrap();
+    roundtrip_message(&AttachServerMessage::DelegatedRequest {
+        native_alias: Some(ClipboardAlias("opaque-native-alias".into())),
+        id: 9,
+        epoch: 8,
+        request: DelegatedRequest::ClipboardReadMime {
+            bridge: Some("opaque-bridge".into()),
+            selection: "c".into(),
+            mimes: vec!["application/type12".into()],
+            list: false,
+            name: "Program".into(),
+            granted: true,
+            can_remember: true,
+        },
+    })
+    .unwrap();
+}
+
+#[test]
+fn clipboard_data_keeps_its_postcard_byte_vector_layout() {
+    let contents = ngterm_session::protocol::ClipboardRepresentation {
+        mime: "x".into(),
+        data: vec![0, 255],
+    };
+    assert_eq!(postcard::to_allocvec(&contents).unwrap(), [1, b'x', 2, 0, 255]);
+    assert_eq!(
+        postcard::from_bytes::<ngterm_session::protocol::ClipboardRepresentation>(&[1, b'x', 2, 0, 255]).unwrap(),
+        contents
+    );
 }

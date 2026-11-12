@@ -54,6 +54,8 @@ mod active;
 #[cfg(test)]
 #[cfg(feature = "local")]
 mod bench;
+mod bridge;
+pub mod clipboard_mime;
 mod effects;
 mod exit;
 mod gesture;
@@ -83,9 +85,13 @@ mod wheel;
 pub use actions::{FormatRegion, SelectionAdjust, TextFormat};
 #[cfg(feature = "screen-read")]
 pub use active::ActiveScreen;
+/// Native clipboard write completion statuses from the terminal protocol.
+pub use ngterm_ghostty_vt::ClipboardWriteResult;
+
 pub use effects::{
-    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, ColorScheme,
-    ExitStatus, PaneEvent, ProgramNeed, ProgramState, ProgramStatus, Progress, TerminalColors,
+    ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardPermissionScope, ClipboardReadRequest,
+    ClipboardWrite, ColorScheme, ExitStatus, PaneEvent, ProgramNeed, ProgramState, ProgramStatus, Progress,
+    TerminalColors, WriteCompletion,
 };
 pub use exit::{ABNORMAL_EXIT_RUNTIME, ExitPolicy};
 pub use gesture::{Autoscroll, CLICK_REPEAT_INTERVAL, Gesture, GestureEvent};
@@ -93,15 +99,14 @@ pub use input::{
     KeyInput, ModSides, MouseAction, MouseButton, MouseInput, Padding, Paste, PasteSource, Scroll, Typing,
 };
 pub use kitty::{
-    KittyFormat, KittyImage, KittyImageKey, KittyLayer, KittyPlacement, KittyView, PlacementKey, PlacementNamespace,
-    PlacementRect, SourceRect, VirtualRooted,
+    KittyFormat, KittyImage, KittyImageKey, KittyLayer, KittyPlacement, KittyView, PlacementRect, SourceRect,
 };
 #[cfg(feature = "local")]
 pub use launch::{COMMAND_SHELL, FALLBACK_TERM, Host, Launch, Prepared, resolve_resources, resource_candidates};
 pub use pane::{
     DEFAULT_KITTY_IMAGE_LIMIT, DEFAULT_WRITE_LIMIT, FrameSnapshot, GridSize, Pane, PaneConfig, PaneStats, Wake,
 };
-pub use placeholder::{KittyPlaceholder, PLACEHOLDER, VirtualPlacement, virtual_placements};
+pub use placeholder::PLACEHOLDER;
 #[cfg(feature = "local")]
 pub use pty::PaneCommand;
 pub use render::{

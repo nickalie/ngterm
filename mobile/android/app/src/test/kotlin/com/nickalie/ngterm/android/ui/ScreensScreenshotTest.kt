@@ -10,6 +10,9 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import com.github.takahirom.roborazzi.captureScreenRoboImage
 import com.nickalie.ngterm.android.ENCRYPTED_FAKE_KEY
 import com.nickalie.ngterm.android.data.ClipboardRead
+import com.nickalie.ngterm.android.data.ClipboardSnapshot
+import com.nickalie.ngterm.android.data.RED_PNG
+import com.nickalie.ngterm.android.data.part
 import com.nickalie.ngterm.android.ui.machines.HostKeyChangedScreen
 import com.nickalie.ngterm.android.ui.machines.HostKeySheet
 import com.nickalie.ngterm.android.ui.machines.MachineDraft
@@ -23,6 +26,7 @@ import com.nickalie.ngterm.android.ui.onboarding.WelcomeScreen
 import com.nickalie.ngterm.android.ui.terminal.ClipboardReadSheet
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.fake.TailscaleSignIn
+import com.nickalie.ngterm.core.ffi.ClipboardPart
 import com.nickalie.ngterm.core.ffi.PaneRef
 import org.junit.Rule
 import org.junit.Test
@@ -177,9 +181,25 @@ class ScreensScreenshotTest(
             NgtermTheme {
                 MachinesSample(MachinesUiState.Ready(SampleMachines.take(1), offline = false))
                 ClipboardReadSheet(
-                    read = ClipboardRead(PaneRef("m1", "s1", "P1"), readId = 1u, listOnly = false),
+                    read =
+                        ClipboardRead(
+                            PaneRef("m1", "s1", "P1"),
+                            readId = 1u,
+                            listOnly = false,
+                            mimes = listOf("text/plain", "text/html", "image/png"),
+                            canRemember = true,
+                        ),
                     machine = "build-01",
                     session = "docs-site",
+                    preview =
+                        ClipboardSnapshot(
+                            listOf(
+                                part("text/plain", "git push origin feature/clipboard\nnpm run deploy -- --prod"),
+                                part("text/html", "<b>deploy</b>"),
+                                ClipboardPart("image/png", RED_PNG),
+                            ),
+                            emptyList(),
+                        ),
                     onAllow = {},
                     onAlways = {},
                     onDeny = {},

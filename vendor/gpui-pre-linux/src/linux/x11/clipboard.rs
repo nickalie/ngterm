@@ -34,7 +34,7 @@ use std::{
 use parking_lot::{Condvar, Mutex, MutexGuard, RwLock};
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, NONE,
-    connection::Connection,
+    connection::{Connection, RequestConnection},
     protocol::{
         Event,
         xproto::{
@@ -210,6 +210,22 @@ enum ReadSelNotifyResult {
 }
 
 impl Inner {
+    /// ChangeProperty has a 24-byte header, plus four bytes when BIG-REQUESTS is used. Until outgoing INCR is
+    /// supported, refuse data that cannot fit rather than accepting a clipboard value nobody can retrieve.
+    fn max_property_bytes(&self) -> usize {
+        self.server.conn.maximum_request_bytes().saturating_sub(28) & !3
+    }
+
+    fn validate_size(&self, size: usize) -> Result<()> {
+        let maximum = self.max_property_bytes();
+        if size > maximum {
+            return Err(Error::unknown(format!(
+                "Clipboard representation exceeds the X11 single-transfer limit ({size} > {maximum} bytes)"
+            )));
+        }
+        Ok(())
+    }
+
     fn new(display: &str) -> Result<Self> {
         let server = XContext::new(display)?;
         let atoms = Atoms::new(&server.conn)
@@ -240,6 +256,10 @@ impl Inner {
             return Err(Error::unknown(
                 "The clipboard handler thread seems to have stopped. Logging messages may reveal the cause. (See the `log` crate.)",
             ));
+        }
+
+        for part in &data {
+            self.validate_size(part.bytes.len())?;
         }
 
         let server_win = self.server.win_id;
@@ -364,6 +384,46 @@ impl Inner {
         }
         log::trace!("All conversions to supported formats failed.");
         Err(Error::ContentNotAvailable)
+    }
+
+    /// The atom named `name`, created when the server has none yet (ngterm: per-MIME writes).
+    fn intern(&self, name: &str) -> Result<Atom> {
+        Ok(self
+            .server
+            .conn
+            .intern_atom(false, name.as_bytes())
+            .map_err(into_unknown)?
+            .reply()
+            .map_err(into_unknown)?
+            .atom)
+    }
+
+    /// The targets `selection` offers with their names (ngterm: per-MIME reads): this process's own data's when it
+    /// owns the selection, else the owner's `TARGETS`; none without an owner.
+    fn targets(&self, selection: ClipboardKind) -> Result<Vec<(Atom, String)>> {
+        let atoms: Vec<Atom> = if self.is_owner(selection)? {
+            self.selection_of(selection)
+                .data
+                .read()
+                .as_ref()
+                .map(|list| list.iter().map(|data| data.format).collect())
+                .unwrap_or_default()
+        } else {
+            let reader = XContext::new(&self.display)?;
+            match self.read_single(&reader, selection, self.atoms.TARGETS) {
+                Ok(ClipboardData { bytes, format }) if format == self.atoms.ATOM => Self::parse_formats(&bytes),
+                Ok(_) | Err(Error::ContentNotAvailable) => Vec::new(),
+                Err(err) => return Err(err),
+            }
+        };
+        let mut targets = Vec::with_capacity(atoms.len());
+        for atom in atoms {
+            if targets.iter().any(|(known, _)| *known == atom) {
+                continue;
+            }
+            targets.push((atom, self.query_atom_name(atom)?));
+        }
+        Ok(targets)
     }
 
     fn parse_formats(bytes: &[u8]) -> Vec<Atom> {
@@ -742,6 +802,10 @@ impl Inner {
                 success = false;
             }
         }
+        self.notify_selection(event, success)
+    }
+
+    fn notify_selection(&self, event: SelectionRequestEvent, success: bool) -> Result<()> {
         // on failure we notify the requester of it
         let property = if success {
             event.property
@@ -888,9 +952,14 @@ fn serve_requests(context: Arc<Inner>) -> Result<(), Box<dyn std::error::Error>>
                     context.atom_name(event.target),
                 );
                 // Someone is requesting the clipboard content from us.
-                context
-                    .handle_selection_request(event)
-                    .map_err(into_unknown)?;
+                if let Err(error) = context.handle_selection_request(event) {
+                    log::warn!("Failed to serve a clipboard request: {error}");
+                    // A bad requestor or one failed transfer must not stop every later clipboard operation.
+                    if let Err(error) = context.notify_selection(event, false) {
+                        log::warn!("Failed to refuse a clipboard request: {error}");
+                    }
+                    continue;
+                }
 
                 // if we are in the progress of saving to the clipboard manager
                 // make sure we save that we have finished writing
@@ -1101,6 +1170,95 @@ impl Clipboard {
     pub fn is_owner(&self, selection: ClipboardKind) -> bool {
         self.inner.is_owner(selection).unwrap_or(false)
     }
+
+    /// Owns `selection` with exactly `representations` (ngterm: `write_clipboard_representations`): `text/plain` under
+    /// the UTF-8 text targets, UTF-8 first, any other type under its own atom; none leaves the selection empty.
+    pub(crate) fn set_representations(
+        &self,
+        representations: Vec<crate::linux::ClipboardRepresentation>,
+        selection: ClipboardKind,
+        wait: WaitConfig,
+    ) -> Result<()> {
+        let mut data = Vec::with_capacity(representations.len() + 2);
+        for representation in representations {
+            self.inner.validate_size(representation.data.len())?;
+            if representation.mime == "text/plain" {
+                for format in [
+                    self.inner.atoms.UTF8_MIME_0,
+                    self.inner.atoms.TEXT_MIME_UNKNOWN,
+                    self.inner.atoms.UTF8_STRING,
+                ] {
+                    data.push(ClipboardData {
+                        bytes: representation.data.clone(),
+                        format,
+                    });
+                }
+                continue;
+            }
+            data.push(ClipboardData {
+                format: self.inner.intern(&representation.mime)?,
+                bytes: representation.data,
+            });
+        }
+        self.inner.write(data, selection, wait)
+    }
+
+    /// The MIME types `selection` advertises (ngterm: `clipboard_mime_types`), without reading their data.
+    pub(crate) fn mime_types(&self, selection: ClipboardKind) -> Result<Vec<String>> {
+        let targets = self.inner.targets(selection)?;
+        let names: Vec<String> = targets.into_iter().map(|(_, name)| name).collect();
+        Ok(crate::linux::clipboard_mime::listed_mimes(&names, None))
+    }
+
+    /// Each of `mimes` `selection` offers, read in order (ngterm: `read_clipboard_mimes`); a text type reads the best
+    /// text target offered.
+    pub(crate) fn read_mimes(
+        &self,
+        selection: ClipboardKind,
+        mimes: &[String],
+    ) -> Result<Vec<crate::linux::ClipboardRepresentation>> {
+        let targets = self.inner.targets(selection)?;
+        let names: Vec<String> = targets.iter().map(|(_, name)| name.clone()).collect();
+        let owner = self.inner.is_owner(selection)?;
+        let reader = if owner {
+            None
+        } else {
+            Some(XContext::new(&self.inner.display)?)
+        };
+        let mut read: Vec<crate::linux::ClipboardRepresentation> = Vec::new();
+        for mime in mimes {
+            if read.iter().any(|known| &known.mime == mime) {
+                continue;
+            }
+            let Some(source) = crate::linux::clipboard_mime::source_type(&names, mime) else {
+                continue;
+            };
+            let Some(&(atom, _)) = targets.iter().find(|(_, name)| name == source) else {
+                continue;
+            };
+            let bytes = match &reader {
+                None => self
+                    .inner
+                    .selection_of(selection)
+                    .data
+                    .read()
+                    .as_ref()
+                    .and_then(|list| list.iter().find(|data| data.format == atom).map(|data| data.bytes.clone())),
+                Some(reader) => match self.inner.read_single(reader, selection, atom) {
+                    Ok(data) => Some(data.bytes),
+                    Err(Error::ContentNotAvailable) => None,
+                    Err(err) => return Err(err),
+                },
+            };
+            if let Some(data) = bytes {
+                read.push(crate::linux::ClipboardRepresentation {
+                    mime: mime.clone(),
+                    data: crate::linux::clipboard_mime::source_data(source, data),
+                });
+            }
+        }
+        Ok(read)
+    }
 }
 
 impl Drop for Clipboard {
@@ -1310,5 +1468,146 @@ impl Error {
         Error::Unknown {
             description: message.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::linux::ClipboardRepresentation;
+
+    fn rep(mime: &str, data: &[u8]) -> ClipboardRepresentation {
+        ClipboardRepresentation {
+            mime: mime.to_owned(),
+            data: data.to_vec(),
+        }
+    }
+
+    /// Another X11 client owning the selection, served by its own thread.
+    fn foreign_owner(display: &str) -> Clipboard {
+        let inner = Arc::new(Inner::new(display).expect("an X connection"));
+        let served = Arc::clone(&inner);
+        std::thread::spawn(move || serve_requests(served).map_err(|err| err.to_string()));
+        Clipboard { inner }
+    }
+
+    #[test]
+    #[ignore = "needs an X server: run under xvfb-run"]
+    fn oversized_writes_are_refused_and_a_failed_transfer_does_not_stop_x11() {
+        let display = std::env::var("DISPLAY").expect("an X display");
+        let owner = foreign_owner(&display);
+        let reader = Clipboard {
+            inner: Arc::new(Inner::new(&display).expect("an X connection")),
+        };
+        // PRIMARY keeps this test independent of the regular CLIPBOARD round trip.
+        let selection = ClipboardKind::Primary;
+        let mime = "application/x-ngterm-large";
+        let wanted = [mime.to_owned()];
+        let old = rep(mime, b"preserved");
+        owner
+            .set_representations(vec![old.clone()], selection, WaitConfig::None)
+            .unwrap();
+        let limit = owner.inner.max_property_bytes();
+        let too_large = vec![7; limit + 1];
+        // A rejected write neither replaces this client's clipboard nor steals a foreign selection.
+        for writer in [&owner, &reader] {
+            let error = writer
+                .set_representations(vec![rep(mime, &too_large)], selection, WaitConfig::None)
+                .unwrap_err();
+            assert!(error.to_string().contains("single-transfer limit"), "{error}");
+            assert_eq!(reader.read_mimes(selection, &wanted).unwrap(), [old.clone()]);
+        }
+        assert!(reader
+            .set_text(Cow::Owned("x".repeat(limit + 1)), selection, WaitConfig::None)
+            .is_err());
+        assert_eq!(reader.read_mimes(selection, &wanted).unwrap(), [old]);
+
+        // The advertised boundary is transferable, including X11's request header and alignment.
+        let boundary = rep(mime, &vec![0xA5; limit]);
+        owner
+            .set_representations(vec![boundary.clone()], selection, WaitConfig::None)
+            .unwrap();
+        assert_eq!(reader.read_mimes(selection, &wanted).unwrap(), [boundary]);
+
+        // Simulate old/unvalidated state to force the actual ChangeProperty request to fail. The request is
+        // refused, and the same worker must serve a later write/read successfully.
+        *owner.inner.selection_of(selection).data.write() = Some(vec![ClipboardData {
+            format: owner.inner.intern(mime).unwrap(),
+            bytes: vec![7; owner.inner.server.conn.maximum_request_bytes() + 1],
+        }]);
+        assert!(reader.read_mimes(selection, &wanted).unwrap().is_empty());
+        assert!(!owner.inner.serve_stopped.load(Ordering::Relaxed));
+        let next = rep(mime, b"still running");
+        owner
+            .set_representations(vec![next.clone()], selection, WaitConfig::None)
+            .unwrap();
+        assert_eq!(reader.read_mimes(selection, &wanted).unwrap(), [next]);
+    }
+
+    #[test]
+    #[ignore = "needs an X server: run under xvfb-run"]
+    fn representations_round_trip_between_x11_clients() {
+        let display = std::env::var("DISPLAY").expect("an X display");
+        let owner = foreign_owner(&display);
+        let reader = Clipboard {
+            inner: Arc::new(Inner::new(&display).expect("an X connection")),
+        };
+        let binary: Vec<u8> = (0..2048u32).map(|i| (i * 7 % 256) as u8).collect();
+        let parts = vec![
+            rep("text/plain", "héllo".as_bytes()),
+            rep("text/html", b"<b>hi</b>"),
+            rep("application/x-ngterm-test", &binary),
+            rep("text/x-empty", b""),
+        ];
+        owner
+            .set_representations(parts, ClipboardKind::Clipboard, WaitConfig::None)
+            .unwrap();
+        assert_eq!(
+            reader.mime_types(ClipboardKind::Clipboard).unwrap(),
+            [
+                "text/plain;charset=utf-8",
+                "text/plain",
+                "text/html",
+                "application/x-ngterm-test",
+                "text/x-empty"
+            ]
+        );
+        let wanted: Vec<String> = ["application/x-ngterm-test", "image/png", "text/plain", "text/x-empty"]
+            .map(String::from)
+            .to_vec();
+        let read = reader.read_mimes(ClipboardKind::Clipboard, &wanted).unwrap();
+        assert_eq!(
+            read,
+            [
+                rep("application/x-ngterm-test", &binary),
+                rep("text/plain", "héllo".as_bytes()),
+                rep("text/x-empty", b""),
+            ]
+        );
+        // the owner reads its own selection without a round trip, alike
+        assert_eq!(owner.read_mimes(ClipboardKind::Clipboard, &wanted).unwrap(), read);
+        owner
+            .set_representations(Vec::new(), ClipboardKind::Clipboard, WaitConfig::None)
+            .unwrap();
+        assert!(reader.mime_types(ClipboardKind::Clipboard).unwrap().is_empty());
+        assert!(reader.read_mimes(ClipboardKind::Clipboard, &wanted).unwrap().is_empty());
+        // a legacy owner offering only Latin-1 `STRING` is read as UTF-8 text
+        owner
+            .inner
+            .write(
+                vec![ClipboardData {
+                    bytes: vec![b'c', b'a', b'f', 0xE9],
+                    format: owner.inner.atoms.STRING,
+                }],
+                ClipboardKind::Clipboard,
+                WaitConfig::None,
+            )
+            .unwrap();
+        assert_eq!(
+            reader
+                .read_mimes(ClipboardKind::Clipboard, &["text/plain".to_owned()])
+                .unwrap(),
+            [rep("text/plain", "café".as_bytes())]
+        );
     }
 }

@@ -12,6 +12,7 @@ import com.nickalie.ngterm.android.data.Connections
 import com.nickalie.ngterm.android.data.KeyMaker
 import com.nickalie.ngterm.android.data.LiveSessions
 import com.nickalie.ngterm.android.data.MachineStore
+import com.nickalie.ngterm.android.data.MemoryClipboard
 import com.nickalie.ngterm.android.data.NotificationPrefs
 import com.nickalie.ngterm.android.data.OpenRequests
 import com.nickalie.ngterm.android.data.SessionChatViews
@@ -23,6 +24,8 @@ import com.nickalie.ngterm.android.platform.PinnedHostKeys
 import com.nickalie.ngterm.android.ui.chat.PaneChats
 import com.nickalie.ngterm.android.ui.session.SessionPanes
 import com.nickalie.ngterm.core.fake.FakeMobileCore
+import com.nickalie.ngterm.core.ffi.ClipboardPart
+import com.nickalie.ngterm.core.ffi.ClipboardWriteStatus
 import com.nickalie.ngterm.core.ffi.HostKeyStore
 import com.nickalie.ngterm.core.ffi.KeyException
 import com.nickalie.ngterm.core.ffi.KeyPair
@@ -166,14 +169,25 @@ class TestGraph(
             FakeMobileCore(sink, OffThreadHostKeys(pins), Dispatchers.IO).also { core = it }
         }
 
-    /** What the device's clipboard holds, as the clipboard reads see it. */
-    @Volatile var clipboard: String? = null
-    val trust = ClipboardTrust(testStore(dir, "clipboard"))
-    val clipboardReads = ClipboardReads(scope, connections, trust) { clipboard }
+    /** The device's clipboard, as the clipboard reads see it. */
+    val deviceClipboard = MemoryClipboard()
 
-    /** What programs wrote to the device's clipboard, oldest first (`null`: cleared). */
-    val clipboardWrites: MutableList<String?> = java.util.Collections.synchronizedList(mutableListOf())
-    val live = LiveSessions(scope, connections) { clipboardWrites += it }
+    /** The text the device's clipboard holds (`null`: nothing). */
+    var clipboard: String?
+        get() = deviceClipboard.text
+        set(value) {
+            deviceClipboard.text = value
+        }
+    val trust = ClipboardTrust(testStore(dir, "clipboard"))
+    val clipboardReads = ClipboardReads(scope, connections, trust, deviceClipboard, Dispatchers.IO)
+
+    /** What programs wrote to the device's clipboard, oldest first (no parts: cleared). */
+    val clipboardWrites: MutableList<List<ClipboardPart>> = java.util.Collections.synchronizedList(mutableListOf())
+    val live =
+        LiveSessions(scope, connections) {
+            clipboardWrites += it
+            ClipboardWriteStatus.DONE
+        }
 
     // the panes' frames are read on the main thread, where the UI tests' clock drives them
     val settings = SettingsStore(testStore(dir, "settings"))

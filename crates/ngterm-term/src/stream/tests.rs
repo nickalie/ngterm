@@ -13,6 +13,47 @@ const SIZE: GridSize = GridSize {
 };
 const DEADLINE: Duration = Duration::from_secs(10);
 
+const ANIMATION: &[u8] = concat!(
+    "\x1b_Ga=T,q=2,f=32,i=1,s=1,v=1,c=1,r=1;/wAA/w==\x1b\\",
+    "\x1b_Ga=f,q=2,f=32,i=1,s=1,v=1,z=10000;AAD//w==\x1b\\",
+    "\x1b_Ga=a,q=2,i=1,r=1,z=100\x1b\\",
+    "\x1b_Ga=a,q=2,i=1,s=3\x1b\\ready",
+)
+.as_bytes();
+
+#[test]
+fn kitty_animation_wakes_and_captures_new_pixels_without_output_even_after_eof() {
+    let fixture = stream(PaneConfig::new(SIZE));
+    assert!(fixture.feed.deliver(ANIMATION));
+    fixture.feed.end_of_output();
+    fixture.screen_until("ready");
+    let first = fixture.pane.frame().frame;
+    let red = &first.kitty.images[0];
+    assert_eq!(&*red.pixels, &[255, 0, 0, 255]);
+    let bytes = fixture.pane.stats().bytes;
+    let deadline = Instant::now() + DEADLINE;
+    let next = loop {
+        // An EOF wake may still be queued. Consume it and wait for the timer rather than assuming every wake is
+        // the animation's; never poll or deliver more output to make the animation progress.
+        fixture
+            .woken
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("the animation deadline must wake the frontend");
+        let next = fixture.pane.frame().frame;
+        if next.kitty.images[0].key != red.key {
+            break next;
+        }
+    };
+    assert_eq!(&*next.kitty.images[0].pixels, &[0, 0, 255, 255]);
+    assert!(next.kitty.images[0].key.generation > red.key.generation);
+    assert_eq!(next.kitty.removed, [red.key]);
+    assert_eq!(next.kitty.placements[0].image, next.kitty.images[0].key);
+    assert_eq!(fixture.pane.stats().bytes, bytes);
+    assert_eq!(&*red.pixels, &[255, 0, 0, 255], "previous frames stay immutable");
+    fixture.pane.set_kitty_image_limit(0).unwrap();
+    assert!(fixture.pane.frame().frame.kitty.images.is_empty());
+}
+
 struct Fixture {
     pane: Pane,
     feed: StreamFeed,
@@ -500,3 +541,9 @@ mod screen_read {
         assert!(!screen.reflowed);
     }
 }
+
+#[path = "clipboard_cases.rs"]
+mod clipboard_cases;
+
+#[path = "bridge_cases.rs"]
+mod bridge_cases;

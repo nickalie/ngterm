@@ -18,7 +18,11 @@
 //! and past the mailbox's high mark is not read (the program waits on the reply anyway), while its input is still
 //! written ([`crate::mailbox`]); the GTK build's full libghostty keeps streaming instead.
 //!
-//! The callback serves an armed answer only to a request it matches (same clipboard; a list-only answer never serves
+//! Writes copy their committed representations into `DeferredClipboardWrites` and deny inside the C callback. The
+//! immediately following Kitty EPERM is held as an acknowledgement template. After the feed, the worker publishes
+//! the owned write and waits outside the VT lock for native completion, then emits the matching status once.
+//!
+//! The callback serves an armed answer only to a request it matches (same clipboard and effective token; a list-only answer never serves
 //! data) and clears it after that one byte; with nothing armed (a read the scanner did not see) it denies.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -66,25 +70,63 @@ pub struct ClipboardContent {
 }
 
 /// A program's clipboard write; no contents means "clear".
+/// A nonzero id must be completed with `Pane::answer_clipboard_write` after the native decision;
+/// program output waits until completion. Id zero is recovery replay and needs no answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardWrite {
     pub location: ClipboardLocation,
     pub contents: Vec<ClipboardContent>,
+    /// Complete this native write with this id; zero is recovery replay and needs no acknowledgement.
+    pub id: u64,
+    /// Untrusted program name, never authority for permission.
+    pub name: String,
+    pub granted: bool,
+    pub can_remember: bool,
+    pub permission_scope: ClipboardPermissionScope,
 }
 
 /// A program's clipboard read, waiting for [`Pane::answer_clipboard_read`](crate::Pane::answer_clipboard_read).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardReadRequest {
     /// Pass back with the answer; answers to any other id are ignored.
     pub id: u64,
     pub location: ClipboardLocation,
     /// [`ReadScope::ListOnly`] asks only which types are available (no consent needed).
     pub scope: ReadScope,
+    pub mimes: Vec<String>,
+    pub list: bool,
+    pub name: String,
+    pub granted: bool,
+    pub can_remember: bool,
+    pub permission_scope: ClipboardPermissionScope,
+}
+
+/// Kitty consent is token-scoped; OSC 52 and OSC 1337 retain the existing global policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardPermissionScope {
+    Kitty,
+    Osc52,
+}
+
+/// Result returned only after the frontend completed the native write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteCompletion {
+    pub status: vt::ClipboardWriteResult,
+    pub remember: bool,
 }
 
 /// The frontend's answer to a [`ClipboardReadRequest`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClipboardAnswer {
+    Data {
+        contents: Vec<ClipboardContent>,
+        available: Vec<String>,
+        remember: bool,
+    },
+    Write(WriteCompletion),
+    Unsupported,
+    Busy,
+    IoError,
     /// The clipboard's text (`None`: the clipboard holds no text; the program reads it as empty).
     Text(Option<String>),
     /// Refused by policy or the user: the program gets an empty clipboard (OSC 52) or `EPERM` (OSC 5522).
@@ -181,6 +223,8 @@ pub enum PaneEvent {
     },
     Progress(Progress),
     ProgramStatus(ProgramStatus),
+    /// Complete nonzero ids with `Pane::answer_clipboard_write`; output waits for that answer.
+    /// Id zero replays recovery and requires no completion.
     ClipboardWrite(ClipboardWrite),
     ClipboardRead(ClipboardReadRequest),
     Colors(TerminalColors),
@@ -199,6 +243,7 @@ pub(crate) struct ArmedRead {
     pub location: ClipboardLocation,
     pub scope: ReadScope,
     pub answer: ClipboardAnswer,
+    pub pw: Vec<u8>,
 }
 
 /// The armed answer, shared by the IO thread (arms and clears it around the dispatch byte, under the VT lock) and
@@ -209,7 +254,7 @@ pub(crate) type ArmedSlot = Arc<Mutex<Option<ArmedRead>>>;
 /// Set and taken under the VT lock, around the one call that writes.
 pub(crate) type DivertSlot = Arc<Mutex<Option<Vec<u8>>>>;
 
-/// The MIME type served (as the GTK build serves it: text only).
+/// The legacy text-answer convenience representation.
 const TEXT: &str = "text/plain";
 
 /// The device attributes Ghostty reports (`termio/stream_handler.zig`): a VT220 (level 2) with color text and
@@ -281,6 +326,7 @@ pub(crate) struct PaneEffects {
     pub replies: Arc<ReplyOutlet>,
     pub capture: Arc<Mutex<Capture>>,
     pub armed: ArmedSlot,
+    pub writes: Arc<Mutex<vt::DeferredClipboardWrites>>,
     pub divert: DivertSlot,
     pub xtversion: String,
     pub scheme: SchemeSlot,
@@ -301,38 +347,74 @@ impl PaneEffects {
         self.send(PaneEvent::Title(title.to_owned()));
     }
 
+    #[cfg(test)]
     fn answer(&self, request: &vt::ClipboardReadRequest<'_>) -> vt::ClipboardReadReply {
-        let armed = self.armed.lock().unwrap_or_else(PoisonError::into_inner).take();
-        let Some(armed) = armed else {
-            tracing::debug!("clipboard read without an armed answer; denied");
-            return vt::ClipboardReadReply::Denied;
+        self.answer_reply(request).0
+    }
+
+    fn answer_reply(&self, request: &vt::ClipboardReadRequest<'_>) -> (vt::ClipboardReadReply, bool) {
+        let Some(armed) = self.armed.lock().unwrap_or_else(PoisonError::into_inner).take() else {
+            return (vt::ClipboardReadReply::Denied, false);
         };
         let location = ClipboardLocation::from_engine(request.location);
-        if armed.location != location || (armed.scope == ReadScope::ListOnly && !request.mimes.is_empty()) {
-            tracing::debug!(
-                ?armed,
-                ?location,
-                "clipboard read does not match the armed answer; denied"
-            );
-            return vt::ClipboardReadReply::Denied;
+        if armed.location != location
+            || armed.pw != request.pw
+            || (armed.scope == ReadScope::ListOnly && !request.mimes.is_empty())
+        {
+            return (vt::ClipboardReadReply::Denied, false);
         }
-        let ClipboardAnswer::Text(text) = armed.answer else {
-            return vt::ClipboardReadReply::Denied;
-        };
-        let contents = match &text {
-            Some(text) if request.mimes.iter().any(|mime| *mime == TEXT.as_bytes()) => vec![vt::ClipboardContent {
-                mime: TEXT.to_owned(),
-                data: text.clone().into_bytes(),
-            }],
-            _ => Vec::new(),
-        };
-        let available = if request.list && text.is_some() {
-            vec![TEXT.to_owned()]
-        } else {
-            Vec::new()
-        };
-        vt::ClipboardReadReply::Success { contents, available }
+        read_reply(armed.answer, request)
     }
+}
+
+/// Select requested available representations in preference order, preserving binary bytes.
+pub(crate) fn read_reply(
+    answer: ClipboardAnswer,
+    request: &vt::ClipboardReadRequest<'_>,
+) -> (vt::ClipboardReadReply, bool) {
+    let (contents, available, remember) = match answer {
+        ClipboardAnswer::Text(text) => {
+            let contents: Vec<_> = text
+                .into_iter()
+                .map(|text| ClipboardContent {
+                    mime: TEXT.into(),
+                    data: text.into_bytes(),
+                })
+                .collect();
+            let available = contents.iter().map(|content| content.mime.clone()).collect();
+            (contents, available, false)
+        }
+        ClipboardAnswer::Data {
+            contents,
+            available,
+            remember,
+        } => (contents, available, remember),
+        ClipboardAnswer::Unsupported => return (vt::ClipboardReadReply::Unsupported, false),
+        ClipboardAnswer::Busy => return (vt::ClipboardReadReply::Busy, false),
+        ClipboardAnswer::IoError => return (vt::ClipboardReadReply::IoError, false),
+        _ => return (vt::ClipboardReadReply::Denied, false),
+    };
+    let contents = request
+        .mimes
+        .iter()
+        .take(4)
+        .filter_map(|mime| contents.iter().find(|content| content.mime.as_bytes() == *mime))
+        .map(|content| vt::ClipboardContent {
+            mime: content.mime.clone(),
+            data: content.data.clone(),
+        })
+        .collect();
+    (
+        vt::ClipboardReadReply::Success {
+            contents,
+            available: if request.list {
+                available.into_iter().take(16).collect()
+            } else {
+                Vec::new()
+            },
+        },
+        remember,
+    )
 }
 
 fn progress(report: vt::ProgressReport) -> Progress {
@@ -371,6 +453,14 @@ fn program_status(status: vt::ProgramStatus) -> ProgramStatus {
 
 impl vt::Effects for PaneEffects {
     fn write_pty(&mut self, data: &[u8]) {
+        if self
+            .writes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .intercept(data)
+        {
+            return;
+        }
         let mut divert = self.divert.lock().unwrap_or_else(PoisonError::into_inner);
         match divert.as_mut() {
             Some(diverted) => diverted.extend_from_slice(data),
@@ -405,26 +495,16 @@ impl vt::Effects for PaneEffects {
         self.send(PaneEvent::ProgramStatus(program_status(status)));
     }
 
-    /// Accepted at once and handed to the frontend, which applies `clipboard-write` and its prompt: OSC 52 has no
-    /// acknowledgement, and an OSC 5522 write is acknowledged before the frontend decides.
     fn clipboard_write(&mut self, request: &vt::ClipboardWriteRequest<'_>) -> vt::ClipboardWriteResult {
-        let contents = request
-            .contents
-            .iter()
-            .map(|content| ClipboardContent {
-                mime: String::from_utf8_lossy(content.mime).into_owned(),
-                data: content.data.to_vec(),
-            })
-            .collect();
-        self.send(PaneEvent::ClipboardWrite(ClipboardWrite {
-            location: ClipboardLocation::from_engine(request.location),
-            contents,
-        }));
-        vt::ClipboardWriteResult::Success
+        self.writes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .capture(request);
+        vt::ClipboardWriteResult::Denied
     }
 
-    fn clipboard_read(&mut self, request: &vt::ClipboardReadRequest<'_>) -> vt::ClipboardReadReply {
-        self.answer(request)
+    fn clipboard_read_reply(&mut self, request: &vt::ClipboardReadRequest<'_>) -> (vt::ClipboardReadReply, bool) {
+        self.answer_reply(request)
     }
 
     fn render_hold(&mut self, held: bool, terminal: &mut vt::HeldTerminal<'_>) {
@@ -470,6 +550,7 @@ mod tests {
             replies: Arc::default(),
             capture: Arc::new(Mutex::new(Capture::new().unwrap())),
             armed: Arc::new(Mutex::new(armed)),
+            writes: Arc::default(),
             divert: Arc::default(),
             xtversion: String::new(),
             scheme: Arc::default(),
@@ -481,6 +562,7 @@ mod tests {
             location,
             scope,
             answer,
+            pw: Vec::new(),
         }
     }
 
@@ -495,6 +577,9 @@ mod tests {
             list,
             name: b"",
             granted: false,
+            can_remember: false,
+            pw: b"",
+            origin: vt::ClipboardOrigin::Osc52,
         }
     }
 

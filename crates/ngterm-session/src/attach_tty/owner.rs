@@ -31,6 +31,18 @@
 //!   once its header is recognized, however long it takes and whether or not its read is still live, so none of it
 //!   is typed (`super::input`, with what that leaves: a header cut before its `52`, garbage inside an answer).
 //!
+//! - An endpoint advertising the attach bridge accepts `attach-bridge` under `NGTERM_ATTACH_BRIDGE=<version>:<nonce>`.
+//!   The viewer supplies the nonce and accepts only matching envelopes. MIME contents, authoritative consent,
+//!   completion and lazy pastes travel through it. Reserved prefixes are suppressed both before and after output
+//!   filtering, before trusted relay injections are mixed in. Older endpoints use ordinary `attach`.
+//! - External terminals are probed with a list-only OSC 5522 read. Supported terminals get correlated
+//!   multipart reads/writes and complete writes only on their native status. An opaque server alias lets
+//!   the outer terminal remember consent; actual program passwords never enter permission events.
+//!   A native paste keeps its outer token here and registers only an opaque bridge and its types with the
+//!   server. Listings read no contents; a follow-up fetch requests at most four representations lazily.
+//! - Without OSC 5522 support, reads retain the OSC 52 text adapter. Delegated OSC 52/1337 writes and
+//!   explicit clears still use OSC 52 and complete when emitted.
+//!
 //! An outer terminal that answers no DA1 within [`PROBE_GIVE_UP`] gets no fences: barriers are completed empty at
 //! once and clipboard reads denied, and the metadata says it shows no Kitty graphics.
 //!
@@ -41,6 +53,7 @@
 //! Kitty graphics when the outer terminal answered the query and answers fences. It is sent when the probe's fence
 //! comes, again when a refresh's does, and whenever the cell size changes.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -50,6 +63,46 @@ use crate::client::{Barrier, Delegated};
 use crate::protocol::{ColorScheme, DelegatedReply, DelegatedRequest, GridSize, LeadRole, ReplyMetadata, Rgb};
 use crate::server::lead::role_title;
 use crate::server::replies::DELEGATION_WAIT;
+
+mod bridge;
+mod clipboard;
+
+fn clipboard_selection(selection: &str) -> &str {
+    match selection {
+        "s" | "p" => selection,
+        _ => "c",
+    }
+}
+
+/// HEAD's text-only attach adapter. MIME requests succeed empty when the requested type is unavailable.
+fn text_clipboard_reply(request: &DelegatedRequest, data: Option<Vec<u8>>) -> DelegatedReply {
+    let Some(data) = data else {
+        return DelegatedReply::Denied;
+    };
+    let text = (!data.is_empty()).then(|| String::from_utf8_lossy(&data).into_owned());
+    let DelegatedRequest::ClipboardReadMime { mimes, list, .. } = request else {
+        return DelegatedReply::Clipboard { text };
+    };
+    let available = if *list && text.is_some() {
+        vec!["text/plain".into()]
+    } else {
+        Vec::new()
+    };
+    let contents = text
+        .filter(|_| mimes.iter().any(|mime| mime == "text/plain"))
+        .into_iter()
+        .map(|text| crate::protocol::ClipboardRepresentation {
+            mime: "text/plain".into(),
+            data: text.into_bytes(),
+        })
+        .collect();
+    DelegatedReply::ClipboardMime {
+        contents,
+        available,
+        remember: false,
+        status: crate::protocol::ClipboardStatus::Success,
+    }
+}
 
 /// How long the client's own sequences wait for the output to stand at ground before CAN ends what the program left
 /// unfinished (zmx's `DEADLINE_MS`).
@@ -82,6 +135,7 @@ fn probe_queries() -> Vec<u8> {
     let mut bytes = colour_queries();
     bytes.extend_from_slice(b"\x1b[16t\x1b[?996n");
     bytes.extend_from_slice(format!("\x1b_Gi={KITTY_PROBE_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\").as_bytes());
+    bytes.extend_from_slice(&super::clipboard::read_query(clipboard::PROBE_ID, "c", &[], true, &[]));
     bytes.extend_from_slice(FENCE);
     bytes
 }
@@ -107,6 +161,7 @@ struct Injection {
     fence: Option<Fence>,
     /// The bytes are the clipboard read's query ([`Relay::outer_read`]).
     clipboard_read: bool,
+    completion: Option<(Delegated, DelegatedReply)>,
 }
 
 /// The clipboard read asked of the outer terminal, or to be (module docs).
@@ -126,6 +181,7 @@ pub enum Outgoing {
     Answer(Delegated, DelegatedReply),
     Complete(Barrier, Vec<u8>),
     Metadata(ReplyMetadata),
+    Paste(crate::protocol::ClipboardPaste),
 }
 
 /// What handling an event produced: bytes for the outer terminal and messages for the server, in order.
@@ -151,6 +207,9 @@ struct Draft {
 #[derive(Debug)]
 pub struct Relay {
     filter: OutputFilter,
+    program_decoder: ngterm_core::attach_bridge::Suppressor,
+    /// Filtering can join program bytes into a reserved prefix; suppress again before trusted injections.
+    filtered_decoder: ngterm_core::attach_bridge::Suppressor,
     /// The managed attach's nonce, for its role titles.
     nonce: Option<String>,
     /// The newest role not yet written.
@@ -168,6 +227,13 @@ pub struct Relay {
     kitty_answers: Vec<u8>,
     /// The one clipboard read the outer terminal is asked or to be asked for.
     outer_read: Option<OuterRead>,
+    native_clipboard: clipboard::Native,
+    reply_owner: bool,
+    bridge_nonce: Option<String>,
+    bridge_hello_sent: bool,
+    /// Viewer request ids remain unique across server handoffs, which restart server ids and epochs.
+    bridge_next_id: u64,
+    bridge_pending: Option<bridge::Pending>,
     draft: Draft,
     grid: GridSize,
     /// The cell's pixels from the window size.
@@ -183,6 +249,8 @@ impl Relay {
     pub fn new(nonce: Option<String>, grid: GridSize, pixels: Option<(u32, u32)>) -> Self {
         Self {
             filter: OutputFilter::new(),
+            program_decoder: ngterm_core::attach_bridge::Suppressor::default(),
+            filtered_decoder: ngterm_core::attach_bridge::Suppressor::default(),
             nonce,
             role: None,
             pending: Vec::new(),
@@ -193,6 +261,12 @@ impl Relay {
             kitty: false,
             kitty_answers: Vec::new(),
             outer_read: None,
+            native_clipboard: clipboard::Native::default(),
+            reply_owner: false,
+            bridge_nonce: None,
+            bridge_hello_sent: false,
+            bridge_next_id: 1,
+            bridge_pending: None,
             draft: Draft {
                 palette: vec![None; 256],
                 ..Draft::default()
@@ -206,6 +280,7 @@ impl Relay {
     /// Starts the probe of a client in a terminal (module docs); a client without one asks nothing and answers no
     /// fence.
     pub fn start(&mut self, terminal: bool, now: Instant, fx: &mut Effects) {
+        self.bridge_hello(fx);
         if !terminal {
             self.fences_work = Some(false);
             return;
@@ -225,7 +300,9 @@ impl Relay {
     /// Whether an answer of the outer terminal is due: a fence's, or a clipboard read's.
     #[must_use]
     pub fn awaiting(&self) -> bool {
-        !self.fences.is_empty() || self.outer_read.as_ref().is_some_and(|read| read.request.is_some())
+        !self.fences.is_empty()
+            || self.outer_read.as_ref().is_some_and(|read| read.request.is_some())
+            || self.native_clipboard.pending.is_some()
     }
 
     /// Whether a clipboard read was asked of the outer terminal and its answer has not come, whether or not the read
@@ -267,21 +344,46 @@ impl Relay {
         }
     }
 
+    /// Program output excludes clipboard operations resolved through delegation. Snapshots replay recovery values.
+    pub fn delegated_output(&mut self, bytes: &[u8], fx: &mut Effects) {
+        let mut filtered = Vec::new();
+        self.filter.delegated_clipboards(true, &mut filtered);
+        fx.stdout.extend(self.filtered_decoder.feed(&filtered));
+        self.output_filtered(bytes, fx);
+    }
+
     /// The session's output (a snapshot's bytes too), on its way to the outer terminal.
     pub fn output(&mut self, bytes: &[u8], fx: &mut Effects) {
+        let mut filtered = Vec::new();
+        self.filter.delegated_clipboards(false, &mut filtered);
+        fx.stdout.extend(self.filtered_decoder.feed(&filtered));
+        self.output_filtered(bytes, fx);
+    }
+
+    fn output_filtered(&mut self, bytes: &[u8], fx: &mut Effects) {
+        self.bridge_hello(fx);
+        let bytes = self.program_decoder.feed(bytes);
+        self.filtered_bytes(&bytes, fx);
+    }
+
+    fn filtered_bytes(&mut self, bytes: &[u8], fx: &mut Effects) {
         let mut rest = bytes;
         while !rest.is_empty() {
             if !self.has_pending() {
-                self.filter.feed(rest, &mut fx.stdout);
+                let mut filtered = Vec::new();
+                self.filter.feed(rest, &mut filtered);
+                fx.stdout.extend(self.filtered_decoder.feed(&filtered));
                 return;
             }
-            if self.filter.at_ground() {
+            if self.filter.can_inject() {
                 self.flush(fx);
                 continue;
             }
-            let taken = self.filter.feed_until_ground(rest, &mut fx.stdout);
+            let mut filtered = Vec::new();
+            let taken = self.filter.feed_until_ground(rest, &mut filtered);
+            fx.stdout.extend(self.filtered_decoder.feed(&filtered));
             rest = &rest[taken..];
-            if self.filter.at_ground() {
+            if self.filter.can_inject() {
                 self.flush(fx);
             }
         }
@@ -294,7 +396,7 @@ impl Relay {
         }
         self.role = Some((role, generation));
         self.waiting_since.get_or_insert(now);
-        if self.filter.at_ground() {
+        if self.filter.can_inject() {
             self.flush(fx);
         }
     }
@@ -311,27 +413,97 @@ impl Relay {
     /// A delegated request: a clipboard read relayed to the outer terminal; denied when it answers no fence or another
     /// read is asked of it (module docs).
     pub fn delegated(&mut self, request: Delegated, now: Instant, fx: &mut Effects) {
+        if self.bridge_nonce.is_some() {
+            self.bridge_request(request, now, fx);
+            return;
+        }
+        if self.native_clipboard.supported
+            && !matches!(
+                request.request,
+                DelegatedRequest::ClipboardRead { .. } | DelegatedRequest::ClipboardWrite { kitty: false, .. }
+            )
+        {
+            self.native_delegated(request, now, fx);
+            return;
+        }
+        if matches!(request.request, DelegatedRequest::ClipboardWrite { .. }) {
+            self.delegated_write(request, now, fx);
+            return;
+        }
         if self.fences_work != Some(true) || self.outer_read.is_some() {
             fx.outgoing.push(Outgoing::Answer(request, DelegatedReply::Denied));
             return;
         }
-        let DelegatedRequest::ClipboardRead { selection, .. } = &request.request;
-        let selection = match selection.as_str() {
-            "s" | "p" => selection.as_str(),
-            _ => "c",
+        let selection = match &request.request {
+            DelegatedRequest::ClipboardRead { selection, .. }
+            | DelegatedRequest::ClipboardReadMime { selection, .. } => selection,
+            DelegatedRequest::ClipboardWrite { .. } => return,
         };
+        let selection = clipboard_selection(selection);
         let bytes = format!("\x1b]52;{selection};?\x1b\\").into_bytes();
         self.outer_read = Some(OuterRead {
             request: Some(request),
             deadline: now + DELEGATION_WAIT,
             asked: false,
         });
-        let injection = Injection {
-            bytes,
-            fence: None,
-            clipboard_read: true,
+        self.inject(
+            Injection {
+                bytes,
+                fence: None,
+                clipboard_read: true,
+                completion: None,
+            },
+            now,
+            fx,
+        );
+    }
+
+    /// The legacy text writer completes only when its bytes enter the stdout effect, never while queued.
+    fn delegated_write(&mut self, request: Delegated, now: Instant, fx: &mut Effects) {
+        let DelegatedRequest::ClipboardWrite {
+            selection,
+            contents,
+            kitty,
+            ..
+        } = &request.request
+        else {
+            return;
         };
-        self.inject(injection, now, fx);
+        let text = contents
+            .iter()
+            .find(|content| content.mime == "text/plain" || content.mime.starts_with("text/plain;"));
+        if *kitty || (!contents.is_empty() && text.is_none()) {
+            fx.outgoing.push(Outgoing::Answer(
+                request,
+                DelegatedReply::ClipboardWrite {
+                    status: crate::protocol::ClipboardStatus::Unsupported,
+                    remember: false,
+                },
+            ));
+            return;
+        }
+        let selection = clipboard_selection(selection);
+        let bytes = format!(
+            "\x1b]52;{selection};{}\x1b\\",
+            STANDARD.encode(text.map_or(&[][..], |content| content.data.as_slice()))
+        )
+        .into_bytes();
+        self.inject(
+            Injection {
+                bytes,
+                fence: None,
+                clipboard_read: false,
+                completion: Some((
+                    request,
+                    DelegatedReply::ClipboardWrite {
+                        status: crate::protocol::ClipboardStatus::Success,
+                        remember: false,
+                    },
+                )),
+            },
+            now,
+            fx,
+        );
     }
 
     /// The outer terminal's answer to the clipboard read asked of it, or to none (dropped).
@@ -343,13 +515,7 @@ impl Relay {
             // the unresolved read's answer: the next read may be asked
             return;
         };
-        let reply = match data {
-            Some(data) if data.is_empty() => DelegatedReply::Clipboard { text: None },
-            Some(data) => DelegatedReply::Clipboard {
-                text: Some(String::from_utf8_lossy(&data).into_owned()),
-            },
-            None => DelegatedReply::Denied,
-        };
+        let reply = text_clipboard_reply(&request.request, data);
         fx.outgoing.push(Outgoing::Answer(request, reply));
     }
 
@@ -377,6 +543,8 @@ impl Relay {
             },
             Answer::Palette { index, color } => self.draft.palette[usize::from(index)] = color,
             Answer::Clipboard(data) => self.clipboard_answer(data, fx),
+            Answer::ClipboardMime(packet) => self.native_answer(packet, now, fx),
+            Answer::Bridge(envelope) => self.bridge_answer(envelope, fx),
             Answer::ColorScheme(scheme) => {
                 self.draft.scheme = Some(scheme);
                 if !self.probing() && !self.fences.iter().any(|fence| matches!(fence, Fence::Refresh)) {
@@ -412,13 +580,20 @@ impl Relay {
     /// The client reattached on a new connection: the fences awaited complete nothing of it, and its clipboard read
     /// answers nothing (one asked stays unresolved until its answer comes).
     pub fn reattached(&mut self) {
+        self.bridge_pending = None;
+        self.bridge_hello_sent = false;
+        self.program_decoder = ngterm_core::attach_bridge::Suppressor::default();
+        self.filtered_decoder = ngterm_core::attach_bridge::Suppressor::default();
+        self.native_clipboard.invalidate();
+        self.reply_owner = false;
+        self.pending.retain(|injection| !injection.clipboard_read);
         for fence in &mut self.fences {
             if matches!(fence, Fence::Kitty(_)) {
                 *fence = Fence::Stale;
             }
         }
         self.pending
-            .retain(|injection| !matches!(injection.fence, Some(Fence::Kitty(_))));
+            .retain(|injection| !matches!(injection.fence, Some(Fence::Kitty(_))) && injection.completion.is_none());
         let _ = self.give_up_read();
         self.role = None;
         self.unqueued();
@@ -445,12 +620,20 @@ impl Relay {
             .as_ref()
             .filter(|read| read.request.is_some())
             .map(|read| read.deadline);
-        inject.into_iter().chain(probe).chain(read).min()
+        inject
+            .into_iter()
+            .chain(probe)
+            .chain(read)
+            .chain(self.native_clipboard.deadline())
+            .chain(self.bridge_pending.as_ref().map(|pending| pending.deadline))
+            .min()
     }
 
     /// What is due at `now`: the client's own sequences written after CAN when the output stayed inside a sequence for
     /// [`INJECT_WAIT`]; the probe given up after [`PROBE_GIVE_UP`]; the clipboard read denied at its deadline.
     pub fn tick(&mut self, now: Instant, fx: &mut Effects) {
+        self.bridge_expire(now, fx);
+        self.native_expire(now, fx);
         if self
             .outer_read
             .as_ref()
@@ -463,8 +646,10 @@ impl Relay {
             .waiting_since
             .is_some_and(|since| now.saturating_duration_since(since) >= INJECT_WAIT)
         {
-            if !self.filter.at_ground() {
-                self.filter.cancel(&mut fx.stdout);
+            if !self.filter.can_inject() {
+                let mut filtered = Vec::new();
+                self.filter.cancel(&mut filtered);
+                fx.stdout.extend(self.filtered_decoder.feed(&filtered));
             }
             self.flush(fx);
         }
@@ -496,6 +681,7 @@ impl Relay {
             bytes,
             fence,
             clipboard_read: false,
+            completion: None,
         };
         self.inject(injection, now, fx);
     }
@@ -503,7 +689,7 @@ impl Relay {
     fn inject(&mut self, injection: Injection, now: Instant, fx: &mut Effects) {
         self.pending.push(injection);
         self.waiting_since.get_or_insert(now);
-        if self.filter.at_ground() {
+        if self.filter.can_inject() {
             self.flush(fx);
         }
     }
@@ -521,6 +707,9 @@ impl Relay {
             }
             if injection.clipboard_read {
                 self.asked();
+            }
+            if let Some((request, reply)) = injection.completion {
+                fx.outgoing.push(Outgoing::Answer(request, reply));
             }
         }
         self.waiting_since = None;

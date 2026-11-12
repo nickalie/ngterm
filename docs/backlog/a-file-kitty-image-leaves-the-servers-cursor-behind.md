@@ -25,3 +25,9 @@ Task 23's client then has to measure) is needed, and both need a design of their
 too would race the client for a temporary file (`t=t` is deleted by its first reader) and cannot read the client's
 shared memory. The divergence is recorded in `server::replies`' module docs. Reported as pre-existing in the revmux
 review of Task 20, round 1 (`docs/plans/20261018-cross-platform-sessions.md`).
+
+Rechecked at Ghostty v1.4.0 (`83fb95624b0439ee660c2679b43b38c8b63769cd`): the official render-state image
+iterator (`render.h`, `src/terminal/render.zig`) resolves fixed, placeholder and relative placements, but reports only
+images already in storage. Its geometry cannot recover a placement for file/temp/shm media the server could not
+load. The snapshot image records and the abandoned chunked-load fix (#14811) likewise do not place a failed load.
+Adopting that iterator and retiring patch 0001 therefore leaves this cursor divergence open.

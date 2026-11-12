@@ -54,6 +54,12 @@ fn remote_clipboard_destination_follows_both_session_panes() {
         PaneSpec::split(window, workspace, &session).unwrap(),
     ] {
         assert_eq!(spec.terminal_spec().remote_host.as_deref(), Some("user@remote"));
+        assert_eq!(
+            spec.env(&context())
+                .get(ngterm_core::attach_bridge::VARIABLE)
+                .map(String::as_str),
+            None
+        );
     }
     // Scratch panes run a local shell even when the session was attached from another machine.
     assert_eq!(

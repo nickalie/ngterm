@@ -6,7 +6,7 @@
 use super::validate::{Compat, KeySpec, Kind};
 
 /// The Ghostty revision the tables were generated from.
-pub const LIBGHOSTTY_VT_REV: &str = "81598385d608dda4946093d6d6a234d204a2f225";
+pub const LIBGHOSTTY_VT_REV: &str = "83fb95624b0439ee660c2679b43b38c8b63769cd";
 
 /// Every key ghostty's config knows, sorted by name, with its Zig type and the kind its values are checked as.
 pub static KEYS: &[KeySpec] = &[
@@ -482,6 +482,11 @@ pub static KEYS: &[KeySpec] = &[
         name: "gtk-single-instance",
         zig: "GtkSingleInstance",
         kind: Kind::Enum(&["false", "true", "detect"]),
+    },
+    KeySpec {
+        name: "gtk-tabs-inverted",
+        zig: "bool",
+        kind: Kind::Bool,
     },
     KeySpec {
         name: "gtk-tabs-location",

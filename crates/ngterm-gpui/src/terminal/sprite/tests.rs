@@ -1,7 +1,46 @@
 use std::rc::Rc;
 
 use super::super::metrics::{CellMetrics, FaceMetrics};
+use super::canvas::{Canvas, Mask, Path};
 use super::{RANGES, is_sprite, of_text, rasterize, sprite};
+
+/// z2d 0.13's `Polygon.inBox` extents, relative to the padded buffer's top-left corner.
+fn filled_polygon_at_padded_bounds(right: f64, bottom: f64) -> Mask {
+    let mut canvas = Canvas::new(100, 100);
+    // Canvas paths use cell coordinates; its 25-pixel padding moves these extents to the buffer's origin.
+    let padding = 25.0;
+    canvas.fill(
+        Path::polygon(&[
+            (-37.0 - padding, -29.0 - padding),
+            (right - padding, -29.0 - padding),
+            (right - padding, bottom - padding),
+            (-37.0 - padding, bottom - padding),
+        ]),
+        255,
+    );
+    canvas.into_mask()
+}
+
+#[test]
+fn filled_polygons_adjacent_to_the_padded_origin_paint_nothing() {
+    // z2d's "OOB, bottom adjacent at exactly zero" and "OOB, right side adjacent at exactly zero".
+    for (edge, right, bottom) in [("bottom", 21.0, 0.0), ("right", 0.0, 21.0)] {
+        let mask = filled_polygon_at_padded_bounds(right, bottom);
+        assert!(
+            mask.alpha.is_empty(),
+            "a polygon with {edge} at zero paints no pixel: {mask:?}"
+        );
+        assert_eq!((mask.width, mask.height), (0, 0), "{edge}");
+    }
+}
+
+#[test]
+fn a_filled_polygon_crossing_the_padded_origin_paints_its_visible_part() {
+    let mask = filled_polygon_at_padded_bounds(21.0, 21.0);
+    assert_eq!((mask.left, mask.top), (-25, -25));
+    assert_eq!((mask.width, mask.height), (21, 21));
+    assert_eq!(mask.alpha, vec![255; 21 * 21]);
+}
 
 /// The `draw<MIN>_<MAX>` / `draw<CP>` functions of Ghostty's `src/font/sprite/draw/*.zig` at `LIBGHOSTTY_VT_REV`,
 /// as `grep 'pub fn draw' src/font/sprite/draw/*.zig` lists them.

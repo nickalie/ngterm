@@ -4,10 +4,18 @@
 //!
 //! - An empty value resets the pwd: the report is the empty path.
 //! - Otherwise the value must parse as a `file://` or `kitty-shell-cwd://` URI (the scheme as written, case and all)
-//!   with a host (Ghostty parses with `mac_address` on Linux, so a MAC address host is a host, not a host and a
-//!   port), and the host must be local:
-//!   `localhost` or this machine's hostname exactly (`os/hostname.zig` `isLocal`). An empty host (`file:///tmp`) is
-//!   no match for either, so Ghostty ignores it, and so does this.
+//!   whose authority `std.Uri.parseAfterScheme` (Ghostty's pinned Zig, 0.17) parses: it ends at the first `/`, `?`
+//!   or `#`, its host follows the last `@`, and a port after the host's last `:` must parse as Zig's
+//!   `parseInt(u16, _, 10)` takes it ([`is_port`]), or the report is ignored. The host must be one that
+//!   `std.Io.net.HostName.fromUri` accepts: at most [`HOST_MAX_LEN`] bytes as written, then, percent-decoded, a valid
+//!   RFC 1123 name
+//!   (`HostName.validate`, [`is_valid_host_name`]): dot-separated labels of 1 to 63 ASCII letters, digits and
+//!   hyphens, each starting and ending with a letter or digit, at most 253 bytes besides one trailing dot. The host
+//!   must then be local: `localhost` or this machine's hostname exactly (`os/hostname.zig` `isLocal`). An empty host
+//!   (`file:///tmp`) has no host, so Ghostty ignores it, and so does this. A MAC address host (`12:34:56:78:90:ab`,
+//!   which macOS's private Wi-Fi address makes the hostname, and which Ghostty's `mac_address` parse on Linux keeps
+//!   whole) is no valid name, so Ghostty ignores it since Zig 0.17's `fromUri` replaced `Uri.getHost`, which
+//!   validated nothing.
 //! - The path is percent-decoded and ends at a query or fragment, except for `kitty-shell-cwd://`, whose path is
 //!   everything after the host, raw (Ghostty's `raw_path`).
 //! - On Windows a path naming a drive as a URI spells it, `/C:/Users/me` (RFC 8089's form, which ngterm's
@@ -32,9 +40,21 @@ pub fn reported_path(raw: &str, hostname: &str) -> Option<String> {
         tracing::debug!(scheme, "OSC 7 scheme must be file or kitty-shell-cwd");
         return None;
     }
-    let path_start = rest.find('/').unwrap_or(rest.len());
-    let (authority, path) = rest.split_at(path_start);
-    let host = decode(&host_of(authority));
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(authority_end);
+    let Some(host) = host_of(authority) else {
+        tracing::debug!("OSC 7 uri has an invalid port");
+        return None;
+    };
+    if host.len() > HOST_MAX_LEN {
+        tracing::debug!("OSC 7 host is too long");
+        return None;
+    }
+    let host = decode(host);
+    if !is_valid_host_name(&host) {
+        tracing::debug!(host, "OSC 7 uri contains an invalid hostname");
+        return None;
+    }
     if host != "localhost" && host != hostname {
         tracing::debug!(host, "OSC 7 host must be local");
         return None;
@@ -97,25 +117,66 @@ pub fn local_hostname() -> Option<String> {
     String::from_utf16(&buffer[..len]).ok()
 }
 
-/// The host of a URI's authority: past any user info, without a port, a MAC address kept whole.
-fn host_of(authority: &str) -> String {
+/// The longest host, in bytes, a URI may carry (`std.Io.net.HostName.max_len`): the longest name's text, with its
+/// trailing dot.
+const HOST_MAX_LEN: usize = 254;
+/// The longest name without that trailing dot.
+const HOST_NAME_MAX_LEN: usize = HOST_MAX_LEN - 1;
+/// The longest label of a name.
+const LABEL_MAX_LEN: usize = 63;
+
+/// The host of a URI's authority as Zig 0.17's `std.Uri.parseAfterScheme` takes it: past any user info (after its
+/// last `@`), before a port (after the host's last `:`); `None` when that port is no [`is_port`] (Zig's
+/// `error.InvalidPort`). A MAC address host has colons left either way, or no port (Ghostty's `mac_address` retry on
+/// Linux keeps it whole), so it stays no valid name.
+fn host_of(authority: &str) -> Option<&str> {
     let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
-    if is_mac_address(host) {
-        return host.to_owned();
-    }
     match host.rsplit_once(':') {
-        Some((name, port)) if !name.contains(':') && port.bytes().all(|byte| byte.is_ascii_digit()) => name.to_owned(),
-        _ => host.to_owned(),
+        Some((name, port)) => is_port(port).then_some(name),
+        None => Some(host),
     }
 }
 
-/// Six pairs of hex digits separated by colons (Ghostty's `isValidMacAddress`).
-fn is_mac_address(text: &str) -> bool {
-    let parts: Vec<&str> = text.split(':').collect();
-    parts.len() == 6
-        && parts
-            .iter()
-            .all(|part| part.len() == 2 && part.bytes().all(|byte| byte.is_ascii_hexdigit()))
+/// Whether `port` parses as Zig 0.17's `std.fmt.parseInt(u16, port, 10)` has it: an optional `+` or `-`, then decimal
+/// digits that `_` may separate but not start or end, at most 65535 (only zero with a `-`). Not empty.
+fn is_port(port: &str) -> bool {
+    let (negative, digits) = match port.as_bytes().first() {
+        Some(b'+') => (false, &port[1..]),
+        Some(b'-') => (true, &port[1..]),
+        _ => (false, port),
+    };
+    if digits.is_empty()
+        || digits.starts_with('_')
+        || digits.ends_with('_')
+        || !digits.bytes().all(|byte| byte.is_ascii_digit() || byte == b'_')
+    {
+        return false;
+    }
+    let mut value = 0_u32;
+    for digit in digits.bytes().filter(u8::is_ascii_digit) {
+        value = value * 10 + u32::from(digit - b'0');
+        if value > u32::from(u16::MAX) {
+            return false;
+        }
+    }
+    !negative || value == 0
+}
+
+/// Whether `host` is a valid host name as Zig 0.17's `std.Io.net.HostName.validate` (RFC 1123) has it: not empty, at
+/// most [`HOST_NAME_MAX_LEN`] bytes besides one trailing dot, dot-separated labels of 1 to [`LABEL_MAX_LEN`] ASCII
+/// letters, digits and hyphens, none starting with a hyphen and each ending with a letter or digit.
+fn is_valid_host_name(host: &str) -> bool {
+    let name = host.strip_suffix('.').unwrap_or(host);
+    !name.is_empty()
+        && name.len() <= HOST_NAME_MAX_LEN
+        && name.split('.').all(|label| {
+            let bytes = label.as_bytes();
+            !bytes.is_empty()
+                && bytes.len() <= LABEL_MAX_LEN
+                && bytes[0] != b'-'
+                && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+                && bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+        })
 }
 
 /// Percent-decodes `text`; a `%` not followed by two hex digits stays as it is.
@@ -204,15 +265,150 @@ mod tests {
         assert_eq!(reported_path("file:///tmp", HOST), None, "an empty host is not local");
         assert_eq!(reported_path("http://box/tmp", HOST), None);
         assert_eq!(reported_path("/tmp", HOST), None, "a bare path is no URI");
+    }
+
+    #[test]
+    fn a_local_name_or_localhost_is_accepted_percent_decoded() {
         assert_eq!(
-            reported_path("file://12:34:56:78:90:ab/tmp", HOST),
-            None,
-            "a MAC address host is a host"
-        );
-        assert_eq!(
-            reported_path("file://12:34:56:78:90:ab/tmp", "12:34:56:78:90:ab").as_deref(),
+            reported_path("kitty-shell-cwd://box/tmp", HOST).as_deref(),
             Some("/tmp")
         );
+        assert_eq!(
+            reported_path("kitty-shell-cwd://localhost/tmp", HOST).as_deref(),
+            Some("/tmp")
+        );
+        assert_eq!(
+            reported_path("file://my-box.lan/tmp", "my-box.lan").as_deref(),
+            Some("/tmp"),
+            "a dotted name with a hyphen"
+        );
+        assert_eq!(
+            reported_path("file://%62%6F%78/tmp", HOST).as_deref(),
+            Some("/tmp"),
+            "the host is validated and compared once decoded"
+        );
+        assert_eq!(
+            reported_path("file://box./tmp", "box.").as_deref(),
+            Some("/tmp"),
+            "one trailing dot is a valid name"
+        );
+        assert_eq!(reported_path("file://box./tmp", HOST), None, "but not this machine's");
+        // the longest valid name: 253 bytes, labels of 63
+        let longest = [&"a".repeat(63)[..], &"b".repeat(63), &"c".repeat(63), &"d".repeat(61)].join(".");
+        assert_eq!(longest.len(), 253);
+        assert_eq!(
+            reported_path(&format!("file://{longest}/tmp"), &longest).as_deref(),
+            Some("/tmp")
+        );
+        assert_eq!(
+            reported_path(&format!("file://{longest}./tmp"), &format!("{longest}.")).as_deref(),
+            Some("/tmp")
+        );
+    }
+
+    /// Zig 0.17's `HostName.fromUri` (in place of `Uri.getHost`, which validated nothing) refuses a host that is no
+    /// valid RFC 1123 name, even when it is this machine's hostname: the report is ignored.
+    #[test]
+    fn an_invalid_or_overlong_host_is_ignored_even_when_it_matches() {
+        for host in [
+            "my_box",
+            "-box",
+            "box-",
+            "a..b",
+            "..",
+            "b\u{f6}x",
+            "box\u{1b}]52;c;SGVsbG8=\u{7}",
+            "[::1]",
+        ] {
+            assert_eq!(reported_path(&format!("file://{host}/tmp"), host), None, "{host:?}");
+        }
+        assert_eq!(
+            reported_path("file://my%5Fbox/tmp", "my_box"),
+            None,
+            "a decoded invalid byte"
+        );
+        let label = "a".repeat(64);
+        assert_eq!(
+            reported_path(&format!("file://{label}/tmp"), &label),
+            None,
+            "a 64-byte label"
+        );
+        let long = [&"a".repeat(63)[..], &"b".repeat(63), &"c".repeat(63), &"d".repeat(62)].join(".");
+        assert_eq!(long.len(), 254);
+        assert_eq!(
+            reported_path(&format!("file://{long}/tmp"), &long),
+            None,
+            "a 254-byte name"
+        );
+        // longer than 254 bytes as written, though its decoded name would be short enough
+        let encoded = "%61".repeat(85);
+        assert_eq!(reported_path(&format!("file://{encoded}/tmp"), &"a".repeat(85)), None);
+        assert_eq!(
+            reported_path(&format!("file://{}/tmp", "%61".repeat(21)), &"a".repeat(21)).as_deref(),
+            Some("/tmp"),
+            "a short encoded name"
+        );
+        // a MAC address host (macOS's private Wi-Fi address as the hostname) has colons, so it is no name
+        assert_eq!(reported_path("file://12:34:56:78:90:ab/tmp", HOST), None);
+        assert_eq!(
+            reported_path("file://12:34:56:78:90:ab/tmp", "12:34:56:78:90:ab"),
+            None,
+            "a MAC address host is refused even when it is this machine's"
+        );
+        assert_eq!(
+            reported_path("kitty-shell-cwd://12:34:56:78:90:12/tmp", "12:34:56:78:90:12"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_missing_or_empty_host_is_ignored() {
+        assert_eq!(reported_path("file:///tmp", ""), None);
+        assert_eq!(reported_path("kitty-shell-cwd:///tmp", HOST), None);
+        assert_eq!(reported_path("file://", HOST), None);
+        assert_eq!(reported_path("file://@/tmp", HOST), None, "only user info");
+        assert_eq!(
+            reported_path("file://me@x@box/tmp", HOST).as_deref(),
+            Some("/tmp"),
+            "the host follows the last @"
+        );
+    }
+
+    /// Zig's `parseAfterScheme` ends the authority at the first `/`, `?` or `#`, and refuses a port that is no
+    /// `u16` (`error.InvalidPort`, which Ghostty ignores the report for).
+    #[test]
+    fn the_authority_ends_at_a_path_query_or_fragment_and_its_port_must_be_a_u16() {
+        for port in ["22", "0", "65535", "+22", "-0", "2_2", "0_0_065535"] {
+            assert_eq!(
+                reported_path(&format!("file://box:{port}/tmp"), HOST).as_deref(),
+                Some("/tmp"),
+                "{port:?}"
+            );
+        }
+        for port in [
+            "", "65536", "99999", "-1", "+", "-", "_22", "22_", "0x16", " 22", "2 2", "ssh",
+        ] {
+            assert_eq!(reported_path(&format!("file://box:{port}/tmp"), HOST), None, "{port:?}");
+        }
+        assert_eq!(
+            reported_path("file://user@box:/tmp", HOST),
+            None,
+            "an empty port after user info"
+        );
+        assert_eq!(
+            reported_path("file://box?q", HOST).as_deref(),
+            Some(""),
+            "an empty path before a query"
+        );
+        assert_eq!(reported_path("file://box#f/x", HOST).as_deref(), Some(""));
+        assert_eq!(reported_path("file://box:22?q/x", HOST).as_deref(), Some(""));
+        assert_eq!(
+            reported_path("kitty-shell-cwd://box?a/b#c", HOST).as_deref(),
+            Some("?a/b#c"),
+            "kitty's raw path is everything after the host"
+        );
+        assert_eq!(reported_path("file://box:9?q", HOST).as_deref(), Some(""));
+        assert_eq!(reported_path("file://box:99999?q", HOST), None);
     }
 
     #[test]

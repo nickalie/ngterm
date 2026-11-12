@@ -203,6 +203,8 @@ impl Host {
         for (key, value) in launch.shell_profile.iter().flat_map(|profile| &profile.env) {
             vars.set(key, value.clone());
         }
+        // Bridge negotiation is a per-launch decision; an inherited or config value cannot enable it.
+        vars.remove(ngterm_core::attach_bridge::VARIABLE);
         for name in &launch.env_remove {
             vars.remove(name);
         }
@@ -679,6 +681,18 @@ impl Pane {
         let config = PaneConfig {
             exit: prepared.exit,
             status_file: launch.status_file.clone(),
+            attach_bridge: launch
+                .live
+                .is_none()
+                .then(|| {
+                    launch
+                        .env
+                        .iter()
+                        .find(|(key, _)| key == ngterm_core::attach_bridge::VARIABLE)
+                        .and_then(|(_, value)| ngterm_core::attach_bridge::parse_variable(value))
+                        .map(str::to_owned)
+                })
+                .flatten(),
             // the queue is empty: it takes the input whole, even a 10 MB `input = path:` file
             write_limit: config.write_limit.max(input.len()),
             ..config.clone()
@@ -748,6 +762,39 @@ mod tests {
         std::fs::create_dir_all(bash.parent().unwrap()).unwrap();
         std::fs::write(&bash, "").unwrap();
         resources
+    }
+
+    #[test]
+    fn bridge_off_launches_remove_inherited_and_config_negotiation() {
+        let mut host = host(None);
+        host.env
+            .push((ngterm_core::attach_bridge::VARIABLE.into(), "1:config".into()));
+        let inherited = MapEnv::new().with(ngterm_core::attach_bridge::VARIABLE, "1:inherited");
+        let mut profile = ngterm_core::shell_profiles::ShellProfile::new("test", "Test", "/bin/bash".into(), &[]);
+        profile
+            .env
+            .insert(ngterm_core::attach_bridge::VARIABLE.into(), "1:profile".into());
+        let profiled = Launch {
+            shell_profile: Some(profile),
+            ..Launch::default()
+        };
+        let prepared = host.prepare(&profiled, &inherited);
+        assert!(!set(&prepared).contains_key(ngterm_core::attach_bridge::VARIABLE));
+        assert!(
+            prepared
+                .command
+                .env_remove
+                .iter()
+                .any(|key| key == ngterm_core::attach_bridge::VARIABLE)
+        );
+        let launch = Launch {
+            env: vec![(ngterm_core::attach_bridge::VARIABLE.into(), "1:launch".into())],
+            ..Launch::default()
+        };
+        assert_eq!(
+            set(&host.prepare(&launch, &inherited))[ngterm_core::attach_bridge::VARIABLE],
+            "1:launch"
+        );
     }
 
     #[test]
@@ -1096,7 +1143,10 @@ mod tests {
                 ("GHOSTTY_SHELL_FEATURES", "path"),
             ],
         );
-        assert_eq!(removed(&prepared), ["GHOSTTY_LOG", "VTE_VERSION"]);
+        assert_eq!(
+            removed(&prepared),
+            ["GHOSTTY_LOG", "VTE_VERSION", ngterm_core::attach_bridge::VARIABLE]
+        );
         // the config's `term` is what a resolved terminal claims
         let kitty = Host {
             term: "xterm-kitty".to_owned(),

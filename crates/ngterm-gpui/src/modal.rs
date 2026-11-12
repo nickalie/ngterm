@@ -501,11 +501,19 @@ pub struct Alert {
     highlighted: usize,
     checked: Vec<bool>,
     done: Option<AlertDone>,
+    /// A view shown under the body (the clipboard prompt's preview), which widens the panel.
+    extra: Option<gpui_kit::AnyView>,
     _field_events: Option<Subscription>,
 }
 
 impl Alert {
-    fn new(spec: AlertSpec, done: AlertDone, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        spec: AlertSpec,
+        extra: Option<gpui_kit::AnyView>,
+        done: AlertDone,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let offset = spec.checks.len();
         let checked = spec.checks.iter().map(|check| check.checked).collect();
         let highlighted = spec.default_button().map_or(0, |index| index + offset);
@@ -531,6 +539,7 @@ impl Alert {
             highlighted,
             checked,
             done: Some(done),
+            extra,
             _field_events: field_events,
         }
     }
@@ -554,6 +563,12 @@ impl Alert {
     #[must_use]
     pub fn holds_keyboard(&self, window: &Window, cx: &App) -> bool {
         self.focus.contains_focused(window, cx) || self.focus_handle(cx).is_focused(window)
+    }
+
+    /// The view shown under the body, with one.
+    #[must_use]
+    pub fn extra(&self) -> Option<&gpui_kit::AnyView> {
+        self.extra.as_ref()
     }
 
     /// Whether the first check is checked.
@@ -785,7 +800,7 @@ impl Render for Alert {
             .capture_key_down(cx.listener(Self::capture_key))
             .on_key_down(cx.listener(Self::key_down))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .w(px(372.))
+            .w(px(if self.extra.is_some() { 460. } else { 372. }))
             .max_w_full()
             .max_h_full()
             .p_6()
@@ -812,6 +827,7 @@ impl Render for Alert {
                         .child(SharedString::from(self.spec.body.clone())),
                 )
             })
+            .children(self.extra.clone().map(|extra| div().flex_shrink_0().child(extra)))
             .children(field)
             .children(checks)
             .child(
@@ -856,8 +872,19 @@ pub fn open_alert(
     done: impl FnOnce(AlertAnswer, &mut Window, &mut App) + 'static,
     cx: &mut App,
 ) -> Entity<Alert> {
+    open_alert_with(window, spec, None, done, cx)
+}
+
+/// [`open_alert`] with `extra` shown under the body (the clipboard prompt's preview).
+pub fn open_alert_with(
+    window: &mut Window,
+    spec: AlertSpec,
+    extra: Option<gpui_kit::AnyView>,
+    done: impl FnOnce(AlertAnswer, &mut Window, &mut App) + 'static,
+    cx: &mut App,
+) -> Entity<Alert> {
     let handle = window.window_handle();
-    let alert = cx.new(|cx| Alert::new(spec, Box::new(done), window, cx));
+    let alert = cx.new(|cx| Alert::new(spec, extra, Box::new(done), window, cx));
     let front = cx.update_default_global::<Alerts, _>(|alerts, _| {
         let queue = alerts.queues.entry(handle).or_default();
         queue.push(alert.clone());

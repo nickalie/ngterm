@@ -13,7 +13,7 @@ diagnostics. The typed model (`GhosttyConfig`, `model.rs`) carries only a subset
 "ghostty config key not supported; ignored" arms of `GhosttyConfig::apply` (logged at debug level) and change nothing.
 A user who sets one gets Ghostty's default behavior, or ngterm's own behavior where ngterm owns the feature.
 
-147 keys are in that state. The list comes from the key table itself: each key in `known_keys()` was applied to a
+148 keys are in that state. The list comes from the key table itself: each key in `known_keys()` was applied to a
 default `GhosttyConfig`, and the keys the model refused were collected. Three more keys miss the model but are read
 elsewhere, so they are not listed: `keybind` (`binds.rs`), `config-file` (the loader's includes) and `command`
 (`ngterm-gpui` `session_host.rs`, a pane's default program).
@@ -161,7 +161,7 @@ through its native key translation and the libghostty-vt encoder, including sepa
 | `quick-terminal-animation-duration` | the quick terminal's slide animation | macOS app ("only implemented on macOS") |
 | `quick-terminal-space-behavior` | the quick terminal across Spaces | macOS app |
 
-## 3. Ghostty app-runtime keys the GTK build did not honor (63)
+## 3. Ghostty app-runtime keys the GTK build did not honor (64)
 
 Ghostty's own GTK app runtime (or both of its runtimes) reads these keys. The GTK build ran the embedded runtime, and
 `agterm-gtk` did not read them, so setting them changed nothing there either. Several of them shape UI that ngterm
@@ -176,6 +176,7 @@ draws itself, after upstream: windows, titlebar, sidebar, splits, quick terminal
 | `gtk-quick-terminal-namespace` | layer-shell namespace of the quick terminal | Ghostty GTK runtime (Wayland) |
 | `gtk-single-instance` | Ghostty's single-instance mode | `apprt/gtk/class/application.zig`; ngterm has its own single instance |
 | `gtk-tabs-location` | the tab bar's side | `apprt/gtk/class/window.zig` |
+| `gtk-tabs-inverted` | the close button at the tab's start, the icon at its end | `apprt/gtk/class/window.zig` (new in Ghostty 1.4.0, #14657) |
 | `gtk-titlebar` | draw the GTK titlebar | `apprt/gtk/class/window.zig` |
 | `gtk-titlebar-hide-when-maximized` | hide it when maximized | `apprt/gtk/class/window.zig` |
 | `gtk-titlebar-style` | native or tabs titlebar | `apprt/gtk/class/window.zig` |

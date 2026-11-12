@@ -2,14 +2,16 @@
 //! (and the other mutating calls), and the trampolines that reach them from C.
 //!
 //! The library passes one userdata pointer to every callback. [`Terminal::set_effects`](crate::Terminal::set_effects)
-//! boxes the handler on the heap and hands the library a pointer to that box; the terminal owns the box but never
+//! boxes the handler and its grant-table handle on the heap and hands the library a pointer to that slot; the terminal owns the box but never
 //! dereferences it, so the only Rust reference to the handler during a call is the `&mut` a trampoline makes for the
 //! duration of one callback (no aliased `&mut`). Callbacks must not call back into the terminal's mutating API (the C
 //! API forbids re-entrant `vt_write`), which the handler cannot: it gets no terminal, only [`HeldTerminal`] in
 //! [`Effects::render_hold`], which can do nothing but capture a render state, as `terminal.h` asks.
 
+use crate::{ClipboardDirection, ClipboardGrants};
 use std::ffi::c_void;
 use std::marker::PhantomData;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::{ffi, raw_slice, string_bytes};
 
@@ -39,6 +41,23 @@ impl ClipboardLocation {
     }
 }
 
+/// The protocol that produced a clipboard callback (metadata patch 0005).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardOrigin {
+    Kitty,
+    Osc52,
+    Osc1337,
+}
+impl ClipboardOrigin {
+    fn from_raw(raw: ffi::GhosttyClipboardOrigin) -> Self {
+        match raw {
+            ffi::GHOSTTY_CLIPBOARD_ORIGIN_KITTY => Self::Kitty,
+            ffi::GHOSTTY_CLIPBOARD_ORIGIN_OSC1337 => Self::Osc1337,
+            _ => Self::Osc52,
+        }
+    }
+}
+
 /// One representation of a clipboard write, borrowed for the callback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClipboardData<'a> {
@@ -54,6 +73,13 @@ pub struct ClipboardWriteRequest<'a> {
     pub contents: Vec<ClipboardData<'a>>,
     /// The writing program's name, when the protocol carries one (OSC 5522).
     pub name: &'a [u8],
+    /// A previous allowed token granted writes for this terminal.
+    pub granted: bool,
+    /// A named password permits remembering an allowed write.
+    pub can_remember: bool,
+    /// Effective token; never send it to a frontend or include it in a permission prompt.
+    pub pw: &'a [u8],
+    pub origin: ClipboardOrigin,
 }
 
 /// How a clipboard write ended; protocols with an acknowledgement (OSC 5522) report it to the program.
@@ -89,9 +115,13 @@ pub struct ClipboardReadRequest<'a> {
     /// Whether the program also wants the list of available MIME types.
     pub list: bool,
     pub name: &'a [u8],
-    /// Whether the terminal holds a session grant for the request (only after a reply set `remember`, which this
-    /// wrapper never does).
+    /// Whether the terminal holds a session grant for the request.
     pub granted: bool,
+    /// A named password permits remembering an allowed read.
+    pub can_remember: bool,
+    /// Effective token; never send it to a frontend or include it in a permission prompt.
+    pub pw: &'a [u8],
+    pub origin: ClipboardOrigin,
 }
 
 /// One owned representation of a clipboard read's answer.
@@ -286,10 +316,22 @@ pub trait Effects: Send {
         ClipboardWriteResult::Denied
     }
 
+    /// Answer a write and optionally remember an allowed token. The default delegates to
+    /// [`Self::clipboard_write`] without remembering it. No request or callback pointer may escape this call.
+    fn clipboard_write_reply(&mut self, request: &ClipboardWriteRequest<'_>) -> (ClipboardWriteResult, bool) {
+        (self.clipboard_write(request), false)
+    }
+
     /// A program's clipboard read, answered now. The default refuses it.
     fn clipboard_read(&mut self, request: &ClipboardReadRequest<'_>) -> ClipboardReadReply {
         let _ = request;
         ClipboardReadReply::Denied
+    }
+
+    /// Answer a read and optionally remember an allowed token. The default delegates to
+    /// [`Self::clipboard_read`] without remembering it. Only successful replies can create a grant.
+    fn clipboard_read_reply(&mut self, request: &ClipboardReadRequest<'_>) -> (ClipboardReadReply, bool) {
+        (self.clipboard_read(request), false)
     }
 
     /// Synchronized output (mode 2026) began (`held`) or ended. When it begins, the terminal holds exactly the frame
@@ -324,16 +366,24 @@ pub trait Effects: Send {
 
 /// The heap slot the library's userdata points at, owned by the terminal and freed after it.
 pub(crate) struct EffectsSlot {
-    raw: std::ptr::NonNull<Box<dyn Effects>>,
+    raw: std::ptr::NonNull<HandlerState>,
 }
 
 // SAFETY: the slot owns a `Box<dyn Effects>` and `Effects: Send`; it is only reached through the terminal that owns
 // it, whose calls are serialized by `&mut`.
 unsafe impl Send for EffectsSlot {}
 
+struct HandlerState {
+    effects: Box<dyn Effects>,
+    grants: Arc<Mutex<ClipboardGrants>>,
+}
 impl EffectsSlot {
+    #[cfg(test)]
     pub(crate) fn new(effects: Box<dyn Effects>) -> Self {
-        let raw = std::ptr::NonNull::from(Box::leak(Box::new(effects)));
+        Self::with_grants(effects, Arc::default())
+    }
+    pub(crate) fn with_grants(effects: Box<dyn Effects>, grants: Arc<Mutex<ClipboardGrants>>) -> Self {
+        let raw = std::ptr::NonNull::from(Box::leak(Box::new(HandlerState { effects, grants })));
         Self { raw }
     }
 
@@ -400,10 +450,17 @@ pub(crate) const CALLBACKS: &[(ffi::GhosttyTerminalOption, *const c_void)] = &[
 /// `userdata` must be the pointer of a live [`EffectsSlot`] (the terminal sets nothing else), and no other reference
 /// to its handler may exist for `'a` (true inside one callback: the terminal never dereferences the slot).
 unsafe fn handler<'a>(userdata: *mut c_void) -> &'a mut dyn Effects {
-    let slot = userdata.cast::<Box<dyn Effects>>();
+    let slot = userdata.cast::<HandlerState>();
     // SAFETY: the caller's contract: `slot` points at the live box, uniquely borrowed for `'a`.
     let boxed = unsafe { &mut *slot };
-    boxed.as_mut()
+    boxed.effects.as_mut()
+}
+
+/// # Safety
+/// userdata is this terminal's live effects slot, as in `handler`.
+unsafe fn grant_slot(userdata: *mut c_void) -> Arc<Mutex<ClipboardGrants>> {
+    // SAFETY: caller supplies the live slot; only the Arc is copied.
+    Arc::clone(&unsafe { &*userdata.cast::<HandlerState>() }.grants)
 }
 
 /// A `GhosttyString` datum of the calling terminal, copied (lossy UTF-8).
@@ -576,14 +633,32 @@ unsafe extern "C" fn clipboard_write(
             data: unsafe { string_bytes(entry.data) },
         })
         .collect();
+    // SAFETY: the effective password is borrowed for this callback by patch 0005.
+    let pw = unsafe { string_bytes(write.pw) };
+    // SAFETY: userdata is the live effects slot.
+    let grants = unsafe { grant_slot(userdata) };
+    let granted = grants
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .consume(pw, ClipboardDirection::Write);
     let request = ClipboardWriteRequest {
         location: ClipboardLocation::from_raw(write.location),
         contents,
         // SAFETY: as above.
         name: unsafe { string_bytes(write.name) },
+        granted,
+        pw,
+        origin: ClipboardOrigin::from_raw(write.origin),
+        can_remember: write.can_remember,
     };
     // SAFETY: as in `write_pty`.
-    let result = unsafe { handler(userdata) }.clipboard_write(&request);
+    let (result, remember) = unsafe { handler(userdata) }.clipboard_write_reply(&request);
+    if result == ClipboardWriteResult::Success && remember && request.can_remember {
+        grants
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .grant(pw, ClipboardDirection::Write, false);
+    }
     let reply = ffi::GhosttyClipboardWriteReply {
         size: std::mem::size_of::<ffi::GhosttyClipboardWriteReply>(),
         result: result.to_raw(),
@@ -610,6 +685,15 @@ unsafe extern "C" fn clipboard_read(
     }
     // SAFETY: `mimes` holds `mimes_len` strings for the call.
     let mimes = unsafe { raw_slice(read.mimes, read.mimes_len) };
+    // SAFETY: as for the other borrowed request strings.
+    let pw = unsafe { string_bytes(read.pw) };
+    // SAFETY: userdata is the terminal's live effects slot.
+    let grants = unsafe { grant_slot(userdata) };
+    let granted = !mimes.is_empty()
+        && grants
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .consume(pw, ClipboardDirection::Read);
     let request = ClipboardReadRequest {
         location: ClipboardLocation::from_raw(read.location),
         // SAFETY: each MIME string lives for the call.
@@ -617,10 +701,19 @@ unsafe extern "C" fn clipboard_read(
         list: read.list,
         // SAFETY: as above.
         name: unsafe { string_bytes(read.name) },
-        granted: read.granted,
+        granted,
+        pw,
+        origin: ClipboardOrigin::from_raw(read.origin),
+        can_remember: read.can_remember,
     };
     // SAFETY: as in `write_pty`.
-    let answer = unsafe { handler(userdata) }.clipboard_read(&request);
+    let (answer, remember) = unsafe { handler(userdata) }.clipboard_read_reply(&request);
+    if matches!(answer, ClipboardReadReply::Success { .. }) && remember && request.can_remember {
+        grants
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .grant(pw, ClipboardDirection::Read, false);
+    }
     let (contents, available): (Vec<_>, Vec<_>) = match &answer {
         ClipboardReadReply::Success { contents, available } => (
             contents
@@ -630,7 +723,11 @@ unsafe extern "C" fn clipboard_read(
                     data: library_string(&content.data),
                 })
                 .collect(),
-            available.iter().map(|mime| library_string(mime.as_bytes())).collect(),
+            available
+                .iter()
+                .take(16)
+                .map(|mime| library_string(mime.as_bytes()))
+                .collect(),
         ),
         _ => (Vec::new(), Vec::new()),
     };
@@ -775,6 +872,12 @@ unsafe extern "C" fn color_scheme(
 
 unsafe extern "C" fn reset(_terminal: ffi::GhosttyTerminal, userdata: *mut c_void) {
     // SAFETY: as in `write_pty`.
+    // SAFETY: as in every effect trampoline; RIS invalidates this terminal's grants.
+    unsafe { grant_slot(userdata) }
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clear();
+    // SAFETY: userdata is the same live effects slot; the grant-table lock was released above.
     unsafe { handler(userdata) }.reset();
 }
 

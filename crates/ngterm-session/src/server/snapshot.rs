@@ -38,8 +38,8 @@
 //! 6. the stream continuation: the unfinished escape sequence or UTF-8 character the session's parser stands in, so
 //!    the client's parser takes the next output where the session's does.
 //!
-//! Skipped cells come out as unstyled blanks (Ghostty patch `0004-formatter-unstyled-blanks`), as upstream's
-//! re-attach writes them. On the alternate screen the snapshot is that screen's, as zmx's: the primary screen the
+//! Skipped cells come back unstyled and empty, as upstream's re-attach writes them: the pinned formatter steps over
+//! them with CUF (Ghostty #14725, which replaced the VT half of patch `0004-formatter-unstyled-blanks`). On the alternate screen the snapshot is that screen's, as zmx's: the primary screen the
 //! program will return to is not carried.
 //!
 //! # Where to cut
@@ -64,8 +64,8 @@ pub const CHUNK_SIZE: usize = 64 * 1024;
 /// What a client already sent some of the session's output gets ahead of a snapshot that replaces it. That output may
 /// have left anything on (the alternate screen, mouse tracking, a keyboard mode, a hidden cursor, a colour) and the
 /// snapshot writes only what the session has on, so the client's terminal starts over from a fresh one's state. In
-/// order: CAN ends any sequence the output was cut in (a string sequence, OSC, DCS or APC, is dispatched early by a
-/// Ghostty client, and the reset then undoes it); RIS resets the terminal (Ghostty's `Terminal.fullReset`: the
+/// order: CAN cancels any sequence the output was cut in (Ghostty discards a cut-short APC or OSC without
+/// dispatching it); RIS resets the terminal (Ghostty's `Terminal.fullReset`: the
 /// primary screen, the alternate one dropped, the screen and its scrollback, the modes, tab stops, palette, cursor and
 /// its style, saved cursor, charsets, protection, Kitty keyboard flags and images, title and working directory); ED 3
 /// drops the scrollback where a terminal's RIS keeps it (xterm's), so the snapshot's history is not added to what the
@@ -291,6 +291,7 @@ pub fn chunks(data: &[u8]) -> impl Iterator<Item = &[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ngterm_ghostty_vt::{Style, StyleColor};
 
     const COLS: u16 = 40;
     const ROWS: u16 = 6;
@@ -541,9 +542,97 @@ mod tests {
     fn blank_runs_come_back_unstyled() {
         let mut session = tracked();
         session.vt_write(b"\x1b[41mAB\x1b[3CX\x1b[0m");
-        let text = String::from_utf8_lossy(&snapshot(&mut session)).into_owned();
-        assert!(text.contains("AB\x1b[0m   \x1b["), "{text:?}");
+        let bytes = snapshot(&mut session);
+        let text = String::from_utf8_lossy(&bytes).into_owned();
         assert!(!text.contains("AB   "), "{text:?}");
+        let row = client(&bytes).active_row(0).unwrap();
+        let red = StyleColor::Palette(1);
+        for x in [0, 1, 5] {
+            assert_eq!(row.cells[x].style.background, red, "cell {x}: {text:?}");
+        }
+        for (x, cell) in row.cells.iter().enumerate().take(5).skip(2) {
+            assert!(cell.text.is_empty(), "gap cell {x}: {text:?}");
+            assert_eq!(cell.style, Style::default(), "gap cell {x}: {text:?}");
+        }
+    }
+
+    /// Read the colors a renderer sees as well: a background-only cell has no text style.
+    fn backgrounds(terminal: &mut Terminal) -> Vec<Vec<Option<Rgb>>> {
+        let mut state = ngterm_ghostty_vt::RenderState::new().unwrap();
+        state.update(terminal).unwrap();
+        let mut rows = state.rows().unwrap();
+        let mut result = Vec::new();
+        while let Some(mut row) = rows.next_row() {
+            let mut colors = Vec::new();
+            let mut cells = row.cells().unwrap();
+            while let Some(cell) = cells.next_cell() {
+                colors.push(cell.unwrap().background());
+            }
+            result.push(colors);
+        }
+        result
+    }
+
+    fn assert_replayed_cells(source: &mut Terminal, replayed: &mut Terminal) {
+        assert_eq!(backgrounds(replayed), backgrounds(source));
+        assert_eq!(replayed.total_rows(), source.total_rows());
+        assert_eq!(replayed.cursor(), source.cursor());
+        for y in 0..ROWS {
+            assert_eq!(
+                replayed.active_row(y).unwrap().cells,
+                source.active_row(y).unwrap().cells,
+                "row {y}"
+            );
+            for x in 0..COLS {
+                let point = Point::new(PointTag::Active, x, u32::from(y));
+                assert_eq!(
+                    replayed.hyperlink_uri(point).unwrap(),
+                    source.hyperlink_uri(point).unwrap(),
+                    "{x},{y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn attach_and_resync_replay_links_gaps_background_rows_rgb_and_wrapped_wide_cells() {
+        // Ghostty formatter.zig: Terminal vt restores hyperlinks of cells / gaps and
+        // cells that only have a background. Include a wrapped wide character too.
+        let content = format!(
+            "\x1b[41mred\x1b[0m\x1b[10G\x1b]8;id=a;https://example.com\x1b\\link\x1b]8;;\x1b\\ plain\r\n\
+             \x1b[44m\x1b[K\x1b[0m\r\n\
+             CPU:\x1b[42m\x1b[K\x1b[48;2;1;2;3m\x1b[15G\x1b[3X\x1b[0m\x1b[19Gx\r\n\
+             {}中\r\nunlinked",
+            "w".repeat(usize::from(COLS) - 1),
+        );
+        for kind in [Kind::Attach, Kind::Resync] {
+            let mut source = tracked();
+            source.vt_write(content.as_bytes());
+            let bytes = capture(&mut source, kind).unwrap();
+            let mut replayed = tracked();
+            if kind == Kind::Resync {
+                replayed.vt_write(b"\x1b[45m\x1b[2Jold\r\nstate\x1b]8;;https://stale.example\x1b\\");
+            }
+            replayed.vt_write(&bytes);
+            assert_replayed_cells(&mut source, &mut replayed);
+            let colors = backgrounds(&mut replayed);
+            assert_eq!(colors[0][3], None, "the gap remains unpainted");
+            assert_eq!(colors[1], vec![Some(source.colors().palette[4]); usize::from(COLS)]);
+            assert_eq!(colors[2][14..17], [Some(Rgb::new(1, 2, 3)); 3]);
+            assert!(replayed.active_row(3).unwrap().wrapped);
+            assert_eq!(replayed.active_row(4).unwrap().cells[0].text, "中");
+            assert_eq!(
+                replayed
+                    .hyperlink_uri(Point::new(PointTag::Active, 9, 0))
+                    .unwrap()
+                    .as_deref(),
+                Some("https://example.com")
+            );
+            // The cursor pen is unlinked after replay, despite the earlier cell links.
+            source.vt_write(b"!");
+            replayed.vt_write(b"!");
+            assert_replayed_cells(&mut source, &mut replayed);
+        }
     }
 
     #[test]
@@ -817,5 +906,66 @@ mod tests {
             "the session's terminal could not be formatted: libghostty-vt refused an invalid value"
         );
         assert_eq!(state(&mut terminal), before);
+    }
+
+    #[derive(Clone, Default)]
+    struct CutEffects {
+        replies: std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+        titles: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl ngterm_ghostty_vt::Effects for CutEffects {
+        fn write_pty(&mut self, bytes: &[u8]) {
+            self.replies.lock().unwrap().push(bytes.to_vec());
+        }
+        fn title_changed(&mut self, title: &str) {
+            self.titles.lock().unwrap().push(title.to_owned());
+        }
+    }
+
+    #[test]
+    fn every_c1_restart_cut_restores_without_repeated_effects() {
+        for corpus in [
+            b"\x1b_hello\x9b31mtext".as_slice(),
+            b"\x1b_Ga=q\x90$qm\x1b\\text",
+            b"\x1b_hello\x9d2;title\x07text",
+        ] {
+            for cut in 0..=corpus.len() {
+                for kind in [Kind::Attach, Kind::Resync] {
+                    assert_c1_cut(corpus, cut, kind);
+                }
+            }
+        }
+    }
+
+    fn assert_c1_cut(corpus: &[u8], cut: usize, kind: Kind) {
+        let mut session = tracked();
+        let original = CutEffects::default();
+        session.set_effects(Box::new(original.clone())).unwrap();
+        session.vt_write(&corpus[..cut]);
+        let bytes = capture(&mut session, kind).unwrap();
+        let mut restored = tracked();
+        let effects = CutEffects::default();
+        restored.set_effects(Box::new(effects.clone())).unwrap();
+        restored.vt_write(&bytes);
+        assert!(
+            effects.replies.lock().unwrap().is_empty(),
+            "restoring must not repeat a query"
+        );
+        let expected_titles = if session.title().is_empty() && kind == Kind::Attach {
+            Vec::new()
+        } else {
+            vec![session.title()]
+        };
+        assert_eq!(*effects.titles.lock().unwrap(), expected_titles);
+        original.replies.lock().unwrap().clear();
+        original.titles.lock().unwrap().clear();
+        effects.titles.lock().unwrap().clear();
+        session.vt_write(&corpus[cut..]);
+        restored.vt_write(&corpus[cut..]);
+        assert_eq!(state(&mut restored), state(&mut session), "{corpus:?} cut {cut}");
+        assert_replayed_cells(&mut session, &mut restored);
+        assert_eq!(*effects.replies.lock().unwrap(), *original.replies.lock().unwrap());
+        assert_eq!(*effects.titles.lock().unwrap(), *original.titles.lock().unwrap());
     }
 }

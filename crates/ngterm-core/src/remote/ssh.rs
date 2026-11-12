@@ -232,11 +232,24 @@ pub fn attach_tail(
         format!("{NO_DETACH_KEY_VARIABLE}=1"),
     ];
     words.push(format!("{DIRECTORY_VARIABLE}={}", endpoint.socket_directory));
-    words.extend(lead.map(LeadAttachment::assignments).unwrap_or_default());
+    let bridge = lead.and_then(|lead| crate::attach_bridge::launch_nonce(endpoint, lead));
+    if let Some(nonce) = bridge {
+        words.push(format!(
+            "{}={}",
+            crate::attach_bridge::VARIABLE,
+            crate::attach_bridge::variable(nonce)
+        ));
+    }
+    words.extend(
+        lead.map(LeadAttachment::assignments)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|word| !word.starts_with(crate::attach_bridge::VARIABLE)),
+    );
     words.extend(
         [
             endpoint.executable.as_str(),
-            "attach",
+            if bridge.is_some() { "attach-bridge" } else { "attach" },
             daemon,
             "/bin/sh",
             "-c",
@@ -257,8 +270,23 @@ fn windows_attach_tail(endpoint: &ControlLiveEndpoint, daemon: &str, lead: Optio
         (NO_DETACH_KEY_VARIABLE.to_owned(), "1".to_owned()),
         (DIRECTORY_VARIABLE.to_owned(), endpoint.socket_directory.clone()),
     ];
-    environment.extend(lead.map(LeadAttachment::environment).unwrap_or_default());
-    let mut words = vec!["attach".to_owned(), daemon.to_owned()];
+    let bridge = lead.and_then(|lead| crate::attach_bridge::launch_nonce(endpoint, lead));
+    if let Some(nonce) = bridge {
+        environment.push((
+            crate::attach_bridge::VARIABLE.into(),
+            crate::attach_bridge::variable(nonce),
+        ));
+    }
+    environment.extend(
+        lead.map(LeadAttachment::environment)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(key, _)| key != crate::attach_bridge::VARIABLE),
+    );
+    let mut words = vec![
+        if bridge.is_some() { "attach-bridge" } else { "attach" }.to_owned(),
+        daemon.to_owned(),
+    ];
     words.extend(origin::WINDOWS_GONE_GUARD.map(str::to_owned));
     OriginRun::Program {
         program: endpoint.executable.clone(),
@@ -439,6 +467,7 @@ mod tests {
 
     fn endpoint() -> ControlLiveEndpoint {
         ControlLiveEndpoint {
+            attach_bridge: None,
             executable: "/opt/ngterm/bin/ngterm-session".to_owned(),
             socket_directory: "/tmp/ngterm-live-abc".to_owned(),
         }
@@ -527,6 +556,7 @@ mod tests {
     #[test]
     fn a_windows_endpoints_attach_is_the_session_program_with_its_contract() {
         let endpoint = ControlLiveEndpoint {
+            attach_bridge: None,
             executable: r"C:\Program Files\ngterm\ngterm-session.exe".to_owned(),
             socket_directory: r"C:\Users\me\AppData\Local\ngterm\live\ab".to_owned(),
         };
@@ -604,6 +634,7 @@ mod tests {
     #[test]
     fn the_attach_line_is_the_ssh_options_plus_its_tail_with_and_without_a_lead() {
         let endpoint = ControlLiveEndpoint {
+            attach_bridge: None,
             executable: "/opt/My Apps/ngterm-session".to_owned(),
             socket_directory: "/tmp/ngterm-live-abc".to_owned(),
         };
@@ -636,6 +667,7 @@ mod tests {
             Err(InvocationError::InvalidSession)
         );
         let hostile = ControlLiveEndpoint {
+            attach_bridge: None,
             executable: "/opt/ngterm-session".to_owned(),
             socket_directory: "/tmp/x\n".to_owned(),
         };
@@ -818,6 +850,74 @@ mod tests {
     }
 
     #[test]
+    fn bridge_capabilities_gate_the_nonce_and_distinct_command_on_both_origin_shells() {
+        for executable in ["/ngterm-session", r"C:\ngterm-session.exe"] {
+            for version in [
+                None,
+                Some(crate::attach_bridge::VERSION),
+                Some(crate::attach_bridge::VERSION + 1),
+            ] {
+                let endpoint = ControlLiveEndpoint {
+                    executable: executable.into(),
+                    socket_directory: "/tmp/live".into(),
+                    attach_bridge: version,
+                };
+                let lead = lead("viewer-nonce", false);
+                let tail = attach_tail(&endpoint, &daemon_name(Uuid::new_v4()), Some(&lead)).unwrap();
+                let bridged = version == Some(crate::attach_bridge::VERSION);
+                assert_bridge_command(&endpoint, &tail, bridged);
+            }
+        }
+    }
+
+    fn assert_bridge_command(endpoint: &ControlLiveEndpoint, tail: &str, bridged: bool) {
+        if OriginShell::of_endpoint(endpoint) == OriginShell::Windows {
+            let OriginRun::Program { words, environment, .. } = windows_run(tail) else {
+                panic!("{tail}")
+            };
+            assert_eq!(words[0], if bridged { "attach-bridge" } else { "attach" });
+            assert_eq!(
+                environment
+                    .iter()
+                    .find(|(key, _)| key == crate::attach_bridge::VARIABLE)
+                    .map(|(_, value)| value.as_str()),
+                bridged.then_some("1:viewer-nonce")
+            );
+        } else {
+            assert_eq!(tail.contains("'attach-bridge'"), bridged);
+            assert_eq!(tail.contains("NGTERM_ATTACH_BRIDGE=1:viewer-nonce"), bridged);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_bridge_capability_fails_closed_against_an_old_parser() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("old-session");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\ncase $1 in attach) echo unexpected-fallback;; *) echo unknown-command >&2; exit 2;; esac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let endpoint = ControlLiveEndpoint {
+            executable: executable.to_string_lossy().into_owned(),
+            socket_directory: dir.path().to_string_lossy().into_owned(),
+            attach_bridge: Some(crate::attach_bridge::VERSION),
+        };
+        let command = attach_tail(&endpoint, &daemon_name(Uuid::new_v4()), Some(&lead("nonce", false))).unwrap();
+        let mut child = std::process::Command::new("/bin/sh");
+        for (key, _) in std::env::vars_os().filter(|(key, _)| key.to_string_lossy().starts_with("NGTERM_")) {
+            child.env_remove(key);
+        }
+        let output = child.args(["-c", &command]).output().unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.stderr, b"unknown-command\n");
+    }
+
+    #[test]
     fn anything_but_an_ngterm_daemon_name_or_a_plain_path_is_refused() {
         for name in ["ngterm 42", "ngterm\n42", "", "notes", "ngterm-nothex"] {
             assert_eq!(
@@ -828,11 +928,13 @@ mod tests {
         }
         let daemon = daemon_name(Uuid::new_v4());
         let spaced = ControlLiveEndpoint {
+            attach_bridge: None,
             executable: "/home/me/My Apps/ngterm/bin/ngterm-session".to_owned(),
             socket_directory: "/tmp/x".to_owned(),
         };
         assert!(attach_command("buildbox", &spaced, &daemon, None).is_ok());
         let hostile = ControlLiveEndpoint {
+            attach_bridge: None,
             executable: "/opt/ngterm-session\n".to_owned(),
             socket_directory: "/tmp/x".to_owned(),
         };

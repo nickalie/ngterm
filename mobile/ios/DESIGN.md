@@ -293,16 +293,23 @@ recognizers; what is new to iOS is the system's: the edit menu, the text beam, t
   first, in the system's alert: "Paste text that can run a command?", what it can do, and the text's first six lines
   as they are (cut at 60 characters, control characters as their symbols, ␛ for escape). **Cancel** is the safe
   answer and what dismissing does; **Paste** repeats the menu's word.
-- **A program reading the clipboard** asks in a sheet over whatever shows (`ClipboardReadQuestion`), a page of the
-  connect prompts' shape: the attention diamond, "Let docs-site read your clipboard?" as a heading, what the program
-  would see (the text, or only what kinds of content the clipboard holds) and from which session on which machine, then
-  **Allow** (prominent), and **Always allow on build-01** and **Deny**, quieter (the tint on the ground). Swiping it
-  away denies. Every read gets an answer: a read whose session is detached, whose pane's program ends, whose machine
-  drops, or that is waiting when the app suspends is denied. A machine allowed always is answered unasked until
-  Settings asks again. Handing over the text may still bring up iOS's own question about pasting from another app,
-  which the app can't skip outside the user's own paste.
-- **A program writing the clipboard** (OSC 52) puts its text on the system's; a write to the selection or primary
-  clipboard, which iOS doesn't have, is dropped.
+- **A program reading the clipboard** (OSC 52, or the Kitty clipboard protocol's OSC 5522) asks in a sheet over
+  whatever shows (`ClipboardReadQuestion`), a page of the connect prompts' shape: the attention diamond, "Let
+  docs-site read your clipboard?" as a heading, from which session on which machine, then what the program would see
+  on a plate (the grouped ground's raised surface), in Ghostty's macOS form: the copied text in the plate's mono
+  (scrolling past 160 pt, the first 64 KiB, the rest counted), or, with no UTF-8 text, a line per type with its size,
+  and under it the first image, fitted, at most 200 pt tall. Then the toggle **Don't ask again for this program in this
+  terminal**, only for a read that can keep a grant (the Kitty protocol's password), **Allow** (prominent), and
+  **Always allow on build-01** and **Deny**, quieter (the tint on the ground). Swiping it away denies. The pasteboard
+  is read when the sheet comes up, which may bring up iOS's own question about pasting from another app (the app can't
+  skip it outside the user's own paste); Allow hands over exactly what the sheet showed. A listing of the types, or a
+  read asking for no type, never asks; neither does a read whose program holds a grant. Every read gets an answer: a
+  read whose session is detached, whose pane's program ends, whose machine drops, or that is waiting when the app
+  suspends is denied. A machine allowed always is answered unasked until Settings asks again.
+- **A program writing the clipboard** isn't asked about (Ghostty's `clipboard-write = allow`): its text, HTML and
+  images land on the general pasteboard as one item, and the program learns the outcome once the pasteboard took it. A
+  write of none of those types is refused as unsupported, only a write with nothing in it clears, and a write to the
+  selection or primary clipboard, which iOS doesn't have, is refused by the core.
 
 ### The keyboard
 

@@ -4,9 +4,10 @@ import SwiftUI
 
 /// Asks about the first clipboard read the shown panes' programs wait on, in a sheet over whatever shows.
 ///
-/// The sheet (mobile/android's `ClipboardReadPrompt`) names the machine and the session the read comes from, and
-/// offers Allow, Always allow on the machine, or Deny. Swiping it away denies; a sheet whose read went (answered
-/// elsewhere, or dismissed by the core) goes by itself.
+/// The sheet (mobile/android's `ClipboardReadPrompt`) names the machine and the session the read comes from, shows what
+/// it would hand over (read when the sheet comes up, which may bring up iOS's own question about pasting from another
+/// app), and offers Allow, Always allow on the machine, or Deny. Swiping it away denies; a sheet whose read went
+/// (answered elsewhere, or dismissed by the core) goes by itself.
 internal struct ClipboardReadPrompt: ViewModifier {
     internal let graph: AppGraph
     @State private var shown: ClipboardRead?
@@ -40,10 +41,16 @@ internal struct ClipboardReadPrompt: ViewModifier {
         let machine = graph.machines.machine(id: pane.machineId)?.title ?? pane.machineId
         let listed = graph.connections.trees[pane.machineId]?.first { $0.id == pane.sessionId }
         let session = listed?.name ?? pane.sessionId
-        return ClipboardReadQuestion(listOnly: read.listOnly, machine: machine, session: session) {
-            reads.allow(read)
-        } onAlways: {
-            reads.allowAlways(read)
+        return ClipboardReadQuestion(
+            canRemember: read.canRemember,
+            machine: machine,
+            session: session,
+            preview: reads.preview(read).contents,
+            listed: read.list
+        ) { remember in
+            reads.allow(read, remember: remember)
+        } onAlways: { remember in
+            reads.allowAlways(read, remember: remember)
         } onDeny: {
             reads.deny(read)
         }

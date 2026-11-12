@@ -1,7 +1,7 @@
 //! A pane's mailbox: everything that reaches its IO worker ([`crate::pane`]) — the program's output from the PTY
 //! actor's read callback, the frontend's clipboard answers, the child's exit, the end of the output, the pane's
 //! shutdown — behind one lock and one condition variable, so the worker waits on all of them at once, with the
-//! synchronized-output hold's deadline as its timeout.
+//! earliest synchronized-output hold or Kitty animation deadline as its timeout.
 //!
 //! - The read callback ([`Mailbox::deliver`]) only copies the output in and never waits, so nothing that holds the
 //!   VT lock can wait on a callback that waits on the VT.
@@ -11,7 +11,8 @@
 //!   under the mailbox's lock, so a stale resume never overrides a newer pause. While reads are paused the actor still
 //!   writes the program's input — a worker waiting on a clipboard answer holds the program's output back, not its
 //!   input.
-//! - The child's exit and the shutdown are flags that pass queued output, so a clipboard wait never hides them.
+//! - The child's exit and the shutdown are flags that pass queued output, as do expired hold and animation
+//!   deadlines, so a clipboard wait never hides them.
 //! - A live pane's reader queues the attach stream's events that must follow the output before them
 //!   (`crate::session_io::LiveMail`) in order with it (`Mailbox::deliver_live`); they count no bytes.
 //!
@@ -68,9 +69,11 @@ pub(crate) enum Mail {
     /// A live pane's event, after the output before it.
     #[cfg(feature = "local")]
     Live(LiveMail),
-    /// The deadline passed with nothing to take.
+    /// A hold or animation deadline passed; it is reported before any queued output.
     Idle,
-    /// The output ended (every read was taken) or the pane shut down.
+    /// All output was taken. The worker still services animation wakes until shutdown.
+    Eof,
+    /// The pane shut down.
     End,
 }
 
@@ -93,15 +96,24 @@ enum Item {
     Live(LiveMail),
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+enum OutputEnd {
+    #[default]
+    Open,
+    Pending,
+    Reported,
+}
+
 #[derive(Debug, Default)]
 struct State {
     output: VecDeque<Item>,
     /// Output bytes not fed to the VT yet: the queued reads, and the one the worker holds.
     pending: usize,
     answers: Vec<(u64, ClipboardAnswer)>,
-    eof: bool,
+    eof: OutputEnd,
     child_exited: bool,
     shutdown: bool,
+    animation_deadline: Option<Instant>,
 }
 
 #[derive(Debug)]
@@ -109,6 +121,9 @@ pub(crate) struct Mailbox {
     state: Mutex<State>,
     changed: Condvar,
     pause: ReadPause,
+    /// Signals under the state lock immediately before sleeping, to test rearming an already waiting worker.
+    #[cfg(test)]
+    before_wait: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
 impl Mailbox {
@@ -118,6 +133,8 @@ impl Mailbox {
             state: Mutex::new(State::default()),
             changed: Condvar::new(),
             pause,
+            #[cfg(test)]
+            before_wait: Mutex::new(None),
         }
     }
 
@@ -153,7 +170,11 @@ impl Mailbox {
 
     /// The actor stopped: no more output comes.
     pub(crate) fn end_of_output(&self) {
-        self.post(|state| state.eof = true);
+        self.post(|state| {
+            if state.eof == OutputEnd::Open {
+                state.eof = OutputEnd::Pending;
+            }
+        });
     }
 
     /// The child exited: a clipboard read waiting now, or waited on later, is denied.
@@ -163,7 +184,20 @@ impl Mailbox {
 
     /// The pane goes away: the worker stops at its next look.
     pub(crate) fn shutdown(&self) {
-        self.post(|state| state.shutdown = true);
+        self.post(|state| {
+            state.shutdown = true;
+            state.animation_deadline = None;
+        });
+    }
+
+    /// Rearm the single animation wake. Kept under the wait's own lock so an earlier deadline cannot be lost
+    /// between the worker reading it and going to sleep. Repeated captures of the same deadline leave it alone.
+    pub(crate) fn animation_deadline(&self, deadline: Option<Instant>) {
+        let mut state = self.lock();
+        if !state.shutdown && state.animation_deadline != deadline {
+            state.animation_deadline = deadline;
+            self.changed.notify_all();
+        }
     }
 
     /// The frontend's answer to the clipboard read `id`.
@@ -171,30 +205,47 @@ impl Mailbox {
         self.post(|state| state.answers.push((id, answer)));
     }
 
-    /// Wait on the state until `deadline` (forever without one); whether it passed.
-    fn wait<'a>(&self, state: MutexGuard<'a, State>, deadline: Option<Instant>) -> (MutexGuard<'a, State>, bool) {
+    /// Wait until either deadline or new mail. Recompute after every notification, including cancellations.
+    fn wait<'a>(&self, state: MutexGuard<'a, State>, deadline: Option<Instant>) -> MutexGuard<'a, State> {
+        #[cfg(test)]
+        if let Some(signal) = self.before_wait.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            let _ = signal.send(());
+        }
+        let deadline = earliest(deadline, state.animation_deadline);
         let Some(deadline) = deadline else {
-            return (self.changed.wait(state).unwrap_or_else(PoisonError::into_inner), false);
+            return self.changed.wait(state).unwrap_or_else(PoisonError::into_inner);
         };
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return (state, true);
+            return state;
         }
         let (state, _) = self
             .changed
             .wait_timeout(state, left)
             .unwrap_or_else(PoisonError::into_inner);
-        // the clock decides, not the condvar's flag: Windows' timed wait can end a little before `left` has passed
-        (state, Instant::now() >= deadline)
+        state
     }
 
-    /// The worker's side: the next read of output, waiting for one until `deadline`. A read taken stays pending
-    /// until [`Mailbox::consumed`].
+    /// Consume an animation wake once. The frontend's next capture rearms it; a hidden pane never polls.
+    fn expired(state: &mut State, deadline: Option<Instant>) -> bool {
+        let now = Instant::now();
+        let animation_due = state.animation_deadline.is_some_and(|at| now >= at);
+        if animation_due {
+            state.animation_deadline = None;
+        }
+        animation_due || deadline.is_some_and(|at| now >= at)
+    }
+
+    /// The worker's side: the next read of output, waiting until the hold `deadline` or the armed animation deadline.
+    /// An expired deadline is reported before queued output. A read taken stays pending until [`Mailbox::consumed`].
     pub(crate) fn next(&self, deadline: Option<Instant>) -> Mail {
         let mut state = self.lock();
         loop {
             if state.shutdown {
                 return Mail::End;
+            }
+            if Self::expired(&mut state, deadline) {
+                return Mail::Idle;
             }
             match state.output.pop_front() {
                 Some(Item::Output(output)) => return Mail::Output(output),
@@ -202,14 +253,11 @@ impl Mailbox {
                 Some(Item::Live(mail)) => return Mail::Live(mail),
                 None => {}
             }
-            if state.eof {
-                return Mail::End;
+            if state.eof == OutputEnd::Pending {
+                state.eof = OutputEnd::Reported;
+                return Mail::Eof;
             }
-            let (next, timed_out) = self.wait(state, deadline);
-            state = next;
-            if timed_out {
-                return Mail::Idle;
-            }
+            state = self.wait(state, deadline);
         }
     }
 
@@ -235,15 +283,14 @@ impl Mailbox {
             if state.child_exited {
                 return Answer::ChildExited;
             }
+            if Self::expired(&mut state, deadline) {
+                return Answer::Idle;
+            }
             let answers = std::mem::take(&mut state.answers);
             if let Some((_, answer)) = answers.into_iter().find(|(answered, _)| *answered == id) {
                 return Answer::Given(answer);
             }
-            let (next, timed_out) = self.wait(state, deadline);
-            state = next;
-            if timed_out {
-                return Answer::Idle;
-            }
+            state = self.wait(state, deadline);
         }
     }
 
@@ -253,6 +300,13 @@ impl Mailbox {
         self.lock().pending
     }
 }
+
+fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
+    a.into_iter().chain(b).min()
+}
+
+#[cfg(test)]
+mod animation_tests;
 
 #[cfg(test)]
 mod tests {
@@ -275,7 +329,7 @@ mod tests {
         mailbox.end_of_output();
         assert_eq!(mailbox.next(None), Mail::Output(b"one".to_vec()));
         assert_eq!(mailbox.next(None), Mail::Output(b"two".to_vec()));
-        assert_eq!(mailbox.next(None), Mail::End);
+        assert_eq!(mailbox.next(None), Mail::Eof);
         assert_eq!(mailbox.pending(), 6, "taken reads stay pending until consumed");
     }
 

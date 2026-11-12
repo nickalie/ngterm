@@ -1,32 +1,19 @@
-ngterm: hosted Wuffs builds (herdr's libghostty-vt patch 0004, rebased onto LIBGHOSTTY_VT_REV)
+ngterm: hosted Wuffs builds (herdr's libghostty-vt patch 0004, its allocator-stub half, rebased onto
+LIBGHOSTTY_VT_REV)
 
 From herdr (https://github.com/herdrdev/herdr, HERDR_REV 143bf5f, Apache-2.0):
 vendor/patches/libghostty-vt/0004-fix-hosted-wuffs-builds.patch, modified: its paths rebased off
-vendor/libghostty-vt/, and the translator's libc option written for the pin's pkg/translate-c wrapper, whose
-`libc_file` is a union (`.direct` or `.detect_darwin`, the default) where herdr's base took a plain path. Without a
---libc file the option stays `.detect_darwin`, so native builds are unchanged. Reason and remove-when:
-build/patches/ghostty-vt/README.md.
+vendor/libghostty-vt/, and only its pkg/wuffs/src/main.zig half carried. Its pkg/wuffs/build.zig half (the build's
+--libc file forwarded to Wuffs' translate-c step) has no form under Zig 0.17, whose build.zig runs in a configurer
+process that never sees --libc, and ngterm passes no --libc file: build/patches/ghostty-vt/README.md records the
+scope reduction and how to restore it. Reason and remove-when: that README.
 
-- pkg/wuffs/build.zig: the build's --libc file (Windows MSVC's SDK) reaches Wuffs' translate-c step, which does not
-  inherit it the way the C compiles do;
-- pkg/wuffs/src/main.zig: the weak calloc/free stubs are exported for freestanding targets only, so on a hosted
-  target with libc unlinked (a build with SIMD off) they never stand in for the embedding executable's libc.
+pkg/wuffs/src/main.zig: the weak calloc/free stubs are exported for freestanding targets only, so on a hosted target
+with libc unlinked (a build with SIMD off) they never stand in for the embedding executable's libc. The guard reads
+`builtin.target.os.tag`, Zig 0.17's spelling (#14519 renamed `builtin.os`).
 
 Applied by scripts/build-ghostty-vt.sh. No header changes.
 
---- a/pkg/wuffs/build.zig
-+++ b/pkg/wuffs/build.zig
-@@ -87,6 +87,10 @@
-             .optimize = optimize,
-             .include_paths = include_paths,
-             .link_libc = windows,
-+            // The build's --libc file (an MSVC SDK on Windows) reaches the
-+            // C compiles by itself, but the translator needs it explicitly.
-+            // Without one, the Darwin SDK is detected as before.
-+            .libc_file = if (b.libc_file) |path| .{ .direct = .{ .cwd_relative = path } } else .detect_darwin,
-             .extra_args = macro_flags,
-         });
- 
 --- a/pkg/wuffs/src/main.zig
 +++ b/pkg/wuffs/src/main.zig
 @@ -20,12 +20,11 @@
@@ -42,7 +29,7 @@ Applied by scripts/build-ghostty-vt.sh. No header changes.
 +// archive can override the embedding executable's dynamically linked libc.
  comptime {
 -    if (!builtin.link_libc) {
-+    if (!builtin.link_libc and builtin.os.tag == .freestanding) {
++    if (!builtin.link_libc and builtin.target.os.tag == .freestanding) {
          @export(&callocStub, .{
              .name = "calloc",
              .linkage = .weak,

@@ -56,6 +56,7 @@ pub const LIVE_ANY_SHELL: &str = "live-any-shell";
 pub fn install(core: &mut Core, runtime: &Runtime) {
     let directory = ngterm_core::live::socket_directory(&runtime.state_dir);
     let endpoint = ControlLiveEndpoint {
+        attach_bridge: Some(ngterm_core::attach_bridge::VERSION),
         executable: runtime.executable.to_string_lossy().into_owned(),
         socket_directory: directory.clone(),
     };

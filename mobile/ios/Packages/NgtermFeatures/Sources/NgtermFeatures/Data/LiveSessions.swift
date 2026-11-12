@@ -6,10 +6,10 @@ import Observation
 /// What the core tells the app about the attached sessions and their shown panes (mobile/android's `LiveSessions`).
 ///
 /// It keeps, per session in ``sessions``, the stream's state, status, context, layout and HUD, and each pane's role,
-/// cover, end and title. A shown pane's frames go to the ``PaneFrames`` ``route(_:to:)``d to it, and a program's write
-/// to the standard clipboard goes to the device's (iOS has no selection or primary clipboard, so a write to either is
-/// dropped). A detached session's
-/// state is let go, and the attached set is written to the ``AttachedStore`` on every change, for a background refresh
+/// cover, end and title. A shown pane's frames go to the ``PaneFrames`` ``route(_:to:)``d to it, and a program's
+/// clipboard write goes to the device's, whose status the program learns once the clipboard took it or refused it (the
+/// core answers writes to the selection or primary clipboard, which iOS has none of). A detached session's state is let
+/// go, and the attached set is written to the ``AttachedStore`` on every change, for a background refresh
 /// that starts with nothing attached. A stream that fails before the session was ever shown has the machine listed
 /// again, so a session ended elsewhere since its listing leaves.
 @preconcurrency
@@ -109,8 +109,16 @@ public final class LiveSessions {
                 live.isCovered = false
             }
 
-        case .clipboardWrite(_, .standard, let text):
-            clipboard.write(text)
+        case .clipboardWrite(let pane, let writeId, let contents):
+            let status = clipboard.write(contents)
+            // a core that has stopped leaves no program waiting
+            try? connections.core.completeClipboardWrite(
+                machineId: pane.machineId,
+                sessionId: pane.sessionId,
+                paneId: pane.paneId,
+                writeId: writeId,
+                status: status
+            )
 
         case .paneAgent(let machineId, let sessionId, let paneId, let agent, let conversationId):
             change(SessionKey(machineId: machineId, sessionId: sessionId)) { session in

@@ -154,3 +154,7 @@ fn a_selection_adjusts_its_end() {
     assert!(terminal.adjust_selection(SelectionAdjust::Down).unwrap());
     assert_eq!(terminal.selection(PointTag::Screen).map(|s| s.end.y), Some(1));
 }
+
+#[cfg(test)]
+#[path = "link/write_until.rs"]
+mod write_until;

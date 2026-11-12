@@ -49,7 +49,7 @@ FUNCTIONS=(
 # Type families (`Ghostty<name>...`) reached through untyped `void*` option values and out-pointers, so no function
 # signature pulls them in.
 TYPES=(
-  Terminal RenderState Key Mouse Selection Formatter Paste Search Kitty Snapshot Sys Osc
+  Terminal RenderState ImageProtocol Key Mouse Selection Formatter Paste Search Kitty Snapshot Sys Osc
   Cell Row GridRef Mode Focus Style Color String Buffer Point BuildInfo Optimize ClipboardRead ClipboardWrite
   OptionAsAlt SurfacePosition Codepoints
 )

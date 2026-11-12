@@ -306,6 +306,34 @@ struct StartupEnvironment {
 }
 
 impl LinuxPlatform {
+    /// The MIME types `target` advertises (ngterm: `clipboard_mime.rs`).
+    pub(crate) fn clipboard_mime_types(
+        &self,
+        target: crate::linux::ClipboardTarget,
+    ) -> Result<Vec<String>, crate::linux::ClipboardMimeError> {
+        self.connection.borrow().clipboard_mime_types(target)
+    }
+
+    /// Each requested type `target` offers (ngterm: `clipboard_mime.rs`).
+    pub(crate) fn read_clipboard_mimes(
+        &self,
+        target: crate::linux::ClipboardTarget,
+        mimes: &[String],
+    ) -> Result<Vec<crate::linux::ClipboardRepresentation>, crate::linux::ClipboardMimeError> {
+        self.connection.borrow().read_clipboard_mimes(target, mimes)
+    }
+
+    /// Owns `target` with exactly `representations` (ngterm: `clipboard_mime.rs`).
+    pub(crate) fn write_clipboard_representations(
+        &self,
+        target: crate::linux::ClipboardTarget,
+        representations: Vec<crate::linux::ClipboardRepresentation>,
+    ) -> Result<(), crate::linux::ClipboardMimeError> {
+        self.connection
+            .borrow()
+            .write_clipboard_representations(target, representations)
+    }
+
     /// Creates the platform, headless until `run` connects it in its initial mode.
     pub(crate) fn new(allowed_modes: WindowingModes) -> Self {
         let startup = StartupEnvironment {
@@ -1130,22 +1158,62 @@ async fn run_open_commands(
     activation_token: Option<&str>,
     environment: &GraphicalEnvironment,
 ) -> bool {
-    for mut command in open::commands(target) {
+    run_open_commands_with(
+        open::commands(target),
+        activation_token,
+        environment,
+        run_open_command,
+    )
+    .await
+}
+
+#[cfg(any(feature = "wayland", feature = "x11"))]
+async fn run_open_commands_with(
+    commands: impl IntoIterator<Item = std::process::Command>,
+    activation_token: Option<&str>,
+    environment: &GraphicalEnvironment,
+    mut run: impl AsyncFnMut(std::process::Command) -> bool,
+) -> bool {
+    for mut command in commands {
         environment.apply_to(&mut command);
+        // Never inherit a token for a different user interaction.
+        command.env_remove("XDG_ACTIVATION_TOKEN");
         if let Some(token) = activation_token {
             command.env("XDG_ACTIVATION_TOKEN", token);
         }
-        let program = format!("{:?}", command.get_program());
-        match smol::process::Command::from(command).spawn() {
-            Ok(mut child) => match child.status().await {
-                Ok(status) if status.success() => return true,
-                Ok(status) => log::error!("Command {} exited with status: {}", program, status),
-                Err(error) => log::error!("Failed to get status from {}: {}", program, error),
-            },
-            Err(error) => log::error!("Failed to open with {}: {}", program, error),
+        if run(command).await {
+            return true;
         }
     }
     false
+}
+
+#[cfg(any(feature = "wayland", feature = "x11"))]
+async fn run_open_command(command: std::process::Command) -> bool {
+    let program = format!("{:?}", command.get_program());
+    match smol::process::Command::from(command).spawn() {
+        Ok(mut child) => match child.status().await {
+            Ok(status) if status.success() => return true,
+            Ok(status) => log::error!("Command {} exited with status: {}", program, status),
+            Err(error) => log::error!("Failed to get status from {}: {}", program, error),
+        },
+        Err(error) => log::error!("Failed to open with {}: {}", program, error),
+    }
+    false
+}
+
+// Keep the URI and token together through both launch routes. Injected sinks exercise this
+// without starting a browser or connecting to the user's portal.
+#[cfg(any(feature = "wayland", feature = "x11"))]
+async fn open_uri_with(
+    uri: &ashpd::Uri,
+    token: Option<&str>,
+    launcher: impl AsyncFnOnce(&ashpd::Uri, Option<&str>) -> bool,
+    portal: impl AsyncFnOnce(&ashpd::Uri, Option<&str>),
+) {
+    if !launcher(uri, token).await {
+        portal(uri, token).await;
+    }
 }
 
 #[cfg(any(feature = "wayland", feature = "x11"))]
@@ -1158,26 +1226,24 @@ pub(super) fn open_uri_internal(
     if let Some(uri) = ashpd::Uri::parse(uri).log_err() {
         executor
             .spawn(async move {
-                let opened = run_open_commands(
-                    uri.as_str().as_ref(),
+                open_uri_with(
+                    &uri,
                     activation_token.as_deref(),
-                    &environment,
-                )
-                .await;
-                if !opened {
-                    match ashpd::desktop::open_uri::OpenFileRequest::default()
-                        .activation_token(activation_token.map(ashpd::ActivationToken::from))
-                        .send_uri(&uri)
+                    async |uri, token| {
+                        run_open_commands(uri.as_str().as_ref(), token, &environment).await
+                    },
+                    async |uri, token| match ashpd::desktop::open_uri::OpenFileRequest::default()
+                        .activation_token(token.map(ashpd::ActivationToken::from))
+                        .send_uri(uri)
                         .await
                         .and_then(|e| e.response())
                     {
                         Ok(()) => {}
                         Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)) => {}
-                        Err(e) => {
-                            log::error!("Failed to open with dbus: {}", e);
-                        }
-                    }
-                }
+                        Err(e) => log::error!("Failed to open with dbus: {}", e),
+                    },
+                )
+                .await;
             })
             .detach();
     }
@@ -1736,6 +1802,58 @@ mod tests {
             zero,
             Point::new(px(5.0), px(5.1))
         ),);
+    }
+
+    #[cfg(any(feature = "wayland", feature = "x11"))]
+    #[test]
+    fn uri_activation_token_reaches_launchers_and_portal_fallback() {
+        use std::ffi::OsStr;
+        use std::process::Command;
+        let uri = ashpd::Uri::parse("https://example.com/a?b=1").unwrap();
+        let environment = GraphicalEnvironment::default();
+        for token in [Some("token-for-this-click"), None] {
+            for succeeds in [true, false] {
+                let launched = RefCell::new(Vec::new());
+                let portals = RefCell::new(Vec::new());
+                smol::block_on(open_uri_with(
+                    &uri,
+                    token,
+                    async |uri, token| {
+                        let mut command = Command::new("injected-launcher");
+                        command.arg(uri.as_str());
+                        command.env("XDG_ACTIVATION_TOKEN", "stale-token");
+                        run_open_commands_with([command], token, &environment, async |command| {
+                            let actual_token = command
+                                .get_envs()
+                                .find(|(name, _)| *name == OsStr::new("XDG_ACTIVATION_TOKEN"))
+                                .and_then(|(_, value)| value)
+                                .map(|value| value.to_owned());
+                            launched.borrow_mut().push((
+                                command.get_args().next().unwrap().to_owned(),
+                                actual_token,
+                            ));
+                            succeeds
+                        })
+                        .await
+                    },
+                    async |uri, token| {
+                        portals
+                            .borrow_mut()
+                            .push((uri.to_string(), token.map(str::to_owned)));
+                    },
+                ));
+                assert_eq!(
+                    *launched.borrow(),
+                    [(uri.as_str().into(), token.map(Into::into))]
+                );
+                let expected = if succeeds {
+                    vec![]
+                } else {
+                    vec![(uri.to_string(), token.map(str::to_owned))]
+                };
+                assert_eq!(*portals.borrow(), expected);
+            }
+        }
     }
 
     #[cfg(any(feature = "wayland", feature = "x11"))]

@@ -4,10 +4,6 @@
 //! terminal mutably for its whole life: nothing can write the terminal while placements are read or an image's pixels
 //! are borrowed.
 //!
-//! A placement's id namespace and a relative placement's parent link come from this build's libghostty-vt patch
-//! (`build/patches/ghostty-vt/0001-kitty-placement-namespace-and-parent.patch`): the C API at the pin reports neither.
-//! They are read out as storage holds them; resolving a chain is the caller's (`ngterm-term`).
-
 use std::marker::PhantomData;
 
 use crate::{Error, Handle, HeldTerminal, Terminal, ffi};
@@ -34,13 +30,14 @@ impl KittyFormat {
 }
 
 /// Where a placement is drawn relative to the text, from its z-index (the protocol's conventions).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum KittyLayer {
     /// `z < i32::MIN / 2`: under the cell backgrounds.
     BelowBackground,
     /// `i32::MIN / 2 <= z < 0`: over the backgrounds, under the text.
     BelowText,
     /// `z >= 0`.
+    #[default]
     AboveText,
 }
 
@@ -64,44 +61,6 @@ pub struct PixelRect {
     pub y: u32,
     pub width: u32,
     pub height: u32,
-}
-
-/// The namespace of a placement id: a terminal-assigned and a client's placement of one image can share a number.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub enum KittyIdNamespace {
-    /// Assigned by the terminal to a placement created without `p=`.
-    #[default]
-    Internal,
-    /// The client's `p=`: the ids Unicode placeholders and `Q=` name.
-    External,
-}
-
-impl KittyIdNamespace {
-    fn from_raw(raw: ffi::GhosttyKittyPlacementIdNamespace) -> Self {
-        if raw == ffi::GHOSTTY_KITTY_PLACEMENT_ID_NAMESPACE_EXTERNAL {
-            Self::External
-        } else {
-            Self::Internal
-        }
-    }
-}
-
-/// The key storage holds a placement under.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct KittyPlacementKey {
-    pub image_id: u32,
-    pub placement_id: u32,
-    pub namespace: KittyIdNamespace,
-}
-
-/// A relative placement's (`P=`/`Q=`) link to its parent, as storage holds it (Ghostty's `Placement.Relative`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct KittyParent {
-    /// The parent placement: `Q=`, or the one storage picked when the client named none.
-    pub key: KittyPlacementKey,
-    /// Cells from the parent's origin (`H=`, `V=`).
-    pub horizontal_offset: i32,
-    pub vertical_offset: i32,
 }
 
 /// What the library resolves of a placement's drawing: its size and source always, its viewport cell when visible.
@@ -129,8 +88,6 @@ pub struct KittyRenderInfo {
 pub struct KittyPlacement {
     pub image_id: u32,
     pub placement_id: u32,
-    /// The namespace of `placement_id`.
-    pub namespace: KittyIdNamespace,
     /// A virtual placement (Unicode placeholders) has no position of its own.
     pub is_virtual: bool,
     pub z: i32,
@@ -142,19 +99,6 @@ pub struct KittyPlacement {
     pub rows: u32,
     /// `None` when the library resolves nothing (its image is missing).
     pub render: Option<KittyRenderInfo>,
-    /// A relative placement's parent link; `None` for the others.
-    pub parent: Option<KittyParent>,
-}
-
-impl KittyPlacement {
-    #[must_use]
-    pub fn key(&self) -> KittyPlacementKey {
-        KittyPlacementKey {
-            image_id: self.image_id,
-            placement_id: self.placement_id,
-            namespace: self.namespace,
-        }
-    }
 }
 
 /// An image, borrowed from the terminal.
@@ -223,6 +167,26 @@ impl KittyGraphics<'_> {
 }
 
 impl KittyGraphics<'_> {
+    /// Advance each running animation by at most one frame and return its next absolute deadline on the caller's
+    /// forward-only millisecond clock. `None` means no animation needs another tick.
+    ///
+    /// The mutable borrow prevents a tick while image pixels borrowed from this storage are still in use.
+    /// See Ghostty `src/terminal/c/kitty_graphics.zig::animation_tick` at the libghostty-vt pin.
+    ///
+    /// # Errors
+    ///
+    /// The library's result when it cannot tick the storage.
+    pub fn animation_tick(&mut self, now_ms: u64) -> Result<Option<u64>, Error> {
+        let mut next_ms = 0;
+        // SAFETY: the storage is live and exclusively borrowed; `next_ms` is a valid uint64_t out-pointer.
+        let result = unsafe { ffi::ghostty_kitty_graphics_animation_tick(self.raw, now_ms, &raw mut next_ms) };
+        if result == ffi::GHOSTTY_NO_VALUE {
+            return Ok(None);
+        }
+        Error::check(result)?;
+        Ok(Some(next_ms))
+    }
+
     /// The storage's generation: unchanged means the same placements and image data (geometry may still have moved
     /// with scrolling); zero for a storage never written.
     #[must_use]
@@ -312,11 +276,6 @@ impl KittyGraphics<'_> {
         KittyPlacement {
             image_id,
             placement_id: u32_of(ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PLACEMENT_ID),
-            namespace: namespace_value(
-                iterator,
-                ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PLACEMENT_ID_NAMESPACE,
-            )
-            .unwrap_or_default(),
             is_virtual: placement_value::<bool>(iterator, ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IS_VIRTUAL)
                 .unwrap_or(false),
             z: placement_value::<i32>(iterator, ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Z).unwrap_or(0),
@@ -325,7 +284,6 @@ impl KittyGraphics<'_> {
             columns: u32_of(ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_COLUMNS),
             rows: u32_of(ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_ROWS),
             render: self.render_info(iterator, image_id),
-            parent: parent(iterator),
         }
     }
 
@@ -398,44 +356,78 @@ fn placement_value<T: Copy + Default>(
     (result == ffi::GHOSTTY_SUCCESS).then_some(value)
 }
 
-/// A namespace datum of the placement the iterator is on.
-fn namespace_value(
-    iterator: ffi::GhosttyKittyGraphicsPlacementIterator,
-    data: ffi::GhosttyKittyGraphicsPlacementData,
-) -> Option<KittyIdNamespace> {
-    placement_value::<ffi::GhosttyKittyPlacementIdNamespace>(iterator, data).map(KittyIdNamespace::from_raw)
-}
-
-/// The parent link of the relative placement the iterator is on; `None` for any other placement (every parent datum
-/// reports no value).
-fn parent(iterator: ffi::GhosttyKittyGraphicsPlacementIterator) -> Option<KittyParent> {
-    let image_id = placement_value::<u32>(iterator, ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PARENT_IMAGE_ID)?;
-    Some(KittyParent {
-        key: KittyPlacementKey {
-            image_id,
-            placement_id: placement_value::<u32>(
-                iterator,
-                ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PARENT_PLACEMENT_ID,
-            )?,
-            namespace: namespace_value(
-                iterator,
-                ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PARENT_PLACEMENT_ID_NAMESPACE,
-            )?,
-        },
-        horizontal_offset: placement_value::<i32>(
-            iterator,
-            ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_RELATIVE_HORIZONTAL_OFFSET,
-        )?,
-        vertical_offset: placement_value::<i32>(
-            iterator,
-            ffi::GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_RELATIVE_VERTICAL_OFFSET,
-        )?,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ANIMATION: &[u8] = concat!(
+        "\x1b_Ga=T,f=32,i=1,s=1,v=1,c=1,r=1;/wAA/w==\x1b\\",
+        "\x1b_Ga=f,f=32,i=1,s=1,v=1,z=40;AAD//w==\x1b\\",
+        "\x1b_Ga=a,i=1,r=1,z=30\x1b\\",
+        "\x1b_Ga=a,i=1,s=3\x1b\\",
+    )
+    .as_bytes();
+
+    fn snapshot(graphics: &KittyGraphics<'_>) -> (u64, Vec<u8>) {
+        let image = graphics.image(1).unwrap();
+        (image.generation, image.pixels.unwrap().to_vec())
+    }
+
+    fn assert_stopped(graphics: &mut KittyGraphics<'_>) {
+        assert_eq!(graphics.animation_tick(1100), Ok(None));
+        let mut untouched = 42;
+        // SAFETY: the live exclusively borrowed storage and valid output match the C fixture's contract.
+        let result = unsafe { ffi::ghostty_kitty_graphics_animation_tick(graphics.raw, 1100, &raw mut untouched) };
+        assert_eq!(result, ffi::GHOSTTY_NO_VALUE);
+        assert_eq!(untouched, 42);
+    }
+
+    #[test]
+    fn animation_tick_advances_the_current_frame_on_absolute_deadlines() {
+        let mut terminal = terminal();
+        terminal.vt_write(ANIMATION);
+        let mut graphics = terminal.kitty_graphics().unwrap();
+        let red = snapshot(&graphics);
+        assert_eq!(red.1, [255, 0, 0, 255]);
+        assert_eq!(graphics.animation_tick(1000), Ok(Some(1030)));
+        assert_eq!(snapshot(&graphics), red);
+        assert_eq!(graphics.animation_tick(1010), Ok(Some(1030)));
+        assert_eq!(snapshot(&graphics), red);
+        assert_eq!(graphics.animation_tick(1030), Ok(Some(1070)));
+        let blue = snapshot(&graphics);
+        assert!(blue.0 > red.0);
+        assert_eq!(blue.1, [0, 0, 255, 255]);
+        assert_eq!(graphics.animation_tick(1070), Ok(Some(1100)));
+        let red_again = snapshot(&graphics);
+        assert!(red_again.0 > blue.0);
+        assert_eq!(red_again.1, red.1);
+        terminal.vt_write(b"\x1b_Ga=a,i=1,s=1\x1b\\");
+        let mut graphics = terminal.kitty_graphics().unwrap();
+        assert_stopped(&mut graphics);
+        assert_eq!(snapshot(&graphics), red_again);
+    }
+
+    #[test]
+    fn animation_tick_late_advances_only_one_frame() {
+        let mut terminal = terminal();
+        terminal.vt_write(ANIMATION);
+        let mut graphics = terminal.kitty_graphics().unwrap();
+        assert_eq!(graphics.animation_tick(1000), Ok(Some(1030)));
+        assert_eq!(graphics.animation_tick(2000), Ok(Some(2040)));
+        assert_eq!(snapshot(&graphics).1, [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn animation_tick_without_playback_has_no_deadline_and_null_output_is_invalid() {
+        let mut terminal = terminal();
+        assert_eq!(terminal.kitty_graphics().unwrap().animation_tick(0), Ok(None));
+        terminal.vt_write(b"\x1b_Ga=T,f=32,i=1,s=1,v=1,c=1,r=1;/wAA/w==\x1b\\");
+        let mut graphics = terminal.kitty_graphics().unwrap();
+        assert_eq!(graphics.animation_tick(1000), Ok(None));
+        // SAFETY: a null output is explicitly accepted as an invalid argument by the C API.
+        let result = unsafe { ffi::ghostty_kitty_graphics_animation_tick(graphics.raw, 0, std::ptr::null_mut()) };
+        assert_eq!(result, ffi::GHOSTTY_INVALID_VALUE);
+    }
 
     /// A 2x1 RGBA image sent directly (`f=32`), in two chunks, then placed.
     const CHUNKED: &[u8] = b"\x1b_Ga=T,f=32,s=2,v=1,i=7,m=1;AQIDBAUG\x1b\\\x1b_Gm=0;Bwg=\x1b\\";
@@ -445,6 +437,29 @@ mod tests {
         terminal.resize(20, 5, 10, 20).unwrap();
         terminal.set_kitty_image_storage_limit(10_000_000).unwrap();
         terminal
+    }
+
+    #[test]
+    fn cancelled_or_aborted_kitty_commands_store_nothing_and_send_no_reply() {
+        use std::sync::{Arc, Mutex};
+        struct Answers(Arc<Mutex<Vec<u8>>>);
+        impl crate::Effects for Answers {
+            fn write_pty(&mut self, data: &[u8]) {
+                self.0.lock().unwrap().extend_from_slice(data);
+            }
+        }
+        for exit in [0x18, 0x1a, 0x9b] {
+            let mut terminal = terminal();
+            let replies = Arc::new(Mutex::new(Vec::new()));
+            terminal.set_effects(Box::new(Answers(replies.clone()))).unwrap();
+            terminal.vt_write(b"\x1b_Ga=t,f=24,s=1,v=1,i=7;AAAA");
+            terminal.vt_write(&[exit]);
+            assert!(terminal.kitty_graphics().unwrap().image(7).is_none());
+            assert!(replies.lock().unwrap().is_empty());
+            terminal.vt_write(b"\x1b_Ga=t,f=24,s=1,v=1,i=7;AAAA\x1b\\");
+            assert!(terminal.kitty_graphics().unwrap().image(7).is_some());
+            assert_eq!(*replies.lock().unwrap(), b"\x1b_Gi=7;OK\x1b\\");
+        }
     }
 
     #[test]
@@ -506,122 +521,6 @@ mod tests {
         let render = placement.render.unwrap();
         assert!(!render.visible);
         assert_eq!((render.grid_cols, render.grid_rows), (3, 2));
-        assert_eq!(placement.namespace, KittyIdNamespace::External);
-        assert!(placement.parent.is_none());
-    }
-
-    /// The placements of image `image_id`, internal ids first, each namespace by number.
-    fn of_image(placements: &[KittyPlacement], image_id: u32) -> Vec<KittyPlacement> {
-        let mut of_image: Vec<KittyPlacement> = placements
-            .iter()
-            .filter(|placement| placement.image_id == image_id)
-            .copied()
-            .collect();
-        of_image.sort_by_key(|placement| {
-            (
-                placement.namespace == KittyIdNamespace::External,
-                placement.placement_id,
-            )
-        });
-        of_image
-    }
-
-    #[test]
-    fn a_placement_reports_its_id_namespace() {
-        let mut terminal = terminal();
-        // two terminal-assigned placements (internal 0 and 1) and the client's p=1 (external 1) of one image
-        terminal.vt_write(b"\x1b_Ga=T,q=2,f=24,s=1,v=1,i=1,C=1;AAAA\x1b\\");
-        terminal.vt_write(b"\x1b_Ga=p,q=2,i=1,C=1\x1b\\\x1b_Ga=p,q=2,i=1,p=1,C=1\x1b\\");
-        let graphics = terminal.kitty_graphics().unwrap();
-        let keys: Vec<(u32, KittyIdNamespace)> = of_image(&graphics.placements().unwrap(), 1)
-            .iter()
-            .map(|placement| (placement.placement_id, placement.namespace))
-            .collect();
-        assert_eq!(
-            keys,
-            [
-                (0, KittyIdNamespace::Internal),
-                (1, KittyIdNamespace::Internal),
-                (1, KittyIdNamespace::External),
-            ]
-        );
-    }
-
-    /// Image 1 placed virtually (external 1); image 2 relative to it at (2, -1), two cells wide; image 3 relative to
-    /// image 2 at (1, 3), with no `p=` of its own; image 4 on a pin (external 2) with image 5 relative to it at (3, 0),
-    /// naming no parent placement (`Q=`).
-    const CHAINS: &[u8] = concat!(
-        "\x1b_Ga=T,U=1,q=2,f=24,s=1,v=1,i=1,p=1;AAAA\x1b\\",
-        "\x1b_Ga=t,q=2,f=24,s=1,v=1,i=2;AAAA\x1b\\",
-        "\x1b_Ga=p,q=2,i=2,p=1,P=1,Q=1,H=2,V=-1,c=2,r=1\x1b\\",
-        "\x1b_Ga=t,q=2,f=24,s=1,v=1,i=3;AAAA\x1b\\",
-        "\x1b_Ga=p,q=2,i=3,P=2,Q=1,H=1,V=3,C=1\x1b\\",
-        "\x1b_Ga=T,q=2,f=24,s=1,v=1,i=4,p=2,C=1;AAAA\x1b\\",
-        "\x1b_Ga=t,q=2,f=24,s=1,v=1,i=5;AAAA\x1b\\",
-        "\x1b_Ga=p,q=2,i=5,P=4,H=3,C=1\x1b\\",
-    )
-    .as_bytes();
-
-    fn client(image_id: u32, placement_id: u32) -> KittyPlacementKey {
-        KittyPlacementKey {
-            image_id,
-            placement_id,
-            namespace: KittyIdNamespace::External,
-        }
-    }
-
-    #[test]
-    fn a_relative_placement_reports_its_parent_link() {
-        let mut terminal = terminal();
-        terminal.vt_write(CHAINS);
-        let graphics = terminal.kitty_graphics().unwrap();
-        let placements = graphics.placements().unwrap();
-        let only = |image_id| {
-            let found = of_image(&placements, image_id);
-            assert_eq!(found.len(), 1, "image {image_id}: {found:?}");
-            found[0]
-        };
-        assert_eq!(only(1).parent, None);
-        assert_eq!(only(4).parent, None);
-        let child = only(2);
-        assert_eq!(
-            child.parent,
-            Some(KittyParent {
-                key: client(1, 1),
-                horizontal_offset: 2,
-                vertical_offset: -1,
-            })
-        );
-        // rooted at a virtual placement: sized and sourced, but no position of its own
-        let render = child.render.unwrap();
-        assert!(!render.visible);
-        assert_eq!((render.grid_cols, render.grid_rows), (2, 1));
-        assert_eq!((render.pixel_width, render.pixel_height), (20, 20));
-        // its own link only, not the chain's sum
-        let grandchild = only(3);
-        assert_eq!(grandchild.namespace, KittyIdNamespace::Internal);
-        assert_eq!(
-            grandchild.parent,
-            Some(KittyParent {
-                key: client(2, 1),
-                horizontal_offset: 1,
-                vertical_offset: 3,
-            })
-        );
-        // no `Q=`: the parent storage picked, the pinned image's only placement
-        let pinned = only(5);
-        assert_eq!(
-            pinned.parent,
-            Some(KittyParent {
-                key: client(4, 2),
-                horizontal_offset: 3,
-                vertical_offset: 0,
-            })
-        );
-        // rooted at a pin: the library positions it itself
-        let render = pinned.render.unwrap();
-        assert!(render.visible);
-        assert_eq!((render.viewport_col, render.viewport_row), (3, 0));
     }
 
     #[test]
@@ -640,5 +539,172 @@ mod tests {
             assert!(graphics.image(7).is_none());
             assert!(graphics.placements().unwrap().is_empty());
         }
+    }
+
+    #[derive(Clone, Default)]
+    struct Answers(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl crate::Effects for Answers {
+        fn write_pty(&mut self, bytes: &[u8]) {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+        }
+    }
+
+    fn file_payload(data: &[u8]) -> (tempfile::TempDir, String) {
+        use base64::Engine as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("image.data");
+        std::fs::write(&path, data).unwrap();
+        let path = path.canonicalize().unwrap();
+        let path = path.to_str().unwrap();
+        // Ghostty rejects raw Windows device namespace paths; use the ordinary local drive spelling.
+        #[cfg(windows)]
+        let path = path.strip_prefix(r"\\?\").unwrap_or(path);
+        (dir, base64::engine::general_purpose::STANDARD.encode(path))
+    }
+
+    /// Ghostty `graphics_exec.zig`: a non-direct transmission begins a new load, including its reply policy.
+    #[test]
+    fn a_file_transmission_abandons_a_chunked_image_and_uses_its_own_quiet_flag() {
+        let (_dir, payload) = file_payload(&[1, 2, 3]);
+        for (old_quiet, fresh_quiet) in [(2, 0), (0, 2)] {
+            let mut terminal = terminal();
+            terminal.set_kitty_image_media(true, None, false).unwrap();
+            let answers = Answers::default();
+            terminal.set_effects(Box::new(answers.clone())).unwrap();
+            terminal.vt_write(format!("\x1b_Ga=t,f=24,s=1,v=2,i=1,m=1,q={old_quiet};AAAA\x1b\\").as_bytes());
+            assert!(answers.0.lock().unwrap().is_empty());
+            terminal.vt_write(format!("\x1b_Ga=t,t=f,f=24,s=1,v=1,i=2,q={fresh_quiet};{payload}\x1b\\").as_bytes());
+            let graphics = terminal.kitty_graphics().unwrap();
+            assert!(graphics.image(1).is_none());
+            assert_eq!(graphics.image(2).unwrap().pixels, Some([1, 2, 3].as_slice()));
+            assert_eq!(
+                answers.0.lock().unwrap().as_slice(),
+                if fresh_quiet == 0 {
+                    b"\x1b_Gi=2;OK\x1b\\".as_slice()
+                } else {
+                    b""
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_transmission_abandons_a_chunked_frame_and_keeps_only_the_new_frame() {
+        let (_dir, payload) = file_payload(&[0, 255, 0, 0, 255, 0]);
+        for (old_quiet, fresh_quiet) in [(2, 0), (0, 2)] {
+            let mut terminal = terminal();
+            terminal.set_kitty_image_media(true, None, false).unwrap();
+            terminal.vt_write(b"\x1b_Ga=t,f=24,s=2,v=1,i=1,q=2;////////\x1b\\");
+            let answers = Answers::default();
+            terminal.set_effects(Box::new(answers.clone())).unwrap();
+            terminal.vt_write(format!("\x1b_Ga=f,i=1,f=24,s=2,v=1,m=1,q={old_quiet};/wAA\x1b\\").as_bytes());
+            assert!(answers.0.lock().unwrap().is_empty());
+            terminal.vt_write(format!("\x1b_Ga=f,t=f,i=1,f=24,s=2,v=1,q={fresh_quiet};{payload}\x1b\\").as_bytes());
+            assert_eq!(
+                answers.0.lock().unwrap().as_slice(),
+                if fresh_quiet == 0 {
+                    b"\x1b_Gi=1,r=2;OK\x1b\\".as_slice()
+                } else {
+                    b""
+                }
+            );
+            // Only the new green frame was appended; selecting a nonexistent third frame leaves it unchanged.
+            terminal.vt_write(b"\x1b_Ga=a,i=1,c=2,s=1\x1b\\");
+            assert_eq!(
+                terminal.kitty_graphics().unwrap().image(1).unwrap().pixels,
+                Some([0, 255, 0, 255, 0, 255, 0, 255].as_slice())
+            );
+            terminal.vt_write(b"\x1b_Ga=a,i=1,c=3,s=1\x1b\\");
+            assert_eq!(
+                terminal.kitty_graphics().unwrap().image(1).unwrap().pixels,
+                Some([0, 255, 0, 255, 0, 255, 0, 255].as_slice())
+            );
+        }
+    }
+
+    #[test]
+    fn erasing_history_removes_its_placements_and_relative_children() {
+        let mut terminal = terminal();
+        for id in 1..=4 {
+            terminal.vt_write(format!("\x1b_Ga=t,f=24,s=1,v=1,i={id},q=2;AAAA\x1b\\").as_bytes());
+        }
+        terminal.vt_write(b"\x1b_Ga=p,i=1,p=1,c=1,r=1,C=1,q=2\x1b\\");
+        terminal.vt_write(b"\x1b_Ga=p,i=3,p=1,P=1,Q=1,c=1,r=1,C=1,q=2\x1b\\");
+        terminal.vt_write(b"\x1b[1S\x1b_Ga=p,i=2,p=1,c=1,r=1,C=1,q=2\x1b\\");
+        terminal.vt_write(b"\x1b_Ga=p,i=4,p=1,U=1,c=1,r=1,q=2\x1b\\");
+        assert_eq!(terminal.kitty_graphics().unwrap().placements().unwrap().len(), 4);
+        terminal.vt_write(b"\x1b[3J");
+        let graphics = terminal.kitty_graphics().unwrap();
+        let mut ids: Vec<_> = graphics.placements().unwrap().iter().map(|p| p.image_id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [2, 4]);
+        for id in 1..=4 {
+            assert!(
+                graphics.image(id).is_some(),
+                "erase removes placements, retaining image {id}"
+            );
+        }
+    }
+
+    /// Ghostty `graphics_image.zig`: Darwin sandbox-style shm names have no leading slash.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn shared_memory_without_a_leading_slash_loads_and_is_unlinked() {
+        use base64::Engine as _;
+        use std::os::fd::{FromRawFd as _, OwnedFd};
+        struct SharedName(std::ffi::CString);
+        impl Drop for SharedName {
+            fn drop(&mut self) {
+                // SAFETY: a valid NUL-terminated name; ENOENT is expected after a successful load.
+                unsafe { libc::shm_unlink(self.0.as_ptr()) };
+            }
+        }
+        let prefix = if cfg!(target_os = "macos") {
+            "ngterm.test/shm-"
+        } else {
+            "ngterm-test-shm-"
+        };
+        let name = std::ffi::CString::new(format!("{prefix}{}", std::process::id())).unwrap();
+        // SAFETY: name is NUL-terminated; O_EXCL prevents modifying another process's object.
+        let fd = unsafe { libc::shm_open(name.as_ptr(), libc::O_CREAT | libc::O_EXCL | libc::O_RDWR, 0o600) };
+        assert!(fd >= 0, "shm_open: {}", std::io::Error::last_os_error());
+        let name = SharedName(name);
+        // SAFETY: a newly opened descriptor, owned exactly once from this point on.
+        let _fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        // SAFETY: the live descriptor is writable and owned by this test.
+        assert_eq!(unsafe { libc::ftruncate(fd, 3) }, 0);
+        // SAFETY: the descriptor holds three bytes; mapping avoids write(2), unsupported by macOS shm.
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                3,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        assert_ne!(ptr, libc::MAP_FAILED);
+        // SAFETY: both buffers hold three bytes, do not overlap, and the mapping is writable.
+        unsafe { std::ptr::copy_nonoverlapping([1u8, 2, 3].as_ptr(), ptr.cast(), 3) };
+        // SAFETY: releases exactly the live mapping returned above, after its last use.
+        assert_eq!(unsafe { libc::munmap(ptr, 3) }, 0);
+        let mut terminal = terminal();
+        terminal.set_kitty_image_media(false, None, true).unwrap();
+        let payload = base64::engine::general_purpose::STANDARD.encode(name.0.as_bytes());
+        terminal.vt_write(format!("\x1b_Ga=t,t=s,f=24,s=1,v=1,i=31;{payload}\x1b\\").as_bytes());
+        assert_eq!(
+            terminal.kitty_graphics().unwrap().image(31).unwrap().pixels,
+            Some([1, 2, 3].as_slice())
+        );
+        // SAFETY: only probes the test's own name; no creation flags.
+        let reopened = unsafe { libc::shm_open(name.0.as_ptr(), libc::O_RDWR, 0) };
+        if reopened >= 0 {
+            // SAFETY: close the unexpected descriptor before reporting the unlink failure.
+            unsafe { libc::close(reopened) };
+        }
+        assert_eq!(reopened, -1);
+        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ENOENT));
     }
 }

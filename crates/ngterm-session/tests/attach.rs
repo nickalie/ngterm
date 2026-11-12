@@ -583,7 +583,7 @@ fn a_clipboard_read_is_delegated_over_the_connection_and_answered_back() -> Test
     assert_eq!(owner.owners, [(true, 1)], "the creator owns the replies");
     let (id, request_epoch) = loop {
         match owner.next()? {
-            Some(AttachServerMessage::DelegatedRequest { id, epoch, request }) => {
+            Some(AttachServerMessage::DelegatedRequest { id, epoch, request, .. }) => {
                 let selection = "c".to_owned();
                 assert_eq!(
                     request,

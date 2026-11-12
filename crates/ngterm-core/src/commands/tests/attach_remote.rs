@@ -2089,3 +2089,66 @@ fn a_partial_picked_group_moves_its_error_hud_to_the_attached_parent() {
     );
     assert_eq!(row.overlay.effective_hud_spec(), Some(failure(&expected)));
 }
+
+#[test]
+fn initial_remote_panes_pair_their_capability_gated_commands_and_nonces() {
+    for capability in [
+        None,
+        Some(crate::attach_bridge::VERSION),
+        Some(crate::attach_bridge::VERSION + 1),
+    ] {
+        let mut fixture = Fixture::new(0);
+        let mut remote = build_session();
+        remote["panes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"pane":"right", "daemon": crate::live::daemon_name(Uuid::from_u128(0xd2))}));
+        let remote: ngterm_proto::ControlRemoteSession = serde_json::from_value(remote).unwrap();
+        let tree = ngterm_proto::ControlRemoteTree {
+            host: None,
+            endpoint: ngterm_proto::ControlLiveEndpoint {
+                executable: "/session".into(),
+                socket_directory: "/live".into(),
+                attach_bridge: capability,
+            },
+            sessions: vec![remote.clone()],
+            presentation: None,
+        };
+        let result = fixture
+            .core
+            .attach_remote_session(
+                &remote,
+                &tree,
+                "origin",
+                crate::remote::attach::Placement {
+                    window: fixture.window,
+                    workspace: fixture.workspace,
+                    at: None,
+                    parent: None,
+                    select: false,
+                },
+            )
+            .unwrap();
+        let id = Uuid::parse_str(result.id.as_deref().unwrap()).unwrap();
+        let session = fixture.store_mut().unwrap().session_mut(id).unwrap();
+        for role in [crate::model::StatusPane::Left, crate::model::StatusPane::Right] {
+            let launch = session.pane_launch(role).unwrap();
+            let bridged = capability == Some(crate::attach_bridge::VERSION);
+            assert_eq!(launch.command.as_ref().unwrap().contains("attach-bridge"), bridged);
+            assert_eq!(launch.attach_bridge.is_some(), bridged);
+            let nonce = launch.attach_bridge.clone();
+            let seed = crate::restore::spawn_plan::resolve_seed(
+                session,
+                role,
+                &crate::restore::spawn_plan::LaunchSeedPolicy::default(),
+            );
+            assert_eq!(
+                seed.env
+                    .iter()
+                    .find(|(key, _)| key == crate::attach_bridge::VARIABLE)
+                    .map(|(_, value)| crate::attach_bridge::parse_variable(value).unwrap().to_owned()),
+                nonce
+            );
+        }
+    }
+}

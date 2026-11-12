@@ -71,6 +71,27 @@ impl ReplyOutlet {
         }
     }
 
+    /// Queue a bridge envelope as input, allowing a whole envelope on an empty queue and reporting refusal.
+    pub(crate) fn input(&self, data: &[u8]) -> Result<(), crate::PaneError> {
+        let state = lock(&self.state);
+        match &*state {
+            #[cfg(feature = "local")]
+            Outlet::Actor(actor) => {
+                let actor = actor.clone();
+                drop(state);
+                actor.write_input(data).map_err(crate::PaneError::from)
+            }
+            #[cfg(feature = "local")]
+            Outlet::Live(_, live) => {
+                let live = Arc::clone(live);
+                drop(state);
+                live.input(data)
+            }
+            Outlet::Stream(outbound) => outbound.input(data),
+            Outlet::Buffered(_, _) | Outlet::Closed => Err(crate::PaneError::Closed),
+        }
+    }
+
     /// Queue bytes the pane itself sends the program (a clear's form feed): a reply on a PTY or a stream, a live
     /// pane's input.
     pub(crate) fn push_input(&self, data: &[u8]) {
@@ -162,6 +183,7 @@ mod tests {
         outlet.push_reply(b"\x1b[1;1R");
         assert_eq!(outlet.queued(), 10);
         outlet.close();
+        assert!(matches!(outlet.input(b"late"), Err(crate::PaneError::Closed)));
         outlet.push_reply(b"late");
         assert_eq!(outlet.queued(), 0);
     }
@@ -259,7 +281,7 @@ mod tests {
             let outlet = ReplyOutlet::default();
             outlet.push_reply(b"one\n");
             outlet.attach(&handle);
-            outlet.push_input(b"two\n");
+            outlet.input(b"two\n").unwrap();
             wait_output(&output, "got one,two");
             outlet.close();
             handle.shutdown();

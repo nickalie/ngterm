@@ -5,7 +5,7 @@
 
 use std::ffi::c_void;
 
-use crate::effects::ClipboardLocation;
+use crate::effects::{ClipboardContent, ClipboardLocation};
 use crate::{Error, Terminal, ffi};
 
 /// Why a paste happens.
@@ -30,21 +30,20 @@ pub enum PasteOutcome {
     Unsafe,
 }
 
-/// The MIME type a text paste offers.
-const TEXT: &[u8] = b"text/plain";
-
-/// Writes the paste's text to the library's writer (the one representation offered, so `mime` needs no check).
-unsafe extern "C" fn read_text(userdata: *mut c_void, _mime: ffi::GhosttyString, writer: ffi::GhosttyWriter) -> bool {
-    // SAFETY: `userdata` is the `&str` the paste borrows for the call (`Terminal::paste`).
-    let text = unsafe { &*userdata.cast::<&str>() };
-    if text.is_empty() {
-        return true;
-    }
+/// Supplies the requested representation, borrowing all bytes only for this call.
+unsafe extern "C" fn read_content(userdata: *mut c_void, mime: ffi::GhosttyString, writer: ffi::GhosttyWriter) -> bool {
+    // SAFETY: userdata borrows the slice passed to `paste_contents`, alive across the C call.
+    let contents = unsafe { &*userdata.cast::<&[ClipboardContent]>() };
+    // SAFETY: the library borrows the MIME string for the callback.
+    let mime = unsafe { crate::string_bytes(mime) };
+    let Some(content) = contents.iter().find(|content| content.mime.as_bytes() == mime) else {
+        return false;
+    };
     let Some(write) = writer.write else {
         return false;
     };
-    // SAFETY: the writer is valid during this callback; the bytes are borrowed for the call.
-    unsafe { write(writer.userdata, text.as_ptr(), text.len()) }
+    // SAFETY: writer and the borrowed content bytes are valid throughout the callback.
+    content.data.is_empty() || unsafe { write(writer.userdata, content.data.as_ptr(), content.data.len()) }
 }
 
 impl Terminal {
@@ -61,11 +60,39 @@ impl Terminal {
         location: ClipboardLocation,
         allow_unsafe: bool,
     ) -> Result<PasteOutcome, Error> {
-        let mime = ffi::GhosttyString {
-            ptr: TEXT.as_ptr(),
-            len: TEXT.len(),
-        };
-        let mut text = text;
+        self.paste_contents(
+            &[ClipboardContent {
+                mime: "text/plain".to_owned(),
+                data: text.as_bytes().to_vec(),
+            }],
+            source,
+            location,
+            allow_unsafe,
+        )
+    }
+
+    /// Paste a clipboard's real representations. Mode 5522 advertises the MIME list and grants
+    /// its follow-up read; a text-source paste still inserts text through the library's framing.
+    ///
+    /// # Errors
+    ///
+    /// The same errors as [`Self::paste`]. No representation is retained after this call.
+    pub fn paste_contents(
+        &mut self,
+        contents: &[ClipboardContent],
+        source: PasteSource,
+        location: ClipboardLocation,
+        allow_unsafe: bool,
+    ) -> Result<PasteOutcome, Error> {
+        let mimes: Vec<_> = contents
+            .iter()
+            .take(16)
+            .map(|content| ffi::GhosttyString {
+                ptr: content.mime.as_ptr(),
+                len: content.mime.len(),
+            })
+            .collect();
+        let mut contents = contents;
         let paste = ffi::GhosttyPaste {
             size: std::mem::size_of::<ffi::GhosttyPaste>(),
             location: location.raw(),
@@ -73,11 +100,11 @@ impl Terminal {
                 PasteSource::Clipboard => ffi::GHOSTTY_PASTE_SOURCE_CLIPBOARD,
                 PasteSource::Text => ffi::GHOSTTY_PASTE_SOURCE_TEXT,
             },
-            mimes: &raw const mime,
-            mimes_len: 1,
+            mimes: mimes.as_ptr(),
+            mimes_len: mimes.len(),
             reader: ffi::GhosttyMimeReader {
-                read: Some(read_text),
-                userdata: (&raw mut text).cast(),
+                read: Some(read_content),
+                userdata: (&raw mut contents).cast(),
             },
             allow_unsafe,
         };

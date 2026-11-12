@@ -12,6 +12,8 @@ import Testing
 @MainActor
 @Suite("the clipboard reads")
 internal struct ClipboardReadsTests {
+    private static let copied = ClipboardPart(mime: "text/plain", data: Data("copied text".utf8))
+
     private let test = TestGraph()
     private let pane = PaneRef(machineId: "m1", sessionId: "s1", paneId: "P1")
 
@@ -19,10 +21,37 @@ internal struct ClipboardReadsTests {
         test.graph.clipboardReads
     }
 
-    private func request(_ id: UInt64, pane: PaneRef? = nil, listOnly: Bool = false) async {
+    private func request(
+        _ id: UInt64,
+        pane: PaneRef? = nil,
+        listOnly: Bool = false,
+        mimes: [String] = ["text/plain"],
+        list: Bool = false,
+        granted: Bool = false,
+        canRemember: Bool = false
+    ) async {
         let reading = pane ?? self.pane
-        test.core.emit(.clipboardReadRequest(pane: reading, readId: id, clipboard: .standard, listOnly: listOnly))
+        test.core.emit(
+            .clipboardReadRequest(
+                pane: reading,
+                readId: id,
+                clipboard: .standard,
+                listOnly: listOnly,
+                mimes: listOnly ? [] : mimes,
+                list: listOnly || list,
+                granted: granted,
+                canRemember: canRemember
+            )
+        )
         await test.settled()
+    }
+
+    private func allowed(
+        _ contents: [ClipboardPart] = [],
+        available: [String] = [],
+        remember: Bool = false
+    ) -> ClipboardReply {
+        .allow(contents: contents, available: available, remember: remember)
     }
 
     private func answers() -> [FakeCall] {
@@ -34,26 +63,71 @@ internal struct ClipboardReadsTests {
         return FakeCall("answerClipboardRead", [reading.machineId, reading.sessionId, reading.paneId, id, reply])
     }
 
-    @Test("a read waits for the user, and Allow hands over the clipboard")
+    @Test("a read waits for the user, and Allow hands over what the preview showed")
     internal func allow() async {
         defer { test.remove() }
         test.clipboard.held = "copied text"
-        await request(7, listOnly: true)
-        #expect(reads.pending == [ClipboardRead(pane: pane, readId: 7, listOnly: true)])
+        await request(7)
+        #expect(reads.pending == [ClipboardRead(pane: pane, readId: 7, listOnly: false)])
         #expect(answers().isEmpty)
+        #expect(reads.preview(reads.pending[0]).contents == [Self.copied])
+        test.clipboard.held = "copied later"
         reads.allow(reads.pending[0])
-        #expect(answers() == [answer(7, .allow(text: "copied text"))])
+        #expect(answers() == [answer(7, allowed([Self.copied]))])
         #expect(reads.pending.isEmpty)
     }
 
-    @Test("Deny gives an empty clipboard, and a clipboard with no text is allowed as none")
+    @Test("Deny refuses, and a clipboard with none of the types is allowed as nothing")
     internal func deny() async {
         defer { test.remove() }
         await request(1)
         await request(2)
         reads.deny(reads.pending[0])
         reads.allow(reads.pending[0])
-        #expect(answers() == [answer(1, .deny), answer(2, .allow(text: nil))])
+        #expect(answers() == [answer(1, .deny), answer(2, allowed())])
+    }
+
+    @Test("each requested type the clipboard holds is handed over in order, with the listing")
+    internal func types() async {
+        defer { test.remove() }
+        let png = ClipboardPart(mime: "image/png", data: Data([0x89, 0x50, 0x4E, 0x47, 0]))
+        let html = ClipboardPart(mime: "text/html", data: Data("<b>hi</b>".utf8))
+        test.clipboard.held = "copied text"
+        test.clipboard.others = [html, png]
+        await request(1, mimes: ["image/png", "application/x-missing", "text/plain"], list: true)
+        reads.allow(reads.pending[0])
+        let listed = ["text/plain", "text/html", "image/png"]
+        #expect(answers() == [answer(1, allowed([png, Self.copied], available: listed))])
+    }
+
+    @Test("a listing or a read of no type is answered unasked with no data, sixteen types at most")
+    internal func listing() async {
+        defer { test.remove() }
+        test.clipboard.others = (1...20).map { ClipboardPart(mime: "application/x-\($0)", data: Data([1])) }
+        await request(1, listOnly: true)
+        await request(2, mimes: [], list: true)
+        #expect(reads.pending.isEmpty)
+        let listed = (1...16).map { "application/x-\($0)" }
+        #expect(answers() == [answer(1, allowed(available: listed)), answer(2, allowed(available: listed))])
+    }
+
+    @Test("a granted read is answered unasked, and remember is kept only where it can be")
+    internal func grants() async {
+        defer { test.remove() }
+        test.clipboard.held = "copied text"
+        await request(1, granted: true)
+        #expect(reads.pending.isEmpty)
+        await request(2, canRemember: true)
+        await request(3)
+        reads.allow(reads.pending[0], remember: true)
+        reads.allow(reads.pending[0], remember: true)
+        #expect(
+            answers() == [
+                answer(1, allowed([Self.copied])),
+                answer(2, allowed([Self.copied], remember: true)),
+                answer(3, allowed([Self.copied])),
+            ]
+        )
     }
 
     @Test("Always allow answers the machine's reads waiting and later ones unasked, kept across launches")
@@ -72,9 +146,9 @@ internal struct ClipboardReadsTests {
         #expect(reads.pending.count == 1)
         #expect(
             answers() == [
-                answer(1, .allow(text: "copied text")),
-                answer(2, .allow(text: "copied text"), pane: sibling),
-                answer(4, .allow(text: "copied text")),
+                answer(1, allowed([Self.copied])),
+                answer(2, allowed([Self.copied]), pane: sibling),
+                answer(4, allowed([Self.copied])),
             ]
         )
         #expect(reads.alwaysAllowed == ["m1"])
@@ -100,7 +174,7 @@ internal struct ClipboardReadsTests {
         #expect(reads.alwaysAllowed.isEmpty)
         await request(2)
         #expect(reads.pending == [ClipboardRead(pane: pane, readId: 2, listOnly: false)])
-        #expect(answers() == [answer(1, .allow(text: nil))])
+        #expect(answers() == [answer(1, allowed())])
     }
 
     @Test("a read the core dismisses leaves unanswered: the core denied it")
