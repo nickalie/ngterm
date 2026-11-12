@@ -59,7 +59,9 @@ internal final class KeyboardTests: XCTestCase {
             throw XCTSkip("the simulator has the Mac's keyboard attached, so no soft keyboard shows")
         }
         Self.closeTheKeyboardIntroduction(in: app)
+        // each key reaches the program as it goes down, not when a space or Return ends the word
         keyboard.keys["l"].tap()
+        Self.expect("bench-typed", reads: "l", in: app)
         keyboard.keys["s"].tap()
         Self.expect("bench-typed", reads: "ls", in: app)
         Self.key("control", in: app).tap()

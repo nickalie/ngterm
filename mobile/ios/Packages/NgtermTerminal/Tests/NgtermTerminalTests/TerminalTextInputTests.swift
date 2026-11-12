@@ -30,6 +30,20 @@ internal struct TerminalTextInputTests {
         view.offset(from: view.beginningOfDocument, to: position)
     }
 
+    @Test("each key the soft keyboard types reaches the program as it goes down, with nothing held for the word")
+    internal func eachKey() {
+        let rig = Self.rig()
+        let view = rig.view
+        var sent: [FakeInput] = []
+        for key in ["/", "c", "l"] {
+            view.insertText(key)
+            sent.append(.typed(key))
+            #expect(rig.inputs == sent)
+            #expect(view.markedTextRange == nil)
+            #expect(view.composition.isEmpty)
+        }
+    }
+
     @Test("the input method's selection moves within the composition, and a deletion takes what it selects")
     internal func selection() throws {
         let rig = Self.rig()
