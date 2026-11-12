@@ -93,7 +93,10 @@ internal struct SessionsModelTests {
         try await connected(["s1", "s2"])
         let model = model()
         var opened = 0
-        await model.attach(sessionId: "s2") { opened += 1 }.value
+        await model.attach(sessionId: "s2") {
+            opened += 1
+            return .here
+        }.value
         #expect(opened == 1)
         #expect(model.state?.attached == ["s2"])
         guard case .sessions(let attached, let others, _) = SessionsBody(try #require(model.state)) else {
@@ -104,7 +107,10 @@ internal struct SessionsModelTests {
         #expect(others.map(\.id) == ["s1"])
         model.detach(sessionId: "s2")
         #expect(model.state?.attached.isEmpty == true)
-        await model.attach(sessionId: "s1") { opened += 1 }.value
+        await model.attach(sessionId: "s1") {
+            opened += 1
+            return .here
+        }.value
         await model.end(sessionId: "s1")?.value
         await test.settled()
         #expect(model.state?.attached.isEmpty == true)
@@ -118,7 +124,10 @@ internal struct SessionsModelTests {
         let model = model()
         test.core.failNext("attachSession", with: .Remote(reason: "the session is gone"))
         var opened = false
-        await model.attach(sessionId: "s1") { opened = true }.value
+        await model.attach(sessionId: "s1") {
+            opened = true
+            return .here
+        }.value
         #expect(!opened)
         #expect(model.notice == "the session is gone")
         #expect(model.state?.attached.isEmpty == true)

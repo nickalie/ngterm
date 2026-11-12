@@ -261,14 +261,20 @@ public final class SessionsModel {
         }
     }
 
-    /// Attaches the session `sessionId`, then runs `onAttached` (which opens it).
+    /// Attaches the session `sessionId`, then runs `onAttached`, which opens it and says where.
     @discardableResult
     @preconcurrency
-    public func attach(sessionId: String, then onAttached: @escaping @MainActor () -> Void) -> Task<Void, Never> {
+    public func attach(
+        sessionId: String,
+        then onAttached: @escaping @MainActor () -> SessionPlacement
+    ) -> Task<Void, Never> {
         Task {
             do {
                 try await graph.connections.attach(machineId: machineId, sessionId: sessionId)
-                onAttached()
+                if onAttached() != .ownWindow {
+                    // now, not at the view's next update: a create resuming before it would take its place
+                    windowShows(sessionId)
+                }
             } catch let error as MobileError {
                 notice = error.reason
             } catch {

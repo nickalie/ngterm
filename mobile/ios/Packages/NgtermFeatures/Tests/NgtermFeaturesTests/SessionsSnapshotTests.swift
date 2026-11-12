@@ -66,6 +66,7 @@ internal struct SessionsSnapshotTests {
                 selection: nil,
                 onOpen: { _ in
                     // a golden opens nothing
+                    .here
                 },
                 onGone: ScreenSnapshot.ignore
             )

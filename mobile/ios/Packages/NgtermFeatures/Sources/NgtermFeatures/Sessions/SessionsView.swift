@@ -16,7 +16,7 @@ public struct SessionsView: View {
     private let model: SessionsModel
     private let machines: MachinesModel
     private let selection: String?
-    private let onOpen: @MainActor (String) -> Void
+    private let onOpen: @MainActor (String) -> SessionPlacement
     private let onGone: @MainActor () -> Void
     @State private var confirming: SessionLine?
     @State private var isReviewing = false
@@ -102,7 +102,7 @@ public struct SessionsView: View {
             } label: {
                 Label(String(localized: "New session"), systemImage: "plus")
             } primaryAction: {
-                model.createAndOpen(then: onOpen)
+                model.createAndOpen(then: openCreated)
             }
             .accessibilityIdentifier("new-session")
         }
@@ -122,14 +122,14 @@ public struct SessionsView: View {
     /// The sessions of the machine of `model`.
     ///
     /// `selection` is the session this window shows, if it is the machine's; opening one calls `onOpen` with its id
-    /// once it is attached, and `onGone` runs when the machine is no longer saved. A changed host key is reviewed over
-    /// `machines`.
+    /// once it is attached, which says where the session shows, and `onGone` runs when the machine is no longer saved.
+    /// A changed host key is reviewed over `machines`.
     @preconcurrency
     public init(
         model: SessionsModel,
         machines: MachinesModel,
         selection: String?,
-        onOpen: @escaping @MainActor (String) -> Void,
+        onOpen: @escaping @MainActor (String) -> SessionPlacement,
         onGone: @escaping @MainActor () -> Void
     ) {
         self.model = model
@@ -179,7 +179,7 @@ public struct SessionsView: View {
             .sheet(isPresented: isNamingSession) {
                 if let newSession = model.newSession {
                     NewSessionSheet(machine: state.machine.title, state: newSession) { name in
-                        model.create(name: name, then: onOpen)
+                        model.create(name: name, then: openCreated)
                     } onCancel: {
                         model.closeNewSession()
                     }
@@ -266,7 +266,7 @@ public struct SessionsView: View {
             title: String(localized: "No sessions on \(name)"),
             message: String(localized: "Start one here. It runs on \(name) and keeps running when you leave."),
             action: RowAction(String(localized: "New session")) {
-                model.createAndOpen(then: onOpen)
+                model.createAndOpen(then: openCreated)
             }
         )
         .background(Color(uiColor: .systemGroupedBackground))
@@ -293,5 +293,9 @@ public struct SessionsView: View {
         model.attach(sessionId: sessionId) {
             onOpen(sessionId)
         }
+    }
+
+    private func openCreated(_ sessionId: String) {
+        _ = onOpen(sessionId)
     }
 }

@@ -22,9 +22,11 @@ internal struct SessionsColumn: View {
             selection: scaffold.session.flatMap { $0.machineID == machineId ? $0.sessionID : nil }
         ) { sessionId in
             let session = SessionWindowID(machineID: machineId, sessionID: sessionId)
-            if scaffold.open(session) == .ownWindow {
+            let placement = scaffold.open(session)
+            if placement == .ownWindow {
                 openWindow(value: session)
             }
+            return placement
         } onGone: {
             scaffold.forget(machine: machineId)
         }

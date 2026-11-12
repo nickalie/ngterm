@@ -20,9 +20,9 @@ internal struct NewSessionLandingTests {
         return model
     }
 
-    private func connected() async throws {
+    private func connected(_ sessions: [String] = []) async throws {
         try test.seed(TestGraph.machine(keyId: "k1"))
-        test.core.sessions["m1"] = []
+        test.core.sessions["m1"] = sessions.map { fakeSession(id: $0) }
         await test.connections.connect(TestGraph.machine(keyId: "k1").core).value
         await test.settled()
     }
@@ -160,6 +160,7 @@ internal struct NewSessionLandingTests {
         let otherGate = test.core.hold("attachSession")
         let opening = SessionsModel(graph: test.graph, machineId: "m1", windows: windows).attach(sessionId: "fake-1") {
             other.session = session
+            return .here
         }
         await otherGate.reached()
         gate.open()
@@ -183,11 +184,54 @@ internal struct NewSessionLandingTests {
         await gate.reached()
         test.core.failNext("attachSession", with: .Remote(reason: "the session is gone"))
         var tapped = false
-        await model.attach(sessionId: "s0") { tapped = true }.value
+        await model.attach(sessionId: "s0") {
+            tapped = true
+            return .here
+        }.value
         gate.open()
         await creating?.value
         #expect(!tapped)
         #expect(model.notice == "the session is gone")
+        #expect(opened == ["fake-1"])
+        #expect(claims == [SessionKey(machineId: "m1", sessionId: "fake-1")])
+    }
+
+    @Test(
+        "a create whose attach resumes after a tap's, before the window reports it, leaves the tapped session",
+        arguments: [SessionPlacement.here, .otherWindow]
+    )
+    internal func createTapOpenedFirst(placement: SessionPlacement) async throws {
+        defer { test.remove() }
+        try await connected(["s0"])
+        let model = model()
+        let gate = test.core.hold("attachSession")
+        var opened: [String] = []
+        let creating = model.createAndOpen { opened.append($0) }
+        await gate.reached()
+        let tapGate = test.core.hold("attachSession")
+        let tapping = model.attach(sessionId: "s0") { placement }
+        await tapGate.reached()
+        tapGate.open()
+        await tapping.value
+        gate.open()
+        await creating?.value
+        #expect(opened.isEmpty)
+        #expect(claims.isEmpty)
+        #expect(model.state?.attached == ["fake-1", "s0"])
+    }
+
+    @Test("a create during which a tap brought another session's own window forward still lands")
+    internal func createTapOwnWindow() async throws {
+        defer { test.remove() }
+        try await connected(["s0"])
+        let model = model()
+        let gate = test.core.hold("createSession")
+        var opened: [String] = []
+        let creating = model.createAndOpen { opened.append($0) }
+        await gate.reached()
+        await model.attach(sessionId: "s0") { .ownWindow }.value
+        gate.open()
+        await creating?.value
         #expect(opened == ["fake-1"])
         #expect(claims == [SessionKey(machineId: "m1", sessionId: "fake-1")])
     }
