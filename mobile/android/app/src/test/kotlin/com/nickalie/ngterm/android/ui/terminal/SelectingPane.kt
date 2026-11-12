@@ -7,14 +7,16 @@ import com.nickalie.ngterm.core.ffi.CellPoint
 import com.nickalie.ngterm.core.ffi.PaneSize
 
 /**
- * A pane whose screen is [lines] (a few lines of words by default), its cursor at [cursor], and whose selection
- * follows the select calls it takes, as the real terminal's does: a word runs to the blanks around the point, a
- * range is its cells row by row, everything is every row.
+ * A pane whose screen is [lines] (a few lines of words by default), its cursor where [cursor] puts it on the grid,
+ * and whose selection follows the select calls it takes, as the real terminal's does: a word runs to the blanks
+ * around the point, a range is its cells row by row, everything is every row.
  */
 internal class SelectingPane(
     private val lines: List<String> = List(ROWS) { "alpha beta gamma delta $it" },
-    private val cursor: FakeCursor = FakeCursor(0, 0),
+    private val cursor: (PaneSize) -> FakeCursor = { FakeCursor(0, 0) },
 ) : FakePane() {
+    constructor(lines: List<String>, cursor: FakeCursor) : this(lines, { cursor })
+
     @Volatile private var spans: List<Triple<Int, Int, Int>> = emptyList()
     private var seq = 0L
 
@@ -22,7 +24,7 @@ internal class SelectingPane(
         frames = { _ ->
             val grid = sizes.lastOrNull() ?: PaneSize(COLUMNS.toUShort(), ROWS.toUShort(), 1u, 1u)
             seq++
-            val writer = RowBufferWriter(grid.cols.toInt(), grid.rows.toInt(), seq = seq, cursor = cursor)
+            val writer = RowBufferWriter(grid.cols.toInt(), grid.rows.toInt(), seq = seq, cursor = cursor(grid))
             colors.lastOrNull()?.let {
                 writer.colors(
                     it.foreground.toInt(),

@@ -501,7 +501,9 @@ sideways or wider (48dp a key or more): one line of sixteen
   editors take different amounts back on a backspace over a letter with its marks, a conjunct or an emoji sequence
   (Claude Code and Codex the whole character, readline the last letter with its marks, the terminal's own line editing
   one code point), so a composition goes only as far as its first such character; from there it waits at the cursor
-  as a dead key's accent does, and goes when the word is done. Backspace past it is the program's.
+  as a dead key's accent does, and goes when the word is done. It waits where the terminal will put it: from the
+  cursor on, each character covering its own cells, onto the next row at the right edge (the screen moving up a row
+  when that is past the last), never over the text before it. Backspace past it is the program's.
 - **The row** sits under the terminal, over the keyboard, whenever no hardware keyboard is attached and Settings hasn't
   hidden it (it shows with the keyboard closed too: the arrows and Esc work a pager or a menu without it). Two lines of
   eight on a phone held upright: Ctrl and Alt by Tab under the thumb, the arrows an inverted T with Home and End over
@@ -524,10 +526,12 @@ sideways or wider (48dp a key or more): one line of sixteen
   Settings sets (on Dvorak, Ctrl+[ and Ctrl+] stay the program's); Ctrl+Shift+Left and Right go to the previous and
   next pane, Ctrl+Shift+Up and Down to the previous and next session (the session view's to wire; a chord with nowhere
   to go is the program's).
-- **Order:** a key from the row or a hardware key, a paste, or a tap, click or wheel the program takes while the soft
-  keyboard is composing ends the composition (what waits at the cursor goes first), so the keyboard starts afresh
-  after it rather than correcting text before it or where the cursor was. A mouse click gives the terminal the focus
-  without opening the soft keyboard; a tap opens it.
+- **Order:** a key from the row or a hardware key, a paste that goes in, or a tap, click or wheel the program takes
+  while the soft keyboard is composing ends the composition, so the keyboard starts afresh after it rather than
+  correcting text before it or where the cursor was. What waits at the cursor goes first, before any paste, tap, click,
+  drag or scroll, a scroll of the view included (where the wheel goes is only known once the program has it), so it
+  lands where it was typed. A mouse click gives the terminal the focus without opening the soft keyboard; a tap opens
+  it.
 
 ### The session view (`ui/session/`)
 

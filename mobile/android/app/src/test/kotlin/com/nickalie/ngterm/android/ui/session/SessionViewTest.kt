@@ -304,18 +304,18 @@ class SessionViewTest : SessionViewFixture() {
         compose.waitForIdle()
         val old = requireNotNull(connect()) { "no input connection after the tap" }
         clearInputs()
-        old.setComposingText("ab", 1)
+        old.setComposingText("abकै", 1)
         compose.onNodeWithContentDescription("Pane 2 of 2").performClick()
         compose.waitForIdle()
-        // the composition pending at the switch is finished where it was typed
-        assertEquals("ab", typed("P1"))
+        // the composition pending at the switch is finished where it was typed, its held word too
+        assertEquals("abकै", typed("P1"))
         old.commitText("zz", 1)
         old.setComposingText("q", 1)
         old.deleteSurroundingText(1, 0)
         old.performEditorAction(EditorInfo.IME_ACTION_NONE)
         old.sendKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_X))
         compose.waitForIdle()
-        assertEquals("ab", typed("P1"))
+        assertEquals("abकै", typed("P1"))
         assertTrue(pressed("P1").isEmpty())
         assertTrue(nothingReached("P2"))
     }

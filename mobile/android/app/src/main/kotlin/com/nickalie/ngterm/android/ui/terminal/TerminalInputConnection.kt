@@ -1,8 +1,7 @@
 package com.nickalie.ngterm.android.ui.terminal
 
+import android.annotation.SuppressLint
 import android.content.res.Configuration
-import android.graphics.Canvas
-import android.graphics.Paint
 import android.icu.lang.UCharacter
 import android.icu.lang.UProperty
 import android.icu.lang.UScript
@@ -20,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusEventModifierNode
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.FocusState
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.KeyInputModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.ObserverModifierNode
@@ -30,7 +28,6 @@ import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.PlatformTextInputMethodRequest
 import androidx.compose.ui.platform.PlatformTextInputModifierNode
 import androidx.compose.ui.platform.establishTextInputSession
-import com.nickalie.ngterm.android.ui.theme.TerminalPalette
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import androidx.compose.ui.input.key.KeyEvent as ComposeKeyEvent
@@ -48,8 +45,9 @@ import androidx.compose.ui.input.key.KeyEvent as ComposeKeyEvent
  * composition, which stays, as in the framework's editors (backspaces before it, deletes after it); the keys it sends
  * (Enter, backspace) go as keys. A key (its own or one from elsewhere: [TerminalKeyboard.composition]), the pointer or
  * a paste reaching the program, a line break or a composed letter a sticky modifier turned into a chord ends the
- * composition and restarts the input method, so it never corrects text the program has moved past; a held part goes
- * first, where it was typed.
+ * composition and restarts the input method, so it never corrects text the program has moved past. A held part goes
+ * first, where it was typed: a pointer press, drag or wheel turn or a paste types it and ends the composition before
+ * reaching the program, whether the program then takes it or not (a scroll of the view too).
  *
  * It types only while [terminal] is the keyboard's target and until it is [close]d: what the input method sends to a
  * connection whose terminal is not (or no longer) the one selected lands nowhere, so it never reaches another program.
@@ -231,15 +229,32 @@ internal class TerminalInputConnection(
                 UCharacter.GraphemeClusterBreak.LVT,
             )
 
-        // the scripts whose conjuncts a grapheme editor keeps whole (Unicode's Indic_Conjunct_Break)
+        // the scripts of Unicode 18.0's Indic_Conjunct_Break consonants (DerivedCoreProperties.txt), whose conjuncts a
+        // grapheme editor keeps whole: a list, as the device's ICU may predate the program's Unicode and only API 37
+        // exposes the property; script codes are fixed numbers, so a newer one just matches nothing on an older ICU
+        @SuppressLint("InlinedApi")
         val CONJUNCT_SCRIPTS =
             setOf(
+                UScript.BALINESE,
                 UScript.BENGALI,
+                UScript.CHAKMA,
                 UScript.DEVANAGARI,
+                UScript.DIVES_AKURU,
                 UScript.GUJARATI,
+                UScript.JAVANESE,
+                UScript.KAWI,
+                UScript.KHAROSHTHI,
+                UScript.KHMER,
+                UScript.LANNA,
                 UScript.MALAYALAM,
+                UScript.MEITEI_MAYEK,
+                UScript.MYANMAR,
                 UScript.ORIYA,
+                UScript.SOYOMBO,
+                UScript.SUNDANESE,
                 UScript.TELUGU,
+                UScript.TULU_TIGALARI,
+                UScript.ZANABAZAR_SQUARE,
             )
 
         const val BACKSPACE = "backspace"
@@ -427,39 +442,4 @@ private class TerminalTextInputNode(
     override fun onKeyEvent(event: ComposeKeyEvent): Boolean = keyboard.key(event.nativeKeyEvent)
 
     override fun onPreKeyEvent(event: ComposeKeyEvent): Boolean = false
-}
-
-/**
- * Draws what waits at a terminal's cursor ([TerminalState.composing]): on the terminal's ground in its text color,
- * underlined in the cursor's color, moved left as far as it needs to fit the view.
- */
-internal class CompositionPainter(
-    private val font: TerminalFont,
-    /** The underline's thickness in pixels. */
-    private val underline: Float,
-) {
-    private val fill = Paint()
-
-    /** Draws [text] at [state]'s cursor on [canvas], [width] pixels wide, in [palette]'s colors. */
-    fun draw(
-        canvas: Canvas,
-        text: String,
-        state: TerminalState,
-        palette: TerminalPalette,
-        width: Float,
-    ) {
-        if (text.isEmpty()) return
-        val cursor = state.screen.header?.cursor ?: return
-        val paint = font.paint(0)
-        val textWidth = paint.measureText(text)
-        val left = font.left(cursor.column).coerceAtMost(width - textWidth).coerceAtLeast(0f)
-        val top = font.top(cursor.row)
-        val bottom = top + font.cellHeight
-        fill.color = palette.background.toArgb()
-        canvas.drawRect(left, top, left + textWidth, bottom, fill)
-        paint.color = palette.foreground.toArgb()
-        canvas.drawText(text, left, top + font.baseline, paint)
-        fill.color = palette.cursor.toArgb()
-        canvas.drawRect(left, bottom - underline, left + textWidth, bottom, fill)
-    }
 }

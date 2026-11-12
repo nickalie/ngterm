@@ -17,8 +17,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
@@ -71,6 +73,7 @@ class TerminalCompositionTest {
     private val pane = SelectingPane()
     private lateinit var state: TerminalState
     private lateinit var view: View
+    private lateinit var focusManager: FocusManager
     private val moves = mutableListOf<String>()
     private val keyboard =
         TerminalKeyboard(
@@ -87,6 +90,7 @@ class TerminalCompositionTest {
         compose.setContent {
             NgtermTheme(darkTheme = true) {
                 view = LocalView.current
+                focusManager = LocalFocusManager.current
                 val state = remember { TerminalState(pane, EmptyCoroutineContext) }
                 this.state = state
                 DisposableEffect(Unit) {
@@ -255,6 +259,25 @@ class TerminalCompositionTest {
         )
         assertEquals("", state.composing)
         assertEquals("backspaces only over lone letters", List(3) { press("backspace") }, presses())
+    }
+
+    @Test
+    fun aConsonantAfterAViramaWaitsInEveryConjunctScript() {
+        show()
+        focus()
+        val connection = connect()
+        // Myanmar and Khmer, two of the scripts whose conjuncts joined grapheme clusters in Unicode 16
+        var typed = ""
+        for ((virama, first, second) in listOf(Triple("က္", "က", "ခ"), Triple("ក្", "ក", "ខ"))) {
+            connection.commitText(virama, 1)
+            connection.setComposingText(first, 1)
+            assertEquals("a consonant waits", typed + virama to first, line() to state.composing)
+            connection.setComposingText(second, 1)
+            connection.commitText("$second ", 1)
+            typed += "$virama$second "
+        }
+        assertEquals("က္ခ ក្ខ ", line())
+        assertTrue("nothing is taken back", presses().isEmpty())
     }
 
     @Test
@@ -497,6 +520,26 @@ class TerminalCompositionTest {
         assertTrue("the program heard the motion", pane.inputs.any { it is FakeInput.Mouse })
         connection.commitText("the ", 1)
         assertEquals("the ", line())
+        connection.setComposingText("कै", 1)
+        terminal.performMouseInput { moveTo(topLeft) }
+        compose.waitForIdle()
+        assertEquals("a held word waits on", "the " to "कै", line() to state.composing)
+        connection.commitText("कि ", 1)
+        assertEquals("the कि ", line())
+    }
+
+    @Test
+    fun aHeldWordGoesWhereItWasTypedWhenTheTerminalLosesTheFocus() {
+        show()
+        focus()
+        val connection = connect()
+        connection.setComposingText("aकै", 1)
+        assertEquals("a" to "कै", line() to state.composing)
+        compose.runOnIdle { focusManager.clearFocus() }
+        compose.waitForIdle()
+        assertEquals("aकै" to "", line() to state.composing)
+        connection.commitText("x", 1)
+        assertEquals("nothing reaches the terminal once it let the connection go", "aकै", line())
     }
 
     @Test

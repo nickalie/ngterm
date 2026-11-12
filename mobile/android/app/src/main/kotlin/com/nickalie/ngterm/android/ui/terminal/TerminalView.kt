@@ -236,7 +236,7 @@ fun TerminalView(
     val focus = focusRequester ?: ownFocus
     val softKeyboard = rememberSoftKeyboardRequest(focus)
     val underline = with(density) { CompositionUnderline.toPx() }
-    val composition = remember(font, underline) { CompositionPainter(font, underline) }
+    val composition = remember(painter, underline) { CompositionPainter(painter, font, underline) }
     SideEffect {
         input.font = font
         input.keyboardRequest = softKeyboard::request
@@ -267,9 +267,7 @@ fun TerminalView(
                     // read here, so a new frame or composition draws again without composing again
                     state.drawn
                     drawRect(palette.background)
-                    val canvas = drawContext.canvas.nativeCanvas
-                    painter.draw(canvas, state.screen, size, look)
-                    composition.draw(canvas, state.composing, state, palette, size.width)
+                    composition.draw(drawContext.canvas.nativeCanvas, state, size, look, palette)
                 }.terminalGestures(
                     input = input,
                     selection = selection,
