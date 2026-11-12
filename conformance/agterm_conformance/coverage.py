@@ -33,7 +33,7 @@ SECTIONS = {
     "ui": "ui:",
 }
 CATALOG_SECTIONS = ("commands", "fields", "events", "cli", "behaviors")
-UI_SECTIONS = ("ids", "manual")
+UI_SECTIONS = ("ids", "manual", "rust")
 REMOVED = "removed-upstream"
 
 

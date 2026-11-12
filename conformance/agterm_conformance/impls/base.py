@@ -192,6 +192,9 @@ CAPABILITIES: Mapping[str, str] = {
     "agterm-peer": "Rust-only: a Mac running upstream agterm is a remote origin too: `live tree HOST` and `live attach "
     "HOST ID` reach its `agtermctl zmx`, its panes attach through its own zmx, `agterm:HOST` and `ngterm:HOST` pin the "
     "app, and the listing and the title bar name what agterm lacks",
+    "shell-profiles": "Rust-only: a pane runs a shell profile (an absolute executable, its arguments and variables) "
+    "in place of the login shell: Settings' `defaultShellProfile` for new sessions, a `shellProfiles` entry from the "
+    "sidebar's + menu for one session, kept by the pane through splits, duplicates and restores",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
     "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",

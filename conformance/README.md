@@ -196,8 +196,9 @@ tests. Host capability skips remain recorded separately from passing coverage.
 The Rust build's progress is held by a ratchet: `conformance/rust-passing.txt` lists the ids that went green, and
 `run-linux.sh` fails when one of them goes red again (see rust-build.md > Ratchet).
 A Rust-only extension (today `live-any-shell`, Live sessions in bash and PowerShell login shells; `agent-chat`, the
-agent record behind the Android chat view; `pages-survive`, a page parked while no presenter shows it; and
-`kitty-clipboard`, a program's Kitty clipboard protocol) is a
+agent record behind the Android chat view; `pages-survive`, a page parked while no presenter shows it;
+`kitty-clipboard`, a program's Kitty clipboard protocol; and `shell-profiles`, a pane's shell profile in place of the
+login shell) is a
 capability the reference does not claim: its tests skip as unsupported there and are validated by the Rust CI with
 `--must-pass` on the capability (see rust-build.md > Rust-only extensions).
 A platform adaptation no test reads differently stays a recorded divergence, with no capability of its own. v0.41's
@@ -288,7 +289,9 @@ from an upstream tag:
 .venv/bin/python conformance/tools/gen_catalog.py --tag v0.41.1 --repo ../agterm   # or --source <extracted tree>
 ```
 
-Generated sections are replaced and statuses survive; `behaviors` and `exemptions` are hand-maintained.
+Generated sections are replaced and statuses survive; `behaviors` and `exemptions` are hand-maintained, and so is
+`ui-ids.yaml`'s `rust` section: the ids of a Rust-only extension's ui (each with the `site` that sets it), which tests
+of that capability address like upstream's.
 Retire an item with `status: removed-upstream`.
 
 ```sh

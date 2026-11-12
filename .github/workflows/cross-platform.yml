@@ -201,12 +201,13 @@ jobs:
       # skipped, failed or deselected Live test fails the job, as does finding none. --must-pass agent-chat: the
       # Rust-only agent record and `ngtermctl agent` behind the Android chat view, likewise; --must-pass
       # kitty-clipboard: a program's Rust-only Kitty clipboard protocol, likewise. --must-pass agterm-peer: the Windows
-      # viewer's ssh.exe attach of an upstream agterm Mac (the loopback-sshd tests need posix-command-line).
+      # viewer's ssh.exe attach of an upstream agterm Mac (the loopback-sshd tests need posix-command-line);
+      # --must-pass shell-profiles: the Rust-only shell profiles, the detected Windows shells included.
       - name: suite (protocol, cli, behaviors, ui)
         run: >-
           CONFORMANCE_KEEP_LOGS="$(cygpath -w "$PWD/conformance/reports/rust-windows/instances")"
           conformance/tools/run-windows.sh -- --must-pass live-any-shell --must-pass agent-chat --must-pass kitty-clipboard
-          --must-pass agterm-peer
+          --must-pass agterm-peer --must-pass shell-profiles
       - name: report into the summary
         if: always()
         run: |

@@ -97,7 +97,8 @@ class Element:
 
 
 class UiIds:
-    """The identifiers ui tests may address: ui-ids.yaml `ids` and `manual` keys, `{name}` parts as templates."""
+    """The identifiers ui tests may address: ui-ids.yaml `ids`, `manual` and `rust` keys, `{name}` parts as
+    templates."""
 
     def __init__(self, keys: Iterable[str]) -> None:
         self.keys = frozenset(keys)
@@ -109,7 +110,7 @@ class UiIds:
     @classmethod
     def load(cls, path: Path = DEFAULT_UI_IDS) -> UiIds:
         data = yaml.safe_load(path.read_text()) or {}
-        return cls([*(data.get("ids") or {}), *(data.get("manual") or {})])
+        return cls([*(data.get("ids") or {}), *(data.get("manual") or {}), *(data.get("rust") or {})])
 
     def expand(self, template: str, **values: str) -> str:
         """`ask-button-{choice}` with choice="Yes" is `ask-button-Yes`; every placeholder, nothing else."""

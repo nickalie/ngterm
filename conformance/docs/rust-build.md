@@ -118,6 +118,7 @@ share is asserted directly, with no capability.
 | `pages-survive` |  | Rust-only: an HTML page lives until it is closed: a page handed to the viewer presenting a session is parked, its slot reserved and its outcome pending, when that presenter or its page helper goes, and handed again to the next presenter that speaks pages |
 | `kitty-clipboard` |  | Rust-only: a program's Kitty clipboard protocol (OSC 5522) reads and writes per MIME type, refused under `clipboard-read`/`clipboard-write = deny`, asked about with a preview of their data under `ask`, a listing answered without a prompt, in a plain pane and in a Live one through the session server |
 | `agterm-peer` |  | Rust-only: a Mac running upstream agterm is a remote origin too: `live tree HOST` and `live attach HOST ID` reach its `agtermctl zmx`, its panes attach through its own zmx, `agterm:HOST` and `ngterm:HOST` pin the app, and the listing and the title bar name what agterm lacks |
+| `shell-profiles` |  | Rust-only: a pane runs a shell profile (an absolute executable, its arguments and variables) in place of the login shell: Settings' `defaultShellProfile` for new sessions, a `shellProfiles` entry from the sidebar's + menu for one session, kept by the pane through splits, duplicates and restores |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
@@ -160,7 +161,8 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `pages-survive`: on every OS, a page handed to a presenter parked on its presenter's loss and handed to the next, a
   Rust-only extension (below);
 - `kitty-clipboard`: on every OS, a program's Kitty clipboard protocol (OSC 5522), a Rust-only extension (below);
-- `agterm-peer`: on every OS, attaching an upstream agterm Mac's live sessions, a Rust-only extension (below).
+- `agterm-peer`: on every OS, attaching an upstream agterm Mac's live sessions, a Rust-only extension (below);
+- `shell-profiles`: on every OS, a pane's shell profile in place of the login shell, a Rust-only extension (below).
 
 It does not claim:
 
@@ -279,6 +281,21 @@ attach); they skip with the reason on a host without OpenSSH's server, and fail 
 (`test_agterm_peer_windows.py`, which requires `cmd-command-line`) is tested on Windows alone. The build claims it on
 every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and every conformance job that judges the ratchet runs with
 `--must-pass agterm-peer`: the three Linux legs, whose container carries `openssh`, and Windows' `windows` job.
+
+`shell-profiles`: a pane runs a shell profile in place of the login shell (docs/development.md > Windows shell
+profiles): Settings' default for new sessions, a `shellProfiles` entry the sidebar's + menu starts one session with,
+each pane keeping its own copy through splits, duplicates and relaunches while the default changes. Windows detects
+its installed shells (PowerShell, Windows PowerShell, Git Bash, Command Prompt, WSL distributions); other OSes offer
+only the settings file's entries, so their tests name `/bin/sh` and `/bin/bash` profiles, each told apart by a
+variable of its own (`agterm_conformance/shell_profiles.py`). Its tests are in `tests/protocol/test_shell_profiles.py`
+(the default, a pane's copy, a malformed default, a creation command, a profile's arguments, Live with a profile) and
+`tests/ui/test_shell_profile_ui.py` (Settings' Default shell picker and hints, the + menu's profiles, the fresh-shell
+label under Live), with a Windows-only one there for the detected shells and a Command Prompt session (`requires`
+`windows-shells` too). Command Prompt and WSL in Windows' live-session server are held below the suite by
+`tools/check_windows_shell_profiles.py` and `tools/check_wsl_integration.py`, run by hand on a Windows host (a WSL
+distribution for the latter). The Settings ids are the Rust build's own, under `rust:` in `ui-ids.yaml`. The build
+claims it on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and every conformance job that judges the
+ratchet runs with `--must-pass shell-profiles`: the three Linux legs and Windows' `windows` job.
 
 ### Commands
 

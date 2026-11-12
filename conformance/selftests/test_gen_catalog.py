@@ -793,6 +793,33 @@ def test_malformed_manual_entries_write_nothing(
     assert expected in capsys.readouterr().err
 
 
+def test_rust_ids_are_kept_as_written(mini: Path, tmp_path: Path) -> None:
+    _, ui, args = _paths(tmp_path)
+    rust = {"settings-shell-profile": {"status": "covered", "site": "crates/ngterm-gpui/src/settings/general.rs"}}
+    ui.write_text(yaml.safe_dump({"rust": rust}))
+    assert gc.main(["--source", str(mini), *args]) == 0
+    assert yaml.safe_load(ui.read_text())["rust"] == rust
+
+
+@pytest.mark.parametrize(
+    ("rust", "expected"),
+    [
+        ({"x": {"status": "uncovered"}}, "rust id x: needs a site"),
+        ({"ask-dialog": {"site": "crates/a.rs"}}, "rust id ask-dialog is upstream's now"),
+        (["x"], "`rust` is not a mapping"),
+    ],
+)
+def test_malformed_rust_entries_write_nothing(
+    mini: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str], rust: Any, expected: str
+) -> None:
+    catalog, ui, args = _paths(tmp_path)
+    ui.write_text(yaml.safe_dump({"rust": rust}))
+    before = ui.read_text()
+    assert gc.main(["--source", str(mini), *args]) == 1
+    assert ui.read_text() == before and not catalog.exists()
+    assert expected in capsys.readouterr().err
+
+
 def test_ui_ids_keep_status_and_mark_vanished_ids(mini: Path, tmp_path: Path) -> None:
     _, ui, args = _paths(tmp_path)
     ui.write_text(

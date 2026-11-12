@@ -98,6 +98,8 @@ UI_HEADER = (
     "# interpolated part (a template) and a two-literal ternary yields both ids. Regenerated: `at`; status survives.\n"
     "# manual: hand-maintained ids passed in through a variable; `site` is <file>:<expression> of the call they\n"
     "# reach, and every such call needs one. Statuses: uncovered, covered, removed-upstream.\n"
+    "# rust: hand-maintained ids of the Rust build's own extensions (a Rust-only capability's ui), kept as written;\n"
+    "# `site` is the <crate file> that sets the id. An id upstream comes to generate must leave this section.\n"
 )
 
 
@@ -842,7 +844,8 @@ def merge(old: Mapping[str, Any] | None, gen: Generated, tag: str) -> tuple[dict
 
 
 def merge_ui(old: Mapping[str, Any] | None, gen: Generated, tag: str) -> tuple[dict[str, Any], Changes]:
-    """ui-ids.yaml: `ids` regenerated like a catalog section; `manual` kept, its status following its site.
+    """ui-ids.yaml: `ids` regenerated like a catalog section; `manual` kept, its status following its site; `rust`
+    (the Rust build's own ids) kept as written.
 
     A variable call no manual entry names, or a malformed manual entry, raises: an id is never guessed.
     """
@@ -877,9 +880,22 @@ def merge_ui(old: Mapping[str, Any] | None, gen: Generated, tag: str) -> tuple[d
                 f"{', '.join(where)}: identifier passed through `{site.rsplit(':', 1)[1]}` — add the ids it carries "
                 f"under `manual:` in {UI_IDS_NAME}, each with site: {site}"
             )
+    rust = old.get("rust") or {}
+    if not isinstance(rust, Mapping):
+        problems.append("`rust` is not a mapping")
+        rust = {}
+    for key, entry in rust.items():
+        site = entry.get("site") if isinstance(entry, Mapping) else None
+        if not isinstance(site, str) or not site:
+            problems.append(f"rust id {key}: needs a site (<crate file>)")
+        elif key in gen.ui_ids or key in manual:
+            problems.append(f"rust id {key} is upstream's now: remove it from `rust`")
     if problems:
         raise CatalogError("ui ids need manual entries:\n  " + "\n  ".join(problems))
-    return {"upstream": tag, "ids": ids, "manual": manual}, changes
+    merged: dict[str, Any] = {"upstream": tag, "ids": ids, "manual": manual}
+    if rust:
+        merged["rust"] = {key: dict(entry) for key, entry in rust.items()}
+    return merged, changes
 
 
 class _Flow(dict):  # type: ignore[type-arg]

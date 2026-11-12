@@ -3,6 +3,8 @@
 # interpolated part (a template) and a two-literal ternary yields both ids. Regenerated: `at`; status survives.
 # manual: hand-maintained ids passed in through a variable; `site` is <file>:<expression> of the call they
 # reach, and every such call needs one. Statuses: uncovered, covered, removed-upstream.
+# rust: hand-maintained ids of the Rust build's own extensions (a Rust-only capability's ui), kept as written;
+# `site` is the <crate file> that sets the id. An id upstream comes to generate must leave this section.
 upstream: v0.41.1
 ids:
   settings-font-family: {status: uncovered, at: ['agterm/Views/AppearanceSettingsView.swift:20']}
@@ -136,3 +138,8 @@ manual:
   welcome-skill-checkbox: {status: uncovered, site: 'agterm/WelcomeAlert.swift:identifier', from: line 38}
   welcome-hooks-checkbox: {status: uncovered, site: 'agterm/WelcomeAlert.swift:identifier', from: line 39}
   ask-other: {status: uncovered, site: 'agterm/Views/AskFormViews.swift:Self.otherRowID', from: line 341}
+rust:
+  settings-shell-profile: {status: uncovered, site: crates/ngterm-gpui/src/settings/general.rs}
+  settings-shell-profile-hint: {status: uncovered, site: crates/ngterm-gpui/src/settings/general.rs}
+  settings-shell-profile-missing: {status: uncovered, site: crates/ngterm-gpui/src/settings/general.rs}
+  settings-shell-profile-live: {status: uncovered, site: crates/ngterm-gpui/src/settings/general.rs}

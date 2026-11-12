@@ -372,9 +372,10 @@ jobs:
   #   sessions) and `--must-pass live-any-shell`, and `--must-pass pages-survive` (the Rust-only parking of a page whose
   #   presenter went, whose tests need Live sessions).
   # - bash, zsh and fish: `--must-pass agent-chat` too (the Rust-only agent record and `ngtermctl agent` behind the
-  #   Android chat view), `--must-pass kitty-clipboard` (a program's Rust-only Kitty clipboard protocol), and
+  #   Android chat view), `--must-pass kitty-clipboard` (a program's Rust-only Kitty clipboard protocol),
   #   `--must-pass agterm-peer` (the Rust-only attach of an upstream agterm Mac, whose tests reach a loopback sshd:
-  #   openssh below).
+  #   openssh below) and `--must-pass shell-profiles` (the Rust-only shell profiles a pane runs in place of the login
+  #   shell).
 # - coverage: the zsh entry again on an instrumented build (run-linux.sh --coverage: cargo-llvm-cov and the toolchain's
 #   llvm-tools), every layer, its report the desktop app's e2e line coverage on Linux (code_coverage.py e2e: the total,
 #   its distance to 90% and the share markers exclude, per crate), judged by
@@ -395,16 +396,17 @@ jobs:
             out: rust-linux
             must-pass: >-
               --must-pass live-any-shell --must-pass agent-chat --must-pass kitty-clipboard --must-pass agterm-peer
+              --must-pass shell-profiles
           - shell: zsh
             out: rust-linux-zsh
             must-pass: >-
               --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
-              --must-pass kitty-clipboard --must-pass agterm-peer
+              --must-pass kitty-clipboard --must-pass agterm-peer --must-pass shell-profiles
           - shell: fish
             out: rust-linux-fish
             must-pass: >-
               --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
-              --must-pass kitty-clipboard --must-pass agterm-peer
+              --must-pass kitty-clipboard --must-pass agterm-peer --must-pass shell-profiles
           - shell: zsh
             out: rust-linux-coverage
             coverage: true
