@@ -286,7 +286,10 @@ fn reconnect_replacements_rotate_the_expected_nonce_and_disable_it_for_old_endpo
                 .and_then(|(_, value)| crate::attach_bridge::parse_variable(value)),
             capability.map(|_| nonce)
         );
-        assert_eq!(replacement.command.contains("attach-bridge"), capability.is_some());
+        assert_eq!(
+            crate::remote::viewer_run::readable(&replacement.command).contains("attach-bridge"),
+            capability.is_some()
+        );
         core.pane_replaced(replacement);
     }
 }

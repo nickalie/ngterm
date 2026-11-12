@@ -598,7 +598,7 @@ fn a_remote_split_carries_the_exact_capability_and_nonce_of_its_attach() {
             .and_then(|(_, value)| crate::attach_bridge::parse_variable(value));
         assert_eq!(nonce, capability.map(|_| expected));
         assert_eq!(
-            seed.command.as_ref().unwrap().contains("attach-bridge"),
+            crate::remote::viewer_run::readable(seed.command.as_ref().unwrap()).contains("attach-bridge"),
             capability.is_some()
         );
     }

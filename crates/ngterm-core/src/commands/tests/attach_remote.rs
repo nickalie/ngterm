@@ -2134,7 +2134,10 @@ fn initial_remote_panes_pair_their_capability_gated_commands_and_nonces() {
         for role in [crate::model::StatusPane::Left, crate::model::StatusPane::Right] {
             let launch = session.pane_launch(role).unwrap();
             let bridged = capability == Some(crate::attach_bridge::VERSION);
-            assert_eq!(launch.command.as_ref().unwrap().contains("attach-bridge"), bridged);
+            assert_eq!(
+                crate::remote::viewer_run::readable(launch.command.as_ref().unwrap()).contains("attach-bridge"),
+                bridged
+            );
             assert_eq!(launch.attach_bridge.is_some(), bridged);
             let nonce = launch.attach_bridge.clone();
             let seed = crate::restore::spawn_plan::resolve_seed(
