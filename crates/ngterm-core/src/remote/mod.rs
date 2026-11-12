@@ -78,7 +78,7 @@ pub use self::handoff::PRESENTATION_LOST;
 pub(crate) use self::handoff::{
     AskPlacement, RemoteOverlayOpen, RemoteOverlayResize, RemoteProgram, open_remote_overlay, present_ask_remotely,
 };
-use self::hub::{CloseReason, HubEvent, PresentationHub, PresentationSink, SubscriberId};
+use self::hub::{CloseReason, HubEvent, PresentationHub, PresentationSink, SubscriberId, Surface};
 pub use self::page::PAGE_CLAIM_WINDOW;
 pub(crate) use self::page::{
     REMOTE_LOOPBACK, REMOTE_TOO_LARGE, RemotePageCommand, RemotePageOpen, VIEWER_GONE, open_remote_page, travels,
@@ -614,8 +614,8 @@ impl Core {
         }
     }
 
-    /// Acts on what the hub queued: a presenter lost takes its ask back, a surface holder lost its overlays and pages,
-    /// a new surface holder is handed the session's parked pages, a viewer's frame is applied.
+    /// Acts on what the hub queued: a presenter lost takes its ask back, a surface's holder lost what it showed, a new
+    /// holder of pages is handed the session's parked pages, a viewer's frame is applied.
     fn run_hub_events(&mut self) {
         loop {
             let events = self.remote.hub.take_events();
@@ -625,8 +625,18 @@ impl Core {
             for event in events {
                 match event {
                     HubEvent::PresenterLost(session) => self.take_back_remote_ask(session),
-                    HubEvent::SurfacesLost(session) => self.surfaces_lost(session),
-                    HubEvent::SurfacesGained(session) => self.hand_on_parked_pages(session),
+                    HubEvent::SurfaceLost {
+                        session,
+                        surface: Surface::Overlays,
+                        holder,
+                    } => self.overlays_lost(session, holder),
+                    HubEvent::SurfaceLost {
+                        session,
+                        surface: Surface::Pages,
+                        holder,
+                    } => self.pages_lost(session, holder),
+                    HubEvent::SurfaceGained(session, Surface::Pages) => self.hand_on_parked_pages(session),
+                    HubEvent::SurfaceGained(_, Surface::Overlays) => {}
                     HubEvent::PresenterFrame(session, body) => self.receive_presenter_frame(session, *body),
                 }
             }

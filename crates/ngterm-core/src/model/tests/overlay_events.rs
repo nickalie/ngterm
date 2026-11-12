@@ -346,7 +346,7 @@ fn closing_rejecting_or_losing_a_remote_overlay_invalidates_the_tree() {
     store.finish_remote_overlay(id, "c", &RemoteOverlayOutcome::Exited(0));
     assert_eq!(
         tree_changes(&mut store, |s| {
-            s.remote_overlay_presenter_lost(id);
+            s.remote_overlay_surfaces_gone(id);
         }),
         1,
         "the held surface went with its presenter"
@@ -380,13 +380,16 @@ fn parking_and_handing_on_a_remote_page_invalidate_the_tree() {
             .unwrap()
             .parked
     };
-    let mut lost = (Vec::new(), Vec::new());
+    let mut lost = Vec::new();
     assert_eq!(
-        tree_changes(&mut store, |s| lost = s.remote_overlay_presenter_lost(id)),
-        1
+        tree_changes(&mut store, |s| assert!(
+            s.remote_overlay_surfaces_gone(id).is_empty(),
+            "no program job"
+        )),
+        0
     );
-    assert_eq!(lost.0, Vec::<String>::new(), "no program job");
-    assert_eq!(lost.1.len(), 1);
+    assert_eq!(tree_changes(&mut store, |s| lost = s.park_remote_pages(id)), 1);
+    assert_eq!(lost.len(), 1);
     assert!(parked(&store));
     assert_eq!(tree_changes(&mut store, |s| assert!(!s.park_remote_page(id, &job))), 0);
     let now = std::time::Instant::now();

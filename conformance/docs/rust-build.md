@@ -270,9 +270,11 @@ composer's `/` dropdown (`agent/commands.rs`, over `ngterm-core`'s `agent_chat::
 
 A Rust-only presentation kind is a `live.present` frame kind upstream's stream does not have. It is opt-in
 (`OPT_IN_KINDS` in `ngterm-core`'s `remote/hub.rs`): sent, published state included, only to a viewer whose hello lists
-it, so desktop Attach Remote and upstream's viewers, which do not, get the stream they always got. Today there is one,
-`agent`: what each pane runs (`{pane, agent, conversationId}`, `agent` null for none), from the agent record above, for
-the Android chat view (`remote::agents`).
+it, so desktop Attach Remote and upstream's viewers, which do not, get the stream they always got. Today there are
+two: `agent`, what each pane runs (`{pane, agent, conversationId}`, `agent` null for none), from the agent record
+above, for the Android chat view (`remote::agents`); and `overlay.none`, which names no frame: the mobile apps list it
+as they refuse every program overlay, and a presenter listing it keeps its asks and sounds while the origin hands
+program overlays to a viewer beside it that shows them (`PresentationHub::surface_holder`).
 
 ## Release behavior at v0.40.0
 

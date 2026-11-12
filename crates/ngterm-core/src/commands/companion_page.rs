@@ -9,7 +9,7 @@
 //! machine could not show it. The web views are the frontend's ([`crate::html::HtmlHost`]): a build or a host without
 //! them refuses the page as `session.overlay.open` does, a remote row's page included (a Rust-only refusal). A headless
 //! origin has no web views and creates the companion all the same: the machine presenting the parent is told to show it
-//! ([`Core::hand_companion_page_to_presenter`]), and any viewer can attach it as for a desktop origin's.
+//! ([`Core::hand_companion_page_to_viewer`]), and any viewer can attach it as for a desktop origin's.
 
 use std::borrow::Cow;
 
@@ -214,7 +214,7 @@ fn create(core: &mut Core, target: Option<&str>, args: &Args, source: HtmlSource
     core.register_page_outcome(page_id);
     core.track_page(page_id);
     if presenter_only && let Some(parent) = parent {
-        core.hand_companion_page_to_presenter(parent, companion);
+        core.hand_companion_page_to_viewer(parent, companion);
     }
     Ok(ControlResult {
         page_id: Some(uuid_string(page_id)),

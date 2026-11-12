@@ -7,8 +7,8 @@
 //! which ends every channel and token serving it. A soft-closed page still serves, so undo brings it back with its
 //! viewers attached.
 //!
-//! A headless origin also tells the machine presenting a parent about each page companion created under it
-//! ([`Core::hand_companion_page_to_presenter`]), which attaches it as `live attach` would.
+//! A headless origin also tells the viewer showing a parent's pages about each page companion created under it
+//! ([`Core::hand_companion_page_to_viewer`]), which attaches it as `live attach` would.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,6 +17,7 @@ use std::time::Instant;
 use uuid::Uuid;
 
 use super::frames::{Body, PresentationCompanion, PresentationPage};
+use super::hub::Surface;
 use super::page::{PAGE_CLAIM_WINDOW, RemotePagePlace, presentation_source};
 use super::page_serve::PageServeStream;
 use crate::Core;
@@ -173,16 +174,16 @@ impl Core {
         }
     }
 
-    /// Tells the machine presenting `parent` to show its new page companion `companion` (this build's
+    /// Tells the viewer showing `parent`'s pages to show its new page companion `companion` (this build's
     /// `companion.page`): on a headless origin nothing shows the page here, so without it the page would wait unseen
     /// until a viewer attached the group again. A presenter that does not list the kind is told nothing, and a mirror
     /// attaches it with `live attach`.
-    pub(crate) fn hand_companion_page_to_presenter(&mut self, parent: Uuid, companion: Uuid) {
+    pub(crate) fn hand_companion_page_to_viewer(&mut self, parent: Uuid, companion: Uuid) {
         let body = Body::CompanionPage(PresentationCompanion {
             session: uuid_string(companion),
         });
-        if !self.remote.hub.send_to_surfaces(body, parent) {
-            tracing::info!(%parent, %companion, "no presenter takes the page companion; it waits for an attach");
+        if !self.remote.hub.send_to_surface(Surface::Pages, body, parent) {
+            tracing::info!(%parent, %companion, "no viewer takes the page companion; it waits for an attach");
         }
     }
 

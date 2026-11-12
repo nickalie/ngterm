@@ -166,7 +166,8 @@ impl Roles {
         set_lead(&mut origin.fixture.core, left, "follower");
         let session = origin.session;
         if phone_first {
-            let kinds = crate::remote::client::viewer_kinds(false);
+            let mut kinds = crate::remote::client::viewer_kinds(false);
+            kinds.push(crate::remote::hub::NO_OVERLAYS_KIND.to_owned());
             let kinds: Vec<&str> = kinds.iter().map(String::as_str).collect();
             let core = &mut origin.fixture.core;
             let (serial, phone) = subscribe_listing(core, session, "presenter", &kinds);

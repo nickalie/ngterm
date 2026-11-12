@@ -15,10 +15,11 @@
 //!   - a snapshot's status is no change on the origin ([`MobileEvent::SessionStatus`]'s `changed` is false), so the
 //!     app notifies nothing for it;
 //!   - the hello lists `viewer_kinds(false)`: no page kinds, as the app shows no handed-over pages; `status.shapes`, as
-//!     both apps draw every status shape (their `StatusShape`); and the opt-in
+//!     both apps draw every status shape (their `StatusShape`); the opt-in
 //!     `agent` kind, whose frames become [`MobileEvent::PaneAgent`] for the chat view ([`crate::chat`]). They are not
 //!     cleared when the stream leaves `connected`: the origin announces every pane again when it reconnects, and a
-//!     chat follows its own channel meanwhile;
+//!     chat follows its own channel meanwhile; and the opt-in `overlay.none`, so an origin hands program overlays to a
+//!     desktop beside the phone rather than to it;
 //!   - an ask for an attached session is always accepted (the app shows it as a dialog when the session is on screen,
 //!     otherwise as a notification) and its answer echoes the request's `owner`, kept here;
 //!   - an overlay is refused with `overlay.rejected`, and a page with `page.rejected` ([`PAGES_UNSUPPORTED`]);
@@ -346,6 +347,7 @@ impl<C: Connection> Presentations<C> {
         self.last_client += 1;
         let mut client = PresentationClient::new(session, self.last_client, vec![tail], version);
         client.set_shows_agents(true);
+        client.set_refuses_overlays(true);
         let mut attached = Attached {
             machine_id: machine_id.to_owned(),
             session_id: session_id.to_owned(),

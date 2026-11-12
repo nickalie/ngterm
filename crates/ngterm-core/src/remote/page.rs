@@ -12,13 +12,16 @@
 //! ([`super::hub::PAGE_CONTENT_KIND`], [`super::hub::PAGE_DOCUMENT_KIND`]), read here first as an open reads it, a
 //! picture with its probed pixels, which that presenter fits to its own screen (`presenter_sized`).
 //!
+//! "The presenter" here is the viewer showing the session's pages ([`super::hub::Surface::Pages`]): the presenter, or
+//! when it shows no pages (a phone), a viewer beside it that does (this build's extension).
+//!
 //! The presenter's loss, its page channel's helper going, an unclaimed channel page's claim window passing and the
 //! presenter's `page.detached` (its own helper for the page ended) park the page instead (an extension beyond upstream,
 //! where they end it, the last one being a `page.closed` there): the slot stays reserved, the outcome pending, and the
-//! presenter, when it stays and still holds a replica, is told to drop it. The next presenter granted the session that speaks pages
-//! is handed every parked page again as a fresh `page.request` ([`Core::hand_on_parked_pages`]), in the order they were
-//! opened, a pane page once its pane is laid out; the placement rule is not run again, as a parked page belongs to the
-//! session's viewer. A parked page closes here like any page, telling no presenter; its visibility and size are
+//! presenter, when it stays and still holds a replica, is told to drop it. The next presenter of the session that
+//! speaks pages is handed every parked page again as a fresh `page.request` ([`Core::hand_on_parked_pages`]), in the
+//! order they were opened, a pane page once its pane is laid out; the placement rule is not run again, as a parked
+//! page belongs to the session's viewer. A parked page closes here like any page, telling no presenter; its visibility and size are
 //! recorded for the hand-on, and what needs a page shown is refused.
 
 use std::time::{Duration, Instant};
@@ -29,7 +32,7 @@ use super::frames::{
     self, Body, PresentationFrame, PresentationPage, PresentationPageAction, PresentationPageChange,
     PresentationPageCommand, PresentationPageSource, PresentationPane,
 };
-use super::hub::{PAGE_CONTENT_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS};
+use super::hub::{PAGE_CONTENT_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS, SubscriberId, Surface};
 use crate::Core;
 use crate::commands::overlay_page::PageOpening;
 use crate::html::image_page::{BASE_PERCENT, ImagePixels};
@@ -120,10 +123,11 @@ pub(crate) fn travels(source: &HtmlSource) -> bool {
 /// decode (upstream's guards in `openRemotePage`).
 fn presenter_builds(core: &Core, session: Uuid, source: &PresentationPageSource) -> bool {
     let hub = &core.remote.hub;
-    if source.is_content() && !hub.surfaces_support(PAGE_CONTENT_KIND, session) {
+    if source.is_content() && !hub.surface_supports(Surface::Pages, PAGE_CONTENT_KIND, session) {
         return false;
     }
-    !matches!(source, PresentationPageSource::Document { .. }) || hub.surfaces_support(PAGE_DOCUMENT_KIND, session)
+    !matches!(source, PresentationPageSource::Document { .. })
+        || hub.surface_supports(Surface::Pages, PAGE_DOCUMENT_KIND, session)
 }
 
 /// The identity of the pane `pane` addresses, `None` for the session-wide slot.
@@ -215,7 +219,7 @@ pub(crate) fn open_remote_page(
     }
     if !PAGE_KINDS
         .iter()
-        .all(|kind| core.remote.hub.surfaces_support(kind, session))
+        .all(|kind| core.remote.hub.surface_supports(Surface::Pages, kind, session))
     {
         return RemotePageOpen::Unsupported;
     }
@@ -237,7 +241,7 @@ pub(crate) fn open_remote_page(
     };
     let channel = source.uses_channel();
     let sent = OverlaySize {
-        points: core.presentable_points(session, size.points),
+        points: core.presentable_points(Surface::Pages, session, size.points),
         ..size
     };
     let request = Body::PageRequest(page_request(overlay, opening, source, identity, token.clone(), sent));
@@ -245,7 +249,7 @@ pub(crate) fn open_remote_page(
         return RemotePageOpen::TooLarge;
     }
     let hud = found.overlay.hud_active();
-    let owner = core.remote.hub.surface_generation(session);
+    let owner = core.remote.hub.surface_generation(Surface::Pages, session);
     let Some(store) = core.library_mut().store_mut(window) else {
         return RemotePageOpen::Local;
     };
@@ -270,7 +274,7 @@ pub(crate) fn open_remote_page(
         },
     );
     core.register_viewer_page_outcome(overlay.id);
-    core.remote.hub.send_to_surfaces(request, session);
+    core.remote.hub.send_to_surface(Surface::Pages, request, session);
     core.arm_page_claim_expiry(channel);
     RemotePageOpen::Opened
 }
@@ -298,7 +302,7 @@ fn unreachable_loopback(core: &Core, session: Uuid, source: &HtmlSource) -> bool
         && !core
             .remote
             .hub
-            .surfaces_support(super::page_tunnel::TUNNEL_KIND, session)
+            .surface_supports(Surface::Pages, super::page_tunnel::TUNNEL_KIND, session)
 }
 
 /// Where a page handed to the presenter is reserved now (upstream's `remotePagePlace`).
@@ -337,7 +341,7 @@ impl Core {
     fn page_shown_by_owner(&self, session: Uuid, slot: &RemoteOverlaySlot) -> bool {
         slot.page.as_ref().is_some_and(|page| !page.parked)
             && self.remote.hub.has_presenter(session)
-            && self.remote.hub.surface_generation(session) == slot.owner
+            && self.remote.hub.surface_generation(Surface::Pages, session) == slot.owner
     }
 
     /// Asks the presenter to act on the page in `pane`'s slot (upstream's `sendRemotePageCommand`); false when no remote
@@ -374,7 +378,9 @@ impl Core {
             size_percent: size.percent,
             merge,
         };
-        self.remote.hub.send_to_surfaces(Body::PageCommand(command), session)
+        self.remote
+            .hub
+            .send_to_surface(Surface::Pages, Body::PageCommand(command), session)
     }
 
     /// Runs a toolbar navigation on the page in `pane`'s slot when the presenting machine shows it (upstream's
@@ -477,7 +483,7 @@ impl Core {
     pub(super) fn close_remote_page(&mut self, session: Uuid, page: Uuid, shown: bool) {
         if shown {
             let close = Body::PageClose(PresentationPageChange::page(uuid_string(page)));
-            self.remote.hub.send_to_surfaces(close, session);
+            self.remote.hub.send_to_surface(Surface::Pages, close, session);
         }
         self.remote_page_ended(page);
     }
@@ -489,7 +495,9 @@ impl Core {
             .and_then(|found| found.remote_overlays().slot_of_job(&command.page))
             .is_some_and(|slot| self.page_shown_by_owner(session, slot));
         if owned {
-            self.remote.hub.send_to_surfaces(Body::PageCommand(command), session);
+            self.remote
+                .hub
+                .send_to_surface(Surface::Pages, Body::PageCommand(command), session);
         }
     }
 
@@ -501,8 +509,8 @@ impl Core {
     }
 
     /// Where page `page` is reserved now, `None` once it ended, parked or its presenter changed (upstream's
-    /// `remotePagePlace`): a swap moves the slot, and a new presenter generation means the page belongs to a stream
-    /// that is gone.
+    /// `remotePagePlace`): a swap moves the slot, and a new generation of the pages' holder means the page belongs to
+    /// a stream that is gone.
     pub(crate) fn remote_page_place(&self, page: Uuid) -> Option<RemotePagePlace> {
         let job = uuid_string(page);
         let library = self.library();
@@ -556,7 +564,22 @@ impl Core {
             .is_some_and(|store| store.park_remote_page(session, &job));
         if parked {
             let close = Body::PageClose(PresentationPageChange::page(job));
-            self.remote.hub.send_to_surfaces(close, session);
+            self.remote.hub.send_to_surface(Surface::Pages, close, session);
+            self.shut_page_serve_channel(page);
+        }
+    }
+
+    /// Parks the pages `holder` showed instead of ending them (an extension beyond upstream); a holder still attached
+    /// drops its replicas.
+    pub(crate) fn pages_lost(&mut self, session: Uuid, holder: SubscriberId) {
+        let pages = self
+            .library_mut()
+            .store_for_session_mut(session)
+            .map(|store| store.park_remote_pages(session))
+            .unwrap_or_default();
+        for page in pages {
+            let close = Body::PageClose(PresentationPageChange::page(uuid_string(page)));
+            self.remote.hub.send_to(close, holder);
             self.shut_page_serve_channel(page);
         }
     }
@@ -595,7 +618,7 @@ impl Core {
         }
     }
 
-    /// The presenter of `session` was just granted, or a pane of the session came into view: when the presenter speaks
+    /// A viewer just took `session`'s pages, or a pane of the session came into view: when the presenter speaks
     /// pages, every page parked in the session and not handed to it yet is handed to it (an extension beyond upstream),
     /// each as a fresh `page.request` under a new claim token and the new generation, never raising the session
     /// (`follow` off), at the size the slot keeps, then a hide when it was hidden. A page parked while this presenter
@@ -610,11 +633,11 @@ impl Core {
     pub(crate) fn hand_on_parked_pages(&mut self, session: Uuid) {
         if !PAGE_KINDS
             .iter()
-            .all(|kind| self.remote.hub.surfaces_support(kind, session))
+            .all(|kind| self.remote.hub.surface_supports(Surface::Pages, kind, session))
         {
             return;
         }
-        let generation = self.remote.hub.surface_generation(session);
+        let generation = self.remote.hub.surface_generation(Surface::Pages, session);
         let parked: Vec<(RemoteOverlaySlot, bool)> = self
             .presented_session(session)
             .map(|found| {
@@ -686,7 +709,7 @@ impl Core {
         };
         let size = page_size(&opening);
         let sent = OverlaySize {
-            points: self.presentable_points(session, size.points),
+            points: self.presentable_points(Surface::Pages, session, size.points),
             ..size
         };
         let token = uuid_string(Uuid::new_v4());
@@ -695,7 +718,7 @@ impl Core {
         if !fits_one_frame(&request) {
             return;
         }
-        let owner = self.remote.hub.surface_generation(session);
+        let owner = self.remote.hub.surface_generation(Surface::Pages, session);
         let deadline = Instant::now() + PAGE_CLAIM_WINDOW;
         let Some(handed) = self
             .library_mut()
@@ -704,7 +727,7 @@ impl Core {
         else {
             return;
         };
-        self.remote.hub.send_to_surfaces(request, session);
+        self.remote.hub.send_to_surface(Surface::Pages, request, session);
         if let HandedOn::Hidden(seq) = handed {
             let command = PresentationPageCommand {
                 width: None,
@@ -715,7 +738,9 @@ impl Core {
                 size_percent: None,
                 merge: None,
             };
-            self.remote.hub.send_to_surfaces(Body::PageCommand(command), session);
+            self.remote
+                .hub
+                .send_to_surface(Surface::Pages, Body::PageCommand(command), session);
         }
         self.arm_page_claim_expiry(channel);
     }

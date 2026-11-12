@@ -15,7 +15,7 @@ use super::frames::{
     Body, MAX_FRAME_BYTES, PresentationAsk, PresentationAskRef, PresentationOverlay, PresentationOverlayChange,
     PresentationPageAction, PresentationPane, PresentationSound,
 };
-use super::hub::{ASK_FORM_KIND, ASK_OTHER_KIND, PresentationHub};
+use super::hub::{ASK_FORM_KIND, ASK_OTHER_KIND, PresentationHub, SubscriberId, Surface};
 use super::presentation_status_pane;
 use crate::Core;
 use crate::commands::Outcome;
@@ -170,19 +170,16 @@ impl Core {
             .is_some_and(|pane| session.renders_overlay_pane(pane))
     }
 
-    /// The viewer showing `session`'s overlays and pages is gone or gave them up: every program overlay it held goes
-    /// with it, a job still unclaimed cancelled so it can no longer launch (upstream's `onPresenterLost`). A page it
-    /// showed is parked for the next one instead of ended (an extension beyond upstream): only its channel goes.
-    pub(crate) fn surfaces_lost(&mut self, session: Uuid) {
-        let (jobs, pages) = self
+    /// Upstream's `onPresenterLost` for program overlays; a holder still attached closes them too.
+    pub(crate) fn overlays_lost(&mut self, session: Uuid, holder: SubscriberId) {
+        let jobs = self
             .library_mut()
             .store_for_session_mut(session)
-            .map(|store| store.remote_overlay_presenter_lost(session))
+            .map(|store| store.remote_overlay_surfaces_gone(session))
             .unwrap_or_default();
-        for page in pages {
-            self.shut_page_serve_channel(page);
-        }
         for job in jobs {
+            let close = Body::OverlayClose(PresentationOverlayChange::job(job.clone()));
+            self.remote.hub.send_to(close, holder);
             let unclaimed = self
                 .jobs
                 .jobs
@@ -244,7 +241,7 @@ impl Core {
             match change {
                 RemoteOverlayChange::Closed { session, job } => {
                     let body = Body::OverlayClose(PresentationOverlayChange::job(job.clone()));
-                    self.remote.hub.send_to_surfaces(body, session);
+                    self.remote.hub.send_to_surface(Surface::Overlays, body, session);
                     self.cancel_overlay_job(&job);
                 }
                 RemoteOverlayChange::PageClosed { session, page, shown } => {
@@ -286,8 +283,13 @@ impl Core {
             .and_then(|store| store.session(session))
             .and_then(|found| found.remote_overlays().slot(None).cloned())?;
         let parked = slot.page.as_ref().is_some_and(|page| page.parked);
+        let surface = if slot.page.is_some() {
+            Surface::Pages
+        } else {
+            Surface::Overlays
+        };
         let hub = &self.remote.hub;
-        if !parked && (!hub.has_presenter(session) || hub.surface_generation(session) != slot.owner) {
+        if !parked && (!hub.has_presenter(session) || hub.surface_generation(surface, session) != slot.owner) {
             return Some(RemoteOverlayResize::ViewerGone);
         }
         let (size, merged) = if let Some(percent) = size_percent {
@@ -309,7 +311,7 @@ impl Core {
         if parked {
             return Some(RemoteOverlayResize::Sent);
         }
-        let sent = self.presentable_points(session, if merge { points } else { merged });
+        let sent = self.presentable_points(surface, session, if merge { points } else { merged });
         let delivered = if slot.page.is_some() {
             let size = OverlaySize {
                 percent: size,
@@ -323,7 +325,8 @@ impl Core {
                 merge.then_some(true),
             )
         } else {
-            self.remote.hub.send_to_surfaces(
+            self.remote.hub.send_to_surface(
+                Surface::Overlays,
                 Body::OverlayResize(PresentationOverlayChange {
                     job: slot.job,
                     size_percent: size,
@@ -341,11 +344,16 @@ impl Core {
     }
 
     /// Older presenters receive the percent alone; requested axes stay in the origin's slot.
-    pub(super) fn presentable_points(&self, session: Uuid, points: OverlayPointSize) -> OverlayPointSize {
+    pub(super) fn presentable_points(
+        &self,
+        surface: Surface,
+        session: Uuid,
+        points: OverlayPointSize,
+    ) -> OverlayPointSize {
         if self
             .remote
             .hub
-            .surfaces_support(super::hub::OVERLAY_POINTS_KIND, session)
+            .surface_supports(surface, super::hub::OVERLAY_POINTS_KIND, session)
         {
             points
         } else {
@@ -465,7 +473,7 @@ pub(crate) fn open_remote_overlay(
         return RemoteOverlayOpen::TooLarge;
     }
     let hud = found.overlay.hud_active();
-    let owner = core.remote.hub.surface_generation(session);
+    let owner = core.remote.hub.surface_generation(Surface::Overlays, session);
     let Some(store) = core.library_mut().store_mut(window) else {
         return RemoteOverlayOpen::NotPresented;
     };
@@ -499,7 +507,7 @@ pub(crate) fn open_remote_overlay(
             },
         );
     }
-    let sent = core.presentable_points(session, points);
+    let sent = core.presentable_points(Surface::Overlays, session, points);
     let overlay = PresentationOverlay {
         width: sent.width,
         height: sent.height,
@@ -510,7 +518,9 @@ pub(crate) fn open_remote_overlay(
         follow: request.follow,
         wait: request.program.wait,
     };
-    core.remote.hub.send_to_surfaces(Body::OverlayRequest(overlay), session);
+    core.remote
+        .hub
+        .send_to_surface(Surface::Overlays, Body::OverlayRequest(overlay), session);
     RemoteOverlayOpen::Opened
 }
 

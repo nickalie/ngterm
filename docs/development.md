@@ -212,10 +212,11 @@ and how this build does it where the OS matters:
   presenter runs over ssh) and loaded under the `ngterm-page` scheme; a page on the origin's loopback (a dev server,
   a status page) loads through an ssh port forward the presenter opens, where upstream refuses it
   (`crates/ngterm-core/src/remote/page_tunnel.rs`); `ask` forms show and status sounds play on the
-  presenting machine too. When the presenter shows no pages (a phone took the role first), pages and program overlays
-  go to a viewer of the session that shows them, while asks and sounds stay the presenter's
-  (`PresentationHub::surface_holder`). A status sound on Linux, which has none of macOS's named sounds, rings the display's bell
-  (Wayland's `xdg_system_bell_v1`, X11's core bell).
+  presenting machine too. When the presenter shows no pages (a phone took the role first, or a desktop without web
+  views), pages go to a viewer of the session that shows them, and so do program overlays when the presenter refuses
+  them (a phone), while asks and sounds stay the presenter's (`PresentationHub::surface_holder`). A status sound on
+  Linux, which has none of macOS's named sounds, rings the display's bell (Wayland's `xdg_system_bell_v1`, X11's core
+  bell).
 - Settings ▸ Key Mapping ▸ "Lock in terminals" selects a keyboard layout while a terminal or an HTML overlay page (its
   fields included) has the keyboard and restores the previous one when the keyboard goes to another app or to an ngterm
   text field outside the page: macOS Text Input Source Services, Windows' keyboard layouts, and on Linux XKB's group

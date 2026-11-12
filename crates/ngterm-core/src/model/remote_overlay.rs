@@ -521,32 +521,35 @@ impl AppStore {
         }
     }
 
-    /// The viewer showing `session`'s overlays and pages is gone or gave them up: each program slot's surface counts
-    /// as gone, and each page it showed is parked for the next one. The program jobs, whose unclaimed ones the caller cancels, and the pages parked
-    /// now, whose channels the caller shuts, are returned.
-    pub fn remote_overlay_presenter_lost(&mut self, session: Uuid) -> (Vec<String>, Vec<Uuid>) {
+    /// The viewer showing `session`'s program overlays is gone or gave them up: each program slot's surface counts as
+    /// gone. The program jobs are returned, for the caller to cancel the unclaimed ones.
+    pub fn remote_overlay_surfaces_gone(&mut self, session: Uuid) -> Vec<String> {
+        self.tracking_remote_slots(session, |overlays| {
+            let jobs: Vec<String> = overlays
+                .slots()
+                .iter()
+                .filter(|slot| slot.page.is_none())
+                .map(|slot| slot.job.clone())
+                .collect();
+            for job in &jobs {
+                overlays.surface_gone(job);
+            }
+            jobs
+        })
+        .unwrap_or_default()
+    }
+
+    /// The viewer showing `session`'s pages is gone or gave them up: each page it showed is parked for the next one.
+    /// The pages parked now are returned, for the caller to shut their channels.
+    pub fn park_remote_pages(&mut self, session: Uuid) -> Vec<Uuid> {
         let Some(found) = self.session_mut(session) else {
-            return (Vec::new(), Vec::new());
+            return Vec::new();
         };
         let pages = found.remote_overlays.park_pages();
         if !pages.is_empty() {
             self.schedule_tree_changed();
         }
-        let jobs = self
-            .tracking_remote_slots(session, |overlays| {
-                let jobs: Vec<String> = overlays
-                    .slots()
-                    .iter()
-                    .filter(|slot| slot.page.is_none())
-                    .map(|slot| slot.job.clone())
-                    .collect();
-                for job in &jobs {
-                    overlays.surface_gone(job);
-                }
-                jobs
-            })
-            .unwrap_or_default();
-        (jobs, pages)
+        pages
     }
 
     /// Parks the page held under `job`, its channel's helper gone or its claim expired while its presenter stays;

@@ -1,6 +1,6 @@
-//! Where a session's pages go when its viewers differ in what they show (this build's extension): the presenter role
-//! stays first come, so asks and sounds keep going to whoever took it, while pages and program overlays go to a
-//! viewer that shows pages when the presenter (a phone) shows none.
+//! Where a session's pages and program overlays go when its viewers differ in what they show (this build's extension):
+//! the presenter role stays first come, so asks and sounds keep going to whoever took it, while pages go to a viewer
+//! that shows them when the presenter shows none, and program overlays too when the presenter refuses them (a phone).
 
 use ngterm_proto::command::{AskCmd, SessionCmd};
 use ngterm_proto::{Args, AskButton, Command, Request, Response};
@@ -10,20 +10,21 @@ use super::remote::{Viewer, frame, subscribe_listing};
 use super::remote_page::Origin;
 use super::{args, failure, wire};
 use crate::remote::client::viewer_kinds;
-use crate::remote::hub::SUPPORTED_KINDS;
+use crate::remote::hub::{NO_OVERLAYS_KIND, SUPPORTED_KINDS};
 
 const PRESENTER: &str = "a viewer presents this session: an html overlay would open where nobody sees it";
 const FILE: &str = "/tmp/docs/index.html";
 
 fn phone_kinds() -> Vec<String> {
-    viewer_kinds(false)
+    let mut kinds = viewer_kinds(false);
+    kinds.push(NO_OVERLAYS_KIND.to_owned());
+    kinds
 }
 
 fn listed(kinds: &[String]) -> Vec<&str> {
     kinds.iter().map(String::as_str).collect()
 }
 
-/// A viewer attaching `origin`'s session and asking for the presenter role; its serial and stream.
 fn attach(origin: &mut Origin, kinds: &[&str]) -> (u64, Viewer) {
     let session = origin.session();
     let core = &mut origin.live.fixture.core;
@@ -61,6 +62,13 @@ fn open_ask(origin: &mut Origin) -> Response {
     });
     origin.live.fixture.core.commit();
     response
+}
+
+fn open_program(origin: &mut Origin) -> Response {
+    origin.overlay(SessionCmd::OverlayOpen, |a| {
+        a.command = Some("sleep 9".to_owned());
+        a.pane = Some("left".to_owned());
+    })
 }
 
 fn page_id(response: &Response) -> String {
@@ -158,4 +166,42 @@ fn a_viewer_that_asked_to_mirror_is_handed_no_page() {
     let (_, mirror) = subscribe_listing(&mut origin.live.fixture.core, session, "mirror", &SUPPORTED_KINDS);
     assert_eq!(open_page(&mut origin), failure(PRESENTER));
     assert!(mirror.last("page.request").is_none());
+}
+
+/// The phone leaving takes the presenter role, and with it what the desktop beside it showed: the page is parked and
+/// the program overlay goes, and the desktop, still attached, is told to drop both.
+#[test]
+fn the_phone_leaving_closes_the_page_and_the_overlay_on_the_desktop_that_stays() {
+    let phone = phone_kinds();
+    let mut origin = Origin::new(false, &listed(&phone));
+    let (_, desktop) = attach(&mut origin, &SUPPORTED_KINDS);
+    let page = page_id(&open_page(&mut origin));
+    assert!(open_program(&mut origin).ok);
+    let job = desktop.last("overlay.request").expect("the desktop shows the overlay")["overlay"]["job"].clone();
+    assert!(origin.presenter.last("overlay.request").is_none());
+
+    origin.live.fixture.core.presentation_closed(origin.serial);
+    origin.live.fixture.core.commit();
+
+    assert_eq!(origin.node()["htmlOverlays"][0]["parked"], json!(true));
+    assert_eq!(desktop.last("page.close").unwrap()["page"], json!({"page": page}));
+    assert_eq!(desktop.last("overlay.close").unwrap()["overlay"]["job"], job);
+}
+
+/// Upstream keeps a desktop presenter's program overlays on it whether or not it has web views; only the pages it
+/// would refuse go to a desktop beside it that shows them.
+#[test]
+fn a_desktop_presenter_without_web_views_keeps_its_overlays_while_its_pages_go_beside() {
+    let bare = viewer_kinds(false);
+    let mut origin = Origin::new(false, &listed(&bare));
+    let (_, desktop) = attach(&mut origin, &SUPPORTED_KINDS);
+    assert_eq!((mode(&origin.presenter), mode(&desktop)), ("presenter", "mirror"));
+
+    assert!(open_program(&mut origin).ok);
+    assert!(origin.presenter.last("overlay.request").is_some());
+    assert!(desktop.last("overlay.request").is_none());
+
+    let page = page_id(&open_page(&mut origin));
+    assert_eq!(desktop.last("page.request").unwrap()["page"]["page"], json!(page));
+    assert!(origin.presenter.last("page.request").is_none());
 }

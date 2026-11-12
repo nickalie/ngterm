@@ -21,8 +21,8 @@ use super::frames::{
     PresentationSound, PresentationStatus,
 };
 use super::hub::{
-    AGENT_KIND, COMPANION_PAGE_KIND, PAGE_CONTENT_KIND, PAGE_DETACHED_KIND, PAGE_DOCUMENT_KIND, PAGE_KINDS,
-    SUPPORTED_KINDS,
+    AGENT_KIND, COMPANION_PAGE_KIND, NO_OVERLAYS_KIND, OPT_IN_KINDS, PAGE_CONTENT_KIND, PAGE_DETACHED_KIND,
+    PAGE_DOCUMENT_KIND, PAGE_KINDS, SUPPORTED_KINDS,
 };
 use super::reconnect::retry_delay;
 use crate::model::RemoteConnection;
@@ -145,8 +145,8 @@ pub struct PresentationClient {
     mode: Option<PresentationMode>,
     /// The hello lists the page kinds ([`viewer_kinds`]).
     shows_pages: bool,
-    /// The hello lists [`AGENT_KIND`] too, and its frames are reported.
-    shows_agents: bool,
+    /// The [`OPT_IN_KINDS`] the hello lists; [`AGENT_KIND`]'s frames are reported only when it is one.
+    opt_in: Vec<&'static str>,
     /// The kinds the origin's last hello answer listed, kept after its link goes so what is said about that link's
     /// work still follows them ([`PresentationClient::origin_speaks`]).
     origin_kinds: Vec<String>,
@@ -185,7 +185,7 @@ impl PresentationClient {
             connection: None,
             mode: None,
             shows_pages: false,
-            shows_agents: false,
+            opt_in: Vec::new(),
             origin_kinds: Vec::new(),
         }
     }
@@ -198,7 +198,22 @@ impl PresentationClient {
     /// Whether this viewer shows what each pane runs (the Android chat view): the next hello lists [`AGENT_KIND`], an
     /// opt-in kind of this build that desktop never lists, and its frames are reported as [`ClientEffect::Agent`].
     pub fn set_shows_agents(&mut self, shows_agents: bool) {
-        self.shows_agents = shows_agents;
+        self.set_opt_in(AGENT_KIND, shows_agents);
+    }
+
+    /// Whether this viewer refuses every program overlay (the mobile apps): the next hello lists [`NO_OVERLAYS_KIND`],
+    /// so an origin hands them to a viewer beside it that shows them.
+    pub fn set_refuses_overlays(&mut self, refuses_overlays: bool) {
+        self.set_opt_in(NO_OVERLAYS_KIND, refuses_overlays);
+    }
+
+    fn set_opt_in(&mut self, kind: &'static str, listed: bool) {
+        self.opt_in.retain(|listed| *listed != kind);
+        if listed {
+            self.opt_in.push(kind);
+        }
+        self.opt_in
+            .sort_by_key(|kind| OPT_IN_KINDS.iter().position(|known| known == kind));
     }
 
     /// Whether the origin's last hello answer listed `kind`: both sides speak it. False before any answer.
@@ -210,9 +225,7 @@ impl PresentationClient {
     /// The kinds the next hello lists.
     fn hello_kinds(&self) -> Vec<String> {
         let mut kinds = viewer_kinds(self.shows_pages);
-        if self.shows_agents {
-            kinds.push(AGENT_KIND.to_owned());
-        }
+        kinds.extend(self.opt_in.iter().map(|kind| (*kind).to_owned()));
         kinds
     }
 
@@ -378,7 +391,7 @@ impl PresentationClient {
             Body::PageCommand(command) => effects.push(ClientEffect::PageCommand(command)),
             Body::Respawn(respawns) => effects.push(ClientEffect::Respawns(respawns, false)),
             Body::CompanionPage(companion) => effects.push(ClientEffect::CompanionPage(companion)),
-            Body::Agent(agent) if self.shows_agents => effects.push(ClientEffect::Agent(agent)),
+            Body::Agent(agent) if self.opt_in.contains(&AGENT_KIND) => effects.push(ClientEffect::Agent(agent)),
             Body::Ack
             | Body::PresenterAcquire
             | Body::AskResolve(_)
@@ -728,14 +741,15 @@ mod tests {
 
         let mut harness = Harness::new(Some(1));
         harness.client.set_shows_agents(true);
+        harness.client.set_refuses_overlays(true);
         harness.start();
         let hello = harness.transport.link(0).0.borrow().sent[0].body.clone();
         let Body::Hello(hello) = hello else {
             panic!("the first frame is the hello")
         };
         let mut kinds = viewer_kinds(false);
-        kinds.push(crate::remote::hub::AGENT_KIND.to_owned());
-        assert_eq!(hello.kinds, kinds, "the opt-in kind follows the build's own");
+        kinds.extend(crate::remote::hub::OPT_IN_KINDS.map(str::to_owned));
+        assert_eq!(hello.kinds, kinds, "the opt-in kinds follow the build's own");
         harness.connect(PresentationSnapshot::default(), 7, PresentationMode::Mirror);
         harness.deliver(&line(agent(), 7, 2));
         assert_eq!(reported(&harness), 1);
