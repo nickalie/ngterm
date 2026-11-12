@@ -8,7 +8,7 @@
 # client key as instrumentation arguments (the tests import the key and add the machine as a person does).
 #
 # On exit it stops the instance and sshd by the pids they recorded, ends every session of the private namespace
-# through that namespace's own session server, and drops the port reverse. The scratch directory is removed after a
+# through that namespace's own session server and removes the namespace's directory, and drops the port reverse. The scratch directory is removed after a
 # pass and kept after a failure (headless.log, sshd/sshd.log). With --evidence DIR, the tests' screenshots and the
 # device's log of the run are copied into DIR.
 #
@@ -82,16 +82,12 @@ PRIVATE=(env -i "NGTERM_STATE_DIR=$WORK/s" "HOME=$WORK/home" "PATH=$WORK/stage/b
   "USER=$USER_NAME" "LOGNAME=$USER_NAME" LANG=C.UTF-8)
 PORT=
 
-# The private namespace's live sessions, ended through its own session server; the instance and sshd, by the pids they
-# recorded and only while those pids still run this run's binary or config; the device's port reverse.
+# The instance and sshd, by the pids they recorded and only while those pids still run this run's binary or config; the
+# private namespace's live sessions, ended through its own session server, and its directory once that server, left
+# empty, has gone (after its idle grace; the namespace is this run's alone, hashed from its private state dir); the
+# device's port reverse.
 reap() {
-  local session="$WORK/stage/bin/ngterm-session" pid names
-  if [[ -s "$WORK/live-dir" && -x "$session" ]]; then
-    names="$("${PRIVATE[@]}" "NGTERM_LIVE_DIR=$(<"$WORK/live-dir")" "$session" list --short 2>/dev/null || true)"
-    # shellcheck disable=SC2086 # one session name per word
-    [[ -z "$names" ]] || "${PRIVATE[@]}" "NGTERM_LIVE_DIR=$(<"$WORK/live-dir")" "$session" kill --force $names \
-      >/dev/null 2>&1 || true
-  fi
+  local session="$WORK/stage/bin/ngterm-session" pid names namespace
   if [[ -s "$WORK/headless.pid" ]]; then
     pid="$(<"$WORK/headless.pid")"
     if [[ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" == "$(readlink -f "$WORK/stage/bin/ngterm-headless")" ]]; then
@@ -102,6 +98,22 @@ reap() {
     pid="$(<"$WORK/sshd/sshd.pid")"
     if tr '\0' ' ' 2>/dev/null <"/proc/$pid/cmdline" | grep -qF "$WORK/sshd/sshd_config"; then
       kill -TERM "$pid" 2>/dev/null || true
+    fi
+  fi
+  if [[ -s "$WORK/live-dir" && -x "$session" ]]; then
+    namespace="$(<"$WORK/live-dir")"
+    names="$("${PRIVATE[@]}" "NGTERM_LIVE_DIR=$namespace" "$session" list --short 2>/dev/null || true)"
+    # shellcheck disable=SC2086 # one session name per word
+    [[ -z "$names" ]] || "${PRIVATE[@]}" "NGTERM_LIVE_DIR=$namespace" "$session" kill --force $names \
+      >/dev/null 2>&1 || true
+    for ((i = 0; i < 300; i++)); do
+      [[ -e "$namespace/server.sock" ]] || break
+      sleep 0.1
+    done
+    if [[ -e "$namespace/server.sock" ]]; then
+      echo "→ the session server of $namespace is still running; it and the directory are left behind" >&2
+    else
+      rm -rf "$namespace"
     fi
   fi
   [[ -z "$PORT" ]] || "$ADB" reverse --remove "tcp:$PORT" >/dev/null 2>&1 || true
