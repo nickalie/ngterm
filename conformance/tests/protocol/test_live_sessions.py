@@ -623,31 +623,26 @@ def _until_ended(stream):
             return kinds
 
 
-@LIVE_IN_ANY_SHELL
-@pytest.mark.covers(
-    "live.present", "session.status", "field:tree.session.presenters", streams=("live.present",)
-)
-def test_a_viewer_that_stops_reading_is_dropped(live):
-    """A viewer whose frames back up is dropped, never waited on: upstream's `ControlStreamOwner` refuses a frame once
-    256 wait for the writer, and closes the stream once one write blocks past its timeout. Status changes come faster
-    than either bound, so the drop is certain; the session and its other viewers go on. The viewer keeps acking, so
-    the heartbeat's 30 s silence bound never drops it first on a slow runner."""
-    sid = _live_session(live)
-    stalled, gen = _subscribed(live, sid, "mirror")
-    with stalled:
-        _presenters(live, sid, {"mirrors": 1})
-        statuses = itertools.cycle(["active", "blocked"])
-        # a Windows runner answers about 35 requests a second, and there the drop comes from the queue bound (18 s)
-        deadline = time.monotonic() + 120
-        while find_session(live.tree(), sid).get("presenters") is not None:
-            assert time.monotonic() < deadline, "a viewer that reads nothing was never dropped"
-            for _ in range(64):
-                assert_ok(live.request("session.status", sid, status=next(statuses)))
-            # an ack is a viewer's sign of life whether or not it read anything; one the drop beat goes nowhere
-            with contextlib.suppress(OSError):
-                stalled.send({"kind": "ack", "gen": gen, "rev": 0})
-        # the stream ends; a socket keeps what the viewer had not read before the end, a Windows pipe drops it
-        _until_ended(stalled)
+# A notification's body rides its frame whole: a few of these fill any socket's or pipe's buffer toward a viewer that
+# reads nothing, while the frames left waiting stay far under the writer's queue bound.
+BIG_NOTIFY_BODY = "x" * (64 * 1024)
+BIG_NOTIFIES = 16
+
+
+def _wait_dropped(live, sid, viewer, gen, timeout, between=lambda: None):
+    """Until the origin dropped `viewer`, calling `between` and acking each round: an ack is a viewer's sign of life
+    whether or not it read anything, so the heartbeat's 30 s silence bound cannot drop it first on a slow runner. An
+    ack the drop beat goes nowhere."""
+    deadline = time.monotonic() + timeout
+    while find_session(live.tree(), sid).get("presenters") is not None:
+        assert time.monotonic() < deadline, f"the viewer was not dropped within {timeout}s"
+        between()
+        with contextlib.suppress(OSError):
+            viewer.send({"kind": "ack", "gen": gen, "rev": 0})
+
+
+def _a_new_viewer_gets_frames(live, sid):
+    """The session and its later viewers go on after a viewer was dropped."""
     reading, _ = _subscribed(live, sid, "mirror")
     with reading:
         _presenters(live, sid, {"mirrors": 1})
@@ -655,6 +650,66 @@ def test_a_viewer_that_stops_reading_is_dropped(live):
         assert wait_frame(reading.read, "status", reading.send)["status"]["status"] == "completed"
     _presenters(live, sid, None)
     assert_ok(live.request("session.close", sid))
+
+
+@LIVE_IN_ANY_SHELL
+@pytest.mark.covers("live.present", "notify", "field:tree.session.presenters", streams=("live.present",))
+def test_a_viewer_that_stops_reading_is_dropped(live):
+    """A viewer that reads nothing is dropped, never waited on: upstream's `ControlStreamOwner` closes the stream once
+    one write blocks past its timeout (5 s). A few big frames fill the stream's buffer and leave the backlog far under
+    its 256-frame bound, so the write timeout is what drops it (the bound has its own test below)."""
+    sid = _live_session(live)
+    stalled, gen = _subscribed(live, sid, "mirror")
+    with stalled:
+        _presenters(live, sid, {"mirrors": 1})
+        for _ in range(BIG_NOTIFIES):
+            assert_ok(live.request("notify", sid, body=BIG_NOTIFY_BODY))
+        _wait_dropped(live, sid, stalled, gen, timeout=60, between=lambda: time.sleep(0.5))
+        # the stream ends; a socket keeps what the viewer had not read before the end, a Windows pipe drops it
+        _until_ended(stalled)
+    _a_new_viewer_gets_frames(live, sid)
+
+
+@LIVE_IN_ANY_SHELL
+@pytest.mark.covers(
+    "live.present", "session.status", "field:tree.session.presenters", streams=("live.present",)
+)
+def test_a_viewer_that_falls_behind_is_dropped_at_its_backlog(live):
+    """A viewer that reads, but slower than its frames come, is dropped once 256 frames wait for the writer (upstream's
+    `ControlStreamOwner` refuses a frame past that). It takes a little of the stream every half second, so where a
+    reader's room lets a blocked write go on (a Windows pipe, macOS) no write waits as long as its 5 s timeout; status
+    changes come as fast as the origin answers them."""
+    sid = _live_session(live)
+    slow, gen = _subscribed(live, sid, "mirror")
+    with slow:
+        _presenters(live, sid, {"mirrors": 1})
+        statuses = itertools.cycle(["active", "blocked"])
+        took = time.monotonic()
+
+        def burst():
+            nonlocal took
+            for _ in range(16):
+                assert_ok(live.request("session.status", sid, status=next(statuses)))
+            if time.monotonic() - took >= 0.5:
+                _take(slow, 1024)
+                took = time.monotonic()
+
+        _wait_dropped(live, sid, slow, gen, timeout=120, between=burst)
+        while (chunk := _take(slow, 65536, timeout=10)) != b"":
+            assert chunk is not None, "the dropped viewer's stream stayed open"
+    _a_new_viewer_gets_frames(live, sid)
+
+
+def _take(stream, size, timeout=0.05):
+    """Up to `size` raw bytes of `stream`, past its frame parsing: empty once it ended, `None` when nothing came in
+    time."""
+    stream.sock.settimeout(timeout)
+    try:
+        return stream.sock.recv(size)
+    except TimeoutError:
+        return None
+    except OSError:
+        return b""
 
 
 @LIVE

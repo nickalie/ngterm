@@ -1608,6 +1608,29 @@ def test_live_present_bridges_the_stream(cli, live):
     assert_ok(live.request("session.close", sid))
 
 
+@LIVE_IN_ANY_SHELL
+@pytest.mark.covers("cli:live present")
+def test_live_present_ends_when_the_origin_ends_the_stream(cli, live):
+    """The origin closing the stream (its session closed) ends the bridge by itself, the viewer's input still open."""
+    cli = cli.on(live.instance)
+    sid = _live_session(live)
+    with cli.spawn(*cli.vocabulary.cli("live", "present", sid), interactive=True) as bridge:
+
+        def read(seconds):
+            return json.loads(bridge.line(seconds))
+
+        def send(frame):
+            bridge.send(json.dumps(frame) + "\n")
+
+        send(PRESENTATION_HELLO)
+        assert read(10.0)["kind"] == "hello"
+        wait_frame(read, "snapshot", send)
+        live.wait_tree(lambda tree: find_session(tree, sid).get("presenters") == {"mirrors": 1})
+        assert_ok(live.request("session.close", sid))
+        ended = bridge.finish()
+        assert ended.returncode == 0, (ended.stdout, ended.stderr)
+
+
 @LIVE
 @pytest.mark.covers("cli:session overlay run-job")
 def test_live_run_job_runs_the_handed_over_program(cli, live):
