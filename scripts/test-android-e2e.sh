@@ -97,12 +97,23 @@ PORT=
 AGTERM_PORT=
 AGTERM="$WORK/agterm"
 
+# of the given pids (all this user's when none is given), those of the processes the stand-in agterm's logins started:
+# each has its private home
+agterm_procs() {
+  local pid pids=("$@")
+  (($#)) || mapfile -t pids < <(pgrep -u "$(id -u)" 2>/dev/null || true)
+  for pid in "${pids[@]}"; do
+    grep -qzxF "HOME=$AGTERM/home" "/proc/$pid/environ" 2>/dev/null && echo "$pid"
+  done
+  return 0
+}
+
 # The instance and sshd, by the pids they recorded and only while those pids still run this run's binary or config; the
 # private namespace's live sessions, ended through its own session server, and its directory once that server, left
 # empty, has gone (after its idle grace; the namespace is this run's alone, hashed from its private state dir); the
 # device's port reverse.
 reap() {
-  local session="$WORK/stage/bin/ngterm-session" pid names namespace
+  local session="$WORK/stage/bin/ngterm-session" pid names namespace i pids
   if [[ -s "$WORK/headless.pid" ]]; then
     pid="$(<"$WORK/headless.pid")"
     if [[ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" == "$(readlink -f "$WORK/stage/bin/ngterm-headless")" ]]; then
@@ -132,10 +143,20 @@ reap() {
     fi
   fi
   # the stand-in agterm's streams and shells, which outlive a connection the device dropped unclosed: every process its
-  # logins started has its private home
-  for pid in $(pgrep -u "$(id -u)" 2>/dev/null || true); do
-    grep -qzxF "HOME=$AGTERM/home" "/proc/$pid/environ" 2>/dev/null && kill -TERM "$pid" 2>/dev/null || true
-  done
+  # logins started has its private home. An interactive shell ignores TERM, so HUP goes with it and KILL ends what is
+  # left a moment later
+  pids="$(agterm_procs)"
+  # shellcheck disable=SC2086 # one pid per word
+  if [[ -n "$pids" ]]; then
+    kill -HUP $pids 2>/dev/null || true
+    kill -TERM $pids 2>/dev/null || true
+    for ((i = 0; i < 20; i++)); do
+      pids="$(agterm_procs $pids)"
+      [[ -n "$pids" ]] || break
+      sleep 0.1
+    done
+    [[ -z "$pids" ]] || kill -KILL $pids 2>/dev/null || true
+  fi
   [[ -z "$PORT" ]] || "$ADB" reverse --remove "tcp:$PORT" >/dev/null 2>&1 || true
   [[ -z "$AGTERM_PORT" ]] || "$ADB" reverse --remove "tcp:$AGTERM_PORT" >/dev/null 2>&1 || true
 }

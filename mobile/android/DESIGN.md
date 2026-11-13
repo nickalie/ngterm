@@ -283,9 +283,10 @@ reading, not a poster), the mark on top of the welcome.
 - **States:** a spinner while the list is read; an error with Retry when it can't be; the empty state with Add
   machine; an offline banner over the list while the device has no network.
 - **Another app:** a machine whose listing came from agterm (upstream's app on a Mac, reached as ngterm reaches its
-  own) shows a `PeerBadge` "agterm" after its address while it stays connected; the card isn't the place for its
-  note, which the sessions screen and the session bar give on a tap. A machine with no sessions listed yet says
-  nothing either way: its listing names the app.
+  own) shows a `PeerBadge` "agterm" after its address from its first listing until it is disconnected, removed or edited
+  (a lost or unreachable connection keeps it); the card isn't the place for its note, which the sessions screen and
+  the session bar give on a tap. A machine with no sessions listed yet says nothing either way: its listing names the
+  app.
 - **Remove** asks nothing: the machine goes at once and a snackbar offers Undo, which puts it back where it was, with
   its pinned key.
 - **Add and Edit machine:** a `ScreenFrame` with Close and Save. Name, Host, Port and User (mono for what is compared

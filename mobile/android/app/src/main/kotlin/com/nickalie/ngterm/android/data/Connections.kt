@@ -179,15 +179,16 @@ class Connections(
             listings[machineId] = sessions
             treeState.update { it + (machineId to withStreamNames(machineId, sessions)) }
             treeFailureState.update { it - machineId }
+            // under the lock, so a disconnect or a replaced connection can't land between the listing and its app
+            learnPeer(machineId, sessions)
         }
-        learnPeer(machineId, sessions)
         val ids = sessions.mapTo(mutableSetOf()) { it.id }
         val gone = attachedState.value[machineId].orEmpty() - ids
         gone.forEach { detach(machineId, it) }
     }
 
     // a listing names its machine's app on each session (one connection, one app); an empty one says nothing, so the
-    // app learned before stays
+    // app learned before stays; callers hold listingLock
     private fun learnPeer(
         machineId: String,
         sessions: List<RemoteSession>,
@@ -329,8 +330,10 @@ class Connections(
     // the machine's connection is replaced by one with another record: its attached sessions' streams went with the old
     // one, and a listing call on it no longer counts
     private fun replaced(machineId: String) {
-        synchronized(listingLock) { bump(machineId) }
-        peerState.update { it - machineId }
+        synchronized(listingLock) {
+            bump(machineId)
+            peerState.update { it - machineId }
+        }
         attachedState.value[machineId].orEmpty().forEach { detach(machineId, it) }
     }
 
@@ -449,9 +452,9 @@ class Connections(
             listings -= machineId
             treeState.update { it - machineId }
             treeFailureState.update { it - machineId }
+            peerState.update { it - machineId }
         }
         attachedState.update { it - machineId }
-        peerState.update { it - machineId }
         streamNames.keys.removeIf { it.machineId == machineId }
     }
 
