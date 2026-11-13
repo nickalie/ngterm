@@ -27,6 +27,13 @@ tests/behaviors/test_relaunch.py::test_rerun_types_the_pinned_line_into_a_window
 tests/behaviors/test_relaunch.py::test_rerun_types_the_pinned_line_into_a_windows_shell[pwsh]
 tests/behaviors/test_state_dir_lock.py::test_a_second_instance_on_an_owned_state_dir_exits_1_without_writing
 tests/behaviors/test_state_dir_lock.py::test_the_lock_is_released_at_exit
+tests/cli/test_agent_chat.py::test_a_claude_hook_sets_the_record_and_its_end_clears_it
+tests/cli/test_agent_chat.py::test_a_permission_prompt_is_an_approval_only_while_the_pane_is_blocked
+tests/cli/test_agent_chat.py::test_a_report_the_record_cannot_take_is_refused
+tests/cli/test_agent_chat.py::test_the_chat_ends_once_the_pane_is_back_at_its_shell
+tests/cli/test_agent_chat.py::test_the_chat_streams_a_codex_rollout_with_its_subagent
+tests/cli/test_agent_chat.py::test_the_chat_streams_the_claude_transcript_and_follows_it
+tests/cli/test_agent_chat.py::test_the_commands_list_the_agents_own_and_installed_ones
 tests/cli/test_agent_mail.py::test_a_claude_that_is_not_the_panes_agent_takes_nothing[a claude -p worker]
 tests/cli/test_agent_mail.py::test_a_claude_that_is_not_the_panes_agent_takes_nothing[a subagent's event]
 tests/cli/test_agent_mail.py::test_a_claude_that_is_not_the_panes_agent_takes_nothing[an event that hands nothing over]
@@ -39,6 +46,7 @@ tests/cli/test_agent_mail.py::test_a_codex_run_not_created_by_its_tui_takes_noth
 tests/cli/test_agent_mail.py::test_a_hook_outside_a_pane_takes_nothing
 tests/cli/test_agent_mail.py::test_a_newer_waiter_supersedes_the_older_one
 tests/cli/test_agent_mail.py::test_a_payload_that_is_not_json_fails_the_hook
+tests/cli/test_agent_mail.py::test_a_read_that_does_not_confirm_its_removal_hands_nothing_over
 tests/cli/test_agent_mail.py::test_a_read_the_app_refuses_fails_the_hook
 tests/cli/test_agent_mail.py::test_a_stop_keeps_the_turn_going_with_every_message_as_its_reason
 tests/cli/test_agent_mail.py::test_a_tool_call_hands_the_mail_over_as_added_context
@@ -46,6 +54,13 @@ tests/cli/test_agent_mail.py::test_a_waiter_ends_quietly_once_its_pane_is_gone
 tests/cli/test_agent_mail.py::test_a_waiter_wakes_the_agent_with_its_mail_and_marks_it_active
 tests/cli/test_agent_mail.py::test_codex_has_no_waiter
 tests/cli/test_agent_mail.py::test_codexs_tui_takes_the_mail
+tests/cli/test_cli_messages.py::test_identity_environment
+tests/cli/test_cli_messages.py::test_read_ack_requires_confirmation[None]
+tests/cli/test_cli_messages.py::test_read_ack_requires_confirmation[acked1]
+tests/cli/test_cli_messages.py::test_read_ack_requires_confirmation[acked2]
+tests/cli/test_cli_messages.py::test_read_wait_timeout
+tests/cli/test_cli_messages.py::test_send_partial_failure
+tests/cli/test_cli_messages.py::test_send_read_ack_output
 tests/cli/test_cli_only.py::test_clipboard_set_checks_the_text_before_the_pane
 tests/cli/test_cli_only.py::test_clipboard_set_refuses_outside_a_live_pane
 tests/cli/test_cli_only.py::test_duplicate_no_select_needs_companion
@@ -129,6 +144,7 @@ tests/cli/test_cli_output.py::test_session_close_undoable
 tests/cli/test_cli_output.py::test_session_commands_refused_outside_their_state
 tests/cli/test_cli_output.py::test_session_create_select_and_close
 tests/cli/test_cli_output.py::test_session_flag_move
+tests/cli/test_cli_output.py::test_session_info_sets_and_clears
 tests/cli/test_cli_output.py::test_session_metadata
 tests/cli/test_cli_output.py::test_session_move_and_go
 tests/cli/test_cli_output.py::test_session_new_parent_collapse_and_expand
@@ -185,6 +201,9 @@ tests/protocol/test_addressing.py::test_undecodable_request_is_refused[unknown-c
 tests/protocol/test_addressing.py::test_unresolved_target[session.select--no such session: ]
 tests/protocol/test_addressing.py::test_unresolved_target[session.select-zzz-no such session: zzz]
 tests/protocol/test_addressing.py::test_unresolved_target[workspace.select-zzz-no such workspace: zzz]
+tests/protocol/test_agterm_peer_windows.py::test_a_windows_viewer_attaches_an_agterm_pane_through_ssh_exe[cmd_shell_profile]
+tests/protocol/test_agterm_peer_windows.py::test_a_windows_viewer_attaches_an_agterm_pane_through_ssh_exe[git_bash_shell_profile]
+tests/protocol/test_agterm_peer_windows.py::test_a_windows_viewer_attaches_an_agterm_pane_through_ssh_exe[no-profile]
 tests/protocol/test_ask_pick.py::test_a_form_needs_no_buttons
 tests/protocol/test_ask_pick.py::test_ask_refusals[align]
 tests/protocol/test_ask_pick.py::test_ask_refusals[blank-title]
@@ -272,6 +291,7 @@ tests/protocol/test_companions.py::test_closing_the_page_closes_its_row
 tests/protocol/test_companions.py::test_collapse_and_expand_fold_a_parent
 tests/protocol/test_companions.py::test_companion_new_refusals
 tests/protocol/test_companions.py::test_duplicate_as_companion_copies_the_split_and_runs_each_program
+tests/protocol/test_companions.py::test_duplicate_as_companion_rebinds_session_and_pane_ids[plain]
 tests/protocol/test_companions.py::test_duplicate_as_companion_refusals
 tests/protocol/test_companions.py::test_duplicate_as_companion_with_no_select_keeps_the_selection
 tests/protocol/test_companions.py::test_page_attach_hands_out_a_claim_only_for_a_page_companion
@@ -292,6 +312,7 @@ tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[bogus]
 tests/protocol/test_config_browser.py::test_links_sets_and_reads_the_link_open_mode
 tests/protocol/test_config_browser.py::test_links_takes_the_sized_overlay_modes
 tests/protocol/test_config_browser.py::test_reload_applies_the_edited_config_to_open_and_new_sessions
+tests/protocol/test_config_diagnostics.py::test_reload_counts_a_theme_refused_as_it_loads
 tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[bool]
 tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[color]
 tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[config-file]
@@ -473,6 +494,7 @@ tests/protocol/test_live_any_shell.py::test_an_interrupted_live_restart_command_
 tests/protocol/test_live_sessions.py::test_a_respawned_live_parent_publishes_its_respawn_to_a_presenter
 tests/protocol/test_live_sessions.py::test_a_viewer_that_stops_reading_is_dropped
 tests/protocol/test_live_sessions.py::test_a_viewer_without_status_shapes_gets_only_shapes_it_decodes
+tests/protocol/test_live_sessions.py::test_group_attach_validates_before_remote_discovery
 tests/protocol/test_live_sessions.py::test_kill_ends_the_daemon_and_closes_its_pane
 tests/protocol/test_live_sessions.py::test_kill_refuses_a_daemon_that_is_not_running
 tests/protocol/test_live_sessions.py::test_kill_rejects[active]
@@ -514,6 +536,14 @@ tests/protocol/test_live_sessions.py::test_tree_lists_a_page_companion_without_p
 tests/protocol/test_live_sessions.py::test_tree_parent_membership_lists_companions_in_sidebar_order
 tests/protocol/test_live_sessions.py::test_tree_rows_carry_the_session_status
 tests/protocol/test_live_sessions.py::test_tree_without_a_host_lists_no_attachable_session_outside_live
+tests/protocol/test_messages.py::test_aliases_deliver_once
+tests/protocol/test_messages.py::test_broadcast_scope_and_identity
+tests/protocol/test_messages.py::test_mailbox_follows_pane_identity
+tests/protocol/test_messages.py::test_mailbox_lifecycle
+tests/protocol/test_messages.py::test_message_event_has_recipient_location_and_no_body
+tests/protocol/test_messages.py::test_message_limits_and_partial_rejections
+tests/protocol/test_messages.py::test_read_ack_is_atomic_and_bounded
+tests/protocol/test_messages.py::test_send_read_ack
 tests/protocol/test_notify.py::test_a_programs_desktop_notification_raises_the_badge[osc-777]
 tests/protocol/test_notify.py::test_a_programs_desktop_notification_raises_the_badge[osc-9]
 tests/protocol/test_notify.py::test_notify_raises_the_badge_and_emits_the_event
@@ -763,7 +793,22 @@ tests/protocol/test_session.py::test_unknown_session_target[session.reveal-args3
 tests/protocol/test_session.py::test_unknown_session_target[session.seen-args6]
 tests/protocol/test_session.py::test_unknown_session_target[session.select-args1]
 tests/protocol/test_session.py::test_unknown_session_target[session.status-args7]
+tests/protocol/test_session_info.py::test_info_expiry_refresh_and_cancel
 tests/protocol/test_session_info.py::test_info_markup_takes_the_new_names_but_no_hex
+tests/protocol/test_session_info.py::test_info_not_persisted_or_duplicated
+tests/protocol/test_session_info.py::test_info_set_reject_and_clear
+tests/protocol/test_session_info.py::test_info_soft_close_undo
+tests/protocol/test_session_info.py::test_info_tree_changed
+tests/protocol/test_session_info.py::test_info_validation[args0-invalid info mode:  (set|clear)]
+tests/protocol/test_session_info.py::test_info_validation[args1-session.info set requires text]
+tests/protocol/test_session_info.py::test_info_validation[args2-session.info clear takes no text, markdown or hide-after]
+tests/protocol/test_session_info.py::test_info_validation[args3-session.info clear takes no text, markdown or hide-after]
+tests/protocol/test_session_info.py::test_info_validation[args4-session.info: info text is over 512 bytes]
+tests/protocol/test_session_info.py::test_info_validation[args5-session.info: --hide-after must be 0...86400 seconds]
+tests/protocol/test_session_info.py::test_info_validation[args6-session.info: info text is empty]
+tests/protocol/test_session_info.py::test_info_validation[args7-session.info: info text must be one line]
+tests/protocol/test_session_info.py::test_info_validation[args8-session.info: info text contains a control character]
+tests/protocol/test_session_info.py::test_info_validation[args9-session.info: invalid info markdown; quote attribute values: ^[text](color: "green")]
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[right-session has no split pane-session.text]
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[right-session has no split pane-session.type]
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[scratch-session has no scratch terminal-session.text]
@@ -789,6 +834,14 @@ tests/protocol/test_session_text.py::test_type_then_read_the_marker_back
 tests/protocol/test_session_text.py::test_unknown_session_target[session.search-args2]
 tests/protocol/test_session_text.py::test_unknown_session_target[session.text-args1]
 tests/protocol/test_session_text.py::test_unknown_session_target[session.type-args0]
+tests/protocol/test_shell_profiles.py::test_a_default_whose_program_is_gone_shows_why_in_the_pane
+tests/protocol/test_shell_profiles.py::test_a_live_git_bash_pane_reports_its_directory_as_windows_names_it
+tests/protocol/test_shell_profiles.py::test_a_malformed_default_starts_the_configured_shell[relative-executable]
+tests/protocol/test_shell_profiles.py::test_a_malformed_default_starts_the_configured_shell[variable-name-with-equals]
+tests/protocol/test_shell_profiles.py::test_a_pane_keeps_its_profile_through_splits_duplicates_and_relaunches_while_the_default_changes
+tests/protocol/test_shell_profiles.py::test_a_profiles_arguments_reach_its_program_one_by_one
+tests/protocol/test_shell_profiles.py::test_a_session_from_before_any_default_keeps_the_configured_shell
+tests/protocol/test_shell_profiles.py::test_the_default_profile_runs_in_the_first_and_every_new_session
 tests/protocol/test_sidebar.py::test_collapse_is_a_no_op_under_the_flat_flagged_list
 tests/protocol/test_sidebar.py::test_collapse_keeps_the_current_workspace_open_and_expand_opens_all
 tests/protocol/test_sidebar.py::test_density_echoes_the_density_it_set
@@ -1012,7 +1065,15 @@ tests/ui/test_settings.py::test_ignore_reduce_transparency_toggle_persists
 tests/ui/test_settings.py::test_interface_tab_toggles_title_bar_buttons
 tests/ui/test_settings.py::test_key_mapping_tab_reports_a_keymap_error_after_reload
 tests/ui/test_settings.py::test_notifications_tab_reads_the_seeded_toggles
+tests/ui/test_settings.py::test_row_icons_hide_independently
+tests/ui/test_settings.py::test_session_info_display_picker_persists
 tests/ui/test_settings.py::test_sidebar_density_picker_persists
+tests/ui/test_shell_profile_ui.py::test_a_default_whose_shell_is_gone_is_kept_and_flagged
+tests/ui/test_shell_profile_ui.py::test_the_add_session_menu_starts_one_session_with_a_profile_in_its_directory
+tests/ui/test_shell_profile_ui.py::test_the_default_shell_picker_is_absent_without_profiles_outside_windows
+tests/ui/test_shell_profile_ui.py::test_the_default_shell_picker_sets_the_shell_of_new_sessions_only
+tests/ui/test_shell_profile_ui.py::test_under_live_a_profile_live_cannot_run_is_marked_a_fresh_shell
+tests/ui/test_shell_profile_ui.py::test_windows_offers_its_detected_shells_and_runs_command_prompt
 tests/ui/test_sidebar_rows.py::test_add_session_menu_opens_a_session
 tests/ui/test_sidebar_rows.py::test_agent_status_glyph_reads_the_session_status
 tests/ui/test_sidebar_rows.py::test_companion_rows_nest_fold_and_mark_attention
@@ -1023,6 +1084,7 @@ tests/ui/test_sidebar_rows.py::test_idle_ms_starts_with_a_gui_keystroke
 tests/ui/test_sidebar_rows.py::test_notify_badge_counts_a_background_session_notifications
 tests/ui/test_sidebar_rows.py::test_rename_session_edits_the_row_in_place
 tests/ui/test_sidebar_rows.py::test_rows_carry_the_names_the_tree_reads
+tests/ui/test_sidebar_rows.py::test_session_info_renders_visible_text_below_its_row
 tests/ui/test_sidebar_rows.py::test_the_empty_flagged_view_link_opens_the_session_editor
 tests/ui/test_sidebar_rows.py::test_workspace_add_session_opens_a_session_in_its_workspace
 tests/ui/test_terminal_bindings.py::test_adjust_selection_moves_the_selections_end
