@@ -23,6 +23,7 @@
 //!   leaves running;
 //! - [`process_table`]: the process table a pane's foreground is read through, on every OS;
 //! - [`client`]: the client library: the api and a session's attach stream, its contract checked on the client's side;
+//! - [`coverage`]: an instrumented build's coverage profile, written before an exit that skips the exit handlers;
 //! - [`host`]: the `SessionHost` over the client ([`host::ServerHost`]), with upstream `ZmxClient`'s error kinds and
 //!   outcomes;
 //! - [`cli`]: the binary's client commands: `attach`, the attach contract's terminal client and the session's reply
@@ -40,6 +41,7 @@ pub mod attach_tty;
 pub mod build_id;
 pub mod cli;
 pub mod client;
+pub mod coverage;
 pub mod endpoint;
 pub mod host;
 pub mod job;

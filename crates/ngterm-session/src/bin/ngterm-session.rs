@@ -15,6 +15,9 @@ use ngterm_session::cli;
 use ngterm_session::server::{self, handoff};
 
 fn main() -> ExitCode {
+    // an instrumented build's coverage profile, written before a termination signal ends the process (an attach client
+    // on an ssh login's pty ends by the hangup when the viewer goes)
+    ngterm_session::coverage::write_profile_on_termination();
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
         [command, rest @ ..] if command == "server" && is_server_line(rest) => server::command(rest),
