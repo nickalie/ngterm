@@ -41,9 +41,12 @@ internal final class SessionViewTests: XCTestCase {
         FakeApp.expect(add, "the machines")
     }
 
-    // types ⌘⌥ with `key` and waits for the session whose pane's screen shows `text`
+    // on the session whose pane's screen shows `shown`, types ⌘⌥ with `key` and waits for the session whose pane's
+    // screen shows `text`; a tap on the terminal first gives it the keyboard, as a user's does (a session the moves
+    // opened has no terminal with the keyboard yet)
     @MainActor
-    private static func moveSession(_ key: String, to text: String, in app: XCUIApplication) {
+    private static func moveSession(_ key: String, from shown: String, to text: String, in app: XCUIApplication) {
+        screen(showing: shown, in: app).tap()
         app.typeKey(key, modifierFlags: [.command, .option])
         FakeApp.expect(screen(showing: text, in: app), "the session showing \(text) after the move")
     }
@@ -215,15 +218,12 @@ internal final class SessionViewTests: XCTestCase {
         Self.keepScreenshot(of: app, named: "companion nested under its attached parent")
 
         rows[0].tap()
-        let first = Self.screen(showing: "P1 ready", in: app)
-        FakeApp.expect(first, "work's first pane")
-        // a tap gives the terminal the keyboard, as a user's does before a chord
-        first.tap()
+        FakeApp.expect(Self.screen(showing: "P1 ready", in: app), "work's first pane")
         let down = XCUIKeyboardKey.downArrow.rawValue
-        Self.moveSession(down, to: "R1 ready", in: app)
-        Self.moveSession(down, to: "N1 ready", in: app)
-        Self.moveSession(down, to: "P1 ready", in: app)
-        Self.moveSession(XCUIKeyboardKey.upArrow.rawValue, to: "N1 ready", in: app)
+        Self.moveSession(down, from: "P1 ready", to: "R1 ready", in: app)
+        Self.moveSession(down, from: "R1 ready", to: "N1 ready", in: app)
+        Self.moveSession(down, from: "N1 ready", to: "P1 ready", in: app)
+        Self.moveSession(XCUIKeyboardKey.upArrow.rawValue, from: "P1 ready", to: "N1 ready", in: app)
     }
 
     @MainActor
