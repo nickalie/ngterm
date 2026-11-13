@@ -3,6 +3,7 @@
 //! its events; for the tests of the binary, the binary staged as a build and the wait for a process's end.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use ngterm_ghostty_vt::Terminal;
@@ -19,8 +20,23 @@ pub const PATIENCE: Duration = Duration::from_secs(60);
 
 pub const SIZE: GridSize = GridSize { cols: 120, rows: 30 };
 
-/// The `ngterm-session` binary.
-pub const EXE: &str = env!("CARGO_BIN_EXE_ngterm-session");
+/// Names the directory of another build's programs, whose `ngterm-session` the tests run in place of cargo's own
+/// build: scripts/test-mobile-e2e.sh --coverage points it at the instrumented build its e2e coverage is read against.
+pub const BIN_DIR_VARIABLE: &str = "E2E_BIN_DIR";
+
+/// The `ngterm-session` binary: cargo's own build, or the one in [`BIN_DIR_VARIABLE`]'s directory when it is set.
+pub fn exe() -> &'static str {
+    const OWN: &str = env!("CARGO_BIN_EXE_ngterm-session");
+    static EXE: OnceLock<String> = OnceLock::new();
+    let Some(dir) = std::env::var_os(BIN_DIR_VARIABLE).filter(|dir| !dir.is_empty()) else {
+        return OWN;
+    };
+    EXE.get_or_init(|| {
+        let other = Path::new(&dir).join(Path::new(OWN).file_name().unwrap_or_default());
+        assert!(other.is_file(), "{BIN_DIR_VARIABLE}: no {} in it", other.display());
+        other.to_string_lossy().into_owned()
+    })
+}
 
 /// Poll `read` until `done` holds for what it reads; the last read otherwise, in the panic.
 pub fn wait_for<T: std::fmt::Debug>(what: &str, mut read: impl FnMut() -> T, done: impl Fn(&T) -> bool) -> T {
@@ -42,10 +58,12 @@ pub fn wait_for<T: std::fmt::Debug>(what: &str, mut read: impl FnMut() -> T, don
 /// long as the copy takes, to every child another test's thread forks meanwhile, until that child's exec, and starting
 /// the copy before such a child execs fails with ETXTBSY ("Text file busy").
 pub fn stage(root: &Path, id: &str) -> TestResult<PathBuf> {
-    let executable = root.join("bin").join(Path::new(EXE).file_name().ok_or("no file name")?);
+    let executable = root
+        .join("bin")
+        .join(Path::new(exe()).file_name().ok_or("no file name")?);
     std::fs::create_dir_all(executable.parent().ok_or("no parent")?)?;
     let temporary = executable.with_extension("new");
-    copy_executable(Path::new(EXE), &temporary)?;
+    copy_executable(Path::new(exe()), &temporary)?;
     std::fs::rename(&temporary, &executable)?;
     Staged::write_beside(&executable, id)?;
     Ok(executable)

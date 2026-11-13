@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 
 use ngterm_server::endpoint::{self, Connection};
 
+mod support;
+
 struct Fixture {
     root: tempfile::TempDir,
     binary: PathBuf,
@@ -18,13 +20,13 @@ struct Fixture {
 impl Fixture {
     fn new(staged: bool) -> io::Result<Self> {
         let root = tempfile::tempdir()?;
-        let source = Path::new(env!("CARGO_BIN_EXE_ngterm-headless"));
+        let source = support::binary();
         // Windows' live probe wants the bundled PowerShell integration, which only a staged build finds
         let binary = if staged || cfg!(windows) {
             let bin = root.path().join("stage/bin");
             std::fs::create_dir_all(&bin)?;
             let target = bin.join(format!("ngterm-headless{}", std::env::consts::EXE_SUFFIX));
-            ngterm_host::fakes::copy_executable(source, &target)?;
+            ngterm_host::fakes::copy_executable(&source, &target)?;
             let share = root.path().join("stage/share");
             std::fs::create_dir_all(&share)?;
             let resources = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources");
@@ -34,7 +36,7 @@ impl Fixture {
             copy_tree(&resources, &share.join("ngterm"))?;
             target
         } else {
-            source.to_path_buf()
+            source
         };
         for path in [
             "home/.claude",
@@ -434,8 +436,25 @@ fn a_refused_control_socket_saves_on_quit_and_exits_unsuccessfully() {
     assert!(index.is_file());
 }
 
-/// Stops a server only its pid is known of, when the test ends.
+/// Stops a server only its pid is known of, when the test ends: on Unix as the system does, SIGTERM, so it quits and an
+/// instrumented build writes its coverage profile; SIGKILL only if it is still there after [`DETACHED_QUIT`].
 struct DetachedServer(u32);
+
+/// How long a detached server is given to quit on SIGTERM.
+#[cfg(unix)]
+const DETACHED_QUIT: Duration = Duration::from_secs(10);
+
+/// Whether the process `pid` still runs: there, and on Linux not a zombie its new parent has yet to reap.
+#[cfg(unix)]
+fn runs(pid: i32) -> bool {
+    // SAFETY: signal 0 only checks that the process exists.
+    let exists = unsafe { libc::kill(pid, 0) } == 0;
+    let zombie = std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        stat.rsplit_once(')')
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+    });
+    exists && !zombie
+}
 
 impl Drop for DetachedServer {
     fn drop(&mut self) {
@@ -446,7 +465,15 @@ impl Drop for DetachedServer {
         #[cfg(unix)]
         if let Ok(pid) = i32::try_from(self.0) {
             // SAFETY: the signal targets only this test's own server.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+            let deadline = Instant::now() + DETACHED_QUIT;
+            while runs(pid) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            if runs(pid) {
+                // SAFETY: as above.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
         }
     }
 }

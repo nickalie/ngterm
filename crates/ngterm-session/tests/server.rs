@@ -24,7 +24,7 @@ use ngterm_session::protocol::{
 use ngterm_session::server::handoff::IMPORT_FLAG;
 use ngterm_session::server::lifecycle::{Graces, StopReason};
 use ngterm_session::server::{self, EXIT_FAILED, EXIT_USAGE, ServerConfig};
-use support::{EXE, PATIENCE, TestResult};
+use support::{PATIENCE, TestResult, exe};
 
 const BUILD: &str = "server-test";
 
@@ -117,7 +117,7 @@ fn a_connection_that_does_not_start_with_a_hello_is_refused_with_the_welcome() -
     let server = Server::start()?;
     let mut stream = server.connect()?;
     let request = HandoffRequest {
-        import_exe: EXE.to_owned(),
+        import_exe: exe().to_owned(),
         expected_build: "other".to_owned(),
         expected_protocol: PROTOCOL_VERSION,
     };
@@ -167,7 +167,7 @@ fn server_arguments_it_does_not_take_are_a_usage_error() {
 #[test]
 fn a_replacement_without_its_source_fails() -> TestResult {
     let root = tempfile::tempdir()?;
-    let output = Command::new(EXE)
+    let output = Command::new(exe())
         .arg("server")
         .arg(root.path().join("live"))
         .arg(IMPORT_FLAG)

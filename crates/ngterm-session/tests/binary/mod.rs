@@ -18,7 +18,7 @@ use ngterm_session::server::lifecycle::IDLE_GRACE;
 use ngterm_session::server::spawn::{StartOptions, connect_existing};
 use tempfile::TempDir;
 
-use crate::support::{self, EXE, PATIENCE, TestResult, shown};
+use crate::support::{self, PATIENCE, TestResult, exe, shown};
 
 /// The outer terminal's grid.
 pub const ROWS: u16 = 24;
@@ -45,7 +45,7 @@ impl Namespace {
         Ok(Self {
             _root: Some(root),
             directory,
-            executable: PathBuf::from(EXE),
+            executable: PathBuf::from(exe()),
             server: true,
         })
     }
@@ -55,7 +55,7 @@ impl Namespace {
         Self {
             _root: None,
             directory: directory.to_owned(),
-            executable: PathBuf::from(EXE),
+            executable: PathBuf::from(exe()),
             server: false,
         }
     }

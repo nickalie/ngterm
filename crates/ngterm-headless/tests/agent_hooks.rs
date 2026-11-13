@@ -8,8 +8,10 @@ use std::process::Command;
 
 use ngterm_core::state_lock::StateDirectoryLock;
 
+mod support;
+
 fn installer(home: &Path, state: &Path) -> Command {
-    let mut command = headless(Path::new(env!("CARGO_BIN_EXE_ngterm-headless")), home, state);
+    let mut command = headless(&support::binary(), home, state);
     command.arg("--install-agent-hooks");
     command
 }
@@ -116,13 +118,13 @@ fn assert_skill_and_hooks_reported(stdout: &[u8], home: &Path) {
 fn stage(root: &Path) -> io::Result<PathBuf> {
     let bin = root.join("bin");
     fs::create_dir_all(&bin)?;
-    let source = Path::new(env!("CARGO_BIN_EXE_ngterm-headless"));
+    let source = support::binary();
     let name = source
         .file_name()
         .ok_or_else(|| io::Error::other("the binary has no name"))?;
     let binary = bin.join(name);
-    if fs::hard_link(source, &binary).is_err() {
-        ngterm_host::fakes::copy_executable(source, &binary)?;
+    if fs::hard_link(&source, &binary).is_err() {
+        ngterm_host::fakes::copy_executable(&source, &binary)?;
     }
     let resources = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources");
     for relative in ["agent-status", "skills/ngterm"] {

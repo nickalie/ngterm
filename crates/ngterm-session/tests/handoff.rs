@@ -34,7 +34,7 @@ use ngterm_session::server::handoff::Support;
 use ngterm_session::server::lifecycle::Graces;
 use ngterm_session::server::spawn::{Connected, HandoffAttempt, StartOptions, connect_existing, connect_or_start};
 use ngterm_session::server::{self, BUILD_ID, ServerConfig};
-use support::{EXE, PATIENCE, SIZE, TestResult, shell, spec, stage};
+use support::{PATIENCE, SIZE, TestResult, exe, shell, spec, stage};
 
 /// A server's sessions: each one's name and its program's pid.
 type Sessions = Vec<(String, Option<i32>)>;
@@ -80,7 +80,7 @@ impl Namespace {
             name: name.to_owned(),
             all: true,
         };
-        match self.api(&StartOptions::new(EXE), request)? {
+        match self.api(&StartOptions::new(exe()), request)? {
             (ApiResponse::Screen(screen), _) => Ok(screen.text),
             (other, _) => Err(format!("a screen read answered {other:?}").into()),
         }
@@ -103,7 +103,7 @@ impl Namespace {
 
     /// The serving server's sessions and pid.
     fn sessions(&self) -> TestResult<(Sessions, u32)> {
-        match self.api(&StartOptions::new(EXE), ApiRequest::List)? {
+        match self.api(&StartOptions::new(exe()), ApiRequest::List)? {
             (ApiResponse::Sessions(sessions), pid) => Ok((
                 sessions
                     .into_iter()
@@ -120,7 +120,7 @@ impl Namespace {
             name: name.to_owned(),
             data: text.as_bytes().to_vec(),
         };
-        self.api(&StartOptions::new(EXE), request)?;
+        self.api(&StartOptions::new(exe()), request)?;
         Ok(())
     }
 
@@ -130,7 +130,7 @@ impl Namespace {
             name: name.to_owned(),
             data: format!("{line}{enter}").into_bytes(),
         };
-        self.api(&StartOptions::new(EXE), request)?;
+        self.api(&StartOptions::new(exe()), request)?;
         Ok(())
     }
 
@@ -172,7 +172,7 @@ impl Drop for Namespace {
             return;
         };
         let names = sessions.into_iter().map(|(name, _)| name).collect();
-        let _ = self.api(&StartOptions::new(EXE), ApiRequest::Kill { names, force: true });
+        let _ = self.api(&StartOptions::new(exe()), ApiRequest::Kill { names, force: true });
         if pid == std::process::id() {
             return;
         }
@@ -340,7 +340,7 @@ const PRINTED: &str = "printed-mark";
 #[test]
 fn a_handoff_keeps_the_shell_its_screen_and_its_scrollback() -> TestResult {
     let namespace = Namespace::new()?;
-    let options = StartOptions::new(EXE);
+    let options = StartOptions::new(exe());
     let mut before = Client::attach(&namespace, &options, "kept", Some(shell()))?;
     namespace.type_line("kept", &set_variable("MARK", "kept-state"))?;
     namespace.type_line("kept", &numbered(80))?;
@@ -352,7 +352,7 @@ fn a_handoff_keeps_the_shell_its_screen_and_its_scrollback() -> TestResult {
     let (sessions, old) = namespace.sessions()?;
     assert_eq!(sessions.len(), 1, "{sessions:?}");
 
-    assert_eq!(namespace.hand_over(Path::new(EXE), BUILD_ID)?, Ok(()));
+    assert_eq!(namespace.hand_over(Path::new(exe()), BUILD_ID)?, Ok(()));
 
     // the client attached before is disconnected, and reattaches to the new server
     before.closed()?;
@@ -384,13 +384,13 @@ fn a_handoff_keeps_the_shell_its_screen_and_its_scrollback() -> TestResult {
 #[test]
 fn a_failed_handoff_leaves_the_old_server_serving() -> TestResult {
     let namespace = Namespace::new()?;
-    let options = StartOptions::new(EXE);
+    let options = StartOptions::new(exe());
     let created = Client::attach(&namespace, &options, "stays", Some(shell()))?;
     namespace.type_line("stays", &set_variable("MARK", "still-here"))?;
     let (sessions, old) = namespace.sessions()?;
 
     let refused = namespace
-        .hand_over(Path::new(EXE), "a build no replacement is")?
+        .hand_over(Path::new(exe()), "a build no replacement is")?
         .unwrap_err();
     assert_eq!(refused.code, ErrorCode::HandoffFailed);
     assert!(refused.message.contains("expected build"), "{}", refused.message);
@@ -414,11 +414,11 @@ fn a_failed_handoff_leaves_the_old_server_serving() -> TestResult {
 #[test]
 fn a_failed_handoff_is_not_asked_again_and_the_clients_stay_attached() -> TestResult {
     let namespace = Namespace::new()?;
-    let plain = StartOptions::new(EXE);
+    let plain = StartOptions::new(exe());
     let mut before = Client::attach(&namespace, &plain, "once", Some(shell()))?;
     let unreachable = StartOptions {
         build: Some("a build no replacement is".to_owned()),
-        ..StartOptions::new(EXE)
+        ..StartOptions::new(exe())
     };
     let first = connect_or_start(&namespace.endpoint, &hello(Role::Api), &unreachable)?;
     let Some(HandoffAttempt::Failed { from, reason }) = first.handoff.clone() else {
@@ -449,18 +449,18 @@ fn a_failed_handoff_is_not_asked_again_and_the_clients_stay_attached() -> TestRe
 fn a_server_answers_a_failed_handoff_asked_again_and_keeps_its_clients_attached() -> TestResult {
     const UNREACHABLE: &str = "a build no replacement is";
     let namespace = Namespace::new()?;
-    let options = StartOptions::new(EXE);
+    let options = StartOptions::new(exe());
     let mut before = Client::attach(&namespace, &options, "asked", Some(shell()))?;
-    let first = namespace.hand_over(Path::new(EXE), UNREACHABLE)?.unwrap_err();
+    let first = namespace.hand_over(Path::new(exe()), UNREACHABLE)?.unwrap_err();
     assert_eq!(first.code, ErrorCode::HandoffFailed);
     before.closed()?;
     let mut after = Client::attach(&namespace, &options, "asked", None)?;
 
-    assert_eq!(namespace.hand_over(Path::new(EXE), UNREACHABLE)?, Err(first));
+    assert_eq!(namespace.hand_over(Path::new(exe()), UNREACHABLE)?, Err(first));
     namespace.type_line("asked", &support::tagged("still-attached"))?;
     after.expect("got:still-attached")?;
 
-    let other = namespace.hand_over_at(Path::new(EXE), UNREACHABLE, PROTOCOL_VERSION + 1)?;
+    let other = namespace.hand_over_at(Path::new(exe()), UNREACHABLE, PROTOCOL_VERSION + 1)?;
     assert!(other.is_err(), "no replacement is of that build either");
     after.closed()?;
     Ok(())
@@ -493,7 +493,7 @@ fn a_client_of_another_build_hands_the_server_over_and_the_staged_binary_can_be_
     assert_ne!(connected.welcome.pid, old);
     drop(connected);
     assert_eq!(namespace.sessions()?.0, sessions);
-    let mut client = Client::attach(&namespace, &StartOptions::new(EXE), "carried", None)?;
+    let mut client = Client::attach(&namespace, &StartOptions::new(exe()), "carried", None)?;
     namespace.type_line("carried", &print_variable("MARK"))?;
     client.expect("got:carried-over")?;
 
@@ -517,7 +517,7 @@ fn an_update_hands_a_running_server_of_another_build_over_and_starts_none() -> T
     // the server's own build: nothing either
     assert_eq!(update.update(&StartOptions::new(&first))?, None);
     // an unstaged executable expects no build: no handoff asked
-    let mut unstaged = StartOptions::new(EXE);
+    let mut unstaged = StartOptions::new(exe());
     unstaged.build = None;
     assert_eq!(update.update(&unstaged)?, None);
     // the app launching a new build hands the sessions over to it
@@ -539,7 +539,7 @@ fn an_update_hands_a_running_server_of_another_build_over_and_starts_none() -> T
 fn continuous_output_across_a_handoff_loses_no_byte() -> TestResult {
     const COUNT: u32 = 300;
     let namespace = Namespace::new()?;
-    let options = StartOptions::new(EXE);
+    let options = StartOptions::new(exe());
     let program = if cfg!(windows) {
         spec(&[
             "powershell.exe",
@@ -560,7 +560,7 @@ fn continuous_output_across_a_handoff_loses_no_byte() -> TestResult {
     };
     let _created = Client::attach(&namespace, &options, "stream", Some(program))?;
     namespace.wait_screen("stream", "n20\n")?;
-    assert_eq!(namespace.hand_over(Path::new(EXE), BUILD_ID)?, Ok(()));
+    assert_eq!(namespace.hand_over(Path::new(exe()), BUILD_ID)?, Ok(()));
     let screen = namespace.wait_screen("stream", "done")?;
     let numbers: Vec<u32> = screen
         .lines()
@@ -590,7 +590,7 @@ fn a_server_that_does_not_hand_over_refuses_and_keeps_serving() -> TestResult {
         assert!(Instant::now() < deadline, "the test's server never listened");
         thread::sleep(Duration::from_millis(20));
     }
-    let options = StartOptions::new(EXE);
+    let options = StartOptions::new(exe());
     let _created = Client::attach(&namespace, &options, "refuser", Some(shell()))?;
     let connected = connect_existing(&namespace.endpoint, &hello(Role::Control), PATIENCE)?.ok_or("no server")?;
     assert!(
@@ -603,7 +603,7 @@ fn a_server_that_does_not_hand_over_refuses_and_keeps_serving() -> TestResult {
         connected.welcome.capabilities
     );
     drop(connected);
-    let refused = namespace.hand_over(Path::new(EXE), BUILD_ID)?.unwrap_err();
+    let refused = namespace.hand_over(Path::new(exe()), BUILD_ID)?.unwrap_err();
     assert_eq!(refused.code, ErrorCode::HandoffFailed);
     assert!(refused.message.contains("does not hand over"), "{}", refused.message);
     let mut client = Client::attach(&namespace, &options, "refuser", None)?;
@@ -618,7 +618,7 @@ fn a_server_that_does_not_hand_over_refuses_and_keeps_serving() -> TestResult {
 #[test]
 fn this_hosts_server_advertises_its_handoff() -> TestResult {
     let namespace = Namespace::new()?;
-    let connected = connect_or_start(&namespace.endpoint, &hello(Role::Control), &StartOptions::new(EXE))?;
+    let connected = connect_or_start(&namespace.endpoint, &hello(Role::Control), &StartOptions::new(exe()))?;
     let advertised = connected
         .welcome
         .capabilities
