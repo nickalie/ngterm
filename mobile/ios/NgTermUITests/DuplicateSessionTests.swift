@@ -15,6 +15,9 @@ internal final class DuplicateSessionTests: XCTestCase {
     private static let longPress: TimeInterval = 1
     // where a tap closes the menu that is up: low on the dimmed screen, away from the menu and the home indicator
     private static let offMenu = CGVector(dx: 0.5, dy: 0.9)
+    // how long windows take to open or close, and the most session windows a test opens
+    private static let windowWait: TimeInterval = 10
+    private static let maxWindows = 3
 
     @MainActor
     private static func any(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
@@ -46,7 +49,7 @@ internal final class DuplicateSessionTests: XCTestCase {
 
     // the session view's title naming `name`
     @MainActor
-    private static func title(naming name: String, in app: XCUIApplication) -> XCUIElement {
+    private static func title(naming name: String, in app: XCUIElement) -> XCUIElement {
         app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier == 'session-title' AND label CONTAINS %@", name))
             .firstMatch
@@ -54,7 +57,7 @@ internal final class DuplicateSessionTests: XCTestCase {
 
     // the terminal whose screen shows `text`: only while no cover hides the pane
     @MainActor
-    private static func screen(showing text: String, in app: XCUIApplication) -> XCUIElement {
+    private static func screen(showing text: String, in app: XCUIElement) -> XCUIElement {
         app.textViews.matching(NSPredicate(format: "value CONTAINS %@", text)).firstMatch
     }
 
@@ -141,34 +144,93 @@ internal final class DuplicateSessionTests: XCTestCase {
         XCTAssertFalse(Self.title(naming: "Duplicating", in: app).exists, "the copy's title still says Duplicating")
     }
 
-    // an iPad's session window: the copy opens in a window of its own, and the source's window stays, which shows again
-    // once the copy's window closes (Detach)
+    // an iPad's session window: the copy opens in a window of its own, in front (the app's first window), and the
+    // source's window stays behind it, showing the source; the test closes the windows it opened (Detach), or the
+    // system would bring them back on the next launch
     @MainActor
     internal func testInASessionWindowTheCopyOpensInAWindowOfItsOwn() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "only an iPad opens session windows")
         let app = openMachine()
+        addTeardownBlock { @MainActor in
+            Self.closeSessionWindows(in: app)
+        }
         Self.any("session-work", in: app).tap()
         FakeApp.expect(Self.title(naming: "work", in: app), "work's session view")
         app.buttons["session-menu"].tap()
         let newWindow = app.buttons["session-new-window"]
         FakeApp.expect(newWindow, "Open in New Window in the session's More")
         newWindow.tap()
-        // work's own window: no machines beside it
-        FakeApp.expect(Self.title(naming: "work", in: app), "work's window")
-        XCTAssertTrue(app.buttons["add-machine"].waitForNonExistence(timeout: 10), "work's window shows the machines")
-        attach(app, "work's window")
+        Self.expectWindows(2, in: app)
+        let front = app.windows.element(boundBy: 0)
+        FakeApp.expect(Self.title(naming: "work", in: front), "work's window in front")
+        XCTAssertFalse(front.buttons["add-machine"].exists, "work's window shows the machines")
 
-        duplicateFromMenu(in: app)
-        Self.expectCopyInControl(in: app)
-        XCTAssertFalse(app.buttons["add-machine"].exists, "the copy opened beside the machines")
-        attach(app, "the copy's window")
+        front.buttons["session-menu"].tap()
+        let duplicate = app.buttons["session-duplicate"]
+        FakeApp.expect(duplicate, "Duplicate session in work's window's More")
+        duplicate.tap()
+        Self.expectWindows(3, in: app)
+        let copy = app.windows.element(boundBy: 0)
+        FakeApp.expect(Self.title(naming: "session 1", in: copy), "the copy's window in front")
+        FakeApp.expect(Self.screen(showing: "P1 ready", in: copy), "the copy's pane in control")
+        XCTAssertFalse(copy.buttons["Take control"].exists, "the copy offered Take control")
+        XCTAssertFalse(copy.buttons["add-machine"].exists, "the copy opened beside the machines")
+        let behind = app.windows.allElementsBoundByIndex.dropFirst()
+        XCTAssertTrue(
+            behind.contains { Self.title(naming: "work", in: $0).exists },
+            "work's window went: \(app.debugDescription)"
+        )
+    }
 
-        app.buttons["session-menu"].tap()
-        let detach = app.buttons["session-detach"]
-        FakeApp.expect(detach, "Detach in the copy's More")
-        detach.tap()
-        attach(app, "after the copy's Detach")
-        FakeApp.expect(Self.title(naming: "work", in: app), "work's window, once the copy's closed")
+    // waits until the app has `count` windows
+    @MainActor
+    private static func expectWindows(_ count: Int, in app: XCUIApplication) {
+        let windows = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "count == %d", count),
+            object: app.windows
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [windows], timeout: windowWait), .completed, "not \(count) windows")
+    }
+
+    // closes the session windows: Detach in the More of a session window in front, or, with the app's own window in
+    // front, Detach in the context menu of a row whose session a window shows
+    @MainActor
+    private static func closeSessionWindows(in app: XCUIApplication) {
+        for _ in 0..<maxWindows {
+            let count = app.windows.count
+            guard count > 1 else {
+                return
+            }
+            let front = app.windows.element(boundBy: 0)
+            if front.buttons["add-machine"].exists {
+                guard detachARow(of: ["session 1", "work"], in: app) else {
+                    return
+                }
+            } else {
+                front.buttons["session-menu"].tap()
+                let detach = app.buttons["session-detach"]
+                guard detach.waitForExistence(timeout: windowWait) else {
+                    return
+                }
+                detach.tap()
+            }
+            expectWindows(count - 1, in: app)
+        }
+    }
+
+    // detaches the first of the sessions `names` whose row's context menu offers Detach; false when none does
+    @MainActor
+    private static func detachARow(of names: [String], in app: XCUIApplication) -> Bool {
+        for name in names where any("session-\(name)", in: app).exists {
+            any("session-\(name)", in: app).press(forDuration: longPress)
+            let detach = app.buttons["Detach"]
+            if detach.waitForExistence(timeout: windowWait) {
+                detach.tap()
+                return true
+            }
+            closeMenu(in: app)
+        }
+        return false
     }
 
     // an agterm Mac's session: its row's context menu offers Duplicate session, and the copy opens, saying agterm
@@ -187,19 +249,6 @@ internal final class DuplicateSessionTests: XCTestCase {
             .matching(NSPredicate(format: "label CONTAINS 'agterm'"))
             .firstMatch
         FakeApp.expect(copy, "the copy's session view with its agterm badge")
-    }
-
-    // keeps the screen and its element tree in the result, named `what`
-    @MainActor
-    private func attach(_ app: XCUIApplication, _ what: String) {
-        XCTContext.runActivity(named: what) { activity in
-            let shot = XCTAttachment(screenshot: app.screenshot())
-            shot.lifetime = .keepAlways
-            activity.add(shot)
-            let tree = XCTAttachment(string: app.debugDescription)
-            tree.lifetime = .keepAlways
-            activity.add(tree)
-        }
     }
 
     deinit {
