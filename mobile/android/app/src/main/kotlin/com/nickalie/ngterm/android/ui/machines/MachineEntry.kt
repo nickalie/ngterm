@@ -27,6 +27,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.Link
+import com.nickalie.ngterm.android.data.badge
 import com.nickalie.ngterm.android.ui.components.AgentStatusBadge
 import com.nickalie.ngterm.android.ui.components.MachineCard
 import com.nickalie.ngterm.android.ui.components.StatusBadge
@@ -55,6 +56,7 @@ internal fun MachineEntry(
         onClick = { actions.onOpen(id) },
         modifier = modifier,
         connectionLabel = connectionLabel(link, now),
+        peer = item.peer?.takeIf { it.foreign }?.badge,
         menu = { MachineMenu(item.machine.title, link, id, actions) },
     ) {
         Summary(item, actions)

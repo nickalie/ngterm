@@ -20,6 +20,7 @@ import com.nickalie.ngterm.core.fake.FakePane
 import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.PaneRef
+import com.nickalie.ngterm.core.ffi.PeerKind
 import com.nickalie.ngterm.core.ffi.RemoteLayout
 import com.nickalie.ngterm.core.ffi.StreamState
 import org.junit.After
@@ -59,10 +60,12 @@ abstract class SessionViewFixture {
     protected fun described(text: String) =
         compose.onAllNodes(hasContentDescription(text)).fetchSemanticsNodes().isNotEmpty()
 
-    // the app with docs-site (s1) on build-01 opened from the machine's list, its stream live with panes P1 and P2
+    // the app with docs-site (s1) on build-01 (running [peer]; null: ngterm) opened from the machine's list, its stream
+    // live with panes P1 and P2
     protected fun openSession(
         withLayout: Boolean = true,
         restoration: StateRestorationTester? = null,
+        peer: PeerKind? = null,
     ) {
         val key = test.seedKey()
         test.seedMachine(testMachine(keyId = key.id))
@@ -71,7 +74,7 @@ abstract class SessionViewFixture {
         }
         if (restoration == null) compose.setContent(content) else restoration.setContent(content)
         waitFor { test.connections.trees.value["m1"] != null }
-        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "docs-site"))
+        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "docs-site", peer = peer))
         test.core.paneFactory =
             { _, _, pane, _ -> SelectingPane(List(4) { "$pane line $it" }).also { panes[pane] = it } }
         compose.onNodeWithText("build-01").performClick()

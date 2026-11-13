@@ -63,6 +63,7 @@ internal fun SessionEntry(
                 canDuplicate = line.canDuplicate,
                 onDuplicate = { actions.onDuplicate(session.id) },
                 chatView = line.chatView,
+                noChatOn = line.noChatOn,
                 onChatView = { on -> actions.onChatView(session.id, on) },
                 onEnd = onAskEnd,
             )
@@ -114,6 +115,7 @@ private fun SessionMenu(
     canDuplicate: Boolean,
     onDuplicate: () -> Unit,
     chatView: Boolean,
+    noChatOn: String?,
     onChatView: (Boolean) -> Unit,
     onEnd: () -> Unit,
     modifier: Modifier = Modifier,
@@ -145,7 +147,7 @@ private fun SessionMenu(
                 open = false
                 onDuplicate()
             }
-            ChatViewItem(chatView) { on ->
+            ChatViewItem(chatView, noChatOn) { on ->
                 open = false
                 onChatView(on)
             }

@@ -1,6 +1,8 @@
 package com.nickalie.ngterm.android.ui.sessions
 
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
@@ -22,10 +24,12 @@ import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import com.nickalie.ngterm.core.fake.AGTERM_NOTE
 import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
+import com.nickalie.ngterm.core.ffi.PeerKind
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -182,6 +186,36 @@ class SessionsRouteTest {
         gone("Attached")
         assertEquals(null, test.connections.attached.value["m1"])
         assertEquals(listOf("s1"), test.core.sessions["m1"]?.map { it.id })
+    }
+
+    @Test
+    fun anAgtermMachineSaysSoAndItsSessionsOfferNoChatView() {
+        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", "build", peer = PeerKind.AGTERM))
+        connect()
+        route()
+        compose.awaitText("build")
+        menu()
+        compose.onNodeWithText("Chat view").assertIsOff().assertIsNotEnabled()
+        compose.onNodeWithText("agterm has no chat view").assertExists()
+        // what agterm has still works: Attach goes through as for ngterm
+        compose.onNodeWithText("Attach").performClick()
+        compose.waitUntil(ROUTE_WAIT_MS) { opened.isNotEmpty() }
+        assertEquals(listOf(SessionKey("m1", "s1")), opened)
+        // the badge reads as the app and what it lacks; a tap shows the note
+        compose.onNodeWithContentDescription("agterm. $AGTERM_NOTE").assertHasClickAction().performClick()
+        compose.awaitText(AGTERM_NOTE)
+    }
+
+    @Test
+    fun anNgtermMachineShowsNoAppBadge() {
+        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", "build", peer = PeerKind.NGTERM))
+        connect()
+        route()
+        compose.awaitText("build")
+        compose.onNodeWithText("agterm").assertDoesNotExist()
+        menu()
+        compose.onNodeWithText("Chat view").assertIsOn().assertIsEnabled()
+        compose.onNodeWithText("agterm has no chat view").assertDoesNotExist()
     }
 
     @Test

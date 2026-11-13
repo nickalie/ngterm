@@ -17,6 +17,7 @@ import com.nickalie.ngterm.core.ffi.ChatState
 import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
+import com.nickalie.ngterm.core.ffi.PeerKind
 import com.nickalie.ngterm.core.ffi.RemoteLayout
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -113,6 +114,32 @@ class ChatModeTest {
                 .none { it.method == "takeLead" || it.method == "hidePane" },
         )
         assertTrue(bed.ref("p1") in bed.test.panes.shown.value)
+    }
+
+    @Test
+    fun aPaneOnAnAgtermMachineKeepsItsTerminalAndOpensNoChat() {
+        bed.attach("p1", peer = PeerKind.AGTERM)
+        val model = model()
+        model.open(bed.key)
+        bed.show("p1")
+        bed.agent("p1")
+        eventually {
+            bed.test.live.sessions.value[bed.key]
+                ?.agents
+                ?.isNotEmpty() == true
+        }
+        eventually {
+            model.state.value.sessions
+                .singleOrNull()
+                ?.noChatOn == "agterm"
+        }
+        assertNull(bed.view("p1"))
+        assertTrue(openChats().isEmpty())
+        assertTrue((model.state.value.open as OpenSession.Live).views.isEmpty())
+        assertTrue(
+            bed.test.core.calls
+                .none { it.method == "openChat" },
+        )
     }
 
     @Test

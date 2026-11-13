@@ -3,7 +3,9 @@ package com.nickalie.ngterm.android.ui.sessions
 import com.nickalie.ngterm.android.data.ChatViews
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.SessionKey
+import com.nickalie.ngterm.android.data.badge
 import com.nickalie.ngterm.android.data.families
+import com.nickalie.ngterm.android.data.offersChat
 import com.nickalie.ngterm.core.ffi.RemoteSession
 
 /** Where the far side's setup is explained: the README's section on running ngterm on a server. */
@@ -23,8 +25,9 @@ fun isMissingCli(reason: String): Boolean {
 
 /**
  * A session as the list shows it: the session, its parent's name when it is a companion, what is under way, whether
- * its panes running an agent show as a chat ([chatView]: its own choice, else Settings'), and whether Duplicate takes
- * a tap ([canDuplicate]: not while a create is under way).
+ * its panes running an agent show as a chat ([chatView]: its own choice, else Settings'), whether Duplicate takes
+ * a tap ([canDuplicate]: not while a create is under way), and the app without a chat view its machine runs
+ * ([noChatOn], its badge word; `null` when the machine has one).
  */
 data class SessionLine(
     val session: RemoteSession,
@@ -34,6 +37,7 @@ data class SessionLine(
     val chatView: Boolean = ChatViews().default,
     val duplicating: Boolean = false,
     val canDuplicate: Boolean = true,
+    val noChatOn: String? = null,
 )
 
 /** What the body of a machine's sessions screen is, by its link and its listing. */
@@ -128,6 +132,7 @@ private fun MachineSessions.lines(listed: List<RemoteSession>): SessionsBody.Ses
             chatView = chatViews.on(SessionKey(machine.id, session.id)),
             duplicating = session.id == duplicating,
             canDuplicate = !creating,
+            noChatOn = peer?.takeUnless { it.offersChat }?.badge,
         )
     }
     val families = families(listed).map { family -> family.map(line) }

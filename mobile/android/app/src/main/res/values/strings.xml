@@ -260,6 +260,10 @@
   <string name="session_show_chat">Show chat</string>
   <string name="session_show_terminal">Show terminal</string>
   <string name="session_chat_view">Chat view</string>
+  <string name="session_chat_view_unavailable">%1$s has no chat view</string>
+  <!-- a machine's app badge as TalkBack reads it: the app's name, then what it lacks -->
+  <string name="peer_badge_description">%1$s. %2$s</string>
+  <string name="peer_badge_explain">Show what it lacks</string>
   <string name="session_follower_title">Another device is driving this pane</string>
   <string name="session_follower_body">Its size and keys are the other device\'s. Take control to type here; the other device follows.</string>
   <string name="session_take_control">Take control</string>

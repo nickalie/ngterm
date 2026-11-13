@@ -31,6 +31,7 @@ import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
+import com.nickalie.ngterm.core.ffi.PeerKind
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -264,6 +265,19 @@ class MachinesRouteTest {
         compose.onNodeWithText("build").performClick()
         compose.waitUntil(ROUTE_WAIT_MS) { opened != null }
         assertEquals(SessionKey("m1", "s1"), opened)
+    }
+
+    @Test
+    fun anAgtermMachinesCardSaysSoWhileItsConnectionLasts() {
+        seed()
+        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "build", peer = PeerKind.AGTERM))
+        route()
+        compose.awaitDescription("Connected")
+        compose.awaitText("agterm")
+        compose.onNodeWithContentDescription("More options for build-01").performClick()
+        compose.onNodeWithText("Disconnect").performClick()
+        compose.awaitDescription("Offline")
+        compose.onNodeWithText("agterm").assertDoesNotExist()
     }
 
     @Test

@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.Link
+import com.nickalie.ngterm.android.data.badge
 import com.nickalie.ngterm.android.ui.NavLayout
 import com.nickalie.ngterm.android.ui.components.Banner
 import com.nickalie.ngterm.android.ui.components.ConfirmDialog
@@ -52,6 +53,7 @@ import com.nickalie.ngterm.android.ui.components.EmptyState
 import com.nickalie.ngterm.android.ui.components.ErrorState
 import com.nickalie.ngterm.android.ui.components.OfflineState
 import com.nickalie.ngterm.android.ui.components.PanelAction
+import com.nickalie.ngterm.android.ui.components.PeerBadge
 import com.nickalie.ngterm.android.ui.components.SectionAction
 import com.nickalie.ngterm.android.ui.components.SectionHeader
 import com.nickalie.ngterm.android.ui.currentNavLayout
@@ -61,7 +63,8 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.StatusTone
 
 /**
- * A machine's sessions: a top row with Back, the machine's name and address, and New session; then the sessions this
+ * A machine's sessions: a top row with Back, the machine's name (with its app's [PeerBadge] when that isn't ngterm)
+ * and address, and New session; then the sessions this
  * app has attached and the others the machine runs, companions under their parents, with pull to refresh. Instead of
  * the list it shows what the machine's link or listing calls for ([SessionsBody]), always with the one action that
  * moves on: Connect, Retry, Review, New session, or the README when the machine has no `ngtermctl`. [now] is the clock
@@ -142,6 +145,7 @@ private fun TopRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        state.peer?.takeIf { it.foreign }?.let { PeerBadge(it.badge, note = it.note) }
         if (newSession) {
             NewSessionButton(starting, !starting && !state.creating, actions.onNewSession, actions.onNewNamedSession)
         }

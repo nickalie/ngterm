@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.data.AppKey
 import com.nickalie.ngterm.android.data.Link
+import com.nickalie.ngterm.android.data.MachinePeer
 import com.nickalie.ngterm.android.data.StoredMachine
 import com.nickalie.ngterm.core.ffi.RemoteSession
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -21,11 +22,15 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-/** A machine on the Machines home: the machine, its link, and its sessions when it has listed them. */
+/**
+ * A machine on the Machines home: the machine, its link, its sessions when it has listed them, and the app it runs
+ * when a listing said ([peer]; `null`: ngterm, or not said).
+ */
 data class MachineItem(
     val machine: StoredMachine,
     val link: Link,
     val sessions: List<RemoteSession>?,
+    val peer: MachinePeer? = null,
 )
 
 /** What the Machines home shows. */
@@ -72,10 +77,11 @@ class MachinesViewModel(
                     graph.machines.machines,
                     graph.connections.links,
                     graph.connections.trees,
+                    graph.connections.peers,
                     graph.online,
-                ) { machines, links, trees, online ->
+                ) { machines, links, trees, peers, online ->
                     val items =
-                        machines.map { MachineItem(it, links[it.id] ?: Link.Offline, trees[it.id]) }
+                        machines.map { MachineItem(it, links[it.id] ?: Link.Offline, trees[it.id], peers[it.id]) }
                     MachinesUiState.Ready(items, offline = !online) as MachinesUiState
                 }.catch { emit(MachinesUiState.Failed(it.message ?: it.javaClass.simpleName)) }
             }.stateIn(viewModelScope, SharingStarted.Eagerly, MachinesUiState.Loading)

@@ -8,12 +8,16 @@ import android.view.inputmethod.InputConnection
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -28,6 +32,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.data.key
 import com.nickalie.ngterm.android.data.part
 import com.nickalie.ngterm.android.ui.NavLayout
+import com.nickalie.ngterm.core.fake.AGTERM_NOTE
 import com.nickalie.ngterm.core.fake.FakeInput
 import com.nickalie.ngterm.core.ffi.ChatBody
 import com.nickalie.ngterm.core.ffi.ChatEvent
@@ -36,6 +41,7 @@ import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneEnd
 import com.nickalie.ngterm.core.ffi.PaneKeyAction
 import com.nickalie.ngterm.core.ffi.PaneRole
+import com.nickalie.ngterm.core.ffi.PeerKind
 import com.nickalie.ngterm.core.ffi.RemoteLayout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -78,6 +84,26 @@ class SessionViewTest : SessionViewFixture() {
         layout.value = NavLayout.Bar
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
+    }
+
+    @Test
+    fun anAgtermSessionsBarSaysSoAndItsMoreMenuOffersNoChatView() {
+        openSession(peer = PeerKind.AGTERM)
+        compose.onAllNodesWithContentDescription("agterm. $AGTERM_NOTE")[0].assertHasClickAction()
+        compose.onAllNodesWithContentDescription("More options for docs-site").onFirst().performClick()
+        compose.onNodeWithText("Chat view").assertIsOff().assertIsNotEnabled()
+        compose.onNodeWithText("agterm has no chat view").assertExists()
+    }
+
+    @Test
+    fun anNgtermSessionsBarHasNoAppBadge() {
+        openSession()
+        assertTrue(
+            compose
+                .onAllNodesWithContentDescription("agterm", substring = true)
+                .fetchSemanticsNodes()
+                .isEmpty(),
+        )
     }
 
     @Test

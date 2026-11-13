@@ -4,8 +4,10 @@ import com.nickalie.ngterm.android.data.ChatViews
 import com.nickalie.ngterm.android.data.Connections
 import com.nickalie.ngterm.android.data.LiveSession
 import com.nickalie.ngterm.android.data.LiveSessions
+import com.nickalie.ngterm.android.data.MachinePeer
 import com.nickalie.ngterm.android.data.SessionChatViews
 import com.nickalie.ngterm.android.data.SessionKey
+import com.nickalie.ngterm.android.data.offersChat
 import com.nickalie.ngterm.android.data.session
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
 import com.nickalie.ngterm.android.ui.theme.AgentState
@@ -38,7 +40,8 @@ enum class PaneView { Terminal, Chat }
  * set its own through [setChatView], kept in [sessionViews]), unless its terminal was picked: by hand ([pick]), or
  * because its chat ended or the origin couldn't open it (a link that is down only defers the open until it is back).
  * A terminal so picked holds until the pane's next conversation (or the agent leaves); picking the chat again lifts
- * it. With its session's chat view off every pane shows its terminal.
+ * it. With its session's chat view off every pane shows its terminal, as on a machine whose app has no chat view
+ * (agterm: [Connections.peers]).
  *
  * [views] has every pane with an agent whose session's chat view is on. A pane in chat view that is shown ([shown])
  * has its chat open in [chats], one [ChatViewModel] each, so the core's chat channels stay as few as the panes on
@@ -91,7 +94,7 @@ class PaneChats(
         }
         scope.launch { sessions.collect(::keepHolds) }
         scope.launch {
-            combine(sessions, holds, chatViewState, ::views).collect { viewState.value = it }
+            combine(sessions, holds, chatViewState, connections.peers, ::views).collect { viewState.value = it }
         }
         scope.launch {
             combine(viewState, shown) { views, shown -> views to shown.keys }
@@ -267,14 +270,15 @@ private data class Hold(
     val conversation: String?,
 )
 
-// every pane with an agent, in its view, while its session's chat view is on
+// every pane with an agent, in its view, while its session's chat view is on and its machine's app has one
 private fun views(
     sessions: Map<SessionKey, LiveSession>,
     holds: Map<PaneRef, Hold>,
     chatViews: ChatViews,
+    peers: Map<String, MachinePeer>,
 ): Map<PaneRef, PaneView> =
     sessions
-        .filterKeys(chatViews::on)
+        .filterKeys { key -> chatViews.on(key) && peers[key.machineId].offersChat }
         .flatMap { (key, session) ->
             session.agents.map { (paneId, agent) ->
                 val pane = PaneRef(key.machineId, key.sessionId, paneId)

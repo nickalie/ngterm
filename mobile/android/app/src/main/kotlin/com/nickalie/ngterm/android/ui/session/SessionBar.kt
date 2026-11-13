@@ -34,8 +34,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.Link
+import com.nickalie.ngterm.android.data.badge
 import com.nickalie.ngterm.android.ui.chat.PaneView
 import com.nickalie.ngterm.android.ui.components.AgentStatusBadge
+import com.nickalie.ngterm.android.ui.components.PeerBadge
 import com.nickalie.ngterm.android.ui.components.StatusBadge
 import com.nickalie.ngterm.android.ui.sessions.UnderWay
 import com.nickalie.ngterm.android.ui.terminal.CompositionStrip
@@ -49,7 +51,9 @@ import com.nickalie.ngterm.core.ffi.StreamState
  * switcher ([onSelectPane]; [focused] marked; [alone] where a tab also toggles the split, see [PaneSwitcher]), the
  * view switch while the focused pane runs an agent ([view], how it shows now; [onView] asks for the other), and More:
  * Detach ([onDetach], at once), Duplicate session ([onDuplicate]; "Duplicating" stands in for the state while it
- * runs), Chat view (the session's, flipped through [onChatView]) and End session ([onEnd], once confirmed). Text
+ * runs), Chat view (the session's, flipped through [onChatView]; off on an app without one) and End session ([onEnd],
+ * once confirmed). A session of a machine running another app than ngterm has that app's [PeerBadge] after its name,
+ * whose tap says what the app lacks. Text
  * waiting to be typed ([held]) shows in the name's place while there is no extra-keys row to hold it.
  */
 @Composable
@@ -103,6 +107,7 @@ fun SessionBar(
             }
             if (held.isNotEmpty()) CompositionStrip(held, Modifier.matchParentSize(), inset = 0.dp)
         }
+        session.peer?.takeIf { it.foreign }?.let { PeerBadge(it.badge, note = it.note) }
         val live = session.live
         PaneSwitcher(
             panes = live.layout?.panes.orEmpty(),
@@ -134,6 +139,7 @@ private fun BarMenu(
         onEnd = { confirming = true },
         canDuplicate = session.canDuplicate,
         onDuplicate = onDuplicate,
+        noChatOn = session.noChatOn,
     )
     if (confirming) {
         EndSessionDialog(

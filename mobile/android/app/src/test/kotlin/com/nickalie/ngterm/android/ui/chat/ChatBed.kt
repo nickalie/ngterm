@@ -17,6 +17,7 @@ import com.nickalie.ngterm.core.ffi.ChatToolStatus
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
+import com.nickalie.ngterm.core.ffi.PeerKind
 import com.nickalie.ngterm.core.ffi.RemoteLayout
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -35,11 +36,17 @@ class ChatBed(
     /** The panes shown, by id. */
     val panes: MutableMap<String, FakePane> = mutableMapOf()
 
-    /** Connects m1 with s1 listed, attaches s1, and lays it out as [ids] (the first primary). */
-    fun attach(vararg ids: String) {
+    /**
+     * Connects m1 with s1 listed (from a machine running [peer]; `null`: ngterm), attaches s1, and lays it out as [ids]
+     * (the first primary).
+     */
+    fun attach(
+        vararg ids: String,
+        peer: PeerKind? = null,
+    ) {
         val stored = testMachine(keyId = test.seedKey().id)
         test.seedMachine(stored)
-        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", paneCount = ids.size.toUInt()))
+        test.core.sessions["m1"] = mutableListOf(fakeSession("s1", paneCount = ids.size.toUInt(), peer = peer))
         test.core.paneFactory = { _, _, id, _ ->
             // a pane with frames to read takes input; the chat's actions reach it
             FakePane(id, frames = { ByteArray(0) }).also { panes[id] = it }

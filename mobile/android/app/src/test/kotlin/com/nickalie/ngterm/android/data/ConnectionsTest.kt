@@ -1,15 +1,18 @@
 package com.nickalie.ngterm.android.data
 
+import com.nickalie.ngterm.core.fake.AGTERM_NOTE
 import com.nickalie.ngterm.core.fake.FakeMobileCore
 import com.nickalie.ngterm.core.fake.HOST_KEY_CHANGED
 import com.nickalie.ngterm.core.fake.SIGN_IN_UNFINISHED
 import com.nickalie.ngterm.core.fake.TailscaleSignIn
+import com.nickalie.ngterm.core.fake.fakePeerCapabilities
 import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.HostKeyStore
 import com.nickalie.ngterm.core.ffi.Machine
 import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
+import com.nickalie.ngterm.core.ffi.PeerKind
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancelChildren
@@ -44,7 +47,70 @@ class ConnectionsTest {
     private fun Connections.names() = trees.value["m1"]?.map { it.name }
 
     private fun TestScope.connections() =
-        Connections(this, { now }) { sink -> FakeMobileCore(sink, pins).also { core = it } }
+        Connections(this, { now }, ::fakePeerCapabilities) { sink -> FakeMobileCore(sink, pins).also { core = it } }
+
+    @Test
+    fun aListingFromAgtermNamesTheMachinesAppUntilItsConnectionGoes() =
+        runTest {
+            val asked = mutableListOf<PeerKind>()
+            val connections =
+                Connections(this, { now }, { kind -> fakePeerCapabilities(kind).also { asked += kind } }) { sink ->
+                    FakeMobileCore(sink, pins).also { core = it }
+                }
+            core.sessions["m1"] = mutableListOf(fakeSession("s1", peer = PeerKind.AGTERM))
+            connections.connect(machine)
+            advanceUntilIdle()
+            val peer = connections.peers.value["m1"]
+            assertEquals(PeerKind.AGTERM, peer?.kind)
+            assertEquals(true, peer?.foreign)
+            assertEquals(AGTERM_NOTE, peer?.note)
+            assertEquals(false, peer.offersChat)
+            assertEquals("agterm", peer?.badge)
+
+            // a listing with no sessions says nothing about the app: the one learned stays, asked of the core once
+            core.sessions["m1"]?.clear()
+            connections.listSessions("m1")
+            advanceUntilIdle()
+            assertEquals(emptyList<Any>(), connections.trees.value["m1"])
+            assertEquals(PeerKind.AGTERM, connections.peers.value["m1"]?.kind)
+            assertEquals(listOf(PeerKind.AGTERM), asked)
+
+            // the machine now answers as ngterm: its next listing says so
+            core.sessions["m1"]?.add(fakeSession("s2", peer = PeerKind.NGTERM))
+            connections.listSessions("m1")
+            advanceUntilIdle()
+            assertEquals(false, connections.peers.value["m1"]?.foreign)
+            assertEquals(true, connections.peers.value["m1"].offersChat)
+
+            connections.disconnect("m1")
+            assertEquals(null, connections.peers.value["m1"])
+        }
+
+    @Test
+    fun aListingThatNamesNoAppLeavesTheMachineAsNgterm() =
+        runTest {
+            val connections = connections()
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            connections.connect(machine)
+            advanceUntilIdle()
+            assertEquals(listOf(fakeSession("s1")), connections.trees.value["m1"])
+            assertEquals(null, connections.peers.value["m1"])
+            assertEquals(true, connections.peers.value["m1"].offersChat)
+        }
+
+    @Test
+    fun anEditedMachineForgetsTheAppItsOldConnectionRan() =
+        runTest {
+            val connections = connections()
+            core.sessions["m1"] = mutableListOf(fakeSession("s1", peer = PeerKind.AGTERM))
+            connections.connect(machine)
+            advanceUntilIdle()
+            assertEquals(PeerKind.AGTERM, connections.peers.value["m1"]?.kind)
+            core.sessions["m1"]?.clear()
+            connections.connect(machine.copy(host = "studio.lan"))
+            advanceUntilIdle()
+            assertEquals(null, connections.peers.value["m1"])
+        }
 
     @Test
     fun aConnectGoesFromConnectingToConnectedAndListsTheSessions() =

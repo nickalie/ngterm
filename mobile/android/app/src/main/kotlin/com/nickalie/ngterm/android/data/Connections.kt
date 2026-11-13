@@ -6,7 +6,10 @@ import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileCoreInterface
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
+import com.nickalie.ngterm.core.ffi.PeerCapabilities
+import com.nickalie.ngterm.core.ffi.PeerKind
 import com.nickalie.ngterm.core.ffi.RemoteSession
+import com.nickalie.ngterm.core.ffi.peerCapabilities
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -69,7 +72,9 @@ sealed interface Link {
  * core's events and its connect answers into each machine's [Link] in [links], keeps each machine's last listing in
  * [trees] (and why the last one failed in [treeFailures]; a connect and a reconnect each list anew), and the sessions
  * this app has attached in [attached]. An attached session's listing carries the name its stream last said, so a
- * rename on its machine shows everywhere at once, though the machine is listed only now and then.
+ * rename on its machine shows everywhere at once, though the machine is listed only now and then. Each machine's app
+ * (ngterm, or agterm with fewer features) is in [peers], as its listings name it; [offers] says what an app offers
+ * (the core's `peer_capabilities`; the app's tests, which run without the native library, give their own).
  * Events arrive on the core's thread; the state flows take them from any thread. Calls are made from the main thread
  * and the suspending ones run in [scope] or the caller's, except [detach], which a listing event also makes on the
  * core's thread (it only posts to the core, so it must never block on it).
@@ -78,12 +83,14 @@ sealed interface Link {
 class Connections(
     private val scope: CoroutineScope,
     val clock: () -> Long,
+    private val offers: (PeerKind) -> PeerCapabilities = { peerCapabilities(it) },
     coreFactory: (EventSink) -> MobileCoreInterface,
 ) : EventSink {
     private val linkState = MutableStateFlow<Map<String, Link>>(emptyMap())
     private val treeState = MutableStateFlow<Map<String, List<RemoteSession>>>(emptyMap())
     private val treeFailureState = MutableStateFlow<Map<String, String>>(emptyMap())
     private val attachedState = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
+    private val peerState = MutableStateFlow<Map<String, MachinePeer>>(emptyMap())
 
     // the record each machine was last connected with (main thread): a connect with another replaces the connection
     private val records = mutableMapOf<String, Machine>()
@@ -128,6 +135,12 @@ class Connections(
     /** The sessions this app has attached, by machine id: each machine's session ids. */
     val attached: StateFlow<Map<String, Set<String>>> = attachedState.asStateFlow()
 
+    /**
+     * The app each machine runs, by id, as its connection's last listing with a session named it; a machine not here
+     * runs ngterm or hasn't said.
+     */
+    val peers: StateFlow<Map<String, MachinePeer>> = peerState.asStateFlow()
+
     // the app's other parts that take the core's events (clipboard reads, panes), called on the core's thread
     private val listeners = CopyOnWriteArrayList<(MobileEvent) -> Unit>()
 
@@ -167,9 +180,22 @@ class Connections(
             treeState.update { it + (machineId to withStreamNames(machineId, sessions)) }
             treeFailureState.update { it - machineId }
         }
+        learnPeer(machineId, sessions)
         val ids = sessions.mapTo(mutableSetOf()) { it.id }
         val gone = attachedState.value[machineId].orEmpty() - ids
         gone.forEach { detach(machineId, it) }
+    }
+
+    // a listing names its machine's app on each session (one connection, one app); an empty one says nothing, so the
+    // app learned before stays
+    private fun learnPeer(
+        machineId: String,
+        sessions: List<RemoteSession>,
+    ) {
+        val kind = sessions.firstNotNullOfOrNull { it.peer } ?: return
+        if (peerState.value[machineId]?.kind == kind) return
+        val peer = MachinePeer(kind, offers(kind))
+        peerState.update { it + (machineId to peer) }
     }
 
     // a stream's word on its session's name (a blank one says nothing); it reaches the listing once the session is
@@ -304,6 +330,7 @@ class Connections(
     // one, and a listing call on it no longer counts
     private fun replaced(machineId: String) {
         synchronized(listingLock) { bump(machineId) }
+        peerState.update { it - machineId }
         attachedState.value[machineId].orEmpty().forEach { detach(machineId, it) }
     }
 
@@ -424,6 +451,7 @@ class Connections(
             treeFailureState.update { it - machineId }
         }
         attachedState.update { it - machineId }
+        peerState.update { it - machineId }
         streamNames.keys.removeIf { it.machineId == machineId }
     }
 

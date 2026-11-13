@@ -16,6 +16,8 @@ import com.nickalie.ngterm.core.ffi.NoHandle
 import com.nickalie.ngterm.core.ffi.Pane
 import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
+import com.nickalie.ngterm.core.ffi.PeerCapabilities
+import com.nickalie.ngterm.core.ffi.PeerKind
 import com.nickalie.ngterm.core.ffi.RemoteSession
 import com.nickalie.ngterm.core.ffi.UploadCancel
 import com.nickalie.ngterm.core.ffi.UploadProgress
@@ -557,12 +559,16 @@ val TailscaleSignIn =
         url = "https://login.tailscale.com/a/l1nk",
     )
 
-/** A session as a machine's tree lists it, with what a test doesn't care about left plain. */
+/**
+ * A session as a machine's tree lists it, with what a test doesn't care about left plain. [peer] is the app its machine
+ * runs, as the real core stamps it on every listed session; `null` (the default) reads as ngterm.
+ */
 fun fakeSession(
     id: String,
     name: String = id,
     parent: String? = null,
     paneCount: UInt = 1u,
+    peer: PeerKind? = null,
 ): RemoteSession =
     RemoteSession(
         id = id,
@@ -577,4 +583,25 @@ fun fakeSession(
         parent = parent,
         paneCount = paneCount,
         splitAxis = null,
+        peer = peer,
     )
+
+/** The note the core gives about an agterm machine (`ngterm_core::remote::peer::limits_note`). */
+const val AGTERM_NOTE =
+    "Attached from agterm: the agent chat view, Kitty clipboard paste, renames made there and page companions " +
+        "opened there later are not available"
+
+/**
+ * What the core's `peer_capabilities` answers for [kind], for the app's tests, which run without the native library:
+ * ngterm offers everything, agterm nothing beyond the protocol both speak, with [AGTERM_NOTE].
+ */
+fun fakePeerCapabilities(kind: PeerKind?): PeerCapabilities {
+    val own = kind != PeerKind.AGTERM
+    return PeerCapabilities(
+        agentChat = own,
+        clipboardBridge = own,
+        followsRenames = own,
+        pageCompanions = own,
+        note = if (own) null else AGTERM_NOTE,
+    )
+}

@@ -7,9 +7,12 @@ import com.nickalie.ngterm.android.data.ChatViews
 import com.nickalie.ngterm.android.data.Create
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.LiveSession
+import com.nickalie.ngterm.android.data.MachinePeer
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.data.StoredMachine
+import com.nickalie.ngterm.android.data.badge
 import com.nickalie.ngterm.android.data.families
+import com.nickalie.ngterm.android.data.offersChat
 import com.nickalie.ngterm.android.data.reason
 import com.nickalie.ngterm.android.ui.chat.PaneView
 import com.nickalie.ngterm.core.ffi.MobileException
@@ -39,8 +42,9 @@ data class AgentStatus(
  * when it has them, the machine's last listing's otherwise), its machine's [link], its stream's [live] state,
  * whether its panes running an agent show as a chat ([chatView]: its own choice, else Settings'), whether this
  * device is [taking] its lead, its parent's name when it is a companion ([companionOf]), whether it is [nested]
- * under that parent, attached too and listed above it, whether its Duplicate is under way ([duplicating]), and
- * whether Duplicate takes a tap ([canDuplicate]: not while any create is under way, from any screen).
+ * under that parent, attached too and listed above it, whether its Duplicate is under way ([duplicating]),
+ * whether Duplicate takes a tap ([canDuplicate]: not while any create is under way, from any screen), and the app its
+ * machine runs ([peer], when a listing said; `null`: ngterm, or not said).
  */
 data class AttachedSession(
     val key: SessionKey,
@@ -56,7 +60,11 @@ data class AttachedSession(
     val nested: Boolean = false,
     val duplicating: Boolean = false,
     val canDuplicate: Boolean = true,
-)
+    val peer: MachinePeer? = null,
+) {
+    /** The name of the app without a chat view its machine runs, or `null` when the machine has one. */
+    val noChatOn: String? get() = peer?.takeUnless { it.offersChat }?.badge
+}
 
 /** A machine's attached sessions, in its listing's order by family (a parent, then its companions under it). */
 data class AttachedGroup(
@@ -122,13 +130,14 @@ class SessionViewModel(
     private val seen = mutableMapOf<SessionKey, AttachedSession>()
 
     private val listed =
-        combine(graph.machines.machines, connections.attached, connections.trees, connections.links) {
-            machines,
-            attached,
-            trees,
-            links,
-            ->
-            Listed(machines, attached, trees, links)
+        combine(
+            graph.machines.machines,
+            connections.attached,
+            connections.trees,
+            connections.links,
+            connections.peers,
+        ) { machines, attached, trees, links, peers ->
+            Listed(machines, attached, trees, links, peers)
         }
 
     /** The destination's state. */
@@ -304,12 +313,13 @@ private data class Marks(
     val create: Create?,
 )
 
-/** What the lists are made of: the saved machines, what is attached, each machine's listing and link. */
+/** What the lists are made of: the saved machines, what is attached, each machine's listing, link and app. */
 private data class Listed(
     val machines: List<StoredMachine>,
     val attached: Map<String, Set<String>>,
     val trees: Map<String, List<RemoteSession>>,
     val links: Map<String, Link>,
+    val peers: Map<String, MachinePeer>,
 )
 
 // each machine's attached sessions in its listing's order by family (any it no longer lists after), remembering in
@@ -371,5 +381,6 @@ private fun attached(
         status = status,
         link = listed.links[machine.id] ?: Link.Offline,
         live = stream,
+        peer = listed.peers[machine.id],
     ).also { seen[key] = it }
 }

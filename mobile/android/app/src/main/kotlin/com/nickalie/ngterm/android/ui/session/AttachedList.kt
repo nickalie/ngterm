@@ -88,6 +88,7 @@ fun AttachedList(
                             onEnd = { onEnd(session.key) },
                             canDuplicate = session.canDuplicate,
                             onDuplicate = { onDuplicate(session.key) },
+                            noChatOn = session.noChatOn,
                         )
                     },
                 ) { Status(session) }

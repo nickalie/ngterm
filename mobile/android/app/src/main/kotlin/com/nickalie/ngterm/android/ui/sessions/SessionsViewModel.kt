@@ -6,6 +6,7 @@ import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.data.ChatViews
 import com.nickalie.ngterm.android.data.Create
 import com.nickalie.ngterm.android.data.Link
+import com.nickalie.ngterm.android.data.MachinePeer
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.data.StoredMachine
 import com.nickalie.ngterm.android.data.reason
@@ -43,6 +44,8 @@ data class MachineSessions(
     val creating: Boolean = false,
     // whether each session's panes running an agent show as a chat
     val chatViews: ChatViews = ChatViews(),
+    // the app the machine runs, when a listing said (null: ngterm, or not said)
+    val peer: MachinePeer? = null,
 )
 
 /** What a machine's sessions screen shows. */
@@ -95,14 +98,15 @@ class SessionsViewModel(
             connections.trees,
             connections.treeFailures,
             connections.attached,
-            graph.chats.chatViews,
-        ) { links, trees, failures, attached, chatViews ->
+            combine(graph.chats.chatViews, connections.peers, ::Pair),
+        ) { links, trees, failures, attached, (chatViews, peers) ->
             Live(
                 links[machineId] ?: Link.Offline,
                 trees[machineId],
                 failures[machineId],
                 attached[machineId].orEmpty(),
                 chatViews,
+                peers[machineId],
             )
         }
 
@@ -112,6 +116,7 @@ class SessionsViewModel(
         val failure: String?,
         val attached: Set<String>,
         val chatViews: ChatViews,
+        val peer: MachinePeer?,
     )
 
     private val creates = graph.creates
@@ -142,6 +147,7 @@ class SessionsViewModel(
                         duplicating = underWay.create?.takeIf { it.machineId == machineId }?.source,
                         creating = underWay.create != null,
                         chatViews = live.chatViews,
+                        peer = live.peer,
                     ),
                 )
             }

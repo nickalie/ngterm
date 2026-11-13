@@ -1,6 +1,7 @@
 package com.nickalie.ngterm.android.ui.session
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -26,8 +27,8 @@ import com.nickalie.ngterm.android.ui.components.ConfirmDialog
 
 /**
  * An attached session's More menu, named for the session [name]: Detach ([onDetach]), Duplicate session
- * ([onDuplicate], taking no tap unless [canDuplicate]), Chat view ([chatView], flipped through [onChatView]) and End
- * session ([onEnd]).
+ * ([onDuplicate], taking no tap unless [canDuplicate]), Chat view ([chatView], flipped through [onChatView]; off and
+ * saying why on a machine whose app has none, [noChatOn]) and End session ([onEnd]).
  */
 @Composable
 internal fun SessionMenu(
@@ -39,6 +40,7 @@ internal fun SessionMenu(
     modifier: Modifier = Modifier,
     canDuplicate: Boolean = true,
     onDuplicate: () -> Unit = {},
+    noChatOn: String? = null,
 ) {
     var open by rememberSaveable { mutableStateOf(false) }
     Box(modifier = modifier) {
@@ -61,7 +63,7 @@ internal fun SessionMenu(
                 open = false
                 onDuplicate()
             }
-            ChatViewItem(chatView) { on ->
+            ChatViewItem(chatView, noChatOn) { on ->
                 open = false
                 onChatView(on)
             }
@@ -91,21 +93,36 @@ internal fun DuplicateItem(
 
 /**
  * A session's Chat view item, checked while its panes running an agent show as a chat (Settings' Agent chat view, or
- * the session's own choice); a tap asks for the other ([onChatView]).
+ * the session's own choice); a tap asks for the other ([onChatView]). On a machine whose app has no chat view
+ * ([noChatOn], its name) it is off, takes no tap and says so under its label.
  */
 @Composable
 internal fun ChatViewItem(
     on: Boolean,
+    noChatOn: String? = null,
     onChatView: (Boolean) -> Unit,
 ) {
+    val offered = noChatOn == null
+    val checked = on && offered
     DropdownMenuItem(
-        text = { Text(stringResource(R.string.session_chat_view)) },
+        text = {
+            Column {
+                Text(stringResource(R.string.session_chat_view))
+                noChatOn?.let {
+                    Text(
+                        text = stringResource(R.string.session_chat_view_unavailable, it),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
         onClick = { onChatView(!on) },
-        trailingIcon = { Checkbox(checked = on, onCheckedChange = null) },
+        enabled = offered,
+        trailingIcon = { Checkbox(checked = checked, onCheckedChange = null, enabled = offered) },
         modifier =
             Modifier.semantics {
                 role = Role.Checkbox
-                toggleableState = ToggleableState(on)
+                toggleableState = ToggleableState(checked)
             },
     )
 }

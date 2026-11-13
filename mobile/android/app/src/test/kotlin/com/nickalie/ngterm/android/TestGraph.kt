@@ -25,6 +25,7 @@ import com.nickalie.ngterm.android.ui.chat.PaneChats
 import com.nickalie.ngterm.android.ui.session.SessionPanes
 import com.nickalie.ngterm.android.update.AppUpdates
 import com.nickalie.ngterm.core.fake.FakeMobileCore
+import com.nickalie.ngterm.core.fake.fakePeerCapabilities
 import com.nickalie.ngterm.core.ffi.ClipboardPart
 import com.nickalie.ngterm.core.ffi.ClipboardWriteStatus
 import com.nickalie.ngterm.core.ffi.HostKeyStore
@@ -151,7 +152,8 @@ private class OffThreadHostKeys(
  * The app's graph over fakes in [dir]: the [core] a [FakeMobileCore] pinning through the real [PinnedHostKeys], the
  * stores real DataStores, the vault sealing with a [SoftwareWrapper], the clock [now], the network [online] and the
  * clipboard's text [clipboard] set by the test. [scope] runs the connections' calls (the main thread's in UI tests);
- * [close] stops it. The chats rank their `/` menus with [rankCommands] (the native `filter_commands` isn't loaded).
+ * [close] stops it. What a machine's app offers is [fakePeerCapabilities] (the native `peer_capabilities` isn't
+ * loaded either). The chats rank their `/` menus with [rankCommands] (the native `filter_commands` isn't loaded).
  * Its [AppGraph.updates] are the test's [updates], none by default.
  */
 class TestGraph(
@@ -168,7 +170,7 @@ class TestGraph(
     lateinit var core: FakeMobileCore
         private set
     val connections =
-        Connections(scope, { now }) { sink ->
+        Connections(scope, { now }, ::fakePeerCapabilities) { sink ->
             FakeMobileCore(sink, OffThreadHostKeys(pins), Dispatchers.IO).also { core = it }
         }
 
