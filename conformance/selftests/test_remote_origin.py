@@ -321,6 +321,21 @@ def test_a_missing_ngterm_headless_ends_a_ci_run_naming_the_step(roots, adapter,
     assert roots == []
 
 
+def test_a_cli_installed_on_the_logins_path_skips_a_local_run_as_it_would_shadow_the_build(
+    roots, adapter, tmp_path, stand_in_sshd, monkeypatch
+):
+    system = tmp_path / "usr-bin"
+    system.mkdir()
+    installed = system / adapter.ctl_name
+    installed.write_text("#!/bin/sh\n")
+    installed.chmod(0o755)
+    monkeypatch.setattr(remote_origin, "LOGIN_PATH", os.fspath(system))
+    monkeypatch.delenv("CI", raising=False)
+    with pytest.raises(pytest.skip.Exception, match=f"{installed} comes before the origin's ~/.local/bin"):
+        RemoteOrigin(adapter, tmp_path / "world").start()
+    assert roots == []
+
+
 def test_an_unknown_kind_is_refused(adapter, tmp_path):
     with pytest.raises(ValueError, match="one of instance, headless"):
         RemoteOrigin(adapter, tmp_path, "agterm")

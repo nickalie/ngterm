@@ -5,7 +5,8 @@ network would (`SeveringProxy`).
 
 A login to the origin gets the origin's own HOME, whose `~/.local/bin` holds the build's CLI as its installer links it,
 and the origin's state dir, so the CLI there answers for that instance, as on a machine whose user runs it. A coverage
-run's profile destination reaches the login too: the far side's CLI and session server count.
+run's profile destination reaches the login too: the far side's CLI and session server count. A CLI installed on sshd's
+bare PATH would answer before that one, so the origin does not start beside it.
 
 The viewer reaches it as `ORIGIN_HOST` through `RemoteOrigin.client`: a private ssh directory (config, known_hosts and
 identity, all generated here) and an `ssh` that reads nothing else, which a viewer takes first on its PATH
@@ -31,7 +32,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from agterm_conformance import llvm_profiles
-from agterm_conformance.loopback_ssh import LoopbackMachine, SshClient, find_openssh
+from agterm_conformance.loopback_ssh import LOGIN_PATH, LoopbackMachine, SshClient, find_openssh
 
 if TYPE_CHECKING:
     from agterm_conformance.impls.base import Adapter, Instance
@@ -218,6 +219,13 @@ class RemoteOrigin:
         require(
             f"install {self.adapter.ctl_name} on the origin",
             None if ctl is not None else f"{self.adapter.name} has no {self.adapter.ctl_name}: pass --ctl",
+        )
+        installed = shutil.which(self.adapter.ctl_name, path=LOGIN_PATH)
+        require(
+            f"install {self.adapter.ctl_name} on the origin",
+            None
+            if installed is None
+            else f"{installed} comes before the origin's ~/.local/bin on a login's PATH: uninstall it to test {ctl}",
         )
         program = None
         if self.kind == "headless":

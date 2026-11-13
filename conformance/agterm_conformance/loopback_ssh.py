@@ -30,6 +30,8 @@ import pytest
 
 SSHD_DIRECTORIES = ("/usr/sbin", "/usr/local/sbin", "/usr/bin", "/sbin")
 READY_TIMEOUT = 15.0
+# the PATH sshd gives a login
+LOGIN_PATH = "/usr/bin:/bin"
 
 
 def find_program(name: str, extra: tuple[str, ...] = ()) -> str | None:
@@ -185,7 +187,7 @@ class LoopbackMachine:
         shell = _account().pw_shell or "/bin/sh"
         subprocess.run(
             [shell, "-c", "true"],
-            env={"HOME": os.fspath(self.home), "PATH": "/usr/bin:/bin", "USER": _account().pw_name},
+            env={"HOME": os.fspath(self.home), "PATH": LOGIN_PATH, "USER": _account().pw_name},
             stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=120,
@@ -196,7 +198,7 @@ class LoopbackMachine:
         """The command every login runs: the client's own through the account's login shell, as sshd runs it, with
         this machine's HOME, sshd's bare PATH and whatever the machine exports."""
         shell = _account().pw_shell or "/bin/sh"
-        exports = {"HOME": os.fspath(self.home), "PATH": "/usr/bin:/bin", **self.env}
+        exports = {"HOME": os.fspath(self.home), "PATH": LOGIN_PATH, **self.env}
         assignments = " ".join(f"{name}={shlex.quote(value)}" for name, value in exports.items())
         script = self.directory / "force-command"
         script.write_text(

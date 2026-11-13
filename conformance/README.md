@@ -68,8 +68,8 @@ A remote attach test takes `remote_origin` and `remote_viewer` (`agterm_conforma
 another instance of the build with Live on or, parametrized indirectly with `"headless"`, the staged
 `ngterm-headless`, behind an `sshd` of the harness's own on 127.0.0.1. The viewer's ssh reaches it as
 `remote_origin.host` and reads nothing of the account's ssh setup; `remote_origin.sever()` cuts the open links. Without
-OpenSSH's server or the staged `ngterm-headless` they skip with the reason; under `CI` the run ends with exit 2 naming
-the step.
+OpenSSH's server or the staged `ngterm-headless`, or with the CLI installed on sshd's bare PATH, where a login would
+find it before the build's, they skip with the reason; under `CI` the run ends with exit 2 naming the step.
 
 ## Markers
 
