@@ -96,6 +96,44 @@ internal final class SessionViewTests: XCTestCase {
         FakeApp.expect(Self.screen(showing: "P1 ready", in: app), "the first pane's screen")
     }
 
+    // the attached sessions under their machine are a tree, as the machine's own list: a companion right under its
+    // parent, saying whose it is
+    @MainActor
+    internal func testTheMachinesNestAnAttachedCompanionUnderItsParent() throws {
+        let app = FakeApp.launch(withKey: true, arguments: ["-ngterm-fake-session", "-ngterm-fake-companion"], for: self)
+        FakeApp.showMachines(in: app)
+        FakeApp.expectRow("split", reads: "Connected", in: app)
+        app.descendants(matching: .any)["machine-row-split"].firstMatch.tap()
+        let companion = app.descendants(matching: .any)["session-review"].firstMatch
+        FakeApp.expect(companion, "the companion's row")
+        companion.tap()
+        FakeApp.expect(Self.screen(showing: "R1 ready", in: app), "the companion's pane")
+        // a phone goes back from the session to the machine's sessions; a tablet shows them beside it
+        if !Self.isPad {
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+        }
+        let parent = app.descendants(matching: .any)["session-work"].firstMatch
+        FakeApp.expect(parent, "the parent's row")
+        parent.tap()
+        FakeApp.expect(Self.screen(showing: "P1 ready", in: app), "the parent's first pane")
+
+        let add = app.buttons["add-machine"]
+        for _ in 0..<2 where !add.exists {
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+        }
+        FakeApp.expect(add, "the machines")
+        let parentRow = app.descendants(matching: .any)["sidebar-session-work"].firstMatch
+        let companionRow = app.descendants(matching: .any)["sidebar-session-review"].firstMatch
+        FakeApp.expect(companionRow, "the attached companion under its machine")
+        XCTAssertTrue(companionRow.label.contains("Companion of work"), "the companion says whose it is")
+        XCTAssertGreaterThan(companionRow.frame.minY, parentRow.frame.minY, "the companion comes under its parent")
+        if !Self.isPad {
+            try FakeApp.audit(app)
+        }
+        companionRow.tap()
+        FakeApp.expect(Self.screen(showing: "R1 ready", in: app), "the companion's pane again")
+    }
+
     @MainActor
     internal func testDetachClosesTheSessionView() {
         let app = openSession()

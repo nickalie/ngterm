@@ -185,7 +185,7 @@ by themselves.
 | `StatusBadge` | one of the app's tones: glyph and word (or a longer label) in its color, read as the words |
 | `AgentStatusBadge` | an origin's agent status, its color lifted to read on every ground; a label may say more ("2 waiting") |
 | `MachineRow` | a machine: name (a heading), connection badge, mono address, what the state means with its one action (`RowAction`) at the line's end, and a slot for its sessions' statuses. At accessibility sizes the badge goes under the name and the action under the line. VoiceOver reads it as one element, with the action as its custom action |
-| `SessionRow` | a session: name, the Attached mark (link glyph and "Attached" in verdigris), its line (context, working directory, or "Companion of …"), its status slot, or "Ending" with a spinner; a companion is indented |
+| `SessionRow` | a session: name, the Attached mark (link glyph and "Attached" in verdigris), its line (context, working directory, or "Companion of …"), its status slot, or "Ending" with a spinner; a companion is indented (a machine's list indents every companion; the machines' column, one more step, only one under its attached parent) |
 | `StatePanel` | what a screen shows instead of content, on `ContentUnavailableView`, scrolling when it doesn't fit (the largest text sizes): `.loading`, `.empty`, `.error`, `.offline`, each with the one action that moves on and at most one quieter one under it; the glyph (`idle` unless the state has a tone) is decorative, and the title is a heading of its own |
 | `Banner` | a strip about the whole screen while it stays usable: glyph, message, note, optional action and dismiss; the text wraps and the actions go under it when they don't fit beside it; announced to VoiceOver when it appears |
 | `Cover` | a veil (a system material) over a pane that can't be used as it is: glyph or spinner, title (a heading), what it means, the action that fixes it; it takes every touch, and `covered(by:)` hides the pane under it from VoiceOver |
@@ -519,9 +519,12 @@ compact: the selected pane alone                regular: the origin's split
   choice is kept per session while the app runs. Each pane of a split has a 4 pt gutter at its leading edge, where the selected
   one shows a 3 × 32 pt bar in the tint; its cursor draws as it is, the other's as a hollow block. A tap or a click on
   a pane selects it. Beside it, the machines' column lists each machine's attached sessions under it (name and
-  status; the session view says the context), the one shown marked with a checkmark in the tint (the list selects
-  nothing meanwhile: a selection it draws grey once the session has the focus would leave the machine's colored text
-  under 4.5:1). A compact width's machines list shows the same rows under each machine, so a phone sees every
+  status; the session view says the context) as the tree a machine's sessions shows, kept to what is attached: in the
+  machine's order by family, a companion indented once more under its attached parent with "Companion of …" as its
+  line. A companion whose parent isn't attached keeps that line but stands at the sessions' own indent, so it never
+  reads as another session's; there is nothing to expand or collapse. The one shown is marked with a checkmark in the
+  tint (the list selects nothing meanwhile: a selection it draws grey once the session has the focus would leave the
+  machine's colored text under 4.5:1). A compact width's machines list shows the same rows under each machine, so a phone sees every
   attached session in one place, as Android's Sessions destination shows them.
 - **Selection and the keyboard:** one keyboard serves every pane; the selected pane is the only one anything typed
   reaches. A tab, a swipe, ⌘⌥←/→ and a touch select a pane, and the focus follows: the pane selected next takes it,

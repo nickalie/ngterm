@@ -148,6 +148,35 @@ internal struct MachinesSnapshotTests {
         ScreenSnapshot.check(view, named: "machines-sidebar", variant: variant)
     }
 
+    @Test(
+        "the sidebar's tree: a companion under its attached parent, one whose parent isn't attached unnested",
+        arguments: ScreenVariant.allCases
+    )
+    internal func sidebarTree(variant: ScreenVariant) async throws {
+        defer { test.remove() }
+        let build = machine("m1", "build-01", host: "build-01.lan")
+        try test.seed(build)
+        var review = fakeSession(id: "s5", name: "api review", parent: "s2")
+        review.status = "blocked"
+        test.core.sessions["m1"] = Self.sessions + [review, fakeSession(id: "s6", name: "docs proof", parent: "s1")]
+        await test.connections.connect(build.core).value
+        await test.settled()
+        for sessionId in ["s6", "s5", "s2"] {
+            try await test.connections.attach(machineId: "m1", sessionId: sessionId)
+        }
+        let model = MachinesModel(graph: test.graph)
+        let view = NavigationStack {
+            MachinesView(model: model, selection: "m1") { _ in
+                // a golden opens nothing
+            }
+            .attachedSessions(shown: SessionKey(machineId: "m1", sessionId: "s5")) { _ in
+                // a golden opens nothing
+            }
+            .navigationTitle("Machines")
+        }
+        ScreenSnapshot.check(view, named: "machines-sidebar-tree", variant: variant)
+    }
+
     @Test("Add machine, Save tried with problems", arguments: ScreenVariant.allCases)
     internal func addForm(variant: ScreenVariant) async throws {
         defer { test.remove() }

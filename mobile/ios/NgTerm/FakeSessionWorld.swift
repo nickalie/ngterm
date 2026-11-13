@@ -10,12 +10,14 @@
     /// leads both panes; when asked, its origin then asks whether to deploy (``deployAsk``), and says what it does with
     /// the answer as the session's context ("Deploying to production", or "Deploy called off"); when asked, its first
     /// pane runs Claude Code (``FakeChatWorld``). Each pane's screen names it on its first line ("P1 ready"), so a test
-    /// sees which pane shows.
+    /// sees which pane shows. With a companion, `split` also lists `review`, a companion of `work` with one pane.
     internal enum FakeSessionWorld {
         /// The machine's id in the store.
         internal static let machineId = "split"
         /// The session's id.
         internal static let sessionId = "work"
+        /// The companion's id, when there is one.
+        internal static let companionId = "review"
         nonisolated private static let columns = 40
         nonisolated private static let rows = 12
         private static let paneIds = ["P1", "P2"]
@@ -40,8 +42,8 @@
             choices: nil
         )
 
-        private static var attachEvents: [MobileEvent] {
-            let layout = RemoteLayout(panes: paneIds, primary: paneIds[0], axis: "vertical", shown: true)
+        private static func attachEvents(of sessionId: String, panes: [String]) -> [MobileEvent] {
+            let layout = RemoteLayout(panes: panes, primary: panes[0], axis: "vertical", shown: true)
             let status = RemoteStatus(
                 status: "working",
                 blink: false,
@@ -72,14 +74,16 @@
         }
 
         /// Saves the machine in `machines`, signing in with `keyId`, and gives `core` its session, whose origin asks
-        /// ``deployAsk`` when `asks`, and whose first pane runs Claude Code (``FakeChatWorld``) when `chats`.
+        /// ``deployAsk`` when `asks`, and whose first pane runs Claude Code (``FakeChatWorld``) when `chats`; and its
+        /// companion ``companionId`` when `companion`.
         @MainActor
         internal static func seed(
             _ machines: MachineStore,
             core: FakeMobileCore,
             keyId: String,
             asks: Bool,
-            chats: Bool
+            chats: Bool,
+            companion: Bool
         ) {
             let machine = StoredMachine(
                 id: machineId,
@@ -94,9 +98,18 @@
                 fakeSession(id: sessionId, name: sessionId, paneCount: UInt32(paneIds.count))
             ]
             core.panes[sessionId] = Set(paneIds)
+            if companion {
+                let companionPanes = ["R1"]
+                core.sessions[machineId, default: []].append(
+                    fakeSession(id: companionId, name: companionId, parent: sessionId)
+                )
+                core.panes[companionId] = Set(companionPanes)
+                core.attachEvents[companionId] = attachEvents(of: companionId, panes: companionPanes)
+            }
             let agent = FakeChatWorld(core: core, pace: .real)
             core.attachEvents[sessionId] =
-                attachEvents + (asks ? [askEvent] : []) + (chats ? [FakeChatWorld.agentEvent] : [])
+                attachEvents(of: sessionId, panes: paneIds) + (asks ? [askEvent] : [])
+                + (chats ? [FakeChatWorld.agentEvent] : [])
             if chats {
                 core.chatEvents[FakeChatWorld.pane] = FakeChatWorld.catchUp
             }

@@ -4,8 +4,9 @@ import NgtermPlatform
 /// The attached sessions across machines, as the session view, its moves and the sidebar show them (mobile/android's
 /// `SessionViewModel` lists).
 ///
-/// Each machine's attached sessions come in its listing's order, any it no longer lists after them; a machine with
-/// none is left out. It reads the stores and the routers as they are now (all observable), and remembers the name each
+/// Each machine's attached sessions come in its listing's order by family (a parent, then its companions under it, as
+/// a machine's sessions list them), any it no longer lists after them; a machine with none is left out. A companion
+/// whose parent is attached too is nested under it. It reads the stores and the routers as they are now (all observable), and remembers the name each
 /// session was last shown with, for the gone state once its machine's listing has dropped it.
 @preconcurrency
 @MainActor
@@ -74,15 +75,30 @@ public final class AttachedSessions {
             return nil
         }
         let tree = connections.trees[machine.id] ?? []
-        let listed = tree.map(\.id).filter(ids.contains)
-        let unlisted = ids.subtracting(listed).sorted()
-        let members = (listed + unlisted).map { id in
-            attached(SessionKey(machineId: machine.id, sessionId: id), of: machine)
+        let names = Dictionary(tree.map { ($0.id, $0.name) }) { first, _ in first }
+        let listed = SessionFamilies.of(tree).joined().filter { ids.contains($0.id) }.map { ($0.id, $0.parent) }
+        let unlisted = ids.subtracting(names.keys).sorted().map { ($0, String?.none) }
+        // the names of the sessions placed so far: a companion nests only under a parent shown above it
+        var shown: [String: String] = [:]
+        let members = (listed + unlisted).map { id, parent in
+            let session = attached(
+                SessionKey(machineId: machine.id, sessionId: id),
+                of: machine,
+                companionOf: parent.map { shown[$0] ?? names[$0] ?? $0 },
+                isNested: parent.map { shown[$0] != nil } ?? false
+            )
+            shown[id] = session.name
+            return session
         }
         return AttachedGroup(machineId: machine.id, machine: machine.title, sessions: members)
     }
 
-    private func attached(_ key: SessionKey, of machine: StoredMachine) -> AttachedSession {
+    private func attached(
+        _ key: SessionKey,
+        of machine: StoredMachine,
+        companionOf: String? = nil,
+        isNested: Bool = false
+    ) -> AttachedSession {
         let listing = connections.trees[key.machineId]?.first { $0.id == key.sessionId }
         let stream = live.sessions[key] ?? LiveSession()
         let made = AttachedSession(
@@ -92,7 +108,9 @@ public final class AttachedSessions {
             link: connections.link(of: key.machineId),
             live: stream,
             context: stream.isContextSaid ? stream.context : listing?.context.flatMap(Self.unlessBlank),
-            status: Self.status(stream: stream, listing: listing)
+            status: Self.status(stream: stream, listing: listing),
+            companionOf: companionOf,
+            isNested: isNested
         )
         seen[key] = made
         return made

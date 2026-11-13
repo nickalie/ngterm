@@ -27,6 +27,52 @@ internal struct AttachedSessionsTests {
         #expect(attached.lastSeen(SessionWorld.key)?.name == "api")
     }
 
+    @Test("companions follow their parent, nested only under an attached one, named as it is shown")
+    internal func families() async throws {
+        defer { world.remove() }
+        try world.test.seed(TestGraph.machine(keyId: "k1"))
+        // the core lists parents first, companions after them all
+        world.core.sessions["m1"] = [
+            fakeSession(id: "a", name: "api"),
+            fakeSession(id: "b", name: "blog"),
+            fakeSession(id: "ar", name: "api review", parent: "a"),
+            fakeSession(id: "bd", name: "blog drafts", parent: "b"),
+            fakeSession(id: "arn", name: "review notes", parent: "ar"),
+        ]
+        await world.test.connections.connect(TestGraph.machine(keyId: "k1").core).value
+        await world.test.settled()
+        for sessionId in ["bd", "arn", "ar", "a"] {
+            try await world.test.connections.attach(machineId: "m1", sessionId: sessionId)
+        }
+        let rows = attached.sessions.map { [$0.name, $0.companionOf ?? "-", $0.isNested ? "nested" : "flat"] }
+        #expect(
+            rows == [
+                ["api", "-", "flat"],
+                ["api review", "api", "nested"],
+                ["review notes", "api review", "nested"],
+                ["blog drafts", "blog", "flat"],
+            ]
+        )
+        // the moves between sessions take the same order
+        let first = SessionKey(machineId: "m1", sessionId: "a")
+        #expect(attached.neighbor(of: first, forward: true)?.sessionId == "ar")
+
+        // a companion whose parent isn't attached says whose it is, unnested; its own companion stays under it
+        world.graph.connections.detach(machineId: "m1", sessionId: "a")
+        let orphaned = attached.sessions.map { [$0.name, $0.companionOf ?? "-", $0.isNested ? "nested" : "flat"] }
+        #expect(
+            orphaned == [
+                ["api review", "api", "flat"],
+                ["review notes", "api review", "nested"],
+                ["blog drafts", "blog", "flat"],
+            ]
+        )
+
+        // the companion's line follows its parent's name as the stream renames it
+        await world.emit(.sessionName(machineId: "m1", sessionId: "ar", name: "api review v2"))
+        #expect(attached.sessions.map(\.companionOf) == ["api", "api review v2", "blog"])
+    }
+
     @Test("the listing's status and context stand in until the stream says its own, a clear included")
     internal func statusAndContext() async throws {
         defer { world.remove() }

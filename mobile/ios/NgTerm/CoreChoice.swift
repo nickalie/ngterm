@@ -28,6 +28,8 @@ internal struct CoreChoice {
     internal static let fakeAskArgument = "-ngterm-fake-ask"
     /// With the fake session, the launch argument that has Claude Code run in its first pane (``FakeChatWorld``).
     internal static let fakeChatArgument = "-ngterm-fake-chat"
+    /// With the fake session, the launch argument that lists a companion of it.
+    internal static let fakeCompanionArgument = "-ngterm-fake-companion"
     /// With the fake core, the launch argument that leaves the question about notifying to be asked.
     internal static let fakeNotificationQuestionArgument = "-ngterm-fake-notification-question"
 

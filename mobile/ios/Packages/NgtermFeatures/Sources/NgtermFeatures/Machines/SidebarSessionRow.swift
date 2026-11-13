@@ -4,6 +4,9 @@ import SwiftUI
 /// An attached session under its machine in the sidebar (mobile/android's `SidebarSessions`): its name and its status
 /// (the session's own view says its context), indented under the machine, the one this window shows marked with a
 /// checkmark in the tint; a tap opens it.
+///
+/// A companion says "Companion of …" and sits one indent further under its parent when that is attached and shown
+/// above it; one whose parent isn't keeps the line at the sessions' own indent, so it never reads as another's.
 internal struct SidebarSessionRow: View {
     internal let session: AttachedSession
     internal let isShown: Bool
@@ -18,13 +21,18 @@ internal struct SidebarSessionRow: View {
         .accessibilityIdentifier("sidebar-session-\(session.key.sessionId)")
     }
 
+    private var companionLine: String? {
+        session.companionOf.map { parent in String(localized: "Companion of \(parent)") }
+    }
+
     private var label: some View {
         HStack(spacing: Spacing.small) {
-            SessionRow(name: session.name, line: nil, isCompanion: true) {
+            SessionRow(name: session.name, line: companionLine, isCompanion: true) {
                 if let status = session.status {
                     AgentStatusBadge(status: status.text, colorHex: status.color, shape: status.shape)
                 }
             }
+            .padding(.leading, session.isNested ? Spacing.xLarge : 0)
             .frame(maxWidth: .infinity, alignment: .leading)
             if isShown {
                 Image(systemName: "checkmark")
