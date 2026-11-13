@@ -10,4 +10,10 @@ public struct NewSessionState: Hashable, Sendable {
         self.isRunning = isRunning
         self.failure = failure
     }
+
+    /// Whether Create (its button or the field's Return) starts a create now: not while this one runs, nor while
+    /// another create `isHeld` it.
+    public func takesCreate(isHeld: Bool) -> Bool {
+        !isRunning && !isHeld
+    }
 }

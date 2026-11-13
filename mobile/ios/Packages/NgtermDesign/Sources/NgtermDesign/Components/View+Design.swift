@@ -40,6 +40,7 @@ extension View {
     ) -> some View {
         confirmationDialog(title, isPresented: isPresented, titleVisibility: .visible) {
             Button(action.title, role: .destructive, action: action.perform)
+                .disabled(!action.isEnabled)
             Button(String(localized: "Cancel", bundle: .module), role: .cancel) {
                 // Cancel only closes the dialog
             }

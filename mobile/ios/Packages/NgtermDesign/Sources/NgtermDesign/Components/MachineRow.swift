@@ -48,7 +48,8 @@ public struct MachineRow<Summary: View>: View {
         // one element, its action a custom action of it (the line's button is hidden from VoiceOver)
         .accessibilityElement(children: .combine)
         .accessibilityActions {
-            if let action {
+            // VoiceOver is offered only what the screen's button takes now
+            if let action, action.isEnabled {
                 Button(action.title, action: action.perform)
             }
         }

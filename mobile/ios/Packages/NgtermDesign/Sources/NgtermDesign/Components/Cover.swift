@@ -41,6 +41,7 @@ public struct Cover: View {
                 if let action {
                     Button(action.title, action: action.perform)
                         .prominentAction()
+                        .disabled(!action.isEnabled)
                 }
             }
             .frame(maxWidth: Spacing.textWidth)

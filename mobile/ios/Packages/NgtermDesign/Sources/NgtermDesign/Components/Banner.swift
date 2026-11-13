@@ -78,6 +78,7 @@ public struct Banner: View {
             .buttonStyle(.borderless)
             .foregroundStyle(Palette.secondaryText.color)
             .accessibilityLabel(dismiss.title)
+            .disabled(!dismiss.isEnabled)
         }
     }
 

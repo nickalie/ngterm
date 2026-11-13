@@ -4,7 +4,7 @@ public struct RowAction {
     public let title: String
     /// What it does.
     @preconcurrency public let perform: @MainActor () -> Void
-    /// Whether it takes a tap now; a button for it shows disabled otherwise.
+    /// Whether it takes a tap now; otherwise every button for it shows disabled and VoiceOver isn't offered it.
     public let isEnabled: Bool
 
     /// The action `title` doing `perform`, taking a tap while `isEnabled`.

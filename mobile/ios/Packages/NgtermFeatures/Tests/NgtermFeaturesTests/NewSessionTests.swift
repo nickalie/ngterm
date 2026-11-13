@@ -247,4 +247,12 @@ internal struct NewSessionTests {
         #expect(model.newSession == NewSessionState())
         #expect(model.notice == nil)
     }
+
+    @Test("the sheet's Create (button or Return) takes a tap only while no create runs, its own or another")
+    internal func sheetCreateHeld() {
+        #expect(NewSessionState().takesCreate(isHeld: false))
+        #expect(!NewSessionState().takesCreate(isHeld: true))
+        #expect(!NewSessionState(isRunning: true).takesCreate(isHeld: false))
+        #expect(!NewSessionState(failure: "refused").takesCreate(isHeld: true))
+    }
 }

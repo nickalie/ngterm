@@ -54,7 +54,7 @@ internal struct NewSessionSheet: View {
                             .accessibilityLabel(String(localized: "Creating"))
                     } else {
                         Button(String(localized: "Create"), action: create)
-                            .disabled(isHeld)
+                            .disabled(!state.takesCreate(isHeld: isHeld))
                             .accessibilityIdentifier("create-session")
                     }
                 }
@@ -63,7 +63,7 @@ internal struct NewSessionSheet: View {
     }
 
     private func create() {
-        if !state.isRunning {
+        if state.takesCreate(isHeld: isHeld) {
             onCreate(name)
         }
     }
