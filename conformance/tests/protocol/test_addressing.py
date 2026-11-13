@@ -1,5 +1,9 @@
 """Target resolution and the request envelope."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
+
 import pytest
 from agterm_conformance.match import (
     active_session_id,
@@ -120,3 +124,22 @@ def test_a_request_runs_when_its_client_hangs_up_before_the_answer(ctl):
     ctl.wait_tree(lambda tree: find_session(tree, sid).get("name") == "hung up")
     assert_ok(ctl.request("version"))
     assert_ok(ctl.request("session.close", sid))
+
+
+@pytest.mark.covers("session.rename", "field:tree.session.name")
+def test_a_burst_of_clients_that_hang_up_all_have_their_requests_run(ctl):
+    # Fire-and-forget clients at once: some connect while the app is between two accepts and close before it takes them.
+    sids = [assert_ok(ctl.request("session.new"))["id"] for _ in range(12)]
+    start = threading.Barrier(len(sids))
+
+    def hang_up(sid):
+        client = ctl.instance.client()
+        start.wait()
+        client.send_and_hang_up({"cmd": "session.rename", "target": sid, "args": {"name": f"burst {sid[:8]}"}})
+
+    with ThreadPoolExecutor(len(sids)) as pool:
+        list(pool.map(lambda sid: copy_context().run(hang_up, sid), sids))
+    ctl.wait_tree(lambda tree: all(find_session(tree, sid).get("name") == f"burst {sid[:8]}" for sid in sids))
+    assert_ok(ctl.request("version"))
+    for sid in sids:
+        assert_ok(ctl.request("session.close", sid))

@@ -8,10 +8,21 @@ in the app's. Their lines are in the build's command-line dialect (`agterm_confo
 import json
 import os
 import shlex
+import sys
+from pathlib import Path
 
 import pytest
+from agterm_conformance import transport
 from agterm_conformance.command_line import CommandLines
-from agterm_conformance.match import ANY, assert_absent, assert_error, assert_ok, assert_subset, window_ids
+from agterm_conformance.match import (
+    ANY,
+    assert_absent,
+    assert_error,
+    assert_ok,
+    assert_subset,
+    find_session,
+    window_ids,
+)
 from agterm_conformance.wait import wait_until
 
 UNKNOWN = "zzz"
@@ -385,6 +396,28 @@ def test_hook_gets_its_event_on_stdin_and_in_its_environment(ctl, hooks, adapter
     closed = ctl.wait_event(cursor, "session.closed", {"session": sid})
     assert json.loads(_written(out / f"session.closed-{sid}.json")) == closed
     assert _written(out / f"session.closed-{sid}.env") == f"session.closed|{sid}|{window}|{socket}"
+
+
+@pytest.mark.covers("session.rename", "field:tree.session.name")
+def test_a_hook_that_sends_a_request_and_exits_has_it_run(ctl, hooks, adapter):
+    # A user's hook script that writes its request and exits without waiting for the answer.
+    lines = CommandLines.of(adapter)
+    script = ctl.instance.root / "rename-hook.py"
+    script.write_text(
+        "import json, os, sys\n"
+        f"sys.path.insert(0, {os.fspath(Path(transport.__file__).parents[1])!r})\n"
+        "from agterm_conformance import transport\n"
+        "sys.stdin.read()\n"
+        'request = {"cmd": "session.rename", "target": os.environ["AGT_SESSION_ID"], "args": {"name": "hooked"}}\n'
+        'with transport.connect(os.environ["AGT_SOCKET"], 10) as connection:\n'
+        '    connection.sendall(json.dumps(request).encode() + b"\\n")\n'
+    )
+    hooks.write_text(f"on session.created {lines.quote(sys.executable)} {lines.quote(script)}\n")
+    assert assert_ok(ctl.request("hooks.reload")) == {"count": 0}
+    sid = assert_ok(ctl.request("session.new"))["id"]
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get("name") == "hooked")
+    assert_ok(ctl.request("version"))
+    assert_ok(ctl.request("session.close", sid))
 
 
 class _Gate:
