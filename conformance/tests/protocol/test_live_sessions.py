@@ -630,9 +630,10 @@ def _until_ended(stream):
 def test_a_viewer_that_stops_reading_is_dropped(live):
     """A viewer whose frames back up is dropped, never waited on: upstream's `ControlStreamOwner` refuses a frame once
     256 wait for the writer, and closes the stream once one write blocks past its timeout. Status changes come faster
-    than either bound, so the drop is certain; the session and its other viewers go on."""
+    than either bound, so the drop is certain; the session and its other viewers go on. The viewer keeps acking, so
+    the heartbeat's 30 s silence bound never drops it first on a slow runner."""
     sid = _live_session(live)
-    stalled, _ = _subscribed(live, sid, "mirror")
+    stalled, gen = _subscribed(live, sid, "mirror")
     with stalled:
         _presenters(live, sid, {"mirrors": 1})
         statuses = itertools.cycle(["active", "blocked"])
@@ -642,6 +643,9 @@ def test_a_viewer_that_stops_reading_is_dropped(live):
             assert time.monotonic() < deadline, "a viewer that reads nothing was never dropped"
             for _ in range(64):
                 assert_ok(live.request("session.status", sid, status=next(statuses)))
+            # an ack is a viewer's sign of life whether or not it read anything; one the drop beat goes nowhere
+            with contextlib.suppress(OSError):
+                stalled.send({"kind": "ack", "gen": gen, "rev": 0})
         # the stream ends; a socket keeps what the viewer had not read before the end, a Windows pipe drops it
         _until_ended(stalled)
     reading, _ = _subscribed(live, sid, "mirror")
