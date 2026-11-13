@@ -1062,6 +1062,34 @@ def test_stop_reaps_a_split_whose_survivor_is_promoted_by_the_first_kill(
     assert find_leftovers(instance.live_dir, UPSTREAM) == []
 
 
+def test_stop_reaps_a_daemon_its_session_starts_again(
+    roots: list[Path], fake_bin: Path, tmp_path: Path, daemons: list[subprocess.Popen[bytes]]
+) -> None:
+    # A parent's last pane killed while its companion lives: the app starts its shell again under the same daemon name
+    adapter = UpstreamVocabularyAdapter(fake_bin)
+    instance = adapter.launch()
+    first, second = (spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons) for _ in range(2))
+    assert instance.request("fake.adopt", pid=first, session="s1", daemon="a-parent", respawn=[second]).ok
+    adapter.stop(instance, cleanup=False)
+    requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
+    assert [request["target"] for request in requests if request["cmd"] == "zmx.kill"] == ["s1", "s1"]
+    assert find_leftovers(instance.live_dir, UPSTREAM) == []
+    shutil.rmtree(instance.root)
+
+
+def test_a_daemon_that_keeps_coming_back_is_killed_a_bounded_number_of_times(
+    roots: list[Path], fake_bin: Path, tmp_path: Path, daemons: list[subprocess.Popen[bytes]]
+) -> None:
+    adapter = UpstreamVocabularyAdapter(fake_bin)
+    instance = adapter.launch()
+    pids = [spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons) for _ in range(base.REAP_KILLS + 1)]
+    assert instance.request("fake.adopt", pid=pids[0], session="s1", daemon="d1", respawn=pids[1:]).ok
+    steps = base.reap_live_sessions(instance, settle=0)
+    assert steps.count("zmx.kill d1: ok") == base.REAP_KILLS
+    assert steps[-1] == "left listed: d1 claimed/None"
+    adapter.stop(instance)
+
+
 def test_a_refused_kill_is_not_retried(roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left"}
     monkeypatch.setenv("FAKE_LIVE_LIST", json.dumps({"zmx": {"entries": [row]}}))

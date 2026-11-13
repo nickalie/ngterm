@@ -8,8 +8,10 @@ exit 134 instead, without a core). FAKE_TERM=quit: SIGTERM exits 0, as the app's
 JSON for the `version` result. FAKE_LIVE_LIST: JSON replacing the `<group>.list` result. FAKE_LIVE_GROUP: the live-session
 group's name, by default the one of the implementation whose prefix the adapter set (the Rust build's `live`, the
 Swift reference's own under `AGTERM_`); the fake answers `<group>.list` under the result key `<group>`.
-`fake.adopt {pid, session?, pane?, daemon?}` makes that pid a claimed daemon which `<group>.kill` terminates;
-killing a left pane promotes the session's right pane into the left slot, as upstream does.
+`fake.adopt {pid, session?, pane?, daemon?, respawn?}` makes that pid a claimed daemon (listed as its `leaderPID`)
+which `<group>.kill` terminates; killing a left pane promotes the session's right pane into the left slot, as upstream
+does, and a daemon with `respawn` pids left takes the next one as its leader under the same name, as a session with
+companions starts its shell again.
 `tree` serves a settable tree (`fake.set_tree {tree?, error?, delay?}`); `events.read` serves a ring with
 upstream's cursor semantics, appended to by `fake.emit {kind, session?, payload?, delay?}`. A delay applies the
 change from a timer after the reply, as an app does work after acknowledging a command.
@@ -227,6 +229,7 @@ def handle(request: dict) -> dict:
                 "daemon": args.get("daemon", f"d{pid}"),
                 "sessionID": args.get("session", f"s{pid}"),
                 "pane": args.get("pane", "left"),
+                "respawn": [int(pid) for pid in args.get("respawn", [])],
             }
         )
         return {"ok": True}
@@ -242,6 +245,7 @@ def handle(request: dict) -> dict:
                 "sessionID": d["sessionID"],
                 "pane": d["pane"],
                 "windowID": "w1",
+                "leaderPID": d["pid"],
             }
             for d in sorted(daemons, key=lambda d: d["daemon"])
         ]
@@ -252,6 +256,9 @@ def handle(request: dict) -> dict:
         if match is None:
             return {"ok": False, "error": f"no {pane} pane daemon for session {session}"}
         os.kill(match["pid"], signal.SIGTERM)
+        if match["respawn"]:
+            match["pid"] = match["respawn"].pop(0)
+            return {"ok": True}
         daemons.remove(match)
         for survivor in daemons:
             if pane == "left" and survivor["sessionID"] == session:

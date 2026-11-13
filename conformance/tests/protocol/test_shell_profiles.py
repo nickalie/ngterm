@@ -209,11 +209,16 @@ def test_a_live_pane_runs_its_profiles_shell_and_a_profile_live_cannot_run_start
 
 
 def _directory_of(ctl, sid, **pane):
-    """The directory `sid`'s (its `pane=` one's) Git Bash is in, as Windows names it (`cygpath -m`: `C:/...`)."""
+    """The directory `sid`'s (its `pane=` one's) Git Bash is in, as Windows names it (`cygpath -m`: `C:/...`).
+
+    Its own `$PWD` is spelled as MSYS spells it (`/c/...`, `/tmp/...`): a Windows `C:\\...` one would be the
+    spelling a launch handed it, which its prompt then shows."""
     marker = f"QD{next(_MARKERS):04d}X"
-    line = f"printf '%s%s|%s|\\n' {marker[:3]} {marker[3:]} \"$(cygpath -m \"$PWD\")\"\n"
+    line = f"printf '%s%s|%s|%s|\\n' {marker[:3]} {marker[3:]} \"$(cygpath -m \"$PWD\")\" \"$PWD\"\n"
     assert_ok(ctl.request("session.type", sid, text=line, **pane))
-    return ctl.wait_text(sid, rf"(?m)^{marker}\|([^|\n]*)\|\s*$", **pane).group(1)
+    found = ctl.wait_text(sid, rf"(?m)^{marker}\|([^|\n]*)\|([^|\n]*)\|\s*$", **pane)
+    assert found.group(2).startswith("/") and "\\" not in found.group(2), found.group(2)
+    return found.group(1)
 
 
 @SHELL_PROFILES
@@ -231,6 +236,8 @@ def test_a_live_git_bash_pane_reports_its_directory_as_windows_names_it(launch):
     sid = _new(ctl)
     ctl.wait_tree(lambda tree: find_session(tree, sid).get(backed_key) is True)
     assert shell_of(ctl, sid) == "gitbash"
+    # its first prompt is in MSYS's spelling of where it started, as every later check's pane is
+    _directory_of(ctl, sid)
 
     # a directory with a space, entered the way a Git Bash user types it
     directory = ctl.instance.root / "git bash cwd"
@@ -251,3 +258,4 @@ def test_a_live_git_bash_pane_reports_its_directory_as_windows_names_it(launch):
     ctl.wait_mounted(copy, "left")
     assert find_session(ctl.tree(), copy)["cwd"] == str(directory)
     assert _directory_of(ctl, copy, pane="left") == directory.as_posix()
+    assert _directory_of(ctl, copy, pane="right") == directory.as_posix()

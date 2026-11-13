@@ -166,6 +166,8 @@ QUIT_WINDOW_WAIT = 2.0
 ABORT_GRACE = 10.0
 PROC_ROOT = Path("/proc")
 REAP_SETTLE = 8.0
+# Kills of one daemon name while reaping: its first leader, a respawn, and one spare.
+REAP_KILLS = 3
 LEFTOVER_GRACE = 5.0
 POLL_INTERVAL = 0.05
 
@@ -1328,13 +1330,15 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
     Re-lists after every kill: killing a left pane promotes its split survivor into the left slot, so a
     selector read before the kill no longer names that survivor. A claimed daemon the host does not list yet
     (`observation: absent`, as right after it starts) refuses a kill as not running, and a `pendingClose` one
-    refuses it outright, so both are waited for until `settle` runs out.
+    refuses it outright, so both are waited for until `settle` runs out. A session with companions starts its shell
+    again when its last pane exits (upstream's respawn on last pane exit), under the same daemon name with another
+    leader, so a daemon listed with a leader not yet killed is killed again, `REAP_KILLS` times at most.
     """
     steps: list[str] = []
     deadline = time.monotonic() + settle
     try:
         steps.append(f"listed: {_listed(instance)}")
-        tried: set[str] = set()
+        tried: set[tuple[str, Any]] = set()
         while True:
             entry, waiting = _next_claimed(instance, tried, time.monotonic() < deadline)
             if entry is None:
@@ -1342,7 +1346,7 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
                     break
                 threading.Event().wait(POLL_INTERVAL)
                 continue
-            tried.add(_daemon_key(entry))
+            tried.add(_kill_key(entry))
             args: dict[str, Any] = {"pane": entry["pane"], "force": True}
             if entry.get("windowID"):
                 args["window"] = entry["windowID"]
@@ -1397,7 +1401,8 @@ def _next_claimed(instance: Instance, tried: set[str], wait_absent: bool) -> tup
             and entry.get("state") == "claimed"
             and entry.get("sessionID")
             and entry.get("pane")
-            and _daemon_key(entry) not in tried
+            and _kill_key(entry) not in tried
+            and sum(key[0] == _daemon_key(entry) for key in tried) < REAP_KILLS
         ):
             if wait_absent and entry.get("observation") == "absent":
                 waiting = True
@@ -1408,6 +1413,11 @@ def _next_claimed(instance: Instance, tried: set[str], wait_absent: bool) -> tup
 
 def _daemon_key(entry: dict[str, Any]) -> str:
     return str(entry.get("daemon") or (entry["sessionID"], entry["pane"], entry.get("windowID")))
+
+
+def _kill_key(entry: dict[str, Any]) -> tuple[str, Any]:
+    """A daemon as one kill ends it: a respawned one keeps its name under another leader."""
+    return _daemon_key(entry), entry.get("leaderPID")
 
 
 def _terminate(process: subprocess.Popen[bytes]) -> bool:
