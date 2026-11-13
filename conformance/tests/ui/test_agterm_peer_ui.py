@@ -78,6 +78,8 @@ def test_attach_remote_lists_the_agterm_macs_sessions_and_attaches_the_chosen_on
     ui = ui_for(viewer)
     row = _attach_from_the_menu(ui, viewer, "build")
     assert row["remoteHost"] == "agterm:studio"
+    # the row precedes its pane's mount; a text read before it answers "session not realized"
+    viewer.wait_mounted(row["id"], "left")
     wait_text(viewer, row["id"], re.escape(f"attached {build['panes'][0]['daemon']}"), timeout=30)
     # the pinned destination reached agterm's CLI, ssh given the host alone
     studio.wait_call(lambda call: call["argv"] == ["zmx", "present", build["id"]], program="agtermctl")
@@ -133,6 +135,7 @@ def test_new_session_on_the_mac_creates_it_with_agtermctl_and_attaches_it(adapte
     made = wait_until(lambda: next((s for s in studio.state()["sessions"] if s["id"] != build["id"]), None))
     row = wait_until(lambda: next((s for s in _remote_rows(viewer) if s["name"] == made["name"]), None))
     assert row["remoteHost"] == "agterm:studio"
+    viewer.wait_mounted(row["id"], "left")
     wait_text(viewer, row["id"], re.escape(f"attached {made['panes'][0]['daemon']}"), timeout=30)
 
 def test_duplicate_session_on_a_remote_row_duplicates_it_on_the_mac(adapter, viewer, ui_for, studio):
