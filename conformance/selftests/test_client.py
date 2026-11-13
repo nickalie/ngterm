@@ -230,6 +230,33 @@ def test_symlink_out_of_root_refused_at_connect(live_server: FakeServer, root: P
     assert live_server.lines == []
 
 
+
+def test_hang_up_sends_the_request_without_a_newline_and_reads_nothing(serve, root: Path) -> None:
+    answered = threading.Event()
+
+    def handler(_line: bytes) -> None:
+        answered.set()
+
+    server = serve(handler)
+    Client(server.path, root).send_and_hang_up({"cmd": "session.rename", "target": "s", "args": {"name": "x"}})
+    assert answered.wait(5)
+    assert server.lines == [b'{"cmd":"session.rename","target":"s","args":{"name":"x"}}']
+
+
+def test_hang_up_missing_socket(root: Path) -> None:
+    with pytest.raises(ConnectFailed):
+        Client(root / "absent.sock", root).send_and_hang_up({"cmd": "version"})
+
+
+def test_hang_up_symlink_out_of_root_refused(live_server: FakeServer, root: Path) -> None:
+    link = root / "s.sock"
+    client = Client(link, root)
+    symlink(link, live_server.path)
+    with pytest.raises(SocketOutsideRoot):
+        client.send_and_hang_up({"cmd": "version"})
+    assert live_server.lines == []
+
+
 # -- streams
 
 

@@ -16,6 +16,7 @@ PACKAGE = CONFORMANCE / "agterm_conformance"
 CONNECT_SITES = {
     ("client.py", "_open_stream"),
     ("client.py", "_exchange"),
+    ("client.py", "send_and_hang_up"),
     ("transport.py", "connect"),
     ("impls/base.py", "wait_for_unix_socket"),
     ("loopback_ssh.py", "_banner"),

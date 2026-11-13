@@ -1,9 +1,6 @@
 """Target resolution and the request envelope."""
 
-import json
-
 import pytest
-from agterm_conformance import transport
 from agterm_conformance.match import (
     active_session_id,
     active_workspace_id,
@@ -119,10 +116,7 @@ def test_a_request_runs_when_its_client_hangs_up_before_the_answer(ctl):
     # answer's write to the gone client into a plain write error: the request still runs and the app keeps serving.
     # Closing before the newline makes the hang-up come first every time: the app reads the line only at EOF.
     sid = assert_ok(ctl.request("session.new"))["id"]
-    client = ctl.instance.client()
-    line = json.dumps({"cmd": "session.rename", "target": sid, "args": {"name": "hung up"}}).encode()
-    with transport.connect(client.socket_path, client.timeout) as sock:
-        sock.sendall(line)
+    ctl.instance.client().send_and_hang_up({"cmd": "session.rename", "target": sid, "args": {"name": "hung up"}})
     ctl.wait_tree(lambda tree: find_session(tree, sid).get("name") == "hung up")
     assert_ok(ctl.request("version"))
     assert_ok(ctl.request("session.close", sid))

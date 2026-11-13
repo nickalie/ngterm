@@ -244,6 +244,20 @@ class Client:
         trace.event("socket", **entry, response=response.raw)
         return response
 
+    def send_and_hang_up(self, payload: dict[str, Any]) -> None:
+        """Write the request with no newline and close before any answer: the server reads the line only at the end of
+        the stream, so its answer always goes to a client already gone."""
+        line = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
+        check_under_root(self.socket_path, self.root)
+        try:
+            with transport.connect(self.socket_path, self.timeout) as sock:
+                sock.sendall(line)
+        except TimeoutError:
+            raise ClientTimeout(f"{self.socket_path} took no request within {self.timeout}s") from None
+        except OSError as error:
+            raise ConnectFailed(f"cannot connect to {self.socket_path}: {error}") from error
+        trace.event("socket", socket=str(self.socket_path), direction="hang-up", request=payload)
+
     def _exchange(self, data: bytes, timeout: float) -> bytes:
         # Re-checked per connection: the socket file can appear (or be swapped for a link) after init.
         check_under_root(self.socket_path, self.root)
