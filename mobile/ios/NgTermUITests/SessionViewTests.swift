@@ -16,6 +16,48 @@ internal final class SessionViewTests: XCTestCase {
         app.textViews.matching(NSPredicate(format: "value CONTAINS %@", text)).firstMatch
     }
 
+    // the attached session `id`'s row in the machines' column
+    @MainActor
+    private static func sidebarRow(_ id: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["sidebar-session-\(id)"].firstMatch
+    }
+
+    // opens the session `id` from its machine's sessions, and waits for its pane's screen `text`
+    @MainActor
+    private static func open(_ id: String, showing text: String, in app: XCUIApplication) {
+        let row = app.descendants(matching: .any)["session-\(id)"].firstMatch
+        FakeApp.expect(row, "\(id)'s row")
+        row.tap()
+        FakeApp.expect(screen(showing: text, in: app), "\(id)'s pane")
+    }
+
+    // a phone goes back from the session and the machine's sessions to the machines; a tablet shows them beside it
+    @MainActor
+    private static func backToMachines(in app: XCUIApplication) {
+        let add = app.buttons["add-machine"]
+        for _ in 0..<2 where !add.exists {
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+        }
+        FakeApp.expect(add, "the machines")
+    }
+
+    // types ⌘⌥ with `key` and waits for the session whose pane's screen shows `text`
+    @MainActor
+    private static func moveSession(_ key: String, to text: String, in app: XCUIApplication) {
+        app.typeKey(key, modifierFlags: [.command, .option])
+        FakeApp.expect(screen(showing: text, in: app), "the session showing \(text) after the move")
+    }
+
+    @MainActor
+    private static func keepScreenshot(of app: XCUIApplication, named name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        XCTContext.runActivity(named: name) { activity in
+            activity.add(shot)
+        }
+    }
+
     // the app on `work`'s session view, its first pane selected
     @MainActor
     private func openSession() -> XCUIApplication {
@@ -133,6 +175,55 @@ internal final class SessionViewTests: XCTestCase {
         }
         companionRow.tap()
         FakeApp.expect(Self.screen(showing: "R1 ready", in: app), "the companion's pane again")
+    }
+
+    // `split` lists work, notes and review (work's companion), the core's order: parents first, companions after.
+    // Attached alone, the companion keeps "Companion of work" at the sessions' indent; with its parent attached, the
+    // column and the session moves (⌘⌥↓ and ⌘⌥↑ on a hardware keyboard) go work, review, notes, not the listing's order
+    @MainActor
+    internal func testAnOrphanCompanionStandsAloneAndTheSessionMovesFollowTheTree() throws {
+        let arguments = ["-ngterm-fake-session", "-ngterm-fake-companion"]
+        let app = FakeApp.launch(withKey: true, arguments: arguments, for: self)
+        FakeApp.showMachines(in: app)
+        FakeApp.expectRow("split", reads: "Connected", in: app)
+        app.descendants(matching: .any)["machine-row-split"].firstMatch.tap()
+        Self.open("review", showing: "R1 ready", in: app)
+        Self.backToMachines(in: app)
+        let companionRow = Self.sidebarRow("review", in: app)
+        FakeApp.expect(companionRow, "the attached companion under its machine")
+        XCTAssertTrue(companionRow.label.contains("Companion of work"), "the orphan says whose it is")
+        XCTAssertFalse(Self.sidebarRow("work", in: app).exists, "the parent isn't attached")
+        Self.keepScreenshot(of: app, named: "orphan companion at the sessions' indent")
+
+        // a phone opens the machine's sessions again; a tablet shows them beside the session
+        if !Self.isPad {
+            app.descendants(matching: .any)["machine-row-split"].firstMatch.tap()
+        }
+        Self.open("notes", showing: "N1 ready", in: app)
+        if !Self.isPad {
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+        }
+        Self.open("work", showing: "P1 ready", in: app)
+        Self.backToMachines(in: app)
+        let rows = ["work", "review", "notes"].map { Self.sidebarRow($0, in: app) }
+        for row in rows {
+            FakeApp.expect(row, "\(row.identifier) under its machine")
+        }
+        XCTAssertLessThan(rows[0].frame.minY, rows[1].frame.minY, "the companion comes under its parent")
+        XCTAssertLessThan(rows[1].frame.minY, rows[2].frame.minY, "the next family comes after the companion")
+        XCTAssertTrue(rows[1].label.contains("Companion of work"), "the nested companion says whose it is")
+        Self.keepScreenshot(of: app, named: "companion nested under its attached parent")
+
+        rows[0].tap()
+        let first = Self.screen(showing: "P1 ready", in: app)
+        FakeApp.expect(first, "work's first pane")
+        // a tap gives the terminal the keyboard, as a user's does before a chord
+        first.tap()
+        let down = XCUIKeyboardKey.downArrow.rawValue
+        Self.moveSession(down, to: "R1 ready", in: app)
+        Self.moveSession(down, to: "N1 ready", in: app)
+        Self.moveSession(down, to: "P1 ready", in: app)
+        Self.moveSession(XCUIKeyboardKey.upArrow.rawValue, to: "N1 ready", in: app)
     }
 
     @MainActor

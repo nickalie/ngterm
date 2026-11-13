@@ -10,7 +10,8 @@
     /// leads both panes; when asked, its origin then asks whether to deploy (``deployAsk``), and says what it does with
     /// the answer as the session's context ("Deploying to production", or "Deploy called off"); when asked, its first
     /// pane runs Claude Code (``FakeChatWorld``). Each pane's screen names it on its first line ("P1 ready"), so a test
-    /// sees which pane shows. With a companion, `split` also lists `review`, a companion of `work` with one pane.
+    /// sees which pane shows. With a companion, `split` also lists `notes`, a session of its own, and `review`, a
+    /// companion of `work`, each with one pane, listed as the core lists them: parents first, companions after them.
     internal enum FakeSessionWorld {
         /// The machine's id in the store.
         internal static let machineId = "split"
@@ -18,6 +19,8 @@
         internal static let sessionId = "work"
         /// The companion's id, when there is one.
         internal static let companionId = "review"
+        /// The id of the session listed with the companion, between `work` and it.
+        internal static let otherId = "notes"
         nonisolated private static let columns = 40
         nonisolated private static let rows = 12
         private static let paneIds = ["P1", "P2"]
@@ -74,8 +77,8 @@
         }
 
         /// Saves the machine in `machines`, signing in with `keyId`, and gives `core` its session, whose origin asks
-        /// ``deployAsk`` when `asks`, and whose first pane runs Claude Code (``FakeChatWorld``) when `chats`; and its
-        /// companion ``companionId`` when `companion`.
+        /// ``deployAsk`` when `asks`, and whose first pane runs Claude Code (``FakeChatWorld``) when `chats`; and
+        /// ``otherId`` and its companion ``companionId`` when `companion`.
         @MainActor
         internal static func seed(
             _ machines: MachineStore,
@@ -99,12 +102,12 @@
             ]
             core.panes[sessionId] = Set(paneIds)
             if companion {
-                let companionPanes = ["R1"]
-                core.sessions[machineId, default: []].append(
-                    fakeSession(id: companionId, name: companionId, parent: sessionId)
-                )
-                core.panes[companionId] = Set(companionPanes)
-                core.attachEvents[companionId] = attachEvents(of: companionId, panes: companionPanes)
+                let others = [(otherId, ["N1"], String?.none), (companionId, ["R1"], Optional(sessionId))]
+                for (id, panes, parent) in others {
+                    core.sessions[machineId, default: []].append(fakeSession(id: id, name: id, parent: parent))
+                    core.panes[id] = Set(panes)
+                    core.attachEvents[id] = attachEvents(of: id, panes: panes)
+                }
             }
             let agent = FakeChatWorld(core: core, pace: .real)
             core.attachEvents[sessionId] =
