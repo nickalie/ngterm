@@ -53,6 +53,12 @@ while (($#)); do
   esac
 done
 [[ "$(host_os)" == linux ]] || die "the Android e2e test runs on Linux"
+# the evidence directory is made and resolved now, before anything starts and before the cd below: a path it cannot
+# make or write stops the run here, not in the exit trap
+if [[ -n "$EVIDENCE" ]]; then
+  mkdir -p "$EVIDENCE" 2>/dev/null && [[ -w "$EVIDENCE" ]] || die "cannot write the evidence directory $EVIDENCE"
+  EVIDENCE="$(cd "$EVIDENCE" && pwd)"
+fi
 
 cd "$NATIVE_ROOT"
 eval "$(scripts/setup-android.sh --check)"
@@ -120,15 +126,19 @@ reap() {
 }
 collect() {
   [[ -n "$EVIDENCE" ]] || return 0
-  mkdir -p "$EVIDENCE"
+  mkdir -p "$EVIDENCE" 2>/dev/null || {
+    echo "→ cannot make $EVIDENCE; no evidence collected" >&2
+    return 0
+  }
   "$ADB" pull "$DEVICE_EVIDENCE/." "$EVIDENCE/" >/dev/null 2>&1 || true
   "$ADB" logcat -d >"$EVIDENCE/logcat.txt" 2>/dev/null || true
   cp "$WORK/headless.log" "$EVIDENCE/" 2>/dev/null || true
 }
 on_exit() {
   local status=$?
-  collect
+  # reap first: whatever collect meets, the processes, the namespace and the port reverse never stay behind
   reap
+  collect
   if ((status == 0)); then
     rm -rf "$WORK"
   else
