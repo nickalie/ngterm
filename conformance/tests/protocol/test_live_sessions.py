@@ -20,6 +20,7 @@ import itertools
 import json
 import os
 import shlex
+import socket
 import time
 
 import pytest
@@ -667,6 +668,27 @@ def test_a_viewer_that_stops_reading_is_dropped(live):
         _wait_dropped(live, sid, stalled, gen, timeout=60, between=lambda: time.sleep(0.5))
         # the stream ends; a socket keeps what the viewer had not read before the end, a Windows pipe drops it
         _until_ended(stalled)
+    _a_new_viewer_gets_frames(live, sid)
+
+
+@LIVE_IN_ANY_SHELL
+@pytest.mark.covers("live.present", "notify", "field:tree.session.presenters", streams=("live.present",))
+def test_a_viewer_that_hangs_up_with_frames_backed_up_is_dropped(live):
+    """A viewer that hangs up while a write to it is blocked on a full buffer is dropped: the write fails at the
+    hang-up, well before its timeout, and the session goes on."""
+    sid = _live_session(live)
+    leaving, _ = _subscribed(live, sid, "mirror")
+    with leaving:
+        _presenters(live, sid, {"mirrors": 1})
+        for _ in range(6):
+            assert_ok(live.request("notify", sid, body=BIG_NOTIFY_BODY))
+        # a socket's shutdown ends it both ways with no reset (closing it with frames unread would send one), so the
+        # origin's read sees a plain end; a pipe has no shutdown, and closing it is the hang-up
+        if isinstance(leaving.sock, socket.socket):
+            leaving.sock.shutdown(socket.SHUT_RDWR)
+        else:
+            leaving.close()
+        _presenters(live, sid, None)
     _a_new_viewer_gets_frames(live, sid)
 
 
