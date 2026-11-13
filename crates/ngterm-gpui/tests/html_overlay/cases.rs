@@ -3,7 +3,7 @@
 //! A [`Fixture`] is a headless GPUI app with one window whose root shows a page's element; every turn runs GPUI's
 //! tasks (the engine's events arrive through the overlay's pump), renders a frame and reads it back.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -560,6 +560,8 @@ pub struct FakeOrigin {
     /// How many reads of the held path are answered before the rest are held.
     answered_first: usize,
     parked: RefCell<Vec<ngterm_wpe_client::SchemeToken>>,
+    /// Set by [`FakeOrigin::release`]: the held path has arrived, and every later read of it is answered.
+    released: Cell<bool>,
 }
 
 impl FakeOrigin {
@@ -576,26 +578,40 @@ impl FakeOrigin {
             held: None,
             answered_first: 0,
             parked: RefCell::default(),
+            released: Cell::new(false),
         })
+    }
+
+    /// What a read of `path` gets: the file from the map, or a failure when there is none.
+    fn resource(&self, path: &str) -> Result<PageResource, String> {
+        self.files
+            .get(path)
+            .map(|(mime, body)| PageResource {
+                mime_type: (*mime).to_owned(),
+                body: body.clone(),
+            })
+            .ok_or_else(|| "file cannot be read".to_owned())
+    }
+
+    /// Answers the held reads with the file and stops holding it, as a large file that has arrived: a read the page
+    /// makes later is answered too.
+    fn release(&self) {
+        self.released.set(true);
+        for token in self.parked.borrow_mut().drain(..) {
+            html_overlay::answer_resource(token, self.resource(self.held.unwrap_or_default()));
+        }
     }
 }
 
 impl ReplicaLink for FakeOrigin {
     fn fetch(&self, _: Uuid, path: String, token: ngterm_wpe_client::SchemeToken) {
         let earlier = self.requested.borrow().iter().filter(|read| **read == path).count();
-        if self.held == Some(path.as_str()) && earlier >= self.answered_first {
+        if self.held == Some(path.as_str()) && !self.released.get() && earlier >= self.answered_first {
             self.requested.borrow_mut().push(path);
             self.parked.borrow_mut().push(token);
             return;
         }
-        let result = self
-            .files
-            .get(path.as_str())
-            .map(|(mime, body)| PageResource {
-                mime_type: (*mime).to_owned(),
-                body: body.clone(),
-            })
-            .ok_or_else(|| "file cannot be read".to_owned());
+        let result = self.resource(&path);
         self.requested.borrow_mut().push(path);
         html_overlay::answer_resource(token, result);
     }
@@ -1201,6 +1217,9 @@ fn granted_unreadable_play(fixture: &mut Fixture, _: &Gpu) -> Result<(), String>
 /// A `play()` of an element whose candidates both need a rescue: the first file's blob cannot be decoded, and the
 /// second's read is held by the origin, then answered. Each rescue runs the selection again, aborting the play each
 /// time; the page's promise still resolves once the second file plays. Green when it does, blue when it rejected.
+/// The first held read may be `WebKit`'s own rather than the rescue's: when the first file's rescue reruns the
+/// selection just as it runs out, the rerun cancels the second source's queued `error`, so that file's rescue starts
+/// one selection later, after its held read.
 fn replica_play_reruns(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     const GREEN: [u8; 4] = [0x30, 0xc0, 0x30, 0xff];
     const BLUE: [u8; 4] = [0x30, 0x30, 0xc0, 0xff];
@@ -1233,22 +1252,13 @@ fn replica_play_reruns(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     })?;
     fixture.click(point(px(160.), px(120.)))?;
     let held = Rc::clone(&origin);
-    fixture.wait("the second file's rescue read", || !held.parked.borrow().is_empty())?;
+    fixture.wait("a held read of the second file", || !held.parked.borrow().is_empty())?;
     // let the first file's blob fail and its rerun of the selection end before the second file arrives
     let settle = Instant::now() + Duration::from_millis(500);
     while Instant::now() < settle {
         fixture.frame()?;
     }
-    let parked: Vec<_> = origin.parked.borrow_mut().drain(..).collect();
-    for token in parked {
-        html_overlay::answer_resource(
-            token,
-            Ok(PageResource {
-                mime_type: "audio/wav".to_owned(),
-                body: wav_second(),
-            }),
-        );
-    }
+    origin.release();
     let mut seen = [0; 4];
     fixture.until("the play's outcome", &element, |_, width, pixels| {
         seen = pixel(pixels, width, width / 2, 200);
