@@ -70,6 +70,9 @@ pub struct LaunchSeed {
     /// A live pane's attach as data, which the pane runs in process in place of `command` (its shell line); `None`
     /// for any other pane, and behind a session host's client.
     pub attach: Option<LiveAttach>,
+    /// `command` is a remote session pane's attach, which ends on its own line naming the host and the status, so its
+    /// exit is never a failure to launch, however soon it came.
+    pub remote: bool,
 }
 
 /// The launch-wide inputs a seed is decided against (upstream's `LaunchSeedPolicy`).
@@ -145,6 +148,7 @@ fn resolve_seed_in(
         plan.wait_after_command = false;
     }
     LaunchSeed {
+        remote: session.remote_host().is_some() && plan.command.is_some(),
         command: plan.command,
         initial_input: plan.initial_input,
         wait_after_command: plan.wait_after_command,
@@ -197,6 +201,7 @@ pub fn resolve_live_seed(
         env: configuration.environment.clone().into_iter().collect(),
         live: true,
         attach: configuration.in_process(attach),
+        remote: false,
     }
 }
 

@@ -188,6 +188,7 @@ fn a_remote_split_is_created_once_and_attached_with_lead_and_reconnect() {
     assert!(command.contains("ssh") && command.contains("buildbox") && command.contains(&daemon_name(target)));
     assert!(command.contains("NGTERM_LIVE_MANAGED_CLAIM=1") && command.contains("reconnecting"));
     assert!(seed.wait_after_command);
+    assert!(seed.remote, "the attach names its own end: never a failure to launch");
     assert!(!seed.live, "the viewer must not wrap ssh in a local live daemon");
     let calls = remote.runner.calls.lock().unwrap();
     assert_eq!(calls.len(), 2);
@@ -207,7 +208,7 @@ fn a_refused_remote_split_gets_an_error_receipt_instead_of_a_local_shell() {
     remote.script([result(&json!({"ok": false, "error": "origin refused"}))]);
     remote.request();
     let seed = remote.spawn();
-    assert!(seed.wait_after_command);
+    assert!(seed.wait_after_command && seed.remote);
     assert!(seed.command.is_some());
     assert!(remote.has_failure("origin refused"));
     assert_eq!(remote.runner.calls.lock().unwrap().len(), 1);

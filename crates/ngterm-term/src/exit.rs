@@ -6,6 +6,11 @@
 //! - An abnormal exit — nonzero within `ExitPolicy::Launched`'s `abnormal_runtime` (`abnormal-command-exit-runtime`, 250 ms) —
 //!   holds the pane on libghostty's failure report, a plain shell's included.
 //! - A command run with `wait_after_command` holds the pane on "Process exited. Press any key to close the terminal."
+//! - A remote pane's attach is never a failure to launch, however soon it failed: its wrapper ends on its own line
+//!   naming the host and the status (`ngterm_core::remote::ssh::attach_pane_command`), and a fast link makes a gone
+//!   session's attach end within the abnormal runtime, where the report would echo the internal ssh line and scroll
+//!   that line away. Upstream's libghostty would report it too (on macOS any exit that soon, `Surface.childExited`),
+//!   which only a fast link reaches; ngterm departs here on purpose.
 //! - Anything else closes.
 //!
 //! A program whose exit status nobody could read (a live session's shell after the session server's update handoff on
@@ -38,6 +43,8 @@ pub enum ExitPolicy {
         wait_after_command: bool,
         /// An exit this soon with a nonzero status counts as a failure to launch.
         abnormal_runtime: Duration,
+        /// The command is a remote pane's attach, which reports its own end: never a failure to launch.
+        remote: bool,
     },
 }
 
@@ -65,6 +72,7 @@ impl ExitPolicy {
             command,
             wait_after_command,
             abnormal_runtime,
+            remote,
             ..
         } = self
         else {
@@ -72,7 +80,7 @@ impl ExitPolicy {
         };
         if *command && !*wait_after_command {
             Outcome::Close
-        } else if runtime <= *abnormal_runtime && code.is_some_and(|code| code != 0) {
+        } else if !*remote && runtime <= *abnormal_runtime && code.is_some_and(|code| code != 0) {
             Outcome::Failed
         } else if *wait_after_command {
             Outcome::Prompt
@@ -155,7 +163,31 @@ mod tests {
             command,
             wait_after_command: wait,
             abnormal_runtime: ABNORMAL_EXIT_RUNTIME,
+            remote: false,
         }
+    }
+
+    fn remote() -> ExitPolicy {
+        ExitPolicy::Launched {
+            argv: "/bin/sh -c 'ssh -tt box ...'".to_owned(),
+            command: true,
+            wait_after_command: true,
+            abnormal_runtime: ABNORMAL_EXIT_RUNTIME,
+            remote: true,
+        }
+    }
+
+    #[test]
+    fn a_remote_pane_that_fails_at_once_holds_on_its_own_line() {
+        let soon = Duration::from_millis(190);
+        let later = Duration::from_secs(3);
+        // its wrapper printed the host and the status: the prompt follows them, never the failure report
+        assert_eq!(remote().outcome(Some(1), soon), Outcome::Prompt);
+        assert_eq!(remote().outcome(Some(255), Duration::ZERO), Outcome::Prompt);
+        assert_eq!(remote().outcome(Some(1), later), Outcome::Prompt);
+        assert_eq!(remote().outcome(Some(0), soon), Outcome::Prompt);
+        // the same command run locally failed to launch
+        assert_eq!(launched(true, true).outcome(Some(1), soon), Outcome::Failed);
     }
 
     #[test]

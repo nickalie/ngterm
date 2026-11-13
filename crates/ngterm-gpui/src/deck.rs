@@ -1030,6 +1030,7 @@ impl Deck {
         launch.live.clone_from(&replacement.attach);
         // a remote replica's attach holds after its ssh, as the pane's first attach did
         launch.wait_after_command = replacement.remote;
+        launch.remote = replacement.remote;
         launch.env = merged_env(&launch.env, &replacement.env);
         launch.working_directory = Some(replacement.cwd.clone().unwrap_or(old_cwd).into());
         let spec = PaneSpec {

@@ -544,6 +544,7 @@ impl Panes {
             live: replacement.attach.clone(),
             painter: None,
             status_file: None,
+            remote: replacement.remote,
         };
         let fresh = self.cell(&spec.token);
         let installed = core

@@ -244,6 +244,7 @@ impl Host {
                 command: launch.command.is_some(),
                 wait_after_command: launch.wait_after_command || self.wait_after_command,
                 abnormal_runtime: self.abnormal_exit_runtime,
+                remote: launch.remote,
             },
         }
     }
@@ -550,6 +551,9 @@ pub struct Launch {
     pub painter: Option<PathBuf>,
     /// Where the program's exit status is written when it ends by itself ([`PaneConfig::status_file`]).
     pub status_file: Option<PathBuf>,
+    /// `command` is a remote pane's attach, which ends on its own line naming the host and the status: its exit is
+    /// never a failure to launch ([`crate::exit`]).
+    pub remote: bool,
 }
 
 impl Launch {
@@ -574,6 +578,7 @@ impl Launch {
             live: seed.attach.clone(),
             painter: None,
             status_file: None,
+            remote: seed.remote,
         }
     }
 }
@@ -994,6 +999,7 @@ mod tests {
                 command: false,
                 wait_after_command: true,
                 abnormal_runtime: Duration::from_secs(1),
+                remote: false,
             }
         );
         let defaults = host_of("", None);
@@ -1305,6 +1311,7 @@ mod tests {
             live: None,
             painter: None,
             status_file: None,
+            remote: false,
         };
         let prepared = host(None).prepare(&launch, &MapEnv::new());
         // `/bin/sh -c <line>`; on Windows (no `ComSpec` here) `cmd.exe /D /S /C "<line>"`
@@ -1334,6 +1341,7 @@ mod tests {
                 command: true,
                 wait_after_command: true,
                 abnormal_runtime: ABNORMAL_EXIT_RUNTIME,
+                remote: false,
             }
         );
     }
@@ -1575,6 +1583,32 @@ mod tests {
     }
 
     #[test]
+    fn a_remote_panes_attach_is_never_a_failure_to_launch() {
+        let seed = LaunchSeed {
+            command: Some("ssh -tt box attach".to_owned()),
+            wait_after_command: true,
+            remote: true,
+            ..LaunchSeed::default()
+        };
+        let launch = Launch::from_seed(&seed, None, &[]);
+        assert!(launch.remote);
+        let prepared = host(None).prepare(&launch, &MapEnv::new());
+        assert!(matches!(
+            prepared.exit,
+            ExitPolicy::Launched {
+                command: true,
+                wait_after_command: true,
+                remote: true,
+                ..
+            }
+        ));
+        // a local command's seed keeps the failure report
+        let local = Launch::from_seed(&LaunchSeed { remote: false, ..seed }, None, &[]);
+        let prepared = host(None).prepare(&local, &MapEnv::new());
+        assert!(matches!(prepared.exit, ExitPolicy::Launched { remote: false, .. }));
+    }
+
+    #[test]
     fn a_seed_runs_with_its_variables_over_the_panes() {
         let seed = LaunchSeed {
             command: Some("ngterm-session attach x".to_owned()),
@@ -1590,6 +1624,7 @@ mod tests {
                 session: "x".to_owned(),
                 argv: Vec::new(),
             }),
+            remote: false,
         };
         let pane_env = vec![
             ("NGTERM_PANE_ID".to_owned(), "P".to_owned()),

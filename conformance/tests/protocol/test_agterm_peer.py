@@ -304,17 +304,34 @@ def test_an_overlay_agterm_hands_over_runs_its_job_through_agtermctl(viewer, vcl
     assert run[0] == "-tt" and "studio" in run, run
 
 
-def test_a_daemon_gone_before_the_attach_prints_the_gone_line_and_hands_back_no_shell(viewer, vcli, fresh):
+@pytest.fixture
+def slow_abnormal_exit(viewer):
+    """The viewer counts any nonzero exit within a minute as a failure to launch, so the gone attach (a fast loopback
+    login, ~200 ms) always falls inside `abnormal-command-exit-runtime`, however loaded the host is."""
+    path = viewer.instance.state_dir / "config" / "ghostty.conf"
+    original = path.read_text(encoding="utf-8")
+    path.write_text(original.rstrip("\n") + "\nabnormal-command-exit-runtime = 60000\n", encoding="utf-8")
+    assert assert_ok(viewer.request("config.reload")) == {"count": 0}
+    yield
+    path.write_text(original, encoding="utf-8")
+    assert assert_ok(viewer.request("config.reload")) == {"count": 0}
+
+
+def test_a_daemon_gone_before_the_attach_prints_the_gone_line_and_hands_back_no_shell(
+    viewer, vcli, fresh, slow_abnormal_exit
+):
     build = fresh.add_session("vanishing")
     fresh.vanish_on_attach(build)
     local = _attach(vcli, "studio", build["id"])
-    # with the scrollback, each on its own line: an attach that fails within `abnormal-command-exit-runtime` (a fast
-    # loopback login) gets the terminal's "failed to launch" note, which echoes the command and scrolls these up
-    wait_text(viewer, local, re.compile(rf"^{re.escape(GONE)}$", re.M), timeout=30, all=True)
+    # each on its own line on the screen: the attach ends within `abnormal-command-exit-runtime`, and a remote pane,
+    # which names its own end, never gets the terminal's "failed to launch" note, which would echo the internal ssh
+    # line and scroll these off the screen
     disconnected = "ngterm: vanishing (left) on studio disconnected, exit 1"
     wait_text(viewer, local, re.compile(rf"^{re.escape(disconnected)}$", re.M), timeout=30, all=True)
+    wait_text(viewer, local, re.compile(rf"^{re.escape(GONE)}\n{re.escape(disconnected)}$", re.M), timeout=30)
     text = assert_ok(viewer.request("session.text", local, all=True))["text"]
     assert "agterm$" not in text and "attached " not in text, text
+    assert "failed to launch" not in text and "ssh" not in text, text
 
 
 def test_attach_refuses_a_session_the_mac_no_longer_lists(vcli, fresh):

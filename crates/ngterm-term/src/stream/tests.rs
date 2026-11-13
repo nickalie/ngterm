@@ -307,6 +307,7 @@ fn exited_while_output_is_still_queued_shows_that_output_first() {
             command: true,
             wait_after_command: true,
             abnormal_runtime: Duration::ZERO,
+            remote: false,
         },
         ..PaneConfig::new(SIZE)
     });

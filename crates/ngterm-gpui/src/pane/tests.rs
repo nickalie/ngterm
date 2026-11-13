@@ -248,6 +248,7 @@ fn a_seed_runs_over_the_panes_own_environment() {
         ],
         live: true,
         attach: None,
+        remote: false,
     };
     let launch = spec.seeded(&seed, &context());
     assert_eq!(launch.command.as_deref(), Some("ngterm-session attach x"));

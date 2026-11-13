@@ -422,6 +422,7 @@ pub fn launch(cwd: String, context: &PaneContext) -> ngterm_term::Launch {
         live: None,
         painter: None,
         status_file: None,
+        remote: false,
     }
 }
 

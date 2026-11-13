@@ -585,6 +585,7 @@ fn launch(session: &Session, program: &Program, hud: &HudContext<'_>) -> ngterm_
         live: None,
         painter: None,
         status_file: surface.terminal_records_status.then_some(code_file),
+        remote: false,
     }
 }
 
