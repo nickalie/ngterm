@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+import time
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -104,6 +105,9 @@ SW_RESTORE = 9
 # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: UIA's bounds and SendInput's absolute coordinates in physical pixels.
 PER_MONITOR_AWARE_V2 = -4
 FOREGROUND_TIMEOUT = 5.0
+# How long pointer input waits after the driver moved the foreground. Windows CI, a wheel at once after taking the
+# foreground from another app's window: 8 of 10 never reached the app, none of 10 after 50 ms.
+POINTER_SETTLE = 0.3
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -531,14 +535,15 @@ class UiaDriver(Driver):
             raise ReadFailed(f"uia pid {self.pid}: no top-level window")
         return windows[0][1]
 
-    def _activate(self, hwnd: int) -> None:
-        """Make `hwnd` the foreground window, the one SendInput's keys and the topmost pointer target reach.
+    def _activate(self, hwnd: int) -> bool:
+        """Make `hwnd` the foreground window, the one SendInput's keys and the topmost pointer target reach; whether
+        the foreground moved.
 
         Windows lets a process take the foreground only right after input of its own; a tap of Alt is that input
         (GPUI's windows have no menu bar for it to open)."""
         user32 = self.user32
         if (user32.GetForegroundWindow() or 0) == hwnd:
-            return
+            return False
         if user32.IsIconic(hwnd):
             user32.ShowWindow(hwnd, SW_RESTORE)
         self._send([key_input(VK_MENU, True), key_input(VK_MENU, False)])
@@ -548,6 +553,7 @@ class UiaDriver(Driver):
             wait_until(lambda: (user32.GetForegroundWindow() or 0) == hwnd, FOREGROUND_TIMEOUT)
         except WaitTimeout:
             raise DriverError(f"uia: window {hwnd:#x} of pid {self.pid} did not come to the foreground") from None
+        return True
 
     # -- input
 
@@ -577,7 +583,9 @@ class UiaDriver(Driver):
     def _pointer_target(self, element: Element) -> None:
         # The pointer hits the topmost window at the point, and another window (of this app or another instance)
         # may cover the target's: bring the target's own window to the foreground, which also raises it.
-        self._activate(element.handle.hwnd)
+        if self._activate(element.handle.hwnd):
+            # keys follow the foreground at once, but a wheel sent right after the move may never reach the window
+            time.sleep(POINTER_SETTLE)
 
     def _pointer_move(self, x: float, y: float) -> None:
         self._send([move_input(x, y, self._desk())])

@@ -89,7 +89,9 @@ impl TerminalView {
         let target = view.downgrade();
         let over = hitbox.clone();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble && over.is_hovered(window) {
+            // not `is_hovered`, which is false while the last input was a key: a wheel turned after typing, the
+            // pointer unmoved, would be lost
+            if phase == DispatchPhase::Bubble && over.should_handle_scroll(window) {
                 let _ = target.update(cx, |view, cx| view.scroll_wheel(event, bounds, cx));
             }
         });

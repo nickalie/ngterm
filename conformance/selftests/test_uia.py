@@ -180,6 +180,28 @@ def test_drag_moves_presses_steps_and_releases():
     assert uia.button_input("right", True).mi.dwFlags == uia.MOUSEEVENTF_RIGHTDOWN
 
 
+def _pointer_targeted(monkeypatch, foreground):
+    slept, activated = [], []
+    monkeypatch.setattr(uia.time, "sleep", slept.append)
+
+    def activate(hwnd):
+        activated.append(hwnd)
+        return foreground != hwnd
+
+    driver = _bare_driver(_activate=activate)
+    driver._pointer_target(uia.Element("pane", "window", handle=uia.Node(None, (1,), {}, 0x50)))
+    return activated, slept
+
+
+def test_pointer_input_settles_after_the_foreground_moves(monkeypatch):
+    """A wheel sent right after the driver took the foreground may never reach the window: pointer input waits."""
+    assert _pointer_targeted(monkeypatch, foreground=0x70) == ([0x50], [uia.POINTER_SETTLE])
+
+
+def test_pointer_input_goes_at_once_to_the_foreground_window(monkeypatch):
+    assert _pointer_targeted(monkeypatch, foreground=0x50) == ([0x50], [])
+
+
 def test_menu_reveals_each_item_before_the_pointer_reaches_it():
     """A scrolled menu may hold a submenu's trigger below its viewport: it is wheeled into view before the hover."""
     calls = []

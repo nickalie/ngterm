@@ -844,6 +844,24 @@ fn the_wheel_scrolls_the_viewport_back(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn the_wheel_scrolls_after_typing_with_the_pointer_still(cx: &mut TestAppContext) {
+    // a key press leaves GPUI's input modality on the keyboard, and a wheel turned without moving the pointer first
+    // must still scroll
+    let script = "i=0; while [ $i -lt 60 ]; do echo line-$i; i=$((i+1)); done; printf ready; exec sleep 30";
+    let mut f = fixture(cx, script, config(""));
+    f.cx.simulate_mouse_move(Fixture::at(3, 3), None, Modifiers::default());
+    f.type_keys("x");
+    assert!(!f.painted().contains("line-30"));
+    f.cx.simulate_event(ScrollWheelEvent {
+        position: Fixture::at(3, 3),
+        delta: ScrollDelta::Lines(point(0., 3. * 4.)),
+        ..ScrollWheelEvent::default()
+    });
+    f.wait_painted("line-30");
+}
+
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_ctrl_click_on_a_link_opens_it_through_the_link_route(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nsee \\033]8;;https://osc8.test/x\\033\\\\here\\033]8;;\\033\\\\ or https://example.com/p'; exec sleep 30";
     let mut f = fixture(cx, script, config(""));
