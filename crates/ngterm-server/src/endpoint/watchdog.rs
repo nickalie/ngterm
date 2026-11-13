@@ -1,8 +1,8 @@
 //! Timeouts for named-pipe calls, which Windows gives no per-call timeout: one process-wide timer thread cancels a
 //! call still pending past its deadline (`CancelIoEx`), and the call then fails with [`io::ErrorKind::TimedOut`].
 //!
-//! interprocess issues every pipe read and write overlapped, waiting alertably for its completion, so a cancel from
-//! another thread ends it. The timer cancels everything pending on the pipe, not one call; it keeps cancelling every
+//! A connection issues every pipe read and write overlapped and waits for its completion, so a cancel from another
+//! thread ends it. The timer cancels everything pending on the pipe, not one call; it keeps cancelling every
 //! [`RETRY`] until the call returns, since a cancel that lands just before the call is issued finds nothing to cancel.
 
 use std::io;

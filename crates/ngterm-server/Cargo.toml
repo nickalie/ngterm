@@ -24,8 +24,16 @@ libc.workspace = true
 interprocess.workspace = true
 # the pipe's SDDL, in the UTF-16 string type interprocess takes
 widestring.workspace = true
-# a pipe's disconnect and the cancel of its pending calls (a shutdown, a timeout)
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Pipes"] }
+# the pipe's instances, its accepts, its ends' overlapped reads and writes, their disconnect and the cancel of their
+# pending calls (a shutdown, a timeout)
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 ngterm-host = { workspace = true, features = ["fakes"] }

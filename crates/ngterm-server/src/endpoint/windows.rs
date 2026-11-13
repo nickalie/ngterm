@@ -4,31 +4,128 @@
 //! The pipe's creation and its client's checks follow ngterm-session's namespace pipe (`endpoint/windows.rs` there,
 //! after herdr's `src/platform/windows.rs` at `HERDR_REV`, Apache-2.0): the same descriptor and server-user check,
 //! shared through [`ngterm_core::pipe_security`].
+//!
+//! The listener and the server's ends are ngterm's own, not interprocess's: its `PipeListener::accept` (2.4.6)
+//! disconnects an instance whose client already closed (`ERROR_NO_DATA`), which drops a request written before the
+//! accept, and its streams made from a handle reopen it (`ReOpenFile`), which turns a server end into a new client of
+//! the pipe's listening instance. Clients still connect through interprocess and keep only the handle.
 
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
-use std::os::windows::io::{AsHandle as _, AsRawHandle as _};
+use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use interprocess::TryClone as _;
-use interprocess::os::windows::named_pipe::{DuplexPipeStream, PipeListenerOptions, pipe_mode::Bytes};
-use interprocess::os::windows::security_descriptor::SecurityDescriptor;
+use interprocess::os::windows::named_pipe::{DuplexPipeStream, pipe_mode::Bytes};
+use interprocess::os::windows::security_descriptor::{AsSecurityDescriptor as _, SecurityDescriptor};
 use widestring::U16CString;
-use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::System::IO::CancelIoEx;
-use windows_sys::Win32::System::Pipes::DisconnectNamedPipe;
+use windows_sys::Win32::Foundation::{
+    ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE, INVALID_HANDLE_VALUE,
+};
+use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
+};
+use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
+use windows_sys::Win32::System::Pipes::{
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+    PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+};
+use windows_sys::Win32::System::Threading::CreateEventW;
+use windows_sys::core::BOOL;
 
 use super::watchdog;
 
-pub(super) type Listener = interprocess::os::windows::named_pipe::PipeListener<Bytes, Bytes>;
+/// The pipe's listening instance, and what makes the next one.
+pub(super) struct Listener {
+    instance: Mutex<OwnedHandle>,
+    path: U16CString,
+    descriptor: SecurityDescriptor,
+}
 
-type Pipe = DuplexPipeStream<Bytes>;
+/// One end of a connection: an overlapped byte-mode pipe handle, read and written through overlapped calls so a
+/// read in flight never holds up a write on a duplicate, and so a cancel from another thread ends either.
+#[derive(Debug)]
+struct Pipe {
+    handle: OwnedHandle,
+    server: bool,
+}
+
+impl Pipe {
+    fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            handle: self.handle.try_clone()?,
+            server: self.server,
+        })
+    }
+
+    /// Reads what the pipe holds; a peer gone (or disconnected) reads as the end, as a socket's does.
+    fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
+        let handle = self.handle.as_raw_handle();
+        let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+        let ptr = buf.as_mut_ptr();
+        // SAFETY: `buf` outlives the call, which `overlapped` waits for, and `len` is within it.
+        let read = overlapped(handle, |ov| unsafe {
+            ReadFile(handle, ptr, len, std::ptr::null_mut(), ov)
+        });
+        match read {
+            Ok(read) => usize::try_from(read).map_err(io::Error::other),
+            Err(error) if is_peer_gone(&error) => Ok(0),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn write(&self, buf: &[u8]) -> io::Result<usize> {
+        let handle = self.handle.as_raw_handle();
+        let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+        let ptr = buf.as_ptr();
+        // SAFETY: `buf` outlives the call, which `overlapped` waits for, and `len` is within it.
+        let written = overlapped(handle, |ov| unsafe {
+            WriteFile(handle, ptr, len, std::ptr::null_mut(), ov)
+        })?;
+        usize::try_from(written).map_err(io::Error::other)
+    }
+}
+
+fn is_peer_gone(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::BrokenPipe || is_os_error(error, ERROR_PIPE_NOT_CONNECTED)
+}
+
+fn is_os_error(error: &io::Error, code: u32) -> bool {
+    error.raw_os_error().and_then(|raw| u32::try_from(raw).ok()) == Some(code)
+}
+
+/// Starts `call`, an overlapped call on `handle` given the `OVERLAPPED` to use, and waits for it to finish: the bytes
+/// it moved, or its error.
+fn overlapped(handle: HANDLE, call: impl FnOnce(*mut OVERLAPPED) -> BOOL) -> io::Result<u32> {
+    // SAFETY: a manual-reset event, unnamed and unshared; the handle is checked before it is owned.
+    let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+    if event.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateEventW returned a fresh handle that nothing else owns.
+    let event = unsafe { OwnedHandle::from_raw_handle(event) };
+    // SAFETY: an all-zero OVERLAPPED is a valid one (offset 0, no result yet).
+    let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+    overlapped.hEvent = event.as_raw_handle();
+    if call(&raw mut overlapped) == 0 {
+        let error = io::Error::last_os_error();
+        if !is_os_error(&error, ERROR_IO_PENDING) {
+            return Err(error);
+        }
+    }
+    let mut moved = 0;
+    // SAFETY: `overlapped` and its event live until the call completes, which this waits for.
+    if unsafe { GetOverlappedResult(handle, &raw const overlapped, &raw mut moved, 1) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(moved)
+}
 
 /// What each direction of a pipe buffers, near an `AF_UNIX` socket's default, so a response or a stream's lines are
-/// not handed over 512 bytes (interprocess's default) at a time.
+/// not handed over a few hundred bytes at a time.
 const BUFFER_BYTES: u32 = 64 * 1024;
 
 /// One control connection, either end: a byte-mode pipe stream with the part of std's socket surface the server
@@ -176,13 +273,13 @@ impl Connection {
     }
 
     fn handle(&self) -> HANDLE {
-        self.pipe.as_handle().as_raw_handle()
+        self.pipe.handle.as_raw_handle()
     }
 
     fn disconnect(&self) {
         let handle = self.handle();
         // Failures (a client's end, a pipe already disconnected, nothing pending) leave it as closed as it gets.
-        if self.pipe.is_server() {
+        if self.pipe.server {
             // SAFETY: the handle is the open pipe end `self.pipe` owns, borrowed for the call.
             unsafe { DisconnectNamedPipe(handle) };
         }
@@ -200,7 +297,7 @@ impl Read for &Connection {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let timeout = Timeouts::get(&self.timeouts.read);
         self.call(
-            || watchdog::timed(self.handle(), timeout, || (&self.pipe).read(buf)),
+            || watchdog::timed(self.handle(), timeout, || self.pipe.read(buf)),
             || Ok(0),
         )
     }
@@ -210,7 +307,7 @@ impl Write for &Connection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let timeout = Timeouts::get(&self.timeouts.write);
         let written = self.call(
-            || watchdog::timed(self.handle(), timeout, || (&self.pipe).write(buf)),
+            || watchdog::timed(self.handle(), timeout, || self.pipe.write(buf)),
             || Err(io::ErrorKind::BrokenPipe.into()),
         );
         if written
@@ -250,29 +347,86 @@ fn pipe_path(socket: &Path) -> String {
 
 pub(super) fn bind(socket: &Path) -> io::Result<Listener> {
     let path = pipe_path(socket);
-    let mut options = PipeListenerOptions::new().path(path.as_str());
-    options.security_descriptor = Some(owner_only_security_descriptor()?);
-    options.input_buffer_size_hint = BUFFER_BYTES;
-    options.output_buffer_size_hint = BUFFER_BYTES;
-    options
-        .create_duplex::<Bytes>()
-        .map_err(|error| name_taken_error(&path, error))
+    let wide = U16CString::from_str(&path).map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let descriptor = owner_only_security_descriptor()?;
+    let first = create_instance(&wide, &descriptor, true).map_err(|error| name_taken_error(&path, error))?;
+    Ok(Listener {
+        instance: Mutex::new(first),
+        path: wide,
+        descriptor,
+    })
 }
 
+/// One instance of the pipe: overlapped, duplex, byte mode, remote clients refused, [`BUFFER_BYTES`] each way, the
+/// instance count unlimited, under the owner-only `descriptor`; with `FILE_FLAG_FIRST_PIPE_INSTANCE` when `first`.
+/// These are the instances interprocess's listener made (`named_pipe/listener/create_instance.rs` at 2.4.6).
+fn create_instance(path: &U16CString, descriptor: &SecurityDescriptor, first: bool) -> io::Result<OwnedHandle> {
+    let mut open_mode = FILE_FLAG_OVERLAPPED | PIPE_ACCESS_DUPLEX;
+    if first {
+        open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).map_err(io::Error::other)?,
+        lpSecurityDescriptor: descriptor.as_sd().cast_mut(),
+        bInheritHandle: 0,
+    };
+    // SAFETY: the path is a NUL-terminated wide string, the attributes and the descriptor they point to live across
+    // the call; the returned handle is checked before it is owned.
+    let handle = unsafe {
+        CreateNamedPipeW(
+            path.as_ptr(),
+            open_mode,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_UNLIMITED_INSTANCES,
+            BUFFER_BYTES,
+            BUFFER_BYTES,
+            0,
+            &raw const attributes,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateNamedPipeW returned a fresh handle that nothing else owns.
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
+}
+
+/// Waits for a client on the listening instance and hands that instance out, a fresh one listening in its place.
+/// A client that connected, wrote and closed before the wait is handed out too: its bytes stay in the instance, read
+/// before the end, as a socket's peer's are.
 pub(super) fn accept(listener: &Listener) -> io::Result<Connection> {
-    listener.accept().map(Connection::new)
+    let mut instance = listener.instance.lock().unwrap_or_else(PoisonError::into_inner);
+    let handle = instance.as_raw_handle();
+    // SAFETY: the instance is open while the lock is held; `overlapped` waits for the call to finish.
+    match overlapped(handle, |ov| unsafe { ConnectNamedPipe(handle, ov) }) {
+        Ok(_) => {}
+        Err(error) if is_os_error(&error, ERROR_PIPE_CONNECTED) || is_os_error(&error, ERROR_NO_DATA) => {}
+        Err(error) => return Err(error),
+    }
+    // a failure here keeps the connected instance listening: the next accept hands it out
+    let next = create_instance(&listener.path, &listener.descriptor, false)?;
+    let connected = std::mem::replace(&mut *instance, next);
+    Ok(Connection::new(Pipe {
+        handle: connected,
+        server: true,
+    }))
 }
 
 pub(super) fn connect(socket: &Path) -> io::Result<Connection> {
     let path = pipe_path(socket);
-    let pipe = Pipe::connect_by_path(path.as_str())?;
+    let pipe = DuplexPipeStream::<Bytes>::connect_by_path(path.as_str())?;
     ngterm_core::pipe_security::check_server_user(&path, pipe.server_process_id()?)?;
-    Ok(Connection::new(pipe))
+    client(pipe)
 }
 
 /// A connection to the pipe without the server-user check: the server's own, to its own pipe.
 pub(super) fn connect_unchecked(socket: &Path) -> io::Result<Connection> {
-    Pipe::connect_by_path(pipe_path(socket).as_str()).map(Connection::new)
+    client(DuplexPipeStream::<Bytes>::connect_by_path(pipe_path(socket).as_str())?)
+}
+
+fn client(pipe: DuplexPipeStream<Bytes>) -> io::Result<Connection> {
+    let handle = OwnedHandle::try_from(pipe).map_err(|_| io::Error::other("a split pipe stream"))?;
+    Ok(Connection::new(Pipe { handle, server: false }))
 }
 
 /// Nothing: a pipe ends with its last handle.
@@ -315,3 +469,7 @@ fn name_taken_error(path: &str, error: io::Error) -> io::Error {
         format!("another process holds the pipe {path}: {error}"),
     )
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;
