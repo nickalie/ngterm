@@ -598,6 +598,10 @@ handler, so a process that ends past its handlers writes its profile first: `ngt
 (`__llvm_profile_write_file`, then the counters reset) runs in the app's `exit_now` before `_exit` or `TerminateProcess`
 of itself, in `ngterm-headless`'s relaunch before its `exec`, and in `ngterm-wpe`'s `exit_process` (its own `_exit`, the
 HTML worker's too); nothing in a build without `cfg(coverage)`. A `process::exit` or a return from `main` needs nothing.
+`ngterm-session` writes its profile before a termination signal's default action ends it
+(`ngterm_session::coverage::write_profile_on_termination`), and a signal that meets its exit leaves one writer: the
+runtime's file lock is a POSIX record lock, which a process's threads share, so two writers at once leave a cut-short
+profile whose header is corrupt (`ngterm_session::coverage` has the rule).
 After the suite the desktop app's e2e report reads the merged profiles against each of the app's programs
 (`conformance/coverage/apps.toml`), whose staged copies must be the build's own byte for byte
 (`agterm_conformance/code_coverage.py e2e`).

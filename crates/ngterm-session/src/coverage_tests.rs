@@ -100,12 +100,18 @@ mod termination {
     use super::{CHILD, child_test};
 
     const WAITER: &str = "coverage::tests::termination::child_waits_for_a_termination_signal";
+    const MEETER: &str = "coverage::tests::termination::child_meets_an_exit";
 
     /// The child test waiting for a signal with the handler on (`mode`), its termination signals at their default
     /// action but `ignored`, as a process started with that one ignored has it, and its profile, if any, into
     /// `profile`; once it says it is ready.
     fn waiter(dir: &Path, mode: &str, ignored: Option<i32>, profile: Option<&Path>) -> Child {
-        let mut command = child_test(WAITER, dir, mode);
+        start(WAITER, dir, mode, ignored, profile)
+    }
+
+    /// The child test `name`, as [`waiter`] starts it.
+    fn start(name: &str, dir: &Path, mode: &str, ignored: Option<i32>, profile: Option<&Path>) -> Child {
+        let mut command = child_test(name, dir, mode);
         if let Some(profile) = profile {
             command.env("LLVM_PROFILE_FILE", profile);
         }
@@ -125,12 +131,16 @@ mod termination {
         // child before exec.
         unsafe { command.pre_exec(reset) };
         let child = command.spawn().expect("the child test");
+        wait_for_file(&dir.join("ready"));
+        child
+    }
+
+    fn wait_for_file(path: &Path) {
         let deadline = Instant::now() + Duration::from_secs(30);
-        while !dir.join("ready").exists() {
-            assert!(Instant::now() < deadline, "the child test never got ready");
+        while !path.exists() {
+            assert!(Instant::now() < deadline, "no {} from the child test", path.display());
             std::thread::sleep(Duration::from_millis(10));
         }
-        child
     }
 
     fn signal(child: &Child, signal: i32) {
@@ -230,6 +240,72 @@ mod termination {
         // SAFETY: raising a signal at this process.
         unsafe { libc::raise(libc::SIGTERM) };
         eprintln!("survived SIGTERM");
+    }
+
+    /// A termination signal handled first holds back an exit begun while its action runs: the action finishes, the
+    /// process ends by the signal, and the exit handler that would write the profile beside it (the runtime's, set up
+    /// before `main`) never starts.
+    #[test]
+    fn an_exit_begun_during_the_signals_action_waits_for_the_signal_to_end_the_process() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let mut child = start(MEETER, dir.path(), "signal-first", None, None);
+        signal(&child, libc::SIGTERM);
+        let status = child.wait().expect("the child's status");
+        assert_eq!(status.signal(), Some(libc::SIGTERM), "{status}");
+        assert!(dir.path().join("ran").exists(), "the action did not finish");
+        assert!(
+            !dir.path().join("exit-writing").exists(),
+            "the exit handler wrote beside the action"
+        );
+    }
+
+    /// A termination signal handled after the exit began never runs its action: the exit handler finishes and the
+    /// process ends by its exit.
+    #[test]
+    fn a_signal_handled_after_the_exit_began_waits_for_the_exit_to_end_the_process() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let mut child = start(MEETER, dir.path(), "exit-first", None, None);
+        wait_for_file(&dir.path().join("exit-writing"));
+        signal(&child, libc::SIGTERM);
+        let status = child.wait().expect("the child's status");
+        assert_eq!(status.code(), Some(0), "{status}");
+        assert!(
+            dir.path().join("exit-wrote").exists(),
+            "the exit handler did not finish"
+        );
+        assert!(!dir.path().join("acting").exists(), "the action ran during the exit");
+    }
+
+    /// The child of the tests above; nothing when run on its own. Registers a stand-in for the runtime's exit writer,
+    /// installs the handler with a slow action, says it is ready and exits: once the action began (`signal-first`), or
+    /// at once (`exit-first`).
+    #[test]
+    fn child_meets_an_exit() {
+        let Some(dir) = std::env::var_os(CHILD) else {
+            return;
+        };
+        // SAFETY: registers a handler that only writes files and sleeps.
+        assert_eq!(unsafe { libc::atexit(exit_writer) }, 0);
+        super::super::before_termination(|| slow_marks("acting", "ran")).expect("the handler");
+        std::fs::write(Path::new(&dir).join("ready"), "").expect("say ready");
+        if std::env::var(super::MODE).as_deref() == Ok("signal-first") {
+            wait_for_file(&Path::new(&dir).join("acting"));
+        }
+        std::process::exit(0);
+    }
+
+    /// The child's stand-in for the runtime's exit writer, registered as it is, before the handler.
+    extern "C" fn exit_writer() {
+        slow_marks("exit-writing", "exit-wrote");
+    }
+
+    /// `first` in the child's scratch directory, then `then` half a second later: a write that takes a while.
+    fn slow_marks(first: &str, then: &str) {
+        if let Some(dir) = std::env::var_os(CHILD) {
+            let _ = std::fs::write(Path::new(&dir).join(first), "");
+            std::thread::sleep(Duration::from_millis(500));
+            let _ = std::fs::write(Path::new(&dir).join(then), "");
+        }
     }
 
     /// Marks the action's run in the child's scratch directory.

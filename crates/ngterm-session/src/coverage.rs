@@ -9,6 +9,11 @@
 //!   `ngterm-session` installs (an attach client on an ssh login's pty ends by the hangup when the viewer goes);
 //! - a kill (`SIGKILL`, `TerminateProcess` by another process): nothing can; the e2e runners count those they cause.
 //!
+//! One writer at a time in a process: the runtime locks the profile with a POSIX record lock, which every thread of the
+//! process holds alike, so two writers at once (a termination signal's write beside the exit handler's) both write, and
+//! the signal's default action can end the process in the middle of the other's write, leaving a profile whose header
+//! promises more than the file holds (llvm-profdata: "file header is corrupt"), which then fails every later merge.
+//!
 //! `ngterm_app::coverage` re-exports [`write_profile`] for the programs above the session crate.
 
 /// Writes this process's coverage profile now (to `LLVM_PROFILE_FILE`, merged into what is there under `%m`) and
@@ -17,17 +22,34 @@
 pub fn write_profile() {
     #[cfg(coverage)]
     {
-        // compiler-rt's profile runtime, linked into every `-C instrument-coverage` binary
-        unsafe extern "C" {
-            fn __llvm_profile_write_file() -> std::ffi::c_int;
-            fn __llvm_profile_reset_counters();
-        }
-        // SAFETY: the runtime's own writer, the one its exit handler calls; it touches only the runtime's state and may
-        // run at any point. A write that fails reports on stderr; nothing more to do.
-        unsafe { __llvm_profile_write_file() };
-        // SAFETY: zeroes the runtime's own counters only.
-        unsafe { __llvm_profile_reset_counters() };
+        let _writing = writing();
+        write_unguarded();
     }
+}
+
+/// Held by whoever writes the profile (module docs: one writer at a time), and, once the termination writer is
+/// installed, from the start of the exit handlers to the end of the process.
+#[cfg(any(coverage, all(unix, test)))]
+static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(any(coverage, all(unix, test)))]
+fn writing() -> std::sync::MutexGuard<'static, ()> {
+    WRITING.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// [`write_profile`] without taking [`WRITING`], for a caller that holds it.
+#[cfg(coverage)]
+fn write_unguarded() {
+    // compiler-rt's profile runtime, linked into every `-C instrument-coverage` binary
+    unsafe extern "C" {
+        fn __llvm_profile_write_file() -> std::ffi::c_int;
+        fn __llvm_profile_reset_counters();
+    }
+    // SAFETY: the runtime's own writer, the one its exit handler calls; it touches only the runtime's state and may run
+    // at any point. A write that fails reports on stderr; nothing more to do.
+    unsafe { __llvm_profile_write_file() };
+    // SAFETY: zeroes the runtime's own counters only.
+    unsafe { __llvm_profile_reset_counters() };
 }
 
 /// In an instrumented build on Unix: a termination signal (`SIGHUP`, `SIGINT`, `SIGTERM`) that would end the process
@@ -35,10 +57,12 @@ pub fn write_profile() {
 /// process's status and its parent's view stay what they were. A signal the process started with ignored stays
 /// ignored. Only for a program that handles none of these signals itself: a signal-hook registration of its own runs
 /// beside this one, which then ends the process before that program's handling is done (only a raw `sigaction`
-/// replaces it). Nothing in a build without coverage, or on Windows.
+/// replaces it). A signal and an exit that meet write once: a signal handled first holds the exit back until the
+/// signal ends the process, and one handled after the exit began waits for the exit to end it. Nothing in a build
+/// without coverage, or on Windows.
 pub fn write_profile_on_termination() {
     #[cfg(all(coverage, unix))]
-    if let Err(error) = before_termination(write_profile) {
+    if let Err(error) = before_termination(write_unguarded) {
         // the session binary installs no tracing subscriber
         eprintln!("ngterm-session: coverage: the profile is not written before a termination signal: {error}");
     }
@@ -49,7 +73,9 @@ pub fn write_profile_on_termination() {
 const TERMINATION: [i32; 3] = [libc::SIGHUP, libc::SIGINT, libc::SIGTERM];
 
 /// Runs `action` on a termination signal, then ends the process by the signal's default action; a signal ignored now
-/// is left ignored.
+/// is left ignored. `action` runs holding [`WRITING`], which the exit handlers take first ([`hold_writing_at_exit`]):
+/// an exit begun while it runs waits for the signal to end the process, and a signal handled after the exit began
+/// never runs it.
 ///
 /// # Errors
 ///
@@ -62,6 +88,7 @@ fn before_termination(action: fn()) -> std::io::Result<()> {
     if handled.is_empty() {
         return Ok(());
     }
+    hold_writing_at_exit()?;
     // the thread first: signal-hook keeps its handler once registered, and with no action left ignores the signal
     let (to_thread, from_caller) = std::sync::mpsc::channel::<Signals>();
     std::thread::Builder::new()
@@ -71,6 +98,8 @@ fn before_termination(action: fn()) -> std::io::Result<()> {
                 return;
             };
             if let Some(signal) = signals.forever().next() {
+                // kept to the end: the process ends by the signal below while holding it
+                let _writing = writing();
                 action();
                 // resets the signal to its default action and raises it again: the process ends as it would have
                 let _ = signal_hook::low_level::emulate_default_handler(signal);
@@ -78,6 +107,26 @@ fn before_termination(action: fn()) -> std::io::Result<()> {
         })?;
     let _ = to_thread.send(Signals::new(&handled)?);
     Ok(())
+}
+
+/// From the start of the exit handlers on, [`WRITING`] is held to the end of the process. Registered after the
+/// runtime's own exit writer (set up before `main`), this handler runs before it, so the runtime writes alone.
+///
+/// # Errors
+///
+/// `atexit` refused the handler.
+#[cfg(all(unix, any(coverage, test)))]
+fn hold_writing_at_exit() -> std::io::Result<()> {
+    extern "C" fn hold() {
+        std::mem::forget(writing());
+    }
+    static REGISTERED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    // SAFETY: registers a handler that takes a lock and returns; registered once, so it never waits on itself.
+    if *REGISTERED.get_or_init(|| unsafe { libc::atexit(hold) } == 0) {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("atexit refused the exit handler"))
+    }
 }
 
 /// Whether `signal` is ignored, as it is when the process started with it ignored, before any handler is installed.
