@@ -272,7 +272,13 @@ fn a_profile_whose_program_is_gone_shows_why_and_holds_on_the_failure_report() -
     let text = screen(&pane);
     // the start's own complaint, then libghostty's report naming the program below a rule
     let complaint = text.find("cannot start the program:").expect("the complaint");
-    assert!(text[complaint..].lines().next().is_some_and(|line| line.contains(missing)), "{text}");
+    assert!(
+        text[complaint..]
+            .lines()
+            .next()
+            .is_some_and(|line| line.contains(missing)),
+        "{text}"
+    );
     for line in [
         "Ghostty failed to launch the requested command:",
         &format!("{missing} -l"),
