@@ -1264,7 +1264,9 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   `ngterm-session` built instrumented and staged, the mobile e2e, `ngterm-headless`'s integration tests and
   `ngterm-session`'s e2e test run on that build (the tests themselves uninstrumented, the two crates' tests taking the
   build's programs through `E2E_BIN_DIR`), the report in `DIR`, held against
-  `conformance/coverage/e2e-floor-headless-linux.txt`. Also CI's job.
+  `conformance/coverage/e2e-floor-headless-linux.txt`. The report waits until no process the tests left (a session
+  server in its idle grace) still runs and would write its profile into the pool: one read mid-write is corrupt and
+  fails the merge. Also CI's job.
 - `scripts/unit-coverage.sh OUT_DIR [-p CRATE]... [-- TEST_ARGS...]` measures what `cargo test` covers: one
   instrumented build and run of the workspace's tests (the -sys crates left out, and `ngterm-wpe` too outside Linux;
   default features), or of the `-p` crates' alone, with test code out of the denominator (`#[cfg(test)]` and `#[test]`

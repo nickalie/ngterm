@@ -6,6 +6,7 @@ cargo, stage.sh, uname and Python; nothing is built and no test or profile is re
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -16,9 +17,18 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPT = "scripts/test-mobile-e2e.sh"
 WRAPPER = "/stand-in/cargo-llvm-cov"
 
-# Logs each call with the environment the script gave it; `llvm-cov show-env` prints an instrumenting environment.
+# A process a test leaves running, as a session server in its idle grace: it records its pid, then writes its profile
+# into the pool when it ends.
+LEFTOVER = (
+    "import os, sys, time; open(os.path.join(sys.argv[2], 'leftover.pid'), 'w').write(str(os.getpid())); "
+    "time.sleep(float(sys.argv[1])); open(os.path.join(sys.argv[2], 'headless-late.profraw'), 'w').write('late')"
+)
+
+# Logs each call with the environment the script gave it; `llvm-cov show-env` prints an instrumenting environment;
+# `test -p ngterm-session` leaves a process behind with LEFTOVER_SECONDS.
 CARGO = f'''
-import json, os, sys
+import json, os, subprocess, sys
+LEFTOVER = {LEFTOVER!r}
 args = sys.argv[1:]
 keys = ("RUSTC_WRAPPER", "CARGO_TARGET_DIR", "LLVM_PROFILE_FILE", "E2E_BIN_DIR", "MOBILE_E2E_STAGE",
         "NGTERM_CALLER")
@@ -33,6 +43,11 @@ if args[:2] == ["llvm-cov", "show-env"]:
 elif args[0] == "build" and "RUSTC_WRAPPER" in os.environ:
     sys.exit(int(os.environ.get("BUILD_STATUS", "0")))
 elif args[0] == "test":
+    if "LEFTOVER_SECONDS" in os.environ and args[2] == "ngterm-session":
+        subprocess.Popen(
+            [sys.executable, "-c", LEFTOVER, os.environ["LEFTOVER_SECONDS"], os.path.dirname(pool)],
+            start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
     if "LIVE_DIR" in os.environ:
         with open(os.path.join(os.environ["MOBILE_E2E_WORK"], "live-dir"), "w") as live:
             live.write(os.environ["LIVE_DIR"])
@@ -54,6 +69,8 @@ PYTHON = '''
 import json, os, sys
 keys = ("RUSTC_WRAPPER", "CARGO_TARGET_DIR", "PYTHONPATH")
 env = {key: os.environ[key] for key in keys if key in os.environ}
+if "--profiles" in sys.argv:
+    env["pool"] = sorted(os.listdir(sys.argv[sys.argv.index("--profiles") + 1]))
 with open(os.environ["TOOL_LOG"], "a") as log:
     log.write(json.dumps([os.path.basename(sys.argv[0]), sys.argv[1:], env]) + "\\n")
 if sys.argv[1] == "-c":
@@ -235,6 +252,29 @@ def test_a_failed_test_still_runs_the_rest_and_reports(checkout: Checkout, faili
     assert len(checkout.cargo("test")) == 3
     assert len(checkout.report()) == 1
     assert "mobile e2e: a test failed (the coverage report is written)\n" in result.stderr
+
+
+def test_the_report_waits_for_a_left_process_to_write_its_profile(checkout: Checkout) -> None:
+    result = checkout.run("--coverage", "report", LEFTOVER_SECONDS="1.5")
+    assert result.returncode == 0, result.stderr
+    [(_, report_env)] = checkout.report()
+    assert "headless-late.profraw" in report_env["pool"]
+
+
+def test_a_process_that_outlasts_the_wait_is_named_and_no_report_is_made(checkout: Checkout) -> None:
+    pool = checkout.cov / "headless-e2e"
+    result = checkout.run("--coverage", "report", LEFTOVER_SECONDS="60", MOBILE_E2E_WRITER_WAIT="1")
+    leftover = int((pool / "leftover.pid").read_text())
+    try:
+        assert result.returncode == 2
+        assert (
+            "mobile e2e: processes of the run still run after 1s and would write into the profile pool; no report is "
+            "read from it:\n"
+        ) in result.stderr
+        assert f"  {leftover} " in result.stderr
+        assert checkout.report() == []
+    finally:
+        os.kill(leftover, signal.SIGKILL)
 
 
 def test_no_report_is_exit_two(checkout: Checkout) -> None:

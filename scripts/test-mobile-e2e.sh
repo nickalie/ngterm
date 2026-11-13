@@ -20,11 +20,14 @@
 # processes' own code. Every process they start from the build writes its profile, pooled per binary
 # (LLVM_PROFILE_FILE, `%4m`), into llvm-cov-target/headless-e2e/, emptied first. Besides the mobile e2e, the headless
 # app's other e2e run on the same build: ngterm-headless's integration tests and ngterm-session's e2e test, which take
-# the build's programs in place of cargo's own through E2E_BIN_DIR. Then agterm_conformance/code_coverage.py e2e --app
-# headless --platform linux reads the profiles against the build's programs, checked to be the stage's byte for byte,
-# into DIR: lcov.info, lcov-measured.info, summary.json and summary.md (the total line %, its distance to 90%, the
-# share the e2e-coverage markers exclude, per crate), which conformance/tools/check_coverage.py holds against
-# conformance/coverage/e2e-floor-headless-linux.txt. Every test runs even when one fails. Needs cargo-llvm-cov, the
+# the build's programs in place of cargo's own through E2E_BIN_DIR. A process the tests leave behind still writes its
+# profile when it ends (a session server ends by itself after its idle grace, past its test's return), and a profile
+# read while it is written is corrupt, so the report waits until no process that carries the pool's LLVM_PROFILE_FILE
+# runs; one still running after MOBILE_E2E_WRITER_WAIT seconds (default 60) is named and no report is made. Then
+# agterm_conformance/code_coverage.py e2e --app headless --platform linux reads the profiles against the build's
+# programs, checked to be the stage's byte for byte, into DIR: lcov.info, lcov-measured.info, summary.json and
+# summary.md (the total line %, its distance to 90%, the share the e2e-coverage markers exclude, per crate), which
+# conformance/tools/check_coverage.py holds against conformance/coverage/e2e-floor-headless-linux.txt. Every test runs even when one fails. Needs cargo-llvm-cov, the
 # toolchain's llvm-tools and Python 3.11+ ($PYTHON when set, else the first of python3, python, python3.13,
 # python3.12, python3.11 that can import tomllib; checked before the build).
 #
@@ -32,8 +35,8 @@
 #   MOBILE_E2E_WORK_ROOT overrides where the scratch directory is made (default: cargo's target dir); keep it short,
 #   since the private control socket lives under it.
 # Exit 0: passed (or skipped); 1: a test failed (with --coverage, its report is still written) or bad arguments; 2 with
-# --coverage: no report could be made (no profile, a stage that is not the instrumented build) or the instrumented build
-# failed; any other: a plain run's build or stage failed, with that command's status.
+# --coverage: no report could be made (no profile, a stage that is not the instrumented build, a process of the run
+# that would not end) or the instrumented build failed; any other: a plain run's build or stage failed, with that command's status.
 set -euo pipefail
 
 # shellcheck source=lib/native.sh
@@ -212,6 +215,27 @@ for test in crates/ngterm-headless/tests/*.rs; do
 done
 run_tests -p ngterm-headless --no-fail-fast "${headless_tests[@]}" || status=1
 run_tests -p ngterm-session --test e2e || status=1
+
+# The processes still running that carry the pool's LLVM_PROFILE_FILE, one pid per line
+pool_writers() {
+  local entry
+  for entry in /proc/[0-9]*; do
+    grep -qzxF "LLVM_PROFILE_FILE=$PROFILES/headless-%4m.profraw" "$entry/environ" 2>/dev/null && echo "${entry#/proc/}"
+  done
+  return 0
+}
+writer_wait="${MOBILE_E2E_WRITER_WAIT:-60}"
+deadline=$((SECONDS + writer_wait))
+while writers="$(pool_writers)" && [[ -n "$writers" ]]; do
+  if ((SECONDS >= deadline)); then
+    echo "mobile e2e: processes of the run still run after ${writer_wait}s and would write into the profile pool; no report is read from it:" >&2
+    for pid in $writers; do
+      echo "  $pid $({ tr '\0' ' ' <"/proc/$pid/cmdline"; } 2>/dev/null)" >&2
+    done
+    exit 2
+  fi
+  sleep 0.2
+done
 
 if ! PYTHONPATH="$NATIVE_ROOT/conformance" instrumented "$python" -m agterm_conformance.code_coverage e2e \
   --app headless --platform linux --profiles "$PROFILES" --release-dir "$BUILT" --stage-bin "$WORK/stage/bin" \
