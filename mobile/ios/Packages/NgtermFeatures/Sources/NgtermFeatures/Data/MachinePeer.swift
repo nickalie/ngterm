@@ -1,8 +1,9 @@
 import NgtermCore
 
-/// The app a machine runs, as its last listing said (``RemoteSession/peer``), and what that app offers (the core's
-/// ``peerCapabilities(peer:)``) (mobile/android's `MachinePeer`). A machine with none known runs ngterm, which offers
-/// everything.
+/// The app a machine runs, and what that app offers (mobile/android's `MachinePeer`).
+///
+/// The app is the one its last listing said (``RemoteSession/peer``), what it offers the core's
+/// ``peerCapabilities(peer:)``. A machine with none known runs ngterm, which offers everything.
 public struct MachinePeer: Hashable, Sendable {
     /// The app.
     public let kind: PeerKind

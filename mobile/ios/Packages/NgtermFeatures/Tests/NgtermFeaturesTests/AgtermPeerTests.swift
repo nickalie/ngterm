@@ -47,7 +47,7 @@ internal struct AgtermPeerTests {
         test.core.sessions["m1"] = []
         await connections.listSessions(machineId: "m1")
         await test.settled()
-        #expect(connections.trees["m1"] == [])
+        #expect(connections.trees["m1"]?.isEmpty == true)
         #expect(connections.peers["m1"]?.kind == .agterm, "an empty listing says nothing")
         await listed(nil)
         #expect(connections.peers["m1"]?.kind == .agterm, "a listing that doesn't say keeps it")

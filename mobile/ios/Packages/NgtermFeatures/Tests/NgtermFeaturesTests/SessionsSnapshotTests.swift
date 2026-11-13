@@ -133,12 +133,12 @@ internal struct SessionsSnapshotTests {
     @Test("an agterm machine's sessions: its badge and what it lacks", arguments: ScreenVariant.allCases)
     internal func agterm(variant: ScreenVariant) throws {
         defer { test.remove() }
-        let sessions = Self.sessions.map { session in
-            var listed = session
-            listed.peer = .agterm
-            return listed
+        let agterms = Self.sessions.map { session in
+            var marked = session
+            marked.peer = .agterm
+            return marked
         }
-        ScreenSnapshot.check(screen(try listed(sessions, attached: ["s3"])), named: "sessions-agterm", variant: variant)
+        ScreenSnapshot.check(screen(try listed(agterms, attached: ["s3"])), named: "sessions-agterm", variant: variant)
     }
 
     @Test("no sessions yet", arguments: ScreenVariant.allCases)

@@ -94,16 +94,16 @@ internal struct ComponentSnapshotTests {
     internal func peerBadges(variant: SnapshotVariant) {
         let list = List {
             PeerBadge("agterm", note: "Attached from agterm: the agent chat view is not available")
-            MachineRow(name: "studio", address: "nick@studio.lan:22", peer: "agterm", tone: .online) {
+            MachineRow(name: "studio", address: "nick@studio.lan:22", tone: .online, peer: "agterm") {
                 AgentStatusBadge(status: "active")
             }
             MachineRow(
                 name: "mini",
                 address: "nick@mac-mini.example.com:2222",
-                peer: "agterm",
                 tone: .offline,
                 detail: "Not connected",
-                action: Self.noAction
+                action: Self.noAction,
+                peer: "agterm"
             )
         }
         snapshot(list, named: "peer-badges", variant: variant, height: variant == .accessibility ? 1_000 : 400)

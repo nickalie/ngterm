@@ -66,13 +66,18 @@ internal final class SessionWorld {
         layout(panes, axis: axis, shown: true)
     }
 
+    /// build-01 connected with its sessions `sessions` listed (`s1` is "api"), and `attach` of them attached.
+    internal func attach(_ attach: [String], of sessions: [String]) async throws {
+        try await self.attach(attach, of: sessions, peer: nil)
+    }
+
     /// build-01 connected with its sessions `sessions` listed (`s1` is "api") as the app `peer` lists them (`nil`: the
     /// listing doesn't say), and `attach` of them attached.
-    internal func attach(_ attach: [String], of sessions: [String], peer: PeerKind? = nil) async throws {
+    internal func attach(_ attach: [String], of sessions: [String], peer: PeerKind?) async throws {
         try test.seed(TestGraph.machine(keyId: "k1"))
         let count = UInt32(Self.panes.count)
-        core.sessions["m1"] = sessions.map {
-            fakeSession(id: $0, name: $0 == "s1" ? "api" : $0, paneCount: count, peer: peer)
+        core.sessions["m1"] = sessions.map { sessionId in
+            fakeSession(id: sessionId, name: sessionId == "s1" ? "api" : sessionId, paneCount: count, peer: peer)
         }
         await test.connections.connect(TestGraph.machine(keyId: "k1").core).value
         await test.settled()

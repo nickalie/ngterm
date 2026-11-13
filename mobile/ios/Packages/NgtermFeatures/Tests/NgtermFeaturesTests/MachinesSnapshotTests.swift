@@ -83,9 +83,9 @@ internal struct MachinesSnapshotTests {
         }
         connections.receive(.tree(machineId: "connected", sessions: Self.sessions))
         let agterm = Self.sessions.prefix(2).map { session in
-            var listed = session
-            listed.peer = .agterm
-            return listed
+            var marked = session
+            marked.peer = .agterm
+            return marked
         }
         connections.receive(.tree(machineId: "agterm", sessions: agterm))
         ScreenSnapshot.check(screen(MachinesModel(graph: test.graph)), named: "machines-agterm", variant: variant)

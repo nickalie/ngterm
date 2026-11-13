@@ -1,9 +1,11 @@
 import XCTest
 
-/// A Mac running agterm on the fake core: `studio`, whose one session `notes` runs Claude Code in its pane (the app's
-/// `FakeAgtermWorld`). Its row, its sessions screen and its session view say it runs agterm, its sessions list, attach
-/// and end as an ngterm machine's do, and its pane keeps showing the terminal: agterm has no chat view, so Chat view is
-/// off and takes no tap, and no view switch offers a chat.
+/// A Mac running agterm on the fake core.
+///
+/// `studio`, whose one session `notes` runs Claude Code in its pane (the app's `FakeAgtermWorld`). Its row, its
+/// sessions screen and its session view say it runs agterm; its sessions list, attach and end as an ngterm machine's
+/// do; and its pane keeps showing the terminal: agterm has no chat view, so Chat view is off and takes no tap, and no
+/// view switch offers a chat.
 internal final class AgtermTests: XCTestCase {
     // how long a view that should not come is watched for
     private static let steady: TimeInterval = 3

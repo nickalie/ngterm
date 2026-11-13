@@ -70,17 +70,17 @@ public struct MachineRow<Summary: View>: View {
         }
     }
 
-    /// A machine named `name` at `address` (`user@host:port`) running `peer` (an app's name; `nil` for ngterm), its
-    /// connection `tone` (with `toneLabel` in place of its word), what the state means (`detail`) and its `action`,
-    /// then `summary`.
+    /// A machine named `name` at `address` (`user@host:port`), its connection `tone` (with `toneLabel` in place of
+    /// its word), what the state means (`detail`) and its `action`, the app it runs (`peer`, an app's name; `nil` for
+    /// ngterm), then `summary`.
     public init(
         name: String,
         address: String,
-        peer: String? = nil,
         tone: StatusTone,
         toneLabel: String? = nil,
         detail: String? = nil,
         action: RowAction? = nil,
+        peer: String? = nil,
         @ViewBuilder summary: () -> Summary
     ) {
         self.name = name
@@ -99,20 +99,20 @@ extension MachineRow where Summary == EmptyView {
     public init(
         name: String,
         address: String,
-        peer: String? = nil,
         tone: StatusTone,
         toneLabel: String? = nil,
         detail: String? = nil,
-        action: RowAction? = nil
+        action: RowAction? = nil,
+        peer: String? = nil
     ) {
         self.init(
             name: name,
             address: address,
-            peer: peer,
             tone: tone,
             toneLabel: toneLabel,
             detail: detail,
-            action: action
+            action: action,
+            peer: peer
         ) {
             EmptyView()
         }

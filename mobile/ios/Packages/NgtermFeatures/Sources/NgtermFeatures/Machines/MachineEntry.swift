@@ -31,11 +31,11 @@ internal struct MachineEntry: View {
         return MachineRow(
             name: item.machine.title,
             address: item.machine.address,
-            peer: item.peer.flatMap { $0.isForeign ? $0.badge : nil },
             tone: look.tone,
             toneLabel: look.label,
             detail: look.detail,
-            action: look.action.map(rowAction)
+            action: look.action.map(rowAction),
+            peer: item.peer.flatMap { $0.isForeign ? $0.badge : nil }
         ) {
             if item.link == .connected, item.isListed {
                 SessionsSummary(sessions: item.sessions)
