@@ -250,6 +250,7 @@ fn ready(fixture: &Fixture, child: &mut Running) -> io::Result<Connection> {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         if let Ok(stream) = endpoint::connect(&fixture.socket()) {
+            first_pane_settled(fixture);
             return Ok(stream);
         }
         assert!(!child.has_exited()?, "headless exited before serving");
@@ -259,6 +260,28 @@ fn ready(fixture: &Fixture, child: &mut Running) -> io::Result<Connection> {
             fixture.log()
         );
         std::thread::yield_now();
+    }
+}
+
+/// On Linux, where the headless e2e coverage is measured (scripts/test-mobile-e2e.sh --coverage): waits until the
+/// first pane of a launch that runs live has failed its attach over the inert session host (the log says both), so
+/// every run of a test quits after that failure, never before it, and an instrumented build's coverage does not vary
+/// with how soon a test ends. Nothing for a launch that does not run live.
+fn first_pane_settled(fixture: &Fixture) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let log = fixture.log();
+        if !log.contains("this launch runs live") || log.contains("a live pane's attach failed") {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the first live pane never failed its attach: {log}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -427,6 +450,7 @@ fn a_refused_control_socket_saves_on_quit_and_exits_unsuccessfully() {
         );
         std::thread::yield_now();
     }
+    first_pane_settled(&fixture);
     // the launch wrote the index; nothing changes after it, so only the quit save writes it again
     let index = fixture.root.path().join("state/windows.json");
     std::fs::remove_file(&index).unwrap();
@@ -510,6 +534,7 @@ fn a_detached_start_returns_and_the_server_keeps_serving() {
         std::thread::yield_now();
     };
     assert_eq!(response["ok"], true, "{response}");
+    first_pane_settled(&fixture);
 }
 
 #[test]
