@@ -344,6 +344,12 @@ its lowest value; `--add` takes at least two summaries of one build (one run's l
 tolerance) and raises each floor to the batch's lowest, never lowering one; a crate new to the workspace is added, a
 removed one dropped. Raise the floors from CI runs of the same commit.
 
+The headless app has its own e2e report, made outside the suite by `scripts/test-mobile-e2e.sh --coverage DIR`
+(linux.yml's `headless-e2e` job): `ngterm-headless`, `ngtermctl` and `ngterm-session` built instrumented the same way,
+profiles pooled per binary into `target/llvm-cov-target/headless-e2e/`, `code_coverage.py e2e --app headless
+--platform linux` into `DIR`, judged by `conformance/coverage/e2e-floor-headless-linux.txt` (docs/development.md >
+Test).
+
 A crate whose % moves between runs of one build has code the suite runs only on some timing. `coverage_diff.py` names
 it from two or more runs' `lcov.info` (the CI coverage artifacts of one commit): each crate's % per run and its spread,
 and each group of lines some runs hit and others missed, with the runs, the function and the source line:

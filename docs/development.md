@@ -943,6 +943,7 @@ scripts/build-android.sh :app:koverHtmlReportDebugJvm :app:koverXmlReportDebugJv
 scripts/build-android.sh :koverHtmlReportDebugJvm :koverXmlReportDebugJvm   # both modules, aggregated
 scripts/build-android.sh installGithubDebug    # onto the device or emulator adb sees
 scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-headless behind a private sshd (Linux; python3 runs its fake agent)
+scripts/test-mobile-e2e.sh --coverage DIR   # the headless app's e2e line coverage into DIR, as CI's headless-e2e job (cargo-llvm-cov)
 scripts/test-android-e2e.sh [TEST...]  # the app on the device adb sees, against a real ngterm-headless behind a private sshd, and conformance's stand-in agterm Mac on a second port (Linux)
 ```
 
@@ -1256,6 +1257,11 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   `conformance/tools/check_coverage.py` holds against `conformance/coverage/e2e-floor-desktop-linux.txt`
   (conformance/README.md > Code coverage). It is CI's job; run it locally only
   for a change to the coverage tooling.
+- `scripts/test-mobile-e2e.sh --coverage DIR` does the same for the headless app: `ngterm-headless`, `ngtermctl` and
+  `ngterm-session` built instrumented and staged, the mobile e2e, `ngterm-headless`'s integration tests and
+  `ngterm-session`'s e2e test run on that build (the tests themselves uninstrumented, the two crates' tests taking the
+  build's programs through `E2E_BIN_DIR`), the report in `DIR`, held against
+  `conformance/coverage/e2e-floor-headless-linux.txt`. Also CI's job.
 - `scripts/unit-coverage.sh OUT_DIR [-p CRATE]... [-- TEST_ARGS...]` measures what `cargo test` covers: one
   instrumented build and run of the workspace's tests (the -sys crates left out, and `ngterm-wpe` too outside Linux;
   default features), or of the `-p` crates' alone, with test code out of the denominator (`#[cfg(test)]` and `#[test]`
@@ -1324,9 +1330,11 @@ and the fix, and leaves everything else alone; its header says what it checks, a
   (OpenSSH in the container for its loopback `sshd`), the zsh and fish ones
   with `--must-pass live-sessions` and `--must-pass pages-survive`
   too; the bash one runs the app's process tests with the overlays on first, and a `coverage` entry runs the suite on
-  an instrumented build, judged by `conformance/coverage/e2e-floor-desktop-linux.txt` only; and `unit-coverage`, the workspace's
+  an instrumented build, judged by `conformance/coverage/e2e-floor-desktop-linux.txt` only; `unit-coverage`, the workspace's
   `cargo test` under cargo-llvm-cov in the `wpe` job's Arch container (`scripts/unit-coverage.sh`), judged by
-  `scripts/unit-coverage-floor-linux.txt`.
+  `scripts/unit-coverage-floor-linux.txt`; and `headless-e2e`, the headless app's e2e on an instrumented build
+  (`scripts/test-mobile-e2e.sh --coverage`, behind the runner's `sshd`), judged by
+  `conformance/coverage/e2e-floor-headless-linux.txt`.
 - `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,
   `ngterm-core`, `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt`, `ngterm-pty`, `ngterm-term`, `ngterm-server`,
   `ngterm-ctl`, `ngterm-app`, `ngterm-headless`, `ngterm-mobile` and `ngterm-update` so far), on Ubuntu, macOS and Windows runners: the libghostty-vt
@@ -1344,8 +1352,8 @@ and the fix, and leaves everything else alone; its header says what it checks, a
 - `android.yml` (path-filtered to the mobile core, the crates under it, `mobile/android/` and the Android scripts and
   pins; also on `ci/**` pushes): `app` sets up the pinned toolchain (`scripts/setup-android.sh`), runs
   `scripts/build-android.sh check assembleDebug` (Spotless, detekt, Android Lint, the JVM unit and Roborazzi screenshot
-  tests) and keeps the debug APK as the `ngterm-android-debug` artifact, then runs `scripts/test-mobile-e2e.sh` behind
-  the runner's `sshd`; `emulator` runs the instrumented tests on the phone and tablet AVDs (KVM), where the app's
+  tests) and keeps the debug APK as the `ngterm-android-debug` artifact (the mobile core's e2e runs in `linux.yml`'s
+  `headless-e2e`); `emulator` runs the instrumented tests on the phone and tablet AVDs (KVM), where the app's
   real-machine e2e tests (`e2e` package, `scripts/test-android-e2e.sh`) skip, having no machine.
 - `ios.yml` (path-filtered to the mobile core, the crates under it, `mobile/ios/`, the shared fonts and the iOS
   scripts and pins; also on `ci/**` pushes), on the `xcode-27` image, three jobs side by side: `lint` (the core's Rust

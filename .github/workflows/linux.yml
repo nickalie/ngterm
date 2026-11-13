@@ -356,6 +356,69 @@ jobs:
           path: unit-coverage/
           if-no-files-found: warn
 
+  # The headless app's e2e line coverage on Linux (scripts/test-mobile-e2e.sh --coverage): ngterm-headless, ngtermctl
+  # and ngterm-session built instrumented (cargo-llvm-cov and the toolchain's llvm-tools) and staged, then every e2e of
+  # the headless app on that build: the mobile core's against the staged instance behind an unprivileged sshd on
+  # 127.0.0.1 (openssh-server; CI set, so a missing sshd fails it), ngterm-headless's integration tests and
+  # ngterm-session's e2e test. Its report (code_coverage.py e2e --app headless: the total, its distance to 90% and the
+  # share markers exclude, per crate) is judged by conformance/coverage/e2e-floor-headless-linux.txt
+  # (tools/check_coverage.py), even after a failed test, and uploaded as e2e-coverage-headless-linux (lcov.info: what a
+  # merge and the gap lists read); a failed run's scratch directory (headless.log, sshd/sshd.log) as
+  # headless-e2e-logs.
+  headless-e2e:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+      - name: rust toolchain (rust-toolchain.toml) with llvm-tools
+        run: |
+          rustup toolchain install
+          rustup component add llvm-tools
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - uses: Swatinem/rust-cache@v2
+      # the libghostty-vt prefix, keyed like cross-platform.yml's Ubuntu leg's
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: vendor-ngterm-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - name: sshd for the mobile e2e
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openssh-server
+      - name: libghostty-vt prefix
+        run: scripts/build-ghostty-vt.sh
+      # exits 1 on a failed test with the report written, 2 when no report could be made
+      - name: instrumented headless e2e
+        run: scripts/test-mobile-e2e.sh --coverage headless-e2e-coverage
+      - name: coverage floors
+        if: ${{ !cancelled() && hashFiles('headless-e2e-coverage/summary.md') != '' }}
+        run: >-
+          python3 conformance/tools/check_coverage.py
+          --summary headless-e2e-coverage/summary.md
+          --floor conformance/coverage/e2e-floor-headless-linux.txt
+      - name: report into the summary
+        if: ${{ !cancelled() && hashFiles('headless-e2e-coverage/summary.md') != '' }}
+        run: cat headless-e2e-coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: upload the e2e coverage
+        if: ${{ !cancelled() && hashFiles('headless-e2e-coverage/lcov.info') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-coverage-headless-linux
+          path: headless-e2e-coverage/
+          if-no-files-found: error
+      # the failed run's scratch directory, which the script keeps
+      - name: upload the e2e logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: headless-e2e-logs
+          path: target/me2e.*/
+          if-no-files-found: ignore
+
   # The staged build under the suite (run-linux.sh: each instance on its own headless weston and session bus),
   # held by conformance/rust-passing.txt, once per login shell. Its HTML overlays run on WPE WebKit, which Ubuntu does
   # not package, so the jobs run in the wpe job's Arch container (the same digest and Arch Linux Archive snapshot),

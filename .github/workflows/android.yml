@@ -6,9 +6,8 @@
 # environment), the mobile core for arm64-v8a and x86_64 with its Kotlin bindings and then Gradle's `check` (Spotless,
 # detekt, Android Lint, the JVM unit tests and the Roborazzi screenshot tests, which a plain test run verifies against
 # the committed goldens, and Kover coverage floors) and the debug APK, all through scripts/build-android.sh; the APK
-# is kept as `ngterm-android-debug` and the coverage reports as `android-coverage`. Then the core's end-to-end test
-# against a staged ngterm-headless behind an unprivileged sshd (scripts/test-mobile-e2e.sh; with CI set, a missing
-# sshd fails it rather than skipping).
+# is kept as `ngterm-android-debug` and the coverage reports as `android-coverage`. The core's end-to-end test against
+# a staged ngterm-headless behind an unprivileged sshd runs in linux.yml's headless-e2e job, instrumented.
 #
 # `emulator`: :app's instrumented tests (connectedGithubDebugAndroidTest) on the phone and then the tablet AVD
 # setup-android.sh creates (reactivecircus/android-emulator-runner on KVM, which reuses them: force-avd-creation off).
@@ -19,11 +18,10 @@
 # crowd the vendor and cargo caches out of the repository's cache space. Gradle's caches go through setup-gradle's
 # basic (MIT, actions/cache) provider.
 #
-# Path-filtered to what the app builds from: the mobile core and the crates it builds on, the crates the e2e test
-# stages, the workspace manifest, lock file and toolchain, mobile/android/, the scripts, patches and
-# pins of its toolchain, and this file. Pushes to a `ci/**` branch run it too, as they do cross-platform.yml, and it
-# can be run by hand (a `ci/**` branch made at a commit another branch already holds changes no file, so no path
-# filter matches it).
+# Path-filtered to what the app builds from: the mobile core and the crates it builds on, the workspace manifest, lock
+# file and toolchain, mobile/android/, the scripts, patches and pins of its toolchain, and this file. Pushes to a
+# `ci/**` branch run it too, as they do cross-platform.yml, and it can be run by hand (a `ci/**` branch made at a
+# commit another branch already holds changes no file, so no path filter matches it).
 name: android
 
 on:
@@ -37,15 +35,6 @@ on:
       - crates/ngterm-proto/**
       - crates/ngterm-ghostty-vt/**
       - crates/ngterm-ghostty-vt-sys/**
-      # what the e2e test builds and stages besides: ngterm-headless, ngtermctl, ngterm-session and the crates under
-      # them
-      - crates/ngterm-headless/**
-      - crates/ngterm-session/**
-      - crates/ngterm-ctl/**
-      - crates/ngterm-server/**
-      - crates/ngterm-app/**
-      - crates/ngterm-pty/**
-      - vendor/portable-pty/**
       # the workspace's dependency pins, toolchain and cargo config
       - Cargo.toml
       - Cargo.lock
@@ -55,12 +44,9 @@ on:
       - scripts/build-android.sh
       - scripts/setup-android.sh
       - scripts/build-ghostty-vt.sh
-      - scripts/test-mobile-e2e.sh
-      - scripts/stage.sh
       - scripts/lib/native.sh
       - build/pins.env
       - build/patches/ghostty-vt/**
-      - build/patches/portable-pty/**
       - .github/workflows/android.yml
   push:
     branches: [main, "ci/**"]
@@ -103,7 +89,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           cache-provider: basic
-      # sshd for the e2e test (setup-android.sh also reports it missing)
+      # setup-android.sh checks for sshd too and fails the step without it
       - name: system packages
         run: |
           sudo apt-get update
@@ -137,16 +123,6 @@ jobs:
           path: |
             mobile/android/*/build/reports/
             mobile/android/*/build/outputs/roborazzi/
-          if-no-files-found: ignore
-      - name: mobile e2e (ngterm-headless behind sshd)
-        run: scripts/test-mobile-e2e.sh
-      # the failed run's scratch directory (headless.log, sshd/sshd.log), which the script keeps
-      - name: upload the e2e logs
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: mobile-e2e-logs
-          path: target/me2e.*/
           if-no-files-found: ignore
 
   emulator:

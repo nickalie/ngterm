@@ -1,0 +1,10 @@
+# E2E line coverage floors of the headless app on Linux (conformance/tools/check_coverage.py): the total and the line %
+# per workspace crate of the instrumented headless e2e (scripts/test-mobile-e2e.sh --coverage, linux.yml's
+# headless-e2e job): the mobile core's e2e against a staged ngterm-headless behind sshd, ngterm-headless's integration
+# tests and ngterm-session's e2e test. Its report reads the app's own programs alone
+# (agterm_conformance/code_coverage.py e2e, conformance/coverage/apps.toml).
+# A total or crate more than 0.5 pt below its floor fails the job. Raised, never lowered, from a batch of runs of one
+# build: check_coverage.py --floor THIS --add --summary A/summary.md --summary B/summary.md ... (each floor raised to
+# the batch's lowest; a new crate added, a gone one dropped).
+# The total first, then sorted by crate.
+total 0.00
