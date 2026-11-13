@@ -70,6 +70,57 @@ internal final class DuplicateSessionTests: XCTestCase {
         XCTAssertFalse(FakeApp.element(containing: "Another device is driving", in: app).exists)
     }
 
+    // waits until the app has `count` windows
+    @MainActor
+    private static func expectWindows(_ count: Int, in app: XCUIApplication) {
+        let windows = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "count == %d", count),
+            object: app.windows
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [windows], timeout: windowWait), .completed, "not \(count) windows")
+    }
+
+    // closes the session windows: Detach in the More of a session window in front, or, with the app's own window in
+    // front, Detach in the context menu of a row whose session a window shows
+    @MainActor
+    private static func closeSessionWindows(in app: XCUIApplication) {
+        for _ in 0..<maxWindows {
+            let count = app.windows.count
+            guard count > 1 else {
+                return
+            }
+            let front = app.windows.element(boundBy: 0)
+            if front.buttons["add-machine"].exists {
+                guard detachARow(of: ["session 1", "work"], in: app) else {
+                    return
+                }
+            } else {
+                front.buttons["session-menu"].tap()
+                let detach = app.buttons["session-detach"]
+                guard detach.waitForExistence(timeout: windowWait) else {
+                    return
+                }
+                detach.tap()
+            }
+            expectWindows(count - 1, in: app)
+        }
+    }
+
+    // detaches the first of the sessions `names` whose row's context menu offers Detach; false when none does
+    @MainActor
+    private static func detachARow(of names: [String], in app: XCUIApplication) -> Bool {
+        for name in names where any("session-\(name)", in: app).exists {
+            any("session-\(name)", in: app).press(forDuration: longPress)
+            let detach = app.buttons["Detach"]
+            if detach.waitForExistence(timeout: windowWait) {
+                detach.tap()
+                return true
+            }
+            closeMenu(in: app)
+        }
+        return false
+    }
+
     // the app on `split`'s sessions, as `arguments` ask
     @MainActor
     private func openMachine(arguments: [String] = []) -> XCUIApplication {
@@ -180,57 +231,6 @@ internal final class DuplicateSessionTests: XCTestCase {
             behind.contains { Self.title(naming: "work", in: $0).exists },
             "work's window went: \(app.debugDescription)"
         )
-    }
-
-    // waits until the app has `count` windows
-    @MainActor
-    private static func expectWindows(_ count: Int, in app: XCUIApplication) {
-        let windows = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "count == %d", count),
-            object: app.windows
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [windows], timeout: windowWait), .completed, "not \(count) windows")
-    }
-
-    // closes the session windows: Detach in the More of a session window in front, or, with the app's own window in
-    // front, Detach in the context menu of a row whose session a window shows
-    @MainActor
-    private static func closeSessionWindows(in app: XCUIApplication) {
-        for _ in 0..<maxWindows {
-            let count = app.windows.count
-            guard count > 1 else {
-                return
-            }
-            let front = app.windows.element(boundBy: 0)
-            if front.buttons["add-machine"].exists {
-                guard detachARow(of: ["session 1", "work"], in: app) else {
-                    return
-                }
-            } else {
-                front.buttons["session-menu"].tap()
-                let detach = app.buttons["session-detach"]
-                guard detach.waitForExistence(timeout: windowWait) else {
-                    return
-                }
-                detach.tap()
-            }
-            expectWindows(count - 1, in: app)
-        }
-    }
-
-    // detaches the first of the sessions `names` whose row's context menu offers Detach; false when none does
-    @MainActor
-    private static func detachARow(of names: [String], in app: XCUIApplication) -> Bool {
-        for name in names where any("session-\(name)", in: app).exists {
-            any("session-\(name)", in: app).press(forDuration: longPress)
-            let detach = app.buttons["Detach"]
-            if detach.waitForExistence(timeout: windowWait) {
-                detach.tap()
-                return true
-            }
-            closeMenu(in: app)
-        }
-        return false
     }
 
     // an agterm Mac's session: its row's context menu offers Duplicate session, and the copy opens, saying agterm
