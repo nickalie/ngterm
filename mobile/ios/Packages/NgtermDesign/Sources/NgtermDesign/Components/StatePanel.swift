@@ -55,6 +55,7 @@ public struct StatePanel: View {
             if let action {
                 Button(action.title, action: action.perform)
                     .prominentAction()
+                    .disabled(!action.isEnabled)
             }
             if let secondaryAction {
                 QuietButton(action: secondaryAction)

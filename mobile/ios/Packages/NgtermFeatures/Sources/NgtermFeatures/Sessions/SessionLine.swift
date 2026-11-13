@@ -13,7 +13,7 @@ public struct SessionLine: Hashable, Sendable, Identifiable {
     public let isEnding: Bool
     /// Whether its Duplicate is under way.
     public let isDuplicating: Bool
-    /// Whether Duplicate takes a tap: not while a create is under way.
+    /// Whether Duplicate takes a tap: not while a create, or the session's End, is under way.
     public let canDuplicate: Bool
 
     /// The session's id.

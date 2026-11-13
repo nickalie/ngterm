@@ -9,6 +9,8 @@ import SwiftUI
 internal struct NewSessionSheet: View {
     internal let machine: String
     internal let state: NewSessionState
+    // another create (a Duplicate, another window's New session) holds Create until it ends
+    internal var isHeld = false
     internal let onCreate: @MainActor (String) -> Void
     internal let onCancel: @MainActor () -> Void
     @State private var name = ""
@@ -52,6 +54,7 @@ internal struct NewSessionSheet: View {
                             .accessibilityLabel(String(localized: "Creating"))
                     } else {
                         Button(String(localized: "Create"), action: create)
+                            .disabled(isHeld)
                             .accessibilityIdentifier("create-session")
                     }
                 }

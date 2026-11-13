@@ -5,7 +5,8 @@ import SwiftUI
 /// An attached session, live (mobile/android's `SessionScreen`): its toolbar (name, state and context, the pane
 /// switcher, More: Detach, Duplicate session, Open in New Window, End session), the origin's HUD, and its panes.
 ///
-/// Its Duplicate opens the copy in its place, in control (``SessionActions/open``).
+/// Its Duplicate opens the copy in control through ``SessionActions/open``: in its place in the main window, in a
+/// window of its own from a session's window.
 /// A compact width shows the selected pane alone and a swipe across it moves to the next or previous one; a regular
 /// width shows the origin's split, or the selected pane alone once a pane tab asked for it (``PaneAlone``). One
 /// keyboard serves every pane, and its chords move between the panes and the sessions. The selected pane is the only
@@ -237,8 +238,6 @@ internal struct SessionLiveView: View {
     }
 
     private func moveSession(forward: Bool) {
-        if let next = model.neighborSession(forward: forward) {
-            actions.open(next)
-        }
+        model.moveSession(forward: forward, then: actions.open)
     }
 }

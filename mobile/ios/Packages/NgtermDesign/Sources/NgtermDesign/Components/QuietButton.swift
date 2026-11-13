@@ -16,5 +16,6 @@ internal struct QuietButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
+        .disabled(!action.isEnabled)
     }
 }

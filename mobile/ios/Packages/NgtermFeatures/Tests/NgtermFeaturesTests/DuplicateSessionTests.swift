@@ -97,6 +97,55 @@ internal struct DuplicateSessionTests {
         #expect(graph.panes.claims.isEmpty)
     }
 
+    @Test("a list's Duplicate whose window opened another session meanwhile opens and claims nothing")
+    internal func listDuplicateOtherOpened() async throws {
+        defer { world.remove() }
+        try await world.attach([], of: ["s1", "s2"])
+        let model = list()
+        let gate = world.core.hold("duplicateSession")
+        let duplicating = model.duplicate(sessionId: "s1") { _ in Issue.record("a copy took another session's place") }
+        await gate.reached()
+        model.windowShows("s2")
+        gate.open()
+        await duplicating?.value
+        #expect(graph.connections.attached["m1"] == ["fake-1"])
+        #expect(graph.panes.claims.isEmpty)
+    }
+
+    @Test("a row whose End is under way offers no Duplicate, and the others still do")
+    internal func endingRowHoldsDuplicate() async throws {
+        defer { world.remove() }
+        try await world.attach([], of: ["s1", "s2"])
+        let model = list()
+        let gate = world.core.hold("endSession")
+        let ending = model.end(sessionId: "s1")
+        await gate.reached()
+        #expect(line("s1", of: model)?.canDuplicate == false)
+        #expect(line("s2", of: model)?.canDuplicate == true)
+        gate.open()
+        await ending?.value
+    }
+
+    @Test("a named New session under way holds a list's Duplicate until it ends")
+    internal func namedSessionHoldsDuplicate() async throws {
+        defer { world.remove() }
+        try await world.attach([], of: ["s1"])
+        let model = list()
+        let gate = world.core.hold("createSession")
+        model.openNewSession()
+        let creating = model.create(name: "x") { _ in
+            // the window would open it
+        }
+        await gate.reached()
+        #expect(model.isCreateUnderWay)
+        #expect(line("s1", of: model)?.canDuplicate == false)
+        #expect(model.duplicate(sessionId: "s1") { _ in Issue.record("a Duplicate began") } == nil)
+        gate.open()
+        await creating?.value
+        #expect(!model.isCreateUnderWay)
+        #expect(duplicates.isEmpty)
+    }
+
     @Test("a New session under way holds a list's Duplicate")
     internal func newSessionHoldsDuplicate() async throws {
         defer { world.remove() }
@@ -161,6 +210,37 @@ internal struct DuplicateSessionTests {
         #expect(model.notice == Self.refused.reason)
         #expect(graph.panes.claims.isEmpty)
         #expect(graph.connections.attached["m1"] == ["s1"])
+    }
+
+    @Test("a session view that moved to another session before its copy landed leaves the copy unopened and unclaimed")
+    internal func viewMovedMeanwhile() async throws {
+        defer { world.remove() }
+        try await world.attach(["s1", "s2"], of: ["s1", "s2"])
+        let model = view()
+        let gate = world.core.hold("attachSession")
+        let duplicating = model.duplicate { _ in Issue.record("a copy took the moved-to session's place") }
+        await gate.reached()
+        var moved: [SessionKey] = []
+        #expect(model.moveSession(forward: true) { moved.append($0) })
+        gate.open()
+        await duplicating?.value
+        #expect(moved == [SessionKey(machineId: "m1", sessionId: "s2")])
+        #expect(graph.connections.attached["m1"] == ["s1", "s2", "fake-1"])
+        #expect(graph.panes.claims.isEmpty)
+    }
+
+    @Test("a session view whose End is under way offers no Duplicate")
+    internal func viewEndingHoldsDuplicate() async throws {
+        defer { world.remove() }
+        try await world.attach()
+        let model = view()
+        let gate = world.core.hold("endSession")
+        let ending = Task { await model.end() }
+        await gate.reached()
+        #expect(!model.canDuplicate)
+        gate.open()
+        _ = await ending.value
+        #expect(model.canDuplicate)
     }
 
     @Test("a session view gone before its copy landed leaves the copy attached, unopened and unclaimed")

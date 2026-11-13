@@ -20,8 +20,10 @@ public final class SessionModel {
     /// The keyboard every pane of the session types through.
     @ObservationIgnored public let keyboard: TerminalKeyboard
     @ObservationIgnored private let graph: AppGraph
-    // a Duplicate opens its copy only while the view still shows: one gone meanwhile leaves the copy in the lists
+    // a Duplicate opens its copy only while the view still shows, with no other session opened from it since it
+    // began: otherwise the copy stays in the lists
     @ObservationIgnored private var isShowing = false
+    @ObservationIgnored private var opens = 0
 
     /// What the view shows: the session live while attached (unless a pane says it is gone), gone once its machine's
     /// listing has dropped it, and `nil` once it was let go some other way (a detach, a disconnect).
@@ -66,9 +68,10 @@ public final class SessionModel {
         graph.creates.underWay == Create(machineId: key.machineId, source: key.sessionId)
     }
 
-    /// Whether Duplicate takes a tap: not while a create (a New session, a Duplicate) is under way, from any screen.
+    /// Whether Duplicate takes a tap: not while the session's End or a create (a New session, a Duplicate) is under
+    /// way, from any screen.
     public var canDuplicate: Bool {
-        graph.creates.underWay == nil
+        !isEnding && graph.creates.underWay == nil
     }
 
     /// The session `key` over `graph`, its panes typing through `keyboard` (one of its own by default).
@@ -139,6 +142,19 @@ public final class SessionModel {
         graph.attachedSessions.neighbor(of: key, forward: forward)
     }
 
+    /// Opens the attached session after (or before) this one through `open`; whether there was one.
+    ///
+    /// A Duplicate under way then opens nothing: the copy stays attached in the lists.
+    @discardableResult
+    public func moveSession(forward: Bool, then open: (SessionKey) -> Void) -> Bool {
+        guard let next = neighborSession(forward: forward) else {
+            return false
+        }
+        opens += 1
+        open(next)
+        return true
+    }
+
     /// Shows the pane `spot` at `size`, as its view first has room for it.
     public func show(_ spot: PaneSpot, size: PaneSize) {
         graph.panes.show(spot.ref, size: size)
@@ -176,8 +192,8 @@ public final class SessionModel {
 
     /// Duplicates the session on its machine, then attaches the copy, takes its lead and opens it through `open`.
     ///
-    /// A view gone meanwhile opens nothing: the copy stays attached in the lists. A failure is the ``notice``; nothing
-    /// begins while another create is under way.
+    /// A view gone meanwhile, or one that opened another session (``moveSession(forward:then:)``), opens nothing: the
+    /// copy stays attached in the lists. A failure is the ``notice``; nothing begins while another create is under way.
     @discardableResult
     @preconcurrency
     public func duplicate(then open: @escaping @MainActor (SessionKey) -> Void) -> Task<Void, Never>? {
@@ -185,6 +201,7 @@ public final class SessionModel {
         guard graph.creates.begin(create) else {
             return nil
         }
+        let began = opens
         return Task {
             defer { graph.creates.end(create) }
             let connections = graph.connections
@@ -192,7 +209,7 @@ public final class SessionModel {
                 let copy = try await connections.duplicateSession(machineId: key.machineId, sessionId: key.sessionId)
                 try await connections.attachCreated(machineId: key.machineId, sessionId: copy.id)
                 try Task.checkCancellation()
-                guard isShowing else {
+                guard isShowing, opens == began else {
                     return
                 }
                 let landed = SessionKey(machineId: key.machineId, sessionId: copy.id)

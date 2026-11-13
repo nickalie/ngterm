@@ -183,7 +183,11 @@ public struct SessionsView: View {
             }
             .sheet(isPresented: isNamingSession) {
                 if let newSession = model.newSession {
-                    NewSessionSheet(machine: state.machine.title, state: newSession) { name in
+                    NewSessionSheet(
+                        machine: state.machine.title,
+                        state: newSession,
+                        isHeld: model.isCreateUnderWay
+                    ) { name in
                         model.create(name: name, then: openCreated)
                     } onCancel: {
                         model.closeNewSession()
@@ -272,7 +276,7 @@ public struct SessionsView: View {
             systemImage: "terminal",
             title: String(localized: "No sessions on \(name)"),
             message: String(localized: "Start one here. It runs on \(name) and keeps running when you leave."),
-            action: RowAction(String(localized: "New session")) {
+            action: RowAction(String(localized: "New session"), isEnabled: !model.isCreateUnderWay) {
                 model.createAndOpen(then: openCreated)
             }
         )

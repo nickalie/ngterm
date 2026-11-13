@@ -79,7 +79,7 @@ public enum SessionsBody: Hashable, Sendable {
                     isAttached: state.attached.contains(session.id),
                     isEnding: state.ending.contains(session.id),
                     isDuplicating: state.duplicating == session.id,
-                    canDuplicate: !state.isCreating
+                    canDuplicate: !state.isCreating && !state.ending.contains(session.id)
                 )
             }
         }
