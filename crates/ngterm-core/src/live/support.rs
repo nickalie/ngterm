@@ -296,6 +296,7 @@ pub fn configuration(inputs: &Inputs) -> Result<Configuration, LiveRejection> {
     shell_integration::inject_live(
         eligible.kind,
         &eligible.resources,
+        inputs.own_resources_dir.as_deref(),
         &inputs.inherited,
         &mut configuration.environment,
     );

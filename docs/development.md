@@ -551,7 +551,8 @@ headers from Linux).
 The live-session server works the same on all three ([Live sessions](#live-sessions)), each OS with its own detach and
 endpoint. A live session on Windows runs the pane's selected Git Bash, PowerShell, CMD or WSL profile. With no profile,
 it uses a supported `command` from `ghostty.conf`, then PowerShell (`pwsh.exe` from `PATH`, else Windows
-PowerShell's `powershell.exe`). PowerShell uses ngterm's integration; Git Bash uses Ghostty's Bash integration.
+PowerShell's `powershell.exe`). PowerShell uses ngterm's integration; Git Bash uses Ghostty's Bash integration,
+loaded through ngterm's shim (`resources/shell-integration/git-bash`) so that its directory reports carry Windows paths.
 
 ### Windows shell profiles
 
@@ -599,7 +600,9 @@ runs, not to a command the platform's command shell runs instead.
 
 Live uses the same executable and environment as the selected profile. Git Bash and PowerShell use injected
 integration and accept login/interactive flags (plus PowerShell's banner/stay-open flags). Git Bash integration
-paths use forward slashes, including paths containing spaces; `CHERE_INVOKING=1` keeps the pane's directory.
+paths use forward slashes, including paths containing spaces; `CHERE_INVOKING=1` keeps the pane's directory. Its
+directory reports name the directory as `cygpath -m` does (`C:/Users/me`, never MSYS's `/c/Users/me`), so a split,
+a duplicate or a restarted shell opens in it.
 
 CMD and WSL run directly in the Windows session server's ConPTY. Reattaching preserves the running process,
 its directory and variables, including WSL's Linux shell. CMD preserves startup switches such as `/D`, `/Q`

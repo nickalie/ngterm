@@ -1,0 +1,41 @@
+# Git Bash on Windows: load the bundled Ghostty integration, then report the working directory as Windows names it.
+# Ghostty's own report carries bash's MSYS path (`/c/Users/me`, `/usr/bin`), which no Windows program can open, so
+# it is turned off and this one reports `cygpath -m`'s form instead (`/C:/Users/me`, the drive as a URI spells it).
+# cygpath runs once per change of directory. A path cygpath cannot convert, or that names no drive, is not reported.
+__ngterm_git_bash_ghostty=${NGTERM_GIT_BASH_GHOSTTY-}
+builtin unset NGTERM_GIT_BASH_GHOSTTY
+[[ -z $__ngterm_git_bash_ghostty ]] || builtin source "$__ngterm_git_bash_ghostty"
+builtin unset __ngterm_git_bash_ghostty
+
+if builtin declare -F __ghostty_precmd >/dev/null; then
+    __ngterm_git_bash_definition=$(builtin declare -f __ghostty_precmd)
+    builtin eval "__ngterm_ghostty_precmd${__ngterm_git_bash_definition#__ghostty_precmd}"
+    builtin unset __ngterm_git_bash_definition
+
+    __ngterm_git_bash_reported=
+    __ngterm_git_bash_pwd() {
+        [[ $__ngterm_git_bash_reported != "$PWD" ]] || return 0
+        __ngterm_git_bash_reported=$PWD
+        case "$PWD" in
+            *[$'\001'-$'\037'$'\177']*) return 0 ;;
+        esac
+        builtin local native
+        native=$(command cygpath -m -- "$PWD" 2>/dev/null) || return 0
+        case "$native" in
+            [A-Za-z]:/*) ;;
+            *) return 0 ;;
+        esac
+        case "$native" in
+            *[$'\001'-$'\037'$'\177']*) return 0 ;;
+        esac
+        builtin printf '\e]7;kitty-shell-cwd://localhost/%s\a' "$native"
+    }
+
+    # Ghostty's precmd, with its directory report taken over: it reports only a directory it has not reported yet.
+    __ghostty_precmd() {
+        builtin local __ngterm_status="${1:-$?}"
+        _ghostty_last_reported_cwd=$PWD
+        __ngterm_ghostty_precmd "$__ngterm_status"
+        __ngterm_git_bash_pwd
+    }
+fi

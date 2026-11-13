@@ -5,7 +5,7 @@
 #   share/ghostty/{themes,shell-integration}  share/terminfo
 #   share/ngterm/session-BUILD (the staged ngterm-session's build id, with bin/ngterm-session)
 #   share/ngterm/app-BUILD (the staged ngterm's version and commit, with bin/ngterm)
-#   share/ngterm/{agent-status,skills/ngterm}  share/ngterm/shell-integration/pwsh/ngterm.ps1
+#   share/ngterm/{agent-status,skills/ngterm}  share/ngterm/shell-integration/{pwsh/ngterm.ps1,wsl,git-bash}
 #
 # from cargo's target dir and the vendored prefixes, plus ngterm's PowerShell integration and the agent
 # integrations' payloads from resources/. Binaries are staged when they exist (each appears with its crate's build:
@@ -105,7 +105,8 @@ verify_ghostty_resources "$DEST/share" >&2
 mkdir -p "$DEST/share/ngterm/shell-integration/pwsh"
 install -m644 "$NATIVE_ROOT/resources/shell-integration/pwsh/ngterm.ps1" \
   "$DEST/share/ngterm/shell-integration/pwsh/ngterm.ps1"
-cp -R "$NATIVE_ROOT/resources/shell-integration/wsl" "$DEST/share/ngterm/shell-integration/"
+cp -R "$NATIVE_ROOT/resources/shell-integration/wsl" "$NATIVE_ROOT/resources/shell-integration/git-bash" \
+  "$DEST/share/ngterm/shell-integration/"
 # Trusted Markdown renderer, stylesheet and third-party notices.
 mkdir -p "$DEST/share/ngterm/markdown"
 cp -R "$NATIVE_ROOT/resources/markdown/." "$DEST/share/ngterm/markdown/"

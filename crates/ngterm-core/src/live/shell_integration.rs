@@ -5,7 +5,9 @@
 //! - zsh as upstream agterm: `ZDOTDIR` names the integration, the app's own one handed on as `GHOSTTY_ZSH_ZDOTDIR`;
 //! - bash in POSIX mode (`--posix`), whose interactive start reads `ENV`: the integration script, told by
 //!   `GHOSTTY_BASH_INJECT` to rebuild bash's own startup sequence, the app's `ENV` kept as `GHOSTTY_BASH_ENV` and
-//!   `HISTFILE` pinned to `~/.bash_history` (POSIX mode's default is `~/.sh_history`);
+//!   `HISTFILE` pinned to `~/.bash_history` (POSIX mode's default is `~/.sh_history`); on Windows (Git Bash) `ENV`
+//!   names ngterm's own [`GIT_BASH_SHIM`] instead, which loads that script and reports the working directory as
+//!   Windows names it, not as MSYS does (`/c/Users/me`);
 //! - fish through `XDG_DATA_DIRS`, the integration's `vendor_conf.d` ahead of the inherited (or the specification's
 //!   default) directories, which the integration removes again. A live pane's surface sets only the integration's root,
 //!   [`FISH_INTEGRATION_VARIABLE`] ([`inject_live`], upstream's #761): a surface `XDG_DATA_DIRS` would replace a
@@ -42,6 +44,12 @@ pub const DATA_DIRS_VARIABLE: &str = "XDG_DATA_DIRS";
 /// The variable naming the fish integration's root (Ghostty's `shell-integration` directory), which the integration
 /// removes from `XDG_DATA_DIRS` again once fish has read it.
 pub const FISH_INTEGRATION_VARIABLE: &str = "GHOSTTY_SHELL_INTEGRATION_XDG_DIR";
+
+/// The script, under ngterm's own resources, that a live Git Bash pane's `ENV` names on Windows: it loads Ghostty's
+/// bash integration from [`GIT_BASH_GHOSTTY_VARIABLE`] and reports the working directory as Windows names it.
+pub const GIT_BASH_SHIM: &str = "shell-integration/git-bash/bash-env";
+/// The variable naming Ghostty's bash integration for [`GIT_BASH_SHIM`], which unsets it.
+pub const GIT_BASH_GHOSTTY_VARIABLE: &str = "NGTERM_GIT_BASH_GHOSTTY";
 
 /// The variable naming the PowerShell integration script a live pane's PowerShell loads ([`PWSH_LOAD`]).
 pub const PWSH_INTEGRATION_VARIABLE: &str = "NGTERM_PWSH_INTEGRATION";
@@ -297,6 +305,21 @@ impl Inherited {
 /// Sets `shell`'s integration variables in `environment`, the integration under `resources` (a Ghostty resources
 /// directory, or ngterm's own for the shells [`LoginShell::is_ngterms`] names; standardized).
 pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, environment: &mut BTreeMap<String, String>) {
+    inject_on(cfg!(windows), shell, resources, None, inherited, environment);
+}
+
+/// [`inject`] on Windows or not, so both are tested on every OS. On Windows bash is Git Bash, whose paths are
+/// handed on with forward slashes, and whose integration is started through ngterm's [`GIT_BASH_SHIM`] when
+/// `own_resources` (ngterm's own resources directory) holds it: it reports the working directory as Windows names it
+/// rather than as MSYS does.
+fn inject_on(
+    windows: bool,
+    shell: LoginShell,
+    resources: &Path,
+    own_resources: Option<&Path>,
+    inherited: &Inherited,
+    environment: &mut BTreeMap<String, String>,
+) {
     let integration = resources.join("shell-integration");
     let mut set = |key: &str, value: String| environment.insert(key.to_owned(), value);
     match shell {
@@ -342,8 +365,21 @@ pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, enviro
             );
         }
     }
-    if shell == LoginShell::Bash && cfg!(windows) {
-        for key in ["ENV", "HISTFILE", "GHOSTTY_BASH_ENV", "GHOSTTY_RESOURCES_DIR"] {
+    if shell == LoginShell::Bash && windows {
+        if let Some(shim) = own_resources
+            .map(|own| crate::paths::join_relative(own, GIT_BASH_SHIM))
+            .filter(|shim| shim.is_file())
+            && let Some(loader) = environment.insert("ENV".to_owned(), shim.to_string_lossy().into_owned())
+        {
+            environment.insert(GIT_BASH_GHOSTTY_VARIABLE.to_owned(), loader);
+        }
+        for key in [
+            "ENV",
+            "HISTFILE",
+            "GHOSTTY_BASH_ENV",
+            "GHOSTTY_RESOURCES_DIR",
+            GIT_BASH_GHOSTTY_VARIABLE,
+        ] {
             if let Some(path) = environment.get_mut(key) {
                 *path = crate::shell_profiles::bash_path(path);
             }
@@ -372,13 +408,14 @@ fn bash_env_literal(path: &str) -> String {
     literal
 }
 
-/// [`inject`] for a live pane's surface: fish gets only [`FISH_INTEGRATION_VARIABLE`], and `XDG_DATA_DIRS` stays the
+/// [`inject`] for a live pane's surface, ngterm's own resources in `own_resources` (Git Bash's [`GIT_BASH_SHIM`]): fish gets only [`FISH_INTEGRATION_VARIABLE`], and `XDG_DATA_DIRS` stays the
 /// pane's own (upstream's `ZmxSupport.configuration`), so a ghostty config `env` entry the launch applies under the
 /// wrap's variables keeps it; the root is merged in front of it when the session's environment is prepared
 /// ([`merged_data_dirs`]). The other shells are injected as [`inject`] injects them.
 pub fn inject_live(
     shell: LoginShell,
     resources: &Path,
+    own_resources: Option<&Path>,
     inherited: &Inherited,
     environment: &mut BTreeMap<String, String>,
 ) {
@@ -387,7 +424,7 @@ pub fn inject_live(
         environment.insert(FISH_INTEGRATION_VARIABLE.to_owned(), root);
         return;
     }
-    inject(shell, resources, inherited, environment);
+    inject_on(cfg!(windows), shell, resources, own_resources, inherited, environment);
 }
 
 /// The `XDG_DATA_DIRS` a live fish session starts with (upstream's `fishXDGDataDirectoriesScript`): the integration's
@@ -610,6 +647,8 @@ pub fn rearm(shell: LoginShell, environment: &BTreeMap<String, String>) -> Optio
             {
                 steps.extend([histfile, unexport]);
             }
+            // Git Bash's shim on Windows, which the integration it loads consumed
+            steps.extend(required(GIT_BASH_GHOSTTY_VARIABLE));
             steps
         }
         // upstream's order: the integration's directory, then the data directories that put it on fish's path
@@ -844,7 +883,7 @@ mod tests {
         };
         let live = |shell| {
             let mut environment = BTreeMap::from([("NGTERM_ENABLED".to_owned(), "1".to_owned())]);
-            inject_live(shell, Path::new("/res"), &inherited, &mut environment);
+            inject_live(shell, Path::new("/res"), None, &inherited, &mut environment);
             environment
         };
         assert_eq!(
@@ -945,6 +984,7 @@ mod tests {
         inject_live(
             LoginShell::Fish,
             Path::new("/res"),
+            None,
             &Inherited::default(),
             &mut live_fish,
         );
@@ -1173,6 +1213,69 @@ mod structured_profile_tests {
         assert!(String::from_utf8_lossy(&output.stdout).contains("sourced-literally"));
         assert!(!resources.path().join("ran").exists() && !resources.path().join("ran2").exists());
         assert_eq!(bash_env_literal("/plain/path"), "/plain/path");
+    }
+
+    /// On Windows a live Git Bash starts ngterm's shim when its own resources hold it, the shim told where Ghostty's
+    /// integration is, and a replay re-arms both; without the shim it starts Ghostty's integration as before.
+    #[test]
+    fn windows_bash_starts_ngterms_shim_when_it_is_staged() {
+        let ghostty = tempfile::tempdir().unwrap();
+        let own = tempfile::tempdir().unwrap();
+        let shim = crate::paths::join_relative(own.path(), GIT_BASH_SHIM);
+        let loader = LoginShell::Bash.loader_path(ghostty.path());
+        let mut env = BTreeMap::new();
+        inject_on(
+            true,
+            LoginShell::Bash,
+            ghostty.path(),
+            Some(own.path()),
+            &Inherited::default(),
+            &mut env,
+        );
+        assert_eq!(
+            env["ENV"],
+            bash_env_literal(&crate::shell_profiles::bash_path(&loader.to_string_lossy()))
+        );
+        assert!(!env.contains_key(GIT_BASH_GHOSTTY_VARIABLE), "no shim staged");
+        assert_eq!(env["CHERE_INVOKING"], "1");
+
+        std::fs::create_dir_all(shim.parent().unwrap()).unwrap();
+        std::fs::write(&shim, "").unwrap();
+        let mut env = BTreeMap::new();
+        inject_on(
+            true,
+            LoginShell::Bash,
+            ghostty.path(),
+            Some(own.path()),
+            &Inherited::default(),
+            &mut env,
+        );
+        assert_eq!(
+            env["ENV"],
+            bash_env_literal(&crate::shell_profiles::bash_path(&shim.to_string_lossy()))
+        );
+        assert_eq!(
+            env[GIT_BASH_GHOSTTY_VARIABLE],
+            crate::shell_profiles::bash_path(&loader.to_string_lossy())
+        );
+        let steps = rearm(LoginShell::Bash, &env).unwrap();
+        assert!(steps.contains(&Rearm::Export(
+            GIT_BASH_GHOSTTY_VARIABLE,
+            env[GIT_BASH_GHOSTTY_VARIABLE].clone()
+        )));
+
+        // elsewhere bash is no Git Bash: the shim is never used
+        let mut env = BTreeMap::new();
+        inject_on(
+            false,
+            LoginShell::Bash,
+            ghostty.path(),
+            Some(own.path()),
+            &Inherited::default(),
+            &mut env,
+        );
+        assert!(!env.contains_key(GIT_BASH_GHOSTTY_VARIABLE) && !env.contains_key("CHERE_INVOKING"));
+        assert_eq!(env["ENV"], bash_env_literal(&loader.to_string_lossy()));
     }
 
     #[test]

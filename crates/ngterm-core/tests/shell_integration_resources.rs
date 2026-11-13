@@ -21,6 +21,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -123,6 +124,19 @@ fn run_integrated(
     dirs: (&Path, &Path),
     script: &str,
 ) -> TestResult<Output> {
+    run_integrated_with(kind, shell, resources, dirs, script, |_| {})
+}
+
+/// [`run_integrated`] with the shell's variables changed by `adjust` once the integration set them (`PATH` among
+/// them, which is otherwise the test's).
+fn run_integrated_with(
+    kind: LoginShell,
+    shell: &Path,
+    resources: &Path,
+    dirs: (&Path, &Path),
+    script: &str,
+    adjust: impl FnOnce(&mut BTreeMap<String, String>),
+) -> TestResult<Output> {
     let (home, work) = dirs;
     let mut environment = BTreeMap::new();
     let inherited = Inherited {
@@ -133,15 +147,16 @@ fn run_integrated(
     if kind == LoginShell::Bash {
         environment.insert("GHOSTTY_BASH_INJECT".to_owned(), "1 --noprofile".to_owned());
     }
+    adjust(&mut environment);
     let mut command = Command::new(shell);
     command
         .args(kind.interactive_flags())
         .env_clear()
-        .envs(&environment)
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", home)
         .env("TERM", "xterm-256color")
         .env("GHOSTTY_SHELL_FEATURES", "title")
+        .envs(&environment)
         .current_dir(work)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -267,6 +282,75 @@ fn zsh_reports_a_hostile_directory_or_host_without_its_escape_sequences() -> Tes
         return Ok(());
     };
     reports_safely(LoginShell::Zsh, &shell, "HOST")
+}
+
+/// Git Bash on Windows starts ngterm's shim (`resources/shell-integration/git-bash/bash-env`, what `ENV` names there),
+/// which loads Ghostty's integration and replaces its directory report, bash's MSYS path, with the Windows form
+/// `cygpath -m` gives (faked here: `C:/msys` in front of the path), and none for a directory cygpath cannot convert;
+/// Ghostty's prompt marks still carry each command's status.
+#[test]
+fn git_bash_shim_reports_cygpaths_windows_form_instead_of_the_msys_path() -> TestResult {
+    let Some(shell) = bash() else {
+        eprintln!("SKIPPED: no Bash 4 or newer on PATH");
+        return Ok(());
+    };
+    let resources = staged_resources()?;
+    let shim = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("resources")
+        .join(shell_integration::GIT_BASH_SHIM)
+        .canonicalize()?;
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().canonicalize()?;
+    let (home, work, bin) = (root.join("home"), root.join("work"), root.join("bin"));
+    fs::create_dir_all(work.join("a b").join("unconvertible"))?;
+    fs::create_dir_all(&home)?;
+    fs::create_dir_all(&bin)?;
+    let cygpath = bin.join("cygpath");
+    fs::write(
+        &cygpath,
+        "#!/bin/sh\n[ \"$1 $2\" = '-m --' ] || exit 2\ncase $3 in */unconvertible) exit 1 ;; esac\nprintf 'C:/msys%s\\n' \"$3\"\n",
+    )?;
+    fs::set_permissions(&cygpath, fs::Permissions::from_mode(0o755))?;
+    let path = std::env::join_paths(
+        std::iter::once(bin.clone()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())),
+    )?;
+    let script = "cd -- 'a b'\ncd unconvertible\nfalse\ncd ..\nexit\n";
+    let output = run_integrated_with(
+        LoginShell::Bash,
+        &shell,
+        &resources,
+        (&home, &work),
+        script,
+        |environment| {
+            let loader = environment.insert("ENV".to_owned(), shim.display().to_string());
+            environment.insert(
+                shell_integration::GIT_BASH_GHOSTTY_VARIABLE.to_owned(),
+                loader.unwrap_or_default(),
+            );
+            environment.insert("PATH".to_owned(), path.to_string_lossy().into_owned());
+        },
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    let payloads = osc_payloads(&output.stdout)
+        .into_iter()
+        .map(String::from_utf8)
+        .collect::<Result<Vec<_>, _>>()?;
+    let reports = payloads
+        .iter()
+        .filter_map(|payload| payload.strip_prefix("7;"))
+        .collect::<Vec<_>>();
+    let windows = |path: &Path| format!("kitty-shell-cwd://localhost/C:/msys{}", path.display());
+    assert_eq!(
+        reports,
+        [windows(&work), windows(&work.join("a b")), windows(&work.join("a b"))],
+        "{output:?}"
+    );
+    assert!(
+        payloads.iter().any(|payload| payload.starts_with("133;D;1;")),
+        "the failed command's status reaches the prompt mark: {output:?}"
+    );
+    Ok(())
 }
 
 #[test]

@@ -98,6 +98,7 @@ function Test-Installed([string] $msi, [bool] $versioned) {
     Check "product $code ($version) is installed" ((Get-ProductState $code) -eq 5)
     foreach ($file in 'bin\ngterm.exe', 'bin\ngtermctl.exe', 'bin\ngterm-session.exe', 'bin\ngterm-headless.exe', 'bin\vcruntime140.dll',
         'share\ghostty\shell-integration\bash\ghostty.bash', 'share\ngterm\shell-integration\pwsh\ngterm.ps1',
+        'share\ngterm\shell-integration\git-bash\bash-env',
         'share\ngterm\agent-status\ngterm-agent-status.ps1', 'share\ngterm\skills\ngterm\SKILL.md',
         'share\ngterm\app-BUILD', 'share\doc\ngterm\LICENSE.txt', 'share\doc\ngterm\NOTICE.txt',
         'share\doc\fonts\JetBrainsMono-OFL.txt') {
