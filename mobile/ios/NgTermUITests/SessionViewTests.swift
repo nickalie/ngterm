@@ -181,7 +181,7 @@ internal final class SessionViewTests: XCTestCase {
     // Attached alone, the companion keeps "Companion of work" at the sessions' indent; with its parent attached, the
     // column and the session moves (⌘⌥↓ and ⌘⌥↑ on a hardware keyboard) go work, review, notes, not the listing's order
     @MainActor
-    internal func testAnOrphanCompanionStandsAloneAndTheSessionMovesFollowTheTree() throws {
+    internal func testAnOrphanCompanionStandsAloneAndTheSessionMovesFollowTheTree() {
         let arguments = ["-ngterm-fake-session", "-ngterm-fake-companion"]
         let app = FakeApp.launch(withKey: true, arguments: arguments, for: self)
         FakeApp.showMachines(in: app)
