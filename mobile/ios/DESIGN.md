@@ -135,6 +135,7 @@ accessibility sizes. Sentence case everywhere; no all-caps labels.
 | `sessionName` | body, semibold | a session's name in its row |
 | `detail` | subheadline | a row's second line, a row's action |
 | `statusWord` | footnote, semibold | a status's word and glyph |
+| `peerWord` | caption, medium | the app a machine runs, in its `PeerBadge` (small enough for a two-line title) |
 | `banner` | subheadline, semibold | a banner's message and action |
 | `note` | footnote | a banner's or a cover's explanation |
 | `coverTitle` | title 3, semibold | a cover's title |
@@ -185,6 +186,7 @@ by themselves.
 | `StatusBadge` | one of the app's tones: glyph and word (or a longer label) in its color, read as the words |
 | `AgentStatusBadge` | an origin's agent status, its color lifted to read on every ground; a label may say more ("2 waiting") |
 | `MachineRow` | a machine: name (a heading), connection badge, mono address, what the state means with its one action (`RowAction`) at the line's end, and a slot for its sessions' statuses. At accessibility sizes the badge goes under the name and the action under the line. VoiceOver reads it as one element, with the action as its custom action |
+| `PeerBadge` | the app a machine runs when it isn't ngterm ("agterm"): the word in secondary ink inside a hairline 6 pt outline, so it reads as a fact about the machine, not a status or an action. It takes no tap; what that app lacks is its VoiceOver hint and, with a pointer, its tooltip, and the screen with room says it in full |
 | `SessionRow` | a session: name, the Attached mark (link glyph and "Attached" in verdigris), its line (context, working directory, or "Companion of …"), its status slot, or "Ending" with a spinner; a companion is indented (a machine's list indents every companion; the machines' column, one more step, only one under its attached parent) |
 | `StatePanel` | what a screen shows instead of content, on `ContentUnavailableView`, scrolling when it doesn't fit (the largest text sizes): `.loading`, `.empty`, `.error`, `.offline`, each with the one action that moves on and at most one quieter one under it; the glyph (`idle` unless the state has a tone) is decorative, and the title is a heading of its own |
 | `Banner` | a strip about the whole screen while it stays usable: glyph, message, note, optional action and dismiss; the text wraps and the actions go under it when they don't fit beside it; announced to VoiceOver when it appears |
@@ -402,6 +404,8 @@ The first column: an inset grouped `List` of `MachineRow`s, its selection the ma
   idle count, or "No sessions"), Connecting, Offline with **Connect**, Reconnecting in *n* s (counting down each
   second) with **Retry now**, Unreachable with the core's reason and **Retry**, "Needs you" while a host key waits on
   its sheet, "Waiting for sign-in" while a sign-in does, and "Host key changed" with **Review**.
+- **A Mac running agterm** (its listing says so; one with no sessions listed yet says nothing) has a `PeerBadge`
+  after its address; at accessibility sizes it goes under the address.
 - **Add machine** is the toolbar's `+`. A row's context menu has Connect or Disconnect, Edit, and Remove; swiping it
   removes it at once, and a banner at the list's end offers **Undo** for 10 s (the machine comes back where it was,
   with its pinned key). Removing doesn't confirm: Undo is the safety.
@@ -435,6 +439,10 @@ build-01.lan, port 22"), what it means, then its plates and actions.
 The second column: an inset grouped `List` of `SessionRow`s, its selection the session this window shows. The title is
 inline: the machine's name over its mono address, read by VoiceOver as one heading with the address in words. **New
 session** is the toolbar's `+` while the machine is connected.
+
+- **A Mac running agterm:** its `PeerBadge` follows the address in the title (VoiceOver reads it last), and the core's
+  note on what agterm lacks ("Attached from agterm: the agent chat view, … are not available") is the list's footer,
+  in the app's note style. Its sessions list, attach, open and end as an ngterm machine's do.
 
 - **Groups:** the families with a session this app has attached under "Attached", then the others under "On
   build-01", each a parent with its companions right under it (indented, "Companion of …"). The headers are the app's
@@ -488,7 +496,8 @@ compact: the selected pane alone                regular: the origin's split
 ```
 
 - **Toolbar:** the session's name over its state (the agent's status while the stream is live; "Connecting",
-  "Reconnecting" or "Can't stream" while it isn't) and its context, read as one heading. Trailing: the pane switcher,
+  "Reconnecting" or "Can't stream" while it isn't), the `PeerBadge` of a session on a Mac running agterm, and its
+  context, read as one heading. Trailing: the pane switcher,
   the view switch while the selected pane runs an agent, and More.
 - **Pane switcher** (two panes or more): the panes' numbers in the origin's order, 44 pt each; the selected one bold,
   underlined and in the tint (weight and the line carry it, not color alone). VoiceOver reads "Pane 1 of 2" and the
@@ -506,7 +515,9 @@ compact: the selected pane alone                regular: the origin's split
   own Agent chat view, a toggle the system's menu draws with a checkmark while the session's panes running an agent
   show as a chat. It starts at Settings' Agent chat view, and a tap sets the other for that session alone, kept on
   this device (`session-chat-views.json`, the newest 256 sessions); one set back to Settings' value follows Settings
-  again. A choice the store can't write holds until the app ends.
+  again. A choice the store can't write holds until the app ends. On a Mac running agterm, which has no chat view, it
+  is off and takes no tap, its subtitle saying "agterm has no chat view"; its panes always show their terminal, with
+  no view switch.
 - **HUD:** the origin's HUD as a strip under the toolbar on the secondary ground (a spinner when the origin runs one,
   its message and its detail), in the app's colors, not the desktop's; announced as it changes, and left out below
   320 pt of height (a phone on its side with the keyboard up), where it would take the terminal's last rows.

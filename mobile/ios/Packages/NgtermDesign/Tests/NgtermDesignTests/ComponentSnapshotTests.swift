@@ -90,6 +90,25 @@ internal struct ComponentSnapshotTests {
         snapshot(list, named: "machines", variant: variant, height: variant == .accessibility ? 1_400 : 560)
     }
 
+    @Test("a machine's app badge, alone and after a row's address", arguments: SnapshotVariant.allCases)
+    internal func peerBadges(variant: SnapshotVariant) {
+        let list = List {
+            PeerBadge("agterm", note: "Attached from agterm: the agent chat view is not available")
+            MachineRow(name: "studio", address: "nick@studio.lan:22", peer: "agterm", tone: .online) {
+                AgentStatusBadge(status: "active")
+            }
+            MachineRow(
+                name: "mini",
+                address: "nick@mac-mini.example.com:2222",
+                peer: "agterm",
+                tone: .offline,
+                detail: "Not connected",
+                action: Self.noAction
+            )
+        }
+        snapshot(list, named: "peer-badges", variant: variant, height: variant == .accessibility ? 1_000 : 400)
+    }
+
     @Test("session rows", arguments: SnapshotVariant.allCases)
     internal func sessionRows(variant: SnapshotVariant) {
         let list = List {

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// A machine's sessions as a list: the banners (the device is offline, the last refresh failed), the families with a
 /// session this app has attached under "Attached", then the others under "On build-01", companions under their
-/// parents.
+/// parents, and under the last group a `note` when the machine's app lacks features (agterm).
 ///
 /// Its selection is the session this window shows; selecting another attaches and opens it (`onOpen`).
 internal struct SessionsList: View {
@@ -10,6 +10,7 @@ internal struct SessionsList: View {
     internal let attached: [SessionLine]
     internal let others: [SessionLine]
     internal let banners: SessionsBanners
+    internal var note: String?
     internal let selection: String?
     internal let onOpen: @MainActor (String) -> Void
     internal let onDetach: @MainActor (String) -> Void
@@ -25,8 +26,8 @@ internal struct SessionsList: View {
                         .listRowBackground(Color.clear)
                 }
             }
-            group(String(localized: "Attached"), attached)
-            group(String(localized: "On \(machine)"), others)
+            group(String(localized: "Attached"), attached, note: others.isEmpty ? note : nil)
+            group(String(localized: "On \(machine)"), others, note: note)
         }
         .listStyle(.insetGrouped)
         .accessibilityIdentifier("sessions")
@@ -43,7 +44,7 @@ internal struct SessionsList: View {
     }
 
     @ViewBuilder
-    private func group(_ title: String, _ lines: [SessionLine]) -> some View {
+    private func group(_ title: String, _ lines: [SessionLine], note: String?) -> some View {
         if !lines.isEmpty {
             Section {
                 ForEach(lines) { line in
@@ -58,6 +59,11 @@ internal struct SessionsList: View {
                 }
             } header: {
                 FormHint(title, .header)
+            } footer: {
+                if let note {
+                    FormHint(note, .note)
+                        .accessibilityIdentifier("sessions-peer-note")
+                }
             }
         }
     }

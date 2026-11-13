@@ -54,7 +54,7 @@ public final class SessionModel {
     public var chatView: ChatViewChoice {
         let chats = graph.chats
         let session = key
-        return ChatViewChoice(isOn: chats.isChatView(session)) { isOn in
+        return ChatViewChoice(isOn: chats.isChatView(session), noChatOn: chats.noChatOn(session)) { isOn in
             chats.setChatView(session, on: isOn)
         }
     }

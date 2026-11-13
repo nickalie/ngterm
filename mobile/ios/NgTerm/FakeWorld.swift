@@ -19,7 +19,7 @@
     /// after it: its question shows only once the first is answered; and, when asked, a machine `split`
     /// (`split.lan`) is saved already, with a session `work` of two panes side by side (``FakeSessionWorld``), whose
     /// origin asks a question as it is attached, and whose first pane runs Claude Code (``FakeChatWorld``), each when
-    /// asked too.
+    /// asked too; and, when asked, a Mac running agterm, `studio` (``FakeAgtermWorld``).
     ///
     /// Notifications go to memory (``FakeNotices``), and the question about notifying counts as asked unless the
     /// launch asks for it.
@@ -41,7 +41,8 @@
         /// The app's graph over the fake core, as the launch arguments ask.
         ///
         /// The `arguments` are ``CoreChoice``'s: a key already, two programs asking to read the clipboard, `split` with
-        /// its session, its question, its agent and its companion, the question about notifying left to ask.
+        /// its session, its question, its agent and its companion, `studio` running agterm, the question about notifying
+        /// left to ask.
         @MainActor
         internal static func graph(arguments: [String]) -> AppGraph {
             let directory = FileManager.default.temporaryDirectory.appending(
@@ -66,6 +67,9 @@
                     chats: arguments.contains(CoreChoice.fakeChatArgument),
                     companion: arguments.contains(CoreChoice.fakeCompanionArgument)
                 )
+            }
+            if arguments.contains(CoreChoice.fakeAgtermArgument) {
+                FakeAgtermWorld.seed(machines, core: core, keyId: key.id)
             }
             let stores = GraphStores(directory: directory)
             if !arguments.contains(CoreChoice.fakeNotificationQuestionArgument) {

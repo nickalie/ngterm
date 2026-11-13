@@ -47,7 +47,8 @@ public final class SessionsModel {
             attached: connections.attached[machineId] ?? [],
             isOffline: !graph.network.isOnline,
             isRefreshing: isRefreshing,
-            ending: ending
+            ending: ending,
+            peer: connections.peers[machineId]
         )
     }
 
@@ -287,7 +288,7 @@ public final class SessionsModel {
     public func chatView(sessionId: String) -> ChatViewChoice {
         let key = SessionKey(machineId: machineId, sessionId: sessionId)
         let chats = graph.chats
-        return ChatViewChoice(isOn: chats.isChatView(key)) { isOn in
+        return ChatViewChoice(isOn: chats.isChatView(key), noChatOn: chats.noChatOn(key)) { isOn in
             chats.setChatView(key, on: isOn)
         }
     }

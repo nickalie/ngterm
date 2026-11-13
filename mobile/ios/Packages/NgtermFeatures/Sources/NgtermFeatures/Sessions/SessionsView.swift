@@ -4,7 +4,8 @@ import SwiftUI
 
 /// A machine's sessions: the machine's name and address as the title, New session in the toolbar while it is
 /// connected, and the sessions this app has attached, then the others, companions under their parents, with pull to
-/// refresh.
+/// refresh. A machine running another app than ngterm (agterm) has its badge in the title and what it lacks under
+/// the list.
 ///
 /// Instead of the list it shows what the machine's link or listing calls for (``SessionsBody``), always with the one
 /// action that moves on. End session confirms; a failure the list can't show is a banner at its end. A tap on a
@@ -146,7 +147,7 @@ public struct SessionsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    SessionsTitle(machine: state.machine)
+                    SessionsTitle(machine: state.machine, peer: state.peer)
                 }
                 if hasNewSessionButton(state) {
                     ToolbarItem(placement: .primaryAction) {
@@ -245,6 +246,7 @@ public struct SessionsView: View {
                 attached: attached,
                 others: others,
                 banners: banners(state, failure: failure),
+                note: state.peer.flatMap { $0.isForeign ? $0.note : nil },
                 selection: selection,
                 onOpen: open,
                 onDetach: model.detach,

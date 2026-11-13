@@ -75,6 +75,8 @@
         public static let notShown = "the pane is not shown"
         /// The core's reason for a page asked of a chat not open (chat.rs's `NOT_OPEN`).
         public static let notOpen = "the pane's chat is not open"
+        /// The core's reason for a chat call on a machine running agterm (chat.rs's `NO_CHAT_ON_AGTERM`).
+        public static let noChatOnAgterm = "agterm has no agent chat view; the pane shows its terminal"
 
         /// Every event handed out, those a test emitted and those the fake made, in order.
         public let events: AsyncStream<MobileEvent>

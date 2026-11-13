@@ -1034,6 +1034,9 @@ as before, with no error. A Windows origin can't be reached at all yet, as above
 - Its [agent chat view](#agent-chat-view) is the same, in the session's toolbar (Show terminal / Show chat) and its More
   menu (Chat view); the paperclip offers the photo picker and the document picker, and a hardware keyboard sends with
   ⌘Return.
+- It reaches Macs running upstream agterm too ([An agterm origin](#an-agterm-origin)): their machine row, sessions
+  screen and session title carry an "agterm" badge, the sessions list's footer says what agterm lacks, and their
+  sessions offer no chat view. Its UI tests reach one on the fake core (`FakeAgtermWorld`), as it runs no sshd.
 - It is connected only while it is in the foreground: iOS can't keep the ssh links up, so there is no counterpart of
   Android's foreground service. Leaving the foreground, it disconnects after a short grace, and its open asks go back
   to the machine; coming back, it reconnects. Asks show as sheets, or as notifications with answer actions until the

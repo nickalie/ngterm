@@ -68,6 +68,29 @@ internal struct MachinesSnapshotTests {
         .environment(\.fixedNow, test.clock.now)
     }
 
+    @Test("an agterm machine's badge after its address, beside an ngterm one", arguments: ScreenVariant.allCases)
+    internal func agterm(variant: ScreenVariant) throws {
+        defer { test.remove() }
+        let connections = test.connections
+        let machines = [
+            machine("connected", "build-01", host: "build-01.lan"),
+            machine("agterm", "studio", host: "studio.lan"),
+        ]
+        for machine in machines {
+            try test.seed(machine)
+            connections.connect(machine.core).cancel()
+            connections.receive(.machineState(machineId: machine.id, state: .connected))
+        }
+        connections.receive(.tree(machineId: "connected", sessions: Self.sessions))
+        let agterm = Self.sessions.prefix(2).map { session in
+            var listed = session
+            listed.peer = .agterm
+            return listed
+        }
+        connections.receive(.tree(machineId: "agterm", sessions: agterm))
+        ScreenSnapshot.check(screen(MachinesModel(graph: test.graph)), named: "machines-agterm", variant: variant)
+    }
+
     @Test("no machines yet", arguments: ScreenVariant.allCases)
     internal func empty(variant: ScreenVariant) {
         defer { test.remove() }

@@ -2,7 +2,8 @@ import Foundation
 import NgtermDesign
 import SwiftUI
 
-/// One machine's row: its link as the badge, what the link calls for, and its sessions' statuses.
+/// One machine's row: its link as the badge, what the link calls for, its sessions' statuses, and the app it runs
+/// after its address when that isn't ngterm.
 ///
 /// The statuses show while it is connected. A reconnect counts down each second.
 internal struct MachineEntry: View {
@@ -30,6 +31,7 @@ internal struct MachineEntry: View {
         return MachineRow(
             name: item.machine.title,
             address: item.machine.address,
+            peer: item.peer.flatMap { $0.isForeign ? $0.badge : nil },
             tone: look.tone,
             toneLabel: look.label,
             detail: look.detail,

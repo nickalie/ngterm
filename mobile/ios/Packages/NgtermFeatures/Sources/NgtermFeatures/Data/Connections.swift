@@ -3,7 +3,8 @@ import NgtermCore
 import Observation
 
 /// The app's side of the mobile core's connections (mobile/android's `Connections`): each machine's ``Link``, its last
-/// listing and why the last one failed, and the sessions this app has attached.
+/// listing and why the last one failed, the sessions this app has attached, and the app each machine runs (``peers``:
+/// ngterm, or agterm with fewer features), as its listings name it.
 ///
 /// An attached session's listing carries the name its stream last said, so a rename on its machine shows everywhere at
 /// once, though the machine is listed only now and then.
@@ -24,6 +25,9 @@ public final class Connections {
     public private(set) var trees: [String: [RemoteSession]] = [:]
     /// Why a machine's last listing failed (the core's words), by id, until a listing lands.
     public private(set) var treeFailures: [String: String] = [:]
+    /// The app each machine runs, by id, as its connection's last listing with a session named it; a machine not here
+    /// runs ngterm or hasn't said.
+    public private(set) var peers: [String: MachinePeer] = [:]
     /// The sessions this app has attached, by machine id: each machine's session ids.
     public internal(set) var attached: [String: Set<String>] = [:] {
         didSet {
@@ -204,6 +208,7 @@ public final class Connections {
         trees[machineId] = nil
         treeFailures[machineId] = nil
         attached[machineId] = nil
+        peers[machineId] = nil
         streamNames = streamNames.filter { $0.key.machineId != machineId }
     }
 
@@ -341,10 +346,20 @@ public final class Connections {
         listings[machineId] = sessions
         trees[machineId] = withStreamNames(machineId, sessions)
         treeFailures[machineId] = nil
+        learnPeer(machineId, sessions)
         let gone = (attached[machineId] ?? []).subtracting(sessions.map(\.id))
         for sessionId in gone.sorted() {
             detach(machineId: machineId, sessionId: sessionId)
         }
+    }
+
+    // a listing names its machine's app on each session (one connection, one app); an empty one says nothing, so the
+    // app learned before stays
+    private func learnPeer(_ machineId: String, _ sessions: [RemoteSession]) {
+        guard let kind = sessions.lazy.compactMap(\.peer).first, peers[machineId]?.kind != kind else {
+            return
+        }
+        peers[machineId] = MachinePeer(kind: kind)
     }
 
     // a stream's word on its session's name (a blank one says nothing); it reaches the listing once the session is
@@ -389,6 +404,7 @@ public final class Connections {
     // old one, and a listing call on it no longer counts
     private func replaced(_ machineId: String) {
         bump(machineId)
+        peers[machineId] = nil
         for sessionId in (attached[machineId] ?? []).sorted() {
             detach(machineId: machineId, sessionId: sessionId)
         }

@@ -1,8 +1,8 @@
 import NgtermCore
 import NgtermPlatform
 
-/// What a machine's sessions screen knows: the machine, its link, its sessions and what is under way on them
-/// (mobile/android's `MachineSessions`).
+/// What a machine's sessions screen knows: the machine, its link, its sessions and what is under way on them, and the
+/// app it runs (mobile/android's `MachineSessions`).
 public struct MachineSessions: Hashable, Sendable {
     /// The machine.
     public var machine: StoredMachine
@@ -22,10 +22,12 @@ public struct MachineSessions: Hashable, Sendable {
     public var isRefreshing: Bool
     /// The sessions whose End is under way, by id.
     public var ending: Set<String>
+    /// The app the machine runs, as a listing said; `nil`: ngterm, or not said.
+    public var peer: MachinePeer?
 
     /// The screen's facts: `machine` with its `link`, its `sessions` when it `isListed`, why the last listing
-    /// `failure`d, what is `attached`, whether the device `isOffline`, a refresh is under way, and which sessions are
-    /// `ending`.
+    /// `failure`d, what is `attached`, whether the device `isOffline`, a refresh is under way, which sessions are
+    /// `ending`, and the app it runs (`peer`).
     public init(
         machine: StoredMachine,
         link: Link,
@@ -35,7 +37,8 @@ public struct MachineSessions: Hashable, Sendable {
         attached: Set<String>,
         isOffline: Bool,
         isRefreshing: Bool = false,
-        ending: Set<String> = []
+        ending: Set<String> = [],
+        peer: MachinePeer? = nil
     ) {
         self.machine = machine
         self.link = link
@@ -46,5 +49,6 @@ public struct MachineSessions: Hashable, Sendable {
         self.isOffline = isOffline
         self.isRefreshing = isRefreshing
         self.ending = ending
+        self.peer = peer
     }
 }

@@ -16,7 +16,7 @@ public final class MachinesModel {
     public internal(set) var failure: String?
     @ObservationIgnored private let graph: AppGraph
 
-    /// The machines, in the order they were added, each with its link and listed sessions.
+    /// The machines, in the order they were added, each with its link, listed sessions and the app it runs.
     public var items: [MachineItem] {
         graph.machines.machines.map { machine in
             let listing = graph.connections.trees[machine.id]
@@ -24,7 +24,8 @@ public final class MachinesModel {
                 machine: machine,
                 link: graph.connections.link(of: machine.id),
                 isListed: listing != nil,
-                sessions: listing ?? []
+                sessions: listing ?? [],
+                peer: graph.connections.peers[machine.id]
             )
         }
     }

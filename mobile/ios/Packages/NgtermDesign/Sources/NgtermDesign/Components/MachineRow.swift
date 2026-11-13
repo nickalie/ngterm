@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// A machine in a list: its name, its connection's badge, its mono address, what the state means with the one action
-/// it calls for, and a slot for its sessions' statuses while it is connected.
+/// A machine in a list: its name, its connection's badge, its mono address (with the app it runs after it, when that
+/// isn't ngterm: a ``PeerBadge``), what the state means with the one action it calls for, and a slot for its sessions'
+/// statuses while it is connected.
 ///
 /// It shows what it is given and reads no app state; the list it sits in makes it a row, a card in an inset list. At an
 /// accessibility text size the badge goes under the name. VoiceOver reads it as one element, its name a heading, with
@@ -12,6 +13,7 @@ public struct MachineRow<Summary: View>: View {
 
     private let name: String
     private let address: String
+    private let peer: String?
     private let tone: StatusTone
     private let toneLabel: String?
     private let detail: String?
@@ -35,9 +37,7 @@ public struct MachineRow<Summary: View>: View {
                 }
                 StatusBadge(tone, label: toneLabel)
             }
-            Text(verbatim: address)
-                .font(Typography.address)
-                .rowForeground(Palette.secondaryText.color)
+            addressLine
             if detail != nil || action != nil {
                 DetailLine(detail: detail, action: action)
             }
@@ -54,11 +54,29 @@ public struct MachineRow<Summary: View>: View {
         }
     }
 
-    /// A machine named `name` at `address` (`user@host:port`), its connection `tone` (with `toneLabel` in place of
-    /// its word), what the state means (`detail`) and its `action`, then `summary`.
+    // the badge goes under the address at an accessibility size rather than cutting it short
+    @ViewBuilder private var addressLine: some View {
+        let line =
+            typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: Spacing.xSmall))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: Spacing.small))
+        line {
+            Text(verbatim: address)
+                .font(Typography.address)
+                .rowForeground(Palette.secondaryText.color)
+            if let peer {
+                PeerBadge(peer)
+            }
+        }
+    }
+
+    /// A machine named `name` at `address` (`user@host:port`) running `peer` (an app's name; `nil` for ngterm), its
+    /// connection `tone` (with `toneLabel` in place of its word), what the state means (`detail`) and its `action`,
+    /// then `summary`.
     public init(
         name: String,
         address: String,
+        peer: String? = nil,
         tone: StatusTone,
         toneLabel: String? = nil,
         detail: String? = nil,
@@ -67,6 +85,7 @@ public struct MachineRow<Summary: View>: View {
     ) {
         self.name = name
         self.address = address
+        self.peer = peer
         self.tone = tone
         self.toneLabel = toneLabel
         self.detail = detail
@@ -80,12 +99,21 @@ extension MachineRow where Summary == EmptyView {
     public init(
         name: String,
         address: String,
+        peer: String? = nil,
         tone: StatusTone,
         toneLabel: String? = nil,
         detail: String? = nil,
         action: RowAction? = nil
     ) {
-        self.init(name: name, address: address, tone: tone, toneLabel: toneLabel, detail: detail, action: action) {
+        self.init(
+            name: name,
+            address: address,
+            peer: peer,
+            tone: tone,
+            toneLabel: toneLabel,
+            detail: detail,
+            action: action
+        ) {
             EmptyView()
         }
     }

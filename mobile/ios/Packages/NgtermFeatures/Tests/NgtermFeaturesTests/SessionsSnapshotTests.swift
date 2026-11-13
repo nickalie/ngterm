@@ -130,6 +130,17 @@ internal struct SessionsSnapshotTests {
         await ending?.value
     }
 
+    @Test("an agterm machine's sessions: its badge and what it lacks", arguments: ScreenVariant.allCases)
+    internal func agterm(variant: ScreenVariant) throws {
+        defer { test.remove() }
+        let sessions = Self.sessions.map { session in
+            var listed = session
+            listed.peer = .agterm
+            return listed
+        }
+        ScreenSnapshot.check(screen(try listed(sessions, attached: ["s3"])), named: "sessions-agterm", variant: variant)
+    }
+
     @Test("no sessions yet", arguments: ScreenVariant.allCases)
     internal func empty(variant: ScreenVariant) throws {
         defer { test.remove() }

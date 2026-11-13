@@ -12,6 +12,8 @@ public enum Typography {
     public static let detail = Font.subheadline
     /// A status's word.
     public static let statusWord = Font.footnote.weight(.semibold)
+    /// The app a machine runs, in its badge: a size under the address's, so the badge fits a two-line title.
+    public static let peerWord = Font.caption.weight(.medium)
     /// A banner's message.
     public static let banner = Font.subheadline.weight(.semibold)
     /// A banner's or a cover's explanation.

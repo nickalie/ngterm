@@ -73,6 +73,14 @@
             return sessions[machineId] ?? []
         }
 
+        /// Refuses a chat call on `machineId` when its last listing named agterm, which has no agent chat view, as the
+        /// core does.
+        internal func offersChat(_ machineId: String) throws(MobileError) {
+            if listings[machineId]?.contains(where: { $0.peer == .agterm }) == true {
+                throw MobileError.Remote(reason: FakeMobileCore.noChatOnAgterm)
+            }
+        }
+
         /// The session `sessionId` of the last listing of `machineId`.
         internal func listed(_ machineId: String, _ sessionId: String) throws(MobileError) -> RemoteSession {
             _ = try sessionsOf(machineId)

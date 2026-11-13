@@ -75,6 +75,10 @@ public typealias PaneMouse = NgtermCoreBindings.PaneMouse
 public typealias PaneMouseAction = NgtermCoreBindings.PaneMouseAction
 /// A pointer event's button.
 public typealias PaneMouseButton = NgtermCoreBindings.PaneMouseButton
+/// What a machine's app offers beyond the protocol both apps speak, and the line the app shows about it.
+public typealias PeerCapabilities = NgtermCoreBindings.PeerCapabilities
+/// The app on a machine's far side: ngterm, or upstream agterm with fewer features.
+public typealias PeerKind = NgtermCoreBindings.PeerKind
 /// A shown pane: its machine, its session and its identity there.
 public typealias PaneRef = NgtermCoreBindings.PaneRef
 /// A shown pane's role at its session.

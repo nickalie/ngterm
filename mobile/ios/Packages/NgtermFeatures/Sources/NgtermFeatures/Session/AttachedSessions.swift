@@ -102,7 +102,7 @@ public final class AttachedSessions {
     ) -> AttachedSession {
         let listing = connections.trees[key.machineId]?.first { $0.id == key.sessionId }
         let stream = live.sessions[key] ?? LiveSession()
-        let made = AttachedSession(
+        var made = AttachedSession(
             key: key,
             machine: machine.title,
             name: listing?.name ?? seen[key]?.name ?? key.sessionId,
@@ -113,6 +113,7 @@ public final class AttachedSessions {
             companionOf: companionOf,
             isNested: isNested
         )
+        made.peer = connections.peers[key.machineId]
         seen[key] = made
         return made
     }

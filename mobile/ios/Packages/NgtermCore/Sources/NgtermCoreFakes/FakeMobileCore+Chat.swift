@@ -16,6 +16,7 @@
                 let ref = PaneRef(machineId: machineId, sessionId: sessionId, paneId: paneId)
                 try state.withLock { state throws(MobileError) in
                     _ = try state.sessionsOf(machineId)
+                    try state.offersChat(machineId)
                     guard state.shown[ref] != nil else {
                         throw MobileError.Remote(reason: Self.notShown)
                     }
@@ -71,6 +72,7 @@
                 let ref = PaneRef(machineId: machineId, sessionId: sessionId, paneId: paneId)
                 return try state.withLock { state throws(MobileError) in
                     _ = try state.sessionsOf(machineId)
+                    try state.offersChat(machineId)
                     guard let commands = state.catalogs[ref] else {
                         throw MobileError.Remote(reason: "no agent in this pane")
                     }
@@ -92,6 +94,7 @@
                 let total = UInt64(bytes.count)
                 _ = try state.withLock { state throws(MobileError) in
                     _ = try state.sessionsOf(machineId)
+                    try state.offersChat(machineId)
                     state.uploadTokens.append(cancel)
                 }
                 // half of it has gone when a test's gate holds the call; a cancel there stops it

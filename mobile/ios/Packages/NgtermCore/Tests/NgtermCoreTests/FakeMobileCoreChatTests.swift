@@ -22,6 +22,35 @@ internal struct FakeMobileCoreChatTests {
         return core
     }
 
+    @Test("a machine whose listing names agterm refuses the chat, its commands and uploads, as the core does")
+    internal func agtermRefusesChat() async throws {
+        let core = FakeMobileCore()
+        core.sessions["m1"] = [fakeSession(id: "s1", peer: .agterm)]
+        try await core.connect(machine: Self.machine)
+        _ = try await core.listSessions(machineId: "m1")
+        _ = try await core.showPane(machineId: "m1", sessionId: "s1", paneId: "p1", size: Self.size)
+        let refused = MobileError.Remote(reason: FakeMobileCore.noChatOnAgterm)
+        await #expect(throws: refused) {
+            try await core.openChat(machineId: "m1", sessionId: "s1", paneId: "p1")
+        }
+        await #expect(throws: refused) {
+            _ = try await core.agentCommands(machineId: "m1", sessionId: "s1", paneId: "p1")
+        }
+        await #expect(throws: refused) {
+            _ = try await core.uploadFile(
+                machineId: "m1",
+                name: "notes.txt",
+                bytes: Data("hi".utf8),
+                progress: { _, _ in
+                    // nothing is sent
+                },
+                cancel: UploadCancel()
+            )
+        }
+        #expect(core.openChats.isEmpty)
+        #expect(core.uploads.isEmpty)
+    }
+
     @Test("a chat opens only on a shown pane, and closes with its close or the pane's hide")
     internal func openAndClose() async throws {
         let core = try await Self.shown()

@@ -17,9 +17,9 @@ internal struct SessionSnapshotTests {
 
     private let world = SessionWorld()
 
-    // the session streaming `layout`, its panes shown
-    private func live(_ layout: RemoteLayout) async throws {
-        try await world.attach()
+    // the session streaming `layout`, its panes shown, its machine running `peer`
+    private func live(_ layout: RemoteLayout, peer: PeerKind? = nil) async throws {
+        try await world.attach(["s1"], of: ["s1"], peer: peer)
         await world.stream(layout)
         for paneId in layout.panes {
             await world.show(paneId)
@@ -120,6 +120,18 @@ internal struct SessionSnapshotTests {
             .paneEnded(pane: SessionWorld.pane("P1"), end: .exited(code: 1, signal: nil))
         )
         await SessionShot.check(world, named: "exited-hud", shot: Self.phone, hasTerminals: true)
+    }
+
+    @Test("an agterm session: its badge beside the state, its agent's pane showing the terminal")
+    internal func agterm() async throws {
+        defer { world.remove() }
+        try await live(SessionWorld.layout(["P1"], axis: nil, shown: true), peer: .agterm)
+        await world.emit(
+            .paneAgent(machineId: "m1", sessionId: "s1", paneId: "P1", agent: "claude", conversationId: "c1")
+        )
+        for shot in [Self.phone, Self.phoneDark, Self.phoneLarge, Self.tablet] {
+            await SessionShot.check(world, named: "agterm", shot: shot, hasTerminals: true)
+        }
     }
 
     @Test("a session ended on its machine is gone")
