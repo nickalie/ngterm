@@ -219,7 +219,9 @@ def _directory_of(ctl, sid, **pane):
 @SHELL_PROFILES
 @pytest.mark.requires("windows-shells", reason="Git Bash is Windows' own: elsewhere bash's paths are the OS's")
 @pytest.mark.requires("live-any-shell", reason="Live sessions in Git Bash are the Rust build's own")
-@pytest.mark.covers("field:tree.session.cwd", "session.split", "session.companion.duplicate")
+@pytest.mark.covers(
+    "field:tree.session.cwd", "session.split", "session.duplicate", "session.companion.duplicate"
+)
 def test_a_live_git_bash_pane_reports_its_directory_as_windows_names_it(launch):
     # the detected Git Bash profile's program and arguments; its shim reports `cygpath -m`'s form, never MSYS's
     # `/c/...`, which no Windows program opens
@@ -236,10 +238,15 @@ def test_a_live_git_bash_pane_reports_its_directory_as_windows_names_it(launch):
     assert_ok(ctl.request("session.type", sid, text=f"cd '{directory.as_posix()}'\n"))
     ctl.wait_tree(lambda tree: find_session(tree, sid).get("cwd") == str(directory))
 
-    # a split and a duplicate open in it: the Windows form is one Git Bash (and every Windows program) can enter
+    # a split, a duplicate and a companion copy open in it: the Windows form is one Git Bash (and every Windows
+    # program) can enter
     _split(ctl, sid)
     assert shell_of(ctl, sid, pane="right") == "gitbash"
     assert _directory_of(ctl, sid, pane="right") == directory.as_posix()
+    duplicate = assert_ok(ctl.request("session.duplicate", sid))["id"]
+    ctl.wait_mounted(duplicate, "left")
+    assert find_session(ctl.tree(), duplicate)["cwd"] == str(directory)
+    assert _directory_of(ctl, duplicate) == directory.as_posix()
     copy = assert_ok(ctl.request("session.companion.duplicate", sid))["id"]
     ctl.wait_mounted(copy, "left")
     assert find_session(ctl.tree(), copy)["cwd"] == str(directory)
