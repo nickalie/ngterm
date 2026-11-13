@@ -21,10 +21,10 @@ import com.nickalie.ngterm.android.ui.theme.StatusTone
 /**
  * A machine on the Machines home: its [label], its ssh [address] (`user@host:port`, in mono: it is compared
  * character by character) with the app it runs beside it when that isn't ngterm ([peer], a [PeerBadge]: the sessions
- * screen's says what that app lacks), its connection as a [StatusBadge], and [summary] under them, the sessions' aggregate
- * status (an [AgentStatusBadge] or a line of text, and the action the state calls for) or nothing. [menu], when
- * given, ends the top row (an icon button opening the machine's menu). A flat tonal card, no shadow: depth is for
- * what floats. When the name and a long connection label don't fit side by side, the label moves under the name
+ * screen's says what that app lacks), its connection as a [StatusBadge], and [summary] under them, the sessions'
+ * aggregate status (an [AgentStatusBadge] or a line of text, and the action the state calls for) or nothing. [menu],
+ * when given, ends the top row (an icon button opening the machine's menu). A flat tonal card, no shadow: depth is
+ * for what floats. When the name and a long connection label don't fit side by side, the label moves under the name
  * rather than cutting it short.
  */
 @Composable

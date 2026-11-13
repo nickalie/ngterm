@@ -85,7 +85,12 @@ class AgtermPeerE2eTest {
         }
 
     @get:Rule
-    val rules: RuleChain = RuleChain.outerRule(stack).around(freshInstall).around(compose).around(evidence)
+    val rules: RuleChain =
+        RuleChain
+            .outerRule(stack)
+            .around(freshInstall)
+            .around(compose)
+            .around(evidence)
 
     @Test
     fun anAgtermMacsSessionIsListedAttachedAndEndedWithoutAChatView() {
