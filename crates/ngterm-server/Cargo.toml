@@ -20,9 +20,9 @@ tracing.workspace = true
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-# the control socket's named pipe: its listener and its streams
+# the control socket's pipe clients (their connect and the server's process id) and its security descriptor
 interprocess.workspace = true
-# the pipe's SDDL, in the UTF-16 string type interprocess takes
+# the pipe's path and SDDL as UTF-16 strings
 widestring.workspace = true
 # the pipe's instances, its accepts, its ends' overlapped reads and writes, their disconnect and the cancel of their
 # pending calls (a shutdown, a timeout)
