@@ -1236,10 +1236,11 @@ mod tests {
                 ("GHOSTTY_SHELL_FEATURES", "path"),
             ],
         );
-        assert_eq!(
-            removed(&prepared),
-            ["GHOSTTY_LOG", "VTE_VERSION", ngterm_core::attach_bridge::VARIABLE]
-        );
+        let mut removals = vec!["GHOSTTY_LOG", "VTE_VERSION", ngterm_core::attach_bridge::VARIABLE];
+        if cfg!(windows) {
+            removals.push("PWD");
+        }
+        assert_eq!(removed(&prepared), removals);
         // the config's `term` is what a resolved terminal claims
         let kitty = Host {
             term: "xterm-kitty".to_owned(),
@@ -2045,15 +2046,18 @@ mod profile_tests {
 mod unix_profile_tests {
     use super::*;
 
+    // not Apple's `/bin/bash`, which macOS leaves without the integration as Ghostty does
+    const BASH: &str = "/usr/local/bin/bash";
+
     #[test]
     fn ordinary_bash_profile_uses_the_integrated_arguments() {
         let resources = tempfile::tempdir().unwrap();
         let loader = resources.path().join("shell-integration/bash/ghostty.bash");
         std::fs::create_dir_all(loader.parent().unwrap()).unwrap();
         std::fs::write(loader, "").unwrap();
-        let mut host = Host::new(&GhosttyConfig::default(), Some("/bin/bash".into()), None, None);
+        let mut host = Host::new(&GhosttyConfig::default(), Some(BASH.into()), None, None);
         host.resources_dir = Some(resources.path().to_owned());
-        let profile = ngterm_core::shell_profiles::ShellProfile::new("bash", "Bash", "/bin/bash".into(), &["-li"]);
+        let profile = ngterm_core::shell_profiles::ShellProfile::new("bash", "Bash", BASH.into(), &["-li"]);
         let launch = Launch {
             shell_profile: Some(profile),
             ..Launch::default()
@@ -2072,9 +2076,9 @@ mod unix_profile_tests {
         let loader = resources.path().join("shell-integration/bash/ghostty.bash");
         std::fs::create_dir_all(loader.parent().unwrap()).unwrap();
         std::fs::write(loader, "").unwrap();
-        let mut host = Host::new(&GhosttyConfig::default(), Some("/bin/bash".into()), None, None);
+        let mut host = Host::new(&GhosttyConfig::default(), Some(BASH.into()), None, None);
         host.resources_dir = Some(resources.path().to_owned());
-        let mut profile = ngterm_core::shell_profiles::ShellProfile::new("bash", "Bash", "/bin/bash".into(), &["-l"]);
+        let mut profile = ngterm_core::shell_profiles::ShellProfile::new("bash", "Bash", BASH.into(), &["-l"]);
         profile.env.insert("ENV".into(), "/profile/env".into());
         profile.env.insert("HISTFILE".into(), "/profile/history".into());
         let launch = Launch {

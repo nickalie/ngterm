@@ -166,6 +166,8 @@ def test_a_windows_viewer_attaches_an_agterm_pane_through_ssh_exe(adapter, reque
         assert attached.returncode == 0, attached.stderr
         local = attached.stdout.strip()
         assert find_session(ctl.tree(), local)["remoteHost"] == "agterm:studio"
+        # the row precedes its pane's mount; a text read before it answers "session not realized"
+        ctl.wait_mounted(local, "left", timeout=30)
         wait_text(ctl, local, re.escape(f"attached {daemon}"), timeout=30)
 
         attach = wait_until(
