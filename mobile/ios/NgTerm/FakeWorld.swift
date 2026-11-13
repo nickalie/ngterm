@@ -41,8 +41,8 @@
         /// The app's graph over the fake core, as the launch arguments ask.
         ///
         /// The `arguments` are ``CoreChoice``'s: a key already, two programs asking to read the clipboard, `split` with
-        /// its session, its question, its agent and its companion, `studio` running agterm, the question about notifying
-        /// left to ask.
+        /// its session, its question, its agent and its companion, `studio` running agterm, the question about
+        /// notifying left to ask.
         @MainActor
         internal static func graph(arguments: [String]) -> AppGraph {
             let directory = FileManager.default.temporaryDirectory.appending(
