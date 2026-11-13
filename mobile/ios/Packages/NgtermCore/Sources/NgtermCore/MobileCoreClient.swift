@@ -35,6 +35,10 @@ public protocol MobileCoreClient: AnyObject, Sendable {
     /// New Session on `machineId`, named `name` when given (a blank name is none).
     nonisolated(nonsending) func createSession(machineId: String, name: String?) async throws -> RemoteSession
 
+    /// Duplicate Session: `machineId` copies its session `sessionId` as desktop's Duplicate does, answered as
+    /// ``createSession(machineId:name:)`` is.
+    nonisolated(nonsending) func duplicateSession(machineId: String, sessionId: String) async throws -> RemoteSession
+
     /// End Session: `machineId` closes its session `sessionId`, with no undo.
     nonisolated(nonsending) func endSession(machineId: String, sessionId: String) async throws
 

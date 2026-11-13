@@ -77,7 +77,9 @@ public enum SessionsBody: Hashable, Sendable {
                     session: session,
                     companionOf: session.parent.map { names[$0] ?? $0 },
                     isAttached: state.attached.contains(session.id),
-                    isEnding: state.ending.contains(session.id)
+                    isEnding: state.ending.contains(session.id),
+                    isDuplicating: state.duplicating == session.id,
+                    canDuplicate: !state.isCreating
                 )
             }
         }

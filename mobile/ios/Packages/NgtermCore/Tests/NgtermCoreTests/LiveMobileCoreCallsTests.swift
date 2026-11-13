@@ -34,6 +34,9 @@ internal struct LiveMobileCoreCallsTests {
             try await core.endSession(machineId: "m1", sessionId: "s1")
         }
         await #expect(throws: MobileError.NotConnected(machineId: "m1")) {
+            _ = try await core.duplicateSession(machineId: "m1", sessionId: "s1")
+        }
+        await #expect(throws: MobileError.NotConnected(machineId: "m1")) {
             try await core.attachSession(machineId: "m1", sessionId: "s1")
         }
         await #expect(throws: MobileError.NotConnected(machineId: "m1")) {

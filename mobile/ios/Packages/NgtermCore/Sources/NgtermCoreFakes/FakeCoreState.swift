@@ -45,6 +45,10 @@
         internal var attachEvents: [String: [MobileEvent]] = [:]
         // what the origin tells once an ask is answered, by FakeMobileCore.answerKey
         internal var answerEvents: [String: [MobileEvent]] = [:]
+        // what the origin tells as a pane not shown yet is shown, by pane
+        internal var showEvents: [PaneRef: [MobileEvent]] = [:]
+        // what the origin tells once this device takes a pane's lead, by pane
+        internal var takeLeadEvents: [PaneRef: [MobileEvent]] = [:]
         internal var paneFactory: FakeMobileCore.PaneFactory
         // the chats open
         internal var chats: Set<PaneRef> = []

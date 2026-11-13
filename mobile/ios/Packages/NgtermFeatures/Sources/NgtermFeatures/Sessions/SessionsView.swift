@@ -10,7 +10,9 @@ import SwiftUI
 ///
 /// Instead of the list it shows what the machine's link or listing calls for (``SessionsBody``), always with the one
 /// action that moves on. End session confirms; a failure the list can't show is a banner at its end. A tap on a
-/// session attaches it, then `onOpen` opens it. When the machine is removed meanwhile, `onGone` lets the screen go.
+/// session attaches it, then `onOpen` opens it; a session's Duplicate opens its copy the same way, in control. While a
+/// create is under way, from any screen, New session and Duplicate take no tap. When the machine is removed meanwhile,
+/// `onGone` lets the screen go.
 public struct SessionsView: View {
     // where the far side's setup is explained: the README's section on running ngterm on a server
     private static let serverSetup = URL(string: "https://github.com/nickalie/ngterm#a-server-without-a-display")
@@ -106,6 +108,7 @@ public struct SessionsView: View {
             } primaryAction: {
                 model.createAndOpen(then: openCreated)
             }
+            .disabled(model.isCreateUnderWay)
             .accessibilityIdentifier("new-session")
         }
     }
@@ -251,6 +254,7 @@ public struct SessionsView: View {
                 selection: selection,
                 onOpen: open,
                 onDetach: model.detach,
+                onDuplicate: duplicate,
                 chatView: model.chatView(sessionId:)
             ) { line in
                 confirming = line
@@ -296,6 +300,10 @@ public struct SessionsView: View {
         model.attach(sessionId: sessionId) {
             onOpen(sessionId)
         }
+    }
+
+    private func duplicate(_ sessionId: String) {
+        model.duplicate(sessionId: sessionId, then: openCreated)
     }
 
     private func openCreated(_ sessionId: String) {

@@ -19,7 +19,8 @@
     /// after it: its question shows only once the first is answered; and, when asked, a machine `split`
     /// (`split.lan`) is saved already, with a session `work` of two panes side by side (``FakeSessionWorld``), whose
     /// origin asks a question as it is attached, and whose first pane runs Claude Code (``FakeChatWorld``), each when
-    /// asked too; and, when asked, a Mac running agterm, `studio` (``FakeAgtermWorld``).
+    /// asked too, its first Duplicate failing when asked; and, when asked, a Mac running agterm, `studio`
+    /// (``FakeAgtermWorld``).
     ///
     /// Notifications go to memory (``FakeNotices``), and the question about notifying counts as asked unless the
     /// launch asks for it.
@@ -67,6 +68,9 @@
                     chats: arguments.contains(CoreChoice.fakeChatArgument),
                     companion: arguments.contains(CoreChoice.fakeCompanionArgument)
                 )
+                if arguments.contains(CoreChoice.fakeDuplicateFailsArgument) {
+                    core.failNext("duplicateSession", with: .Remote(reason: FakeSessionWorld.duplicateRefusal))
+                }
             }
             if arguments.contains(CoreChoice.fakeAgtermArgument) {
                 FakeAgtermWorld.seed(machines, core: core, keyId: key.id)

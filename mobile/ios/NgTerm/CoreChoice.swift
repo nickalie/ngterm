@@ -33,6 +33,8 @@ internal struct CoreChoice {
     /// With the fake core, the launch argument that saves a Mac running agterm with one session
     /// (``FakeAgtermWorld``).
     internal static let fakeAgtermArgument = "-ngterm-fake-agterm"
+    /// With the fake session, the launch argument that has the first Duplicate fail.
+    internal static let fakeDuplicateFailsArgument = "-ngterm-fake-duplicate-fails"
     /// With the fake core, the launch argument that leaves the question about notifying to be asked.
     internal static let fakeNotificationQuestionArgument = "-ngterm-fake-notification-question"
 

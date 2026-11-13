@@ -4,9 +4,9 @@ import NgtermPlatform
 import NgtermTerminal
 
 /// What the app's screens work with, made once per process: the machines, the settings, the keys, the pinned host
-/// keys, the connections over the mobile core, the attached sessions' live state, their shown panes and the agents'
-/// chats, the programs' clipboard reads, the asks and the notifications, the status baseline and the background
-/// refresh, and whether the device is online.
+/// keys, the connections over the mobile core, the session create under way, the attached sessions' live state, their
+/// shown panes and the agents' chats, the programs' clipboard reads, the asks and the notifications, the status
+/// baseline and the background refresh, and whether the device is online.
 ///
 /// The app makes it over the linked core, the Keychain, Application Support and the system's notifications, or over
 /// the fake core and memory for its UI tests; the tests make one over fakes. ``start()`` starts what runs on its own.
@@ -27,6 +27,8 @@ public final class AppGraph {
     public let live: LiveSessions
     /// The attached sessions across machines, as the lists show them.
     public let attachedSessions: AttachedSessions
+    /// The session create under way on this device, whichever screen began it.
+    public let creates = Creates()
     /// The shown panes, and the pane each session has selected.
     public let panes: SessionPanes
     /// Which panes running an agent show as a chat, and their chats.

@@ -10,7 +10,8 @@ private enum TapReadiness: Sendable {
     case waiting
 }
 
-// The sessions of the machines: New Session, End Session, attach (a notification tap's too) and detach.
+// The sessions of the machines: New Session, Duplicate Session, End Session, attach (a notification tap's too) and
+// detach.
 extension Connections {
     /// Creates a session on `machineId`, named `name` (blank for the machine's own name), and returns it once it is
     /// listed; the listing that has it arrives in ``trees``.
@@ -19,6 +20,27 @@ extension Connections {
     public func createSession(machineId: String, name: String) async throws -> RemoteSession {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return try await core.createSession(machineId: machineId, name: trimmed.isEmpty ? nil : trimmed)
+    }
+
+    /// Duplicates `sessionId` on `machineId` as desktop's Duplicate does, and returns the copy once it is listed; the
+    /// listing that has it arrives in ``trees``.
+    ///
+    /// - Throws: ``MobileError`` with the core's words when it could not.
+    public func duplicateSession(machineId: String, sessionId: String) async throws -> RemoteSession {
+        try await core.duplicateSession(machineId: machineId, sessionId: sessionId)
+    }
+
+    /// Attaches `sessionId` of `machineId`, a session this app just created there, listing the machine again first
+    /// when a listing that raced the create's lacks it.
+    ///
+    /// - Throws: ``MobileError`` with the core's words when it could not.
+    public func attachCreated(machineId: String, sessionId: String) async throws {
+        do {
+            try await attach(machineId: machineId, sessionId: sessionId)
+        } catch MobileError.NotListed {
+            await listSessions(machineId: machineId)
+            try await attach(machineId: machineId, sessionId: sessionId)
+        }
     }
 
     /// Ends `sessionId` on `machineId`, with no undo, and lets go of it here when it was attached.

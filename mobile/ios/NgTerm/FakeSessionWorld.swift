@@ -12,6 +12,9 @@
     /// pane runs Claude Code (``FakeChatWorld``). Each pane's screen names it on its first line ("P1 ready"), so a test
     /// sees which pane shows. With a companion, `split` also lists `notes`, a session of its own, and `review`, a
     /// companion of `work`, each with one pane, listed as the core lists them: parents first, companions after them.
+    ///
+    /// A Duplicate's first copy (``copyId``) has one pane, which another device leads as it is shown, and which this
+    /// device leads once it takes control; when asked, the first Duplicate fails (``duplicateRefusal``).
     internal enum FakeSessionWorld {
         /// The machine's id in the store.
         internal static let machineId = "split"
@@ -21,6 +24,10 @@
         internal static let companionId = "review"
         /// The id of the session listed with the companion, between `work` and it.
         internal static let otherId = "notes"
+        /// The id of a Duplicate's first copy, as the fake core names it.
+        internal static let copyId = "fake-1"
+        /// Why the first Duplicate fails, when the launch asks for it.
+        internal static let duplicateRefusal = "split could not copy work"
         nonisolated private static let columns = 40
         nonisolated private static let rows = 12
         private static let paneIds = ["P1", "P2"]
@@ -49,7 +56,11 @@
             .ask(machineId: machineId, sessionId: sessionId, ask: deployAsk)
         }
 
-        private static func attachEvents(of sessionId: String, panes: [String]) -> [MobileEvent] {
+        private static func attachEvents(
+            of sessionId: String,
+            panes: [String],
+            role: PaneRole? = .leader
+        ) -> [MobileEvent] {
             let layout = RemoteLayout(panes: panes, primary: panes[0], axis: "vertical", shown: true)
             let status = RemoteStatus(
                 status: "working",
@@ -67,9 +78,20 @@
             ]
             for paneId in layout.panes {
                 let pane = PaneRef(machineId: machineId, sessionId: sessionId, paneId: paneId)
-                events.append(.paneLead(pane: pane, role: .leader, covered: false))
+                if let role {
+                    events.append(.paneLead(pane: pane, role: role, covered: false))
+                }
             }
             return events
+        }
+
+        // a Duplicate's copy: another device leads its pane as it is shown, until this one takes control
+        @MainActor
+        private static func seedCopy(_ core: FakeMobileCore) {
+            let pane = PaneRef(machineId: machineId, sessionId: copyId, paneId: "P1")
+            core.attachEvents[copyId] = attachEvents(of: copyId, panes: [pane.paneId], role: nil)
+            core.showEvents = [pane: [.paneLead(pane: pane, role: .follower, covered: false)]]
+            core.takeLeadEvents = [pane: [.paneLead(pane: pane, role: .leader, covered: false)]]
         }
 
         private static func context(_ text: String) -> MobileEvent {
@@ -109,6 +131,7 @@
                     core.attachEvents[id] = attachEvents(of: id, panes: panes)
                 }
             }
+            seedCopy(core)
             let agent = FakeChatWorld(core: core, pace: .real)
             core.attachEvents[sessionId] =
                 attachEvents(of: sessionId, panes: paneIds) + (asks ? [askEvent] : [])

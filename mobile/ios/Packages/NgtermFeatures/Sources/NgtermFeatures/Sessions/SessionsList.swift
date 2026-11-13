@@ -4,7 +4,8 @@ import SwiftUI
 /// session this app has attached under "Attached", then the others under "On build-01", companions under their
 /// parents, and under the last group a `note` when the machine's app lacks features (agterm).
 ///
-/// Its selection is the session this window shows; selecting another attaches and opens it (`onOpen`).
+/// Its selection is the session this window shows; selecting another attaches and opens it (`onOpen`). A row's
+/// Duplicate session asks `onDuplicate` for a copy of it.
 internal struct SessionsList: View {
     internal let machine: String
     internal let attached: [SessionLine]
@@ -14,6 +15,7 @@ internal struct SessionsList: View {
     internal let selection: String?
     internal let onOpen: @MainActor (String) -> Void
     internal let onDetach: @MainActor (String) -> Void
+    internal let onDuplicate: @MainActor (String) -> Void
     internal let chatView: @MainActor (String) -> ChatViewChoice
     internal let onAskEnd: @MainActor (SessionLine) -> Void
 
@@ -52,6 +54,8 @@ internal struct SessionsList: View {
                         onOpen(line.id)
                     } onDetach: {
                         onDetach(line.id)
+                    } onDuplicate: {
+                        onDuplicate(line.id)
                     } onAskEnd: {
                         onAskEnd(line)
                     }

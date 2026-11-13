@@ -2,10 +2,11 @@ import NgtermDesign
 import SwiftUI
 
 /// One session's row: its name, its context (or its working directory) or the parent it is a companion of, and its
-/// agent's status; "Ending" with a spinner while its End is under way.
+/// agent's status; "Ending" or "Duplicating" with a spinner while its End or its Duplicate is under way.
 ///
-/// A tap attaches it and opens it (the list's selection). Its context menu has Attach or Detach, Chat view (checked
-/// while its panes running an agent show as a chat) and End session; its
+/// A tap attaches it and opens it (the list's selection). Its context menu has Attach or Detach, Duplicate session
+/// (`onDuplicate`: the copy opens in control; no tap while a create is under way), Chat view (checked while its panes
+/// running an agent show as a chat) and End session; its
 /// swipe actions, End session and, when attached, Detach, which VoiceOver offers as the row's actions. End session
 /// only asks (`onAskEnd`): the screen confirms it.
 internal struct SessionEntry: View {
@@ -13,6 +14,7 @@ internal struct SessionEntry: View {
     internal let chatView: ChatViewChoice
     internal let onOpen: @MainActor () -> Void
     internal let onDetach: @MainActor () -> Void
+    internal let onDuplicate: @MainActor () -> Void
     internal let onAskEnd: @MainActor () -> Void
 
     internal var body: some View {
@@ -23,7 +25,8 @@ internal struct SessionEntry: View {
             isCompanion: line.companionOf != nil,
             // the Attached group's heading says it: the mark would only crowd the row
             isAttached: false,
-            isEnding: line.isEnding
+            isEnding: line.isEnding,
+            isDuplicating: line.isDuplicating
         ) {
             if let status = session.status, !status.allSatisfy(\.isWhitespace) {
                 AgentStatusBadge(status: status, colorHex: session.statusColor, shape: session.statusShape)
@@ -36,6 +39,8 @@ internal struct SessionEntry: View {
             } else {
                 Button(String(localized: "Attach"), systemImage: "link", action: onOpen)
             }
+            DuplicateButton(action: onDuplicate)
+                .disabled(!line.canDuplicate)
             ChatViewToggle(choice: chatView)
             Button(String(localized: "End session"), systemImage: "xmark.circle", role: .destructive, action: onAskEnd)
                 .disabled(line.isEnding)

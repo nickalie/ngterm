@@ -187,7 +187,8 @@ by themselves.
 | `AgentStatusBadge` | an origin's agent status, its color lifted to read on every ground; a label may say more ("2 waiting") |
 | `MachineRow` | a machine: name (a heading), connection badge, mono address, what the state means with its one action (`RowAction`) at the line's end, and a slot for its sessions' statuses. At accessibility sizes the badge goes under the name and the action under the line. VoiceOver reads it as one element, with the action as its custom action |
 | `PeerBadge` | the app a machine runs when it isn't ngterm ("agterm"): the word in secondary ink inside a hairline 6 pt outline, so it reads as a fact about the machine, not a status or an action. It takes no tap; what that app lacks is its VoiceOver hint and, with a pointer, its tooltip, and the screen with room says it in full |
-| `SessionRow` | a session: name, the Attached mark (link glyph and "Attached" in verdigris), its line (context, working directory, or "Companion of …"), its status slot, or "Ending" with a spinner; a companion is indented (a machine's list indents every companion; the machines' column, one more step, only one under its attached parent) |
+| `SessionRow` | a session: name, the Attached mark (link glyph and "Attached" in verdigris), its line (context, working directory, or "Companion of …"), its status slot, or an `UnderWayLabel` while it is ended or duplicated; a companion is indented (a machine's list indents every companion; the machines' column, one more step, only one under its attached parent) |
+| `UnderWayLabel` | what is under way in a status's place: a mini spinner and its word ("Ending", "Duplicating") in `statusWord`, `secondaryText`; read as the word |
 | `StatePanel` | what a screen shows instead of content, on `ContentUnavailableView`, scrolling when it doesn't fit (the largest text sizes): `.loading`, `.empty`, `.error`, `.offline`, each with the one action that moves on and at most one quieter one under it; the glyph (`idle` unless the state has a tone) is decorative, and the title is a heading of its own |
 | `Banner` | a strip about the whole screen while it stays usable: glyph, message, note, optional action and dismiss; the text wraps and the actions go under it when they don't fit beside it; announced to VoiceOver when it appears |
 | `Cover` | a veil (a system material) over a pane that can't be used as it is: glyph or spinner, title (a heading), what it means, the action that fixes it; it takes every touch, and `covered(by:)` hides the pane under it from VoiceOver |
@@ -447,13 +448,13 @@ session** is the toolbar's `+` while the machine is connected.
 - **Groups:** the families with a session this app has attached under "Attached", then the others under "On
   build-01", each a parent with its companions right under it (indented, "Companion of …"). The headers are the app's
   `FormHint` headings, not the system's grey. A row's line is the context, else the working directory; its status is
-  the `AgentStatusBadge`; while its End runs it says "Ending" with a spinner. The Attached mark stays off the rows: the
-  group's heading says it.
-- **Actions:** a tap attaches the session and opens it. The context menu has Attach or Detach, Chat view (The
-  session, below) and **End session**; the
-  swipe actions (VoiceOver's row actions) End session and, when attached, Detach. End session confirms
-  (`confirmingDestructive`: "End api?", "It stops on build-01, with everything running in it. This can't be undone.");
-  Detach doesn't. The swipe's End has no destructive role, so the row stays until the machine's listing lets it go.
+  the `AgentStatusBadge`; while its End or its Duplicate runs it says "Ending" or "Duplicating" with a spinner
+  (`UnderWayLabel`). The Attached mark stays off the rows: the group's heading says it.
+- **Actions:** a tap attaches the session and opens it. The context menu has Attach or Detach, Duplicate session
+  (below), Chat view (The session, below) and **End session**; the swipe actions (VoiceOver's row actions) End
+  session and, when attached, Detach. End session confirms (`confirmingDestructive`: "End api?", "It stops on
+  build-01, with everything running in it. This can't be undone."); Detach doesn't. The swipe's End has no
+  destructive role, so the row stays until the machine's listing lets it go.
 - **Pull to refresh** lists the machine again; on a machine that isn't connected it connects.
 - **States,** each with the one action that moves on: connecting and reading (`StatePanel.loading`), empty ("No
   sessions on build-01" with **New session**), not connected (**Connect**), offline (**Retry**), dropped ("Trying
@@ -470,6 +471,13 @@ session** is the toolbar's `+` while the machine is connected.
   an attach that fails is the failed banner at the list's end, and nothing opens. A create whose screen was left, or
   whose window opened another session meanwhile, stays attached and opens nothing: it never takes the lead unseen. Until
   the takeover's answer, the pane shows attaching, never a Take control cover that would only flash.
+- **Duplicate session** (`plus.square.on.square`, in a row's context menu and the session's More) has the machine
+  copy the session as desktop's Duplicate does, and lands in the copy as New session does: attached, opened and in
+  this device's control. One create runs at a time on the device, whichever screen began it: while one runs, the `+`
+  and every Duplicate are disabled, and the source says "Duplicating" (its row, or the session's title in place of
+  its state). A Duplicate that fails is the failed banner of the screen it began on (the list's, or the session
+  view's), and nothing opens; one whose screen was left, or whose window opened another session meanwhile, leaves the
+  copy attached in the lists without the lead.
 - **New named session…** is the `+`'s long-press menu (`Menu` with a primary action): a sheet with a `Form`: the name
   (mono, optional: "build-01 names it when blank"), Cancel and Create in the toolbar. Create lands in the session as
   the `+` does, the sheet closing first. While the create runs, Create gives way to a spinner and the field holds
@@ -509,8 +517,9 @@ compact: the selected pane alone                regular: the origin's split
   lifts it. When the agent ends, or its chat ends or can't open (an origin without the chat view), the pane shows its
   terminal and the switch offers the chat back while the agent is still announced. A pane without an agent, or every
   pane of a session with its chat view off, has no switch. Switching never resizes the pane or moves its lead.
-- **More** (`ellipsis`): Detach at once, Open in New Window (where the device has windows), Chat view, and End
-  session, which confirms ("End api?", as the sessions list does).
+- **More** (`ellipsis`): Detach at once, Duplicate session (the copy opens in this view's place: Sessions, above),
+  Open in New Window (where the device has windows), Chat view, and End session, which confirms ("End api?", as the
+  sessions list does).
 - **Chat view** (`ChatViewToggle`, in every session's menu: More, and a machine's list's context menu): the session's
   own Agent chat view, a toggle the system's menu draws with a checkmark while the session's panes running an agent
   show as a chat. It starts at Settings' Agent chat view, and a tap sets the other for that session alone, kept on

@@ -24,10 +24,14 @@ public struct MachineSessions: Hashable, Sendable {
     public var ending: Set<String>
     /// The app the machine runs, as a listing said; `nil`: ngterm, or not said.
     public var peer: MachinePeer?
+    /// The session whose Duplicate is under way, by id.
+    public var duplicating: String?
+    /// Whether a create (a New session, a Duplicate) is under way on this device, from any screen: none takes another.
+    public var isCreating: Bool
 
     /// The screen's facts: `machine` with its `link`, its `sessions` when it `isListed`, why the last listing
     /// `failure`d, what is `attached`, whether the device `isOffline`, a refresh is under way, which sessions are
-    /// `ending`, and the app it runs (`peer`).
+    /// `ending`, the app it runs (`peer`), which session is `duplicating`, and whether a create `isCreating`.
     public init(
         machine: StoredMachine,
         link: Link,
@@ -38,7 +42,9 @@ public struct MachineSessions: Hashable, Sendable {
         isOffline: Bool,
         isRefreshing: Bool = false,
         ending: Set<String> = [],
-        peer: MachinePeer? = nil
+        peer: MachinePeer? = nil,
+        duplicating: String? = nil,
+        isCreating: Bool = false
     ) {
         self.machine = machine
         self.link = link
@@ -50,5 +56,7 @@ public struct MachineSessions: Hashable, Sendable {
         self.isRefreshing = isRefreshing
         self.ending = ending
         self.peer = peer
+        self.duplicating = duplicating
+        self.isCreating = isCreating
     }
 }

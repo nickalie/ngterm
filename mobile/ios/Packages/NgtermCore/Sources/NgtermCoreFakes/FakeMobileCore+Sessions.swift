@@ -34,6 +34,35 @@
             }
         }
 
+        /// Copies a session of ``sessions`` right after it, with a name of its own and no parent or context (desktop's
+        /// Duplicate opens a plain session where the source was), answered once the listing that has it is delivered.
+        nonisolated(nonsending) public func duplicateSession(
+            machineId: String,
+            sessionId: String
+        ) async throws -> RemoteSession {
+            try await abandoningOnCancel { [self] in
+                let call = recordHeld("duplicateSession", [machineId, sessionId])
+                try await call.pass()
+                let copy = try state.withLock { state throws(MobileError) in
+                    let sessions = try state.sessionsOf(machineId)
+                    guard let index = sessions.firstIndex(where: { $0.id == sessionId }) else {
+                        throw MobileError.Remote(reason: "no session \(sessionId)")
+                    }
+                    state.created += 1
+                    let number = state.created
+                    var copy = sessions[index]
+                    copy.id = "fake-\(number)"
+                    copy.name = "session \(number)"
+                    copy.parent = nil
+                    copy.context = nil
+                    state.sessions[machineId, default: []].insert(copy, at: index + 1)
+                    return copy
+                }
+                _ = try keepListing(machineId)
+                return copy
+            }
+        }
+
         /// Ends a session of ``sessions``, delivering the kept listing without it, if one is kept.
         nonisolated(nonsending) public func endSession(machineId: String, sessionId: String) async throws {
             try await abandoningOnCancel { [self] in
@@ -109,6 +138,9 @@
                         return other
                     }
                     state.shown[ref] = made
+                    for event in state.showEvents[ref] ?? [] {
+                        emit(event, in: &state)
+                    }
                     return made
                 }
             }
@@ -124,9 +156,15 @@
             }
         }
 
-        /// Records the call.
+        /// Records the call, then delivers what ``takeLeadEvents`` holds for the pane.
         public func takeLead(machineId: String, sessionId: String, paneId: String) throws {
             try record("takeLead", [machineId, sessionId, paneId])
+            let pane = PaneRef(machineId: machineId, sessionId: sessionId, paneId: paneId)
+            state.withLock { state in
+                for event in state.takeLeadEvents[pane] ?? [] {
+                    emit(event, in: &state)
+                }
+            }
         }
 
         /// Records the call, then delivers what ``answerEvents`` says the answer makes the origin tell.

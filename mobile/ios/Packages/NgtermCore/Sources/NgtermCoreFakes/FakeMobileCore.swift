@@ -33,20 +33,22 @@
     ///   otherwise; a disconnect while it waits cancels it;
     /// - ``listSessions(machineId:)`` keeps what it answers as the machine's listing and also delivers it as a
     ///   ``MobileEvent/tree(machineId:sessions:)``; ``createSession(machineId:name:)`` does the same with the listing
-    ///   that has the new session;
+    ///   that has the new session, and ``duplicateSession(machineId:sessionId:)`` with the listing that has the copy
+    ///   right after its source (``MobileError/Remote(reason:)`` for one the machine doesn't have);
     /// - ``endSession(machineId:sessionId:)`` ends a session of ``sessions`` whether listed or not
     ///   (``MobileError/Remote(reason:)`` for one the machine doesn't have) and delivers a tree only when a listing is
     ///   kept;
     /// - ``attachSession(machineId:sessionId:)`` and ``showPane(machineId:sessionId:paneId:size:)`` take only a session
     ///   of the machine's last listing (``MobileError/NotListed(sessionId:)`` otherwise), not of ``sessions``, as the
     ///   real core refuses a session it has not listed; an attach then delivers the session's ``attachEvents``, as its
-    ///   stream would, and an answer to an ask what ``answerEvents`` holds for it;
+    ///   stream would, an answer to an ask what ``answerEvents`` holds for it, and a Take control what
+    ///   ``takeLeadEvents`` holds for its pane;
     /// - a session given ``panes`` has those panes: a show takes only one the session had at the machine's last listing
     ///   (``MobileError/Remote(reason:)`` with ``unknownPane`` otherwise), so a pane added since (a split) needs a new
     ///   listing first. A session not in ``panes`` takes any pane;
     /// - a show hands back the same handle for a pane already shown; a hide, a detach (its session's panes) and a
     ///   disconnect (its machine's) hide panes, and ``shownPanes`` lists those still shown. A new pane is
-    ///   ``paneFactory``'s, a ``FakePane`` by default;
+    ///   ``paneFactory``'s, a ``FakePane`` by default, and its show delivers what ``showEvents`` holds for it;
     /// - ``openChat(machineId:sessionId:paneId:)`` takes only a shown pane (``MobileError/Remote(reason:)`` with
     ///   ``notShown`` otherwise), delivering the pane's ``chatEvents`` as it opens, and ``openChats`` lists the chats
     ///   open; a close, and hiding the pane, close one.
@@ -151,6 +153,19 @@
         public var answerEvents: [String: [MobileEvent]] {
             get { state.withLock { $0.answerEvents } }
             set { state.withLock { $0.answerEvents = newValue } }
+        }
+
+        /// What the origin tells as a pane not shown yet is shown, by pane: its lead, as the pane's attach reports it.
+        public var showEvents: [PaneRef: [MobileEvent]] {
+            get { state.withLock { $0.showEvents } }
+            set { state.withLock { $0.showEvents = newValue } }
+        }
+
+        /// What the origin tells once this device takes a pane's lead, by pane: the pane's new lead, as the origin's
+        /// stream reports a takeover.
+        public var takeLeadEvents: [PaneRef: [MobileEvent]] {
+            get { state.withLock { $0.takeLeadEvents } }
+            set { state.withLock { $0.takeLeadEvents = newValue } }
         }
 
         /// What a show of a pane not shown yet hands back.

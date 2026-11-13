@@ -52,6 +52,16 @@ public final class LiveMobileCore: MobileCoreClient {
         try await abandoningOnCancel { [core] in try await core.createSession(machineId: machineId, name: name) }
     }
 
+    /// Duplicates a session of `machineId` (api.rs's `duplicate_session`).
+    nonisolated(nonsending) public func duplicateSession(
+        machineId: String,
+        sessionId: String
+    ) async throws -> RemoteSession {
+        try await abandoningOnCancel { [core] in
+            try await core.duplicateSession(machineId: machineId, sessionId: sessionId)
+        }
+    }
+
     /// Ends a session of `machineId` (api.rs's `end_session`).
     nonisolated(nonsending) public func endSession(machineId: String, sessionId: String) async throws {
         try await abandoningOnCancel { [core] in

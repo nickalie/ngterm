@@ -2,7 +2,8 @@ import NgtermCore
 import Observation
 
 /// A machine's sessions (mobile/android's `SessionsViewModel`): its listing with each session's status and whether
-/// this app has it attached, refreshing it, New session (named or not), End session, attaching and detaching.
+/// this app has it attached, refreshing it, New session (named or not), Duplicate session, End session, attaching and
+/// detaching.
 ///
 /// The New session sheet's state lives here, so a size change keeps a create under way. ``notice`` carries what the
 /// list can't show, for a banner.
@@ -18,6 +19,10 @@ public final class SessionsModel {
     public private(set) var ending: Set<String> = []
     /// Whether a one-tap New session is under way.
     public private(set) var isCreating = false
+    /// Whether a create (a New session, a Duplicate) is under way on this device, from any screen: none takes another.
+    public var isCreateUnderWay: Bool {
+        graph.creates.underWay != nil
+    }
     /// The New session sheet, or `nil` while it is closed.
     public private(set) var newSession: NewSessionState?
     /// What the screen should say in a banner, until it is dismissed.
@@ -38,6 +43,7 @@ public final class SessionsModel {
         }
         let connections = graph.connections
         let listing = connections.trees[machineId]
+        let create = graph.creates.underWay
         return MachineSessions(
             machine: machine,
             link: connections.link(of: machineId),
@@ -48,7 +54,9 @@ public final class SessionsModel {
             isOffline: !graph.network.isOnline,
             isRefreshing: isRefreshing,
             ending: ending,
-            peer: connections.peers[machineId]
+            peer: connections.peers[machineId],
+            duplicating: create?.machineId == machineId ? create?.source : nil,
+            isCreating: create != nil
         )
     }
 
@@ -127,13 +135,17 @@ public final class SessionsModel {
     @discardableResult
     @preconcurrency
     public func createAndOpen(then onOpen: @escaping @MainActor (String) -> Void) -> Task<Void, Never>? {
-        guard !isCreating, newSession?.isRunning != true else {
+        let create = Create(machineId: machineId)
+        guard !isCreating, newSession?.isRunning != true, graph.creates.begin(create) else {
             return nil
         }
         isCreating = true
         let began = opens
         return Task {
-            defer { isCreating = false }
+            defer {
+                isCreating = false
+                graph.creates.end(create)
+            }
             let session: RemoteSession
             do {
                 session = try await graph.connections.createSession(machineId: machineId, name: "")
@@ -153,13 +165,15 @@ public final class SessionsModel {
     @discardableResult
     @preconcurrency
     public func create(name: String, then onOpen: @escaping @MainActor (String) -> Void) -> Task<Void, Never>? {
-        guard newSession?.isRunning != true, !isCreating else {
+        let create = Create(machineId: machineId)
+        guard newSession?.isRunning != true, !isCreating, graph.creates.begin(create) else {
             return nil
         }
         let mine = sheet
         let began = opens
         newSession = NewSessionState(isRunning: true)
         return Task {
+            defer { graph.creates.end(create) }
             // Cancel while it ran: the user chose not to land in it
             guard let session = await createInSheet(name: name, sheet: mine), sheet == mine else {
                 return
@@ -181,6 +195,37 @@ public final class SessionsModel {
             if sheet == mine {
                 newSession = nil
             }
+        }
+    }
+
+    /// Duplicates the session `sessionId` there and lands in the copy as ``createAndOpen(then:)`` does.
+    ///
+    /// The copy takes the lead and opens unless its screen was left or another session opened meanwhile, and stays
+    /// attached in the list otherwise; a failure goes to ``notice``. Nothing begins while another create is under way.
+    @discardableResult
+    @preconcurrency
+    public func duplicate(
+        sessionId: String,
+        then onOpen: @escaping @MainActor (String) -> Void
+    ) -> Task<Void, Never>? {
+        let create = Create(machineId: machineId, source: sessionId)
+        guard graph.creates.begin(create) else {
+            return nil
+        }
+        let began = opens
+        return Task {
+            defer { graph.creates.end(create) }
+            let copy: RemoteSession
+            do {
+                copy = try await graph.connections.duplicateSession(machineId: machineId, sessionId: sessionId)
+            } catch let error as MobileError {
+                notice = error.reason
+                return
+            } catch {
+                // cancelled: the core still duplicates it, and the listing shows the copy
+                return
+            }
+            await land(copy.id, if: { isWanted(began) }, then: onOpen)
         }
     }
 
@@ -221,13 +266,7 @@ public final class SessionsModel {
     ) async -> Bool {
         let connections = graph.connections
         do {
-            do {
-                try await connections.attach(machineId: machineId, sessionId: sessionId)
-            } catch MobileError.NotListed {
-                // a listing that raced the create's may lack it
-                await connections.listSessions(machineId: machineId)
-                try await connections.attach(machineId: machineId, sessionId: sessionId)
-            }
+            try await connections.attachCreated(machineId: machineId, sessionId: sessionId)
             try Task.checkCancellation()
         } catch let error as MobileError {
             notice = error.reason

@@ -2,15 +2,16 @@ import SwiftUI
 
 /// A session in a list: its name with the Attached mark, its line, and its status.
 ///
-/// The line is the context, the working directory, or "Companion of …"; the status an ``AgentStatusBadge``, or
-/// "Ending" with a spinner while the session is being ended. A companion sits indented under its parent. It reads no
-/// app state; its list adds the selection, swipe actions and the context menu.
+/// The line is the context, the working directory, or "Companion of …"; the status an ``AgentStatusBadge``, or an
+/// ``UnderWayLabel`` while the session is being ended ("Ending") or duplicated ("Duplicating"). A companion sits
+/// indented under its parent. It reads no app state; its list adds the selection, swipe actions and the context menu.
 public struct SessionRow<Status: View>: View {
     private let name: String
     private let line: String?
     private let isCompanion: Bool
     private let isAttached: Bool
     private let isEnding: Bool
+    private let isDuplicating: Bool
     private let status: Status
 
     /// The body of the view.
@@ -31,14 +32,9 @@ public struct SessionRow<Status: View>: View {
                     .lineLimit(Spacing.rowLines)
             }
             if isEnding {
-                HStack(spacing: Spacing.xSmall) {
-                    ProgressView()
-                        .controlSize(.mini)
-                    Text(String(localized: "Ending", bundle: .module))
-                        .font(Typography.statusWord)
-                        .rowForeground(Palette.secondaryText.color)
-                }
-                .accessibilityElement(children: .combine)
+                UnderWayLabel(String(localized: "Ending", bundle: .module))
+            } else if isDuplicating {
+                UnderWayLabel(String(localized: "Duplicating", bundle: .module))
             } else {
                 status
             }
@@ -49,14 +45,15 @@ public struct SessionRow<Status: View>: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// A session named `name` with its `line`, a companion or not, attached by this app or not, being ended or not,
-    /// and its `status`.
+    /// A session named `name` with its `line`, a companion or not, attached by this app or not, being ended or
+    /// duplicated or not, and its `status`.
     public init(
         name: String,
         line: String?,
         isCompanion: Bool = false,
         isAttached: Bool = false,
         isEnding: Bool = false,
+        isDuplicating: Bool = false,
         @ViewBuilder status: () -> Status
     ) {
         self.name = name
@@ -64,6 +61,7 @@ public struct SessionRow<Status: View>: View {
         self.isCompanion = isCompanion
         self.isAttached = isAttached
         self.isEnding = isEnding
+        self.isDuplicating = isDuplicating
         self.status = status()
     }
 }

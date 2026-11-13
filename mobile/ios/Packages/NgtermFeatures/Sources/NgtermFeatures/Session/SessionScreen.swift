@@ -8,8 +8,8 @@ import SwiftUI
 /// A compact width shows one pane at a time, a regular width the origin's split. Once the session is let go some other
 /// way (Detach, End session, a disconnect), the view asks its window to close it. While it shows, the screen stays
 /// awake when Settings asks for it, its extra keys lay out as Settings says, and the session's open asks show in a
-/// sheet over it (``AskPrompt``). Its caller gives it the session's identity (`.id`), so another session gets a view
-/// of its own.
+/// sheet over it (``AskPrompt``). A Duplicate opens its copy through `actions` only while the view still shows. Its
+/// caller gives it the session's identity (`.id`), so another session gets a view of its own.
 public struct SessionScreen: View {
     @Environment(\.colorScheme)
     private var colorScheme
@@ -26,9 +26,11 @@ public struct SessionScreen: View {
     public var body: some View {
         content
             .onAppear {
+                model.setShowing(true)
                 graph.screenAwake.hold(holder, wanted: graph.settings.settings.keepScreenOn)
             }
             .onDisappear {
+                model.setShowing(false)
                 graph.screenAwake.hold(holder, wanted: false)
             }
             .onChange(of: graph.settings.settings.keepScreenOn) { _, keepsOn in

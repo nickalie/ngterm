@@ -3,8 +3,9 @@ import NgtermTerminal
 import SwiftUI
 
 /// An attached session, live (mobile/android's `SessionScreen`): its toolbar (name, state and context, the pane
-/// switcher, More: Detach, Open in New Window, End session), the origin's HUD, and its panes.
+/// switcher, More: Detach, Duplicate session, Open in New Window, End session), the origin's HUD, and its panes.
 ///
+/// Its Duplicate opens the copy in its place, in control (``SessionActions/open``).
 /// A compact width shows the selected pane alone and a swipe across it moves to the next or previous one; a regular
 /// width shows the origin's split, or the selected pane alone once a pane tab asked for it (``PaneAlone``). One
 /// keyboard serves every pane, and its chords move between the panes and the sessions. The selected pane is the only
@@ -85,7 +86,7 @@ internal struct SessionLiveView: View {
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            SessionTitle(session: session)
+            SessionTitle(session: session, isDuplicating: model.isDuplicating)
         }
         let panes = session.live.layout?.panes ?? []
         if panes.count > 1 {
@@ -114,6 +115,8 @@ internal struct SessionLiveView: View {
             SessionMenu(
                 name: session.name,
                 onDetach: model.detach,
+                canDuplicate: model.canDuplicate,
+                onDuplicate: duplicate,
                 onNewWindow: actions.openInNewWindow,
                 chatView: model.chatView
             ) {
@@ -227,6 +230,10 @@ internal struct SessionLiveView: View {
                 actions.close()
             }
         }
+    }
+
+    private func duplicate() {
+        model.duplicate(then: actions.open)
     }
 
     private func moveSession(forward: Bool) {

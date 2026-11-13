@@ -3,10 +3,10 @@ import NgtermTerminal
 import Observation
 
 /// One session view's session (mobile/android's `SessionViewModel`, for the session it shows): what it shows, its
-/// panes and the one selected, Take control, Detach and End session.
+/// panes and the one selected, Take control, Detach, Duplicate session and End session.
 ///
 /// The selection lives in the app's ``SessionPanes``, so a new view of the session (another size class, a trip
-/// elsewhere and back) finds the same pane. ``notice`` carries an End that failed, for a banner.
+/// elsewhere and back) finds the same pane. ``notice`` carries an End or a Duplicate that failed, for a banner.
 @preconcurrency
 @MainActor
 @Observable
@@ -20,6 +20,8 @@ public final class SessionModel {
     /// The keyboard every pane of the session types through.
     @ObservationIgnored public let keyboard: TerminalKeyboard
     @ObservationIgnored private let graph: AppGraph
+    // a Duplicate opens its copy only while the view still shows: one gone meanwhile leaves the copy in the lists
+    @ObservationIgnored private var isShowing = false
 
     /// What the view shows: the session live while attached (unless a pane says it is gone), gone once its machine's
     /// listing has dropped it, and `nil` once it was let go some other way (a detach, a disconnect).
@@ -57,6 +59,16 @@ public final class SessionModel {
         return ChatViewChoice(isOn: chats.isChatView(session), noChatOn: chats.noChatOn(session)) { isOn in
             chats.setChatView(session, on: isOn)
         }
+    }
+
+    /// Whether the session's Duplicate is under way.
+    public var isDuplicating: Bool {
+        graph.creates.underWay == Create(machineId: key.machineId, source: key.sessionId)
+    }
+
+    /// Whether Duplicate takes a tap: not while a create (a New session, a Duplicate) is under way, from any screen.
+    public var canDuplicate: Bool {
+        graph.creates.underWay == nil
     }
 
     /// The session `key` over `graph`, its panes typing through `keyboard` (one of its own by default).
@@ -155,6 +167,43 @@ public final class SessionModel {
     /// Detaches the session: it goes on running there, and the view closes.
     public func detach() {
         graph.connections.detach(machineId: key.machineId, sessionId: key.sessionId)
+    }
+
+    /// Whether the view shows, as it appears and disappears.
+    public func setShowing(_ isShowing: Bool) {
+        self.isShowing = isShowing
+    }
+
+    /// Duplicates the session on its machine, then attaches the copy, takes its lead and opens it through `open`.
+    ///
+    /// A view gone meanwhile opens nothing: the copy stays attached in the lists. A failure is the ``notice``; nothing
+    /// begins while another create is under way.
+    @discardableResult
+    @preconcurrency
+    public func duplicate(then open: @escaping @MainActor (SessionKey) -> Void) -> Task<Void, Never>? {
+        let create = Create(machineId: key.machineId, source: key.sessionId)
+        guard graph.creates.begin(create) else {
+            return nil
+        }
+        return Task {
+            defer { graph.creates.end(create) }
+            let connections = graph.connections
+            do {
+                let copy = try await connections.duplicateSession(machineId: key.machineId, sessionId: key.sessionId)
+                try await connections.attachCreated(machineId: key.machineId, sessionId: copy.id)
+                try Task.checkCancellation()
+                guard isShowing else {
+                    return
+                }
+                let landed = SessionKey(machineId: key.machineId, sessionId: copy.id)
+                graph.panes.claimLead(of: landed)
+                open(landed)
+            } catch let error as MobileError {
+                notice = error.reason
+            } catch {
+                // the caller's task was cancelled: the core still duplicates it, and the listing shows the copy
+            }
+        }
     }
 
     /// Ends the session on its machine, with no undo (the view confirms first); whether it ended.

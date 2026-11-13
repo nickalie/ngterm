@@ -1,10 +1,13 @@
 import SwiftUI
 
-/// An attached session's More menu, in its toolbar (mobile/android's `SessionMenu`): Detach at once, Open in New
-/// Window where the device has windows, Chat view, and End session, which the view confirms first.
+/// An attached session's More menu, in its toolbar (mobile/android's `SessionMenu`): Detach at once, Duplicate
+/// session (the copy opens in control; no tap unless `canDuplicate`), Open in New Window where the device has windows,
+/// Chat view, and End session, which the view confirms first.
 internal struct SessionMenu: View {
     internal let name: String
     internal let onDetach: @MainActor () -> Void
+    internal let canDuplicate: Bool
+    internal let onDuplicate: @MainActor () -> Void
     internal let onNewWindow: (@MainActor () -> Void)?
     internal let chatView: ChatViewChoice
     internal let onEnd: @MainActor () -> Void
@@ -13,6 +16,9 @@ internal struct SessionMenu: View {
         Menu {
             Button(String(localized: "Detach"), systemImage: "eject", action: onDetach)
                 .accessibilityIdentifier("session-detach")
+            DuplicateButton(action: onDuplicate)
+                .disabled(!canDuplicate)
+                .accessibilityIdentifier("session-duplicate")
             if let onNewWindow {
                 Button(
                     String(localized: "Open in New Window"),
