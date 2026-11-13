@@ -34,7 +34,8 @@ GONE_GUARD = "printf '%s\\n' 'ngterm: remote session is gone'; exit 1"
 ZMX = "/Applications/agterm.app/Contents/MacOS/zmx"
 ZMX_DIR = "/tmp/agterm-zmx-501"
 
-_STAND_IN = r"""
+# distlib makes a launcher (ssh.exe) only for a script whose first line is a python shebang; else it copies it
+_STAND_IN = r"""#!python
 import json, sys
 record, listing = {record!r}, {listing!r}
 argv = sys.argv[1:]
