@@ -286,8 +286,9 @@ fn zsh_reports_a_hostile_directory_or_host_without_its_escape_sequences() -> Tes
 
 /// Git Bash on Windows starts ngterm's shim (`resources/shell-integration/git-bash/bash-env`, what `ENV` names there),
 /// which loads Ghostty's integration and replaces its directory report, bash's MSYS path, with the Windows form
-/// `cygpath -m` gives (faked here: `C:/msys` in front of the path), and none for a directory cygpath cannot convert;
-/// Ghostty's prompt marks still carry each command's status.
+/// `cygpath -m` gives (faked here: `C:/msys` in front of the path), and none for a directory cygpath cannot convert
+/// or whose name holds control bytes (the fake hands them back, so only the shim's own checks keep an OSC 52 out);
+/// Ghostty's prompt marks still carry each command's status, and the loader's variable reaches no child process.
 #[test]
 fn git_bash_shim_reports_cygpaths_windows_form_instead_of_the_msys_path() -> TestResult {
     let Some(shell) = bash() else {
@@ -304,6 +305,8 @@ fn git_bash_shim_reports_cygpaths_windows_form_instead_of_the_msys_path() -> Tes
     let root = dir.path().canonicalize()?;
     let (home, work, bin) = (root.join("home"), root.join("work"), root.join("bin"));
     fs::create_dir_all(work.join("a b").join("unconvertible"))?;
+    // the raw bytes: a BEL to end the report, then an OSC 52 of its own
+    fs::create_dir_all(work.join(DIRECTORIES[1].0))?;
     fs::create_dir_all(&home)?;
     fs::create_dir_all(&bin)?;
     let cygpath = bin.join("cygpath");
@@ -315,13 +318,16 @@ fn git_bash_shim_reports_cygpaths_windows_form_instead_of_the_msys_path() -> Tes
     let path = std::env::join_paths(
         std::iter::once(bin.clone()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())),
     )?;
-    let script = "cd -- 'a b'\ncd unconvertible\nfalse\ncd ..\nexit\n";
+    let script = format!(
+        "printenv {} || echo loader-unset\ncd -- 'a b'\ncd unconvertible\nfalse\ncd ..\ncd -- \"$NGTERM_TEST_DIR1\"\nexit\n",
+        shell_integration::GIT_BASH_GHOSTTY_VARIABLE
+    );
     let output = run_integrated_with(
         LoginShell::Bash,
         &shell,
         &resources,
         (&home, &work),
-        script,
+        &script,
         |environment| {
             let loader = environment.insert("ENV".to_owned(), shim.display().to_string());
             environment.insert(
@@ -332,6 +338,15 @@ fn git_bash_shim_reports_cygpaths_windows_form_instead_of_the_msys_path() -> Tes
         },
     )?;
     assert!(output.status.success(), "{output:?}");
+    assert!(
+        !output.stdout.windows(4).any(|window| window == b"\x1b]52"),
+        "an OSC 52 got through: {output:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("loader-unset\n"),
+        "the shim leaves {} to child processes: {output:?}",
+        shell_integration::GIT_BASH_GHOSTTY_VARIABLE
+    );
     let payloads = osc_payloads(&output.stdout)
         .into_iter()
         .map(String::from_utf8)
