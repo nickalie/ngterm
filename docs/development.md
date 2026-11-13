@@ -943,7 +943,7 @@ scripts/build-android.sh :app:koverHtmlReportDebugJvm :app:koverXmlReportDebugJv
 scripts/build-android.sh :koverHtmlReportDebugJvm :koverXmlReportDebugJvm   # both modules, aggregated
 scripts/build-android.sh installGithubDebug    # onto the device or emulator adb sees
 scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-headless behind a private sshd (Linux; python3 runs its fake agent)
-scripts/test-android-e2e.sh [TEST...]  # the app on the device adb sees, against a real ngterm-headless behind a private sshd (Linux)
+scripts/test-android-e2e.sh [TEST...]  # the app on the device adb sees, against a real ngterm-headless behind a private sshd, and conformance's stand-in agterm Mac on a second port (Linux)
 ```
 
 `build-android.sh` builds `libngterm_mobile.so` for arm64-v8a and x86_64 through cargo-ndk, generates the Kotlin
