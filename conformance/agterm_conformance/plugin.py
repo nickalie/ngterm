@@ -24,6 +24,7 @@ from agterm_conformance.match import assert_ok
 if TYPE_CHECKING:
     from agterm_conformance.drivers.base import Driver
     from agterm_conformance.impls.base import Adapter, Instance
+    from agterm_conformance.remote_origin import RemoteOrigin
     from agterm_conformance.vocabulary import Vocabulary
 
 IMPLS = ("swift-macos", "rust")
@@ -1140,6 +1141,32 @@ def launch(adapter: Adapter, request: pytest.FixtureRequest) -> Iterator[Launche
     launcher = Launcher(adapter, **launch_options(request))
     yield launcher
     launcher.stop_all()
+
+
+@pytest.fixture(scope="module")
+def remote_origin(
+    adapter: Adapter, request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[RemoteOrigin]:
+    """Another machine on loopback the module's viewers attach from, reached over a real sshd as `remote_origin.host`
+    (`agterm_conformance.remote_origin`): another instance of the build with Live on, or, parametrized indirectly with
+    `"headless"`, the staged `ngterm-headless`. Stopped, its sessions reaped through its own server, after the module."""
+    from agterm_conformance.remote_origin import RemoteOrigin
+
+    origin = RemoteOrigin(adapter, tmp_path_factory.mktemp("remote-origin"), getattr(request, "param", "instance"))
+    try:
+        yield origin.start()
+    finally:
+        origin.stop()
+
+
+@pytest.fixture(scope="module")
+def remote_viewer(adapter: Adapter, remote_origin: RemoteOrigin, request: pytest.FixtureRequest) -> Iterator[Ctl]:
+    """An instance whose ssh reaches `remote_origin`, and reads nothing of the account's ssh setup."""
+    instance = adapter.launch(path_prefix=remote_origin.viewer_path, **launch_options(request))
+    try:
+        yield Ctl(instance)
+    finally:
+        adapter.stop(instance)
 
 
 def _target_instance(request: pytest.FixtureRequest) -> Instance:

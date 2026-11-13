@@ -64,6 +64,13 @@ vocabulary) is in [docs/rust-build.md](docs/rust-build.md).
 - `tests/ui`: accessibility ids from `ui-ids.yaml`, through `ui` (UI layer below).
 - `selftests`: the harness itself, host-free; they run without `--impl`.
 
+A remote attach test takes `remote_origin` and `remote_viewer` (`agterm_conformance/remote_origin.py`). The origin is
+another instance of the build with Live on or, parametrized indirectly with `"headless"`, the staged
+`ngterm-headless`, behind an `sshd` of the harness's own on 127.0.0.1. The viewer's ssh reaches it as
+`remote_origin.host` and reads nothing of the account's ssh setup; `remote_origin.sever()` cuts the open links. Without
+OpenSSH's server or the staged `ngterm-headless` they skip with the reason; under `CI` the run ends with exit 2 naming
+the step.
+
 ## Markers
 
 - `since("0.41.1")`: skipped as `not-yet-at-level` when the build's parity level is lower. A `pytest.param`, test,

@@ -44,17 +44,24 @@ def find_program(name: str, extra: tuple[str, ...] = ()) -> str | None:
     return None
 
 
-def require_openssh() -> tuple[str, str, str]:
-    """sshd, ssh and ssh-keygen, or the test is skipped with the missing one named; under CI it fails instead, as a
-    runner that should carry them must not pass by skipping."""
+def find_openssh() -> tuple[dict[str, str | None], str | None]:
+    """sshd, ssh and ssh-keygen by name (None where missing), and why the loopback machine cannot run, or None."""
     found = {
         "sshd": find_program("sshd", SSHD_DIRECTORIES),
         "ssh": find_program("ssh"),
         "ssh-keygen": find_program("ssh-keygen"),
     }
     missing = [name for name, path in found.items() if path is None]
-    if missing:
-        reason = f"no {', '.join(missing)} on this machine: the loopback machine needs OpenSSH's server and client"
+    if not missing:
+        return found, None
+    return found, f"no {', '.join(missing)} on this machine: the loopback machine needs OpenSSH's server and client"
+
+
+def require_openssh() -> tuple[str, str, str]:
+    """sshd, ssh and ssh-keygen, or the test is skipped with the missing one named; under CI it fails instead, as a
+    runner that should carry them must not pass by skipping."""
+    found, reason = find_openssh()
+    if reason is not None:
         if os.environ.get("CI"):
             pytest.fail(reason)
         pytest.skip(reason)
@@ -101,12 +108,17 @@ def _config_word(path: Path | str) -> str:
 class LoopbackMachine:
     """One machine: its sshd, its HOME and what its forced command exports. Stop it with `stop`."""
 
-    def __init__(self, root: Path, alias: str, client_key: str, env: Mapping[str, str] | None = None) -> None:
+    def __init__(
+        self, root: Path, alias: str, client_key: str, env: Mapping[str, str] | None = None, home: Path | None = None
+    ) -> None:
+        """`home` is the HOME logins get, by default one of the machine's own: an app already running there passes
+        its own, so a login sees what that app's user has."""
         self.alias = alias
         self.directory = root / f"machine-{alias}"
-        self.home = self.directory / "home"
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.home = home if home is not None else self.directory / "home"
         self.bin = self.home / ".local" / "bin"
-        self.bin.mkdir(parents=True)
+        self.bin.mkdir(parents=True, exist_ok=True)
         self.env = dict(env or {})
         self.port = 0
         self.host_public = ""
@@ -241,7 +253,7 @@ class SshClient:
         self.config = self.directory / "config"
         self.known_hosts = self.directory / "known_hosts"
         self.calls = self.directory / "calls"
-        self._machines: list[LoopbackMachine] = []
+        self._machines: list[tuple[LoopbackMachine, int | None]] = []
         wrapper = self.bin / "ssh"
         wrapper.write_text(
             "#!/bin/sh\n"
@@ -252,8 +264,9 @@ class SshClient:
         wrapper.chmod(0o755)
         self._write()
 
-    def add(self, machine: LoopbackMachine) -> None:
-        self._machines.append(machine)
+    def add(self, machine: LoopbackMachine, port: int | None = None) -> None:
+        """`port` reaches the machine through something in front of its sshd (a proxy), by default its sshd itself."""
+        self._machines.append((machine, port))
         self._write()
 
     def warm(self, machine: LoopbackMachine) -> None:
@@ -281,13 +294,13 @@ class SshClient:
         blocks = [
             f"Host {machine.alias}\n"
             "  HostName 127.0.0.1\n"
-            f"  Port {machine.port}\n"
+            f"  Port {port or machine.port}\n"
             f"  User {user}\n"
             f"  HostKeyAlias {machine.alias}\n"
             f"  IdentityFile {_config_word(self.identity)}\n"
             "  IdentitiesOnly yes\n"
             "  IdentityAgent none\n"
-            for machine in self._machines
+            for machine, port in self._machines
         ]
         common = (
             "Host *\n"
@@ -301,5 +314,5 @@ class SshClient:
         )
         self.config.write_text("".join(blocks) + common)
         self.known_hosts.write_text(
-            "".join(f"{machine.alias} {machine.host_public}\n" for machine in self._machines)
+            "".join(f"{machine.alias} {machine.host_public}\n" for machine, _ in self._machines)
         )
