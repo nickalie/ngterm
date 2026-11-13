@@ -137,8 +137,9 @@ def test_clients_that_hang_up_back_to_back_all_have_their_requests_run(ctl):
     def hang_up_in_turn(mine):
         client = ctl.instance.client()
         start.wait()
-        for sid in mine:
-            client.send_and_hang_up({"cmd": "session.rename", "target": sid, "args": {"name": f"run {sid[:8]}"}})
+        client.send_and_hang_up_each(
+            [{"cmd": "session.rename", "target": sid, "args": {"name": f"run {sid[:8]}"}} for sid in mine]
+        )
 
     with ThreadPoolExecutor(clients) as pool:
         runs = [pool.submit(copy_context().run, hang_up_in_turn, sids[i::clients]) for i in range(clients)]

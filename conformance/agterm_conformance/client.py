@@ -247,16 +247,23 @@ class Client:
     def send_and_hang_up(self, payload: dict[str, Any]) -> None:
         """Write the request with no newline and close before any answer: the server reads the line only at the end of
         the stream, so its answer always goes to a client already gone."""
-        line = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
+        self.send_and_hang_up_each([payload])
+
+    def send_and_hang_up_each(self, payloads: list[dict[str, Any]]) -> None:
+        """Each request as [`send_and_hang_up`] sends it, its connection opened as soon as the last one closed: the
+        socket is checked once, before the first, so nothing slows the run between two of them."""
+        lines = [json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode() for payload in payloads]
         check_under_root(self.socket_path, self.root)
         try:
-            with transport.connect(self.socket_path, self.timeout) as sock:
-                sock.sendall(line)
+            for line in lines:
+                with transport.connect(self.socket_path, self.timeout) as sock:
+                    sock.sendall(line)
         except TimeoutError:
             raise ClientTimeout(f"{self.socket_path} took no request within {self.timeout}s") from None
         except OSError as error:
             raise ConnectFailed(f"cannot connect to {self.socket_path}: {error}") from error
-        trace.event("socket", socket=str(self.socket_path), direction="hang-up", request=payload)
+        for payload in payloads:
+            trace.event("socket", socket=str(self.socket_path), direction="hang-up", request=payload)
 
     def _exchange(self, data: bytes, timeout: float) -> bytes:
         # Re-checked per connection: the socket file can appear (or be swapped for a link) after init.

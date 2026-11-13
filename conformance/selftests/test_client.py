@@ -243,6 +243,18 @@ def test_hang_up_sends_the_request_without_a_newline_and_reads_nothing(serve, ro
     assert server.lines == [b'{"cmd":"session.rename","target":"s","args":{"name":"x"}}']
 
 
+def test_hang_ups_in_turn_send_each_request_on_its_own_connection(serve, root: Path) -> None:
+    answered = threading.Semaphore(0)
+
+    def handler(_line: bytes) -> None:
+        answered.release()
+
+    server = serve(handler)
+    Client(server.path, root).send_and_hang_up_each([{"cmd": "version"}, {"cmd": "tree"}])
+    assert answered.acquire(timeout=5) and answered.acquire(timeout=5)
+    assert sorted(server.lines) == [b'{"cmd":"tree"}', b'{"cmd":"version"}']
+
+
 def test_hang_up_missing_socket(root: Path) -> None:
     with pytest.raises(ConnectFailed):
         Client(root / "absent.sock", root).send_and_hang_up({"cmd": "version"})
