@@ -68,9 +68,11 @@ fun MachineCard(
                 }
                 menu?.invoke()
             }
-            Row(
+            // the badge moves under the address rather than cutting it short
+            FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(spacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(spacing.xs),
+                itemVerticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     text = address,
@@ -78,7 +80,6 @@ fun MachineCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
                 )
                 peer?.let { PeerBadge(it) }
             }

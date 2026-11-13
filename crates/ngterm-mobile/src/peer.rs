@@ -2,7 +2,8 @@
 //! attaches and presents too, with fewer features ([`ngterm_core::remote::peer`]). The core learns it from each listing
 //! ([`crate::sessions`]) and forms every later command for it, and refuses the chat calls on agterm, which has no agent
 //! chat view. It reports the app on each [`RemoteSession::peer`](crate::sessions::RemoteSession) and what it lacks
-//! through [`peer_capabilities`], for the apps to show; the Android and iOS apps read neither yet.
+//! through [`peer_capabilities`], for the apps to show: the Android app badges such a machine and its sessions with the
+//! app's name and note, and turns their chat view off; the iOS app reads neither yet.
 
 use ngterm_core::remote::peer::{self, Capabilities, RemotePeer};
 

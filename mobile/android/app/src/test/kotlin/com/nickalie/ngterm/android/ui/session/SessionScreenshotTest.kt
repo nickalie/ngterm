@@ -15,6 +15,7 @@ import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.ui.AdaptiveScaffold
 import com.nickalie.ngterm.android.ui.AppDestinations
 import com.nickalie.ngterm.android.ui.NavLayout
+import com.nickalie.ngterm.android.ui.SampleAgtermPeer
 import com.nickalie.ngterm.android.ui.Window
 import com.nickalie.ngterm.android.ui.terminal.SelectingPane
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
@@ -58,8 +59,8 @@ private class SessionWindowRule(
  * The session view (src/test/screenshots/session) in the app's frame at the three widths: a phone (one pane at a
  * time, the bar stepped aside), a medium window (the rail of attached sessions) and an expanded one (the sidebar of
  * machines and their sessions beside the split). Each shows one pane with the HUD, two panes side by side and
- * stacked, a hidden split, a follower's cover and a reconnecting pane; and with none open, the attached sessions as a
- * tree, a companion under its parent.
+ * stacked, a hidden split, a follower's cover, a reconnecting pane and a session of an agterm machine (its badge in
+ * the bar); and with none open, the attached sessions as a tree, a companion under its parent.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -217,6 +218,13 @@ class SessionScreenshotTest(
         val live = LiveSession(StreamState.Connected, null, CONTEXT, RemoteLayout(listOf("P1"), "P1", null, false))
         val session = AttachedSession(key, "build-01", "docs-site", CONTEXT, Waiting, Link.Connected, live)
         shoot("duplicating", session.copy(duplicating = true, canDuplicate = false))
+    }
+
+    @Test
+    fun agterm() {
+        val live = LiveSession(StreamState.Connected, null, CONTEXT, RemoteLayout(listOf("P1"), "P1", null, false))
+        val session = AttachedSession(key, "build-01", "docs-site", CONTEXT, Waiting, Link.Connected, live)
+        shoot("agterm", session.copy(peer = SampleAgtermPeer))
     }
 
     @Test

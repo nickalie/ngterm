@@ -13,6 +13,7 @@ import com.nickalie.ngterm.android.FAKE_FINGERPRINT
 import com.nickalie.ngterm.android.FAKE_PUBLIC_KEY
 import com.nickalie.ngterm.android.data.AppKey
 import com.nickalie.ngterm.android.data.Link
+import com.nickalie.ngterm.android.data.MachinePeer
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.android.ui.machines.MachineActions
 import com.nickalie.ngterm.android.ui.machines.MachineItem
@@ -22,7 +23,9 @@ import com.nickalie.ngterm.android.ui.sessions.MachineSessions
 import com.nickalie.ngterm.android.ui.sessions.SessionActions
 import com.nickalie.ngterm.android.ui.sessions.SessionsScreen
 import com.nickalie.ngterm.core.fake.TailscaleSignIn
+import com.nickalie.ngterm.core.fake.fakePeerCapabilities
 import com.nickalie.ngterm.core.fake.fakeSession
+import com.nickalie.ngterm.core.ffi.PeerKind
 
 // The screens' content for the screenshot tests: real-looking machines and made-up keys (never a real one).
 
@@ -45,7 +48,8 @@ private fun status(
     wire: String,
     color: String? = null,
     shape: String? = null,
-) = fakeSession(id).copy(status = wire, statusColor = color, statusShape = shape)
+    peer: PeerKind? = null,
+) = fakeSession(id, peer = peer).copy(status = wire, statusColor = color, statusShape = shape)
 
 /** One machine in each state the home shows. */
 val SampleMachines =
@@ -141,6 +145,37 @@ val SampleSessions =
         attached = setOf("s3"),
         offline = false,
         ending = setOf("s5"),
+    )
+
+/** What a Mac running agterm offers, as the core says. */
+val SampleAgtermPeer = MachinePeer(PeerKind.AGTERM, fakePeerCapabilities(PeerKind.AGTERM))
+
+/** A Mac running agterm, connected, with its sessions listed. */
+val SampleAgtermMachine =
+    MachineItem(
+        testMachine(id = "m6", label = "studio", host = "studio.local").copy(user = "me"),
+        Link.Connected,
+        listOf(status("a1", "active", peer = PeerKind.AGTERM), fakeSession("a2", peer = PeerKind.AGTERM)),
+        SampleAgtermPeer,
+    )
+
+/** That Mac's sessions screen. */
+val SampleAgtermSessions =
+    MachineSessions(
+        machine = SampleAgtermMachine.machine,
+        link = Link.Connected,
+        sessions =
+            listOf(
+                status("a1", "active", peer = PeerKind.AGTERM).copy(
+                    name = "claude",
+                    context = "Port the settings sheet",
+                ),
+                fakeSession("a2", name = "shell", peer = PeerKind.AGTERM).copy(cwd = "/Users/me/src/app"),
+            ),
+        failure = null,
+        attached = setOf("a1"),
+        offline = false,
+        peer = SampleAgtermPeer,
     )
 
 val NoSessionActions = SessionActions({}, {}, {}, {}, {}, {}, {}, {}, {})

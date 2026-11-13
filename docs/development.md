@@ -929,7 +929,8 @@ mobile core over its own ssh channels, and each only sends that Mac the command 
 `mobile/android` is a native Android app (Kotlin, Jetpack Compose, phones and tablets) over the Rust core
 `crates/ngterm-mobile`, which Kotlin reaches through UniFFI. It is remote-only: it runs no sessions of its own, and
 reaches machines running ngterm (`ngterm-headless` on a server, or a desktop instance) over ssh, as File ▸ Attach Remote
-does. It lists a machine's live sessions, makes, duplicates and ends them, and attaches them: their panes (one at a time on a
+does, and Macs running upstream agterm ([An agterm origin](#an-agterm-origin)): their machine card, sessions screen and
+session bar carry an "agterm" badge whose tap says what agterm lacks, and their sessions offer no chat view. It lists a machine's live sessions, makes, duplicates and ends them, and attaches them: their panes (one at a time on a
 phone, the origin's split on a tablet), status, context, HUD and notifications. Asks show as dialogs, or as
 notification actions while the app is in the background; a foreground service keeps attached sessions connected. Its
 design system is `mobile/android/DESIGN.md`.
