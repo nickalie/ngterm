@@ -19,7 +19,7 @@
     /// after it: its question shows only once the first is answered; and, when asked, a machine `split`
     /// (`split.lan`) is saved already, with a session `work` of two panes side by side (``FakeSessionWorld``), whose
     /// origin asks a question as it is attached, and whose first pane runs Claude Code (``FakeChatWorld``), each when
-    /// asked too, its first Duplicate failing when asked; and, when asked, a Mac running agterm, `studio`
+    /// asked too, its first Duplicate failing when asked; and, when asked, each Duplicate held a while; and, when asked, a Mac running agterm, `studio`
     /// (``FakeAgtermWorld``).
     ///
     /// Notifications go to memory (``FakeNotices``), and the question about notifying counts as asked unless the
@@ -29,6 +29,8 @@
         internal static let buildHostKey = "SHA256:fAkEbU1Ld01h0sTkEyF0rUiTeStS0nLyN0tArEaLkEy00"
         /// The host key `signin.lan` offers (made up).
         internal static let signInHostKey = "SHA256:fAkEs1GnInh0sTkEyF0rUiTeStS0nLyN0tArEaLkEy000"
+        // how long a Duplicate is held, when the launch asks for it
+        private static let duplicatePause = Duration.seconds(20)
 
         // a key as the first run would leave it (made up: the fake core never loads it)
         private static let key = AppKey(
@@ -43,7 +45,7 @@
         ///
         /// The `arguments` are ``CoreChoice``'s: a key already, two programs asking to read the clipboard, `split` with
         /// its session, its question, its agent and its companion, `studio` running agterm, the question about
-        /// notifying left to ask.
+        /// notifying left to ask, each Duplicate held a while.
         @MainActor
         internal static func graph(arguments: [String]) -> AppGraph {
             let directory = FileManager.default.temporaryDirectory.appending(
@@ -75,6 +77,9 @@
             if arguments.contains(CoreChoice.fakeAgtermArgument) {
                 FakeAgtermWorld.seed(machines, core: core, keyId: key.id)
             }
+            if arguments.contains(CoreChoice.fakeDuplicateSlowArgument) {
+                holdDuplicates(core)
+            }
             let stores = GraphStores(directory: directory)
             if !arguments.contains(CoreChoice.fakeNotificationQuestionArgument) {
                 try? stores.notificationPrefs.markPermissionAsked()
@@ -97,6 +102,20 @@
                 core.emit(read(pane: next, canRemember: false))
             }
             return graph
+        }
+
+        // holds each Duplicate for `duplicatePause` once it is under way, so a test sees what shows meanwhile: the source's
+        // "Duplicating", and New session and every Duplicate taking no tap
+        @MainActor
+        private static func holdDuplicates(_ core: FakeMobileCore) {
+            Task {
+                while !Task.isCancelled {
+                    let gate = core.hold("duplicateSession")
+                    await gate.reached()
+                    try? await Task.sleep(for: duplicatePause)
+                    gate.open()
+                }
+            }
         }
 
         // a pasteboard of the launch's own holding a command, when programs ask to read the clipboard; else none
