@@ -41,7 +41,14 @@ record, listing = {record!r}, {listing!r}
 argv = sys.argv[1:]
 with open(record, "a", encoding="utf-8") as out:
     out.write(json.dumps(argv) + "\n")
-command = argv[-1] if argv else ""
+if argv[:1] == ["-G"]:
+    # the attach line first reads ssh's resolved config for its keepalive, as from an unconfigured host
+    sys.stdout.write("serveraliveinterval 0\n")
+    sys.exit(0)
+# the viewer quotes each word of the remote line ('zmx' 'present' 'ID'); match on the words alone
+command = (argv[-1] if argv else "").replace("\\", "").replace("'", "")
+if command == "true":
+    sys.exit(0)
 if "zmx tree" in command:
     sys.stdout.write("ngterm-peer: agterm\n" + listing + "\n")
     sys.exit(0)
@@ -57,6 +64,11 @@ if " attach " in command:
     sys.exit(0)
 sys.exit(255)
 """
+
+
+def _words(command):
+    """A remote line as its words, without the quoting the viewer puts around each one."""
+    return command.replace("\\", "").replace("'", "")
 
 
 @pytest.fixture
@@ -125,7 +137,11 @@ def test_a_windows_viewer_attaches_an_agterm_pane_through_ssh_exe(adapter, reque
         assert find_session(ctl.tree(), local)["remoteHost"] == "agterm:studio"
         wait_text(ctl, local, re.escape(f"attached {daemon}"), timeout=30)
 
-        attach = wait_until(lambda: next((argv for argv in calls() if f" attach {daemon} " in argv[-1]), None))
+        attach = wait_until(
+            lambda: next(
+                (argv for argv in calls() if argv[0] != "-G" and f" attach {daemon} " in _words(argv[-1])), None
+            )
+        )
         assert attach[0] == "-tt" and "studio" in attach and "agterm:studio" not in attach, attach
         assert "LogLevel=ERROR" in attach, attach
         words = shlex.split(attach[-1])
@@ -137,7 +153,7 @@ def test_a_windows_viewer_attaches_an_agterm_pane_through_ssh_exe(adapter, reque
         assert not any(name.startswith("NGTERM_") for name in assignments), words
         assert words[-6:] == [ZMX, "attach", daemon, "/bin/sh", "-c", GONE_GUARD], words
 
-        present = wait_until(lambda: next((argv for argv in calls() if "zmx present" in argv[-1]), None))
+        present = wait_until(lambda: next((argv for argv in calls() if "zmx present" in _words(argv[-1])), None))
         assert present[0] == "-T" and "agtermctl" in present[-1] and session in present[-1], present
     finally:
         adapter.stop(instance)
