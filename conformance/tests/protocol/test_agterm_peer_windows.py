@@ -4,7 +4,10 @@ viewer-run`, with no `/bin/sh` and no zmx on this machine, and hand the Mac the 
 Windows runs no unprivileged sshd, so the far side is an `ssh.exe` stand-in first on the instance's PATH (distlib's
 script launcher over Python, as `tests/cli/test_cli_only.py`'s): it records each argv and answers as agterm v0.41.1's
 Mac does over ssh: the listing under its marker line (`fake_agterm`'s shape), a presentation stream that waits for the
-viewer to hang up, and an attach that prints the daemon it reached and waits for input."""
+viewer to hang up, and an attach that prints the daemon it reached and waits for input.
+
+A user's default shell profile (`shell-profiles`: CMD, which runs a pane's command itself, or Git Bash) is no part of a
+remote pane: its attach still runs through viewer-run, without the profile's variables."""
 
 import json
 import os
@@ -16,6 +19,7 @@ import uuid
 import pytest
 from agterm_conformance.match import find_session
 from agterm_conformance.plugin import Cli, Ctl, launch_options
+from agterm_conformance.shell_profiles import SHELL_PROFILES, git_bash, profile, settings
 from agterm_conformance.wait import wait_text, wait_until
 
 pytestmark = [
@@ -36,11 +40,11 @@ ZMX_DIR = "/tmp/agterm-zmx-501"
 
 # distlib makes a launcher (ssh.exe) only for a script whose first line is a python shebang; else it copies it
 _STAND_IN = r"""#!python
-import json, sys
+import json, os, sys
 record, listing = {record!r}, {listing!r}
 argv = sys.argv[1:]
 with open(record, "a", encoding="utf-8") as out:
-    out.write(json.dumps(argv) + "\n")
+    out.write(json.dumps({{"argv": argv, "QA_SHELL": os.environ.get("QA_SHELL")}}) + "\n")
 if argv[:1] == ["-G"]:
     # the attach line first reads ssh's resolved config for its keepalive, as from an unconfigured host
     sys.stdout.write("serveraliveinterval 0\n")
@@ -112,18 +116,42 @@ def agterm_ssh(tmp_path):
     maker.make("ssh.py")
     assert (folder / "ssh.exe").is_file(), sorted(os.listdir(folder))
 
-    def calls():
+    def records():
         try:
             return [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
         except FileNotFoundError:
             return []
 
-    return folder, session, daemon, calls
+    def calls():
+        return [entry["argv"] for entry in records()]
+
+    def shells():
+        """The `QA_SHELL` each ssh.exe call saw: a default profile's variable, were the profile run."""
+        return {entry["QA_SHELL"] for entry in records()}
+
+    return folder, session, daemon, calls, shells
 
 
-def test_a_windows_viewer_attaches_an_agterm_pane_through_ssh_exe(adapter, request, agterm_ssh):
-    folder, session, daemon, calls = agterm_ssh
-    instance = adapter.launch(path_prefix=[folder], **launch_options(request))
+def _cmd():
+    return profile("cmd", os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe"))
+
+
+def _git_bash():
+    return profile("gitbash", git_bash(), args=["--login", "-i"])
+
+
+@pytest.mark.parametrize(
+    "default",
+    [
+        pytest.param(None, id="no-profile"),
+        pytest.param(_cmd, id="cmd_shell_profile", marks=SHELL_PROFILES),
+        pytest.param(_git_bash, id="git_bash_shell_profile", marks=SHELL_PROFILES),
+    ],
+)
+def test_a_windows_viewer_attaches_an_agterm_pane_through_ssh_exe(adapter, request, agterm_ssh, default):
+    folder, session, daemon, calls, shells = agterm_ssh
+    seeded = settings(default()) if default else None
+    instance = adapter.launch(path_prefix=[folder], settings=seeded, **launch_options(request))
     try:
         ctl = Ctl(instance)
         cli = Cli(adapter.ctl_path, instance, adapter.ctl_name)
@@ -155,5 +183,7 @@ def test_a_windows_viewer_attaches_an_agterm_pane_through_ssh_exe(adapter, reque
 
         present = wait_until(lambda: next((argv for argv in calls() if "zmx present" in _words(argv[-1])), None))
         assert present[0] == "-T" and "agtermctl" in present[-1] and session in present[-1], present
+        # a default profile's variables reach no ssh.exe the remote row runs
+        assert shells() == {None}, shells()
     finally:
         adapter.stop(instance)
