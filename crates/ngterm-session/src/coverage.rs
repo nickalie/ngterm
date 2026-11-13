@@ -53,8 +53,9 @@ fn write_unguarded() {
 }
 
 /// In an instrumented build on Unix: a termination signal (`SIGHUP`, `SIGINT`, `SIGTERM`) that would end the process
-/// by its default action writes the profile first ([`write_profile`]), then ends it by that default action, so the
-/// process's status and its parent's view stay what they were. A signal the process started with ignored stays
+/// by its default action writes the profile first (the write [`write_profile`] does, but without taking its lock: the
+/// signal path already holds it, and `write_profile` here would wait on itself), then ends it by that default action,
+/// so the process's status and its parent's view stay what they were. A signal the process started with ignored stays
 /// ignored. Only for a program that handles none of these signals itself: a signal-hook registration of its own runs
 /// beside this one, which then ends the process before that program's handling is done (only a raw `sigaction`
 /// replaces it). A signal and an exit that meet write once: a signal handled first holds the exit back until the
