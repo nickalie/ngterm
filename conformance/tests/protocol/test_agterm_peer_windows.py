@@ -6,8 +6,11 @@ script launcher over Python, as `tests/cli/test_cli_only.py`'s): it records each
 Mac does over ssh: the listing under its marker line (`fake_agterm`'s shape), a presentation stream that waits for the
 viewer to hang up, and an attach that prints the daemon it reached and waits for input.
 
-A user's default shell profile (`shell-profiles`: CMD, which runs a pane's command itself, or Git Bash) is no part of a
-remote pane: its attach still runs through viewer-run, without the profile's variables."""
+A user's default shell profile (`shell-profiles`) is no part of a remote pane. With CMD as the default, which would run
+a pane's command itself, the attach still runs through viewer-run and ssh.exe sees none of the profile's variables:
+that case fails if the remote session took the default. Git Bash cannot run a pane's command (its profile would change
+neither the argv nor ssh.exe's environment), so its case checks only that the attach works beside a local Git Bash
+default."""
 
 import json
 import os
@@ -183,7 +186,8 @@ def test_a_windows_viewer_attaches_an_agterm_pane_through_ssh_exe(adapter, reque
 
         present = wait_until(lambda: next((argv for argv in calls() if "zmx present" in _words(argv[-1])), None))
         assert present[0] == "-T" and "agtermctl" in present[-1] and session in present[-1], present
-        # a default profile's variables reach no ssh.exe the remote row runs
+        # a default profile's variables reach no ssh.exe the remote row runs (only CMD's would, were the remote session
+        # to take the default)
         assert shells() == {None}, shells()
     finally:
         adapter.stop(instance)
