@@ -15,9 +15,10 @@ internal final class DuplicateSessionTests: XCTestCase {
     private static let longPress: TimeInterval = 1
     // where a tap closes the menu that is up: low on the dimmed screen, away from the menu and the home indicator
     private static let offMenu = CGVector(dx: 0.5, dy: 0.9)
-    // how long windows take to open or close, and the most session windows a test opens
+    // how long windows take to open or close
     private static let windowWait: TimeInterval = 10
-    private static let maxWindows = 3
+    // how often closing the session windows is tried, at most
+    private static let closeTries = 6
 
     @MainActor
     private static func any(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
@@ -81,29 +82,39 @@ internal final class DuplicateSessionTests: XCTestCase {
     }
 
     // closes the session windows: Detach in the More of a session window in front, or, with the app's own window in
-    // front, Detach in the context menu of a row whose session a window shows
+    // front, Detach in the context menu of a row whose session a window shows; a More that brings up no Detach (the
+    // window first in the list need not be the one on the screen) is left for the rows' Detach on the next try
     @MainActor
     private static func closeSessionWindows(in app: XCUIApplication) {
-        for _ in 0..<maxWindows {
+        var isMoreMissed = false
+        for _ in 0..<closeTries {
             let count = app.windows.count
             guard count > 1 else {
                 return
             }
             let front = app.windows.element(boundBy: 0)
-            if front.buttons["add-machine"].exists {
+            if isMoreMissed || front.buttons["add-machine"].exists {
+                isMoreMissed = false
                 guard detachARow(of: ["session 1", "work"], in: app) else {
-                    return
+                    continue
                 }
             } else {
                 front.buttons["session-menu"].tap()
                 let detach = app.buttons["session-detach"]
                 guard detach.waitForExistence(timeout: windowWait) else {
-                    return
+                    isMoreMissed = true
+                    closeMenu(in: app)
+                    continue
                 }
                 detach.tap()
             }
-            expectWindows(count - 1, in: app)
+            let closed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "count < %d", count),
+                object: app.windows
+            )
+            _ = XCTWaiter.wait(for: [closed], timeout: windowWait)
         }
+        XCTAssertEqual(app.windows.count, 1, "the session windows stayed: \(app.debugDescription)")
     }
 
     // detaches the first of the sessions `names` whose row's context menu offers Detach; false when none does
