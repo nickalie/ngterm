@@ -5,6 +5,18 @@
 # (agterm_conformance/code_coverage.py e2e, conformance/coverage/apps.toml).
 # A total or crate more than 0.5 pt below its floor fails the job. Raised, never lowered, from a batch of runs of one
 # build: check_coverage.py --floor THIS --add --summary A/summary.md --summary B/summary.md ... (each floor raised to
-# the batch's lowest; a new crate added, a gone one dropped).
+# the batch's lowest; a new crate added, a gone one dropped). Seeded from the per-crate minimum of three same-build CI
+# runs.
 # The total first, then sorted by crate.
-total 0.00
+total 28.65
+ngterm-app 44.51
+ngterm-core 20.87
+ngterm-ctl 13.17
+ngterm-ghostty-vt 31.99
+ngterm-headless 70.57
+ngterm-host 35.89
+ngterm-proto 35.32
+ngterm-pty 72.62
+ngterm-server 74.75
+ngterm-session 61.87
+ngterm-term 27.00
