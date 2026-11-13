@@ -186,6 +186,7 @@ tests/protocol/test_addressing.py::test_a_request_runs_when_its_client_hangs_up_
 tests/protocol/test_addressing.py::test_active_and_omitted_targets_name_the_current_workspace
 tests/protocol/test_addressing.py::test_active_and_omitted_targets_name_the_selected_session
 tests/protocol/test_addressing.py::test_ambiguous_prefix_lists_the_matches
+tests/protocol/test_addressing.py::test_clients_that_hang_up_back_to_back_all_have_their_requests_run
 tests/protocol/test_addressing.py::test_session_target_by_id[exact]
 tests/protocol/test_addressing.py::test_session_target_by_id[lowercase]
 tests/protocol/test_addressing.py::test_session_target_by_id[unique-prefix]
@@ -478,6 +479,7 @@ tests/protocol/test_hud.py::test_unknown_session_target[session.hud.update-args1
 tests/protocol/test_hud.py::test_update_replaces_the_whole_spec
 tests/protocol/test_hud.py::test_update_sets_and_drops_sticky_and_frame
 tests/protocol/test_keymap_hooks.py::test_a_file_binding_the_toggle_overlay_chord_keeps_it
+tests/protocol/test_keymap_hooks.py::test_a_hook_that_sends_a_request_and_exits_has_it_run
 tests/protocol/test_keymap_hooks.py::test_a_running_hook_queues_its_events_and_survives_its_removal
 tests/protocol/test_keymap_hooks.py::test_attach_remote_ships_a_default_that_an_existing_binding_keeps
 tests/protocol/test_keymap_hooks.py::test_duplicate_companion_is_a_keyless_builtin
