@@ -67,8 +67,9 @@ internal class WindowRule(
 /**
  * Task 13's, 14's and 16's screens rendered by Robolectric and compared with their goldens
  * (src/test/screenshots/screens): the first run, the Machines home, a machine's sessions (and an agterm machine's card
- * and sessions, with its badge), the machine form, the host-key sheet, the sign-in sheet, the changed-key stop and a program's clipboard read, each on a phone (light,
- * dark, font scale 2.0), an unfolded foldable (light) and a landscape tablet (light, dark). The keys shown are made up.
+ * and sessions, with its badge), the machine form, the host-key sheet, the sign-in sheet, the changed-key stop and a
+ * program's clipboard read, each on a phone (light, dark, font scale 2.0), an unfolded foldable (light) and a
+ * landscape tablet (light, dark). The keys shown are made up.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
