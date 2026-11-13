@@ -113,3 +113,91 @@ fn an_accepted_end_is_the_servers() -> io::Result<()> {
     );
     Ok(())
 }
+
+/// A read issued on `handle` and left pending, for a test to start before something else happens on the pipe; it
+/// owns its buffer, `OVERLAPPED` and event until the read is done.
+struct PendingRead {
+    handle: HANDLE,
+    overlapped: Box<OVERLAPPED>,
+    buf: Box<[u8; 16]>,
+    _event: OwnedHandle,
+    done: bool,
+}
+
+impl PendingRead {
+    fn start(handle: HANDLE) -> io::Result<Self> {
+        // SAFETY: a manual-reset event, unnamed and unshared; the handle is checked before it is owned.
+        let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+        if event.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: CreateEventW returned a fresh handle that nothing else owns.
+        let event = unsafe { OwnedHandle::from_raw_handle(event) };
+        // SAFETY: an all-zero OVERLAPPED is a valid one.
+        let mut overlapped: Box<OVERLAPPED> = Box::new(unsafe { std::mem::zeroed() });
+        overlapped.hEvent = event.as_raw_handle();
+        let mut read = Self {
+            handle,
+            overlapped,
+            buf: Box::new([0; 16]),
+            _event: event,
+            done: true,
+        };
+        let ptr = read.buf.as_mut_ptr();
+        let len = u32::try_from(read.buf.len()).map_err(io::Error::other)?;
+        // SAFETY: the buffer and the OVERLAPPED are boxed, so they stay put, and `Drop` waits for the read to end.
+        if unsafe { ReadFile(handle, ptr, len, std::ptr::null_mut(), &raw mut *read.overlapped) } != 0 {
+            return Err(io::Error::other("the read finished at once"));
+        }
+        let error = io::Error::last_os_error();
+        if !is_os_error(&error, ERROR_IO_PENDING) {
+            return Err(error);
+        }
+        read.done = false;
+        Ok(read)
+    }
+
+    /// Waits for the read to end.
+    fn wait(&mut self) -> io::Result<usize> {
+        let mut moved = 0;
+        // SAFETY: the OVERLAPPED is the pending read's, alive in `self`; this waits for the read to end.
+        let finished = unsafe { GetOverlappedResult(self.handle, &raw const *self.overlapped, &raw mut moved, 1) };
+        self.done = true;
+        if finished == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        usize::try_from(moved).map_err(io::Error::other)
+    }
+
+    /// What the read got, or its error.
+    fn finish(mut self) -> io::Result<Vec<u8>> {
+        let moved = self.wait()?;
+        Ok(self.buf.get(..moved).unwrap_or_default().to_vec())
+    }
+}
+
+impl Drop for PendingRead {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        // SAFETY: the read is pending on the open handle through this OVERLAPPED, which the wait below keeps alive.
+        unsafe { CancelIoEx(self.handle, &raw const *self.overlapped) };
+        self.wait().ok();
+    }
+}
+
+/// A write past its timeout ends alone: a read pending on the same end goes on and gets the peer's next bytes.
+#[test]
+fn a_write_timeout_leaves_the_pending_read_alone() -> io::Result<()> {
+    let (server, client) = pair()?;
+    let read = PendingRead::start(server.handle())?;
+    server.set_write_timeout(Some(Duration::from_millis(200)))?;
+    let more_than_the_pipe_holds = vec![b'w'; 256 * 1024];
+    let written = (&server).write(&more_than_the_pipe_holds);
+    assert_eq!(written.map_err(|error| error.kind()), Err(io::ErrorKind::TimedOut));
+
+    (&client).write_all(b"ping")?;
+    assert_eq!(read.finish()?, b"ping");
+    Ok(())
+}

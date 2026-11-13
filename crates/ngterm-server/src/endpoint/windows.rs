@@ -61,13 +61,14 @@ impl Pipe {
         })
     }
 
-    /// Reads what the pipe holds; a peer gone (or disconnected) reads as the end, as a socket's does.
-    fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
+    /// Reads what the pipe holds, within `timeout`; a peer gone (or disconnected) reads as the end, as a socket's
+    /// does.
+    fn read(&self, buf: &mut [u8], timeout: Option<Duration>) -> io::Result<usize> {
         let handle = self.handle.as_raw_handle();
         let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         let ptr = buf.as_mut_ptr();
         // SAFETY: `buf` outlives the call, which `overlapped` waits for, and `len` is within it.
-        let read = overlapped(handle, |ov| unsafe {
+        let read = overlapped(handle, timeout, |ov| unsafe {
             ReadFile(handle, ptr, len, std::ptr::null_mut(), ov)
         });
         match read {
@@ -77,12 +78,12 @@ impl Pipe {
         }
     }
 
-    fn write(&self, buf: &[u8]) -> io::Result<usize> {
+    fn write(&self, buf: &[u8], timeout: Option<Duration>) -> io::Result<usize> {
         let handle = self.handle.as_raw_handle();
         let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         let ptr = buf.as_ptr();
         // SAFETY: `buf` outlives the call, which `overlapped` waits for, and `len` is within it.
-        let written = overlapped(handle, |ov| unsafe {
+        let written = overlapped(handle, timeout, |ov| unsafe {
             WriteFile(handle, ptr, len, std::ptr::null_mut(), ov)
         })?;
         usize::try_from(written).map_err(io::Error::other)
@@ -98,8 +99,12 @@ fn is_os_error(error: &io::Error, code: u32) -> bool {
 }
 
 /// Starts `call`, an overlapped call on `handle` given the `OVERLAPPED` to use, and waits for it to finish: the bytes
-/// it moved, or its error.
-fn overlapped(handle: HANDLE, call: impl FnOnce(*mut OVERLAPPED) -> BOOL) -> io::Result<u32> {
+/// it moved, or its error. Past `timeout` that call alone is cancelled ([`watchdog::timed`]).
+fn overlapped(
+    handle: HANDLE,
+    timeout: Option<Duration>,
+    call: impl FnOnce(*mut OVERLAPPED) -> BOOL,
+) -> io::Result<u32> {
     // SAFETY: a manual-reset event, unnamed and unshared; the handle is checked before it is owned.
     let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
     if event.is_null() {
@@ -116,12 +121,15 @@ fn overlapped(handle: HANDLE, call: impl FnOnce(*mut OVERLAPPED) -> BOOL) -> io:
             return Err(error);
         }
     }
-    let mut moved = 0;
-    // SAFETY: `overlapped` and its event live until the call completes, which this waits for.
-    if unsafe { GetOverlappedResult(handle, &raw const overlapped, &raw mut moved, 1) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(moved)
+    let pending = &raw const overlapped;
+    watchdog::timed(handle, pending, timeout, || {
+        let mut moved = 0;
+        // SAFETY: `overlapped` and its event live until the call completes, which this waits for.
+        if unsafe { GetOverlappedResult(handle, pending, &raw mut moved, 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(moved)
+    })
 }
 
 /// What each direction of a pipe buffers, near an `AF_UNIX` socket's default, so a response or a stream's lines are
@@ -130,7 +138,7 @@ const BUFFER_BYTES: u32 = 64 * 1024;
 
 /// One control connection, either end: a byte-mode pipe stream with the part of std's socket surface the server
 /// and `ngtermctl` use. Reads and writes take the timeouts set on it (shared with its duplicates, as a socket's
-/// options are), a write that times out disconnects the pipe (its peer is stalled, and what it was sent is cut), and
+/// options are), a call that times out ends alone, the calls pending on its duplicates untouched, and
 /// [`Connection::shutdown`] ends either end from any thread, for good, as `shutdown(2)` does a socket's.
 #[derive(Debug)]
 pub struct Connection {
@@ -199,8 +207,8 @@ impl Connection {
         Timeouts::set(&self.timeouts.read, timeout)
     }
 
-    /// Bounds each later write: past `timeout` it fails with [`io::ErrorKind::TimedOut`] and the pipe is
-    /// disconnected. `None` waits for as long as it takes.
+    /// Bounds each later write: past `timeout` it fails with [`io::ErrorKind::TimedOut`]; what part of it reached
+    /// the peer is unknown, so its caller ends the connection. `None` waits for as long as it takes.
     ///
     /// # Errors
     ///
@@ -296,27 +304,17 @@ impl Connection {
 impl Read for &Connection {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let timeout = Timeouts::get(&self.timeouts.read);
-        self.call(
-            || watchdog::timed(self.handle(), timeout, || self.pipe.read(buf)),
-            || Ok(0),
-        )
+        self.call(|| self.pipe.read(buf, timeout), || Ok(0))
     }
 }
 
 impl Write for &Connection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let timeout = Timeouts::get(&self.timeouts.write);
-        let written = self.call(
-            || watchdog::timed(self.handle(), timeout, || self.pipe.write(buf)),
+        self.call(
+            || self.pipe.write(buf, timeout),
             || Err(io::ErrorKind::BrokenPipe.into()),
-        );
-        if written
-            .as_ref()
-            .is_err_and(|error| error.kind() == io::ErrorKind::TimedOut)
-        {
-            self.disconnect();
-        }
-        written
+        )
     }
 
     /// Nothing to do, as for a socket: a written byte is the pipe's.
@@ -398,7 +396,7 @@ pub(super) fn accept(listener: &Listener) -> io::Result<Connection> {
     let mut instance = listener.instance.lock().unwrap_or_else(PoisonError::into_inner);
     let handle = instance.as_raw_handle();
     // SAFETY: the instance is open while the lock is held; `overlapped` waits for the call to finish.
-    match overlapped(handle, |ov| unsafe { ConnectNamedPipe(handle, ov) }) {
+    match overlapped(handle, None, |ov| unsafe { ConnectNamedPipe(handle, ov) }) {
         Ok(_) => {}
         Err(error) if is_os_error(&error, ERROR_PIPE_CONNECTED) || is_os_error(&error, ERROR_NO_DATA) => {}
         Err(error) => return Err(error),
