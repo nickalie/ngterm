@@ -100,7 +100,8 @@ internal final class SessionViewTests: XCTestCase {
     // parent, saying whose it is
     @MainActor
     internal func testTheMachinesNestAnAttachedCompanionUnderItsParent() throws {
-        let app = FakeApp.launch(withKey: true, arguments: ["-ngterm-fake-session", "-ngterm-fake-companion"], for: self)
+        let arguments = ["-ngterm-fake-session", "-ngterm-fake-companion"]
+        let app = FakeApp.launch(withKey: true, arguments: arguments, for: self)
         FakeApp.showMachines(in: app)
         FakeApp.expectRow("split", reads: "Connected", in: app)
         app.descendants(matching: .any)["machine-row-split"].firstMatch.tap()

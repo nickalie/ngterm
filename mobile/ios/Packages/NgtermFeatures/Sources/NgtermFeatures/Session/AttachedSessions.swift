@@ -6,8 +6,9 @@ import NgtermPlatform
 ///
 /// Each machine's attached sessions come in its listing's order by family (a parent, then its companions under it, as
 /// a machine's sessions list them), any it no longer lists after them; a machine with none is left out. A companion
-/// whose parent is attached too is nested under it. It reads the stores and the routers as they are now (all observable), and remembers the name each
-/// session was last shown with, for the gone state once its machine's listing has dropped it.
+/// whose parent is attached too is nested under it. It reads the stores and the routers as they are now (all
+/// observable), and remembers the name each session was last shown with, for the gone state once its machine's listing
+/// has dropped it.
 @preconcurrency
 @MainActor
 public final class AttachedSessions {

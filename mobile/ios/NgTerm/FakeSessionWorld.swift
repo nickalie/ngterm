@@ -42,6 +42,10 @@
             choices: nil
         )
 
+        private static var askEvent: MobileEvent {
+            .ask(machineId: machineId, sessionId: sessionId, ask: deployAsk)
+        }
+
         private static func attachEvents(of sessionId: String, panes: [String]) -> [MobileEvent] {
             let layout = RemoteLayout(panes: panes, primary: panes[0], axis: "vertical", shown: true)
             let status = RemoteStatus(
@@ -63,10 +67,6 @@
                 events.append(.paneLead(pane: pane, role: .leader, covered: false))
             }
             return events
-        }
-
-        private static var askEvent: MobileEvent {
-            .ask(machineId: machineId, sessionId: sessionId, ask: deployAsk)
         }
 
         private static func context(_ text: String) -> MobileEvent {
