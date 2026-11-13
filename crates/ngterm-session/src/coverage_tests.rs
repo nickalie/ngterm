@@ -184,6 +184,54 @@ mod termination {
         assert!(super::is_raw_profile(&profile), "no raw profile");
     }
 
+    #[cfg(target_os = "linux")]
+    const UNSTARTED: &str = "coverage::tests::termination::child_cannot_start_the_thread";
+
+    /// A thread that cannot start (`RLIMIT_NPROC` binds threads on Linux only, and not root) leaves SIGTERM its default
+    /// action.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_thread_that_cannot_start_leaves_sigterm_its_default_action() {
+        // SAFETY: a plain call.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipped: RLIMIT_NPROC does not bind root");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let mut command = super::child_test(UNSTARTED, dir.path(), "unstarted");
+        let reset = || {
+            // SAFETY: `SIG_DFL` installs no handler code.
+            unsafe { libc::signal(libc::SIGTERM, libc::SIG_DFL) };
+            Ok(())
+        };
+        // SAFETY: the hook only calls `signal`, async-signal-safe and allocation-free, fit for the forked child.
+        unsafe { command.pre_exec(reset) };
+        let status = command.status().expect("the child test");
+        assert_eq!(status.signal(), Some(libc::SIGTERM), "{status}");
+    }
+
+    /// The child of the test above; nothing when run on its own.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn child_cannot_start_the_thread() {
+        if std::env::var_os(CHILD).is_none() {
+            return;
+        }
+        let none = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: a plain call with a live local.
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &raw const none) }, 0);
+        assert!(
+            super::super::before_termination(mark).is_err(),
+            "the thread started after all"
+        );
+        // SAFETY: raising a signal at this process.
+        unsafe { libc::raise(libc::SIGTERM) };
+        eprintln!("survived SIGTERM");
+    }
+
     /// Marks the action's run in the child's scratch directory.
     fn mark() {
         if let Some(dir) = std::env::var_os(CHILD) {

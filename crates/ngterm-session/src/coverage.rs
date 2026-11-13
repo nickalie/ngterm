@@ -9,7 +9,7 @@
 //!   `ngterm-session` installs (an attach client on an ssh login's pty ends by the hangup when the viewer goes);
 //! - a kill (`SIGKILL`, `TerminateProcess` by another process): nothing can; the e2e runners count those they cause.
 //!
-//! `ngterm_app::coverage` re-exports these for the programs above the session crate.
+//! `ngterm_app::coverage` re-exports [`write_profile`] for the programs above the session crate.
 
 /// Writes this process's coverage profile now (to `LLVM_PROFILE_FILE`, merged into what is there under `%m`) and
 /// zeroes the counters, so a process that goes on and later exits normally does not count the same run twice. Nothing
@@ -33,12 +33,14 @@ pub fn write_profile() {
 /// In an instrumented build on Unix: a termination signal (`SIGHUP`, `SIGINT`, `SIGTERM`) that would end the process
 /// by its default action writes the profile first ([`write_profile`]), then ends it by that default action, so the
 /// process's status and its parent's view stay what they were. A signal the process started with ignored stays
-/// ignored, and nothing else changes: a program that handles a signal itself installs its handler after this one,
-/// replacing it. Nothing in a build without coverage, or on Windows.
+/// ignored. Only for a program that handles none of these signals itself: a signal-hook registration of its own runs
+/// beside this one, which then ends the process before that program's handling is done (only a raw `sigaction`
+/// replaces it). Nothing in a build without coverage, or on Windows.
 pub fn write_profile_on_termination() {
     #[cfg(all(coverage, unix))]
     if let Err(error) = before_termination(write_profile) {
-        tracing::warn!(%error, "coverage: the profile is not written before a termination signal");
+        // the session binary installs no tracing subscriber
+        eprintln!("ngterm-session: coverage: the profile is not written before a termination signal: {error}");
     }
 }
 
@@ -51,23 +53,30 @@ const TERMINATION: [i32; 3] = [libc::SIGHUP, libc::SIGINT, libc::SIGTERM];
 ///
 /// # Errors
 ///
-/// The handlers or their thread could not be set up.
+/// The handlers or their thread could not be set up. A thread that could not start leaves the signals as they were.
 #[cfg(all(unix, any(coverage, test)))]
 fn before_termination(action: fn()) -> std::io::Result<()> {
+    use signal_hook::iterator::Signals;
+
     let handled: Vec<i32> = TERMINATION.into_iter().filter(|signal| !ignored(*signal)).collect();
     if handled.is_empty() {
         return Ok(());
     }
-    let mut signals = signal_hook::iterator::Signals::new(&handled)?;
+    // the thread first: signal-hook keeps its handler once registered, and with no action left ignores the signal
+    let (to_thread, from_caller) = std::sync::mpsc::channel::<Signals>();
     std::thread::Builder::new()
         .name("coverage-termination".to_owned())
         .spawn(move || {
+            let Ok(mut signals) = from_caller.recv() else {
+                return;
+            };
             if let Some(signal) = signals.forever().next() {
                 action();
                 // resets the signal to its default action and raises it again: the process ends as it would have
                 let _ = signal_hook::low_level::emulate_default_handler(signal);
             }
         })?;
+    let _ = to_thread.send(Signals::new(&handled)?);
     Ok(())
 }
 

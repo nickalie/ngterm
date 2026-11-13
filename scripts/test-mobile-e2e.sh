@@ -31,8 +31,9 @@
 # Usage: scripts/test-mobile-e2e.sh [--profile debug|release] [--coverage DIR]   (default: debug)
 #   MOBILE_E2E_WORK_ROOT overrides where the scratch directory is made (default: cargo's target dir); keep it short,
 #   since the private control socket lives under it.
-# Exit 0: passed (or skipped); 1: a test failed (with --coverage, its report is still written); 2 with --coverage: no
-# report could be made (no profile, a stage that is not the instrumented build) or the instrumented build failed.
+# Exit 0: passed (or skipped); 1: a test failed (with --coverage, its report is still written) or bad arguments; 2 with
+# --coverage: no report could be made (no profile, a stage that is not the instrumented build) or the instrumented build
+# failed; any other: a plain run's build or stage failed, with that command's status.
 set -euo pipefail
 
 # shellcheck source=lib/native.sh
@@ -132,6 +133,8 @@ reap() {
   local private=(env -i "NGTERM_STATE_DIR=$WORK/s" "HOME=$WORK/home" "PATH=$WORK/stage/bin:/usr/bin:/bin"
     "USER=$user" "LOGNAME=$user" LANG=C.UTF-8)
   local session="$WORK/stage/bin/ngterm-session" pid names
+  # an instrumented session client's profile goes to the pool, not to a default.profraw in the checkout
+  [[ -z "$PROFILES" ]] || private+=("LLVM_PROFILE_FILE=$PROFILES/headless-%4m.profraw")
   if [[ -s "$WORK/live-dir" && -x "$session" ]]; then
     private+=("NGTERM_LIVE_DIR=$(<"$WORK/live-dir")")
     names="$("${private[@]}" "$session" list --short 2>/dev/null || true)"
@@ -182,7 +185,7 @@ run_tests() {
 }
 
 if [[ -z "$COVERAGE" ]]; then
-  run_tests -p ngterm-mobile --test headless_e2e -- --ignored --nocapture
+  run_tests -p ngterm-mobile --test headless_e2e -- --ignored --nocapture || exit 1
   if [[ -e "$WORK/skipped" ]]; then
     echo "→ mobile e2e skipped: no sshd on this machine" >&2
   else
@@ -207,7 +210,7 @@ for test in crates/ngterm-headless/tests/*.rs; do
   name="$(basename "$test" .rs)"
   headless_tests+=(--test "$name")
 done
-run_tests -p ngterm-headless "${headless_tests[@]}" || status=1
+run_tests -p ngterm-headless --no-fail-fast "${headless_tests[@]}" || status=1
 run_tests -p ngterm-session --test e2e || status=1
 
 if ! PYTHONPATH="$NATIVE_ROOT/conformance" instrumented "$python" -m agterm_conformance.code_coverage e2e \

@@ -33,8 +33,21 @@ if args[:2] == ["llvm-cov", "show-env"]:
 elif args[0] == "build" and "RUSTC_WRAPPER" in os.environ:
     sys.exit(int(os.environ.get("BUILD_STATUS", "0")))
 elif args[0] == "test":
+    if "LIVE_DIR" in os.environ:
+        with open(os.path.join(os.environ["MOBILE_E2E_WORK"], "live-dir"), "w") as live:
+            live.write(os.environ["LIVE_DIR"])
     failing = os.environ.get("FAILING_TEST")
-    sys.exit(1 if failing and failing in args else 0)
+    sys.exit(101 if failing and failing in args else 0)
+'''
+
+# The staged ngterm-session, as the exit trap's reap runs it (env -i: the log's path is written in): logs its call and
+# its profile path, and lists one session.
+SESSION = '''
+import json, os, sys
+with open({log!r}, "a") as log:
+    log.write(json.dumps(["ngterm-session", sys.argv[1:], {{"LLVM_PROFILE_FILE": os.environ.get("LLVM_PROFILE_FILE")}}]) + "\\n")
+if sys.argv[1:] == ["list", "--short"]:
+    print("left")
 '''
 
 PYTHON = '''
@@ -51,6 +64,7 @@ sys.exit(int(os.environ.get("REPORT_STATUS", "0")))
 # scripts/stage.sh: the destination's bin/, and the call logged with the build it stages from
 STAGE = '''#!/usr/bin/env bash
 mkdir -p "$1/bin"
+[[ -z "${STAGE_SESSION:-}" ]] || cp "$STAGE_SESSION" "$1/bin/ngterm-session"
 printf '["stage", ["%s", "%s", "%s"], {"CARGO_TARGET_DIR": "%s"}]\\n' "$1" "$2" "$3" "$CARGO_TARGET_DIR" >>"$TOOL_LOG"
 '''
 
@@ -161,7 +175,8 @@ def test_a_coverage_run_measures_the_instrumented_stage_under_every_headless_e2e
     tests = checkout.cargo("test")
     assert [args for args, _ in tests] == [
         ["test", "-p", "ngterm-mobile", "--test", "headless_e2e", "--", "--ignored", "--nocapture"],
-        ["test", "-p", "ngterm-headless", "--test", "agent_hooks", "--test", "lifecycle"],
+        # every target runs even when an earlier one fails
+        ["test", "-p", "ngterm-headless", "--no-fail-fast", "--test", "agent_hooks", "--test", "lifecycle"],
         ["test", "-p", "ngterm-session", "--test", "e2e"],
     ]
     for _, env in tests:
@@ -193,7 +208,27 @@ def test_a_release_coverage_run_builds_tests_and_reads_the_release_build(checkou
     assert report[report.index("--release-dir") + 1] == str(built)
 
 
-@pytest.mark.parametrize("failing", ["headless_e2e", "lifecycle", "e2e"])
+def test_a_failed_plain_run_is_exit_one(checkout: Checkout) -> None:
+    result = checkout.run(FAILING_TEST="headless_e2e")
+    assert result.returncode == 1
+    assert "mobile e2e failed; its scratch directory is kept" in result.stderr
+
+
+@pytest.mark.parametrize("coverage", [False, True])
+def test_the_exit_trap_reaps_the_private_sessions_into_the_pool_under_coverage(checkout: Checkout, coverage: bool) -> None:
+    session = checkout.root / "session-stand-in"
+    session.write_text(f"#!{sys.executable}\n" + SESSION.format(log=str(checkout.log)))
+    session.chmod(0o755)
+    args = ("--coverage", "report") if coverage else ()
+    result = checkout.run(*args, STAGE_SESSION=str(session), LIVE_DIR="the namespace")
+    assert result.returncode == 0, result.stderr
+    reaped = [(args, env) for tool, args, env in checkout.calls() if tool == "ngterm-session"]
+    assert [args for args, _ in reaped] == [["list", "--short"], ["kill", "--force", "left"]]
+    profile = f"{checkout.cov}/headless-e2e/headless-%4m.profraw" if coverage else None
+    assert {env["LLVM_PROFILE_FILE"] for _, env in reaped} == {profile}
+
+
+@pytest.mark.parametrize("failing", ["headless_e2e", "agent_hooks", "lifecycle", "e2e"])
 def test_a_failed_test_still_runs_the_rest_and_reports(checkout: Checkout, failing: str) -> None:
     result = checkout.run("--coverage", "report", FAILING_TEST=failing)
     assert result.returncode == 1

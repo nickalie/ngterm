@@ -2,4 +2,4 @@
 //! `exit_now`, `ngterm-headless`'s relaunch by `exec`): `ngterm_session::coverage`'s, for the programs above the session
 //! crate.
 
-pub use ngterm_session::coverage::{write_profile, write_profile_on_termination};
+pub use ngterm_session::coverage::write_profile;
