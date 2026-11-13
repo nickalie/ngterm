@@ -1174,8 +1174,9 @@ fn a_write_queued_after_owner_overflow_is_delegated_in_the_resync_epoch() -> Tes
         }
     ));
     go(gate.path(), 0)?;
-    owner.expect(&pane, "PROBE-DONE");
-    assert_eq!(replies(&server_text(&pane)), [b"\x1b[0n".to_vec()]);
+    // the owner's 32-byte queue can overflow again on the probe's last lines, and this viewer never resyncs
+    let text = server_expects(&pane, "PROBE-DONE");
+    assert_eq!(replies(&text), [b"\x1b[0n".to_vec()]);
     Ok(())
 }
 
