@@ -1,11 +1,15 @@
 """Target resolution and the request envelope."""
 
+import json
+
 import pytest
+from agterm_conformance import transport
 from agterm_conformance.match import (
     active_session_id,
     active_workspace_id,
     assert_error,
     assert_ok,
+    find_session,
     window_ids,
     workspace_ids,
 )
@@ -107,3 +111,18 @@ def test_undecodable_request_is_refused(ctl, line):
     assert response.ok is False, response.raw
     assert isinstance(response.error, str) and response.error.startswith("invalid request: "), response.raw
     assert_ok(ctl.request("version"))
+
+
+@pytest.mark.covers("session.rename", "field:tree.session.name")
+def test_a_request_runs_when_its_client_hangs_up_before_the_answer(ctl):
+    # Upstream's `readLine` takes a line the client ends by closing the connection, and its `SO_NOSIGPIPE` turns the
+    # answer's write to the gone client into a plain write error: the request still runs and the app keeps serving.
+    # Closing before the newline makes the hang-up come first every time: the app reads the line only at EOF.
+    sid = assert_ok(ctl.request("session.new"))["id"]
+    client = ctl.instance.client()
+    line = json.dumps({"cmd": "session.rename", "target": sid, "args": {"name": "hung up"}}).encode()
+    with transport.connect(client.socket_path, client.timeout) as sock:
+        sock.sendall(line)
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get("name") == "hung up")
+    assert_ok(ctl.request("version"))
+    assert_ok(ctl.request("session.close", sid))

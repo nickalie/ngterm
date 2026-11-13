@@ -20,6 +20,7 @@ import itertools
 import json
 import os
 import shlex
+import time
 
 import pytest
 from agterm_conformance.client import NoResponse
@@ -608,6 +609,45 @@ def test_present_mirrors_a_live_session(live):
         _presenters(live, sid, {"mirrors": 1})
         assert_ok(live.request("session.status", sid, status="active"))
         assert wait_frame(stream.read, "status", stream.send)["status"]["status"] == "active"
+    _presenters(live, sid, None)
+    assert_ok(live.request("session.close", sid))
+
+
+def _until_ended(stream):
+    """Reads what the origin wrote to `stream` before it closed it, until the close: the frames' kinds."""
+    kinds = []
+    while True:
+        try:
+            kinds.append(stream.read().get("kind"))
+        except NoResponse:
+            return kinds
+
+
+@LIVE_IN_ANY_SHELL
+@pytest.mark.covers(
+    "live.present", "session.status", "field:tree.session.presenters", streams=("live.present",)
+)
+def test_a_viewer_that_stops_reading_is_dropped(live):
+    """A viewer whose frames back up is dropped, never waited on: upstream's `ControlStreamOwner` refuses a frame once
+    256 wait for the writer, and closes the stream once one write blocks past its timeout. Status changes come faster
+    than either bound, so the drop is certain; the session and its other viewers go on."""
+    sid = _live_session(live)
+    stalled, _ = _subscribed(live, sid, "mirror")
+    with stalled:
+        _presenters(live, sid, {"mirrors": 1})
+        statuses = itertools.cycle(["active", "blocked"])
+        deadline = time.monotonic() + 60
+        while find_session(live.tree(), sid).get("presenters") is not None:
+            assert time.monotonic() < deadline, "a viewer that reads nothing was never dropped"
+            for _ in range(64):
+                assert_ok(live.request("session.status", sid, status=next(statuses)))
+        # what was written before the drop is still there to read, then the stream ends
+        assert "status" in _until_ended(stalled)
+    reading, _ = _subscribed(live, sid, "mirror")
+    with reading:
+        _presenters(live, sid, {"mirrors": 1})
+        assert_ok(live.request("session.status", sid, status="completed"))
+        assert wait_frame(reading.read, "status", reading.send)["status"]["status"] == "completed"
     _presenters(live, sid, None)
     assert_ok(live.request("session.close", sid))
 
@@ -1318,6 +1358,33 @@ def test_losing_the_page_helper_takes_only_the_page_off_its_presenter(live, adap
             assert_ok(live.request("session.overlay.close", sid))
         else:
             # upstream ends it
+            live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
+        assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "dismissed"}
+        _presenters(live, sid, {"mirrors": 0, "presenter": True})
+
+
+@LIVE
+@pytest.mark.covers("session.overlay.page.serve", streams=("session.overlay.page.serve",))
+def test_a_page_helper_that_stops_reading_loses_its_channel(live, adapter, tmp_path):
+    """A helper that asks for a file and reads none of it: the origin's file worker waits for room (upstream's
+    `sendWaiting`) until the blocked write times out (5 s) and the channel closes, which ends the wait. The page then
+    goes off its presenter as when the helper hangs up."""
+    with _page_presenter(live) as (sid, presenter, _):
+        page_id, page, _, helper = _claimed_page(live, sid, presenter, tmp_path)
+        with helper:
+            # far more than the socket, the channel's queue (8 lines) and one more line hold
+            huge = page.parent / "huge.bin"
+            huge.write_bytes(bytes(range(256)) * (16 * 1024))
+            helper.send({"kind": "resource", "id": 1, "path": str(huge)})
+            closed = wait_frame(presenter.read, "page.close", presenter.send, timeout=30)
+            assert closed["page"] == {"page": page_id}
+            kinds = _until_ended(helper)
+            assert kinds and set(kinds) <= {"head", "chunk"}, kinds
+        if adapter.has("pages-survive"):
+            parked = [{"pageID": page_id, "parked": True}]
+            live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == parked)
+            assert_ok(live.request("session.overlay.close", sid))
+        else:
             live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
         assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "dismissed"}
         _presenters(live, sid, {"mirrors": 0, "presenter": True})
