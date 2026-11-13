@@ -96,6 +96,40 @@ fn the_duplicate_takes_its_target_window_and_no_select() {
     assert_eq!(ids(&fixture), [source, copy, selected, other]);
 }
 
+/// A shell's copy starts where the shell last reported (OSC 7) on Windows, whose process directory does not follow an
+/// MSYS shell's `cd` (Git Bash), as a split and a plain duplicate do; elsewhere in its process's directory, as
+/// upstream reads it. Each pane reads its own report.
+#[test]
+fn a_shell_copy_starts_in_its_reported_directory_on_windows() {
+    let process = tempfile::tempdir().unwrap();
+    let left = tempfile::tempdir().unwrap();
+    let right = tempfile::tempdir().unwrap();
+    let [process, left, right] = [&process, &left, &right].map(|dir| dir.path().display().to_string());
+    let mut fixture = Fixture::new(0);
+    let source = fixture.sessions[0];
+    let table = idle_shell(&process);
+    table.insert(stat(200, 1, 200, 200), Some(&["-sh"]));
+    table.set_working_directory(200, &process);
+    fixture.core.set_process_table(Box::new(table), Some("sh".to_owned()));
+    let store = fixture.store_mut().unwrap();
+    store.set_split_visibility(source, true, None);
+    let session = store.session_mut(source).unwrap();
+    session.report_pwd(false, &left);
+    session.report_pwd(true, &right);
+    mount(&mut fixture, source, StatusPane::Left, 100);
+    mount(&mut fixture, source, StatusPane::Right, 200);
+
+    let copy = answered_id(&duplicate(&mut fixture, source, Args::default())).expect("a copy");
+    let session = fixture.store().session(copy).unwrap();
+    let (left, right) = if cfg!(windows) {
+        (left, right)
+    } else {
+        (process.clone(), process)
+    };
+    assert_eq!(session.initial_cwd(), left);
+    assert_eq!(session.initial_split_cwd.as_deref(), Some(right.as_str()));
+}
+
 /// Upstream's `testDuplicateAsCompanionRefusesAPageOrUnrealizedSourceAndCreatesNothing`.
 #[test]
 fn a_page_or_unrealized_source_is_refused_and_nothing_is_created() {

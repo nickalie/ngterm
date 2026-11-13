@@ -584,6 +584,16 @@ impl Session {
         }
     }
 
+    /// The latest working directory a pane role reported (OSC 7): the split pane's for [`StatusPane::Right`], else
+    /// the primary's; `None` before its first report, where [`Session::cwd_for`] falls back to where it started.
+    #[must_use]
+    pub fn reported_cwd_for(&self, pane: StatusPane) -> Option<&str> {
+        match pane {
+            StatusPane::Right => self.split_cwd.as_deref(),
+            StatusPane::Left | StatusPane::Scratch => self.current_cwd.as_deref(),
+        }
+    }
+
     /// Records a reported cwd for the primary pane, sanitized as every stored path is.
     pub fn set_current_cwd(&mut self, cwd: &str) {
         self.current_cwd = Some(sanitized(cwd));

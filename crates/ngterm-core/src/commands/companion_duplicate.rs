@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use super::{Outcome, args_of, session_store, with_id};
 use crate::Core;
+use crate::command_restore::PaneForeground;
 use crate::duplicate_replay::{Lookup, Planner, Reason, Refusal, canonical_executable};
 use crate::error::ControlError;
 use crate::live::daemon_name;
@@ -124,7 +125,8 @@ impl Core {
             .get()
             .filter(|surface| surface.is_realized())
             .ok_or_else(|| format!("{name} pane is not realized; nothing was created"))?;
-        let observation = self.replay_observation(surface);
+        let mut observation = self.replay_observation(surface);
+        prefer_reported_shell_directory(&mut observation, session.reported_cwd_for(pane), REPORT_OVER_PROCESS);
         let denylist: Vec<String> = self.restore.denylist().iter().cloned().collect();
         let lookup = Lookup::host();
         let resolved_file = |path: &str| canonical_executable(path);
@@ -197,6 +199,30 @@ impl Core {
     }
 }
 
+/// Whether a shell's own directory report wins over its process's current directory: on Windows only, where the
+/// process's directory does not follow the shell's `cd` (an MSYS or Cygwin shell such as Git Bash keeps its own,
+/// Git's `bin\bash.exe` launcher and `wsl.exe` stand in front of the real shell, PowerShell's `Set-Location` leaves
+/// it), while every shell ngterm starts there reports its directory (OSC 7). Upstream reads the process's, which on
+/// macOS follows `cd`.
+const REPORT_OVER_PROCESS: bool = cfg!(windows);
+
+/// A shell holding the pane copies into `reported`, the pane's latest OSC 7 directory, when `report_wins` and it
+/// reported one, as a split and a plain duplicate of it start there; otherwise the observation keeps its process's
+/// directory. A program's directory is always its process's.
+fn prefer_reported_shell_directory(observation: &mut Observation, reported: Option<&str>, report_wins: bool) {
+    let shell = observation
+        .foreground
+        .as_ref()
+        .and_then(PaneForeground::shell_name)
+        .is_some();
+    if report_wins
+        && shell
+        && let Some(reported) = reported
+    {
+        observation.working_directory = Some(reported.to_owned());
+    }
+}
+
 /// `argv` as a copy's stored creation command: the line the `ordinary` dialect (`/bin/sh -c`'s, `cmd.exe`'s) reads,
 /// and only when `live_shell`, the shell new panes run in Live sessions now, can carry it too; `None` otherwise.
 pub(crate) fn creation_line(ordinary: ShellDialect, live_shell: Option<&str>, argv: &[String]) -> Option<String> {
@@ -204,4 +230,35 @@ pub(crate) fn creation_line(ordinary: ShellDialect, live_shell: Option<&str>, ar
         ShellDialect::of_shell(shell).line(argv)?;
     }
     ordinary.line(argv)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observation(foreground: PaneForeground) -> Observation {
+        Observation {
+            foreground: Some(foreground),
+            is_daemon_leader: false,
+            working_directory: Some("C:\\Users\\me".to_owned()),
+            executable_path: None,
+            search_path: None,
+        }
+    }
+
+    #[test]
+    fn only_a_shell_takes_its_report_and_only_where_the_report_wins() {
+        let shell = || observation(PaneForeground::ForegroundShell("bash".to_owned()));
+        let program = || observation(PaneForeground::Program(vec!["vim".to_owned()]));
+        let reported = Some("C:\\Users\\me\\work");
+        for (mut observation, reported, wins, expected) in [
+            (shell(), reported, true, "C:\\Users\\me\\work"),
+            (shell(), None, true, "C:\\Users\\me"),
+            (shell(), reported, false, "C:\\Users\\me"),
+            (program(), reported, true, "C:\\Users\\me"),
+        ] {
+            prefer_reported_shell_directory(&mut observation, reported, wins);
+            assert_eq!(observation.working_directory.as_deref(), Some(expected));
+        }
+    }
 }
