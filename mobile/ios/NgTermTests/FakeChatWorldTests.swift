@@ -32,6 +32,17 @@ internal struct FakeChatWorldTests {
         told().map(\.body)
     }
 
+    // the latest permission prompt told, by kind: what the agent tells after it may have come already
+    private func lastPrompt() throws -> (id: String, approval: ChatApproval) {
+        let prompts = told().compactMap { event -> (id: String, approval: ChatApproval)? in
+            guard case .approval(let approval) = event.body else {
+                return nil
+            }
+            return (event.id, approval)
+        }
+        return try #require(prompts.last, "no permission prompt in \(bodies())")
+    }
+
     @Test("the session world with its agent announces it, opens its chat on the catch-up, and answers on its pane")
     internal func seeded() throws {
         let graph = CoreChoice(arguments: [
@@ -67,11 +78,7 @@ internal struct FakeChatWorldTests {
     internal func question() async throws {
         let pane = agentPane()
         _ = try await pane.sendPrompt(text: "ask me")
-        let asked = try #require(told().last)
-        guard case .approval(let approval) = asked.body else {
-            Issue.record("no permission prompt: \(asked.body)")
-            return
-        }
+        let (askedId, approval) = try lastPrompt()
         #expect(approval.tool == "AskUserQuestion")
         #expect(approval.questions == FakeChatWorld.shells)
         let question = ChatQuestion(questions: FakeChatWorld.shells, status: .running, output: nil)
@@ -79,7 +86,7 @@ internal struct FakeChatWorldTests {
         let answered = told().suffix(3)
         let afterRow: [ChatBody] = [.assistant(text: "Going with fish."), .approvalDone(approval: approval)]
         #expect(Array(answered.map(\.body).dropFirst()) == afterRow)
-        #expect(answered.last?.id == asked.id)
+        #expect(answered.last?.id == askedId)
         guard case .question(let row) = answered.first?.body else {
             Issue.record("no question row")
             return
@@ -92,11 +99,7 @@ internal struct FakeChatWorldTests {
     internal func approval() async throws {
         let pane = agentPane()
         _ = try await pane.sendPrompt(text: "run the build")
-        let asked = try #require(told().last)
-        guard case .approval(let approval) = asked.body else {
-            Issue.record("no permission prompt: \(asked.body)")
-            return
-        }
+        let approval = try lastPrompt().approval
         #expect(approval.tool == "Bash")
         let before = told().count
         _ = try await pane.answerApproval(approval: approval, label: "No")
@@ -110,11 +113,11 @@ internal struct FakeChatWorldTests {
     internal func dropped() async throws {
         let pane = agentPane()
         _ = try await pane.sendPrompt(text: "ask me, then drop")
-        let asked = try #require(told().last)
+        let askedId = try lastPrompt().id
         try await AppWindow.until { told().last?.body == .live }
         #expect(core.emitted.contains(.chatState(pane: FakeChatWorld.pane, state: .reconnecting)))
         let ended = told().suffix(2).first
-        #expect(ended?.id == asked.id)
+        #expect(ended?.id == askedId)
         guard case .approvalDone = ended?.body else {
             Issue.record("the prompt didn't end: \(String(describing: ended?.body))")
             return
