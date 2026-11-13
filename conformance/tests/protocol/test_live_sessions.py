@@ -657,15 +657,20 @@ def _a_new_viewer_gets_frames(live, sid):
 @pytest.mark.covers("live.present", "notify", "field:tree.session.presenters", streams=("live.present",))
 def test_a_viewer_that_stops_reading_is_dropped(live):
     """A viewer that reads nothing is dropped, never waited on: upstream's `ControlStreamOwner` closes the stream once
-    one write blocks past its timeout (5 s). A few big frames fill the stream's buffer and leave the backlog far under
-    its 256-frame bound, so the write timeout is what drops it (the bound has its own test below)."""
+    one write blocks past its timeout (5 s). Big frames fill the stream's buffer, however large the host makes it, and
+    leave the backlog far under its 256-frame bound, so the write timeout is what drops it (the bound has its own test
+    below)."""
     sid = _live_session(live)
     stalled, gen = _subscribed(live, sid, "mirror")
     with stalled:
         _presenters(live, sid, {"mirrors": 1})
         for _ in range(BIG_NOTIFIES):
             assert_ok(live.request("notify", sid, body=BIG_NOTIFY_BODY))
-        _wait_dropped(live, sid, stalled, gen, timeout=60, between=lambda: time.sleep(0.5))
+        def another():
+            time.sleep(0.5)
+            assert_ok(live.request("notify", sid, body=BIG_NOTIFY_BODY))
+
+        _wait_dropped(live, sid, stalled, gen, timeout=60, between=another)
         # the stream ends; a socket keeps what the viewer had not read before the end, a Windows pipe drops it
         _until_ended(stalled)
     _a_new_viewer_gets_frames(live, sid)
@@ -700,7 +705,9 @@ def test_a_viewer_that_falls_behind_is_dropped_at_its_backlog(live):
     """A viewer that reads, but slower than its frames come, is dropped once 256 frames wait for the writer (upstream's
     `ControlStreamOwner` refuses a frame past that). It takes a little of the stream every half second, so where a
     reader's room lets a blocked write go on (a Windows pipe, macOS) no write waits as long as its 5 s timeout; status
-    changes come as fast as the origin answers them."""
+    changes come as fast as the origin answers them. Linux wakes a blocked writer only once three quarters of its
+    buffer are free, which these reads never free: there the bound comes first only while the flood queues 256 frames
+    within the timeout, and a drop looks the same either way, so the Windows run is what pins the bound end to end."""
     sid = _live_session(live)
     slow, gen = _subscribed(live, sid, "mirror")
     with slow:
