@@ -24,8 +24,9 @@
 //!   `NGTERM_*` ones stay); the terminal
 //!   identity ([`Host`]); `GHOSTTY_SHELL_FEATURES`; the shell integration of a zsh, bash or fish command line
 //!   ([`ngterm_core::live::shell_integration::setup`], as `shell-integration` asks); the config's `env`; the launch's
-//!   own variables; `PWD` for a working directory. On Windows, whose names ignore case, a later step's key replaces
-//!   every spelling of it (`PATH` over `Path`).
+//!   own variables; `PWD` for a working directory, removed instead on Windows (an MSYS bash adopts its Windows
+//!   spelling). On Windows, whose names ignore case, a later step's key replaces every spelling of it (`PATH` over
+//!   `Path`).
 //! - **Config** (`Surface.zig` and `termio/Exec.zig`, the embedder's options winning as `apprt/embedded.zig` lets
 //!   them): the launch's working directory, else (none, or not a directory) `working-directory`'s; the launch's initial input, else `input`'s;
 //!   `wait-after-command` for every launch; `abnormal-command-exit-runtime`; `shell-integration`'s forced shell for the
@@ -225,7 +226,11 @@ impl Host {
             .clone()
             .filter(|dir| dir.is_dir())
             .or_else(|| self.default_directory(env).filter(|dir| dir.is_dir()));
-        if let Some(cwd) = &cwd {
+        // Ghostty's `PWD` for the shell to adopt; not on Windows, where only an MSYS or Cygwin shell (Git Bash) reads
+        // it and adopts the Windows spelling as is (`C:\Users/me` at its prompt), and none is left from the app's own
+        if cfg!(windows) {
+            vars.remove("PWD");
+        } else if let Some(cwd) = &cwd {
             vars.set("PWD", cwd.to_string_lossy().into_owned());
         }
         let (mut command, argv) = match runs {
@@ -1493,7 +1498,12 @@ mod tests {
         };
         let prepared = host(None).prepare(&launch, &MapEnv::new());
         assert_eq!(prepared.command.cwd.as_deref(), Some(dir.path()));
-        assert_eq!(set(&prepared)["PWD"], dir.path().to_string_lossy());
+        // Ghostty's `PWD`, which on Windows an MSYS bash would adopt in its Windows spelling, so none reaches it there
+        if cfg!(windows) {
+            assert!(!set(&prepared).contains_key("PWD") && removed(&prepared).contains(&"PWD".to_owned()));
+        } else {
+            assert_eq!(set(&prepared)["PWD"], dir.path().to_string_lossy());
+        }
         // the login shell, run as a command line too (on Windows run directly, as Ghostty runs it there)
         if cfg!(windows) {
             assert_eq!(prepared.command.program, OsString::from("/bin/zsh"));
