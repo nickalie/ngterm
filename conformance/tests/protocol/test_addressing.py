@@ -127,19 +127,24 @@ def test_a_request_runs_when_its_client_hangs_up_before_the_answer(ctl):
 
 
 @pytest.mark.covers("session.rename", "field:tree.session.name")
-def test_a_burst_of_clients_that_hang_up_all_have_their_requests_run(ctl):
-    # Fire-and-forget clients at once: some connect while the app is between two accepts and close before it takes them.
-    sids = [assert_ok(ctl.request("session.new"))["id"] for _ in range(12)]
-    start = threading.Barrier(len(sids))
+def test_clients_that_hang_up_back_to_back_all_have_their_requests_run(ctl):
+    # Each client sends its next request as soon as it hung up on the last one, so some connect while the app is
+    # between two accepts and close before it takes them; a few such clients run at once.
+    clients, each = 4, 8
+    sids = [assert_ok(ctl.request("session.new"))["id"] for _ in range(clients * each)]
+    start = threading.Barrier(clients)
 
-    def hang_up(sid):
+    def hang_up_in_turn(mine):
         client = ctl.instance.client()
         start.wait()
-        client.send_and_hang_up({"cmd": "session.rename", "target": sid, "args": {"name": f"burst {sid[:8]}"}})
+        for sid in mine:
+            client.send_and_hang_up({"cmd": "session.rename", "target": sid, "args": {"name": f"run {sid[:8]}"}})
 
-    with ThreadPoolExecutor(len(sids)) as pool:
-        list(pool.map(lambda sid: copy_context().run(hang_up, sid), sids))
-    ctl.wait_tree(lambda tree: all(find_session(tree, sid).get("name") == f"burst {sid[:8]}" for sid in sids))
+    with ThreadPoolExecutor(clients) as pool:
+        runs = [pool.submit(copy_context().run, hang_up_in_turn, sids[i::clients]) for i in range(clients)]
+        for run in runs:
+            run.result()
+    ctl.wait_tree(lambda tree: all(find_session(tree, sid).get("name") == f"run {sid[:8]}" for sid in sids))
     assert_ok(ctl.request("version"))
     for sid in sids:
         assert_ok(ctl.request("session.close", sid))
