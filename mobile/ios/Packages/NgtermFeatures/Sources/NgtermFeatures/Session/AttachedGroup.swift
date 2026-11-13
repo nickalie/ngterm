@@ -1,4 +1,4 @@
-/// A machine's attached sessions, in its listing's order (mobile/android's `AttachedGroup`).
+/// A machine's attached sessions, in its listing's order by family (mobile/android's `AttachedGroup`).
 public struct AttachedGroup: Hashable, Sendable {
     /// The machine's id in the app's store.
     public let machineId: String

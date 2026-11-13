@@ -60,7 +60,7 @@ public final class MachinesModel {
         self.graph = graph
     }
 
-    /// The attached sessions of the machine `machineId`, in its listing's order.
+    /// The attached sessions of the machine `machineId`, in its listing's order by family (``AttachedSessions``).
     public func attached(of machineId: String) -> [AttachedSession] {
         graph.attachedSessions.groups.first { $0.machineId == machineId }?.sessions ?? []
     }
