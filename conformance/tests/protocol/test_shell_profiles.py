@@ -18,6 +18,7 @@ from agterm_conformance.shell_profiles import (
     BETA,
     NO_PROFILE,
     SHELL_PROFILES,
+    git_bash,
     profile as _profile,
     settings as _settings,
     shell_of,
@@ -205,3 +206,41 @@ def test_a_live_pane_runs_its_profiles_shell_and_a_profile_live_cannot_run_start
     fresh = _new(ctl)
     assert shell_of(ctl, fresh) == ALPHA
     assert find_session(ctl.tree(), fresh).get(backed_key) is not True
+
+
+def _directory_of(ctl, sid, **pane):
+    """The directory `sid`'s (its `pane=` one's) Git Bash is in, as Windows names it (`cygpath -m`: `C:/...`)."""
+    marker = f"QD{next(_MARKERS):04d}X"
+    line = f"printf '%s%s|%s|\\n' {marker[:3]} {marker[3:]} \"$(cygpath -m \"$PWD\")\"\n"
+    assert_ok(ctl.request("session.type", sid, text=line, **pane))
+    return ctl.wait_text(sid, rf"(?m)^{marker}\|([^|\n]*)\|\s*$", **pane).group(1)
+
+
+@SHELL_PROFILES
+@pytest.mark.requires("windows-shells", reason="Git Bash is Windows' own: elsewhere bash's paths are the OS's")
+@pytest.mark.requires("live-any-shell", reason="Live sessions in Git Bash are the Rust build's own")
+@pytest.mark.covers("field:tree.session.cwd", "session.split", "session.companion.duplicate")
+def test_a_live_git_bash_pane_reports_its_directory_as_windows_names_it(launch):
+    # the detected Git Bash profile's program and arguments; its shim reports `cygpath -m`'s form, never MSYS's
+    # `/c/...`, which no Windows program opens
+    bash = _profile("gitbash", executable=git_bash(), args=["--login", "-i"])
+    ctl = launch(settings=_settings(bash, restoreMode="live"))
+    backed_key = ctl.vocabulary.backed_key
+    sid = _new(ctl)
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get(backed_key) is True)
+    assert shell_of(ctl, sid) == "gitbash"
+
+    # a directory with a space, entered the way a Git Bash user types it
+    directory = ctl.instance.root / "git bash cwd"
+    directory.mkdir()
+    assert_ok(ctl.request("session.type", sid, text=f"cd '{directory.as_posix()}'\n"))
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get("cwd") == str(directory))
+
+    # a split and a duplicate open in it: the Windows form is one Git Bash (and every Windows program) can enter
+    _split(ctl, sid)
+    assert shell_of(ctl, sid, pane="right") == "gitbash"
+    assert _directory_of(ctl, sid, pane="right") == directory.as_posix()
+    copy = assert_ok(ctl.request("session.companion.duplicate", sid))["id"]
+    ctl.wait_mounted(copy, "left")
+    assert find_session(ctl.tree(), copy)["cwd"] == str(directory)
+    assert _directory_of(ctl, copy, pane="left") == directory.as_posix()

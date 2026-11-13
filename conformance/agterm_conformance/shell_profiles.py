@@ -7,6 +7,7 @@ in the value of `QA_SHELL` they set, so a line typed into a pane tells which pro
 from __future__ import annotations
 
 import itertools
+import os
 from typing import Any
 
 import pytest
@@ -25,6 +26,15 @@ NO_PROFILE = "none"
 SHELL_START = 60.0
 
 _markers = itertools.count(1)
+
+
+def git_bash() -> str:
+    """Git for Windows' `bin\\bash.exe`, beside the panes' `sh.exe` (`posix_shell`): the Git Bash Windows detects,
+    present wherever the suite runs on Windows (it needs Git for its `sh`); refused when missing."""
+    bash = os.path.join(os.path.dirname(posix_shell()), "bash.exe")
+    if not os.path.isfile(bash):
+        raise FileNotFoundError(f"no Git Bash beside the panes' sh: {bash}")
+    return bash
 
 
 def profile(name: str, executable: str | None = None, **extra: Any) -> dict[str, Any]:
