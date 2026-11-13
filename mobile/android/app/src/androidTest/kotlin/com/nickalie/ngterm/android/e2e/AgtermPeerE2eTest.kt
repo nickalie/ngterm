@@ -9,7 +9,6 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
-import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -47,8 +46,9 @@ import java.io.File
  * its sessions screen and the attached session's bar say "agterm", the last two showing what agterm lacks on a tap or a
  * long press. Every menu of the agterm session (the machine's list, the attached list, the bar) has Chat view off with
  * "agterm has no chat view"; the session attaches through agterm's bundled zmx (its shell's prompt reaches the
- * terminal) with no Show chat switch, and ends through agterm's CLI. The ngterm machine beside it shows no badge and
- * keeps Chat view in its session's menus.
+ * terminal) and ends through agterm's CLI. The ngterm machine beside it shows no badge and keeps Chat view in its
+ * session's menus. The stand-in's pane runs no agent, so the missing Show chat switch of an agterm agent pane is
+ * `ChatModeTest`'s (its agterm case), not this test's.
  *
  * The agterm machine is the conformance suite's stand-in for agterm v0.41.1
  * (`conformance/agterm_conformance/fake_agterm.py`: its `agtermctl` and its `zmx`, answering as upstream's sources and
@@ -152,25 +152,15 @@ class AgtermPeerE2eTest {
         Log.i(TAG, "terminal:\n${terminalText()}")
         assertTrue("agterm's shell never showed in the pane; it shows:\n${terminalText()}", prompted)
 
-        // the pane stays a terminal: no Show chat switch; the bar carries the badge with its note, and its menu (and,
-        // on a wide screen, the attached list's beside it) has no chat view
-        assertEquals(
-            "an agterm pane offers Show chat",
-            0,
-            nodes(hasContentDescription(text(R.string.session_show_chat))),
-        )
+        // the bar carries the badge with its note, and its menu has no chat view
         showsTheNoteOnTapAndLongPress("agterm session's bar", heading = SESSION)
         assertEveryMenuHasNoChatView(SESSION)
         screenshot("attached")
 
-        // the attached list holds both: the agterm session's menu has no chat view, the ngterm one's keeps it (a wide
-        // screen's list beside the open session has no menus: there each session's own bar is its menu)
+        // the attached list holds both: the agterm session's menu has no chat view, the ngterm one's keeps it
         toAttachedList()
-        awaitText(NGTERM_SESSION)
         screenshot("attached-list")
-        openWhereItHasNoMenu(NGTERM_SESSION)
         assertEveryMenuOffersChatView(NGTERM_SESSION)
-        openWhereItHasNoMenu(SESSION)
         assertEveryMenuHasNoChatView(SESSION)
 
         // End session goes to agterm's CLI, and the session leaves every list
@@ -283,19 +273,21 @@ class AgtermPeerE2eTest {
         }
     }
 
-    // a phone's session bar has Back, to the attached list; a wide screen keeps the list beside the session
+    /**
+     * Closes the open session to the attached list, in every layout: a phone's session bar has Back; a wider screen's
+     * has none, and its rail's or sidebar's sessions are no list with menus, so system Back closes it there (a first
+     * Back may only put the keyboard away).
+     */
     private fun toAttachedList() {
         val back = hasContentDescription(text(R.string.action_back))
         if (nodes(back) > 0) compose.onAllNodes(back)[0].performClick()
-        compose.waitUntil(CONNECT_WAIT_MS) { nodes(terminal()) == 0 || nodes(hasText(NGTERM_SESSION)) > 0 }
-        if (nodes(hasText(NGTERM_SESSION)) == 0) compose.onNodeWithText(text(R.string.nav_sessions)).performClick()
-    }
-
-    // [session] opened from the attached list when no menu of it is on screen, so its bar's menu is
-    private fun openWhereItHasNoMenu(session: String) {
-        if (nodes(more(session)) > 0) return
-        compose.onAllNodes(hasText(session) and hasClickAction())[0].performClick()
-        compose.waitUntil(CONNECT_WAIT_MS) { nodes(more(session)) > 0 }
+        repeat(SYSTEM_BACKS) {
+            if (nodes(terminal()) > 0) {
+                device.pressBack()
+                runCatching { compose.waitUntil(NOTE_WAIT_MS) { nodes(terminal()) == 0 } }
+            }
+        }
+        compose.waitUntil(CONNECT_WAIT_MS) { nodes(terminal()) == 0 && nodes(more(NGTERM_SESSION)) > 0 }
     }
 
     private fun toMachines() {
@@ -375,5 +367,6 @@ class AgtermPeerE2eTest {
         const val CONNECT_WAIT_MS = 60_000L
         const val NOTE_WAIT_MS = 5_000L
         const val ASK_WAIT_MS = 5_000L
+        const val SYSTEM_BACKS = 2
     }
 }
