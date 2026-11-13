@@ -1,11 +1,13 @@
 import XCTest
 
-/// Duplicate session on the fake core's `split`: from a session row's context menu and from the session view's More,
-/// the copy (`session 1`, whose pane another device leads as it attaches) opens at once in this device's control, its
-/// pane's screen showing with no Take control cover; a Duplicate that fails says why and opens nothing. While one runs
-/// (the fake world holds it a while, when asked), its source says "Duplicating", and New session and every other
-/// Duplicate take no tap. In an iPad's session window the copy opens in a window of its own. An agterm Mac's session
-/// duplicates as an ngterm machine's does.
+/// Duplicate session, from a session's row and from its session view.
+///
+/// On the fake core's `split`, from a session row's context menu and from the session view's More, the copy
+/// (`session 1`, whose pane another device leads as it attaches) opens at once in this device's control, its pane's
+/// screen showing with no Take control cover; a Duplicate that fails says why and opens nothing. While one runs (the
+/// fake world holds it a while, when asked), its source says "Duplicating", and New session and every other Duplicate
+/// take no tap. In an iPad's session window the copy opens in a window of its own. An agterm Mac's session duplicates
+/// as an ngterm machine's does.
 internal final class DuplicateSessionTests: XCTestCase {
     // what the fake world's first Duplicate fails with, when asked (FakeSessionWorld.duplicateRefusal)
     private static let refusal = "split could not copy work"
