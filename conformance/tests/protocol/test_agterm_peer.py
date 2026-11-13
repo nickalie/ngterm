@@ -308,9 +308,12 @@ def test_a_daemon_gone_before_the_attach_prints_the_gone_line_and_hands_back_no_
     build = fresh.add_session("vanishing")
     fresh.vanish_on_attach(build)
     local = _attach(vcli, "studio", build["id"])
-    wait_text(viewer, local, re.escape(GONE), timeout=30)
-    wait_text(viewer, local, re.escape("ngterm: vanishing (left) on studio disconnected, exit 1"), timeout=30)
-    text = assert_ok(viewer.request("session.text", local))["text"]
+    # with the scrollback, each on its own line: an attach that fails within `abnormal-command-exit-runtime` (a fast
+    # loopback login) gets the terminal's "failed to launch" note, which echoes the command and scrolls these up
+    wait_text(viewer, local, re.compile(rf"^{re.escape(GONE)}$", re.M), timeout=30, all=True)
+    disconnected = "ngterm: vanishing (left) on studio disconnected, exit 1"
+    wait_text(viewer, local, re.compile(rf"^{re.escape(disconnected)}$", re.M), timeout=30, all=True)
+    text = assert_ok(viewer.request("session.text", local, all=True))["text"]
     assert "agterm$" not in text and "attached " not in text, text
 
 

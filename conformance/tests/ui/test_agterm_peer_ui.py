@@ -92,13 +92,17 @@ def test_the_title_bar_names_the_host_and_badges_agterm_with_what_it_lacks(adapt
     viewer.wait_mounted(local, "left")
     wait_text(viewer, local, re.escape(f"attached {build['panes'][0]['daemon']}"), timeout=30)
 
+    # what a screen reader announces: the host as text without its `agterm:` pin, and the badge as text named after
+    # the app whose description is its hover note
+    host = re.compile(r"\(text name='studio'[ )]")
+    badge = re.compile(rf"\(text name='agterm' [^)]*description={re.escape(repr(NOTE))}\)")
+
     def labelled():
         dump = ui.tree_dump()
-        assert re.search(r"name='[^']*\bagterm\b(?!:)", dump), dump
+        assert host.search(dump) and badge.search(dump), dump
         return dump
 
-    dump = wait_until(labelled, timeout=ui.timeout)
-    assert NOTE in dump, dump
+    wait_until(labelled, timeout=ui.timeout)
 
 def _menu_on(ui, name, item):
     ui.mouse_click(_row(ui, name), button="right")
