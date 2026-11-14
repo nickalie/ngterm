@@ -450,6 +450,50 @@ def test_a_root_left_behind_fails_a_holding_run(tmp_path: Path, stage: Path, lay
     assert len(ours) == len(left) == 1
 
 
+def test_the_shards_of_a_run_merge_into_the_whole_runs_report(tmp_path: Path, stage: Path, layers: Path) -> None:
+    """Each shard judges the listed ids it ran; the merged report holds every listed id, as one whole run does."""
+    (layers / "protocol" / "test_other.py").write_text(OTHER_TEST)
+    listed = ratchet(tmp_path, OTHER_ID, PROBE_ID)
+    ran = []
+    for index in (1, 2):
+        completed, report = run(
+            tmp_path, stage, layers, listed, "--shard", f"{index}/2", "--out", str(tmp_path / f"shard-{index}")
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        text = (tmp_path / f"shard-{index}" / "report.md").read_text()
+        assert f"- shard: {index}/2" in text and "rust: 1 pass, 0 fail" in text
+        assert f"ratchet holds: 2 listed id(s), full run, shard {index}/2 alone" in text
+        lines = (tmp_path / f"shard-{index}" / "nodeids.jsonl").read_text().splitlines()
+        ran += [json.loads(line)["nodeid"] for line in lines[1:]]
+    assert sorted(ran) == [OTHER_ID, PROBE_ID]
+    merged = subprocess.run(
+        [sys.executable, str(SCRIPT.with_name("merge_shards.py")), "--out", str(tmp_path / "merged"), "--list",
+         str(listed), "--title", "rust-linux", str(tmp_path / "shard-1"), str(tmp_path / "shard-2")],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    assert merged.returncode == 0, merged.stdout + merged.stderr
+    text = (tmp_path / "merged" / "report.md").read_text()
+    assert "ratchet holds: 2 listed id(s), full run\n" in text
+    assert "2 pass, 0 fail" in text and "- tests: 2 of 2 collected" in text
+    assert "ui ids exercised by a passing test:" in text
+
+
+def test_a_red_listed_id_breaks_its_shard(tmp_path: Path, stage: Path, layers: Path) -> None:
+    (layers / "protocol" / "test_other.py").write_text(FAILING_TEST)
+    statuses = []
+    for index in (1, 2):
+        completed, _ = run(tmp_path, stage, layers, ratchet(tmp_path, OTHER_ID, PROBE_ID), "--shard", f"{index}/2")
+        statuses.append(completed.returncode)
+    assert sorted(statuses) == [0, 1]
+
+
+def test_build_only_takes_no_stage(tmp_path: Path, stage: Path, layers: Path) -> None:
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--build-only")
+    assert completed.returncode == 2
+    assert "--build-only builds the stage: it takes no --stage" in completed.stderr
+    assert report == ""
+
+
 @pytest.mark.parametrize("case", ["missing stage", "no layer", "missing ratchet"])
 def test_bad_arguments_exit_2(tmp_path: Path, stage: Path, layers: Path, lock: Path, case: str) -> None:
     listed = ratchet(tmp_path)
@@ -829,6 +873,24 @@ def test_a_coverage_run_reports_code_and_catalog_coverage(
     assert json.loads((out / "summary.json").read_text())["app"] == "desktop"
     catalog = report.split("### catalog coverage\n", 1)[1]
     assert re.search(r"^ui ids exercised by a passing test: \d+/\d+ \(\d+\.\d%\)$", catalog, re.MULTILINE), catalog
+
+
+def test_a_coverage_run_on_a_stage_from_another_machine_reads_the_staged_programs(
+    tmp_path: Path, stage: Path, layers: Path, fake_cargo: Path
+) -> None:
+    """A shard runs the stage a build job made: no target dir of the build, and no cargo-llvm-cov to ask."""
+    target = tmp_path / "target"
+    shutil.rmtree(built(stage, target).parent)
+    instrument(stage / "bin" / "ngterm")
+    fake_cargo.write_text(f"#!{sys.executable}\nimport sys\nsys.exit('cargo is not needed for a staged build')\n")
+    (layers / "protocol" / "test_probe.py").write_text(PROFILE_WRITING_TEST)
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--coverage", LAUNCH_PROBE=str(tmp_path / "launch.txt"),
+        CARGO_TARGET_DIR=str(target), FAKE_TERM="quit", FAKE_LLVM_COV_ENV="1",
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "**Total: 25.00% of lines (2/8)" in report
+    assert (tmp_path / "report" / "coverage" / "lcov.info").is_file()
 
 
 def test_a_coverage_run_without_profiles_exits_2_with_the_reason(

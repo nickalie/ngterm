@@ -4,10 +4,16 @@
 # NGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-* parent, its own headless weston and session bus; a ui
 # instance its own Xvfb on the run's private a11y bus); no window, notification or a11y object reaches the desktop.
 #
-#   conformance/tools/run-linux.sh [--stage DIR] [--out DIR] [--tests DIR] [--coverage]
+#   conformance/tools/run-linux.sh [--stage DIR] [--out DIR] [--tests DIR] [--coverage] [--build-only]
+#                                       [--shard I/N]
 #                                       [--ratchet FILE] [--ratchet-only [--also SELECTOR]... [--also-k EXPR]...]
 #                                       [-- PYTEST_ARGS...]
 #
+# --build-only builds and stages (instrumented with --coverage) and runs nothing: the stage a later --stage run, on
+# this machine or another, takes. --shard I/N runs part I of the suite split by test file into N parts
+# (agterm_conformance/shards.py, weighed by conformance/shard-weights-linux.txt) and judges the listed ids it ran;
+# tools/merge_shards.py joins the N reports into the whole run's and judges every listed id. CI runs the suite so;
+# without --shard the whole suite runs here, as before.
 # --ratchet-only runs only the ids the ratchet list holds, plus each --also directory, file or node-id prefix (a
 # path outside the layers is collected too) and each --also-k -k expression, and judges the ratchet as a full run
 # does: every listed id must pass, and newly passing ids come only from what ran. The red tests a build short of
@@ -19,6 +25,7 @@
 # --coverage builds instrumented (cargo llvm-cov show-env, into target/llvm-cov-target after cargo llvm-cov clean
 # --workspace), stages into target/conformance-stage-cov, and gives every process of the build a pooled
 # LLVM_PROFILE_FILE in target/llvm-cov-target (agterm_conformance/llvm_profiles.py); a --stage not built so exits 2.
+# A --stage from another machine comes without the build's target dir: its report reads the staged programs' own maps.
 # The processes the harness had to end past their exit are listed in DIR/lost-profiles.txt. After the suite
 # the profiles are merged and read against the desktop app's own programs into its e2e report in DIR/coverage
 # (agterm_conformance/code_coverage.py e2e --app desktop --platform linux: lcov.info, lcov-measured.info, summary.json
@@ -48,6 +55,8 @@ tests="$repo/conformance/tests"
 ratchet=""
 ratchet_only=""
 coverage=""
+build_only=""
+shard=""
 also=()
 also_k=()
 extra=()
@@ -63,12 +72,19 @@ while (($#)); do
         --also-k) also_k+=("$2"); shift 2 ;;
         --) shift; extra=("$@"); break ;;
         --coverage) coverage=1; shift ;;
-        -h|--help) sed -n '2,35s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --build-only) build_only=1; shift ;;
+        --shard) shard="$2"; shift 2 ;;
+        -h|--help) sed -n '2,42s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
 if [[ -z "$ratchet_only" ]] && ((${#also[@]} + ${#also_k[@]})); then
     echo "--also and --also-k need --ratchet-only" >&2
+    exit 2
+fi
+
+if [[ -n "$build_only" && -n "$stage" ]]; then
+    echo "--build-only builds the stage: it takes no --stage" >&2
     exit 2
 fi
 
@@ -83,7 +99,8 @@ python="${PYTHON:-$repo/.venv/bin/python}"
 # This checkout's harness, ahead of whichever checkout the venv's editable install points at.
 export PYTHONPATH="$repo/conformance${PYTHONPATH:+:$PYTHONPATH}"
 display="${CONFORMANCE_LINUX_DISPLAY:-headless}"
-if [[ "$display" == headless ]]; then
+# --build-only launches nothing: what only an instance needs (a display, a11y bindings, lavapipe) is not asked for.
+if [[ -z "$build_only" && "$display" == headless ]]; then
     for tool in weston dbus-daemon; do
         if ! command -v "$tool" >/dev/null; then
             echo "no $tool on PATH: install it, or set CONFORMANCE_LINUX_DISPLAY=session" >&2
@@ -121,6 +138,7 @@ fi
 
 # UI selections need real accessibility bindings even before the AT-SPI driver is enabled.
 for layer in "${layers[@]}"; do
+    if [[ -n "$build_only" ]]; then break; fi
     if [[ "$layer" == "$tests/ui" || "$layer" == "$tests/ui/"* ]]; then
         [[ "$display" == headless ]] || { echo "Linux UI instances require headless display mode" >&2; exit 2; }
         "$python" -m agterm_conformance.linux_ui || exit 2
@@ -140,15 +158,18 @@ fi
 # The build renders through Vulkan: on lavapipe and nothing else (the harness points VK_DRIVER_FILES at it), never on
 # this machine's GPU driver, so a missing lavapipe stops the run here. Not NGTERM_- or AGTERM_-prefixed: the plugin
 # scrubs those.
-if ! lavapipe="$("$repo/scripts/fetch-lavapipe.sh")"; then
-    echo "no lavapipe for the GPUI build: see scripts/fetch-lavapipe.sh" >&2
-    exit 2
+lavapipe=""
+if [[ -z "$build_only" ]]; then
+    if ! lavapipe="$("$repo/scripts/fetch-lavapipe.sh")"; then
+        echo "no lavapipe for the GPUI build: see scripts/fetch-lavapipe.sh" >&2
+        exit 2
+    fi
+    export CONFORMANCE_LAVAPIPE_ICD="$lavapipe"
 fi
-export CONFORMANCE_LAVAPIPE_ICD="$lavapipe"
 # GPUI panics without a wl_seat, which headless weston offers only with --fake-seat (weston 15.0 and later): a system
 # weston without it gives way to the one scripts/build-weston.sh vendors. The help is read whole first: under pipefail,
 # `grep -q` leaving the pipe early would end weston with SIGPIPE and fail a weston that has the option.
-if [[ "$display" == headless ]] \
+if [[ -z "$build_only" && "$display" == headless ]] \
     && ! grep -q -- --fake-seat <<<"$(env -u WAYLAND_DISPLAY -u DISPLAY weston --help 2>/dev/null || true)"; then
     if ! "$repo/scripts/build-weston.sh" --verify; then
         echo "$(command -v weston) has no --fake-seat, which the GPUI build needs (weston 15.0 or later):" \
@@ -215,6 +236,10 @@ elif [[ -z "$stage" ]]; then
     "$repo/scripts/stage.sh" "$stage"
 fi
 [[ -d "$stage" ]] || { echo "no staged tree at $stage" >&2; exit 2; }
+if [[ -n "$build_only" ]]; then
+    echo "stage: $stage"
+    exit 0
+fi
 bin_args=()
 if [[ -x "$stage/bin/$app" ]]; then
     bin_args=(--bin "$stage/bin/$app")
@@ -237,11 +262,20 @@ parent="$(mktemp -d /tmp/agt-run-XXXXXX)"
 trap 'rmdir "$parent" 2>/dev/null || true' EXIT
 export CONFORMANCE_TMP="$parent"
 
+shard_args=()
+if [[ -n "$shard" ]]; then
+    shard_args=(--shard "$shard")
+    weights="$repo/conformance/shard-weights-linux.txt"
+    # one word: pytest takes a bare path among its arguments for a place to look for its rootdir
+    if [[ -f "$weights" ]]; then shard_args+=("--shard-weights=$weights"); fi
+fi
+
 set +e
 started=$SECONDS
 # -rfE: the hundreds of skips of a build short of parity would bury the failures; the summary line counts them.
 "$python" -m pytest "${layers[@]}" --impl rust "${bin_args[@]}" -rfE \
-    --junitxml "$out/junit.xml" --nodeid-report "$out/nodeids.jsonl" "${selection[@]}" "${extra[@]}" 2>&1 \
+    --junitxml "$out/junit.xml" --nodeid-report "$out/nodeids.jsonl" "${selection[@]}" "${shard_args[@]}" \
+    "${extra[@]}" 2>&1 \
     | tee "$out/pytest.log"
 pytest_status=${PIPESTATUS[0]}
 elapsed=$((SECONDS - started))
@@ -272,14 +306,20 @@ if [[ -n "$coverage" ]]; then
     rm -rf "$out/coverage"
     stage_bin="$(realpath -m -- "$stage/bin")"
     coverage_out="$(realpath -m -- "$out/coverage")"
+    # a --stage from another machine comes without the build's target dir (and needs no cargo-llvm-cov here): the
+    # staged programs' own maps are read, with the toolchain's llvm-tools
+    release_dir="$cov_target/release"
+    [[ -d "$release_dir" ]] || release_dir="$stage_bin"
     if ! coverage_error="$(
         cd "$repo" || exit 2
         export CARGO_TARGET_DIR="$cov_target"
-        llvm_cov_env="$(cargo llvm-cov show-env --sh 2>/dev/null)" \
-            || { echo "code coverage: cargo llvm-cov show-env failed"; exit 2; }
-        eval "$llvm_cov_env"
+        if [[ "$release_dir" != "$stage_bin" ]]; then
+            llvm_cov_env="$(cargo llvm-cov show-env --sh 2>/dev/null)" \
+                || { echo "code coverage: cargo llvm-cov show-env failed"; exit 2; }
+            eval "$llvm_cov_env"
+        fi
         "$python" -m agterm_conformance.code_coverage e2e --app desktop --platform linux \
-            --profiles "$cov_target" --stage-bin "$stage_bin" --release-dir "$cov_target/release" \
+            --profiles "$cov_target" --stage-bin "$stage_bin" --release-dir "$release_dir" \
             --repo "$repo" --out "$coverage_out" 2>&1 >/dev/null
     )"; then
         status=2
@@ -303,6 +343,7 @@ if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)
     else
         echo "- mode: full"
     fi
+    if [[ -n "$shard" ]]; then echo "- shard: $shard (tools/merge_shards.py joins the run's shards)"; fi
     echo "- suite time: ${elapsed}s"
     if ((${#bin_args[@]})); then echo "- ngterm: \`$stage/bin/$app\`"; else echo "- ngterm: not staged"; fi
     echo "- Vulkan: lavapipe only, \`$lavapipe\`"

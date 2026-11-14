@@ -8,13 +8,15 @@
 # pid at the stop). Its window opens on this desktop: run it on a CI runner or a throwaway VM only, never beside a
 # live ngterm.
 #
-#   conformance/tools/run-windows.sh [--stage DIR] [--out DIR] [--tests DIR] [--coverage]
+#   conformance/tools/run-windows.sh [--stage DIR] [--out DIR] [--tests DIR] [--coverage] [--build-only]
+#                                         [--shard I/N]
 #                                         [--ratchet FILE] [--ratchet-only [--also SELECTOR]... [--also-k EXPR]...]
 #                                         [-- PYTEST_ARGS...]
 #
 # The options are run-linux.sh's, --coverage included (an instrumented build in target\llvm-cov-target staged into
 # target\conformance-stage-cov, its profiles in target\llvm-cov-target, read after the suite into the desktop app's
-# e2e report on Windows in DIR\coverage).
+# e2e report on Windows in DIR\coverage), and --build-only and --shard (weighed by
+# conformance/shard-weights-windows.txt).
 # The build needs the libghostty-vt prefix (scripts/build-ghostty-vt.sh) and the terminal fonts
 # (scripts/fetch-fonts.sh); its HTML overlays need the WebView2 runtime. The panes run Git for Windows' sh.exe (the
 # harness's CONFORMANCE_POSIX_SHELL, else the one beside git). Reports go to conformance/reports/rust-windows by
@@ -35,6 +37,8 @@ tests="$repo/conformance/tests"
 ratchet=""
 ratchet_only=""
 coverage=""
+build_only=""
+shard=""
 also=()
 also_k=()
 extra=()
@@ -50,12 +54,19 @@ while (($#)); do
         --also-k) also_k+=("$2"); shift 2 ;;
         --) shift; extra=("$@"); break ;;
         --coverage) coverage=1; shift ;;
+        --build-only) build_only=1; shift ;;
+        --shard) shard="$2"; shift 2 ;;
         -h|--help) sed -n '2,25s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
 if [[ -z "$ratchet_only" ]] && ((${#also[@]} + ${#also_k[@]})); then
     echo "--also and --also-k need --ratchet-only" >&2
+    exit 2
+fi
+
+if [[ -n "$build_only" && -n "$stage" ]]; then
+    echo "--build-only builds the stage: it takes no --stage" >&2
     exit 2
 fi
 
@@ -125,9 +136,20 @@ elif [[ -z "$stage" ]]; then
     rm -rf "$stage"
     "$repo/scripts/stage.sh" "$stage"
 fi
+if [[ -n "$build_only" ]]; then
+    echo "stage: $(win "$stage")"
+    exit 0
+fi
 bin_args=()
 if [[ -x "$stage/bin/$app" ]]; then
     bin_args=(--bin "$(win "$stage/bin/$app")")
+fi
+shard_args=()
+if [[ -n "$shard" ]]; then
+    shard_args=(--shard "$shard")
+    weights="$repo/conformance/shard-weights-windows.txt"
+    # one word: pytest takes a bare path among its arguments for a place to look for its rootdir
+    if [[ -f "$weights" ]]; then shard_args+=("--shard-weights=$(win "$weights")"); fi
 fi
 
 # A shell inside a live ngterm or agterm session exports its socket and session; the plugin scrubs these too.
@@ -158,7 +180,7 @@ fi
 started=$SECONDS
 "$python" -m pytest "${win_layers[@]}" --impl rust "${bin_args[@]}" -rfE \
     --junitxml "$(win "$out/junit.xml")" --nodeid-report "$(win "$out/nodeids.jsonl")" "${selection[@]}" \
-    "${extra[@]}" 2>&1 | tee "$out/pytest.log"
+    "${shard_args[@]}" "${extra[@]}" 2>&1 | tee "$out/pytest.log"
 pytest_status=${PIPESTATUS[0]}
 elapsed=$((SECONDS - started))
 ratchet_log="$("$python" "$(win "$here/check_ratchet.py")" --report "$(win "$out/nodeids.jsonl")" \
@@ -189,14 +211,24 @@ if [[ -n "$coverage" ]]; then
     rm -rf "$out/coverage"
     stage_bin="$(win "$(cygpath -ua "$stage/bin")")"
     coverage_out="$(win "$(cygpath -ua "$out/coverage")")"
+    # a --stage from another machine comes without the build's target dir (and needs no cargo-llvm-cov here): the
+    # staged programs' own maps are read, with the toolchain's llvm-tools
+    release_dir="$cov_target/release"
+    foreign_stage=""
+    if [[ ! -d "$release_dir" ]]; then
+        release_dir="$(cygpath -ua "$stage/bin")"
+        foreign_stage=1
+    fi
     if ! coverage_error="$(
         cd "$repo" || exit 2
         export CARGO_TARGET_DIR="$(win "$cov_target")"
-        llvm_cov_env="$(cargo llvm-cov show-env --sh 2>/dev/null)" \
-            || { echo "code coverage: cargo llvm-cov show-env failed"; exit 2; }
-        eval "$llvm_cov_env"
+        if [[ -z "$foreign_stage" ]]; then
+            llvm_cov_env="$(cargo llvm-cov show-env --sh 2>/dev/null)" \
+                || { echo "code coverage: cargo llvm-cov show-env failed"; exit 2; }
+            eval "$llvm_cov_env"
+        fi
         "$python" -m agterm_conformance.code_coverage e2e --app desktop --platform windows \
-            --profiles "$(win "$cov_target")" --stage-bin "$stage_bin" --release-dir "$(win "$cov_target/release")" \
+            --profiles "$(win "$cov_target")" --stage-bin "$stage_bin" --release-dir "$(win "$release_dir")" \
             --repo "$(win "$repo")" --out "$coverage_out" 2>&1 >/dev/null
     )"; then
         status=2
@@ -224,6 +256,7 @@ fi
     else
         echo "- mode: full"
     fi
+    if [[ -n "$shard" ]]; then echo "- shard: $shard (tools/merge_shards.py joins the run's shards)"; fi
     echo "- suite time: ${elapsed}s"
     if ((${#bin_args[@]})); then echo "- ngterm: \`${bin_args[1]}\`"; else echo "- ngterm: not staged"; fi
     echo "- host: $(uname -sr), $(date -u +%Y-%m-%dT%H:%M:%SZ)"

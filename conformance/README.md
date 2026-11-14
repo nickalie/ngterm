@@ -284,6 +284,12 @@ narrowed the run. The plugin options behind it are `--ratchet-only LIST`, `--als
 about, and `--add` adds only ids that ran and passed. A narrower selection (`-k`, `-m` or node ids after `--`) makes
 the mode `partial`: the listed ids that did not run are not judged, so a partial run can neither break nor shrink
 the list through what it left out. The report names the mode and the suite time.
+`--build-only` builds and stages and runs nothing; `--shard I/N` runs part I of the suite split by test file into N
+parts (`agterm_conformance/shards.py`; the plugin option is `--shard I/N`, with `--shard-weights FILE`). Its nodeid
+report's run header carries `"shard"`, and `check_ratchet.py` judges it on the listed ids it ran;
+`tools/merge_shards.py --out DIR --list LIST SHARD_DIR...` joins the shards' report directories into the whole
+run's and judges every listed id, refusing (exit 2) a set that is not every part of one split. CI runs the suite
+so (docs/development.md > Sharded suite); without `--shard` the whole suite runs in one process, as before.
 A full run stays the script's default, but locally a change runs only a partial run (`-- -k EXPR`) over the ids that
 cover the behavior it touches (docs/development.md > Test); full and ratchet-only runs are CI's, which holds the whole list on every
 PR and push to main. A partial run finds newly passing ids only among what it selected.
@@ -434,6 +440,8 @@ that could reach it:
   `--must-pass live-sessions` too); the matrix's `coverage` entry runs the zsh leg's suite (the widest: the bash leg's
   tests and the live ones) on the instrumented build (`--coverage`) and judges `coverage/e2e-floor-desktop-linux.txt`
   only, its report uploaded as `rust-linux-coverage-conformance` and its `coverage/` as `e2e-coverage-desktop-linux`.
+  Each leg runs as shards on a stage built once (`conformance-build`), joined by `conformance-report`
+  (docs/development.md > Sharded suite).
 - `cross-platform`'s `windows` job (`windows-2025`): the harness's Windows self-tests (the pipe transport, the client,
   the launch and stop, the UIA driver's mappings), then `tools/run-windows.sh` with `--must-pass live-any-shell` (the
   login shell is Windows PowerShell): protocol, cli, behaviors and ui (UI Automation and `SendInput`,
@@ -442,4 +450,5 @@ that could reach it:
   staged tree is kept as an artifact, for a run on a Windows VM against the same build (`--stage DIR`).
   `coverage-windows` runs the same suite on the instrumented build (`run-windows.sh --coverage`) and judges
   `coverage/e2e-floor-desktop-windows.txt` only, its report uploaded as `rust-windows-coverage-conformance` and its
-  `coverage/` as `e2e-coverage-desktop-windows`.
+  `coverage/` as `e2e-coverage-desktop-windows`. Both run as shards on the stages `windows-build` makes (the
+  self-tests run there), joined by `windows-report`.

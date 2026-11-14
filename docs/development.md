@@ -1242,7 +1242,7 @@ cargo clippy -p ngterm-gpui --no-default-features --all-targets -- -D warnings  
 scripts/lint-report.sh                      # complexity #[expect]s with their reasons; refuses inner #![allow]
 GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test --workspace
 .venv/bin/python -m pytest conformance/selftests   # the suite's own tests, host-free
-conformance/tools/run-linux.sh [--ratchet-only] [--stage DIR] [--coverage] [-- PYTEST_ARGS...]
+conformance/tools/run-linux.sh [--ratchet-only] [--stage DIR] [--coverage] [-- PYTEST_ARGS...]   # --shard I/N: CI's
 ```
 
 A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`, as the `wpe` CI job does; one to
@@ -1354,8 +1354,10 @@ already holds changes no file, so the path-filtered workflows don't start on it.
   bash, fish and zsh), each with `--must-pass live-any-shell`, `--must-pass agent-chat` and `--must-pass agterm-peer`
   (OpenSSH in the container for its loopback `sshd`), the zsh and fish ones
   with `--must-pass live-sessions` and `--must-pass pages-survive`
-  too; the bash one runs the app's process tests with the overlays on first, and a `coverage` entry runs the suite on
-  an instrumented build, judged by `conformance/coverage/e2e-floor-desktop-linux.txt` only; `unit-coverage`, the workspace's
+  too, and a `coverage` entry that runs the suite on
+  an instrumented build, judged by `conformance/coverage/e2e-floor-desktop-linux.txt` only
+  ([Sharded suite](#sharded-suite) below: `conformance-build`, `conformance`, `conformance-report`); `process-tests`,
+  the app's process tests with the overlays on; `unit-coverage`, the workspace's
   `cargo test` under cargo-llvm-cov in the `wpe` job's Arch container (`scripts/unit-coverage.sh`), judged by
   `scripts/unit-coverage-floor-linux.txt`; and `headless-e2e`, the headless app's e2e on an instrumented build
   (`scripts/test-mobile-e2e.sh --coverage`, behind the runner's `sshd`), judged by
@@ -1367,12 +1369,14 @@ already holds changes no file, so the path-filtered workflows don't start on it.
   clippy and `cargo test` (`crates`, a matrix), then the sys crate cross-built for the Zig targets no runner runs
   natively (aarch64 Linux and x86_64 macOS on Ubuntu, aarch64 Windows on Windows). The macOS leg also checks the frontend with and without WKWebView HTML overlays. The Windows leg also runs the
   vendored portable-pty's Windows patch tests and builds the app: `ngterm-gpui`'s clippy and tests without and with
-  its HTML overlays (WebView2, which the runner image carries). Beside it, `windows`: the harness's Windows
-  self-tests and the suite against the staged release build (`conformance/tools/run-windows.sh`, with `--must-pass
+  its HTML overlays (WebView2, which the runner image carries). Beside it, `windows-build` (the harness's Windows
+  self-tests, then the staged release build and the instrumented one), `windows`: the suite against the staged
+  release build (`conformance/tools/run-windows.sh`, with `--must-pass
   live-any-shell`, as the runner's login shell is Windows PowerShell, `--must-pass agent-chat` and `--must-pass
   agterm-peer`), held by `rust-passing-windows.txt`; the report
-  and the stage are kept as artifacts; and `coverage-windows`, the suite on an instrumented build, judged by
-  `conformance/coverage/e2e-floor-desktop-windows.txt` only.
+  and the stage are kept as artifacts; `coverage-windows`, the suite on the instrumented build, judged by
+  `conformance/coverage/e2e-floor-desktop-windows.txt` only; and `windows-report`, which joins the two
+  ([Sharded suite](#sharded-suite)).
 - `android.yml` (path-filtered to the mobile core, the crates under it, `mobile/android/` and the Android scripts and
   pins): `app` sets up the pinned toolchain (`scripts/setup-android.sh`), runs
   `scripts/build-android.sh check assembleDebug` (Spotless, detekt, Android Lint, the JVM unit and Roborazzi screenshot
@@ -1394,6 +1398,40 @@ already holds changes no file, so the path-filtered workflows don't start on it.
   checksum-verified, then the scripts' self-tests and the pre-commit hook's test. Run it locally the same way.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
 - `reference-macos.yml` (PRs that change `conformance/`, and by hand): the suite against upstream's macOS release.
+
+### Sharded suite
+
+CI builds each stage once and runs the suite on it in shards, side by side: a build job (`conformance-build` in
+`linux.yml`, `windows-build` in `cross-platform.yml`) stages the release build and the instrumented one
+(`run-linux.sh --build-only`, `run-windows.sh --build-only`) and keeps each as an artifact; every leg (a login shell
+on Linux, the coverage run, Windows) then runs as the shards of its matrix (`--stage DIR --shard I/N`), which build
+nothing; and a report job (`conformance-report`, `windows-report`) joins a leg's shards with
+`conformance/tools/merge_shards.py`.
+
+- The split is by test file, made by every shard itself from the whole collection
+  (`conformance/agterm_conformance/shards.py`): no list of files exists, so a new test file lands in a shard by
+  itself. A file's tests stay together and in order, so tests that share a module's instance or rely on the test
+  before them in their file run as in a whole run. No test may rely on another file's.
+- The files are balanced by their recorded seconds (`conformance/shard-weights-linux.txt`,
+  `shard-weights-windows.txt`); a file without a record weighs its number of tests. Stale weights cost balance only.
+  The joined report's table shows each shard's seconds: when they drift far apart, refresh the weights from a main
+  run's joined report (`<leg>-conformance` artifact):
+  `conformance/tools/shard_durations.py nodeids.jsonl --write conformance/shard-weights-linux.txt`.
+- A shard judges the listed ids it ran, so a red one fails that shard's job, with its log, traces and report
+  (`<leg>-conformance-shard-<I>` artifact, kept three days). The report job judges the ratchet on the joined report,
+  whole: it fails when a shard left no report, when the shards are not every part of one split, or when a test is in
+  two of them, so no listed id goes unjudged. A `--must-pass` capability is held over all the shards: each holds its
+  own tests, the report job the capability no test requires or none passed for.
+- The joined report keeps the unsharded job's artifact name (`rust-linux-conformance`, `rust-linux-zsh-conformance`,
+  `rust-linux-fish-conformance`, `rust-linux-coverage-conformance`, `rust-windows-conformance`,
+  `rust-windows-coverage-conformance`): `report.md`, `nodeids.jsonl`, `junit.xml` (a test suite per shard),
+  `pytest.log`, `traces/`, on Windows `instances/`, and each shard's own files under `shards/<I>/`.
+- A coverage leg's shards each write their lcov; the report job joins them (a line run in any shard counts as run)
+  into the same `coverage/` and `e2e-coverage-desktop-<platform>` artifact and holds the same floors.
+- To change the number of shards, change a job's `shard` list and the `/N` of its run steps together; a mismatch
+  fails the report job.
+
+The local runners run the whole suite unsharded, as before.
 
 ## Layout
 

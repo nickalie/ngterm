@@ -121,7 +121,7 @@ jobs:
       # (ngterm-session's tests/replay.rs) run against real fish and zsh, beside bash
       # ngterm-gpui's process tests run on their own private bus, headless weston and Xvfb, rendering on lavapipe
       # (mesa-vulkan-drivers): none may skip here (only the nested-niri check is #[ignore]d, no niri on Ubuntu). They
-      # run without the HTML overlays here; the bash conformance job runs the instance tests again with them, on Arch.
+      # run without the HTML overlays here; the process-tests job runs the instance tests again with them, on Arch.
       # ngterm-gpui's external texture test imports synthetic dmabufs from udmabuf on lavapipe; required here like
       # the display tests, so the device must be there. udmabuf is a bool in the kernel's Kconfig, built in or absent
       # and never a module, so there is nothing to modprobe or install: the runner's kernel has it or the job fails.
@@ -454,11 +454,25 @@ jobs:
   # privileged so WebKit's bubblewrap sandbox gets its user namespaces, with an init that reaps what the suite's
   # instances leave. The build renders on lavapipe only: scripts/fetch-lavapipe.sh finds the distribution's
   # (vulkan-swrast) and the harness makes it the only Vulkan driver; its weston gets --fake-seat
-  # (scripts/build-weston.sh builds the pinned one where Arch's lacks it). The app and the harness read the password
-  # database's login shell, never $SHELL:
+  # (scripts/build-weston.sh builds the pinned one where Arch's lacks it).
+  #
+  # Four jobs make it:
+  # - conformance-build: the stage, built once for every shell (run-linux.sh --build-only) and once more instrumented
+  #   (--coverage), each kept a day as an artifact (a tar: an artifact drops the programs' mode bits). It waits for no
+  #   other job: the build takes as long as the `linux` job, which the suite waits for.
+  # - process-tests: the app's process tests with the HTML overlays on.
+  # - conformance: the suite, each leg split by test file into the shards of its matrix (run-linux.sh --stage
+  #   --shard I/N, agterm_conformance/shards.py; the matrix's `shard` list and the N of its run step go together), on
+  #   the stage the build job made. A shard builds nothing; it judges the listed ids it ran, so a red one fails its
+  #   own job, with its log and traces.
+  # - conformance-report: a leg's shards joined into its one report (tools/merge_shards.py: nodeids.jsonl, junit.xml,
+  #   pytest.log, traces/), the ratchet judged on it whole. A shard that left no report, or a set that is not one
+  #   whole split, fails it: no listed id goes unjudged. `--must-pass` capabilities are held there too, over all the
+  #   shards. The report keeps the leg's artifact name; each shard's own is kept three days beside it.
+  #
+  # The legs. The app and the harness read the password database's login shell, never $SHELL:
   # - bash: the build claims `live-any-shell` (Live sessions in bash, a Rust-only extension) and every test requiring
-  #   it must pass; the process tests (single instance, activation, the quit save on SIGTERM, privileges) run here
-  #   again with the HTML overlays on.
+  #   it must pass.
   # - zsh and fish: upstream wraps a pane in zmx only for one of these login shells, so the build claims
   #   `live-sessions` too and the live tests run: `--must-pass live-sessions` (every test upstream holds to Live
   #   sessions) and `--must-pass live-any-shell`, and `--must-pass pages-survive` (the Rust-only parking of a page whose
@@ -468,42 +482,115 @@ jobs:
   #   `--must-pass agterm-peer` (the Rust-only attach of an upstream agterm Mac, whose tests reach a loopback sshd:
   #   openssh below), `--must-pass shell-profiles` (the Rust-only shell profiles a pane runs in place of the login
   #   shell) and `--must-pass web-worker-faults` (the page worker's faults a launch asks for, Rust-only).
-# - coverage: the zsh entry again on an instrumented build (run-linux.sh --coverage: cargo-llvm-cov and the toolchain's
-#   llvm-tools), every layer, its report the desktop app's e2e line coverage on Linux (code_coverage.py e2e: the total,
-#   its distance to 90% and the share markers exclude, per crate), judged by
-#   conformance/coverage/e2e-floor-desktop-linux.txt (tools/check_coverage.py: the total and each crate) and nothing
-#   else: instrumentation slows the app, so the ratchet stays the entries above. zsh, as its run is the widest: it runs
-#   every test the bash one does, and the live tests besides (`live-sessions`). Its report (coverage/, traces/) is
-#   uploaded as rust-linux-coverage-conformance, and coverage/ alone (lcov.info: what a merge and the gap lists read)
-#   as e2e-coverage-desktop-linux.
-  conformance:
-    needs: linux
+  # - coverage: the zsh entry again on the instrumented stage (run-linux.sh --coverage: the toolchain's llvm-tools read
+  #   each shard's profiles against the staged programs), every layer. The report job joins the shards' lcov into the
+  #   desktop app's e2e line coverage on Linux (code_coverage.py e2e: a line run in any shard counts as run; the
+  #   total, its distance to 90% and the share markers exclude, per crate), judged by
+  #   conformance/coverage/e2e-floor-desktop-linux.txt (tools/check_coverage.py: the total and each crate) and nothing
+  #   else: instrumentation slows the app, so the ratchet stays the entries above. zsh, as its run is the widest: it
+  #   runs every test the bash one does, and the live tests besides (`live-sessions`). Its report (coverage/, traces/)
+  #   is uploaded as rust-linux-coverage-conformance, and coverage/ alone (lcov.info: what a merge and the gap lists
+  #   read) as e2e-coverage-desktop-linux.
+  conformance-build:
+    name: conformance build (${{ matrix.build }})
     runs-on: ubuntu-26.04
-    timeout-minutes: 150
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
-          - shell: bash
-            out: rust-linux
-            must-pass: >-
-              --must-pass live-any-shell --must-pass agent-chat --must-pass kitty-clipboard --must-pass agterm-peer
-              --must-pass shell-profiles --must-pass web-worker-faults
-          - shell: zsh
-            out: rust-linux-zsh
-            must-pass: >-
-              --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
-              --must-pass kitty-clipboard --must-pass agterm-peer --must-pass shell-profiles
-              --must-pass web-worker-faults
-          - shell: fish
-            out: rust-linux-fish
-            must-pass: >-
-              --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
-              --must-pass kitty-clipboard --must-pass agterm-peer --must-pass shell-profiles
-              --must-pass web-worker-faults
-          - shell: zsh
-            out: rust-linux-coverage
-            coverage: true
+          - build: release
+            stage: conformance-stage
+          - build: coverage
+            stage: conformance-stage-cov
+            flag: --coverage
+    container:
+      # archlinux:base-devel-20261011.0.609700
+      image: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
+      options: --privileged --init
+    env:
+      CARGO_TERM_COLOR: always
+      ARCH_SNAPSHOT: "2026/10/14"
+    steps:
+      - name: system packages from the Arch Linux Archive snapshot
+        run: |
+          echo "Server = https://archive.archlinux.org/repos/$ARCH_SNAPSHOT/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
+          cat > /usr/local/bin/pacman-archive <<'EOF'
+          #!/bin/bash
+          # pacman-archive PKG...: the snapshot's upgrade and PKG..., downloaded with retries, installed from the cache
+          set -u
+          for attempt in 1 2 3; do
+            if timeout --kill-after=1m 15m pacman -Syyuuw --needed --noconfirm --disable-download-timeout "$@"; then
+              exec pacman -Suu --needed --noconfirm "$@"
+            fi
+            rm -f /var/lib/pacman/db.lck
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::download from the Arch Linux Archive failed (attempt $attempt of 3), retrying in 30s"
+              sleep 30
+            fi
+          done
+          echo "::error::download from the Arch Linux Archive failed 3 times: $*"
+          exit 1
+          EOF
+          chmod +x /usr/local/bin/pacman-archive
+          pacman-archive git rustup wpewebkit bubblewrap \
+            meson ninja wayland wayland-protocols libxkbcommon libxcb \
+            curl xz patch ncurses fontconfig ttf-dejavu procps-ng \
+            weston dbus xorg-server-xvfb mesa vulkan-swrast \
+            pixman libinput libevdev libdrm cairo pango libpng hwdata seatd lcms2 \
+            python zsh fish at-spi2-core gobject-introspection cairo pkgconf gcc openssh
+      - uses: actions/checkout@v7
+      # the runner owns the workspace, the container runs as root: without this git refuses the checkout, and
+      # run-linux.sh reads the build's commit from it
+      - name: git trusts the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: llvm-tools (coverage)
+        if: matrix.build == 'coverage'
+        run: rustup component add llvm-tools
+      - name: cargo-llvm-cov (coverage)
+        if: matrix.build == 'coverage'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: ${{ matrix.build }}
+      - uses: actions/cache@v6
+        if: github.ref == 'refs/heads/main'
+        with: &vendor-conformance
+          path: ~/.cache/ngterm/vendor
+          key: vendor-ngterm-arch-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
+      - uses: actions/cache/restore@v6
+        if: github.ref != 'refs/heads/main'
+        with: *vendor-conformance
+      # the source the app's libghostty-vt is built from, with the stage's terminfo, themes and shell integration
+      # (Ghostty's at the same pin)
+      - name: libghostty-vt prefix
+        run: scripts/build-ghostty-vt.sh
+      - name: terminal fonts
+        run: scripts/fetch-fonts.sh
+      - name: build and stage
+        run: conformance/tools/run-linux.sh ${{ matrix.flag }} --build-only
+      - name: pack the stage
+        run: tar -C target -cf "target/${{ matrix.stage }}.tar" ${{ matrix.stage }}
+      - name: upload the stage
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.stage }}-linux
+          path: target/${{ matrix.stage }}.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  # instance: forwarding, activation and the SIGTERM quit; privileges: the app, a Live pane and its session keep the
+  # user's privileges while a page runs (with the system's wpewebkit its worker runs plainly here); quit: SIGTERM
+  # within its deadline with Live sessions busy and pages open. Under a bash login shell, in the suite's container.
+  process-tests:
+    needs: linux
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
     container:
       # archlinux:base-devel-20261011.0.609700
       image: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
@@ -549,16 +636,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/cache@v6
-        if: github.ref == 'refs/heads/main'
-        with: &vendor-conformance
-          path: ~/.cache/ngterm/vendor
-          key: vendor-ngterm-arch-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
       - uses: actions/cache/restore@v6
-        if: github.ref != 'refs/heads/main'
         with: *vendor-conformance
-      # the source the app's libghostty-vt is built from, with the stage's terminfo, themes and shell integration
-      # (Ghostty's at the same pin)
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
       - name: terminal fonts
@@ -572,16 +651,12 @@ jobs:
           fi
       - name: lavapipe (the distribution's)
         run: scripts/fetch-lavapipe.sh
-      - name: ${{ matrix.shell }} as the login shell
+      - name: bash as the login shell
         shell: bash
         run: |
-          usermod --shell "$(command -v ${{ matrix.shell }})" "$(id -un)"
+          usermod --shell "$(command -v bash)" "$(id -un)"
           getent passwd "$(id -un)"
-      # instance: forwarding, activation and the SIGTERM quit; privileges: the app, a Live pane and its session keep
-      # the user's privileges while a page runs (with the system's wpewebkit its worker runs plainly here); quit:
-      # SIGTERM within its deadline with Live sessions busy and pages open
       - name: the process tests with the HTML overlays
-        if: matrix.shell == 'bash' && !matrix.coverage
         env:
           NGTERM_REQUIRE_DISPLAY_TESTS: "1"
         # live panes need ngterm-session and HTML overlays need ngterm-web beside the app; a gpui-only test run
@@ -589,58 +664,142 @@ jobs:
         run: |
           cargo build -p ngterm-session --bin ngterm-session -p ngterm-wpe --bin ngterm-web
           cargo test -p ngterm-gpui --test instance --test privileges --test quit
+
+  conformance:
+    name: conformance (${{ matrix.leg.out }}, ${{ matrix.shard }}/3)
+    needs: [linux, conformance-build]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+        leg:
+          - shell: bash
+            out: rust-linux
+            stage: conformance-stage
+            must-pass: >-
+              --must-pass live-any-shell --must-pass agent-chat --must-pass kitty-clipboard --must-pass agterm-peer
+              --must-pass shell-profiles --must-pass web-worker-faults
+          - shell: zsh
+            out: rust-linux-zsh
+            stage: conformance-stage
+            must-pass: >-
+              --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
+              --must-pass kitty-clipboard --must-pass agterm-peer --must-pass shell-profiles
+              --must-pass web-worker-faults
+          - shell: fish
+            out: rust-linux-fish
+            stage: conformance-stage
+            must-pass: >-
+              --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
+              --must-pass kitty-clipboard --must-pass agterm-peer --must-pass shell-profiles
+              --must-pass web-worker-faults
+          - shell: zsh
+            out: rust-linux-coverage
+            stage: conformance-stage-cov
+            coverage: true
+    container:
+      # archlinux:base-devel-20261011.0.609700
+      image: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
+      options: --privileged --init
+    env:
+      CARGO_TERM_COLOR: always
+      ARCH_SNAPSHOT: "2026/10/14"
+    steps:
+      - name: system packages from the Arch Linux Archive snapshot
+        run: |
+          echo "Server = https://archive.archlinux.org/repos/$ARCH_SNAPSHOT/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
+          cat > /usr/local/bin/pacman-archive <<'EOF'
+          #!/bin/bash
+          # pacman-archive PKG...: the snapshot's upgrade and PKG..., downloaded with retries, installed from the cache
+          set -u
+          for attempt in 1 2 3; do
+            if timeout --kill-after=1m 15m pacman -Syyuuw --needed --noconfirm --disable-download-timeout "$@"; then
+              exec pacman -Suu --needed --noconfirm "$@"
+            fi
+            rm -f /var/lib/pacman/db.lck
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::download from the Arch Linux Archive failed (attempt $attempt of 3), retrying in 30s"
+              sleep 30
+            fi
+          done
+          echo "::error::download from the Arch Linux Archive failed 3 times: $*"
+          exit 1
+          EOF
+          chmod +x /usr/local/bin/pacman-archive
+          pacman-archive git rustup wpewebkit bubblewrap \
+            meson ninja wayland wayland-protocols libxkbcommon libxcb \
+            curl xz patch ncurses fontconfig ttf-dejavu procps-ng \
+            weston dbus xorg-server-xvfb mesa vulkan-swrast \
+            pixman libinput libevdev libdrm cairo pango libpng hwdata seatd lcms2 \
+            python zsh fish at-spi2-core gobject-introspection cairo pkgconf gcc openssh
+      - uses: actions/checkout@v7
+      # the runner owns the workspace, the container runs as root: without this git refuses the checkout, and
+      # run-linux.sh reads the build's commit from it
+      - name: git trusts the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # the report of an instrumented run reads its profiles with the toolchain's llvm-cov and llvm-profdata
+      - name: rust toolchain with llvm-tools (coverage)
+        if: matrix.leg.coverage
+        run: |
+          rustup toolchain install
+          rustup component add llvm-tools
+      - name: weston with --fake-seat
+        shell: bash
+        run: |
+          # the help read whole: `grep -q` leaving a pipe early would end weston with SIGPIPE under pipefail
+          if ! grep -q -- --fake-seat <<<"$(weston --help 2>/dev/null || true)"; then
+            echo "$(scripts/build-weston.sh)/bin" >> "$GITHUB_PATH"
+          fi
+      - name: lavapipe (the distribution's)
+        run: scripts/fetch-lavapipe.sh
+      - name: ${{ matrix.leg.shell }} as the login shell
+        shell: bash
+        run: |
+          usermod --shell "$(command -v ${{ matrix.leg.shell }})" "$(id -un)"
+          getent passwd "$(id -un)"
       - name: install the suite
         run: |
           python -m venv /opt/suite
           /opt/suite/bin/pip install -e "conformance[linux-ui]"
-      # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
-      - name: full suite under a ${{ matrix.shell }} login shell (protocol, cli, behaviors)
-        if: ${{ !matrix.coverage }}
+      - name: download the stage
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.leg.stage }}-linux
+          path: target
+      - name: unpack the stage
+        run: tar -C target -xf "target/${{ matrix.leg.stage }}.tar"
+      # Exits with the ratchet's status over the listed ids this shard ran; check_ratchet.py lists the newly green ids
+      # in the job summary.
+      - name: shard ${{ matrix.shard }}/3 under a ${{ matrix.leg.shell }} login shell (protocol, cli, behaviors, ui)
+        if: ${{ !matrix.leg.coverage }}
         env:
           PYTHON: /opt/suite/bin/python
         run: >-
-          conformance/tools/run-linux.sh --out conformance/reports/${{ matrix.out }} --
-          ${{ matrix.must-pass }}
-      # On the stage the suite ran: the terminal surface draws its first frame, a page loads in WPE WebKit's sandbox,
-      # and the title bar, the sidebar and the terminal draw one color, the theme's background, with the sidebar tint
-      # washing the sidebar alone (screenshots of the maximized window, its weston started with --debug).
-      - name: llvm-tools (coverage)
-        if: matrix.coverage
-        run: rustup component add llvm-tools
-      - name: cargo-llvm-cov (coverage)
-        if: matrix.coverage
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov@0.9.1
+          conformance/tools/run-linux.sh --stage "$PWD/target/${{ matrix.leg.stage }}" --shard ${{ matrix.shard }}/3
+          --out conformance/reports/${{ matrix.leg.out }} --
+          ${{ matrix.leg.must-pass }}
       # The instrumented build under every layer. Only a run without a coverage report (exit 2) fails here: the ratchet
       # verdict (exit 1) is the entries above's to judge. Unsetting GITHUB_STEP_SUMMARY only keeps the ratchet checker's
       # own summary block out; the suite's report.md, appended below, still carries its ratchet verdict.
-      - name: instrumented suite (coverage)
-        if: matrix.coverage
+      - name: instrumented shard ${{ matrix.shard }}/3 (coverage)
+        if: matrix.leg.coverage
         shell: bash
         env:
           PYTHON: /opt/suite/bin/python
         run: |
           status=0
           env -u GITHUB_STEP_SUMMARY conformance/tools/run-linux.sh --coverage \
-            --out conformance/reports/${{ matrix.out }} || status=$?
+            --stage "$PWD/target/${{ matrix.leg.stage }}" --shard ${{ matrix.shard }}/3 \
+            --out conformance/reports/${{ matrix.leg.out }} || status=$?
           if ((status == 2)); then exit 2; fi
           echo "run-linux.sh exited $status (the ratchet is not judged here)"
-      - name: coverage floors
-        if: matrix.coverage
-        run: >-
-          /opt/suite/bin/python conformance/tools/check_coverage.py
-          --summary conformance/reports/${{ matrix.out }}/coverage/summary.md
-          --floor conformance/coverage/e2e-floor-desktop-linux.txt
-      - name: upload the e2e coverage
-        if: ${{ matrix.coverage && !cancelled() && hashFiles('conformance/reports/rust-linux-coverage/coverage/lcov.info') != '' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-coverage-desktop-linux
-          path: conformance/reports/${{ matrix.out }}/coverage/
-          if-no-files-found: error
+      # On the stage the suite ran: the terminal surface draws its first frame, a page loads in WPE WebKit's sandbox,
+      # and the title bar, the sidebar and the terminal draw one color, the theme's background, with the sidebar tint
+      # washing the sidebar alone (screenshots of the maximized window, its weston started with --debug).
       - name: probes (terminal frame, web process, window chrome)
-        if: matrix.shell == 'bash' && !matrix.coverage
+        if: matrix.leg.shell == 'bash' && matrix.shard == 1
         shell: bash
         run: |
           status=0
@@ -663,6 +822,79 @@ jobs:
         if: always()
         shell: bash
         run: |
+          report=conformance/reports/${{ matrix.leg.out }}/report.md
+          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: upload the shard's report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.leg.out }}-conformance-shard-${{ matrix.shard }}
+          # Includes per-test traces/ alongside the nodeid report.
+          path: conformance/reports/${{ matrix.leg.out }}/
+          retention-days: 3
+          if-no-files-found: warn
+
+  conformance-report:
+    name: conformance (${{ matrix.out }})
+    needs: conformance
+    # a failed shard still has its report to join; shards that never started (the `linux` job failed) have none
+    if: ${{ !cancelled() && needs.conformance.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - out: rust-linux
+          - out: rust-linux-zsh
+          - out: rust-linux-fish
+          - out: rust-linux-coverage
+            coverage: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: install the suite
+        run: python -m pip install -e conformance
+      - name: download the shards' reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ matrix.out }}-conformance-shard-*
+          path: shards
+      # Exits with the ratchet's status over the whole list; check_ratchet.py lists the newly green ids in the job
+      # summary.
+      - name: join the shards and hold the ratchet
+        if: ${{ !matrix.coverage }}
+        run: >-
+          python conformance/tools/merge_shards.py --title rust-linux --list conformance/rust-passing.txt
+          --out conformance/reports/${{ matrix.out }} shards/*
+      # Only a run without a coverage report (exit 2) fails here: the ratchet is the entries above's to judge.
+      - name: join the shards and their coverage
+        if: matrix.coverage
+        run: |
+          status=0
+          env -u GITHUB_STEP_SUMMARY python conformance/tools/merge_shards.py --title rust-linux \
+            --list conformance/rust-passing.txt --coverage desktop linux \
+            --out conformance/reports/${{ matrix.out }} shards/* || status=$?
+          if ((status == 2)); then exit 2; fi
+          echo "merge_shards.py exited $status (the ratchet is not judged here)"
+      - name: coverage floors
+        if: matrix.coverage
+        run: >-
+          python conformance/tools/check_coverage.py
+          --summary conformance/reports/${{ matrix.out }}/coverage/summary.md
+          --floor conformance/coverage/e2e-floor-desktop-linux.txt
+      - name: upload the e2e coverage
+        if: ${{ matrix.coverage && !cancelled() && hashFiles('conformance/reports/rust-linux-coverage/coverage/lcov.info') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-coverage-desktop-linux
+          path: conformance/reports/${{ matrix.out }}/coverage/
+          if-no-files-found: error
+      - name: report into the summary
+        if: always()
+        run: |
           report=conformance/reports/${{ matrix.out }}/report.md
           if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
       - name: upload the report
@@ -670,6 +902,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.out }}-conformance
-          # Includes per-test traces/ alongside the nodeid report.
+          # the shards' joined nodeid report, junit.xml and pytest.log, their per-test traces/, and each shard's own
+          # report under shards/
           path: conformance/reports/${{ matrix.out }}/
           if-no-files-found: warn

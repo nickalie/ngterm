@@ -170,19 +170,62 @@ jobs:
   # CLI and the live sessions' server staged by scripts/stage.sh, the protocol, cli and behaviors layers run against
   # them over the control socket's named pipe and the ui layer through UI Automation and SendInput (drivers/uia.py),
   # each instance on a private root (its home, application data, state dir and pipe; its window on the runner's
-  # desktop, which no one uses), its panes in Git for Windows' sh, its process tree reaped by pid. Held by conformance/rust-passing-windows.txt, the Windows ratchet beside rust-passing.txt. The
-  # harness's Windows self-tests (the pipe transport, the launch and stop) run first.
-  windows:
+  # desktop, which no one uses), its panes in Git for Windows' sh, its process tree reaped by pid. Held by
+  # conformance/rust-passing-windows.txt, the Windows ratchet beside rust-passing.txt.
+  #
+  # Four jobs make it, as in linux.yml:
+  # - windows-build: the harness's Windows self-tests (the pipe transport, the launch and stop), then the stage
+  #   (run-windows.sh --build-only), kept as the rust-windows-stage artifact; once more instrumented (--coverage), as
+  #   rust-windows-stage-cov for a day.
+  # - windows: the suite on that stage, split by test file into the shards of its matrix (run-windows.sh --stage
+  #   --shard I/N, agterm_conformance/shards.py; the matrix's `shard` list and the N of its run step go together). A
+  #   shard builds nothing; it judges the listed ids it ran, so a red one fails its own job.
+  # - coverage-windows: the same shards on the instrumented stage, every layer (the toolchain's llvm-tools read each
+  #   shard's profiles against the staged programs); the ratchet stays the windows job's, as instrumentation slows
+  #   the app.
+  # - windows-report: each of the two joined into its one report (tools/merge_shards.py), kept under the artifact
+  #   name the unsharded job had: the ratchet judged on the whole run, and for coverage the shards' lcov joined into
+  #   the desktop app's e2e line coverage on Windows (code_coverage.py e2e: the total, its distance to 90% and the
+  #   share markers exclude, per crate), judged by conformance/coverage/e2e-floor-desktop-windows.txt
+  #   (tools/check_coverage.py: the total and each crate). A shard that left no report, or a set that is not one
+  #   whole split, fails it. Its coverage/ alone (lcov.info: what a merge and the gap lists read) is uploaded as
+  #   e2e-coverage-desktop-windows. Each shard's own report is kept three days beside the joined one.
+  windows-build:
+    name: windows build (${{ matrix.build }})
     runs-on: windows-2025
-    timeout-minutes: 150
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the cargo caches the unsharded jobs saved
+          - build: release
+            cache: conformance-windows
+            stage: conformance-stage
+            artifact: rust-windows-stage
+            retention: 5
+          - build: coverage
+            cache: coverage-coverage-windows
+            stage: conformance-stage-cov
+            artifact: rust-windows-stage-cov
+            retention: 1
+            flag: --coverage
     steps:
       - uses: actions/checkout@v7
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      - name: llvm-tools (coverage)
+        if: matrix.build == 'coverage'
+        run: rustup component add llvm-tools
+      - name: cargo-llvm-cov (coverage)
+        if: matrix.build == 'coverage'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          key: conformance
+          shared-key: ${{ matrix.cache }}
       - uses: actions/cache@v6
         if: github.ref == 'refs/heads/main'
         with: &vendor-windows
@@ -203,81 +246,34 @@ jobs:
           python -m venv .venv
           .venv/Scripts/python.exe -m pip install -e conformance
       - name: the harness's Windows self-tests
+        if: matrix.build == 'release'
         run: >-
           .venv/Scripts/python.exe -m pytest conformance/selftests/test_transport.py
           conformance/selftests/test_client.py conformance/selftests/test_windows_launch.py
           conformance/selftests/test_uia.py
-      # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
-      # every stopped instance's logs (the harness's and the app's own), named after its test, uploaded with the report
-      # --must-pass live-any-shell: the login shell is Windows PowerShell, which the build runs its live sessions in; a
-      # skipped, failed or deselected Live test fails the job, as does finding none. --must-pass agent-chat: the
-      # Rust-only agent record and `ngtermctl agent` behind the Android chat view, likewise; --must-pass
-      # kitty-clipboard: a program's Rust-only Kitty clipboard protocol, likewise. --must-pass agterm-peer: the Windows
-      # viewer's ssh.exe attach of an upstream agterm Mac (the loopback-sshd tests need posix-command-line);
-      # --must-pass shell-profiles: the Rust-only shell profiles, the detected Windows shells included.
-      - name: suite (protocol, cli, behaviors, ui)
-        run: >-
-          CONFORMANCE_KEEP_LOGS="$(cygpath -w "$PWD/conformance/reports/rust-windows/instances")"
-          conformance/tools/run-windows.sh -- --must-pass live-any-shell --must-pass agent-chat --must-pass kitty-clipboard
-          --must-pass agterm-peer --must-pass shell-profiles
-      - name: report into the summary
-        if: always()
-        run: |
-          report=conformance/reports/rust-windows/report.md
-          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
-      - name: upload the report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: rust-windows-conformance
-          # Includes per-test traces/ alongside the nodeid report.
-          path: conformance/reports/rust-windows/
-          if-no-files-found: warn
-      # the staged tree the suite ran, for a run on a Windows VM against the same build (run-windows.sh --stage)
+      - name: build and stage
+        run: conformance/tools/run-windows.sh ${{ matrix.flag }} --build-only
+      # the staged tree the shards run; the release one also serves a run on a Windows VM against the same build
+      # (run-windows.sh --stage)
       - name: upload the stage
-        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: rust-windows-stage
-          path: target/conformance-stage/
-          retention-days: 5
-          if-no-files-found: warn
+          name: ${{ matrix.artifact }}
+          path: target/${{ matrix.stage }}/
+          retention-days: ${{ matrix.retention }}
+          if-no-files-found: error
 
-  # The windows job's suite again on an instrumented build (run-windows.sh --coverage: cargo-llvm-cov and the
-  # toolchain's llvm-tools), every layer, its report the desktop app's e2e line coverage on Windows (code_coverage.py
-  # e2e: the total, its distance to 90% and the share markers exclude, per crate), judged by
-  # conformance/coverage/e2e-floor-desktop-windows.txt (tools/check_coverage.py: the total and each crate) and nothing
-  # else: instrumentation slows the app, so the ratchet stays the windows job's. Its report (coverage/, traces/) is
-  # uploaded as rust-windows-coverage-conformance, and coverage/ alone (lcov.info: what a merge and the gap lists read)
-  # as e2e-coverage-desktop-windows.
-  coverage-windows:
+  windows:
+    name: windows (${{ matrix.shard }}/3)
+    needs: windows-build
     runs-on: windows-2025
-    timeout-minutes: 150
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
-      - name: rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - name: llvm-tools
-        run: rustup component add llvm-tools
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov@0.9.1
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          key: coverage
-      - uses: actions/cache@v6
-        if: github.ref == 'refs/heads/main'
-        with: &vendor-coverage-windows
-          path: ~/.cache/ngterm/vendor
-          key: vendor-ngterm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
-      - uses: actions/cache/restore@v6
-        if: github.ref != 'refs/heads/main'
-        with: *vendor-coverage-windows
-      - name: libghostty-vt prefix
-        run: scripts/build-ghostty-vt.sh
-      - name: terminal fonts
-        run: scripts/fetch-fonts.sh
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -285,40 +281,165 @@ jobs:
         run: |
           python -m venv .venv
           .venv/Scripts/python.exe -m pip install -e conformance
+      - name: download the stage
+        uses: actions/download-artifact@v8
+        with:
+          name: rust-windows-stage
+          path: target/conformance-stage
+      # Exits with the ratchet's status over the listed ids this shard ran; check_ratchet.py lists the newly green ids
+      # in the job summary.
+      # every stopped instance's logs (the harness's and the app's own), named after its test, uploaded with the report
+      # --must-pass live-any-shell: the login shell is Windows PowerShell, which the build runs its live sessions in; a
+      # skipped, failed or deselected Live test fails the job, as does finding none in any shard (windows-report).
+      # --must-pass agent-chat: the Rust-only agent record and `ngtermctl agent` behind the Android chat view,
+      # likewise; --must-pass kitty-clipboard: a program's Rust-only Kitty clipboard protocol, likewise. --must-pass
+      # agterm-peer: the Windows viewer's ssh.exe attach of an upstream agterm Mac (the loopback-sshd tests need
+      # posix-command-line); --must-pass shell-profiles: the Rust-only shell profiles, the detected Windows shells
+      # included.
+      - name: shard ${{ matrix.shard }}/3 (protocol, cli, behaviors, ui)
+        run: >-
+          CONFORMANCE_KEEP_LOGS="$(cygpath -w "$PWD/conformance/reports/rust-windows/instances")"
+          conformance/tools/run-windows.sh --stage "$PWD/target/conformance-stage" --shard ${{ matrix.shard }}/3
+          -- --must-pass live-any-shell --must-pass agent-chat --must-pass kitty-clipboard
+          --must-pass agterm-peer --must-pass shell-profiles
+      - name: report into the summary
+        if: always()
+        run: |
+          report=conformance/reports/rust-windows/report.md
+          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: upload the shard's report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-windows-conformance-shard-${{ matrix.shard }}
+          # Includes per-test traces/ alongside the nodeid report.
+          path: conformance/reports/rust-windows/
+          retention-days: 3
+          if-no-files-found: warn
+
+  coverage-windows:
+    name: coverage-windows (${{ matrix.shard }}/3)
+    needs: windows-build
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+      # the report of an instrumented run reads its profiles with the toolchain's llvm-cov and llvm-profdata
+      - name: rust toolchain (rust-toolchain.toml) with llvm-tools
+        run: |
+          rustup toolchain install
+          rustup component add llvm-tools
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: install the suite
+        run: |
+          python -m venv .venv
+          .venv/Scripts/python.exe -m pip install -e conformance
+      - name: download the stage
+        uses: actions/download-artifact@v8
+        with:
+          name: rust-windows-stage-cov
+          path: target/conformance-stage-cov
       # Only a run without a coverage report (exit 2) fails here: the ratchet verdict (exit 1) is the windows job's to
       # judge. Unsetting GITHUB_STEP_SUMMARY only keeps the ratchet checker's own summary block out; the suite's
       # report.md, appended below, still carries its ratchet verdict.
-      - name: instrumented suite (protocol, cli, behaviors, ui)
+      - name: instrumented shard ${{ matrix.shard }}/3 (protocol, cli, behaviors, ui)
         run: |
           status=0
           CONFORMANCE_KEEP_LOGS="$(cygpath -w "$PWD/conformance/reports/rust-windows-coverage/instances")" \
             env -u GITHUB_STEP_SUMMARY conformance/tools/run-windows.sh --coverage \
+            --stage "$PWD/target/conformance-stage-cov" --shard ${{ matrix.shard }}/3 \
             --out conformance/reports/rust-windows-coverage || status=$?
           if ((status == 2)); then exit 2; fi
           echo "run-windows.sh exited $status (the ratchet is not judged here)"
-      - name: coverage floors
-        run: >-
-          .venv/Scripts/python.exe conformance/tools/check_coverage.py
-          --summary conformance/reports/rust-windows-coverage/coverage/summary.md
-          --floor conformance/coverage/e2e-floor-desktop-windows.txt
-      - name: upload the e2e coverage
-        if: ${{ !cancelled() && hashFiles('conformance/reports/rust-windows-coverage/coverage/lcov.info') != '' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-coverage-desktop-windows
-          path: conformance/reports/rust-windows-coverage/coverage/
-          if-no-files-found: error
       - name: report into the summary
         if: always()
         run: |
           report=conformance/reports/rust-windows-coverage/report.md
           if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: upload the shard's report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-windows-coverage-conformance-shard-${{ matrix.shard }}
+          # coverage/ (the shard's e2e report: lcov.info) and the per-test traces/ beside the nodeid report
+          path: conformance/reports/rust-windows-coverage/
+          retention-days: 3
+          if-no-files-found: warn
+
+  windows-report:
+    name: windows (${{ matrix.out }})
+    needs: [windows, coverage-windows]
+    # a failed shard still has its report to join; shards that never started (the build failed) have none
+    if: ${{ !cancelled() && needs.windows.result != 'skipped' && needs.coverage-windows.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - out: rust-windows
+          - out: rust-windows-coverage
+            coverage: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: install the suite
+        run: python -m pip install -e conformance
+      - name: download the shards' reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ matrix.out }}-conformance-shard-*
+          path: shards
+      # Exits with the ratchet's status over the whole list; check_ratchet.py lists the newly green ids in the job
+      # summary.
+      - name: join the shards and hold the ratchet
+        if: ${{ !matrix.coverage }}
+        run: >-
+          python conformance/tools/merge_shards.py --title rust-windows
+          --list conformance/rust-passing-windows.txt
+          --out conformance/reports/${{ matrix.out }} shards/*
+      # Only a run without a coverage report (exit 2) fails here: the ratchet is the entry above's to judge.
+      - name: join the shards and their coverage
+        if: matrix.coverage
+        run: |
+          status=0
+          env -u GITHUB_STEP_SUMMARY python conformance/tools/merge_shards.py --title rust-windows \
+            --list conformance/rust-passing-windows.txt --coverage desktop windows \
+            --out conformance/reports/${{ matrix.out }} shards/* || status=$?
+          if ((status == 2)); then exit 2; fi
+          echo "merge_shards.py exited $status (the ratchet is not judged here)"
+      - name: coverage floors
+        if: matrix.coverage
+        run: >-
+          python conformance/tools/check_coverage.py
+          --summary conformance/reports/${{ matrix.out }}/coverage/summary.md
+          --floor conformance/coverage/e2e-floor-desktop-windows.txt
+      - name: upload the e2e coverage
+        if: ${{ matrix.coverage && !cancelled() && hashFiles('conformance/reports/rust-windows-coverage/coverage/lcov.info') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-coverage-desktop-windows
+          path: conformance/reports/${{ matrix.out }}/coverage/
+          if-no-files-found: error
+      - name: report into the summary
+        if: always()
+        run: |
+          report=conformance/reports/${{ matrix.out }}/report.md
+          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
       - name: upload the report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: rust-windows-coverage-conformance
-          # coverage/ (the e2e report: lcov.info, lcov-measured.info, summary.md) and the per-test traces/ beside the
-          # nodeid report
-          path: conformance/reports/rust-windows-coverage/
+          name: ${{ matrix.out }}-conformance
+          # the shards' joined nodeid report, junit.xml and pytest.log, their per-test traces/ and instances/, and
+          # each shard's own report (with its coverage/) under shards/
+          path: conformance/reports/${{ matrix.out }}/
           if-no-files-found: warn

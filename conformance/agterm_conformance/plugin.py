@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 
-from agterm_conformance import coverage, llvm_profiles, selection, wait
+from agterm_conformance import coverage, llvm_profiles, selection, shards, wait
 from agterm_conformance.drivers import trace
 from agterm_conformance.client import Response, SocketOutsideRoot, Stream, check_under_root
 from agterm_conformance.match import assert_ok
@@ -187,6 +187,19 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         metavar="EXPRESSION",
         help="with --ratchet-only: also run the tests this -k expression matches (repeatable)",
     )
+    group.addoption(
+        "--shard",
+        default=None,
+        metavar="I/N",
+        help="run part I of the collection split by test file into N parts; tools/merge_shards.py joins the reports",
+    )
+    group.addoption(
+        "--shard-weights",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="with --shard: each test file's recorded seconds (`seconds path` lines), which the split balances",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -230,6 +243,15 @@ def pytest_configure(config: pytest.Config) -> None:
         if unknown := sorted(set(must_pass) - set(CAPABILITIES)):
             raise pytest.UsageError(f"--must-pass: unknown capability {', '.join(unknown)}")
         config.pluginmanager.register(MustPass(frozenset(must_pass), config), "agterm-must-pass")
+    shard, weights = config.getoption("shard"), config.getoption("shard_weights")
+    if shard is None and weights is not None:
+        raise pytest.UsageError("--shard-weights needs --shard")
+    if shard is not None:
+        if options.coverage_gate:
+            raise pytest.UsageError("--shard cannot be combined with --coverage-gate")
+        recorded = {} if weights is None else shards.read_weights(config.invocation_params.dir / weights)
+        # last: its tryfirst collection hook then runs ahead of every other plugin's here
+        config.pluginmanager.register(shards.Split(shards.parse(shard), recorded), shards.PLUGIN_NAME)
 
 
 def check_coverage_stage(options: ImplOptions) -> None:
@@ -309,6 +331,8 @@ class MustPass:
         self.spoiled: set[str] = set()
         self.excused: set[str] = set()
         self.problems: list[str] = []
+        # by capability: the tests requiring it, and those of them that passed
+        self.counts: dict[str, dict[str, int]] = {}
 
     @pytest.hookimpl(tryfirst=True)
     def pytest_collection_modifyitems(self, items: list[pytest.Item]) -> None:
@@ -345,13 +369,19 @@ class MustPass:
 
     @pytest.hookimpl(tryfirst=True)
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
-        self.problems = [f"no collected test requires {capability}" for capability in sorted(self.uncollected)]
         passed = self.passed - self.spoiled
-        self.problems += [
-            f"no test requiring {capability} passed"
-            for capability in sorted(self.capabilities - self.uncollected)
-            if not any(capability in self.requires_of[nodeid] for nodeid in self.required if nodeid in passed)
-        ]
+        self.counts = {
+            capability: {
+                "required": sum(1 for nodeid in self.required if capability in self.requires_of[nodeid]),
+                "passed": sum(1 for nodeid in self.required if nodeid in passed and capability in self.requires_of[nodeid]),
+            }
+            for capability in sorted(self.capabilities)
+        }
+        self.problems = []
+        # A shard holds only its own tests: whether any test requires a capability, and whether one passed, is the
+        # merged report's to say (tools/merge_shards.py, from the counts).
+        if not session.config.pluginmanager.has_plugin(shards.PLUGIN_NAME):
+            self.problems = shards.capability_problems(self.counts)
         self.problems += [
             nodeid for nodeid in self.required
             if nodeid not in passed and (nodeid not in self.excused or nodeid in self.spoiled)
@@ -377,6 +407,8 @@ class NodeidReport:
         # set by `--ratchet-only` when nothing else narrowed the collection (selection.RatchetOnly)
         self.mode: str | None = None
         self.merged: dict[str, dict[str, Any]] = {}
+        # seconds by node id, setup and teardown included (the last attempt's): what the shard split weighs
+        self.durations: dict[str, float] = {}
         self.collection_errors: list[dict[str, Any]] = []
 
     def pytest_deselected(self, items: list[pytest.Item]) -> None:
@@ -392,8 +424,10 @@ class NodeidReport:
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         if report.outcome == "rerun":
             self.merged.pop(report.nodeid, None)
+            self.durations.pop(report.nodeid, None)
             return
         record = self.merged.setdefault(report.nodeid, _not_run())
+        self.durations[report.nodeid] = self.durations.get(report.nodeid, 0.0) + report.duration
         if report.failed:
             if report.when == "call":
                 record.update(outcome="failed", skip=None, reason=None)
@@ -425,15 +459,24 @@ class NodeidReport:
         options = session.config.stash[_OPTIONS_KEY]
         run: dict[str, Any] = {"kind": "run", "partial": partial, "mode": mode}
         run.update(catalog=str(catalog_path(session.config, options)), ui_ids=str(ui_ids_path(session.config, options)))
+        split = session.config.pluginmanager.get_plugin(shards.PLUGIN_NAME)
+        if split is not None:
+            run["shard"] = split.header()
         lines: list[dict[str, Any]] = [run]
         for item in getattr(session, "items", []):
-            lines.append(
-                {"kind": "test", "nodeid": item.nodeid, **self.merged.get(item.nodeid, _not_run()), "covers": _covers(item)}
-            )
+            lines.append({
+                "kind": "test", "nodeid": item.nodeid, **self.merged.get(item.nodeid, _not_run()),
+                "covers": _covers(item), "duration": round(self.durations.get(item.nodeid, 0.0), 3),
+            })
         lines += self.collection_errors
         must_pass = session.config.pluginmanager.get_plugin("agterm-must-pass")
         if must_pass is not None:
             lines += [{"kind": "must-pass", "problem": problem} for problem in must_pass.problems]
+            if split is not None:
+                lines += [
+                    {"kind": "must-pass-capability", "capability": capability, **count}
+                    for capability, count in must_pass.counts.items()
+                ]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
 

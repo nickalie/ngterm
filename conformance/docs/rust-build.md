@@ -532,11 +532,16 @@ plus a task's `--also`/`--also-k` selections), judged like a full run, a listed 
 A change's local check is a partial run over the ids that cover what it touches; the full suite runs in CI on every PR
 and push to main (conformance/README.md > Rust runner and ratchet).
 The script exits with the ratchet's status, or 1 when an instance root was left behind, whatever pytest's own status.
+CI runs each leg as shards (`--shard I/N`, split by test file): a shard's report is judged on the listed ids it ran,
+and `conformance/tools/merge_shards.py` joins a leg's shards into one report judged as the whole run it is; a shard
+without a report, or a set that is not one whole split, is no usable report (exit 2). The `--must-pass` problems of
+a whole capability (no test requires it, or none passed) are the joined report's.
 
 On Windows `conformance/tools/run-windows.sh` does the same from Git Bash, against the build staged with `.exe`
 binaries (GPUI build below), into `conformance/reports/rust-windows/`, and holds its own list,
 `conformance/rust-passing-windows.txt`, with the same checker and rules (`check_ratchet.py --list`). The `windows`
-job of `.github/workflows/cross-platform.yml` runs it on every PR, push to main and push to a `ci/**` branch.
+jobs of `.github/workflows/cross-platform.yml` run it, sharded the same way, on every PR, push to main and push to a
+`ci/**` branch.
 
 The historical ratchet ID `test_points_are_refused_for_an_overlay_a_presenter_shows` now checks the older-presenter
 downgrade rather than an obsolete origin refusal. Replica-local refusal is checked by core presenter tests;
@@ -596,7 +601,7 @@ theme's background, the sidebar tint washing the sidebar alone).
 On Windows. `run-windows.sh` builds the release app with its `html` feature (the HTML overlays on WebView2, which
 needs the WebView2 Runtime), `ngterm-ctl` and `ngterm-session`, and stages them with the same script
 (`bin\ngterm.exe`, `bin\ngtermctl.exe`, `bin\ngterm-session.exe` beside the same `share\`); `--stage DIR` runs a tree
-staged elsewhere, such as the `windows` job's `rust-windows-stage` artifact on a VM. No lavapipe, weston or bus: the
+staged elsewhere, such as the `windows-build` job's `rust-windows-stage` artifact on a VM. No lavapipe, weston or bus: the
 build renders through DirectX on the machine's adapter, on the desktop the run is on (Launch contract above). The
 probes are Linux's.
 

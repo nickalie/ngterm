@@ -8,7 +8,9 @@ collection error or a `--must-pass` problem breaks the run. Prints the breaks, t
 listed yet, and a verdict; `--add` merges those ids into the list when the ratchet holds, and never removes one.
 The report's run header names its mode: `full` and `ratchet-only` (`--ratchet-only`: the listed ids plus a task's
 extras ran) judge every listed id and warn about one not collected; `partial` (a narrower selection) judges only
-the listed ids that ran, so it can neither break nor shrink the list through what it left out. Appends a markdown
+the listed ids that ran, so it can neither break nor shrink the list through what it left out. One shard's report
+(`pytest --shard I/N`, its header's `shard`) is judged like a partial one, whatever its mode: the other shards ran
+the rest, and `merge_shards.py` joins them into the report that is judged whole. Appends a markdown
 summary to `$GITHUB_STEP_SUMMARY` when it is set. Exit 0: holds, 1: broken, 2: usage error or a bad input file.
 """
 
@@ -58,6 +60,8 @@ class Report:
     tests: dict[str, TestRecord] = field(default_factory=dict)
     collection_errors: list[tuple[str, str]] = field(default_factory=list)
     must_pass: list[str] = field(default_factory=list)
+    # `I/N` for one shard's report, not yet merged with the others
+    shard: str | None = None
 
 
 @dataclass
@@ -71,6 +75,7 @@ class Verdict:
     partial: bool
     listed: int
     mode: str = "full"
+    shard: str | None = None
     breaks: list[str] = field(default_factory=list)
     not_run: list[str] = field(default_factory=list)
     not_collected: list[str] = field(default_factory=list)
@@ -87,7 +92,8 @@ class Verdict:
         if self.not_collected:
             notes.append(f"{len(self.not_collected)} not collected")
         suffix = f" ({', '.join(notes)})" if notes else ""
-        return f"ratchet holds: {self.listed} listed id(s){suffix}, {self.mode} run"
+        shard = f", shard {self.shard} alone" if self.shard else ""
+        return f"ratchet holds: {self.listed} listed id(s){suffix}, {self.mode} run{shard}"
 
 
 def _field(record: dict[str, Any], key: str, types: tuple[type, ...], where: str) -> Any:
@@ -95,6 +101,19 @@ def _field(record: dict[str, Any], key: str, types: tuple[type, ...], where: str
     if not isinstance(value, types):
         raise InputError(f"{where}: {key!r} is missing or has the wrong type")
     return value
+
+
+def _shard(record: dict[str, Any], where: str) -> str | None:
+    """`I/N` of a run header's `shard`, None for a whole run's."""
+    shard = record.get("shard")
+    if shard is None:
+        return None
+    if not isinstance(shard, dict):
+        raise InputError(f"{where}: 'shard' is not an object")
+    index, count = (_field(shard, key, (int,), where) for key in ("index", "count"))
+    if isinstance(index, bool) or isinstance(count, bool) or not 1 <= index <= count:
+        raise InputError(f"{where}: shard {index}/{count} is not one of its run's")
+    return f"{index}/{count}"
 
 
 def read_report(path: Path) -> Report:
@@ -123,7 +142,7 @@ def read_report(path: Path) -> Report:
             mode = record.get("mode", "partial" if partial else "full")
             if mode not in MODES or (mode == "full") == partial:
                 raise InputError(f"{where}: run mode {mode!r} does not fit partial={partial}")
-            report = Report(partial=partial, mode=mode)
+            report = Report(partial=partial, mode=mode, shard=_shard(record, where))
             continue
         if report is None:
             raise InputError(f"{where}: a {kind!r} record before the run header")
@@ -147,6 +166,9 @@ def read_report(path: Path) -> Report:
             )
         elif kind == "must-pass":
             report.must_pass.append(_field(record, "problem", (str,), where))
+        elif kind == "must-pass-capability":
+            # a shard's counts, which merge_shards.py turns into the whole run's problems
+            _field(record, "capability", (str,), where)
         else:
             raise InputError(f"{where}: unknown kind {kind!r}")
     if report is None:
@@ -204,13 +226,14 @@ def host_dependent_skip(test: TestRecord) -> bool:
 
 
 def judge(report: Report, ratchet: RatchetList) -> Verdict:
-    verdict = Verdict(partial=report.partial, listed=len(ratchet.ids), mode=report.mode)
+    verdict = Verdict(partial=report.partial, listed=len(ratchet.ids), mode=report.mode, shard=report.shard)
     for nodeid in ratchet.ids:
         test = report.tests.get(nodeid)
         if test is None:
             # A ratchet-only run selected every listed id, so one it lacks is gone, as in a full run. A narrower
-            # selection leaves the unselected ids unjudged: such a run neither breaks nor shrinks the list.
-            if report.mode != "partial":
+            # selection leaves the unselected ids unjudged: such a run neither breaks nor shrinks the list. So does
+            # one shard, whose missing ids the other shards ran.
+            if report.mode != "partial" and report.shard is None:
                 verdict.not_collected.append(nodeid)
         elif host_dependent_skip(test):
             verdict.not_run.append(f"{test.describe()}: {nodeid}")

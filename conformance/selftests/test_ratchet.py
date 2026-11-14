@@ -260,6 +260,31 @@ def test_a_narrower_run_adds_only_what_ran_and_removes_nothing(
     assert ratchet.read_text() == HEADER + f"{A}\n{B}\n{C}\n"
 
 
+def test_one_shards_report_is_judged_on_the_ids_it_ran(files: tuple[Path, Path], capsys: pytest.CaptureFixture[str]) -> None:
+    """The other shards ran the rest: a listed id this one lacks is neither a break nor a warning, a red one breaks."""
+    report, ratchet = files
+    write_list(ratchet, A, B, C)
+    shard = {"index": 2, "count": 3, "collected": 3, "split": "0" * 64}
+    lines = [{"kind": "run", "partial": False, "mode": "full", "shard": shard}, rec(A),
+             {"kind": "must-pass-capability", "capability": "live-sessions", "required": 0, "passed": 0}]
+    report.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    code, out, _ = check(capsys, report, ratchet)
+    assert (code, out) == (0, ["ratchet holds: 3 listed id(s), full run, shard 2/3 alone"])
+    lines[1] = rec(A, "failed")
+    report.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    code, out, _ = check(capsys, report, ratchet)
+    assert (code, out[0]) == (1, f"BROKEN failed: {A}")
+
+
+@pytest.mark.parametrize("shard", [3, {"index": 0, "count": 2}, {"index": 3, "count": 2}, {"index": True, "count": 2}, {}])
+def test_a_bad_shard_header_is_refused(files: tuple[Path, Path], capsys: pytest.CaptureFixture[str], shard: Any) -> None:
+    report, ratchet = files
+    write_list(ratchet, A)
+    report.write_text(json.dumps({"kind": "run", "partial": False, "shard": shard}) + "\n", encoding="utf-8")
+    code, _, err = check(capsys, report, ratchet)
+    assert code == 2 and "shard" in err
+
+
 def test_a_partial_run_leaves_a_listed_id_it_did_not_run_unjudged(
     files: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
