@@ -8,6 +8,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.TestGraph
+import com.nickalie.ngterm.android.awaitStore
 import com.nickalie.ngterm.android.awaitText
 import com.nickalie.ngterm.android.data.RED_PNG
 import com.nickalie.ngterm.android.data.allowed
@@ -170,7 +171,8 @@ class ClipboardReadPromptTest {
         compose.onNodeWithText("Always allow on build-01").performClick()
         compose.waitForIdle()
         request(2u)
-        compose.waitForIdle()
+        // an unasked read is answered once its snapshot is taken on the IO dispatcher, which idling doesn't see
+        compose.awaitStore { answers().size >= 2 }
         compose.onNodeWithText("Let docs-site read your clipboard?").assertDoesNotExist()
         assertEquals(listOf(1uL to allowed(copied), 2uL to allowed(copied)), answers())
     }

@@ -18,6 +18,9 @@ fun <T> T.awaitText(
     }
 }
 
+/** Waits until [condition] holds, as the stores' threads bring it about. */
+fun ComposeTestRule.awaitStore(condition: () -> Boolean) = waitUntil(STORE_WAIT_MS, condition)
+
 /** Waits until a node is described as [description] (a status badge reads as its word). */
 fun <T> T.awaitDescription(description: String) where T : ComposeTestRule, T : SemanticsNodeInteractionsProvider {
     waitUntil(STORE_WAIT_MS) {
