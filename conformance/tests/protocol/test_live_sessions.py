@@ -15,6 +15,7 @@ vocabulary's directory variable, or the session server of the namespace).
 harness (see the catalog exemption)."""
 
 import base64
+import concurrent.futures
 import contextlib
 import itertools
 import json
@@ -726,6 +727,76 @@ def test_a_viewer_that_falls_behind_is_dropped_at_its_backlog(live):
         _wait_dropped(live, sid, slow, gen, timeout=120, between=burst)
         while (chunk := _take(slow, 65536, timeout=10)) != b"":
             assert chunk is not None, "the dropped viewer's stream stayed open"
+    _a_new_viewer_gets_frames(live, sid)
+
+
+@LIVE_IN_ANY_SHELL
+@pytest.mark.covers("live.present", "notify", "field:tree.session.presenters", streams=("live.present",))
+def test_a_viewer_that_stops_reading_is_heard_until_it_is_dropped(live):
+    """A viewer that reads nothing is still heard while a write to it waits: its `presenter.acquire` makes it the
+    presenter. Then the write's timeout drops it like any viewer that stops reading, and the session goes on."""
+    sid = _live_session(live)
+    stalled, gen = _subscribed(live, sid, "presenter")
+    with stalled:
+        _presenters(live, sid, {"mirrors": 1})
+        # far past the buffer of a socket or a pipe, so a write to the viewer waits
+        for _ in range(6):
+            assert_ok(live.request("notify", sid, body=BIG_NOTIFY_BODY))
+        stalled.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
+        _presenters(live, sid, {"mirrors": 0, "presenter": True})
+
+        def another():
+            time.sleep(0.5)
+            assert_ok(live.request("notify", sid, body=BIG_NOTIFY_BODY))
+
+        _wait_dropped(live, sid, stalled, gen, timeout=60, between=another)
+        _until_ended(stalled)
+    _a_new_viewer_gets_frames(live, sid)
+
+
+STALLED_VIEWERS = 6
+
+
+def _notify_bodies(stream, last):
+    """The bodies of the `notify` frames `stream` reads, up to and including `last`."""
+    bodies = []
+    while not bodies or bodies[-1] != last:
+        bodies.append(wait_frame(stream.read, "notify", stream.send, timeout=60)["notify"]["body"])
+    return bodies
+
+
+@LIVE_IN_ANY_SHELL
+@pytest.mark.covers("live.present", "notify", "field:tree.session.presenters", streams=("live.present",))
+def test_viewers_that_stop_reading_together_are_dropped_while_a_reading_one_gets_every_frame(live):
+    """Several viewers that stop reading at once are each dropped, while a viewer that reads gets every frame sent
+    meanwhile, in order, and stays; the app answers throughout and a later viewer gets frames."""
+    sid = _live_session(live)
+    reading, _ = _subscribed(live, sid, "mirror")
+    with reading, contextlib.ExitStack() as viewers:
+        stalled = [viewers.enter_context(_subscribed(live, sid, "mirror")[0]) for _ in range(STALLED_VIEWERS)]
+        _presenters(live, sid, {"mirrors": STALLED_VIEWERS + 1})
+        sent = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            received = pool.submit(_notify_bodies, reading, "last")
+
+            def notify(body):
+                assert_ok(live.request("notify", sid, body=body))
+                sent.append(body)
+
+            for n in range(BIG_NOTIFIES):
+                notify(f"{n:04d}{BIG_NOTIFY_BODY}")
+            deadline = time.monotonic() + 60
+            while find_session(live.tree(), sid).get("presenters") != {"mirrors": 1}:
+                assert time.monotonic() < deadline, find_session(live.tree(), sid).get("presenters")
+                assert not received.done(), received.result()
+                time.sleep(0.5)
+                notify(f"{len(sent):04d}{BIG_NOTIFY_BODY}")
+            for viewer in stalled:
+                _until_ended(viewer)
+            notify("last")
+            assert received.result(timeout=60) == sent
+        assert assert_ok(live.request("version"))
+        _presenters(live, sid, {"mirrors": 1})
     _a_new_viewer_gets_frames(live, sid)
 
 

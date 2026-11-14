@@ -8,6 +8,7 @@ import itertools
 import json
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 
@@ -1502,6 +1503,8 @@ LIVE_IN_ANY_SHELL = pytest.mark.requires(
     any=True,
     reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell",
 )
+# A notification's body rides its frame whole: a few fill any pipe or socket toward a reader that takes nothing.
+BIG_NOTIFY_BODY = "x" * (64 * 1024)
 PRESENTATION_HELLO = {
     "kind": "hello",
     "gen": 0,
@@ -1629,6 +1632,43 @@ def test_live_present_ends_when_the_origin_ends_the_stream(cli, live):
         assert_ok(live.request("session.close", sid))
         ended = bridge.finish()
         assert ended.returncode == 0, (ended.stdout, ended.stderr)
+
+
+@LIVE_IN_ANY_SHELL
+@pytest.mark.covers("cli:live present", "notify")
+def test_live_present_into_a_reader_that_stops_is_dropped(cli, live):
+    """`live present` piped into a reader that stops reading is dropped once the app's write to it waits past its
+    timeout, its input still acking; the app keeps serving, and the bridge ends by itself once its output is read."""
+    cli = cli.on(live.instance)
+    sid = _live_session(live)
+    with cli.spawn(*cli.vocabulary.cli("live", "present", sid), interactive=True) as bridge:
+
+        def read(seconds):
+            return json.loads(bridge.line(seconds))
+
+        def send(frame):
+            bridge.send(json.dumps(frame) + "\n")
+
+        send(PRESENTATION_HELLO)
+        gen = wait_frame(read, "hello", send)["gen"]
+        wait_frame(read, "snapshot", send)
+        live.wait_tree(lambda tree: find_session(tree, sid).get("presenters") == {"mirrors": 1})
+        bridge.hold()
+        # far past what the pipes and sockets between the app and the reader hold
+        for _ in range(32):
+            assert_ok(live.request("notify", sid, body=BIG_NOTIFY_BODY))
+        deadline = time.monotonic() + 60
+        while "presenters" in find_session(live.tree(), sid):
+            assert time.monotonic() < deadline, "the bridge was not dropped within 60s"
+            # an ack is a sign of life, so the heartbeat's silence bound cannot drop it first on a slow runner
+            send({"kind": "ack", "gen": gen, "rev": 0})
+            time.sleep(0.5)
+            assert_ok(live.request("notify", sid, body=BIG_NOTIFY_BODY))
+        assert_ok(live.request("session.status", sid, status="active"))
+        bridge.release()
+        ended = bridge.finish()
+        assert ended.returncode == 0, (ended.stdout[-500:], ended.stderr)
+    assert_ok(live.request("session.close", sid))
 
 
 @LIVE

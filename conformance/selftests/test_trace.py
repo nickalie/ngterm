@@ -107,6 +107,27 @@ def test_cli_includes_consumed_stream_lines(tmp_path):
     assert record.logs['cli'][1]['returncode'] == 0
 
 
+def test_a_held_cli_process_blocks_on_its_output_until_released(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from agterm_conformance.plugin import CliProcess
+    # after its first line and a go-ahead, far past any OS pipe's buffer, so the writer waits on a reader
+    script = ('import sys\nprint("first", flush=True)\nsys.stdin.readline()\n'
+              'for n in range(4096): sys.stdout.write(f"{n:04d}" + "x" * 1019 + "\\n")')
+    with CliProcess([sys.executable, '-c', script], dict(os.environ), tmp_path, None, interactive=True) as process:
+        assert process.line() == 'first'
+        process.hold()
+        process.send('go\n')
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.process.wait(timeout=1)
+        process.release()
+        assert process.line().startswith('0000')
+        result = process.finish()
+    assert result.returncode == 0
+    assert len(result.stdout.splitlines()) == 4095
+
+
 def test_action_success_failure_and_tree_dump(tmp_path):
     from test_drivers import FakeDriver
     from agterm_conformance.drivers.base import Element, _describe

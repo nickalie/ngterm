@@ -948,6 +948,8 @@ class CliProcess:
         self._transcript = []
         self._trace_entry = None
         self._lines: queue.Queue[str | None] = queue.Queue()
+        self._reading = threading.Event()
+        self._reading.set()
         self._stderr: str | None = None
         try:
             self.process = subprocess.Popen(
@@ -978,7 +980,17 @@ class CliProcess:
         for line in self.process.stdout:
             self._transcript.append(line)
             self._lines.put(line.rstrip("\n"))
+            self._reading.wait()
         self._lines.put(None)
+
+    def hold(self) -> None:
+        """Stops reading stdout after the line being read, so a command writing more blocks on it as one piped into a
+        stalled reader does."""
+        self._reading.clear()
+
+    def release(self) -> None:
+        """Reads stdout again after `hold`."""
+        self._reading.set()
 
     def send(self, text: str) -> None:
         assert self.process.stdin is not None
@@ -998,6 +1010,7 @@ class CliProcess:
 
     def finish(self, timeout: float = CLI_TIMEOUT) -> CliResult:
         """Wait for the process to exit by itself; the stdout lines not yet read come back as `stdout`."""
+        self.release()
         returncode = self.process.wait(timeout=timeout)
         self._reader.join(timeout)
         lines: list[str] = []
@@ -1029,6 +1042,7 @@ class CliProcess:
                 self.process.pid, self.argv[0], self.process.returncode, "CliProcess.close: ended before it exited",
                 terminated=terminated,
             )
+        self.release()
         self._reader.join(STOP_GRACE)
         self.stderr()
         self._record_trace()
