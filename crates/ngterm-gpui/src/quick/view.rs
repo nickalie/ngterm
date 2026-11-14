@@ -176,7 +176,7 @@ impl QuickView {
             }
             Settle::Wait => {}
             Settle::Again => self.settle_zoom_after_a_frame(window, cx),
-            Settle::Request => self.request_zoom(window, cx),
+            Settle::Request => Self::request_zoom(window, cx),
         }
     }
 
@@ -193,14 +193,13 @@ impl QuickView {
     }
 
     #[cfg(not(target_os = "macos"))]
-    #[expect(clippy::unused_self, reason = "the macOS form keeps the panel's frame")]
-    fn request_zoom(&mut self, window: &mut Window, _: &mut Context<Self>) {
+    fn request_zoom(window: &mut Window, _: &mut Context<Self>) {
         window.zoom_window();
     }
 
     /// Gives the panel its screen's visible frame, or the frame it had ([`super::zoom`]).
     #[cfg(target_os = "macos")]
-    fn request_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn request_zoom(window: &mut Window, cx: &mut Context<Self>) {
         // AppKit reports the resize from inside the call, which GPUI takes only outside an update
         cx.spawn_in(window, async move |view, cx| {
             let target = view.update_in(cx, |view, window, _| view.frame_target(window));
