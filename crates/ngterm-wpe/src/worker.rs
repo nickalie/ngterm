@@ -379,6 +379,16 @@ mod tests {
     }
 
     #[test]
+    fn a_worker_whose_read_times_out_before_its_hello_ends_failed_saying_nothing() {
+        use std::os::fd::AsFd as _;
+
+        let (app, mut child) = faulty_worker("timeout-before-hello");
+        assert_eq!(child.wait().unwrap().code(), Some(2));
+        let said = super::wire::recv(app.as_fd(), super::wire::Limits::FROM_WORKER).unwrap();
+        assert!(said.is_none(), "{said:?}");
+    }
+
+    #[test]
     fn a_worker_asked_to_stop_reading_after_its_hello_refuses_the_start_and_waits_to_be_killed() {
         use std::os::fd::AsFd as _;
 

@@ -1,6 +1,6 @@
 """The Linux build's page worker (`ngterm-web`, the process its HTML pages' engine runs in) when it breaks: a worker that
-ends or stops reading during its start fails the start, one that breaks its protocol later fails every page for the
-rest of the run, a frame it sends for a page the app closed is dropped, and a worker whose app quit ends. A
+ends, fails a read or stops reading during its start fails the start, one that breaks its protocol later fails every
+page for the rest of the run, a frame it sends for a page the app closed is dropped, and a worker whose app quit ends. A
 Rust-only extension (capability `web-worker-faults`, conformance/docs/rust-build.md > Rust-only extensions): each test
 launches an instance of its own whose worker plays one fault (`launch(web_worker_fault=...)`), since the engine starts
 once per process and a failed one stays failed."""
@@ -121,11 +121,13 @@ def faulty(adapter, request):
     [
         # the worker's socket ends before its hello
         ("end-before-hello", "the worker ended while starting"),
+        # the worker says no hello and its read of the configuration fails: it ends while the app waits for the hello
+        ("timeout-before-hello", "the worker ended while starting"),
         # the worker reads nothing past its hello, so the configuration the app sends it cannot go
         ("deaf-after-hello", "Broken pipe (os error 32)"),
     ],
     indirect=["faulty"],
-    ids=["end-before-hello", "deaf-after-hello"],
+    ids=["end-before-hello", "timeout-before-hello", "deaf-after-hello"],
 )
 def test_a_page_worker_that_breaks_its_start_fails_the_pages(faulty, reason):
     first_session = _new(faulty)

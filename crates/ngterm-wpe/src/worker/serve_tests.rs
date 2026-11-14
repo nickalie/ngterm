@@ -255,6 +255,7 @@ fn a_fault_is_named_as_the_suite_names_it() {
     for (name, fault) in [
         ("end-before-hello", Fault::EndBeforeHello),
         ("deaf-after-hello", Fault::DeafAfterHello),
+        ("timeout-before-hello", Fault::TimeoutBeforeHello),
         ("hello-after-hang-up", Fault::HelloAfterHangUp),
         ("hello-on-evaluate", Fault::HelloOnEvaluate),
         ("frame-after-close", Fault::FrameAfterClose),

@@ -118,7 +118,7 @@ share is asserted directly, with no capability.
 | `pages-survive` |  | Rust-only: an HTML page lives until it is closed: a page handed to the viewer presenting a session is parked, its slot reserved and its outcome pending, when that presenter or its page helper goes, and handed again to the next presenter that speaks pages |
 | `kitty-clipboard` |  | Rust-only: a program's Kitty clipboard protocol (OSC 5522) reads and writes per MIME type, refused under `clipboard-read`/`clipboard-write = deny`, asked about with a preview of their data under `ask`, a listing answered without a prompt, in a plain pane and in a Live one through the session server |
 | `agterm-peer` |  | Rust-only: a Mac running upstream agterm is a remote origin too: `live tree HOST` and `live attach HOST ID` reach its `agtermctl zmx`, its panes attach through its own zmx, `agterm:HOST` and `ngterm:HOST` pin the app, and the listing and the title bar name what agterm lacks |
-| `web-worker-faults` |  | Rust-only, Linux: the HTML pages' engine runs in a worker process (`ngterm-web`) a launch can make misbehave (`launch(web_worker_fault=...)`): end before its hello, stop reading after it, say hello only once its app is gone, answer an evaluation with a second hello, send a frame for a page the app closed |
+| `web-worker-faults` |  | Rust-only, Linux: the HTML pages' engine runs in a worker process (`ngterm-web`) a launch can make misbehave (`launch(web_worker_fault=...)`): end before its hello, fail its read before it, stop reading after it, say hello only once its app is gone, answer an evaluation with a second hello, send a frame for a page the app closed |
 | `shell-profiles` |  | Rust-only: a pane runs a shell profile (an absolute executable, its arguments and variables) in place of the login shell: Settings' `defaultShellProfile` for new sessions, a `shellProfiles` entry from the sidebar's + menu for one session, kept by the pane through splits, duplicates and restores |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
@@ -304,7 +304,7 @@ ratchet runs with `--must-pass shell-profiles`: the three Linux legs and Windows
 `ngterm-wpe-client`'s `worker`), and a launch can make that worker break on purpose, so the app's handling of a broken
 worker runs end to end, every run: `launch(web_worker_fault=...)` sets `NGTERM_TEST_WEB_WORKER_FAULT`, which the
 worker inherits with the app's environment and nothing else reads (`ngterm-wpe`'s `worker::serve::Fault`). A worker
-that ends before its hello, or stops reading after it, fails the engine's start, and a later page is refused with the
+that ends before its hello, fails its read before it, or stops reading after it, fails the engine's start, and a later page is refused with the
 reason; one that answers an evaluation with a second hello is dropped, its evaluation failed and every page with
 "the web engine ended unexpectedly"; a frame it sends for a page the app closed is dropped; one that says hello only
 once its app hung up ends when the app quits during its start. Its tests are in `tests/protocol/test_page_worker.py`,

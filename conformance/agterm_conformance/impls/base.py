@@ -195,8 +195,9 @@ CAPABILITIES: Mapping[str, str] = {
     "HOST ID` reach its `agtermctl zmx`, its panes attach through its own zmx, `agterm:HOST` and `ngterm:HOST` pin the "
     "app, and the listing and the title bar name what agterm lacks",
     "web-worker-faults": "Rust-only, Linux: the HTML pages' engine runs in a worker process (`ngterm-web`) a launch "
-    "can make misbehave (`launch(web_worker_fault=...)`): end before its hello, stop reading after it, say hello only "
-    "once its app is gone, answer an evaluation with a second hello, send a frame for a page the app closed",
+    "can make misbehave (`launch(web_worker_fault=...)`): end before its hello, fail its read before it, stop "
+    "reading after it, say hello only once its app is gone, answer an evaluation with a second hello, send a frame "
+    "for a page the app closed",
     "shell-profiles": "Rust-only: a pane runs a shell profile (an absolute executable, its arguments and variables) "
     "in place of the login shell: Settings' `defaultShellProfile` for new sessions, a `shellProfiles` entry from the "
     "sidebar's + menu for one session, kept by the pane through splits, duplicates and restores",

@@ -23,6 +23,8 @@ pub(super) enum Fault {
     EndBeforeHello,
     /// Stops reading before its hello, so the app's configuration cannot reach it, then waits for the app to kill it.
     DeafAfterHello,
+    /// Says no hello, and its read of the app's configuration fails (times out) while the app waits for that hello.
+    TimeoutBeforeHello,
     /// Says hello only once its app hung up.
     HelloAfterHangUp,
     /// Answers an evaluation with a second hello.
@@ -37,6 +39,7 @@ impl Fault {
         Some(match name {
             "end-before-hello" => Self::EndBeforeHello,
             "deaf-after-hello" => Self::DeafAfterHello,
+            "timeout-before-hello" => Self::TimeoutBeforeHello,
             "hello-after-hang-up" => Self::HelloAfterHangUp,
             "hello-on-evaluate" => Self::HelloOnEvaluate,
             "frame-after-close" => Self::FrameAfterClose,
@@ -68,13 +71,22 @@ pub(super) fn serve(socket: OwnedFd, fault: Option<Fault>) -> i32 {
         Some(Fault::DeafAfterHello) => {
             let _ = rustix::net::shutdown(&*socket, rustix::net::Shutdown::Read);
         }
+        Some(Fault::TimeoutBeforeHello) => {
+            let _ = rustix::net::sockopt::set_socket_timeout(
+                &*socket,
+                rustix::net::sockopt::Timeout::Recv,
+                Some(Duration::from_millis(1)),
+            );
+            // held until the process ends, after its coverage profile is written: as with `EndBeforeHello`
+            let _ = socket.try_clone().map(std::os::fd::IntoRawFd::into_raw_fd);
+        }
         Some(Fault::HelloAfterHangUp) => {
             // the app sends nothing before the hello: what ends this wait is its hang-up
             let _ = wire::recv(socket.as_fd(), Limits::FROM_APP);
         }
         _ => {}
     }
-    if send(&socket, &hello()).is_err() {
+    if fault != Some(Fault::TimeoutBeforeHello) && send(&socket, &hello()).is_err() {
         return 0;
     }
     if fault == Some(Fault::DeafAfterHello) {

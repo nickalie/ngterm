@@ -724,6 +724,7 @@ tests/protocol/test_page_worker.py::test_a_frame_of_a_page_the_app_closed_is_dro
 tests/protocol/test_page_worker.py::test_a_page_worker_that_breaks_its_protocol_fails_every_page[hello-on-evaluate]
 tests/protocol/test_page_worker.py::test_a_page_worker_that_breaks_its_start_fails_the_pages[deaf-after-hello]
 tests/protocol/test_page_worker.py::test_a_page_worker_that_breaks_its_start_fails_the_pages[end-before-hello]
+tests/protocol/test_page_worker.py::test_a_page_worker_that_breaks_its_start_fails_the_pages[timeout-before-hello]
 tests/protocol/test_page_worker.py::test_a_page_worker_whose_app_quits_during_its_start_ends[hello-after-hang-up]
 tests/protocol/test_recent.py::test_a_parent_entry_reopens_its_companions
 tests/protocol/test_recent.py::test_a_soft_closed_group_is_one_undo
