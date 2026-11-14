@@ -13,8 +13,9 @@
 //!
 //! macOS has no maximize for the panel: `-[NSWindow zoom:]` does nothing on a window that is not resizable, as the
 //! panel is. Its request there gives the panel its screen's visible frame, as upstream's panel takes it
-//! (`QuickTerminalController.targetFrame`), and the unzoom gives back the frame it had ([`Restore`]). GPUI reads a
-//! window of that size as maximized, so the request settles as the others do.
+//! (`QuickTerminalController.targetFrame`), and the unzoom gives back the frame it had ([`Restore`]). The kept frame
+//! is the panel's maximize there, not the window's size against its screen, which stops matching once the screen's
+//! visible frame changes under a zoomed panel; the request settles on it as the others do.
 
 /// What the window does next for the panel's zoom.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,15 +81,19 @@ pub struct Restore(Option<Rect>);
 
 #[cfg(any(target_os = "macos", test))]
 impl Restore {
-    /// The frame a request gives the window: for a zoom (the window reads not `maximized`) its screen's `visible`
-    /// frame, `current` kept for the unzoom; for an unzoom the kept frame, `None` when no zoom of the panel's filled
-    /// the screen.
-    pub fn target(&mut self, maximized: bool, current: Rect, visible: Rect) -> Option<Rect> {
-        if maximized {
-            return self.0.take();
-        }
-        self.0 = Some(current);
-        Some(visible)
+    /// Whether a zoom of the panel's filled its screen and no unzoom gave the frame back since.
+    #[must_use]
+    pub fn filled(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// The frame a request gives the window: the kept frame for the unzoom of a zoom that [`filled`](Self::filled)
+    /// the screen, whatever size the window has by now; else the screen's `visible` frame, `current` kept.
+    pub fn target(&mut self, current: Rect, visible: Rect) -> Rect {
+        self.0.take().unwrap_or_else(|| {
+            self.0 = Some(current);
+            visible
+        })
     }
 }
 

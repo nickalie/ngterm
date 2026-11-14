@@ -158,17 +158,17 @@ impl QuickView {
         if self.zoom.is_none() {
             return;
         }
-        cx.on_next_frame(window, |_, window, cx| {
-            let committed = window.is_maximized();
+        cx.on_next_frame(window, |view, window, cx| {
+            let committed = view.zoomed(window);
             cx.on_next_frame(window, move |view, window, cx| view.settle_zoom(committed, window, cx));
         });
     }
 
     fn settle_zoom(&mut self, committed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let maximized = self.zoomed(window);
         let Some(request) = &mut self.zoom else {
             return;
         };
-        let maximized = window.is_maximized();
         match request.settle(committed, maximized) {
             Settle::Done => {
                 self.zoom = None;
@@ -178,6 +178,18 @@ impl QuickView {
             Settle::Again => self.settle_zoom_after_a_frame(window, cx),
             Settle::Request => self.request_zoom(window, cx),
         }
+    }
+
+    /// The window's maximize as the zoom settles on it ([`super::zoom`]).
+    #[cfg(not(target_os = "macos"))]
+    #[expect(clippy::unused_self, reason = "the macOS form reads the panel's kept frame")]
+    fn zoomed(&self, window: &Window) -> bool {
+        window.is_maximized()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn zoomed(&self, _: &Window) -> bool {
+        self.restore.filled()
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -196,12 +208,14 @@ impl QuickView {
                 // SAFETY: the live GPUI NSView the update just read, on its main thread, and four values.
                 unsafe { crate::macos::ngterm_window_set_frame(native, frame.as_ptr()) };
             }
+            // a frame the window already had changes no bounds, so nothing else would settle the request
+            let _ = view.update_in(cx, |view, window, cx| view.settle_zoom_after_a_frame(window, cx));
         })
         .detach();
     }
 
     /// The window's `NSView` and the frame the zoom's request gives its window; `None`, the request dropped, when the
-    /// window is on no screen or has no frame to return to.
+    /// window is on no screen.
     #[cfg(target_os = "macos")]
     fn frame_target(&mut self, window: &Window) -> Option<(*mut std::ffi::c_void, super::zoom::Rect)> {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -213,11 +227,9 @@ impl QuickView {
         // SAFETY: the live GPUI NSView, on its main thread, and four values for each frame.
         let on_screen =
             unsafe { crate::macos::ngterm_window_frames(native, current.as_mut_ptr(), visible.as_mut_ptr()) };
-        let frame = on_screen
-            .then(|| self.restore.target(window.is_maximized(), current, visible))
-            .flatten();
+        let frame = on_screen.then(|| self.restore.target(current, visible));
         if frame.is_none() {
-            tracing::debug!("quick terminal: the panel has no frame for its zoom");
+            tracing::debug!("quick terminal: the panel is on no screen for its zoom");
             self.zoom = None;
         }
         Some((native, frame?))

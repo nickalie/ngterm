@@ -62,24 +62,47 @@ const PANEL: Rect = [410., 190., 1100., 700.];
 const VISIBLE: Rect = [0., 0., 1920., 1055.];
 
 #[test]
+#[expect(clippy::float_cmp, reason = "a frame is handed back as it was kept, never computed")]
 fn a_zoom_fills_the_visible_frame_and_its_unzoom_gives_the_panels_frame_back() {
     let mut restore = Restore::default();
-    assert_eq!(restore.target(false, PANEL, VISIBLE), Some(VISIBLE));
-    assert_eq!(restore.target(true, VISIBLE, VISIBLE), Some(PANEL));
+    assert!(!restore.filled());
+    assert_eq!(restore.target(PANEL, VISIBLE), VISIBLE);
+    assert!(restore.filled());
+    assert_eq!(restore.target(VISIBLE, VISIBLE), PANEL);
     assert_eq!(restore, Restore::default(), "the frame is given back once");
 }
 
 #[test]
-fn an_unzoom_of_a_window_no_zoom_filled_has_no_frame_to_give() {
-    assert_eq!(Restore::default().target(true, VISIBLE, VISIBLE), None);
+#[expect(clippy::float_cmp, reason = "a frame is handed back as it was kept, never computed")]
+fn an_unzoom_gives_the_panels_frame_back_after_the_screens_visible_frame_changed() {
+    let without_dock: Rect = [0., 0., 1920., 1175.];
+    let mut restore = Restore::default();
+    assert_eq!(restore.target(PANEL, VISIBLE), VISIBLE);
+    // the window no longer has its screen's visible size, and the kept frame still reads as the zoom
+    assert_eq!(
+        ZoomRequest::new(false).settle(restore.filled(), restore.filled()),
+        Settle::Request
+    );
+    assert_eq!(restore.target(VISIBLE, without_dock), PANEL);
+    assert_eq!(
+        ZoomRequest::new(false).settle(restore.filled(), restore.filled()),
+        Settle::Done
+    );
+    assert_eq!(
+        restore.target(PANEL, without_dock),
+        without_dock,
+        "the next zoom keeps the panel's own frame"
+    );
+    assert_eq!(restore.target(without_dock, without_dock), PANEL);
 }
 
 #[test]
+#[expect(clippy::float_cmp, reason = "a frame is handed back as it was kept, never computed")]
 fn a_zoom_after_an_unzoom_keeps_the_frame_the_window_has_then() {
     let moved: Rect = [100., 80., 900., 600.];
     let mut restore = Restore::default();
-    assert_eq!(restore.target(false, PANEL, VISIBLE), Some(VISIBLE));
-    assert_eq!(restore.target(true, VISIBLE, VISIBLE), Some(PANEL));
-    assert_eq!(restore.target(false, moved, VISIBLE), Some(VISIBLE));
-    assert_eq!(restore.target(true, VISIBLE, VISIBLE), Some(moved));
+    assert_eq!(restore.target(PANEL, VISIBLE), VISIBLE);
+    assert_eq!(restore.target(VISIBLE, VISIBLE), PANEL);
+    assert_eq!(restore.target(moved, VISIBLE), VISIBLE);
+    assert_eq!(restore.target(VISIBLE, VISIBLE), moved);
 }
