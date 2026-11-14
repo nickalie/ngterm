@@ -10,6 +10,8 @@ use ngterm_term::{GridSize, Outgoing, StreamFeed, StreamOut};
 use tokio::sync::mpsc;
 
 use super::*;
+use crate::chat::matchers::Agent;
+use crate::chat::tests::matchers::{Capture, draft_drawn};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 /// How long the drain of the handle's output waits for one more piece once it has the bytes it expected.
@@ -32,10 +34,14 @@ struct Shown {
 
 /// A slot with no terminal, its handle and the count of its wakes.
 fn empty() -> (Pane, Arc<PaneSlot>, Arc<AtomicUsize>) {
+    empty_at(SIZE)
+}
+
+fn empty_at(size: PaneSize) -> (Pane, Arc<PaneSlot>, Arc<AtomicUsize>) {
     let sized = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&sized);
     let slot = Arc::new(PaneSlot::new(
-        SIZE.into(),
+        size.into(),
         Arc::new(move || {
             counted.fetch_add(1, Ordering::SeqCst);
         }),
@@ -50,10 +56,28 @@ fn terminal(size: GridSize) -> (ngterm_term::Pane, StreamFeed, StreamOut) {
 
 impl Shown {
     fn new() -> Self {
-        let (pane, slot, sized) = empty();
-        let (terminal, feed, out) = terminal(SIZE.into());
-        slot.install(Arc::new(terminal), SIZE.into());
+        Self::sized(SIZE)
+    }
+
+    fn sized(size: PaneSize) -> Self {
+        let (pane, slot, sized) = empty_at(size);
+        let (terminal, feed, out) = terminal(size.into());
+        slot.install(Arc::new(terminal), size.into());
         Self { pane, feed, out, sized }
+    }
+
+    /// A handle whose terminal shows `agent`'s recorded screen at `state`, with `more` drawn over it.
+    fn showing(agent: &str, state: &str, more: &[u8]) -> Self {
+        let capture = Capture::load(&format!("{agent}-44x36"));
+        let shown = Self::sized(PaneSize {
+            cols: capture.cols,
+            rows: capture.rows,
+            ..SIZE
+        });
+        shown.feed(capture.at(state));
+        shown.feed(more);
+        shown.sent();
+        shown
     }
 
     /// Feeds the machine's `bytes` and waits until the terminal took them: a cursor report asked for after them comes
@@ -224,6 +248,52 @@ fn keys_are_sent_as_the_layout_types_them_and_a_lone_modifier_or_release_sends_n
     assert_eq!(shown.pane.key(key("no-such-key", 0, "é")), Ok(true));
     assert_eq!(shown.sent(), "é".as_bytes());
     assert_eq!(shown.sent(), b"");
+}
+
+#[test]
+fn a_lone_left_arrow_is_not_sent_to_claudes_empty_prompt() {
+    // Claude Code moves the conversation to a background process on it, at once when idle and at the turn's end
+    // when working
+    for state in ["idle", "working"] {
+        let shown = Shown::showing("claude", state, b"");
+        assert_eq!(shown.pane.key(key("arrow_left", 0, "")), Ok(false), "{state}");
+        let repeat = PaneKey {
+            action: PaneKeyAction::Repeat,
+            ..key("arrow_left", 0, "")
+        };
+        assert_eq!(shown.pane.key(repeat), Ok(false), "{state}");
+        // the locks are no modifiers: caps lock (16) and num lock (32)
+        assert_eq!(shown.pane.key(key("arrow_left", 48, "")), Ok(false), "{state}");
+        assert_eq!(shown.sent(), b"", "{state}");
+        assert_eq!(shown.pane.key(key("arrow_right", 0, "")), Ok(true), "{state}");
+        assert_eq!(shown.sent(), b"\x1b[C", "{state}");
+    }
+}
+
+#[test]
+fn a_left_arrow_reaches_claude_with_a_draft_a_modifier_or_a_dialog_and_every_other_program() {
+    let left = b"\x1b[D".as_slice();
+    let capture = Capture::load("claude-44x36");
+    let (draft, _) = draft_drawn(&capture, Agent::Claude, "idle", "fix the build");
+    let shown = Shown::showing("claude", "idle", &draft);
+    assert_eq!(shown.pane.key(key("arrow_left", 0, "")), Ok(true));
+    assert_eq!(shown.sent(), left, "the cursor moves in a draft");
+
+    let shown = Shown::showing("claude", "idle", b"");
+    // shift (1): Claude Code moves the cursor and nothing else
+    assert_eq!(shown.pane.key(key("arrow_left", 1, "")), Ok(true));
+    assert!(shown.sent().ends_with(b"D"));
+
+    for (agent, state) in [("claude", "permission"), ("claude", "question"), ("codex", "idle")] {
+        let shown = Shown::showing(agent, state, b"");
+        assert_eq!(shown.pane.key(key("arrow_left", 0, "")), Ok(true), "{agent} {state}");
+        assert!(shown.sent().ends_with(b"D"), "{agent} {state}");
+    }
+
+    let shown = Shown::new();
+    shown.feed(b"$ ");
+    assert_eq!(shown.pane.key(key("arrow_left", 0, "")), Ok(true));
+    assert_eq!(shown.sent(), left, "a shell");
 }
 
 #[test]

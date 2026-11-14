@@ -246,6 +246,14 @@ impl Screen {
     }
 }
 
+/// Whether `frame` shows the screen on which Claude Code takes a Left arrow with no modifier for "open agents": its
+/// prompt with nothing typed, idle or working. Claude Code (seen in 2.1.325) then moves the conversation to a
+/// background process, at once or when the running turn ends, on one key press and with no question; with a draft in
+/// the prompt, a modifier held or a dialog up the key only moves the cursor.
+pub(crate) fn left_arrow_backgrounds(frame: &Frame) -> bool {
+    matches!(Agent::Claude.read(frame), Screen::Prompt { composer, .. } if composer.is_empty())
+}
+
 /// `text` without whitespace: how labels and questions are compared, since a screen wraps them where it likes.
 pub(crate) fn squeeze(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace()).collect()

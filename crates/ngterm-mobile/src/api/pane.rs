@@ -24,6 +24,7 @@ use ngterm_term::{
 
 use crate::actor::Command;
 use crate::chat::input::{Action, AgentInputOutcome, QuestionAnswer};
+use crate::chat::matchers::left_arrow_backgrounds;
 use crate::chat::{ChatApproval, ChatQuestion};
 use crate::pane::PaneRef;
 
@@ -391,6 +392,18 @@ fn mods(bits: u8) -> Mods {
     Mods::from_bits_truncate(bits)
 }
 
+/// Whether `input` is a Left arrow with no modifier (the locks aside) for a screen where Claude Code would take it to
+/// move its conversation to the background. A screen that can't be read now lets the key through.
+fn backgrounds_claude(terminal: &ngterm_term::Pane, input: &KeyInput<'_>) -> bool {
+    input.key == PhysicalKey::new("arrow_left").unwrap_or(PhysicalKey::UNIDENTIFIED)
+        && input.mods.binding().is_empty()
+        && terminal
+            .active_screen()
+            .ok()
+            .flatten()
+            .is_some_and(|screen| left_arrow_backgrounds(&screen.frame))
+}
+
 #[uniffi::export]
 impl Pane {
     /// The pane's identity in its session, as the session's layout names it.
@@ -441,7 +454,9 @@ impl Pane {
     }
 
     /// Sends a key, encoded for the program's keyboard modes; whether anything was sent (a lone modifier sends
-    /// nothing).
+    /// nothing). A Left arrow with no modifier is not sent to Claude Code's empty prompt, where it would move the
+    /// conversation to a background process ([`left_arrow_backgrounds`]): on a phone that key comes from a brush of
+    /// the extra keys or of the soft keyboard's cursor control far more often than from a wish to leave.
     ///
     /// # Errors
     ///
@@ -463,6 +478,9 @@ impl Pane {
         input.composing = key.composing;
         if let Some(unshifted) = key.unshifted.as_deref().and_then(|text| text.chars().next()) {
             input.unshifted = Some(unshifted);
+        }
+        if backgrounds_claude(&terminal, &input) {
+            return Ok(false);
         }
         Ok(terminal.key(&input)?)
     }
