@@ -120,11 +120,11 @@ fn forward_port_from(
     }
 }
 
-/// A port free on this machine that no other test of the process takes: below every OS's default ephemeral range
-/// (Linux 32768, macOS and Windows 49152), so no bind to port 0 or outgoing connection is handed it, and handed out
-/// again only after every other port of the range. A port freed from a bind to port 0 may go to a parallel test's
-/// socket before the test reuses it. Each process starts at an offset of its own, so test runs of parallel checkouts
-/// on one machine walk different parts of the range.
+/// A port free on this machine that no other test takes, in this process or another: below every OS's default
+/// ephemeral range (Linux 32768, macOS and Windows 49152), so no bind to port 0 or outgoing connection is handed it,
+/// and claimed through [`claim_test_port`], so a parallel test process of another checkout never takes it too. A port
+/// freed from a bind to port 0 may go to a parallel test's socket before the test reuses it. Each process starts at
+/// an offset of its own, so parallel test processes seldom try the same claims.
 #[cfg(test)]
 pub(crate) fn reserved_test_port() -> u16 {
     use std::sync::{
@@ -137,8 +137,46 @@ pub(crate) fn reserved_test_port() -> u16 {
         LazyLock::new(|| AtomicU16::new(u16::try_from(std::process::id() % u32::from(SPAN)).expect("below the span")));
     (0..SPAN)
         .map(|_| RANGE.start + NEXT.fetch_add(1, Ordering::Relaxed) % SPAN)
-        .find(|&port| port_free(port))
+        .find(|&port| claim_test_port(port) && port_free(port))
         .expect("a free port below the ephemeral ranges")
+}
+
+/// Whether this process holds the claim on `port`, taking it when no other process holds it: an exclusive lock on a
+/// file of the user's temp dir, kept for the process's life and released by the OS when it exits, however it ends.
+#[cfg(test)]
+fn claim_test_port(port: u16) -> bool {
+    use std::{
+        collections::HashMap,
+        fs::{File, TryLockError},
+        sync::{LazyLock, Mutex},
+    };
+    static CLAIMS: LazyLock<Mutex<HashMap<u16, File>>> = LazyLock::new(Mutex::default);
+    let mut claims = CLAIMS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if claims.contains_key(&port) {
+        return true;
+    }
+    let file = test_port_claim_file(port);
+    match file.try_lock() {
+        Ok(()) => {
+            claims.insert(port, file);
+            true
+        }
+        Err(TryLockError::WouldBlock) => false,
+        Err(TryLockError::Error(error)) => panic!("claiming test port {port}: {error}"),
+    }
+}
+
+/// The file whose exclusive lock claims test `port` for one process of this user's.
+#[cfg(test)]
+fn test_port_claim_file(port: u16) -> std::fs::File {
+    let dir = std::env::temp_dir().join("ngterm-core-test-ports");
+    std::fs::create_dir_all(&dir).expect("the test port claims' directory");
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(format!("{port}.lock")))
+        .expect("a test port's claim file")
 }
 
 /// Whether no server of this machine's listens on `port` where a connection to 127.0.0.1 would reach it. Binding
@@ -244,6 +282,21 @@ mod tests {
         assert_ne!(port, busy, "a port taken here falls back to another");
         drop(taken);
         assert_eq!(forward_port(busy, []).unwrap(), busy, "a free port is the origin's own");
+    }
+
+    #[test]
+    fn a_reserved_port_is_claimed_from_every_other_process() {
+        let port = reserved_test_port();
+        assert!((31_000..32_768).contains(&port));
+        assert!(
+            matches!(
+                test_port_claim_file(port).try_lock(),
+                Err(std::fs::TryLockError::WouldBlock)
+            ),
+            "another process's claim on the port fails while this one lives"
+        );
+        assert!(claim_test_port(port), "the claim stays this process's own");
+        assert_ne!(reserved_test_port(), port, "never handed out twice in a row");
     }
 
     /// The fallback through `ephemeral`, with the ports the listeners it bound hold.
