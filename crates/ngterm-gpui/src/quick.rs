@@ -50,6 +50,7 @@ use crate::terminal::{Shared, Terminal, TerminalEvent, TerminalSpec};
 
 mod host;
 mod view;
+mod zoom;
 
 #[cfg(test)]
 mod tests;
@@ -231,9 +232,7 @@ impl QuickPanel {
         };
         shown.frame.fit = fit;
         let zoomed_in_place = shown.handle.update(cx, |view, window, cx| {
-            if window.is_maximized() != zoomed {
-                window.zoom_window();
-            }
+            view.zoom(zoomed, window, cx);
             view.focus_terminal(window, cx);
         });
         if zoomed_in_place.is_err() {

@@ -79,6 +79,23 @@ fn wait_count(sandbox: &Sandbox, needle: &str, times: usize) -> TestResult {
     })
 }
 
+/// [`wait_count`] polling the log without pause, so a request sent next reaches the panel within the frame the line was
+/// logged in.
+fn wait_count_promptly(sandbox: &Sandbox, needle: &str, times: usize) -> TestResult {
+    let started = std::time::Instant::now();
+    while count(sandbox, needle) < times {
+        if started.elapsed() > DEADLINE {
+            return Err(format!(
+                "{needle:?} never appeared {times} times in the log:\n{}",
+                sandbox.log("primary.log")
+            )
+            .into());
+        }
+        std::thread::yield_now();
+    }
+    Ok(())
+}
+
 /// Types a marker into the quick terminal and waits until its output reads back: the shell runs, shown or hidden.
 fn round_trip(sandbox: &Sandbox, marker: &str) -> TestResult {
     let (head, tail) = marker.split_at(4);
@@ -122,13 +139,15 @@ fn the_panel_falls_back_to_a_window_on_weston() -> TestResult {
     wait_count(&sandbox, "quick terminal: holds the keyboard", 1)?;
     round_trip(&sandbox, "QWIN1")?;
 
-    // the zoom maximizes the window in place, and the unzoom restores it
+    // the zoom maximizes the window in place, and the unzoom restores it, sent as soon as the maximized size shows:
+    // weston drops a maximize change that comes before the client commits the configure it acked
     zoom(&sandbox, "show")?;
-    wait_count(&sandbox, "quick terminal: sized size=1280x800", 1)?;
     assert_eq!(quick_state(&sandbox)?, (true, true));
+    wait_count_promptly(&sandbox, "quick terminal: sized size=1280x800", 1)?;
     zoom(&sandbox, "hide")?;
     wait_count(&sandbox, "quick terminal: sized size=1100x700", 2)?;
     assert_eq!(count(&sandbox, "quick terminal: shown"), 1, "the zoom kept the window");
+    assert_eq!(quick_state(&sandbox)?, (true, false));
 
     // hidden, the window goes and the shell stays typable; shown, a new window over the same shell
     quick(&sandbox, "hide")?;

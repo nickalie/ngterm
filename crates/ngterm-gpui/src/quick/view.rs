@@ -22,6 +22,8 @@ use crate::keymap_dispatch::{self, KeyOrigin};
 use crate::state::{AppState, Poster, post};
 use crate::terminal::{Terminal, TerminalView, ViewRole};
 
+use super::zoom::{Settle, ZoomRequest};
+
 /// The frame's corner radius and the edge's white opacity (upstream's `QuickTerminalPanelContent`).
 const RADIUS: f32 = 12.;
 const EDGE_OPACITY: f64 = 0.18;
@@ -64,6 +66,8 @@ pub struct QuickView {
     holds_key: bool,
     /// The window's size, last logged.
     size: Option<Size<Pixels>>,
+    /// The window host's zoom until the window's maximize matches it.
+    zoom: Option<ZoomRequest>,
     poster: Poster,
     _subscriptions: Vec<Subscription>,
 }
@@ -106,6 +110,7 @@ impl QuickView {
                 if view.size.replace(size) != Some(size) {
                     log_size(size);
                 }
+                view.settle_zoom_after_a_frame(window, cx);
                 cx.notify();
             }),
             cx.on_release(move |view: &mut Self, cx| view.released(handle, cx)),
@@ -116,6 +121,7 @@ impl QuickView {
             links,
             holds_key: false,
             size: Some(size),
+            zoom: None,
             poster,
             _subscriptions: subscriptions,
         }
@@ -131,6 +137,37 @@ impl QuickView {
     pub fn focus_terminal(&self, window: &mut Window, cx: &mut gpui_kit::App) {
         let handle = self.terminal.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
+    }
+
+    /// Maximizes (`zoomed`) or restores the window host for the zoom ([`super::zoom`]).
+    pub fn zoom(&mut self, zoomed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        match &mut self.zoom {
+            Some(request) => request.want(zoomed),
+            None => self.zoom = Some(ZoomRequest::new(zoomed)),
+        }
+        self.settle_zoom_after_a_frame(window, cx);
+    }
+
+    /// Settles the zoom once a frame was presented: the callbacks run as a frame starts, so the second one runs after the
+    /// frame the first one started was drawn and committed.
+    fn settle_zoom_after_a_frame(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.zoom.is_none() {
+            return;
+        }
+        cx.on_next_frame(window, |_, window, cx| {
+            cx.on_next_frame(window, |view, window, _| view.settle_zoom(window));
+        });
+    }
+
+    fn settle_zoom(&mut self, window: &mut Window) {
+        let Some(request) = &mut self.zoom else {
+            return;
+        };
+        match request.settle(window.is_maximized()) {
+            Settle::Done => self.zoom = None,
+            Settle::Wait => {}
+            Settle::Request => window.zoom_window(),
+        }
     }
 
     /// The window took or lost the keyboard: holding it is the panel's (the decks step aside), losing it after holding

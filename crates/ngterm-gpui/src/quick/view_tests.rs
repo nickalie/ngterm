@@ -63,3 +63,28 @@ fn bounds_changes_reach_the_panel_and_owned_close_clears_its_focus(cx: &mut Test
         "the closing window leaves the record alone"
     );
 }
+
+#[gpui_kit::test]
+fn an_unzoom_of_a_window_already_restored_settles_without_a_request(cx: &mut TestAppContext) {
+    let terminal =
+        cx.new(|cx| Terminal::gated(TerminalSpec::default(), TerminalConfig::default(), Box::new(|| {}), cx));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        QuickView::new(
+            &terminal,
+            Rgb::BLACK,
+            Rc::new(Links::default()),
+            crate::state::detached_poster(),
+            window,
+            cx,
+        )
+    });
+    // the test window never maximizes, and asking it to panics: settling here proves no request went out
+    view.update_in(cx, |view, window, cx| {
+        view.zoom(false, window, cx);
+        assert!(view.zoom.is_some(), "the zoom settles after a frame");
+        view.settle_zoom(window);
+    });
+    cx.simulate_resize(size(px(640.), px(300.)));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.zoom), None);
+}
