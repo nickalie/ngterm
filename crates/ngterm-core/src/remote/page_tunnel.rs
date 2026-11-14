@@ -123,15 +123,20 @@ fn forward_port_from(
 /// A port free on this machine that no other test of the process takes: below every OS's default ephemeral range
 /// (Linux 32768, macOS and Windows 49152), so no bind to port 0 or outgoing connection is handed it, and handed out
 /// again only after every other port of the range. A port freed from a bind to port 0 may go to a parallel test's
-/// socket before the test reuses it.
+/// socket before the test reuses it. Each process starts at an offset of its own, so test runs of parallel checkouts
+/// on one machine walk different parts of the range.
 #[cfg(test)]
 pub(crate) fn reserved_test_port() -> u16 {
-    use std::sync::atomic::{AtomicU16, Ordering};
+    use std::sync::{
+        LazyLock,
+        atomic::{AtomicU16, Ordering},
+    };
     const RANGE: std::ops::Range<u16> = 31_000..32_768;
-    static NEXT: AtomicU16 = AtomicU16::new(0);
-    let span = RANGE.end - RANGE.start;
-    (0..span)
-        .map(|_| RANGE.start + NEXT.fetch_add(1, Ordering::Relaxed) % span)
+    const SPAN: u16 = RANGE.end - RANGE.start;
+    static NEXT: LazyLock<AtomicU16> =
+        LazyLock::new(|| AtomicU16::new(u16::try_from(std::process::id() % u32::from(SPAN)).expect("below the span")));
+    (0..SPAN)
+        .map(|_| RANGE.start + NEXT.fetch_add(1, Ordering::Relaxed) % SPAN)
         .find(|&port| port_free(port))
         .expect("a free port below the ephemeral ranges")
 }
@@ -367,11 +372,20 @@ mod tests {
         );
     }
 
-    /// A server listening on `[::]`, IPv6-only or dual-stack; `None` on a machine without IPv6.
+    /// A server listening on `[::]`, IPv6-only or dual-stack; `None` on a machine without IPv6. An IPv6-only one
+    /// holds no IPv4 port, so it takes a [`reserved_test_port`]: a parallel test's IPv4 bind to port 0 may be handed
+    /// the port it got from a bind to port 0 of its own.
     fn ipv6_server(only_v6: bool) -> Option<(Socket, u16)> {
         let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP)).ok()?;
         socket.set_only_v6(only_v6).ok()?;
-        socket.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)).into()).ok()?;
+        let mut port = if only_v6 { reserved_test_port() } else { 0 };
+        // An IPv6 socket of this machine's may hold a port the IPv4 probes find free.
+        while let Err(error) = socket.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)).into()) {
+            if port == 0 || error.kind() != std::io::ErrorKind::AddrInUse {
+                return None;
+            }
+            port = reserved_test_port();
+        }
         socket.listen(1).ok()?;
         let port = socket.local_addr().ok()?.as_socket()?.port();
         Some((socket, port))
