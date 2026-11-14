@@ -15,28 +15,30 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::IO::{CancelIoEx, OVERLAPPED};
 
-/// A call's timeout with the timer that enforces it, got before the call is issued: once a call is pending, nothing
+/// A call's deadline with the timer that enforces it, got before the call is issued: once a call is pending, nothing
 /// may fail before its wait.
 #[derive(Clone, Copy)]
 pub(super) struct Deadline {
     timer: &'static Timer,
     timeout: Duration,
+    due: Instant,
 }
 
-/// The deadline for a call bounded by `timeout`; `None` for an unbounded one.
+/// The deadline for a call bounded by `timeout`, from now; `None` for an unbounded one, or one too far off for an
+/// [`Instant`] to hold, which no wait reaches.
 ///
 /// # Errors
 ///
 /// The timer thread could not be started.
 pub(super) fn deadline(timeout: Option<Duration>) -> io::Result<Option<Deadline>> {
-    timeout
-        .map(|timeout| {
-            Ok(Deadline {
-                timer: timer()?,
-                timeout,
-            })
-        })
-        .transpose()
+    let Some((timeout, due)) = timeout.and_then(|timeout| Some((timeout, Instant::now().checked_add(timeout)?))) else {
+        return Ok(None);
+    };
+    Ok(Some(Deadline {
+        timer: timer()?,
+        timeout,
+        due,
+    }))
 }
 
 /// Waits for the call pending on the pipe `handle` through `overlapped` (`wait`), cancelling it once its `deadline`
@@ -50,10 +52,10 @@ pub(super) fn timed<T>(
     deadline: Option<Deadline>,
     wait: impl FnOnce() -> io::Result<T>,
 ) -> io::Result<T> {
-    let Some(Deadline { timer, timeout }) = deadline else {
+    let Some(Deadline { timer, timeout, due }) = deadline else {
         return wait();
     };
-    let id = timer.arm(handle, overlapped, Instant::now() + timeout);
+    let id = timer.arm(handle, overlapped, due);
     let result = wait();
     let fired = timer.disarm(id);
     match result {

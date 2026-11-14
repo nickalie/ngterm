@@ -201,3 +201,25 @@ fn a_write_timeout_leaves_the_pending_read_alone() -> io::Result<()> {
     assert_eq!(read.finish()?, b"ping");
     Ok(())
 }
+
+/// A timeout too long for any clock to reach bounds nothing: the calls wait for the peer, as a socket's do.
+#[test]
+fn a_timeout_past_any_deadline_waits_for_the_peer() -> io::Result<()> {
+    let (server, client) = pair()?;
+    server.set_read_timeout(Some(Duration::MAX))?;
+    server.set_write_timeout(Some(Duration::MAX))?;
+    let peer = thread::spawn(move || -> io::Result<Vec<u8>> {
+        thread::sleep(Duration::from_millis(100));
+        (&client).write_all(b"ping")?;
+        let mut pong = [0_u8; 4];
+        (&client).read_exact(&mut pong)?;
+        Ok(pong.to_vec())
+    });
+    let mut ping = [0_u8; 4];
+    (&server).read_exact(&mut ping)?;
+    assert_eq!(&ping, b"ping");
+    (&server).write_all(b"pong")?;
+    let pong = peer.join().map_err(|_| io::Error::other("the peer panicked"))??;
+    assert_eq!(pong, b"pong");
+    Ok(())
+}
