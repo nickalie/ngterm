@@ -150,10 +150,10 @@ export CONFORMANCE_TMP="$(win "$parent")"
 win_layers=()
 for layer in "${layers[@]}"; do win_layers+=("$(win "$layer")"); done
 set +e
-# The WebView2 runtime's cold start, paid once here and not by the suite's first page (tools/warm_webview2.py); not
-# under --coverage, whose instrumented app would write a profile of its own.
-if ((${#bin_args[@]})) && [[ -z "$coverage" ]]; then
-    "$python" "$(win "$here/warm_webview2.py")" "${bin_args[@]}"
+# The WebView2 runtime's cold start, paid once here and not by the suite's first page (tools/warm_webview2.py). Under
+# --coverage too, with no profile directory: the warm-up's profile goes with its instance root, not into the report.
+if ((${#bin_args[@]})); then
+    env -u CONFORMANCE_COVERAGE_DIR "$python" "$(win "$here/warm_webview2.py")" "${bin_args[@]}"
 fi
 started=$SECONDS
 "$python" -m pytest "${win_layers[@]}" --impl rust "${bin_args[@]}" -rfE \
