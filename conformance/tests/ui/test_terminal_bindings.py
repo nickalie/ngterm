@@ -135,25 +135,34 @@ def _screen(ctl, sid):
 
 
 def _all_lines(ctl, sid):
-    return [line.rstrip() for line in _text(ctl, sid).split("\n")]
+    return _all_lines_of(_text(ctl, sid))
+
+
+def _all_lines_of(text):
+    return [line.rstrip() for line in text.split("\n")]
+
+
+def _visible_chars(text):
+    return len("".join(text.split()))
 
 
 def _scrollback(ctl, sid):
     """`ROWS` numbered lines typed into `cat` at once, each echoed and printed again: a screen many viewports tall.
-    The copies may interleave (the terminal echoes what `cat` has not read yet), so only the last line's count is
-    waited on, for up to 30 s: the instrumented build (`--coverage`) echoes the 400 lines slower than the default
-    wait. Returns that line."""
+    The line discipline interleaves the echo with `cat`'s copies at any byte, splitting a line of either across
+    rows, so no line is sure to show whole twice: what is waited on is the screen holding every character of both
+    copies, for up to 30 s, as the instrumented build (`--coverage`) echoes the 400 lines slower than the default
+    wait. Returns the screen's last line, the one the bottom of the viewport shows."""
     lines = [f"row-{index:03}" for index in range(ROWS)]
+    expected = _visible_chars(_text(ctl, sid)) + 2 * _visible_chars("".join(lines))
     assert_ok(ctl.request("session.type", sid, text="".join(f"{line}\n" for line in lines)))
 
     def echoed():
         text = _text(ctl, sid)
-        seen = text.count(lines[-1])
-        assert seen == 2, f"{lines[-1]!r} seen {seen} times, the text ends {text[-80:]!r}"
-        return True
+        seen = _visible_chars(text)
+        assert seen == expected, f"{seen} of {expected} characters shown, the text ends {text[-80:]!r}"
+        return text
 
-    wait_until(echoed, timeout=30)
-    return lines[-1]
+    return next(line for line in reversed(_all_lines_of(wait_until(echoed, timeout=30))) if line)
 
 
 def _shows(ctl, sid, top):
