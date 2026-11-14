@@ -7,11 +7,43 @@ use std::time::Duration;
 
 use super::message::{self, FromWorker, PROTOCOL, StartFailure, ToWorker};
 use super::wire::{self, Limits, Packet};
-use crate::event::SchemeResponse;
+use crate::event::{Event, SchemeResponse};
+use crate::frames::{BufferId, Frame, FrameContent};
 use crate::host::{Command, Local};
+use crate::spec::ViewId;
 
 /// How long the worker waits for its last answer to leave before it ends anyway (an app that stopped reading).
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// A broken worker the conformance suite asks for (`worker::FAULT_ENV`), so the app's handling of one runs end to end
+/// (`web-worker-faults` in `conformance/docs/rust-build.md`). Without it the worker keeps its protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Fault {
+    /// Ends before its hello (the process, at once).
+    EndBeforeHello,
+    /// Stops reading before its hello, so the app's configuration cannot reach it, then waits for the app to kill it.
+    DeafAfterHello,
+    /// Says hello only once its app hung up.
+    HelloAfterHangUp,
+    /// Answers an evaluation with a second hello.
+    HelloOnEvaluate,
+    /// Sends a frame of each page the app closes, after the close.
+    FrameAfterClose,
+}
+
+impl Fault {
+    /// The fault `name` names (`end-before-hello`, ...), or `None`.
+    pub(super) fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "end-before-hello" => Self::EndBeforeHello,
+            "deaf-after-hello" => Self::DeafAfterHello,
+            "hello-after-hang-up" => Self::HelloAfterHangUp,
+            "hello-on-evaluate" => Self::HelloOnEvaluate,
+            "frame-after-close" => Self::FrameAfterClose,
+            _ => return None,
+        })
+    }
+}
 
 /// What the writer thread sends.
 enum Outgoing {
@@ -20,21 +52,33 @@ enum Outgoing {
     Flush(std::sync::mpsc::SyncSender<()>),
 }
 
-/// Serves the engine on `socket` until the app quits it or goes away; the worker's exit code.
-pub(super) fn serve(socket: OwnedFd) -> i32 {
+/// Serves the engine on `socket` until the app quits it or goes away, playing `fault` if one is asked for; the worker's
+/// exit code.
+pub(super) fn serve(socket: OwnedFd, fault: Option<Fault>) -> i32 {
     // inherited across the exec alone: nothing WebKit starts may keep the app's peer alive
     if let Err(err) = rustix::io::fcntl_setfd(&socket, rustix::io::FdFlags::CLOEXEC) {
         eprintln!("ngterm: the WPE worker cannot make its socket close-on-exec: {err}");
         return 2;
     }
     let socket = Arc::new(socket);
-    let hello = FromWorker::Hello {
-        protocol: PROTOCOL,
-        version: ngterm_wpe_client::worker::build_identity(),
-        pid: std::process::id(),
-    };
-    if send(&socket, &hello).is_err() {
+    match fault {
+        // the socket closes as the process ends, after its coverage profile is written: the app kills a worker whose
+        // start failed at once
+        Some(Fault::EndBeforeHello) => crate::exit_process(0),
+        Some(Fault::DeafAfterHello) => {
+            let _ = rustix::net::shutdown(&*socket, rustix::net::Shutdown::Read);
+        }
+        Some(Fault::HelloAfterHangUp) => {
+            // the app sends nothing before the hello: what ends this wait is its hang-up
+            let _ = wire::recv(socket.as_fd(), Limits::FROM_APP);
+        }
+        _ => {}
+    }
+    if send(&socket, &hello()).is_err() {
         return 0;
+    }
+    if fault == Some(Fault::DeafAfterHello) {
+        wait_to_be_killed();
     }
     let first = match wire::recv(socket.as_fd(), Limits::FROM_APP) {
         Ok(Some(packet)) => message::body::<ToWorker>(&packet),
@@ -88,20 +132,46 @@ pub(super) fn serve(socket: OwnedFd) -> i32 {
             }
         }
     });
-    serve_commands(&socket, &engine, &outgoing)
+    serve_commands(&socket, &engine, &outgoing, fault)
+}
+
+fn hello() -> FromWorker {
+    FromWorker::Hello {
+        protocol: PROTOCOL,
+        version: ngterm_wpe_client::worker::build_identity(),
+        pid: std::process::id(),
+    }
+}
+
+/// [`Fault::DeafAfterHello`]'s end: the app kills a worker whose start failed, and an exit of its own would race that
+/// kill for the coverage profile it writes.
+fn wait_to_be_killed() -> ! {
+    loop {
+        std::thread::park();
+    }
 }
 
 /// Hands the app's commands to `engine` until a quit (after which the engine's stop is told and flushed) or the end of
 /// the socket; the engine stops either way, so its web processes end with the worker (`engine::stop`) rather than
 /// outlive it.
-fn serve_commands(socket: &OwnedFd, engine: &Local, outgoing: &async_channel::Sender<Outgoing>) -> i32 {
-    let code = serve_until_end(socket, engine, outgoing);
+fn serve_commands(
+    socket: &OwnedFd,
+    engine: &Local,
+    outgoing: &async_channel::Sender<Outgoing>,
+    fault: Option<Fault>,
+) -> i32 {
+    let code = serve_until_end(socket, engine, outgoing, fault);
     engine.stop();
     code
 }
 
 /// [`serve_commands`]'s loop: the worker's exit code once the app quit the engine or went away.
-fn serve_until_end(socket: &OwnedFd, engine: &Local, outgoing: &async_channel::Sender<Outgoing>) -> i32 {
+fn serve_until_end(
+    socket: &OwnedFd,
+    engine: &Local,
+    outgoing: &async_channel::Sender<Outgoing>,
+    fault: Option<Fault>,
+) -> i32 {
     loop {
         let packet = match wire::recv(socket.as_fd(), Limits::FROM_APP) {
             Ok(Some(packet)) => packet,
@@ -123,7 +193,7 @@ fn serve_until_end(socket: &OwnedFd, engine: &Local, outgoing: &async_channel::S
                 let _ = flushed.recv_timeout(FLUSH_TIMEOUT);
                 return 0;
             }
-            Ok(ToWorker::Command(command)) => engine.post(command),
+            Ok(ToWorker::Command(command)) => post(engine, outgoing, command, fault),
             Ok(ToWorker::PersistentSession {
                 session,
                 data_dir,
@@ -140,6 +210,11 @@ fn serve_until_end(socket: &OwnedFd, engine: &Local, outgoing: &async_channel::S
                     mime,
                 },
             )),
+            Ok(ToWorker::Evaluate { .. }) if fault == Some(Fault::HelloOnEvaluate) => {
+                if let Ok(packet) = hello().packet() {
+                    let _ = outgoing.try_send(Outgoing::Packet(packet));
+                }
+            }
             Ok(ToWorker::Evaluate {
                 id,
                 view,
@@ -161,6 +236,33 @@ fn serve_until_end(socket: &OwnedFd, engine: &Local, outgoing: &async_channel::S
                 return 2;
             }
         }
+    }
+}
+
+/// Hands `command` to `engine`; under [`Fault::FrameAfterClose`] a page's close is followed by a frame of it.
+fn post(engine: &Local, outgoing: &async_channel::Sender<Outgoing>, command: Command, fault: Option<Fault>) {
+    let closed = match &command {
+        Command::CloseView(view) if fault == Some(Fault::FrameAfterClose) => Some(*view),
+        _ => None,
+    };
+    engine.post(command);
+    if let Some(view) = closed {
+        send_late_frame(outgoing, view);
+    }
+}
+
+/// [`Fault::FrameAfterClose`]: an empty frame of page `view`, which the app closed before it sent the close.
+fn send_late_frame(outgoing: &async_channel::Sender<Outgoing>, view: ViewId) {
+    let frame = Frame {
+        view,
+        buffer: BufferId::from_raw(0),
+        width: 1,
+        height: 1,
+        damage: Vec::new(),
+        content: FrameContent::Shm(Vec::new()),
+    };
+    if let Ok(packet) = FromWorker::event_packet(Event::Frame(frame)) {
+        let _ = outgoing.try_send(Outgoing::Packet(packet));
     }
 }
 

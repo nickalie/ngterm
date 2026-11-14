@@ -194,6 +194,9 @@ CAPABILITIES: Mapping[str, str] = {
     "agterm-peer": "Rust-only: a Mac running upstream agterm is a remote origin too: `live tree HOST` and `live attach "
     "HOST ID` reach its `agtermctl zmx`, its panes attach through its own zmx, `agterm:HOST` and `ngterm:HOST` pin the "
     "app, and the listing and the title bar name what agterm lacks",
+    "web-worker-faults": "Rust-only, Linux: the HTML pages' engine runs in a worker process (`ngterm-web`) a launch "
+    "can make misbehave (`launch(web_worker_fault=...)`): end before its hello, stop reading after it, say hello only "
+    "once its app is gone, answer an evaluation with a second hello, send a frame for a page the app closed",
     "shell-profiles": "Rust-only: a pane runs a shell profile (an absolute executable, its arguments and variables) "
     "in place of the login shell: Settings' `defaultShellProfile` for new sessions, a `shellProfiles` entry from the "
     "sidebar's + menu for one session, kept by the pane through splits, duplicates and restores",
@@ -342,6 +345,8 @@ OWN_VARIABLE_NAMES = (
     "APP_ID",
     "UITEST_FORCE_SIDEBAR_VISIBLE",
     "UITEST_SHOW_WELCOME",
+    # The Rust build's page worker fault (`launch(web_worker_fault=...)`), for the `web-worker-faults` tests alone.
+    "TEST_WEB_WORKER_FAULT",
     # The Rust build's log filter, set only by tools/ghostty_probe.py and tools/chrome_probe.py; an inherited one is
     # still scrubbed.
     "LOG",
@@ -666,6 +671,7 @@ class Adapter:
         pane_shell: str | None = None,
         ui: Any = None,
         path_prefix: Sequence[os.PathLike[str] | str] = (),
+        web_worker_fault: str | None = None,
     ) -> Instance:
         """`settings` seeds `<state>/settings.json`, which every implementation reads at launch (`restoreMode`, ...).
         `ui` is the run-wide A11yRun selecting private Xvfb (headless only); Instance.ui keeps its X11Context.
@@ -677,6 +683,7 @@ class Adapter:
         `first_run` leaves out the prior-state marker and asks for the welcome dialog an isolated launch suppresses.
         The dialog is modal and holds the socket unanswered, so such a launch returns without waiting for it: the
         caller dismisses the dialog, then calls `serving`. `private_install`: see `instance_executable`.
+        `web_worker_fault` names the fault the Rust build's page worker plays (`web-worker-faults`), kept by relaunches.
         """
         self.executable()  # refuses before anything exists
         headless = self.headless
@@ -692,6 +699,8 @@ class Adapter:
                 env["PATH"] = os.pathsep.join([*map(os.fspath, path_prefix), env["PATH"]])
             if first_run:
                 self.first_run_env(env)
+            if web_worker_fault is not None:
+                env[self.variable("TEST_WEB_WORKER_FAULT")] = web_worker_fault
             check_launch_env(
                 env, root, self.needs_app_id, self.needs_runtime_dir, headless, self.env_prefix, vocabulary=self.vocabulary
             )

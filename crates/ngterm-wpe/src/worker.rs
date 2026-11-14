@@ -34,6 +34,8 @@
 //!   worker whose app went away (the end of its socket) stops its engine the same way before it ends. A worker that
 //!   ends unasked answers every evaluation still waiting with an error and closes the event channel: the consumer's
 //!   pages cannot come back in this process.
+//! - Faults: [`FAULT_ENV`], set by the conformance suite alone, makes the worker break its protocol on purpose
+//!   (`serve::Fault`), so the app's handling of a broken worker runs end to end; unset, the worker keeps to it.
 
 pub use ngterm_wpe_client::worker::{message, wire};
 mod serve;
@@ -43,6 +45,10 @@ use std::os::fd::{FromRawFd as _, OwnedFd};
 pub(crate) use ngterm_wpe_client::worker::Client;
 
 pub use ngterm_wpe_client::worker::{WORKER_FD_ENV, WORKER_IMAGE_ENV};
+
+/// The variable that names a fault the worker plays (`serve::Fault`), for the conformance suite alone: the app's
+/// environment reaches the worker, so a test sets it at the app's launch.
+pub const FAULT_ENV: &str = "NGTERM_TEST_WEB_WORKER_FAULT";
 
 /// Serves the engine and ends the process when this process was started as the worker ([`WORKER_FD_ENV`]); returns
 /// at once otherwise. `setup` runs first in the worker (the app's logging, say).
@@ -91,7 +97,10 @@ pub unsafe fn serve_if_asked(setup: impl FnOnce()) {
         }
     };
     setup();
-    let code = serve::serve(socket);
+    let fault = std::env::var(FAULT_ENV)
+        .ok()
+        .and_then(|name| serve::Fault::named(&name));
+    let code = serve::serve(socket, fault);
     crate::exit_process(code)
 }
 
@@ -318,6 +327,82 @@ mod tests {
                 format!("ngterm: NGTERM_WPE_WORKER_FD={value} names no socket this process inherited\n")
             );
         }
+    }
+
+    /// The test binary started as a worker playing `fault` (`super::FAULT_ENV`), and the app's end of its socket.
+    fn faulty_worker(fault: &str) -> (std::os::fd::OwnedFd, std::process::Child) {
+        use std::os::unix::process::CommandExt as _;
+
+        let (app, worker) = rustix::net::socketpair(
+            rustix::net::AddressFamily::UNIX,
+            rustix::net::SocketType::SEQPACKET,
+            rustix::net::SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        let fd = worker.as_raw_fd();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("NGTERM_") {
+                command.env_remove(key);
+            }
+        }
+        command
+            .args(["--exact", "worker_entry_must_exit_before_libtest"])
+            .env("WPE_WORKER_ENTRY_PROBE", "1")
+            .env(super::WORKER_FD_ENV, fd.to_string())
+            .env(super::FAULT_ENV, fault)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null());
+        let inherit = move || {
+            // SAFETY: only changes the child's flags on the descriptor it inherits.
+            if unsafe { libc::fcntl(fd, libc::F_SETFD, 0) } < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        };
+        // SAFETY: only async-signal-safe fcntl runs between fork and exec.
+        unsafe { command.pre_exec(inherit) };
+        let child = command.spawn().unwrap();
+        drop(worker);
+        (app, child)
+    }
+
+    #[test]
+    fn a_worker_asked_to_end_before_its_hello_ends_saying_nothing() {
+        use std::os::fd::AsFd as _;
+
+        let (app, mut child) = faulty_worker("end-before-hello");
+        assert_eq!(child.wait().unwrap().code(), Some(0));
+        let said = super::wire::recv(app.as_fd(), super::wire::Limits::FROM_WORKER).unwrap();
+        assert!(said.is_none(), "{said:?}");
+    }
+
+    #[test]
+    fn a_worker_asked_to_stop_reading_after_its_hello_refuses_the_start_and_waits_to_be_killed() {
+        use std::os::fd::AsFd as _;
+
+        use super::message::{FromWorker, ToWorker};
+        use super::wire::{self, Limits};
+
+        let (app, mut child) = faulty_worker("deaf-after-hello");
+        let hello = wire::recv(app.as_fd(), Limits::FROM_WORKER).unwrap().unwrap();
+        assert!(matches!(
+            super::message::body(&hello).unwrap(),
+            FromWorker::Hello { .. }
+        ));
+        let start = ToWorker::Start(crate::HostConfig {
+            frames: crate::FrameMode::Shm,
+            schemes: Vec::new(),
+        });
+        let refused = wire::send(app.as_fd(), &start.packet(None).unwrap()).unwrap_err();
+        assert!(
+            matches!(&refused, wire::WireError::Io(error) if error.raw_os_error() == Some(libc::EPIPE)),
+            "{refused}"
+        );
+        assert!(child.try_wait().unwrap().is_none(), "the worker ended by itself");
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 
     #[test]

@@ -437,8 +437,8 @@ jobs:
   # - bash, zsh and fish: `--must-pass agent-chat` too (the Rust-only agent record and `ngtermctl agent` behind the
   #   Android chat view), `--must-pass kitty-clipboard` (a program's Rust-only Kitty clipboard protocol),
   #   `--must-pass agterm-peer` (the Rust-only attach of an upstream agterm Mac, whose tests reach a loopback sshd:
-  #   openssh below) and `--must-pass shell-profiles` (the Rust-only shell profiles a pane runs in place of the login
-  #   shell).
+  #   openssh below), `--must-pass shell-profiles` (the Rust-only shell profiles a pane runs in place of the login
+  #   shell) and `--must-pass web-worker-faults` (the page worker's faults a launch asks for, Rust-only).
 # - coverage: the zsh entry again on an instrumented build (run-linux.sh --coverage: cargo-llvm-cov and the toolchain's
 #   llvm-tools), every layer, its report the desktop app's e2e line coverage on Linux (code_coverage.py e2e: the total,
 #   its distance to 90% and the share markers exclude, per crate), judged by
@@ -459,17 +459,19 @@ jobs:
             out: rust-linux
             must-pass: >-
               --must-pass live-any-shell --must-pass agent-chat --must-pass kitty-clipboard --must-pass agterm-peer
-              --must-pass shell-profiles
+              --must-pass shell-profiles --must-pass web-worker-faults
           - shell: zsh
             out: rust-linux-zsh
             must-pass: >-
               --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
               --must-pass kitty-clipboard --must-pass agterm-peer --must-pass shell-profiles
+              --must-pass web-worker-faults
           - shell: fish
             out: rust-linux-fish
             must-pass: >-
               --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat --must-pass pages-survive
               --must-pass kitty-clipboard --must-pass agterm-peer --must-pass shell-profiles
+              --must-pass web-worker-faults
           - shell: zsh
             out: rust-linux-coverage
             coverage: true

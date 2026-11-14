@@ -41,7 +41,8 @@ use crate::windows::{ConfigHost, Windows};
 /// Android chat view, which serve no UI, `pages-survive`, the Rust-only parking of a page whose presenter went until
 /// the next one is handed it, `kitty-clipboard`, a program's Kitty clipboard protocol, `agterm-peer`, attaching an
 /// upstream agterm Mac's sessions, and `shell-profiles`, the Rust-only shell profiles a pane runs in place of the login
-/// shell.
+/// shell. Linux alone claims `web-worker-faults`: its pages' engine runs in the `ngterm-web` worker, which a launch can
+/// make misbehave.
 #[cfg(not(any(windows, target_os = "macos")))]
 pub const CAPABILITIES: &[&str] = &[
     "posix-shell",
@@ -55,6 +56,7 @@ pub const CAPABILITIES: &[&str] = &[
     "kitty-clipboard",
     "agterm-peer",
     "shell-profiles",
+    "web-worker-faults",
 ];
 /// The capabilities of the Rust target profile this build implements on macOS (see Linux's above).
 #[cfg(target_os = "macos")]

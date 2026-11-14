@@ -19,7 +19,7 @@ fn hello(socket: &OwnedFd) {
 fn the_worker_requires_configuration_first_and_handles_a_peer_that_goes_away() {
     for body in [b"{}".to_vec(), b"not json".to_vec(), br#"{"Command":"Quit"}"#.to_vec()] {
         let (app, worker) = pair();
-        let serving = std::thread::spawn(move || serve(worker));
+        let serving = std::thread::spawn(move || serve(worker, None));
         hello(&app);
         wire::send(
             app.as_fd(),
@@ -32,19 +32,19 @@ fn the_worker_requires_configuration_first_and_handles_a_peer_that_goes_away() {
         assert_eq!(serving.join().unwrap(), 2);
     }
     let (app, worker) = pair();
-    let serving = std::thread::spawn(move || serve(worker));
+    let serving = std::thread::spawn(move || serve(worker, None));
     hello(&app);
     drop(app);
     assert_eq!(serving.join().unwrap(), 0);
     let (app, worker) = pair();
     drop(app);
-    assert_eq!(serve(worker), 0);
+    assert_eq!(serve(worker, None), 0);
 }
 
 #[test]
 fn the_worker_refuses_a_broken_transport_before_starting() {
     let (app, worker) = pair();
-    let serving = std::thread::spawn(move || serve(worker));
+    let serving = std::thread::spawn(move || serve(worker, None));
     hello(&app);
     rustix::net::send(&app, b"short", rustix::net::SendFlags::NOSIGNAL).unwrap();
     assert_eq!(serving.join().unwrap(), 2);
@@ -63,14 +63,14 @@ fn commands_after_the_handshake_are_forwarded_and_malformed_messages_end_the_wor
             let (app, socket) = pair();
             let (outgoing, queue) = async_channel::unbounded();
             let reader = std::thread::spawn(move || forward_commands(&app, &queue));
-            assert_eq!(serve_commands(&socket, &engine, &outgoing), 2);
+            assert_eq!(serve_commands(&socket, &engine, &outgoing, None), 2);
             reader.join().unwrap();
             let (app, socket) = pair();
             drop(app);
-            assert_eq!(serve_until_end(&socket, &engine, &outgoing), 0);
+            assert_eq!(serve_until_end(&socket, &engine, &outgoing, None), 0);
             let (app, socket) = pair();
             rustix::net::send(&app, b"short", rustix::net::SendFlags::NOSIGNAL).unwrap();
-            assert_eq!(serve_until_end(&socket, &engine, &outgoing), 2);
+            assert_eq!(serve_until_end(&socket, &engine, &outgoing, None), 2);
         },
     );
 }
@@ -139,7 +139,7 @@ fn a_worker_reports_its_display_start_failure() {
         "worker::serve::tests::a_worker_reports_its_display_start_failure",
         || {
             let (app, worker) = pair();
-            let serving = std::thread::spawn(move || serve(worker));
+            let serving = std::thread::spawn(move || serve(worker, None));
             hello(&app);
             let config = crate::HostConfig {
                 frames: crate::FrameMode::DmaBuf(crate::DmaBufTarget {
@@ -192,8 +192,13 @@ fn a_worker_forwards_engine_events_and_flushes_its_stop_before_returning() {
 
 /// The app's end of a worker serving on a thread, past the hello and the engine's start.
 fn started_worker() -> (OwnedFd, std::thread::JoinHandle<i32>) {
+    faulty_worker(None)
+}
+
+/// [`started_worker`] playing `fault`.
+fn faulty_worker(fault: Option<Fault>) -> (OwnedFd, std::thread::JoinHandle<i32>) {
     let (app, worker) = pair();
-    let serving = std::thread::spawn(move || serve(worker));
+    let serving = std::thread::spawn(move || serve(worker, fault));
     hello(&app);
     let config = crate::HostConfig {
         frames: crate::FrameMode::Shm,
@@ -210,7 +215,7 @@ fn a_worker_whose_app_goes_away_before_hearing_of_the_start_ends_quietly() {
         "worker::serve::tests::a_worker_whose_app_goes_away_before_hearing_of_the_start_ends_quietly",
         || {
             let (app, worker) = pair();
-            let serving = std::thread::spawn(move || serve(worker));
+            let serving = std::thread::spawn(move || serve(worker, None));
             hello(&app);
             // the startup reply must fail even if the worker handles Start before this thread runs again
             rustix::net::shutdown(&app, rustix::net::Shutdown::Read).unwrap();
@@ -240,6 +245,80 @@ fn a_worker_whose_app_stops_reading_its_events_ends() {
                 let (message, blob) = ToWorker::command(command);
                 wire::send(app.as_fd(), &message.packet(blob).unwrap()).unwrap();
             }
+            assert_eq!(serving.join().unwrap(), 0);
+        },
+    );
+}
+
+#[test]
+fn a_fault_is_named_as_the_suite_names_it() {
+    for (name, fault) in [
+        ("end-before-hello", Fault::EndBeforeHello),
+        ("deaf-after-hello", Fault::DeafAfterHello),
+        ("hello-after-hang-up", Fault::HelloAfterHangUp),
+        ("hello-on-evaluate", Fault::HelloOnEvaluate),
+        ("frame-after-close", Fault::FrameAfterClose),
+    ] {
+        assert_eq!(Fault::named(name), Some(fault));
+    }
+    assert_eq!(Fault::named("crash"), None);
+}
+
+#[test]
+fn a_worker_that_says_hello_after_its_app_hung_up_ends_as_the_hello_fails() {
+    let (app, worker) = pair();
+    let serving = std::thread::spawn(move || serve(worker, Some(Fault::HelloAfterHangUp)));
+    let mut fds = [rustix::event::PollFd::new(&app, rustix::event::PollFlags::IN)];
+    let wait = rustix::event::Timespec {
+        tv_sec: 0,
+        tv_nsec: 200_000_000,
+    };
+    assert_eq!(
+        rustix::event::poll(&mut fds, Some(&wait)).unwrap(),
+        0,
+        "a hello before the hang-up"
+    );
+    drop(app);
+    assert_eq!(serving.join().unwrap(), 0);
+}
+
+#[test]
+fn a_worker_that_answers_an_evaluation_with_a_hello_ends_with_its_app() {
+    crate::tests::isolated(
+        "worker::serve::tests::a_worker_that_answers_an_evaluation_with_a_hello_ends_with_its_app",
+        || {
+            let (app, serving) = faulty_worker(Some(Fault::HelloOnEvaluate));
+            let evaluate = ToWorker::Evaluate {
+                id: 1,
+                view: crate::ViewId::from_raw(1),
+                script: "1".to_owned(),
+                world: None,
+            };
+            wire::send(app.as_fd(), &evaluate.packet(None).unwrap()).unwrap();
+            assert!(matches!(answer(&app), FromWorker::Hello { .. }));
+            drop(app);
+            assert_eq!(serving.join().unwrap(), 0);
+        },
+    );
+}
+
+#[test]
+fn a_worker_sends_a_frame_of_a_page_after_its_close() {
+    crate::tests::isolated(
+        "worker::serve::tests::a_worker_sends_a_frame_of_a_page_after_its_close",
+        || {
+            let (app, serving) = faulty_worker(Some(Fault::FrameAfterClose));
+            let view = crate::ViewId::from_raw(3);
+            let (close, blob) = ToWorker::command(Command::CloseView(view));
+            wire::send(app.as_fd(), &close.packet(blob).unwrap()).unwrap();
+            let FromWorker::ShmFrame { frame, regions } = answer(&app) else {
+                panic!("a frame")
+            };
+            assert_eq!(frame.view(), view);
+            assert!(regions.is_empty());
+            let (quit, blob) = ToWorker::command(Command::Quit);
+            wire::send(app.as_fd(), &quit.packet(blob).unwrap()).unwrap();
+            assert!(matches!(answer(&app), FromWorker::Stopped));
             assert_eq!(serving.join().unwrap(), 0);
         },
     );

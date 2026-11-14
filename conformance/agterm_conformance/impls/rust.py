@@ -119,9 +119,18 @@ class RustAdapter(Adapter):
         pane_shell: str | None = None,
         ui: Any = None,
         path_prefix: Sequence[os.PathLike[str] | str] = (),
+        web_worker_fault: str | None = None,
     ) -> Instance:
         instance = super().launch(
-            timeout, app_id, settings, first_run, private_install, pane_shell, ui=ui, path_prefix=path_prefix
+            timeout,
+            app_id,
+            settings,
+            first_run,
+            private_install,
+            pane_shell,
+            ui=ui,
+            path_prefix=path_prefix,
+            web_worker_fault=web_worker_fault,
         )
         return instance if first_run else self._profiled(instance)
 
