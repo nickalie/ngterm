@@ -17,11 +17,11 @@ internal struct FakeDuplicateWorldTests {
     private let work = AppWindow.work
 
     // the fake session world launched with `arguments` too, `split` connected, Duplicates held `pause` when asked
-    private func connected(_ arguments: [String]) async throws -> (AppGraph, FakeMobileCore) {
+    private func connected(_ arguments: [String], pause: Duration) async throws -> (AppGraph, FakeMobileCore) {
         let graph = FakeWorld.graph(
             arguments: [CoreChoice.fakeArgument, CoreChoice.fakeKeyArgument, CoreChoice.fakeSessionArgument]
                 + arguments,
-            duplicatePause: Self.pause
+            duplicatePause: pause
         )
         let core = try #require(graph.connections.core as? FakeMobileCore)
         graph.start()
@@ -45,7 +45,7 @@ internal struct FakeDuplicateWorldTests {
 
     @Test("the copy attaches with no lead, its pane is led elsewhere as it shows, and here once taken")
     internal func copyLead() async throws {
-        let (graph, core) = try await connected([])
+        let (graph, core) = try await connected([], pause: Self.pause)
         let copy = try await duplicateWork(core)
         #expect(copy.id == FakeSessionWorld.copyId)
         let pane = PaneRef(machineId: work.machineId, sessionId: copy.id, paneId: "P1")
@@ -68,7 +68,7 @@ internal struct FakeDuplicateWorldTests {
 
     @Test("the first Duplicate fails with the world's refusal when asked, and the next one lands")
     internal func firstFails() async throws {
-        let (graph, core) = try await connected([CoreChoice.fakeDuplicateFailsArgument])
+        let (graph, core) = try await connected([CoreChoice.fakeDuplicateFailsArgument], pause: Self.pause)
         await #expect(throws: MobileError.Remote(reason: FakeSessionWorld.duplicateRefusal)) {
             _ = try await duplicateWork(core)
         }
@@ -78,7 +78,8 @@ internal struct FakeDuplicateWorldTests {
 
     @Test("with no ask the first Duplicate lands at once")
     internal func firstLands() async throws {
-        let (graph, core) = try await connected([])
+        // a stray hold would take the whole pause, past the bound below
+        let (graph, core) = try await connected([], pause: FakeWorld.duplicatePause)
         let clock = ContinuousClock()
         let started = clock.now
         #expect(try await duplicateWork(core).id == FakeSessionWorld.copyId)
@@ -88,7 +89,7 @@ internal struct FakeDuplicateWorldTests {
 
     @Test("each Duplicate is held its pause once under way when asked, then lands")
     internal func held() async throws {
-        let (graph, core) = try await connected([CoreChoice.fakeDuplicateSlowArgument])
+        let (graph, core) = try await connected([CoreChoice.fakeDuplicateSlowArgument], pause: Self.pause)
         let clock = ContinuousClock()
         for number in 1...2 {
             let started = clock.now

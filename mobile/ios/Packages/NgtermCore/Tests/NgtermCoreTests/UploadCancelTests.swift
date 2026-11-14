@@ -27,13 +27,19 @@ internal struct UploadCancelTests {
     @Test("every wait under way ends at the cancel")
     internal func waitsEndAtCancel() async {
         let cancel = UploadCancel()
+        let ended = Counter()
+        // immediate tasks run to their first suspension here, so both waits are under way before the cancel
         let waits = (0..<2).map { _ in
-            Task { await cancel.cancelled() }
+            Task.immediate {
+                await cancel.cancelled()
+                ended.add()
+            }
         }
+        #expect(ended.count == .zero)
         cancel.cancel()
         for wait in waits {
             await wait.value
         }
-        #expect(cancel.isCancelled)
+        #expect(ended.count == 2)
     }
 }
