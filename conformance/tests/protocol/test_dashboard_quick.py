@@ -7,6 +7,7 @@ import re
 
 import pytest
 from agterm_conformance.match import assert_absent, assert_error, assert_ok
+from agterm_conformance.wait import wait_until
 
 UNKNOWN = "zzz"
 DASHBOARD_FIELDS = ("dashboardMembers", "dashboardHighlighted", "dashboardFontSize", "dashboardFontMode")
@@ -269,6 +270,82 @@ def test_quick_zoom_ends_with_the_panel(ctl):
     assert_ok(ctl.request("quick", mode="hide"))
     assert_absent(_top(ctl), "zoomedSurface")
     assert_error(ctl.request("surface.zoom", "quick", mode="show"), "surface not available: quick")
+
+
+def _quick_grid(ctl):
+    """The quick terminal's rows and columns as its shell reads them; the typed line holds the marker split in two."""
+    marker = f"QGRID{next(_markers)}"
+    assert_ok(ctl.request("quick.type", text=f"printf '%s%s=%s\\n' {marker[:5]} {marker[5:]} \"$(stty size)\"\n"))
+    pattern = re.compile(rf"(?m)^{marker}=(\d+) (\d+)$")
+
+    def accept(response):
+        assert response.ok, response.error
+        return pattern.search(response.result["text"])
+
+    accept.__qualname__ = f"quick text matching {pattern.pattern!r}"
+    rows, columns = pattern.search(ctl.wait_response("quick.text", None, accept).result["text"]).groups()
+    return int(rows), int(columns)
+
+
+def _wait_grid(ctl, check, what):
+    def settled():
+        grid = _quick_grid(ctl)
+        assert check(grid), f"{what}: the quick terminal reads {grid}"
+        return grid
+
+    return wait_until(settled)
+
+
+@POSIX_SHELL
+@pytest.mark.covers("quick", "surface.zoom", "field:tree.zoomedSurface")
+def test_quick_zoom_resizes_the_panel_and_its_unzoom_restores_it(ctl):
+    assert_ok(ctl.request("quick", mode="show"))
+    try:
+        _quick_echo(ctl)
+        panel = _quick_grid(ctl)
+
+        def grown(grid):
+            return grid[0] > panel[0] and grid[1] > panel[1]
+
+        def restored(grid):
+            return grid == panel
+
+        # zooms sent back to back: the panel ends at the last one's size
+        for modes, zoomed in (
+            (("show",), True),
+            (("hide",), False),
+            (("show", "hide", "show"), True),
+            (("hide", "show", "hide"), False),
+            (("toggle",) * 5, True),
+            (("toggle",) * 3, False),
+        ):
+            for mode in modes:
+                assert_ok(ctl.request("surface.zoom", "quick", mode=mode))
+            assert ("zoomedSurface" in _top(ctl)) is zoomed, modes
+            _wait_grid(ctl, grown if zoomed else restored, f"after {modes}")
+
+        # a zoom ends with the panel: shown again, the panel has its own size and the unzoom changes nothing
+        assert_ok(ctl.request("surface.zoom", "quick", mode="show"))
+        _wait_grid(ctl, grown, "zoomed")
+        assert_ok(ctl.request("quick", mode="hide"))
+        assert_ok(ctl.request("quick", mode="show"))
+        assert_absent(_top(ctl), "zoomedSurface")
+        _wait_grid(ctl, restored, "shown again")
+        assert_ok(ctl.request("surface.zoom", "quick", mode="hide"))
+        assert _quick_grid(ctl) == panel
+
+        # hidden while its zoom is still under way: shown again, unzoomed, and it zooms as before
+        assert_ok(ctl.request("surface.zoom", "quick", mode="show"))
+        assert_ok(ctl.request("quick", mode="hide"))
+        assert_ok(ctl.request("quick", mode="show"))
+        assert_absent(_top(ctl), "zoomedSurface")
+        _wait_grid(ctl, restored, "shown again under way")
+        assert_ok(ctl.request("surface.zoom", "quick", mode="show"))
+        _wait_grid(ctl, grown, "zoomed again")
+        assert_ok(ctl.request("surface.zoom", "quick", mode="hide"))
+        _wait_grid(ctl, restored, "unzoomed again")
+    finally:
+        ctl.request("quick", mode="hide")
 
 
 @pytest.mark.covers("quick.type", "quick.text")

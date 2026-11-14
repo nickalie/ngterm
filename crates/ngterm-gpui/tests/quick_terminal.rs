@@ -96,6 +96,38 @@ fn wait_count_promptly(sandbox: &Sandbox, needle: &str, times: usize) -> TestRes
     Ok(())
 }
 
+/// The primary's log from byte `from` on: what the build logged after a point the test marked.
+fn log_since(sandbox: &Sandbox, from: usize) -> String {
+    sandbox.log("primary.log").get(from..).unwrap_or_default().to_owned()
+}
+
+/// Waits until the primary logs, past byte `from`, that the panel's zoom settled with the window `maximized`.
+fn wait_settled(sandbox: &Sandbox, from: usize, maximized: bool) -> TestResult {
+    let needle = format!("quick terminal: zoom settled maximized={maximized}");
+    wait_for(|| log_since(sandbox, from).contains(&needle).then_some(())).map_err(|_| {
+        format!(
+            "{needle:?} never appeared after byte {from} of the log:\n{}",
+            sandbox.log("primary.log")
+        )
+        .into()
+    })
+}
+
+/// The panel window's size the primary logged last.
+fn last_size(sandbox: &Sandbox) -> Option<String> {
+    let log = sandbox.log("primary.log");
+    log.lines()
+        .rev()
+        .find_map(|line| line.split_once("quick terminal: sized size="))
+        .map(|(_, size)| size.trim().to_owned())
+}
+
+/// Waits until the panel window's last logged size is `size`.
+fn wait_last_size(sandbox: &Sandbox, size: &str) -> TestResult {
+    wait_for(|| (last_size(sandbox).as_deref() == Some(size)).then_some(()))
+        .map_err(|_| format!("the panel never settled at {size}:\n{}", sandbox.log("primary.log")).into())
+}
+
 /// Types a marker into the quick terminal and waits until its output reads back: the shell runs, shown or hidden.
 fn round_trip(sandbox: &Sandbox, marker: &str) -> TestResult {
     let (head, tail) = marker.split_at(4);
@@ -175,6 +207,89 @@ fn the_panel_falls_back_to_a_window_on_weston() -> TestResult {
     );
     let text = request(&sandbox, "quick.text", None, &json!({ "all": true }))?;
     assert!(text["text"].as_str().is_some_and(|text| text.contains("QWIN2")));
+
+    sandbox.terminate(primary)?;
+    assert_eq!(
+        sandbox.wait_exit(primary, std::time::Duration::from_secs(10))?.0.code(),
+        Some(0)
+    );
+    Ok(())
+}
+
+/// The panel window's size for a zoom on weston's 1280x800 output.
+fn zoomed_size(zoomed: bool) -> &'static str {
+    if zoomed { "1280x800" } else { "1100x700" }
+}
+
+#[test]
+fn the_panel_window_follows_back_to_back_zooms_on_weston() -> TestResult {
+    if seated_weston().is_none() {
+        skip!("{NO_SEATED_WESTON}");
+    }
+    let Some(lavapipe) = lavapipe_icd() else {
+        skip!("no lavapipe ICD (scripts/fetch-lavapipe.sh)");
+    };
+    let mut sandbox = Sandbox::new()?;
+    sandbox.start_weston()?;
+    let primary = primary(&mut sandbox, &lavapipe)?;
+
+    quick(&sandbox, "show")?;
+    wait_count(&sandbox, "quick terminal: shown", 1)?;
+    wait_count(&sandbox, "quick terminal: sized size=1100x700", 1)?;
+
+    // zooms sent back to back, faster than weston answers them: the window ends at the last one's size
+    let rounds: [(&[&str], bool); 4] = [
+        (&["show", "hide", "show"], true),
+        (&["hide", "show", "hide"], false),
+        (&["toggle"; 5], true),
+        (&["toggle"; 3], false),
+    ];
+    for (modes, zoomed) in rounds {
+        let (last, first) = modes.split_last().ok_or("an empty round")?;
+        for mode in first {
+            zoom(&sandbox, mode)?;
+        }
+        // marked before the last zoom: its settle can be logged before the reply reads back
+        let from = sandbox.log("primary.log").len();
+        zoom(&sandbox, last)?;
+        wait_settled(&sandbox, from, zoomed)?;
+        wait_last_size(&sandbox, zoomed_size(zoomed))?;
+        assert_eq!(quick_state(&sandbox)?, (true, zoomed), "after {modes:?}");
+    }
+
+    // a zoom ends with the panel: shown again, the new window has the panel's own size, and an unzoom changes nothing
+    let from = sandbox.log("primary.log").len();
+    zoom(&sandbox, "show")?;
+    wait_settled(&sandbox, from, true)?;
+    wait_last_size(&sandbox, "1280x800")?;
+    quick(&sandbox, "hide")?;
+    wait_count(&sandbox, "quick terminal: hidden", 1)?;
+    quick(&sandbox, "show")?;
+    wait_count(&sandbox, "quick terminal: shown", 2)?;
+    wait_last_size(&sandbox, "1100x700")?;
+    assert_eq!(quick_state(&sandbox)?, (true, false));
+    zoom(&sandbox, "hide")?;
+    round_trip(&sandbox, "QZOOM1")?;
+    assert_eq!(last_size(&sandbox).as_deref(), Some("1100x700"));
+    assert_eq!(quick_state(&sandbox)?, (true, false));
+
+    // hidden while its maximize is still out: shown again, the new window is not maximized, and zooms as before
+    zoom(&sandbox, "show")?;
+    quick(&sandbox, "hide")?;
+    wait_count(&sandbox, "quick terminal: hidden", 2)?;
+    quick(&sandbox, "show")?;
+    wait_count(&sandbox, "quick terminal: shown", 3)?;
+    round_trip(&sandbox, "QZOOM2")?;
+    assert_eq!(last_size(&sandbox).as_deref(), Some("1100x700"));
+    assert_eq!(quick_state(&sandbox)?, (true, false));
+    let from = sandbox.log("primary.log").len();
+    zoom(&sandbox, "show")?;
+    wait_settled(&sandbox, from, true)?;
+    wait_last_size(&sandbox, "1280x800")?;
+    let from = sandbox.log("primary.log").len();
+    zoom(&sandbox, "hide")?;
+    wait_settled(&sandbox, from, false)?;
+    wait_last_size(&sandbox, "1100x700")?;
 
     sandbox.terminate(primary)?;
     assert_eq!(
@@ -268,6 +383,14 @@ fn the_panel_is_a_centered_window_on_x11() -> TestResult {
     );
     wait_count(&sandbox, "quick terminal: sized size=1100x700", 1)?;
     round_trip(&sandbox, "QX111")?;
+
+    // no window manager answers a maximize here: back-to-back zooms leave the window in place and the panel working
+    for mode in ["show", "hide", "toggle", "toggle"] {
+        zoom(&sandbox, mode)?;
+    }
+    assert_eq!(quick_state(&sandbox)?, (true, false));
+    round_trip(&sandbox, "QX113")?;
+    assert_centered(x11.mapped("Quick Terminal")?.ok_or("the zooms unmapped the panel")?);
 
     quick(&sandbox, "hide")?;
     x11.wait_gone("Quick Terminal")?;
