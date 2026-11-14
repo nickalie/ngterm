@@ -142,12 +142,24 @@ fn the_panel_falls_back_to_a_window_on_weston() -> TestResult {
     // the zoom maximizes the window in place, and the unzoom restores it, sent as soon as the maximized size shows:
     // weston drops a maximize change that comes before the client commits the configure it acked
     zoom(&sandbox, "show")?;
-    assert_eq!(quick_state(&sandbox)?, (true, true));
     wait_count_promptly(&sandbox, "quick terminal: sized size=1280x800", 1)?;
     zoom(&sandbox, "hide")?;
     wait_count(&sandbox, "quick terminal: sized size=1100x700", 2)?;
     assert_eq!(count(&sandbox, "quick terminal: shown"), 1, "the zoom kept the window");
     assert_eq!(quick_state(&sandbox)?, (true, false));
+    wait_count(&sandbox, "quick terminal: zoom settled maximized=false", 1)?;
+
+    // an unzoom right behind the zoom, before or while its request is out, leaves the window restored
+    zoom(&sandbox, "show")?;
+    zoom(&sandbox, "hide")?;
+    wait_count(&sandbox, "quick terminal: zoom settled maximized=false", 2)?;
+    assert_eq!(quick_state(&sandbox)?, (true, false));
+    let sizes = sandbox.log("primary.log");
+    let last = sizes
+        .lines()
+        .rev()
+        .find_map(|line| line.split_once("quick terminal: sized size="));
+    assert_eq!(last.map(|(_, size)| size.trim()), Some("1100x700"), "{sizes}");
 
     // hidden, the window goes and the shell stays typable; shown, a new window over the same shell
     quick(&sandbox, "hide")?;

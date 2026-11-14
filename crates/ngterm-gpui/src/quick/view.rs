@@ -148,24 +148,30 @@ impl QuickView {
         self.settle_zoom_after_a_frame(window, cx);
     }
 
-    /// Settles the zoom once a frame was presented: the callbacks run as a frame starts, so the second one runs after the
-    /// frame the first one started was drawn and committed.
+    /// Settles the zoom over two frames ([`super::zoom`]): the callbacks run as a frame starts, so the first one reads
+    /// the maximize that frame commits, and the second one settles after it.
     fn settle_zoom_after_a_frame(&self, window: &mut Window, cx: &mut Context<Self>) {
         if self.zoom.is_none() {
             return;
         }
         cx.on_next_frame(window, |_, window, cx| {
-            cx.on_next_frame(window, |view, window, _| view.settle_zoom(window));
+            let committed = window.is_maximized();
+            cx.on_next_frame(window, move |view, window, cx| view.settle_zoom(committed, window, cx));
         });
     }
 
-    fn settle_zoom(&mut self, window: &mut Window) {
+    fn settle_zoom(&mut self, committed: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(request) = &mut self.zoom else {
             return;
         };
-        match request.settle(window.is_maximized()) {
-            Settle::Done => self.zoom = None,
+        let maximized = window.is_maximized();
+        match request.settle(committed, maximized) {
+            Settle::Done => {
+                self.zoom = None;
+                tracing::info!(maximized, "quick terminal: zoom settled");
+            }
             Settle::Wait => {}
+            Settle::Again => self.settle_zoom_after_a_frame(window, cx),
             Settle::Request => window.zoom_window(),
         }
     }
