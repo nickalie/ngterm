@@ -57,3 +57,29 @@ fn a_rezoom_before_the_unzoom_is_sent_needs_nothing() {
     zoom.want(true);
     assert_eq!(zoom.settle(true, true), Settle::Done);
 }
+
+const PANEL: Rect = [410., 190., 1100., 700.];
+const VISIBLE: Rect = [0., 0., 1920., 1055.];
+
+#[test]
+fn a_zoom_fills_the_visible_frame_and_its_unzoom_gives_the_panels_frame_back() {
+    let mut restore = Restore::default();
+    assert_eq!(restore.target(false, PANEL, VISIBLE), Some(VISIBLE));
+    assert_eq!(restore.target(true, VISIBLE, VISIBLE), Some(PANEL));
+    assert_eq!(restore, Restore::default(), "the frame is given back once");
+}
+
+#[test]
+fn an_unzoom_of_a_window_no_zoom_filled_has_no_frame_to_give() {
+    assert_eq!(Restore::default().target(true, VISIBLE, VISIBLE), None);
+}
+
+#[test]
+fn a_zoom_after_an_unzoom_keeps_the_frame_the_window_has_then() {
+    let moved: Rect = [100., 80., 900., 600.];
+    let mut restore = Restore::default();
+    assert_eq!(restore.target(false, PANEL, VISIBLE), Some(VISIBLE));
+    assert_eq!(restore.target(true, VISIBLE, VISIBLE), Some(PANEL));
+    assert_eq!(restore.target(false, moved, VISIBLE), Some(VISIBLE));
+    assert_eq!(restore.target(true, VISIBLE, VISIBLE), Some(moved));
+}

@@ -20,6 +20,26 @@ bool ngterm_minimized(void *view) {
 bool ngterm_maximized(void *view) {
   return [(__bridge NSView *)view window].zoomed;
 }
+bool ngterm_window_frames(void *view, double frame[4], double visible[4]) {
+  NSWindow *window = [(__bridge NSView *)view window];
+  NSScreen *screen = window.screen;
+  if (!screen)
+    return false;
+  NSRect rects[2] = {window.frame, screen.visibleFrame};
+  double *out[2] = {frame, visible};
+  for (int i = 0; i < 2; i++) {
+    out[i][0] = rects[i].origin.x;
+    out[i][1] = rects[i].origin.y;
+    out[i][2] = rects[i].size.width;
+    out[i][3] = rects[i].size.height;
+  }
+  return true;
+}
+void ngterm_window_set_frame(void *view, const double frame[4]) {
+  [[(__bridge NSView *)view window]
+      setFrame:NSMakeRect(frame[0], frame[1], frame[2], frame[3])
+       display:YES];
+}
 
 static nw_path_monitor_t networkMonitor;
 void ngterm_network_start(void (*report)(int)) {

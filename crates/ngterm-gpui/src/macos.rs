@@ -8,6 +8,11 @@ unsafe extern "C" {
     pub fn ngterm_reduce_motion() -> bool;
     pub fn ngterm_minimized(view: *mut c_void) -> bool;
     pub fn ngterm_maximized(view: *mut c_void) -> bool;
+    /// The frame of `view`'s window and the visible frame of its screen, each x, y, width, height in `AppKit`'s
+    /// screen coordinates; false when the window is on no screen.
+    pub fn ngterm_window_frames(view: *mut c_void, frame: *mut f64, visible: *mut f64) -> bool;
+    /// Gives `view`'s window `frame`; `AppKit` reports the resize from inside the call.
+    pub fn ngterm_window_set_frame(view: *mut c_void, frame: *const f64);
     fn ngterm_hotkey(key: i32, mods: u32, callback: extern "C" fn()) -> i32;
     pub fn ngterm_key(
         mods: *mut u32,

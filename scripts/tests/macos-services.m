@@ -8,6 +8,8 @@
 #import <objc/runtime.h>
 extern bool ngterm_reduce_transparency(void), ngterm_reduce_motion(void);
 extern int ngterm_hotkey(int, unsigned, void (*)(void));
+extern bool ngterm_window_frames(void *, double[4], double[4]);
+extern void ngterm_window_set_frame(void *, const double[4]);
 extern void ngterm_clipboard_html(const char *, const char *);
 extern unsigned ngterm_key_flags(unsigned long, bool, bool, bool);
 extern int ngterm_key_event(void *, unsigned *, unsigned *, unsigned *, char *,
@@ -174,9 +176,34 @@ static void keyboard(void) {
   assert(mods & 4); // US Option+E starts composition; AppKit must receive it.
   assert(!strcmp(without, "e"));
 }
+// The quick terminal's panel is not resizable, so AppKit's zoom never resizes
+// it: its zoom is these frame calls.
+static void panelFrame(void) {
+  NSPanel *panel = [[NSPanel alloc]
+      initWithContentRect:NSMakeRect(200, 200, 400, 300)
+                styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                          NSWindowStyleMaskNonactivatingPanel
+                  backing:NSBackingStoreBuffered
+                    defer:NO];
+  [panel orderFrontRegardless];
+  NSSize size = panel.frame.size;
+  [panel zoom:nil];
+  assert(NSEqualSizes(panel.frame.size, size));
+  void *view = (__bridge void *)panel.contentView;
+  NSRect was = panel.frame;
+  double frame[4], visible[4];
+  assert(ngterm_window_frames(view, frame, visible));
+  assert(NSEqualRects(NSMakeRect(frame[0], frame[1], frame[2], frame[3]), was));
+  ngterm_window_set_frame(view, visible);
+  assert(NSEqualRects(panel.frame, panel.screen.visibleFrame));
+  ngterm_window_set_frame(view, frame);
+  assert(NSEqualRects(panel.frame, was));
+  [panel orderOut:nil];
+}
 static void checkServices(void) {
   @autoreleasepool {
     keyboard();
+    panelFrame();
     assert(ngterm_reduce_transparency() ==
            NSWorkspace.sharedWorkspace
                .accessibilityDisplayShouldReduceTransparency);
@@ -347,7 +374,8 @@ static void checkServices(void) {
     assert([page.title isEqual:@"ngterm-smoke"]);
     ngterm_web_detach(delegate);
     assert(page.navigationDelegate == previous);
-    puts("PASS: native keys/KVO superclass, settings, hotkey, clipboard, "
+    puts("PASS: native keys/KVO superclass, panel frame, settings, hotkey, "
+         "clipboard, "
          "Edit shortcuts and model menu actions, load/theme/delegate "
          "forwarding, native bridge replies, "
          "reparent focus, same-document/subframe navigation, effective "

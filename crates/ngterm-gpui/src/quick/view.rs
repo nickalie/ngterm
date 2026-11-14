@@ -68,6 +68,8 @@ pub struct QuickView {
     size: Option<Size<Pixels>>,
     /// The window host's zoom until the window's maximize matches it.
     zoom: Option<ZoomRequest>,
+    #[cfg(target_os = "macos")]
+    restore: super::zoom::Restore,
     poster: Poster,
     _subscriptions: Vec<Subscription>,
 }
@@ -122,6 +124,8 @@ impl QuickView {
             holds_key: false,
             size: Some(size),
             zoom: None,
+            #[cfg(target_os = "macos")]
+            restore: super::zoom::Restore::default(),
             poster,
             _subscriptions: subscriptions,
         }
@@ -172,8 +176,51 @@ impl QuickView {
             }
             Settle::Wait => {}
             Settle::Again => self.settle_zoom_after_a_frame(window, cx),
-            Settle::Request => window.zoom_window(),
+            Settle::Request => self.request_zoom(window, cx),
         }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[expect(clippy::unused_self, reason = "the macOS form keeps the panel's frame")]
+    fn request_zoom(&mut self, window: &mut Window, _: &mut Context<Self>) {
+        window.zoom_window();
+    }
+
+    /// Gives the panel its screen's visible frame, or the frame it had ([`super::zoom`]).
+    #[cfg(target_os = "macos")]
+    fn request_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // AppKit reports the resize from inside the call, which GPUI takes only outside an update
+        cx.spawn_in(window, async move |view, cx| {
+            let target = view.update_in(cx, |view, window, _| view.frame_target(window));
+            if let Ok(Some((native, frame))) = target {
+                // SAFETY: the live GPUI NSView the update just read, on its main thread, and four values.
+                unsafe { crate::macos::ngterm_window_set_frame(native, frame.as_ptr()) };
+            }
+        })
+        .detach();
+    }
+
+    /// The window's `NSView` and the frame the zoom's request gives its window; `None`, the request dropped, when the
+    /// window is on no screen or has no frame to return to.
+    #[cfg(target_os = "macos")]
+    fn frame_target(&mut self, window: &Window) -> Option<(*mut std::ffi::c_void, super::zoom::Rect)> {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let native = match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+            RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr(),
+            _ => return None,
+        };
+        let (mut current, mut visible) = ([0.; 4], [0.; 4]);
+        // SAFETY: the live GPUI NSView, on its main thread, and four values for each frame.
+        let on_screen =
+            unsafe { crate::macos::ngterm_window_frames(native, current.as_mut_ptr(), visible.as_mut_ptr()) };
+        let frame = on_screen
+            .then(|| self.restore.target(window.is_maximized(), current, visible))
+            .flatten();
+        if frame.is_none() {
+            tracing::debug!("quick terminal: the panel has no frame for its zoom");
+            self.zoom = None;
+        }
+        Some((native, frame?))
     }
 
     /// The window took or lost the keyboard: holding it is the panel's (the decks step aside), losing it after holding

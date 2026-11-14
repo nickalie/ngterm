@@ -10,6 +10,11 @@
 //! sends a request only when the maximize still reads as that frame committed it; otherwise a configure came in
 //! between, acked and not yet committed, and the settle waits for the next two frames. It sends one request at a time
 //! and settles again once the window's state changes.
+//!
+//! macOS has no maximize for the panel: `-[NSWindow zoom:]` does nothing on a window that is not resizable, as the
+//! panel is. Its request there gives the panel its screen's visible frame, as upstream's panel takes it
+//! (`QuickTerminalController.targetFrame`), and the unzoom gives back the frame it had ([`Restore`]). GPUI reads a
+//! window of that size as maximized, so the request settles as the others do.
 
 /// What the window does next for the panel's zoom.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +66,29 @@ impl ZoomRequest {
         }
         self.sent_from = Some(maximized);
         Settle::Request
+    }
+}
+
+/// A window's frame in its platform's coordinates: x, y, width, height.
+#[cfg(any(target_os = "macos", test))]
+pub type Rect = [f64; 4];
+
+/// The frame the macOS panel had before its zoom filled the screen.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Restore(Option<Rect>);
+
+#[cfg(any(target_os = "macos", test))]
+impl Restore {
+    /// The frame a request gives the window: for a zoom (the window reads not `maximized`) its screen's `visible`
+    /// frame, `current` kept for the unzoom; for an unzoom the kept frame, `None` when no zoom of the panel's filled
+    /// the screen.
+    pub fn target(&mut self, maximized: bool, current: Rect, visible: Rect) -> Option<Rect> {
+        if maximized {
+            return self.0.take();
+        }
+        self.0 = Some(current);
+        Some(visible)
     }
 }
 
