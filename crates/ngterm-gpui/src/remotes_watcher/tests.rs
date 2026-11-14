@@ -228,7 +228,8 @@ fn a_burst_of_edits_is_read_once_it_settles() {
     std::fs::write(&file, "").unwrap();
     counting(&file, |reads| {
         let mut whole = String::new();
-        let mut last = Instant::now();
+        let first = Instant::now();
+        let mut last = first;
         for line in 0..20 {
             let text = format!("host{line}\n");
             last = Instant::now();
@@ -237,8 +238,9 @@ fn a_burst_of_edits_is_read_once_it_settles() {
             whole.push_str(&text);
         }
         wait("the burst's end is read", || reads.text() == whole);
+        // a writer stalled for most of the cap is read at the cap, sooner than the quiet time after its last append
         assert!(
-            last.elapsed() >= COUNTED.quiet,
+            last.elapsed() >= COUNTED.quiet || first.elapsed() >= COUNTED.cap,
             "the read waits for the burst to settle"
         );
         std::thread::sleep(COUNTED_QUIET);
