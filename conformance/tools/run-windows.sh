@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# The Windows counterpart of run-linux.sh, run from Git Bash: build the app, the CLI and the live sessions' server
-# (release), stage them with scripts/stage.sh (bin\ngterm.exe, bin\ngtermctl.exe and bin\ngterm-session.exe beside
+# The Windows counterpart of run-linux.sh, run from Git Bash: build the app, the CLI, the live sessions' server and
+# the headless server (release), stage them with scripts/stage.sh (bin\ngterm.exe, bin\ngtermctl.exe,
+# bin\ngterm-session.exe and bin\ngterm-headless.exe, whose --install-agent-hooks the agent hooks' tests run, beside
 # share\ghostty and share\terminfo), run the protocol, cli, behaviors and ui layers against the stage, then hold the
 # Windows ratchet: every id in conformance/rust-passing-windows.txt must still pass. Every instance comes from the
 # harness (a fresh root under this run's own %TEMP%\agt-run-* parent holding its home, application data, state dir and
@@ -50,7 +51,7 @@ while (($#)); do
         --also-k) also_k+=("$2"); shift 2 ;;
         --) shift; extra=("$@"); break ;;
         --coverage) coverage=1; shift ;;
-        -h|--help) sed -n '2,25s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,26s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -113,15 +114,15 @@ if [[ -z "$stage" && -n "$coverage" ]]; then
         export CARGO_TARGET_DIR="$(win "$cov_target")"
         eval "$(cargo llvm-cov show-env --sh)" || exit
         cargo llvm-cov clean --workspace || exit
-        cargo build --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session || exit
+        cargo build --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless || exit
         rm -rf "$stage"
         "$repo/scripts/stage.sh" "$stage"
     )
     "$python" -m agterm_conformance.llvm_profiles "$(win "$stage/bin")" || exit 2
 elif [[ -z "$stage" ]]; then
     stage="$target/conformance-stage"
-    # the app with its HTML overlays (WebView2), the CLI and the live sessions' server
-    (cd "$repo" && cargo build --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session)
+    # the app with its HTML overlays (WebView2), the CLI, the live sessions' server and the headless server
+    (cd "$repo" && cargo build --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless)
     rm -rf "$stage"
     "$repo/scripts/stage.sh" "$stage"
 fi

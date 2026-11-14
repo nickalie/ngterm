@@ -201,6 +201,11 @@ def _hook_env(cli, session: str | None, pane_id: str | None, socket) -> dict[str
         env.pop(variable(name), None)
     env.pop("CLAUDE_JOB_DIR", None)
     env["CLAUDE_CODE_ENTRYPOINT"] = "cli"
+    if WINDOWS:
+        # Claude Code runs a hook with the user's PATH, which names the inbox Windows PowerShell on every Windows;
+        # the instance's minimal PATH leaves that directory out, and the installed entries start `powershell`.
+        system = os.environ.get("SystemRoot") or r"C:\Windows"
+        env["PATH"] = os.pathsep.join((env["PATH"], os.path.join(system, "System32", "WindowsPowerShell", "v1.0")))
     if session is not None:
         env[variable("SESSION_ID")] = session
         env[variable("PANE")] = "left"

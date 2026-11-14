@@ -167,7 +167,7 @@ jobs:
           done
 
   # The conformance suite on Windows (conformance/tools/run-windows.sh): the release app with its HTML overlays, the
-  # CLI and the live sessions' server staged by scripts/stage.sh, the protocol, cli and behaviors layers run against
+  # CLI, the live sessions' server and the headless server staged by scripts/stage.sh, the protocol, cli and behaviors layers run against
   # them over the control socket's named pipe and the ui layer through UI Automation and SendInput (drivers/uia.py),
   # each instance on a private root (its home, application data, state dir and pipe; its window on the runner's
   # desktop, which no one uses), its panes in Git for Windows' sh, its process tree reaped by pid. Held by conformance/rust-passing-windows.txt, the Windows ratchet beside rust-passing.txt. The

@@ -1135,12 +1135,13 @@ PowerShell 7):
   with the suite's install; its `--coverage` run needs cargo-llvm-cov and the `llvm-tools` component, as on Linux.
 
 Build and stage, from Git Bash (`stage.sh` takes a destination in either form and stages
-`bin\{ngterm,ngtermctl,ngterm-session}.exe` beside `share\`, the layout the suite, the installer and an install run
-from):
+`bin\{ngterm,ngtermctl,ngterm-session,ngterm-headless}.exe` beside `share\`, the layout the suite, the installer and
+an install run from):
 
 ```sh
 scripts/build-ghostty-vt.sh && scripts/fetch-fonts.sh
-cargo build --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session    # ngterm-gpui's default `html`: WebView2
+# ngterm-gpui's default `html`: WebView2
+cargo build --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless
 scripts/stage.sh 'C:\ngterm-stage'
 ```
 
