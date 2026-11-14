@@ -285,6 +285,15 @@ def _typed_with_the_pointer_resting(ctl, ui, sid, **pane):
     ctl.wait_text(sid, r"typed", **pane)
 
 
+def _reads_after_the_resize(ctl, sid, **pane):
+    """Until `cat` has read a line typed after its terminal's resize. On Windows an MSYS program (Git's `cat`) may
+    lose the first byte typed while its runtime handles the console's resize (its console thread takes the input
+    queue, sends SIGWINCH and puts the keys back; a byte the pseudoconsole adds meanwhile can go), so the line may
+    show without its first letter; once read, the resize is behind the program and keys typed next all arrive."""
+    assert_ok(ctl.request("session.type", sid, text="resized\n", **pane))
+    ctl.wait_text(sid, r"r?esized\s+r?esized", **pane)
+
+
 def _runs_cat(argv):
     """Whether a pane's foreground argv is `cat`'s: a shell's `exec` names its program by path (Windows: Git's
     `cat.exe`)."""
@@ -316,7 +325,8 @@ def test_the_wheel_scrolls_the_split_pane_under_the_pointer_not_the_focused_one(
     with _cat(ctl) as sid:
         assert_ok(ctl.request("session.split", sid, mode="on", axis="vertical"))
         ctl.wait_mounted(sid, "left", "right")
-        # the split's new pane takes the focus, which a request with no pane addresses
+        # the split's new pane takes the focus, which a request with no pane addresses; the split narrowed the left one
+        _reads_after_the_resize(ctl, sid, pane="left")
         _scrollback(ctl, sid, pane="left")
         # the new pane's shell hands it to `cat` as well, so no prompt redraws there
         assert_ok(ctl.request("session.type", sid, pane="right", text="exec cat\n"))
@@ -329,6 +339,8 @@ def test_the_wheel_scrolls_the_split_pane_under_the_pointer_not_the_focused_one(
         ctl.wait_tree(lambda tree: find_session(tree, sid).get("splitRatio") == pytest.approx(0.8, abs=0.004))
         assert_ok(ctl.request("session.focus", sid, pane="right"))
         ctl.wait_tree(lambda tree: find_session(tree, sid).get("splitFocused") is True)
+        _reads_after_the_resize(ctl, sid, pane="left")
+        _reads_after_the_resize(ctl, sid, pane="right")
         _at_bottom(ctl, sid, pane="left")
         _at_bottom(ctl, sid, pane="right")
         _typed_with_the_pointer_resting(ctl, ui, sid, pane="right")
