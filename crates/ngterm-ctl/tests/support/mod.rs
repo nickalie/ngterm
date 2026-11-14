@@ -97,7 +97,8 @@ pub fn foreign_var(name: &OsStr) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
-/// `program` with the caller's foreign variables removed and a home under `root`.
+/// `program` with the caller's foreign variables removed, and a home and a state directory under `root`: the default
+/// socket is then one under `root` on every OS, never the developer's running ngterm's.
 pub fn isolated(program: impl AsRef<OsStr>, root: &Path) -> Command {
     let mut command = Command::new(program);
     for (name, _) in std::env::vars_os() {
@@ -106,7 +107,13 @@ pub fn isolated(program: impl AsRef<OsStr>, root: &Path) -> Command {
         }
     }
     command.env("HOME", root.join("home"));
+    command.env("NGTERM_STATE_DIR", state_dir(root));
     command
+}
+
+/// The state directory [`isolated`] gives a program run under `root`.
+pub fn state_dir(root: &Path) -> PathBuf {
+    root.join("state")
 }
 
 /// `ngterm-core`'s recorded agent fixtures.

@@ -279,6 +279,23 @@ fn a_left_arrow_reaches_claude_with_a_draft_a_modifier_or_a_dialog_and_every_oth
     assert_eq!(shown.pane.key(key("arrow_left", 0, "")), Ok(true));
     assert_eq!(shown.sent(), left, "the cursor moves in a draft");
 
+    // a draft of spaces, then one of a line break: the prompt reads as empty, the cursor shows it is not
+    for (text, cursor) in [("a", (0, 6)), ("a\nb", (1, 3))] {
+        let (mut blanks, _) = draft_drawn(&capture, Agent::Claude, "idle", text);
+        let term = capture.term();
+        term.feed(capture.at("idle"));
+        term.feed(&blanks);
+        let lines = term.frame().lines();
+        let mark = lines.iter().rposition(|line| line.starts_with('❯')).unwrap();
+        for row in 0..text.lines().count() {
+            blanks.extend(format!("\x1b[{};3H\x1b[K", mark + row + 1).bytes());
+        }
+        blanks.extend(format!("\x1b[{};{}H", mark + cursor.0 + 1, cursor.1).bytes());
+        let shown = Shown::showing("claude", "idle", &blanks);
+        assert_eq!(shown.pane.key(key("arrow_left", 0, "")), Ok(true), "{text:?}");
+        assert_eq!(shown.sent(), left, "the cursor moves in a blank draft {text:?}");
+    }
+
     let shown = Shown::showing("claude", "idle", b"");
     // shift (1): Claude Code moves the cursor and nothing else
     assert_eq!(shown.pane.key(key("arrow_left", 1, "")), Ok(true));

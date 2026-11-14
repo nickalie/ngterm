@@ -251,8 +251,29 @@ impl Screen {
 /// background process, at once or when the running turn ends, on one key press and with no question; with a draft in
 /// the prompt, a modifier held or a dialog up the key only moves the cursor.
 pub(crate) fn left_arrow_backgrounds(frame: &Frame) -> bool {
-    matches!(Agent::Claude.read(frame), Screen::Prompt { composer, .. } if composer.is_empty())
+    matches!(Agent::Claude.read(frame), Screen::Prompt { composer, .. } if composer.is_empty()) && !blank_draft(frame)
 }
+
+/// Whether Claude's prompt box holds a draft of blanks only, which reads as nothing typed: Claude Code keeps the
+/// terminal's cursor at its input point, the cell after `❯ ` while the prompt is empty, so a cursor further along
+/// that row or on a later row of the box stands after typed spaces or line breaks.
+fn blank_draft(frame: &Frame) -> bool {
+    let rows = Rows::of(frame);
+    let Some(mark) = (0..rows.lines.len())
+        .rev()
+        .find(|index| rows.get(*index).starts_with(CLAUDE_CURSOR))
+    else {
+        return false;
+    };
+    let rule = (mark..rows.lines.len()).find(|index| rows.rule(*index));
+    frame.cursor.position.is_some_and(|at| {
+        let (row, column) = (usize::from(at.row), usize::from(at.column));
+        (row == mark && column > CLAUDE_INPUT_COLUMN) || (row > mark && rule.is_some_and(|rule| row < rule))
+    })
+}
+
+/// The column Claude's input starts at, after `❯ `.
+const CLAUDE_INPUT_COLUMN: usize = 2;
 
 /// `text` without whitespace: how labels and questions are compared, since a screen wraps them where it likes.
 pub(crate) fn squeeze(text: &str) -> String {

@@ -15,7 +15,7 @@ use ngterm_host::fakes::FakeMainLoop;
 use ngterm_proto::Response;
 use serde_json::{Value, json};
 use support::{
-    NGTERMCTL, Server, TestResult, fixtures, isolated, request, serve_core, serve_on, session_id, short_dir,
+    NGTERMCTL, Server, TestResult, fixtures, isolated, request, serve_core, serve_on, session_id, short_dir, state_dir,
 };
 
 /// A server that answers every request with one result, counting them and keeping the last.
@@ -428,6 +428,7 @@ fn status_of(socket: &Path) -> TestResult<Value> {
 const MOVED_FROM: &str = "0a0a0a0a-0000-4000-8000-00000000000a";
 const MOVED_TO: &str = "0b0b0b0b-0000-4000-8000-00000000000b";
 const NOBODYS: &str = "0c0c0c0c-0000-4000-8000-00000000000c";
+const ELSEWHERE: &str = "0d0d0d0d-0000-4000-8000-00000000000d";
 /// What Claude Code's daemon was started with: a session and a pane that are gone.
 const DAEMONS_SESSION: &str = "5B4EE31F-9B89-472B-9990-C1DCEEF7A966";
 const DAEMONS_PANE: &str = "121CAAB2-9079-4F7E-A0CB-808CE743B005";
@@ -466,6 +467,63 @@ impl BackgroundJob<'_> {
     }
 }
 
+/// The Claude Code of `session`'s main pane reports that it started the conversation `id`, to the instance at
+/// `socket`.
+fn started(root: &Path, socket: &Path, session: &str, id: &str) -> TestResult<(Option<i32>, String, String)> {
+    let args = [
+        "agent",
+        "hook",
+        "claude",
+        "SessionStart",
+        "--target",
+        session,
+        "--pane",
+        "left",
+        "--socket",
+        socket.to_str().ok_or("a UTF-8 path")?,
+    ];
+    let payload = claude_payload("SessionStart", id, &claude_transcript(root, id)?);
+    Ok(outcome(&hook(root, &args, &payload)?))
+}
+
+/// A background job whose conversation the daemon's instance does not know asks the default instance next. In a test
+/// that is one under the test's own root, where a pane holds the conversation: a hook that resolved the default
+/// socket from the developer's environment would reach their running ngterm and leave this pane idle.
+#[test]
+fn a_background_jobs_hooks_ask_the_default_instance_under_the_tests_own_root() -> TestResult {
+    let Some(bash) = codex_bash() else {
+        eprintln!("SKIPPED: no Git for Windows bash");
+        return Ok(());
+    };
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    let _daemons = serve_core(&socket)?;
+    let state = state_dir(dir.path());
+    std::fs::create_dir_all(&state)?;
+    let default_socket = state.join("ngterm.sock");
+    let _default = serve_core(&default_socket)?;
+    let session = session_id(&default_socket)?;
+    let silent = (Some(0), String::new(), String::new());
+    assert_eq!(started(dir.path(), &default_socket, &session, ELSEWHERE)?, silent);
+    let background = BackgroundJob {
+        bash: &bash,
+        root: dir.path(),
+        socket: &socket,
+    };
+    assert_eq!(
+        background.hook(
+            "ngterm-claude-status.sh",
+            &["active", "--blink"],
+            "PostToolUse",
+            ELSEWHERE
+        )?,
+        silent
+    );
+    assert_eq!(status_of(&default_socket)?, "active");
+    assert_eq!(status_of(&socket)?, Value::Null);
+    Ok(())
+}
+
 /// End to end through the installed Claude hooks, run as a background job's ([`BackgroundJob`]). A conversation
 /// Claude Code moved there from a pane (its old transcript ends with `continued-in`) keeps that pane's status and
 /// record up to date; a job no pane started does nothing and prints nothing.
@@ -479,7 +537,6 @@ fn a_background_jobs_hooks_reach_the_pane_the_conversation_came_from_or_stay_sil
     let socket = dir.path().join("ngterm.sock");
     let _server = serve_core(&socket)?;
     let session = session_id(&socket)?;
-    let socket_arg = socket.to_str().ok_or("a UTF-8 path")?;
     let transcript = |id: &str| claude_transcript(dir.path(), id);
     let background = BackgroundJob {
         bash: &bash,
@@ -490,24 +547,7 @@ fn a_background_jobs_hooks_reach_the_pane_the_conversation_came_from_or_stay_sil
     let silent = (Some(0), String::new(), String::new());
 
     // the pane's own Claude Code reports its conversation, then moves it to the daemon
-    let start = [
-        "agent",
-        "hook",
-        "claude",
-        "SessionStart",
-        "--target",
-        &session,
-        "--pane",
-        "left",
-        "--socket",
-        socket_arg,
-    ];
-    let started = hook(
-        dir.path(),
-        &start,
-        &claude_payload("SessionStart", MOVED_FROM, &transcript(MOVED_FROM)?),
-    )?;
-    assert_eq!(outcome(&started), silent);
+    assert_eq!(started(dir.path(), &socket, &session, MOVED_FROM)?, silent);
     std::fs::write(
         transcript(MOVED_FROM)?,
         format!(

@@ -271,16 +271,7 @@ fn locate_conversation(core: &mut Core, request: &Request) -> Outcome {
         .ok_or_else(|| ControlError::rejected("agent.locate requires a report"))?;
     let agent = AgentKind::from_name(&report.agent)
         .ok_or_else(|| ControlError::rejected(format!("invalid agent: {} (claude|codex)", report.agent)))?;
-    let (transcript, conversation) = match (report.transcript_path.as_deref(), report.conversation_id.as_deref()) {
-        (Some(transcript), Some(conversation)) if !transcript.is_empty() && !conversation.is_empty() => {
-            (transcript, conversation)
-        }
-        _ => {
-            return Err(ControlError::rejected(
-                "agent.locate requires transcriptPath and conversationId",
-            ));
-        }
-    };
+    let (transcript, conversation) = conversation_of(report, "agent.locate")?;
     check_transcript(agent, transcript).map_err(ControlError::rejected)?;
     core.sync_agent_records();
     let no_pane = || ControlError::rejected(NO_PANE);
@@ -309,33 +300,37 @@ fn locate_conversation(core: &mut Core, request: &Request) -> Outcome {
         SystemTime::now(),
     );
     Ok(ControlResult {
-        agent: Some(ControlAgent {
-            agent: record.agent.name().to_owned(),
-            pane: role.as_str().to_owned(),
-            transcript_path: record.transcript.clone(),
-            conversation_id: record.conversation.clone(),
-            updated_at: epoch_seconds(record.updated_at),
-            approval: None,
-            pane_id: Some(uuid_string(identity)),
-        }),
+        agent: Some(control_agent(record, role, None, Some(uuid_string(identity)))),
         ..with_id(session)
     })
 }
 
-/// The report's transcript and conversation id, both or neither; `required` refuses neither.
-fn conversation_of(
-    report: &AgentReport,
-    event: HookEvent,
-    required: bool,
-) -> Result<Option<(&str, &str)>, ControlError> {
+/// `record` as the wire carries it, for `role`'s pane.
+fn control_agent(
+    record: &AgentRecord,
+    role: StatusPane,
+    approval: Option<ControlAgentApproval>,
+    pane_id: Option<String>,
+) -> ControlAgent {
+    ControlAgent {
+        agent: record.agent.name().to_owned(),
+        pane: role.as_str().to_owned(),
+        transcript_path: record.transcript.clone(),
+        conversation_id: record.conversation.clone(),
+        updated_at: epoch_seconds(record.updated_at),
+        approval,
+        pane_id,
+    }
+}
+
+/// The report's transcript and conversation id; a report without both is refused in `command`'s name.
+fn conversation_of<'a>(report: &'a AgentReport, command: &str) -> Result<(&'a str, &'a str), ControlError> {
     match (report.transcript_path.as_deref(), report.conversation_id.as_deref()) {
         (Some(transcript), Some(conversation)) if !transcript.is_empty() && !conversation.is_empty() => {
-            Ok(Some((transcript, conversation)))
+            Ok((transcript, conversation))
         }
-        (None, None) if !required => Ok(None),
         _ => Err(ControlError::rejected(format!(
-            "agent.report {} requires transcriptPath and conversationId",
-            event.name()
+            "{command} requires transcriptPath and conversationId"
         ))),
     }
 }
@@ -357,18 +352,19 @@ fn report(core: &mut Core, request: &Request) -> Outcome {
     let blocked = locate(core.library(), pane.identity).is_some_and(|(session, role)| pane_blocked(session, role));
     let records = &mut core.agents.by_pane;
     let now = SystemTime::now();
+    let command = format!("agent.report {}", event.name());
     match event {
         HookEvent::SessionStart | HookEvent::UserPromptSubmit => {
-            if let Some((transcript, conversation)) = conversation_of(report, event, true)? {
-                set_conversation(records, pane.identity, agent, transcript, conversation, now).candidate = None;
-            }
+            let (transcript, conversation) = conversation_of(report, &command)?;
+            set_conversation(records, pane.identity, agent, transcript, conversation, now).candidate = None;
         }
         HookEvent::PermissionRequest => {
             let approval = report
                 .approval
                 .clone()
                 .ok_or_else(|| ControlError::rejected("agent.report PermissionRequest requires an approval"))?;
-            if let Some((transcript, conversation)) = conversation_of(report, event, false)? {
+            if report.transcript_path.is_some() || report.conversation_id.is_some() {
+                let (transcript, conversation) = conversation_of(report, &command)?;
                 set_conversation(records, pane.identity, agent, transcript, conversation, now);
             }
             let record = records
@@ -447,15 +443,7 @@ fn get(core: &mut Core, request: &Request) -> Outcome {
         since: epoch_seconds(candidate.since),
     });
     Ok(ControlResult {
-        agent: Some(ControlAgent {
-            agent: record.agent.name().to_owned(),
-            pane: pane.role.as_str().to_owned(),
-            transcript_path: record.transcript.clone(),
-            conversation_id: record.conversation.clone(),
-            updated_at: epoch_seconds(record.updated_at),
-            approval,
-            pane_id: None,
-        }),
+        agent: Some(control_agent(record, pane.role, approval, None)),
         ..ControlResult::default()
     })
 }

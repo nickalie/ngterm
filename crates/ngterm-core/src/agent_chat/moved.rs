@@ -7,11 +7,12 @@
 //! As Claude Code reads it, the row counts only while no message follows it: a conversation the user went back to
 //! in its first process is that process's again.
 
-use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::Path;
 
 use serde_json::Value;
+
+use crate::bounded_file;
 
 /// How much of a transcript's end is searched for its `continued-in` row: Claude Code writes it last, a few short
 /// rows of its own state after it at most.
@@ -61,10 +62,11 @@ pub fn continued_in(transcript: &Path) -> Option<String> {
     None
 }
 
-/// The whole rows in the last [`TAIL`] bytes of `path`.
+/// The whole rows in the last [`TAIL`] bytes of the regular file at `path`: a FIFO there would hold the open, and
+/// with it the main loop, until a writer came.
 fn tail(path: &Path) -> Option<String> {
-    let mut file = File::open(path).ok()?;
-    let size = file.metadata().ok()?.len();
+    let (mut file, metadata) = bounded_file::opened(path).ok()?;
+    let size = metadata.len();
     let from = size.saturating_sub(TAIL);
     file.seek(SeekFrom::Start(from)).ok()?;
     let mut bytes = Vec::new();
@@ -111,6 +113,18 @@ mod tests {
         assert_eq!(continued_in(&path), None, "the user went back to it");
         fs::write(&path, format!("{REPLY}\n{}\n", moved("../x"))).unwrap();
         assert_eq!(continued_in(&path), None, "no id");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_in_a_transcripts_place_is_not_waited_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("aaaa.jsonl");
+        let name = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        // SAFETY: `name` is a NUL-terminated path that outlives the call.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert_eq!(continued_in(&path), None);
+        assert!(!moved_to(&path, "bbbb"));
     }
 
     #[test]
