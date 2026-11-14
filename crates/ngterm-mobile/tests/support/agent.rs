@@ -52,6 +52,7 @@ pub(crate) struct FakeAgent {
     config: PathBuf,
     control: PathBuf,
     pid: PathBuf,
+    keys: PathBuf,
 }
 
 /// What the fake agent shows, as [`FakeAgent::show`] sets it.
@@ -119,6 +120,7 @@ impl FakeAgent {
         let config = directory.join("config.json");
         let control = directory.join("state");
         let pid = directory.join("pid");
+        let keys = directory.join("keys");
         let settings = json!({
             "agent": "claude",
             "capture": "claude",
@@ -133,6 +135,7 @@ impl FakeAgent {
             "pane_id": pane,
             "control": control,
             "pid": pid,
+            "keys": keys,
             "question": question_input(),
             "assistant_template": turns.assistant,
         });
@@ -144,7 +147,18 @@ impl FakeAgent {
             config,
             control,
             pid,
+            keys,
         }
+    }
+
+    /// The cursor keys the program has read so far, oldest first, each as the terminal sent it with its escape byte
+    /// written `ESC`.
+    pub(crate) fn keys(&self) -> Vec<String> {
+        fs::read_to_string(&self.keys)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
     /// Moves the running program to `state`, which it draws at once.

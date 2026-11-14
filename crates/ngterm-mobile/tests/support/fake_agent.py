@@ -14,6 +14,8 @@ would, so the origin's agent record, `ngtermctl agent chat` and the phone's chat
   composer: the prompt is appended to the transcript as Claude writes a user line, and shown above the prompt box as
   `> text`. Backspace drops a character. The replies to the terminal queries the capture makes, focus and mouse
   reports are read and dropped.
+- Every cursor key it reads (an arrow, with or without modifiers) is appended to the `keys` file, one per line with
+  its escape byte written `ESC`, in every state: what the test reads to tell which arrows reached the program.
 - `/exit` submitted ends it: the screen modes are restored and it exits 0, with no SessionEnd, so the pane's
   foreground goes back to the shell and the origin clears the record on its own.
 - The test moves it between states by writing the state's name to the `control` file and sending it SIGUSR1 (its pid
@@ -30,7 +32,7 @@ would, so the origin's agent record, `ngtermctl agent chat` and the phone's chat
   `exit` ends it, as Claude's `/exit` does.
 
 Usage: fake_agent.py CONFIG.json (the keys: agent, capture, transcript, backlog, payload, user_template, screens,
-ngtermctl, socket, target, pane_id, control, pid, question, groups).
+ngtermctl, socket, target, pane_id, control, pid, keys, question, groups).
 """
 
 import codecs
@@ -56,6 +58,8 @@ HISTORY_ROWS = 6
 RESTORE = b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2031l\x1b[?2004l\x1b[0m\x1b[?1049l"
 PASTE_START = "\x1b[200~"
 PASTE_END = "\x1b[201~"
+# An arrow key as a terminal sends it: CSI or SS3, any modifier parameters, final A to D.
+CURSOR_KEY = re.compile(r"\x1b(?:\[[0-9;:]*|O)[ABCD]")
 
 
 def load_captures(directory, prefix):
@@ -122,7 +126,10 @@ class Input:
             actions.append(("paste", text[len(PASTE_START) : end].replace("\r\n", "\n").replace("\r", "\n")))
             return end + len(PASTE_END)
         if text[0] == "\x1b":
-            return escape_length(text)
+            length = escape_length(text)
+            if length and CURSOR_KEY.fullmatch(text[:length]):
+                actions.append(("cursor", text[:length]))
+            return length
         if text[0] in "\r\n":
             actions.append(("enter", None))
         elif text[0] in "\x7f\x08":
@@ -261,6 +268,11 @@ class Agent:
 
     def handle(self, action, value):
         """Applies one input action; False once the agent should exit."""
+        if action == "cursor":
+            if self.config.get("keys"):
+                with open(self.config["keys"], "a", encoding="utf-8") as file:
+                    file.write(value.replace("\x1b", "ESC") + "\n")
+            return True
         if self.config["agent"] == "codex":
             return self.codex(action, value)
         if self.state == "question":

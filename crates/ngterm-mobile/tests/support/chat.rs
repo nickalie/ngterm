@@ -1,7 +1,7 @@
 //! The e2e test's agent chat steps: a fake agent ([`FakeAgent`]) in the pane, the phone's chat of it read, followed,
 //! paged and resumed, a prompt sent while another client leads, a prompt sent while the agent works (absorbed into its
 //! turn), an approval, an approval answered while the phone is away, a question Claude Code has not written yet shown
-//! and answered, and the agent's end.
+//! and answered, and the agent's end. The Left arrow steps between them are in `left_arrow.rs`.
 
 use std::collections::HashSet;
 
@@ -40,9 +40,9 @@ const PROMPT: &str = "hello from the phone";
 /// The prompt the phone sends while the agent works.
 const ABSORBED: &str = "and add a test for it";
 /// What the fake agent's footer says, as the capture drew it.
-const FOOTER: &str = "for shortcuts";
+pub(crate) const FOOTER: &str = "for shortcuts";
 /// What the working screen's footer says.
-const WORKING: &str = "esc to interrupt";
+pub(crate) const WORKING: &str = "esc to interrupt";
 /// The option the phone picks in the question.
 const PICKED: &str = "Green";
 
@@ -66,11 +66,13 @@ impl Scene<'_> {
         self.page_back(&agent);
         self.resume(&agent);
         self.prompt();
+        self.left_arrow(&agent);
         self.absorbed(&agent);
         self.approval(&agent);
         self.approval_away(&agent);
         self.question(&agent);
         self.end();
+        self.left_arrow_elsewhere();
         self.codex();
     }
 

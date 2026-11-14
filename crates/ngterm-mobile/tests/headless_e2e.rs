@@ -15,7 +15,8 @@
 //! transcript made from the recorded session and reports its `SessionStart` through `ngtermctl agent hook` on the private
 //! socket. The phone hears the agent announced, reads its chat, follows, pages back and resumes it after a severed
 //! link, sends a prompt while the other client leads, sees an approval, and sees the agent cleared once it exits
-//! ([`chat`]).
+//! ([`chat`]). On the way the phone's lone Left arrow is held back from the agent's empty prompt, where Claude Code
+//! would move the conversation to the background, and reaches it everywhere else ([`left_arrow`]).
 //!
 //! Without `sshd` the test skips with a reason, unless `CI` is set: there it fails.
 //!
@@ -29,6 +30,9 @@ mod agent;
 #[cfg(test)]
 #[path = "support/chat.rs"]
 mod chat;
+#[cfg(test)]
+#[path = "support/left_arrow.rs"]
+mod left_arrow;
 #[cfg(test)]
 #[path = "support/machine.rs"]
 mod machine;
