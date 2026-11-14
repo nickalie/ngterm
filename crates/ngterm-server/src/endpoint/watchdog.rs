@@ -15,21 +15,44 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::IO::{CancelIoEx, OVERLAPPED};
 
-/// Waits for the call pending on the pipe `handle` through `overlapped` (`wait`), cancelling it once `timeout` passes;
-/// `None` waits for as long as it takes. A call that fails after its deadline fails with [`io::ErrorKind::TimedOut`],
-/// whatever the cancel made of it; one that finishes anyway keeps its result.
+/// A call's timeout with the timer that enforces it, got before the call is issued: once a call is pending, nothing
+/// may fail before its wait.
+#[derive(Clone, Copy)]
+pub(super) struct Deadline {
+    timer: &'static Timer,
+    timeout: Duration,
+}
+
+/// The deadline for a call bounded by `timeout`; `None` for an unbounded one.
+///
+/// # Errors
+///
+/// The timer thread could not be started.
+pub(super) fn deadline(timeout: Option<Duration>) -> io::Result<Option<Deadline>> {
+    timeout
+        .map(|timeout| {
+            Ok(Deadline {
+                timer: timer()?,
+                timeout,
+            })
+        })
+        .transpose()
+}
+
+/// Waits for the call pending on the pipe `handle` through `overlapped` (`wait`), cancelling it once its `deadline`
+/// passes; `None` waits for as long as it takes. A call that fails after its deadline fails with
+/// [`io::ErrorKind::TimedOut`], whatever the cancel made of it; one that finishes anyway keeps its result.
 ///
 /// `overlapped` must stay where it is until this returns, and `wait` must not return before the call is done.
 pub(super) fn timed<T>(
     handle: HANDLE,
     overlapped: *const OVERLAPPED,
-    timeout: Option<Duration>,
+    deadline: Option<Deadline>,
     wait: impl FnOnce() -> io::Result<T>,
 ) -> io::Result<T> {
-    let Some(timeout) = timeout else {
+    let Some(Deadline { timer, timeout }) = deadline else {
         return wait();
     };
-    let timer = timer()?;
     let id = timer.arm(handle, overlapped, Instant::now() + timeout);
     let result = wait();
     let fired = timer.disarm(id);

@@ -105,6 +105,7 @@ fn overlapped(
     timeout: Option<Duration>,
     call: impl FnOnce(*mut OVERLAPPED) -> BOOL,
 ) -> io::Result<u32> {
+    let deadline = watchdog::deadline(timeout)?;
     // SAFETY: a manual-reset event, unnamed and unshared; the handle is checked before it is owned.
     let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
     if event.is_null() {
@@ -122,7 +123,7 @@ fn overlapped(
         }
     }
     let pending = &raw const overlapped;
-    watchdog::timed(handle, pending, timeout, || {
+    watchdog::timed(handle, pending, deadline, || {
         let mut moved = 0;
         // SAFETY: `overlapped` and its event live until the call completes, which this waits for.
         if unsafe { GetOverlappedResult(handle, pending, &raw mut moved, 1) } == 0 {
