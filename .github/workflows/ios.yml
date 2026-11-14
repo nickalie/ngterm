@@ -3,35 +3,46 @@
 # finds /Applications/Xcode_27.2.app and exports it as DEVELOPER_DIR, which scripts/build-ios.sh takes from it). The
 # core's own Rust checks on the hosts are cross-platform.yml's; this workflow runs what only Xcode can.
 #
-# Each job sets up the same way: the pinned Zig and the libghostty-vt prefix (scripts/build-ghostty-vt.sh, which
-# setup-ios.sh then finds), then the iOS toolchain (scripts/setup-ios.sh: the Rust iOS targets, the phone and tablet
-# simulators, SwiftLint); scripts/build-ios.sh then builds the core for both iOS targets, its Swift bindings and
-# XCFramework before its action. The three run side by side, since one after another they outran two hours with
-# nothing cached (measured 2026-11-05: the core 26 min, the lint's build 35 min, the Unit plan 17 min, the UI plan
-# 40-50 min):
+# The core is built once, by `core`, and the jobs that need it wait for that and then run side by side (one after
+# another they took two hours; measured on main, 2026-11-14: the core 7 to 28 min, the lint's analyzer 33 to 39 min,
+# the Unit plan 20 to 25 min, the UI plan 21 to 27 min on the phone and 30 to 53 min on the tablet):
 #
-# - `lint`: the core's Rust tests on the phone simulator (ngterm-mobile's unit tests and ngterm-ghostty-vt's tests,
-#   through scripts/ios-sim-runner.sh), then scripts/build-ios.sh lint: SwiftLint with its analyzer rules,
-#   swift-format, the suppression reasons, Swift 6 with warnings as errors. Its build log is kept as `ios-lint-log`
-#   when it fails;
-# - `test`: scripts/build-ios.sh test, the Unit and UI test plans on both simulators, and the Unit plan's line coverage
-#   checked against the floors of mobile/ios/coverage-floors.txt; the coverage summary (Unit.coverage.txt and .json)
-#   is kept as `ios-coverage` on every run that wrote it. A UI test that fails runs once more, and each that passed on
-#   its retry is named with what failed it: a warning when XCTest gave up on the app, as it now and then does on these
-#   virtual Macs, and otherwise a flaky test that fails the job (build-ios.sh's report_retried_tests). When it fails
-#   (or runs out of time, or retried a test: mobile/ios/build/retried-tests.txt) the result bundles are kept as
-#   `ios-results`, and the failed snapshots' images (mobile/ios/build/snapshot-failures/) with the failed tests'
-#   attachments exported from the result bundles (each snapshot's reference, failure and difference images, the UI
-#   audits' screenshots) as `ios-failure-diffs`;
+# - `core`: scripts/build-ios.sh --no-xcode, the core for both iOS targets, its Swift bindings and XCFramework, kept
+#   in a cache keyed by everything they are built from (the crates, the workspace's pins, toolchain and cargo config,
+#   the libghostty-vt pins and patches, the scripts that build them), so a run over the same sources builds nothing.
+#   The jobs below restore that cache entry and pass --prebuilt-core: none of them compiles Rust;
+# - `core-tests`: the core's Rust tests on the phone simulator (ngterm-mobile's unit tests and ngterm-ghostty-vt's
+#   tests, through scripts/ios-sim-runner.sh). It needs no XCFramework, so it starts with `core`;
+# - `lint`: scripts/build-ios.sh lint: SwiftLint with its analyzer rules, swift-format, the suppression reasons, Swift
+#   6 with warnings as errors. Its build log is kept as `ios-lint-log` when it fails;
+# - `unit`: scripts/build-ios.sh coverage, the Unit test plan on both simulators and its line coverage, over both
+#   simulators' profiles, checked against the floors of mobile/ios/coverage-floors.txt; the coverage summary
+#   (Unit.coverage.txt and .json) is kept as `ios-coverage` on every run that wrote it;
+# - `ui`: scripts/build-ios.sh ui, the UI test plan, a job per simulator, and the tablet's, the slower, in two shares
+#   of the test classes (--ui-shard, which makes the shares the whole plan). A UI test that fails runs once more, and
+#   each that passed on its retry is named with what failed it: a warning when XCTest gave up on the app, as it now
+#   and then does on these virtual Macs, and otherwise a flaky test that fails the job (build-ios.sh's
+#   report_retried_tests);
+# - `results`: when a `unit` or `ui` job fails (or runs out of time, or retried a test:
+#   mobile/ios/build/retried-tests.txt) its result bundles are kept, and the failed snapshots' images
+#   (mobile/ios/build/snapshot-failures/) with the failed tests' attachments exported from the result bundles (each
+#   snapshot's reference, failure and difference images, the UI audits' screenshots). This job gathers what those jobs
+#   kept into `ios-results` and `ios-failure-diffs`, a directory per job (the jobs' own `ios-results-*` and
+#   `ios-failure-diffs-*` last a day);
 # - `archive`: scripts/build-ios.sh archive, an unsigned Release archive for devices, checked to hold no
 #   NgtermCoreFakes symbol (the fake core is for Debug builds only), to answer the export compliance question, and to
 #   carry a privacy manifest that covers the required-reason APIs its binary uses (scripts/ios-privacy-check.sh). The
 #   signed archive, its export and its upload are ios-release.yml's.
 #
+# Every job that builds sets up the same way: the pinned Zig and the libghostty-vt prefix (scripts/build-ghostty-vt.sh,
+# which setup-ios.sh then finds), then the iOS toolchain (scripts/setup-ios.sh: the Rust iOS targets, the phone and
+# tablet simulators, SwiftLint). `unit` and `ui` end with their tests counted per simulator, so the split can be
+# checked against `scripts/build-ios.sh test`, which runs both plans whole.
+#
 # The vendor root (the pinned Zig, its global cache, the libghostty-vt prefixes and the vendored SwiftLint) and cargo's
 # registry and target directory are cached as cross-platform.yml's macOS leg caches them, under keys of this image;
-# the three jobs share one cargo cache (`shared-key`), which the first of them to pass saves, since each builds the
-# same core. The simulator runtime is the image's; Xcode's derived data is not cached.
+# cargo's cache is `core`'s to save (`core-tests` reads it). The simulator runtime is the image's; Xcode's derived
+# data is not cached.
 #
 # Path-filtered to what the app builds from: the mobile core and the crates it builds on, the workspace manifest, lock
 # file, toolchain and cargo config, mobile/ios/ and the fonts it shares with Android, the scripts, patches and pins of
@@ -87,24 +98,73 @@ defaults:
     shell: bash
 
 jobs:
-  lint:
+  core:
     runs-on: xcode-27
-    timeout-minutes: 120
+    timeout-minutes: 90
+    outputs:
+      key: ${{ steps.key.outputs.key }}
     steps:
       - uses: actions/checkout@v7
+      # every crate, not only the core's build closure: ngterm-mobile embeds a file of a crate outside it
+      - name: the key of the core's inputs
+        id: key
+        env:
+          INPUTS: ${{ hashFiles('crates/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/build-ios.sh', 'scripts/setup-ios.sh', 'scripts/build-ghostty-vt.sh', 'scripts/lib/native.sh') }}
+        run: echo "key=ios-core-xcode-27-$INPUTS" >>"$GITHUB_OUTPUT"
+      - name: the core a run built from these inputs
+        id: built
+        uses: actions/cache@v6
+        with:
+          path: &core-paths |
+            mobile/ios/Packages/NgtermCore/Generated/NgtermCoreFFI.xcframework
+            mobile/ios/Packages/NgtermCore/Generated/NgtermCoreBindings
+          key: ${{ steps.key.outputs.key }}
       - name: rust toolchain (rust-toolchain.toml)
+        if: steps.built.outputs.cache-hit != 'true'
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        if: steps.built.outputs.cache-hit != 'true'
         with:
           shared-key: ios
       # the vendor root, keyed like cross-platform.yml's legs', with the iOS setup that installs SwiftLint into it
       - uses: actions/cache@v6
+        if: steps.built.outputs.cache-hit != 'true'
         with:
           path: ~/.cache/ngterm/vendor
-          key: vendor-ngterm-xcode-27-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh', 'scripts/setup-ios.sh') }}
+          key: &vendor-key vendor-ngterm-xcode-27-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh', 'scripts/setup-ios.sh') }}
       - name: Zig and the libghostty-vt prefix (build/pins.env)
+        if: steps.built.outputs.cache-hit != 'true'
         run: scripts/build-ghostty-vt.sh
       - name: iOS toolchain (build/pins.env)
+        if: steps.built.outputs.cache-hit != 'true'
+        run: scripts/setup-ios.sh
+      - name: the core for both iOS targets, its Swift bindings and XCFramework
+        if: steps.built.outputs.cache-hit != 'true'
+        run: scripts/build-ios.sh --no-xcode
+
+  core-tests:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - &checkout
+        uses: actions/checkout@v7
+      - &rust-toolchain
+        name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ios
+          save-if: false
+      - &vendor-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: *vendor-key
+      - &ghostty-vt
+        name: Zig and the libghostty-vt prefix (build/pins.env)
+        run: scripts/build-ghostty-vt.sh
+      - &ios-toolchain
+        name: iOS toolchain (build/pins.env)
         run: scripts/setup-ios.sh
       - name: the core's Rust tests on the iOS simulator
         run: |
@@ -112,8 +172,26 @@ jobs:
           export CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER="$PWD/scripts/ios-sim-runner.sh"
           cargo test -p ngterm-mobile --lib --target aarch64-apple-ios-sim
           cargo test -p ngterm-ghostty-vt --target aarch64-apple-ios-sim
+
+  lint:
+    needs: core
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - *checkout
+      - *rust-toolchain
+      - *vendor-cache
+      - *ghostty-vt
+      - *ios-toolchain
+      - &prebuilt-core
+        name: the core (the core job's)
+        uses: actions/cache/restore@v6
+        with:
+          path: *core-paths
+          key: ${{ needs.core.outputs.key }}
+          fail-on-cache-miss: true
       - name: lint (SwiftLint and its analyzer rules, swift-format, the suppression reasons)
-        run: scripts/build-ios.sh lint
+        run: scripts/build-ios.sh --prebuilt-core lint
       - name: upload the lint's build log
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7
@@ -122,28 +200,21 @@ jobs:
           path: mobile/ios/build/lint-analyze.log
           if-no-files-found: ignore
 
-  test:
+  unit:
+    needs: core
     runs-on: xcode-27
-    # about two hours with nothing cached (the core, the Debug build, both plans on both simulators)
-    timeout-minutes: 180
+    timeout-minutes: 90
+    env:
+      LEG: unit
     steps:
-      - uses: actions/checkout@v7
-      - name: rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ios
-      # the vendor root, keyed like cross-platform.yml's legs', with the iOS setup that installs SwiftLint into it
-      - uses: actions/cache@v6
-        with:
-          path: ~/.cache/ngterm/vendor
-          key: vendor-ngterm-xcode-27-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh', 'scripts/setup-ios.sh') }}
-      - name: Zig and the libghostty-vt prefix (build/pins.env)
-        run: scripts/build-ghostty-vt.sh
-      - name: iOS toolchain (build/pins.env)
-        run: scripts/setup-ios.sh
-      - name: test (the Unit and UI test plans on the phone and tablet, the Unit plan's coverage floors)
-        run: scripts/build-ios.sh test
+      - *checkout
+      - *rust-toolchain
+      - *vendor-cache
+      - *ghostty-vt
+      - *ios-toolchain
+      - *prebuilt-core
+      - name: the Unit test plan on the phone and tablet, its coverage floors
+        run: scripts/build-ios.sh --prebuilt-core coverage
       - name: upload the coverage summary
         if: always()
         uses: actions/upload-artifact@v7
@@ -151,18 +222,21 @@ jobs:
           name: ios-coverage
           path: mobile/ios/build/Unit.coverage.*
           if-no-files-found: ignore
-      - name: upload the result bundles
+      - &upload-results
+        name: upload the result bundles
         if: failure() || cancelled() || hashFiles('mobile/ios/build/retried-tests.txt') != ''
         uses: actions/upload-artifact@v7
         with:
-          name: ios-results
+          name: ios-results-${{ env.LEG }}
           path: mobile/ios/build/*.xcresult
           if-no-files-found: ignore
+          retention-days: 1
       # the failed tests' attachments out of the result bundles, so they can be looked at without Xcode: a snapshot's
       # reference, failure and difference images, a UI test's audit screenshots, each plan's manifest.json naming them.
       # A passing test keeps none, so everything is exported: `--only-failures` would miss the snapshots' images,
       # which Swift Testing records beside the issue rather than on it
-      - name: export the failed tests' attachments
+      - &export-attachments
+        name: export the failed tests' attachments
         if: failure() || cancelled() || hashFiles('mobile/ios/build/retried-tests.txt') != ''
         run: |
           eval "$(scripts/setup-ios.sh --check)"
@@ -171,34 +245,88 @@ jobs:
             xcrun xcresulttool export attachments --path "$bundle" \
               --output-path "mobile/ios/build/failure-attachments/$(basename "$bundle" .xcresult)" || true
           done
-      - name: upload the failed snapshots and attachments
+      - &upload-failure-diffs
+        name: upload the failed snapshots and attachments
         if: failure() || cancelled() || hashFiles('mobile/ios/build/retried-tests.txt') != ''
         uses: actions/upload-artifact@v7
         with:
-          name: ios-failure-diffs
+          name: ios-failure-diffs-${{ env.LEG }}
           path: |
             mobile/ios/build/snapshot-failures/
             mobile/ios/build/failure-attachments/
           if-no-files-found: ignore
+          retention-days: 1
+
+  ui:
+    needs: core
+    runs-on: xcode-27
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: ui-phone
+            options: --device phone
+          - leg: ui-tablet-1
+            options: --device tablet --ui-shard 1/2
+          - leg: ui-tablet-2
+            options: --device tablet --ui-shard 2/2
+    name: ${{ matrix.leg }}
+    env:
+      LEG: ${{ matrix.leg }}
+    steps:
+      - *checkout
+      - *rust-toolchain
+      - *vendor-cache
+      - *ghostty-vt
+      - *ios-toolchain
+      - *prebuilt-core
+      - name: the UI test plan (${{ matrix.options }})
+        env:
+          OPTIONS: ${{ matrix.options }}
+        run: |
+          read -ra options <<<"$OPTIONS"
+          scripts/build-ios.sh --prebuilt-core "${options[@]}" ui
+      - *upload-results
+      - *export-attachments
+      - *upload-failure-diffs
+
+  # what the unit and ui jobs kept, under the names a run of one job gave them
+  results:
+    needs: [unit, ui]
+    if: always()
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ios-results-*
+          path: ios-results
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios-results
+          path: ios-results/
+          if-no-files-found: ignore
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ios-failure-diffs-*
+          path: ios-failure-diffs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios-failure-diffs
+          path: ios-failure-diffs/
+          if-no-files-found: ignore
 
   archive:
+    needs: core
     runs-on: xcode-27
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
-      - name: rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ios
-      # the vendor root, keyed like cross-platform.yml's legs', with the iOS setup that installs SwiftLint into it
-      - uses: actions/cache@v6
-        with:
-          path: ~/.cache/ngterm/vendor
-          key: vendor-ngterm-xcode-27-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh', 'scripts/setup-ios.sh') }}
-      - name: Zig and the libghostty-vt prefix (build/pins.env)
-        run: scripts/build-ghostty-vt.sh
-      - name: iOS toolchain (build/pins.env)
-        run: scripts/setup-ios.sh
+      - *checkout
+      - *rust-toolchain
+      - *vendor-cache
+      - *ghostty-vt
+      - *ios-toolchain
+      - *prebuilt-core
       - name: unsigned Release archive, with no fake core
-        run: scripts/build-ios.sh archive
+        run: scripts/build-ios.sh --prebuilt-core archive

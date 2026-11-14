@@ -1058,13 +1058,14 @@ as before, with no error. A Windows origin can't be reached at all yet, as above
 
 ```sh
 scripts/setup-ios.sh [--check]    # the pinned toolchain (iOS toolchain); build-ios.sh takes its exports itself
-scripts/build-ios.sh [--profile release|debug] [--no-xcode] [lint|build|test|coverage|archive...]   # default: build
-scripts/build-ios.sh lint test    # the lint gate, then the Unit and UI test plans on both simulators, as CI runs them
+scripts/build-ios.sh [--profile release|debug] [--no-xcode] [lint|build|test|coverage|ui|archive...]   # default: build
+scripts/build-ios.sh lint test    # the lint gate, then the Unit and UI test plans on both simulators, as CI checks them
 scripts/build-ios.sh coverage     # the Unit plan alone, its line coverage summary and floor check, as test measures it
+scripts/build-ios.sh --device tablet --ui-shard 1/2 ui   # the UI plan alone: one simulator, a share of its classes
 eval "$(scripts/setup-ios.sh --check)"   # then, after test or coverage, a source file's lines no Unit test ran:
 scripts/ios-coverage.py uncovered mobile/ios/Packages/NgtermCore/Sources/NgtermCore/CoreInfo.swift
 scripts/build-ios.sh archive      # a Release archive for devices (unsigned without the release secrets), checked
-eval "$(scripts/setup-ios.sh --check)"   # then the core's tests in the phone simulator, as CI's lint job runs them:
+eval "$(scripts/setup-ios.sh --check)"   # then the core's tests in the phone simulator, as CI's core-tests job runs them:
 CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER="$PWD/scripts/ios-sim-runner.sh" \
   cargo test -p ngterm-mobile --lib --target aarch64-apple-ios-sim
 ```
@@ -1082,6 +1083,11 @@ CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER="$PWD/scripts/ios-sim-runner.sh" \
   have a process ID", "Timed out while evaluating UI query"). A test that passed on its retry is named after the run
   with what failed it, red runs included: as a warning when its first attempt failed on those alone, and otherwise
   as a flaky test that fails the run. CI keeps the result bundles and attachments of any run that retried a test.
+- CI runs the plans as parallel jobs over one build of the core (`.github/workflows/ios.yml`): `--prebuilt-core`
+  takes the XCFramework and bindings a `--no-xcode` run left in `Generated/`, `--device phone|tablet` keeps a plan
+  to one simulator, and `--ui-shard K/N` to the K-th of N shares of the UI test classes (the last share skips what
+  the others run, so the shares are the whole plan). Each plan's run ends with its tests counted per simulator and
+  its slowest test classes' times, which is how a split run is checked against a whole one.
 - The Unit plan measures line coverage of the app's own code: the app target and the packages' library targets
   (`Unit.xctestplan`'s code coverage targets), not the tests, the fake core or the generated bindings; the UI plan
   is not measured. `test` and `coverage` write its summary per target and per file, least covered first, beside the
@@ -1380,9 +1386,12 @@ already holds changes no file, so the path-filtered workflows don't start on it.
   `headless-e2e`); `emulator` runs the instrumented tests on the phone and tablet AVDs (KVM), where the app's
   real-machine e2e tests (`e2e` package, `scripts/test-android-e2e.sh`) skip, having no machine.
 - `ios.yml` (path-filtered to the mobile core, the crates under it, `mobile/ios/`, the shared fonts and the iOS
-  scripts and pins), on the `xcode-27` image, three jobs side by side: `lint` (the core's Rust
-  tests in the phone simulator, then `scripts/build-ios.sh lint`), `test` (`build-ios.sh test`, keeping the result
-  bundles and the failed snapshots' images when it fails) and `archive` (`build-ios.sh archive`, unsigned).
+  scripts and pins), on the `xcode-27` image: `core` builds the core's XCFramework and
+  bindings once (cached by their inputs) and `core-tests` runs the core's Rust tests in the phone simulator; then,
+  side by side over that core, `lint` (`scripts/build-ios.sh lint`), `unit` (`build-ios.sh coverage`: the Unit plan
+  on both simulators and its coverage floors), `ui-phone`, `ui-tablet-1` and `ui-tablet-2` (`build-ios.sh ui`: the
+  UI plan per simulator, the tablet's in two shares of its test classes) and `archive` (`build-ios.sh archive`,
+  unsigned); `results` gathers the result bundles and the failed snapshots' images of the test jobs that failed.
 - `ios-release.yml`: a release tag's signed iOS build, uploaded to TestFlight, and dry runs by hand or from `ci/**`
   pushes ([docs/ios-release.md](ios-release.md)).
 - `windows-installer.yml` (the same triggers, and by hand): the release build staged, the MSI built from it with the
