@@ -493,6 +493,15 @@ or ghostty-vt patch change, `scripts/gen-ghostty-config-keys.sh` ngterm-core's g
 `LIBGHOSTTY_VT_REV` bump, `scripts/gen-wpe-bindings.sh` the gir crates `ngterm-wpe-sys`, `ngterm-wpe-platform-sys` and
 `ngterm-wpe-javascriptcore-sys` after a `WPE_*` or `GIR_*` bump.
 
+After any `cargo update` (a Dependabot cargo PR included), run `scripts/check-lock-edges.py --fix` before the
+commit. `cargo update -p CRATE` unlocks CRATE and its whole dependency subtree; a crate outside it whose requirement
+spans several versions (`windows-sys = ">=0.52, <0.62"`) and whose edge pointed into that subtree is then locked to
+the lowest other version of the dependency still in `Cargo.lock`. `--locked` accepts the result, but it is a
+different build: with gpu-allocator on an older `windows` than wgpu-hal's, the Windows dx12 code does not compile.
+No manifest setting prevents it while the lock holds two versions inside one such range, so the script holds every
+edge to the highest locked version its requirement allows (what a resolve from the manifests picks) and CI's Linux
+job fails on a lock that differs.
+
 The GPUI frontend's terminal embeds the fonts Ghostty embeds, from the package deps of the Ghostty at
 `LIBGHOSTTY_VT_REV` (`FONTS_*` in `build/pins.env`, each archive's sha256 pinned): JetBrains Mono 2.304 (its static
 faces; SIL Open Font License 1.1), the face when `font-family` is unset, and Symbols Nerd Font Mono 3.4.0 (MIT), every
@@ -1211,7 +1220,7 @@ macOS' gate is [CI](#ci)'s run on a `ci/**` branch or a PR):
   that depends on one (`cargo tree -i CRATE --workspace -e normal,build,dev --prefix none` lists them). The
   `--no-default-features` line runs only when `ngterm-gpui` is among them.
 - `cargo test` takes `-p` for the touched crates only.
-- the tracing-features check runs for a change to dependencies or `Cargo.lock`; a vendor script's `--check` runs for a
+- the tracing-features check and the lock-edges check run for a change to dependencies or `Cargo.lock`; a vendor script's `--check` runs for a
   change to its `vendor/` tree or `build/patches/`; a bindings check runs for the pin changes named below.
 - the selftests run for a change under `conformance/`.
 - `run-linux.sh` runs partially (`-- -k EXPR`, see [conformance/README.md](../conformance/README.md); node ids after `--`
@@ -1221,6 +1230,7 @@ macOS' gate is [CI](#ci)'s run on a `ci/**` branch or a PR):
 ```sh
 cargo fmt --all --check
 cargo metadata --locked --format-version 1 >/dev/null   # Cargo.lock is current
+scripts/check-lock-edges.py                 # no `cargo update` moved an edge to an older locked version (--fix)
 scripts/check-tracing-features.sh           # no dependency turns on tracing's `log` fallback
 scripts/vendor-calloop.sh --check           # vendor/ equals its crates.io sources plus build/patches/
 scripts/vendor-gpui.sh --check

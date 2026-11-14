@@ -88,6 +88,10 @@ jobs:
         run: cargo fmt --all --check
       - name: Cargo.lock is current
         run: cargo metadata --locked --format-version 1 >/dev/null
+      # a `cargo update -p` (Dependabot's too) can move another crate's edge to an older locked version, which
+      # --locked accepts: gpu-allocator on an older `windows` than wgpu-hal's fails the Windows build
+      - name: Cargo.lock edges
+        run: scripts/check-lock-edges.py
       # before clippy: a dependency turning on tracing's `log` would put dozens of functions over the complexity limit
       - name: tracing features
         run: scripts/check-tracing-features.sh
