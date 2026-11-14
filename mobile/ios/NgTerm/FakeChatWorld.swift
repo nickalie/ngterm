@@ -16,25 +16,24 @@
     ///   and "Going with <pick>.";
     /// - "run the build" asks to allow `npm run build` (the dialog's Yes and No); allowed, the command's row comes with
     ///   the prompt's end and "The build passed.";
-    /// - "ask me, then drop" asks as "ask me" does, then the chat's link drops and comes back with the question
-    ///   answered in the terminal meanwhile: the catch-up writes the answered call and the core ends the prompt;
+    /// - "ask me, then drop" asks as "ask me" does, then the chat's link drops (on the cue ``FakeCues/Cue/chatDrop``)
+    ///   and comes back (on ``FakeCues/Cue/chatBack``) with the question answered in the terminal meanwhile: the
+    ///   catch-up writes the answered call and the core ends the prompt. Cues, not a clock, as a UI test looks at the
+    ///   card and the drop before they end, however slow the simulator answers it;
     /// - "write a lot" replies with 30 paragraphs, "Paragraph 30 ends here." last.
     internal final class FakeChatWorld: Sendable {
-        /// How long the agent takes: a prompt on its way, one that ends "take your time", and a link that drops.
+        /// How long the agent takes: a prompt on its way, and one that ends "take your time".
         internal struct Pace: Sendable {
-            /// As a real agent and link take, near enough.
+            /// As a real agent takes, near enough.
             internal static let real = Self(
                 typing: .milliseconds(typingMilliseconds),
-                slowTyping: .seconds(slowTypingSeconds),
-                away: .seconds(awaySeconds)
+                slowTyping: .seconds(slowTypingSeconds)
             )
             private static let typingMilliseconds = 600
             private static let slowTypingSeconds = 8
-            private static let awaySeconds = 10
 
             internal let typing: Duration
             internal let slowTyping: Duration
-            internal let away: Duration
         }
 
         /// The pane the agent runs in.
@@ -79,13 +78,15 @@
 
         private let core: FakeMobileCore
         private let pace: Pace
+        private let cue: @Sendable (FakeCues.Cue) async -> Void
         private let turns = Mutex(0)
         private let prompts = Mutex<[String: ChatApproval]>([:])
 
-        /// The agent, telling the app through `core`, at `pace`.
-        internal init(core: FakeMobileCore, pace: Pace) {
+        /// The agent, telling the app through `core`, at `pace`, each step a UI test looks at first waiting for `cue`.
+        internal init(core: FakeMobileCore, pace: Pace, cue: @escaping @Sendable (FakeCues.Cue) async -> Void) {
             self.core = core
             self.pace = pace
+            self.cue = cue
         }
 
         private static func event(_ id: String, _ body: ChatBody) -> ChatEvent {
@@ -194,9 +195,9 @@
 
         // the link drops; the question is answered in the terminal meanwhile, and the catch-up says so
         private func dropped(answering id: String, turn: Int) async {
-            try? await Task.sleep(for: pace.away)
+            await cue(.chatDrop)
             core.emit(.chatState(pane: Self.pane, state: .reconnecting))
-            try? await Task.sleep(for: pace.away)
+            await cue(.chatBack)
             guard let approval = prompts.withLock({ $0.removeValue(forKey: id) }) else {
                 return
             }

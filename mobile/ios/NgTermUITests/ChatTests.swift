@@ -2,8 +2,8 @@ import XCTest
 
 /// The agent chat on the fake core's `split`, whose session `work` runs Claude Code in its first pane (the app's
 /// `FakeChatWorld`): what the user types reaches the agent and what it says shows, its questions and permission prompts
-/// come as cards and are answered from them, a card answered while the link was down goes, and the session's Chat view
-/// holds as set.
+/// come as cards and are answered from them, a card answered while the link was down goes (the link dropping and coming
+/// back on the test's cues, once it has seen the card and the drop), and the session's Chat view holds as set.
 internal final class ChatTests: XCTestCase {
     private static let wait: TimeInterval = 15
     // how long a view that should stay is watched for
@@ -134,7 +134,9 @@ internal final class ChatTests: XCTestCase {
         Self.send("ask me, then drop", in: app)
         let send = app.buttons["Send answers"]
         FakeApp.expect(send, "the question card")
+        FakeApp.cue("chat-drop")
         FakeApp.expect(FakeApp.element(containing: "Reconnecting to", in: app), "the reconnecting strip")
+        FakeApp.cue("chat-back")
         Self.expectGone(send, "the card answered in the terminal")
         Self.expectGone(FakeApp.element(containing: "Reconnecting to", in: app), "the reconnecting strip")
         Self.send("carry on", in: app)

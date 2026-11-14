@@ -132,7 +132,8 @@
                 }
             }
             seedCopy(core)
-            let agent = FakeChatWorld(core: core, pace: .real)
+            let cues = FakeCues()
+            let agent = FakeChatWorld(core: core, pace: .real) { await cues.next($0) }
             core.attachEvents[sessionId] =
                 attachEvents(of: sessionId, panes: paneIds) + (asks ? [askEvent] : [])
                 + (chats ? [FakeChatWorld.agentEvent] : [])

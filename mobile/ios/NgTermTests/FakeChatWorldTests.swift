@@ -9,13 +9,16 @@ import Testing
 @MainActor
 @Suite("the fake chat's agent")
 internal struct FakeChatWorldTests {
-    private static let instant = FakeChatWorld.Pace(typing: .zero, slowTyping: .zero, away: .zero)
+    private static let instant = FakeChatWorld.Pace(typing: .zero, slowTyping: .zero)
 
     private let core = FakeMobileCore()
 
     // the agent's pane, its chat's events told through `core`
     private func agentPane() -> FakePane {
-        FakeChatWorld(core: core, pace: Self.instant).pane { _ in Data() }
+        FakeChatWorld(core: core, pace: Self.instant) { _ in
+            // every cue comes at once
+        }
+        .pane { _ in Data() }
     }
 
     // the chat events told so far, oldest first

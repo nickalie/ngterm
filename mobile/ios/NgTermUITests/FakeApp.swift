@@ -72,6 +72,18 @@ internal enum FakeApp {
         XCTAssertTrue(element.waitForExistence(timeout: wait), "no \(what)")
     }
 
+    /// Tells the app's fake worlds the test has seen what the cue `name` (the app's `FakeCues.Cue`) waits on.
+    internal static func cue(_ name: String) {
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        CFNotificationCenterPostNotification(
+            center,
+            CFNotificationName("com.nickalie.ngterm.fake-cue.\(name)" as CFString),
+            nil,
+            nil,
+            true
+        )
+    }
+
     /// The first element whose label holds `text`, whatever its kind.
     @MainActor
     internal static func element(containing text: String, in app: XCUIApplication) -> XCUIElement {
