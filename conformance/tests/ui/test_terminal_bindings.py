@@ -277,10 +277,11 @@ def _scrolled_up(ctl, sid, **pane):
 
 
 def _typed_with_the_pointer_resting(ctl, ui, sid, **pane):
-    """The pointer brought over the window's middle, then keys typed into the focused pane through the OS's keyboard:
-    the window's last input is a key, and a wheel turned at the window's middle next comes with no pointer move."""
+    """The pointer brought over the window's middle, then keys pressed into the focused pane, as a keyboard's (not
+    `type_text`, whose Windows text the pane takes as pasted): the window's last input is a key, and a wheel turned at
+    the window's middle next comes with no pointer move."""
     ui.move(ui.window())
-    ui.type_text("typed")
+    ui.press(*"typed")
     ctl.wait_text(sid, r"typed", **pane)
 
 
@@ -313,34 +314,28 @@ def test_the_wheel_scrolls_the_split_pane_under_the_pointer_not_the_focused_one(
     """Both panes of a side-by-side split hold a screen many viewports tall; keys go to the right one, and the wheel
     over the left one scrolls the left one alone."""
     with _cat(ctl) as sid:
-        assert_ok(ctl.request("sidebar", mode="hide"))
-        try:
-            wait_until(lambda: not assert_ok(ctl.request("window.list"))["windows"][0]["sidebarVisible"])
-            assert_ok(ctl.request("session.split", sid, mode="on", axis="vertical"))
-            ctl.wait_mounted(sid, "left", "right")
-            # the split's new pane takes the focus, which a request with no pane addresses
-            _scrollback(ctl, sid, pane="left")
-            # the new pane's shell hands it to `cat` as well: no prompt redraws there, and no line editor reads the keys
-            # (Windows' UI driver types text, which the pane writes as a bracketed paste Git's `sh` may misread)
-            assert_ok(ctl.request("session.type", sid, pane="right", text="exec cat\n"))
-            ctl.wait_tree(lambda tree: _runs_cat(find_session(tree, sid).get("splitForeground")))
-            assert_ok(ctl.request("session.type", sid, pane="right", text="cat-reads\n"))
-            ctl.wait_text(sid, r"cat-reads[\s\S]*cat-reads", all=True, pane="right")
-            _scrollback(ctl, sid, pane="right")
-            # the panes span the window's width, the sidebar hidden: at 0.8 the window's middle is over the left one
-            assert_ok(ctl.request("session.resize", sid, ratio=0.8))
-            ctl.wait_tree(lambda tree: find_session(tree, sid).get("splitRatio") == pytest.approx(0.8, abs=0.004))
-            assert_ok(ctl.request("session.focus", sid, pane="right"))
-            ctl.wait_tree(lambda tree: find_session(tree, sid).get("splitFocused") is True)
-            _at_bottom(ctl, sid, pane="left")
-            _at_bottom(ctl, sid, pane="right")
-            _typed_with_the_pointer_resting(ctl, ui, sid, pane="right")
-            ui.scroll(ui.window(), -5)
-            _scrolled_up(ctl, sid, pane="left")
-            below = _rows_below_the_viewport(ctl, sid, pane="right")
-            assert below == 0, f"the focused pane scrolled too: {below} rows below its viewport"
-        finally:
-            ctl.request("sidebar", mode="show")
+        assert_ok(ctl.request("session.split", sid, mode="on", axis="vertical"))
+        ctl.wait_mounted(sid, "left", "right")
+        # the split's new pane takes the focus, which a request with no pane addresses
+        _scrollback(ctl, sid, pane="left")
+        # the new pane's shell hands it to `cat` as well, so no prompt redraws there
+        assert_ok(ctl.request("session.type", sid, pane="right", text="exec cat\n"))
+        ctl.wait_tree(lambda tree: _runs_cat(find_session(tree, sid).get("splitForeground")))
+        assert_ok(ctl.request("session.type", sid, pane="right", text="cat-reads\n"))
+        ctl.wait_text(sid, r"cat-reads[\s\S]*cat-reads", all=True, pane="right")
+        _scrollback(ctl, sid, pane="right")
+        # the sidebar, narrower than half the window, on its left: at 0.8 the window's middle is over the left pane
+        assert_ok(ctl.request("session.resize", sid, ratio=0.8))
+        ctl.wait_tree(lambda tree: find_session(tree, sid).get("splitRatio") == pytest.approx(0.8, abs=0.004))
+        assert_ok(ctl.request("session.focus", sid, pane="right"))
+        ctl.wait_tree(lambda tree: find_session(tree, sid).get("splitFocused") is True)
+        _at_bottom(ctl, sid, pane="left")
+        _at_bottom(ctl, sid, pane="right")
+        _typed_with_the_pointer_resting(ctl, ui, sid, pane="right")
+        ui.scroll(ui.window(), -5)
+        _scrolled_up(ctl, sid, pane="left")
+        below = _rows_below_the_viewport(ctl, sid, pane="right")
+        assert below == 0, f"the focused pane scrolled too: {below} rows below its viewport"
 
 
 # a page taller than its view, scrolled down a way once loaded: its title says when a key reaches it and when a wheel
@@ -378,7 +373,7 @@ def test_the_wheel_over_a_page_scrolls_the_page_not_its_sessions_terminal(ctl, u
             view = ui.find("htmlOverlay.page")
             # keys typed with the pointer resting over the page, the wheel turned there next
             ui.move(view)
-            ui.type_text("typed")
+            ui.press(*"typed")
             _page_title(ctl, sid, "page-typed")
             ui.scroll(view, -5)
             _page_title(ctl, sid, "page-scrolled")
