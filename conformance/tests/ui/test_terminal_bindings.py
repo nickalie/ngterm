@@ -278,8 +278,8 @@ def _scrolled_up(ctl, sid, **pane):
 
 def _typed_with_the_pointer_resting(ctl, ui, sid, **pane):
     """The pointer brought over the window's middle, then keys pressed into the focused pane, as a keyboard's (not
-    `type_text`, whose Windows text the pane takes as pasted): the window's last input is a key, and a wheel turned at
-    the window's middle next comes with no pointer move."""
+    `type_text`, whose Windows text the pane takes as pasted): the window's last input is a key, and the wheel turned
+    next where the pointer rests (`ui.wheel`) comes with no pointer move."""
     ui.move(ui.window())
     ui.press(*"typed")
     ctl.wait_text(sid, r"typed", **pane)
@@ -297,7 +297,7 @@ def test_the_wheel_scrolls_after_typing_with_the_pointer_still(ctl, ui):
         _scrollback(ctl, sid)
         _at_bottom(ctl, sid)
         _typed_with_the_pointer_resting(ctl, ui, sid)
-        ui.scroll(ui.window(), -5)
+        ui.wheel(-5)
         _scrolled_up(ctl, sid)
 
 
@@ -332,7 +332,7 @@ def test_the_wheel_scrolls_the_split_pane_under_the_pointer_not_the_focused_one(
         _at_bottom(ctl, sid, pane="left")
         _at_bottom(ctl, sid, pane="right")
         _typed_with_the_pointer_resting(ctl, ui, sid, pane="right")
-        ui.scroll(ui.window(), -5)
+        ui.wheel(-5)
         _scrolled_up(ctl, sid, pane="left")
         below = _rows_below_the_viewport(ctl, sid, pane="right")
         assert below == 0, f"the focused pane scrolled too: {below} rows below its viewport"

@@ -122,7 +122,8 @@ compiled regex; the waits dump the inventory on timeout) and act on snapshots:
   input; `text`, `set_text`, `focus`, `hover`, `menu`, `menu_item` and `tab` read, write and open what they name;
 - pointer input has its own names: `move`, `mouse_click` (`button="left"|"right"`), `mouse_double_click`, `drag`,
   `drag_by`, `scroll`; all but `scroll` (which acts at the element's center) take an `offset` within the element,
-  `drag` one per end (`src_offset`, `dst_offset`); `frame` reads an element's screen rectangle and
+  `drag` one per end (`src_offset`, `dst_offset`); `wheel` turns the wheel where the pointer rests, with no move
+  first (a move resets the app's mouse modality, so a wheel after typing needs it); `frame` reads an element's screen rectangle and
   `window` the app's first window, a target for points the protocol locates (a split divider);
 - a pointer action reads the element's bounds at action time and finds a stale element again once, by id and name
   (role and name without an id), else fails with `ElementNotFound`; nothing retries after input went out.

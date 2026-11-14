@@ -412,6 +412,14 @@ class Driver(ABC):
         self._wheel(dx, dy)
 
     @action
+    def wheel(self, dy: int, dx: int = 0) -> None:
+        """Scroll wheel ticks where the pointer rests, with no move first: the window's last input stays what it was,
+        such as a key typed after a `move`."""
+        if not all(isinstance(v, int) for v in (dx, dy)):
+            raise ValueError("scroll distances must be integer wheel ticks")
+        self._wheel(dx, dy)
+
+    @action
     def type_text(self, text: str) -> None:
         """Type printable Unicode into the focused control; use press for control keys."""
         if not isinstance(text, str) or any(not char.isprintable() for char in text):

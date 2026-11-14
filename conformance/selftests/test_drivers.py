@@ -655,6 +655,16 @@ def test_drag_scroll_and_typing():
     assert driver.events[-3:] == [("move", 60, 40), ("wheel", 2, -3), ("text", "Hello, Я! 😀")]
 
 
+def test_wheel_turns_where_the_pointer_rests_with_no_move_or_target():
+    driver = FakeDriver([Element("add-session", "button")])
+    driver._pointer_target = lambda element: driver.events.append(("target", element.handle))
+    driver.wheel(-5, dx=1)
+    assert driver.events == [("wheel", 1, -5)]
+    with pytest.raises(ValueError):
+        driver.wheel(1.5)
+    assert driver.events == [("wheel", 1, -5)]
+
+
 def test_drag_paces_the_gesture_when_asked(monkeypatch):
     """A press held still, moves spread over the duration, a hold before the release: a native drag's shape."""
     driver = FakeDriver([Element("add-session", "button")])
