@@ -7,11 +7,15 @@ on:
   pull_request:
     paths: ["**", "!**/*.md", "!mobile/ios/**", "conformance/docs/**"]
   push:
-    branches: [main]
+    branches: [main, "ci/**"]
     paths: ["**", "!**/*.md", "!mobile/ios/**", "conformance/docs/**"]
 
 permissions:
   contents: read
+
+concurrency:
+  group: conformance-gate-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   gate:

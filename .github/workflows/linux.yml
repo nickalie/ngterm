@@ -14,7 +14,7 @@ on:
   pull_request:
     paths: ["**", "!**/*.md", "!mobile/ios/**", "resources/**", "vendor/**", "build/**"]
   push:
-    branches: [main]
+    branches: [main, "ci/**"]
     paths: ["**", "!**/*.md", "!mobile/ios/**", "resources/**", "vendor/**", "build/**"]
 
 permissions:
@@ -49,14 +49,21 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      # only main saves caches: a branch's would crowd main's out of the repository's cache space
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The prefixes, the Zig toolchain libghostty-vt's was prepared with and the Zig global cache of its builds;
       # keyed like the prefixes themselves (`ngterm`: the share/ngterm manifest layout; native.sh holds `prefix_key`
       # and the libghostty-vt prefix's layout, part of its key).
       - uses: actions/cache@v6
-        with:
+        if: github.ref == 'refs/heads/main'
+        with: &vendor-linux
           path: ~/.cache/ngterm/vendor
           key: vendor-ngterm-${{ runner.os }}-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
+      - uses: actions/cache/restore@v6
+        if: github.ref != 'refs/heads/main'
+        with: *vendor-linux
       - name: pinned Zig toolchain (sha256 from build/pins.env)
         shell: bash
         run: |
@@ -192,12 +199,18 @@ jobs:
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # the gir binary and the unpacked package the regeneration reads its .gir files from, and the libghostty-vt
       # source with its Zig global cache; keyed like the prefixes
       - uses: actions/cache@v6
-        with:
+        if: github.ref == 'refs/heads/main'
+        with: &vendor-wpe
           path: ~/.cache/ngterm/vendor
           key: vendor-ngterm-wpe-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
+      - uses: actions/cache/restore@v6
+        if: github.ref != 'refs/heads/main'
+        with: *vendor-wpe
       # Before the first clippy: the WPE crates reach ngterm-ghostty-vt-sys too, whose build script needs the source
       # prepared here, and a cold vendor cache has none. The app with its HTML overlays (feature `html`, the default)
       # gets its clippy, its unit tests and the headless page harness below (the real engine on lavapipe, in SHM: no
@@ -295,10 +308,16 @@ jobs:
         with:
           tool: cargo-llvm-cov@0.9.1
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v6
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/cache@v6
+        if: github.ref == 'refs/heads/main'
+        with: &vendor-unit-coverage
           path: ~/.cache/ngterm/vendor
           key: vendor-ngterm-arch-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
+      - uses: actions/cache/restore@v6
+        if: github.ref != 'refs/heads/main'
+        with: *vendor-unit-coverage
       - name: libghostty-vt prefix
         run: scripts/build-ghostty-vt.sh
       - name: terminal fonts
@@ -380,11 +399,17 @@ jobs:
         with:
           tool: cargo-llvm-cov@0.9.1
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # the libghostty-vt prefix, keyed like cross-platform.yml's Ubuntu leg's
       - uses: actions/cache@v6
-        with:
+        if: github.ref == 'refs/heads/main'
+        with: &vendor-headless-e2e
           path: ~/.cache/ngterm/vendor
           key: vendor-ngterm-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - uses: actions/cache/restore@v6
+        if: github.ref != 'refs/heads/main'
+        with: *vendor-headless-e2e
       - name: sshd for the mobile e2e
         run: |
           sudo apt-get update
@@ -518,10 +543,16 @@ jobs:
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v6
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/cache@v6
+        if: github.ref == 'refs/heads/main'
+        with: &vendor-conformance
           path: ~/.cache/ngterm/vendor
           key: vendor-ngterm-arch-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/**', 'scripts/lib/native.sh') }}
+      - uses: actions/cache/restore@v6
+        if: github.ref != 'refs/heads/main'
+        with: *vendor-conformance
       # the source the app's libghostty-vt is built from, with the stage's terminfo, themes and shell integration
       # (Ghostty's at the same pin)
       - name: libghostty-vt prefix

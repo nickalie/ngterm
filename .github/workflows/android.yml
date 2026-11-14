@@ -80,12 +80,19 @@ jobs:
           java-version: "21"
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      # only main saves caches: a branch's would crowd main's out of the repository's cache space
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # the libghostty-vt prefix, keyed like cross-platform.yml's Ubuntu leg's
       - uses: actions/cache@v6
-        with:
+        if: github.ref == 'refs/heads/main'
+        with: &vendor-app
           path: ~/.cache/ngterm/vendor
           key: vendor-ngterm-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - uses: actions/cache/restore@v6
+        if: github.ref != 'refs/heads/main'
+        with: *vendor-app
       - uses: gradle/actions/setup-gradle@v6
         with:
           cache-provider: basic
@@ -137,10 +144,16 @@ jobs:
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v6
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/cache@v6
+        if: github.ref == 'refs/heads/main'
+        with: &vendor-emulator
           path: ~/.cache/ngterm/vendor
           key: vendor-ngterm-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - uses: actions/cache/restore@v6
+        if: github.ref != 'refs/heads/main'
+        with: *vendor-emulator
       - uses: gradle/actions/setup-gradle@v6
         with:
           cache-provider: basic

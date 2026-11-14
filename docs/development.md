@@ -1200,8 +1200,9 @@ conformance/tools/run-windows.sh [--ratchet-only] [--stage DIR] [--coverage] [--
 
 ## Test
 
-The gates' checks. CI runs them on the whole workspace, with the full suite, on every PR and push to main that
-changes more than Markdown nothing builds or tests (docs, plans, READMEs). Locally, a change runs them only on the part
+The gates' checks. CI runs them on the whole workspace, with the full suite, on every PR and push to main or a `ci/**`
+branch that changes more than Markdown nothing builds or tests (docs, plans, READMEs). Locally, a change runs them only
+on the part
 it changes (these are Linux's; Windows' are in [Windows](#windows), and its and
 macOS' gate is [CI](#ci)'s run on a `ci/**` branch or a PR):
 
@@ -1309,19 +1310,28 @@ and the fix, and leaves everything else alone; its header says what it checks, a
 
 ## CI
 
+Every workflow that runs on a push to main runs on a push to a `ci/**` branch too, under the same path filters, so a
+`ci/<task>` run is the check main's run will be. Main keeps what a run leaves behind: only its runs publish
+(`zig-packages.yml`, `release-wpe-cache.yml`) and, `ios.yml` aside, save the cargo and vendor caches, which a branch's
+and a PR's runs only read, as theirs would crowd main's out of the repository's cache space. A push cancels the older
+run of the same workflow on the same `ci/**` branch and no other branch's. A branch made at a commit another branch
+already holds changes no file, so the path-filtered workflows don't start on it.
+
 - `release.yml`: tag-triggered and manual release packaging, with Linux x86_64/aarch64, Windows x86_64, and macOS
   Intel/Apple Silicon builds; see [Downloads and releases](#downloads-and-releases).
-- `zig-packages.yml` (on main: pushes that change libghostty-vt's pins, patches or preparation, and by hand): keeps a
+- `zig-packages.yml` (pushes that change libghostty-vt's pins, patches or preparation, and by hand on main): keeps a
   mirror of the Zig packages libghostty-vt's build needs and of Ghostty's theme archive, as a `zig-packages-<key>`
   prerelease, so preparing libghostty-vt doesn't depend on those upstream hosts being up. It builds with no write
-  access; a separate job, which runs nothing it built, publishes. `scripts/build-ghostty-vt.sh` reads the mirror first
+  access; a separate job, which runs nothing it built, publishes, on main only (a `ci/**` run stops after the
+  build). `scripts/build-ghostty-vt.sh` reads the mirror first
   and checks each package's hash; a key with no mirror falls back to the upstreams. Nothing pins these releases, so
   deleting one is safe.
-- `release-wpe-cache.yml` (on main: pushes that change the WPE build's inputs or its store, and by hand): keeps
+- `release-wpe-cache.yml` (pushes that change the WPE build's inputs or its store, and by hand on main): keeps
   `release.yml`'s portable WPE WebKit prefix, for both Linux arches, in the public GHCR package
   `ghcr.io/<owner>/ngterm-release-wpe`, one tarball per runner image and `scripts/build-release-wpe.sh --print-key`
   (`scripts/release-wpe-store.sh`). It builds only a missing one, with no write access to the package; a separate job
-  pushes it, attests its provenance and only then tags it, and never rewrites a tag. `release.yml`'s `linux` job
+  pushes it, attests its provenance and only then tags it, and never rewrites a tag; a `ci/**` run stops after the
+  build, so a key that is new there is built again on main. `release.yml`'s `linux` job
   unpacks it only after `gh attestation verify` ties it to this workflow on main (a failed check fails the release);
   with none for its key, or a store it can't read (a failed login, an auth or registry error), it warns and builds
   WPE from source (hours). A package version outlives an actions/cache
@@ -1352,16 +1362,15 @@ and the fix, and leaves everything else alone; its header says what it checks, a
   live-any-shell`, as the runner's login shell is Windows PowerShell, `--must-pass agent-chat` and `--must-pass
   agterm-peer`), held by `rust-passing-windows.txt`; the report
   and the stage are kept as artifacts; and `coverage-windows`, the suite on an instrumented build, judged by
-  `conformance/coverage/e2e-floor-desktop-windows.txt` only. The workflow also runs on pushes to `ci/**` branches, to check a
-  macOS or Windows form without a PR.
+  `conformance/coverage/e2e-floor-desktop-windows.txt` only.
 - `android.yml` (path-filtered to the mobile core, the crates under it, `mobile/android/` and the Android scripts and
-  pins; also on `ci/**` pushes): `app` sets up the pinned toolchain (`scripts/setup-android.sh`), runs
+  pins): `app` sets up the pinned toolchain (`scripts/setup-android.sh`), runs
   `scripts/build-android.sh check assembleDebug` (Spotless, detekt, Android Lint, the JVM unit and Roborazzi screenshot
   tests) and keeps the debug APK as the `ngterm-android-debug` artifact (the mobile core's e2e runs in `linux.yml`'s
   `headless-e2e`); `emulator` runs the instrumented tests on the phone and tablet AVDs (KVM), where the app's
   real-machine e2e tests (`e2e` package, `scripts/test-android-e2e.sh`) skip, having no machine.
 - `ios.yml` (path-filtered to the mobile core, the crates under it, `mobile/ios/`, the shared fonts and the iOS
-  scripts and pins; also on `ci/**` pushes), on the `xcode-27` image, three jobs side by side: `lint` (the core's Rust
+  scripts and pins), on the `xcode-27` image, three jobs side by side: `lint` (the core's Rust
   tests in the phone simulator, then `scripts/build-ios.sh lint`), `test` (`build-ios.sh test`, keeping the result
   bundles and the failed snapshots' images when it fails) and `archive` (`build-ios.sh archive`, unsigned).
 - `ios-release.yml`: a release tag's signed iOS build, uploaded to TestFlight, and dry runs by hand or from `ci/**`
@@ -1370,11 +1379,11 @@ and the fix, and leaves everything else alone; its header says what it checks, a
   pinned WiX and one of the next patch version, then `scripts/check-msi.ps1` installs, checks, upgrades and
   uninstalls it on the runner; the MSI is kept as the `ngterm-msi` artifact.
 - `lint.yml` (path-filtered to the workflows, the scripts, the Git hooks, their linters' settings and
-  `packaging/release/pins.env`; also on `ci/**` pushes): `scripts/lint.sh`, which runs actionlint over the workflows
+  `packaging/release/pins.env`): `scripts/lint.sh`, which runs actionlint over the workflows
   and shellcheck over `scripts/*.sh`, `scripts/lib/*.sh`, `.githooks/*` and every `run:` block, both pinned and
   checksum-verified, then the scripts' self-tests and the pre-commit hook's test. Run it locally the same way.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
-- `reference-macos.yml`: the suite against upstream's macOS release.
+- `reference-macos.yml` (PRs that change `conformance/`, and by hand): the suite against upstream's macOS release.
 
 ## Layout
 

@@ -19,7 +19,8 @@ name: release-wpe-cache
 
 on:
   push:
-    branches: [main]
+    # a `ci/**` push runs `build` only, as the check main's run makes of it: nothing is published from there
+    branches: [main, "ci/**"]
     paths:
       - .github/workflows/release-wpe-cache.yml
       - scripts/build-release-wpe.sh
@@ -35,10 +36,10 @@ on:
 permissions:
   contents: read
 
-# Never cancel a running source build: a second run would only start the same build over.
+# Never cancel main's running source build: a second run would only start the same build over.
 concurrency:
-  group: release-wpe-cache
-  cancel-in-progress: false
+  group: release-wpe-cache-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 defaults:
   run:
@@ -46,8 +47,8 @@ defaults:
 
 jobs:
   build:
-    # Only main's provenance is what release.yml accepts.
-    if: github.ref == 'refs/heads/main'
+    # Only main's provenance is what release.yml accepts: a `ci/**` build is a check, which `publish` leaves alone.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/')
     strategy:
       fail-fast: false
       matrix:

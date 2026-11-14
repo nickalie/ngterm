@@ -15,7 +15,8 @@ name: zig-packages
 
 on:
   push:
-    branches: [main]
+    # a `ci/**` push runs `build` only, as the check main's run makes of it: nothing is published from there
+    branches: [main, "ci/**"]
     paths:
       - .github/workflows/zig-packages.yml
       - scripts/build-ghostty-vt.sh
@@ -28,8 +29,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: zig-packages
-  cancel-in-progress: false
+  group: zig-packages-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 defaults:
   run:
@@ -37,7 +38,7 @@ defaults:
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -86,7 +87,7 @@ jobs:
 
   publish:
     needs: build
-    if: needs.build.outputs.exists == 'false'
+    if: github.ref == 'refs/heads/main' && needs.build.outputs.exists == 'false'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
