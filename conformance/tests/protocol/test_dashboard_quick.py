@@ -207,10 +207,12 @@ def test_dashboard_refusals(ctl, args, error):
 
 def _quick_echo(ctl):
     """Print a fresh marker in the quick terminal and wait for it and the prompt after it, so a later read sees a
-    settled screen; the typed line holds the marker split in two and never matches."""
+    settled screen; the typed line holds the marker split in two and never matches. The marker need not start a
+    line: a shell with no description of its terminal (root's, whose ncurses ignores TERMINFO) clears its prompt's
+    row with spaces on a resize, a narrower panel wraps that row, and the output lands on the wrapped rest."""
     marker = f"QMARK{next(_markers)}"
     assert_ok(ctl.request("quick.type", text=f"printf '%s%s\\n' {marker[:5]} {marker[5:]}\n"))
-    pattern = re.compile(rf"(?m)^{marker}\n[^\n]*\S")
+    pattern = re.compile(rf"{marker} *\n[^\n]*\S")
 
     def accept(response):
         assert response.ok, response.error
