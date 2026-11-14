@@ -8,7 +8,9 @@
 //! session runs it again with the same arguments, then leaves the integrated prompt.
 //!
 //! On every OS with a PowerShell 7 (`pwsh`; every CI runner carries one, and Windows requires it). On Unix the shell
-//! runs in a throwaway home, so no profile, history or module cache of the user's is read or written; every session
+//! runs in a throwaway home, so no profile, history or module cache of the user's is read or written, and with a
+//! temporary and runtime directory of its test's own, so no two tests' shells share .NET's named-mutex files (two
+//! first starts race to create them, and the loser's line editor fails on every prompt); every session
 //! gets the test's environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables, and a namespace
 //! directory of its own (only named in its environment: no server runs).
 
@@ -91,7 +93,7 @@ fn staged_resources(dir: &Path) -> TestResult<PathBuf> {
 }
 
 /// A live pane's environment: the test's own with the integration injected, the title and cursor features on, a
-/// terminal .NET knows, and on Unix a throwaway home.
+/// terminal .NET knows, and on Unix a throwaway home, temporary and runtime directory.
 fn session_environment(dir: &Path, resources: &Path) -> TestResult<BTreeMap<String, String>> {
     let mut environment: BTreeMap<String, String> = support::environment().into_iter().collect();
     shell_integration::inject(LoginShell::Pwsh, resources, &Inherited::default(), &mut environment);
@@ -112,6 +114,13 @@ fn session_environment(dir: &Path, resources: &Path) -> TestResult<BTreeMap<Stri
             ("XDG_CACHE_HOME", ".cache"),
         ] {
             environment.insert(key.to_owned(), home.join(below).display().to_string());
+        }
+        // where .NET keeps its named mutexes: TMPDIR on macOS, XDG_RUNTIME_DIR on Linux; a short name, as .NET binds
+        // its diagnostics socket there too and macOS caps a socket path at 103 bytes
+        let temp = dir.join("t");
+        fs::create_dir_all(&temp)?;
+        for key in ["TMPDIR", "XDG_RUNTIME_DIR"] {
+            environment.insert(key.to_owned(), temp.display().to_string());
         }
     }
     Ok(environment)
