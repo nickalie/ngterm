@@ -277,17 +277,18 @@ def _last_line(text):
 
 
 def _watch_quick_grid(ctl):
-    """Start a program in the quick terminal that prints the terminal's rows and columns at start and whenever they
-    change, as a full-screen program reads them; its pattern and the shell's prompt. Nothing is typed while the panel
+    """Start a program in the quick terminal that prints a numbered reading of the terminal's rows and columns on
+    each poll, as a full-screen program reads them; its pattern and the shell's prompt. A reading newer than a request
+    was taken after it, so a check can tell a fresh reading from one printed before. Nothing is typed while the panel
     resizes: a key typed then can be lost on Windows. It polls rather than traps SIGWINCH, which Git's sh on Windows
     can miss. The typed line holds the marker split in two and never matches."""
     _quick_echo(ctl)
     prompt = _last_line(assert_ok(ctl.request("quick.text"))["text"])
     marker = f"QGRID{next(_markers)}"
-    report = f'printf "%s%s=%s\\n" {marker[:5]} {marker[5:]} "$s"'
-    loop = f'p=; while :; do s=$(stty size); [ "$s" = "$p" ] || {report}; p=$s; sleep 0.2; done'
+    report = f'printf "%s%s=%s %s\\n" {marker[:5]} {marker[5:]} "$n" "$(stty size)"'
+    loop = f"n=0; while :; do n=$((n+1)); {report}; sleep 0.2; done"
     assert_ok(ctl.request("quick.type", text=f"sh -c '{loop}'\n"))
-    return re.compile(rf"(?m)^{marker}=(\d+) (\d+)$"), prompt
+    return re.compile(rf"(?m)^{marker}=(\d+) (\d+) (\d+)$"), prompt
 
 
 def _stop_watching(ctl, watcher):
@@ -305,8 +306,8 @@ def _stop_watching(ctl, watcher):
     ctl.wait_response("quick.text", None, back)
 
 
-def _quick_grid(ctl, watcher):
-    """The rows and columns the watcher printed last."""
+def _quick_readings(ctl, watcher):
+    """The watcher's readings on screen, oldest first: (number, (rows, columns))."""
     pattern, _ = watcher
 
     def accept(response):
@@ -315,17 +316,41 @@ def _quick_grid(ctl, watcher):
 
     accept.__qualname__ = f"quick text matching {pattern.pattern!r}"
     text = ctl.wait_response("quick.text", None, accept).result["text"]
-    rows, columns = pattern.findall(text)[-1]
-    return int(rows), int(columns)
+    return [(int(number), (int(rows), int(columns))) for number, rows, columns in pattern.findall(text)]
+
+
+def _quick_reading(ctl, watcher):
+    """The watcher's last reading: its number and the rows and columns."""
+    return _quick_readings(ctl, watcher)[-1]
 
 
 def _wait_grid(ctl, watcher, check, what):
+    """Wait until the watcher's last reading passes `check`; for a size that differs from the one before."""
+
     def settled():
-        grid = _quick_grid(ctl, watcher)
+        _, grid = _quick_reading(ctl, watcher)
         assert check(grid), f"{what}: the quick terminal reads {grid}"
         return grid
 
     return wait_until(settled)
+
+
+# Readings in a row, about a second of the watcher's polls, that must all pass a check when the size must not change.
+_HELD_READINGS = 5
+
+
+def _hold_grid(ctl, watcher, check, what):
+    """Wait until the watcher's last readings, all taken after this call, pass `check`: for a size that is already
+    the one before, which a reading printed before the request would also pass."""
+    since, _ = _quick_reading(ctl, watcher)
+
+    def held():
+        fresh = [grid for number, grid in _quick_readings(ctl, watcher) if number > since][-_HELD_READINGS:]
+        assert len(fresh) == _HELD_READINGS and all(map(check, fresh)), f"{what}: the quick terminal reads {fresh}"
+        return fresh[-1]
+
+    held.__qualname__ = f"{_HELD_READINGS} fresh readings {what}"
+    return wait_until(held)
 
 
 @POSIX_SHELL
@@ -335,7 +360,7 @@ def test_quick_zoom_resizes_the_panel_and_its_unzoom_restores_it(ctl):
     watched = None
     try:
         watched = _watch_quick_grid(ctl)
-        panel = _quick_grid(ctl, watched)
+        _, panel = _quick_reading(ctl, watched)
 
         def grown(grid):
             return grid[0] > panel[0] and grid[1] > panel[1]
@@ -365,14 +390,14 @@ def test_quick_zoom_resizes_the_panel_and_its_unzoom_restores_it(ctl):
         assert_absent(_top(ctl), "zoomedSurface")
         _wait_grid(ctl, watched, restored, "shown again")
         assert_ok(ctl.request("surface.zoom", "quick", mode="hide"))
-        assert _quick_grid(ctl, watched) == panel
+        _hold_grid(ctl, watched, restored, "after an unzoom of the unzoomed panel")
 
         # hidden while its zoom is still under way: shown again, unzoomed, and it zooms as before
         assert_ok(ctl.request("surface.zoom", "quick", mode="show"))
         assert_ok(ctl.request("quick", mode="hide"))
         assert_ok(ctl.request("quick", mode="show"))
         assert_absent(_top(ctl), "zoomedSurface")
-        _wait_grid(ctl, watched, restored, "shown again under way")
+        _hold_grid(ctl, watched, restored, "shown again under way")
         assert_ok(ctl.request("surface.zoom", "quick", mode="show"))
         _wait_grid(ctl, watched, grown, "zoomed again")
         assert_ok(ctl.request("surface.zoom", "quick", mode="hide"))
