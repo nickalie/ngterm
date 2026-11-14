@@ -367,6 +367,7 @@ tests/protocol/test_dashboard_quick.py::test_quick_input_validation
 tests/protocol/test_dashboard_quick.py::test_quick_show_hide_toggle
 tests/protocol/test_dashboard_quick.py::test_quick_type_then_read_the_marker_back
 tests/protocol/test_dashboard_quick.py::test_quick_zoom_ends_with_the_panel
+tests/protocol/test_dashboard_quick.py::test_quick_zoom_resizes_the_panel_and_its_unzoom_restores_it
 tests/protocol/test_document_pages.py::test_document_open_refusals[image]
 tests/protocol/test_document_pages.py::test_document_open_refusals[markdownFile]
 tests/protocol/test_document_pages.py::test_document_open_refusals[textFile]
