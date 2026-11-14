@@ -135,11 +135,7 @@ def _screen(ctl, sid):
 
 
 def _all_lines(ctl, sid):
-    return _all_lines_of(_text(ctl, sid))
-
-
-def _all_lines_of(text):
-    return [line.rstrip() for line in text.split("\n")]
+    return [line.rstrip() for line in _text(ctl, sid).split("\n")]
 
 
 def _visible_chars(text):
@@ -151,7 +147,7 @@ def _scrollback(ctl, sid):
     The line discipline interleaves the echo with `cat`'s copies at any byte, splitting a line of either across
     rows, so no line is sure to show whole twice: what is waited on is the screen holding every character of both
     copies, for up to 30 s, as the instrumented build (`--coverage`) echoes the 400 lines slower than the default
-    wait. Returns the screen's last line, the one the bottom of the viewport shows."""
+    wait."""
     lines = [f"row-{index:03}" for index in range(ROWS)]
     expected = _visible_chars(_text(ctl, sid)) + 2 * _visible_chars("".join(lines))
     assert_ok(ctl.request("session.type", sid, text="".join(f"{line}\n" for line in lines)))
@@ -160,9 +156,9 @@ def _scrollback(ctl, sid):
         text = _text(ctl, sid)
         seen = _visible_chars(text)
         assert seen == expected, f"{seen} of {expected} characters shown, the text ends {text[-80:]!r}"
-        return text
+        return True
 
-    return next(line for line in reversed(_all_lines_of(wait_until(echoed, timeout=30))) if line)
+    wait_until(echoed, timeout=30)
 
 
 def _shows(ctl, sid, top):
@@ -177,13 +173,32 @@ def _shows(ctl, sid, top):
     wait_until(shown)
 
 
-def _at_bottom(ctl, sid, last):
+def _without_trailing_blanks(lines):
+    end = len(lines)
+    while end and not lines[end - 1]:
+        end -= 1
+    return lines[:end]
+
+
+def _rows_below_the_viewport(ctl, sid):
+    """How many of the screen's lines lie below the viewport, 0 at the bottom. The viewport is placed by where its
+    lines sit in the screen, not by one line's text: the echo and `cat`'s copy repeat each line, so the last line can
+    also show some rows higher up. Blank rows after the last written line are left out of both, as the cursor's row."""
+    screen = _without_trailing_blanks(_screen(ctl, sid))
+    every = _without_trailing_blanks(_all_lines(ctl, sid))
+    assert screen, "the viewport shows no text"
+    ends = [end for end in range(len(screen), len(every) + 1) if every[end - len(screen) : end] == screen]
+    assert ends, f"the viewport {screen[:3]}…{screen[-3:]} is no run of the screen's lines"
+    return len(every) - ends[-1]
+
+
+def _at_bottom(ctl, sid):
     def bottom():
-        screen = _screen(ctl, sid)
-        assert last in screen, f"{last!r} not in the viewport's {screen[-3:]}"
+        below = _rows_below_the_viewport(ctl, sid)
+        assert below == 0, f"{below} lines below the viewport"
         return True
 
-    bottom.__qualname__ = f"{last!r} in the viewport"
+    bottom.__qualname__ = "the viewport at the bottom"
     wait_until(bottom)
 
 
@@ -223,13 +238,13 @@ def test_scroll_actions_move_the_viewport(ctl, ui):
         f"keybind = {to_selection}=scroll_to_selection\n"
     )
     with configured(ctl, binds), _cat(ctl) as sid:
-        last = _scrollback(ctl, sid)
+        _scrollback(ctl, sid)
         ui.press(top)
         _shows(ctl, sid, 0)
         ui.press(lines)
         _shows(ctl, sid, 2)
         ui.press(bottom)
-        _at_bottom(ctl, sid, last)
+        _at_bottom(ctl, sid)
         # the selection starts on the screen's first written line: scrolling to it shows that line on top
         first = next(index for index, line in enumerate(_all_lines(ctl, sid)) if line)
         ui.press(select, to_selection)
@@ -239,16 +254,16 @@ def test_scroll_actions_move_the_viewport(ctl, ui):
 @pytest.mark.covers("session.type", "session.text", "behavior:pane.wheel-scroll")
 def test_the_wheel_scrolls_the_viewport(ctl, ui):
     with _cat(ctl) as sid:
-        last = _scrollback(ctl, sid)
-        _at_bottom(ctl, sid, last)
+        _scrollback(ctl, sid)
+        _at_bottom(ctl, sid)
         # the window's middle is over the selected session's pane, the sidebar on its left
         ui.scroll(ui.window(), -5)
 
         def scrolled_up():
-            screen = _screen(ctl, sid)
-            assert last not in screen, f"{last!r} still in the viewport's {screen[-3:]}"
+            below = _rows_below_the_viewport(ctl, sid)
+            assert below > 0, "the viewport is still at the bottom"
             return True
 
         wait_until(scrolled_up)
         ui.scroll(ui.window(), 50)
-        _at_bottom(ctl, sid, last)
+        _at_bottom(ctl, sid)
