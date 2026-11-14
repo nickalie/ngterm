@@ -88,17 +88,52 @@ impl TunnelPlan {
 
 /// The port of this machine's loopback a forward to the origin's `target_port` listens on: that same port when no
 /// server of this machine's holds it ([`port_free`]) and no forward of `held` (this machine's other forwards, some of
-/// them not bound by ssh yet) has it, so the page's `Host` names the origin's own port; else any free one. Another
-/// program may take it before ssh binds it; the forward then fails and the page is refused.
+/// them not bound by ssh yet) has it, so the page's `Host` names the origin's own port; else a free one no forward of
+/// `held` has. Another program may take it before ssh binds it; the forward then fails and the page is refused.
 ///
 /// # Errors
 ///
 /// No port could be bound.
 pub fn forward_port(target_port: u16, held: impl IntoIterator<Item = u16>) -> std::io::Result<u16> {
-    if target_port != 0 && !held.into_iter().any(|port| port == target_port) && port_free(target_port) {
+    forward_port_from(target_port, held, || TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))
+}
+
+/// [`forward_port`], its fallback taking the port of a listener `ephemeral` binds.
+fn forward_port_from(
+    target_port: u16,
+    held: impl IntoIterator<Item = u16>,
+    mut ephemeral: impl FnMut() -> std::io::Result<TcpListener>,
+) -> std::io::Result<u16> {
+    let held: Vec<u16> = held.into_iter().collect();
+    if target_port != 0 && !held.contains(&target_port) && port_free(target_port) {
         return Ok(target_port);
     }
-    Ok(TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?.local_addr()?.port())
+    // A held port no ssh has bound yet is free to the OS; keeping it bound here makes the next bind get another one.
+    let mut skipped = Vec::new();
+    loop {
+        let listener = ephemeral()?;
+        let port = listener.local_addr()?.port();
+        if !held.contains(&port) {
+            return Ok(port);
+        }
+        skipped.push(listener);
+    }
+}
+
+/// A port free on this machine that no other test of the process takes: below every OS's default ephemeral range
+/// (Linux 32768, macOS and Windows 49152), so no bind to port 0 or outgoing connection is handed it, and handed out
+/// again only after every other port of the range. A port freed from a bind to port 0 may go to a parallel test's
+/// socket before the test reuses it.
+#[cfg(test)]
+pub(crate) fn reserved_test_port() -> u16 {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    const RANGE: std::ops::Range<u16> = 31_000..32_768;
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let span = RANGE.end - RANGE.start;
+    (0..span)
+        .map(|_| RANGE.start + NEXT.fetch_add(1, Ordering::Relaxed) % span)
+        .find(|&port| port_free(port))
+        .expect("a free port below the ephemeral ranges")
 }
 
 /// Whether no server of this machine's listens on `port` where a connection to 127.0.0.1 would reach it. Binding
@@ -195,25 +230,45 @@ mod tests {
         );
     }
 
-    /// A port nothing holds right now.
-    fn unused_port() -> u16 {
-        TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
-    }
-
     #[test]
     fn a_forward_takes_the_origins_port_when_it_is_free_here() {
-        let taken = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let busy = taken.local_addr().unwrap().port();
+        let busy = reserved_test_port();
+        let taken = TcpListener::bind((Ipv4Addr::LOCALHOST, busy)).unwrap();
         let port = forward_port(busy, []).unwrap();
         assert_ne!(port, 0);
         assert_ne!(port, busy, "a port taken here falls back to another");
         drop(taken);
         assert_eq!(forward_port(busy, []).unwrap(), busy, "a free port is the origin's own");
-        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok());
+    }
+
+    /// The fallback through `ephemeral`, with the ports the listeners it bound hold.
+    fn fallback(
+        target_port: u16,
+        held: &[u16],
+        mut ephemeral: impl FnMut() -> std::io::Result<TcpListener>,
+    ) -> (u16, Vec<u16>) {
+        let mut bound = Vec::new();
+        let port = forward_port_from(target_port, held.iter().copied(), || {
+            let listener = ephemeral()?;
+            bound.push(listener.local_addr()?.port());
+            Ok(listener)
+        })
+        .unwrap();
+        (port, bound)
+    }
+
+    #[test]
+    fn a_fallback_takes_the_port_the_os_hands_out_and_none_another_forward_holds() {
+        let (held, other) = (reserved_test_port(), reserved_test_port());
+        let mut ports = [held, other].into_iter();
+        let (port, bound) = fallback(0, &[held], || {
+            TcpListener::bind((Ipv4Addr::LOCALHOST, ports.next().unwrap()))
+        });
+        assert_eq!(
+            port, other,
+            "a pending forward's port, free to the OS, is not handed out twice"
+        );
+        assert_eq!(bound, [held, other]);
     }
 
     /// A server listening on a wildcard of `address`'s family, an IPv6 one in dual mode as Node and most dev servers
@@ -245,7 +300,7 @@ mod tests {
 
     #[test]
     fn a_port_another_forward_holds_is_not_taken_again() {
-        let free = unused_port();
+        let free = reserved_test_port();
         let port = forward_port(free, [free]).unwrap();
         assert_ne!(port, free, "a forward whose ssh has not bound yet still holds its port");
         assert_ne!(port, 0);
@@ -273,9 +328,9 @@ mod tests {
 
     #[test]
     fn a_zero_target_port_asks_for_a_usable_ephemeral_port() {
-        let port = forward_port(0, []).unwrap();
+        let (port, bound) = fallback(0, &[], || TcpListener::bind((Ipv4Addr::LOCALHOST, 0)));
         assert_ne!(port, 0);
-        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok());
+        assert_eq!(bound, [port], "the port the OS handed a loopback bind, free until then");
     }
 
     #[test]

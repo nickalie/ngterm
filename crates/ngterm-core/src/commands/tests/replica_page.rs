@@ -405,11 +405,7 @@ fn forwarded_port(replica: &Replica, index: usize) -> u16 {
 
 #[test]
 fn a_forward_listens_on_the_origins_port_unless_another_forward_holds_it() {
-    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    let port = crate::remote::page_tunnel::reserved_test_port();
     let mut replica = Replica::new();
     let first = replica.request_loopback(&format!("http://127.0.0.1:{port}/"));
     assert_eq!(
