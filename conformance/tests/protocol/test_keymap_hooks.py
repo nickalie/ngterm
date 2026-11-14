@@ -322,6 +322,8 @@ def hooks(ctl):
     yield path
     path.unlink(missing_ok=True)
     assert assert_ok(ctl.request("hooks.reload")) == {"count": 0}
+    # a hook still exiting stays listed, retired, and would be a second row in the next test's list
+    wait_until(lambda: not any("runningPid" in hook for hook in _hooks(ctl)["hooks"]))
 
 
 def _hooks(ctl):
