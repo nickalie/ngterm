@@ -481,11 +481,9 @@ mod tests {
 
     #[test]
     fn system_usage_leaves_connection_failures_unknown() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/api/oauth/usage", listener.local_addr().unwrap());
-        drop(listener);
+        // Port 0 takes no connection; a freed ephemeral port can go to a parallel test's server.
         let io = System {
-            usage: UsageEndpoint::local(url),
+            usage: UsageEndpoint::local("http://127.0.0.1:0/api/oauth/usage".to_owned()),
         };
         assert_eq!(io.usage("test-token"), None);
     }
