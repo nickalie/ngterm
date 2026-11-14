@@ -73,6 +73,8 @@ internal enum FakeApp {
     }
 
     /// Tells the app's fake worlds the test has seen what the cue `name` (the app's `FakeCues.Cue`) waits on.
+    ///
+    /// Posts of one name can coalesce into one: post `name` again only after seeing what its previous post let on.
     internal static func cue(_ name: String) {
         let center = CFNotificationCenterGetDarwinNotifyCenter()
         CFNotificationCenterPostNotification(

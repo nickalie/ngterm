@@ -8,6 +8,10 @@
     /// (`FakeApp.cue`), and ``next(_:)`` returns once one has come that no earlier call took.
     ///
     /// The app listens from launch, so a cue posted before its step asks for it waits banked.
+    ///
+    /// Darwin notifications coalesce: posts of one name that come before the app's callback runs reach it as one, so
+    /// they bank one step, not one each. A test therefore posts a cue again only after it has seen what the previous
+    /// post of that cue let on (ChatTests posts `chat-drop` once it sees the card, `chat-back` once it sees the strip).
     internal final class FakeCues: Sendable {
         /// The cues, by the Darwin notification's name.
         internal enum Cue: String, CaseIterable, Sendable {
@@ -34,7 +38,7 @@
             }
         }
 
-        /// Returns once `cue` has come, each post taken by one call.
+        /// Returns once `cue` has come, each callback (posts the system coalesced count as one) taken by one call.
         internal func next(_ cue: Cue) async {
             await withCheckedContinuation { waiter in
                 let banked = lines.withLock { lines in
