@@ -29,8 +29,9 @@
         internal static let buildHostKey = "SHA256:fAkEbU1Ld01h0sTkEyF0rUiTeStS0nLyN0tArEaLkEy00"
         /// The host key `signin.lan` offers (made up).
         internal static let signInHostKey = "SHA256:fAkEs1GnInh0sTkEyF0rUiTeStS0nLyN0tArEaLkEy000"
-        // how long a Duplicate is held, when the launch asks for it
-        private static let duplicatePause: TimeInterval = 20
+        /// How long a Duplicate is held, when the launch asks for it.
+        internal static let duplicatePause = Duration.seconds(duplicateSeconds)
+        private static let duplicateSeconds: Int64 = 20
 
         // a key as the first run would leave it (made up: the fake core never loads it)
         private static let key = AppKey(
@@ -45,9 +46,16 @@
         ///
         /// The `arguments` are ``CoreChoice``'s: a key already, two programs asking to read the clipboard, `split` with
         /// its session, its question, its agent and its companion, `studio` running agterm, the question about
-        /// notifying left to ask, each Duplicate held a while.
+        /// notifying left to ask, each Duplicate held ``duplicatePause``.
         @MainActor
         internal static func graph(arguments: [String]) -> AppGraph {
+            graph(arguments: arguments, duplicatePause: Self.duplicatePause)
+        }
+
+        /// The app's graph over the fake core, as the launch arguments ask, each Duplicate held `duplicatePause` when
+        /// they ask for it.
+        @MainActor
+        internal static func graph(arguments: [String], duplicatePause: Duration) -> AppGraph {
             let directory = FileManager.default.temporaryDirectory.appending(
                 path: "ngterm-fake-\(UUID().uuidString)",
                 directoryHint: .isDirectory
@@ -78,7 +86,7 @@
                 FakeAgtermWorld.seed(machines, core: core, keyId: key.id)
             }
             if arguments.contains(CoreChoice.fakeDuplicateSlowArgument) {
-                holdDuplicates(core)
+                holdDuplicates(core, pause: duplicatePause)
             }
             let stores = GraphStores(directory: directory)
             if !arguments.contains(CoreChoice.fakeNotificationQuestionArgument) {
@@ -104,16 +112,18 @@
             return graph
         }
 
-        // holds each Duplicate for `duplicatePause` once it is under way, so a test sees what shows meanwhile: the
-        // source's "Duplicating", and New session and every Duplicate taking no tap
+        // holds each Duplicate for `pause` once it is under way, so a test sees what shows meanwhile: the source's
+        // "Duplicating", and New session and every Duplicate taking no tap; the first hold is in place at launch
         @MainActor
-        private static func holdDuplicates(_ core: FakeMobileCore) {
+        private static func holdDuplicates(_ core: FakeMobileCore, pause: Duration) {
+            let first = core.hold("duplicateSession")
             Task {
+                var gate = first
                 while !Task.isCancelled {
-                    let gate = core.hold("duplicateSession")
                     await gate.reached()
-                    try? await Task.sleep(for: .seconds(duplicatePause))
+                    try? await Task.sleep(for: pause)
                     gate.open()
+                    gate = core.hold("duplicateSession")
                 }
             }
         }
