@@ -773,7 +773,9 @@ def test_viewers_that_stop_reading_together_are_dropped_while_a_reading_one_gets
     sid = _live_session(live)
     reading, _ = _subscribed(live, sid, "mirror")
     with reading, contextlib.ExitStack() as viewers:
-        stalled = [viewers.enter_context(_subscribed(live, sid, "mirror")[0]) for _ in range(STALLED_VIEWERS)]
+        stalled = [_subscribed(live, sid, "mirror") for _ in range(STALLED_VIEWERS)]
+        for viewer, _ in stalled:
+            viewers.enter_context(viewer)
         _presenters(live, sid, {"mirrors": STALLED_VIEWERS + 1})
         sent = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
@@ -790,8 +792,12 @@ def test_viewers_that_stop_reading_together_are_dropped_while_a_reading_one_gets
                 assert time.monotonic() < deadline, find_session(live.tree(), sid).get("presenters")
                 assert not received.done(), received.result()
                 time.sleep(0.5)
+                # as in _wait_dropped: a sign of life, so the heartbeat's silence bound cannot drop them first
+                for viewer, gen in stalled:
+                    with contextlib.suppress(OSError):
+                        viewer.send({"kind": "ack", "gen": gen, "rev": 0})
                 notify(f"{len(sent):04d}{BIG_NOTIFY_BODY}")
-            for viewer in stalled:
+            for viewer, _ in stalled:
                 _until_ended(viewer)
             notify("last")
             assert received.result(timeout=60) == sent
