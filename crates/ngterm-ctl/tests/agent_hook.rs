@@ -126,10 +126,18 @@ fn hook_sends_the_payloads_report_addressed_as_the_status_hooks_address_theirs()
     );
     assert_eq!(server.count(), 1);
     let report = json!({"agent": "claude", "event": "SessionStart", "transcriptPath": CLAUDE_TRANSCRIPT, "conversationId": CLAUDE_ID});
+    let sent =
+        json!({"cmd": "agent.report", "target": "S", "args": {"pane": "right", "paneID": "P", "report": report}});
+    assert_eq!(server.last()?, sent);
+
+    // Windows PowerShell 5.1 on a UTF-8 console starts what it pipes to a program with a byte-order mark
     assert_eq!(
-        server.last()?,
-        json!({"cmd": "agent.report", "target": "S", "args": {"pane": "right", "paneID": "P", "report": report}})
+        outcome(&hook(dir.path(), &args, &format!("\u{feff}{start}"))?),
+        (Some(0), String::new(), String::new()),
+        "a byte-order mark before the payload is not part of it"
     );
+    assert_eq!(server.count(), 2);
+    assert_eq!(server.last()?, sent);
 
     let permission = fixture("claude/hooks/33-PermissionRequest.json")?;
     let args = [

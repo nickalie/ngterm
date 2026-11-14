@@ -220,8 +220,9 @@ fn parse_agent(name: &str) -> Result<AgentKind, String> {
     AgentKind::from_name(name).ok_or_else(|| format!("unknown agent: {name} (claude|codex)"))
 }
 
-/// The hook payload on standard input, read to its end for `command` (`agent hook`, `agent mail`). A terminal is
-/// refused, since nothing would end the read; so is an empty payload, which no agent writes.
+/// The hook payload on standard input, read to its end for `command` (`agent hook`, `agent mail`, `agent rerun`),
+/// without a leading byte-order mark ([`without_byte_order_mark`]). A terminal is refused, since nothing would end
+/// the read; so is an empty payload, which no agent writes.
 fn read_payload(command: &str) -> Result<Vec<u8>, Failure> {
     let stdin = io::stdin();
     if stdin.is_terminal() {
@@ -241,10 +242,23 @@ fn read_payload(command: &str) -> Result<Vec<u8>, Failure> {
             PAYLOAD_CAP / 1024 / 1024
         )));
     }
+    let payload = without_byte_order_mark(payload);
     if payload.iter().all(u8::is_ascii_whitespace) {
         return Err(Failure::Local("no hook payload on standard input".to_owned()));
     }
     Ok(payload)
+}
+
+/// `payload` without a UTF-8 byte-order mark at its start. The PowerShell hooks pipe the payload on, and Windows
+/// PowerShell 5.1 starts a native command's input with the mark when the console's input code page is UTF-8 (the
+/// .NET Framework's `Process.StandardInput` writes that encoding's preamble, whatever `$OutputEncoding` is), which
+/// is no JSON.
+fn without_byte_order_mark(mut payload: Vec<u8>) -> Vec<u8> {
+    const MARK: &[u8] = "\u{feff}".as_bytes();
+    if payload.starts_with(MARK) {
+        payload.drain(..MARK.len());
+    }
+    payload
 }
 
 #[cfg(test)]
@@ -318,6 +332,18 @@ mod tests {
             hook(&["claude", "SessionStart", "--pane", "middle"]).validate(),
             Err("--pane must be left, right, or scratch".to_owned())
         );
+    }
+
+    #[test]
+    fn a_payload_loses_only_a_byte_order_mark_at_its_start() {
+        assert_eq!(without_byte_order_mark(b"\xef\xbb\xbf{\"a\":1}".to_vec()), b"{\"a\":1}");
+        assert_eq!(
+            without_byte_order_mark(b"{\"a\":\"\xef\xbb\xbf\"}".to_vec()),
+            b"{\"a\":\"\xef\xbb\xbf\"}"
+        );
+        assert_eq!(without_byte_order_mark(b"\xef\xbb\xbf".to_vec()), b"");
+        assert_eq!(without_byte_order_mark(b"\xef\xbb".to_vec()), b"\xef\xbb");
+        assert_eq!(without_byte_order_mark(Vec::new()), b"");
     }
 
     fn agent(argv: &[&str]) -> Agent {
