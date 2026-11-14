@@ -95,6 +95,16 @@ pub enum PiPlan {
     NoPi,
 }
 
+/// The OMP step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OmpPlan {
+    Install(FileWrite),
+    Current,
+    UserOwned,
+    Unreadable,
+    NoOmp,
+}
+
 /// The `OpenCode` step: a decided outcome, or the plugin to install.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenCodePlan {
@@ -122,6 +132,7 @@ pub struct HooksPlan {
     pub rcs_skipped: Vec<PathBuf>,
     pub codex: CodexPlan,
     pub pi: PiPlan,
+    pub omp: OmpPlan,
     pub opencode: OpenCodePlan,
     /// What an install from before the rename left that would still run beside the new files ([`Leftovers`]).
     pub stale: Leftovers,
@@ -187,6 +198,24 @@ impl PiResult {
     }
 }
 
+/// The OMP result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OmpResult {
+    Installed,
+    AlreadyConfigured,
+    UserOwned,
+    Unreadable,
+    WriteFailed,
+    NoOmp,
+}
+
+impl OmpResult {
+    #[must_use]
+    pub fn is_warning(self) -> bool {
+        matches!(self, Self::UserOwned | Self::Unreadable | Self::WriteFailed)
+    }
+}
+
 /// Upstream's `OpenCodeResult`; only the version-specific outcomes carry a version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenCodeResult {
@@ -222,6 +251,7 @@ pub struct HooksOutcome {
     pub rcs_skipped: Vec<PathBuf>,
     pub codex: CodexResult,
     pub pi: PiResult,
+    pub omp: OmpResult,
     pub opencode: OpenCodeResult,
 }
 
@@ -232,6 +262,7 @@ impl HooksOutcome {
             || !self.rcs_skipped.is_empty()
             || self.codex.is_warning()
             || self.pi.is_warning()
+            || self.omp.is_warning()
             || self.opencode.is_warning()
     }
 
@@ -270,11 +301,12 @@ impl HooksOutcome {
             "Claude Code hooks merged into ~/.claude/settings.json."
         };
         format!(
-            "Scripts installed to {}.\n{claude}\n{}\n{}\n{}\n{}\n\nOpen a new terminal for the shell integration to take \
+            "Scripts installed to {}.\n{claude}\n{}\n{}\n{}\n{}\n{}\n\nOpen a new terminal for the shell integration to take \
              effect.",
             self.script_dir.display(),
             codex_text(self.codex),
             pi_text(self.pi),
+            omp_text(self.omp),
             opencode_text(&self.opencode),
             self.shell_text(),
         )
@@ -334,6 +366,30 @@ pub fn pi_text(pi: PiResult) -> &'static str {
         }
         PiResult::NoPi => {
             "No ~/.pi/agent found, so Pi's lifecycle extension was skipped. Start Pi once, then run this again."
+        }
+    }
+}
+
+/// The OMP line of the alert.
+#[must_use]
+pub fn omp_text(omp: OmpResult) -> &'static str {
+    match omp {
+        OmpResult::Installed => {
+            "OMP lifecycle extension installed to ~/.omp/agent/extensions/ngterm-status.ts. Restart OMP to load it."
+        }
+        OmpResult::AlreadyConfigured => {
+            "OMP lifecycle extension is already current at ~/.omp/agent/extensions/ngterm-status.ts."
+        }
+        OmpResult::UserOwned => "~/.omp/agent/extensions/ngterm-status.ts is user-owned, so ngterm left it untouched.",
+        OmpResult::Unreadable => {
+            "~/.omp/agent/extensions/ngterm-status.ts exists but could not be read, so ngterm left it untouched."
+        }
+        OmpResult::WriteFailed => {
+            "OMP's lifecycle extension couldn't be written to ~/.omp/agent/extensions/ (check that directory's \
+             permissions), so it was skipped."
+        }
+        OmpResult::NoOmp => {
+            "No ~/.omp/agent found, so OMP's lifecycle extension was skipped. Start OMP once, then run this again."
         }
     }
 }
@@ -521,6 +577,7 @@ pub fn plan(env: &Environment, opencode: &OpenCodeStart, probe: Option<&Probe>) 
         rcs_skipped,
         codex: plan_codex(&env.home, &dir),
         pi,
+        omp: plan_omp(&env.home, &package)?,
         opencode,
         package,
         script_dir,
@@ -714,6 +771,32 @@ fn plan_pi(home: &Path, package: &Path) -> Result<PiPlan, InstallError> {
     }))
 }
 
+fn plan_omp(home: &Path, package: &Path) -> Result<OmpPlan, InstallError> {
+    if !join_relative(home, ".omp/agent").is_dir() {
+        return Ok(OmpPlan::NoOmp);
+    }
+    let source = bundled_text(
+        &join_relative(package, config::OMP_EXTENSION_RELATIVE_PATH),
+        config::OMP_EXTENSION_MARKER,
+        "The OMP status extension",
+    )?;
+    let path = config::omp_extension_path(home);
+    let Ok(existing) = files::read_existing(&path) else {
+        return Ok(OmpPlan::Unreadable);
+    };
+    if !config::may_overwrite_omp_extension(existing.is_some(), existing.as_deref()) {
+        return Ok(OmpPlan::UserOwned);
+    }
+    if existing.as_deref() == Some(source.as_str()) {
+        return Ok(OmpPlan::Current);
+    }
+    Ok(OmpPlan::Install(FileWrite {
+        path,
+        contents: source,
+        backup: None,
+    }))
+}
+
 /// Carries `plan` out, every step regardless of an earlier one's outcome; a failed copy, bake or config write stops
 /// the install as upstream's thrown error does.
 ///
@@ -735,6 +818,7 @@ pub fn apply(plan: &HooksPlan) -> Result<HooksOutcome, InstallError> {
     }
     let codex = apply_codex(&plan.codex)?;
     let pi = apply_pi(&plan.pi);
+    let omp = apply_omp(&plan.omp);
     let opencode = apply_opencode(&plan.opencode);
     // an old Pi extension or OpenCode plugin goes only once the current one is in place
     let pi_stale = matches!(pi, PiResult::Installed | PiResult::AlreadyConfigured).then_some(&plan.stale.pi);
@@ -753,6 +837,7 @@ pub fn apply(plan: &HooksPlan) -> Result<HooksOutcome, InstallError> {
         codex,
         pi,
         opencode,
+        omp,
     })
 }
 
@@ -829,6 +914,19 @@ fn apply_pi(pi: &PiPlan) -> PiResult {
         PiPlan::UserOwned => PiResult::UserOwned,
         PiPlan::Unreadable => PiResult::Unreadable,
         PiPlan::NoPi => PiResult::NoPi,
+    }
+}
+
+fn apply_omp(omp: &OmpPlan) -> OmpResult {
+    match omp {
+        OmpPlan::Install(write) => match write_with_backup(write, true) {
+            Ok(()) => OmpResult::Installed,
+            Err(_) => OmpResult::WriteFailed,
+        },
+        OmpPlan::Current => OmpResult::AlreadyConfigured,
+        OmpPlan::UserOwned => OmpResult::UserOwned,
+        OmpPlan::Unreadable => OmpResult::Unreadable,
+        OmpPlan::NoOmp => OmpResult::NoOmp,
     }
 }
 

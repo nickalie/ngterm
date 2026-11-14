@@ -1,6 +1,6 @@
 //! The agent integrations (upstream's `SkillInstaller`, `AgentHooksInstaller` and `CLIInstaller`, `control-api.md` >
 //! Installation and agent integrations): the agent skill into each coding agent's skills directory, the
-//! agent-status hooks package with its Claude Code, Codex, Pi, `OpenCode` and shell wiring, and `ngtermctl` onto the
+//! agent-status hooks package with its Claude Code, Codex, Pi, Oh My Pi, `OpenCode` and shell wiring, and `ngtermctl` onto the
 //! `PATH`. Each installer first plans from what it finds on disk (which agents are present, what is already
 //! installed, what belongs to the user), then applies the plan and reports upstream's result text. The Help menu and
 //! the first-run welcome run them from each frontend's own UI glue.
@@ -44,6 +44,9 @@
 //!   `NGTERMCTL`, `NGTERM_AGENT_BIN`, `NGTERM_AGENT_RE`, …); a reinstall moves an install under the old names onto
 //!   these ([`hooks::Leftovers`]);
 //! - the Pi extension and both `OpenCode` plugins call the wrapper in `~/.config/ngterm/agent-status`;
+//! - Oh My Pi gets its own extension in `~/.omp/agent/extensions`, using `agent_end.willContinue` to keep a turn active
+//!   through continuations and background work, and clearing the status on shutdown. The Claude adapters recognize
+//!   `omp` as a parent agent so a worker cannot reset its pane (`build/patches/agent-status/0009-oh-my-pi.patch`);
 //! - the package adds Windows forms, which upstream (macOS only) has no need of: `ngterm-agent-status.ps1`,
 //!   `ngterm-claude-status.ps1` and `ngterm-agent-restore.ps1` do what their POSIX namesakes do under Windows
 //!   PowerShell 5.1 and PowerShell 7 (the Claude adapter reads the process table through `Win32_Process` where the

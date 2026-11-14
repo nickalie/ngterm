@@ -8,7 +8,8 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
 use super::hooks::{
-    self, ClaudePlan, CodexPlan, CodexResult, OpenCodePlan, OpenCodeResult, OpenCodeStart, PiPlan, PiResult,
+    self, ClaudePlan, CodexPlan, CodexResult, OmpPlan, OmpResult, OpenCodePlan, OpenCodeResult, OpenCodeStart, PiPlan,
+    PiResult,
 };
 use super::hooks_config::{
     self as config, CodexMerge, FISH_INTEGRATION_RELATIVE_PATH, INTEGRATION_RELATIVE_PATH, RC_MARKER_BEGIN,
@@ -321,6 +322,75 @@ fn a_second_install_changes_nothing() {
     assert_eq!(home.snapshot(), after_first);
     assert_eq!(home.read(".zshrc").matches(RC_MARKER_BEGIN).count(), 1);
     assert_eq!(home.read(".codex/config.toml").matches(RC_MARKER_BEGIN).count(), 1);
+}
+
+#[test]
+fn omp_extension_install_is_marker_owned_idempotent_and_independent_of_pi() {
+    let home = Home::new();
+    home.mkdir(".omp/agent");
+    home.mkdir(".pi/agent");
+
+    let plan = hooks::plan(&home.env, &no_opencode(&home), None).unwrap();
+    assert!(matches!(&plan.omp, OmpPlan::Install(_)));
+    assert!(matches!(&plan.pi, PiPlan::Install(_)));
+    let first = hooks::apply(&plan).unwrap();
+    assert_eq!(first.omp, OmpResult::Installed);
+    assert_eq!(first.pi, PiResult::Installed);
+    let bundled = fs::read_to_string(resources().join("agent-status/omp/ngterm-status.ts")).unwrap();
+    assert_eq!(home.read(".omp/agent/extensions/ngterm-status.ts"), bundled);
+
+    let after_first = home.snapshot();
+    let plan = hooks::plan(&home.env, &no_opencode(&home), None).unwrap();
+    assert_eq!(plan.omp, OmpPlan::Current);
+    let second = hooks::apply(&plan).unwrap();
+    assert_eq!(second.omp, OmpResult::AlreadyConfigured);
+    assert_eq!(home.snapshot(), after_first);
+
+    home.write(
+        ".omp/agent/extensions/ngterm-status.ts",
+        "// ngterm-omp-status-extension\nold\n",
+    );
+    let updated = hooks::plan(&home.env, &no_opencode(&home), None).unwrap();
+
+    assert!(matches!(&updated.omp, OmpPlan::Install(_)));
+    assert_eq!(hooks::apply(&updated).unwrap().omp, OmpResult::Installed);
+    assert_eq!(home.read(".omp/agent/extensions/ngterm-status.ts"), bundled);
+}
+
+#[test]
+fn omp_extension_skips_absent_config_and_preserves_user_owned_files() {
+    let home = Home::new();
+    assert_eq!(
+        hooks::plan(&home.env, &no_opencode(&home), None).unwrap().omp,
+        OmpPlan::NoOmp
+    );
+
+    home.mkdir(".omp/agent");
+    let user_file = "export default () => {}\n";
+    home.write(".omp/agent/extensions/ngterm-status.ts", user_file);
+    let plan = hooks::plan(&home.env, &no_opencode(&home), None).unwrap();
+    assert_eq!(plan.omp, OmpPlan::UserOwned);
+    assert_eq!(hooks::apply(&plan).unwrap().omp, OmpResult::UserOwned);
+    assert_eq!(home.read(".omp/agent/extensions/ngterm-status.ts"), user_file);
+    assert_eq!(plan.pi, PiPlan::NoPi, "OMP handling does not enable Pi");
+    assert!(hooks::omp_text(OmpResult::UserOwned).contains("user-owned"));
+}
+
+#[test]
+fn omp_extension_reports_unreadable_and_write_failed_files() {
+    let unreadable = Home::new();
+    unreadable.mkdir(".omp/agent");
+    unreadable.mkdir(".omp/agent/extensions/ngterm-status.ts");
+    let plan = hooks::plan(&unreadable.env, &no_opencode(&unreadable), None).unwrap();
+    assert_eq!(plan.omp, OmpPlan::Unreadable);
+    assert_eq!(hooks::apply(&plan).unwrap().omp, OmpResult::Unreadable);
+
+    let write_failed = Home::new();
+    write_failed.mkdir(".omp/agent");
+    write_failed.write(".omp/agent/extensions", "blocks extension directory");
+    let plan = hooks::plan(&write_failed.env, &no_opencode(&write_failed), None).unwrap();
+    assert!(matches!(&plan.omp, OmpPlan::Install(_)));
+    assert_eq!(hooks::apply(&plan).unwrap().omp, OmpResult::WriteFailed);
 }
 
 /// `text` under the names an install from before the rename wrote: its markers, wrappers and plugin markers.
@@ -887,6 +957,16 @@ fn every_alert_line_stays_one_line_and_never_inlines_the_codex_block() {
     ] {
         assert!(!hooks::pi_text(pi).contains('\n'));
     }
+    for omp in [
+        OmpResult::Installed,
+        OmpResult::AlreadyConfigured,
+        OmpResult::UserOwned,
+        OmpResult::Unreadable,
+        OmpResult::WriteFailed,
+        OmpResult::NoOmp,
+    ] {
+        assert!(!hooks::omp_text(omp).contains('\n'));
+    }
 }
 
 #[test]
@@ -955,6 +1035,35 @@ fn a_second_skill_install_replaces_its_own_copy() {
     assert_eq!(home.snapshot(), first);
 }
 
+#[test]
+fn the_skill_installs_idempotently_for_omp_and_preserves_a_users_skill() {
+    let home = Home::new();
+    home.mkdir(".omp/agent");
+
+    let plan = skill::plan(&home.env).unwrap();
+    assert!(matches!(
+        &plan.targets[0],
+        skill::TargetPlan::Install { target, .. }
+            if target.agent == "Oh My Pi"
+                && target.skill_directory == home.path(".omp/agent/skills/ngterm")
+    ));
+    let report = skill::apply(&plan);
+    assert_eq!(report.installed, [("Oh My Pi", home.path(".omp/agent/skills/ngterm"))]);
+    let first = home.snapshot();
+    let report = skill::apply(&skill::plan(&home.env).unwrap());
+    assert_eq!(report.installed, [("Oh My Pi", home.path(".omp/agent/skills/ngterm"))]);
+    assert_eq!(home.snapshot(), first);
+
+    let user_owned = Home::new();
+    user_owned.mkdir(".omp/agent");
+    let contents = "---\nname: ngterm\n---\nmy skill\n";
+    user_owned.write(".omp/agent/skills/ngterm/SKILL.md", contents);
+    let report = skill::apply(&skill::plan(&user_owned.env).unwrap());
+    assert!(report.installed.is_empty());
+    assert_eq!(report.skipped.len(), 1);
+    assert_eq!(user_owned.read(".omp/agent/skills/ngterm/SKILL.md"), contents);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_symlink_at_the_skill_destination_is_the_users() {
@@ -974,6 +1083,8 @@ fn the_bundled_resources_carry_their_ownership_markers() {
     let package = resources().join("agent-status");
     let read = |relative: &str| fs::read_to_string(package.join(relative)).unwrap();
     assert!(read("pi/ngterm-status.ts").contains(super::hooks_config::PI_EXTENSION_MARKER));
+
+    assert!(read("omp/ngterm-status.ts").contains(super::hooks_config::OMP_EXTENSION_MARKER));
     for version in Version::ALL {
         assert!(read(&version.relative_path()).contains(version.marker()));
     }
