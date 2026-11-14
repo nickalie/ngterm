@@ -24,6 +24,7 @@ pub mod codex;
 pub mod event;
 pub mod follow;
 pub mod hook;
+pub mod moved;
 pub mod upload;
 
 pub use claude::ClaudeParser;

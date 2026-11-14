@@ -263,7 +263,7 @@ group_commands!(
 
 group_commands!(
     /// `agent.*` (Rust-only): the per-pane agent record the agent-status hooks fill, which the Android chat view reads.
-    AgentCmd { Report = "agent.report", Get = "agent.get" }
+    AgentCmd { Report = "agent.report", Get = "agent.get", Locate = "agent.locate" }
 );
 
 /// A control command. Groups with a single command named after the group (`tree`, `dashboard`, `notify`,
@@ -395,7 +395,7 @@ impl Command {
 /// (`conformance/docs/rust-build.md` > Rust-only extensions). The conformance catalog is generated from upstream and
 /// never lists them, so the catalog tests hold [`Command::all`] to the catalog plus this list
 /// (`rust_only::check_rust_only`, built for tests only).
-pub const RUST_ONLY_COMMANDS: &[&str] = &["agent.report", "agent.get"];
+pub const RUST_ONLY_COMMANDS: &[&str] = &["agent.report", "agent.get", "agent.locate"];
 
 /// `ngtermctl` subcommand paths (`"live tree"`, as the catalog's `cli` keys them) beyond upstream's `agtermctl`: the
 /// CLI side of [`RUST_ONLY_COMMANDS`], held to the catalog the same way.
@@ -504,6 +504,7 @@ mod tests {
         assert_eq!("workspace.tint".parse(), Ok(Command::Workspace(WorkspaceCmd::Tint)));
         assert_eq!("agent.report".parse(), Ok(Command::Agent(AgentCmd::Report)));
         assert_eq!("agent.get".parse(), Ok(Command::Agent(AgentCmd::Get)));
+        assert_eq!("agent.locate".parse(), Ok(Command::Agent(AgentCmd::Locate)));
     }
 
     #[test]

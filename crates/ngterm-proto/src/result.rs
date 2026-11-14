@@ -144,7 +144,7 @@ pub struct ControlResult {
     /// `live.attach.group`: the membership discovery and companion attach outcomes.
     #[serde(default)]
     pub remote_group: Option<ControlRemoteGroup>,
-    /// `agent.get` (ngterm's own): the pane's agent record.
+    /// `agent.get` and `agent.locate` (ngterm's own): the pane's agent record.
     #[serde(default)]
     pub agent: Option<ControlAgent>,
 }
@@ -167,6 +167,10 @@ pub struct ControlAgent {
     /// The permission prompt the agent shows now; absent when none is live.
     #[serde(default)]
     pub approval: Option<ControlAgentApproval>,
+    /// `agent.locate`: the pane's identity (its `NGTERM_PANE_ID`), which a hook started outside the pane addresses it
+    /// by.
+    #[serde(default, rename = "paneID")]
+    pub pane_id: Option<String>,
 }
 
 /// A live permission prompt of [`ControlAgent`].

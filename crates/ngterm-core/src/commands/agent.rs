@@ -1,6 +1,6 @@
-//! `agent.report` and `agent.get` (Rust-only, `conformance/docs/rust-build.md` > Rust-only extensions): the origin's
-//! per-pane agent record, which the agent-status hooks fill through `ngtermctl agent hook` and the Android chat view
-//! reads (`docs/plans/20261103-android-agent-chat.md`).
+//! `agent.report`, `agent.get` and `agent.locate` (Rust-only, `conformance/docs/rust-build.md` > Rust-only
+//! extensions): the origin's per-pane agent record, which the agent-status hooks fill through `ngtermctl agent hook`
+//! and the Android chat view reads (`docs/plans/20261103-android-agent-chat.md`).
 //!
 //! A record is keyed by pane identity (`NGTERM_PANE_ID`), so it follows its pane through a swap or a promotion. It
 //! holds the agent, its conversation (the transcript and the id) and the last permission prompt the agent asked for,
@@ -26,6 +26,11 @@
 //! later, unrelated block (a question at `Stop`, a `request_user_input` prompt) could make it live. One case is left
 //! open: a call the guardian denies runs no tool, so a turn that ends at once with a question finds it still there.
 //!
+//! `agent.locate` finds the pane by its conversation, for a hook that runs outside the pane: Claude Code can carry a
+//! conversation on in a background process of its daemon, whose hooks inherit the daemon's `NGTERM_*`, not the
+//! pane's (`agent_chat::moved`). The pane is the one whose record holds the conversation, or holds the one it moved
+//! from; the record then follows the move, so the chat view and the next hook find the conversation where it is.
+//!
 //! Whether the agent still runs is read lazily: `agent.get` on a pane whose foreground is back to a shell clears the
 //! record, since no event fires when the program exits, and so does building the presentation stream's `agent` frame
 //! ([`Core::presented_agent`], `remote::agents`). A PowerShell on Linux or macOS settles nothing: it has no job
@@ -33,6 +38,7 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::path::Path;
 use std::time::SystemTime;
 
 use ngterm_proto::command::AgentCmd;
@@ -42,11 +48,13 @@ use uuid::Uuid;
 use super::{Outcome, args_of, not_found, parse_pane, unknown_pane_id, with_id};
 use crate::Core;
 use crate::agent_chat::hook::{HookEvent, check_transcript};
+use crate::agent_chat::moved::moved_to;
 use crate::agent_chat::{AgentKind, NO_AGENT};
 use crate::command_restore::PaneForeground;
 use crate::error::{ControlError, Noun};
 use crate::live::shell_integration::is_powershell;
 use crate::model::{AgentStatus, AppStore, Session, StatusPane, WindowLibrary};
+use crate::pane_env::uuid_string;
 use crate::projection::epoch_seconds;
 use crate::resolve::{ACTIVE, Resolver};
 
@@ -247,7 +255,70 @@ pub(crate) fn dispatch(core: &mut Core, cmd: AgentCmd, request: &Request) -> Out
     match cmd {
         AgentCmd::Report => report(core, request),
         AgentCmd::Get => get(core, request),
+        AgentCmd::Locate => locate_conversation(core, request),
     }
+}
+
+/// `agent.locate`'s refusal when no pane's record holds the conversation or the one it moved from.
+pub const NO_PANE: &str = "no pane holds this conversation";
+
+/// `agent.locate`: the pane whose record holds the report's conversation, or the one it moved from (the record then
+/// follows the move); answers the session id and the record, with the pane's identity.
+fn locate_conversation(core: &mut Core, request: &Request) -> Outcome {
+    let report = args_of(request)
+        .report
+        .as_ref()
+        .ok_or_else(|| ControlError::rejected("agent.locate requires a report"))?;
+    let agent = AgentKind::from_name(&report.agent)
+        .ok_or_else(|| ControlError::rejected(format!("invalid agent: {} (claude|codex)", report.agent)))?;
+    let (transcript, conversation) = match (report.transcript_path.as_deref(), report.conversation_id.as_deref()) {
+        (Some(transcript), Some(conversation)) if !transcript.is_empty() && !conversation.is_empty() => {
+            (transcript, conversation)
+        }
+        _ => {
+            return Err(ControlError::rejected(
+                "agent.locate requires transcriptPath and conversationId",
+            ));
+        }
+    };
+    check_transcript(agent, transcript).map_err(ControlError::rejected)?;
+    core.sync_agent_records();
+    let records = &core.agents.by_pane;
+    let newest = |held: &dyn Fn(&AgentRecord) -> bool| {
+        records
+            .iter()
+            .filter(|(_, record)| record.agent == agent && held(record))
+            .max_by_key(|(_, record)| record.updated_at)
+            .map(|(identity, _)| *identity)
+    };
+    let identity = newest(&|record| record.conversation == conversation)
+        .or_else(|| {
+            newest(&|record| agent == AgentKind::Claude && moved_to(Path::new(&record.transcript), conversation))
+        })
+        .ok_or_else(|| ControlError::rejected(NO_PANE))?;
+    let (session, role) = locate(core.library(), identity)
+        .map(|(session, role)| (session.id(), role))
+        .ok_or_else(|| ControlError::rejected(NO_PANE))?;
+    let record = set_conversation(
+        &mut core.agents.by_pane,
+        identity,
+        agent,
+        transcript,
+        conversation,
+        SystemTime::now(),
+    );
+    Ok(ControlResult {
+        agent: Some(ControlAgent {
+            agent: record.agent.name().to_owned(),
+            pane: role.as_str().to_owned(),
+            transcript_path: record.transcript.clone(),
+            conversation_id: record.conversation.clone(),
+            updated_at: epoch_seconds(record.updated_at),
+            approval: None,
+            pane_id: Some(uuid_string(identity)),
+        }),
+        ..with_id(session)
+    })
 }
 
 /// The report's transcript and conversation id, both or neither; `required` refuses neither.
@@ -382,6 +453,7 @@ fn get(core: &mut Core, request: &Request) -> Outcome {
             conversation_id: record.conversation.clone(),
             updated_at: epoch_seconds(record.updated_at),
             approval,
+            pane_id: None,
         }),
         ..ControlResult::default()
     })

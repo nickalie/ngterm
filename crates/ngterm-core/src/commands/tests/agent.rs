@@ -1,4 +1,4 @@
-//! `agent.report` and `agent.get`: the per-pane agent record on the fakes (`commands::agent`).
+//! `agent.report`, `agent.get` and `agent.locate`: the per-pane agent record on the fakes (`commands::agent`).
 
 use ngterm_host::ProcessStat;
 use ngterm_host::fakes::{FakeProcessTable, FakeSurface, FakeSurfaceProbe};
@@ -661,4 +661,144 @@ fn a_powershell_without_job_control_settles_nothing_on_linux_and_macos() {
     let left = || pane_args(&token, "left");
     assert!(send_report(&mut fixture, session, left(), start(CLAUDE_A, "aaaa")).ok);
     assert_eq!(get(&mut fixture, session, left()).ok, !cfg!(windows));
+}
+
+fn locate(fixture: &mut Fixture, transcript: &str, id: &str) -> Response {
+    let mut args = Args::default();
+    args.report = Some(Box::new(start(transcript, id)));
+    // a hook outside the pane has only a stale address to give, or none
+    fixture.send(Command::Agent(AgentCmd::Locate), Some(UNKNOWN), args)
+}
+
+/// A Claude projects tree in a fresh directory: the transcript path of the conversation `id` in it.
+fn project() -> (tempfile::TempDir, impl Fn(&str) -> String) {
+    let dir = short_tempdir();
+    let project = dir.path().join(".claude").join("projects").join("-p");
+    std::fs::create_dir_all(&project).expect("a project");
+    let path = move |id: &str| project.join(format!("{id}.jsonl")).to_string_lossy().into_owned();
+    (dir, path)
+}
+
+fn continued(to: &str) -> String {
+    format!("{{\"type\":\"assistant\"}}\n{{\"type\":\"continued-in\",\"continuedInSessionId\":\"{to}\"}}\n")
+}
+
+#[test]
+fn a_conversation_is_located_in_the_pane_whose_record_holds_it() {
+    let (mut fixture, session, token) = one_pane();
+    let right = split(&mut fixture, session);
+    assert!(
+        send_report(
+            &mut fixture,
+            session,
+            pane_args(&token, "left"),
+            start(CLAUDE_A, "aaaa")
+        )
+        .ok
+    );
+    assert!(
+        send_report(
+            &mut fixture,
+            session,
+            pane_args(&right, "right"),
+            start(CLAUDE_B, "bbbb")
+        )
+        .ok
+    );
+    for (transcript, id, pane, identity) in [(CLAUDE_A, "aaaa", "left", &token), (CLAUDE_B, "bbbb", "right", &right)] {
+        let located = locate(&mut fixture, transcript, id);
+        assert!(located.ok, "{located:?}");
+        let result = located.result.as_ref().expect("a result");
+        assert_eq!(result["id"], wire(session));
+        let agent = &result["agent"];
+        assert_eq!(
+            (
+                &agent["agent"],
+                &agent["pane"],
+                &agent["paneID"],
+                &agent["conversationId"]
+            ),
+            (&json!("claude"), &json!(pane), &json!(identity), &json!(id))
+        );
+    }
+    assert_eq!(
+        locate(&mut fixture, CLAUDE_A, "cccc"),
+        failure("no pane holds this conversation")
+    );
+    assert_eq!(
+        locate(
+            &mut fixture,
+            "/home/user/.codex/sessions/2026/11/03/rollout-aaaa.jsonl",
+            "aaaa"
+        ),
+        failure(
+            "transcript path is outside a Claude projects/ tree: /home/user/.codex/sessions/2026/11/03/rollout-aaaa.jsonl"
+        )
+    );
+}
+
+#[test]
+fn a_conversation_that_moved_is_located_in_the_pane_it_came_from_and_the_record_follows_it() {
+    let (mut fixture, session, token) = one_pane();
+    let (_dir, path) = project();
+    std::fs::write(path("aaaa"), continued("bbbb")).expect("a transcript");
+    std::fs::write(path("bbbb"), continued("cccc")).expect("a transcript");
+    let left = || pane_args(&token, "left");
+    assert!(send_report(&mut fixture, session, left(), start(&path("aaaa"), "aaaa")).ok);
+    assert_eq!(
+        locate(&mut fixture, &path("dddd"), "dddd"),
+        failure("no pane holds this conversation")
+    );
+
+    // two moves on: the daemon's worker asks with the conversation's new id and transcript
+    let located = locate(&mut fixture, &path("cccc"), "cccc");
+    assert!(located.ok, "{located:?}");
+    let result = located.result.as_ref().expect("a result");
+    assert_eq!(
+        (&result["id"], &result["agent"]["paneID"]),
+        (&json!(wire(session)), &json!(token))
+    );
+    let agent = agent_of(&get(&mut fixture, session, left()));
+    assert_eq!(
+        (&agent["conversationId"], &agent["transcriptPath"]),
+        (&json!("cccc"), &json!(path("cccc")))
+    );
+    // found by its own id from now on, the old transcript gone or not
+    std::fs::remove_file(path("aaaa")).expect("removed");
+    assert!(locate(&mut fixture, &path("cccc"), "cccc").ok);
+    // the conversation it left is no longer this pane's
+    assert_eq!(
+        locate(&mut fixture, &path("aaaa"), "aaaa"),
+        failure("no pane holds this conversation")
+    );
+}
+
+#[test]
+fn a_locate_is_checked_and_another_agents_record_is_not_its_conversation() {
+    let (mut fixture, session, token) = one_pane();
+    assert_eq!(
+        fixture.send(Command::Agent(AgentCmd::Locate), None, Args::default()),
+        failure("agent.locate requires a report")
+    );
+    let mut bare = Args::default();
+    bare.report = Some(Box::new(AgentReport {
+        transcript_path: None,
+        ..start(CLAUDE_A, "aaaa")
+    }));
+    assert_eq!(
+        fixture.send(Command::Agent(AgentCmd::Locate), None, bare),
+        failure("agent.locate requires transcriptPath and conversationId")
+    );
+    let mut unknown = Args::default();
+    unknown.report = Some(Box::new(conversation("gemini", "SessionStart", CLAUDE_A, "aaaa")));
+    assert_eq!(
+        fixture.send(Command::Agent(AgentCmd::Locate), None, unknown),
+        failure("invalid agent: gemini (claude|codex)")
+    );
+    let codex = conversation("codex", "SessionStart", CODEX_A, "aaaa");
+    assert!(send_report(&mut fixture, session, pane_args(&token, "left"), codex).ok);
+    assert_eq!(
+        locate(&mut fixture, CLAUDE_A, "aaaa"),
+        failure("no pane holds this conversation")
+    );
 }

@@ -447,6 +447,7 @@ mod tests {
             conversation_id: "c1".to_owned(),
             updated_at: 1.0,
             approval: None,
+            pane_id: None,
         }
     }
 
