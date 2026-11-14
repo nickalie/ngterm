@@ -284,6 +284,12 @@ def _typed_with_the_pointer_resting(ctl, ui, sid, **pane):
     ctl.wait_text(sid, r"typed", **pane)
 
 
+def _runs_cat(argv):
+    """Whether a pane's foreground argv is `cat`'s: a shell's `exec` names its program by path (Windows: Git's
+    `cat.exe`)."""
+    return bool(argv) and re.fullmatch(r"(?:.*[\\/])?cat(?:\.exe)?", argv[0]) is not None
+
+
 @pytest.mark.covers("session.type", "session.text", "behavior:pane.wheel-scroll")
 def test_the_wheel_scrolls_after_typing_with_the_pointer_still(ctl, ui):
     with _cat(ctl) as sid:
@@ -295,7 +301,13 @@ def test_the_wheel_scrolls_after_typing_with_the_pointer_still(ctl, ui):
 
 
 @pytest.mark.covers(
-    "session.split", "session.focus", "session.resize", "session.type", "session.text", "behavior:pane.wheel-scroll"
+    "session.split",
+    "session.focus",
+    "session.resize",
+    "session.type",
+    "session.text",
+    "field:tree.session.splitForeground",
+    "behavior:pane.wheel-scroll",
 )
 def test_the_wheel_scrolls_the_split_pane_under_the_pointer_not_the_focused_one(ctl, ui):
     """Both panes of a side-by-side split hold a screen many viewports tall; keys go to the right one, and the wheel
@@ -308,9 +320,13 @@ def test_the_wheel_scrolls_the_split_pane_under_the_pointer_not_the_focused_one(
             ctl.wait_mounted(sid, "left", "right")
             # the split's new pane takes the focus, which a request with no pane addresses
             _scrollback(ctl, sid, pane="left")
-            # the new pane's shell prints its own screen many viewports tall, its prompt under it
-            assert_ok(ctl.request("session.type", sid, pane="right", text="printf 'right-%03d\\n' $(seq 0 199)\n"))
-            ctl.wait_text(sid, "right-199", pane="right")
+            # the new pane's shell hands it to `cat` as well: no prompt redraws there, and no line editor reads the keys
+            # (Windows' UI driver types text, which the pane writes as a bracketed paste Git's `sh` may misread)
+            assert_ok(ctl.request("session.type", sid, pane="right", text="exec cat\n"))
+            ctl.wait_tree(lambda tree: _runs_cat(find_session(tree, sid).get("splitForeground")))
+            assert_ok(ctl.request("session.type", sid, pane="right", text="cat-reads\n"))
+            ctl.wait_text(sid, r"cat-reads[\s\S]*cat-reads", all=True, pane="right")
+            _scrollback(ctl, sid, pane="right")
             # the panes span the window's width, the sidebar hidden: at 0.8 the window's middle is over the left one
             assert_ok(ctl.request("session.resize", sid, ratio=0.8))
             ctl.wait_tree(lambda tree: find_session(tree, sid).get("splitRatio") == pytest.approx(0.8, abs=0.004))
