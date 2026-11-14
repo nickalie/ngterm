@@ -7,10 +7,11 @@
 # another they took two hours; measured on main, 2026-11-14: the core 7 to 28 min, the lint's analyzer 33 to 39 min,
 # the Unit plan 20 to 25 min, the UI plan 21 to 27 min on the phone and 30 to 53 min on the tablet):
 #
-# - `core`: scripts/build-ios.sh --no-xcode, the core for both iOS targets, its Swift bindings and XCFramework, kept
-#   in a cache keyed by everything they are built from (the crates, the workspace's pins, toolchain and cargo config,
-#   the libghostty-vt pins and patches, the scripts that build them), so a run over the same sources builds nothing.
-#   The jobs below restore that cache entry and pass --prebuilt-core: none of them compiles Rust;
+# - `core`: scripts/build-ios.sh --no-xcode, the core for both iOS targets, its Swift bindings and XCFramework, handed
+#   to the jobs below as the `ios-core` artifact (kept a day), which they build over with --prebuilt-core: none of
+#   them compiles Rust. Main keeps them in a cache too, keyed by everything they are built from (the crates, the
+#   workspace's pins, toolchain and cargo config, the libghostty-vt pins and patches, the scripts that build them),
+#   so a run over the same sources builds nothing;
 # - `core-tests`: the core's Rust tests on the phone simulator (ngterm-mobile's unit tests and ngterm-ghostty-vt's
 #   tests, through scripts/ios-sim-runner.sh). It needs no XCFramework, so it starts with `core`;
 # - `lint`: scripts/build-ios.sh lint: SwiftLint with its analyzer rules, swift-format, the suppression reasons, Swift
@@ -41,8 +42,8 @@
 #
 # The vendor root (the pinned Zig, its global cache, the libghostty-vt prefixes and the vendored SwiftLint) and cargo's
 # registry and target directory are cached as cross-platform.yml's macOS leg caches them, under keys of this image;
-# cargo's cache is `core`'s to save (`core-tests` reads it). The simulator runtime is the image's; Xcode's derived
-# data is not cached.
+# cargo's cache is `core`'s to save (`core-tests` reads it). Only main saves caches: a branch's would crowd main's
+# out of the repository's cache space. The simulator runtime is the image's; Xcode's derived data is not cached.
 #
 # Path-filtered to what the app builds from: the mobile core and the crates it builds on, the workspace manifest, lock
 # file, toolchain and cargo config, mobile/ios/ and the fonts it shares with Android, the scripts, patches and pins of
@@ -101,24 +102,17 @@ jobs:
   core:
     runs-on: xcode-27
     timeout-minutes: 90
-    outputs:
-      key: ${{ steps.key.outputs.key }}
     steps:
       - uses: actions/checkout@v7
       # every crate, not only the core's build closure: ngterm-mobile embeds a file of a crate outside it
-      - name: the key of the core's inputs
-        id: key
-        env:
-          INPUTS: ${{ hashFiles('crates/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/build-ios.sh', 'scripts/setup-ios.sh', 'scripts/build-ghostty-vt.sh', 'scripts/lib/native.sh') }}
-        run: echo "key=ios-core-xcode-27-$INPUTS" >>"$GITHUB_OUTPUT"
-      - name: the core a run built from these inputs
+      - name: the core a run on main built from these inputs
         id: built
-        uses: actions/cache@v6
-        with:
-          path: &core-paths |
+        uses: actions/cache/restore@v6
+        with: &core-cache
+          path: |
             mobile/ios/Packages/NgtermCore/Generated/NgtermCoreFFI.xcframework
             mobile/ios/Packages/NgtermCore/Generated/NgtermCoreBindings
-          key: ${{ steps.key.outputs.key }}
+          key: ios-core-xcode-27-${{ hashFiles('crates/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/build-ios.sh', 'scripts/setup-ios.sh', 'scripts/build-ghostty-vt.sh', 'scripts/lib/native.sh') }}
       - name: rust toolchain (rust-toolchain.toml)
         if: steps.built.outputs.cache-hit != 'true'
         run: rustup toolchain install
@@ -126,12 +120,16 @@ jobs:
         if: steps.built.outputs.cache-hit != 'true'
         with:
           shared-key: ios
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # the vendor root, keyed like cross-platform.yml's legs', with the iOS setup that installs SwiftLint into it
       - uses: actions/cache@v6
-        if: steps.built.outputs.cache-hit != 'true'
-        with:
+        if: steps.built.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        with: &vendor
           path: ~/.cache/ngterm/vendor
-          key: &vendor-key vendor-ngterm-xcode-27-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh', 'scripts/setup-ios.sh') }}
+          key: vendor-ngterm-xcode-27-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh', 'scripts/setup-ios.sh') }}
+      - uses: actions/cache/restore@v6
+        if: steps.built.outputs.cache-hit != 'true' && github.ref != 'refs/heads/main'
+        with: *vendor
       - name: Zig and the libghostty-vt prefix (build/pins.env)
         if: steps.built.outputs.cache-hit != 'true'
         run: scripts/build-ghostty-vt.sh
@@ -141,6 +139,17 @@ jobs:
       - name: the core for both iOS targets, its Swift bindings and XCFramework
         if: steps.built.outputs.cache-hit != 'true'
         run: scripts/build-ios.sh --no-xcode
+      - uses: actions/cache/save@v6
+        if: steps.built.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        with: *core-cache
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios-core
+          path: |
+            mobile/ios/Packages/NgtermCore/Generated/NgtermCoreFFI.xcframework
+            mobile/ios/Packages/NgtermCore/Generated/NgtermCoreBindings
+          if-no-files-found: error
+          retention-days: 1
 
   core-tests:
     runs-on: xcode-27
@@ -157,9 +166,12 @@ jobs:
           save-if: false
       - &vendor-cache
         uses: actions/cache@v6
-        with:
-          path: ~/.cache/ngterm/vendor
-          key: *vendor-key
+        if: github.ref == 'refs/heads/main'
+        with: *vendor
+      - &vendor-restore
+        uses: actions/cache/restore@v6
+        if: github.ref != 'refs/heads/main'
+        with: *vendor
       - &ghostty-vt
         name: Zig and the libghostty-vt prefix (build/pins.env)
         run: scripts/build-ghostty-vt.sh
@@ -181,15 +193,15 @@ jobs:
       - *checkout
       - *rust-toolchain
       - *vendor-cache
+      - *vendor-restore
       - *ghostty-vt
       - *ios-toolchain
       - &prebuilt-core
         name: the core (the core job's)
-        uses: actions/cache/restore@v6
+        uses: actions/download-artifact@v8
         with:
-          path: *core-paths
-          key: ${{ needs.core.outputs.key }}
-          fail-on-cache-miss: true
+          name: ios-core
+          path: mobile/ios/Packages/NgtermCore/Generated
       - name: lint (SwiftLint and its analyzer rules, swift-format, the suppression reasons)
         run: scripts/build-ios.sh --prebuilt-core lint
       - name: upload the lint's build log
@@ -210,6 +222,7 @@ jobs:
       - *checkout
       - *rust-toolchain
       - *vendor-cache
+      - *vendor-restore
       - *ghostty-vt
       - *ios-toolchain
       - *prebuilt-core
@@ -278,6 +291,7 @@ jobs:
       - *checkout
       - *rust-toolchain
       - *vendor-cache
+      - *vendor-restore
       - *ghostty-vt
       - *ios-toolchain
       - *prebuilt-core
@@ -325,6 +339,7 @@ jobs:
       - *checkout
       - *rust-toolchain
       - *vendor-cache
+      - *vendor-restore
       - *ghostty-vt
       - *ios-toolchain
       - *prebuilt-core

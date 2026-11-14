@@ -1387,7 +1387,7 @@ already holds changes no file, so the path-filtered workflows don't start on it.
   real-machine e2e tests (`e2e` package, `scripts/test-android-e2e.sh`) skip, having no machine.
 - `ios.yml` (path-filtered to the mobile core, the crates under it, `mobile/ios/`, the shared fonts and the iOS
   scripts and pins), on the `xcode-27` image: `core` builds the core's XCFramework and
-  bindings once (cached by their inputs) and `core-tests` runs the core's Rust tests in the phone simulator; then,
+  bindings once (main caches them by their inputs) and `core-tests` runs the core's Rust tests in the phone simulator; then,
   side by side over that core, `lint` (`scripts/build-ios.sh lint`), `unit` (`build-ios.sh coverage`: the Unit plan
   on both simulators and its coverage floors), `ui-phone`, `ui-tablet-1` and `ui-tablet-2` (`build-ios.sh ui`: the
   UI plan per simulator, the tablet's in two shares of its test classes) and `archive` (`build-ios.sh archive`,
