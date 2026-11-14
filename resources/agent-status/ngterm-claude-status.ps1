@@ -28,6 +28,30 @@
 # ngtermctl resolution: $env:NGTERMCTL, else the path the installer bakes in ($NgtermctlBaked), else `ngtermctl` on
 # PATH.
 
+# A background job of Claude Code's daemon (CLAUDE_JOB_DIR is set: Claude Code moves a conversation there on
+# /background or on a Left arrow at its empty prompt) has the daemon's NGTERM_*, which name the pane the daemon was
+# started in: a session long gone, or another one's. `ngtermctl agent rerun` finds the pane that holds this
+# conversation from the payload and runs this hook again as that pane; with none it runs nothing, silently.
+if ($env:CLAUDE_JOB_DIR -and -not $env:NGTERM_AGENT_LOCATED) {
+  $rerunStatus = 0
+  try {
+    $rerunCtl = $env:NGTERMCTL
+    if (-not $rerunCtl) { $rerunCtl = Get-Variable -Name NgtermctlBaked -ValueOnly -ErrorAction SilentlyContinue }
+    if (-not $rerunCtl) { $rerunCtl = 'ngtermctl' }
+    $rerun = @('agent', 'rerun', 'claude')
+    if ($env:NGTERM_SOCKET) { $rerun += @('--socket', $env:NGTERM_SOCKET) }
+    $rerun += @('--', (Get-Process -Id $PID).Path, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', $PSCommandPath) + @($args)
+    if ([Console]::IsInputRedirected) {
+      $rerunInput = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.UTF8Encoding]::new($false))
+      $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+      $rerunInput.ReadToEnd() | & $rerunCtl @rerun
+      $rerunStatus = $LASTEXITCODE
+    }
+  } catch { }
+  exit $rerunStatus
+}
+
 if (-not $env:NGTERM_SESSION_ID) { exit 0 }
 
 $statusWrapper = $env:NGTERM_STATUS_WRAPPER

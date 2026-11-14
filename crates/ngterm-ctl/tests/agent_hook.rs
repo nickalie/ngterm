@@ -395,3 +395,165 @@ fn a_call_auto_review_approved_never_yields_a_live_approval() -> TestResult {
     assert_eq!(approval()?["detail"], "curl -sI https://example.com");
     Ok(())
 }
+
+/// The transcript of the Claude conversation `id` in a projects tree under `root`.
+fn claude_transcript(root: &Path, id: &str) -> TestResult<PathBuf> {
+    let project = root.join("home").join(".claude").join("projects").join("-w");
+    std::fs::create_dir_all(&project)?;
+    Ok(project.join(format!("{id}.jsonl")))
+}
+
+/// A Claude Code hook payload of `event` for the conversation `id`.
+fn claude_payload(event: &str, id: &str, transcript: &Path) -> String {
+    json!({
+        "session_id": id,
+        "transcript_path": transcript,
+        "cwd": "/w",
+        "permission_mode": "default",
+        "hook_event_name": event,
+        "source": "startup",
+        "tool_name": "Bash",
+        "tool_input": {"command": "true"},
+        "background_tasks": [],
+    })
+    .to_string()
+}
+
+/// The seeded session's agent status; null while idle.
+fn status_of(socket: &Path) -> TestResult<Value> {
+    let tree = request(socket, &json!({"cmd": "tree"}))?;
+    Ok(tree.result.ok_or("no tree")?["tree"]["workspaces"][0]["sessions"][0]["status"].clone())
+}
+
+const MOVED_FROM: &str = "0a0a0a0a-0000-4000-8000-00000000000a";
+const MOVED_TO: &str = "0b0b0b0b-0000-4000-8000-00000000000b";
+const NOBODYS: &str = "0c0c0c0c-0000-4000-8000-00000000000c";
+/// What Claude Code's daemon was started with: a session and a pane that are gone.
+const DAEMONS_SESSION: &str = "5B4EE31F-9B89-472B-9990-C1DCEEF7A966";
+const DAEMONS_PANE: &str = "121CAAB2-9079-4F7E-A0CB-808CE743B005";
+
+/// A Claude hook of `resources/agent-status` as Claude Code runs it in a background job of its daemon, for the
+/// conversation `id`: `CLAUDE_JOB_DIR` set, the daemon's `NGTERM_*` naming a session that is gone, its socket the
+/// instance's.
+struct BackgroundJob<'a> {
+    bash: &'a Path,
+    root: &'a Path,
+    socket: &'a Path,
+}
+
+impl BackgroundJob<'_> {
+    fn hook(&self, script: &str, args: &[&str], event: &str, id: &str) -> TestResult<(Option<i32>, String, String)> {
+        let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/agent-status");
+        let mut child = isolated(self.bash, self.root)
+            .arg(bash_path(&scripts.join(script)))
+            .args(args)
+            .env("NGTERMCTL", bash_path(Path::new(NGTERMCTL)))
+            .env("CLAUDE_JOB_DIR", "/home/user/.claude/jobs/0b0b0b0b")
+            .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+            .env("NGTERM_SESSION_ID", DAEMONS_SESSION)
+            .env("NGTERM_PANE", "left")
+            .env("NGTERM_PANE_ID", DAEMONS_PANE)
+            .env("NGTERM_SOCKET", self.socket)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        if let Some(mut input) = child.stdin.take() {
+            let payload = claude_payload(event, id, &claude_transcript(self.root, id)?);
+            let _ = input.write_all(payload.as_bytes());
+        }
+        Ok(outcome(&child.wait_with_output()?))
+    }
+}
+
+/// End to end through the installed Claude hooks, run as a background job's ([`BackgroundJob`]). A conversation
+/// Claude Code moved there from a pane (its old transcript ends with `continued-in`) keeps that pane's status and
+/// record up to date; a job no pane started does nothing and prints nothing.
+#[test]
+fn a_background_jobs_hooks_reach_the_pane_the_conversation_came_from_or_stay_silent() -> TestResult {
+    let Some(bash) = codex_bash() else {
+        eprintln!("SKIPPED: no Git for Windows bash");
+        return Ok(());
+    };
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    let _server = serve_core(&socket)?;
+    let session = session_id(&socket)?;
+    let socket_arg = socket.to_str().ok_or("a UTF-8 path")?;
+    let transcript = |id: &str| claude_transcript(dir.path(), id);
+    let background = BackgroundJob {
+        bash: &bash,
+        root: dir.path(),
+        socket: &socket,
+    };
+    let job = |script: &str, args: &[&str], event: &str, id: &str| background.hook(script, args, event, id);
+    let silent = (Some(0), String::new(), String::new());
+
+    // the pane's own Claude Code reports its conversation, then moves it to the daemon
+    let start = [
+        "agent",
+        "hook",
+        "claude",
+        "SessionStart",
+        "--target",
+        &session,
+        "--pane",
+        "left",
+        "--socket",
+        socket_arg,
+    ];
+    let started = hook(
+        dir.path(),
+        &start,
+        &claude_payload("SessionStart", MOVED_FROM, &transcript(MOVED_FROM)?),
+    )?;
+    assert_eq!(outcome(&started), silent);
+    std::fs::write(
+        transcript(MOVED_FROM)?,
+        format!(
+            "{{\"type\":\"continued-in\",\"sessionId\":\"{MOVED_FROM}\",\"continuedInSessionId\":\"{MOVED_TO}\"}}\n"
+        ),
+    )?;
+    let idle = status_of(&socket)?;
+
+    // a job no pane started: nothing happens, and nothing reaches the agent
+    for (script, args, event) in [
+        ("ngterm-agent-mail.sh", &["claude"][..], "PostToolUse"),
+        ("ngterm-claude-status.sh", &["active", "--blink"][..], "PostToolUse"),
+        ("ngterm-agent-restore.sh", &["claude", "start"][..], "SessionStart"),
+    ] {
+        assert_eq!(job(script, args, event, NOBODYS)?, silent, "{script}");
+    }
+    assert_eq!(status_of(&socket)?, idle);
+    let agent = agent_get(&socket, &session)?.map_err(|err| err.clone())?;
+    assert_eq!(agent["conversationId"], MOVED_FROM);
+
+    // the moved conversation: its hooks are the pane's
+    assert_eq!(
+        job(
+            "ngterm-claude-status.sh",
+            &["active", "--blink"],
+            "PostToolUse",
+            MOVED_TO
+        )?,
+        silent
+    );
+    assert_eq!(status_of(&socket)?, "active");
+    let agent = agent_get(&socket, &session)?.map_err(|err| err.clone())?;
+    assert_eq!(
+        (&agent["conversationId"], &agent["transcriptPath"]),
+        (&json!(MOVED_TO), &json!(transcript(MOVED_TO)?))
+    );
+    // this core's seeded session has no live pane to keep a mailbox for: the refusal names the pane the hook ran as
+    let (_, _, refusal) = job("ngterm-agent-mail.sh", &["claude"], "PostToolUse", MOVED_TO)?;
+    assert!(
+        refusal.contains(&session) && !refusal.contains(DAEMONS_SESSION),
+        "{refusal}"
+    );
+    assert_eq!(
+        job("ngterm-claude-status.sh", &["completed"], "Stop", MOVED_TO)?,
+        silent
+    );
+    assert_eq!(status_of(&socket)?, "completed");
+    Ok(())
+}

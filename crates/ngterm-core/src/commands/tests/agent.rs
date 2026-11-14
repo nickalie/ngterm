@@ -664,10 +664,9 @@ fn a_powershell_without_job_control_settles_nothing_on_linux_and_macos() {
 }
 
 fn locate(fixture: &mut Fixture, transcript: &str, id: &str) -> Response {
-    let mut args = Args::default();
-    args.report = Some(Box::new(start(transcript, id)));
+    let report = args(|a| a.report = Some(Box::new(start(transcript, id))));
     // a hook outside the pane has only a stale address to give, or none
-    fixture.send(Command::Agent(AgentCmd::Locate), Some(UNKNOWN), args)
+    fixture.send(Command::Agent(AgentCmd::Locate), Some(UNKNOWN), report)
 }
 
 /// A Claude projects tree in a fresh directory: the transcript path of the conversation `id` in it.
@@ -780,17 +779,17 @@ fn a_locate_is_checked_and_another_agents_record_is_not_its_conversation() {
         fixture.send(Command::Agent(AgentCmd::Locate), None, Args::default()),
         failure("agent.locate requires a report")
     );
-    let mut bare = Args::default();
-    bare.report = Some(Box::new(AgentReport {
-        transcript_path: None,
-        ..start(CLAUDE_A, "aaaa")
-    }));
+    let bare = args(|a| {
+        a.report = Some(Box::new(AgentReport {
+            transcript_path: None,
+            ..start(CLAUDE_A, "aaaa")
+        }));
+    });
     assert_eq!(
         fixture.send(Command::Agent(AgentCmd::Locate), None, bare),
         failure("agent.locate requires transcriptPath and conversationId")
     );
-    let mut unknown = Args::default();
-    unknown.report = Some(Box::new(conversation("gemini", "SessionStart", CLAUDE_A, "aaaa")));
+    let unknown = args(|a| a.report = Some(Box::new(conversation("gemini", "SessionStart", CLAUDE_A, "aaaa"))));
     assert_eq!(
         fixture.send(Command::Agent(AgentCmd::Locate), None, unknown),
         failure("invalid agent: gemini (claude|codex)")

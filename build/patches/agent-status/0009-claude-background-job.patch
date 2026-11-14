@@ -1,0 +1,173 @@
+Find the pane of a Claude Code background job. Claude Code can carry a conversation on in a background process of its daemon (/background, or a Left arrow at its empty prompt), whose hooks inherit the daemon's NGTERM_* and not the pane's: the Claude status adapter, the mail hook and the restore adapter, in both forms, run themselves again through `ngtermctl agent rerun` when CLAUDE_JOB_DIR is set, as the pane whose agent record holds the conversation, or do nothing. Applied after 0008-ngswap-restore.patch.
+
+diff --git a/ngterm-agent-mail.ps1 b/ngterm-agent-mail.ps1
+index e2a0962..e7307cb 100644
+--- a/ngterm-agent-mail.ps1
++++ b/ngterm-agent-mail.ps1
+@@ -14,6 +14,30 @@
+ # ngtermctl resolution: $env:NGTERMCTL, else the path the installer bakes in ($NgtermctlBaked), else `ngtermctl` on
+ # PATH.
+ 
++# A background job of Claude Code's daemon (CLAUDE_JOB_DIR is set: Claude Code moves a conversation there on
++# /background or on a Left arrow at its empty prompt) has the daemon's NGTERM_*, which name the pane the daemon was
++# started in: a session long gone, or another one's. `ngtermctl agent rerun` finds the pane that holds this
++# conversation from the payload and runs this hook again as that pane; with none it runs nothing, silently.
++if ($env:CLAUDE_JOB_DIR -and -not $env:NGTERM_AGENT_LOCATED) {
++  $rerunStatus = 0
++  try {
++    $rerunCtl = $env:NGTERMCTL
++    if (-not $rerunCtl) { $rerunCtl = Get-Variable -Name NgtermctlBaked -ValueOnly -ErrorAction SilentlyContinue }
++    if (-not $rerunCtl) { $rerunCtl = 'ngtermctl' }
++    $rerun = @('agent', 'rerun', 'claude')
++    if ($env:NGTERM_SOCKET) { $rerun += @('--socket', $env:NGTERM_SOCKET) }
++    $rerun += @('--', (Get-Process -Id $PID).Path, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
++      '-File', $PSCommandPath) + @($args)
++    if ([Console]::IsInputRedirected) {
++      $rerunInput = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.UTF8Encoding]::new($false))
++      $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
++      $rerunInput.ReadToEnd() | & $rerunCtl @rerun
++      $rerunStatus = $LASTEXITCODE
++    }
++  } catch { }
++  exit $rerunStatus
++}
++
+ if (-not $env:NGTERM_SESSION_ID -or -not $env:NGTERM_PANE_ID) { exit 0 }
+ 
+ $ngtermctl = 'ngtermctl'
+diff --git a/ngterm-agent-mail.sh b/ngterm-agent-mail.sh
+index 24ef4ac..08671ea 100755
+--- a/ngterm-agent-mail.sh
++++ b/ngterm-agent-mail.sh
+@@ -24,6 +24,17 @@
+ # ngtermctl resolution: $NGTERMCTL, else the path the installer bakes in, else `ngtermctl` on PATH.
+ set -u
+ 
++# A background job of Claude Code's daemon (CLAUDE_JOB_DIR is set: Claude Code moves a conversation there on
++# /background or on a Left arrow at its empty prompt) has the daemon's NGTERM_*, which name the pane the daemon was
++# started in: a session long gone, or another one's. `ngtermctl agent rerun` finds the pane that holds this
++# conversation from the payload and runs this hook again as that pane; with none it runs nothing, silently.
++if [ -n "${CLAUDE_JOB_DIR:-}" ] && [ -z "${NGTERM_AGENT_LOCATED:-}" ]; then
++  command -v "${NGTERMCTL:-ngtermctl}" >/dev/null 2>&1 || exit 0
++  rerun=(agent rerun claude)
++  [ -n "${NGTERM_SOCKET:-}" ] && rerun+=(--socket "$NGTERM_SOCKET")
++  exec "${NGTERMCTL:-ngtermctl}" "${rerun[@]}" -- "${BASH:-bash}" "$0" "$@"
++fi
++
+ [ -n "${NGTERM_SESSION_ID:-}" ] && [ -n "${NGTERM_PANE_ID:-}" ] || exit 0
+ 
+ args=(agent mail "$@")
+diff --git a/ngterm-agent-restore.ps1 b/ngterm-agent-restore.ps1
+index 6a7947b..bd9b81d 100644
+--- a/ngterm-agent-restore.ps1
++++ b/ngterm-agent-restore.ps1
+@@ -23,6 +23,30 @@
+ 
+ trap { exit 0 }
+ 
++# A background job of Claude Code's daemon (CLAUDE_JOB_DIR is set: Claude Code moves a conversation there on
++# /background or on a Left arrow at its empty prompt) has the daemon's NGTERM_*, which name the pane the daemon was
++# started in: a session long gone, or another one's. `ngtermctl agent rerun` finds the pane that holds this
++# conversation from the payload and runs this hook again as that pane; with none it runs nothing, silently.
++if ($env:CLAUDE_JOB_DIR -and -not $env:NGTERM_AGENT_LOCATED) {
++  $rerunStatus = 0
++  try {
++    $rerunCtl = $env:NGTERMCTL
++    if (-not $rerunCtl) { $rerunCtl = Get-Variable -Name NgtermctlBaked -ValueOnly -ErrorAction SilentlyContinue }
++    if (-not $rerunCtl) { $rerunCtl = 'ngtermctl' }
++    $rerun = @('agent', 'rerun', 'claude')
++    if ($env:NGTERM_SOCKET) { $rerun += @('--socket', $env:NGTERM_SOCKET) }
++    $rerun += @('--', (Get-Process -Id $PID).Path, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
++      '-File', $PSCommandPath) + @($args)
++    if ([Console]::IsInputRedirected) {
++      $rerunInput = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.UTF8Encoding]::new($false))
++      $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
++      $rerunInput.ReadToEnd() | & $rerunCtl @rerun
++      $rerunStatus = $LASTEXITCODE
++    }
++  } catch { }
++  exit $rerunStatus
++}
++
+ if (-not $env:NGTERM_SESSION_ID) { exit 0 }
+ 
+ $agent = if ($args.Count -gt 0) { $args[0] } else { '' }
+diff --git a/ngterm-agent-restore.sh b/ngterm-agent-restore.sh
+index c9c3835..27781bf 100755
+--- a/ngterm-agent-restore.sh
++++ b/ngterm-agent-restore.sh
+@@ -48,6 +48,17 @@
+ trap 'exit 0' EXIT
+ exec >/dev/null 2>&1
+ 
++# A background job of Claude Code's daemon (CLAUDE_JOB_DIR is set: Claude Code moves a conversation there on
++# /background or on a Left arrow at its empty prompt) has the daemon's NGTERM_*, which name the pane the daemon was
++# started in: a session long gone, or another one's. `ngtermctl agent rerun` finds the pane that holds this
++# conversation from the payload and runs this hook again as that pane; with none it runs nothing, silently.
++if [ -n "${CLAUDE_JOB_DIR:-}" ] && [ -z "${NGTERM_AGENT_LOCATED:-}" ]; then
++  command -v "${NGTERMCTL:-ngtermctl}" >/dev/null 2>&1 || exit 0
++  rerun=(agent rerun claude)
++  [ -n "${NGTERM_SOCKET:-}" ] && rerun+=(--socket "$NGTERM_SOCKET")
++  exec "${NGTERMCTL:-ngtermctl}" "${rerun[@]}" -- "${BASH:-bash}" "$0" "$@"
++fi
++
+ [ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
+ 
+ agent=${1:-}
+diff --git a/ngterm-claude-status.ps1 b/ngterm-claude-status.ps1
+index be141e9..b240357 100644
+--- a/ngterm-claude-status.ps1
++++ b/ngterm-claude-status.ps1
+@@ -28,6 +28,30 @@
+ # ngtermctl resolution: $env:NGTERMCTL, else the path the installer bakes in ($NgtermctlBaked), else `ngtermctl` on
+ # PATH.
+ 
++# A background job of Claude Code's daemon (CLAUDE_JOB_DIR is set: Claude Code moves a conversation there on
++# /background or on a Left arrow at its empty prompt) has the daemon's NGTERM_*, which name the pane the daemon was
++# started in: a session long gone, or another one's. `ngtermctl agent rerun` finds the pane that holds this
++# conversation from the payload and runs this hook again as that pane; with none it runs nothing, silently.
++if ($env:CLAUDE_JOB_DIR -and -not $env:NGTERM_AGENT_LOCATED) {
++  $rerunStatus = 0
++  try {
++    $rerunCtl = $env:NGTERMCTL
++    if (-not $rerunCtl) { $rerunCtl = Get-Variable -Name NgtermctlBaked -ValueOnly -ErrorAction SilentlyContinue }
++    if (-not $rerunCtl) { $rerunCtl = 'ngtermctl' }
++    $rerun = @('agent', 'rerun', 'claude')
++    if ($env:NGTERM_SOCKET) { $rerun += @('--socket', $env:NGTERM_SOCKET) }
++    $rerun += @('--', (Get-Process -Id $PID).Path, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
++      '-File', $PSCommandPath) + @($args)
++    if ([Console]::IsInputRedirected) {
++      $rerunInput = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.UTF8Encoding]::new($false))
++      $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
++      $rerunInput.ReadToEnd() | & $rerunCtl @rerun
++      $rerunStatus = $LASTEXITCODE
++    }
++  } catch { }
++  exit $rerunStatus
++}
++
+ if (-not $env:NGTERM_SESSION_ID) { exit 0 }
+ 
+ $statusWrapper = $env:NGTERM_STATUS_WRAPPER
+diff --git a/ngterm-claude-status.sh b/ngterm-claude-status.sh
+index 8a78b3f..123e297 100755
+--- a/ngterm-claude-status.sh
++++ b/ngterm-claude-status.sh
+@@ -37,6 +37,17 @@
+ # (`agent_id`) never does; a subagent's permission prompt does, and `agent hook` keeps only the prompt of it.
+ set -u
+ 
++# A background job of Claude Code's daemon (CLAUDE_JOB_DIR is set: Claude Code moves a conversation there on
++# /background or on a Left arrow at its empty prompt) has the daemon's NGTERM_*, which name the pane the daemon was
++# started in: a session long gone, or another one's. `ngtermctl agent rerun` finds the pane that holds this
++# conversation from the payload and runs this hook again as that pane; with none it runs nothing, silently.
++if [ -n "${CLAUDE_JOB_DIR:-}" ] && [ -z "${NGTERM_AGENT_LOCATED:-}" ]; then
++  command -v "${NGTERMCTL:-ngtermctl}" >/dev/null 2>&1 || exit 0
++  rerun=(agent rerun claude)
++  [ -n "${NGTERM_SOCKET:-}" ] && rerun+=(--socket "$NGTERM_SOCKET")
++  exec "${NGTERMCTL:-ngtermctl}" "${rerun[@]}" -- "${BASH:-bash}" "$0" "$@"
++fi
++
+ [ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
+ 
+ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)

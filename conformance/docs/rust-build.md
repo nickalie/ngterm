@@ -329,7 +329,8 @@ hold the build to the catalog plus that list (`check_rust_only`):
 
 A Rust-only command is not in the catalog, so it has no catalog item to cover; the Rust crates' own tests cover it,
 and so does its capability's tests in the suite (`agent-chat` above). Today the `agent.*` group is: `agent.report` and `agent.get`, the origin's per-pane agent record that the
-agent-status hooks fill and the Android chat view reads (`ngterm-core`'s `commands::agent`). Its CLI side is
+agent-status hooks fill and the Android chat view reads, and `agent.locate`, which answers the pane whose record
+holds a conversation or the one Claude Code moved it from (`ngterm-core`'s `commands::agent`). Its CLI side is
 `ngtermctl agent hook`, which the hooks run with the payload on stdin (`ngterm-ctl`'s `agent.rs`), and
 `ngtermctl agent chat`, which the phone runs on the origin to read the record's transcript as NDJSON chat events
 (`agent/chat.rs`), and `ngtermctl agent commands`, which prints the agent's slash commands and skills for the chat
@@ -337,7 +338,9 @@ composer's `/` dropdown (`agent/commands.rs`, over `ngterm-core`'s `agent_chat::
 `ngtermctl agent upload`, which stores a file the chat composer attaches from its stdin and prints its path
 (`agent/upload.rs`, over `ngterm-core`'s `agent_chat::upload`; no record or running instance needed), and
 `ngtermctl agent mail`, which the hooks run to hand the pane's `msg` mailbox to its agent over upstream's `msg.read`
-(`agent/mail.rs`; it adds no control command).
+(`agent/mail.rs`; it adds no control command), and `ngtermctl agent rerun`, which the Claude hooks of a Claude Code
+background job run themselves through: it asks `agent.locate` for the pane of the payload's conversation and runs
+the hook as that pane, or runs nothing (`agent/rerun.rs`).
 
 ### Presentation kinds
 

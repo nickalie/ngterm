@@ -404,6 +404,7 @@ pub const RUST_ONLY_CLI: &[&str] = &[
     "agent chat",
     "agent commands",
     "agent mail",
+    "agent rerun",
     "agent upload",
 ];
 
@@ -534,7 +535,7 @@ mod tests {
     #[test]
     fn every_command_round_trips_through_its_wire_name() {
         let all = Command::all();
-        assert_eq!(all.len(), 137);
+        assert_eq!(all.len(), 138);
         for command in all {
             assert_eq!(command.wire_name().parse(), Ok(command));
             assert_eq!(

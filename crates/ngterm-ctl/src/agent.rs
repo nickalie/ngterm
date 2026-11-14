@@ -13,12 +13,14 @@
 //! the composer attaches: the bytes on standard input, stored for the agent, the stored path printed.
 //!
 //! `mail` ([`mail`]) is another hook's call, not the chat view's: it hands the pane's `msg` mailbox to the agent running
-//! in it.
+//! in it. `rerun` ([`rerun`]) is what a hook runs itself through when its agent is a background job, whose environment
+//! names another pane than its conversation's.
 
 mod account;
 mod chat;
 mod commands;
 mod mail;
+mod rerun;
 mod upload;
 
 use std::io::{self, IsTerminal, Read};
@@ -71,6 +73,7 @@ enum AgentCommand {
     Chat(chat::Chat),
     Commands(commands::Commands),
     Mail(mail::Mail),
+    Rerun(rerun::Rerun),
     Upload(upload::Upload),
 }
 
@@ -82,6 +85,7 @@ impl Agent {
             AgentCommand::Chat(command) => command.validate(),
             AgentCommand::Commands(command) => command.validate(),
             AgentCommand::Mail(command) => command.validate(),
+            AgentCommand::Rerun(command) => command.validate(),
             AgentCommand::Upload(command) => command.validate(),
         }
     }
@@ -93,6 +97,7 @@ impl Agent {
             AgentCommand::Chat(command) => command.run(env),
             AgentCommand::Commands(command) => command.run(env),
             AgentCommand::Mail(command) => command.run(env),
+            AgentCommand::Rerun(command) => command.run(env),
             AgentCommand::Upload(command) => command.run(env),
         }
     }

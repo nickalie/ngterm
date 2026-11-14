@@ -69,6 +69,12 @@
 //!   (`build/patches/agent-status/0007-agent-mail.patch`); on Windows a Claude Code waiter does not notice its agent's
 //!   exit and ends with the next agent's waiter, its pane, its app or the hook's timeout; the skill documents it
 //!   (`build/patches/skill-ngterm/0020-agent-mail.patch`);
+//! - a Claude Code background job (the daemon process Claude Code carries a conversation on in after `/background`
+//!   or a Left arrow at its empty prompt, `CLAUDE_JOB_DIR` set) has the daemon's `NGTERM_*`, not its conversation's
+//!   pane's: there the Claude status adapter, the mail hook and the restore adapter, in both forms, run themselves
+//!   again through `ngtermctl agent rerun claude`, which finds the pane whose agent record holds the payload's
+//!   conversation or the one it moved from (`agent.locate`) and runs the hook as that pane; a job no pane started
+//!   does nothing and prints nothing (`build/patches/agent-status/0009-claude-background-job.patch`);
 //! - the skill speaks of the `live` group and the attach contract's `NGTERM_LIVE_*` variables where upstream's names
 //!   `zmx`, and it is named `ngterm` (frontmatter `name`, a description that also triggers on ngterm and `ngtermctl`),
 //!   its text, examples and `show-image.sh` running `ngtermctl` wherever upstream runs `agtermctl`, the far side of a

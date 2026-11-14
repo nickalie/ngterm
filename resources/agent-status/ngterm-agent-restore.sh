@@ -48,6 +48,17 @@
 trap 'exit 0' EXIT
 exec >/dev/null 2>&1
 
+# A background job of Claude Code's daemon (CLAUDE_JOB_DIR is set: Claude Code moves a conversation there on
+# /background or on a Left arrow at its empty prompt) has the daemon's NGTERM_*, which name the pane the daemon was
+# started in: a session long gone, or another one's. `ngtermctl agent rerun` finds the pane that holds this
+# conversation from the payload and runs this hook again as that pane; with none it runs nothing, silently.
+if [ -n "${CLAUDE_JOB_DIR:-}" ] && [ -z "${NGTERM_AGENT_LOCATED:-}" ]; then
+  command -v "${NGTERMCTL:-ngtermctl}" >/dev/null 2>&1 || exit 0
+  rerun=(agent rerun claude)
+  [ -n "${NGTERM_SOCKET:-}" ] && rerun+=(--socket "$NGTERM_SOCKET")
+  exec "${NGTERMCTL:-ngtermctl}" "${rerun[@]}" -- "${BASH:-bash}" "$0" "$@"
+fi
+
 [ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
 
 agent=${1:-}
