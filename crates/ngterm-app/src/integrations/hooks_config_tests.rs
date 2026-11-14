@@ -755,6 +755,21 @@ fn pi_paths_and_ownership() {
 }
 
 #[test]
+fn omp_paths_and_ownership() {
+    assert_eq!(
+        omp_extension_path(Path::new("/home/me")),
+        Path::new("/home/me/.omp/agent/extensions/ngterm-status.ts")
+    );
+    assert!(may_overwrite_omp_extension(false, None));
+    assert!(may_overwrite_omp_extension(
+        true,
+        Some("// ngterm-omp-status-extension\nexport default () => {}\n")
+    ));
+    assert!(!may_overwrite_omp_extension(true, Some("export default () => {}\n")));
+    assert!(!may_overwrite_omp_extension(true, None));
+}
+
+#[test]
 fn backup_paths_append_bak() {
     assert_eq!(
         backup_path("/home/me/.claude/settings.json"),

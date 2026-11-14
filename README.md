@@ -18,7 +18,7 @@ another computer or your phone.
 
 ## What you get
 
-**See who needs you.** Claude Code, Codex, Pi and OpenCode report whether they are working, blocked or done, right on
+**See who needs you.** Claude Code, Codex, Pi, Oh My Pi and OpenCode report their status, right on
 their row in the sidebar. Jump straight to whatever needs attention, or watch several sessions at once in the
 dashboard.
 
@@ -97,6 +97,8 @@ download, see [release signing](docs/release-signing.md).
 2. **Connect your agents.** On first launch, ngterm offers to install the agent skill and the agent status hooks.
    Accept, then start a new agent, and its status shows up in the sidebar. Both are also in the **Help** menu. With the
    skill installed, you can ask your agent to split panes, show a page or build you a shortcut.
+   For **Oh My Pi** (`omp`), start it once before you install the hooks. The hooks and skill installers use
+   `~/.omp/agent/extensions/ngterm-status.ts` and `~/.omp/agent/skills/ngterm`. Restart OMP after installation.
 3. **Turn on Live sessions.** Set **Settings ▸ General ▸ Restore sessions** to **Live sessions**, then restart ngterm.
 4. **Want `ngtermctl` outside ngterm?** It already works in ngterm's own terminals. Linux packages and the Windows
    installer also put it on your `PATH`. Everywhere else, choose **Help ▸ Install Command Line Tool…**.

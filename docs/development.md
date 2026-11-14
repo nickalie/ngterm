@@ -30,10 +30,19 @@ Linux build unless it names another OS.
 - The CLI is `ngtermctl` (upstream's is `agtermctl`), and the Help menu's installers use this build's names too:
   Install Command Line Tool… links the bundled `ngtermctl` into `~/.local/bin` (an `agtermctl` there is left alone),
   and Install Agent Skill… installs the `ngterm` skill, which drives the app through `ngtermctl`, into
-  `~/.claude/skills/ngterm` and `~/.codex/skills/ngterm` (an `agterm` skill there is left alone).
+  `~/.claude/skills/ngterm`, `~/.codex/skills/ngterm` and `~/.omp/agent/skills/ngterm` for the agents present
+  (an `agterm` skill there is left alone).
 - One extension beyond upstream: Live sessions in bash and PowerShell login shells too (upstream: zsh and fish),
   under the Rust-only capability `live-any-shell`; PowerShell gets ngterm's own shell integration
   (`resources/shell-integration/pwsh`), since Ghostty has none.
+- Oh My Pi (`omp`) has a separate managed lifecycle extension, installed when `~/.omp/agent` exists:
+  `~/.omp/agent/extensions/ngterm-status.ts`. It reports `active --blink` on `agent_start`, keeps that status on
+  `agent_end` while `willContinue` is true (including background work), reports `completed --auto-reset` on the final
+  `agent_end`, and clears to `idle` on `session_shutdown`. It uses the shared wrapper, including the PowerShell form
+  on Windows, and does nothing outside ngterm. The Claude adapters recognize `omp` as a parent agent, so a Claude
+  worker cannot reset its status. Restart OMP after installation. The installers preserve unmarked user files;
+  custom OMP config directories and named profiles need manual installation into their own `extensions/` and
+  `skills/` directories. The resource is maintained in `build/patches/agent-status/0009-oh-my-pi.patch`.
 - Another extension beyond upstream: Install Agent Status Hooks… also wires a restore adapter
   (`resources/agent-status/ngterm-agent-restore.sh`) into Claude Code's `SessionStart` and `SessionEnd` hooks (Claude
   Code only: Codex gets no restore hooks). On every session start it pins the pane's `session restore` line to the
@@ -359,6 +368,13 @@ and how this build does it where the OS matters:
 - For the OpenCode plugin's tests (`crates/ngterm-app/tests/opencode_status.rs`): Node.js 22.7+ (or 20.19+ on the 20.x
   line), which imports the plugin's bare ES module. A missing or older one skips them (`SKIPPED:`) unless
   `NGTERM_REQUIRE_NODE_TESTS` is set, as CI sets it, which fails them instead.
+- For the Oh My Pi extension's tests (`crates/ngterm-app/tests/omp_status.rs`): Node.js 22.6+ with TypeScript stripping.
+  The test loads the real extension and checks its lifecycle status reports and POSIX/Windows command forms.
+  A Node capability probe checks the required flags. A missing or incompatible Node skips the test unless
+  `NGTERM_REQUIRE_NODE_TESTS` is set, which makes it fail instead.
+- For native OMP end-to-end tests (`crates/ngterm-gpui/tests/omp.rs`): the real `omp` executable, Python 3, Xvfb,
+  lavapipe and a local OpenAI-compatible chat endpoint. These tests use a private home, display, buses and ngterm socket.
+  They do not read the user's OMP credentials. Set `NGTERM_REQUIRE_OMP_E2E=1` to fail instead of skipping missing prerequisites.
 - For the conformance suite: Python 3.11+ with venv, weston and dbus-daemon (each instance gets its own headless
   weston and bus); zsh or fish as the login shell for the Live tests of that shell. Its ui layer also needs Xvfb (an
   X11 display per ui instance), at-spi2-core (`at-spi-bus-launcher` and `at-spi2-registryd`, found in the
@@ -1233,6 +1249,25 @@ GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test --workspace
 .venv/bin/python -m pytest conformance/selftests   # the suite's own tests, host-free
 conformance/tools/run-linux.sh [--ratchet-only] [--stage DIR] [--coverage] [-- PYTEST_ARGS...]
 ```
+
+Run the native OMP checks against a local model server after building ngterm and ngtermctl:
+
+```sh
+NGTERM_REQUIRE_OMP_E2E=1 \
+NGTERM_OMP_E2E_BIN="$(command -v omp)" \
+NGTERM_OMP_E2E_BASE_URL=http://127.0.0.1:19451/v1 \
+NGTERM_OMP_E2E_MODEL=qwen3:0.6b \
+cargo test -p ngterm-gpui --test omp -- --nocapture
+```
+
+The endpoint must serve the named model. Use a test server and model that you control; the tests send real inference
+requests. They check primary and split panes, skill discovery, queued turns, abort/recovery, completion reset, shutdown,
+and isolation from sibling sessions. The Help installers' OMP window tests run separately with
+`cargo test -p ngterm-gpui --lib integrations::tests:: -- --nocapture` on a private display.
+
+The native tests forward real model responses through a loopback proxy. The proxy holds each response until the test
+has checked the busy state or sent an abort, so fast inference cannot make those checks race. The proxy publishes its
+URL by an atomic rename, so the readiness probe cannot read an incomplete address.
 
 A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`, as the `wpe` CI job does; one to
 the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh --check` (it needs `bindgen-cli`).

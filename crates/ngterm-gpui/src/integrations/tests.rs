@@ -315,6 +315,96 @@ fn users_skill_left_alone(cx: &mut VisualTestContext, home: &Home) {
     assert_eq!(fs::read_to_string(&skill).unwrap(), users);
 }
 
+#[gpui_kit::test]
+fn the_skill_installs_for_omp_only_when_its_config_exists(cx: &mut TestAppContext) {
+    let home = Home::new();
+    let cx = host(cx);
+    home.serve(cx);
+
+    start(cx, run_hooks);
+    let absent_hooks = shown(cx);
+    assert_eq!(absent_hooks.heading, "Agent Status Hooks Installed");
+    assert!(!home.path(".omp").exists(), "hooks do not seed OMP config");
+    press(cx, "OK");
+
+    start(cx, run_skill);
+    let absent = shown(cx);
+    assert_eq!(absent.heading, "Agent Skill Installed");
+    assert!(!home.path(".omp").exists(), "skills do not seed OMP config");
+    assert!(home.path(".claude/skills/ngterm/SKILL.md").is_file());
+    press(cx, "OK");
+
+    home.mkdir(".omp/agent");
+    let skill = ".omp/agent/skills/ngterm/SKILL.md";
+    let bundled = fs::read_to_string(resources().join("skills/ngterm/SKILL.md")).unwrap();
+    start(cx, run_skill);
+    assert_eq!(shown(cx).heading, "Agent Skill Installed");
+    assert_eq!(home.read(skill), bundled);
+    press(cx, "OK");
+
+    start(cx, run_skill);
+    assert_eq!(shown(cx).heading, "Agent Skill Installed");
+    assert_eq!(home.read(skill), bundled, "a repeated install remains current");
+    press(cx, "OK");
+
+    home.write(skill, &format!("{MARKER}\nstale marker-owned skill\n"));
+    start(cx, run_skill);
+    assert_eq!(shown(cx).heading, "Agent Skill Installed");
+    assert_eq!(home.read(skill), bundled, "marker-owned skill content is updated");
+    press(cx, "OK");
+
+    let user_skill = "user-written OMP skill\n";
+    home.write(skill, user_skill);
+    start(cx, run_skill);
+    let user_owned = shown(cx);
+    assert_eq!(user_owned.heading, "Agent Skill Installed");
+    assert_eq!(home.read(skill), user_skill);
+    press(cx, "OK");
+}
+
+#[gpui_kit::test]
+fn omp_hooks_install_idempotently_update_owned_extension_and_preserve_user_files(cx: &mut TestAppContext) {
+    let home = Home::new();
+    home.mkdir(".omp/agent");
+    home.mkdir(".pi/agent");
+    let cx = host(cx);
+    home.serve(cx);
+
+    let omp = ".omp/agent/extensions/ngterm-status.ts";
+    let pi = ".pi/agent/extensions/ngterm-status.ts";
+    let bundled_omp = fs::read_to_string(resources().join("agent-status/omp/ngterm-status.ts")).unwrap();
+    let bundled_pi = fs::read_to_string(resources().join("agent-status/pi/ngterm-status.ts")).unwrap();
+
+    start(cx, run_hooks);
+    let installed = shown(cx);
+    assert_eq!(installed.heading, "Agent Status Hooks Installed");
+    assert_eq!(home.read(omp), bundled_omp);
+    assert_eq!(home.read(pi), bundled_pi);
+    press(cx, "OK");
+
+    start(cx, run_hooks);
+    assert_eq!(shown(cx).heading, "Agent Status Hooks Installed");
+    assert_eq!(home.read(omp), bundled_omp, "a repeated install remains current");
+    assert_eq!(home.read(pi), bundled_pi);
+    press(cx, "OK");
+
+    home.write(omp, "// ngterm-omp-status-extension\nstale marker-owned extension\n");
+    start(cx, run_hooks);
+    assert_eq!(shown(cx).heading, "Agent Status Hooks Installed");
+    assert_eq!(home.read(omp), bundled_omp, "marker-owned extension content is updated");
+    assert_eq!(home.read(pi), bundled_pi, "updating OMP does not change Pi");
+    press(cx, "OK");
+
+    let user_extension = "export default () => {};\n";
+    home.write(omp, user_extension);
+    start(cx, run_hooks);
+    let user_owned = shown(cx);
+    assert_eq!(user_owned.heading, "Agent Status Hooks Installed — with a warning");
+    assert_eq!(home.read(omp), user_extension);
+    assert_eq!(home.read(pi), bundled_pi, "an OMP conflict does not change Pi");
+    press(cx, "OK");
+}
+
 /// The Unix form: a symlink into `~/.local/bin`. On Windows the install puts the tool's folder on the user's own
 /// `HKCU\Environment` `Path`, which no test may write (ngterm-app tests that plan without applying it).
 #[cfg(unix)]

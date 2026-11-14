@@ -36,7 +36,7 @@ if (-not $statusWrapper) { $statusWrapper = Join-Path $PSScriptRoot 'ngterm-agen
 # exact names, not a pattern: the union of the hook-driven agents and the shell integration's NGTERM_AGENT_RE
 # default, as in the POSIX form; keep the lists in sync. An overridden NGTERM_AGENT_RE extends the set, matched
 # against the same image name; an expression .NET cannot compile lands on "not an agent", keeping the walk fail-open.
-$agentNames = @('claude', 'codex', 'kimi', 'opencode', 'pi', 'gemini', 'cursor-agent', 'aider', 'crush', 'goose')
+$agentNames = @('claude', 'codex', 'kimi', 'opencode', 'pi', 'omp', 'gemini', 'cursor-agent', 'aider', 'crush', 'goose')
 
 function Test-Agent([string] $name) {
   if ($agentNames -contains $name) { return $true }

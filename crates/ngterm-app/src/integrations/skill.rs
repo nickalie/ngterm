@@ -1,7 +1,7 @@
 //! The agent skill installer (upstream's `SkillInstall.swift` and `SkillInstaller.swift`): the bundled skill into the
-//! skills directory of every coding agent present, Claude Code (`~/.claude/skills/ngterm`) and Codex
-//! (`~/.codex/skills/ngterm`), Claude Code's when neither is. Idempotent, and a same-named skill the user wrote (its
-//! `SKILL.md` absent, unreadable or unmarked) is never overwritten.
+//! skills directory of every coding agent present: Claude Code (`~/.claude/skills/ngterm`), Codex
+//! (`~/.codex/skills/ngterm`) and Oh My Pi (`~/.omp/agent/skills/ngterm`), Claude Code's when none is present.
+//! Idempotent, and a same-named skill the user wrote (`SKILL.md` absent, unreadable or unmarked) is never overwritten.
 //!
 //! The skill is named `ngterm`, not upstream's `agterm`: upstream installs its own `agterm` skill into the same agents'
 //! directories, and that one drives agterm through its `agtermctl`. This build's skill drives it through `ngtermctl`
@@ -32,23 +32,44 @@ pub struct Target {
     pub skill_directory: PathBuf,
 }
 
-/// The targets for the agents present, falling back to Claude Code's (the primary) when neither is, so the install
-/// is never a no-op (upstream's `installTargets`).
+/// A coding agent whose configuration directory can receive the bundled skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Agent {
+    /// Claude Code, configured under `~/.claude`.
+    Claude,
+    /// Codex, configured under `~/.codex`.
+    Codex,
+    /// Oh My Pi, configured under `~/.omp/agent`.
+    Omp,
+}
+
+impl Agent {
+    fn config_directory(self) -> &'static str {
+        match self {
+            Self::Claude => ".claude",
+            Self::Codex => ".codex",
+            Self::Omp => ".omp/agent",
+        }
+    }
+
+    fn target(self, home: &Path) -> Target {
+        Target {
+            agent: match self {
+                Self::Claude => "Claude Code",
+                Self::Codex => "Codex",
+                Self::Omp => "Oh My Pi",
+            },
+            skill_directory: home.join(self.config_directory()).join("skills").join(SKILL_NAME),
+        }
+    }
+}
+
+/// The targets for the agents present, falling back to Claude Code's when none is present.
 #[must_use]
-pub fn install_targets(home: &Path, claude_exists: bool, codex_exists: bool) -> Vec<Target> {
-    let target = |agent, base: &str| Target {
-        agent,
-        skill_directory: home.join(base).join("skills").join(SKILL_NAME),
-    };
-    let mut targets = Vec::new();
-    if claude_exists {
-        targets.push(target("Claude Code", ".claude"));
-    }
-    if codex_exists {
-        targets.push(target("Codex", ".codex"));
-    }
+pub fn install_targets(home: &Path, agents: impl IntoIterator<Item = Agent>) -> Vec<Target> {
+    let mut targets: Vec<Target> = agents.into_iter().map(|agent| agent.target(home)).collect();
     if targets.is_empty() {
-        targets.push(target("Claude Code", ".claude"));
+        targets.push(Agent::Claude.target(home));
     }
     targets
 }
@@ -100,7 +121,10 @@ pub fn plan(env: &Environment) -> Result<SkillPlan, InstallError> {
         .filter(|source| source.is_dir())
         .ok_or_else(|| InstallError("The agent skill is not bundled in this build.".to_owned()))?;
     let home = &env.home;
-    let targets = install_targets(home, home.join(".claude").exists(), home.join(".codex").exists())
+    let agents = [Agent::Claude, Agent::Codex, Agent::Omp]
+        .into_iter()
+        .filter(|agent| home.join(agent.config_directory()).exists());
+    let targets = install_targets(home, agents)
         .into_iter()
         .map(|target| {
             // lstat: a symlink there, dangling or not, counts as present, so the wipe never deletes the user's link
@@ -228,9 +252,27 @@ mod tests {
             agent: "Codex",
             skill_directory: "/h/.codex/skills/ngterm".into(),
         };
-        assert_eq!(install_targets(home, true, true), [claude.clone(), codex.clone()]);
-        assert_eq!(install_targets(home, false, true), [codex]);
-        assert_eq!(install_targets(home, false, false), [claude]);
+        let omp = Target {
+            agent: "Oh My Pi",
+            skill_directory: "/h/.omp/agent/skills/ngterm".into(),
+        };
+        assert_eq!(
+            install_targets(home, [Agent::Claude, Agent::Codex, Agent::Omp]),
+            [claude.clone(), codex.clone(), omp.clone()]
+        );
+        assert_eq!(install_targets(home, [Agent::Omp]), std::slice::from_ref(&omp));
+        assert_eq!(install_targets(home, [Agent::Codex]), std::slice::from_ref(&codex));
+        assert_eq!(install_targets(home, [Agent::Claude]), std::slice::from_ref(&claude));
+        assert_eq!(
+            install_targets(home, [Agent::Claude, Agent::Codex]),
+            [claude.clone(), codex.clone()]
+        );
+        assert_eq!(
+            install_targets(home, [Agent::Claude, Agent::Omp]),
+            [claude.clone(), omp.clone()]
+        );
+        assert_eq!(install_targets(home, [Agent::Codex, Agent::Omp]), [codex, omp]);
+        assert_eq!(install_targets(home, []), [claude]);
     }
 
     #[test]

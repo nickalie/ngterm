@@ -105,6 +105,27 @@ pub const PI_EXTENSION_RELATIVE_PATH: &str = "pi/ngterm-status.ts";
 pub const PI_EXTENSION_NAME: &str = "ngterm-status.ts";
 pub const PI_EXTENSION_MARKER: &str = "// ngterm-pi-status-extension";
 
+/// The bundled OMP extension's path inside the package, destination name and ownership sentinel.
+pub const OMP_EXTENSION_RELATIVE_PATH: &str = "omp/ngterm-status.ts";
+pub const OMP_EXTENSION_NAME: &str = "ngterm-status.ts";
+pub const OMP_EXTENSION_MARKER: &str = "// ngterm-omp-status-extension";
+
+/// OMP's extensions directory under the home.
+const OMP_EXTENSIONS: &str = ".omp/agent/extensions";
+
+/// The OMP extension's destination under `home`.
+#[must_use]
+pub fn omp_extension_path(home: &Path) -> PathBuf {
+    join_relative(home, OMP_EXTENSIONS).join(OMP_EXTENSION_NAME)
+}
+
+/// Whether the OMP extension destination may be replaced: absent is safe, an existing file must carry the ownership
+/// marker, an unreadable one counts as the user's.
+#[must_use]
+pub fn may_overwrite_omp_extension(file_exists: bool, existing: Option<&str>) -> bool {
+    !file_exists || existing.is_some_and(|text| text.contains(OMP_EXTENSION_MARKER))
+}
+
 /// The shell integration scripts sourced from the rc files, relative to the script directory.
 pub const INTEGRATION_RELATIVE_PATH: &str = "shell/integration.sh";
 pub const FISH_INTEGRATION_RELATIVE_PATH: &str = "shell/integration.fish";
