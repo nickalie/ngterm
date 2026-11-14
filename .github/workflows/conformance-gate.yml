@@ -13,9 +13,11 @@ on:
 permissions:
   contents: read
 
+# A push to a branch or a PR cancels that ref's older run. Main's runs each have their own group, so every commit on
+# main keeps its gate result: a shared group would drop a waiting run for a newer one even without cancel-in-progress.
 concurrency:
-  group: conformance-gate-${{ github.ref }}
-  cancel-in-progress: true
+  group: conformance-gate-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   gate:

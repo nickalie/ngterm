@@ -53,9 +53,12 @@ on:
 permissions:
   contents: read
 
+# A release and a run by hand are never cancelled, and wait for an older run of the same tag or ref. A `ci/**` push is
+# only a dry run of an outdated head once a newer push comes: its group is its own (`-push`), so the newer push cancels
+# it and no run by hand on that branch.
 concurrency:
-  group: ios-release-${{ inputs.tag || github.ref_name }}
-  cancel-in-progress: false
+  group: ios-release-${{ inputs.tag || github.ref_name }}${{ github.event_name == 'push' && github.ref_type == 'branch' && '-push' || '' }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
 
 env:
   CARGO_TERM_COLOR: always
