@@ -3,7 +3,6 @@ account's, and the stand-in agterm answers as upstream does (`fake_agterm`), run
 
 import json
 import os
-import pty
 import select
 import subprocess
 import sys
@@ -136,6 +135,8 @@ class _Attach:
     """One `zmx attach` of `daemon` on a pty of its own, as a viewer's ssh runs it."""
 
     def __init__(self, directory, daemon, nonce, claim=False):
+        import pty  # POSIX only: collecting this module on Windows must reach its skip mark
+
         self.master, slave = pty.openpty()
         env = {"PATH": "/usr/bin:/bin", "ZMX_MANAGED": nonce, **({"ZMX_MANAGED_CLAIM": "1"} if claim else {})}
         self.process = subprocess.Popen(
@@ -219,3 +220,19 @@ def test_a_follower_is_told_when_the_leader_leaves_and_the_next_attach_leads_wit
     follower.read("zmx-role;n2:unowned:3")
     attach("n3").read("zmx-role;n3:leader:4")
 
+
+
+# what a Windows Python lacks; `None` in `sys.modules` makes the import fail as it does there
+POSIX_ONLY_MODULES = ("fcntl", "termios", "tty", "pty", "pwd", "grp", "resource")
+
+
+def test_the_stand_in_and_its_machine_import_where_the_posix_only_modules_are_missing():
+    """The Windows run collects the agterm peer tests, whose modules import these, before their marks skip them."""
+    script = (
+        "import sys\n"
+        f"sys.path[:0] = {sys.path!r}\n"
+        f"sys.modules.update(dict.fromkeys({POSIX_ONLY_MODULES!r}))\n"
+        "import agterm_conformance.agterm_mac, agterm_conformance.fake_agterm\n"
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

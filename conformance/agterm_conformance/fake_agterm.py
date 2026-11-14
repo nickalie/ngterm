@@ -27,14 +27,12 @@ printed by the `agtermctl` wrapper from `listing.json` (`save_state`), without s
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import select
 import sys
 import threading
 import time
-import tty
 import uuid
 from pathlib import Path
 
@@ -283,6 +281,8 @@ def _alive(pid: int) -> bool:
 def _lead(machine: Machine, daemon: str, take: bool = False) -> dict:
     """The daemon's lead in `leads.json`, `{"leader": WINDOW | pid | None, "generation": n}`, after a leader that
     exited has left it unowned; with `take`, this process leads it."""
+    import fcntl  # POSIX only: the module stays importable on Windows, where the suite collects it and runs none of it
+
     with open(machine.directory / "leads.lock", "w", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         path = machine.directory / "leads.json"
@@ -307,6 +307,8 @@ def _tell(nonce: str, role: str, generation: int) -> None:
 def _follow(machine: Machine, daemon: str, nonce: str) -> int:
     """A managed follower: its terminal raw as zmx's client sets it, everything it sends dropped, told when the leader
     leaves; until its viewer hangs up."""
+    import tty  # POSIX only, as `fcntl` in `_lead`
+
     stdin = sys.stdin.fileno()
     if os.isatty(stdin):
         tty.setraw(stdin)
