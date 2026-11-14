@@ -31,6 +31,8 @@ pub(super) enum Fault {
     HelloOnEvaluate,
     /// Sends a frame of each page the app closes, after the close.
     FrameAfterClose,
+    /// Holds the app's replies to its pages' requests until the app closes a page, then hands them on after the close.
+    ReplyAfterClose,
 }
 
 impl Fault {
@@ -43,6 +45,7 @@ impl Fault {
             "hello-after-hang-up" => Self::HelloAfterHangUp,
             "hello-on-evaluate" => Self::HelloOnEvaluate,
             "frame-after-close" => Self::FrameAfterClose,
+            "reply-after-close" => Self::ReplyAfterClose,
             _ => return None,
         })
     }
@@ -184,6 +187,7 @@ fn serve_until_end(
     outgoing: &async_channel::Sender<Outgoing>,
     fault: Option<Fault>,
 ) -> i32 {
+    let mut held = Vec::new();
     loop {
         let packet = match wire::recv(socket.as_fd(), Limits::FROM_APP) {
             Ok(Some(packet)) => packet,
@@ -205,7 +209,7 @@ fn serve_until_end(
                 let _ = flushed.recv_timeout(FLUSH_TIMEOUT);
                 return 0;
             }
-            Ok(ToWorker::Command(command)) => post(engine, outgoing, command, fault),
+            Ok(ToWorker::Command(command)) => post(engine, outgoing, command, fault, &mut held),
             Ok(ToWorker::PersistentSession {
                 session,
                 data_dir,
@@ -251,15 +255,30 @@ fn serve_until_end(
     }
 }
 
-/// Hands `command` to `engine`; under [`Fault::FrameAfterClose`] a page's close is followed by a frame of it.
-fn post(engine: &Local, outgoing: &async_channel::Sender<Outgoing>, command: Command, fault: Option<Fault>) {
+/// Hands `command` to `engine`; under [`Fault::FrameAfterClose`] a page's close is followed by a frame of it, and under
+/// [`Fault::ReplyAfterClose`] replies wait in `held` for the next close and follow it.
+fn post(
+    engine: &Local,
+    outgoing: &async_channel::Sender<Outgoing>,
+    command: Command,
+    fault: Option<Fault>,
+    held: &mut Vec<Command>,
+) {
+    if fault == Some(Fault::ReplyAfterClose) && matches!(command, Command::Reply(..)) {
+        held.push(command);
+        return;
+    }
     let closed = match &command {
-        Command::CloseView(view) if fault == Some(Fault::FrameAfterClose) => Some(*view),
+        Command::CloseView(view) => Some(*view),
         _ => None,
     };
     engine.post(command);
-    if let Some(view) = closed {
+    let Some(view) = closed else { return };
+    if fault == Some(Fault::FrameAfterClose) {
         send_late_frame(outgoing, view);
+    }
+    for reply in held.drain(..) {
+        engine.post(reply);
     }
 }
 

@@ -259,6 +259,7 @@ fn a_fault_is_named_as_the_suite_names_it() {
         ("hello-after-hang-up", Fault::HelloAfterHangUp),
         ("hello-on-evaluate", Fault::HelloOnEvaluate),
         ("frame-after-close", Fault::FrameAfterClose),
+        ("reply-after-close", Fault::ReplyAfterClose),
     ] {
         assert_eq!(Fault::named(name), Some(fault));
     }
@@ -319,6 +320,26 @@ fn a_worker_sends_a_frame_of_a_page_after_its_close() {
             assert!(regions.is_empty());
             let (quit, blob) = ToWorker::command(Command::Quit);
             wire::send(app.as_fd(), &quit.packet(blob).unwrap()).unwrap();
+            assert!(matches!(answer(&app), FromWorker::Stopped));
+            assert_eq!(serving.join().unwrap(), 0);
+        },
+    );
+}
+
+#[test]
+fn a_worker_holding_replies_until_a_close_serves_on() {
+    crate::tests::isolated(
+        "worker::serve::tests::a_worker_holding_replies_until_a_close_serves_on",
+        || {
+            let (app, serving) = faulty_worker(Some(Fault::ReplyAfterClose));
+            for command in [
+                Command::Reply(crate::ReplyToken::from_raw(7), Ok("null".to_owned())),
+                Command::CloseView(crate::ViewId::from_raw(3)),
+                Command::Quit,
+            ] {
+                let (message, blob) = ToWorker::command(command);
+                wire::send(app.as_fd(), &message.packet(blob).unwrap()).unwrap();
+            }
             assert!(matches!(answer(&app), FromWorker::Stopped));
             assert_eq!(serving.join().unwrap(), 0);
         },

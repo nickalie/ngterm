@@ -1,6 +1,7 @@
 """The Linux build's page worker (`ngterm-web`, the process its HTML pages' engine runs in) when it breaks: a worker that
 ends, fails a read or stops reading during its start fails the start, one that breaks its protocol later fails every
-page for the rest of the run, a frame it sends for a page the app closed is dropped, and a worker whose app quit ends. A
+page for the rest of the run, a frame it sends for a page the app closed is dropped, so is a page's request the app
+answers after the page closed, and a worker whose app quit ends. A
 Rust-only extension (capability `web-worker-faults`, conformance/docs/rust-build.md > Rust-only extensions): each test
 launches an instance of its own whose worker plays one fault (`launch(web_worker_fault=...)`), since the engine starts
 once per process and a failed one stays failed."""
@@ -188,3 +189,19 @@ def test_a_page_worker_whose_app_quits_during_its_start_ends(faulty):
     faulty.instance.process.send_signal(signal.SIGTERM)
     faulty.instance.process.wait(timeout=WAIT)
     _wait_ended(worker, "the page worker did not end after its app quit")
+
+
+@pytest.mark.covers("session.overlay.open", "session.overlay.close", "field:tree.session.htmlOverlays")
+@pytest.mark.parametrize("faulty", ["reply-after-close"], indirect=True)
+def test_a_page_closed_while_its_request_waits_closes(faulty):
+    # the page's own request closes it, and the worker holds the app's answer until the close: the page's waiting
+    # request ends with the page, and the answer finds no request left
+    sid = _new(faulty)
+    path = faulty.instance.root / "closing.html"
+    path.write_text(
+        "<!doctype html><title>closing</title>"
+        "<script>addEventListener('load', () => ngterm.request('session.overlay.close'))</script>",
+        encoding="utf-8",
+    )
+    assert_ok(faulty.request("session.overlay.open", sid, html=str(path), javascript=True))
+    faulty.wait_tree(lambda tree: "htmlOverlays" not in find_session(tree, sid))

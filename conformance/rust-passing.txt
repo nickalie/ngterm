@@ -721,6 +721,7 @@ tests/protocol/test_overlay.py::test_url_page_reads_back_its_address[browse]
 tests/protocol/test_overlay.py::test_url_page_reads_back_its_address[pinned]
 tests/protocol/test_overlay.py::test_visibility_refusals
 tests/protocol/test_page_worker.py::test_a_frame_of_a_page_the_app_closed_is_dropped[frame-after-close]
+tests/protocol/test_page_worker.py::test_a_page_closed_while_its_request_waits_closes[reply-after-close]
 tests/protocol/test_page_worker.py::test_a_page_worker_that_breaks_its_protocol_fails_every_page[hello-on-evaluate]
 tests/protocol/test_page_worker.py::test_a_page_worker_that_breaks_its_start_fails_the_pages[deaf-after-hello]
 tests/protocol/test_page_worker.py::test_a_page_worker_that_breaks_its_start_fails_the_pages[end-before-hello]
