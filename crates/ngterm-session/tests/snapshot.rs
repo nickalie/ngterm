@@ -310,7 +310,8 @@ fn flood_end(chunk: usize) -> String {
 /// for, while the client that is to fall behind reads nothing. On Windows the next chunk also waits for `cmd`'s prompt
 /// after the last one's end: the console drops a line typed before `cmd` reads again (the end's echo is not yet the
 /// prompt). The watcher's queue is thus empty but for the prompt when a chunk starts, and one chunk fits in it,
-/// however late the watcher reads.
+/// however late the watcher reads. Every client's queue has taken what the watcher read by the return
+/// ([`queued_for_all`]).
 fn flood_past(pane: &Pane, watcher: &mut Client, dir: &Path, chunks: std::ops::RangeInclusive<usize>) -> TestResult {
     let lines = flood_lines(dir)?;
     for chunk in chunks {
@@ -320,7 +321,15 @@ fn flood_past(pane: &Pane, watcher: &mut Client, dir: &Path, chunks: std::ops::R
             expect_prompt_after(watcher, &flood_end(chunk));
         }
     }
+    queued_for_all(pane);
     Ok(())
+}
+
+/// Wait until the read a client last received is queued for every other client too. The pane queues a read for one
+/// client after another under its lock, and a client reads its queue without that lock: one may hold a read the
+/// pane has not yet queued for the next, whose queue then overflows only later. Taking the pane's lock waits it out.
+fn queued_for_all(pane: &Pane) {
+    let _ = pane.offset();
 }
 
 /// Wait for `cmd`'s prompt (its `>`) after the last `needle` in `client`'s output, before anything else is typed.
