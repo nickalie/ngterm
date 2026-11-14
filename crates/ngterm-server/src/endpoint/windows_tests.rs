@@ -211,15 +211,15 @@ fn a_timeout_past_any_deadline_waits_for_the_peer() -> io::Result<()> {
     let peer = thread::spawn(move || -> io::Result<Vec<u8>> {
         thread::sleep(Duration::from_millis(100));
         (&client).write_all(b"ping")?;
-        let mut pong = [0_u8; 4];
-        (&client).read_exact(&mut pong)?;
-        Ok(pong.to_vec())
+        let mut answer = [0_u8; 4];
+        (&client).read_exact(&mut answer)?;
+        Ok(answer.to_vec())
     });
-    let mut ping = [0_u8; 4];
-    (&server).read_exact(&mut ping)?;
-    assert_eq!(&ping, b"ping");
+    let mut request = [0_u8; 4];
+    (&server).read_exact(&mut request)?;
+    assert_eq!(&request, b"ping");
     (&server).write_all(b"pong")?;
-    let pong = peer.join().map_err(|_| io::Error::other("the peer panicked"))??;
-    assert_eq!(pong, b"pong");
+    let answer = peer.join().map_err(|_| io::Error::other("the peer panicked"))??;
+    assert_eq!(answer, b"pong");
     Ok(())
 }
