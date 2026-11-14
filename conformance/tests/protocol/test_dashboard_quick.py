@@ -272,18 +272,42 @@ def test_quick_zoom_ends_with_the_panel(ctl):
     assert_error(ctl.request("surface.zoom", "quick", mode="show"), "surface not available: quick")
 
 
+def _last_line(text):
+    return text.rstrip().rsplit("\n", 1)[-1]
+
+
 def _watch_quick_grid(ctl):
-    """Start a program in the quick terminal that prints the terminal's rows and columns, then again on each resize
-    (SIGWINCH), as a full-screen program learns them; its pattern. Nothing is typed while the panel resizes: a key
-    typed then can be lost on Windows. The typed line holds the marker split in two and never matches."""
+    """Start a program in the quick terminal that prints the terminal's rows and columns at start and whenever they
+    change, as a full-screen program reads them; its pattern and the shell's prompt. Nothing is typed while the panel
+    resizes: a key typed then can be lost on Windows. It polls rather than traps SIGWINCH, which Git's sh on Windows
+    can miss. The typed line holds the marker split in two and never matches."""
+    _quick_echo(ctl)
+    prompt = _last_line(assert_ok(ctl.request("quick.text"))["text"])
     marker = f"QGRID{next(_markers)}"
-    report = f'g() {{ printf "%s%s=%s\\n" {marker[:5]} {marker[5:]} "$(stty size)"; }}'
-    assert_ok(ctl.request("quick.type", text=f"sh -c '{report}; trap g WINCH; g; while :; do sleep 0.2; done'\n"))
-    return re.compile(rf"(?m)^{marker}=(\d+) (\d+)$")
+    report = f'printf "%s%s=%s\\n" {marker[:5]} {marker[5:]} "$s"'
+    loop = f'p=; while :; do s=$(stty size); [ "$s" = "$p" ] || {report}; p=$s; sleep 0.2; done'
+    assert_ok(ctl.request("quick.type", text=f"sh -c '{loop}'\n"))
+    return re.compile(rf"(?m)^{marker}=(\d+) (\d+)$"), prompt
 
 
-def _quick_grid(ctl, pattern):
+def _stop_watching(ctl, watcher):
+    """End the watcher and wait for the shell's prompt after its output: a line typed before it is dropped on
+    Windows."""
+    pattern, prompt = watcher
+    assert_ok(ctl.request("quick.type", text="\x03"))
+
+    def back(response):
+        assert response.ok, response.error
+        text = response.result["text"]
+        return pattern.search(text) and _last_line(text) == prompt
+
+    back.__qualname__ = f"the prompt {prompt!r} after the watcher"
+    ctl.wait_response("quick.text", None, back)
+
+
+def _quick_grid(ctl, watcher):
     """The rows and columns the watcher printed last."""
+    pattern, _ = watcher
 
     def accept(response):
         assert response.ok, response.error
@@ -295,9 +319,9 @@ def _quick_grid(ctl, pattern):
     return int(rows), int(columns)
 
 
-def _wait_grid(ctl, pattern, check, what):
+def _wait_grid(ctl, watcher, check, what):
     def settled():
-        grid = _quick_grid(ctl, pattern)
+        grid = _quick_grid(ctl, watcher)
         assert check(grid), f"{what}: the quick terminal reads {grid}"
         return grid
 
@@ -308,8 +332,8 @@ def _wait_grid(ctl, pattern, check, what):
 @pytest.mark.covers("quick", "surface.zoom", "field:tree.zoomedSurface")
 def test_quick_zoom_resizes_the_panel_and_its_unzoom_restores_it(ctl):
     assert_ok(ctl.request("quick", mode="show"))
+    watched = None
     try:
-        _quick_echo(ctl)
         watched = _watch_quick_grid(ctl)
         panel = _quick_grid(ctl, watched)
 
@@ -355,8 +379,9 @@ def test_quick_zoom_resizes_the_panel_and_its_unzoom_restores_it(ctl):
         _wait_grid(ctl, watched, restored, "unzoomed again")
     finally:
         # the watcher ends, so the next test's line reaches the shell
-        ctl.request("quick.type", text="\x03")
-        _quick_echo(ctl)
+        if watched is not None:
+            _stop_watching(ctl, watched)
+            _quick_echo(ctl)
         ctl.request("quick", mode="hide")
 
 
